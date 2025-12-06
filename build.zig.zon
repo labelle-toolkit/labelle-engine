@@ -1,5 +1,6 @@
 .{
-    .name = .@"labelle-engine",
+    .fingerprint = 0x246cb614beb913ae,
+    .name = .labelle_engine,
     .version = "0.1.0",
     .minimum_zig_version = "0.15.1",
     .dependencies = .{
@@ -11,10 +12,16 @@
             .url = "git+https://github.com/labelle-toolkit/labelle?ref=v0.7.0#2bb9a172bd151a519a0037d5c692b11ec24eacff",
             .hash = "labelle-0.7.0-2bWPIjJmAwA3t_cHUrP2uklGvvy6bBCx8X7mcRnpC562",
         },
+        .zspec = .{
+            .url = "git+https://github.com/apotema/zspec#4d45cc5cda87312312040fcaa205720246d24953",
+            .hash = "zspec-0.3.0-jaKLbbqZAgAB-MBfy6M3HKB3jSTQ-TsNW9OxpLhLlav5",
+        },
     },
     .paths = .{
         "build.zig",
         "build.zig.zon",
         "src",
+        "test",
+        "usage",
     },
 }
