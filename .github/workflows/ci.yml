@@ -82,5 +82,5 @@ jobs:
 
           exit $TEST_EXIT_CODE
 
-      - name: Build example
-        run: zig build example
+      - name: Build and run all examples
+        run: zig build examples
