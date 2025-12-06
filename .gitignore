@@ -1,0 +1,10 @@
+# Zig build artifacts
+.zig-cache/
+zig-out/
+
+# Example build artifacts
+usage/*/.zig-cache/
+usage/*/zig-out/
+
+# Screenshots from CI tests
+screenshot_*.png
