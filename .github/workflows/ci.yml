@@ -33,7 +33,8 @@ jobs:
             libxfixes-dev \
             libwayland-dev \
             libxkbcommon-dev \
-            libasound2-dev
+            libasound2-dev \
+            xvfb
 
       - name: Build library
         run: zig build
@@ -88,4 +89,4 @@ jobs:
       - name: Build and run example_3 (standalone with labelle integration)
         run: |
           cd usage/example_3
-          CI_TEST=1 zig build run
+          xvfb-run -a CI_TEST=1 zig build run
