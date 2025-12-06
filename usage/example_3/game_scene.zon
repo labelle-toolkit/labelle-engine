@@ -1,0 +1,68 @@
+// Game Scene - demonstrates labelle-engine scene loading with labelle rendering
+//
+// This scene defines:
+// - A player character with animations
+// - Multiple enemies patrolling
+//
+// All entities reference sprites from the characters atlas loaded at comptime.
+
+.{
+    .name = "game_scene",
+    .scripts = .{"gravity"},
+    .entities = .{
+        // Ball at top of screen with gravity
+        .{
+            .sprite = .{ .name = "idle_0002", .x = 400, .y = 50, .scale = 2.0 },
+            .components = .{
+                .Velocity = .{ .x = 0, .y = 0 },
+                .Gravity = .{ .strength = 400.0, .enabled = true },
+            },
+        },
+        // Player at center
+        .{
+            .prefab = "player",
+            .x = 400,
+            .y = 300,
+            .components = .{
+                .Velocity = .{ .x = 0, .y = 0 },
+                .Health = .{ .current = 100, .max = 100 },
+            },
+        },
+
+        // Enemies patrolling left
+        .{
+            .prefab = "enemy",
+            .x = 150,
+            .y = 300,
+            .components = .{
+                .Velocity = .{ .x = 50, .y = 0 },
+                .Health = .{ .current = 30, .max = 30 },
+            },
+        },
+
+        // Enemies patrolling right
+        .{
+            .prefab = "enemy",
+            .x = 650,
+            .y = 300,
+            .components = .{
+                .Velocity = .{ .x = -50, .y = 0 },
+                .Health = .{ .current = 30, .max = 30 },
+            },
+        },
+
+        // Extra character (inline entity using idle sprite)
+        .{
+            .sprite = .{ .name = "jump_0001", .x = 300, .y = 450 },
+            .components = .{
+                .Health = .{ .current = 50, .max = 50 },
+            },
+        },
+        .{
+            .sprite = .{ .name = "run_0001", .x = 500, .y = 450 },
+            .components = .{
+                .Velocity = .{ .x = 0, .y = 0 },
+            },
+        },
+    },
+}

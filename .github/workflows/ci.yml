@@ -84,3 +84,8 @@ jobs:
 
       - name: Build and run all examples
         run: zig build examples
+
+      - name: Build and run example_3 (standalone with labelle integration)
+        run: |
+          cd usage/example_3
+          CI_TEST=1 zig build run

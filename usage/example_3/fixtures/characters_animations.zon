@@ -1,0 +1,22 @@
+.{
+    .idle = .{
+        .frames = .{ "idle_0001", "idle_0002", "idle_0003", "idle_0004" },
+        .duration = 0.15,
+        .looping = true,
+    },
+    .walk = .{
+        .frames = .{ "walk_0001", "walk_0002", "walk_0003", "walk_0004", "walk_0005", "walk_0006" },
+        .duration = 0.1,
+        .looping = true,
+    },
+    .run = .{
+        .frames = .{ "run_0001", "run_0002", "run_0003", "run_0004" },
+        .duration = 0.08,
+        .looping = true,
+    },
+    .jump = .{
+        .frames = .{ "jump_0001", "jump_0002", "jump_0003", "jump_0004" },
+        .duration = 0.12,
+        .looping = false,
+    },
+}
