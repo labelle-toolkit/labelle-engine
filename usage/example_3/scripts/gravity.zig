@@ -11,20 +11,22 @@ pub fn update(
     scene: *engine.Scene,
     dt: f32,
 ) void {
-    // Apply gravity and update positions for entities with Velocity and Gravity
+    // Apply physics updates for entities with Velocity
     for (scene.entities.items) |entity_instance| {
         const vel = registry.tryGet(Velocity, entity_instance.entity) orelse continue;
-        const grav = registry.tryGet(Gravity, entity_instance.entity) orelse continue;
 
-        if (grav.enabled) {
-            // Apply gravity to velocity
-            vel.y += grav.strength * dt;
-
-            // Get current position and update with velocity
-            if (ve.getPosition(entity_instance.sprite_id)) |pos| {
-                const new_y = pos.y + vel.y * dt;
-                _ = ve.setPosition(entity_instance.sprite_id, pos.x, new_y);
+        // Apply gravity if the entity has a Gravity component
+        if (registry.tryGet(Gravity, entity_instance.entity)) |grav| {
+            if (grav.enabled) {
+                vel.y += grav.strength * dt;
             }
+        }
+
+        // Update position based on velocity
+        if (ve.getPosition(entity_instance.sprite_id)) |pos| {
+            const new_x = pos.x + vel.x * dt;
+            const new_y = pos.y + vel.y * dt;
+            _ = ve.setPosition(entity_instance.sprite_id, new_x, new_y);
         }
     }
 }
