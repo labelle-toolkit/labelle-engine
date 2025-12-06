@@ -316,32 +316,65 @@ pub fn main() !void {
         \\
     , .{});
 
-    // Demonstrate prefab lookup
-    std.debug.print("\nPrefab Registry Demo:\n", .{});
-    if (Prefabs.get("player")) |player| {
-        std.debug.print("  Found prefab: {s}\n", .{player.name});
-        std.debug.print("  Sprite: {s} at ({d}, {d})\n", .{
-            player.sprite.name,
-            player.sprite.x,
-            player.sprite.y,
-        });
+    // ==========================================================================
+    // Assertions - CI will fail if any of these fail
+    // ==========================================================================
+
+    std.debug.print("\nRunning assertions:\n", .{});
+
+    // Prefab registry assertions
+    {
+        const player = Prefabs.get("player") orelse {
+            std.debug.print("  ✗ ASSERT FAILED: player prefab not found\n", .{});
+            std.process.exit(1);
+        };
+        std.debug.assert(std.mem.eql(u8, player.name, "player"));
+        std.debug.assert(std.mem.eql(u8, player.sprite.name, "player.png"));
+        std.debug.assert(player.sprite.x == 400);
+        std.debug.assert(player.sprite.y == 300);
+        std.debug.print("  ✓ Prefab registry: player prefab loaded correctly\n", .{});
+
+        std.debug.assert(Prefabs.get("enemy") != null);
+        std.debug.assert(Prefabs.get("boss") != null);
+        std.debug.assert(Prefabs.get("background") != null);
+        std.debug.print("  ✓ Prefab registry: all prefabs registered\n", .{});
     }
 
-    // Demonstrate component registry
-    std.debug.print("\nComponent Registry Demo:\n", .{});
-    std.debug.print("  Has 'Health': {}\n", .{Components.has("Health")});
-    std.debug.print("  Has 'Unknown': {}\n", .{Components.has("Unknown")});
+    // Component registry assertions
+    {
+        std.debug.assert(Components.has("Health"));
+        std.debug.assert(Components.has("Velocity"));
+        std.debug.assert(Components.has("Gravity"));
+        std.debug.assert(Components.has("Collectible"));
+        std.debug.assert(!Components.has("Unknown"));
+        std.debug.print("  ✓ Component registry: all components registered\n", .{});
+    }
 
-    // Demonstrate script registry
-    std.debug.print("\nScript Registry Demo:\n", .{});
-    std.debug.print("  Has 'gravity': {}\n", .{Scripts.has("gravity")});
-    std.debug.print("  Has 'movement': {}\n", .{Scripts.has("movement")});
+    // Script registry assertions
+    {
+        std.debug.assert(Scripts.has("gravity"));
+        std.debug.assert(Scripts.has("movement"));
+        std.debug.assert(!Scripts.has("unknown"));
+        std.debug.print("  ✓ Script registry: all scripts registered\n", .{});
+    }
 
-    // Demonstrate scene loading from .zon file
-    std.debug.print("\nScene from .zon file (level1.zon):\n", .{});
-    std.debug.print("  Name: {s}\n", .{level1_from_file.name});
-    std.debug.print("  Scripts: {d}\n", .{level1_from_file.scripts.len});
-    std.debug.print("  Entities: {d}\n", .{level1_from_file.entities.len});
+    // Scene from .zon file assertions
+    {
+        std.debug.assert(std.mem.eql(u8, level1_from_file.name, "level1"));
+        std.debug.assert(level1_from_file.scripts.len == 2);
+        std.debug.assert(level1_from_file.entities.len == 10);
+        std.debug.print("  ✓ Scene from .zon: level1.zon loaded correctly\n", .{});
+    }
+
+    // Inline scene assertions
+    {
+        std.debug.assert(std.mem.eql(u8, level1_scene.name, "level1"));
+        std.debug.assert(level1_scene.scripts.len == 2);
+        std.debug.assert(level1_scene.entities.len == 6);
+        std.debug.print("  ✓ Inline scene: level1_scene defined correctly\n", .{});
+    }
+
+    std.debug.print("\n✅ All assertions passed!\n", .{});
 
     _ = allocator;
 }
