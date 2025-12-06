@@ -1,11 +1,18 @@
 //! Example 2: ECS Component Verification
 //!
 //! This example demonstrates that components defined in scenes are properly
-//! added to the ECS registry and can be queried.
+//! added to the ECS registry and can be queried. Scene data is loaded from
+//! a .zon file (test_scene.zon).
 
 const std = @import("std");
 const engine = @import("labelle-engine");
 const ecs = @import("ecs");
+
+// =============================================================================
+// Scene loaded from .zon file
+// =============================================================================
+
+pub const test_scene = @import("test_scene.zon");
 
 // =============================================================================
 // Components
@@ -66,7 +73,83 @@ fn runTests(allocator: std.mem.Allocator) !void {
     var passed: usize = 0;
     var failed: usize = 0;
 
-    // Test 1: Component registry has all components
+    // Test 1: Scene loaded from .zon file has correct name
+    {
+        if (std.mem.eql(u8, test_scene.name, "ecs_test")) {
+            std.debug.print("  ✓ Scene loaded from .zon file (name: {s})\n", .{test_scene.name});
+            passed += 1;
+        } else {
+            std.debug.print("  ✗ Scene name mismatch\n", .{});
+            failed += 1;
+        }
+    }
+
+    // Test 2: Scene has correct number of entities
+    {
+        if (test_scene.entities.len == 3) {
+            std.debug.print("  ✓ Scene has 3 entities defined\n", .{});
+            passed += 1;
+        } else {
+            std.debug.print("  ✗ Scene entity count wrong (expected 3, got {})\n", .{test_scene.entities.len});
+            failed += 1;
+        }
+    }
+
+    // Test 3: Scene entities have correct prefab references
+    {
+        const player_prefab = test_scene.entities[0].prefab;
+        const enemy1_prefab = test_scene.entities[1].prefab;
+        const enemy2_prefab = test_scene.entities[2].prefab;
+
+        if (std.mem.eql(u8, player_prefab, "player") and
+            std.mem.eql(u8, enemy1_prefab, "enemy") and
+            std.mem.eql(u8, enemy2_prefab, "enemy"))
+        {
+            std.debug.print("  ✓ Scene entities have correct prefab references\n", .{});
+            passed += 1;
+        } else {
+            std.debug.print("  ✗ Scene prefab references incorrect\n", .{});
+            failed += 1;
+        }
+    }
+
+    // Test 4: Scene entities have position overrides from .zon
+    {
+        const e1 = test_scene.entities[0];
+        const e2 = test_scene.entities[1];
+        const e3 = test_scene.entities[2];
+
+        if (e1.x == 0 and e1.y == 0 and
+            e2.x == 50 and e2.y == 50 and
+            e3.x == 100 and e3.y == 100)
+        {
+            std.debug.print("  ✓ Scene entities have correct position overrides\n", .{});
+            passed += 1;
+        } else {
+            std.debug.print("  ✗ Scene position overrides incorrect\n", .{});
+            failed += 1;
+        }
+    }
+
+    // Test 5: Scene entities have component data from .zon
+    {
+        const player_health = test_scene.entities[0].components.Health;
+        const enemy1_health = test_scene.entities[1].components.Health;
+        const enemy2_health = test_scene.entities[2].components.Health;
+
+        if (player_health.current == 100 and player_health.max == 100 and
+            enemy1_health.current == 30 and enemy1_health.max == 30 and
+            enemy2_health.current == 50 and enemy2_health.max == 50)
+        {
+            std.debug.print("  ✓ Scene entities have correct Health component data\n", .{});
+            passed += 1;
+        } else {
+            std.debug.print("  ✗ Scene Health component data incorrect\n", .{});
+            failed += 1;
+        }
+    }
+
+    // Test 6: Component registry has all components
     {
         const has_all = Components.has("Position") and
             Components.has("Velocity") and
@@ -287,10 +370,13 @@ pub fn main() !void {
         \\===================================
         \\
         \\This example verifies that:
-        \\1. Components are properly registered in ComponentRegistry
-        \\2. Components can be added to ECS entities
-        \\3. Components can be queried from the ECS registry
-        \\4. Component views/queries work correctly
+        \\1. Scene data can be loaded from a .zon file
+        \\2. Components are properly registered in ComponentRegistry
+        \\3. Components can be added to ECS entities
+        \\4. Components can be queried from the ECS registry
+        \\5. Component views/queries work correctly
+        \\
+        \\Scene file: test_scene.zon
         \\
         \\Running tests:
         \\
