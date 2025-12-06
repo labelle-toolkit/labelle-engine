@@ -87,6 +87,8 @@ jobs:
         run: zig build examples
 
       - name: Build and run example_3 (standalone with labelle integration)
+        env:
+          CI_TEST: "1"
         run: |
           cd usage/example_3
-          xvfb-run -a CI_TEST=1 zig build run
+          xvfb-run -a zig build run
