@@ -20,6 +20,10 @@
         "build.zig",
         "build.zig.zon",
         "main.zig",
+        "game_scene.zon",
+        "components",
+        "prefabs",
+        "scripts",
         "fixtures",
     },
 }
