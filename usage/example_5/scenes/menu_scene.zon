@@ -1,0 +1,32 @@
+.{
+    .name = "menu",
+    .entities = .{
+        // Title background
+        .{
+            .shape = .{
+                .type = .rectangle,
+                .x = 300,
+                .y = 150,
+                .width = 200,
+                .height = 60,
+                .color = .{ .r = 100, .g = 149, .b = 237, .a = 255 },
+                .filled = true,
+            },
+        },
+        // Play button
+        .{
+            .shape = .{
+                .type = .rectangle,
+                .x = 325,
+                .y = 300,
+                .width = 150,
+                .height = 50,
+                .color = .{ .r = 50, .g = 205, .b = 50, .a = 255 },
+                .filled = true,
+            },
+            .components = .{
+                .Button = .{ .action = "play" },
+            },
+        },
+    },
+}
