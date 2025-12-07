@@ -14,6 +14,8 @@ pub const prefab = @import("prefab.zig");
 pub const loader = @import("loader.zig");
 pub const component = @import("component.zig");
 pub const script = @import("script.zig");
+pub const game = @import("game.zig");
+pub const build_helpers = @import("build_helpers.zig");
 
 // Re-export commonly used types
 pub const Prefab = prefab.Prefab;
@@ -22,6 +24,9 @@ pub const PrefabRegistry = prefab.PrefabRegistry;
 pub const SceneLoader = loader.SceneLoader;
 pub const ComponentRegistry = component.ComponentRegistry;
 pub const ScriptRegistry = script.ScriptRegistry;
+pub const Game = game.Game;
+pub const GameConfig = game.GameConfig;
+pub const WindowConfig = game.WindowConfig;
 
 // Re-export labelle types used by scenes
 pub const VisualEngine = labelle.VisualEngine;
