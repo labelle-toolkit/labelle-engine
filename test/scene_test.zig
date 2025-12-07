@@ -59,16 +59,28 @@ pub const MODULE_EXPORTS = struct {
     };
 
     pub const EXTERNAL_EXPORTS = struct {
-        test "exports VisualEngine type" {
-            try expect.toBeTrue(@hasDecl(engine, "VisualEngine"));
+        test "exports Game type" {
+            try expect.toBeTrue(@hasDecl(engine, "Game"));
         }
 
-        test "exports SpriteId type" {
-            try expect.toBeTrue(@hasDecl(engine, "SpriteId"));
+        test "exports RenderPipeline type" {
+            try expect.toBeTrue(@hasDecl(engine, "RenderPipeline"));
         }
 
-        test "exports ZIndex type" {
-            try expect.toBeTrue(@hasDecl(engine, "ZIndex"));
+        test "exports RetainedEngine type" {
+            try expect.toBeTrue(@hasDecl(engine, "RetainedEngine"));
+        }
+
+        test "exports Position type" {
+            try expect.toBeTrue(@hasDecl(engine, "Position"));
+        }
+
+        test "exports Sprite type" {
+            try expect.toBeTrue(@hasDecl(engine, "Sprite"));
+        }
+
+        test "exports Shape type" {
+            try expect.toBeTrue(@hasDecl(engine, "Shape"));
         }
 
         test "exports Registry type" {

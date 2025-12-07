@@ -1,16 +1,19 @@
 const engine = @import("labelle-engine");
-const labelle = @import("labelle");
 const Velocity = @import("../components/velocity.zig").Velocity;
 const Gravity = @import("../components/gravity.zig").Gravity;
 
-const VisualEngine = labelle.visual_engine.VisualEngine;
+const Game = engine.Game;
+const Scene = engine.Scene;
+const Position = engine.Position;
 
 pub fn update(
-    registry: *engine.Registry,
-    ve: *VisualEngine,
-    scene: *engine.Scene,
+    game: *Game,
+    scene: *Scene,
     dt: f32,
 ) void {
+    const registry = game.getRegistry();
+    const pipeline = game.getPipeline();
+
     // Apply physics updates for entities with Velocity
     for (scene.entities.items) |entity_instance| {
         const vel = registry.tryGet(Velocity, entity_instance.entity) orelse continue;
@@ -22,12 +25,12 @@ pub fn update(
             }
         }
 
-        // Update position based on velocity (only for sprite entities)
-        const sprite_id = entity_instance.sprite_id orelse continue;
-        if (ve.getPosition(sprite_id)) |pos| {
-            const new_x = pos.x + vel.x * dt;
-            const new_y = pos.y + vel.y * dt;
-            _ = ve.setPosition(sprite_id, new_x, new_y);
+        // Update position based on velocity
+        if (registry.tryGet(Position, entity_instance.entity)) |pos| {
+            pos.x += vel.x * dt;
+            pos.y += vel.y * dt;
+            // Mark position as dirty so RenderPipeline syncs it
+            pipeline.markPositionDirty(entity_instance.entity);
         }
     }
 }

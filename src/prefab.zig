@@ -6,16 +6,18 @@
 // - base: Optional reference to another prefab for composition
 //
 // Optional lifecycle hooks:
-// - onCreate(sprite_id, engine): Called when entity is instantiated
-// - onUpdate(sprite_id, engine, dt): Called every frame
-// - onDestroy(sprite_id, engine): Called when entity is removed
+// - onCreate(entity, game): Called when entity is instantiated
+// - onUpdate(entity, game, dt): Called every frame
+// - onDestroy(entity, game): Called when entity is removed
 
 const std = @import("std");
-const labelle = @import("labelle");
 
-pub const VisualEngine = labelle.VisualEngine;
-pub const SpriteId = labelle.visual_engine.SpriteId;
-pub const ZIndex = labelle.ZIndex;
+// Z-index constants for backwards compatibility
+pub const ZIndex = struct {
+    pub const background: u8 = 0;
+    pub const characters: u8 = 128;
+    pub const foreground: u8 = 255;
+};
 
 /// Sprite configuration that can be defined in prefabs or scenes
 pub const SpriteConfig = struct {
@@ -30,13 +32,14 @@ pub const SpriteConfig = struct {
 };
 
 /// Type-erased prefab interface for runtime use
+/// Uses u32 for entity and *anyopaque for Game to avoid circular imports
 pub const Prefab = struct {
     name: []const u8,
     sprite: SpriteConfig,
     animation: ?[]const u8,
-    onCreate: ?*const fn (SpriteId, *VisualEngine) void,
-    onUpdate: ?*const fn (SpriteId, *VisualEngine, f32) void,
-    onDestroy: ?*const fn (SpriteId, *VisualEngine) void,
+    onCreate: ?*const fn (u32, *anyopaque) void,
+    onUpdate: ?*const fn (u32, *anyopaque, f32) void,
+    onDestroy: ?*const fn (u32, *anyopaque) void,
 };
 
 /// Check if a type is a valid prefab
@@ -162,68 +165,9 @@ pub fn PrefabRegistry(comptime prefab_types: anytype) type {
     };
 }
 
-test "prefab basics" {
-    const TestPrefab = struct {
-        pub const name = "test";
-        pub const sprite = SpriteConfig{
-            .name = "test.png",
-            .x = 100,
-            .y = 200,
-        };
-    };
-
-    const p = fromType(TestPrefab);
-    try std.testing.expectEqualStrings("test", p.name);
-    try std.testing.expectEqualStrings("test.png", p.sprite.name);
-    try std.testing.expectEqual(@as(f32, 100), p.sprite.x);
-}
-
-test "prefab with base" {
-    const BasePrefab = struct {
-        pub const name = "base";
-        pub const sprite = SpriteConfig{
-            .name = "base.png",
-            .scale = 2.0,
-            .z_index = ZIndex.background,
-        };
-    };
-
-    const ChildPrefab = struct {
-        pub const name = "child";
-        pub const base = BasePrefab;
-        pub const sprite = SpriteConfig{
-            .name = "child.png", // override name
-            // inherit scale and z_index from base
-        };
-    };
-
-    const p = fromType(ChildPrefab);
-    try std.testing.expectEqualStrings("child", p.name);
-    try std.testing.expectEqualStrings("child.png", p.sprite.name);
-    try std.testing.expectEqual(@as(f32, 2.0), p.sprite.scale);
-    try std.testing.expectEqual(ZIndex.background, p.sprite.z_index);
-}
-
-test "prefab registry" {
-    const Prefab1 = struct {
-        pub const name = "player";
-        pub const sprite = SpriteConfig{ .name = "player.png" };
-    };
-
-    const Prefab2 = struct {
-        pub const name = "enemy";
-        pub const sprite = SpriteConfig{ .name = "enemy.png" };
-    };
-
-    const Registry = PrefabRegistry(.{ Prefab1, Prefab2 });
-
-    const player = Registry.get("player");
-    try std.testing.expect(player != null);
-    try std.testing.expectEqualStrings("player.png", player.?.sprite.name);
-
-    const enemy = Registry.getComptime("enemy");
-    try std.testing.expectEqualStrings("enemy.png", enemy.sprite.name);
-
-    const unknown = Registry.get("unknown");
-    try std.testing.expect(unknown == null);
+// Unit tests are in test/prefab_test.zig using zspec
+test "prefab module compiles" {
+    _ = Prefab;
+    _ = SpriteConfig;
+    _ = ZIndex;
 }
