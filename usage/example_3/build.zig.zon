@@ -7,9 +7,9 @@
         .labelle_engine = .{
             .path = "../..",
         },
-        .labelle = .{
-            .url = "git+https://github.com/labelle-toolkit/labelle?ref=v0.7.0#2bb9a172bd151a519a0037d5c692b11ec24eacff",
-            .hash = "labelle-0.7.0-2bWPIjJmAwA3t_cHUrP2uklGvvy6bBCx8X7mcRnpC562",
+        .@"labelle-gfx" = .{
+            .url = "git+https://github.com/labelle-toolkit/labelle-gfx?ref=v0.10.0#2bc00d41de2f067f72aa55629167b0b61e3f4d42",
+            .hash = "labelle-0.10.0-2bWPIhW2BAB16mnfjuJYX1meUv3k_EQPzY-oJQXjBL76",
         },
         .zig_ecs = .{
             .url = "git+https://github.com/prime31/zig-ecs#dbf3647c2cc4f327fe87067e40f8436c7f87f209",

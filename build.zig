@@ -11,7 +11,7 @@ pub fn build(b: *std.Build) void {
     });
     const ecs = ecs_dep.module("zig-ecs");
 
-    const labelle_dep = b.dependency("labelle", .{
+    const labelle_dep = b.dependency("labelle-gfx", .{
         .target = target,
         .optimize = optimize,
     });
