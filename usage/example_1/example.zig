@@ -27,22 +27,23 @@ pub const PlayerPrefab = struct {
     };
     pub const animation = "idle";
 
-    pub fn onCreate(sprite_id: engine.SpriteId, ve: *engine.VisualEngine) void {
-        _ = sprite_id;
-        _ = ve;
+    // Lifecycle hooks use type-erased pointers (u32 for Entity, *anyopaque for Game)
+    pub fn onCreate(entity: u32, game: *anyopaque) void {
+        _ = entity;
+        _ = game;
         std.debug.print("Player created!\n", .{});
     }
 
-    pub fn onUpdate(sprite_id: engine.SpriteId, ve: *engine.VisualEngine, dt: f32) void {
-        _ = sprite_id;
-        _ = ve;
+    pub fn onUpdate(entity: u32, game: *anyopaque, dt: f32) void {
+        _ = entity;
+        _ = game;
         _ = dt;
         // Update player logic here
     }
 
-    pub fn onDestroy(sprite_id: engine.SpriteId, ve: *engine.VisualEngine) void {
-        _ = sprite_id;
-        _ = ve;
+    pub fn onDestroy(entity: u32, game: *anyopaque) void {
+        _ = entity;
+        _ = game;
         std.debug.print("Player destroyed!\n", .{});
     }
 };
@@ -111,13 +112,12 @@ pub const Collectible = struct {
 
 pub const gravity_script = struct {
     pub fn update(
-        registry: *engine.Registry,
-        ve: *engine.VisualEngine,
+        game: *engine.Game,
         scene: *engine.Scene,
         dt: f32,
     ) void {
-        _ = ve;
         _ = scene;
+        const registry = game.getRegistry();
 
         // Query all entities with Velocity and Gravity components
         var view = registry.view(struct { vel: *Velocity, grav: *const Gravity }, .{});
@@ -133,12 +133,12 @@ pub const gravity_script = struct {
 
 pub const movement_script = struct {
     pub fn update(
-        registry: *engine.Registry,
-        ve: *engine.VisualEngine,
+        game: *engine.Game,
         scene: *engine.Scene,
         dt: f32,
     ) void {
         _ = scene;
+        const registry = game.getRegistry();
 
         // Apply velocity to sprite positions
         var view = registry.view(struct { vel: *const Velocity }, .{});
@@ -146,8 +146,7 @@ pub const movement_script = struct {
 
         while (iter.next()) |item| {
             // In a real implementation, you'd update the sprite position
-            // through the visual engine based on entity mapping
-            _ = ve;
+            // through the Game facade
             _ = dt;
             _ = item;
         }
@@ -299,7 +298,10 @@ pub fn main() !void {
         \\
         \\Usage in a real game:
         \\
-        \\  const ctx = engine.SceneContext.init(&visual_engine, &ecs_registry, allocator);
+        \\  var game = try engine.Game.init(allocator, .{{}});
+        \\  defer game.deinit();
+        \\
+        \\  const ctx = engine.SceneContext.init(&game);
         \\
         \\  // Load scene from inline definition
         \\  var scene = try Loader.load(level1_scene, ctx);
@@ -310,8 +312,8 @@ pub fn main() !void {
         \\  defer scene.deinit();
         \\
         \\  // Game loop
-        \\  while (running) {{
-        \\      scene.update(delta_time);
+        \\  while (game.isRunning()) {{
+        \\      scene.update(game.getDeltaTime());
         \\  }}
         \\
     , .{});

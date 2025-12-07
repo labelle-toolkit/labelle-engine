@@ -1,7 +1,8 @@
 // Game facade - simplified API for GUI-generated projects
 //
 // Provides a high-level interface that encapsulates:
-// - VisualEngine initialization
+// - RetainedEngine initialization (new render pipeline)
+// - RenderPipeline for ECS-to-graphics sync
 // - ECS Registry management
 // - Multi-scene support with transitions
 // - Default game loop
@@ -13,21 +14,33 @@
 //   });
 //   defer game.deinit();
 //
-//   try game.registerScene("main_menu", MainMenuLoader, main_menu_scene);
-//   try game.setScene("main_menu");
+//   // Create entities with Position + visual components
+//   const entity = game.createEntity();
+//   try game.addPosition(entity, .{ .x = 100, .y = 200 });
+//   try game.addSprite(entity, .{ .texture = tex_id });
+//
 //   try game.run();
 
 const std = @import("std");
 const labelle = @import("labelle");
 const ecs = @import("ecs");
-const scene_mod = @import("scene.zig");
+const render_pipeline_mod = @import("render_pipeline.zig");
 
 const Allocator = std.mem.Allocator;
-const VisualEngine = labelle.visual_engine.VisualEngine;
-const ColorConfig = labelle.visual_engine.ColorConfig;
+const RetainedEngine = labelle.RetainedEngine;
 const Registry = ecs.Registry;
-const Scene = scene_mod.Scene;
-const SceneContext = scene_mod.SceneContext;
+const Entity = ecs.Entity;
+
+// Re-export render pipeline types
+pub const RenderPipeline = render_pipeline_mod.RenderPipeline;
+pub const Position = render_pipeline_mod.Position;
+pub const Sprite = render_pipeline_mod.Sprite;
+pub const Shape = render_pipeline_mod.Shape;
+pub const Text = render_pipeline_mod.Text;
+pub const VisualType = render_pipeline_mod.VisualType;
+pub const Color = render_pipeline_mod.Color;
+pub const TextureId = render_pipeline_mod.TextureId;
+pub const FontId = render_pipeline_mod.FontId;
 
 /// Configuration for window creation
 pub const WindowConfig = struct {
@@ -42,7 +55,7 @@ pub const WindowConfig = struct {
 /// Configuration for game initialization
 pub const GameConfig = struct {
     window: WindowConfig = .{},
-    clear_color: ColorConfig = .{ .r = 30, .g = 35, .b = 45 },
+    clear_color: Color = .{ .r = 30, .g = 35, .b = 45 },
 };
 
 /// Scene lifecycle hooks
@@ -63,12 +76,12 @@ pub const FrameCallback = *const fn (*Game, f32) void;
 /// Game facade - main entry point for GUI-generated projects
 pub const Game = struct {
     allocator: Allocator,
-    visual_engine: VisualEngine,
+    retained_engine: RetainedEngine,
     registry: Registry,
+    pipeline: RenderPipeline,
 
     // Scene management
     scenes: std.StringHashMap(SceneEntry),
-    current_scene: ?Scene,
     current_scene_name: ?[]const u8,
     pending_scene_change: ?[]const u8,
 
@@ -77,7 +90,7 @@ pub const Game = struct {
 
     /// Initialize a new game instance
     pub fn init(allocator: Allocator, config: GameConfig) !Game {
-        var visual_engine = try VisualEngine.init(allocator, .{
+        var retained_engine = try RetainedEngine.init(allocator, .{
             .window = .{
                 .width = config.window.width,
                 .height = config.window.height,
@@ -87,21 +100,29 @@ pub const Game = struct {
             },
             .clear_color = config.clear_color,
         });
-        errdefer visual_engine.deinit();
+        errdefer retained_engine.deinit();
 
         var registry = Registry.init(allocator);
         errdefer registry.deinit();
 
-        return Game{
+        var pipeline = RenderPipeline.init(allocator, &retained_engine);
+        errdefer pipeline.deinit();
+
+        var game = Game{
             .allocator = allocator,
-            .visual_engine = visual_engine,
+            .retained_engine = retained_engine,
             .registry = registry,
+            .pipeline = pipeline,
             .scenes = std.StringHashMap(SceneEntry).init(allocator),
-            .current_scene = null,
             .current_scene_name = null,
             .pending_scene_change = null,
             .running = true,
         };
+
+        // Fix pipeline pointer after move
+        game.pipeline.engine = &game.retained_engine;
+
+        return game;
     }
 
     /// Clean up all resources
@@ -117,47 +138,116 @@ pub const Game = struct {
         }
 
         self.scenes.deinit();
+        self.pipeline.deinit();
         self.registry.deinit();
-        self.visual_engine.deinit();
+        self.retained_engine.deinit();
     }
 
     /// Unload the current scene (helper to avoid duplication)
     fn unloadCurrentScene(self: *Game) void {
-        if (self.current_scene) |*scene| {
-            if (self.current_scene_name) |name| {
-                if (self.scenes.get(name)) |entry| {
-                    if (entry.hooks.onUnload) |onUnload| {
-                        onUnload(self);
-                    }
+        if (self.current_scene_name) |name| {
+            if (self.scenes.get(name)) |entry| {
+                if (entry.hooks.onUnload) |onUnload| {
+                    onUnload(self);
                 }
             }
-            scene.deinit();
-            self.current_scene = null;
+        }
+
+        // Clear all tracked entities from pipeline and destroy their visuals
+        var iter = self.pipeline.tracked.iterator();
+        while (iter.next()) |kv| {
+            self.pipeline.untrackEntity(kv.key_ptr.*);
         }
     }
 
+    // ==================== Entity Management ====================
+
+    /// Create a new entity
+    pub fn createEntity(self: *Game) Entity {
+        return self.registry.create();
+    }
+
+    /// Destroy an entity and its visual representation
+    pub fn destroyEntity(self: *Game, entity: Entity) void {
+        self.pipeline.untrackEntity(entity);
+        self.registry.destroy(entity);
+    }
+
+    /// Add Position component to an entity
+    pub fn addPosition(self: *Game, entity: Entity, pos: Position) void {
+        self.registry.add(entity, pos);
+    }
+
+    /// Set Position component (marks dirty for sync)
+    pub fn setPosition(self: *Game, entity: Entity, pos: Position) void {
+        if (self.registry.tryGet(Position, entity)) |p| {
+            p.* = pos;
+            self.pipeline.markPositionDirty(entity);
+        }
+    }
+
+    /// Get Position component
+    pub fn getPosition(self: *Game, entity: Entity) ?*Position {
+        return self.registry.tryGet(Position, entity);
+    }
+
+    /// Add Sprite component and track for rendering
+    pub fn addSprite(self: *Game, entity: Entity, sprite: Sprite) !void {
+        self.registry.add(entity, sprite);
+        try self.pipeline.trackEntity(entity, .sprite);
+    }
+
+    /// Add Shape component and track for rendering
+    pub fn addShape(self: *Game, entity: Entity, shape: Shape) !void {
+        self.registry.add(entity, shape);
+        try self.pipeline.trackEntity(entity, .shape);
+    }
+
+    /// Add Text component and track for rendering
+    pub fn addText(self: *Game, entity: Entity, text: Text) !void {
+        self.registry.add(entity, text);
+        try self.pipeline.trackEntity(entity, .text);
+    }
+
+    /// Add a custom component to an entity
+    pub fn addComponent(self: *Game, comptime T: type, entity: Entity, component: T) void {
+        self.registry.add(entity, component);
+    }
+
+    /// Get a component from an entity
+    pub fn getComponent(self: *Game, comptime T: type, entity: Entity) ?*T {
+        return self.registry.tryGet(T, entity);
+    }
+
+    // ==================== Asset Loading ====================
+
+    /// Load a texture and return its ID
+    pub fn loadTexture(self: *Game, path: [:0]const u8) !TextureId {
+        return self.retained_engine.loadTexture(path);
+    }
+
+    /// Load a texture atlas
+    pub fn loadAtlas(self: *Game, name: []const u8, json_path: [:0]const u8, texture_path: [:0]const u8) !void {
+        return self.retained_engine.loadAtlas(name, json_path, texture_path);
+    }
+
+    // ==================== Scene Management ====================
+
     /// Register a scene with the game
-    /// The LoaderType must have a load(scene_data, SceneContext) function
     pub fn registerScene(
         self: *Game,
         comptime name: []const u8,
-        comptime LoaderType: type,
-        comptime scene_data: anytype,
+        comptime loader_fn: fn (*Game) anyerror!void,
         hooks: SceneHooks,
     ) !void {
-        const loader_fn = struct {
+        const wrapper = struct {
             fn load(game: *Game) anyerror!void {
-                const ctx = SceneContext.init(
-                    &game.visual_engine,
-                    &game.registry,
-                    game.allocator,
-                );
-                game.current_scene = try LoaderType.load(scene_data, ctx);
+                return loader_fn(game);
             }
         }.load;
 
         try self.scenes.put(name, .{
-            .loader_fn = loader_fn,
+            .loader_fn = wrapper,
             .hooks = hooks,
         });
     }
@@ -166,10 +256,9 @@ pub const Game = struct {
     pub fn registerSceneSimple(
         self: *Game,
         comptime name: []const u8,
-        comptime LoaderType: type,
-        comptime scene_data: anytype,
+        comptime loader_fn: fn (*Game) anyerror!void,
     ) !void {
-        try self.registerScene(name, LoaderType, scene_data, .{});
+        try self.registerScene(name, loader_fn, .{});
     }
 
     /// Set the active scene immediately
@@ -186,6 +275,10 @@ pub const Game = struct {
         // Clear ECS registry for new scene
         self.registry.deinit();
         self.registry = Registry.init(self.allocator);
+
+        // Reset pipeline
+        self.pipeline.deinit();
+        self.pipeline = RenderPipeline.init(self.allocator, &self.retained_engine);
 
         // Load new scene
         const entry = self.scenes.get(name) orelse return error.SceneNotFound;
@@ -221,6 +314,8 @@ pub const Game = struct {
         self.running = false;
     }
 
+    // ==================== Game Loop ====================
+
     /// Run the default game loop
     pub fn run(self: *Game) !void {
         try self.runWithCallback(null);
@@ -228,23 +323,21 @@ pub const Game = struct {
 
     /// Run the game loop with an optional frame callback
     pub fn runWithCallback(self: *Game, callback: ?FrameCallback) !void {
-        while (self.running and self.visual_engine.isRunning()) {
-            const dt = self.visual_engine.getDeltaTime();
-
-            // Update current scene
-            if (self.current_scene) |*scene| {
-                scene.update(dt);
-            }
+        while (self.running and self.retained_engine.isRunning()) {
+            const dt = self.retained_engine.getDeltaTime();
 
             // Call custom frame callback if provided
             if (callback) |cb| {
                 cb(self, dt);
             }
 
+            // Sync ECS state to RetainedEngine
+            self.pipeline.sync(&self.registry);
+
             // Render
-            self.visual_engine.beginFrame();
-            self.visual_engine.tick(dt);
-            self.visual_engine.endFrame();
+            self.retained_engine.beginFrame();
+            self.retained_engine.render();
+            self.retained_engine.endFrame();
 
             // Handle pending scene change
             if (self.pending_scene_change) |next_scene| {
@@ -257,9 +350,11 @@ pub const Game = struct {
         }
     }
 
-    /// Get access to the visual engine (for advanced use)
-    pub fn getVisualEngine(self: *Game) *VisualEngine {
-        return &self.visual_engine;
+    // ==================== Accessors ====================
+
+    /// Get access to the retained engine (for advanced use)
+    pub fn getRetainedEngine(self: *Game) *RetainedEngine {
+        return &self.retained_engine;
     }
 
     /// Get access to the ECS registry (for advanced use)
@@ -267,22 +362,19 @@ pub const Game = struct {
         return &self.registry;
     }
 
-    /// Get the current scene (for advanced use)
-    pub fn getCurrentScene(self: *Game) ?*Scene {
-        if (self.current_scene) |*scene| {
-            return scene;
-        }
-        return null;
+    /// Get access to the render pipeline (for advanced use)
+    pub fn getPipeline(self: *Game) *RenderPipeline {
+        return &self.pipeline;
     }
 
-    /// Get delta time from visual engine
+    /// Get delta time from retained engine
     pub fn getDeltaTime(self: *Game) f32 {
-        return self.visual_engine.getDeltaTime();
+        return self.retained_engine.getDeltaTime();
     }
 
-    /// Take a screenshot
-    pub fn takeScreenshot(self: *Game, filename: [:0]const u8) void {
-        self.visual_engine.takeScreenshot(filename);
+    /// Check if the game is still running
+    pub fn isRunning(self: *const Game) bool {
+        return self.running and self.retained_engine.isRunning();
     }
 };
 

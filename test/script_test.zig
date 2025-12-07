@@ -39,11 +39,11 @@ pub const MODULE_STRUCTURE = struct {
         try expect.toBeTrue(@hasDecl(script, "UpdateFn"));
     }
 
-    test "script module exports VisualEngine" {
-        try expect.toBeTrue(@hasDecl(script, "VisualEngine"));
+    test "script module exports Game" {
+        try expect.toBeTrue(@hasDecl(script, "Game"));
     }
 
-    test "script module exports Registry" {
-        try expect.toBeTrue(@hasDecl(script, "Registry"));
+    test "script module exports Scene" {
+        try expect.toBeTrue(@hasDecl(script, "Scene"));
     }
 };

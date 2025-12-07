@@ -10,16 +10,15 @@
 // .{ .name = "demo", .scripts = .{ "gravity", "floating" }, .entities = ... }
 
 const std = @import("std");
-const ecs = @import("ecs");
-const labelle = @import("labelle");
+const game_mod = @import("game.zig");
 const scene_mod = @import("scene.zig");
 
-pub const VisualEngine = labelle.VisualEngine;
-pub const Registry = ecs.Registry;
+pub const Game = game_mod.Game;
 pub const Scene = scene_mod.Scene;
 
 /// Script update function signature
-pub const UpdateFn = *const fn (*Registry, *VisualEngine, *Scene, f32) void;
+/// Scripts receive Game (for ECS/rendering access) and Scene (for scene-specific data)
+pub const UpdateFn = *const fn (*Game, *Scene, f32) void;
 
 /// Create a script registry from a struct type with script imports
 pub fn ScriptRegistry(comptime ScriptMap: type) type {
@@ -59,7 +58,7 @@ pub fn ScriptRegistry(comptime ScriptMap: type) type {
 
 test "script registry" {
     const MockScript = struct {
-        pub fn update(_: *Registry, _: *VisualEngine, _: *Scene, _: f32) void {}
+        pub fn update(_: *Game, _: *Scene, _: f32) void {}
     };
 
     const Scripts = ScriptRegistry(struct {

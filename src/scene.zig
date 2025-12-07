@@ -16,6 +16,7 @@ pub const component = @import("component.zig");
 pub const script = @import("script.zig");
 pub const game = @import("game.zig");
 pub const build_helpers = @import("build_helpers.zig");
+pub const render_pipeline = @import("render_pipeline.zig");
 
 // Re-export commonly used types
 pub const Prefab = prefab.Prefab;
@@ -28,28 +29,45 @@ pub const Game = game.Game;
 pub const GameConfig = game.GameConfig;
 pub const WindowConfig = game.WindowConfig;
 
-// Re-export labelle types used by scenes
-pub const VisualEngine = labelle.VisualEngine;
-pub const SpriteId = labelle.visual_engine.SpriteId;
-pub const ShapeId = labelle.visual_engine.ShapeId;
-pub const ZIndex = labelle.ZIndex;
+// Re-export render pipeline types
+pub const RenderPipeline = render_pipeline.RenderPipeline;
+pub const Position = render_pipeline.Position;
+pub const Sprite = render_pipeline.Sprite;
+pub const Shape = render_pipeline.Shape;
+pub const Text = render_pipeline.Text;
+pub const VisualType = render_pipeline.VisualType;
+pub const RetainedEngine = render_pipeline.RetainedEngine;
+pub const TextureId = render_pipeline.TextureId;
+pub const FontId = render_pipeline.FontId;
+pub const Color = render_pipeline.Color;
+
+// Re-export ZIndex from prefab for backwards compatibility
+pub const ZIndex = prefab.ZIndex;
 
 // Re-export ECS types
 pub const Registry = ecs.Registry;
 pub const Entity = ecs.Entity;
 
 /// Context passed to prefab lifecycle functions and scene loading
+/// Uses Game facade for unified access to ECS, pipeline, and engine
 pub const SceneContext = struct {
-    engine: *VisualEngine,
-    registry: *Registry,
-    allocator: std.mem.Allocator,
+    game: *Game,
 
-    pub fn init(engine: *VisualEngine, registry: *Registry, allocator: std.mem.Allocator) SceneContext {
-        return .{
-            .engine = engine,
-            .registry = registry,
-            .allocator = allocator,
-        };
+    pub fn init(g: *Game) SceneContext {
+        return .{ .game = g };
+    }
+
+    // Convenience accessors
+    pub fn registry(self: *SceneContext) *Registry {
+        return self.game.getRegistry();
+    }
+
+    pub fn pipeline(self: *SceneContext) *RenderPipeline {
+        return self.game.getPipeline();
+    }
+
+    pub fn allocator(self: *SceneContext) std.mem.Allocator {
+        return self.game.allocator;
     }
 };
 
@@ -70,58 +88,52 @@ pub const Scene = struct {
     }
 
     pub fn deinit(self: *Scene) void {
+        const alloc = self.ctx.allocator();
+        const reg = self.ctx.registry();
+        const pipe = self.ctx.pipeline();
+
         // Call onDestroy for all entities and destroy ECS entities
         for (self.entities.items) |*instance| {
             if (instance.onDestroy) |destroy_fn| {
-                if (instance.sprite_id) |sid| {
-                    destroy_fn(sid, self.ctx.engine);
-                }
+                destroy_fn(@bitCast(instance.entity), @ptrCast(self.ctx.game));
             }
-            self.ctx.registry.destroy(instance.entity);
+            pipe.untrackEntity(instance.entity);
+            reg.destroy(instance.entity);
         }
-        self.entities.deinit(self.ctx.allocator);
+        self.entities.deinit(alloc);
     }
 
     pub fn update(self: *Scene, dt: f32) void {
         // Call prefab onUpdate hooks
-        for (self.entities.items) |*entity| {
-            if (entity.onUpdate) |update_fn| {
-                if (entity.sprite_id) |sid| {
-                    update_fn(sid, self.ctx.engine, dt);
-                }
+        for (self.entities.items) |*entity_instance| {
+            if (entity_instance.onUpdate) |update_fn| {
+                update_fn(@bitCast(entity_instance.entity), @ptrCast(self.ctx.game), dt);
             }
         }
 
         // Call scene scripts
         for (self.scripts) |script_update| {
-            script_update(self.ctx.registry, self.ctx.engine, self, dt);
+            script_update(self.ctx.game, self, dt);
         }
     }
 
     pub fn addEntity(self: *Scene, instance: EntityInstance) !void {
-        try self.entities.append(self.ctx.allocator, instance);
+        try self.entities.append(self.ctx.allocator(), instance);
     }
 
-    pub fn spriteCount(self: *const Scene) usize {
+    pub fn entityCount(self: *const Scene) usize {
         return self.entities.items.len;
     }
 };
 
-/// Visual element type for entity instances
-pub const VisualType = enum {
-    sprite,
-    shape,
-};
-
 /// Runtime entity instance
+/// Uses u32 for entity and *anyopaque for lifecycle hooks to avoid circular imports in prefab.zig
 pub const EntityInstance = struct {
     entity: Entity,
     visual_type: VisualType = .sprite,
-    sprite_id: ?SpriteId = null,
-    shape_id: ?ShapeId = null,
     prefab_name: ?[]const u8 = null,
-    onUpdate: ?*const fn (SpriteId, *VisualEngine, f32) void = null,
-    onDestroy: ?*const fn (SpriteId, *VisualEngine) void = null,
+    onUpdate: ?*const fn (u32, *anyopaque, f32) void = null,
+    onDestroy: ?*const fn (u32, *anyopaque) void = null,
 };
 
 test "scene module" {

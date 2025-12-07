@@ -79,6 +79,7 @@ pub fn build(b: *std.Build) void {
     const example_files = [_]struct { name: []const u8, path: []const u8, desc: []const u8 }{
         .{ .name = "example-1", .path = "usage/example_1/example.zig", .desc = "Run example 1: Basic usage" },
         .{ .name = "example-2", .path = "usage/example_2/ecs_components.zig", .desc = "Run example 2: ECS components" },
+        .{ .name = "example-6", .path = "usage/example_6/main.zig", .desc = "Run example 6: RenderPipeline" },
     };
 
     const all_examples_step = b.step("examples", "Run all examples");
