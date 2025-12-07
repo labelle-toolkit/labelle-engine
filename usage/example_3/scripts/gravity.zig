@@ -22,11 +22,12 @@ pub fn update(
             }
         }
 
-        // Update position based on velocity
-        if (ve.getPosition(entity_instance.sprite_id)) |pos| {
+        // Update position based on velocity (only for sprite entities)
+        const sprite_id = entity_instance.sprite_id orelse continue;
+        if (ve.getPosition(sprite_id)) |pos| {
             const new_x = pos.x + vel.x * dt;
             const new_y = pos.y + vel.y * dt;
-            _ = ve.setPosition(entity_instance.sprite_id, new_x, new_y);
+            _ = ve.setPosition(sprite_id, new_x, new_y);
         }
     }
 }

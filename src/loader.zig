@@ -9,6 +9,8 @@
 //         .{ .prefab = "background" },
 //         .{ .sprite = .{ .name = "coin.png", .x = 100, .y = 50 } },
 //         .{ .sprite = .{ .name = "cloud.png" }, .components = .{ .Gravity = .{ .strength = 9.8 } } },
+//         .{ .shape = .{ .type = .circle, .x = 100, .y = 100, .radius = 50, .color = .{ .r = 255, .g = 0, .b = 0, .a = 255 } } },
+//         .{ .shape = .{ .type = .rectangle, .x = 200, .y = 200, .width = 100, .height = 50 } },
 //     },
 // }
 
@@ -22,6 +24,9 @@ const script_mod = @import("script.zig");
 
 pub const VisualEngine = labelle.VisualEngine;
 pub const SpriteId = labelle.visual_engine.SpriteId;
+pub const ShapeId = labelle.visual_engine.ShapeId;
+pub const ShapeConfig = labelle.visual_engine.ShapeConfig;
+pub const ShapeType = labelle.visual_engine.ShapeType;
 pub const ZIndex = labelle.ZIndex;
 pub const Registry = ecs.Registry;
 pub const Entity = ecs.Entity;
@@ -31,6 +36,7 @@ pub const SpriteConfig = prefab_mod.SpriteConfig;
 pub const Scene = scene_mod.Scene;
 pub const SceneContext = scene_mod.SceneContext;
 pub const EntityInstance = scene_mod.EntityInstance;
+pub const VisualType = scene_mod.VisualType;
 
 /// Scene loader that combines .zon scene data with prefab, component, and script registries
 pub fn SceneLoader(comptime PrefabRegistry: type, comptime Components: type, comptime Scripts: type) type {
@@ -68,6 +74,11 @@ pub fn SceneLoader(comptime PrefabRegistry: type, comptime Components: type, com
             // Check if this references a prefab
             if (@hasField(@TypeOf(entity_def), "prefab")) {
                 return try loadPrefabEntity(entity_def, ctx);
+            }
+
+            // Check if this is a shape entity
+            if (@hasField(@TypeOf(entity_def), "shape")) {
+                return try loadShapeEntity(entity_def, ctx);
             }
 
             // Otherwise it's an inline sprite definition
@@ -154,6 +165,65 @@ pub fn SceneLoader(comptime PrefabRegistry: type, comptime Components: type, com
             return .{
                 .entity = entity,
                 .sprite_id = sprite_id,
+                .prefab_name = null,
+                .onUpdate = null,
+                .onDestroy = null,
+            };
+        }
+
+        /// Load a shape entity
+        fn loadShapeEntity(
+            comptime entity_def: anytype,
+            ctx: SceneContext,
+        ) !EntityInstance {
+            const shape_def = entity_def.shape;
+
+            // Create ECS entity
+            const entity = ctx.registry.create();
+
+            // Determine shape type
+            const shape_type: ShapeType = shape_def.type;
+
+            // Build ShapeConfig
+            var config = ShapeConfig{
+                .shape_type = shape_type,
+                .x = if (@hasField(@TypeOf(shape_def), "x")) shape_def.x else 0,
+                .y = if (@hasField(@TypeOf(shape_def), "y")) shape_def.y else 0,
+                .filled = if (@hasField(@TypeOf(shape_def), "filled")) shape_def.filled else true,
+            };
+
+            // Shape-specific properties
+            if (@hasField(@TypeOf(shape_def), "radius")) {
+                config.radius = shape_def.radius;
+            }
+            if (@hasField(@TypeOf(shape_def), "width")) {
+                config.width = shape_def.width;
+            }
+            if (@hasField(@TypeOf(shape_def), "height")) {
+                config.height = shape_def.height;
+            }
+
+            // Color
+            if (@hasField(@TypeOf(shape_def), "color")) {
+                config.color = .{
+                    .r = shape_def.color.r,
+                    .g = shape_def.color.g,
+                    .b = shape_def.color.b,
+                    .a = if (@hasField(@TypeOf(shape_def.color), "a")) shape_def.color.a else 255,
+                };
+            }
+
+            const shape_id = try ctx.engine.addShape(config);
+
+            // Add components from scene definition
+            if (@hasField(@TypeOf(entity_def), "components")) {
+                Components.addComponents(ctx.registry, entity, entity_def.components);
+            }
+
+            return .{
+                .entity = entity,
+                .visual_type = .shape,
+                .shape_id = shape_id,
                 .prefab_name = null,
                 .onUpdate = null,
                 .onDestroy = null,

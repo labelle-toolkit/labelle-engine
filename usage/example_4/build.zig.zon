@@ -1,6 +1,6 @@
 .{
-    .fingerprint = 0xb41e8fcddf9e1298,
-    .name = .example_labelle_rendering,
+    .fingerprint = 0x3a2dd18419b3482,
+    .name = .example_primitives,
     .version = "0.1.0",
     .minimum_zig_version = "0.15.2",
     .dependencies = .{
@@ -22,8 +22,6 @@
         "main.zig",
         "game_scene.zon",
         "components",
-        "prefabs",
         "scripts",
-        "fixtures",
     },
 }
