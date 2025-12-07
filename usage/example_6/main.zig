@@ -96,9 +96,9 @@ pub fn main() !void {
             std.debug.assert(pipeline.count() == 3);
             std.debug.print("Example 6: Pipeline tracking verified ({d} entities)\n", .{pipeline.count()});
         }
-        // Clear pipeline before exiting to avoid segfault on deinit
-        pipeline.tracked.clearRetainingCapacity();
-        return;
+        // Exit immediately without running defers - ve.deinit() would crash
+        // since GLFW was never properly initialized
+        std.process.exit(0);
     }
 
     var frame_count: u32 = 0;
