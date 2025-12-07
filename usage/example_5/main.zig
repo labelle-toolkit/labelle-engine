@@ -37,10 +37,6 @@ const Scripts = engine.ScriptRegistry(struct {});
 // Scene loader type
 const Loader = engine.SceneLoader(Prefabs, Components, Scripts);
 
-// Scene data
-const menu_scene = @embedFile("scenes/menu_scene.zon");
-const game_scene = @embedFile("scenes/game_scene.zon");
-
 // Game state
 var game_started = false;
 var score: u32 = 0;

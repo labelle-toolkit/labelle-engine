@@ -36,7 +36,10 @@ pub fn addFolderImports(
             const import_name = std.fmt.allocPrint(b.allocator, "{s}/{s}", .{ import_prefix, name }) catch continue;
 
             // Create source file path
-            const source_path = std.fmt.allocPrint(b.allocator, "{s}/{s}", .{ folder_path, entry.name }) catch continue;
+            const source_path = std.fmt.allocPrint(b.allocator, "{s}/{s}", .{ folder_path, entry.name }) catch {
+                b.allocator.free(import_name);
+                continue;
+            };
 
             module.addImport(import_name, b.createModule(.{
                 .root_source_file = .{ .cwd_relative = source_path },
@@ -72,11 +75,18 @@ pub fn scanFolder(allocator: std.mem.Allocator, folder_path: []const u8) []const
     while (iter.next() catch null) |entry| {
         if (entry.kind == .file and std.mem.endsWith(u8, entry.name, ".zig")) {
             const name = allocator.dupe(u8, entry.name[0 .. entry.name.len - 4]) catch continue;
-            names.append(name) catch continue;
+            names.append(name) catch {
+                allocator.free(name);
+                continue;
+            };
         }
     }
 
-    return names.toOwnedSlice() catch &.{};
+    return names.toOwnedSlice() catch {
+        for (names.items) |n| allocator.free(n);
+        names.deinit();
+        return &.{};
+    };
 }
 
 test "build_helpers module compiles" {

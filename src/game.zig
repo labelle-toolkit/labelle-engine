@@ -106,7 +106,23 @@ pub const Game = struct {
 
     /// Clean up all resources
     pub fn deinit(self: *Game) void {
-        // Unload current scene if any
+        self.unloadCurrentScene();
+
+        // Free owned strings
+        if (self.current_scene_name) |name| {
+            self.allocator.free(name);
+        }
+        if (self.pending_scene_change) |name| {
+            self.allocator.free(name);
+        }
+
+        self.scenes.deinit();
+        self.registry.deinit();
+        self.visual_engine.deinit();
+    }
+
+    /// Unload the current scene (helper to avoid duplication)
+    fn unloadCurrentScene(self: *Game) void {
         if (self.current_scene) |*scene| {
             if (self.current_scene_name) |name| {
                 if (self.scenes.get(name)) |entry| {
@@ -116,11 +132,8 @@ pub const Game = struct {
                 }
             }
             scene.deinit();
+            self.current_scene = null;
         }
-
-        self.scenes.deinit();
-        self.registry.deinit();
-        self.visual_engine.deinit();
     }
 
     /// Register a scene with the game
@@ -162,16 +175,12 @@ pub const Game = struct {
     /// Set the active scene immediately
     pub fn setScene(self: *Game, name: []const u8) !void {
         // Unload current scene
-        if (self.current_scene) |*scene| {
-            if (self.current_scene_name) |current_name| {
-                if (self.scenes.get(current_name)) |entry| {
-                    if (entry.hooks.onUnload) |onUnload| {
-                        onUnload(self);
-                    }
-                }
-            }
-            scene.deinit();
-            self.current_scene = null;
+        self.unloadCurrentScene();
+
+        // Free old scene name if owned
+        if (self.current_scene_name) |old_name| {
+            self.allocator.free(old_name);
+            self.current_scene_name = null;
         }
 
         // Clear ECS registry for new scene
@@ -181,7 +190,9 @@ pub const Game = struct {
         // Load new scene
         const entry = self.scenes.get(name) orelse return error.SceneNotFound;
         try entry.loader_fn(self);
-        self.current_scene_name = name;
+
+        // Own the scene name by duplicating it
+        self.current_scene_name = try self.allocator.dupe(u8, name);
 
         // Call onLoad hook
         if (entry.hooks.onLoad) |onLoad| {
@@ -192,7 +203,12 @@ pub const Game = struct {
     /// Queue a scene change to happen at the end of the current frame
     /// This is safe to call from within scripts
     pub fn queueSceneChange(self: *Game, name: []const u8) void {
-        self.pending_scene_change = name;
+        // Free any existing pending change
+        if (self.pending_scene_change) |old| {
+            self.allocator.free(old);
+        }
+        // Own the name by duplicating it
+        self.pending_scene_change = self.allocator.dupe(u8, name) catch null;
     }
 
     /// Get the name of the current scene
@@ -232,8 +248,11 @@ pub const Game = struct {
 
             // Handle pending scene change
             if (self.pending_scene_change) |next_scene| {
+                defer {
+                    self.allocator.free(next_scene);
+                    self.pending_scene_change = null;
+                }
                 try self.setScene(next_scene);
-                self.pending_scene_change = null;
             }
         }
     }
