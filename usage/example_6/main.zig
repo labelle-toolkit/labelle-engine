@@ -96,8 +96,14 @@ pub fn main() !void {
             std.debug.assert(pipeline.count() == 3);
             std.debug.print("Example 6: Pipeline tracking verified ({d} entities)\n", .{pipeline.count()});
         }
-        // Exit immediately without running defers - ve.deinit() would crash
-        // since GLFW was never properly initialized
+        // WORKAROUND: Exit immediately without running defers.
+        // When GLFW fails to initialize, RetainedEngine.deinit() crashes because it
+        // tries to cleanup resources that were never created.
+        // See: https://github.com/labelle-toolkit/labelle-gfx/issues/57
+        //
+        // This causes a memory leak (gpa, registry, pipeline not cleaned up), but
+        // it's acceptable for CI test purposes. Once issue #57 is fixed, we can
+        // use a normal return and let defers run.
         std.process.exit(0);
     }
 

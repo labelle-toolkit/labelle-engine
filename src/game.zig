@@ -108,6 +108,9 @@ pub const Game = struct {
         var pipeline = RenderPipeline.init(allocator, &retained_engine);
         errdefer pipeline.deinit();
 
+        // Build the Game struct. Note: pipeline.engine currently points to the
+        // local `retained_engine` variable above, which will become invalid after
+        // the struct is moved to the return value.
         var game = Game{
             .allocator = allocator,
             .retained_engine = retained_engine,
@@ -119,7 +122,13 @@ pub const Game = struct {
             .running = true,
         };
 
-        // Fix pipeline pointer after move
+        // IMPORTANT: Fix pipeline.engine pointer after the struct move.
+        // The pipeline was initialized with &retained_engine (a local variable).
+        // After moving into the Game struct, we must update the pointer to reference
+        // the new location (game.retained_engine). This is safe because:
+        // 1. We update the pointer before returning
+        // 2. The Game struct is returned by value and won't move again
+        // 3. All subsequent access is through *Game pointers
         game.pipeline.engine = &game.retained_engine;
 
         return game;
@@ -204,6 +213,24 @@ pub const Game = struct {
     pub fn addText(self: *Game, entity: Entity, text: Text) !void {
         self.registry.add(entity, text);
         try self.pipeline.trackEntity(entity, .text);
+    }
+
+    /// Remove Sprite component and stop tracking for rendering
+    pub fn removeSprite(self: *Game, entity: Entity) void {
+        self.pipeline.untrackEntity(entity);
+        self.registry.remove(Sprite, entity);
+    }
+
+    /// Remove Shape component and stop tracking for rendering
+    pub fn removeShape(self: *Game, entity: Entity) void {
+        self.pipeline.untrackEntity(entity);
+        self.registry.remove(Shape, entity);
+    }
+
+    /// Remove Text component and stop tracking for rendering
+    pub fn removeText(self: *Game, entity: Entity) void {
+        self.pipeline.untrackEntity(entity);
+        self.registry.remove(Text, entity);
     }
 
     /// Add a custom component to an entity

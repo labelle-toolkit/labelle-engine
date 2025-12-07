@@ -127,13 +127,31 @@ pub const Scene = struct {
 };
 
 /// Runtime entity instance
-/// Uses u32 for entity and *anyopaque for lifecycle hooks to avoid circular imports in prefab.zig
+///
+/// Uses u32 for entity and *anyopaque for lifecycle hooks to avoid circular imports in prefab.zig.
+/// This is necessary because prefab.zig cannot import game.zig without creating a cycle.
+///
+/// When implementing lifecycle hooks in prefabs, cast the parameters as follows:
+/// ```zig
+/// pub fn onCreate(entity_u32: u32, game_ptr: *anyopaque) void {
+///     const entity: Entity = @bitCast(entity_u32);
+///     const game: *Game = @ptrCast(@alignCast(game_ptr));
+///     // ... use entity and game
+/// }
+/// ```
 pub const EntityInstance = struct {
     entity: Entity,
     visual_type: VisualType = .sprite,
     prefab_name: ?[]const u8 = null,
     onUpdate: ?*const fn (u32, *anyopaque, f32) void = null,
     onDestroy: ?*const fn (u32, *anyopaque) void = null,
+
+    // Compile-time verification that Entity can be safely cast to u32
+    comptime {
+        if (@sizeOf(Entity) != @sizeOf(u32)) {
+            @compileError("Entity must be the same size as u32 for @bitCast in lifecycle hooks");
+        }
+    }
 };
 
 test "scene module" {

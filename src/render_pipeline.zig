@@ -250,18 +250,24 @@ pub const RenderPipeline = struct {
                             // Destroy and recreate to handle visual changes
                             self.engine.destroySprite(entity_id);
                             self.engine.createSprite(entity_id, sprite.toVisual(), pos);
+                        } else {
+                            std.log.warn("Entity tracked as sprite but missing Sprite component", .{});
                         }
                     },
                     .shape => {
                         if (registry.tryGet(Shape, tracked.entity)) |shape| {
                             self.engine.destroyShape(entity_id);
                             self.engine.createShape(entity_id, shape.toVisual(), pos);
+                        } else {
+                            std.log.warn("Entity tracked as shape but missing Shape component", .{});
                         }
                     },
                     .text => {
                         if (registry.tryGet(Text, tracked.entity)) |text| {
                             self.engine.destroyText(entity_id);
                             self.engine.createText(entity_id, text.toVisual(), pos);
+                        } else {
+                            std.log.warn("Entity tracked as text but missing Text component", .{});
                         }
                     },
                 }
