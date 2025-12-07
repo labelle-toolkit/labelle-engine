@@ -88,6 +88,19 @@ pub fn main() !void {
     std.debug.print("Example 6: RenderPipeline started\n", .{});
     std.debug.print("  Tracked entities: {d}\n", .{pipeline.count()});
 
+    // Check if engine is actually running (GLFW may fail on headless CI)
+    if (!ve.isRunning()) {
+        std.debug.print("Example 6: No display available, skipping render test\n", .{});
+        // On headless CI, just verify pipeline tracking works
+        if (ci_test) {
+            std.debug.assert(pipeline.count() == 3);
+            std.debug.print("Example 6: Pipeline tracking verified ({d} entities)\n", .{pipeline.count()});
+        }
+        // Clear pipeline before exiting to avoid segfault on deinit
+        pipeline.tracked.clearRetainingCapacity();
+        return;
+    }
+
     var frame_count: u32 = 0;
     const max_frames: u32 = if (ci_test) 120 else 99999;
 
@@ -110,14 +123,9 @@ pub fn main() !void {
 
     std.debug.print("Example 6 completed. Frames: {d}\n", .{frame_count});
 
-    // CI assertion - only check frame count if display was available
+    // CI assertion
     if (ci_test) {
-        // On headless CI, GLFW may fail to init (no X11), so frame_count could be 0
-        // Only assert frame count if we actually ran frames
-        if (frame_count > 0) {
-            std.debug.assert(frame_count >= 60);
-        }
-        // Pipeline tracking works regardless of display
+        std.debug.assert(frame_count >= 60);
         std.debug.assert(pipeline.count() == 3);
     }
 }
