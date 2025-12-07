@@ -176,15 +176,10 @@ pub fn main() !void {
         return;
     }
 
-    var frame_count: u32 = 0;
-
     std.debug.print("Press ESC to exit\n\n", .{});
 
     // Game loop (only runs in interactive mode with display)
     while (game.isRunning()) {
-        frame_count += 1;
-        _ = frame_count;
-
         const dt = game.getDeltaTime();
 
         // Update scene (runs scripts)
