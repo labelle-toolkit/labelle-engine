@@ -26,6 +26,7 @@ pub const ScriptRegistry = script.ScriptRegistry;
 // Re-export labelle types used by scenes
 pub const VisualEngine = labelle.VisualEngine;
 pub const SpriteId = labelle.visual_engine.SpriteId;
+pub const ShapeId = labelle.visual_engine.ShapeId;
 pub const ZIndex = labelle.ZIndex;
 
 // Re-export ECS types
@@ -67,7 +68,9 @@ pub const Scene = struct {
         // Call onDestroy for all entities and destroy ECS entities
         for (self.entities.items) |*instance| {
             if (instance.onDestroy) |destroy_fn| {
-                destroy_fn(instance.sprite_id, self.ctx.engine);
+                if (instance.sprite_id) |sid| {
+                    destroy_fn(sid, self.ctx.engine);
+                }
             }
             self.ctx.registry.destroy(instance.entity);
         }
@@ -78,7 +81,9 @@ pub const Scene = struct {
         // Call prefab onUpdate hooks
         for (self.entities.items) |*entity| {
             if (entity.onUpdate) |update_fn| {
-                update_fn(entity.sprite_id, self.ctx.engine, dt);
+                if (entity.sprite_id) |sid| {
+                    update_fn(sid, self.ctx.engine, dt);
+                }
             }
         }
 
@@ -97,10 +102,18 @@ pub const Scene = struct {
     }
 };
 
+/// Visual element type for entity instances
+pub const VisualType = enum {
+    sprite,
+    shape,
+};
+
 /// Runtime entity instance
 pub const EntityInstance = struct {
     entity: Entity,
-    sprite_id: SpriteId,
+    visual_type: VisualType = .sprite,
+    sprite_id: ?SpriteId = null,
+    shape_id: ?ShapeId = null,
     prefab_name: ?[]const u8 = null,
     onUpdate: ?*const fn (SpriteId, *VisualEngine, f32) void = null,
     onDestroy: ?*const fn (SpriteId, *VisualEngine) void = null,
