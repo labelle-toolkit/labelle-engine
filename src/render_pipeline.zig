@@ -193,15 +193,30 @@ pub const RenderPipeline = struct {
 
     /// Stop tracking an entity and remove from renderer
     pub fn untrackEntity(self: *RenderPipeline, entity: Entity) void {
-        if (self.tracked.get(entity)) |tracked| {
+        if (self.tracked.fetchSwapRemove(entity)) |kv| {
             const entity_id = toEntityId(entity);
-            switch (tracked.visual_type) {
+            switch (kv.value.visual_type) {
                 .sprite => self.engine.destroySprite(entity_id),
                 .shape => self.engine.destroyShape(entity_id),
                 .text => self.engine.destroyText(entity_id),
             }
         }
-        _ = self.tracked.swapRemove(entity);
+    }
+
+    /// Clear all tracked entities and destroy their visuals
+    pub fn clear(self: *RenderPipeline) void {
+        // Destroy all visuals in the engine
+        var iter = self.tracked.iterator();
+        while (iter.next()) |kv| {
+            const entity_id = toEntityId(kv.key_ptr.*);
+            switch (kv.value_ptr.visual_type) {
+                .sprite => self.engine.destroySprite(entity_id),
+                .shape => self.engine.destroyShape(entity_id),
+                .text => self.engine.destroyText(entity_id),
+            }
+        }
+        // Clear the tracking map
+        self.tracked.clearRetainingCapacity();
     }
 
     /// Mark an entity's position as dirty (needs sync to gfx)

@@ -154,10 +154,7 @@ pub const Game = struct {
         }
 
         // Clear all tracked entities from pipeline and destroy their visuals
-        var iter = self.pipeline.tracked.iterator();
-        while (iter.next()) |kv| {
-            self.pipeline.untrackEntity(kv.key_ptr.*);
-        }
+        self.pipeline.clear();
     }
 
     // ==================== Entity Management ====================
