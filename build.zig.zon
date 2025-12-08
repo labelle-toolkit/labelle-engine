@@ -9,8 +9,8 @@
             .hash = "entt-1.0.0-qJPtbNLVAgDPXaUbyRSsBTK75Cr1WujUA92kToJugWry",
         },
         .@"labelle-gfx" = .{
-            .url = "git+https://github.com/labelle-toolkit/labelle-gfx?ref=v0.11.0#d07cd1bebec815141afffba8d20db5bc10298370",
-            .hash = "labelle-0.11.0-2bWPIto7BQAU4KuQ_MgBfOkfbnLyqNN9_k0GYL5KvOnh",
+            .url = "git+https://github.com/labelle-toolkit/labelle-gfx?ref=v0.12.0#e14156faa75a2a7525784dfa0b53ed70ee2956ca",
+            .hash = "labelle-0.12.0-2bWPImpGBQBzeakXLoI91nDZcCHiCWFWBuMhEYVHFrre",
         },
         .zspec = .{
             .url = "git+https://github.com/apotema/zspec#4d45cc5cda87312312040fcaa205720246d24953",

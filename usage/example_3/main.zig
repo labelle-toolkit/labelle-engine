@@ -123,9 +123,8 @@ pub fn main() !void {
     // Get underlying engine for advanced operations
     const re = game.getRetainedEngine();
 
-    // Note: Atlas loading skipped for now - scene entities will use invalid textures
-    // The scene loading and ECS functionality will still work correctly
-    _ = character_frames; // Acknowledge comptime data exists
+    // Load atlas from comptime data (now available in RetainedEngine v0.12.0)
+    try re.loadAtlasComptime("characters", character_frames, "fixtures/characters.png");
 
     // Create scene context using Game facade
     const ctx = engine.SceneContext.init(&game);
@@ -169,17 +168,16 @@ pub fn main() !void {
 
     std.debug.print("\n✅ All assertions passed!\n\n", .{});
 
-    // In CI mode, exit after assertions - the rendering loop has issues
-    // without proper atlas loading (sprites have invalid textures)
-    if (ci_test) {
-        std.debug.print("CI mode: exiting after assertions\n", .{});
-        return;
+    if (!ci_test) {
+        std.debug.print("Press ESC to exit\n\n", .{});
     }
 
-    std.debug.print("Press ESC to exit\n\n", .{});
+    var frame_count: u32 = 0;
+    const max_frames: u32 = if (ci_test) 60 else 999999;
 
-    // Game loop (only runs in interactive mode with display)
-    while (game.isRunning()) {
+    // Game loop
+    while (game.isRunning() and frame_count < max_frames) {
+        frame_count += 1;
         const dt = game.getDeltaTime();
 
         // Update scene (runs scripts)
@@ -206,5 +204,5 @@ pub fn main() !void {
         re.endFrame();
     }
 
-    std.debug.print("Example 3 completed.\n", .{});
+    std.debug.print("Example 3 completed. Frames: {d}\n", .{frame_count});
 }
