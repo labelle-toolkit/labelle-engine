@@ -249,7 +249,6 @@ pub const RenderPipeline = struct {
                     .sprite => {
                         if (registry.tryGet(Sprite, tracked.entity)) |sprite| {
                             self.engine.createSprite(entity_id, sprite.toVisual(), pos);
-                            tracked.created = true;
                         } else {
                             std.log.warn("Entity tracked as sprite but missing Sprite component", .{});
                         }
@@ -257,7 +256,6 @@ pub const RenderPipeline = struct {
                     .shape => {
                         if (registry.tryGet(Shape, tracked.entity)) |shape| {
                             self.engine.createShape(entity_id, shape.toVisual(), pos);
-                            tracked.created = true;
                         } else {
                             std.log.warn("Entity tracked as shape but missing Shape component", .{});
                         }
@@ -265,12 +263,14 @@ pub const RenderPipeline = struct {
                     .text => {
                         if (registry.tryGet(Text, tracked.entity)) |text| {
                             self.engine.createText(entity_id, text.toVisual(), pos);
-                            tracked.created = true;
                         } else {
                             std.log.warn("Entity tracked as text but missing Text component", .{});
                         }
                     },
                 }
+                // Mark as created to prevent repeated warnings on every sync
+                // If component was missing, user should untrack/re-track to retry
+                tracked.created = true;
                 tracked.visual_dirty = false;
                 tracked.position_dirty = false; // Position was set during create
             } else if (tracked.visual_dirty) {
@@ -279,16 +279,22 @@ pub const RenderPipeline = struct {
                     .sprite => {
                         if (registry.tryGet(Sprite, tracked.entity)) |sprite| {
                             self.engine.updateSprite(entity_id, sprite.toVisual());
+                        } else {
+                            std.log.warn("Entity tracked as sprite but missing Sprite component during update", .{});
                         }
                     },
                     .shape => {
                         if (registry.tryGet(Shape, tracked.entity)) |shape| {
                             self.engine.updateShape(entity_id, shape.toVisual());
+                        } else {
+                            std.log.warn("Entity tracked as shape but missing Shape component during update", .{});
                         }
                     },
                     .text => {
                         if (registry.tryGet(Text, tracked.entity)) |text| {
                             self.engine.updateText(entity_id, text.toVisual());
+                        } else {
+                            std.log.warn("Entity tracked as text but missing Text component during update", .{});
                         }
                     },
                 }

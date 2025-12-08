@@ -169,8 +169,9 @@ pub fn main() !void {
     std.debug.print("\n✅ All assertions passed!\n\n", .{});
 
     // In CI mode, exit after assertions pass
-    // The render loop still has issues with sprite/atlas sync that need investigation
-    // (updatePosition crashes when sprites aren't properly created from atlas)
+    // The render loop may still have issues with sprite/atlas sync that need investigation.
+    // Note: updatePosition() now gracefully handles non-existent entities (fixed in labelle-gfx v0.12.0).
+    // See issue #12 for investigation status.
     if (ci_test) {
         std.debug.print("CI mode: exiting after assertions\n", .{});
         return;
