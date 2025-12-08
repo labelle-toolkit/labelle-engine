@@ -153,6 +153,7 @@ const TrackedEntity = struct {
     visual_type: VisualType,
     position_dirty: bool = true,
     visual_dirty: bool = true,
+    created: bool = false, // Has the visual been created in the engine?
 };
 
 // ============================================
@@ -240,32 +241,31 @@ pub const RenderPipeline = struct {
         for (self.tracked.values()) |*tracked| {
             const entity_id = toEntityId(tracked.entity);
 
-            // Handle new/dirty visuals
-            if (tracked.visual_dirty) {
+            // Handle new visuals (first time creation)
+            if (!tracked.created) {
                 const pos: GfxPosition = if (registry.tryGet(Position, tracked.entity)) |p| p.toGfx() else .{};
 
                 switch (tracked.visual_type) {
                     .sprite => {
                         if (registry.tryGet(Sprite, tracked.entity)) |sprite| {
-                            // Destroy and recreate to handle visual changes
-                            self.engine.destroySprite(entity_id);
                             self.engine.createSprite(entity_id, sprite.toVisual(), pos);
+                            tracked.created = true;
                         } else {
                             std.log.warn("Entity tracked as sprite but missing Sprite component", .{});
                         }
                     },
                     .shape => {
                         if (registry.tryGet(Shape, tracked.entity)) |shape| {
-                            self.engine.destroyShape(entity_id);
                             self.engine.createShape(entity_id, shape.toVisual(), pos);
+                            tracked.created = true;
                         } else {
                             std.log.warn("Entity tracked as shape but missing Shape component", .{});
                         }
                     },
                     .text => {
                         if (registry.tryGet(Text, tracked.entity)) |text| {
-                            self.engine.destroyText(entity_id);
                             self.engine.createText(entity_id, text.toVisual(), pos);
+                            tracked.created = true;
                         } else {
                             std.log.warn("Entity tracked as text but missing Text component", .{});
                         }
@@ -273,6 +273,33 @@ pub const RenderPipeline = struct {
                 }
                 tracked.visual_dirty = false;
                 tracked.position_dirty = false; // Position was set during create
+            } else if (tracked.visual_dirty) {
+                // Visual changed - use update methods (v0.12.0+)
+                switch (tracked.visual_type) {
+                    .sprite => {
+                        if (registry.tryGet(Sprite, tracked.entity)) |sprite| {
+                            self.engine.updateSprite(entity_id, sprite.toVisual());
+                        }
+                    },
+                    .shape => {
+                        if (registry.tryGet(Shape, tracked.entity)) |shape| {
+                            self.engine.updateShape(entity_id, shape.toVisual());
+                        }
+                    },
+                    .text => {
+                        if (registry.tryGet(Text, tracked.entity)) |text| {
+                            self.engine.updateText(entity_id, text.toVisual());
+                        }
+                    },
+                }
+                tracked.visual_dirty = false;
+                // Also update position if dirty
+                if (tracked.position_dirty) {
+                    if (registry.tryGet(Position, tracked.entity)) |pos| {
+                        self.engine.updatePosition(entity_id, pos.toGfx());
+                    }
+                    tracked.position_dirty = false;
+                }
             } else if (tracked.position_dirty) {
                 // Only position changed
                 if (registry.tryGet(Position, tracked.entity)) |pos| {
