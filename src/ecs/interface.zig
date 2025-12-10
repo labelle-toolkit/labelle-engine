@@ -18,7 +18,7 @@ const std = @import("std");
 const build_options = @import("build_options");
 
 /// ECS backend selection
-pub const EcsBackend = build_options.EcsBackend;
+pub const EcsBackend = build_options.@"build.EcsBackend";
 
 /// The current ECS backend
 pub const backend: EcsBackend = build_options.ecs_backend;

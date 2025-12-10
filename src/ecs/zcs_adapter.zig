@@ -100,7 +100,12 @@ pub const Registry = struct {
 
     /// Generate a unique key for (type, entity) pair
     fn makeKey(comptime T: type, entity: Entity) u64 {
-        const type_hash: u64 = @truncate(@intFromPtr(&T));
+        // Use comptime type name hash for type identification
+        const type_name = @typeName(T);
+        comptime var type_hash: u64 = 0;
+        inline for (type_name) |c| {
+            type_hash = type_hash *% 31 +% c;
+        }
         return (type_hash << 32) | @as(u64, entity.id);
     }
 };
