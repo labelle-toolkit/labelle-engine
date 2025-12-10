@@ -52,11 +52,11 @@ pub fn SceneLoader(comptime PrefabRegistry: type, comptime Components: type, com
             comptime scene_data: anytype,
             ctx: SceneContext,
         ) !Scene {
-            // Get script update functions if scene has scripts defined
+            // Get script lifecycle function bundles if scene has scripts defined
             const script_fns = comptime if (@hasField(@TypeOf(scene_data), "scripts"))
-                Scripts.getUpdateFns(scene_data.scripts)
+                Scripts.getScriptFnsList(scene_data.scripts)
             else
-                &[_]script_mod.UpdateFn{};
+                &[_]script_mod.ScriptFns{};
 
             var scene = Scene.init(scene_data.name, script_fns, ctx);
             errdefer scene.deinit();

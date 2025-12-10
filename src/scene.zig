@@ -31,6 +31,9 @@ pub const PrefabRegistry = prefab.PrefabRegistry;
 pub const SceneLoader = loader.SceneLoader;
 pub const ComponentRegistry = component.ComponentRegistry;
 pub const ScriptRegistry = script.ScriptRegistry;
+pub const ScriptFns = script.ScriptFns;
+pub const InitFn = script.InitFn;
+pub const DeinitFn = script.DeinitFn;
 pub const Game = game.Game;
 pub const GameConfig = game.GameConfig;
 pub const WindowConfig = game.WindowConfig;
@@ -85,22 +88,48 @@ pub const SceneContext = struct {
 pub const Scene = struct {
     name: []const u8,
     entities: std.ArrayListUnmanaged(EntityInstance),
-    scripts: []const script.UpdateFn,
+    scripts: []const script.ScriptFns,
     ctx: SceneContext,
+    initialized: bool = false,
 
-    pub fn init(name: []const u8, scripts: []const script.UpdateFn, ctx: SceneContext) Scene {
+    pub fn init(name: []const u8, scripts: []const script.ScriptFns, ctx: SceneContext) Scene {
         return .{
             .name = name,
             .entities = .{},
             .scripts = scripts,
             .ctx = ctx,
+            .initialized = false,
         };
+    }
+
+    /// Call all script init functions. Called automatically on first update,
+    /// but can be called manually if needed before the game loop starts.
+    pub fn initScripts(self: *Scene) void {
+        if (self.initialized) return;
+        self.initialized = true;
+
+        for (self.scripts) |script_fns| {
+            if (script_fns.init) |init_fn| {
+                init_fn(self.ctx.game, self);
+            }
+        }
     }
 
     pub fn deinit(self: *Scene) void {
         const alloc = self.ctx.allocator();
         const reg = self.ctx.registry();
         const pipe = self.ctx.pipeline();
+
+        // Call script deinit functions (in reverse order for proper cleanup)
+        if (self.initialized) {
+            var i = self.scripts.len;
+            while (i > 0) {
+                i -= 1;
+                if (self.scripts[i].deinit) |deinit_fn| {
+                    deinit_fn(self.ctx.game, self);
+                }
+            }
+        }
 
         // Call onDestroy for all entities and destroy ECS entities
         for (self.entities.items) |*instance| {
@@ -114,6 +143,11 @@ pub const Scene = struct {
     }
 
     pub fn update(self: *Scene, dt: f32) void {
+        // Initialize scripts on first update if not already done
+        if (!self.initialized) {
+            self.initScripts();
+        }
+
         // Call prefab onUpdate hooks
         for (self.entities.items) |*entity_instance| {
             if (entity_instance.onUpdate) |update_fn| {
@@ -121,9 +155,11 @@ pub const Scene = struct {
             }
         }
 
-        // Call scene scripts
-        for (self.scripts) |script_update| {
-            script_update(self.ctx.game, self, dt);
+        // Call scene script update functions
+        for (self.scripts) |script_fns| {
+            if (script_fns.update) |update_fn| {
+                update_fn(self.ctx.game, self, dt);
+            }
         }
     }
 
