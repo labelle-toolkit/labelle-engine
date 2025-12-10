@@ -11,6 +11,7 @@
 //       .name = "my_game",
 //       .description = "My awesome game",
 //       .initial_scene = "main_menu",
+//       .backend = .raylib,  // or .sokol
 //       .window = .{
 //           .width = 800,
 //           .height = 600,
@@ -27,6 +28,12 @@
 //   try engine.run("project.labelle");
 
 const std = @import("std");
+
+/// Graphics backend selection
+pub const Backend = enum {
+    raylib,
+    sokol,
+};
 
 /// Plugin dependency declaration
 pub const Plugin = struct {
@@ -61,6 +68,7 @@ pub const ProjectConfig = struct {
     name: []const u8,
     description: []const u8 = "",
     initial_scene: []const u8,
+    backend: Backend = .raylib,
     window: WindowConfig = .{},
     resources: Resources = .{},
     plugins: []const Plugin = &.{},

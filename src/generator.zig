@@ -82,6 +82,12 @@ pub fn generateBuildZig(allocator: std.mem.Allocator, config: ProjectConfig) ![]
     var buf: std.ArrayListUnmanaged(u8) = .{};
     const writer = buf.writer(allocator);
 
+    // Get the default backend from project config
+    const default_backend = switch (config.backend) {
+        .raylib => "raylib",
+        .sokol => "sokol",
+    };
+
     try writer.writeAll(
         \\const std = @import("std");
         \\
@@ -95,8 +101,13 @@ pub fn generateBuildZig(allocator: std.mem.Allocator, config: ProjectConfig) ![]
         \\    const target = b.standardTargetOptions(.{});
         \\    const optimize = b.standardOptimizeOption(.{});
         \\
-        \\    // Backend option - allows switching between raylib (default) and sokol
-        \\    const backend = b.option(Backend, "backend", "Graphics backend to use (default: raylib)") orelse .raylib;
+        \\    // Backend option - default comes from project.labelle, can be overridden via -Dbackend
+        \\
+    );
+
+    try writer.print("    const backend = b.option(Backend, \"backend\", \"Graphics backend to use (default: {s})\") orelse .{s};\n", .{ default_backend, default_backend });
+
+    try writer.writeAll(
         \\
         \\    const engine_dep = b.dependency("labelle-engine", .{
         \\        .target = target,

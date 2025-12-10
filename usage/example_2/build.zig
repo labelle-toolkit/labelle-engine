@@ -10,7 +10,7 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    // Default to Sokol backend for this example
+    // Backend option - default comes from project.labelle (.sokol), can be overridden via -Dbackend
     const backend = b.option(Backend, "backend", "Graphics backend to use (default: sokol)") orelse .sokol;
 
     const engine_dep = b.dependency("labelle-engine", .{
