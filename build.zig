@@ -1,8 +1,17 @@
 const std = @import("std");
 
+/// Graphics backend selection
+pub const Backend = enum {
+    raylib,
+    sokol,
+};
+
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
+
+    // Build options
+    const backend = b.option(Backend, "backend", "Graphics backend to use (default: raylib)") orelse .raylib;
 
     // Dependencies
     const ecs_dep = b.dependency("zig_ecs", .{
@@ -23,6 +32,10 @@ pub fn build(b: *std.Build) void {
     });
     const zspec = zspec_dep.module("zspec");
 
+    // Build options module for compile-time configuration
+    const build_options = b.addOptions();
+    build_options.addOption(Backend, "backend", backend);
+
     // Main module
     const engine_mod = b.addModule("labelle-engine", .{
         .root_source_file = b.path("src/scene.zig"),
@@ -31,6 +44,7 @@ pub fn build(b: *std.Build) void {
         .imports = &.{
             .{ .name = "labelle", .module = labelle },
             .{ .name = "ecs", .module = ecs },
+            .{ .name = "build_options", .module = build_options.createModule() },
         },
     });
 
@@ -44,6 +58,7 @@ pub fn build(b: *std.Build) void {
             .imports = &.{
                 .{ .name = "labelle", .module = labelle },
                 .{ .name = "ecs", .module = ecs },
+                .{ .name = "build_options", .module = build_options.createModule() },
             },
         }),
     });
@@ -63,6 +78,7 @@ pub fn build(b: *std.Build) void {
                 .{ .name = "labelle-engine", .module = engine_mod },
                 .{ .name = "labelle", .module = labelle },
                 .{ .name = "ecs", .module = ecs },
+                .{ .name = "build_options", .module = build_options.createModule() },
             },
         }),
         .test_runner = .{ .path = zspec_dep.path("src/runner.zig"), .mode = .simple },

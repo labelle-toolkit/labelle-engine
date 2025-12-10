@@ -4,8 +4,9 @@
 //   labelle-generate [options] [project_path]
 //
 // Options:
-//   --main-only    Only generate main.zig (not build.zig or build.zig.zon)
-//   --all          Generate all files (default for new projects)
+//   --main-only           Only generate main.zig (not build.zig or build.zig.zon)
+//   --all                 Generate all files (default for new projects)
+//   --engine-path <path>  Use local path to labelle-engine (for development)
 //
 // If no path is provided, uses current directory.
 
@@ -23,6 +24,7 @@ pub fn main() !void {
 
     var project_path: []const u8 = ".";
     var main_only = false;
+    var engine_path: ?[]const u8 = null;
 
     // Parse args
     var i: usize = 1;
@@ -32,6 +34,11 @@ pub fn main() !void {
             main_only = true;
         } else if (std.mem.eql(u8, arg, "--all")) {
             main_only = false;
+        } else if (std.mem.eql(u8, arg, "--engine-path")) {
+            i += 1;
+            if (i < args.len) {
+                engine_path = args[i];
+            }
         } else if (!std.mem.startsWith(u8, arg, "-")) {
             project_path = arg;
         }
@@ -47,7 +54,9 @@ pub fn main() !void {
         std.debug.print("  - main.zig\n", .{});
     } else {
         std.debug.print("Generating project files for: {s}\n", .{project_path});
-        generator.generateProject(allocator, project_path) catch |err| {
+        generator.generateProject(allocator, project_path, .{
+            .engine_path = engine_path,
+        }) catch |err| {
             std.debug.print("Error generating project: {}\n", .{err});
             return err;
         };

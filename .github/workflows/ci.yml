@@ -83,9 +83,43 @@ jobs:
 
           exit $TEST_EXIT_CODE
 
-      - name: Build and run example_1
+      - name: Generate example build files
+        run: |
+          # Generate build.zig and build.zig.zon for examples with local engine path
+          zig build generate -- --engine-path ../.. usage/example_1
+          zig build generate -- --engine-path ../.. usage/example_2
+
+          # Fix fingerprints - Zig requires exact fingerprints that we can't predict
+          # Run build once to get suggested values, then update
+          for example in usage/example_1 usage/example_2; do
+            cd $example
+            # Try to build, capture error with suggested fingerprint
+            BUILD_OUTPUT=$(zig build 2>&1 || true)
+            FINGERPRINT=$(echo "$BUILD_OUTPUT" | grep -oP 'use this value: \K0x[a-f0-9]+' | head -1 || true)
+            PATHS_MISSING=$(echo "$BUILD_OUTPUT" | grep -c "missing top-level 'paths' field" || true)
+
+            if [ -n "$FINGERPRINT" ]; then
+              # Replace existing fingerprint with the correct one
+              sed -i "s/\.fingerprint = 0x[a-f0-9]*,/.fingerprint = $FINGERPRINT,/" build.zig.zon
+            fi
+
+            if [ "$PATHS_MISSING" -gt 0 ]; then
+              # Add paths before closing brace
+              sed -i 's/^}$/    .paths = .{ "build.zig", "build.zig.zon", "main.zig", "project.labelle", "scenes", "prefabs", "components", "scripts", "resources" },\n}/' build.zig.zon
+            fi
+            cd ../..
+          done
+
+      - name: Build and run example_1 (raylib)
         env:
           CI_TEST: "1"
         run: |
           cd usage/example_1
+          xvfb-run -a zig build run
+
+      - name: Build and run example_2 (sokol)
+        env:
+          CI_TEST: "1"
+        run: |
+          cd usage/example_2
           xvfb-run -a zig build run

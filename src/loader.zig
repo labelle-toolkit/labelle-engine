@@ -217,6 +217,7 @@ pub fn SceneLoader(comptime PrefabRegistry: type, comptime Components: type, com
                     const thickness: f32 = if (@hasField(@TypeOf(shape_def), "thickness")) shape_def.thickness else 1;
                     break :blk Shape.line(end_x, end_y, thickness);
                 },
+                else => @compileError("Unknown shape type in scene definition"),
             };
 
             // Color

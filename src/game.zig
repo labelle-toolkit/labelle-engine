@@ -27,7 +27,8 @@ const ecs = @import("ecs");
 const render_pipeline_mod = @import("render_pipeline.zig");
 
 const Allocator = std.mem.Allocator;
-const RetainedEngine = labelle.RetainedEngine;
+// Use the backend-aware RetainedEngine from render_pipeline
+const RetainedEngine = render_pipeline_mod.RetainedEngine;
 const Registry = ecs.Registry;
 const Entity = ecs.Entity;
 
