@@ -10,6 +10,15 @@ pub fn build(b: *std.Build) void {
     });
     const engine_mod = engine_dep.module("labelle-engine");
 
+    // Get the generator executable from the engine dependency
+    const generator_exe = engine_dep.artifact("labelle-generate");
+
+    // Run the generator to create main.zig before compilation
+    const generate_step = b.addRunArtifact(generator_exe);
+    generate_step.addArgs(&.{ "--main-only", "." });
+    generate_step.setCwd(b.path("."));
+
+    // Create the executable
     const exe = b.addExecutable(.{
         .name = "example_1",
         .root_module = b.createModule(.{
@@ -21,6 +30,9 @@ pub fn build(b: *std.Build) void {
             },
         }),
     });
+
+    // Make compilation depend on generation
+    exe.step.dependOn(&generate_step.step);
 
     b.installArtifact(exe);
 

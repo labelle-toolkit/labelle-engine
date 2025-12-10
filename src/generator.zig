@@ -365,3 +365,49 @@ pub fn generateProject(allocator: std.mem.Allocator, project_path: []const u8) !
     try cwd.writeFile(.{ .sub_path = build_zig_path, .data = build_zig });
     try cwd.writeFile(.{ .sub_path = main_zig_path, .data = main_zig });
 }
+
+/// Generate only main.zig (for use during build when build.zig already exists)
+pub fn generateMainOnly(allocator: std.mem.Allocator, project_path: []const u8) !void {
+    // Load project config
+    const labelle_path = try std.fs.path.join(allocator, &.{ project_path, "project.labelle" });
+    defer allocator.free(labelle_path);
+
+    const config = try ProjectConfig.load(allocator, labelle_path);
+    defer config.deinit(allocator);
+
+    // Scan folders
+    const prefabs_path = try std.fs.path.join(allocator, &.{ project_path, "prefabs" });
+    defer allocator.free(prefabs_path);
+    const prefabs = try scanFolder(allocator, prefabs_path);
+    defer {
+        for (prefabs) |p| allocator.free(p);
+        allocator.free(prefabs);
+    }
+
+    const components_path = try std.fs.path.join(allocator, &.{ project_path, "components" });
+    defer allocator.free(components_path);
+    const components = try scanFolder(allocator, components_path);
+    defer {
+        for (components) |c| allocator.free(c);
+        allocator.free(components);
+    }
+
+    const scripts_path = try std.fs.path.join(allocator, &.{ project_path, "scripts" });
+    defer allocator.free(scripts_path);
+    const scripts = try scanFolder(allocator, scripts_path);
+    defer {
+        for (scripts) |s| allocator.free(s);
+        allocator.free(scripts);
+    }
+
+    // Generate main.zig
+    const main_zig = try generateMainZig(allocator, config, prefabs, components, scripts);
+    defer allocator.free(main_zig);
+
+    // Write main.zig
+    const main_zig_path = try std.fs.path.join(allocator, &.{ project_path, "main.zig" });
+    defer allocator.free(main_zig_path);
+
+    const cwd = std.fs.cwd();
+    try cwd.writeFile(.{ .sub_path = main_zig_path, .data = main_zig });
+}
