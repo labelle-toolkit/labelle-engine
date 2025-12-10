@@ -21,9 +21,16 @@
 const std = @import("std");
 const labelle = @import("labelle");
 const ecs = @import("ecs");
+const build_options = @import("build_options");
 
-// Re-export types from labelle-gfx
-pub const RetainedEngine = labelle.RetainedEngine;
+// Backend selection - use the configured backend from build options
+const Backend = build_options.backend;
+
+// Get RetainedEngine for the selected backend
+pub const RetainedEngine = switch (Backend) {
+    .raylib => labelle.RetainedEngine,
+    .sokol => labelle.withBackend(labelle.SokolBackend).RetainedEngine,
+};
 pub const EntityId = labelle.EntityId;
 pub const TextureId = labelle.TextureId;
 pub const FontId = labelle.FontId;

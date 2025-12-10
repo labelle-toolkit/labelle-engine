@@ -85,13 +85,23 @@ pub fn generateBuildZig(allocator: std.mem.Allocator, config: ProjectConfig) ![]
     try writer.writeAll(
         \\const std = @import("std");
         \\
+        \\/// Graphics backend selection (must match labelle-engine)
+        \\pub const Backend = enum {
+        \\    raylib,
+        \\    sokol,
+        \\};
+        \\
         \\pub fn build(b: *std.Build) void {
         \\    const target = b.standardTargetOptions(.{});
         \\    const optimize = b.standardOptimizeOption(.{});
         \\
+        \\    // Backend option - allows switching between raylib (default) and sokol
+        \\    const backend = b.option(Backend, "backend", "Graphics backend to use (default: raylib)") orelse .raylib;
+        \\
         \\    const engine_dep = b.dependency("labelle-engine", .{
         \\        .target = target,
         \\        .optimize = optimize,
+        \\        .backend = backend,
         \\    });
         \\    const engine_mod = engine_dep.module("labelle-engine");
         \\

@@ -9,6 +9,10 @@
 const std = @import("std");
 const labelle = @import("labelle");
 const ecs = @import("ecs");
+const build_options = @import("build_options");
+
+// Re-export build options for downstream users
+pub const Backend = build_options.backend;
 
 pub const prefab = @import("prefab.zig");
 pub const loader = @import("loader.zig");
