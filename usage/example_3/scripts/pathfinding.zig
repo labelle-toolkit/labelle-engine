@@ -28,22 +28,12 @@ const GRID_OFFSET_Y: f32 = 60.0;
 // Script state (module-level for persistence across update calls)
 var pf_engine: ?PFEngine = null;
 var grid: ?Grid = null;
+var corners: [4]u32 = undefined;
 var current_corner: usize = 0;
 var player_entity: ?engine.Entity = null;
 var node_entities: [GRID_SIZE * GRID_SIZE]engine.Entity = undefined;
 var target_entity: ?engine.Entity = null;
 var time_at_target: f32 = 0.0;
-
-// Target corners to cycle through (using grid helper)
-fn getCorners() [4]u32 {
-    const g = grid orelse return .{ 0, 0, 0, 0 };
-    return .{
-        g.toNodeId(GRID_SIZE - 1, GRID_SIZE - 1), // bottom-right
-        g.toNodeId(0, GRID_SIZE - 1), // bottom-left
-        g.toNodeId(0, 0), // top-left
-        g.toNodeId(GRID_SIZE - 1, 0), // top-right
-    };
-}
 
 /// Called when the scene loads
 pub fn init(game: *Game, scene: *Scene) void {
@@ -70,6 +60,14 @@ pub fn init(game: *Game, scene: *Scene) void {
         return;
     };
     const g = grid.?;
+
+    // Store corner node IDs for cycling
+    corners = .{
+        g.toNodeId(GRID_SIZE - 1, GRID_SIZE - 1), // bottom-right
+        g.toNodeId(0, GRID_SIZE - 1), // bottom-left
+        g.toNodeId(0, 0), // top-left
+        g.toNodeId(GRID_SIZE - 1, 0), // top-right
+    };
 
     // Create visual representations for grid nodes
     for (0..GRID_SIZE) |y| {
@@ -110,7 +108,6 @@ pub fn init(game: *Game, scene: *Scene) void {
     }
 
     // Request initial path to first corner
-    const corners = getCorners();
     pf.requestPath(PLAYER_ID, corners[0]) catch {};
 
     // Highlight initial target
@@ -156,7 +153,6 @@ pub fn update(game: *Game, scene: *Scene, dt: f32) void {
             }
 
             // Move to next corner
-            const corners = getCorners();
             current_corner = (current_corner + 1) % corners.len;
             const new_target = corners[current_corner];
             pf.requestPath(PLAYER_ID, new_target) catch {};
