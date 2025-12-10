@@ -1,5 +1,5 @@
 .{
-    .fingerprint = 0xbc20e1ab46a5ad9c,
+    .fingerprint = 0xbc20e1ab0837aaba,
     .name = .example_1,
     .version = "0.1.0",
     .minimum_zig_version = "0.15.2",
@@ -14,8 +14,8 @@
         "main.zig",
         "project.labelle",
         "scenes",
-        "components",
         "prefabs",
+        "components",
         "scripts",
         "fixtures",
     },

@@ -4,14 +4,12 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    // Get labelle-engine dependency (includes labelle-gfx and ecs)
     const engine_dep = b.dependency("labelle-engine", .{
         .target = target,
         .optimize = optimize,
     });
     const engine_mod = engine_dep.module("labelle-engine");
 
-    // Main executable
     const exe = b.addExecutable(.{
         .name = "example_1",
         .root_module = b.createModule(.{
@@ -26,13 +24,9 @@ pub fn build(b: *std.Build) void {
 
     b.installArtifact(exe);
 
-    const run_exe = b.addRunArtifact(exe);
-    run_exe.step.dependOn(b.getInstallStep());
+    const run_cmd = b.addRunArtifact(exe);
+    run_cmd.step.dependOn(b.getInstallStep());
 
-    if (b.args) |args| {
-        run_exe.addArgs(args);
-    }
-
-    const run_step = b.step("run", "Run the example");
-    run_step.dependOn(&run_exe.step);
+    const run_step = b.step("run", "Run the game");
+    run_step.dependOn(&run_cmd.step);
 }

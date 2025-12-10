@@ -18,6 +18,7 @@ pub const game = @import("game.zig");
 pub const build_helpers = @import("build_helpers.zig");
 pub const render_pipeline = @import("render_pipeline.zig");
 pub const project_config = @import("project_config.zig");
+pub const generator = @import("generator.zig");
 
 // Re-export commonly used types
 pub const Prefab = prefab.Prefab;

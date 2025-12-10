@@ -78,4 +78,27 @@ pub fn build(b: *std.Build) void {
 
     // Note: Examples have their own build.zig and are built separately
     // To run example_1: cd usage/example_1 && zig build run
+
+    // Generator executable - generates project files from project.labelle
+    const generator_exe = b.addExecutable(.{
+        .name = "labelle-generate",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/generator_cli.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+
+    b.installArtifact(generator_exe);
+
+    const run_generator = b.addRunArtifact(generator_exe);
+    run_generator.step.dependOn(b.getInstallStep());
+
+    // Pass arguments to generator
+    if (b.args) |args| {
+        run_generator.addArgs(args);
+    }
+
+    const generate_step = b.step("generate", "Generate project files from project.labelle");
+    generate_step.dependOn(&run_generator.step);
 }
