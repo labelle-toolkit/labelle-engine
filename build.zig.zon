@@ -16,6 +16,10 @@
             .url = "git+https://github.com/apotema/zspec#4d45cc5cda87312312040fcaa205720246d24953",
             .hash = "zspec-0.3.0-jaKLbbqZAgAB-MBfy6M3HKB3jSTQ-TsNW9OxpLhLlav5",
         },
+        .zts = .{
+            .url = "git+https://github.com/zigster64/zts#ca98e23fcf1a4fa331c80f5cd2e72f6838daf7ee",
+            .hash = "zts-0.14.1-_M80Of22AgBwArz6uCXR49IoEjlzNt5yhu7KV8cWl5jr",
+        },
     },
     .paths = .{
         "build.zig",
