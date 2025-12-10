@@ -92,34 +92,15 @@ jobs:
           # Fix fingerprints - Zig requires exact fingerprints that we can't predict
           # Run build once to get suggested values, then update
           for example in usage/example_1 usage/example_2; do
-            echo "=== Processing $example ==="
             cd $example
-
-            # Show current build.zig.zon content
-            echo "Current build.zig.zon:"
-            cat build.zig.zon
-
             # Try to build, capture error with suggested fingerprint
-            echo "Running zig build to get fingerprint..."
             BUILD_OUTPUT=$(zig build 2>&1 || true)
-            echo "Build output:"
-            echo "$BUILD_OUTPUT"
-
-            # Extract fingerprint - try different patterns
             FINGERPRINT=$(echo "$BUILD_OUTPUT" | grep -oP 'use this value: \K0x[a-f0-9]+' | head -1 || true)
-            echo "Extracted fingerprint: $FINGERPRINT"
-
             PATHS_MISSING=$(echo "$BUILD_OUTPUT" | grep -c "missing top-level 'paths' field" || true)
-            echo "Paths missing: $PATHS_MISSING"
 
             if [ -n "$FINGERPRINT" ]; then
-              echo "Applying fingerprint fix..."
               # Replace existing fingerprint with the correct one
               sed -i "s/\.fingerprint = 0x[a-f0-9]*,/.fingerprint = $FINGERPRINT,/" build.zig.zon
-              echo "Updated build.zig.zon:"
-              cat build.zig.zon
-            else
-              echo "No fingerprint found in output"
             fi
 
             if [ "$PATHS_MISSING" -gt 0 ]; then
