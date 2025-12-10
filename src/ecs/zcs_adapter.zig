@@ -50,8 +50,11 @@ pub const Registry = struct {
     }
 
     /// Clean up the registry
+    /// NOTE: This stub implementation leaks memory for components not explicitly removed.
+    /// This will be resolved when replaced with the actual ZCS adapter.
     pub fn deinit(self: *Registry) void {
-        // In a full implementation, would need to free all stored components
+        // Stub: Cannot properly free type-erased components without tracking their types.
+        // A full implementation would use ZCS's proper cleanup mechanisms.
         self.component_storage.deinit();
     }
 
@@ -63,15 +66,24 @@ pub const Registry = struct {
     }
 
     /// Destroy an entity
+    /// NOTE: This stub is a no-op and leaks components associated with the entity.
+    /// This will be resolved when replaced with the actual ZCS adapter.
     pub fn destroy(_: *Registry, _: Entity) void {
-        // In a full implementation, would remove all components for this entity
-        // ZCS stub - no-op until ZCS is compatible with Zig 0.15+
+        // Stub: Cannot remove components without tracking which types an entity has.
+        // A full implementation would use ZCS's entity destruction with proper cleanup.
     }
 
     /// Add a component to an entity
+    /// If the component already exists, it will be replaced (previous allocation freed).
     pub fn add(self: *Registry, entity: Entity, component: anytype) void {
         const T = @TypeOf(component);
         const key = makeKey(T, entity);
+
+        // Free existing component if present (avoid memory leak on duplicate adds)
+        if (self.component_storage.get(key)) |old_ptr| {
+            const typed_ptr: *T = @ptrCast(@alignCast(old_ptr));
+            self.allocator.destroy(typed_ptr);
+        }
 
         // Allocate storage for the component
         const ptr = self.allocator.create(T) catch @panic("Failed to allocate component");

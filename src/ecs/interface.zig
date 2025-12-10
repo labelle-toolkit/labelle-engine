@@ -8,7 +8,7 @@
 // - zcs: Games-by-Mason/ZCS - A Zig ECS library focused on simplicity
 //
 // Usage:
-//   const ecs = @import("ecs/interface.zig");
+//   const ecs = @import("ecs");
 //   var registry = ecs.Registry.init(allocator);
 //   const entity = registry.create();
 //   registry.add(entity, MyComponent{ .value = 42 });
