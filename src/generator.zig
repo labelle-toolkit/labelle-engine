@@ -86,10 +86,11 @@ pub fn generateBuildZig(allocator: std.mem.Allocator, config: ProjectConfig) ![]
 
 /// Capitalize first letter of a string (returns stack-allocated buffer)
 fn capitalize(name: []const u8) [64]u8 {
+    if (name.len > 64) @panic("name is too long for capitalize buffer (max 64 chars)");
     var type_name: [64]u8 = undefined;
     @memcpy(type_name[0..name.len], name);
-    if (type_name[0] >= 'a' and type_name[0] <= 'z') {
-        type_name[0] -= 32;
+    if (name.len > 0 and type_name[0] >= 'a' and type_name[0] <= 'z') {
+        type_name[0] -= ('a' - 'A');
     }
     return type_name;
 }
