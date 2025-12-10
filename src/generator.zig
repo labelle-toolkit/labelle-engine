@@ -248,11 +248,15 @@ pub fn generateMainZig(
         \\    const project = try ProjectConfig.load(allocator, "project.labelle");
         \\    defer project.deinit(allocator);
         \\
+        \\    // Convert title to sentinel-terminated string for window creation
+        \\    const title = try allocator.dupeZ(u8, project.window.title);
+        \\    defer allocator.free(title);
+        \\
         \\    var game = try Game.init(allocator, .{
         \\        .window = .{
         \\            .width = project.window.width,
         \\            .height = project.window.height,
-        \\            .title = "labelle Game",
+        \\            .title = title,
         \\            .target_fps = project.window.target_fps,
         \\            .hidden = ci_test,
         \\        },

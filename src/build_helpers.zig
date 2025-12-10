@@ -123,11 +123,9 @@ pub fn addGame(
     generate_step.addArg("."); // Generate in current directory
 
     // Determine executable name
-    const exe_name = config.name orelse blk: {
-        // Try to read name from project.labelle at build time
-        // Fall back to "game" if not available
-        break :blk "game";
-    };
+    // Note: project.labelle is read at runtime, not build time
+    // The generator creates main.zig which loads the project config
+    const exe_name = config.name orelse "game";
 
     // Create the executable
     const engine_mod = engine_dep.module("labelle-engine");
