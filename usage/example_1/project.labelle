@@ -9,5 +9,14 @@
         .title = "labelle-engine: Scene + Rendering",
         .target_fps = 60,
     },
+    .resources = .{
+        .atlases = .{
+            .{
+                .name = "characters",
+                .json = "resources/characters.json",
+                .texture = "resources/characters.png",
+            },
+        },
+    },
     .plugins = .{},
 }

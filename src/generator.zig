@@ -69,7 +69,7 @@ pub fn generateBuildZon(allocator: std.mem.Allocator, config: ProjectConfig) ![]
     try writer.writeAll("        \"prefabs\",\n");
     try writer.writeAll("        \"components\",\n");
     try writer.writeAll("        \"scripts\",\n");
-    try writer.writeAll("        \"fixtures\",\n");
+    try writer.writeAll("        \"resources\",\n");
     try writer.writeAll("    },\n");
 
     try writer.writeAll("}\n");
@@ -260,6 +260,11 @@ pub fn generateMainZig(
         \\    });
         \\    game.fixPointers(); // Fix internal pointers after struct is in final location
         \\    defer game.deinit();
+        \\
+        \\    // Load atlases from project config
+        \\    for (project.resources.atlases) |atlas| {
+        \\        try game.loadAtlas(atlas.name, atlas.json, atlas.texture);
+        \\    }
         \\
         \\    const ctx = engine.SceneContext.init(&game);
         \\    var scene = try Loader.load(initial_scene, ctx);

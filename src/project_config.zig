@@ -34,6 +34,18 @@ pub const Plugin = struct {
     version: []const u8,
 };
 
+/// Atlas resource declaration
+pub const Atlas = struct {
+    name: []const u8,
+    json: [:0]const u8,
+    texture: [:0]const u8,
+};
+
+/// Resources configuration
+pub const Resources = struct {
+    atlases: []const Atlas = &.{},
+};
+
 /// Window configuration for the project
 pub const WindowConfig = struct {
     width: i32 = 800,
@@ -50,6 +62,7 @@ pub const ProjectConfig = struct {
     description: []const u8 = "",
     initial_scene: []const u8,
     window: WindowConfig = .{},
+    resources: Resources = .{},
     plugins: []const Plugin = &.{},
 
     /// Load project configuration from a .labelle file
