@@ -258,6 +258,7 @@ pub fn generateMainZig(
         \\        },
         \\        .clear_color = .{ .r = 30, .g = 35, .b = 45 },
         \\    });
+        \\    game.fixPointers(); // Fix internal pointers after struct is in final location
         \\    defer game.deinit();
         \\
         \\    const ctx = engine.SceneContext.init(&game);
