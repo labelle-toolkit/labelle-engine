@@ -13,51 +13,35 @@ const Shape = engine.Shape;
 const Color = engine.Color;
 
 // Entity ID for the moving character
-const EntityId = u32;
-const PLAYER_ID: EntityId = 1;
+const PLAYER_ID: u32 = 1;
 
-// Pathfinding engine configuration
-const PFConfig = struct {
-    pub const Entity = EntityId;
-    pub const Context = void;
-};
-const PFEngine = pathfinding.PathfindingEngine(PFConfig);
+// Pathfinding engine with simplified config (new in 2.5.0)
+const PFEngine = pathfinding.PathfindingEngineSimple(u32, void);
+const Grid = pathfinding.Grid;
 
 // Grid configuration
-const GRID_SIZE: usize = 8;
+const GRID_SIZE: u32 = 8;
 const CELL_SIZE: f32 = 60.0;
 const GRID_OFFSET_X: f32 = 100.0;
 const GRID_OFFSET_Y: f32 = 60.0;
 
-// Target corners to cycle through
-const corners = [_]u32{
-    @intCast((GRID_SIZE - 1) * GRID_SIZE + GRID_SIZE - 1), // bottom-right
-    @intCast((GRID_SIZE - 1) * GRID_SIZE), // bottom-left
-    0, // top-left
-    GRID_SIZE - 1, // top-right
-};
-
 // Script state (module-level for persistence across update calls)
 var pf_engine: ?PFEngine = null;
+var grid: ?Grid = null;
 var current_corner: usize = 0;
 var player_entity: ?engine.Entity = null;
 var node_entities: [GRID_SIZE * GRID_SIZE]engine.Entity = undefined;
 var target_entity: ?engine.Entity = null;
 var time_at_target: f32 = 0.0;
 
-// Convert grid position to screen position
-fn gridToScreen(gx: usize, gy: usize) struct { x: f32, y: f32 } {
+// Target corners to cycle through (using grid helper)
+fn getCorners() [4]u32 {
+    const g = grid orelse return .{ 0, 0, 0, 0 };
     return .{
-        .x = GRID_OFFSET_X + @as(f32, @floatFromInt(gx)) * CELL_SIZE,
-        .y = GRID_OFFSET_Y + @as(f32, @floatFromInt(gy)) * CELL_SIZE,
-    };
-}
-
-// Convert node ID to grid position
-fn nodeToGrid(node: u32) struct { x: usize, y: usize } {
-    return .{
-        .x = node % GRID_SIZE,
-        .y = node / GRID_SIZE,
+        g.toNodeId(GRID_SIZE - 1, GRID_SIZE - 1), // bottom-right
+        g.toNodeId(0, GRID_SIZE - 1), // bottom-left
+        g.toNodeId(0, 0), // top-left
+        g.toNodeId(GRID_SIZE - 1, 0), // top-right
     };
 }
 
@@ -73,12 +57,25 @@ pub fn init(game: *Game, scene: *Scene) void {
     };
     var pf = &pf_engine.?;
 
-    // Create grid nodes and their visual representations
+    // Create grid with nodes and connections in one call (new in 2.5.0)
+    grid = pf.createGrid(.{
+        .rows = GRID_SIZE,
+        .cols = GRID_SIZE,
+        .cell_size = CELL_SIZE,
+        .offset_x = GRID_OFFSET_X,
+        .offset_y = GRID_OFFSET_Y,
+        .connection = .four_way,
+    }) catch |err| {
+        std.debug.print("Failed to create grid: {}\n", .{err});
+        return;
+    };
+    const g = grid.?;
+
+    // Create visual representations for grid nodes
     for (0..GRID_SIZE) |y| {
         for (0..GRID_SIZE) |x| {
-            const node_id: u32 = @intCast(y * GRID_SIZE + x);
-            const pos = gridToScreen(x, y);
-            pf.addNode(node_id, pos.x, pos.y) catch continue;
+            const node_id = g.toNodeId(@intCast(x), @intCast(y));
+            const pos = g.toScreen(@intCast(x), @intCast(y));
 
             // Create visual node (small gray circle)
             const ecs_entity = game.createEntity();
@@ -91,21 +88,14 @@ pub fn init(game: *Game, scene: *Scene) void {
         }
     }
 
-    // Connect nodes in a grid pattern (omnidirectional for grid-based movement)
-    pf.connectNodes(.{ .omnidirectional = .{
-        .max_distance = CELL_SIZE * 1.5, // Slightly more than cell size to catch neighbors
-        .max_connections = 4, // 4-directional movement
-    } }) catch |err| {
-        std.debug.print("Failed to connect nodes: {}\n", .{err});
-        return;
-    };
+    // Rebuild paths after grid creation
     pf.rebuildPaths() catch |err| {
         std.debug.print("Failed to rebuild paths: {}\n", .{err});
         return;
     };
 
     // Create player entity at top-left
-    const start_pos = gridToScreen(0, 0);
+    const start_pos = g.toScreen(0, 0);
     pf.registerEntity(PLAYER_ID, start_pos.x, start_pos.y, 120.0) catch |err| {
         std.debug.print("Failed to register player: {}\n", .{err});
         return;
@@ -120,6 +110,7 @@ pub fn init(game: *Game, scene: *Scene) void {
     }
 
     // Request initial path to first corner
+    const corners = getCorners();
     pf.requestPath(PLAYER_ID, corners[0]) catch {};
 
     // Highlight initial target
@@ -140,6 +131,7 @@ pub fn update(game: *Game, scene: *Scene, dt: f32) void {
 
     var pf = &(pf_engine orelse return);
     const pe = player_entity orelse return;
+    const g = grid orelse return;
 
     // Update pathfinding simulation
     pf.tick({}, dt);
@@ -164,13 +156,14 @@ pub fn update(game: *Game, scene: *Scene, dt: f32) void {
             }
 
             // Move to next corner
+            const corners = getCorners();
             current_corner = (current_corner + 1) % corners.len;
             const new_target = corners[current_corner];
             pf.requestPath(PLAYER_ID, new_target) catch {};
             time_at_target = 0.0;
 
-            const grid_pos = nodeToGrid(new_target);
-            std.debug.print("Moving to corner ({}, {})\n", .{ grid_pos.x, grid_pos.y });
+            const grid_pos = g.fromNodeId(new_target);
+            std.debug.print("Moving to corner ({}, {})\n", .{ grid_pos.col, grid_pos.row });
 
             // Highlight new target
             target_entity = node_entities[new_target];
@@ -207,6 +200,7 @@ pub fn deinit(game: *Game, scene: *Scene) void {
     }
 
     // Reset state for potential scene reload
+    grid = null;
     player_entity = null;
     target_entity = null;
     current_corner = 0;
