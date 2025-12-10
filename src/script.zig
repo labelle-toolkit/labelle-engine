@@ -53,18 +53,18 @@ pub fn ScriptRegistry(comptime ScriptMap: type) type {
 
         /// Get script's update function by name (for backwards compatibility)
         pub fn getUpdateFn(comptime name: []const u8) UpdateFn {
-            const s = @field(ScriptMap, name);
-            return s.update;
+            const script_module = @field(ScriptMap, name);
+            return script_module.update;
         }
 
         /// Get all lifecycle functions for a script by name
         pub fn getScriptFns(comptime name: []const u8) ScriptFns {
-            const S = @field(ScriptMap, name);
+            const script_module = @field(ScriptMap, name);
             // Scripts are imported as types, so check declarations on the type itself
             return .{
-                .init = if (@hasDecl(S, "init")) S.init else null,
-                .update = if (@hasDecl(S, "update")) S.update else null,
-                .deinit = if (@hasDecl(S, "deinit")) S.deinit else null,
+                .init = if (@hasDecl(script_module, "init")) script_module.init else null,
+                .update = if (@hasDecl(script_module, "update")) script_module.update else null,
+                .deinit = if (@hasDecl(script_module, "deinit")) script_module.deinit else null,
             };
         }
 

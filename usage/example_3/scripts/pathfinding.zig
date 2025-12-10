@@ -184,12 +184,26 @@ pub fn update(game: *Game, scene: *Scene, dt: f32) void {
 
 /// Called when the scene unloads - clean up pathfinding resources
 pub fn deinit(game: *Game, scene: *Scene) void {
-    _ = game;
     _ = scene;
 
+    // Clean up pathfinding engine
     if (pf_engine) |*pf| {
         pf.deinit();
         pf_engine = null;
+    }
+
+    // Destroy visual entities created by this script
+    // Only cleanup if init succeeded (player_entity was set)
+    if (player_entity != null) {
+        const registry = game.getRegistry();
+
+        // Destroy player entity
+        registry.destroy(player_entity.?);
+
+        // Destroy grid node entities
+        for (node_entities) |node_ent| {
+            registry.destroy(node_ent);
+        }
     }
 
     // Reset state for potential scene reload
