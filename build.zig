@@ -32,6 +32,12 @@ pub fn build(b: *std.Build) void {
     });
     const zspec = zspec_dep.module("zspec");
 
+    const zts_dep = b.dependency("zts", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const zts = zts_dep.module("zts");
+
     // Build options module for compile-time configuration
     const build_options = b.addOptions();
     build_options.addOption(Backend, "backend", backend);
@@ -102,6 +108,9 @@ pub fn build(b: *std.Build) void {
             .root_source_file = b.path("src/generator_cli.zig"),
             .target = target,
             .optimize = optimize,
+            .imports = &.{
+                .{ .name = "zts", .module = zts },
+            },
         }),
     });
 

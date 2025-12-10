@@ -39,6 +39,8 @@ pub fn main() !void {
             if (i < args.len) {
                 engine_path = args[i];
             }
+        } else if (std.mem.startsWith(u8, arg, "--engine-path=")) {
+            engine_path = arg["--engine-path=".len..];
         } else if (!std.mem.startsWith(u8, arg, "-")) {
             project_path = arg;
         }
