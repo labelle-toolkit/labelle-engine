@@ -8,6 +8,12 @@
             .url = "git+https://github.com/prime31/zig-ecs#dbf3647c2cc4f327fe87067e40f8436c7f87f209",
             .hash = "entt-1.0.0-qJPtbNLVAgDPXaUbyRSsBTK75Cr1WujUA92kToJugWry",
         },
+        // ZCS is commented out due to Zig 0.15+ compatibility issues (@Tuple builtin removed)
+        // Uncomment when ZCS releases a compatible version
+        // .zcs = .{
+        //     .url = "git+https://github.com/Games-by-Mason/ZCS#077236a5532d6a300cb5d302a184773fd29de112",
+        //     .hash = "1220a739e35deb4af64b55ab54c5054ef02f5064ca8e71227ab5f968dc310395026f",
+        // },
         .@"labelle-gfx" = .{
             .url = "git+https://github.com/labelle-toolkit/labelle-gfx?ref=v0.13.1#62dcceaa901f91bab87325c5f8eb986f57568455",
             .hash = "labelle-0.12.0-2bWPIrNHBQArlSlvPehcwo7ZaBBjUQwtbnbWurumtq2m",

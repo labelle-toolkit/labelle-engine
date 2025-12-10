@@ -6,19 +6,26 @@ pub const Backend = enum {
     sokol,
 };
 
+/// ECS backend selection
+pub const EcsBackend = enum {
+    zig_ecs,
+    zcs,
+};
+
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
     // Build options
     const backend = b.option(Backend, "backend", "Graphics backend to use (default: raylib)") orelse .raylib;
+    const ecs_backend = b.option(EcsBackend, "ecs_backend", "ECS backend to use (default: zig_ecs)") orelse .zig_ecs;
 
-    // Dependencies
+    // ECS dependency - only zig_ecs is loaded (ZCS has Zig version compatibility issues)
     const ecs_dep = b.dependency("zig_ecs", .{
         .target = target,
         .optimize = optimize,
     });
-    const ecs = ecs_dep.module("zig-ecs");
+    const zig_ecs_module = ecs_dep.module("zig-ecs");
 
     const labelle_dep = b.dependency("labelle-gfx", .{
         .target = target,
@@ -38,9 +45,24 @@ pub fn build(b: *std.Build) void {
     });
     const zts = zts_dep.module("zts");
 
-    // Build options module for compile-time configuration
+    // Build options module for compile-time configuration (create once, reuse everywhere)
     const build_options = b.addOptions();
     build_options.addOption(Backend, "backend", backend);
+    build_options.addOption(EcsBackend, "ecs_backend", ecs_backend);
+    const build_options_mod = build_options.createModule();
+
+    // Create the ECS interface module that wraps the selected backend
+    // Note: ZCS module is not imported due to Zig 0.15+ compatibility issues
+    // The zcs_adapter.zig provides a stub implementation instead
+    const ecs_interface = b.addModule("ecs", .{
+        .root_source_file = b.path("src/ecs/interface.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "build_options", .module = build_options_mod },
+            .{ .name = "zig_ecs", .module = zig_ecs_module },
+        },
+    });
 
     // Main module
     const engine_mod = b.addModule("labelle-engine", .{
@@ -49,8 +71,8 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .imports = &.{
             .{ .name = "labelle", .module = labelle },
-            .{ .name = "ecs", .module = ecs },
-            .{ .name = "build_options", .module = build_options.createModule() },
+            .{ .name = "ecs", .module = ecs_interface },
+            .{ .name = "build_options", .module = build_options_mod },
         },
     });
 
@@ -63,8 +85,8 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
             .imports = &.{
                 .{ .name = "labelle", .module = labelle },
-                .{ .name = "ecs", .module = ecs },
-                .{ .name = "build_options", .module = build_options.createModule() },
+                .{ .name = "ecs", .module = ecs_interface },
+                .{ .name = "build_options", .module = build_options_mod },
             },
         }),
     });
@@ -83,8 +105,8 @@ pub fn build(b: *std.Build) void {
                 .{ .name = "zspec", .module = zspec },
                 .{ .name = "labelle-engine", .module = engine_mod },
                 .{ .name = "labelle", .module = labelle },
-                .{ .name = "ecs", .module = ecs },
-                .{ .name = "build_options", .module = build_options.createModule() },
+                .{ .name = "ecs", .module = ecs_interface },
+                .{ .name = "build_options", .module = build_options_mod },
             },
         }),
         .test_runner = .{ .path = zspec_dep.path("src/runner.zig"), .mode = .simple },
