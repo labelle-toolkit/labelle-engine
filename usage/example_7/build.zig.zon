@@ -1,0 +1,14 @@
+.{
+    .fingerprint = 0x5543449e8613aae0,
+    .name = .example_7,
+    .version = "0.1.0",
+    .dependencies = .{
+        .@"labelle-engine" = .{ .path = "../.." },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "main.zig",
+        "project.labelle",
+    },
+}

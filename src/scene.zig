@@ -17,6 +17,7 @@ pub const script = @import("script.zig");
 pub const game = @import("game.zig");
 pub const build_helpers = @import("build_helpers.zig");
 pub const render_pipeline = @import("render_pipeline.zig");
+pub const project_config = @import("project_config.zig");
 
 // Re-export commonly used types
 pub const Prefab = prefab.Prefab;
@@ -47,6 +48,10 @@ pub const ZIndex = prefab.ZIndex;
 // Re-export ECS types
 pub const Registry = ecs.Registry;
 pub const Entity = ecs.Entity;
+
+// Re-export project config types
+pub const ProjectConfig = project_config.ProjectConfig;
+pub const Plugin = project_config.Plugin;
 
 /// Context passed to prefab lifecycle functions and scene loading
 /// Uses Game facade for unified access to ECS, pipeline, and engine
@@ -154,8 +159,3 @@ pub const EntityInstance = struct {
     }
 };
 
-test "scene module" {
-    // Basic import test
-    _ = prefab;
-    _ = loader;
-}

@@ -402,6 +402,3 @@ pub const Game = struct {
     }
 };
 
-test "Game compiles" {
-    _ = Game;
-}

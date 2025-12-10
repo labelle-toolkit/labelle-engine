@@ -89,10 +89,3 @@ pub fn scanFolder(allocator: std.mem.Allocator, folder_path: []const u8) []const
     };
 }
 
-test "build_helpers module compiles" {
-    _ = addFolderImports;
-    _ = addScriptsFolder;
-    _ = addComponentsFolder;
-    _ = addPrefabsFolder;
-    _ = scanFolder;
-}

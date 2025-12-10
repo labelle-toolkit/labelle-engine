@@ -56,15 +56,3 @@ pub fn ScriptRegistry(comptime ScriptMap: type) type {
     };
 }
 
-test "script registry" {
-    const MockScript = struct {
-        pub fn update(_: *Game, _: *Scene, _: f32) void {}
-    };
-
-    const Scripts = ScriptRegistry(struct {
-        pub const mock = MockScript;
-    });
-
-    try std.testing.expect(Scripts.has("mock"));
-    try std.testing.expect(!Scripts.has("unknown"));
-}

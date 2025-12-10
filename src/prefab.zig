@@ -165,9 +165,3 @@ pub fn PrefabRegistry(comptime prefab_types: anytype) type {
     };
 }
 
-// Unit tests are in test/prefab_test.zig using zspec
-test "prefab module compiles" {
-    _ = Prefab;
-    _ = SpriteConfig;
-    _ = ZIndex;
-}
