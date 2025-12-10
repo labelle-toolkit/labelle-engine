@@ -12,5 +12,7 @@
     .resources = .{
         .atlases = .{},
     },
-    .plugins = .{},
+    .plugins = .{
+        .{ .name = "labelle-pathfinding", .version = "2.4.0" },
+    },
 }
