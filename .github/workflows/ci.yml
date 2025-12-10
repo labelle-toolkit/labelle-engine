@@ -83,9 +83,22 @@ jobs:
 
           exit $TEST_EXIT_CODE
 
-      - name: Build and run example_1
+      - name: Generate example build files
+        run: |
+          # Generate build.zig and build.zig.zon for examples
+          zig build generate -- usage/example_1
+          zig build generate -- usage/example_2
+
+      - name: Build and run example_1 (raylib)
         env:
           CI_TEST: "1"
         run: |
           cd usage/example_1
+          xvfb-run -a zig build run
+
+      - name: Build and run example_2 (sokol)
+        env:
+          CI_TEST: "1"
+        run: |
+          cd usage/example_2
           xvfb-run -a zig build run

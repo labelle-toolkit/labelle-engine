@@ -6,8 +6,10 @@ zig-out/
 usage/*/.zig-cache/
 usage/*/zig-out/
 
-# Generated main.zig (created automatically during build)
+# Generated files (created automatically by labelle-generate)
 usage/*/main.zig
+usage/*/build.zig
+usage/*/build.zig.zon
 
 # Screenshots from CI tests
 screenshot_*.png
