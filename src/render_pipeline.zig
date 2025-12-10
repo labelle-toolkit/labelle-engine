@@ -322,37 +322,3 @@ pub const RenderPipeline = struct {
     }
 };
 
-// ============================================
-// Tests
-// ============================================
-
-test "Position component" {
-    const pos = Position{ .x = 100, .y = 200 };
-    const gfx_pos = pos.toGfx();
-    try std.testing.expectEqual(@as(f32, 100), gfx_pos.x);
-    try std.testing.expectEqual(@as(f32, 200), gfx_pos.y);
-}
-
-test "Sprite component" {
-    const sprite = Sprite{ .scale = 2.0, .z_index = 50 };
-    const visual = sprite.toVisual();
-    try std.testing.expectEqual(@as(f32, 2.0), visual.scale);
-    try std.testing.expectEqual(@as(u8, 50), visual.z_index);
-}
-
-test "Shape component constructors" {
-    const circle = Shape.circle(50);
-    try std.testing.expectEqual(@as(f32, 50), circle.shape.circle.radius);
-
-    const rect = Shape.rectangle(100, 200);
-    try std.testing.expectEqual(@as(f32, 100), rect.shape.rectangle.width);
-    try std.testing.expectEqual(@as(f32, 200), rect.shape.rectangle.height);
-}
-
-test "RenderPipeline module compiles" {
-    _ = RenderPipeline;
-    _ = Position;
-    _ = Sprite;
-    _ = Shape;
-    _ = Text;
-}

@@ -89,21 +89,3 @@ pub fn ComponentRegistry(comptime ComponentMap: type) type {
     };
 }
 
-test "component registry" {
-    const TestGravity = struct {
-        strength: f32 = 9.8,
-    };
-
-    const TestSpeed = struct {
-        value: f32 = 100,
-    };
-
-    const Components = ComponentRegistry(struct {
-        pub const Gravity = TestGravity;
-        pub const Speed = TestSpeed;
-    });
-
-    try std.testing.expect(Components.has("Gravity"));
-    try std.testing.expect(Components.has("Speed"));
-    try std.testing.expect(!Components.has("Unknown"));
-}

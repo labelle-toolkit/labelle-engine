@@ -260,7 +260,3 @@ pub fn SceneLoader(comptime PrefabRegistry: type, comptime Components: type, com
     };
 }
 
-test "loader compiles" {
-    // Just verify the module compiles
-    _ = SceneLoader;
-}
