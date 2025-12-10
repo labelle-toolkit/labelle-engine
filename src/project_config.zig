@@ -1,33 +1,30 @@
 // Project configuration loader for .labelle files
 //
-// Parses ZON-formatted .labelle project files at runtime using std.zon.parseFromSlice.
-// This enables projects to declare metadata, plugins, and other configuration
-// in a type-safe, Zig-native format.
+// Parses ZON-formatted .labelle project files at runtime using std.zon.parse.fromSlice.
+// This enables projects to declare metadata, plugins, window settings, and the initial
+// scene in a type-safe, Zig-native format.
 //
 // Example .labelle file:
 //
 //   .{
 //       .version = 1,
 //       .name = "my_game",
-//       .created_at = 1733600000,
-//       .modified_at = 1733600000,
 //       .description = "My awesome game",
+//       .initial_scene = "main_menu",
+//       .window = .{
+//           .width = 800,
+//           .height = 600,
+//           .title = "My Game",
+//       },
 //       .plugins = .{
 //           .{ .name = "labelle-pathfinding", .version = "0.1.0" },
-//           .{ .name = "labelle-serialization", .version = "0.2.0" },
 //       },
 //   }
 //
 // Usage:
 //
 //   const engine = @import("labelle-engine");
-//   const config = try engine.ProjectConfig.load(allocator, "project.labelle");
-//   defer config.deinit(allocator);
-//
-//   std.debug.print("Project: {s}\n", .{config.name});
-//   for (config.plugins) |plugin| {
-//       std.debug.print("  Plugin: {s} v{s}\n", .{plugin.name, plugin.version});
-//   }
+//   try engine.run("project.labelle");
 
 const std = @import("std");
 
@@ -37,13 +34,22 @@ pub const Plugin = struct {
     version: []const u8,
 };
 
+/// Window configuration for the project
+pub const WindowConfig = struct {
+    width: i32 = 800,
+    height: i32 = 600,
+    title: []const u8 = "labelle Game",
+    target_fps: i32 = 60,
+    resizable: bool = false,
+};
+
 /// Project configuration loaded from .labelle file
 pub const ProjectConfig = struct {
     version: u32,
     name: []const u8,
-    created_at: i64,
-    modified_at: i64,
-    description: []const u8,
+    description: []const u8 = "",
+    initial_scene: []const u8,
+    window: WindowConfig = .{},
     plugins: []const Plugin = &.{},
 
     /// Load project configuration from a .labelle file

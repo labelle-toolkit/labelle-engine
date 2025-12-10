@@ -4,36 +4,22 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    // Dependencies
-    const labelle_engine_dep = b.dependency("labelle_engine", .{
+    // Get labelle-engine dependency (includes labelle-gfx and ecs)
+    const engine_dep = b.dependency("labelle-engine", .{
         .target = target,
         .optimize = optimize,
     });
-    const labelle_engine = labelle_engine_dep.module("labelle-engine");
-
-    const labelle_dep = b.dependency("labelle-gfx", .{
-        .target = target,
-        .optimize = optimize,
-    });
-    const labelle = labelle_dep.module("labelle");
-
-    const ecs_dep = b.dependency("zig_ecs", .{
-        .target = target,
-        .optimize = optimize,
-    });
-    const ecs = ecs_dep.module("zig-ecs");
+    const engine_mod = engine_dep.module("labelle-engine");
 
     // Main executable
     const exe = b.addExecutable(.{
-        .name = "example-primitives",
+        .name = "example_1",
         .root_module = b.createModule(.{
             .root_source_file = b.path("main.zig"),
             .target = target,
             .optimize = optimize,
             .imports = &.{
-                .{ .name = "labelle-engine", .module = labelle_engine },
-                .{ .name = "labelle", .module = labelle },
-                .{ .name = "ecs", .module = ecs },
+                .{ .name = "labelle-engine", .module = engine_mod },
             },
         }),
     });

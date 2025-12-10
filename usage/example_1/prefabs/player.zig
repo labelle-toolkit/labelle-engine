@@ -1,10 +1,9 @@
 const engine = @import("labelle-engine");
-const labelle = @import("labelle");
 
-const ZIndex = labelle.visual_engine.ZIndex;
+const ZIndex = engine.ZIndex;
 
 pub const name = "player";
-pub const sprite = engine.prefab.SpriteConfig{
+pub const sprite = engine.SpriteConfig{
     .name = "idle_0001",
     .x = 400,
     .y = 300,

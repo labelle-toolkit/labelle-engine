@@ -1,0 +1,22 @@
+.{
+    .fingerprint = 0xbc20e1ab46a5ad9c,
+    .name = .example_1,
+    .version = "0.1.0",
+    .minimum_zig_version = "0.15.2",
+    .dependencies = .{
+        .@"labelle-engine" = .{
+            .path = "../..",
+        },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "main.zig",
+        "project.labelle",
+        "scenes",
+        "components",
+        "prefabs",
+        "scripts",
+        "fixtures",
+    },
+}
