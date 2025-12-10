@@ -26,6 +26,12 @@ pub fn build(b: *std.Build) void {
     });
     const labelle = labelle_dep.module("labelle");
 
+    // Sokol dependency for sokol backend support
+    const sokol_dep = b.dependency("sokol", .{
+        .target = target,
+        .optimize = optimize,
+    });
+
     const zspec_dep = b.dependency("zspec", .{
         .target = target,
         .optimize = optimize,
@@ -45,6 +51,7 @@ pub fn build(b: *std.Build) void {
             .{ .name = "labelle", .module = labelle },
             .{ .name = "ecs", .module = ecs },
             .{ .name = "build_options", .module = build_options.createModule() },
+            .{ .name = "sokol", .module = sokol_dep.module("sokol") },
         },
     });
 

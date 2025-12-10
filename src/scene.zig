@@ -14,6 +14,9 @@ const build_options = @import("build_options");
 // Re-export build options for downstream users
 pub const Backend = build_options.backend;
 
+// Re-export sokol for sokol backend projects
+pub const sokol = @import("sokol");
+
 pub const prefab = @import("prefab.zig");
 pub const loader = @import("loader.zig");
 pub const component = @import("component.zig");
