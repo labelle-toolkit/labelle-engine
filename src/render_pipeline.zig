@@ -245,10 +245,12 @@ pub const RenderPipeline = struct {
             if (!tracked.created) {
                 const pos: GfxPosition = if (registry.tryGet(Position, tracked.entity)) |p| p.toGfx() else .{};
 
+                var creation_succeeded = false;
                 switch (tracked.visual_type) {
                     .sprite => {
                         if (registry.tryGet(Sprite, tracked.entity)) |sprite| {
                             self.engine.createSprite(entity_id, sprite.toVisual(), pos);
+                            creation_succeeded = true;
                         } else {
                             std.log.warn("Entity tracked as sprite but missing Sprite component", .{});
                         }
@@ -256,6 +258,7 @@ pub const RenderPipeline = struct {
                     .shape => {
                         if (registry.tryGet(Shape, tracked.entity)) |shape| {
                             self.engine.createShape(entity_id, shape.toVisual(), pos);
+                            creation_succeeded = true;
                         } else {
                             std.log.warn("Entity tracked as shape but missing Shape component", .{});
                         }
@@ -263,16 +266,17 @@ pub const RenderPipeline = struct {
                     .text => {
                         if (registry.tryGet(Text, tracked.entity)) |text| {
                             self.engine.createText(entity_id, text.toVisual(), pos);
+                            creation_succeeded = true;
                         } else {
                             std.log.warn("Entity tracked as text but missing Text component", .{});
                         }
                     },
                 }
-                // Mark as created to prevent repeated warnings on every sync
-                // If component was missing, user should untrack/re-track to retry
-                tracked.created = true;
+                // Only mark as created if creation actually succeeded
+                // This prevents position updates on entities without visuals
+                tracked.created = creation_succeeded;
                 tracked.visual_dirty = false;
-                tracked.position_dirty = false; // Position was set during create
+                tracked.position_dirty = false; // Position was set during create (or skipped if failed)
             } else if (tracked.visual_dirty) {
                 // Visual changed - use update methods (v0.12.0+)
                 switch (tracked.visual_type) {
@@ -306,8 +310,8 @@ pub const RenderPipeline = struct {
                     }
                     tracked.position_dirty = false;
                 }
-            } else if (tracked.position_dirty) {
-                // Only position changed
+            } else if (tracked.position_dirty and tracked.created) {
+                // Only position changed - but only update if visual was created
                 if (registry.tryGet(Position, tracked.entity)) |pos| {
                     self.engine.updatePosition(entity_id, pos.toGfx());
                 }

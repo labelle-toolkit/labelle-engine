@@ -110,8 +110,8 @@ pub const Game = struct {
 
         // Build the Game struct. Note: pipeline.engine currently points to the
         // local `retained_engine` variable above, which will become invalid after
-        // the struct is moved to the return value.
-        var game = Game{
+        // the struct is moved to the caller's stack.
+        return Game{
             .allocator = allocator,
             .retained_engine = retained_engine,
             .registry = registry,
@@ -121,17 +121,15 @@ pub const Game = struct {
             .pending_scene_change = null,
             .running = true,
         };
+    }
 
-        // IMPORTANT: Fix pipeline.engine pointer after the struct move.
-        // The pipeline was initialized with &retained_engine (a local variable).
-        // After moving into the Game struct, we must update the pointer to reference
-        // the new location (game.retained_engine). This is safe because:
-        // 1. We update the pointer before returning
-        // 2. The Game struct is returned by value and won't move again
-        // 3. All subsequent access is through *Game pointers
-        game.pipeline.engine = &game.retained_engine;
-
-        return game;
+    /// Fix internal pointers after the Game struct has been moved.
+    /// MUST be called immediately after init() when the struct is in its final location.
+    /// Example:
+    ///   var game = try Game.init(allocator, config);
+    ///   game.fixPointers();
+    pub fn fixPointers(self: *Game) void {
+        self.pipeline.engine = &self.retained_engine;
     }
 
     /// Clean up all resources

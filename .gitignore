@@ -6,5 +6,8 @@ zig-out/
 usage/*/.zig-cache/
 usage/*/zig-out/
 
+# Generated main.zig (created automatically during build)
+usage/*/main.zig
+
 # Screenshots from CI tests
 screenshot_*.png

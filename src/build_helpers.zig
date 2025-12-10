@@ -1,19 +1,24 @@
-// Build helpers for GUI-generated project folder scanning
+// Build helpers for labelle-engine projects
 //
-// This module provides build-time functions to scan folders and generate
-// module imports for scripts, components, and prefabs.
+// This module provides build-time functions for:
+// - Generating main.zig from project.labelle and folder contents
+// - Scanning folders for scripts, components, and prefabs
 //
 // Example usage in build.zig:
 //
+//   const engine_dep = b.dependency("labelle-engine", .{ .target = target, .optimize = optimize });
 //   const build_helpers = @import("labelle-engine").build_helpers;
 //
-//   // Scan folders and add to module
-//   build_helpers.addScriptsFolder(b, root_module, "scripts");
-//   build_helpers.addComponentsFolder(b, root_module, "components");
-//   build_helpers.addPrefabsFolder(b, root_module, "prefabs");
+//   // Add standard labelle game executable with auto-generated main.zig
+//   const exe = build_helpers.addGame(b, engine_dep, .{});
+//
+//   const run_cmd = b.addRunArtifact(exe);
+//   const run_step = b.step("run", "Run the game");
+//   run_step.dependOn(&run_cmd.step);
 
 const std = @import("std");
 const Build = std.Build;
+const generator = @import("generator.zig");
 
 /// Scan a folder for .zig files and add them as anonymous imports to a module
 /// This is useful for build.zig to auto-discover scripts/components/prefabs
@@ -87,5 +92,61 @@ pub fn scanFolder(allocator: std.mem.Allocator, folder_path: []const u8) []const
         names.deinit();
         return &.{};
     };
+}
+
+/// Configuration for addGame
+pub const GameConfig = struct {
+    /// Name of the executable (defaults to project name from project.labelle)
+    name: ?[]const u8 = null,
+    /// Path to project.labelle file
+    project_file: []const u8 = "project.labelle",
+};
+
+/// Add a labelle game executable with auto-generated main.zig
+/// This function:
+/// 1. Runs the generator to create main.zig from project.labelle
+/// 2. Sets up the executable with all necessary imports
+/// 3. Returns the compile step for the executable
+pub fn addGame(
+    b: *Build,
+    engine_dep: *Build.Dependency,
+    config: GameConfig,
+) *Build.Step.Compile {
+    const target = b.standardTargetOptions(.{});
+    const optimize = b.standardOptimizeOption(.{});
+
+    // Get the generator executable from the engine dependency
+    const generator_exe = engine_dep.artifact("labelle-generate");
+
+    // Run the generator to create main.zig
+    const generate_step = b.addRunArtifact(generator_exe);
+    generate_step.addArg("."); // Generate in current directory
+
+    // Determine executable name
+    // Note: project.labelle is read at runtime, not build time
+    // The generator creates main.zig which loads the project config
+    const exe_name = config.name orelse "game";
+
+    // Create the executable
+    const engine_mod = engine_dep.module("labelle-engine");
+
+    const exe = b.addExecutable(.{
+        .name = exe_name,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("main.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "labelle-engine", .module = engine_mod },
+            },
+        }),
+    });
+
+    // Make compilation depend on generation
+    exe.step.dependOn(&generate_step.step);
+
+    b.installArtifact(exe);
+
+    return exe;
 }
 

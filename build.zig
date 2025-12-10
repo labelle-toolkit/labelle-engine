@@ -76,50 +76,29 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run all tests");
     test_step.dependOn(&run_zspec_tests.step);
 
-    // Usage examples
-    const example_files = [_]struct { name: []const u8, path: []const u8, desc: []const u8 }{
-        .{ .name = "example-1", .path = "usage/example_1/example.zig", .desc = "Run example 1: Basic usage" },
-        .{ .name = "example-2", .path = "usage/example_2/ecs_components.zig", .desc = "Run example 2: ECS components" },
-        .{ .name = "example-6", .path = "usage/example_6/main.zig", .desc = "Run example 6: RenderPipeline" },
-    };
+    // Note: Examples have their own build.zig and are built separately
+    // To run example_1: cd usage/example_1 && zig build run
 
-    const all_examples_step = b.step("examples", "Run all examples");
-    var first_example_run: ?*std.Build.Step = null;
+    // Generator executable - generates project files from project.labelle
+    const generator_exe = b.addExecutable(.{
+        .name = "labelle-generate",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/generator_cli.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
 
-    for (example_files) |ex| {
-        const exe = b.addExecutable(.{
-            .name = ex.name,
-            .root_module = b.createModule(.{
-                .root_source_file = b.path(ex.path),
-                .target = target,
-                .optimize = optimize,
-                .imports = &.{
-                    .{ .name = "labelle-engine", .module = engine_mod },
-                    .{ .name = "labelle", .module = labelle },
-                    .{ .name = "ecs", .module = ecs },
-                },
-            }),
-        });
+    b.installArtifact(generator_exe);
 
-        b.installArtifact(exe);
+    const run_generator = b.addRunArtifact(generator_exe);
+    run_generator.step.dependOn(b.getInstallStep());
 
-        const run_exe = b.addRunArtifact(exe);
-        run_exe.step.dependOn(b.getInstallStep());
-
-        const run_step = b.step(ex.name, ex.desc);
-        run_step.dependOn(&run_exe.step);
-
-        all_examples_step.dependOn(&run_exe.step);
-
-        // Save first example for backwards compatibility alias
-        if (first_example_run == null) {
-            first_example_run = &run_exe.step;
-        }
+    // Pass arguments to generator
+    if (b.args) |args| {
+        run_generator.addArgs(args);
     }
 
-    // Alias 'example' to run example-1 for backwards compatibility
-    const example_step = b.step("example", "Run example 1 (alias for example-1)");
-    if (first_example_run) |step| {
-        example_step.dependOn(step);
-    }
+    const generate_step = b.step("generate", "Generate project files from project.labelle");
+    generate_step.dependOn(&run_generator.step);
 }
