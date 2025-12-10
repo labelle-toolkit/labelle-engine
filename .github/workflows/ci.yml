@@ -99,8 +99,8 @@ jobs:
             PATHS_MISSING=$(echo "$BUILD_OUTPUT" | grep -c "missing top-level 'paths' field" || true)
 
             if [ -n "$FINGERPRINT" ]; then
-              # Add fingerprint after the opening brace
-              sed -i "s/^\.{$/.{\n    .fingerprint = $FINGERPRINT,/" build.zig.zon
+              # Replace existing fingerprint with the correct one
+              sed -i "s/\.fingerprint = 0x[a-f0-9]*,/.fingerprint = $FINGERPRINT,/" build.zig.zon
             fi
 
             if [ "$PATHS_MISSING" -gt 0 ]; then
