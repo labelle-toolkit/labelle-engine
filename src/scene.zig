@@ -50,8 +50,9 @@ pub const TextureId = render_pipeline.TextureId;
 pub const FontId = render_pipeline.FontId;
 pub const Color = render_pipeline.Color;
 
-// Re-export ZIndex from prefab for backwards compatibility
+// Re-export ZIndex and Pivot from prefab for backwards compatibility
 pub const ZIndex = prefab.ZIndex;
+pub const Pivot = prefab.Pivot;
 
 // Re-export Camera types from labelle-gfx
 pub const Camera = labelle.Camera;

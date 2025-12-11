@@ -11,6 +11,10 @@
 // - onDestroy(entity, game): Called when entity is removed
 
 const std = @import("std");
+const labelle = @import("labelle");
+
+// Re-export Pivot from labelle-gfx
+pub const Pivot = labelle.Pivot;
 
 // Z-index constants for backwards compatibility
 pub const ZIndex = struct {
@@ -29,6 +33,12 @@ pub const SpriteConfig = struct {
     rotation: f32 = 0,
     flip_x: bool = false,
     flip_y: bool = false,
+    /// Pivot point for positioning and rotation (defaults to center)
+    pivot: Pivot = .center,
+    /// Custom pivot X coordinate (0.0-1.0), used when pivot == .custom
+    pivot_x: f32 = 0.5,
+    /// Custom pivot Y coordinate (0.0-1.0), used when pivot == .custom
+    pivot_y: f32 = 0.5,
 };
 
 /// Type-erased prefab interface for runtime use
@@ -88,7 +98,48 @@ pub fn mergeSprite(base: SpriteConfig, over: SpriteConfig) SpriteConfig {
         .rotation = if (over.rotation != 0) over.rotation else base.rotation,
         .flip_x = over.flip_x or base.flip_x,
         .flip_y = over.flip_y or base.flip_y,
+        .pivot = if (over.pivot != .center) over.pivot else base.pivot,
+        .pivot_x = if (over.pivot_x != 0.5) over.pivot_x else base.pivot_x,
+        .pivot_y = if (over.pivot_y != 0.5) over.pivot_y else base.pivot_y,
     };
+}
+
+/// Apply overrides from a comptime struct to a SpriteConfig
+/// Used by mergeSpriteWithOverrides to avoid code duplication
+fn applySpriteOverrides(result: *SpriteConfig, comptime over: anytype) void {
+    if (@hasField(@TypeOf(over), "name")) {
+        result.name = over.name;
+    }
+    if (@hasField(@TypeOf(over), "x")) {
+        result.x = over.x;
+    }
+    if (@hasField(@TypeOf(over), "y")) {
+        result.y = over.y;
+    }
+    if (@hasField(@TypeOf(over), "z_index")) {
+        result.z_index = over.z_index;
+    }
+    if (@hasField(@TypeOf(over), "scale")) {
+        result.scale = over.scale;
+    }
+    if (@hasField(@TypeOf(over), "rotation")) {
+        result.rotation = over.rotation;
+    }
+    if (@hasField(@TypeOf(over), "flip_x")) {
+        result.flip_x = over.flip_x;
+    }
+    if (@hasField(@TypeOf(over), "flip_y")) {
+        result.flip_y = over.flip_y;
+    }
+    if (@hasField(@TypeOf(over), "pivot")) {
+        result.pivot = over.pivot;
+    }
+    if (@hasField(@TypeOf(over), "pivot_x")) {
+        result.pivot_x = over.pivot_x;
+    }
+    if (@hasField(@TypeOf(over), "pivot_y")) {
+        result.pivot_y = over.pivot_y;
+    }
 }
 
 /// Merge sprite config with overrides from scene .zon data
@@ -98,38 +149,12 @@ pub fn mergeSpriteWithOverrides(
 ) SpriteConfig {
     var result = base;
 
-    // Check each possible override field
-    if (@hasField(@TypeOf(overrides), "x")) {
-        result.x = overrides.x;
-    }
-    if (@hasField(@TypeOf(overrides), "y")) {
-        result.y = overrides.y;
-    }
-    if (@hasField(@TypeOf(overrides), "z_index")) {
-        result.z_index = overrides.z_index;
-    }
-    if (@hasField(@TypeOf(overrides), "scale")) {
-        result.scale = overrides.scale;
-    }
-    if (@hasField(@TypeOf(overrides), "rotation")) {
-        result.rotation = overrides.rotation;
-    }
-    if (@hasField(@TypeOf(overrides), "flip_x")) {
-        result.flip_x = overrides.flip_x;
-    }
-    if (@hasField(@TypeOf(overrides), "flip_y")) {
-        result.flip_y = overrides.flip_y;
-    }
+    // Apply top-level overrides (e.g., .x = 100, .pivot = .bottom_center)
+    applySpriteOverrides(&result, overrides);
+
+    // Apply nested sprite overrides (e.g., .sprite = .{ .name = "foo.png" })
     if (@hasField(@TypeOf(overrides), "sprite")) {
-        if (@hasField(@TypeOf(overrides.sprite), "name")) {
-            result.name = overrides.sprite.name;
-        }
-        if (@hasField(@TypeOf(overrides.sprite), "scale")) {
-            result.scale = overrides.sprite.scale;
-        }
-        if (@hasField(@TypeOf(overrides.sprite), "z_index")) {
-            result.z_index = overrides.sprite.z_index;
-        }
+        applySpriteOverrides(&result, overrides.sprite);
     }
 
     return result;

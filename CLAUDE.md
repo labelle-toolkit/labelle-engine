@@ -88,11 +88,21 @@ const Loader = engine.SceneLoader(Prefabs, Components, Scripts);
 **Prefab definition** (prefabs/*.zig):
 ```zig
 pub const name = "player";
-pub const sprite = engine.SpriteConfig{ .name = "idle", .x = 400, .y = 300 };
+pub const sprite = engine.SpriteConfig{
+    .name = "idle",
+    .x = 400,
+    .y = 300,
+    .pivot = .bottom_center,  // Pivot point (default: .center)
+};
 pub fn onCreate(entity: u64, game_ptr: *anyopaque) void { ... }  // optional
 pub fn onUpdate(entity: u64, game_ptr: *anyopaque, dt: f32) void { ... }  // optional
 pub fn onDestroy(entity: u64, game_ptr: *anyopaque) void { ... }  // optional
 ```
+
+**Pivot values:**
+`.center`, `.top_left`, `.top_center`, `.top_right`, `.center_left`, `.center_right`, `.bottom_left`, `.bottom_center`, `.bottom_right`, `.custom`
+
+For `.custom`, also specify `.pivot_x` and `.pivot_y` (0.0-1.0).
 
 **Script definition** (scripts/*.zig):
 ```zig
