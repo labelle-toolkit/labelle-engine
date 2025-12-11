@@ -6,13 +6,18 @@
 //     .scripts = .{ "gravity", "floating" },  // optional
 //     .entities = .{
 //         .{ .prefab = "player", .x = 400, .y = 300 },
+//         .{ .prefab = "player", .pivot = .bottom_center },  // pivot override
 //         .{ .prefab = "background" },
-//         .{ .sprite = .{ .name = "coin.png", .x = 100, .y = 50 } },
+//         .{ .sprite = .{ .name = "coin.png", .x = 100, .y = 50, .pivot = .center } },
 //         .{ .sprite = .{ .name = "cloud.png" }, .components = .{ .Gravity = .{ .strength = 9.8 } } },
 //         .{ .shape = .{ .type = .circle, .x = 100, .y = 100, .radius = 50, .color = .{ .r = 255, .g = 0, .b = 0, .a = 255 } } },
 //         .{ .shape = .{ .type = .rectangle, .x = 200, .y = 200, .width = 100, .height = 50 } },
 //     },
 // }
+//
+// Pivot values: .center, .top_left, .top_center, .top_right, .center_left,
+//               .center_right, .bottom_left, .bottom_center, .bottom_right, .custom
+// For .custom pivot, also specify .pivot_x and .pivot_y (0.0-1.0)
 
 const std = @import("std");
 const ecs = @import("ecs");
@@ -120,6 +125,9 @@ pub fn SceneLoader(comptime PrefabRegistry: type, comptime Components: type, com
                 .flip_x = sprite_config.flip_x,
                 .flip_y = sprite_config.flip_y,
                 .z_index = sprite_config.z_index,
+                .pivot = sprite_config.pivot,
+                .pivot_x = sprite_config.pivot_x,
+                .pivot_y = sprite_config.pivot_y,
             });
 
             // Call onCreate if defined
@@ -167,6 +175,12 @@ pub fn SceneLoader(comptime PrefabRegistry: type, comptime Components: type, com
                 .sprite_name = sprite_def.name,
                 .z_index = if (@hasField(@TypeOf(sprite_def), "z_index")) sprite_def.z_index else ZIndex.characters,
                 .scale = if (@hasField(@TypeOf(sprite_def), "scale")) sprite_def.scale else 1.0,
+                .rotation = if (@hasField(@TypeOf(sprite_def), "rotation")) sprite_def.rotation else 0,
+                .flip_x = if (@hasField(@TypeOf(sprite_def), "flip_x")) sprite_def.flip_x else false,
+                .flip_y = if (@hasField(@TypeOf(sprite_def), "flip_y")) sprite_def.flip_y else false,
+                .pivot = if (@hasField(@TypeOf(sprite_def), "pivot")) sprite_def.pivot else .center,
+                .pivot_x = if (@hasField(@TypeOf(sprite_def), "pivot_x")) sprite_def.pivot_x else 0.5,
+                .pivot_y = if (@hasField(@TypeOf(sprite_def), "pivot_y")) sprite_def.pivot_y else 0.5,
             });
 
             // Add components from scene definition

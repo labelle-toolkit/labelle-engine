@@ -61,6 +61,9 @@ pub const Position = struct {
 // Visual Components (wrap labelle-gfx types)
 // ============================================
 
+/// Pivot point for sprite positioning and rotation
+pub const Pivot = labelle.Pivot;
+
 /// Sprite component - references a texture/sprite for rendering
 pub const Sprite = struct {
     texture: TextureId = .invalid,
@@ -72,6 +75,12 @@ pub const Sprite = struct {
     tint: Color = Color.white,
     z_index: u8 = 128,
     visible: bool = true,
+    /// Pivot point for positioning and rotation (defaults to center)
+    pivot: Pivot = .center,
+    /// Custom pivot X coordinate (0.0-1.0), used when pivot == .custom
+    pivot_x: f32 = 0.5,
+    /// Custom pivot Y coordinate (0.0-1.0), used when pivot == .custom
+    pivot_y: f32 = 0.5,
 
     pub fn toVisual(self: Sprite) SpriteVisual {
         return .{
@@ -84,6 +93,9 @@ pub const Sprite = struct {
             .tint = self.tint,
             .z_index = self.z_index,
             .visible = self.visible,
+            .pivot = self.pivot,
+            .pivot_x = self.pivot_x,
+            .pivot_y = self.pivot_y,
         };
     }
 };

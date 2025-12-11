@@ -11,6 +11,10 @@
 // - onDestroy(entity, game): Called when entity is removed
 
 const std = @import("std");
+const labelle = @import("labelle");
+
+// Re-export Pivot from labelle-gfx
+pub const Pivot = labelle.Pivot;
 
 // Z-index constants for backwards compatibility
 pub const ZIndex = struct {
@@ -29,6 +33,12 @@ pub const SpriteConfig = struct {
     rotation: f32 = 0,
     flip_x: bool = false,
     flip_y: bool = false,
+    /// Pivot point for positioning and rotation (defaults to center)
+    pivot: Pivot = .center,
+    /// Custom pivot X coordinate (0.0-1.0), used when pivot == .custom
+    pivot_x: f32 = 0.5,
+    /// Custom pivot Y coordinate (0.0-1.0), used when pivot == .custom
+    pivot_y: f32 = 0.5,
 };
 
 /// Type-erased prefab interface for runtime use
@@ -88,6 +98,9 @@ pub fn mergeSprite(base: SpriteConfig, over: SpriteConfig) SpriteConfig {
         .rotation = if (over.rotation != 0) over.rotation else base.rotation,
         .flip_x = over.flip_x or base.flip_x,
         .flip_y = over.flip_y or base.flip_y,
+        .pivot = if (over.pivot != .center) over.pivot else base.pivot,
+        .pivot_x = if (over.pivot_x != 0.5) over.pivot_x else base.pivot_x,
+        .pivot_y = if (over.pivot_y != 0.5) over.pivot_y else base.pivot_y,
     };
 }
 
@@ -120,6 +133,15 @@ pub fn mergeSpriteWithOverrides(
     if (@hasField(@TypeOf(overrides), "flip_y")) {
         result.flip_y = overrides.flip_y;
     }
+    if (@hasField(@TypeOf(overrides), "pivot")) {
+        result.pivot = overrides.pivot;
+    }
+    if (@hasField(@TypeOf(overrides), "pivot_x")) {
+        result.pivot_x = overrides.pivot_x;
+    }
+    if (@hasField(@TypeOf(overrides), "pivot_y")) {
+        result.pivot_y = overrides.pivot_y;
+    }
     if (@hasField(@TypeOf(overrides), "sprite")) {
         if (@hasField(@TypeOf(overrides.sprite), "name")) {
             result.name = overrides.sprite.name;
@@ -129,6 +151,15 @@ pub fn mergeSpriteWithOverrides(
         }
         if (@hasField(@TypeOf(overrides.sprite), "z_index")) {
             result.z_index = overrides.sprite.z_index;
+        }
+        if (@hasField(@TypeOf(overrides.sprite), "pivot")) {
+            result.pivot = overrides.sprite.pivot;
+        }
+        if (@hasField(@TypeOf(overrides.sprite), "pivot_x")) {
+            result.pivot_x = overrides.sprite.pivot_x;
+        }
+        if (@hasField(@TypeOf(overrides.sprite), "pivot_y")) {
+            result.pivot_y = overrides.sprite.pivot_y;
         }
     }
 
