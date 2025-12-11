@@ -185,8 +185,12 @@ pub const RenderPipeline = struct {
     }
 
     /// Convert ECS Entity to gfx EntityId
+    /// Uses the lower 32 bits of the entity ID for the graphics layer.
+    /// This works for both 32-bit (zig_ecs) and 64-bit (zflecs) entities.
     fn toEntityId(entity: Entity) EntityId {
-        return EntityId.from(@as(u32, @bitCast(entity)));
+        const EntityBits = std.meta.Int(.unsigned, @bitSizeOf(Entity));
+        const bits: EntityBits = @bitCast(entity);
+        return EntityId.from(@truncate(bits));
     }
 
     /// Start tracking an entity for rendering

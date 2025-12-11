@@ -88,10 +88,11 @@ jobs:
           # Generate build.zig and build.zig.zon for examples with local engine path
           zig build generate -- --engine-path ../.. usage/example_1
           zig build generate -- --engine-path ../.. usage/example_2
+          zig build generate -- --engine-path ../.. usage/example_4
 
           # Fix fingerprints - Zig requires exact fingerprints that we can't predict
           # Run build once to get suggested values, then update
-          for example in usage/example_1 usage/example_2; do
+          for example in usage/example_1 usage/example_2 usage/example_4; do
             cd $example
             # Try to build, capture error with suggested fingerprint
             BUILD_OUTPUT=$(zig build 2>&1 || true)
@@ -123,3 +124,17 @@ jobs:
         run: |
           cd usage/example_2
           xvfb-run -a zig build run
+
+      - name: Build and run example_4 with zig_ecs backend
+        env:
+          CI_TEST: "1"
+        run: |
+          cd usage/example_4
+          xvfb-run -a zig build run -Decs_backend=zig_ecs
+
+      - name: Build and run example_4 with zflecs backend
+        env:
+          CI_TEST: "1"
+        run: |
+          cd usage/example_4
+          xvfb-run -a zig build run -Decs_backend=zflecs

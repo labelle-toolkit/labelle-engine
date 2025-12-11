@@ -134,7 +134,7 @@ pub const Scene = struct {
         // Call onDestroy for all entities and destroy ECS entities
         for (self.entities.items) |*instance| {
             if (instance.onDestroy) |destroy_fn| {
-                destroy_fn(@bitCast(instance.entity), @ptrCast(self.ctx.game));
+                destroy_fn(entityToU64(instance.entity), @ptrCast(self.ctx.game));
             }
             pipe.untrackEntity(instance.entity);
             reg.destroy(instance.entity);
@@ -151,7 +151,7 @@ pub const Scene = struct {
         // Call prefab onUpdate hooks
         for (self.entities.items) |*entity_instance| {
             if (entity_instance.onUpdate) |update_fn| {
-                update_fn(@bitCast(entity_instance.entity), @ptrCast(self.ctx.game), dt);
+                update_fn(entityToU64(entity_instance.entity), @ptrCast(self.ctx.game), dt);
             }
         }
 
@@ -174,13 +174,22 @@ pub const Scene = struct {
 
 /// Runtime entity instance
 ///
-/// Uses u32 for entity and *anyopaque for lifecycle hooks to avoid circular imports in prefab.zig.
+/// Uses u64 for entity and *anyopaque for lifecycle hooks to avoid circular imports in prefab.zig.
 /// This is necessary because prefab.zig cannot import game.zig without creating a cycle.
+/// The u64 type accommodates both 32-bit (zig_ecs) and 64-bit (zflecs) entity IDs.
 ///
 /// When implementing lifecycle hooks in prefabs, cast the parameters as follows:
 /// ```zig
-/// pub fn onCreate(entity_u32: u32, game_ptr: *anyopaque) void {
-///     const entity: Entity = @bitCast(entity_u32);
+/// pub fn onCreate(entity_u64: u64, game_ptr: *anyopaque) void {
+///     const entity: Entity = @bitCast(@as(EntityBits, @truncate(entity_u64)));
+///     const game: *Game = @ptrCast(@alignCast(game_ptr));
+///     // ... use entity and game
+/// }
+/// ```
+/// Or use the helper function:
+/// ```zig
+/// pub fn onCreate(entity_u64: u64, game_ptr: *anyopaque) void {
+///     const entity = entityFromU64(entity_u64);
 ///     const game: *Game = @ptrCast(@alignCast(game_ptr));
 ///     // ... use entity and game
 /// }
@@ -189,14 +198,27 @@ pub const EntityInstance = struct {
     entity: Entity,
     visual_type: VisualType = .sprite,
     prefab_name: ?[]const u8 = null,
-    onUpdate: ?*const fn (u32, *anyopaque, f32) void = null,
-    onDestroy: ?*const fn (u32, *anyopaque) void = null,
+    onUpdate: ?*const fn (u64, *anyopaque, f32) void = null,
+    onDestroy: ?*const fn (u64, *anyopaque) void = null,
 
-    // Compile-time verification that Entity can be safely cast to u32
+    // Compile-time verification that Entity fits in u64
     comptime {
-        if (@sizeOf(Entity) != @sizeOf(u32)) {
-            @compileError("Entity must be the same size as u32 for @bitCast in lifecycle hooks");
+        if (@sizeOf(Entity) > @sizeOf(u64)) {
+            @compileError("Entity must fit in u64 for lifecycle hooks");
         }
     }
 };
+
+/// The underlying integer type that stores Entity bits
+pub const EntityBits = std.meta.Int(.unsigned, @bitSizeOf(Entity));
+
+/// Convert Entity to u64 for lifecycle hooks
+pub fn entityToU64(entity: Entity) u64 {
+    return @as(EntityBits, @bitCast(entity));
+}
+
+/// Convert u64 back to Entity in lifecycle hooks
+pub fn entityFromU64(value: u64) Entity {
+    return @bitCast(@as(EntityBits, @truncate(value)));
+}
 

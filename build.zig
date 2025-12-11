@@ -6,19 +6,32 @@ pub const Backend = enum {
     sokol,
 };
 
+/// ECS backend selection
+pub const EcsBackend = enum {
+    zig_ecs,
+    zflecs,
+};
+
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
     // Build options
     const backend = b.option(Backend, "backend", "Graphics backend to use (default: raylib)") orelse .raylib;
+    const ecs_backend = b.option(EcsBackend, "ecs_backend", "ECS backend to use (default: zig_ecs)") orelse .zig_ecs;
 
-    // Dependencies
+    // ECS dependencies
     const ecs_dep = b.dependency("zig_ecs", .{
         .target = target,
         .optimize = optimize,
     });
-    const ecs = ecs_dep.module("zig-ecs");
+    const zig_ecs_module = ecs_dep.module("zig-ecs");
+
+    const zflecs_dep = b.dependency("zflecs", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const zflecs_module = zflecs_dep.module("root");
 
     const labelle_dep = b.dependency("labelle-gfx", .{
         .target = target,
@@ -38,9 +51,23 @@ pub fn build(b: *std.Build) void {
     });
     const zts = zts_dep.module("zts");
 
-    // Build options module for compile-time configuration
+    // Build options module for compile-time configuration (create once, reuse everywhere)
     const build_options = b.addOptions();
     build_options.addOption(Backend, "backend", backend);
+    build_options.addOption(EcsBackend, "ecs_backend", ecs_backend);
+    const build_options_mod = build_options.createModule();
+
+    // Create the ECS interface module that wraps the selected backend
+    const ecs_interface = b.addModule("ecs", .{
+        .root_source_file = b.path("src/ecs/interface.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "build_options", .module = build_options_mod },
+            .{ .name = "zig_ecs", .module = zig_ecs_module },
+            .{ .name = "zflecs", .module = zflecs_module },
+        },
+    });
 
     // Main module
     const engine_mod = b.addModule("labelle-engine", .{
@@ -49,8 +76,8 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .imports = &.{
             .{ .name = "labelle", .module = labelle },
-            .{ .name = "ecs", .module = ecs },
-            .{ .name = "build_options", .module = build_options.createModule() },
+            .{ .name = "ecs", .module = ecs_interface },
+            .{ .name = "build_options", .module = build_options_mod },
         },
     });
 
@@ -63,8 +90,8 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
             .imports = &.{
                 .{ .name = "labelle", .module = labelle },
-                .{ .name = "ecs", .module = ecs },
-                .{ .name = "build_options", .module = build_options.createModule() },
+                .{ .name = "ecs", .module = ecs_interface },
+                .{ .name = "build_options", .module = build_options_mod },
             },
         }),
     });
@@ -83,8 +110,8 @@ pub fn build(b: *std.Build) void {
                 .{ .name = "zspec", .module = zspec },
                 .{ .name = "labelle-engine", .module = engine_mod },
                 .{ .name = "labelle", .module = labelle },
-                .{ .name = "ecs", .module = ecs },
-                .{ .name = "build_options", .module = build_options.createModule() },
+                .{ .name = "ecs", .module = ecs_interface },
+                .{ .name = "build_options", .module = build_options_mod },
             },
         }),
         .test_runner = .{ .path = zspec_dep.path("src/runner.zig"), .mode = .simple },
@@ -126,4 +153,28 @@ pub fn build(b: *std.Build) void {
 
     const generate_step = b.step("generate", "Generate project files from project.labelle");
     generate_step.dependOn(&run_generator.step);
+
+    // Benchmark executable - compares ECS backend performance
+    const bench_exe = b.addExecutable(.{
+        .name = "ecs-benchmark",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/ecs/benchmark.zig"),
+            .target = target,
+            .optimize = .ReleaseFast, // Always use ReleaseFast for benchmarks
+            .imports = &.{
+                .{ .name = "ecs", .module = ecs_interface },
+                .{ .name = "build_options", .module = build_options_mod },
+                .{ .name = "zig_ecs", .module = zig_ecs_module },
+                .{ .name = "zflecs", .module = zflecs_module },
+            },
+        }),
+    });
+
+    b.installArtifact(bench_exe);
+
+    const run_bench = b.addRunArtifact(bench_exe);
+    run_bench.step.dependOn(b.getInstallStep());
+
+    const bench_step = b.step("bench", "Run ECS benchmarks (use -Decs_backend=zig_ecs or -Decs_backend=zflecs)");
+    bench_step.dependOn(&run_bench.step);
 }

@@ -32,14 +32,15 @@ pub const SpriteConfig = struct {
 };
 
 /// Type-erased prefab interface for runtime use
-/// Uses u32 for entity and *anyopaque for Game to avoid circular imports
+/// Uses u64 for entity and *anyopaque for Game to avoid circular imports.
+/// The u64 type accommodates both 32-bit (zig_ecs) and 64-bit (zflecs) entity IDs.
 pub const Prefab = struct {
     name: []const u8,
     sprite: SpriteConfig,
     animation: ?[]const u8,
-    onCreate: ?*const fn (u32, *anyopaque) void,
-    onUpdate: ?*const fn (u32, *anyopaque, f32) void,
-    onDestroy: ?*const fn (u32, *anyopaque) void,
+    onCreate: ?*const fn (u64, *anyopaque) void,
+    onUpdate: ?*const fn (u64, *anyopaque, f32) void,
+    onDestroy: ?*const fn (u64, *anyopaque) void,
 };
 
 /// Check if a type is a valid prefab
