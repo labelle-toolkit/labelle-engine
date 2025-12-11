@@ -70,6 +70,29 @@ pub const CameraSlot = enum(u2) {
     camera3 = 3,  // Fourth camera (camera 3)
 };
 
+/// Apply camera configuration from comptime config data to a camera
+fn applyCameraConfig(comptime config: anytype, camera: anytype) void {
+    // Extract optional x and y values
+    const x: ?f32 = if (@hasField(@TypeOf(config), "x") and @TypeOf(config.x) != @TypeOf(null))
+        config.x
+    else
+        null;
+    const y: ?f32 = if (@hasField(@TypeOf(config), "y") and @TypeOf(config.y) != @TypeOf(null))
+        config.y
+    else
+        null;
+
+    // Apply position if either coordinate is specified
+    if (x != null or y != null) {
+        camera.setPosition(x orelse 0, y orelse 0);
+    }
+
+    // Apply zoom if specified
+    if (@hasField(@TypeOf(config), "zoom")) {
+        camera.setZoom(config.zoom);
+    }
+}
+
 /// Scene loader that combines .zon scene data with prefab, component, and script registries
 pub fn SceneLoader(comptime PrefabRegistry: type, comptime Components: type, comptime Scripts: type) type {
     return struct {
@@ -100,42 +123,11 @@ pub fn SceneLoader(comptime PrefabRegistry: type, comptime Components: type, com
                     const cam = @field(cameras, field.name);
                     const slot = comptime std.meta.stringToEnum(CameraSlot, field.name) orelse
                         @compileError("Unknown camera name: '" ++ field.name ++ "'. Valid names: main, player2, minimap, camera3");
-                    const camera_ptr = game.getCameraAt(@intFromEnum(slot));
-
-                    // Apply position if specified
-                    if (@hasField(@TypeOf(cam), "x") and @TypeOf(cam.x) != @TypeOf(null)) {
-                        const x: f32 = cam.x;
-                        const y: f32 = if (@hasField(@TypeOf(cam), "y") and @TypeOf(cam.y) != @TypeOf(null)) cam.y else 0;
-                        camera_ptr.setPosition(x, y);
-                    } else if (@hasField(@TypeOf(cam), "y") and @TypeOf(cam.y) != @TypeOf(null)) {
-                        const y: f32 = cam.y;
-                        camera_ptr.setPosition(0, y);
-                    }
-
-                    // Apply zoom if specified
-                    if (@hasField(@TypeOf(cam), "zoom")) {
-                        camera_ptr.setZoom(cam.zoom);
-                    }
+                    applyCameraConfig(cam, game.getCameraAt(@intFromEnum(slot)));
                 }
             } else if (@hasField(@TypeOf(scene_data), "camera")) {
                 // Single camera (primary camera)
-                const cam = scene_data.camera;
-                const game = ctx.game;
-
-                // Apply position if specified
-                if (@hasField(@TypeOf(cam), "x") and @TypeOf(cam.x) != @TypeOf(null)) {
-                    const x: f32 = cam.x;
-                    const y: f32 = if (@hasField(@TypeOf(cam), "y") and @TypeOf(cam.y) != @TypeOf(null)) cam.y else 0;
-                    game.setCameraPosition(x, y);
-                } else if (@hasField(@TypeOf(cam), "y") and @TypeOf(cam.y) != @TypeOf(null)) {
-                    const y: f32 = cam.y;
-                    game.setCameraPosition(0, y);
-                }
-
-                // Apply zoom if specified
-                if (@hasField(@TypeOf(cam), "zoom")) {
-                    game.setCameraZoom(cam.zoom);
-                }
+                applyCameraConfig(scene_data.camera, ctx.game.getCamera());
             }
 
             // Process each entity definition
