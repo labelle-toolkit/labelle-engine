@@ -1,8 +1,9 @@
 .{
     .version = 1,
     .name = "example_4",
-    .description = "Demonstrates configurable ECS backend - switch between zig_ecs and zcs",
+    .description = "Demonstrates configurable ECS backend - switch between zig_ecs and zflecs",
     .initial_scene = "ecs_demo",
+    .ecs_backend = .zig_ecs, // Can be changed to .zflecs
     .window = .{
         .width = 800,
         .height = 600,

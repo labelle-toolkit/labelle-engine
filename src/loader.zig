@@ -124,7 +124,7 @@ pub fn SceneLoader(comptime PrefabRegistry: type, comptime Components: type, com
 
             // Call onCreate if defined
             if (prefab_data.onCreate) |create_fn| {
-                create_fn(@bitCast(entity), @ptrCast(game));
+                create_fn(scene_mod.entityToU64(entity), @ptrCast(game));
             }
 
             // Add components from scene definition

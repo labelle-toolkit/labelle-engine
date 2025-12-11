@@ -1,7 +1,7 @@
 // ECS Demo Script - Demonstrates ECS operations that work with any backend
 //
 // This example shows how the ECS interface abstracts away the underlying
-// implementation. Whether you use zig_ecs or zcs, the API is identical:
+// implementation. Whether you use zig_ecs or zflecs, the API is identical:
 //
 //   - registry.create()      -> Create a new entity
 //   - registry.add(e, comp)  -> Add a component to an entity
@@ -10,8 +10,8 @@
 //   - registry.destroy(e)    -> Destroy an entity
 //
 // Build with different backends:
-//   zig build run                      # Uses zig_ecs (default)
-//   zig build run -Decs_backend=zcs   # Uses zcs backend
+//   zig build run                         # Uses zig_ecs (default)
+//   zig build run -Decs_backend=zflecs   # Uses zflecs backend
 
 const engine = @import("labelle-engine");
 const Bouncer = @import("../components/bouncer.zig").Bouncer;

@@ -132,9 +132,9 @@ jobs:
           cd usage/example_4
           xvfb-run -a zig build run -Decs_backend=zig_ecs
 
-      - name: Build and run example_4 with zcs backend
+      - name: Build and run example_4 with zflecs backend
         env:
           CI_TEST: "1"
         run: |
           cd usage/example_4
-          xvfb-run -a zig build run -Decs_backend=zcs
+          xvfb-run -a zig build run -Decs_backend=zflecs
