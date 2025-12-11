@@ -46,6 +46,7 @@ pub const Entity = ecs.Entity;
 
 pub const Prefab = prefab_mod.Prefab;
 pub const SpriteConfig = prefab_mod.SpriteConfig;
+pub const ResolvedSpriteConfig = prefab_mod.ResolvedSpriteConfig;
 pub const ZIndex = prefab_mod.ZIndex;
 pub const Scene = scene_mod.Scene;
 pub const SceneContext = scene_mod.SceneContext;

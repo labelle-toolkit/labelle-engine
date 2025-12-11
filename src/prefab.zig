@@ -23,22 +23,72 @@ pub const ZIndex = struct {
     pub const foreground: u8 = 255;
 };
 
-/// Sprite configuration that can be defined in prefabs or scenes
+/// Sprite configuration with optional fields for merging/overriding.
+/// Use null to indicate "not specified" (inherit from base).
+/// Use `toResolved()` to get concrete values with defaults applied.
 pub const SpriteConfig = struct {
-    name: []const u8 = "",
-    x: f32 = 0,
-    y: f32 = 0,
-    z_index: u8 = ZIndex.characters,
-    scale: f32 = 1.0,
-    rotation: f32 = 0,
-    flip_x: bool = false,
-    flip_y: bool = false,
-    /// Pivot point for positioning and rotation (defaults to center)
-    pivot: Pivot = .center,
+    name: ?[]const u8 = null,
+    x: ?f32 = null,
+    y: ?f32 = null,
+    z_index: ?u8 = null,
+    scale: ?f32 = null,
+    rotation: ?f32 = null,
+    flip_x: ?bool = null,
+    flip_y: ?bool = null,
+    /// Pivot point for positioning and rotation
+    pivot: ?Pivot = null,
     /// Custom pivot X coordinate (0.0-1.0), used when pivot == .custom
-    pivot_x: f32 = 0.5,
+    pivot_x: ?f32 = null,
     /// Custom pivot Y coordinate (0.0-1.0), used when pivot == .custom
-    pivot_y: f32 = 0.5,
+    pivot_y: ?f32 = null,
+
+    /// Default values used when resolving null fields
+    pub const defaults = ResolvedSpriteConfig{
+        .name = "",
+        .x = 0,
+        .y = 0,
+        .z_index = ZIndex.characters,
+        .scale = 1.0,
+        .rotation = 0,
+        .flip_x = false,
+        .flip_y = false,
+        .pivot = .center,
+        .pivot_x = 0.5,
+        .pivot_y = 0.5,
+    };
+
+    /// Convert to resolved config with all defaults applied
+    pub fn toResolved(self: SpriteConfig) ResolvedSpriteConfig {
+        return .{
+            .name = self.name orelse defaults.name,
+            .x = self.x orelse defaults.x,
+            .y = self.y orelse defaults.y,
+            .z_index = self.z_index orelse defaults.z_index,
+            .scale = self.scale orelse defaults.scale,
+            .rotation = self.rotation orelse defaults.rotation,
+            .flip_x = self.flip_x orelse defaults.flip_x,
+            .flip_y = self.flip_y orelse defaults.flip_y,
+            .pivot = self.pivot orelse defaults.pivot,
+            .pivot_x = self.pivot_x orelse defaults.pivot_x,
+            .pivot_y = self.pivot_y orelse defaults.pivot_y,
+        };
+    }
+};
+
+/// Resolved sprite configuration with concrete values (no optionals).
+/// This is the final output after merging and applying defaults.
+pub const ResolvedSpriteConfig = struct {
+    name: []const u8,
+    x: f32,
+    y: f32,
+    z_index: u8,
+    scale: f32,
+    rotation: f32,
+    flip_x: bool,
+    flip_y: bool,
+    pivot: Pivot,
+    pivot_x: f32,
+    pivot_y: f32,
 };
 
 /// Type-erased prefab interface for runtime use
@@ -46,7 +96,7 @@ pub const SpriteConfig = struct {
 /// The u64 type accommodates both 32-bit (zig_ecs) and 64-bit (zflecs) entity IDs.
 pub const Prefab = struct {
     name: []const u8,
-    sprite: SpriteConfig,
+    sprite: ResolvedSpriteConfig,
     animation: ?[]const u8,
     onCreate: ?*const fn (u64, *anyopaque) void,
     onUpdate: ?*const fn (u64, *anyopaque, f32) void,
@@ -79,34 +129,36 @@ pub fn fromType(comptime T: type) Prefab {
 }
 
 /// Get merged sprite config, including base prefab if present
-fn getMergedSprite(comptime T: type) SpriteConfig {
+fn getMergedSprite(comptime T: type) ResolvedSpriteConfig {
     if (@hasDecl(T, "base")) {
-        const base_sprite = getMergedSprite(T.base);
-        return mergeSprite(base_sprite, T.sprite);
+        const base_resolved = getMergedSprite(T.base);
+        return mergeSprite(base_resolved, T.sprite);
     }
-    return T.sprite;
+    return T.sprite.toResolved();
 }
 
-/// Merge two sprite configs, with 'over' taking precedence
-pub fn mergeSprite(base: SpriteConfig, over: SpriteConfig) SpriteConfig {
+/// Merge a resolved base config with optional overrides.
+/// For each field, if the override is non-null, use it; otherwise keep the base value.
+/// For flip_x/flip_y, use OR logic (either true means true).
+pub fn mergeSprite(base: ResolvedSpriteConfig, over: SpriteConfig) ResolvedSpriteConfig {
     return .{
-        .name = if (over.name.len > 0) over.name else base.name,
-        .x = if (over.x != 0) over.x else base.x,
-        .y = if (over.y != 0) over.y else base.y,
-        .z_index = if (over.z_index != ZIndex.characters) over.z_index else base.z_index,
-        .scale = if (over.scale != 1.0) over.scale else base.scale,
-        .rotation = if (over.rotation != 0) over.rotation else base.rotation,
-        .flip_x = over.flip_x or base.flip_x,
-        .flip_y = over.flip_y or base.flip_y,
-        .pivot = if (over.pivot != .center) over.pivot else base.pivot,
-        .pivot_x = if (over.pivot_x != 0.5) over.pivot_x else base.pivot_x,
-        .pivot_y = if (over.pivot_y != 0.5) over.pivot_y else base.pivot_y,
+        .name = over.name orelse base.name,
+        .x = over.x orelse base.x,
+        .y = over.y orelse base.y,
+        .z_index = over.z_index orelse base.z_index,
+        .scale = over.scale orelse base.scale,
+        .rotation = over.rotation orelse base.rotation,
+        .flip_x = if (over.flip_x) |fx| (fx or base.flip_x) else base.flip_x,
+        .flip_y = if (over.flip_y) |fy| (fy or base.flip_y) else base.flip_y,
+        .pivot = over.pivot orelse base.pivot,
+        .pivot_x = over.pivot_x orelse base.pivot_x,
+        .pivot_y = over.pivot_y orelse base.pivot_y,
     };
 }
 
-/// Apply overrides from a comptime struct to a SpriteConfig
+/// Apply overrides from a comptime struct to a ResolvedSpriteConfig
 /// Used by mergeSpriteWithOverrides to avoid code duplication
-fn applySpriteOverrides(result: *SpriteConfig, comptime over: anytype) void {
+fn applySpriteOverrides(result: *ResolvedSpriteConfig, comptime over: anytype) void {
     if (@hasField(@TypeOf(over), "name")) {
         result.name = over.name;
     }
@@ -126,10 +178,10 @@ fn applySpriteOverrides(result: *SpriteConfig, comptime over: anytype) void {
         result.rotation = over.rotation;
     }
     if (@hasField(@TypeOf(over), "flip_x")) {
-        result.flip_x = over.flip_x;
+        result.flip_x = over.flip_x or result.flip_x;
     }
     if (@hasField(@TypeOf(over), "flip_y")) {
-        result.flip_y = over.flip_y;
+        result.flip_y = over.flip_y or result.flip_y;
     }
     if (@hasField(@TypeOf(over), "pivot")) {
         result.pivot = over.pivot;
@@ -144,9 +196,9 @@ fn applySpriteOverrides(result: *SpriteConfig, comptime over: anytype) void {
 
 /// Merge sprite config with overrides from scene .zon data
 pub fn mergeSpriteWithOverrides(
-    base: SpriteConfig,
+    base: ResolvedSpriteConfig,
     comptime overrides: anytype,
-) SpriteConfig {
+) ResolvedSpriteConfig {
     var result = base;
 
     // Apply top-level overrides (e.g., .x = 100, .pivot = .bottom_center)
