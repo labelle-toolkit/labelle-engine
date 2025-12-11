@@ -44,15 +44,16 @@ const COUNTER_EOS_ID: GameId = 203;
 // Visual Layout Constants
 // ============================================================================
 
-const GRID_SIZE: f32 = 80.0;
-const OFFSET_X: f32 = 100.0;
-const OFFSET_Y: f32 = 100.0;
+const GRID_SIZE: f32 = 100.0;
+// Centered around origin (0,0) since camera is at (0,0) with screen center offset
+const OFFSET_X: f32 = -200.0;
+const OFFSET_Y: f32 = -150.0;
 
 // Positions in grid coordinates
 const FRIDGE_POS = .{ .x = 0, .y = 0 };
 const STOVE_POS = .{ .x = 2, .y = 1 };
 const COUNTER_POS = .{ .x = 4, .y = 0 };
-const CHEF_START_POS = .{ .x = 2, .y = 3 };
+const CHEF_START_POS = .{ .x = 2, .y = 2 };
 
 fn gridToScreen(gx: i32, gy: i32) Position {
     return .{
