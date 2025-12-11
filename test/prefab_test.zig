@@ -11,80 +11,67 @@ test {
 
 pub const SPRITE_CONFIG = struct {
     pub const DEFAULTS = struct {
-        test "name defaults to empty string" {
+        test "fields default to null" {
             const config = prefab.SpriteConfig{};
-            try expect.equal(config.name.len, 0);
+            try expect.toBeNull(config.name);
+            try expect.toBeNull(config.x);
+            try expect.toBeNull(config.y);
+            try expect.toBeNull(config.scale);
+            try expect.toBeNull(config.rotation);
+            try expect.toBeNull(config.flip_x);
+            try expect.toBeNull(config.flip_y);
+            try expect.toBeNull(config.pivot);
+            try expect.toBeNull(config.pivot_x);
+            try expect.toBeNull(config.pivot_y);
         }
 
-        test "position defaults to origin" {
+        test "toResolved applies defaults" {
             const config = prefab.SpriteConfig{};
-            try expect.equal(config.x, 0);
-            try expect.equal(config.y, 0);
-        }
-
-        test "scale defaults to 1.0" {
-            const config = prefab.SpriteConfig{};
-            try expect.equal(config.scale, 1.0);
-        }
-
-        test "rotation defaults to 0" {
-            const config = prefab.SpriteConfig{};
-            try expect.equal(config.rotation, 0);
-        }
-
-        test "flip flags default to false" {
-            const config = prefab.SpriteConfig{};
-            try expect.toBeFalse(config.flip_x);
-            try expect.toBeFalse(config.flip_y);
-        }
-
-        test "pivot defaults to center" {
-            const config = prefab.SpriteConfig{};
-            try expect.equal(config.pivot, .center);
-        }
-
-        test "pivot_x defaults to 0.5" {
-            const config = prefab.SpriteConfig{};
-            try expect.equal(config.pivot_x, 0.5);
-        }
-
-        test "pivot_y defaults to 0.5" {
-            const config = prefab.SpriteConfig{};
-            try expect.equal(config.pivot_y, 0.5);
+            const resolved = config.toResolved();
+            try expect.equal(resolved.name.len, 0);
+            try expect.equal(resolved.x, 0);
+            try expect.equal(resolved.y, 0);
+            try expect.equal(resolved.scale, 1.0);
+            try expect.equal(resolved.rotation, 0);
+            try expect.toBeFalse(resolved.flip_x);
+            try expect.toBeFalse(resolved.flip_y);
+            try expect.equal(resolved.pivot, .center);
+            try expect.equal(resolved.pivot_x, 0.5);
+            try expect.equal(resolved.pivot_y, 0.5);
         }
     };
 
     pub const INITIALIZATION = struct {
         test "can set name" {
             const config = prefab.SpriteConfig{ .name = "sprite.png" };
-            try expect.toBeTrue(std.mem.eql(u8, config.name, "sprite.png"));
+            try expect.toBeTrue(std.mem.eql(u8, config.name.?, "sprite.png"));
         }
 
         test "can set position" {
             const config = prefab.SpriteConfig{ .x = 100, .y = 200 };
-            try expect.equal(config.x, 100);
-            try expect.equal(config.y, 200);
+            try expect.equal(config.x.?, 100);
+            try expect.equal(config.y.?, 200);
         }
 
         test "can set scale" {
             const config = prefab.SpriteConfig{ .scale = 2.5 };
-            try expect.equal(config.scale, 2.5);
+            try expect.equal(config.scale.?, 2.5);
         }
 
         test "can set rotation" {
             const config = prefab.SpriteConfig{ .rotation = 45.0 };
-            try expect.equal(config.rotation, 45.0);
+            try expect.equal(config.rotation.?, 45.0);
         }
 
         test "can set flip flags" {
             const config = prefab.SpriteConfig{ .flip_x = true, .flip_y = true };
-            try expect.toBeTrue(config.flip_x);
-            try expect.toBeTrue(config.flip_y);
+            try expect.toBeTrue(config.flip_x.?);
+            try expect.toBeTrue(config.flip_y.?);
         }
 
         test "can set pivot" {
             const config = prefab.SpriteConfig{ .pivot = .bottom_center };
-            try expect.equal(config.pivot, .bottom_center);
+            try expect.equal(config.pivot.?, .bottom_center);
         }
 
         test "can set custom pivot coordinates" {
@@ -93,9 +80,9 @@ pub const SPRITE_CONFIG = struct {
                 .pivot_x = 0.25,
                 .pivot_y = 0.75,
             };
-            try expect.equal(config.pivot, .custom);
-            try expect.equal(config.pivot_x, 0.25);
-            try expect.equal(config.pivot_y, 0.75);
+            try expect.equal(config.pivot.?, .custom);
+            try expect.equal(config.pivot_x.?, 0.25);
+            try expect.equal(config.pivot_y.?, 0.75);
         }
 
         test "can set all fields at once" {
@@ -109,14 +96,14 @@ pub const SPRITE_CONFIG = struct {
                 .flip_x = true,
                 .flip_y = false,
             };
-            try expect.toBeTrue(std.mem.eql(u8, config.name, "test.png"));
-            try expect.equal(config.x, 10);
-            try expect.equal(config.y, 20);
-            try expect.equal(config.z_index, 5);
-            try expect.equal(config.scale, 1.5);
-            try expect.equal(config.rotation, 90);
-            try expect.toBeTrue(config.flip_x);
-            try expect.toBeFalse(config.flip_y);
+            try expect.toBeTrue(std.mem.eql(u8, config.name.?, "test.png"));
+            try expect.equal(config.x.?, 10);
+            try expect.equal(config.y.?, 20);
+            try expect.equal(config.z_index.?, 5);
+            try expect.equal(config.scale.?, 1.5);
+            try expect.equal(config.rotation.?, 90);
+            try expect.toBeTrue(config.flip_x.?);
+            try expect.toBeFalse(config.flip_y.?);
         }
     };
 };
@@ -153,22 +140,22 @@ pub const IS_PREFAB = struct {
 
 pub const MERGE_SPRITE = struct {
     pub const NAME_MERGING = struct {
-        test "uses over name when non-empty" {
-            const base = prefab.SpriteConfig{ .name = "base.png" };
+        test "uses over name when specified" {
+            const base = (prefab.SpriteConfig{ .name = "base.png" }).toResolved();
             const over = prefab.SpriteConfig{ .name = "over.png" };
             const merged = prefab.mergeSprite(base, over);
             try expect.toBeTrue(std.mem.eql(u8, merged.name, "over.png"));
         }
 
-        test "uses base name when over name is empty" {
-            const base = prefab.SpriteConfig{ .name = "base.png" };
+        test "uses base name when over name is null" {
+            const base = (prefab.SpriteConfig{ .name = "base.png" }).toResolved();
             const over = prefab.SpriteConfig{};
             const merged = prefab.mergeSprite(base, over);
             try expect.toBeTrue(std.mem.eql(u8, merged.name, "base.png"));
         }
 
-        test "empty result when both names are empty" {
-            const base = prefab.SpriteConfig{};
+        test "empty result when both names use defaults" {
+            const base = prefab.SpriteConfig.defaults;
             const over = prefab.SpriteConfig{};
             const merged = prefab.mergeSprite(base, over);
             try expect.equal(merged.name.len, 0);
@@ -176,167 +163,205 @@ pub const MERGE_SPRITE = struct {
     };
 
     pub const POSITION_MERGING = struct {
-        test "uses over x when non-zero" {
-            const base = prefab.SpriteConfig{ .x = 10 };
+        test "uses over x when specified" {
+            const base = (prefab.SpriteConfig{ .x = 10 }).toResolved();
             const over = prefab.SpriteConfig{ .x = 100 };
             const merged = prefab.mergeSprite(base, over);
             try expect.equal(merged.x, 100);
         }
 
-        test "uses base x when over x is zero" {
-            const base = prefab.SpriteConfig{ .x = 10 };
+        test "uses base x when over x is null" {
+            const base = (prefab.SpriteConfig{ .x = 10 }).toResolved();
             const over = prefab.SpriteConfig{};
             const merged = prefab.mergeSprite(base, over);
             try expect.equal(merged.x, 10);
         }
 
-        test "uses over y when non-zero" {
-            const base = prefab.SpriteConfig{ .y = 20 };
+        test "over can explicitly set x to zero" {
+            const base = (prefab.SpriteConfig{ .x = 10 }).toResolved();
+            const over = prefab.SpriteConfig{ .x = 0 };
+            const merged = prefab.mergeSprite(base, over);
+            try expect.equal(merged.x, 0);
+        }
+
+        test "uses over y when specified" {
+            const base = (prefab.SpriteConfig{ .y = 20 }).toResolved();
             const over = prefab.SpriteConfig{ .y = 200 };
             const merged = prefab.mergeSprite(base, over);
             try expect.equal(merged.y, 200);
         }
 
-        test "uses base y when over y is zero" {
-            const base = prefab.SpriteConfig{ .y = 20 };
+        test "uses base y when over y is null" {
+            const base = (prefab.SpriteConfig{ .y = 20 }).toResolved();
             const over = prefab.SpriteConfig{};
             const merged = prefab.mergeSprite(base, over);
             try expect.equal(merged.y, 20);
         }
+
+        test "over can explicitly set y to zero" {
+            const base = (prefab.SpriteConfig{ .y = 20 }).toResolved();
+            const over = prefab.SpriteConfig{ .y = 0 };
+            const merged = prefab.mergeSprite(base, over);
+            try expect.equal(merged.y, 0);
+        }
     };
 
     pub const SCALE_MERGING = struct {
-        test "uses over scale when different from default" {
-            const base = prefab.SpriteConfig{ .scale = 2.0 };
+        test "uses over scale when specified" {
+            const base = (prefab.SpriteConfig{ .scale = 2.0 }).toResolved();
             const over = prefab.SpriteConfig{ .scale = 3.0 };
             const merged = prefab.mergeSprite(base, over);
             try expect.equal(merged.scale, 3.0);
         }
 
-        test "uses base scale when over scale is default" {
-            const base = prefab.SpriteConfig{ .scale = 2.0 };
+        test "uses base scale when over scale is null" {
+            const base = (prefab.SpriteConfig{ .scale = 2.0 }).toResolved();
             const over = prefab.SpriteConfig{};
             const merged = prefab.mergeSprite(base, over);
             try expect.equal(merged.scale, 2.0);
         }
+
+        test "over can explicitly set scale to 1.0" {
+            const base = (prefab.SpriteConfig{ .scale = 2.0 }).toResolved();
+            const over = prefab.SpriteConfig{ .scale = 1.0 };
+            const merged = prefab.mergeSprite(base, over);
+            try expect.equal(merged.scale, 1.0);
+        }
     };
 
     pub const ROTATION_MERGING = struct {
-        test "uses over rotation when non-zero" {
-            const base = prefab.SpriteConfig{ .rotation = 45 };
+        test "uses over rotation when specified" {
+            const base = (prefab.SpriteConfig{ .rotation = 45 }).toResolved();
             const over = prefab.SpriteConfig{ .rotation = 90 };
             const merged = prefab.mergeSprite(base, over);
             try expect.equal(merged.rotation, 90);
         }
 
-        test "uses base rotation when over rotation is zero" {
-            const base = prefab.SpriteConfig{ .rotation = 45 };
+        test "uses base rotation when over rotation is null" {
+            const base = (prefab.SpriteConfig{ .rotation = 45 }).toResolved();
             const over = prefab.SpriteConfig{};
             const merged = prefab.mergeSprite(base, over);
             try expect.equal(merged.rotation, 45);
         }
+
+        test "over can explicitly set rotation to zero" {
+            const base = (prefab.SpriteConfig{ .rotation = 45 }).toResolved();
+            const over = prefab.SpriteConfig{ .rotation = 0 };
+            const merged = prefab.mergeSprite(base, over);
+            try expect.equal(merged.rotation, 0);
+        }
     };
 
     pub const FLIP_MERGING = struct {
-        test "flip_x is ORed - both false" {
-            const base = prefab.SpriteConfig{ .flip_x = false };
+        test "flip_x uses over value when specified" {
+            const base = (prefab.SpriteConfig{ .flip_x = false }).toResolved();
+            const over = prefab.SpriteConfig{ .flip_x = true };
+            const merged = prefab.mergeSprite(base, over);
+            try expect.toBeTrue(merged.flip_x);
+        }
+
+        test "flip_x can override true to false" {
+            const base = (prefab.SpriteConfig{ .flip_x = true }).toResolved();
             const over = prefab.SpriteConfig{ .flip_x = false };
             const merged = prefab.mergeSprite(base, over);
             try expect.toBeFalse(merged.flip_x);
         }
 
-        test "flip_x is ORed - base true" {
-            const base = prefab.SpriteConfig{ .flip_x = true };
-            const over = prefab.SpriteConfig{ .flip_x = false };
+        test "flip_x uses base when over is null" {
+            const base = (prefab.SpriteConfig{ .flip_x = true }).toResolved();
+            const over = prefab.SpriteConfig{};
             const merged = prefab.mergeSprite(base, over);
             try expect.toBeTrue(merged.flip_x);
         }
 
-        test "flip_x is ORed - over true" {
-            const base = prefab.SpriteConfig{ .flip_x = false };
-            const over = prefab.SpriteConfig{ .flip_x = true };
+        test "flip_y uses over value when specified" {
+            const base = (prefab.SpriteConfig{ .flip_y = false }).toResolved();
+            const over = prefab.SpriteConfig{ .flip_y = true };
             const merged = prefab.mergeSprite(base, over);
-            try expect.toBeTrue(merged.flip_x);
+            try expect.toBeTrue(merged.flip_y);
         }
 
-        test "flip_x is ORed - both true" {
-            const base = prefab.SpriteConfig{ .flip_x = true };
-            const over = prefab.SpriteConfig{ .flip_x = true };
-            const merged = prefab.mergeSprite(base, over);
-            try expect.toBeTrue(merged.flip_x);
-        }
-
-        test "flip_y is ORed - both false" {
-            const base = prefab.SpriteConfig{ .flip_y = false };
+        test "flip_y can override true to false" {
+            const base = (prefab.SpriteConfig{ .flip_y = true }).toResolved();
             const over = prefab.SpriteConfig{ .flip_y = false };
             const merged = prefab.mergeSprite(base, over);
             try expect.toBeFalse(merged.flip_y);
         }
 
-        test "flip_y is ORed - base true" {
-            const base = prefab.SpriteConfig{ .flip_y = true };
-            const over = prefab.SpriteConfig{ .flip_y = false };
-            const merged = prefab.mergeSprite(base, over);
-            try expect.toBeTrue(merged.flip_y);
-        }
-
-        test "flip_y is ORed - over true" {
-            const base = prefab.SpriteConfig{ .flip_y = false };
-            const over = prefab.SpriteConfig{ .flip_y = true };
+        test "flip_y uses base when over is null" {
+            const base = (prefab.SpriteConfig{ .flip_y = true }).toResolved();
+            const over = prefab.SpriteConfig{};
             const merged = prefab.mergeSprite(base, over);
             try expect.toBeTrue(merged.flip_y);
         }
     };
 
     pub const PIVOT_MERGING = struct {
-        test "uses over pivot when not center" {
-            const base = prefab.SpriteConfig{ .pivot = .top_left };
+        test "uses over pivot when specified" {
+            const base = (prefab.SpriteConfig{ .pivot = .top_left }).toResolved();
             const over = prefab.SpriteConfig{ .pivot = .bottom_center };
             const merged = prefab.mergeSprite(base, over);
             try expect.equal(merged.pivot, .bottom_center);
         }
 
-        test "uses base pivot when over pivot is center" {
-            const base = prefab.SpriteConfig{ .pivot = .bottom_center };
+        test "uses base pivot when over pivot is null" {
+            const base = (prefab.SpriteConfig{ .pivot = .bottom_center }).toResolved();
             const over = prefab.SpriteConfig{};
             const merged = prefab.mergeSprite(base, over);
             try expect.equal(merged.pivot, .bottom_center);
         }
 
-        test "uses over pivot_x when not 0.5" {
-            const base = prefab.SpriteConfig{ .pivot_x = 0.25 };
+        test "over can explicitly set pivot to center" {
+            const base = (prefab.SpriteConfig{ .pivot = .bottom_center }).toResolved();
+            const over = prefab.SpriteConfig{ .pivot = .center };
+            const merged = prefab.mergeSprite(base, over);
+            try expect.equal(merged.pivot, .center);
+        }
+
+        test "uses over pivot_x when specified" {
+            const base = (prefab.SpriteConfig{ .pivot_x = 0.25 }).toResolved();
             const over = prefab.SpriteConfig{ .pivot_x = 0.75 };
             const merged = prefab.mergeSprite(base, over);
             try expect.equal(merged.pivot_x, 0.75);
         }
 
-        test "uses base pivot_x when over pivot_x is 0.5" {
-            const base = prefab.SpriteConfig{ .pivot_x = 0.25 };
+        test "uses base pivot_x when over pivot_x is null" {
+            const base = (prefab.SpriteConfig{ .pivot_x = 0.25 }).toResolved();
             const over = prefab.SpriteConfig{};
             const merged = prefab.mergeSprite(base, over);
             try expect.equal(merged.pivot_x, 0.25);
         }
 
-        test "uses over pivot_y when not 0.5" {
-            const base = prefab.SpriteConfig{ .pivot_y = 0.1 };
+        test "over can explicitly set pivot_x to 0.5" {
+            const base = (prefab.SpriteConfig{ .pivot_x = 0.25 }).toResolved();
+            const over = prefab.SpriteConfig{ .pivot_x = 0.5 };
+            const merged = prefab.mergeSprite(base, over);
+            try expect.equal(merged.pivot_x, 0.5);
+        }
+
+        test "uses over pivot_y when specified" {
+            const base = (prefab.SpriteConfig{ .pivot_y = 0.1 }).toResolved();
             const over = prefab.SpriteConfig{ .pivot_y = 0.9 };
             const merged = prefab.mergeSprite(base, over);
             try expect.equal(merged.pivot_y, 0.9);
         }
 
-        test "uses base pivot_y when over pivot_y is 0.5" {
-            const base = prefab.SpriteConfig{ .pivot_y = 0.1 };
+        test "uses base pivot_y when over pivot_y is null" {
+            const base = (prefab.SpriteConfig{ .pivot_y = 0.1 }).toResolved();
             const over = prefab.SpriteConfig{};
             const merged = prefab.mergeSprite(base, over);
             try expect.equal(merged.pivot_y, 0.1);
         }
 
+        test "over can explicitly set pivot_y to 0.5" {
+            const base = (prefab.SpriteConfig{ .pivot_y = 0.1 }).toResolved();
+            const over = prefab.SpriteConfig{ .pivot_y = 0.5 };
+            const merged = prefab.mergeSprite(base, over);
+            try expect.equal(merged.pivot_y, 0.5);
+        }
+
         test "merges custom pivot with coordinates" {
-            const base = prefab.SpriteConfig{
-                .pivot = .center,
-                .pivot_x = 0.5,
-                .pivot_y = 0.5,
-            };
+            const base = prefab.SpriteConfig.defaults;
             const over = prefab.SpriteConfig{
                 .pivot = .custom,
                 .pivot_x = 0.3,
@@ -351,7 +376,7 @@ pub const MERGE_SPRITE = struct {
 
     pub const COMPLEX_MERGING = struct {
         test "merges multiple fields correctly" {
-            const base = prefab.SpriteConfig{
+            const base = (prefab.SpriteConfig{
                 .name = "base.png",
                 .x = 10,
                 .y = 20,
@@ -359,12 +384,12 @@ pub const MERGE_SPRITE = struct {
                 .rotation = 45,
                 .flip_x = true,
                 .flip_y = false,
-            };
+            }).toResolved();
             const over = prefab.SpriteConfig{
                 .name = "over.png",
                 .x = 100,
-                // y stays default (0)
-                // scale stays default (1.0)
+                // y stays null (inherit from base)
+                // scale stays null (inherit from base)
                 .rotation = 90,
                 .flip_x = false,
                 .flip_y = true,
@@ -376,8 +401,38 @@ pub const MERGE_SPRITE = struct {
             try expect.equal(merged.y, 20); // from base
             try expect.equal(merged.scale, 2.0); // from base
             try expect.equal(merged.rotation, 90);
-            try expect.toBeTrue(merged.flip_x); // ORed
-            try expect.toBeTrue(merged.flip_y); // ORed
+            try expect.toBeFalse(merged.flip_x); // overridden to false
+            try expect.toBeTrue(merged.flip_y); // overridden to true
+        }
+
+        test "null values correctly inherit from base" {
+            const base = (prefab.SpriteConfig{
+                .name = "base.png",
+                .x = 50,
+                .y = 75,
+                .z_index = 10,
+                .scale = 1.5,
+                .rotation = 30,
+                .flip_x = true,
+                .flip_y = true,
+                .pivot = .bottom_left,
+                .pivot_x = 0.0,
+                .pivot_y = 1.0,
+            }).toResolved();
+            const over = prefab.SpriteConfig{}; // all null - inherit everything
+            const merged = prefab.mergeSprite(base, over);
+
+            try expect.toBeTrue(std.mem.eql(u8, merged.name, "base.png"));
+            try expect.equal(merged.x, 50);
+            try expect.equal(merged.y, 75);
+            try expect.equal(merged.z_index, 10);
+            try expect.equal(merged.scale, 1.5);
+            try expect.equal(merged.rotation, 30);
+            try expect.toBeTrue(merged.flip_x);
+            try expect.toBeTrue(merged.flip_y);
+            try expect.equal(merged.pivot, .bottom_left);
+            try expect.equal(merged.pivot_x, 0.0);
+            try expect.equal(merged.pivot_y, 1.0);
         }
     };
 };

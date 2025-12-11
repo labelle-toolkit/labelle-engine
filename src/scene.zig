@@ -27,6 +27,7 @@ pub const generator = @import("generator.zig");
 // Re-export commonly used types
 pub const Prefab = prefab.Prefab;
 pub const SpriteConfig = prefab.SpriteConfig;
+pub const ResolvedSpriteConfig = prefab.ResolvedSpriteConfig;
 pub const PrefabRegistry = prefab.PrefabRegistry;
 pub const SceneLoader = loader.SceneLoader;
 pub const ComponentRegistry = component.ComponentRegistry;
