@@ -13,8 +13,8 @@
             .hash = "zflecs-0.2.0-dev-1PN3ym9mOgCyE8w0DdK_Uf7FAob-nm0Dp_lZKR3QyJaC",
         },
         .@"labelle-gfx" = .{
-            .url = "git+https://github.com/labelle-toolkit/labelle-gfx?ref=v0.13.1#62dcceaa901f91bab87325c5f8eb986f57568455",
-            .hash = "labelle-0.12.0-2bWPIrNHBQArlSlvPehcwo7ZaBBjUQwtbnbWurumtq2m",
+            .url = "git+https://github.com/labelle-toolkit/labelle-gfx?ref=v0.14.0#fc16a96d7a6104858ceb5239dfde69ce1d755d55",
+            .hash = "labelle-0.14.0-2bWPIotlBgAmQSAoLc_whPfh5ombk-TyQDyHch8AGzLc",
         },
         .zspec = .{
             .url = "git+https://github.com/apotema/zspec#4d45cc5cda87312312040fcaa205720246d24953",
