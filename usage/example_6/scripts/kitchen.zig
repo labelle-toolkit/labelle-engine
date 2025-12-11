@@ -314,9 +314,8 @@ pub fn update(game: *Game, scene: *Scene, dt: f32) void {
             const dist = @sqrt(dx * dx + dy * dy);
 
             if (dist < 5.0) {
-                // Arrived at target
-                pos.x = target.x;
-                pos.y = target.y;
+                // Arrived at target - use setPosition to mark dirty
+                game.setPosition(ce, .{ .x = target.x, .y = target.y });
                 chef_target = null;
 
                 // Notify task engine based on current step
@@ -335,10 +334,11 @@ pub fn update(game: *Game, scene: *Scene, dt: f32) void {
                     }
                 }
             } else {
-                // Move towards target
+                // Move towards target - use setPosition to mark dirty for render sync
                 const speed = chef_speed * dt;
-                pos.x += (dx / dist) * speed;
-                pos.y += (dy / dist) * speed;
+                const new_x = pos.x + (dx / dist) * speed;
+                const new_y = pos.y + (dy / dist) * speed;
+                game.setPosition(ce, .{ .x = new_x, .y = new_y });
             }
         }
     }

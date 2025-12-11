@@ -1,7 +1,7 @@
 .{
     .version = 1,
     .name = "example_6",
-    .description = "Task orchestration demo - kitchen workflow with workers",
+    .description = "Task orchestration demo - kitchen workflow with workers and pathfinding",
     .initial_scene = "kitchen_demo",
     .window = .{
         .width = 800,
@@ -14,5 +14,6 @@
     },
     .plugins = .{
         .{ .name = "labelle-tasks", .version = "0.2.0" },
+        .{ .name = "labelle-pathfinding", .version = "2.5.0" },
     },
 }
