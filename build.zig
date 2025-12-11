@@ -154,6 +154,21 @@ pub fn build(b: *std.Build) void {
     const generate_step = b.step("generate", "Generate project files from project.labelle");
     generate_step.dependOn(&run_generator.step);
 
+    // Main CLI executable - unified interface for labelle projects
+    const cli_exe = b.addExecutable(.{
+        .name = "labelle",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/cli.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "zts", .module = zts },
+            },
+        }),
+    });
+
+    b.installArtifact(cli_exe);
+
     // Benchmark executable - compares ECS backend performance
     const bench_exe = b.addExecutable(.{
         .name = "ecs-benchmark",

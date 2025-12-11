@@ -25,6 +25,16 @@ const build_zig_tmpl = @embedFile("templates/build_zig.txt");
 const main_raylib_tmpl = @embedFile("templates/main_raylib.txt");
 const main_sokol_tmpl = @embedFile("templates/main_sokol.txt");
 
+/// Sanitize a project name to be a valid Zig identifier
+/// Replaces hyphens with underscores
+fn sanitizeZigIdentifier(allocator: std.mem.Allocator, name: []const u8) ![]const u8 {
+    var result = try allocator.alloc(u8, name.len);
+    for (name, 0..) |c, i| {
+        result[i] = if (c == '-') '_' else c;
+    }
+    return result;
+}
+
 /// Options for generating build.zig.zon
 pub const BuildZonOptions = struct {
     /// Path to labelle-engine (for local development). If null, uses URL.
@@ -36,14 +46,18 @@ pub fn generateBuildZon(allocator: std.mem.Allocator, config: ProjectConfig, opt
     var buf: std.ArrayListUnmanaged(u8) = .{};
     const writer = buf.writer(allocator);
 
+    // Sanitize project name for Zig identifier (replace - with _)
+    const zig_name = try sanitizeZigIdentifier(allocator, config.name);
+    defer allocator.free(zig_name);
+
     // Generate a deterministic fingerprint based on project name
     var hash = std.hash.Fnv1a_64.init();
     hash.update(config.name);
     hash.update("labelle-game-v1");
     const fingerprint = hash.final();
 
-    // Write header with fingerprint and name
-    try zts.print(build_zig_zon_tmpl, "header", .{ fingerprint, config.name }, writer);
+    // Write header with fingerprint and sanitized name
+    try zts.print(build_zig_zon_tmpl, "header", .{ fingerprint, zig_name }, writer);
 
     // Write engine dependency (path or URL)
     if (options.engine_path) |path| {
@@ -69,6 +83,10 @@ pub fn generateBuildZig(allocator: std.mem.Allocator, config: ProjectConfig) ![]
     var buf: std.ArrayListUnmanaged(u8) = .{};
     const writer = buf.writer(allocator);
 
+    // Sanitize project name for Zig identifier (replace - with _)
+    const zig_name = try sanitizeZigIdentifier(allocator, config.name);
+    defer allocator.free(zig_name);
+
     // Get the default backends from project config
     const default_backend = switch (config.backend) {
         .raylib => "raylib",
@@ -80,12 +98,19 @@ pub fn generateBuildZig(allocator: std.mem.Allocator, config: ProjectConfig) ![]
         .zflecs => "zflecs",
     };
 
-    // Write template with backend-specific section
-    // Template args: graphics_backend (x2), ecs_backend (x2), project_name
+    // Write common header (includes backend options)
+    // Template args: graphics_backend (x2), ecs_backend (x2)
+    try zts.print(build_zig_tmpl, "header", .{ default_backend, default_backend, default_ecs_backend, default_ecs_backend }, writer);
+
+    // Write backend-specific executable setup
+    // Template args: project_name
     switch (config.backend) {
-        .raylib => try zts.print(build_zig_tmpl, "raylib", .{ default_backend, default_backend, default_ecs_backend, default_ecs_backend, config.name }, writer),
-        .sokol => try zts.print(build_zig_tmpl, "sokol", .{ default_backend, default_backend, default_ecs_backend, default_ecs_backend, config.name }, writer),
+        .raylib => try zts.print(build_zig_tmpl, "raylib", .{zig_name}, writer),
+        .sokol => try zts.print(build_zig_tmpl, "sokol", .{zig_name}, writer),
     }
+
+    // Write common footer
+    try zts.print(build_zig_tmpl, "footer", .{}, writer);
 
     return buf.toOwnedSlice(allocator);
 }
@@ -299,7 +324,7 @@ pub fn generateProject(allocator: std.mem.Allocator, project_path: []const u8, o
     const main_zig = try generateMainZig(allocator, config, prefabs, components, scripts);
     defer allocator.free(main_zig);
 
-    // Write files
+    // Write files to project root
     const build_zig_zon_path = try std.fs.path.join(allocator, &.{ project_path, "build.zig.zon" });
     defer allocator.free(build_zig_zon_path);
     const build_zig_path = try std.fs.path.join(allocator, &.{ project_path, "build.zig" });
@@ -351,7 +376,7 @@ pub fn generateMainOnly(allocator: std.mem.Allocator, project_path: []const u8) 
     const main_zig = try generateMainZig(allocator, config, prefabs, components, scripts);
     defer allocator.free(main_zig);
 
-    // Write main.zig
+    // Write main.zig to project root
     const main_zig_path = try std.fs.path.join(allocator, &.{ project_path, "main.zig" });
     defer allocator.free(main_zig_path);
 
