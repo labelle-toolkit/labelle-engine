@@ -47,6 +47,15 @@ pub const Shape = render_pipeline_mod.Shape;
 pub const Color = render_pipeline_mod.Color;
 pub const ShapeVisual = render_pipeline_mod.ShapeVisual;
 
+/// Get a field from comptime data or return a default value if not present
+fn getFieldOrDefault(comptime data: anytype, comptime field_name: []const u8, comptime default: anytype) @TypeOf(default) {
+    if (@hasField(@TypeOf(data), field_name)) {
+        return @field(data, field_name);
+    } else {
+        return default;
+    }
+}
+
 /// Scene loader that combines .zon scene data with prefab, component, and script registries
 pub fn SceneLoader(comptime PrefabRegistry: type, comptime Components: type, comptime Scripts: type) type {
     return struct {
@@ -166,21 +175,22 @@ pub fn SceneLoader(comptime PrefabRegistry: type, comptime Components: type, com
             const entity = game.createEntity();
 
             // Add Position component
-            const x: f32 = if (@hasField(@TypeOf(sprite_def), "x")) sprite_def.x else 0;
-            const y: f32 = if (@hasField(@TypeOf(sprite_def), "y")) sprite_def.y else 0;
-            game.addPosition(entity, Position{ .x = x, .y = y });
+            game.addPosition(entity, Position{
+                .x = getFieldOrDefault(sprite_def, "x", @as(f32, 0)),
+                .y = getFieldOrDefault(sprite_def, "y", @as(f32, 0)),
+            });
 
             // Add Sprite component
             try game.addSprite(entity, Sprite{
                 .sprite_name = sprite_def.name,
-                .z_index = if (@hasField(@TypeOf(sprite_def), "z_index")) sprite_def.z_index else ZIndex.characters,
-                .scale = if (@hasField(@TypeOf(sprite_def), "scale")) sprite_def.scale else 1.0,
-                .rotation = if (@hasField(@TypeOf(sprite_def), "rotation")) sprite_def.rotation else 0,
-                .flip_x = if (@hasField(@TypeOf(sprite_def), "flip_x")) sprite_def.flip_x else false,
-                .flip_y = if (@hasField(@TypeOf(sprite_def), "flip_y")) sprite_def.flip_y else false,
-                .pivot = if (@hasField(@TypeOf(sprite_def), "pivot")) sprite_def.pivot else .center,
-                .pivot_x = if (@hasField(@TypeOf(sprite_def), "pivot_x")) sprite_def.pivot_x else 0.5,
-                .pivot_y = if (@hasField(@TypeOf(sprite_def), "pivot_y")) sprite_def.pivot_y else 0.5,
+                .z_index = getFieldOrDefault(sprite_def, "z_index", ZIndex.characters),
+                .scale = getFieldOrDefault(sprite_def, "scale", @as(f32, 1.0)),
+                .rotation = getFieldOrDefault(sprite_def, "rotation", @as(f32, 0)),
+                .flip_x = getFieldOrDefault(sprite_def, "flip_x", false),
+                .flip_y = getFieldOrDefault(sprite_def, "flip_y", false),
+                .pivot = getFieldOrDefault(sprite_def, "pivot", render_pipeline_mod.Pivot.center),
+                .pivot_x = getFieldOrDefault(sprite_def, "pivot_x", @as(f32, 0.5)),
+                .pivot_y = getFieldOrDefault(sprite_def, "pivot_y", @as(f32, 0.5)),
             });
 
             // Add components from scene definition
@@ -209,28 +219,24 @@ pub fn SceneLoader(comptime PrefabRegistry: type, comptime Components: type, com
             const entity = game.createEntity();
 
             // Add Position component
-            const x: f32 = if (@hasField(@TypeOf(shape_def), "x")) shape_def.x else 0;
-            const y: f32 = if (@hasField(@TypeOf(shape_def), "y")) shape_def.y else 0;
-            game.addPosition(entity, Position{ .x = x, .y = y });
+            game.addPosition(entity, Position{
+                .x = getFieldOrDefault(shape_def, "x", @as(f32, 0)),
+                .y = getFieldOrDefault(shape_def, "y", @as(f32, 0)),
+            });
 
             // Build shape based on type
             const shape_type = shape_def.type;
             var shape: Shape = switch (shape_type) {
-                .circle => blk: {
-                    const radius: f32 = if (@hasField(@TypeOf(shape_def), "radius")) shape_def.radius else 10;
-                    break :blk Shape.circle(radius);
-                },
-                .rectangle => blk: {
-                    const width: f32 = if (@hasField(@TypeOf(shape_def), "width")) shape_def.width else 10;
-                    const height: f32 = if (@hasField(@TypeOf(shape_def), "height")) shape_def.height else 10;
-                    break :blk Shape.rectangle(width, height);
-                },
-                .line => blk: {
-                    const end_x: f32 = if (@hasField(@TypeOf(shape_def), "end_x")) shape_def.end_x else 10;
-                    const end_y: f32 = if (@hasField(@TypeOf(shape_def), "end_y")) shape_def.end_y else 0;
-                    const thickness: f32 = if (@hasField(@TypeOf(shape_def), "thickness")) shape_def.thickness else 1;
-                    break :blk Shape.line(end_x, end_y, thickness);
-                },
+                .circle => Shape.circle(getFieldOrDefault(shape_def, "radius", @as(f32, 10))),
+                .rectangle => Shape.rectangle(
+                    getFieldOrDefault(shape_def, "width", @as(f32, 10)),
+                    getFieldOrDefault(shape_def, "height", @as(f32, 10)),
+                ),
+                .line => Shape.line(
+                    getFieldOrDefault(shape_def, "end_x", @as(f32, 10)),
+                    getFieldOrDefault(shape_def, "end_y", @as(f32, 0)),
+                    getFieldOrDefault(shape_def, "thickness", @as(f32, 1)),
+                ),
                 else => @compileError("Unknown shape type in scene definition"),
             };
 

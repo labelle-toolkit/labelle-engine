@@ -104,6 +104,44 @@ pub fn mergeSprite(base: SpriteConfig, over: SpriteConfig) SpriteConfig {
     };
 }
 
+/// Apply overrides from a comptime struct to a SpriteConfig
+/// Used by mergeSpriteWithOverrides to avoid code duplication
+fn applySpriteOverrides(result: *SpriteConfig, comptime over: anytype) void {
+    if (@hasField(@TypeOf(over), "name")) {
+        result.name = over.name;
+    }
+    if (@hasField(@TypeOf(over), "x")) {
+        result.x = over.x;
+    }
+    if (@hasField(@TypeOf(over), "y")) {
+        result.y = over.y;
+    }
+    if (@hasField(@TypeOf(over), "z_index")) {
+        result.z_index = over.z_index;
+    }
+    if (@hasField(@TypeOf(over), "scale")) {
+        result.scale = over.scale;
+    }
+    if (@hasField(@TypeOf(over), "rotation")) {
+        result.rotation = over.rotation;
+    }
+    if (@hasField(@TypeOf(over), "flip_x")) {
+        result.flip_x = over.flip_x;
+    }
+    if (@hasField(@TypeOf(over), "flip_y")) {
+        result.flip_y = over.flip_y;
+    }
+    if (@hasField(@TypeOf(over), "pivot")) {
+        result.pivot = over.pivot;
+    }
+    if (@hasField(@TypeOf(over), "pivot_x")) {
+        result.pivot_x = over.pivot_x;
+    }
+    if (@hasField(@TypeOf(over), "pivot_y")) {
+        result.pivot_y = over.pivot_y;
+    }
+}
+
 /// Merge sprite config with overrides from scene .zon data
 pub fn mergeSpriteWithOverrides(
     base: SpriteConfig,
@@ -111,56 +149,12 @@ pub fn mergeSpriteWithOverrides(
 ) SpriteConfig {
     var result = base;
 
-    // Check each possible override field
-    if (@hasField(@TypeOf(overrides), "x")) {
-        result.x = overrides.x;
-    }
-    if (@hasField(@TypeOf(overrides), "y")) {
-        result.y = overrides.y;
-    }
-    if (@hasField(@TypeOf(overrides), "z_index")) {
-        result.z_index = overrides.z_index;
-    }
-    if (@hasField(@TypeOf(overrides), "scale")) {
-        result.scale = overrides.scale;
-    }
-    if (@hasField(@TypeOf(overrides), "rotation")) {
-        result.rotation = overrides.rotation;
-    }
-    if (@hasField(@TypeOf(overrides), "flip_x")) {
-        result.flip_x = overrides.flip_x;
-    }
-    if (@hasField(@TypeOf(overrides), "flip_y")) {
-        result.flip_y = overrides.flip_y;
-    }
-    if (@hasField(@TypeOf(overrides), "pivot")) {
-        result.pivot = overrides.pivot;
-    }
-    if (@hasField(@TypeOf(overrides), "pivot_x")) {
-        result.pivot_x = overrides.pivot_x;
-    }
-    if (@hasField(@TypeOf(overrides), "pivot_y")) {
-        result.pivot_y = overrides.pivot_y;
-    }
+    // Apply top-level overrides (e.g., .x = 100, .pivot = .bottom_center)
+    applySpriteOverrides(&result, overrides);
+
+    // Apply nested sprite overrides (e.g., .sprite = .{ .name = "foo.png" })
     if (@hasField(@TypeOf(overrides), "sprite")) {
-        if (@hasField(@TypeOf(overrides.sprite), "name")) {
-            result.name = overrides.sprite.name;
-        }
-        if (@hasField(@TypeOf(overrides.sprite), "scale")) {
-            result.scale = overrides.sprite.scale;
-        }
-        if (@hasField(@TypeOf(overrides.sprite), "z_index")) {
-            result.z_index = overrides.sprite.z_index;
-        }
-        if (@hasField(@TypeOf(overrides.sprite), "pivot")) {
-            result.pivot = overrides.sprite.pivot;
-        }
-        if (@hasField(@TypeOf(overrides.sprite), "pivot_x")) {
-            result.pivot_x = overrides.sprite.pivot_x;
-        }
-        if (@hasField(@TypeOf(overrides.sprite), "pivot_y")) {
-            result.pivot_y = overrides.sprite.pivot_y;
-        }
+        applySpriteOverrides(&result, overrides.sprite);
     }
 
     return result;
