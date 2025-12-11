@@ -253,32 +253,18 @@ pub const MERGE_SPRITE = struct {
     };
 
     pub const FLIP_MERGING = struct {
-        test "flip_x is ORed - both false" {
+        test "flip_x uses over value when specified" {
             const base = (prefab.SpriteConfig{ .flip_x = false }).toResolved();
+            const over = prefab.SpriteConfig{ .flip_x = true };
+            const merged = prefab.mergeSprite(base, over);
+            try expect.toBeTrue(merged.flip_x);
+        }
+
+        test "flip_x can override true to false" {
+            const base = (prefab.SpriteConfig{ .flip_x = true }).toResolved();
             const over = prefab.SpriteConfig{ .flip_x = false };
             const merged = prefab.mergeSprite(base, over);
             try expect.toBeFalse(merged.flip_x);
-        }
-
-        test "flip_x is ORed - base true" {
-            const base = (prefab.SpriteConfig{ .flip_x = true }).toResolved();
-            const over = prefab.SpriteConfig{ .flip_x = false };
-            const merged = prefab.mergeSprite(base, over);
-            try expect.toBeTrue(merged.flip_x);
-        }
-
-        test "flip_x is ORed - over true" {
-            const base = (prefab.SpriteConfig{ .flip_x = false }).toResolved();
-            const over = prefab.SpriteConfig{ .flip_x = true };
-            const merged = prefab.mergeSprite(base, over);
-            try expect.toBeTrue(merged.flip_x);
-        }
-
-        test "flip_x is ORed - both true" {
-            const base = (prefab.SpriteConfig{ .flip_x = true }).toResolved();
-            const over = prefab.SpriteConfig{ .flip_x = true };
-            const merged = prefab.mergeSprite(base, over);
-            try expect.toBeTrue(merged.flip_x);
         }
 
         test "flip_x uses base when over is null" {
@@ -288,25 +274,18 @@ pub const MERGE_SPRITE = struct {
             try expect.toBeTrue(merged.flip_x);
         }
 
-        test "flip_y is ORed - both false" {
-            const base = (prefab.SpriteConfig{ .flip_y = false }).toResolved();
-            const over = prefab.SpriteConfig{ .flip_y = false };
-            const merged = prefab.mergeSprite(base, over);
-            try expect.toBeFalse(merged.flip_y);
-        }
-
-        test "flip_y is ORed - base true" {
-            const base = (prefab.SpriteConfig{ .flip_y = true }).toResolved();
-            const over = prefab.SpriteConfig{ .flip_y = false };
-            const merged = prefab.mergeSprite(base, over);
-            try expect.toBeTrue(merged.flip_y);
-        }
-
-        test "flip_y is ORed - over true" {
+        test "flip_y uses over value when specified" {
             const base = (prefab.SpriteConfig{ .flip_y = false }).toResolved();
             const over = prefab.SpriteConfig{ .flip_y = true };
             const merged = prefab.mergeSprite(base, over);
             try expect.toBeTrue(merged.flip_y);
+        }
+
+        test "flip_y can override true to false" {
+            const base = (prefab.SpriteConfig{ .flip_y = true }).toResolved();
+            const over = prefab.SpriteConfig{ .flip_y = false };
+            const merged = prefab.mergeSprite(base, over);
+            try expect.toBeFalse(merged.flip_y);
         }
 
         test "flip_y uses base when over is null" {
@@ -422,8 +401,8 @@ pub const MERGE_SPRITE = struct {
             try expect.equal(merged.y, 20); // from base
             try expect.equal(merged.scale, 2.0); // from base
             try expect.equal(merged.rotation, 90);
-            try expect.toBeTrue(merged.flip_x); // ORed
-            try expect.toBeTrue(merged.flip_y); // ORed
+            try expect.toBeFalse(merged.flip_x); // overridden to false
+            try expect.toBeTrue(merged.flip_y); // overridden to true
         }
 
         test "null values correctly inherit from base" {

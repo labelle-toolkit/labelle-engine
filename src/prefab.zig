@@ -139,7 +139,6 @@ fn getMergedSprite(comptime T: type) ResolvedSpriteConfig {
 
 /// Merge a resolved base config with optional overrides.
 /// For each field, if the override is non-null, use it; otherwise keep the base value.
-/// For flip_x/flip_y, use OR logic (either true means true).
 pub fn mergeSprite(base: ResolvedSpriteConfig, over: SpriteConfig) ResolvedSpriteConfig {
     return .{
         .name = over.name orelse base.name,
@@ -148,8 +147,8 @@ pub fn mergeSprite(base: ResolvedSpriteConfig, over: SpriteConfig) ResolvedSprit
         .z_index = over.z_index orelse base.z_index,
         .scale = over.scale orelse base.scale,
         .rotation = over.rotation orelse base.rotation,
-        .flip_x = if (over.flip_x) |fx| (fx or base.flip_x) else base.flip_x,
-        .flip_y = if (over.flip_y) |fy| (fy or base.flip_y) else base.flip_y,
+        .flip_x = over.flip_x orelse base.flip_x,
+        .flip_y = over.flip_y orelse base.flip_y,
         .pivot = over.pivot orelse base.pivot,
         .pivot_x = over.pivot_x orelse base.pivot_x,
         .pivot_y = over.pivot_y orelse base.pivot_y,
@@ -178,10 +177,10 @@ fn applySpriteOverrides(result: *ResolvedSpriteConfig, comptime over: anytype) v
         result.rotation = over.rotation;
     }
     if (@hasField(@TypeOf(over), "flip_x")) {
-        result.flip_x = over.flip_x or result.flip_x;
+        result.flip_x = over.flip_x;
     }
     if (@hasField(@TypeOf(over), "flip_y")) {
-        result.flip_y = over.flip_y or result.flip_y;
+        result.flip_y = over.flip_y;
     }
     if (@hasField(@TypeOf(over), "pivot")) {
         result.pivot = over.pivot;
