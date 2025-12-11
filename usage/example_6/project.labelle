@@ -1,0 +1,18 @@
+.{
+    .version = 1,
+    .name = "example_6",
+    .description = "Task orchestration demo - kitchen workflow with workers",
+    .initial_scene = "kitchen_demo",
+    .window = .{
+        .width = 800,
+        .height = 600,
+        .title = "Kitchen Task Demo",
+        .target_fps = 60,
+    },
+    .resources = .{
+        .atlases = .{},
+    },
+    .plugins = .{
+        .{ .name = "labelle-tasks", .version = "0.2.0" },
+    },
+}
