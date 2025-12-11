@@ -348,7 +348,7 @@ fn printHelp() void {
         \\labelle - Command-line interface for labelle-engine projects
         \\
         \\USAGE:
-        \\    labelle <command> [options]
+        \\    labelle <command> [options] [path]
         \\
         \\COMMANDS:
         \\    init <name>     Create a new labelle project
@@ -363,12 +363,13 @@ fn printHelp() void {
         \\    -v, --version   Show version information
         \\
         \\EXAMPLES:
-        \\    labelle init my-game          Create a new project
-        \\    labelle generate              Generate build files
-        \\    labelle build                 Build the project
-        \\    labelle build --release       Build in release mode
-        \\    labelle run                   Build and run
-        \\    labelle run --release         Run in release mode
+        \\    labelle init my-game              Create a new project
+        \\    labelle generate                  Generate build files
+        \\    labelle generate ./my-project     Generate for specific project
+        \\    labelle build                     Build the project
+        \\    labelle build --release ./game    Build in release mode
+        \\    labelle run                       Build and run
+        \\    labelle run --release ./game      Run in release mode
         \\
         \\For more information on a command, use:
         \\    labelle <command> --help
@@ -428,7 +429,10 @@ fn printCommandHelp(command: Command) void {
                 \\labelle build - Build the project
                 \\
                 \\USAGE:
-                \\    labelle build [path] [options]
+                \\    labelle build [options] [path]
+                \\
+                \\ARGUMENTS:
+                \\    path                        Path to project directory (default: current dir)
                 \\
                 \\OPTIONS:
                 \\    -r, --release               Build in release mode
@@ -438,7 +442,8 @@ fn printCommandHelp(command: Command) void {
                 \\EXAMPLES:
                 \\    labelle build
                 \\    labelle build --release
-                \\    labelle build --backend sokol
+                \\    labelle build --release ./my-game
+                \\    labelle build --backend sokol ./my-game
                 \\
             ;
             std.debug.print("{s}", .{help});
@@ -448,7 +453,10 @@ fn printCommandHelp(command: Command) void {
                 \\labelle run - Build and run the project
                 \\
                 \\USAGE:
-                \\    labelle run [path] [options]
+                \\    labelle run [options] [path]
+                \\
+                \\ARGUMENTS:
+                \\    path                        Path to project directory (default: current dir)
                 \\
                 \\OPTIONS:
                 \\    -r, --release               Run in release mode
@@ -458,7 +466,8 @@ fn printCommandHelp(command: Command) void {
                 \\EXAMPLES:
                 \\    labelle run
                 \\    labelle run --release
-                \\    labelle run --backend sokol
+                \\    labelle run --release ./my-game
+                \\    labelle run --backend sokol ./my-game
                 \\
             ;
             std.debug.print("{s}", .{help});
