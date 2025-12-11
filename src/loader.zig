@@ -4,6 +4,19 @@
 // .{
 //     .name = "level1",
 //     .scripts = .{ "gravity", "floating" },  // optional
+//
+//     // Camera configuration (optional) - two formats supported:
+//     //
+//     // 1. Single camera (configures primary camera):
+//     .camera = .{ .x = 0, .y = 0, .zoom = 1.0 },
+//
+//     // 2. Named cameras (for split-screen/multi-camera):
+//     .cameras = .{
+//         .main = .{ .x = 0, .y = 0, .zoom = 1.0 },      // camera 0 (primary)
+//         .player2 = .{ .x = 100, .y = 0, .zoom = 1.0 }, // camera 1
+//         .minimap = .{ .x = 0, .y = 0, .zoom = 0.25 },  // camera 2
+//     },
+//
 //     .entities = .{
 //         .{ .prefab = "player", .x = 400, .y = 300 },
 //         .{ .prefab = "background" },
@@ -42,6 +55,21 @@ pub const Shape = render_pipeline_mod.Shape;
 pub const Color = render_pipeline_mod.Color;
 pub const ShapeVisual = render_pipeline_mod.ShapeVisual;
 
+/// Scene-level camera configuration
+pub const SceneCameraConfig = struct {
+    x: ?f32 = null,
+    y: ?f32 = null,
+    zoom: f32 = 1.0,
+};
+
+/// Named camera slot for multi-camera scenes
+pub const CameraSlot = enum(u2) {
+    main = 0,     // Primary camera (camera 0)
+    player2 = 1,  // Second player camera (camera 1)
+    minimap = 2,  // Minimap/overview camera (camera 2)
+    camera3 = 3,  // Fourth camera (camera 3)
+};
+
 /// Scene loader that combines .zon scene data with prefab, component, and script registries
 pub fn SceneLoader(comptime PrefabRegistry: type, comptime Components: type, comptime Scripts: type) type {
     return struct {
@@ -60,6 +88,55 @@ pub fn SceneLoader(comptime PrefabRegistry: type, comptime Components: type, com
 
             var scene = Scene.init(scene_data.name, script_fns, ctx);
             errdefer scene.deinit();
+
+            // Apply scene-level camera configuration if present
+            // Priority: .cameras (named multi-camera) > .camera (single camera)
+            if (@hasField(@TypeOf(scene_data), "cameras")) {
+                // Named cameras for multi-camera setup
+                const cameras = scene_data.cameras;
+                const game = ctx.game;
+
+                inline for (@typeInfo(@TypeOf(cameras)).@"struct".fields) |field| {
+                    const cam = @field(cameras, field.name);
+                    const slot = comptime std.meta.stringToEnum(CameraSlot, field.name) orelse
+                        @compileError("Unknown camera name: '" ++ field.name ++ "'. Valid names: main, player2, minimap, camera3");
+                    const camera_ptr = game.getCameraAt(@intFromEnum(slot));
+
+                    // Apply position if specified
+                    if (@hasField(@TypeOf(cam), "x") and @TypeOf(cam.x) != @TypeOf(null)) {
+                        const x: f32 = cam.x;
+                        const y: f32 = if (@hasField(@TypeOf(cam), "y") and @TypeOf(cam.y) != @TypeOf(null)) cam.y else 0;
+                        camera_ptr.setPosition(x, y);
+                    } else if (@hasField(@TypeOf(cam), "y") and @TypeOf(cam.y) != @TypeOf(null)) {
+                        const y: f32 = cam.y;
+                        camera_ptr.setPosition(0, y);
+                    }
+
+                    // Apply zoom if specified
+                    if (@hasField(@TypeOf(cam), "zoom")) {
+                        camera_ptr.setZoom(cam.zoom);
+                    }
+                }
+            } else if (@hasField(@TypeOf(scene_data), "camera")) {
+                // Single camera (primary camera)
+                const cam = scene_data.camera;
+                const game = ctx.game;
+
+                // Apply position if specified
+                if (@hasField(@TypeOf(cam), "x") and @TypeOf(cam.x) != @TypeOf(null)) {
+                    const x: f32 = cam.x;
+                    const y: f32 = if (@hasField(@TypeOf(cam), "y") and @TypeOf(cam.y) != @TypeOf(null)) cam.y else 0;
+                    game.setCameraPosition(x, y);
+                } else if (@hasField(@TypeOf(cam), "y") and @TypeOf(cam.y) != @TypeOf(null)) {
+                    const y: f32 = cam.y;
+                    game.setCameraPosition(0, y);
+                }
+
+                // Apply zoom if specified
+                if (@hasField(@TypeOf(cam), "zoom")) {
+                    game.setCameraZoom(cam.zoom);
+                }
+            }
 
             // Process each entity definition
             inline for (scene_data.entities) |entity_def| {

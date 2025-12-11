@@ -53,6 +53,15 @@ pub const Color = render_pipeline.Color;
 // Re-export ZIndex from prefab for backwards compatibility
 pub const ZIndex = prefab.ZIndex;
 
+// Re-export Camera types from labelle-gfx
+pub const Camera = labelle.Camera;
+pub const CameraManager = labelle.CameraManager;
+pub const SplitScreenLayout = labelle.SplitScreenLayout;
+
+// Re-export scene camera config from loader
+pub const SceneCameraConfig = loader.SceneCameraConfig;
+pub const CameraSlot = loader.CameraSlot;
+
 // Re-export ECS types
 pub const Registry = ecs.Registry;
 pub const Entity = ecs.Entity;
