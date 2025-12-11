@@ -68,12 +68,20 @@ fn gridToScreen(gx: i32, gy: i32) Position {
 
 var task_engine: ?TaskEngine = null;
 
+// Game reference for callbacks
+var game_ref: ?*Game = null;
+
 // Visual entities
 var chef_entity: ?engine.Entity = null;
 var fridge_entity: ?engine.Entity = null;
 var stove_entity: ?engine.Entity = null;
 var counter_entity: ?engine.Entity = null;
-var status_text: ?engine.Entity = null;
+
+// Ingredient entities (triangles)
+const MAX_INGREDIENTS: usize = 10;
+var meat_entities: [MAX_INGREDIENTS]?engine.Entity = [_]?engine.Entity{null} ** MAX_INGREDIENTS;
+var veg_entities: [MAX_INGREDIENTS]?engine.Entity = [_]?engine.Entity{null} ** MAX_INGREDIENTS;
+var meal_entities: [MAX_INGREDIENTS]?engine.Entity = [_]?engine.Entity{null} ** MAX_INGREDIENTS;
 
 // Chef movement state
 var chef_target: ?Position = null;
@@ -84,6 +92,90 @@ var chef_grid_pos: struct { x: i32, y: i32 } = CHEF_START_POS;
 var current_step: ?StepType = null;
 var pickup_item_index: u8 = 0;
 var meals_produced: u32 = 0;
+
+// ============================================================================
+// Ingredient Visual Helpers
+// ============================================================================
+
+// Triangle shape helper - creates a small triangle
+fn createTriangle(p2_x: f32, p2_y: f32, p3_x: f32, p3_y: f32) Shape {
+    return .{ .shape = .{ .triangle = .{ .p2 = .{ .x = p2_x, .y = p2_y }, .p3 = .{ .x = p3_x, .y = p3_y } } } };
+}
+
+fn createIngredientEntity(game: *Game, base_pos: Position, index: usize, item: Item) ?engine.Entity {
+    const offset_x: f32 = @as(f32, @floatFromInt(index % 5)) * 12.0 - 24.0;
+    const offset_y: f32 = @as(f32, @floatFromInt(index / 5)) * 12.0 - 20.0;
+
+    const entity = game.createEntity();
+    game.addPosition(entity, .{ .x = base_pos.x + offset_x, .y = base_pos.y + offset_y });
+
+    // Create small triangle (size ~10px)
+    game.addShape(entity, createTriangle(10.0, 0.0, 5.0, 10.0)) catch return null;
+
+    // Set color based on item type
+    if (game.getComponent(Shape, entity)) |shape| {
+        shape.color = switch (item) {
+            .Meat => Color{ .r = 180, .g = 80, .b = 80, .a = 255 }, // Red-ish for meat
+            .Vegetable => Color{ .r = 80, .g = 180, .b = 80, .a = 255 }, // Green for veggies
+            .Meal => Color{ .r = 255, .g = 220, .b = 100, .a = 255 }, // Golden for meals
+        };
+        shape.z_index = 200; // Above the stations
+    }
+    return entity;
+}
+
+fn destroyIngredientEntity(game: *Game, entity_ptr: *?engine.Entity) void {
+    if (entity_ptr.*) |entity| {
+        game.getRegistry().destroy(entity);
+        entity_ptr.* = null;
+    }
+}
+
+fn updateIngredientVisuals(game: *Game) void {
+    const te = &(task_engine orelse return);
+
+    // Get current storage quantities
+    const fridge_meat = te.getStorageQuantity(FRIDGE_EIS_ID, .Meat);
+    const fridge_veg = te.getStorageQuantity(FRIDGE_EIS_ID, .Vegetable);
+    const counter_meals = te.getStorageQuantity(COUNTER_EOS_ID, .Meal);
+
+    const fridge_pos = gridToScreen(FRIDGE_POS.x, FRIDGE_POS.y);
+    const counter_pos = gridToScreen(COUNTER_POS.x, COUNTER_POS.y);
+
+    // Update meat triangles at fridge
+    for (0..MAX_INGREDIENTS) |i| {
+        if (i < fridge_meat) {
+            if (meat_entities[i] == null) {
+                meat_entities[i] = createIngredientEntity(game, fridge_pos, i, .Meat);
+            }
+        } else {
+            destroyIngredientEntity(game, &meat_entities[i]);
+        }
+    }
+
+    // Update vegetable triangles at fridge
+    for (0..MAX_INGREDIENTS) |i| {
+        if (i < fridge_veg) {
+            if (veg_entities[i] == null) {
+                const offset_pos = Position{ .x = fridge_pos.x + 30.0, .y = fridge_pos.y };
+                veg_entities[i] = createIngredientEntity(game, offset_pos, i, .Vegetable);
+            }
+        } else {
+            destroyIngredientEntity(game, &veg_entities[i]);
+        }
+    }
+
+    // Update meal triangles at counter
+    for (0..MAX_INGREDIENTS) |i| {
+        if (i < counter_meals) {
+            if (meal_entities[i] == null) {
+                meal_entities[i] = createIngredientEntity(game, counter_pos, i, .Meal);
+            }
+        } else {
+            destroyIngredientEntity(game, &meal_entities[i]);
+        }
+    }
+}
 
 // ============================================================================
 // Task Engine Callbacks
@@ -255,6 +347,9 @@ pub fn init(game: *Game, scene: *Scene) void {
     // Create visual entities
     createVisualEntities(game);
 
+    // Create initial ingredient visuals
+    updateIngredientVisuals(game);
+
     std.debug.print("Kitchen initialized with 5 meat and 5 vegetables\n", .{});
     std.debug.print("Chef will cook meals automatically\n\n", .{});
 }
@@ -305,6 +400,9 @@ pub fn update(game: *Game, scene: *Scene, dt: f32) void {
 
     // Update task engine
     te.update();
+
+    // Update ingredient visuals based on storage state
+    updateIngredientVisuals(game);
 
     // Move chef towards target
     if (chef_target) |target| {
@@ -382,6 +480,20 @@ pub fn deinit(game: *Game, scene: *Scene) void {
     if (fridge_entity) |e| registry.destroy(e);
     if (stove_entity) |e| registry.destroy(e);
     if (counter_entity) |e| registry.destroy(e);
+
+    // Destroy ingredient entities
+    for (&meat_entities) |*e| {
+        if (e.*) |entity| registry.destroy(entity);
+        e.* = null;
+    }
+    for (&veg_entities) |*e| {
+        if (e.*) |entity| registry.destroy(entity);
+        e.* = null;
+    }
+    for (&meal_entities) |*e| {
+        if (e.*) |entity| registry.destroy(entity);
+        e.* = null;
+    }
 
     // Reset state
     chef_entity = null;
