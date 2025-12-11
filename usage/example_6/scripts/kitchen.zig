@@ -103,24 +103,25 @@ fn createTriangle(p2_x: f32, p2_y: f32, p3_x: f32, p3_y: f32) Shape {
 }
 
 fn createIngredientEntity(game: *Game, base_pos: Position, index: usize, item: Item) ?engine.Entity {
-    const offset_x: f32 = @as(f32, @floatFromInt(index % 5)) * 12.0 - 24.0;
-    const offset_y: f32 = @as(f32, @floatFromInt(index / 5)) * 12.0 - 20.0;
+    const offset_x: f32 = @as(f32, @floatFromInt(index % 5)) * 18.0 - 36.0;
+    const offset_y: f32 = @as(f32, @floatFromInt(index / 5)) * 18.0 - 20.0;
 
     const entity = game.createEntity();
-    game.addPosition(entity, .{ .x = base_pos.x + offset_x, .y = base_pos.y + offset_y });
+    const pos = Position{ .x = base_pos.x + offset_x, .y = base_pos.y + offset_y };
+    game.addPosition(entity, pos);
 
-    // Create small triangle (size ~10px)
-    game.addShape(entity, createTriangle(10.0, 0.0, 5.0, 10.0)) catch return null;
+    // Create small circle for ingredient
+    const color = switch (item) {
+        .Meat => Color{ .r = 220, .g = 60, .b = 60, .a = 255 }, // Red for meat
+        .Vegetable => Color{ .r = 60, .g = 220, .b = 60, .a = 255 }, // Green for veggies
+        .Meal => Color{ .r = 255, .g = 220, .b = 50, .a = 255 }, // Golden for meals
+    };
 
-    // Set color based on item type
-    if (game.getComponent(Shape, entity)) |shape| {
-        shape.color = switch (item) {
-            .Meat => Color{ .r = 180, .g = 80, .b = 80, .a = 255 }, // Red-ish for meat
-            .Vegetable => Color{ .r = 80, .g = 180, .b = 80, .a = 255 }, // Green for veggies
-            .Meal => Color{ .r = 255, .g = 220, .b = 100, .a = 255 }, // Golden for meals
-        };
-        shape.z_index = 200; // Above the stations
-    }
+    var shape = Shape.circle(10.0);
+    shape.color = color;
+    shape.z_index = 100; // Above stations (50) but below chef (150)
+    game.addShape(entity, shape) catch return null;
+
     return entity;
 }
 
@@ -355,41 +356,41 @@ pub fn init(game: *Game, scene: *Scene) void {
 }
 
 fn createVisualEntities(game: *Game) void {
-    // Create fridge (blue rectangle)
+    // Create fridge (blue rectangle) - low z_index so ingredients appear on top
     const fridge_pos = gridToScreen(FRIDGE_POS.x, FRIDGE_POS.y);
     fridge_entity = game.createEntity();
     game.addPosition(fridge_entity.?, fridge_pos);
-    game.addShape(fridge_entity.?, Shape.rectangle(60.0, 70.0)) catch return;
-    if (game.getComponent(Shape, fridge_entity.?)) |shape| {
-        shape.color = Color{ .r = 100, .g = 150, .b = 255, .a = 255 };
-    }
+    var fridge_shape = Shape.rectangle(60.0, 70.0);
+    fridge_shape.color = Color{ .r = 100, .g = 150, .b = 255, .a = 255 };
+    fridge_shape.z_index = 50;
+    game.addShape(fridge_entity.?, fridge_shape) catch return;
 
     // Create stove (red rectangle)
     const stove_pos = gridToScreen(STOVE_POS.x, STOVE_POS.y);
     stove_entity = game.createEntity();
     game.addPosition(stove_entity.?, stove_pos);
-    game.addShape(stove_entity.?, Shape.rectangle(70.0, 70.0)) catch return;
-    if (game.getComponent(Shape, stove_entity.?)) |shape| {
-        shape.color = Color{ .r = 255, .g = 100, .b = 100, .a = 255 };
-    }
+    var stove_shape = Shape.rectangle(70.0, 70.0);
+    stove_shape.color = Color{ .r = 255, .g = 100, .b = 100, .a = 255 };
+    stove_shape.z_index = 50;
+    game.addShape(stove_entity.?, stove_shape) catch return;
 
     // Create counter (green rectangle)
     const counter_pos = gridToScreen(COUNTER_POS.x, COUNTER_POS.y);
     counter_entity = game.createEntity();
     game.addPosition(counter_entity.?, counter_pos);
-    game.addShape(counter_entity.?, Shape.rectangle(60.0, 50.0)) catch return;
-    if (game.getComponent(Shape, counter_entity.?)) |shape| {
-        shape.color = Color{ .r = 100, .g = 200, .b = 100, .a = 255 };
-    }
+    var counter_shape = Shape.rectangle(60.0, 50.0);
+    counter_shape.color = Color{ .r = 100, .g = 200, .b = 100, .a = 255 };
+    counter_shape.z_index = 50;
+    game.addShape(counter_entity.?, counter_shape) catch return;
 
-    // Create chef (orange circle)
+    // Create chef (orange circle) - high z_index to be on top
     const chef_pos = gridToScreen(CHEF_START_POS.x, CHEF_START_POS.y);
     chef_entity = game.createEntity();
     game.addPosition(chef_entity.?, chef_pos);
-    game.addShape(chef_entity.?, Shape.circle(25.0)) catch return;
-    if (game.getComponent(Shape, chef_entity.?)) |shape| {
-        shape.color = Color{ .r = 255, .g = 180, .b = 50, .a = 255 };
-    }
+    var chef_shape = Shape.circle(25.0);
+    chef_shape.color = Color{ .r = 255, .g = 180, .b = 50, .a = 255 };
+    chef_shape.z_index = 150;
+    game.addShape(chef_entity.?, chef_shape) catch return;
 }
 
 pub fn update(game: *Game, scene: *Scene, dt: f32) void {
