@@ -37,6 +37,21 @@ pub const SPRITE_CONFIG = struct {
             try expect.toBeFalse(config.flip_x);
             try expect.toBeFalse(config.flip_y);
         }
+
+        test "pivot defaults to center" {
+            const config = prefab.SpriteConfig{};
+            try expect.equal(config.pivot, .center);
+        }
+
+        test "pivot_x defaults to 0.5" {
+            const config = prefab.SpriteConfig{};
+            try expect.equal(config.pivot_x, 0.5);
+        }
+
+        test "pivot_y defaults to 0.5" {
+            const config = prefab.SpriteConfig{};
+            try expect.equal(config.pivot_y, 0.5);
+        }
     };
 
     pub const INITIALIZATION = struct {
@@ -65,6 +80,22 @@ pub const SPRITE_CONFIG = struct {
             const config = prefab.SpriteConfig{ .flip_x = true, .flip_y = true };
             try expect.toBeTrue(config.flip_x);
             try expect.toBeTrue(config.flip_y);
+        }
+
+        test "can set pivot" {
+            const config = prefab.SpriteConfig{ .pivot = .bottom_center };
+            try expect.equal(config.pivot, .bottom_center);
+        }
+
+        test "can set custom pivot coordinates" {
+            const config = prefab.SpriteConfig{
+                .pivot = .custom,
+                .pivot_x = 0.25,
+                .pivot_y = 0.75,
+            };
+            try expect.equal(config.pivot, .custom);
+            try expect.equal(config.pivot_x, 0.25);
+            try expect.equal(config.pivot_y, 0.75);
         }
 
         test "can set all fields at once" {
@@ -254,6 +285,67 @@ pub const MERGE_SPRITE = struct {
             const over = prefab.SpriteConfig{ .flip_y = true };
             const merged = prefab.mergeSprite(base, over);
             try expect.toBeTrue(merged.flip_y);
+        }
+    };
+
+    pub const PIVOT_MERGING = struct {
+        test "uses over pivot when not center" {
+            const base = prefab.SpriteConfig{ .pivot = .top_left };
+            const over = prefab.SpriteConfig{ .pivot = .bottom_center };
+            const merged = prefab.mergeSprite(base, over);
+            try expect.equal(merged.pivot, .bottom_center);
+        }
+
+        test "uses base pivot when over pivot is center" {
+            const base = prefab.SpriteConfig{ .pivot = .bottom_center };
+            const over = prefab.SpriteConfig{};
+            const merged = prefab.mergeSprite(base, over);
+            try expect.equal(merged.pivot, .bottom_center);
+        }
+
+        test "uses over pivot_x when not 0.5" {
+            const base = prefab.SpriteConfig{ .pivot_x = 0.25 };
+            const over = prefab.SpriteConfig{ .pivot_x = 0.75 };
+            const merged = prefab.mergeSprite(base, over);
+            try expect.equal(merged.pivot_x, 0.75);
+        }
+
+        test "uses base pivot_x when over pivot_x is 0.5" {
+            const base = prefab.SpriteConfig{ .pivot_x = 0.25 };
+            const over = prefab.SpriteConfig{};
+            const merged = prefab.mergeSprite(base, over);
+            try expect.equal(merged.pivot_x, 0.25);
+        }
+
+        test "uses over pivot_y when not 0.5" {
+            const base = prefab.SpriteConfig{ .pivot_y = 0.1 };
+            const over = prefab.SpriteConfig{ .pivot_y = 0.9 };
+            const merged = prefab.mergeSprite(base, over);
+            try expect.equal(merged.pivot_y, 0.9);
+        }
+
+        test "uses base pivot_y when over pivot_y is 0.5" {
+            const base = prefab.SpriteConfig{ .pivot_y = 0.1 };
+            const over = prefab.SpriteConfig{};
+            const merged = prefab.mergeSprite(base, over);
+            try expect.equal(merged.pivot_y, 0.1);
+        }
+
+        test "merges custom pivot with coordinates" {
+            const base = prefab.SpriteConfig{
+                .pivot = .center,
+                .pivot_x = 0.5,
+                .pivot_y = 0.5,
+            };
+            const over = prefab.SpriteConfig{
+                .pivot = .custom,
+                .pivot_x = 0.3,
+                .pivot_y = 0.7,
+            };
+            const merged = prefab.mergeSprite(base, over);
+            try expect.equal(merged.pivot, .custom);
+            try expect.equal(merged.pivot_x, 0.3);
+            try expect.equal(merged.pivot_y, 0.7);
         }
     };
 
