@@ -11,7 +11,8 @@
 //       .name = "my_game",
 //       .description = "My awesome game",
 //       .initial_scene = "main_menu",
-//       .backend = .raylib,  // or .sokol
+//       .backend = .raylib,      // or .sokol
+//       .ecs_backend = .zig_ecs, // or .zflecs (default: .zig_ecs)
 //       .window = .{
 //           .width = 800,
 //           .height = 600,
@@ -33,6 +34,12 @@ const std = @import("std");
 pub const Backend = enum {
     raylib,
     sokol,
+};
+
+/// ECS backend selection
+pub const EcsBackend = enum {
+    zig_ecs,
+    zflecs,
 };
 
 /// Plugin dependency declaration
@@ -69,6 +76,7 @@ pub const ProjectConfig = struct {
     description: []const u8 = "",
     initial_scene: []const u8,
     backend: Backend = .raylib,
+    ecs_backend: EcsBackend = .zig_ecs,
     window: WindowConfig = .{},
     resources: Resources = .{},
     plugins: []const Plugin = &.{},

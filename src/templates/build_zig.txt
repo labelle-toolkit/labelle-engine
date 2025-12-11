@@ -10,7 +10,7 @@ pub const Backend = enum {{
 /// ECS backend selection (must match labelle-engine)
 pub const EcsBackend = enum {{
     zig_ecs,
-    zcs,
+    zflecs,
 }};
 
 pub fn build(b: *std.Build) void {{
@@ -19,7 +19,7 @@ pub fn build(b: *std.Build) void {{
 
     // Backend options - can be overridden via -Dbackend and -Decs_backend
     const backend = b.option(Backend, "backend", "Graphics backend to use (default: {s})") orelse .{s};
-    const ecs_backend = b.option(EcsBackend, "ecs_backend", "ECS backend to use (default: zig_ecs)") orelse .zig_ecs;
+    const ecs_backend = b.option(EcsBackend, "ecs_backend", "ECS backend to use (default: {s})") orelse .{s};
 
     const engine_dep = b.dependency("labelle-engine", .{{
         .target = target,
@@ -61,7 +61,7 @@ pub const Backend = enum {{
 /// ECS backend selection (must match labelle-engine)
 pub const EcsBackend = enum {{
     zig_ecs,
-    zcs,
+    zflecs,
 }};
 
 pub fn build(b: *std.Build) void {{
@@ -70,7 +70,7 @@ pub fn build(b: *std.Build) void {{
 
     // Backend options - can be overridden via -Dbackend and -Decs_backend
     const backend = b.option(Backend, "backend", "Graphics backend to use (default: {s})") orelse .{s};
-    const ecs_backend = b.option(EcsBackend, "ecs_backend", "ECS backend to use (default: zig_ecs)") orelse .zig_ecs;
+    const ecs_backend = b.option(EcsBackend, "ecs_backend", "ECS backend to use (default: {s})") orelse .{s};
 
     const engine_dep = b.dependency("labelle-engine", .{{
         .target = target,

@@ -69,16 +69,22 @@ pub fn generateBuildZig(allocator: std.mem.Allocator, config: ProjectConfig) ![]
     var buf: std.ArrayListUnmanaged(u8) = .{};
     const writer = buf.writer(allocator);
 
-    // Get the default backend from project config
+    // Get the default backends from project config
     const default_backend = switch (config.backend) {
         .raylib => "raylib",
         .sokol => "sokol",
     };
 
+    const default_ecs_backend = switch (config.ecs_backend) {
+        .zig_ecs => "zig_ecs",
+        .zflecs => "zflecs",
+    };
+
     // Write template with backend-specific section
+    // Template args: graphics_backend (x2), ecs_backend (x2), project_name
     switch (config.backend) {
-        .raylib => try zts.print(build_zig_tmpl, "raylib", .{ default_backend, default_backend, config.name }, writer),
-        .sokol => try zts.print(build_zig_tmpl, "sokol", .{ default_backend, default_backend, config.name }, writer),
+        .raylib => try zts.print(build_zig_tmpl, "raylib", .{ default_backend, default_backend, default_ecs_backend, default_ecs_backend, config.name }, writer),
+        .sokol => try zts.print(build_zig_tmpl, "sokol", .{ default_backend, default_backend, default_ecs_backend, default_ecs_backend, config.name }, writer),
     }
 
     return buf.toOwnedSlice(allocator);
