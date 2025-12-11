@@ -299,7 +299,7 @@ pub fn generateProject(allocator: std.mem.Allocator, project_path: []const u8, o
     const main_zig = try generateMainZig(allocator, config, prefabs, components, scripts);
     defer allocator.free(main_zig);
 
-    // Write files
+    // Write files to project root
     const build_zig_zon_path = try std.fs.path.join(allocator, &.{ project_path, "build.zig.zon" });
     defer allocator.free(build_zig_zon_path);
     const build_zig_path = try std.fs.path.join(allocator, &.{ project_path, "build.zig" });
@@ -351,7 +351,7 @@ pub fn generateMainOnly(allocator: std.mem.Allocator, project_path: []const u8) 
     const main_zig = try generateMainZig(allocator, config, prefabs, components, scripts);
     defer allocator.free(main_zig);
 
-    // Write main.zig
+    // Write main.zig to project root
     const main_zig_path = try std.fs.path.join(allocator, &.{ project_path, "main.zig" });
     defer allocator.free(main_zig_path);
 
