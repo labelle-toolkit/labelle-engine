@@ -98,12 +98,19 @@ pub fn generateBuildZig(allocator: std.mem.Allocator, config: ProjectConfig) ![]
         .zflecs => "zflecs",
     };
 
-    // Write template with backend-specific section
-    // Template args: graphics_backend (x2), ecs_backend (x2), project_name
+    // Write common header (includes backend options)
+    // Template args: graphics_backend (x2), ecs_backend (x2)
+    try zts.print(build_zig_tmpl, "header", .{ default_backend, default_backend, default_ecs_backend, default_ecs_backend }, writer);
+
+    // Write backend-specific executable setup
+    // Template args: project_name
     switch (config.backend) {
-        .raylib => try zts.print(build_zig_tmpl, "raylib", .{ default_backend, default_backend, default_ecs_backend, default_ecs_backend, zig_name }, writer),
-        .sokol => try zts.print(build_zig_tmpl, "sokol", .{ default_backend, default_backend, default_ecs_backend, default_ecs_backend, zig_name }, writer),
+        .raylib => try zts.print(build_zig_tmpl, "raylib", .{zig_name}, writer),
+        .sokol => try zts.print(build_zig_tmpl, "sokol", .{zig_name}, writer),
     }
+
+    // Write common footer
+    try zts.print(build_zig_tmpl, "footer", .{}, writer);
 
     return buf.toOwnedSlice(allocator);
 }
