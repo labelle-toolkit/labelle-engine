@@ -382,7 +382,7 @@ pub const Game = struct {
 
     /// Set the primary camera zoom level
     pub fn setCameraZoom(self: *Game, zoom: f32) void {
-        self.retained_engine.setCameraZoom(zoom);
+        self.retained_engine.setZoom(zoom);
     }
 
     /// Get the primary camera (for advanced use)
