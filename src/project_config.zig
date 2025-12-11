@@ -1,8 +1,8 @@
 // Project configuration loader for .labelle files
 //
 // Parses ZON-formatted .labelle project files at runtime using std.zon.parse.fromSlice.
-// This enables projects to declare metadata, plugins, window settings, and the initial
-// scene in a type-safe, Zig-native format.
+// This enables projects to declare metadata, plugins, window settings, camera settings,
+// and the initial scene in a type-safe, Zig-native format.
 //
 // Example .labelle file:
 //
@@ -17,6 +17,11 @@
 //           .width = 800,
 //           .height = 600,
 //           .title = "My Game",
+//       },
+//       .camera = .{
+//           .x = 0,        // Center at origin (default: auto-center on screen)
+//           .y = 0,
+//           .zoom = 1.0,   // 1.0 = 100% zoom
 //       },
 //       .plugins = .{
 //           .{ .name = "labelle-pathfinding", .version = "0.1.0" },
@@ -55,6 +60,16 @@ pub const Atlas = struct {
     texture: [:0]const u8,
 };
 
+/// Camera configuration for initial camera state
+pub const CameraConfig = struct {
+    /// Initial camera X position. If null, camera auto-centers on screen.
+    x: ?f32 = null,
+    /// Initial camera Y position. If null, camera auto-centers on screen.
+    y: ?f32 = null,
+    /// Initial zoom level (1.0 = 100%)
+    zoom: f32 = 1.0,
+};
+
 /// Resources configuration
 pub const Resources = struct {
     atlases: []const Atlas = &.{},
@@ -78,6 +93,7 @@ pub const ProjectConfig = struct {
     backend: Backend = .raylib,
     ecs_backend: EcsBackend = .zig_ecs,
     window: WindowConfig = .{},
+    camera: CameraConfig = .{},
     resources: Resources = .{},
     plugins: []const Plugin = &.{},
 

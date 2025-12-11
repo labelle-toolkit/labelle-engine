@@ -66,6 +66,17 @@ const Loader = engine.SceneLoader(Prefabs, Components, Scripts);
 .{
     .name = "level1",
     .scripts = .{"gravity"},
+
+    // Single camera (configures primary camera):
+    .camera = .{ .x = 0, .y = 0, .zoom = 1.0 },
+
+    // OR named cameras for multi-camera/split-screen:
+    // .cameras = .{
+    //     .main = .{ .x = 0, .y = 0 },        // camera 0
+    //     .player2 = .{ .x = 100, .y = 0 },   // camera 1
+    //     .minimap = .{ .zoom = 0.25 },       // camera 2
+    // },
+
     .entities = .{
         .{ .prefab = "player", .x = 400, .y = 300 },
         .{ .sprite = .{ .name = "coin.png", .x = 100 }, .components = .{ .Health = .{ .current = 50 } } },
@@ -109,6 +120,7 @@ pub fn deinit(game: *Game, scene: *Scene) void { ... }  // optional
     .backend = .raylib,        // or .sokol
     .ecs_backend = .zig_ecs,   // or .zflecs
     .window = .{ .width = 800, .height = 600, .title = "My Game" },
+    .camera = .{ .x = 0, .y = 0, .zoom = 1.0 },  // optional - default camera position
 }
 ```
 
@@ -147,6 +159,27 @@ Uses zts templates from `src/templates/`.
 4. Prefab `onCreate()` hook called if defined
 5. Each frame: scripts update components, `RenderPipeline.sync()` pushes dirty state to graphics
 6. On destroy: prefab `onDestroy()` hook called, `RenderPipeline.untrackEntity()` removes visual
+
+### Camera System
+
+The Game facade provides direct camera control methods:
+
+```zig
+// Single camera (primary)
+game.setCameraPosition(0, 0);    // Center camera at origin
+game.setCameraZoom(2.0);         // 2x zoom
+game.getCamera();                // Access camera for advanced use
+
+// Multi-camera (split-screen, minimap)
+game.setupSplitScreen(.vertical_split);  // Enable split-screen
+game.getCameraAt(0).setPosition(x, y);   // Control individual cameras
+game.setActiveCameras(0b0011);           // Enable cameras 0 and 1
+game.disableMultiCamera();               // Return to single camera
+```
+
+Camera priority: Scene `.cameras`/`.camera` overrides project `.camera` settings.
+
+Named camera slots: `main` (0), `player2` (1), `minimap` (2), `camera3` (3).
 
 ### Important Patterns
 

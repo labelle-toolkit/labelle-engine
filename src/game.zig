@@ -373,6 +373,55 @@ pub const Game = struct {
         }
     }
 
+    // ==================== Camera ====================
+
+    /// Set the primary camera position
+    pub fn setCameraPosition(self: *Game, x: f32, y: f32) void {
+        self.retained_engine.setCameraPosition(x, y);
+    }
+
+    /// Set the primary camera zoom level
+    pub fn setCameraZoom(self: *Game, zoom: f32) void {
+        self.retained_engine.setZoom(zoom);
+    }
+
+    /// Get the primary camera (for advanced use)
+    pub fn getCamera(self: *Game) *labelle.Camera {
+        return self.retained_engine.getCamera();
+    }
+
+    // ==================== Multi-Camera ====================
+
+    /// Get a camera by index (0-3)
+    pub fn getCameraAt(self: *Game, index: u2) *labelle.Camera {
+        return self.retained_engine.getCameraAt(index);
+    }
+
+    /// Get the camera manager (for advanced multi-camera control)
+    pub fn getCameraManager(self: *Game) *labelle.CameraManager {
+        return self.retained_engine.getCameraManager();
+    }
+
+    /// Set up split-screen with a predefined layout
+    pub fn setupSplitScreen(self: *Game, layout: labelle.SplitScreenLayout) void {
+        self.retained_engine.setupSplitScreen(layout);
+    }
+
+    /// Disable multi-camera mode (return to single camera)
+    pub fn disableMultiCamera(self: *Game) void {
+        self.retained_engine.disableMultiCamera();
+    }
+
+    /// Check if multi-camera mode is enabled
+    pub fn isMultiCameraEnabled(self: *const Game) bool {
+        return self.retained_engine.isMultiCameraEnabled();
+    }
+
+    /// Set which cameras are active (bitmask: bit 0 = camera 0, etc.)
+    pub fn setActiveCameras(self: *Game, mask: u4) void {
+        self.retained_engine.setActiveCameras(mask);
+    }
+
     // ==================== Accessors ====================
 
     /// Get access to the retained engine (for advanced use)

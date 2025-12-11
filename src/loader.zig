@@ -4,6 +4,19 @@
 // .{
 //     .name = "level1",
 //     .scripts = .{ "gravity", "floating" },  // optional
+//
+//     // Camera configuration (optional) - two formats supported:
+//     //
+//     // 1. Single camera (configures primary camera):
+//     .camera = .{ .x = 0, .y = 0, .zoom = 1.0 },
+//
+//     // 2. Named cameras (for split-screen/multi-camera):
+//     .cameras = .{
+//         .main = .{ .x = 0, .y = 0, .zoom = 1.0 },      // camera 0 (primary)
+//         .player2 = .{ .x = 100, .y = 0, .zoom = 1.0 }, // camera 1
+//         .minimap = .{ .x = 0, .y = 0, .zoom = 0.25 },  // camera 2
+//     },
+//
 //     .entities = .{
 //         .{ .prefab = "player", .x = 400, .y = 300 },
 //         .{ .prefab = "player", .pivot = .bottom_center },  // pivot override
@@ -47,12 +60,50 @@ pub const Shape = render_pipeline_mod.Shape;
 pub const Color = render_pipeline_mod.Color;
 pub const ShapeVisual = render_pipeline_mod.ShapeVisual;
 
+/// Scene-level camera configuration
+pub const SceneCameraConfig = struct {
+    x: ?f32 = null,
+    y: ?f32 = null,
+    zoom: f32 = 1.0,
+};
+
+/// Named camera slot for multi-camera scenes
+pub const CameraSlot = enum(u2) {
+    main = 0,     // Primary camera (camera 0)
+    player2 = 1,  // Second player camera (camera 1)
+    minimap = 2,  // Minimap/overview camera (camera 2)
+    camera3 = 3,  // Fourth camera (camera 3)
+};
+
 /// Get a field from comptime data or return a default value if not present
 fn getFieldOrDefault(comptime data: anytype, comptime field_name: []const u8, comptime default: anytype) @TypeOf(default) {
     if (@hasField(@TypeOf(data), field_name)) {
         return @field(data, field_name);
     } else {
         return default;
+    }
+}
+
+/// Apply camera configuration from comptime config data to a camera
+fn applyCameraConfig(comptime config: anytype, camera: anytype) void {
+    // Extract optional x and y values
+    const x: ?f32 = if (@hasField(@TypeOf(config), "x") and @TypeOf(config.x) != @TypeOf(null))
+        config.x
+    else
+        null;
+    const y: ?f32 = if (@hasField(@TypeOf(config), "y") and @TypeOf(config.y) != @TypeOf(null))
+        config.y
+    else
+        null;
+
+    // Apply position if either coordinate is specified
+    if (x != null or y != null) {
+        camera.setPosition(x orelse 0, y orelse 0);
+    }
+
+    // Apply zoom if specified
+    if (@hasField(@TypeOf(config), "zoom")) {
+        camera.setZoom(config.zoom);
     }
 }
 
@@ -74,6 +125,24 @@ pub fn SceneLoader(comptime PrefabRegistry: type, comptime Components: type, com
 
             var scene = Scene.init(scene_data.name, script_fns, ctx);
             errdefer scene.deinit();
+
+            // Apply scene-level camera configuration if present
+            // Priority: .cameras (named multi-camera) > .camera (single camera)
+            if (@hasField(@TypeOf(scene_data), "cameras")) {
+                // Named cameras for multi-camera setup
+                const cameras = scene_data.cameras;
+                const game = ctx.game;
+
+                inline for (@typeInfo(@TypeOf(cameras)).@"struct".fields) |field| {
+                    const cam = @field(cameras, field.name);
+                    const slot = comptime std.meta.stringToEnum(CameraSlot, field.name) orelse
+                        @compileError("Unknown camera name: '" ++ field.name ++ "'. Valid names: main, player2, minimap, camera3");
+                    applyCameraConfig(cam, game.getCameraAt(@intFromEnum(slot)));
+                }
+            } else if (@hasField(@TypeOf(scene_data), "camera")) {
+                // Single camera (primary camera)
+                applyCameraConfig(scene_data.camera, ctx.game.getCamera());
+            }
 
             // Process each entity definition
             inline for (scene_data.entities) |entity_def| {

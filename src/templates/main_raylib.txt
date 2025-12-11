@@ -81,6 +81,14 @@ pub fn main() !void {{
         try game.loadAtlas(atlas.name, atlas.json, atlas.texture);
     }}
 
+    // Apply camera configuration from project
+    if (project.camera.x != null or project.camera.y != null) {{
+        game.setCameraPosition(project.camera.x orelse 0, project.camera.y orelse 0);
+    }}
+    if (project.camera.zoom != 1.0) {{
+        game.setCameraZoom(project.camera.zoom);
+    }}
+
     const ctx = engine.SceneContext.init(&game);
     var scene = try Loader.load(initial_scene, ctx);
     defer scene.deinit();
