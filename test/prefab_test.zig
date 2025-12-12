@@ -280,38 +280,80 @@ pub const MERGE_SPRITE_WITH_OVERRIDES = struct {
 };
 
 pub const PREFAB_REGISTRY = struct {
-    test "can create empty registry" {
-        const allocator = std.testing.allocator;
-        var registry = prefab.PrefabRegistry.init(allocator);
-        defer registry.deinit();
+    // Test prefab data for comptime tests
+    const test_player_prefab = .{
+        .sprite = .{
+            .name = "player.png",
+            .x = 100,
+            .y = 200,
+            .scale = 2.0,
+        },
+    };
 
-        try expect.equal(registry.count(), 0);
+    const test_enemy_prefab = .{
+        .sprite = .{
+            .name = "enemy.png",
+        },
+        .components = .{
+            .Health = .{ .current = 50, .max = 50 },
+        },
+    };
+
+    const TestPrefabs = prefab.PrefabRegistry(.{
+        .player = test_player_prefab,
+        .enemy = test_enemy_prefab,
+    });
+
+    const EmptyPrefabs = prefab.PrefabRegistry(.{});
+
+    test "empty registry has returns false" {
+        try expect.toBeFalse(EmptyPrefabs.has("unknown"));
     }
 
-    test "get returns null for unknown prefab" {
-        const allocator = std.testing.allocator;
-        var registry = prefab.PrefabRegistry.init(allocator);
-        defer registry.deinit();
-
-        try expect.toBeNull(registry.get("unknown"));
+    test "has returns true for registered prefab" {
+        try expect.toBeTrue(TestPrefabs.has("player"));
+        try expect.toBeTrue(TestPrefabs.has("enemy"));
     }
 
     test "has returns false for unknown prefab" {
-        const allocator = std.testing.allocator;
-        var registry = prefab.PrefabRegistry.init(allocator);
-        defer registry.deinit();
-
-        try expect.toBeFalse(registry.has("unknown"));
+        try expect.toBeFalse(TestPrefabs.has("unknown"));
     }
 
-    test "loadFolder handles missing directory gracefully" {
-        const allocator = std.testing.allocator;
-        var registry = prefab.PrefabRegistry.init(allocator);
-        defer registry.deinit();
+    test "get returns prefab data" {
+        const player = TestPrefabs.get("player");
+        try expect.toBeTrue(std.mem.eql(u8, player.sprite.name, "player.png"));
+        try expect.equal(player.sprite.x, 100);
+        try expect.equal(player.sprite.y, 200);
+    }
 
-        // Should not error on missing directory
-        try registry.loadFolder("nonexistent_directory");
-        try expect.equal(registry.count(), 0);
+    test "getSprite returns sprite config" {
+        const sprite = TestPrefabs.getSprite("player", .{});
+        try expect.toBeTrue(std.mem.eql(u8, sprite.name, "player.png"));
+        try expect.equal(sprite.x, 100);
+        try expect.equal(sprite.y, 200);
+        try expect.equal(sprite.scale, 2.0);
+    }
+
+    test "getSprite applies overrides" {
+        const sprite = TestPrefabs.getSprite("player", .{ .x = 500, .scale = 3.0 });
+        try expect.toBeTrue(std.mem.eql(u8, sprite.name, "player.png"));
+        try expect.equal(sprite.x, 500);
+        try expect.equal(sprite.y, 200);
+        try expect.equal(sprite.scale, 3.0);
+    }
+
+    test "hasComponents returns true when prefab has components" {
+        try expect.toBeTrue(TestPrefabs.hasComponents("enemy"));
+    }
+
+    test "hasComponents returns false when prefab has no components" {
+        try expect.toBeFalse(TestPrefabs.hasComponents("player"));
+    }
+
+    test "getComponents returns component data" {
+        const components = TestPrefabs.getComponents("enemy");
+        try expect.equal(components.Health.current, 50);
+        try expect.equal(components.Health.max, 50);
     }
 };
 

@@ -1,4 +1,4 @@
-// Scene loader - loads scenes from comptime .zon data with runtime prefab lookup
+// Scene loader - loads scenes from comptime .zon data with comptime prefab registry
 //
 // Scene .zon format:
 // .{
@@ -44,7 +44,6 @@ const game_mod = @import("game.zig");
 pub const Registry = ecs.Registry;
 pub const Entity = ecs.Entity;
 
-pub const Prefab = prefab_mod.Prefab;
 pub const SpriteConfig = prefab_mod.SpriteConfig;
 pub const PrefabRegistry = prefab_mod.PrefabRegistry;
 pub const ZIndex = prefab_mod.ZIndex;
@@ -108,8 +107,8 @@ fn applyCameraConfig(comptime config: anytype, camera: anytype) void {
     }
 }
 
-/// Scene loader that combines .zon scene data with runtime prefab registry and comptime component/script registries
-pub fn SceneLoader(comptime Components: type, comptime Scripts: type) type {
+/// Scene loader that combines .zon scene data with comptime prefab and component/script registries
+pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime Scripts: type) type {
     return struct {
         const Self = @This();
 
@@ -117,7 +116,6 @@ pub fn SceneLoader(comptime Components: type, comptime Scripts: type) type {
         pub fn load(
             comptime scene_data: anytype,
             ctx: SceneContext,
-            prefabs: *const PrefabRegistry,
         ) !Scene {
             // Get script lifecycle function bundles if scene has scripts defined
             const script_fns = comptime if (@hasField(@TypeOf(scene_data), "scripts"))
@@ -148,7 +146,7 @@ pub fn SceneLoader(comptime Components: type, comptime Scripts: type) type {
 
             // Process each entity definition
             inline for (scene_data.entities) |entity_def| {
-                const instance = try loadEntity(entity_def, ctx, prefabs);
+                const instance = try loadEntity(entity_def, ctx);
                 try scene.addEntity(instance);
             }
 
@@ -159,11 +157,10 @@ pub fn SceneLoader(comptime Components: type, comptime Scripts: type) type {
         fn loadEntity(
             comptime entity_def: anytype,
             ctx: SceneContext,
-            prefabs: *const PrefabRegistry,
         ) !EntityInstance {
             // Check if this references a prefab
             if (@hasField(@TypeOf(entity_def), "prefab")) {
-                return try loadPrefabEntity(entity_def, ctx, prefabs);
+                return try loadPrefabEntity(entity_def, ctx);
             }
 
             // Check if this is a shape entity
@@ -175,28 +172,27 @@ pub fn SceneLoader(comptime Components: type, comptime Scripts: type) type {
             return try loadInlineEntity(entity_def, ctx);
         }
 
-        /// Load an entity that references a prefab (runtime lookup)
+        /// Load an entity that references a prefab (comptime lookup)
         fn loadPrefabEntity(
             comptime entity_def: anytype,
             ctx: SceneContext,
-            prefabs: *const PrefabRegistry,
         ) !EntityInstance {
             const prefab_name = entity_def.prefab;
-            const prefab_sprite = prefabs.get(prefab_name) orelse {
-                std.log.err("Prefab not found: {s}", .{prefab_name});
-                return error.PrefabNotFound;
-            };
+
+            // Verify prefab exists at compile time
+            comptime {
+                if (!Prefabs.has(prefab_name)) {
+                    @compileError("Prefab not found: " ++ prefab_name);
+                }
+            }
 
             const game = ctx.game;
 
             // Create ECS entity
             const entity = game.createEntity();
 
-            // Merge prefab sprite with any overrides from scene
-            const sprite_config = prefab_mod.mergeSpriteWithOverrides(
-                prefab_sprite,
-                entity_def,
-            );
+            // Get sprite config from prefab with scene overrides
+            const sprite_config = Prefabs.getSprite(prefab_name, entity_def);
 
             // Add Position component
             game.addPosition(entity, Position{
@@ -217,7 +213,12 @@ pub fn SceneLoader(comptime Components: type, comptime Scripts: type) type {
                 .pivot_y = sprite_config.pivot_y,
             });
 
-            // Add components from scene definition
+            // Add components from prefab definition
+            if (comptime Prefabs.hasComponents(prefab_name)) {
+                Components.addComponents(game.getRegistry(), entity, Prefabs.getComponents(prefab_name));
+            }
+
+            // Add/override components from scene definition
             if (@hasField(@TypeOf(entity_def), "components")) {
                 Components.addComponents(game.getRegistry(), entity, entity_def.components);
             }
@@ -342,15 +343,6 @@ pub fn SceneLoader(comptime Components: type, comptime Scripts: type) type {
                 .onUpdate = null,
                 .onDestroy = null,
             };
-        }
-
-        /// Convenience function to load and return scene name
-        pub fn loadScene(
-            comptime scene_data: anytype,
-            ctx: SceneContext,
-            prefabs: *const PrefabRegistry,
-        ) !Scene {
-            return try load(scene_data, ctx, prefabs);
         }
     };
 }

@@ -1,14 +1,21 @@
-// Prefab system - runtime ZON-based prefabs
+// Prefab system - comptime prefabs with typed components
 //
-// Prefabs are ZON files that define sprite configuration for entities.
-// The prefab name is derived from the filename (e.g., player.zon -> "player").
+// Prefabs are .zon files imported at comptime that define:
+// - sprite: Visual configuration for the entity
+// - components: Typed component data (optional)
 //
 // Example prefab file (prefabs/player.zon):
 // .{
-//     .name = "player.png",
-//     .x = 100,
-//     .y = 200,
-//     .scale = 2.0,
+//     .sprite = .{
+//         .name = "player.png",
+//         .x = 100,
+//         .y = 200,
+//         .scale = 2.0,
+//     },
+//     .components = .{
+//         .Health = .{ .current = 100, .max = 100 },
+//         .Speed = .{ .value = 5.0 },
+//     },
 // }
 
 const std = @import("std");
@@ -39,93 +46,60 @@ pub const SpriteConfig = struct {
     pivot_y: f32 = 0.5,
 };
 
-/// Runtime prefab registry - loads and manages prefabs from ZON files
-/// Prefab names are derived from filenames (e.g., player.zon -> "player")
-pub const PrefabRegistry = struct {
-    allocator: std.mem.Allocator,
-    prefabs: std.StringHashMapUnmanaged(SpriteConfig),
-    names: std.ArrayListUnmanaged([]const u8),
+/// Comptime prefab registry - maps prefab names to their comptime data
+/// Usage:
+///   const Prefabs = PrefabRegistry(.{
+///       .player = @import("prefabs/player.zon"),
+///       .enemy = @import("prefabs/enemy.zon"),
+///   });
+pub fn PrefabRegistry(comptime prefab_map: anytype) type {
+    return struct {
+        const Self = @This();
+        const PrefabMap = @TypeOf(prefab_map);
 
-    pub fn init(allocator: std.mem.Allocator) PrefabRegistry {
-        return .{
-            .allocator = allocator,
-            .prefabs = .{},
-            .names = .{},
-        };
-    }
-
-    pub fn deinit(self: *PrefabRegistry) void {
-        var iter = self.prefabs.iterator();
-        while (iter.next()) |entry| {
-            std.zon.parse.free(self.allocator, entry.value_ptr.*);
-        }
-        self.prefabs.deinit(self.allocator);
-        for (self.names.items) |name| {
-            self.allocator.free(name);
-        }
-        self.names.deinit(self.allocator);
-    }
-
-    /// Load a prefab from a .zon file (name derived from filename)
-    pub fn loadFromFile(self: *PrefabRegistry, path: []const u8) !void {
-        const file = try std.fs.cwd().openFile(path, .{});
-        defer file.close();
-
-        const stat = try file.stat();
-        const content = try self.allocator.allocSentinel(u8, stat.size, 0);
-        defer self.allocator.free(content);
-
-        const bytes_read = try file.readAll(content);
-        if (bytes_read != stat.size) {
-            return error.UnexpectedEof;
+        /// Check if a prefab exists
+        pub fn has(comptime name: anytype) bool {
+            const name_str: []const u8 = name;
+            return @hasField(PrefabMap, name_str);
         }
 
-        const sprite = try std.zon.parse.fromSlice(SpriteConfig, self.allocator, content, null, .{});
-        errdefer std.zon.parse.free(self.allocator, sprite);
+        /// Get prefab data by name (comptime only)
+        pub fn get(comptime name: []const u8) @TypeOf(@field(prefab_map, name)) {
+            return @field(prefab_map, name);
+        }
 
-        // Extract name from filename (e.g., "prefabs/player.zon" -> "player")
-        const basename = std.fs.path.basename(path);
-        const name_end = std.mem.lastIndexOf(u8, basename, ".") orelse basename.len;
-        const name = try self.allocator.dupe(u8, basename[0..name_end]);
-        errdefer self.allocator.free(name);
+        /// Get sprite config from a prefab, applying overrides
+        pub fn getSprite(comptime name: []const u8, comptime overrides: anytype) SpriteConfig {
+            const prefab_data = get(name);
+            const base_sprite = if (@hasField(@TypeOf(prefab_data), "sprite"))
+                toSpriteConfig(prefab_data.sprite)
+            else
+                SpriteConfig{};
 
-        try self.names.append(self.allocator, name);
-        try self.prefabs.put(self.allocator, name, sprite);
-    }
+            return mergeSpriteWithOverrides(base_sprite, overrides);
+        }
 
-    /// Load all .zon files from a directory
-    pub fn loadFolder(self: *PrefabRegistry, dir_path: []const u8) !void {
-        var dir = std.fs.cwd().openDir(dir_path, .{ .iterate = true }) catch |err| {
-            if (err == error.FileNotFound) return;
-            return err;
-        };
-        defer dir.close();
-
-        var iter = dir.iterate();
-        while (try iter.next()) |entry| {
-            if (entry.kind == .file and std.mem.endsWith(u8, entry.name, ".zon")) {
-                const full_path = try std.fs.path.join(self.allocator, &.{ dir_path, entry.name });
-                defer self.allocator.free(full_path);
-                try self.loadFromFile(full_path);
+        /// Convert comptime sprite data to SpriteConfig
+        fn toSpriteConfig(comptime data: anytype) SpriteConfig {
+            var result = SpriteConfig{};
+            inline for (@typeInfo(@TypeOf(data)).@"struct".fields) |field| {
+                @field(result, field.name) = @field(data, field.name);
             }
+            return result;
         }
-    }
 
-    /// Get a prefab's sprite config by name
-    pub fn get(self: *const PrefabRegistry, name: []const u8) ?SpriteConfig {
-        return self.prefabs.get(name);
-    }
+        /// Check if prefab has components
+        pub fn hasComponents(comptime name: []const u8) bool {
+            const prefab_data = get(name);
+            return @hasField(@TypeOf(prefab_data), "components");
+        }
 
-    /// Check if a prefab exists
-    pub fn has(self: *const PrefabRegistry, name: []const u8) bool {
-        return self.prefabs.contains(name);
-    }
-
-    /// Get number of loaded prefabs
-    pub fn count(self: *const PrefabRegistry) usize {
-        return self.prefabs.count();
-    }
-};
+        /// Get prefab components data (for use with ComponentRegistry.addComponents)
+        pub fn getComponents(comptime name: []const u8) @TypeOf(@field(get(name), "components")) {
+            return get(name).components;
+        }
+    };
+}
 
 /// Apply overrides from a comptime struct to a result struct
 fn applyOverrides(result: anytype, comptime overrides: anytype) void {

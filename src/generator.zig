@@ -127,10 +127,10 @@ fn capitalize(name: []const u8) [64]u8 {
 }
 
 /// Generate main.zig content based on folder contents (raylib backend)
-/// Note: Prefabs are now loaded at runtime from .zon files, not compiled in
 fn generateMainZigRaylib(
     allocator: std.mem.Allocator,
     config: ProjectConfig,
+    prefabs: []const []const u8,
     components: []const []const u8,
     scripts: []const []const u8,
 ) ![]const u8 {
@@ -139,6 +139,11 @@ fn generateMainZigRaylib(
 
     // Header with project name
     try zts.print(main_raylib_tmpl, "header", .{config.name}, writer);
+
+    // Prefab imports
+    for (prefabs) |name| {
+        try zts.print(main_raylib_tmpl, "prefab_import", .{ name, name }, writer);
+    }
 
     // Component imports
     for (components) |name| {
@@ -158,6 +163,17 @@ fn generateMainZigRaylib(
 
     // Main module reference
     try zts.print(main_raylib_tmpl, "main_module", .{}, writer);
+
+    // Prefab registry
+    if (prefabs.len == 0) {
+        try zts.print(main_raylib_tmpl, "prefab_registry_empty", .{}, writer);
+    } else {
+        try zts.print(main_raylib_tmpl, "prefab_registry_start", .{}, writer);
+        for (prefabs) |name| {
+            try zts.print(main_raylib_tmpl, "prefab_registry_item", .{ name, name }, writer);
+        }
+        try zts.print(main_raylib_tmpl, "prefab_registry_end", .{}, writer);
+    }
 
     // Component registry
     if (components.len == 0) {
@@ -218,21 +234,31 @@ fn generateMainZigSokol(
 }
 
 /// Generate main.zig content based on folder contents
-/// Note: Prefabs are loaded at runtime from .zon files in the prefabs/ folder
 pub fn generateMainZig(
     allocator: std.mem.Allocator,
     config: ProjectConfig,
+    prefabs: []const []const u8,
     components: []const []const u8,
     scripts: []const []const u8,
 ) ![]const u8 {
     return switch (config.backend) {
-        .raylib => generateMainZigRaylib(allocator, config, components, scripts),
+        .raylib => generateMainZigRaylib(allocator, config, prefabs, components, scripts),
         .sokol => generateMainZigSokol(allocator, config),
     };
 }
 
 /// Scan a folder for .zig files and return their names (without extension)
 pub fn scanFolder(allocator: std.mem.Allocator, path: []const u8) ![]const []const u8 {
+    return scanFolderWithExtension(allocator, path, ".zig");
+}
+
+/// Scan a folder for .zon files and return their names (without extension)
+pub fn scanZonFolder(allocator: std.mem.Allocator, path: []const u8) ![]const []const u8 {
+    return scanFolderWithExtension(allocator, path, ".zon");
+}
+
+/// Scan a folder for files with a specific extension and return their names (without extension)
+fn scanFolderWithExtension(allocator: std.mem.Allocator, path: []const u8, extension: []const u8) ![]const []const u8 {
     var names: std.ArrayListUnmanaged([]const u8) = .{};
     errdefer {
         for (names.items) |n| allocator.free(n);
@@ -247,8 +273,8 @@ pub fn scanFolder(allocator: std.mem.Allocator, path: []const u8) ![]const []con
 
     var iter = dir.iterate();
     while (try iter.next()) |entry| {
-        if (entry.kind == .file and std.mem.endsWith(u8, entry.name, ".zig")) {
-            const name = try allocator.dupe(u8, entry.name[0 .. entry.name.len - 4]);
+        if (entry.kind == .file and std.mem.endsWith(u8, entry.name, extension)) {
+            const name = try allocator.dupe(u8, entry.name[0 .. entry.name.len - extension.len]);
             try names.append(allocator, name);
         }
     }
@@ -263,7 +289,6 @@ pub const GenerateOptions = struct {
 };
 
 /// Generate all project files (build.zig, build.zig.zon, main.zig)
-/// Note: Prefabs are loaded at runtime from .zon files, not scanned here
 pub fn generateProject(allocator: std.mem.Allocator, project_path: []const u8, options: GenerateOptions) !void {
     // Load project config
     const labelle_path = try std.fs.path.join(allocator, &.{ project_path, "project.labelle" });
@@ -272,7 +297,15 @@ pub fn generateProject(allocator: std.mem.Allocator, project_path: []const u8, o
     const config = try ProjectConfig.load(allocator, labelle_path);
     defer config.deinit(allocator);
 
-    // Scan folders (components and scripts only - prefabs are loaded at runtime)
+    // Scan folders
+    const prefabs_path = try std.fs.path.join(allocator, &.{ project_path, "prefabs" });
+    defer allocator.free(prefabs_path);
+    const prefabs = try scanZonFolder(allocator, prefabs_path);
+    defer {
+        for (prefabs) |p| allocator.free(p);
+        allocator.free(prefabs);
+    }
+
     const components_path = try std.fs.path.join(allocator, &.{ project_path, "components" });
     defer allocator.free(components_path);
     const components = try scanFolder(allocator, components_path);
@@ -298,7 +331,7 @@ pub fn generateProject(allocator: std.mem.Allocator, project_path: []const u8, o
     const build_zig = try generateBuildZig(allocator, config);
     defer allocator.free(build_zig);
 
-    const main_zig = try generateMainZig(allocator, config, components, scripts);
+    const main_zig = try generateMainZig(allocator, config, prefabs, components, scripts);
     defer allocator.free(main_zig);
 
     // Write files to project root
@@ -316,7 +349,6 @@ pub fn generateProject(allocator: std.mem.Allocator, project_path: []const u8, o
 }
 
 /// Generate only main.zig (for use during build when build.zig already exists)
-/// Note: Prefabs are loaded at runtime from .zon files, not scanned here
 pub fn generateMainOnly(allocator: std.mem.Allocator, project_path: []const u8) !void {
     // Load project config
     const labelle_path = try std.fs.path.join(allocator, &.{ project_path, "project.labelle" });
@@ -325,7 +357,15 @@ pub fn generateMainOnly(allocator: std.mem.Allocator, project_path: []const u8) 
     const config = try ProjectConfig.load(allocator, labelle_path);
     defer config.deinit(allocator);
 
-    // Scan folders (components and scripts only - prefabs are loaded at runtime)
+    // Scan folders
+    const prefabs_path = try std.fs.path.join(allocator, &.{ project_path, "prefabs" });
+    defer allocator.free(prefabs_path);
+    const prefabs = try scanZonFolder(allocator, prefabs_path);
+    defer {
+        for (prefabs) |p| allocator.free(p);
+        allocator.free(prefabs);
+    }
+
     const components_path = try std.fs.path.join(allocator, &.{ project_path, "components" });
     defer allocator.free(components_path);
     const components = try scanFolder(allocator, components_path);
@@ -343,7 +383,7 @@ pub fn generateMainOnly(allocator: std.mem.Allocator, project_path: []const u8) 
     }
 
     // Generate main.zig
-    const main_zig = try generateMainZig(allocator, config, components, scripts);
+    const main_zig = try generateMainZig(allocator, config, prefabs, components, scripts);
     defer allocator.free(main_zig);
 
     // Write main.zig to project root

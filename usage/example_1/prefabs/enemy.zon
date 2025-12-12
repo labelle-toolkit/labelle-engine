@@ -1,5 +1,7 @@
 .{
-    .name = "walk_0001",
-    .z_index = 128,
-    .scale = 3.0,
+    .sprite = .{
+        .name = "walk_0001",
+        .z_index = 128,
+        .scale = 3.0,
+    },
 }
