@@ -138,6 +138,15 @@ pub const PrefabRegistry = struct {
     }
 };
 
+/// Apply overrides from a comptime struct to a result struct
+fn applyOverrides(result: anytype, comptime overrides: anytype) void {
+    inline for (@typeInfo(@TypeOf(result.*)).@"struct".fields) |field| {
+        if (@hasField(@TypeOf(overrides), field.name)) {
+            @field(result, field.name) = @field(overrides, field.name);
+        }
+    }
+}
+
 /// Merge sprite config with overrides from scene data
 pub fn mergeSpriteWithOverrides(
     base: SpriteConfig,
@@ -145,74 +154,12 @@ pub fn mergeSpriteWithOverrides(
 ) SpriteConfig {
     var result = base;
 
-    // Apply top-level overrides
-    if (@hasField(@TypeOf(overrides), "x")) {
-        result.x = overrides.x;
-    }
-    if (@hasField(@TypeOf(overrides), "y")) {
-        result.y = overrides.y;
-    }
-    if (@hasField(@TypeOf(overrides), "z_index")) {
-        result.z_index = overrides.z_index;
-    }
-    if (@hasField(@TypeOf(overrides), "scale")) {
-        result.scale = overrides.scale;
-    }
-    if (@hasField(@TypeOf(overrides), "rotation")) {
-        result.rotation = overrides.rotation;
-    }
-    if (@hasField(@TypeOf(overrides), "flip_x")) {
-        result.flip_x = overrides.flip_x;
-    }
-    if (@hasField(@TypeOf(overrides), "flip_y")) {
-        result.flip_y = overrides.flip_y;
-    }
-    if (@hasField(@TypeOf(overrides), "pivot")) {
-        result.pivot = overrides.pivot;
-    }
-    if (@hasField(@TypeOf(overrides), "pivot_x")) {
-        result.pivot_x = overrides.pivot_x;
-    }
-    if (@hasField(@TypeOf(overrides), "pivot_y")) {
-        result.pivot_y = overrides.pivot_y;
-    }
+    // Apply top-level overrides (x, y, scale, etc. directly on entity def)
+    applyOverrides(&result, overrides);
 
-    // Apply nested sprite overrides
+    // Apply nested sprite overrides (entity def has .sprite = .{ ... })
     if (@hasField(@TypeOf(overrides), "sprite")) {
-        const sprite_over = overrides.sprite;
-        if (@hasField(@TypeOf(sprite_over), "name")) {
-            result.name = sprite_over.name;
-        }
-        if (@hasField(@TypeOf(sprite_over), "x")) {
-            result.x = sprite_over.x;
-        }
-        if (@hasField(@TypeOf(sprite_over), "y")) {
-            result.y = sprite_over.y;
-        }
-        if (@hasField(@TypeOf(sprite_over), "z_index")) {
-            result.z_index = sprite_over.z_index;
-        }
-        if (@hasField(@TypeOf(sprite_over), "scale")) {
-            result.scale = sprite_over.scale;
-        }
-        if (@hasField(@TypeOf(sprite_over), "rotation")) {
-            result.rotation = sprite_over.rotation;
-        }
-        if (@hasField(@TypeOf(sprite_over), "flip_x")) {
-            result.flip_x = sprite_over.flip_x;
-        }
-        if (@hasField(@TypeOf(sprite_over), "flip_y")) {
-            result.flip_y = sprite_over.flip_y;
-        }
-        if (@hasField(@TypeOf(sprite_over), "pivot")) {
-            result.pivot = sprite_over.pivot;
-        }
-        if (@hasField(@TypeOf(sprite_over), "pivot_x")) {
-            result.pivot_x = sprite_over.pivot_x;
-        }
-        if (@hasField(@TypeOf(sprite_over), "pivot_y")) {
-            result.pivot_y = sprite_over.pivot_y;
-        }
+        applyOverrides(&result, overrides.sprite);
     }
 
     return result;
