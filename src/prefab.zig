@@ -1,19 +1,14 @@
 // Prefab system - runtime ZON-based prefabs
 //
-// Prefabs are ZON files that define:
-// - name: Unique identifier for the prefab
-// - sprite: Visual configuration for the entity
-// - animation: Optional default animation
+// Prefabs are ZON files that define sprite configuration for entities.
+// The prefab name is derived from the filename (e.g., player.zon -> "player").
 //
 // Example prefab file (prefabs/player.zon):
 // .{
-//     .name = "player",
-//     .sprite = .{
-//         .name = "player.png",
-//         .x = 100,
-//         .y = 200,
-//         .scale = 2.0,
-//     },
+//     .name = "player.png",
+//     .x = 100,
+//     .y = 200,
+//     .scale = 2.0,
 // }
 
 const std = @import("std");
@@ -44,22 +39,18 @@ pub const SpriteConfig = struct {
     pivot_y: f32 = 0.5,
 };
 
-/// Prefab definition loaded from .zon files
-pub const Prefab = struct {
-    name: []const u8,
-    sprite: SpriteConfig = .{},
-    animation: ?[]const u8 = null,
-};
-
 /// Runtime prefab registry - loads and manages prefabs from ZON files
+/// Prefab names are derived from filenames (e.g., player.zon -> "player")
 pub const PrefabRegistry = struct {
     allocator: std.mem.Allocator,
-    prefabs: std.StringHashMap(Prefab),
+    prefabs: std.StringHashMapUnmanaged(SpriteConfig),
+    names: std.ArrayListUnmanaged([]const u8),
 
     pub fn init(allocator: std.mem.Allocator) PrefabRegistry {
         return .{
             .allocator = allocator,
-            .prefabs = std.StringHashMap(Prefab).init(allocator),
+            .prefabs = .{},
+            .names = .{},
         };
     }
 
@@ -68,10 +59,14 @@ pub const PrefabRegistry = struct {
         while (iter.next()) |entry| {
             std.zon.parse.free(self.allocator, entry.value_ptr.*);
         }
-        self.prefabs.deinit();
+        self.prefabs.deinit(self.allocator);
+        for (self.names.items) |name| {
+            self.allocator.free(name);
+        }
+        self.names.deinit(self.allocator);
     }
 
-    /// Load a prefab from a .zon file
+    /// Load a prefab from a .zon file (name derived from filename)
     pub fn loadFromFile(self: *PrefabRegistry, path: []const u8) !void {
         const file = try std.fs.cwd().openFile(path, .{});
         defer file.close();
@@ -85,10 +80,17 @@ pub const PrefabRegistry = struct {
             return error.UnexpectedEof;
         }
 
-        const prefab = try std.zon.parse.fromSlice(Prefab, self.allocator, content, null, .{});
-        errdefer std.zon.parse.free(self.allocator, prefab);
+        const sprite = try std.zon.parse.fromSlice(SpriteConfig, self.allocator, content, null, .{});
+        errdefer std.zon.parse.free(self.allocator, sprite);
 
-        try self.prefabs.put(prefab.name, prefab);
+        // Extract name from filename (e.g., "prefabs/player.zon" -> "player")
+        const basename = std.fs.path.basename(path);
+        const name_end = std.mem.lastIndexOf(u8, basename, ".") orelse basename.len;
+        const name = try self.allocator.dupe(u8, basename[0..name_end]);
+        errdefer self.allocator.free(name);
+
+        try self.names.append(self.allocator, name);
+        try self.prefabs.put(self.allocator, name, sprite);
     }
 
     /// Load all .zon files from a directory
@@ -109,8 +111,8 @@ pub const PrefabRegistry = struct {
         }
     }
 
-    /// Get a prefab by name
-    pub fn get(self: *const PrefabRegistry, name: []const u8) ?Prefab {
+    /// Get a prefab's sprite config by name
+    pub fn get(self: *const PrefabRegistry, name: []const u8) ?SpriteConfig {
         return self.prefabs.get(name);
     }
 

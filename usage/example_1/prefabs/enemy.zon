@@ -1,8 +1,5 @@
 .{
-    .name = "enemy",
-    .sprite = .{
-        .name = "walk_0001",
-        .z_index = 128,
-        .scale = 3.0,
-    },
+    .name = "walk_0001",
+    .z_index = 128,
+    .scale = 3.0,
 }

@@ -182,7 +182,7 @@ pub fn SceneLoader(comptime Components: type, comptime Scripts: type) type {
             prefabs: *const PrefabRegistry,
         ) !EntityInstance {
             const prefab_name = entity_def.prefab;
-            const prefab_data = prefabs.get(prefab_name) orelse {
+            const prefab_sprite = prefabs.get(prefab_name) orelse {
                 std.log.err("Prefab not found: {s}", .{prefab_name});
                 return error.PrefabNotFound;
             };
@@ -194,7 +194,7 @@ pub fn SceneLoader(comptime Components: type, comptime Scripts: type) type {
 
             // Merge prefab sprite with any overrides from scene
             const sprite_config = prefab_mod.mergeSpriteWithOverrides(
-                prefab_data.sprite,
+                prefab_sprite,
                 entity_def,
             );
 
@@ -225,8 +225,8 @@ pub fn SceneLoader(comptime Components: type, comptime Scripts: type) type {
             return .{
                 .entity = entity,
                 .visual_type = .sprite,
-                .prefab_name = prefab_data.name,
-                .onUpdate = null, // ZON prefabs don't have lifecycle hooks
+                .prefab_name = prefab_name,
+                .onUpdate = null,
                 .onDestroy = null,
             };
         }

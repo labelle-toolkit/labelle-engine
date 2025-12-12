@@ -329,38 +329,3 @@ pub const ZINDEX = struct {
     }
 };
 
-pub const PREFAB_STRUCT = struct {
-    test "prefab has sensible defaults" {
-        const p = prefab.Prefab{
-            .name = "test",
-        };
-        try expect.toBeTrue(std.mem.eql(u8, p.name, "test"));
-        try expect.equal(p.sprite.name.len, 0);
-        try expect.toBeNull(p.animation);
-    }
-
-    test "prefab with sprite config" {
-        const p = prefab.Prefab{
-            .name = "player",
-            .sprite = .{
-                .name = "player.png",
-                .x = 100,
-                .y = 200,
-                .scale = 2.0,
-            },
-        };
-        try expect.toBeTrue(std.mem.eql(u8, p.name, "player"));
-        try expect.toBeTrue(std.mem.eql(u8, p.sprite.name, "player.png"));
-        try expect.equal(p.sprite.x, 100);
-        try expect.equal(p.sprite.y, 200);
-        try expect.equal(p.sprite.scale, 2.0);
-    }
-
-    test "prefab with animation" {
-        const p = prefab.Prefab{
-            .name = "character",
-            .animation = "idle",
-        };
-        try expect.toBeTrue(std.mem.eql(u8, p.animation.?, "idle"));
-    }
-};
