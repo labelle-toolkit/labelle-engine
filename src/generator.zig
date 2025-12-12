@@ -39,6 +39,8 @@ fn sanitizeZigIdentifier(allocator: std.mem.Allocator, name: []const u8) ![]cons
 pub const BuildZonOptions = struct {
     /// Path to labelle-engine (for local development). If null, uses URL.
     engine_path: ?[]const u8 = null,
+    /// Package fingerprint. If null, uses placeholder (0x0).
+    fingerprint: ?u64 = null,
 };
 
 /// Generate build.zig.zon content
@@ -50,13 +52,9 @@ pub fn generateBuildZon(allocator: std.mem.Allocator, config: ProjectConfig, opt
     const zig_name = try sanitizeZigIdentifier(allocator, config.name);
     defer allocator.free(zig_name);
 
-    // Generate a deterministic fingerprint based on project name
-    var hash = std.hash.Fnv1a_64.init();
-    hash.update(config.name);
-    hash.update("labelle-game-v1");
-    const fingerprint = hash.final();
-
     // Write header with fingerprint and sanitized name
+    // Use provided fingerprint or placeholder (0x0) that will be replaced later
+    const fingerprint = options.fingerprint orelse 0x0;
     try zts.print(build_zig_zon_tmpl, "header", .{ fingerprint, zig_name }, writer);
 
     // Write engine dependency (path or URL)
@@ -69,7 +67,15 @@ pub fn generateBuildZon(allocator: std.mem.Allocator, config: ProjectConfig, opt
 
     // Write plugin dependencies
     for (config.plugins) |plugin| {
-        try zts.print(build_zig_zon_tmpl, "plugin", .{ plugin.name, plugin.name }, writer);
+        // Use custom URL if provided, otherwise default to github.com/labelle-toolkit/{name}
+        const plugin_url = plugin.url orelse blk: {
+            const default_url = try std.fmt.allocPrint(allocator, "github.com/labelle-toolkit/{s}", .{plugin.name});
+            break :blk default_url;
+        };
+        defer if (plugin.url == null) allocator.free(plugin_url);
+
+        // Template args: name, url, version
+        try zts.print(build_zig_zon_tmpl, "plugin", .{ plugin.name, plugin_url, plugin.version }, writer);
     }
 
     // Write closing
@@ -102,11 +108,56 @@ pub fn generateBuildZig(allocator: std.mem.Allocator, config: ProjectConfig) ![]
     // Template args: graphics_backend (x2), ecs_backend (x2)
     try zts.print(build_zig_tmpl, "header", .{ default_backend, default_backend, default_ecs_backend, default_ecs_backend }, writer);
 
-    // Write backend-specific executable setup
+    // Write plugin dependency declarations
+    // Sanitize plugin names for use as Zig identifiers
+    var plugin_zig_names = try allocator.alloc([]const u8, config.plugins.len);
+    defer {
+        for (plugin_zig_names) |name| allocator.free(name);
+        allocator.free(plugin_zig_names);
+    }
+
+    // Also track module names for imports
+    var plugin_module_names = try allocator.alloc([]const u8, config.plugins.len);
+    defer {
+        for (config.plugins, 0..) |plugin, i| {
+            // Only free if we allocated (when plugin.module was null)
+            if (plugin.module == null) allocator.free(plugin_module_names[i]);
+        }
+        allocator.free(plugin_module_names);
+    }
+
+    for (config.plugins, 0..) |plugin, i| {
+        const plugin_zig_name = try sanitizeZigIdentifier(allocator, plugin.name);
+        plugin_zig_names[i] = plugin_zig_name;
+
+        // Get module name - use explicit module if provided, otherwise default to sanitized name
+        const plugin_module_name = plugin.module orelse blk: {
+            const default_module = try sanitizeZigIdentifier(allocator, plugin.name);
+            break :blk default_module;
+        };
+        plugin_module_names[i] = plugin_module_name;
+
+        // Template args: zig_name, name, zig_name, zig_name, module_name
+        try zts.print(build_zig_tmpl, "plugin_dep", .{ plugin_zig_name, plugin.name, plugin_zig_name, plugin_zig_name, plugin_module_name }, writer);
+    }
+
+    // Write backend-specific executable setup (start of imports)
     // Template args: project_name
     switch (config.backend) {
-        .raylib => try zts.print(build_zig_tmpl, "raylib", .{zig_name}, writer),
-        .sokol => try zts.print(build_zig_tmpl, "sokol", .{zig_name}, writer),
+        .raylib => try zts.print(build_zig_tmpl, "raylib_exe_start", .{zig_name}, writer),
+        .sokol => try zts.print(build_zig_tmpl, "sokol_exe_start", .{zig_name}, writer),
+    }
+
+    // Write plugin imports
+    for (config.plugins, 0..) |plugin, i| {
+        // Template args: name, zig_name
+        try zts.print(build_zig_tmpl, "plugin_import", .{ plugin.name, plugin_zig_names[i] }, writer);
+    }
+
+    // Write backend-specific executable setup (end of imports)
+    switch (config.backend) {
+        .raylib => try zts.print(build_zig_tmpl, "raylib_exe_end", .{}, writer),
+        .sokol => try zts.print(build_zig_tmpl, "sokol_exe_end", .{}, writer),
     }
 
     // Write common footer
@@ -161,19 +212,19 @@ fn generateMainZigRaylib(
         try zts.print(main_raylib_tmpl, "script_import", .{ name, name }, writer);
     }
 
+    // Main module reference
+    try zts.print(main_raylib_tmpl, "main_module", .{}, writer);
+
     // Prefab registry
     if (prefabs.len == 0) {
         try zts.print(main_raylib_tmpl, "prefab_registry_empty", .{}, writer);
     } else {
         try zts.print(main_raylib_tmpl, "prefab_registry_start", .{}, writer);
         for (prefabs) |name| {
-            try zts.print(main_raylib_tmpl, "prefab_registry_item", .{name}, writer);
+            try zts.print(main_raylib_tmpl, "prefab_registry_item", .{ name, name }, writer);
         }
         try zts.print(main_raylib_tmpl, "prefab_registry_end", .{}, writer);
     }
-
-    // Main module reference
-    try zts.print(main_raylib_tmpl, "main_module", .{}, writer);
 
     // Component registry
     if (components.len == 0) {
@@ -249,6 +300,16 @@ pub fn generateMainZig(
 
 /// Scan a folder for .zig files and return their names (without extension)
 pub fn scanFolder(allocator: std.mem.Allocator, path: []const u8) ![]const []const u8 {
+    return scanFolderWithExtension(allocator, path, ".zig");
+}
+
+/// Scan a folder for .zon files and return their names (without extension)
+pub fn scanZonFolder(allocator: std.mem.Allocator, path: []const u8) ![]const []const u8 {
+    return scanFolderWithExtension(allocator, path, ".zon");
+}
+
+/// Scan a folder for files with a specific extension and return their names (without extension)
+fn scanFolderWithExtension(allocator: std.mem.Allocator, path: []const u8, extension: []const u8) ![]const []const u8 {
     var names: std.ArrayListUnmanaged([]const u8) = .{};
     errdefer {
         for (names.items) |n| allocator.free(n);
@@ -263,8 +324,8 @@ pub fn scanFolder(allocator: std.mem.Allocator, path: []const u8) ![]const []con
 
     var iter = dir.iterate();
     while (try iter.next()) |entry| {
-        if (entry.kind == .file and std.mem.endsWith(u8, entry.name, ".zig")) {
-            const name = try allocator.dupe(u8, entry.name[0 .. entry.name.len - 4]);
+        if (entry.kind == .file and std.mem.endsWith(u8, entry.name, extension)) {
+            const name = try allocator.dupe(u8, entry.name[0 .. entry.name.len - extension.len]);
             try names.append(allocator, name);
         }
     }
@@ -290,7 +351,7 @@ pub fn generateProject(allocator: std.mem.Allocator, project_path: []const u8, o
     // Scan folders
     const prefabs_path = try std.fs.path.join(allocator, &.{ project_path, "prefabs" });
     defer allocator.free(prefabs_path);
-    const prefabs = try scanFolder(allocator, prefabs_path);
+    const prefabs = try scanZonFolder(allocator, prefabs_path);
     defer {
         for (prefabs) |p| allocator.free(p);
         allocator.free(prefabs);
@@ -312,19 +373,14 @@ pub fn generateProject(allocator: std.mem.Allocator, project_path: []const u8, o
         allocator.free(scripts);
     }
 
-    // Generate files
-    const build_zig_zon = try generateBuildZon(allocator, config, .{
-        .engine_path = options.engine_path,
-    });
-    defer allocator.free(build_zig_zon);
-
+    // Generate build.zig and main.zig first
     const build_zig = try generateBuildZig(allocator, config);
     defer allocator.free(build_zig);
 
     const main_zig = try generateMainZig(allocator, config, prefabs, components, scripts);
     defer allocator.free(main_zig);
 
-    // Write files to project root
+    // File paths
     const build_zig_zon_path = try std.fs.path.join(allocator, &.{ project_path, "build.zig.zon" });
     defer allocator.free(build_zig_zon_path);
     const build_zig_path = try std.fs.path.join(allocator, &.{ project_path, "build.zig" });
@@ -333,9 +389,90 @@ pub fn generateProject(allocator: std.mem.Allocator, project_path: []const u8, o
     defer allocator.free(main_zig_path);
 
     const cwd = std.fs.cwd();
-    try cwd.writeFile(.{ .sub_path = build_zig_zon_path, .data = build_zig_zon });
+
+    // Generate build.zig.zon with placeholder fingerprint first
+    const initial_build_zig_zon = try generateBuildZon(allocator, config, .{
+        .engine_path = options.engine_path,
+        .fingerprint = null, // placeholder 0x0
+    });
+    defer allocator.free(initial_build_zig_zon);
+
+    // Write all files
+    try cwd.writeFile(.{ .sub_path = build_zig_zon_path, .data = initial_build_zig_zon });
     try cwd.writeFile(.{ .sub_path = build_zig_path, .data = build_zig });
     try cwd.writeFile(.{ .sub_path = main_zig_path, .data = main_zig });
+
+    // Run zig build to get the correct fingerprint from the error message
+    const fingerprint = try detectFingerprint(allocator, project_path);
+
+    // Regenerate build.zig.zon with correct fingerprint
+    const final_build_zig_zon = try generateBuildZon(allocator, config, .{
+        .engine_path = options.engine_path,
+        .fingerprint = fingerprint,
+    });
+    defer allocator.free(final_build_zig_zon);
+
+    try cwd.writeFile(.{ .sub_path = build_zig_zon_path, .data = final_build_zig_zon });
+}
+
+/// Run zig build and parse the suggested fingerprint from the error output
+fn detectFingerprint(allocator: std.mem.Allocator, project_path: []const u8) !u64 {
+    // Run zig build in the project directory
+    var child = std.process.Child.init(&.{ "zig", "build" }, allocator);
+    child.cwd = project_path;
+    child.stderr_behavior = .Pipe;
+    child.stdout_behavior = .Pipe;
+
+    // Spawn the child process
+    try child.spawn();
+
+    // Collect output using ArrayLists
+    var stdout_buf: std.ArrayListUnmanaged(u8) = .{};
+    defer stdout_buf.deinit(allocator);
+    var stderr_buf: std.ArrayListUnmanaged(u8) = .{};
+    defer stderr_buf.deinit(allocator);
+
+    // Run and collect output (allocator, stdout_buf, stderr_buf, max_output_bytes)
+    _ = child.collectOutput(allocator, &stdout_buf, &stderr_buf, 64 * 1024) catch {};
+    const stderr_output = stderr_buf.items;
+
+    // Parse fingerprint from error message like:
+    // "missing top-level 'fingerprint' field; suggested value: 0xbc20e1ab89c1b519"
+    // or "invalid fingerprint: 0x0; if this is a new or forked package, use this value: 0xbc20e1ab89c1b519"
+    const fingerprint = parseFingerprint(stderr_output) orelse {
+        // If we can't parse it, return a default (this shouldn't happen)
+        return error.FingerprintNotFound;
+    };
+
+    return fingerprint;
+}
+
+/// Parse fingerprint value from zig build error output
+fn parseFingerprint(output: []const u8) ?u64 {
+    // Look for "suggested value: 0x" or "use this value: 0x"
+    const patterns = [_][]const u8{
+        "suggested value: 0x",
+        "use this value: 0x",
+    };
+
+    for (patterns) |pattern| {
+        if (std.mem.indexOf(u8, output, pattern)) |start| {
+            const hex_start = start + pattern.len;
+            // Find end of hex number (until non-hex character)
+            var hex_end = hex_start;
+            while (hex_end < output.len) : (hex_end += 1) {
+                const c = output[hex_end];
+                if (!((c >= '0' and c <= '9') or (c >= 'a' and c <= 'f') or (c >= 'A' and c <= 'F'))) {
+                    break;
+                }
+            }
+            if (hex_end > hex_start) {
+                const hex_str = output[hex_start..hex_end];
+                return std.fmt.parseInt(u64, hex_str, 16) catch null;
+            }
+        }
+    }
+    return null;
 }
 
 /// Generate only main.zig (for use during build when build.zig already exists)
@@ -350,7 +487,7 @@ pub fn generateMainOnly(allocator: std.mem.Allocator, project_path: []const u8) 
     // Scan folders
     const prefabs_path = try std.fs.path.join(allocator, &.{ project_path, "prefabs" });
     defer allocator.free(prefabs_path);
-    const prefabs = try scanFolder(allocator, prefabs_path);
+    const prefabs = try scanZonFolder(allocator, prefabs_path);
     defer {
         for (prefabs) |p| allocator.free(p);
         allocator.free(prefabs);

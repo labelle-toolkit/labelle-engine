@@ -13,6 +13,6 @@
         .atlases = .{},
     },
     .plugins = .{
-        .{ .name = "labelle-pathfinding", .version = "2.5.0" },
+        .{ .name = "labelle-pathfinding", .version = "2.5.0", .module = "pathfinding" },
     },
 }

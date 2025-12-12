@@ -1,10 +1,10 @@
-// Scene module - declarative scene and prefab system using comptime .zon files
+// Scene module - declarative scene and prefab system
 //
 // This module provides:
-// - Prefabs: comptime struct templates with optional lifecycle hooks
+// - Prefabs: ZON files that define entity templates with sprites and children
 // - Scenes: .zon files that declare entities (prefabs or inline components)
 // - Components: ECS components that can be attached to entities
-// - Comptime merging of prefab defaults with scene overrides
+// - Runtime prefab loading from .zon files
 
 const std = @import("std");
 const labelle = @import("labelle");
@@ -25,9 +25,7 @@ pub const project_config = @import("project_config.zig");
 pub const generator = @import("generator.zig");
 
 // Re-export commonly used types
-pub const Prefab = prefab.Prefab;
 pub const SpriteConfig = prefab.SpriteConfig;
-pub const ResolvedSpriteConfig = prefab.ResolvedSpriteConfig;
 pub const PrefabRegistry = prefab.PrefabRegistry;
 pub const SceneLoader = loader.SceneLoader;
 pub const ComponentRegistry = component.ComponentRegistry;

@@ -7,8 +7,6 @@
 //
 // To regenerate: zig build generate
 // To modify settings: edit project.labelle instead
-//
-// NOTE: On first build, Zig may report "invalid fingerprint" - update with the suggested value
 // ============================================================================
 .{{
     .fingerprint = 0x{x},
@@ -27,7 +25,7 @@
         }},
 .plugin
         .@"{s}" = .{{
-            .url = "git+https://github.com/labelle-toolkit/{s}",
+            .url = "git+https://{s}#v{s}",
             // .hash = "...",  // Add after first build
         }},
 .deps_end

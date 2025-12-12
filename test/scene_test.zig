@@ -13,10 +13,6 @@ test {
 
 pub const MODULE_EXPORTS = struct {
     pub const PREFAB_EXPORTS = struct {
-        test "exports Prefab type" {
-            try expect.toBeTrue(@hasDecl(engine, "Prefab"));
-        }
-
         test "exports SpriteConfig type" {
             try expect.toBeTrue(@hasDecl(engine, "SpriteConfig"));
         }

@@ -18,25 +18,23 @@ const Game = engine.Game;
 const ProjectConfig = engine.ProjectConfig;
 
 .prefab_import
-const {s}_prefab = @import("prefabs/{s}.zig");
+const {s}_prefab = @import("prefabs/{s}.zon");
 .component_import
 const {s}_comp = @import("components/{s}.zig");
 .component_export
 pub const {s} = {s}_comp.{s};
 .script_import
 const {s}_script = @import("scripts/{s}.zig");
-.prefab_registry_empty
-// Registries
-pub const Prefabs = engine.PrefabRegistry(.{{}});
-.prefab_registry_start
-// Registries
-pub const Prefabs = engine.PrefabRegistry(.{{
-.prefab_registry_item
-    {s}_prefab,
-.prefab_registry_end
-}});
 .main_module
 const main_module = @This();
+.prefab_registry_empty
+pub const Prefabs = engine.PrefabRegistry(.{{}});
+.prefab_registry_start
+pub const Prefabs = engine.PrefabRegistry(.{{
+.prefab_registry_item
+    .{s} = {s}_prefab,
+.prefab_registry_end
+}});
 .component_registry_empty
 pub const Components = engine.ComponentRegistry(struct {{}});
 .component_registry_start
