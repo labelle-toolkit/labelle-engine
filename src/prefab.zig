@@ -1,14 +1,25 @@
-// Prefab system - comptime struct templates with optional lifecycle hooks
+// Prefab system - runtime ZON-based prefabs with component composition
 //
-// Prefabs are comptime structs that define:
-// - sprite: Default sprite configuration
-// - animation: Optional default animation to play
-// - base: Optional reference to another prefab for composition
+// Prefabs are ZON files that define:
+// - name: Unique identifier for the prefab
+// - sprite: Visual configuration for the entity
+// - animation: Optional default animation
+// - children: Optional nested prefab references
 //
-// Optional lifecycle hooks:
-// - onCreate(entity, game): Called when entity is instantiated
-// - onUpdate(entity, game, dt): Called every frame
-// - onDestroy(entity, game): Called when entity is removed
+// Example prefab file (prefabs/player.zon):
+// .{
+//     .name = "player",
+//     .sprite = .{
+//         .name = "player.png",
+//         .x = 100,
+//         .y = 200,
+//         .scale = 2.0,
+//     },
+//     .children = .{
+//         .weapon = "sword",
+//         .items = .{ "potion", "potion" },
+//     },
+// }
 
 const std = @import("std");
 const labelle = @import("labelle");
@@ -16,229 +27,193 @@ const labelle = @import("labelle");
 // Re-export Pivot from labelle-gfx
 pub const Pivot = labelle.Pivot;
 
-// Z-index constants for backwards compatibility
+// Z-index constants
 pub const ZIndex = struct {
     pub const background: u8 = 0;
     pub const characters: u8 = 128;
     pub const foreground: u8 = 255;
 };
 
-/// Sprite configuration with optional fields for merging/overriding.
-/// Use null to indicate "not specified" (inherit from base).
-/// Use `toResolved()` to get concrete values with defaults applied.
+/// Sprite configuration for prefabs
 pub const SpriteConfig = struct {
-    name: ?[]const u8 = null,
-    x: ?f32 = null,
-    y: ?f32 = null,
-    z_index: ?u8 = null,
-    scale: ?f32 = null,
-    rotation: ?f32 = null,
-    flip_x: ?bool = null,
-    flip_y: ?bool = null,
-    /// Pivot point for positioning and rotation
-    pivot: ?Pivot = null,
-    /// Custom pivot X coordinate (0.0-1.0), used when pivot == .custom
-    pivot_x: ?f32 = null,
-    /// Custom pivot Y coordinate (0.0-1.0), used when pivot == .custom
-    pivot_y: ?f32 = null,
-
-    /// Default values used when resolving null fields
-    pub const defaults = ResolvedSpriteConfig{
-        .name = "",
-        .x = 0,
-        .y = 0,
-        .z_index = ZIndex.characters,
-        .scale = 1.0,
-        .rotation = 0,
-        .flip_x = false,
-        .flip_y = false,
-        .pivot = .center,
-        .pivot_x = 0.5,
-        .pivot_y = 0.5,
-    };
-
-    /// Convert to resolved config with all defaults applied
-    pub fn toResolved(self: SpriteConfig) ResolvedSpriteConfig {
-        return .{
-            .name = self.name orelse defaults.name,
-            .x = self.x orelse defaults.x,
-            .y = self.y orelse defaults.y,
-            .z_index = self.z_index orelse defaults.z_index,
-            .scale = self.scale orelse defaults.scale,
-            .rotation = self.rotation orelse defaults.rotation,
-            .flip_x = self.flip_x orelse defaults.flip_x,
-            .flip_y = self.flip_y orelse defaults.flip_y,
-            .pivot = self.pivot orelse defaults.pivot,
-            .pivot_x = self.pivot_x orelse defaults.pivot_x,
-            .pivot_y = self.pivot_y orelse defaults.pivot_y,
-        };
-    }
+    name: []const u8 = "",
+    x: f32 = 0,
+    y: f32 = 0,
+    z_index: u8 = ZIndex.characters,
+    scale: f32 = 1.0,
+    rotation: f32 = 0,
+    flip_x: bool = false,
+    flip_y: bool = false,
+    pivot: Pivot = .center,
+    pivot_x: f32 = 0.5,
+    pivot_y: f32 = 0.5,
 };
 
-/// Resolved sprite configuration with concrete values (no optionals).
-/// This is the final output after merging and applying defaults.
-pub const ResolvedSpriteConfig = struct {
-    name: []const u8,
-    x: f32,
-    y: f32,
-    z_index: u8,
-    scale: f32,
-    rotation: f32,
-    flip_x: bool,
-    flip_y: bool,
-    pivot: Pivot,
-    pivot_x: f32,
-    pivot_y: f32,
+/// Children configuration for nested prefabs
+pub const ChildrenConfig = struct {
+    weapon: ?[]const u8 = null,
+    offhand: ?[]const u8 = null,
+    items: ?[]const []const u8 = null,
 };
 
-/// Type-erased prefab interface for runtime use
-/// Uses u64 for entity and *anyopaque for Game to avoid circular imports.
-/// The u64 type accommodates both 32-bit (zig_ecs) and 64-bit (zflecs) entity IDs.
+/// Prefab definition loaded from .zon files
 pub const Prefab = struct {
     name: []const u8,
-    sprite: ResolvedSpriteConfig,
-    animation: ?[]const u8,
-    onCreate: ?*const fn (u64, *anyopaque) void,
-    onUpdate: ?*const fn (u64, *anyopaque, f32) void,
-    onDestroy: ?*const fn (u64, *anyopaque) void,
+    sprite: SpriteConfig = .{},
+    animation: ?[]const u8 = null,
+    children: ChildrenConfig = .{},
 };
 
-/// Check if a type is a valid prefab
-pub fn isPrefab(comptime T: type) bool {
-    // Must have a name
-    if (!@hasDecl(T, "name")) return false;
-    // Must have sprite config
-    if (!@hasDecl(T, "sprite")) return false;
-    return true;
-}
+/// Runtime prefab registry - loads and manages prefabs from ZON files
+pub const PrefabRegistry = struct {
+    allocator: std.mem.Allocator,
+    prefabs: std.StringHashMap(Prefab),
 
-/// Extract a Prefab from a comptime prefab type
-pub fn fromType(comptime T: type) Prefab {
-    if (!isPrefab(T)) {
-        @compileError("Type is not a valid prefab. Must have 'name' and 'sprite' declarations.");
+    pub fn init(allocator: std.mem.Allocator) PrefabRegistry {
+        return .{
+            .allocator = allocator,
+            .prefabs = std.StringHashMap(Prefab).init(allocator),
+        };
     }
 
-    return .{
-        .name = T.name,
-        .sprite = getMergedSprite(T),
-        .animation = if (@hasDecl(T, "animation")) T.animation else null,
-        .onCreate = if (@hasDecl(T, "onCreate")) T.onCreate else null,
-        .onUpdate = if (@hasDecl(T, "onUpdate")) T.onUpdate else null,
-        .onDestroy = if (@hasDecl(T, "onDestroy")) T.onDestroy else null,
-    };
-}
+    pub fn deinit(self: *PrefabRegistry) void {
+        var iter = self.prefabs.iterator();
+        while (iter.next()) |entry| {
+            std.zon.parse.free(self.allocator, entry.value_ptr.*);
+        }
+        self.prefabs.deinit();
+    }
 
-/// Get merged sprite config, including base prefab if present
-fn getMergedSprite(comptime T: type) ResolvedSpriteConfig {
-    if (@hasDecl(T, "base")) {
-        const base_resolved = getMergedSprite(T.base);
-        return mergeSprite(base_resolved, T.sprite);
-    }
-    return T.sprite.toResolved();
-}
+    /// Load a prefab from a .zon file
+    pub fn loadFromFile(self: *PrefabRegistry, path: []const u8) !void {
+        const file = try std.fs.cwd().openFile(path, .{});
+        defer file.close();
 
-/// Merge a resolved base config with optional overrides.
-/// For each field, if the override is non-null, use it; otherwise keep the base value.
-pub fn mergeSprite(base: ResolvedSpriteConfig, over: SpriteConfig) ResolvedSpriteConfig {
-    return .{
-        .name = over.name orelse base.name,
-        .x = over.x orelse base.x,
-        .y = over.y orelse base.y,
-        .z_index = over.z_index orelse base.z_index,
-        .scale = over.scale orelse base.scale,
-        .rotation = over.rotation orelse base.rotation,
-        .flip_x = over.flip_x orelse base.flip_x,
-        .flip_y = over.flip_y orelse base.flip_y,
-        .pivot = over.pivot orelse base.pivot,
-        .pivot_x = over.pivot_x orelse base.pivot_x,
-        .pivot_y = over.pivot_y orelse base.pivot_y,
-    };
-}
+        const stat = try file.stat();
+        const content = try self.allocator.allocSentinel(u8, stat.size, 0);
+        defer self.allocator.free(content);
 
-/// Apply overrides from a comptime struct to a ResolvedSpriteConfig
-/// Used by mergeSpriteWithOverrides to avoid code duplication
-fn applySpriteOverrides(result: *ResolvedSpriteConfig, comptime over: anytype) void {
-    if (@hasField(@TypeOf(over), "name")) {
-        result.name = over.name;
-    }
-    if (@hasField(@TypeOf(over), "x")) {
-        result.x = over.x;
-    }
-    if (@hasField(@TypeOf(over), "y")) {
-        result.y = over.y;
-    }
-    if (@hasField(@TypeOf(over), "z_index")) {
-        result.z_index = over.z_index;
-    }
-    if (@hasField(@TypeOf(over), "scale")) {
-        result.scale = over.scale;
-    }
-    if (@hasField(@TypeOf(over), "rotation")) {
-        result.rotation = over.rotation;
-    }
-    if (@hasField(@TypeOf(over), "flip_x")) {
-        result.flip_x = over.flip_x;
-    }
-    if (@hasField(@TypeOf(over), "flip_y")) {
-        result.flip_y = over.flip_y;
-    }
-    if (@hasField(@TypeOf(over), "pivot")) {
-        result.pivot = over.pivot;
-    }
-    if (@hasField(@TypeOf(over), "pivot_x")) {
-        result.pivot_x = over.pivot_x;
-    }
-    if (@hasField(@TypeOf(over), "pivot_y")) {
-        result.pivot_y = over.pivot_y;
-    }
-}
+        const bytes_read = try file.readAll(content);
+        if (bytes_read != stat.size) {
+            return error.UnexpectedEof;
+        }
 
-/// Merge sprite config with overrides from scene .zon data
+        const prefab = try std.zon.parse.fromSlice(Prefab, self.allocator, content, null, .{});
+        errdefer std.zon.parse.free(self.allocator, prefab);
+
+        try self.prefabs.put(prefab.name, prefab);
+    }
+
+    /// Load all .zon files from a directory
+    pub fn loadFolder(self: *PrefabRegistry, dir_path: []const u8) !void {
+        var dir = std.fs.cwd().openDir(dir_path, .{ .iterate = true }) catch |err| {
+            if (err == error.FileNotFound) return;
+            return err;
+        };
+        defer dir.close();
+
+        var iter = dir.iterate();
+        while (try iter.next()) |entry| {
+            if (entry.kind == .file and std.mem.endsWith(u8, entry.name, ".zon")) {
+                const full_path = try std.fs.path.join(self.allocator, &.{ dir_path, entry.name });
+                defer self.allocator.free(full_path);
+                try self.loadFromFile(full_path);
+            }
+        }
+    }
+
+    /// Get a prefab by name
+    pub fn get(self: *const PrefabRegistry, name: []const u8) ?Prefab {
+        return self.prefabs.get(name);
+    }
+
+    /// Check if a prefab exists
+    pub fn has(self: *const PrefabRegistry, name: []const u8) bool {
+        return self.prefabs.contains(name);
+    }
+
+    /// Get number of loaded prefabs
+    pub fn count(self: *const PrefabRegistry) usize {
+        return self.prefabs.count();
+    }
+};
+
+/// Merge sprite config with overrides from scene data
 pub fn mergeSpriteWithOverrides(
-    base: ResolvedSpriteConfig,
+    base: SpriteConfig,
     comptime overrides: anytype,
-) ResolvedSpriteConfig {
+) SpriteConfig {
     var result = base;
 
-    // Apply top-level overrides (e.g., .x = 100, .pivot = .bottom_center)
-    applySpriteOverrides(&result, overrides);
+    // Apply top-level overrides
+    if (@hasField(@TypeOf(overrides), "x")) {
+        result.x = overrides.x;
+    }
+    if (@hasField(@TypeOf(overrides), "y")) {
+        result.y = overrides.y;
+    }
+    if (@hasField(@TypeOf(overrides), "z_index")) {
+        result.z_index = overrides.z_index;
+    }
+    if (@hasField(@TypeOf(overrides), "scale")) {
+        result.scale = overrides.scale;
+    }
+    if (@hasField(@TypeOf(overrides), "rotation")) {
+        result.rotation = overrides.rotation;
+    }
+    if (@hasField(@TypeOf(overrides), "flip_x")) {
+        result.flip_x = overrides.flip_x;
+    }
+    if (@hasField(@TypeOf(overrides), "flip_y")) {
+        result.flip_y = overrides.flip_y;
+    }
+    if (@hasField(@TypeOf(overrides), "pivot")) {
+        result.pivot = overrides.pivot;
+    }
+    if (@hasField(@TypeOf(overrides), "pivot_x")) {
+        result.pivot_x = overrides.pivot_x;
+    }
+    if (@hasField(@TypeOf(overrides), "pivot_y")) {
+        result.pivot_y = overrides.pivot_y;
+    }
 
-    // Apply nested sprite overrides (e.g., .sprite = .{ .name = "foo.png" })
+    // Apply nested sprite overrides
     if (@hasField(@TypeOf(overrides), "sprite")) {
-        applySpriteOverrides(&result, overrides.sprite);
+        const sprite_over = overrides.sprite;
+        if (@hasField(@TypeOf(sprite_over), "name")) {
+            result.name = sprite_over.name;
+        }
+        if (@hasField(@TypeOf(sprite_over), "x")) {
+            result.x = sprite_over.x;
+        }
+        if (@hasField(@TypeOf(sprite_over), "y")) {
+            result.y = sprite_over.y;
+        }
+        if (@hasField(@TypeOf(sprite_over), "z_index")) {
+            result.z_index = sprite_over.z_index;
+        }
+        if (@hasField(@TypeOf(sprite_over), "scale")) {
+            result.scale = sprite_over.scale;
+        }
+        if (@hasField(@TypeOf(sprite_over), "rotation")) {
+            result.rotation = sprite_over.rotation;
+        }
+        if (@hasField(@TypeOf(sprite_over), "flip_x")) {
+            result.flip_x = sprite_over.flip_x;
+        }
+        if (@hasField(@TypeOf(sprite_over), "flip_y")) {
+            result.flip_y = sprite_over.flip_y;
+        }
+        if (@hasField(@TypeOf(sprite_over), "pivot")) {
+            result.pivot = sprite_over.pivot;
+        }
+        if (@hasField(@TypeOf(sprite_over), "pivot_x")) {
+            result.pivot_x = sprite_over.pivot_x;
+        }
+        if (@hasField(@TypeOf(sprite_over), "pivot_y")) {
+            result.pivot_y = sprite_over.pivot_y;
+        }
     }
 
     return result;
 }
-
-/// Create a prefab registry from a tuple of prefab types
-pub fn PrefabRegistry(comptime prefab_types: anytype) type {
-    return struct {
-        pub const prefabs = blk: {
-            var arr: [prefab_types.len]Prefab = undefined;
-            for (prefab_types, 0..) |T, i| {
-                arr[i] = fromType(T);
-            }
-            break :blk arr;
-        };
-
-        pub fn get(name: []const u8) ?Prefab {
-            inline for (prefabs) |p| {
-                if (std.mem.eql(u8, p.name, name)) {
-                    return p;
-                }
-            }
-            return null;
-        }
-
-        pub fn getComptime(comptime name: []const u8) Prefab {
-            inline for (prefabs) |p| {
-                if (comptime std.mem.eql(u8, p.name, name)) {
-                    return p;
-                }
-            }
-            @compileError("Prefab not found: " ++ name);
-        }
-    };
-}
-

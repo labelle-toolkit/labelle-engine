@@ -16,25 +16,14 @@ const engine = @import("labelle-engine");
 
 const Game = engine.Game;
 const ProjectConfig = engine.ProjectConfig;
+const PrefabRegistry = engine.PrefabRegistry;
 
-.prefab_import
-const {s}_prefab = @import("prefabs/{s}.zig");
 .component_import
 const {s}_comp = @import("components/{s}.zig");
 .component_export
 pub const {s} = {s}_comp.{s};
 .script_import
 const {s}_script = @import("scripts/{s}.zig");
-.prefab_registry_empty
-// Registries
-pub const Prefabs = engine.PrefabRegistry(.{{}});
-.prefab_registry_start
-// Registries
-pub const Prefabs = engine.PrefabRegistry(.{{
-.prefab_registry_item
-    {s}_prefab,
-.prefab_registry_end
-}});
 .main_module
 const main_module = @This();
 .component_registry_empty
@@ -54,7 +43,7 @@ pub const Scripts = engine.ScriptRegistry(struct {{
 .script_registry_end
 }});
 .loader
-pub const Loader = engine.SceneLoader(Prefabs, Components, Scripts);
+pub const Loader = engine.SceneLoader(Components, Scripts);
 pub const initial_scene = @import("scenes/{s}.zon");
 
 .main_fn
@@ -85,6 +74,11 @@ pub fn main() !void {{
     game.fixPointers(); // Fix internal pointers after struct is in final location
     defer game.deinit();
 
+    // Load prefabs from .zon files
+    var prefabs = PrefabRegistry.init(allocator);
+    defer prefabs.deinit();
+    try prefabs.loadFolder("prefabs");
+
     // Load atlases from project config
     for (project.resources.atlases) |atlas| {{
         try game.loadAtlas(atlas.name, atlas.json, atlas.texture);
@@ -99,7 +93,7 @@ pub fn main() !void {{
     }}
 
     const ctx = engine.SceneContext.init(&game);
-    var scene = try Loader.load(initial_scene, ctx);
+    var scene = try Loader.load(initial_scene, ctx, &prefabs);
     defer scene.deinit();
 
     if (ci_test) return;
