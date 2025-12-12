@@ -39,7 +39,14 @@ pub fn build(b: *std.Build) void {{
     }});
     const engine_mod = engine_dep.module("labelle-engine");
 
-.raylib
+.plugin_dep
+    const {s}_dep = b.dependency("{s}", .{{
+        .target = target,
+        .optimize = optimize,
+    }});
+    const {s}_mod = {s}_dep.module("{s}");
+
+.raylib_exe_start
     const exe = b.addExecutable(.{{
         .name = "{s}",
         .root_module = b.createModule(.{{
@@ -48,10 +55,11 @@ pub fn build(b: *std.Build) void {{
             .optimize = optimize,
             .imports = &.{{
                 .{{ .name = "labelle-engine", .module = engine_mod }},
+.raylib_exe_end
             }},
         }}),
     }});
-.sokol
+.sokol_exe_start
     // Get labelle-gfx dependency for sokol bindings
     const labelle_dep = engine_dep.builder.dependency("labelle-gfx", .{{
         .target = target,
@@ -72,9 +80,12 @@ pub fn build(b: *std.Build) void {{
             .imports = &.{{
                 .{{ .name = "labelle-engine", .module = engine_mod }},
                 .{{ .name = "sokol", .module = sokol_mod }},
+.sokol_exe_end
             }},
         }}),
     }});
+.plugin_import
+                .{{ .name = "{s}", .module = {s}_mod }},
 .footer
     b.installArtifact(exe);
 

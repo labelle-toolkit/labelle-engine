@@ -27,7 +27,7 @@
         }},
 .plugin
         .@"{s}" = .{{
-            .url = "git+https://github.com/labelle-toolkit/{s}",
+            .url = "git+https://{s}#v{s}",
             // .hash = "...",  // Add after first build
         }},
 .deps_end

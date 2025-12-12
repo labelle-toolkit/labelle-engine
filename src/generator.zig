@@ -69,7 +69,15 @@ pub fn generateBuildZon(allocator: std.mem.Allocator, config: ProjectConfig, opt
 
     // Write plugin dependencies
     for (config.plugins) |plugin| {
-        try zts.print(build_zig_zon_tmpl, "plugin", .{ plugin.name, plugin.name }, writer);
+        // Use custom URL if provided, otherwise default to github.com/labelle-toolkit/{name}
+        const plugin_url = plugin.url orelse blk: {
+            const default_url = try std.fmt.allocPrint(allocator, "github.com/labelle-toolkit/{s}", .{plugin.name});
+            break :blk default_url;
+        };
+        defer if (plugin.url == null) allocator.free(plugin_url);
+
+        // Template args: name, url, version
+        try zts.print(build_zig_zon_tmpl, "plugin", .{ plugin.name, plugin_url, plugin.version }, writer);
     }
 
     // Write closing
@@ -102,11 +110,56 @@ pub fn generateBuildZig(allocator: std.mem.Allocator, config: ProjectConfig) ![]
     // Template args: graphics_backend (x2), ecs_backend (x2)
     try zts.print(build_zig_tmpl, "header", .{ default_backend, default_backend, default_ecs_backend, default_ecs_backend }, writer);
 
-    // Write backend-specific executable setup
+    // Write plugin dependency declarations
+    // Sanitize plugin names for use as Zig identifiers
+    var plugin_zig_names = try allocator.alloc([]const u8, config.plugins.len);
+    defer {
+        for (plugin_zig_names) |name| allocator.free(name);
+        allocator.free(plugin_zig_names);
+    }
+
+    // Also track module names for imports
+    var plugin_module_names = try allocator.alloc([]const u8, config.plugins.len);
+    defer {
+        for (config.plugins, 0..) |plugin, i| {
+            // Only free if we allocated (when plugin.module was null)
+            if (plugin.module == null) allocator.free(plugin_module_names[i]);
+        }
+        allocator.free(plugin_module_names);
+    }
+
+    for (config.plugins, 0..) |plugin, i| {
+        const plugin_zig_name = try sanitizeZigIdentifier(allocator, plugin.name);
+        plugin_zig_names[i] = plugin_zig_name;
+
+        // Get module name - use explicit module if provided, otherwise default to sanitized name
+        const plugin_module_name = plugin.module orelse blk: {
+            const default_module = try sanitizeZigIdentifier(allocator, plugin.name);
+            break :blk default_module;
+        };
+        plugin_module_names[i] = plugin_module_name;
+
+        // Template args: zig_name, name, zig_name, zig_name, module_name
+        try zts.print(build_zig_tmpl, "plugin_dep", .{ plugin_zig_name, plugin.name, plugin_zig_name, plugin_zig_name, plugin_module_name }, writer);
+    }
+
+    // Write backend-specific executable setup (start of imports)
     // Template args: project_name
     switch (config.backend) {
-        .raylib => try zts.print(build_zig_tmpl, "raylib", .{zig_name}, writer),
-        .sokol => try zts.print(build_zig_tmpl, "sokol", .{zig_name}, writer),
+        .raylib => try zts.print(build_zig_tmpl, "raylib_exe_start", .{zig_name}, writer),
+        .sokol => try zts.print(build_zig_tmpl, "sokol_exe_start", .{zig_name}, writer),
+    }
+
+    // Write plugin imports
+    for (config.plugins, 0..) |plugin, i| {
+        // Template args: name, zig_name
+        try zts.print(build_zig_tmpl, "plugin_import", .{ plugin.name, plugin_zig_names[i] }, writer);
+    }
+
+    // Write backend-specific executable setup (end of imports)
+    switch (config.backend) {
+        .raylib => try zts.print(build_zig_tmpl, "raylib_exe_end", .{}, writer),
+        .sokol => try zts.print(build_zig_tmpl, "sokol_exe_end", .{}, writer),
     }
 
     // Write common footer

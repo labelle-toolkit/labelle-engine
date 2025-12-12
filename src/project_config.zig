@@ -24,7 +24,7 @@
 //           .zoom = 1.0,   // 1.0 = 100% zoom
 //       },
 //       .plugins = .{
-//           .{ .name = "labelle-pathfinding", .version = "0.1.0" },
+//           .{ .name = "labelle-pathfinding", .version = "2.5.0", .module = "pathfinding" },
 //       },
 //   }
 //
@@ -51,6 +51,12 @@ pub const EcsBackend = enum {
 pub const Plugin = struct {
     name: []const u8,
     version: []const u8,
+    /// GitHub repository URL (e.g., "github.com/labelle-toolkit/labelle-pathfinding")
+    /// If not provided, defaults to "github.com/labelle-toolkit/{name}"
+    url: ?[]const u8 = null,
+    /// Module name exported by the package (e.g., "pathfinding" for labelle-pathfinding)
+    /// If not provided, defaults to the plugin name with hyphens replaced by underscores
+    module: ?[]const u8 = null,
 };
 
 /// Atlas resource declaration
