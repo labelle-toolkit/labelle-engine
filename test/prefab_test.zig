@@ -337,9 +337,6 @@ pub const PREFAB_STRUCT = struct {
         try expect.toBeTrue(std.mem.eql(u8, p.name, "test"));
         try expect.equal(p.sprite.name.len, 0);
         try expect.toBeNull(p.animation);
-        try expect.toBeNull(p.children.weapon);
-        try expect.toBeNull(p.children.offhand);
-        try expect.toBeNull(p.children.items);
     }
 
     test "prefab with sprite config" {
@@ -365,17 +362,5 @@ pub const PREFAB_STRUCT = struct {
             .animation = "idle",
         };
         try expect.toBeTrue(std.mem.eql(u8, p.animation.?, "idle"));
-    }
-
-    test "prefab with children" {
-        const p = prefab.Prefab{
-            .name = "player",
-            .children = .{
-                .weapon = "sword",
-                .offhand = "shield",
-            },
-        };
-        try expect.toBeTrue(std.mem.eql(u8, p.children.weapon.?, "sword"));
-        try expect.toBeTrue(std.mem.eql(u8, p.children.offhand.?, "shield"));
     }
 };

@@ -1,10 +1,9 @@
-// Prefab system - runtime ZON-based prefabs with component composition
+// Prefab system - runtime ZON-based prefabs
 //
 // Prefabs are ZON files that define:
 // - name: Unique identifier for the prefab
 // - sprite: Visual configuration for the entity
 // - animation: Optional default animation
-// - children: Optional nested prefab references
 //
 // Example prefab file (prefabs/player.zon):
 // .{
@@ -14,10 +13,6 @@
 //         .x = 100,
 //         .y = 200,
 //         .scale = 2.0,
-//     },
-//     .children = .{
-//         .weapon = "sword",
-//         .items = .{ "potion", "potion" },
 //     },
 // }
 
@@ -49,19 +44,11 @@ pub const SpriteConfig = struct {
     pivot_y: f32 = 0.5,
 };
 
-/// Children configuration for nested prefabs
-pub const ChildrenConfig = struct {
-    weapon: ?[]const u8 = null,
-    offhand: ?[]const u8 = null,
-    items: ?[]const []const u8 = null,
-};
-
 /// Prefab definition loaded from .zon files
 pub const Prefab = struct {
     name: []const u8,
     sprite: SpriteConfig = .{},
     animation: ?[]const u8 = null,
-    children: ChildrenConfig = .{},
 };
 
 /// Runtime prefab registry - loads and manages prefabs from ZON files
