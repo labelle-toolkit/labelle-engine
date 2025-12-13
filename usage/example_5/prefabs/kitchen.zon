@@ -1,0 +1,47 @@
+.{
+    .sprite = .{
+        .name = "kitchen",
+        .z_index = 0,
+    },
+    .components = .{
+        .Children = .{ .items = .{
+            // Workstation with 3 movement nodes
+            .{
+                .x = 50,
+                .y = 30,
+                .components = .{
+                    .Workstation = .{
+                        .station_type = "prep_counter",
+                        .is_active = true,
+                        .movement_nodes = .{
+                            // Node 1: Left side
+                            .{
+                                .x = -20,
+                                .y = 0,
+                                .components = .{
+                                    .Movement_node = .{ .id = 1, .walkable = true },
+                                },
+                            },
+                            // Node 2: Center
+                            .{
+                                .x = 0,
+                                .y = 20,
+                                .components = .{
+                                    .Movement_node = .{ .id = 2, .walkable = true },
+                                },
+                            },
+                            // Node 3: Right side
+                            .{
+                                .x = 20,
+                                .y = 0,
+                                .components = .{
+                                    .Movement_node = .{ .id = 3, .walkable = true },
+                                },
+                            },
+                        },
+                    },
+                },
+            },
+        } },
+    },
+}

@@ -2,7 +2,7 @@
     .version = 1,
     .name = "example_5",
     .description = "Demonstrates nested prefab composition with relative positioning",
-    .initial_scene = "nested_test",
+    .initial_scene = "kitchen_test",
     .window = .{
         .width = 800,
         .height = 600,
