@@ -221,6 +221,7 @@ pub const RenderPipeline = struct {
         if (self.tracked.fetchSwapRemove(entity)) |kv| {
             const entity_id = toEntityId(entity);
             switch (kv.value.visual_type) {
+                .none => {}, // No visual to destroy
                 .sprite => self.engine.destroySprite(entity_id),
                 .shape => self.engine.destroyShape(entity_id),
                 .text => self.engine.destroyText(entity_id),
@@ -235,6 +236,7 @@ pub const RenderPipeline = struct {
         while (iter.next()) |kv| {
             const entity_id = toEntityId(kv.key_ptr.*);
             switch (kv.value_ptr.visual_type) {
+                .none => {}, // No visual to destroy
                 .sprite => self.engine.destroySprite(entity_id),
                 .shape => self.engine.destroyShape(entity_id),
                 .text => self.engine.destroyText(entity_id),
@@ -271,6 +273,7 @@ pub const RenderPipeline = struct {
 
                 var creation_succeeded = false;
                 switch (tracked.visual_type) {
+                    .none => {}, // No visual to create for data-only entities
                     .sprite => {
                         if (registry.tryGet(Sprite, tracked.entity)) |sprite| {
                             self.engine.createSprite(entity_id, sprite.toVisual(), pos);
@@ -304,6 +307,7 @@ pub const RenderPipeline = struct {
             } else if (tracked.visual_dirty) {
                 // Visual changed - use update methods (v0.12.0+)
                 switch (tracked.visual_type) {
+                    .none => {}, // No visual to update for data-only entities
                     .sprite => {
                         if (registry.tryGet(Sprite, tracked.entity)) |sprite| {
                             self.engine.updateSprite(entity_id, sprite.toVisual());
