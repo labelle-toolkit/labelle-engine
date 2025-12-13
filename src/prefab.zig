@@ -117,5 +117,10 @@ pub fn mergeSpriteWithOverrides(
     // Apply top-level overrides (x, y, scale, etc. directly on entity def)
     applyOverrides(&result, overrides);
 
+    // Apply overrides from .components.Sprite if present
+    if (@hasField(@TypeOf(overrides), "components") and @hasField(@TypeOf(overrides.components), "Sprite")) {
+        applyOverrides(&result, overrides.components.Sprite);
+    }
+
     return result;
 }

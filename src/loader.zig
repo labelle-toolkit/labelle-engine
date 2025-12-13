@@ -95,6 +95,31 @@ fn hasSpriteInComponents(comptime entity_def: anytype) bool {
     return false;
 }
 
+/// Get sprite local position from entity definition
+/// Entity-level x/y takes precedence over Sprite.x/y
+fn getSpriteLocalPosition(comptime entity_def: anytype, comptime sprite_data: anytype) struct { x: f32, y: f32 } {
+    const x = if (@hasField(@TypeOf(entity_def), "x"))
+        entity_def.x
+    else
+        getFieldOrDefault(sprite_data, "x", @as(f32, 0));
+    const y = if (@hasField(@TypeOf(entity_def), "y"))
+        entity_def.y
+    else
+        getFieldOrDefault(sprite_data, "y", @as(f32, 0));
+    return .{ .x = x, .y = y };
+}
+
+/// Get sprite name from sprite data (.name or .sprite_name field)
+fn getSpriteName(comptime sprite_data: anytype) []const u8 {
+    if (@hasField(@TypeOf(sprite_data), "name")) {
+        return sprite_data.name;
+    } else if (@hasField(@TypeOf(sprite_data), "sprite_name")) {
+        return sprite_data.sprite_name;
+    } else {
+        return "";
+    }
+}
+
 /// Apply camera configuration from comptime config data to a camera
 fn applyCameraConfig(comptime config: anytype, camera: anytype) void {
     // Extract optional x and y values
@@ -328,31 +353,15 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
             const sprite_data = entity_def.components.Sprite;
             const entity = game.createEntity();
 
-            // Position can come from entity-level x/y or from Sprite.x/y, relative to parent
-            const local_x = if (@hasField(@TypeOf(entity_def), "x"))
-                entity_def.x
-            else
-                getFieldOrDefault(sprite_data, "x", @as(f32, 0));
-            const local_y = if (@hasField(@TypeOf(entity_def), "y"))
-                entity_def.y
-            else
-                getFieldOrDefault(sprite_data, "y", @as(f32, 0));
-
-            const pos_x = parent_x + local_x;
-            const pos_y = parent_y + local_y;
+            // Position relative to parent
+            const local_pos = getSpriteLocalPosition(entity_def, sprite_data);
+            const pos_x = parent_x + local_pos.x;
+            const pos_y = parent_y + local_pos.y;
 
             game.addPosition(entity, Position{ .x = pos_x, .y = pos_y });
 
-            // Add Sprite component - name can be in .name or .sprite_name field
-            const sprite_name = if (@hasField(@TypeOf(sprite_data), "name"))
-                sprite_data.name
-            else if (@hasField(@TypeOf(sprite_data), "sprite_name"))
-                sprite_data.sprite_name
-            else
-                "";
-
             try game.addSprite(entity, Sprite{
-                .sprite_name = sprite_name,
+                .sprite_name = getSpriteName(sprite_data),
                 .z_index = getFieldOrDefault(sprite_data, "z_index", ZIndex.characters),
                 .scale = getFieldOrDefault(sprite_data, "scale", @as(f32, 1.0)),
                 .rotation = getFieldOrDefault(sprite_data, "rotation", @as(f32, 0)),
@@ -683,33 +692,18 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
             // Create ECS entity
             const entity = game.createEntity();
 
-            // Position can come from entity-level x/y or from Sprite.x/y
-            // Entity-level x/y take precedence
-            const pos_x = if (@hasField(@TypeOf(entity_def), "x"))
-                entity_def.x
-            else
-                getFieldOrDefault(sprite_data, "x", @as(f32, 0));
-            const pos_y = if (@hasField(@TypeOf(entity_def), "y"))
-                entity_def.y
-            else
-                getFieldOrDefault(sprite_data, "y", @as(f32, 0));
+            // Get position using helper (entity-level x/y take precedence over Sprite.x/y)
+            const pos = getSpriteLocalPosition(entity_def, sprite_data);
 
             // Add Position component
             game.addPosition(entity, Position{
-                .x = pos_x,
-                .y = pos_y,
+                .x = pos.x,
+                .y = pos.y,
             });
 
-            // Add Sprite component - name can be in .name or .sprite_name field
-            const sprite_name = if (@hasField(@TypeOf(sprite_data), "name"))
-                sprite_data.name
-            else if (@hasField(@TypeOf(sprite_data), "sprite_name"))
-                sprite_data.sprite_name
-            else
-                "";
-
+            // Add Sprite component
             try game.addSprite(entity, Sprite{
-                .sprite_name = sprite_name,
+                .sprite_name = getSpriteName(sprite_data),
                 .z_index = getFieldOrDefault(sprite_data, "z_index", ZIndex.characters),
                 .scale = getFieldOrDefault(sprite_data, "scale", @as(f32, 1.0)),
                 .rotation = getFieldOrDefault(sprite_data, "rotation", @as(f32, 0)),
@@ -721,7 +715,7 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
             });
 
             // Add other components (excluding Sprite which we already handled)
-            try addComponentsExcludingSprite(game, scene, entity, entity_def.components, pos_x, pos_y);
+            try addComponentsExcludingSprite(game, scene, entity, entity_def.components, pos.x, pos.y);
 
             return .{
                 .entity = entity,
