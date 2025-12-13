@@ -67,9 +67,17 @@ pub const PREFAB_WITH_COMPONENTS = struct {
         }
 
         test "Bar.bazzes is a slice of Entity" {
-            // Verify the type is correct
+            // Verify the field type is []const Entity
             const field_info = @typeInfo(Bar).@"struct".fields[0];
             try expect.toBeTrue(std.mem.eql(u8, field_info.name, "bazzes"));
+
+            // Verify the type is a pointer (slice)
+            const type_info = @typeInfo(field_info.type);
+            try expect.toBeTrue(type_info == .pointer);
+
+            // Verify it's a slice (not single pointer) of Entity
+            try expect.toBeTrue(type_info.pointer.size == .slice);
+            try expect.toBeTrue(type_info.pointer.child == Entity);
         }
     };
 };

@@ -148,7 +148,7 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
                 if (scene) |s| {
                     try s.addEntity(.{
                         .entity = child,
-                        .visual_type = .sprite,
+                        .visual_type = .none, // Child entities are data-only by default
                         .prefab_name = null,
                         .onUpdate = null,
                         .onDestroy = null,
@@ -156,6 +156,11 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
                 }
 
                 entities[i] = child;
+            }
+
+            // Track the allocated slice for cleanup on scene deinit
+            if (scene) |s| {
+                try s.trackAllocatedSlice(entities);
             }
 
             return entities;
@@ -177,6 +182,8 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
             var component: ComponentType = .{};
 
             // Process each field in the component type
+            // Note: component is initialized with .{} which sets defaults, so we only
+            // need to handle fields that are explicitly provided in comp_data
             inline for (comp_fields) |comp_field| {
                 const field_name = comp_field.name;
 
@@ -191,11 +198,8 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
                         const data_value = @field(comp_data, field_name);
                         @field(component, field_name) = zon.coerceValue(comp_field.type, data_value);
                     }
-                } else if (comp_field.default_value_ptr) |ptr| {
-                    // Use default value
-                    const default_ptr: *const comp_field.type = @ptrCast(@alignCast(ptr));
-                    @field(component, field_name) = default_ptr.*;
                 }
+                // Fields not in comp_data retain their defaults from .{} initialization
             }
 
             game.getRegistry().add(parent_entity, component);

@@ -158,6 +158,7 @@ pub const Text = struct {
 // ============================================
 
 pub const VisualType = enum {
+    none, // Entity has no visual (e.g., nested data-only entities)
     sprite,
     shape,
     text,

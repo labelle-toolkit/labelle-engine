@@ -101,6 +101,8 @@ pub const Scene = struct {
     scripts: []const script.ScriptFns,
     ctx: SceneContext,
     initialized: bool = false,
+    /// Tracks allocated entity slices for cleanup (used by nested entity composition)
+    allocated_entity_slices: std.ArrayListUnmanaged([]Entity) = .{},
 
     pub fn init(name: []const u8, scripts: []const script.ScriptFns, ctx: SceneContext) Scene {
         return .{
@@ -109,7 +111,14 @@ pub const Scene = struct {
             .scripts = scripts,
             .ctx = ctx,
             .initialized = false,
+            .allocated_entity_slices = .{},
         };
+    }
+
+    /// Register an allocated entity slice for cleanup on scene deinit.
+    /// Used by nested entity composition to track dynamically allocated slices.
+    pub fn trackAllocatedSlice(self: *Scene, slice: []Entity) !void {
+        try self.allocated_entity_slices.append(self.ctx.allocator(), slice);
     }
 
     /// Call all script init functions. Called automatically on first update,
@@ -150,6 +159,12 @@ pub const Scene = struct {
             reg.destroy(instance.entity);
         }
         self.entities.deinit(alloc);
+
+        // Free allocated entity slices (from nested entity composition)
+        for (self.allocated_entity_slices.items) |slice| {
+            alloc.free(slice);
+        }
+        self.allocated_entity_slices.deinit(alloc);
     }
 
     pub fn update(self: *Scene, dt: f32) void {
