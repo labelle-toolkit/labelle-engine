@@ -114,6 +114,7 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
         const Self = @This();
 
         /// Create child entities from a tuple of entity definitions.
+        /// Supports full entity definitions including shapes, sprites, and prefab references.
         ///
         /// When scene is provided:
         /// - Child entities are added to scene.entities for lifecycle management
@@ -137,32 +138,14 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
             // Create each child entity
             inline for (0..entity_count) |i| {
                 const entity_def = entity_defs[i];
-
-                // Create child entity
-                const child = game.createEntity();
-
-                // Add position with relative offset
-                const child_x = parent_x + getFieldOrDefault(entity_def, "x", @as(f32, 0));
-                const child_y = parent_y + getFieldOrDefault(entity_def, "y", @as(f32, 0));
-                game.addPosition(child, Position{ .x = child_x, .y = child_y });
-
-                // Add child's components (recursively handles nested entities)
-                if (@hasField(@TypeOf(entity_def), "components")) {
-                    try addComponentsWithNestedEntities(game, scene, child, entity_def.components, child_x, child_y);
-                }
+                const instance = try createChildEntity(game, scene, entity_def, parent_x, parent_y);
 
                 // Track child entity in scene for cleanup
                 if (scene) |s| {
-                    try s.addEntity(.{
-                        .entity = child,
-                        .visual_type = .none, // Child entities are data-only by default
-                        .prefab_name = null,
-                        .onUpdate = null,
-                        .onDestroy = null,
-                    });
+                    try s.addEntity(instance);
                 }
 
-                entities[i] = child;
+                entities[i] = instance.entity;
             }
 
             // Track the allocated slice for cleanup on scene deinit
@@ -171,6 +154,229 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
             }
 
             return entities;
+        }
+
+        /// Create a single child entity with support for shapes, sprites, prefabs, or data-only.
+        /// Positions are relative to parent.
+        fn createChildEntity(
+            game: *Game,
+            scene: ?*Scene,
+            comptime entity_def: anytype,
+            parent_x: f32,
+            parent_y: f32,
+        ) !EntityInstance {
+            // Check if this is a prefab reference
+            if (@hasField(@TypeOf(entity_def), "prefab")) {
+                return try createChildPrefabEntity(game, scene, entity_def, parent_x, parent_y);
+            }
+
+            // Check if this is a shape entity
+            if (@hasField(@TypeOf(entity_def), "shape")) {
+                return try createChildShapeEntity(game, scene, entity_def, parent_x, parent_y);
+            }
+
+            // Check if this is a sprite entity
+            if (@hasField(@TypeOf(entity_def), "sprite")) {
+                return try createChildSpriteEntity(game, scene, entity_def, parent_x, parent_y);
+            }
+
+            // Data-only entity (no visual)
+            return try createChildDataEntity(game, scene, entity_def, parent_x, parent_y);
+        }
+
+        /// Create a child entity that references a prefab
+        fn createChildPrefabEntity(
+            game: *Game,
+            scene: ?*Scene,
+            comptime entity_def: anytype,
+            parent_x: f32,
+            parent_y: f32,
+        ) !EntityInstance {
+            const prefab_name = entity_def.prefab;
+
+            // Verify prefab exists at compile time
+            comptime {
+                if (!Prefabs.has(prefab_name)) {
+                    @compileError("Prefab not found in nested entity: " ++ prefab_name);
+                }
+            }
+
+            const entity = game.createEntity();
+
+            // Get sprite config from prefab with entity_def overrides
+            const sprite_config = Prefabs.getSprite(prefab_name, entity_def);
+
+            // Position is relative to parent
+            const pos_x = parent_x + sprite_config.x;
+            const pos_y = parent_y + sprite_config.y;
+
+            game.addPosition(entity, Position{ .x = pos_x, .y = pos_y });
+
+            try game.addSprite(entity, Sprite{
+                .sprite_name = sprite_config.name,
+                .scale = sprite_config.scale,
+                .rotation = sprite_config.rotation,
+                .flip_x = sprite_config.flip_x,
+                .flip_y = sprite_config.flip_y,
+                .z_index = sprite_config.z_index,
+                .pivot = sprite_config.pivot,
+                .pivot_x = sprite_config.pivot_x,
+                .pivot_y = sprite_config.pivot_y,
+            });
+
+            // Add components from prefab definition
+            if (comptime Prefabs.hasComponents(prefab_name)) {
+                try addComponentsWithNestedEntities(game, scene, entity, Prefabs.getComponents(prefab_name), pos_x, pos_y);
+            }
+
+            // Add/override components from entity definition
+            if (@hasField(@TypeOf(entity_def), "components")) {
+                try addComponentsWithNestedEntities(game, scene, entity, entity_def.components, pos_x, pos_y);
+            }
+
+            return .{
+                .entity = entity,
+                .visual_type = .sprite,
+                .prefab_name = prefab_name,
+                .onUpdate = null,
+                .onDestroy = null,
+            };
+        }
+
+        /// Create a child shape entity with relative positioning
+        fn createChildShapeEntity(
+            game: *Game,
+            scene: ?*Scene,
+            comptime entity_def: anytype,
+            parent_x: f32,
+            parent_y: f32,
+        ) !EntityInstance {
+            const shape_def = entity_def.shape;
+            const entity = game.createEntity();
+
+            // Position is relative to parent
+            const pos_x = parent_x + getFieldOrDefault(shape_def, "x", @as(f32, 0));
+            const pos_y = parent_y + getFieldOrDefault(shape_def, "y", @as(f32, 0));
+
+            game.addPosition(entity, Position{ .x = pos_x, .y = pos_y });
+
+            // Build shape based on type
+            const shape_type = shape_def.type;
+            var shape: Shape = switch (shape_type) {
+                .circle => Shape.circle(getFieldOrDefault(shape_def, "radius", @as(f32, 10))),
+                .rectangle => Shape.rectangle(
+                    getFieldOrDefault(shape_def, "width", @as(f32, 10)),
+                    getFieldOrDefault(shape_def, "height", @as(f32, 10)),
+                ),
+                .line => Shape.line(
+                    getFieldOrDefault(shape_def, "end_x", @as(f32, 10)),
+                    getFieldOrDefault(shape_def, "end_y", @as(f32, 0)),
+                    getFieldOrDefault(shape_def, "thickness", @as(f32, 1)),
+                ),
+                else => @compileError("Unknown shape type in nested entity definition"),
+            };
+
+            // Color
+            if (@hasField(@TypeOf(shape_def), "color")) {
+                shape.color = .{
+                    .r = shape_def.color.r,
+                    .g = shape_def.color.g,
+                    .b = shape_def.color.b,
+                    .a = if (@hasField(@TypeOf(shape_def.color), "a")) shape_def.color.a else 255,
+                };
+            }
+
+            // z_index
+            if (@hasField(@TypeOf(shape_def), "z_index")) {
+                shape.z_index = shape_def.z_index;
+            }
+
+            try game.addShape(entity, shape);
+
+            // Add components
+            if (@hasField(@TypeOf(entity_def), "components")) {
+                try addComponentsWithNestedEntities(game, scene, entity, entity_def.components, pos_x, pos_y);
+            }
+
+            return .{
+                .entity = entity,
+                .visual_type = .shape,
+                .prefab_name = null,
+                .onUpdate = null,
+                .onDestroy = null,
+            };
+        }
+
+        /// Create a child sprite entity with relative positioning
+        fn createChildSpriteEntity(
+            game: *Game,
+            scene: ?*Scene,
+            comptime entity_def: anytype,
+            parent_x: f32,
+            parent_y: f32,
+        ) !EntityInstance {
+            const sprite_def = entity_def.sprite;
+            const entity = game.createEntity();
+
+            // Position is relative to parent
+            const pos_x = parent_x + getFieldOrDefault(sprite_def, "x", @as(f32, 0));
+            const pos_y = parent_y + getFieldOrDefault(sprite_def, "y", @as(f32, 0));
+
+            game.addPosition(entity, Position{ .x = pos_x, .y = pos_y });
+
+            try game.addSprite(entity, Sprite{
+                .sprite_name = sprite_def.name,
+                .z_index = getFieldOrDefault(sprite_def, "z_index", ZIndex.characters),
+                .scale = getFieldOrDefault(sprite_def, "scale", @as(f32, 1.0)),
+                .rotation = getFieldOrDefault(sprite_def, "rotation", @as(f32, 0)),
+                .flip_x = getFieldOrDefault(sprite_def, "flip_x", false),
+                .flip_y = getFieldOrDefault(sprite_def, "flip_y", false),
+                .pivot = getFieldOrDefault(sprite_def, "pivot", render_pipeline_mod.Pivot.center),
+                .pivot_x = getFieldOrDefault(sprite_def, "pivot_x", @as(f32, 0.5)),
+                .pivot_y = getFieldOrDefault(sprite_def, "pivot_y", @as(f32, 0.5)),
+            });
+
+            // Add components
+            if (@hasField(@TypeOf(entity_def), "components")) {
+                try addComponentsWithNestedEntities(game, scene, entity, entity_def.components, pos_x, pos_y);
+            }
+
+            return .{
+                .entity = entity,
+                .visual_type = .sprite,
+                .prefab_name = null,
+                .onUpdate = null,
+                .onDestroy = null,
+            };
+        }
+
+        /// Create a data-only child entity (no visual)
+        fn createChildDataEntity(
+            game: *Game,
+            scene: ?*Scene,
+            comptime entity_def: anytype,
+            parent_x: f32,
+            parent_y: f32,
+        ) !EntityInstance {
+            const entity = game.createEntity();
+
+            // Position from components if present, otherwise from x/y fields
+            const child_x = parent_x + getFieldOrDefault(entity_def, "x", @as(f32, 0));
+            const child_y = parent_y + getFieldOrDefault(entity_def, "y", @as(f32, 0));
+            game.addPosition(entity, Position{ .x = child_x, .y = child_y });
+
+            // Add components (recursively handles nested entities)
+            if (@hasField(@TypeOf(entity_def), "components")) {
+                try addComponentsWithNestedEntities(game, scene, entity, entity_def.components, child_x, child_y);
+            }
+
+            return .{
+                .entity = entity,
+                .visual_type = .none,
+                .prefab_name = null,
+                .onUpdate = null,
+                .onDestroy = null,
+            };
         }
 
         /// Add a component, creating child entities for any []const Entity fields.

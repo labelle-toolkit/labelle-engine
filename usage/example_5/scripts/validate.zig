@@ -4,6 +4,7 @@ const engine = @import("labelle-engine");
 const Game = engine.Game;
 const Scene = engine.Scene;
 const Position = engine.Position;
+const Shape = engine.Shape;
 const Entity = engine.Entity;
 
 // Import components
@@ -49,11 +50,23 @@ pub fn init(game: *Game, scene: *Scene) void {
                 @panic("Expected Child_data component on child entity");
             }
 
-            // Verify child entity position (relative to parent at 100, 200)
+            // Verify child entity has Shape component (nested entity visual support)
+            if (registry.tryGet(Shape, child_entity)) |shape| {
+                std.debug.assert(shape.shape == .circle);
+                std.debug.assert(shape.shape.circle.radius == 8);
+                std.debug.print("Child Shape = circle with radius {} (expected 8)\n", .{shape.shape.circle.radius});
+                std.debug.print("Child Shape color = ({}, {}, {}, {}) (expected 100, 150, 255, 200)\n", .{
+                    shape.color.r, shape.color.g, shape.color.b, shape.color.a,
+                });
+            } else {
+                @panic("Expected Shape component on child entity (nested entity visuals)");
+            }
+
+            // Verify child entity position (parent at 100,200 + shape offset 20,30 = 120,230)
             if (registry.tryGet(Position, child_entity)) |child_pos| {
-                std.debug.assert(child_pos.x == 100);
-                std.debug.assert(child_pos.y == 200);
-                std.debug.print("Child position = ({}, {}) (expected 100, 200)\n", .{ child_pos.x, child_pos.y });
+                std.debug.assert(child_pos.x == 120);
+                std.debug.assert(child_pos.y == 230);
+                std.debug.print("Child position = ({}, {}) (expected 120, 230)\n", .{ child_pos.x, child_pos.y });
             } else {
                 @panic("Expected Position component on child entity");
             }
