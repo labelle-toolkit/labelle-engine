@@ -112,6 +112,89 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
     return struct {
         const Self = @This();
 
+        /// Add a component that may have nested child entity definitions
+        /// If the component data has a `.components` wrapper, creates child entities and stores their IDs
+        fn addComponentWithNestedEntities(
+            game: *Game,
+            parent_entity: Entity,
+            comptime comp_name: []const u8,
+            comptime comp_data: anytype,
+            parent_x: f32,
+            parent_y: f32,
+        ) !void {
+            const ComponentType = Components.getType(comp_name);
+
+            if (@hasField(@TypeOf(comp_data), "components")) {
+                // This component has nested entity definitions via .components wrapper
+                const nested_data = comp_data.components;
+                var component: ComponentType = .{};
+
+                // For each field in nested_data (e.g., "bazzes")
+                inline for (@typeInfo(@TypeOf(nested_data)).@"struct".fields) |field| {
+                    const field_name = field.name;
+                    const entity_defs = @field(nested_data, field_name);
+
+                    // Get tuple size at comptime
+                    const entity_count = @typeInfo(@TypeOf(entity_defs)).@"struct".fields.len;
+
+                    // Allocate slice for entity references
+                    const entities = try game.allocator.alloc(Entity, entity_count);
+
+                    // Create each child entity
+                    inline for (0..entity_count) |i| {
+                        const entity_def = entity_defs[i];
+
+                        // Create child entity
+                        const child = game.createEntity();
+
+                        // Add position with relative offset
+                        const child_x = parent_x + getFieldOrDefault(entity_def, "x", @as(f32, 0));
+                        const child_y = parent_y + getFieldOrDefault(entity_def, "y", @as(f32, 0));
+                        game.addPosition(child, Position{ .x = child_x, .y = child_y });
+
+                        // Add child's components
+                        if (@hasField(@TypeOf(entity_def), "components")) {
+                            Components.addComponents(game.getRegistry(), child, entity_def.components);
+                        }
+
+                        entities[i] = child;
+                    }
+
+                    // Set the field on the component
+                    @field(component, field_name) = entities;
+                }
+
+                // Add any other direct fields from comp_data (non-.components fields)
+                inline for (@typeInfo(@TypeOf(comp_data)).@"struct".fields) |field| {
+                    if (!std.mem.eql(u8, field.name, "components")) {
+                        if (@hasField(ComponentType, field.name)) {
+                            @field(component, field.name) = @field(comp_data, field.name);
+                        }
+                    }
+                }
+
+                game.getRegistry().add(parent_entity, component);
+            } else {
+                // No nested entities, use normal path
+                Components.addComponent(game.getRegistry(), parent_entity, comp_name, comp_data);
+            }
+        }
+
+        /// Add all components, handling nested entity definitions where present
+        fn addComponentsWithNestedEntities(
+            game: *Game,
+            entity: Entity,
+            comptime components_data: anytype,
+            parent_x: f32,
+            parent_y: f32,
+        ) !void {
+            const data_fields = comptime std.meta.fieldNames(@TypeOf(components_data));
+            inline for (data_fields) |field_name| {
+                const field_data = @field(components_data, field_name);
+                try addComponentWithNestedEntities(game, entity, field_name, field_data, parent_x, parent_y);
+            }
+        }
+
         /// Load a scene from comptime .zon data
         pub fn load(
             comptime scene_data: anytype,
@@ -151,6 +234,71 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
             }
 
             return scene;
+        }
+
+        /// Instantiate a prefab at runtime with a specific world position
+        /// Returns the created entity and adds it to the scene
+        /// Usage: const entity = try Loader.instantiatePrefab("player", &scene, ctx, 100, 200);
+        pub fn instantiatePrefab(
+            comptime prefab_name: []const u8,
+            scene: *Scene,
+            ctx: SceneContext,
+            x: f32,
+            y: f32,
+        ) !Entity {
+            // Verify prefab exists at compile time
+            comptime {
+                if (!Prefabs.has(prefab_name)) {
+                    @compileError("Prefab not found: " ++ prefab_name);
+                }
+            }
+
+            const game = ctx.game;
+
+            // Create ECS entity
+            const entity = game.createEntity();
+
+            // Get sprite config from prefab (no scene overrides for runtime instantiation)
+            const sprite_config = Prefabs.getSprite(prefab_name, .{});
+
+            // Use provided position as world position (sprite_config.x/y are ignored for runtime)
+            const world_x = x;
+            const world_y = y;
+
+            // Add Position component with world position
+            game.addPosition(entity, Position{
+                .x = world_x,
+                .y = world_y,
+            });
+
+            // Add Sprite component and track for rendering
+            try game.addSprite(entity, Sprite{
+                .sprite_name = sprite_config.name,
+                .scale = sprite_config.scale,
+                .rotation = sprite_config.rotation,
+                .flip_x = sprite_config.flip_x,
+                .flip_y = sprite_config.flip_y,
+                .z_index = sprite_config.z_index,
+                .pivot = sprite_config.pivot,
+                .pivot_x = sprite_config.pivot_x,
+                .pivot_y = sprite_config.pivot_y,
+            });
+
+            // Add components from prefab definition (handles nested entity creation)
+            if (comptime Prefabs.hasComponents(prefab_name)) {
+                try addComponentsWithNestedEntities(game, entity, Prefabs.getComponents(prefab_name), world_x, world_y);
+            }
+
+            // Add entity to scene
+            try scene.addEntity(.{
+                .entity = entity,
+                .visual_type = .sprite,
+                .prefab_name = prefab_name,
+                .onUpdate = null,
+                .onDestroy = null,
+            });
+
+            return entity;
         }
 
         /// Load a single entity from its definition
@@ -213,14 +361,14 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
                 .pivot_y = sprite_config.pivot_y,
             });
 
-            // Add components from prefab definition
+            // Add components from prefab definition (handles nested entity creation)
             if (comptime Prefabs.hasComponents(prefab_name)) {
-                Components.addComponents(game.getRegistry(), entity, Prefabs.getComponents(prefab_name));
+                try addComponentsWithNestedEntities(game, entity, Prefabs.getComponents(prefab_name), sprite_config.x, sprite_config.y);
             }
 
             // Add/override components from scene definition
             if (@hasField(@TypeOf(entity_def), "components")) {
-                Components.addComponents(game.getRegistry(), entity, entity_def.components);
+                try addComponentsWithNestedEntities(game, entity, entity_def.components, sprite_config.x, sprite_config.y);
             }
 
             return .{
