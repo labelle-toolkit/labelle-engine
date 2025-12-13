@@ -1,9 +1,6 @@
 .{
-    .sprite = .{
-        .name = "qux",
-        .z_index = 100,
-    },
     .components = .{
+        .Sprite = .{ .name = "qux", .z_index = 100 },
         .Parent_data = .{ .value = 42 },
         .Children = .{ .items = .{
             // Child with shape visual (demonstrates nested entity with visuals)
