@@ -188,8 +188,25 @@ fn generateMainZigRaylib(
     var buf: std.ArrayListUnmanaged(u8) = .{};
     const writer = buf.writer(allocator);
 
+    const has_plugins = config.plugins.len > 0;
+
+    // Pre-compute sanitized plugin names for Zig identifiers
+    var plugin_zig_names = try allocator.alloc([]const u8, config.plugins.len);
+    defer {
+        for (plugin_zig_names) |name| allocator.free(name);
+        allocator.free(plugin_zig_names);
+    }
+    for (config.plugins, 0..) |plugin, i| {
+        plugin_zig_names[i] = try sanitizeZigIdentifier(allocator, plugin.name);
+    }
+
     // Header with project name
     try zts.print(main_raylib_tmpl, "header", .{config.name}, writer);
+
+    // Plugin imports (using sanitized identifier and original name for import path)
+    for (config.plugins, 0..) |plugin, i| {
+        try zts.print(main_raylib_tmpl, "plugin_import", .{ plugin_zig_names[i], plugin.name }, writer);
+    }
 
     // Prefab imports
     for (prefabs) |name| {
@@ -226,16 +243,36 @@ fn generateMainZigRaylib(
         try zts.print(main_raylib_tmpl, "prefab_registry_end", .{}, writer);
     }
 
-    // Component registry
-    if (components.len == 0) {
-        try zts.print(main_raylib_tmpl, "component_registry_empty", .{}, writer);
-    } else {
-        try zts.print(main_raylib_tmpl, "component_registry_start", .{}, writer);
-        for (components) |name| {
-            const type_name = capitalize(name);
-            try zts.print(main_raylib_tmpl, "component_registry_item", .{ type_name[0..name.len], type_name[0..name.len] }, writer);
+    // Component registry - use ComponentRegistryMulti when plugins are present
+    if (has_plugins) {
+        // Use ComponentRegistryMulti to merge base components with plugin components
+        if (components.len == 0) {
+            try zts.print(main_raylib_tmpl, "component_registry_multi_empty_start", .{}, writer);
+        } else {
+            try zts.print(main_raylib_tmpl, "component_registry_multi_start", .{}, writer);
+            for (components) |name| {
+                const type_name = capitalize(name);
+                try zts.print(main_raylib_tmpl, "component_registry_multi_item", .{ type_name[0..name.len], type_name[0..name.len] }, writer);
+            }
         }
-        try zts.print(main_raylib_tmpl, "component_registry_end", .{}, writer);
+        try zts.print(main_raylib_tmpl, "component_registry_multi_base_end", .{}, writer);
+        // Add plugin Components
+        for (plugin_zig_names) |zig_name| {
+            try zts.print(main_raylib_tmpl, "component_registry_multi_plugin", .{zig_name}, writer);
+        }
+        try zts.print(main_raylib_tmpl, "component_registry_multi_end", .{}, writer);
+    } else {
+        // No plugins - use simple ComponentRegistry
+        if (components.len == 0) {
+            try zts.print(main_raylib_tmpl, "component_registry_empty", .{}, writer);
+        } else {
+            try zts.print(main_raylib_tmpl, "component_registry_start", .{}, writer);
+            for (components) |name| {
+                const type_name = capitalize(name);
+                try zts.print(main_raylib_tmpl, "component_registry_item", .{ type_name[0..name.len], type_name[0..name.len] }, writer);
+            }
+            try zts.print(main_raylib_tmpl, "component_registry_end", .{}, writer);
+        }
     }
 
     // Script registry

@@ -16,6 +16,80 @@ const zon = @import("zon_coercion.zig");
 pub const Registry = ecs.Registry;
 pub const Entity = ecs.Entity;
 
+/// Create a component registry from multiple struct types.
+/// Searches all provided maps when looking up components.
+///
+/// Usage:
+/// ```
+/// const Components = ComponentRegistryMulti(.{
+///     struct { pub const Position = engine.Position; },
+///     plugin_foo.Components,
+///     plugin_bar.Components,
+/// });
+/// ```
+pub fn ComponentRegistryMulti(comptime ComponentMaps: anytype) type {
+    const maps_info = @typeInfo(@TypeOf(ComponentMaps));
+    if (maps_info != .@"struct" or !maps_info.@"struct".is_tuple) {
+        @compileError("ComponentRegistryMulti expects a tuple of struct types");
+    }
+
+    return struct {
+        const Self = @This();
+
+        /// Check if a component name exists in any of the maps
+        pub fn has(comptime name: []const u8) bool {
+            inline for (maps_info.@"struct".fields) |field| {
+                const Map = @field(ComponentMaps, field.name);
+                if (@hasDecl(Map, name)) return true;
+            }
+            return false;
+        }
+
+        /// Get component type by name (searches maps in order)
+        pub fn getType(comptime name: []const u8) type {
+            inline for (maps_info.@"struct".fields) |field| {
+                const Map = @field(ComponentMaps, field.name);
+                if (@hasDecl(Map, name)) {
+                    return @field(Map, name);
+                }
+            }
+            @compileError("Unknown component: " ++ name);
+        }
+
+        /// Add a component to an entity by name using comptime data
+        pub fn addComponent(
+            registry: *Registry,
+            entity: Entity,
+            comptime name: []const u8,
+            comptime data: anytype,
+        ) void {
+            const ComponentType = getType(name);
+            const component_value = createComponentFromData(ComponentType, data);
+            registry.add(entity, component_value);
+        }
+
+        /// Create a component value from .zon data by direct field initialization
+        fn createComponentFromData(comptime ComponentType: type, comptime data: anytype) ComponentType {
+            return comptime zon.buildStruct(ComponentType, data);
+        }
+
+        /// Add all components from a .zon components struct to an entity
+        pub fn addComponents(
+            registry: *Registry,
+            entity: Entity,
+            comptime components_data: anytype,
+        ) void {
+            comptime var i: usize = 0;
+            const data_fields = comptime std.meta.fieldNames(@TypeOf(components_data));
+            inline while (i < data_fields.len) : (i += 1) {
+                const field_name = data_fields[i];
+                const field_data = @field(components_data, field_name);
+                addComponent(registry, entity, field_name, field_data);
+            }
+        }
+    };
+}
+
 /// Create a component registry from a struct type with component type declarations
 /// The struct's pub const declarations become the component names in .zon files
 pub fn ComponentRegistry(comptime ComponentMap: type) type {
