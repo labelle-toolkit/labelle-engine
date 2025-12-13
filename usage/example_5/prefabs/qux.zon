@@ -4,11 +4,11 @@
         .z_index = 100,
     },
     .components = .{
-        .ParentData = .{ .value = 42 },
+        .Parent_data = .{ .value = 42 },
         .Children = .{ .items = .{
             .{
                 .components = .{
-                    .ChildData = .{ .val = 7 },
+                    .Child_data = .{ .val = 7 },
                 },
             },
         } },

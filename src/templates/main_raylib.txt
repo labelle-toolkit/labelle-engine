@@ -36,9 +36,21 @@ pub const Prefabs = engine.PrefabRegistry(.{{
 .prefab_registry_end
 }});
 .component_registry_empty
-pub const Components = engine.ComponentRegistry(struct {{}});
+pub const Components = engine.ComponentRegistry(struct {{
+    // Engine built-in components
+    pub const Position = engine.Position;
+    pub const Sprite = engine.Sprite;
+    pub const Shape = engine.Shape;
+    pub const Text = engine.Text;
+}});
 .component_registry_start
 pub const Components = engine.ComponentRegistry(struct {{
+    // Engine built-in components
+    pub const Position = engine.Position;
+    pub const Sprite = engine.Sprite;
+    pub const Shape = engine.Shape;
+    pub const Text = engine.Text;
+    // Project components
 .component_registry_item
     pub const {s} = main_module.{s};
 .component_registry_end

@@ -1,4 +1,4 @@
 /// Data component for the parent entity in nested composition demo
-pub const ParentData = struct {
+pub const Parent_data = struct {
     value: i32 = 0,
 };

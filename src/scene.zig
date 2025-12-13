@@ -50,6 +50,15 @@ pub const TextureId = render_pipeline.TextureId;
 pub const FontId = render_pipeline.FontId;
 pub const Color = render_pipeline.Color;
 
+/// Built-in component types that can be used in .zon prefab/scene files.
+/// These are automatically included in the ComponentRegistry by the generator.
+pub const BuiltinComponents = struct {
+    pub const Position = render_pipeline.Position;
+    pub const Sprite = render_pipeline.Sprite;
+    pub const Shape = render_pipeline.Shape;
+    pub const Text = render_pipeline.Text;
+};
+
 // Re-export ZIndex and Pivot from prefab for backwards compatibility
 pub const ZIndex = prefab.ZIndex;
 pub const Pivot = prefab.Pivot;
