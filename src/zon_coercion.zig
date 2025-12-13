@@ -72,6 +72,8 @@ pub fn buildStruct(comptime StructType: type, comptime data: anytype) StructType
 
 /// Convert a tuple to a slice at comptime.
 /// Recursively coerces each element.
+/// Note: Returns pointer to comptime array, which is valid because
+/// comptime arrays have static lifetime.
 pub fn tupleToSlice(comptime ChildType: type, comptime tuple: anytype) []const ChildType {
     const tuple_info = @typeInfo(@TypeOf(tuple)).@"struct";
     const len = tuple_info.fields.len;
@@ -81,8 +83,7 @@ pub fn tupleToSlice(comptime ChildType: type, comptime tuple: anytype) []const C
         array[i] = coerceValue(ChildType, tuple[i]);
     }
 
-    const final = array;
-    return &final;
+    return &array;
 }
 
 /// Check if a field type is a slice of Entity

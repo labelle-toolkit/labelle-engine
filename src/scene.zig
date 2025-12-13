@@ -18,6 +18,7 @@ pub const prefab = @import("prefab.zig");
 pub const loader = @import("loader.zig");
 pub const component = @import("component.zig");
 pub const script = @import("script.zig");
+pub const zon_coercion = @import("zon_coercion.zig");
 pub const game = @import("game.zig");
 pub const build_helpers = @import("build_helpers.zig");
 pub const render_pipeline = @import("render_pipeline.zig");

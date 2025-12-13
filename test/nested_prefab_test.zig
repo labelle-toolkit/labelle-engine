@@ -87,3 +87,68 @@ pub const SCENE_LOADER_API = struct {
         try expect.toBeTrue(@hasDecl(TestLoader, "instantiatePrefab"));
     }
 };
+
+pub const ZON_COERCION = struct {
+    const zon = engine.zon_coercion;
+    const ecs = @import("ecs");
+    const Entity = ecs.Entity;
+
+    test "isEntitySlice returns true for []const Entity" {
+        try expect.toBeTrue(zon.isEntitySlice([]const Entity));
+    }
+
+    test "isEntitySlice returns false for []const u32" {
+        try expect.toBeFalse(zon.isEntitySlice([]const u32));
+    }
+
+    test "isEntitySlice returns false for non-slice types" {
+        try expect.toBeFalse(zon.isEntitySlice(u32));
+        try expect.toBeFalse(zon.isEntitySlice(Entity));
+    }
+
+    test "coerceValue handles simple types" {
+        const result = comptime zon.coerceValue(i32, 42);
+        try expect.equal(result, 42);
+    }
+
+    test "coerceValue handles nested structs" {
+        const Inner = struct { x: i32, y: i32 };
+        const result = comptime zon.coerceValue(Inner, .{ .x = 10, .y = 20 });
+        try expect.equal(result.x, 10);
+        try expect.equal(result.y, 20);
+    }
+
+    test "coerceValue returns empty slice for Entity slices" {
+        // Entity slices should return empty since entity creation is runtime-only
+        const result = comptime zon.coerceValue([]const Entity, .{});
+        try expect.equal(result.len, 0);
+    }
+
+    test "buildStruct creates struct from anonymous data" {
+        const TestStruct = struct {
+            value: i32 = 0,
+            name: []const u8 = "",
+        };
+        const result = comptime zon.buildStruct(TestStruct, .{ .value = 123, .name = "test" });
+        try expect.equal(result.value, 123);
+        try expect.toBeTrue(std.mem.eql(u8, result.name, "test"));
+    }
+
+    test "buildStruct uses defaults for missing fields" {
+        const TestStruct = struct {
+            value: i32 = 99,
+            count: u32 = 5,
+        };
+        const result = comptime zon.buildStruct(TestStruct, .{ .value = 42 });
+        try expect.equal(result.value, 42);
+        try expect.equal(result.count, 5);
+    }
+
+    test "tupleToSlice converts tuple to slice" {
+        const result = comptime zon.tupleToSlice(i32, .{ 1, 2, 3 });
+        try expect.equal(result.len, 3);
+        try expect.equal(result[0], 1);
+        try expect.equal(result[1], 2);
+        try expect.equal(result[2], 3);
+    }
+};
