@@ -114,7 +114,14 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
         const Self = @This();
 
         /// Create child entities from a tuple of entity definitions.
-        /// If scene is provided, child entities are tracked for cleanup.
+        ///
+        /// When scene is provided:
+        /// - Child entities are added to scene.entities for lifecycle management
+        /// - Allocated entity slices are tracked in scene.allocated_entity_slices for cleanup
+        ///
+        /// When scene is null:
+        /// - Caller is responsible for entity cleanup (destroy via registry)
+        /// - Allocated slice ownership transfers to caller (must free via game.allocator)
         fn createChildEntities(
             game: *Game,
             scene: ?*Scene,
@@ -290,15 +297,8 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
             // Get sprite config from prefab (no scene overrides for runtime instantiation)
             const sprite_config = Prefabs.getSprite(prefab_name, .{});
 
-            // Use provided position as world position (sprite_config.x/y are ignored for runtime)
-            const world_x = x;
-            const world_y = y;
-
-            // Add Position component with world position
-            game.addPosition(entity, Position{
-                .x = world_x,
-                .y = world_y,
-            });
+            // Add Position component (sprite_config.x/y are ignored for runtime instantiation)
+            game.addPosition(entity, Position{ .x = x, .y = y });
 
             // Add Sprite component and track for rendering
             try game.addSprite(entity, Sprite{
@@ -315,7 +315,7 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
 
             // Add components from prefab definition (handles nested entity creation)
             if (comptime Prefabs.hasComponents(prefab_name)) {
-                try addComponentsWithNestedEntities(game, scene, entity, Prefabs.getComponents(prefab_name), world_x, world_y);
+                try addComponentsWithNestedEntities(game, scene, entity, Prefabs.getComponents(prefab_name), x, y);
             }
 
             // Add entity to scene
