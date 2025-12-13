@@ -1,0 +1,16 @@
+.{
+    .sprite = .{
+        .name = "qux",
+        .z_index = 100,
+    },
+    .components = .{
+        .ParentData = .{ .value = 42 },
+        .Children = .{ .items = .{
+            .{
+                .components = .{
+                    .ChildData = .{ .val = 7 },
+                },
+            },
+        } },
+    },
+}

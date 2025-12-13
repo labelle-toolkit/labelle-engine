@@ -11,6 +11,7 @@
 
 const std = @import("std");
 const ecs = @import("ecs");
+const zon = @import("zon_coercion.zig");
 
 pub const Registry = ecs.Registry;
 pub const Entity = ecs.Entity;
@@ -48,26 +49,7 @@ pub fn ComponentRegistry(comptime ComponentMap: type) type {
 
         /// Create a component value from .zon data by direct field initialization
         fn createComponentFromData(comptime ComponentType: type, comptime data: anytype) ComponentType {
-            // Build the component using comptime field access
-            return comptime buildComponent(ComponentType, data);
-        }
-
-        fn buildComponent(comptime ComponentType: type, comptime data: anytype) ComponentType {
-            const fields = std.meta.fields(ComponentType);
-            var result: ComponentType = undefined;
-
-            inline for (fields) |field| {
-                if (@hasField(@TypeOf(data), field.name)) {
-                    @field(result, field.name) = @field(data, field.name);
-                } else if (field.default_value_ptr) |ptr| {
-                    const default_ptr: *const field.type = @ptrCast(@alignCast(ptr));
-                    @field(result, field.name) = default_ptr.*;
-                } else {
-                    @field(result, field.name) = std.mem.zeroes(field.type);
-                }
-            }
-
-            return result;
+            return comptime zon.buildStruct(ComponentType, data);
         }
 
         /// Add all components from a .zon components struct to an entity
