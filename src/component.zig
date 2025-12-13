@@ -82,6 +82,13 @@ pub fn ComponentRegistry(comptime ComponentMap: type) type {
                 const ptr_info = field_info.pointer;
                 if (ptr_info.size == .slice) {
                     const ChildType = ptr_info.child;
+
+                    // Skip []const Entity fields - entity creation is a runtime operation
+                    // and must be handled by the scene loader, not comptime coercion
+                    if (ChildType == Entity) {
+                        return &.{};
+                    }
+
                     const data_info = @typeInfo(DataType);
 
                     // If data is a tuple, convert to slice
