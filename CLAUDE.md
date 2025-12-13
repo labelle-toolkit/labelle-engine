@@ -82,6 +82,8 @@ const Loader = engine.SceneLoader(Prefabs, Components, Scripts);
         .{ .shape = .{ .type = .circle, .radius = 50, .color = .{ .r = 255 } } },
         // Sprite entities use .components block:
         .{ .x = 300, .y = 150, .components = .{ .Sprite = .{ .name = "gem.png" }, .Health = .{ .current = 50 } } },
+        // Data-only entities (no visual):
+        .{ .x = 100, .y = 100, .components = .{ .Health = .{ .current = 100 } } },
     },
 }
 ```

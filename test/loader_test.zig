@@ -315,6 +315,56 @@ pub const SCENE_DATA_FORMAT = struct {
             try expect.equal(scene_with_sprite_in_components.entities.len, 3);
         }
     };
+
+    // Scene with data-only entities (no visual)
+    const scene_with_data_only_entities = .{
+        .name = "data_only",
+        .entities = .{
+            // Data-only entity with position
+            .{
+                .x = 100,
+                .y = 200,
+                .components = .{
+                    .Health = .{ .current = 50 },
+                },
+            },
+            // Data-only entity without position
+            .{
+                .components = .{
+                    .Velocity = .{ .x = 10, .y = 5 },
+                },
+            },
+        },
+    };
+
+    pub const DATA_ONLY_ENTITIES = struct {
+        test "data-only entity has components but no visual" {
+            const entity = scene_with_data_only_entities.entities[0];
+            try expect.toBeTrue(@hasField(@TypeOf(entity), "components"));
+            try expect.toBeFalse(@hasField(@TypeOf(entity.components), "Sprite"));
+        }
+
+        test "data-only entity can have position" {
+            const entity = scene_with_data_only_entities.entities[0];
+            try expect.equal(entity.x, 100);
+            try expect.equal(entity.y, 200);
+        }
+
+        test "data-only entity can have components" {
+            const entity = scene_with_data_only_entities.entities[0];
+            try expect.equal(entity.components.Health.current, 50);
+        }
+
+        test "data-only entity without position fields" {
+            const entity = scene_with_data_only_entities.entities[1];
+            try expect.toBeFalse(@hasField(@TypeOf(entity), "x"));
+            try expect.toBeFalse(@hasField(@TypeOf(entity), "y"));
+        }
+
+        test "scene has correct entity count" {
+            try expect.equal(scene_with_data_only_entities.entities.len, 2);
+        }
+    };
 };
 
 const loader_test = @This();

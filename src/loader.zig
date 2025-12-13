@@ -25,6 +25,8 @@
 //         .{ .shape = .{ .type = .rectangle, .x = 200, .y = 200, .width = 100, .height = 50 } },
 //         // Sprite entities use .components block:
 //         .{ .x = 300, .y = 150, .components = .{ .Sprite = .{ .name = "gem.png" }, .Health = .{ .current = 50 } } },
+//         // Data-only entities (no visual):
+//         .{ .x = 100, .y = 100, .components = .{ .Health = .{ .current = 100 } } },
 //     },
 // }
 //
@@ -600,7 +602,12 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
                 return try loadSpriteEntity(entity_def, ctx, scene);
             }
 
-            @compileError("Entity must have .prefab, .shape, or .components.Sprite field");
+            // Check if this has components (data-only entity, no visual)
+            if (@hasField(@TypeOf(entity_def), "components")) {
+                return try loadDataOnlyEntity(entity_def, ctx, scene);
+            }
+
+            @compileError("Entity must have .prefab, .shape, or .components field");
         }
 
         /// Load an entity that references a prefab (comptime lookup)
@@ -719,6 +726,39 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
             return .{
                 .entity = entity,
                 .visual_type = .sprite,
+                .prefab_name = null,
+                .onUpdate = null,
+                .onDestroy = null,
+            };
+        }
+
+        /// Load a data-only entity (no visual, just components)
+        fn loadDataOnlyEntity(
+            comptime entity_def: anytype,
+            ctx: SceneContext,
+            scene: *Scene,
+        ) !EntityInstance {
+            const game = ctx.game;
+
+            // Create ECS entity
+            const entity = game.createEntity();
+
+            // Position from x/y fields if present
+            const pos_x = getFieldOrDefault(entity_def, "x", @as(f32, 0));
+            const pos_y = getFieldOrDefault(entity_def, "y", @as(f32, 0));
+
+            // Add Position component
+            game.addPosition(entity, Position{
+                .x = pos_x,
+                .y = pos_y,
+            });
+
+            // Add components (handles nested entity creation)
+            try addComponentsWithNestedEntities(game, scene, entity, entity_def.components, pos_x, pos_y);
+
+            return .{
+                .entity = entity,
+                .visual_type = .none,
                 .prefab_name = null,
                 .onUpdate = null,
                 .onDestroy = null,
