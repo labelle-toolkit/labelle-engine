@@ -73,11 +73,11 @@ pub fn init(game: *Game, scene: *Scene) void {
                 @panic("Expected Workstation component on workstation entity");
             }
 
-            // Verify workstation position (100 + 50, 100 + 30) = (150, 130)
+            // Verify workstation position (from Position component: 50, 30)
             if (registry.tryGet(Position, workstation_entity)) |ws_pos| {
-                std.debug.assert(ws_pos.x == 150);
-                std.debug.assert(ws_pos.y == 130);
-                std.debug.print("Workstation position = ({}, {}) (expected 150, 130)\n", .{ ws_pos.x, ws_pos.y });
+                std.debug.assert(ws_pos.x == 50);
+                std.debug.assert(ws_pos.y == 30);
+                std.debug.print("Workstation position = ({}, {}) (expected 50, 30)\n", .{ ws_pos.x, ws_pos.y });
             } else {
                 @panic("Expected Position component on workstation entity");
             }
