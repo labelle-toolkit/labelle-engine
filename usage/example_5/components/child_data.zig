@@ -1,4 +1,4 @@
 /// Data component for child entities in nested composition demo
-pub const Child_data = struct {
+pub const ChildData = struct {
     val: u32 = 0,
 };

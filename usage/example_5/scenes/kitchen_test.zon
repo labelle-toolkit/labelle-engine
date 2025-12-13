@@ -1,7 +1,0 @@
-.{
-    .name = "kitchen_test",
-    .scripts = .{"validate_kitchen"},
-    .entities = .{
-        .{ .prefab = "kitchen", .x = 100, .y = 100 },
-    },
-}

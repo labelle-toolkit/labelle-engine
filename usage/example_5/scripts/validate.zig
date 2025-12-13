@@ -7,9 +7,9 @@ const Position = engine.Position;
 const Entity = engine.Entity;
 
 // Import components
-const Parent_data = @import("../components/parent_data.zig").Parent_data;
+const ParentData = @import("../components/parent_data.zig").ParentData;
 const Children = @import("../components/children.zig").Children;
-const Child_data = @import("../components/child_data.zig").Child_data;
+const ChildData = @import("../components/child_data.zig").ChildData;
 
 pub fn init(game: *Game, scene: *Scene) void {
     const registry = game.getRegistry();
@@ -27,12 +27,12 @@ pub fn init(game: *Game, scene: *Scene) void {
         found_qux = true;
         const entity = entity_instance.entity;
 
-        // Check Parent_data component
-        if (registry.tryGet(Parent_data, entity)) |parent_data| {
+        // Check ParentData component
+        if (registry.tryGet(ParentData, entity)) |parent_data| {
             std.debug.assert(parent_data.value == 42);
-            std.debug.print("Parent_data.value = {} (expected 42)\n", .{parent_data.value});
+            std.debug.print("ParentData.value = {} (expected 42)\n", .{parent_data.value});
         } else {
-            @panic("Expected Parent_data component on qux entity");
+            @panic("Expected ParentData component on qux entity");
         }
 
         // Check Children component with child entities
@@ -40,13 +40,13 @@ pub fn init(game: *Game, scene: *Scene) void {
             std.debug.assert(children.items.len == 1);
             std.debug.print("Children.items.len = {} (expected 1)\n", .{children.items.len});
 
-            // Verify the child entity has Child_data component
+            // Verify the child entity has ChildData component
             const child_entity = children.items[0];
-            if (registry.tryGet(Child_data, child_entity)) |child_data| {
+            if (registry.tryGet(ChildData, child_entity)) |child_data| {
                 std.debug.assert(child_data.val == 7);
-                std.debug.print("Child_data.val = {} (expected 7)\n", .{child_data.val});
+                std.debug.print("ChildData.val = {} (expected 7)\n", .{child_data.val});
             } else {
-                @panic("Expected Child_data component on child entity");
+                @panic("Expected ChildData component on child entity");
             }
 
             // Verify child entity position (relative to parent at 100, 200)
