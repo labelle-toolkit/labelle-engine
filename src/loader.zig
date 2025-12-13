@@ -112,8 +112,54 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
     return struct {
         const Self = @This();
 
-        /// Add a component that may have nested child entity definitions
-        /// If the component data has a `.components` wrapper, creates child entities and stores their IDs
+        /// Check if a field type is a slice of Entity
+        fn isEntitySlice(comptime FieldType: type) bool {
+            const info = @typeInfo(FieldType);
+            if (info == .pointer) {
+                const ptr_info = info.pointer;
+                if (ptr_info.size == .slice and ptr_info.child == Entity) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        /// Create child entities from a tuple of entity definitions
+        fn createChildEntities(
+            game: *Game,
+            comptime entity_defs: anytype,
+            parent_x: f32,
+            parent_y: f32,
+        ) ![]Entity {
+            const entity_count = @typeInfo(@TypeOf(entity_defs)).@"struct".fields.len;
+
+            // Allocate slice for entity references
+            const entities = try game.allocator.alloc(Entity, entity_count);
+
+            // Create each child entity
+            inline for (0..entity_count) |i| {
+                const entity_def = entity_defs[i];
+
+                // Create child entity
+                const child = game.createEntity();
+
+                // Add position with relative offset
+                const child_x = parent_x + getFieldOrDefault(entity_def, "x", @as(f32, 0));
+                const child_y = parent_y + getFieldOrDefault(entity_def, "y", @as(f32, 0));
+                game.addPosition(child, Position{ .x = child_x, .y = child_y });
+
+                // Add child's components
+                if (@hasField(@TypeOf(entity_def), "components")) {
+                    Components.addComponents(game.getRegistry(), child, entity_def.components);
+                }
+
+                entities[i] = child;
+            }
+
+            return entities;
+        }
+
+        /// Add a component, creating child entities for any []const Entity fields
         fn addComponentWithNestedEntities(
             game: *Game,
             parent_entity: Entity,
@@ -123,61 +169,31 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
             parent_y: f32,
         ) !void {
             const ComponentType = Components.getType(comp_name);
+            const comp_fields = @typeInfo(ComponentType).@"struct".fields;
+            var component: ComponentType = .{};
 
-            if (@hasField(@TypeOf(comp_data), "components")) {
-                // This component has nested entity definitions via .components wrapper
-                const nested_data = comp_data.components;
-                var component: ComponentType = .{};
+            // Process each field in the component type
+            inline for (comp_fields) |comp_field| {
+                const field_name = comp_field.name;
 
-                // For each field in nested_data (e.g., "bazzes")
-                inline for (@typeInfo(@TypeOf(nested_data)).@"struct".fields) |field| {
-                    const field_name = field.name;
-                    const entity_defs = @field(nested_data, field_name);
-
-                    // Get tuple size at comptime
-                    const entity_count = @typeInfo(@TypeOf(entity_defs)).@"struct".fields.len;
-
-                    // Allocate slice for entity references
-                    const entities = try game.allocator.alloc(Entity, entity_count);
-
-                    // Create each child entity
-                    inline for (0..entity_count) |i| {
-                        const entity_def = entity_defs[i];
-
-                        // Create child entity
-                        const child = game.createEntity();
-
-                        // Add position with relative offset
-                        const child_x = parent_x + getFieldOrDefault(entity_def, "x", @as(f32, 0));
-                        const child_y = parent_y + getFieldOrDefault(entity_def, "y", @as(f32, 0));
-                        game.addPosition(child, Position{ .x = child_x, .y = child_y });
-
-                        // Add child's components
-                        if (@hasField(@TypeOf(entity_def), "components")) {
-                            Components.addComponents(game.getRegistry(), child, entity_def.components);
-                        }
-
-                        entities[i] = child;
+                if (@hasField(@TypeOf(comp_data), field_name)) {
+                    // Data provides this field
+                    if (comptime isEntitySlice(comp_field.type)) {
+                        // This field is []const Entity - create child entities from the tuple
+                        const entity_defs = @field(comp_data, field_name);
+                        @field(component, field_name) = try createChildEntities(game, entity_defs, parent_x, parent_y);
+                    } else {
+                        // Regular field - direct assignment
+                        @field(component, field_name) = @field(comp_data, field_name);
                     }
-
-                    // Set the field on the component
-                    @field(component, field_name) = entities;
+                } else if (comp_field.default_value_ptr) |ptr| {
+                    // Use default value
+                    const default_ptr: *const comp_field.type = @ptrCast(@alignCast(ptr));
+                    @field(component, field_name) = default_ptr.*;
                 }
-
-                // Add any other direct fields from comp_data (non-.components fields)
-                inline for (@typeInfo(@TypeOf(comp_data)).@"struct".fields) |field| {
-                    if (!std.mem.eql(u8, field.name, "components")) {
-                        if (@hasField(ComponentType, field.name)) {
-                            @field(component, field.name) = @field(comp_data, field.name);
-                        }
-                    }
-                }
-
-                game.getRegistry().add(parent_entity, component);
-            } else {
-                // No nested entities, use normal path
-                Components.addComponent(game.getRegistry(), parent_entity, comp_name, comp_data);
             }
+
+            game.getRegistry().add(parent_entity, component);
         }
 
         /// Add all components, handling nested entity definitions where present

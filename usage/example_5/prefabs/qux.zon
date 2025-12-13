@@ -5,14 +5,12 @@
     },
     .components = .{
         .Foo = .{ .value = 42 },
-        .Bar = .{
-            .components = .{ .bazzes = .{
-                .{
-                    .components = .{
-                        .Baz = .{ .val = 7 },
-                    },
+        .Bar = .{ .bazzes = .{
+            .{
+                .components = .{
+                    .Baz = .{ .val = 7 },
                 },
-            } },
-        },
+            },
+        } },
     },
 }
