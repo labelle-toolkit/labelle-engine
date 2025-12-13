@@ -34,6 +34,7 @@
 
 const std = @import("std");
 const ecs = @import("ecs");
+const zon = @import("zon_coercion.zig");
 const prefab_mod = @import("prefab.zig");
 const scene_mod = @import("scene.zig");
 const component_mod = @import("component.zig");
@@ -112,81 +113,6 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
     return struct {
         const Self = @This();
 
-        /// Check if a field type is a slice of Entity
-        fn isEntitySlice(comptime FieldType: type) bool {
-            const info = @typeInfo(FieldType);
-            if (info == .pointer) {
-                const ptr_info = info.pointer;
-                if (ptr_info.size == .slice and ptr_info.child == Entity) {
-                    return true;
-                }
-            }
-            return false;
-        }
-
-        /// Coerce a comptime ZON value to the expected field type
-        /// Handles nested struct coercion and tuple-to-slice conversion
-        fn coerceFieldValue(comptime FieldType: type, comptime data_value: anytype) FieldType {
-            const DataType = @TypeOf(data_value);
-            const field_info = @typeInfo(FieldType);
-
-            // Handle slice types (except Entity slices, which are handled specially)
-            if (field_info == .pointer) {
-                const ptr_info = field_info.pointer;
-                if (ptr_info.size == .slice) {
-                    const ChildType = ptr_info.child;
-                    const data_info = @typeInfo(DataType);
-
-                    // If data is a tuple, convert to slice
-                    if (data_info == .@"struct" and data_info.@"struct".is_tuple) {
-                        return tupleToSlice(ChildType, data_value);
-                    }
-                }
-            }
-
-            // Handle nested struct coercion
-            if (field_info == .@"struct" and @typeInfo(DataType) == .@"struct") {
-                return buildStruct(FieldType, data_value);
-            }
-
-            // Direct assignment for compatible types
-            return data_value;
-        }
-
-        /// Build a struct from comptime anonymous struct data
-        fn buildStruct(comptime StructType: type, comptime data: anytype) StructType {
-            const fields = std.meta.fields(StructType);
-            var result: StructType = undefined;
-
-            inline for (fields) |field| {
-                if (@hasField(@TypeOf(data), field.name)) {
-                    const data_value = @field(data, field.name);
-                    @field(result, field.name) = coerceFieldValue(field.type, data_value);
-                } else if (field.default_value_ptr) |ptr| {
-                    const default_ptr: *const field.type = @ptrCast(@alignCast(ptr));
-                    @field(result, field.name) = default_ptr.*;
-                } else {
-                    @field(result, field.name) = std.mem.zeroes(field.type);
-                }
-            }
-
-            return result;
-        }
-
-        /// Convert a tuple to a slice at comptime
-        fn tupleToSlice(comptime ChildType: type, comptime tuple: anytype) []const ChildType {
-            const tuple_info = @typeInfo(@TypeOf(tuple)).@"struct";
-            const len = tuple_info.fields.len;
-
-            var array: [len]ChildType = undefined;
-            inline for (0..len) |i| {
-                array[i] = coerceFieldValue(ChildType, tuple[i]);
-            }
-
-            const final = array;
-            return &final;
-        }
-
         /// Create child entities from a tuple of entity definitions
         fn createChildEntities(
             game: *Game,
@@ -241,14 +167,14 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
 
                 if (@hasField(@TypeOf(comp_data), field_name)) {
                     // Data provides this field
-                    if (comptime isEntitySlice(comp_field.type)) {
+                    if (comptime zon.isEntitySlice(comp_field.type)) {
                         // This field is []const Entity - create child entities from the tuple
                         const entity_defs = @field(comp_data, field_name);
                         @field(component, field_name) = try createChildEntities(game, entity_defs, parent_x, parent_y);
                     } else {
                         // Regular field - coerce to handle nested structs and tuples
                         const data_value = @field(comp_data, field_name);
-                        @field(component, field_name) = coerceFieldValue(comp_field.type, data_value);
+                        @field(component, field_name) = zon.coerceValue(comp_field.type, data_value);
                     }
                 } else if (comp_field.default_value_ptr) |ptr| {
                     // Use default value

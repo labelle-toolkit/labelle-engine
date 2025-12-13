@@ -11,6 +11,7 @@
 
 const std = @import("std");
 const ecs = @import("ecs");
+const zon = @import("zon_coercion.zig");
 
 pub const Registry = ecs.Registry;
 pub const Entity = ecs.Entity;
@@ -48,80 +49,7 @@ pub fn ComponentRegistry(comptime ComponentMap: type) type {
 
         /// Create a component value from .zon data by direct field initialization
         fn createComponentFromData(comptime ComponentType: type, comptime data: anytype) ComponentType {
-            // Build the component using comptime field access
-            return comptime buildComponent(ComponentType, data);
-        }
-
-        fn buildComponent(comptime ComponentType: type, comptime data: anytype) ComponentType {
-            const fields = std.meta.fields(ComponentType);
-            var result: ComponentType = undefined;
-
-            inline for (fields) |field| {
-                if (@hasField(@TypeOf(data), field.name)) {
-                    const data_value = @field(data, field.name);
-                    @field(result, field.name) = coerceValue(field.type, data_value);
-                } else if (field.default_value_ptr) |ptr| {
-                    const default_ptr: *const field.type = @ptrCast(@alignCast(ptr));
-                    @field(result, field.name) = default_ptr.*;
-                } else {
-                    @field(result, field.name) = std.mem.zeroes(field.type);
-                }
-            }
-
-            return result;
-        }
-
-        /// Coerce a ZON value to the expected field type
-        /// Handles tuple-to-slice conversion for array fields
-        fn coerceValue(comptime FieldType: type, comptime data_value: anytype) FieldType {
-            const DataType = @TypeOf(data_value);
-            const field_info = @typeInfo(FieldType);
-
-            // Check if field is a slice and data is a tuple
-            if (field_info == .pointer) {
-                const ptr_info = field_info.pointer;
-                if (ptr_info.size == .slice) {
-                    const ChildType = ptr_info.child;
-
-                    // Skip []const Entity fields - entity creation is a runtime operation
-                    // and must be handled by the scene loader, not comptime coercion
-                    if (ChildType == Entity) {
-                        return &.{};
-                    }
-
-                    const data_info = @typeInfo(DataType);
-
-                    // If data is a tuple, convert to slice
-                    if (data_info == .@"struct" and data_info.@"struct".is_tuple) {
-                        return tupleToSlice(ChildType, data_value);
-                    }
-                }
-            }
-
-            // Check if field is a struct and data is an anonymous struct (nested component)
-            if (field_info == .@"struct" and @typeInfo(DataType) == .@"struct") {
-                return buildComponent(FieldType, data_value);
-            }
-
-            // Direct assignment for compatible types
-            return data_value;
-        }
-
-        /// Convert a tuple to a slice at comptime
-        fn tupleToSlice(comptime ChildType: type, comptime tuple: anytype) []const ChildType {
-            const tuple_info = @typeInfo(@TypeOf(tuple)).@"struct";
-            const len = tuple_info.fields.len;
-
-            // Build array from tuple elements
-            var array: [len]ChildType = undefined;
-            inline for (0..len) |i| {
-                // Recursively coerce each element (handles nested structs)
-                array[i] = coerceValue(ChildType, tuple[i]);
-            }
-
-            // Return pointer to comptime array as slice
-            const final = array;
-            return &final;
+            return comptime zon.buildStruct(ComponentType, data);
         }
 
         /// Add all components from a .zon components struct to an entity
