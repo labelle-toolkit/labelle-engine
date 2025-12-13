@@ -30,6 +30,7 @@ pub const SpriteConfig = prefab.SpriteConfig;
 pub const PrefabRegistry = prefab.PrefabRegistry;
 pub const SceneLoader = loader.SceneLoader;
 pub const ComponentRegistry = component.ComponentRegistry;
+pub const ComponentRegistryMulti = component.ComponentRegistryMulti;
 pub const ScriptRegistry = script.ScriptRegistry;
 pub const ScriptFns = script.ScriptFns;
 pub const InitFn = script.InitFn;

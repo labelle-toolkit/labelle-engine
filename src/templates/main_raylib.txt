@@ -17,6 +17,8 @@ const engine = @import("labelle-engine");
 const Game = engine.Game;
 const ProjectConfig = engine.ProjectConfig;
 
+.plugin_import
+const {s} = @import("{s}");
 .prefab_import
 const {s}_prefab = @import("prefabs/{s}.zon");
 .component_import
@@ -54,6 +56,32 @@ pub const Components = engine.ComponentRegistry(struct {{
 .component_registry_item
     pub const {s} = main_module.{s};
 .component_registry_end
+}});
+.component_registry_multi_empty_start
+pub const Components = engine.ComponentRegistryMulti(.{{
+    struct {{
+        // Engine built-in components
+        pub const Position = engine.Position;
+        pub const Sprite = engine.Sprite;
+        pub const Shape = engine.Shape;
+        pub const Text = engine.Text;
+    }},
+.component_registry_multi_start
+pub const Components = engine.ComponentRegistryMulti(.{{
+    struct {{
+        // Engine built-in components
+        pub const Position = engine.Position;
+        pub const Sprite = engine.Sprite;
+        pub const Shape = engine.Shape;
+        pub const Text = engine.Text;
+        // Project components
+.component_registry_multi_item
+        pub const {s} = main_module.{s};
+.component_registry_multi_base_end
+    }},
+.component_registry_multi_plugin
+    {s}.Components,
+.component_registry_multi_end
 }});
 .script_registry_empty
 pub const Scripts = engine.ScriptRegistry(struct {{}});
