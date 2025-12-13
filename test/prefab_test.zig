@@ -194,32 +194,6 @@ pub const MERGE_SPRITE_WITH_OVERRIDES = struct {
         }
     };
 
-    pub const NESTED_SPRITE_OVERRIDES = struct {
-        test "uses nested sprite name override" {
-            const base = prefab.SpriteConfig{ .name = "base.png" };
-            const merged = prefab.mergeSpriteWithOverrides(base, .{
-                .sprite = .{ .name = "over.png" },
-            });
-            try expect.toBeTrue(std.mem.eql(u8, merged.name, "over.png"));
-        }
-
-        test "uses nested sprite position override" {
-            const base = prefab.SpriteConfig{ .x = 10, .y = 20 };
-            const merged = prefab.mergeSpriteWithOverrides(base, .{
-                .sprite = .{ .x = 100, .y = 200 },
-            });
-            try expect.equal(merged.x, 100);
-            try expect.equal(merged.y, 200);
-        }
-
-        test "uses nested sprite scale override" {
-            const base = prefab.SpriteConfig{ .scale = 2.0 };
-            const merged = prefab.mergeSpriteWithOverrides(base, .{
-                .sprite = .{ .scale = 3.0 },
-            });
-            try expect.equal(merged.scale, 3.0);
-        }
-    };
 
     pub const COMPLEX_MERGING = struct {
         test "merges multiple fields correctly" {
@@ -280,21 +254,16 @@ pub const MERGE_SPRITE_WITH_OVERRIDES = struct {
 };
 
 pub const PREFAB_REGISTRY = struct {
-    // Test prefab data for comptime tests
+    // Test prefab data using new .components.Sprite format
     const test_player_prefab = .{
-        .sprite = .{
-            .name = "player.png",
-            .x = 100,
-            .y = 200,
-            .scale = 2.0,
+        .components = .{
+            .Sprite = .{ .name = "player.png", .x = 100, .y = 200, .scale = 2.0 },
         },
     };
 
     const test_enemy_prefab = .{
-        .sprite = .{
-            .name = "enemy.png",
-        },
         .components = .{
+            .Sprite = .{ .name = "enemy.png" },
             .Health = .{ .current = 50, .max = 50 },
         },
     };
@@ -321,9 +290,9 @@ pub const PREFAB_REGISTRY = struct {
 
     test "get returns prefab data" {
         const player = TestPrefabs.get("player");
-        try expect.toBeTrue(std.mem.eql(u8, player.sprite.name, "player.png"));
-        try expect.equal(player.sprite.x, 100);
-        try expect.equal(player.sprite.y, 200);
+        try expect.toBeTrue(std.mem.eql(u8, player.components.Sprite.name, "player.png"));
+        try expect.equal(player.components.Sprite.x, 100);
+        try expect.equal(player.components.Sprite.y, 200);
     }
 
     test "getSprite returns sprite config" {
@@ -346,8 +315,8 @@ pub const PREFAB_REGISTRY = struct {
         try expect.toBeTrue(TestPrefabs.hasComponents("enemy"));
     }
 
-    test "hasComponents returns false when prefab has no components" {
-        try expect.toBeFalse(TestPrefabs.hasComponents("player"));
+    test "hasComponents returns true for prefab with only Sprite" {
+        try expect.toBeTrue(TestPrefabs.hasComponents("player"));
     }
 
     test "getComponents returns component data" {

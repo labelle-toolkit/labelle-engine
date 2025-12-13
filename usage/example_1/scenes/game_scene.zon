@@ -12,8 +12,10 @@
     .entities = .{
         // Ball at top of screen with gravity
         .{
-            .sprite = .{ .name = "idle_0002", .x = 400, .y = 50, .scale = 2.0 },
+            .x = 400,
+            .y = 50,
             .components = .{
+                .Sprite = .{ .name = "idle_0002", .scale = 2.0 },
                 .Velocity = .{ .x = 0, .y = 0 },
                 .Gravity = .{ .strength = 400.0, .enabled = true },
             },
@@ -51,17 +53,29 @@
             },
         },
 
-        // Extra character (inline entity using idle sprite)
+        // Extra characters
         .{
-            .sprite = .{ .name = "jump_0001", .x = 300, .y = 450 },
+            .x = 300,
+            .y = 450,
             .components = .{
+                .Sprite = .{ .name = "jump_0001" },
                 .Health = .{ .current = 50, .max = 50 },
             },
         },
         .{
-            .sprite = .{ .name = "run_0001", .x = 500, .y = 450 },
+            .x = 500,
+            .y = 450,
             .components = .{
+                .Sprite = .{ .name = "run_0001" },
                 .Velocity = .{ .x = 0, .y = 0 },
+            },
+        },
+        .{
+            .x = 200,
+            .y = 150,
+            .components = .{
+                .Sprite = .{ .name = "idle_0003", .scale = 1.5 },
+                .Health = .{ .current = 75, .max = 75 },
             },
         },
     },

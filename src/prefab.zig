@@ -1,18 +1,13 @@
 // Prefab system - comptime prefabs with typed components
 //
 // Prefabs are .zon files imported at comptime that define:
-// - sprite: Visual configuration for the entity
-// - components: Typed component data (optional)
+// - components.Sprite: Visual configuration for the entity
+// - components.*: Other typed component data
 //
 // Example prefab file (prefabs/player.zon):
 // .{
-//     .sprite = .{
-//         .name = "player.png",
-//         .x = 100,
-//         .y = 200,
-//         .scale = 2.0,
-//     },
 //     .components = .{
+//         .Sprite = .{ .name = "player.png", .scale = 2.0 },
 //         .Health = .{ .current = 100, .max = 100 },
 //         .Speed = .{ .value = 5.0 },
 //     },
@@ -69,10 +64,12 @@ pub fn PrefabRegistry(comptime prefab_map: anytype) type {
         }
 
         /// Get sprite config from a prefab, applying overrides
+        /// Sprite is expected in .components.Sprite
         pub fn getSprite(comptime name: []const u8, comptime overrides: anytype) SpriteConfig {
             const prefab_data = get(name);
-            const base_sprite = if (@hasField(@TypeOf(prefab_data), "sprite"))
-                toSpriteConfig(prefab_data.sprite)
+            const base_sprite = if (@hasField(@TypeOf(prefab_data), "components") and
+                @hasField(@TypeOf(prefab_data.components), "Sprite"))
+                toSpriteConfig(prefab_data.components.Sprite)
             else
                 SpriteConfig{};
 
@@ -120,9 +117,9 @@ pub fn mergeSpriteWithOverrides(
     // Apply top-level overrides (x, y, scale, etc. directly on entity def)
     applyOverrides(&result, overrides);
 
-    // Apply nested sprite overrides (entity def has .sprite = .{ ... })
-    if (@hasField(@TypeOf(overrides), "sprite")) {
-        applyOverrides(&result, overrides.sprite);
+    // Apply overrides from .components.Sprite if present
+    if (@hasField(@TypeOf(overrides), "components") and @hasField(@TypeOf(overrides.components), "Sprite")) {
+        applyOverrides(&result, overrides.components.Sprite);
     }
 
     return result;

@@ -79,24 +79,25 @@ const Loader = engine.SceneLoader(Prefabs, Components, Scripts);
 
     .entities = .{
         .{ .prefab = "player", .x = 400, .y = 300 },
-        .{ .sprite = .{ .name = "coin.png", .x = 100 }, .components = .{ .Health = .{ .current = 50 } } },
         .{ .shape = .{ .type = .circle, .radius = 50, .color = .{ .r = 255 } } },
+        // Sprite entities use .components block:
+        .{ .x = 300, .y = 150, .components = .{ .Sprite = .{ .name = "gem.png" }, .Health = .{ .current = 50 } } },
+        // Data-only entities (no visual):
+        .{ .x = 100, .y = 100, .components = .{ .Health = .{ .current = 100 } } },
     },
 }
 ```
 
-**Prefab definition** (prefabs/*.zig):
+**Position:** Entity-level `.x`/`.y` takes precedence over `.Sprite.x`/`.Sprite.y`.
+
+**Prefab definition** (prefabs/*.zon):
 ```zig
-pub const name = "player";
-pub const sprite = engine.SpriteConfig{
-    .name = "idle",
-    .x = 400,
-    .y = 300,
-    .pivot = .bottom_center,  // Pivot point (default: .center)
-};
-pub fn onCreate(entity: u64, game_ptr: *anyopaque) void { ... }  // optional
-pub fn onUpdate(entity: u64, game_ptr: *anyopaque, dt: f32) void { ... }  // optional
-pub fn onDestroy(entity: u64, game_ptr: *anyopaque) void { ... }  // optional
+.{
+    .components = .{
+        .Sprite = .{ .name = "idle", .x = 400, .y = 300, .pivot = .bottom_center },
+        .Health = .{ .current = 100, .max = 100 },  // optional custom components
+    },
+}
 ```
 
 **Pivot values:**

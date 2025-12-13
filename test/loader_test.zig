@@ -12,30 +12,23 @@ test {
     zspec.runAll(@This());
 }
 
-// Test prefabs
-const PlayerPrefab = struct {
-    pub const name = "player";
-    pub const sprite = prefab.SpriteConfig{
-        .name = "player.png",
-        .x = 100,
-        .y = 200,
-    };
+// Test prefabs using new .components.Sprite format
+const player_prefab = .{
+    .components = .{
+        .Sprite = .{ .name = "player.png", .x = 100, .y = 200 },
+    },
 };
 
-const EnemyPrefab = struct {
-    pub const name = "enemy";
-    pub const sprite = prefab.SpriteConfig{
-        .name = "enemy.png",
-        .scale = 0.8,
-    };
+const enemy_prefab = .{
+    .components = .{
+        .Sprite = .{ .name = "enemy.png", .scale = 0.8 },
+    },
 };
 
-const BackgroundPrefab = struct {
-    pub const name = "background";
-    pub const sprite = prefab.SpriteConfig{
-        .name = "background.png",
-        .z_index = 0,
-    };
+const background_prefab = .{
+    .components = .{
+        .Sprite = .{ .name = "background.png", .z_index = 0 },
+    },
 };
 
 // Test components
@@ -50,7 +43,11 @@ const Health = struct {
 };
 
 // Test registries (without scripts to avoid circular dependency)
-const TestPrefabs = prefab.PrefabRegistry(.{ PlayerPrefab, EnemyPrefab, BackgroundPrefab });
+const TestPrefabs = prefab.PrefabRegistry(.{
+    .player = player_prefab,
+    .enemy = enemy_prefab,
+    .background = background_prefab,
+});
 const TestComponents = component.ComponentRegistry(struct {
     pub const Velocity = loader_test.Velocity;
     pub const Health = loader_test.Health;
@@ -103,11 +100,11 @@ pub const SCENE_DATA_FORMAT = struct {
         },
     };
 
-    const scene_with_inline_sprites = .{
-        .name = "with_inline",
+    const scene_with_sprite_entities = .{
+        .name = "with_sprites",
         .entities = .{
-            .{ .sprite = .{ .name = "coin.png", .x = 200, .y = 150 } },
-            .{ .sprite = .{ .name = "platform.png" } },
+            .{ .x = 200, .y = 150, .components = .{ .Sprite = .{ .name = "coin.png" } } },
+            .{ .components = .{ .Sprite = .{ .name = "platform.png" } } },
         },
     };
 
@@ -134,7 +131,9 @@ pub const SCENE_DATA_FORMAT = struct {
                 },
             },
             .{
-                .sprite = .{ .name = "coin.png", .x = 500, .y = 200 },
+                .x = 500,
+                .y = 200,
+                .components = .{ .Sprite = .{ .name = "coin.png" } },
             },
         },
     };
@@ -176,8 +175,8 @@ pub const SCENE_DATA_FORMAT = struct {
             try expect.equal(scene_with_overrides.entities.len, 2);
         }
 
-        test "scene with inline sprites has two entities" {
-            try expect.equal(scene_with_inline_sprites.entities.len, 2);
+        test "scene with sprite entities has two entities" {
+            try expect.equal(scene_with_sprite_entities.entities.len, 2);
         }
 
         test "complex scene has four entities" {
@@ -224,21 +223,146 @@ pub const SCENE_DATA_FORMAT = struct {
         }
     };
 
-    pub const INLINE_SPRITES = struct {
-        test "inline entity has sprite field" {
-            const entity = scene_with_inline_sprites.entities[0];
-            try expect.toBeTrue(@hasField(@TypeOf(entity), "sprite"));
+    pub const SPRITE_ENTITIES = struct {
+        test "sprite entity has components.Sprite" {
+            const entity = scene_with_sprite_entities.entities[0];
+            try expect.toBeTrue(@hasField(@TypeOf(entity), "components"));
+            try expect.toBeTrue(@hasField(@TypeOf(entity.components), "Sprite"));
         }
 
-        test "inline sprite has name" {
-            const entity = scene_with_inline_sprites.entities[0];
-            try expect.toBeTrue(std.mem.eql(u8, entity.sprite.name, "coin.png"));
+        test "sprite entity has name" {
+            const entity = scene_with_sprite_entities.entities[0];
+            try expect.toBeTrue(std.mem.eql(u8, entity.components.Sprite.name, "coin.png"));
         }
 
-        test "inline sprite can have position" {
-            const entity = scene_with_inline_sprites.entities[0];
-            try expect.equal(entity.sprite.x, 200);
-            try expect.equal(entity.sprite.y, 150);
+        test "sprite entity can have position at entity level" {
+            const entity = scene_with_sprite_entities.entities[0];
+            try expect.equal(entity.x, 200);
+            try expect.equal(entity.y, 150);
+        }
+    };
+
+    // Scene with Sprite defined inside .components block (uniform syntax)
+    const scene_with_sprite_in_components = .{
+        .name = "sprite_in_components",
+        .entities = .{
+            // Sprite inside components with entity-level position
+            .{
+                .x = 100,
+                .y = 200,
+                .components = .{
+                    .Sprite = .{ .name = "player.png", .z_index = 10 },
+                    .Health = .{ .current = 50 },
+                },
+            },
+            // Sprite inside components with position in Sprite
+            .{
+                .components = .{
+                    .Sprite = .{ .name = "enemy.png", .x = 300, .y = 400, .scale = 2.0 },
+                    .Velocity = .{ .x = 5, .y = 0 },
+                },
+            },
+            // Sprite-only in components
+            .{
+                .components = .{
+                    .Sprite = .{ .name = "item.png" },
+                },
+            },
+        },
+    };
+
+    pub const SPRITE_IN_COMPONENTS = struct {
+        test "entity can have Sprite in components" {
+            const entity = scene_with_sprite_in_components.entities[0];
+            try expect.toBeTrue(@hasField(@TypeOf(entity), "components"));
+            try expect.toBeTrue(@hasField(@TypeOf(entity.components), "Sprite"));
+        }
+
+        test "Sprite in components has name" {
+            const entity = scene_with_sprite_in_components.entities[0];
+            try expect.toBeTrue(std.mem.eql(u8, entity.components.Sprite.name, "player.png"));
+        }
+
+        test "Sprite in components can have z_index" {
+            const entity = scene_with_sprite_in_components.entities[0];
+            try expect.equal(entity.components.Sprite.z_index, 10);
+        }
+
+        test "entity-level position overrides Sprite position" {
+            const entity = scene_with_sprite_in_components.entities[0];
+            try expect.equal(entity.x, 100);
+            try expect.equal(entity.y, 200);
+        }
+
+        test "Sprite in components can have position" {
+            const entity = scene_with_sprite_in_components.entities[1];
+            try expect.equal(entity.components.Sprite.x, 300);
+            try expect.equal(entity.components.Sprite.y, 400);
+        }
+
+        test "Sprite in components can have scale" {
+            const entity = scene_with_sprite_in_components.entities[1];
+            try expect.equal(entity.components.Sprite.scale, 2.0);
+        }
+
+        test "can have other components alongside Sprite" {
+            const entity = scene_with_sprite_in_components.entities[0];
+            try expect.toBeTrue(@hasField(@TypeOf(entity.components), "Health"));
+            try expect.equal(entity.components.Health.current, 50);
+        }
+
+        test "scene has correct entity count" {
+            try expect.equal(scene_with_sprite_in_components.entities.len, 3);
+        }
+    };
+
+    // Scene with data-only entities (no visual)
+    const scene_with_data_only_entities = .{
+        .name = "data_only",
+        .entities = .{
+            // Data-only entity with position
+            .{
+                .x = 100,
+                .y = 200,
+                .components = .{
+                    .Health = .{ .current = 50 },
+                },
+            },
+            // Data-only entity without position
+            .{
+                .components = .{
+                    .Velocity = .{ .x = 10, .y = 5 },
+                },
+            },
+        },
+    };
+
+    pub const DATA_ONLY_ENTITIES = struct {
+        test "data-only entity has components but no visual" {
+            const entity = scene_with_data_only_entities.entities[0];
+            try expect.toBeTrue(@hasField(@TypeOf(entity), "components"));
+            try expect.toBeFalse(@hasField(@TypeOf(entity.components), "Sprite"));
+        }
+
+        test "data-only entity can have position" {
+            const entity = scene_with_data_only_entities.entities[0];
+            try expect.equal(entity.x, 100);
+            try expect.equal(entity.y, 200);
+        }
+
+        test "data-only entity can have components" {
+            const entity = scene_with_data_only_entities.entities[0];
+            try expect.equal(entity.components.Health.current, 50);
+        }
+
+        test "data-only entity without position fields" {
+            const entity = scene_with_data_only_entities.entities[1];
+            try expect.toBeFalse(@hasField(@TypeOf(entity), "x"));
+            try expect.toBeFalse(@hasField(@TypeOf(entity), "y"));
+        }
+
+        test "scene has correct entity count" {
+            try expect.equal(scene_with_data_only_entities.entities.len, 2);
         }
     };
 };
