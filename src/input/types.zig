@@ -124,6 +124,6 @@ pub const MouseButton = enum(c_int) {
 
 /// Mouse position
 pub const MousePosition = struct {
-    x: f32,
-    y: f32,
+    x: f32 = 0,
+    y: f32 = 0,
 };

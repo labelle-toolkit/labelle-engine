@@ -13,4 +13,5 @@ test {
     _ = @import("scene_test.zig");
     _ = @import("render_pipeline_test.zig");
     _ = @import("nested_prefab_test.zig");
+    _ = @import("input_test.zig");
 }
