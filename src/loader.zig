@@ -426,11 +426,9 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
         ) !void {
             const ComponentType = Components.getType(comp_name);
             const comp_fields = @typeInfo(ComponentType).@"struct".fields;
-            var component: ComponentType = .{};
+            var component: ComponentType = undefined;
 
             // Process each field in the component type
-            // Note: component is initialized with .{} which sets defaults, so we only
-            // need to handle fields that are explicitly provided in comp_data
             inline for (comp_fields) |comp_field| {
                 const field_name = comp_field.name;
 
@@ -445,8 +443,14 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
                         const data_value = @field(comp_data, field_name);
                         @field(component, field_name) = zon.coerceValue(comp_field.type, data_value);
                     }
+                } else if (comp_field.default_value_ptr) |ptr| {
+                    // Field not provided but has a default value
+                    const default_ptr: *const comp_field.type = @ptrCast(@alignCast(ptr));
+                    @field(component, field_name) = default_ptr.*;
+                } else {
+                    // Required field not provided - compile-time error
+                    @compileError("Missing required field '" ++ field_name ++ "' for component '" ++ comp_name ++ "'");
                 }
-                // Fields not in comp_data retain their defaults from .{} initialization
             }
 
             game.getRegistry().add(parent_entity, component);

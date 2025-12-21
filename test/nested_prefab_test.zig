@@ -152,6 +152,16 @@ pub const ZON_COERCION = struct {
         try expect.equal(result.count, 5);
     }
 
+    test "buildStruct works with required fields when all provided" {
+        const TestStruct = struct {
+            required_value: i32, // No default - required
+            optional_value: u32 = 10,
+        };
+        const result = comptime zon.buildStruct(TestStruct, .{ .required_value = 42 });
+        try expect.equal(result.required_value, 42);
+        try expect.equal(result.optional_value, 10);
+    }
+
     test "tupleToSlice converts tuple to slice" {
         const result = comptime zon.tupleToSlice(i32, .{ 1, 2, 3 });
         try expect.equal(result.len, 3);
