@@ -97,9 +97,12 @@ fn hasSpriteInComponents(comptime entity_def: anytype) bool {
     return false;
 }
 
+/// Simple position struct for loader internal use
+const Pos = struct { x: f32, y: f32 };
+
 /// Get position from entity definition's .components.Position
 /// Returns null if no Position component is defined
-fn getPositionFromComponents(comptime entity_def: anytype) ?struct { x: f32, y: f32 } {
+fn getPositionFromComponents(comptime entity_def: anytype) ?Pos {
     if (@hasField(@TypeOf(entity_def), "components")) {
         if (@hasField(@TypeOf(entity_def.components), "Position")) {
             const pos = entity_def.components.Position;
@@ -358,7 +361,7 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
             const entity = game.createEntity();
 
             // Get position from .components.Position, relative to parent
-            const local_pos = getPositionFromComponents(entity_def) orelse .{ .x = 0, .y = 0 };
+            const local_pos = getPositionFromComponents(entity_def) orelse Pos{ .x = 0, .y = 0 };
             const pos_x = parent_x + local_pos.x;
             const pos_y = parent_y + local_pos.y;
 
@@ -399,7 +402,7 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
             const entity = game.createEntity();
 
             // Get position from .components.Position, relative to parent
-            const local_pos = getPositionFromComponents(entity_def) orelse .{ .x = 0, .y = 0 };
+            const local_pos = getPositionFromComponents(entity_def) orelse Pos{ .x = 0, .y = 0 };
             const child_x = parent_x + local_pos.x;
             const child_y = parent_y + local_pos.y;
             game.addPosition(entity, Position{ .x = child_x, .y = child_y });
@@ -648,7 +651,7 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
         }
 
         /// Get position for a prefab entity: scene .components.Position overrides prefab .components.Position
-        fn getPrefabPosition(comptime prefab_name: []const u8, comptime entity_def: anytype) struct { x: f32, y: f32 } {
+        fn getPrefabPosition(comptime prefab_name: []const u8, comptime entity_def: anytype) Pos {
             // Scene-level Position takes precedence
             if (getPositionFromComponents(entity_def)) |pos| {
                 return pos;
@@ -657,14 +660,14 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
             if (comptime Prefabs.hasComponents(prefab_name)) {
                 const prefab_components = Prefabs.getComponents(prefab_name);
                 if (@hasField(@TypeOf(prefab_components), "Position")) {
-                    const pos = prefab_components.Position;
-                    return .{
-                        .x = getFieldOrDefault(pos, "x", @as(f32, 0)),
-                        .y = getFieldOrDefault(pos, "y", @as(f32, 0)),
+                    const p = prefab_components.Position;
+                    return Pos{
+                        .x = getFieldOrDefault(p, "x", @as(f32, 0)),
+                        .y = getFieldOrDefault(p, "y", @as(f32, 0)),
                     };
                 }
             }
-            return .{ .x = 0, .y = 0 };
+            return Pos{ .x = 0, .y = 0 };
         }
 
         /// Load an entity that references a prefab (comptime lookup)
@@ -744,7 +747,7 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
             const entity = game.createEntity();
 
             // Get position from .components.Position
-            const pos = getPositionFromComponents(entity_def) orelse .{ .x = 0, .y = 0 };
+            const pos = getPositionFromComponents(entity_def) orelse Pos{ .x = 0, .y = 0 };
 
             // Add Position component
             game.addPosition(entity, Position{
@@ -789,7 +792,7 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
             const entity = game.createEntity();
 
             // Get position from .components.Position
-            const pos = getPositionFromComponents(entity_def) orelse .{ .x = 0, .y = 0 };
+            const pos = getPositionFromComponents(entity_def) orelse Pos{ .x = 0, .y = 0 };
 
             // Add Position component
             game.addPosition(entity, Position{
