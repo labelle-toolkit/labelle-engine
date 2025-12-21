@@ -154,6 +154,11 @@ pub fn build(b: *std.Build) void {
     const generate_step = b.step("generate", "Generate project files from project.labelle");
     generate_step.dependOn(&run_generator.step);
 
+    // Build.zig.zon module for version info
+    const build_zon_mod = b.createModule(.{
+        .root_source_file = b.path("build.zig.zon"),
+    });
+
     // Main CLI executable - unified interface for labelle projects
     const cli_exe = b.addExecutable(.{
         .name = "labelle",
@@ -163,6 +168,7 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
             .imports = &.{
                 .{ .name = "zts", .module = zts },
+                .{ .name = "build_zon", .module = build_zon_mod },
             },
         }),
     });

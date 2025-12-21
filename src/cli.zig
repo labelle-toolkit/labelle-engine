@@ -23,7 +23,9 @@ const project_config = @import("project_config.zig");
 
 const ProjectConfig = project_config.ProjectConfig;
 
-const version = "0.1.0";
+// Version from build.zig.zon (imported as module)
+const build_zon = @import("build_zon");
+const version = build_zon.version;
 
 const Command = enum {
     init,
