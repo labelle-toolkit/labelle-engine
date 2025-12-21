@@ -30,6 +30,7 @@ const MusicSlot = struct {
     sound: ?*zaudio.Sound,
     generation: u16,
     active: bool,
+    pause_frame: u64, // Cursor position when paused (for resume)
 };
 
 /// zaudio engine
@@ -63,20 +64,8 @@ pub fn init() Self {
     };
 
     // Initialize all slots as inactive
-    for (&self.sounds) |*slot| {
-        slot.* = .{
-            .sound = null,
-            .generation = 0,
-            .active = false,
-        };
-    }
-    for (&self.music) |*slot| {
-        slot.* = .{
-            .sound = null,
-            .generation = 0,
-            .active = false,
-        };
-    }
+    self.sounds = std.mem.zeroes([MAX_SOUNDS]SoundSlot);
+    self.music = std.mem.zeroes([MAX_MUSIC]MusicSlot);
 
     // Initialize zaudio
     zaudio.init(allocator);
@@ -229,9 +218,6 @@ pub fn loadMusic(self: *Self, path: [:0]const u8) AudioError!MusicId {
                 return AudioError.LoadFailed;
             };
 
-            // Set looping for music by default
-            sound.setLooping(true);
-
             slot.sound = sound;
             slot.generation = self.music_generation;
             slot.active = true;
@@ -280,19 +266,23 @@ pub fn stopMusic(self: *Self, music_id: MusicId) void {
     }
 }
 
-/// Pause music playback
+/// Pause music playback (saves position for resume)
 pub fn pauseMusic(self: *Self, music_id: MusicId) void {
     if (self.getMusicSlot(music_id)) |slot| {
         if (slot.sound) |sound| {
+            // Save cursor position before stopping
+            slot.pause_frame = sound.getCursorInPcmFrames() catch 0;
             sound.stop() catch {};
         }
     }
 }
 
-/// Resume music playback
+/// Resume music playback (from paused position)
 pub fn resumeMusic(self: *Self, music_id: MusicId) void {
     if (self.getMusicSlot(music_id)) |slot| {
         if (slot.sound) |sound| {
+            // Seek to saved position and start
+            sound.seekToPcmFrame(slot.pause_frame) catch {};
             sound.start() catch {};
         }
     }

@@ -3,8 +3,9 @@
 //! Provides a unified audio API with compile-time backend selection.
 //! The backend is chosen at build time based on the graphics backend.
 //!
-//! Note: Only the raylib backend has full audio support. Sokol and SDL
-//! backends return AudioNotSupported errors for load functions.
+//! Note: All backends have audio support. Raylib uses its native audio
+//! system; sokol and SDL use the miniaudio backend via zaudio. The
+//! AudioNotSupported error is only returned if audio initialization fails.
 //!
 //! Usage:
 //!   const audio = @import("audio");

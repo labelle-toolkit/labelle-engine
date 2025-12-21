@@ -30,7 +30,7 @@ pub const MusicId = struct {
 
 /// Audio loading errors
 pub const AudioError = error{
-    /// Audio backend is not available (e.g., sokol, SDL)
+    /// Audio system failed to initialize
     AudioNotSupported,
     /// Failed to load audio file
     LoadFailed,

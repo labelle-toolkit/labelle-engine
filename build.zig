@@ -119,8 +119,10 @@ pub fn build(b: *std.Build) void {
         },
     });
 
-    // Link miniaudio library for audio module (needed for sokol/SDL backends)
-    audio_interface.linkLibrary(zaudio_dep.artifact("miniaudio"));
+    // Link miniaudio library for audio module (only needed for sokol/SDL backends)
+    if (backend != .raylib) {
+        audio_interface.linkLibrary(zaudio_dep.artifact("miniaudio"));
+    }
 
     // Main module
     const engine_mod = b.addModule("labelle-engine", .{
