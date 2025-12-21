@@ -61,8 +61,8 @@ pub fn beginFrame(self: *Self) void {
     }
 }
 
-/// Process a single SDL event
-pub fn processEvent(self: *Self, event: sdl.Event) void {
+/// Process a single SDL event (internal - called by beginFrame)
+fn processEvent(self: *Self, event: sdl.Event) void {
     switch (event) {
         .key_down => |key| {
             const idx = sdlScancodeToKeyIndex(key.scancode);
@@ -324,11 +324,11 @@ fn sdlScancodeToKeyIndex(scancode: sdl.Scancode) ?usize {
 /// Convert SDL mouse button to our index
 fn sdlMouseButtonToIndex(button: sdl.MouseButton) ?usize {
     const mapped: ?usize = switch (button) {
-        .left => 0,
-        .right => 1,
-        .middle => 2,
-        .x1 => 3, // side button
-        .x2 => 4, // extra button
+        .left => @intFromEnum(types.MouseButton.left),
+        .right => @intFromEnum(types.MouseButton.right),
+        .middle => @intFromEnum(types.MouseButton.middle),
+        .x1 => @intFromEnum(types.MouseButton.back), // SDL X1 = Back button
+        .x2 => @intFromEnum(types.MouseButton.forward), // SDL X2 = Forward button
     };
     return mapped;
 }

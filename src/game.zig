@@ -346,12 +346,20 @@ pub const Game = struct {
 
     // ==================== Game Loop ====================
 
-    /// Run the default game loop
+    /// Run the default game loop.
+    ///
+    /// Note: This polling-style game loop works with raylib and SDL backends.
+    /// For sokol backend, use sokol's callback-based event loop directly:
+    /// - Register a sokol event callback that calls `game.getInput().processEvent(event)`
+    /// - In your frame callback, call `game.getInput().beginFrame()` at the start
     pub fn run(self: *Game) !void {
         try self.runWithCallback(null);
     }
 
-    /// Run the game loop with an optional frame callback
+    /// Run the game loop with an optional frame callback.
+    ///
+    /// Note: This polling-style game loop works with raylib and SDL backends.
+    /// For sokol backend, you must use sokol's callback-based architecture instead.
     pub fn runWithCallback(self: *Game, callback: ?FrameCallback) !void {
         while (self.running and self.retained_engine.isRunning()) {
             // Begin input frame (clears per-frame state)
