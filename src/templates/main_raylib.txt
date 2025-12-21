@@ -80,7 +80,7 @@ pub const Components = engine.ComponentRegistryMulti(.{{
 .component_registry_multi_base_end
     }},
 .component_registry_multi_plugin
-    {s}.Components,
+    {s}.{s},
 .component_registry_multi_end
 }});
 .script_registry_empty
