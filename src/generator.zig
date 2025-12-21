@@ -166,15 +166,28 @@ pub fn generateBuildZig(allocator: std.mem.Allocator, config: ProjectConfig) ![]
     return buf.toOwnedSlice(allocator);
 }
 
-/// Capitalize first letter of a string (returns stack-allocated buffer)
-fn capitalize(name: []const u8) [64]u8 {
-    if (name.len > 64) @panic("name is too long for capitalize buffer (max 64 chars)");
-    var type_name: [64]u8 = undefined;
-    @memcpy(type_name[0..name.len], name);
-    if (name.len > 0 and type_name[0] >= 'a' and type_name[0] <= 'z') {
-        type_name[0] -= ('a' - 'A');
+/// Result type for toPascalCase
+const PascalCaseResult = struct { buf: [64]u8, len: usize };
+
+/// Convert snake_case to PascalCase (returns stack-allocated buffer and length)
+/// e.g., "task_workstation" -> "TaskWorkstation"
+fn toPascalCase(name: []const u8) PascalCaseResult {
+    if (name.len > 64) @panic("name is too long for toPascalCase buffer (max 64 chars)");
+    var result: [64]u8 = undefined;
+    var result_len: usize = 0;
+    var capitalize_next = true;
+
+    for (name) |c| {
+        if (c == '_') {
+            capitalize_next = true;
+        } else {
+            result[result_len] = if (capitalize_next) std.ascii.toUpper(c) else c;
+            result_len += 1;
+            capitalize_next = false;
+        }
     }
-    return type_name;
+
+    return .{ .buf = result, .len = result_len };
 }
 
 /// Generate main.zig content based on folder contents (raylib backend)
@@ -207,6 +220,13 @@ fn generateMainZigRaylib(
         plugin_zig_names[i] = try sanitizeZigIdentifier(allocator, plugin.name);
     }
 
+    // Pre-compute PascalCase names for components
+    var component_pascal_names = try allocator.alloc(PascalCaseResult, components.len);
+    defer allocator.free(component_pascal_names);
+    for (components, 0..) |name, i| {
+        component_pascal_names[i] = toPascalCase(name);
+    }
+
     // Header with project name
     try zts.print(main_raylib_tmpl, "header", .{config.name}, writer);
 
@@ -225,10 +245,10 @@ fn generateMainZigRaylib(
         try zts.print(main_raylib_tmpl, "component_import", .{ name, name }, writer);
     }
 
-    // Component exports (with capitalized type names)
-    for (components) |name| {
-        const type_name = capitalize(name);
-        try zts.print(main_raylib_tmpl, "component_export", .{ type_name[0..name.len], name, type_name[0..name.len] }, writer);
+    // Component exports (with PascalCase type names)
+    for (components, 0..) |name, i| {
+        const pascal = component_pascal_names[i];
+        try zts.print(main_raylib_tmpl, "component_export", .{ pascal.buf[0..pascal.len], name, pascal.buf[0..pascal.len] }, writer);
     }
 
     // Script imports
@@ -258,9 +278,8 @@ fn generateMainZigRaylib(
             try zts.print(main_raylib_tmpl, "component_registry_multi_empty_start", .{}, writer);
         } else {
             try zts.print(main_raylib_tmpl, "component_registry_multi_start", .{}, writer);
-            for (components) |name| {
-                const type_name = capitalize(name);
-                try zts.print(main_raylib_tmpl, "component_registry_multi_item", .{ type_name[0..name.len], type_name[0..name.len] }, writer);
+            for (component_pascal_names) |pascal| {
+                try zts.print(main_raylib_tmpl, "component_registry_multi_item", .{ pascal.buf[0..pascal.len], pascal.buf[0..pascal.len] }, writer);
             }
             try zts.print(main_raylib_tmpl, "component_registry_multi_base_end", .{}, writer);
         }
@@ -277,9 +296,8 @@ fn generateMainZigRaylib(
             try zts.print(main_raylib_tmpl, "component_registry_empty", .{}, writer);
         } else {
             try zts.print(main_raylib_tmpl, "component_registry_start", .{}, writer);
-            for (components) |name| {
-                const type_name = capitalize(name);
-                try zts.print(main_raylib_tmpl, "component_registry_item", .{ type_name[0..name.len], type_name[0..name.len] }, writer);
+            for (component_pascal_names) |pascal| {
+                try zts.print(main_raylib_tmpl, "component_registry_item", .{ pascal.buf[0..pascal.len], pascal.buf[0..pascal.len] }, writer);
             }
             try zts.print(main_raylib_tmpl, "component_registry_end", .{}, writer);
         }
