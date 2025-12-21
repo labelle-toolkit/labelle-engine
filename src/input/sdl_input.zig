@@ -101,7 +101,8 @@ fn processEvent(self: *Self, event: sdl.Event) void {
             self.mouse_y = @floatFromInt(motion.y);
         },
         .mouse_wheel => |wheel| {
-            self.mouse_wheel = @floatFromInt(wheel.delta_y);
+            // Accumulate scroll events within a frame
+            self.mouse_wheel += @floatFromInt(wheel.delta_y);
         },
         else => {},
     }

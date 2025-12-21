@@ -97,7 +97,8 @@ pub fn processEvent(self: *Self, event: *const sapp.Event) void {
             self.mouse_y = event.mouse_y;
         },
         .MOUSE_SCROLL => {
-            self.mouse_wheel = event.scroll_y;
+            // Accumulate scroll events within a frame
+            self.mouse_wheel += event.scroll_y;
         },
         else => {},
     }
