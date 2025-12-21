@@ -18,15 +18,17 @@
 //     },
 //
 //     .entities = .{
-//         .{ .prefab = "player", .x = 400, .y = 300 },
-//         .{ .prefab = "player", .pivot = .bottom_center },  // pivot override
+//         // Prefab entities with position in .components:
+//         .{ .prefab = "player", .components = .{ .Position = .{ .x = 400, .y = 300 } } },
+//         .{ .prefab = "player", .pivot = .bottom_center },  // pivot override, position defaults to (0,0)
 //         .{ .prefab = "background" },
+//         // Shape entities (position inside .shape block):
 //         .{ .shape = .{ .type = .circle, .x = 100, .y = 100, .radius = 50, .color = .{ .r = 255, .g = 0, .b = 0, .a = 255 } } },
 //         .{ .shape = .{ .type = .rectangle, .x = 200, .y = 200, .width = 100, .height = 50 } },
-//         // Sprite entities use .components block:
-//         .{ .x = 300, .y = 150, .components = .{ .Sprite = .{ .name = "gem.png" }, .Health = .{ .current = 50 } } },
+//         // Sprite entities with position in .components:
+//         .{ .components = .{ .Position = .{ .x = 300, .y = 150 }, .Sprite = .{ .name = "gem.png" }, .Health = .{ .current = 50 } } },
 //         // Data-only entities (no visual):
-//         .{ .x = 100, .y = 100, .components = .{ .Health = .{ .current = 100 } } },
+//         .{ .components = .{ .Position = .{ .x = 100, .y = 100 }, .Health = .{ .current = 100 } } },
 //     },
 // }
 //
@@ -95,18 +97,22 @@ fn hasSpriteInComponents(comptime entity_def: anytype) bool {
     return false;
 }
 
-/// Get sprite local position from entity definition
-/// Entity-level x/y takes precedence over Sprite.x/y
-fn getSpriteLocalPosition(comptime entity_def: anytype, comptime sprite_data: anytype) struct { x: f32, y: f32 } {
-    const x = if (@hasField(@TypeOf(entity_def), "x"))
-        entity_def.x
-    else
-        getFieldOrDefault(sprite_data, "x", @as(f32, 0));
-    const y = if (@hasField(@TypeOf(entity_def), "y"))
-        entity_def.y
-    else
-        getFieldOrDefault(sprite_data, "y", @as(f32, 0));
-    return .{ .x = x, .y = y };
+/// Simple position struct for loader internal use
+const Pos = struct { x: f32, y: f32 };
+
+/// Get position from entity definition's .components.Position
+/// Returns null if no Position component is defined
+fn getPositionFromComponents(comptime entity_def: anytype) ?Pos {
+    if (@hasField(@TypeOf(entity_def), "components")) {
+        if (@hasField(@TypeOf(entity_def.components), "Position")) {
+            const pos = entity_def.components.Position;
+            return .{
+                .x = getFieldOrDefault(pos, "x", @as(f32, 0)),
+                .y = getFieldOrDefault(pos, "y", @as(f32, 0)),
+            };
+        }
+    }
+    return null;
 }
 
 /// Get sprite name from sprite data (.name or .sprite_name field)
@@ -238,12 +244,13 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
 
             const entity = game.createEntity();
 
-            // Get sprite config from prefab with entity_def overrides
+            // Get sprite config from prefab with entity_def overrides (excludes position)
             const sprite_config = Prefabs.getSprite(prefab_name, entity_def);
 
-            // Position is relative to parent
-            const pos_x = parent_x + sprite_config.x;
-            const pos_y = parent_y + sprite_config.y;
+            // Get position from .components.Position (scene overrides prefab), relative to parent
+            const local_pos = getPrefabPosition(prefab_name, entity_def);
+            const pos_x = parent_x + local_pos.x;
+            const pos_y = parent_y + local_pos.y;
 
             game.addPosition(entity, Position{ .x = pos_x, .y = pos_y });
 
@@ -259,12 +266,12 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
                 .pivot_y = sprite_config.pivot_y,
             });
 
-            // Add components from prefab definition (excluding Sprite which is already added)
+            // Add components from prefab definition (excluding Sprite and Position which are already added)
             if (comptime Prefabs.hasComponents(prefab_name)) {
                 try addComponentsExcludingSprite(game, scene, entity, Prefabs.getComponents(prefab_name), pos_x, pos_y);
             }
 
-            // Add/override components from entity definition (excluding Sprite)
+            // Add/override components from entity definition (excluding Sprite and Position)
             if (@hasField(@TypeOf(entity_def), "components")) {
                 try addComponentsExcludingSprite(game, scene, entity, entity_def.components, pos_x, pos_y);
             }
@@ -353,8 +360,8 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
             const sprite_data = entity_def.components.Sprite;
             const entity = game.createEntity();
 
-            // Position relative to parent
-            const local_pos = getSpriteLocalPosition(entity_def, sprite_data);
+            // Get position from .components.Position, relative to parent
+            const local_pos = getPositionFromComponents(entity_def) orelse Pos{ .x = 0, .y = 0 };
             const pos_x = parent_x + local_pos.x;
             const pos_y = parent_y + local_pos.y;
 
@@ -372,7 +379,7 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
                 .pivot_y = getFieldOrDefault(sprite_data, "pivot_y", @as(f32, 0.5)),
             });
 
-            // Add other components (excluding Sprite)
+            // Add other components (excluding Sprite and Position)
             try addComponentsExcludingSprite(game, scene, entity, entity_def.components, pos_x, pos_y);
 
             return .{
@@ -394,14 +401,15 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
         ) !EntityInstance {
             const entity = game.createEntity();
 
-            // Position from components if present, otherwise from x/y fields
-            const child_x = parent_x + getFieldOrDefault(entity_def, "x", @as(f32, 0));
-            const child_y = parent_y + getFieldOrDefault(entity_def, "y", @as(f32, 0));
+            // Get position from .components.Position, relative to parent
+            const local_pos = getPositionFromComponents(entity_def) orelse Pos{ .x = 0, .y = 0 };
+            const child_x = parent_x + local_pos.x;
+            const child_y = parent_y + local_pos.y;
             game.addPosition(entity, Position{ .x = child_x, .y = child_y });
 
-            // Add components (recursively handles nested entities)
+            // Add components (recursively handles nested entities), excluding Position
             if (@hasField(@TypeOf(entity_def), "components")) {
-                try addComponentsWithNestedEntities(game, scene, entity, entity_def.components, child_x, child_y);
+                try addComponentsExcludingPosition(game, scene, entity, entity_def.components, child_x, child_y);
             }
 
             return .{
@@ -473,8 +481,8 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
             }
         }
 
-        /// Add all components except Sprite (for use when Sprite is in .components block
-        /// and has already been handled separately via game.addSprite()).
+        /// Add all components except Sprite and Position (for use when Sprite is in .components block
+        /// and has already been handled separately via game.addSprite(), and Position via game.addPosition()).
         fn addComponentsExcludingSprite(
             game: *Game,
             scene: ?*Scene,
@@ -485,8 +493,27 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
         ) !void {
             const data_fields = comptime std.meta.fieldNames(@TypeOf(components_data));
             inline for (data_fields) |field_name| {
-                // Skip Sprite - it's handled specially via game.addSprite()
-                if (comptime !std.mem.eql(u8, field_name, "Sprite")) {
+                // Skip Sprite and Position - they're handled specially
+                if (comptime !std.mem.eql(u8, field_name, "Sprite") and !std.mem.eql(u8, field_name, "Position")) {
+                    const field_data = @field(components_data, field_name);
+                    try addComponentWithNestedEntities(game, scene, entity, field_name, field_data, parent_x, parent_y);
+                }
+            }
+        }
+
+        /// Add all components except Position (for data-only entities where Position is handled separately).
+        fn addComponentsExcludingPosition(
+            game: *Game,
+            scene: ?*Scene,
+            entity: Entity,
+            comptime components_data: anytype,
+            parent_x: f32,
+            parent_y: f32,
+        ) !void {
+            const data_fields = comptime std.meta.fieldNames(@TypeOf(components_data));
+            inline for (data_fields) |field_name| {
+                // Skip Position - it's handled specially via game.addPosition()
+                if (comptime !std.mem.eql(u8, field_name, "Position")) {
                     const field_data = @field(components_data, field_name);
                     try addComponentWithNestedEntities(game, scene, entity, field_name, field_data, parent_x, parent_y);
                 }
@@ -623,6 +650,26 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
             @compileError("Entity must have .prefab, .shape, or .components field");
         }
 
+        /// Get position for a prefab entity: scene .components.Position overrides prefab .components.Position
+        fn getPrefabPosition(comptime prefab_name: []const u8, comptime entity_def: anytype) Pos {
+            // Scene-level Position takes precedence
+            if (getPositionFromComponents(entity_def)) |pos| {
+                return pos;
+            }
+            // Fall back to prefab's Position
+            if (comptime Prefabs.hasComponents(prefab_name)) {
+                const prefab_components = Prefabs.getComponents(prefab_name);
+                if (@hasField(@TypeOf(prefab_components), "Position")) {
+                    const p = prefab_components.Position;
+                    return Pos{
+                        .x = getFieldOrDefault(p, "x", @as(f32, 0)),
+                        .y = getFieldOrDefault(p, "y", @as(f32, 0)),
+                    };
+                }
+            }
+            return Pos{ .x = 0, .y = 0 };
+        }
+
         /// Load an entity that references a prefab (comptime lookup)
         fn loadPrefabEntity(
             comptime entity_def: anytype,
@@ -643,13 +690,16 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
             // Create ECS entity
             const entity = game.createEntity();
 
-            // Get sprite config from prefab with scene overrides
+            // Get sprite config from prefab with scene overrides (excludes position)
             const sprite_config = Prefabs.getSprite(prefab_name, entity_def);
+
+            // Get position from .components.Position (scene overrides prefab)
+            const pos = getPrefabPosition(prefab_name, entity_def);
 
             // Add Position component
             game.addPosition(entity, Position{
-                .x = sprite_config.x,
-                .y = sprite_config.y,
+                .x = pos.x,
+                .y = pos.y,
             });
 
             // Add Sprite component and track for rendering
@@ -665,14 +715,14 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
                 .pivot_y = sprite_config.pivot_y,
             });
 
-            // Add components from prefab definition (excluding Sprite which is already added)
+            // Add components from prefab definition (excluding Sprite and Position which are already added)
             if (comptime Prefabs.hasComponents(prefab_name)) {
-                try addComponentsExcludingSprite(game, scene, entity, Prefabs.getComponents(prefab_name), sprite_config.x, sprite_config.y);
+                try addComponentsExcludingSprite(game, scene, entity, Prefabs.getComponents(prefab_name), pos.x, pos.y);
             }
 
-            // Add/override components from scene definition (excluding Sprite)
+            // Add/override components from scene definition (excluding Sprite and Position)
             if (@hasField(@TypeOf(entity_def), "components")) {
-                try addComponentsExcludingSprite(game, scene, entity, entity_def.components, sprite_config.x, sprite_config.y);
+                try addComponentsExcludingSprite(game, scene, entity, entity_def.components, pos.x, pos.y);
             }
 
             return .{
@@ -696,8 +746,8 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
             // Create ECS entity
             const entity = game.createEntity();
 
-            // Get position using helper (entity-level x/y take precedence over Sprite.x/y)
-            const pos = getSpriteLocalPosition(entity_def, sprite_data);
+            // Get position from .components.Position
+            const pos = getPositionFromComponents(entity_def) orelse Pos{ .x = 0, .y = 0 };
 
             // Add Position component
             game.addPosition(entity, Position{
@@ -741,18 +791,17 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
             // Create ECS entity
             const entity = game.createEntity();
 
-            // Position from x/y fields if present
-            const pos_x = getFieldOrDefault(entity_def, "x", @as(f32, 0));
-            const pos_y = getFieldOrDefault(entity_def, "y", @as(f32, 0));
+            // Get position from .components.Position
+            const pos = getPositionFromComponents(entity_def) orelse Pos{ .x = 0, .y = 0 };
 
             // Add Position component
             game.addPosition(entity, Position{
-                .x = pos_x,
-                .y = pos_y,
+                .x = pos.x,
+                .y = pos.y,
             });
 
-            // Add components (handles nested entity creation)
-            try addComponentsWithNestedEntities(game, scene, entity, entity_def.components, pos_x, pos_y);
+            // Add components (handles nested entity creation), excluding Position which we already added
+            try addComponentsExcludingPosition(game, scene, entity, entity_def.components, pos.x, pos.y);
 
             return .{
                 .entity = entity,

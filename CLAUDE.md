@@ -78,23 +78,26 @@ const Loader = engine.SceneLoader(Prefabs, Components, Scripts);
     // },
 
     .entities = .{
-        .{ .prefab = "player", .x = 400, .y = 300 },
-        .{ .shape = .{ .type = .circle, .radius = 50, .color = .{ .r = 255 } } },
-        // Sprite entities use .components block:
-        .{ .x = 300, .y = 150, .components = .{ .Sprite = .{ .name = "gem.png" }, .Health = .{ .current = 50 } } },
-        // Data-only entities (no visual):
-        .{ .x = 100, .y = 100, .components = .{ .Health = .{ .current = 100 } } },
+        // Prefab with position:
+        .{ .prefab = "player", .components = .{ .Position = .{ .x = 400, .y = 300 } } },
+        // Shape entity (position inside .shape block):
+        .{ .shape = .{ .type = .circle, .x = 100, .y = 100, .radius = 50, .color = .{ .r = 255 } } },
+        // Sprite entity with position in .components:
+        .{ .components = .{ .Position = .{ .x = 300, .y = 150 }, .Sprite = .{ .name = "gem.png" }, .Health = .{ .current = 50 } } },
+        // Data-only entity (no visual):
+        .{ .components = .{ .Position = .{ .x = 100, .y = 100 }, .Health = .{ .current = 100 } } },
     },
 }
 ```
 
-**Position:** Entity-level `.x`/`.y` takes precedence over `.Sprite.x`/`.Sprite.y`.
+**Position:** Use `.Position` component in the `.components` block. Scene-level Position overrides prefab Position.
 
 **Prefab definition** (prefabs/*.zon):
 ```zig
 .{
     .components = .{
-        .Sprite = .{ .name = "idle", .x = 400, .y = 300, .pivot = .bottom_center },
+        .Position = .{ .x = 0, .y = 0 },  // default position, can be overridden in scene
+        .Sprite = .{ .name = "idle", .pivot = .bottom_center },
         .Health = .{ .current = 100, .max = 100 },  // optional custom components
     },
 }
