@@ -2,6 +2,6 @@
     .name = "nested_test",
     .scripts = .{"validate"},
     .entities = .{
-        .{ .prefab = "qux", .x = 100, .y = 200 },
+        .{ .prefab = "qux", .components = .{ .Position = .{ .x = 100, .y = 200 } } },
     },
 }

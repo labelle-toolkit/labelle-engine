@@ -1,12 +1,14 @@
 // Prefab system - comptime prefabs with typed components
 //
 // Prefabs are .zon files imported at comptime that define:
+// - components.Position: Entity position (can be overridden in scene)
 // - components.Sprite: Visual configuration for the entity
 // - components.*: Other typed component data
 //
 // Example prefab file (prefabs/player.zon):
 // .{
 //     .components = .{
+//         .Position = .{ .x = 0, .y = 0 },  // default position, can be overridden in scene
 //         .Sprite = .{ .name = "player.png", .scale = 2.0 },
 //         .Health = .{ .current = 100, .max = 100 },
 //         .Speed = .{ .value = 5.0 },
@@ -26,11 +28,9 @@ pub const ZIndex = struct {
     pub const foreground: u8 = 255;
 };
 
-/// Sprite configuration for prefabs
+/// Sprite configuration for prefabs (visual properties only, position is in Position component)
 pub const SpriteConfig = struct {
     name: []const u8 = "",
-    x: f32 = 0,
-    y: f32 = 0,
     z_index: u8 = ZIndex.characters,
     scale: f32 = 1.0,
     rotation: f32 = 0,
@@ -77,10 +77,13 @@ pub fn PrefabRegistry(comptime prefab_map: anytype) type {
         }
 
         /// Convert comptime sprite data to SpriteConfig
+        /// Only copies fields that exist in SpriteConfig (ignores unknown fields like x/y)
         fn toSpriteConfig(comptime data: anytype) SpriteConfig {
             var result = SpriteConfig{};
             inline for (@typeInfo(@TypeOf(data)).@"struct".fields) |field| {
-                @field(result, field.name) = @field(data, field.name);
+                if (@hasField(SpriteConfig, field.name)) {
+                    @field(result, field.name) = @field(data, field.name);
+                }
             }
             return result;
         }

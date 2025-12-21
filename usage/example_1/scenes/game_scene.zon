@@ -12,9 +12,8 @@
     .entities = .{
         // Ball at top of screen with gravity
         .{
-            .x = 400,
-            .y = 50,
             .components = .{
+                .Position = .{ .x = 400, .y = 50 },
                 .Sprite = .{ .name = "idle_0002", .scale = 2.0 },
                 .Velocity = .{ .x = 0, .y = 0 },
                 .Gravity = .{ .strength = 400.0, .enabled = true },
@@ -23,9 +22,8 @@
         // Player at center
         .{
             .prefab = "player",
-            .x = 400,
-            .y = 300,
             .components = .{
+                .Position = .{ .x = 400, .y = 300 },
                 .Velocity = .{ .x = 0, .y = 0 },
                 .Health = .{ .current = 100, .max = 100 },
             },
@@ -34,9 +32,8 @@
         // Enemy moving right (starts on left side)
         .{
             .prefab = "enemy",
-            .x = 150,
-            .y = 300,
             .components = .{
+                .Position = .{ .x = 150, .y = 300 },
                 .Velocity = .{ .x = 50, .y = 0 },
                 .Health = .{ .current = 30, .max = 30 },
             },
@@ -45,9 +42,8 @@
         // Enemy moving left (starts on right side)
         .{
             .prefab = "enemy",
-            .x = 650,
-            .y = 300,
             .components = .{
+                .Position = .{ .x = 650, .y = 300 },
                 .Velocity = .{ .x = -50, .y = 0 },
                 .Health = .{ .current = 30, .max = 30 },
             },
@@ -55,25 +51,22 @@
 
         // Extra characters
         .{
-            .x = 300,
-            .y = 450,
             .components = .{
+                .Position = .{ .x = 300, .y = 450 },
                 .Sprite = .{ .name = "jump_0001" },
                 .Health = .{ .current = 50, .max = 50 },
             },
         },
         .{
-            .x = 500,
-            .y = 450,
             .components = .{
+                .Position = .{ .x = 500, .y = 450 },
                 .Sprite = .{ .name = "run_0001" },
                 .Velocity = .{ .x = 0, .y = 0 },
             },
         },
         .{
-            .x = 200,
-            .y = 150,
             .components = .{
+                .Position = .{ .x = 200, .y = 150 },
                 .Sprite = .{ .name = "idle_0003", .scale = 1.5 },
                 .Health = .{ .current = 75, .max = 75 },
             },
