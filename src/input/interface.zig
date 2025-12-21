@@ -117,6 +117,7 @@ pub fn InputInterface(comptime Impl: type) type {
 const BackendImpl = switch (backend) {
     .raylib => @import("raylib_input.zig"),
     .sokol => @import("sokol_input.zig"),
+    .sdl => @import("sdl_input.zig"),
 };
 
 /// The Input type for the selected backend
