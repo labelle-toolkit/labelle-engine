@@ -31,25 +31,17 @@ pub const backend: Backend = build_options.backend;
 pub fn AudioInterface(comptime Impl: type) type {
     // Compile-time validation: ensure Impl has all required methods
     comptime {
-        if (!@hasDecl(Impl, "init")) @compileError("Audio backend must have init method");
-        if (!@hasDecl(Impl, "deinit")) @compileError("Audio backend must have deinit method");
-        if (!@hasDecl(Impl, "update")) @compileError("Audio backend must have update method");
-        if (!@hasDecl(Impl, "loadSound")) @compileError("Audio backend must have loadSound method");
-        if (!@hasDecl(Impl, "unloadSound")) @compileError("Audio backend must have unloadSound method");
-        if (!@hasDecl(Impl, "playSound")) @compileError("Audio backend must have playSound method");
-        if (!@hasDecl(Impl, "stopSound")) @compileError("Audio backend must have stopSound method");
-        if (!@hasDecl(Impl, "setSoundVolume")) @compileError("Audio backend must have setSoundVolume method");
-        if (!@hasDecl(Impl, "isSoundPlaying")) @compileError("Audio backend must have isSoundPlaying method");
-        if (!@hasDecl(Impl, "loadMusic")) @compileError("Audio backend must have loadMusic method");
-        if (!@hasDecl(Impl, "unloadMusic")) @compileError("Audio backend must have unloadMusic method");
-        if (!@hasDecl(Impl, "playMusic")) @compileError("Audio backend must have playMusic method");
-        if (!@hasDecl(Impl, "stopMusic")) @compileError("Audio backend must have stopMusic method");
-        if (!@hasDecl(Impl, "pauseMusic")) @compileError("Audio backend must have pauseMusic method");
-        if (!@hasDecl(Impl, "resumeMusic")) @compileError("Audio backend must have resumeMusic method");
-        if (!@hasDecl(Impl, "setMusicVolume")) @compileError("Audio backend must have setMusicVolume method");
-        if (!@hasDecl(Impl, "isMusicPlaying")) @compileError("Audio backend must have isMusicPlaying method");
-        if (!@hasDecl(Impl, "setMasterVolume")) @compileError("Audio backend must have setMasterVolume method");
-        if (!@hasDecl(Impl, "isAvailable")) @compileError("Audio backend must have isAvailable method");
+        const required_fns = .{
+            "init",           "deinit",         "update",
+            "loadSound",      "unloadSound",    "playSound",      "stopSound",      "setSoundVolume", "isSoundPlaying",
+            "loadMusic",      "unloadMusic",    "playMusic",      "stopMusic",      "pauseMusic",     "resumeMusic",    "setMusicVolume", "isMusicPlaying",
+            "setMasterVolume", "isAvailable",
+        };
+        for (required_fns) |name| {
+            if (!@hasDecl(Impl, name)) {
+                @compileError("Audio backend must have " ++ name ++ " method");
+            }
+        }
     }
 
     return struct {

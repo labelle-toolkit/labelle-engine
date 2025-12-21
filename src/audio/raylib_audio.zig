@@ -3,6 +3,7 @@
 //! Full audio implementation using raylib's audio system.
 //! Supports both sound effects (loaded into memory) and music (streamed).
 
+const std = @import("std");
 const rl = @import("raylib");
 const types = @import("types.zig");
 
@@ -44,31 +45,12 @@ music_generation: u16,
 pub fn init() Self {
     rl.initAudioDevice();
 
-    var self = Self{
-        .sounds = undefined,
-        .music = undefined,
+    return Self{
+        .sounds = std.mem.zeroes([MAX_SOUNDS]SoundSlot),
+        .music = std.mem.zeroes([MAX_MUSIC]MusicSlot),
         .sound_generation = 1, // Start at 1 so 0 is always invalid
         .music_generation = 1,
     };
-
-    // Initialize all slots as inactive
-    for (&self.sounds) |*slot| {
-        slot.* = .{
-            .sound = undefined,
-            .generation = 0,
-            .active = false,
-        };
-    }
-    for (&self.music) |*slot| {
-        slot.* = .{
-            .music = undefined,
-            .generation = 0,
-            .active = false,
-            .playing = false,
-        };
-    }
-
-    return self;
 }
 
 /// Clean up the audio system
