@@ -24,6 +24,7 @@
 const std = @import("std");
 const labelle = @import("labelle");
 const ecs = @import("ecs");
+const input_mod = @import("input");
 const render_pipeline_mod = @import("render_pipeline.zig");
 
 const Allocator = std.mem.Allocator;
@@ -31,6 +32,7 @@ const Allocator = std.mem.Allocator;
 const RetainedEngine = render_pipeline_mod.RetainedEngine;
 const Registry = ecs.Registry;
 const Entity = ecs.Entity;
+const Input = input_mod.Input;
 
 // Re-export render pipeline types
 pub const RenderPipeline = render_pipeline_mod.RenderPipeline;
@@ -80,6 +82,7 @@ pub const Game = struct {
     retained_engine: RetainedEngine,
     registry: Registry,
     pipeline: RenderPipeline,
+    input: Input,
 
     // Scene management
     scenes: std.StringHashMap(SceneEntry),
@@ -109,6 +112,8 @@ pub const Game = struct {
         var pipeline = RenderPipeline.init(allocator, &retained_engine);
         errdefer pipeline.deinit();
 
+        const input = Input.init();
+
         // Build the Game struct. Note: pipeline.engine currently points to the
         // local `retained_engine` variable above, which will become invalid after
         // the struct is moved to the caller's stack.
@@ -117,6 +122,7 @@ pub const Game = struct {
             .retained_engine = retained_engine,
             .registry = registry,
             .pipeline = pipeline,
+            .input = input,
             .scenes = std.StringHashMap(SceneEntry).init(allocator),
             .current_scene_name = null,
             .pending_scene_change = null,
@@ -148,6 +154,7 @@ pub const Game = struct {
         self.scenes.deinit();
         self.pipeline.deinit();
         self.registry.deinit();
+        self.input.deinit();
         self.retained_engine.deinit();
     }
 
@@ -339,14 +346,25 @@ pub const Game = struct {
 
     // ==================== Game Loop ====================
 
-    /// Run the default game loop
+    /// Run the default game loop.
+    ///
+    /// Note: This polling-style game loop works with raylib and SDL backends.
+    /// For sokol backend, use sokol's callback-based event loop directly:
+    /// - Register a sokol event callback that calls `game.getInput().processEvent(event)`
+    /// - In your frame callback, call `game.getInput().beginFrame()` at the start
     pub fn run(self: *Game) !void {
         try self.runWithCallback(null);
     }
 
-    /// Run the game loop with an optional frame callback
+    /// Run the game loop with an optional frame callback.
+    ///
+    /// Note: This polling-style game loop works with raylib and SDL backends.
+    /// For sokol backend, you must use sokol's callback-based architecture instead.
     pub fn runWithCallback(self: *Game, callback: ?FrameCallback) !void {
         while (self.running and self.retained_engine.isRunning()) {
+            // Begin input frame (clears per-frame state)
+            self.input.beginFrame();
+
             const dt = self.retained_engine.getDeltaTime();
 
             // Call custom frame callback if provided
@@ -437,6 +455,11 @@ pub const Game = struct {
     /// Get access to the render pipeline (for advanced use)
     pub fn getPipeline(self: *Game) *RenderPipeline {
         return &self.pipeline;
+    }
+
+    /// Get access to the input system
+    pub fn getInput(self: *Game) *Input {
+        return &self.input;
     }
 
     /// Get delta time from retained engine

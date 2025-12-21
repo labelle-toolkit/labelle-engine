@@ -4,6 +4,7 @@ const std = @import("std");
 pub const Backend = enum {
     raylib,
     sokol,
+    sdl,
 };
 
 /// ECS backend selection
@@ -39,6 +40,23 @@ pub fn build(b: *std.Build) void {
     });
     const labelle = labelle_dep.module("labelle");
 
+    // Input backend dependencies
+    const raylib_dep = b.dependency("raylib_zig", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const raylib = raylib_dep.module("raylib");
+
+    const sokol_dep = b.dependency("sokol", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const sokol = sokol_dep.module("sokol");
+
+    // SDL module - get from labelle-gfx's re-exported module
+    // labelle-gfx v0.15.0+ re-exports SDL to avoid Zig module conflicts
+    const sdl = labelle_dep.builder.modules.get("sdl").?;
+
     const zspec_dep = b.dependency("zspec", .{
         .target = target,
         .optimize = optimize,
@@ -69,6 +87,19 @@ pub fn build(b: *std.Build) void {
         },
     });
 
+    // Create the Input interface module that wraps the selected backend
+    const input_interface = b.addModule("input", .{
+        .root_source_file = b.path("src/input/interface.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "build_options", .module = build_options_mod },
+            .{ .name = "raylib", .module = raylib },
+            .{ .name = "sokol", .module = sokol },
+            .{ .name = "sdl2", .module = sdl },
+        },
+    });
+
     // Main module
     const engine_mod = b.addModule("labelle-engine", .{
         .root_source_file = b.path("src/scene.zig"),
@@ -77,6 +108,7 @@ pub fn build(b: *std.Build) void {
         .imports = &.{
             .{ .name = "labelle", .module = labelle },
             .{ .name = "ecs", .module = ecs_interface },
+            .{ .name = "input", .module = input_interface },
             .{ .name = "build_options", .module = build_options_mod },
         },
     });
@@ -91,6 +123,7 @@ pub fn build(b: *std.Build) void {
             .imports = &.{
                 .{ .name = "labelle", .module = labelle },
                 .{ .name = "ecs", .module = ecs_interface },
+                .{ .name = "input", .module = input_interface },
                 .{ .name = "build_options", .module = build_options_mod },
             },
         }),
@@ -111,6 +144,7 @@ pub fn build(b: *std.Build) void {
                 .{ .name = "labelle-engine", .module = engine_mod },
                 .{ .name = "labelle", .module = labelle },
                 .{ .name = "ecs", .module = ecs_interface },
+                .{ .name = "input", .module = input_interface },
                 .{ .name = "build_options", .module = build_options_mod },
             },
         }),

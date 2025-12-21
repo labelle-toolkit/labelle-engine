@@ -8,7 +8,7 @@
 
 .{
     .name = "game_scene",
-    .scripts = .{"gravity"},
+    .scripts = .{ "gravity", "player_input" },
     .entities = .{
         // Ball at top of screen with gravity
         .{

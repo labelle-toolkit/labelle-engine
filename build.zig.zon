@@ -13,8 +13,8 @@
             .hash = "zflecs-0.2.0-dev-1PN3ym9mOgCyE8w0DdK_Uf7FAob-nm0Dp_lZKR3QyJaC",
         },
         .@"labelle-gfx" = .{
-            .url = "git+https://github.com/labelle-toolkit/labelle-gfx?ref=v0.14.0#fc16a96d7a6104858ceb5239dfde69ce1d755d55",
-            .hash = "labelle-0.14.0-2bWPIotlBgAmQSAoLc_whPfh5ombk-TyQDyHch8AGzLc",
+            .url = "git+https://github.com/labelle-toolkit/labelle-gfx?ref=v0.15.0#92413f7c7505a5eb962416e3f163b5dd6b3eaed7",
+            .hash = "labelle_gfx-0.15.0-WZ2XcGUtBgArJi5KCD74cV35FW6DOuOpRdjYMClJOPeQ",
         },
         .zspec = .{
             .url = "git+https://github.com/apotema/zspec#4d45cc5cda87312312040fcaa205720246d24953",
@@ -23,6 +23,14 @@
         .zts = .{
             .url = "git+https://github.com/zigster64/zts#ca98e23fcf1a4fa331c80f5cd2e72f6838daf7ee",
             .hash = "zts-0.14.1-_M80Of22AgBwArz6uCXR49IoEjlzNt5yhu7KV8cWl5jr",
+        },
+        .raylib_zig = .{
+            .url = "git+https://github.com/raylib-zig/raylib-zig#a4d18b2d1cf8fdddec68b5b084535fca0475f466",
+            .hash = "raylib_zig-5.6.0-dev-KE8REL5MBQAf3p497t52Xw9P7ojndIkVOWPXnLiLLw2P",
+        },
+        .sokol = .{
+            .url = "git+https://github.com/floooh/sokol-zig.git#bb1a4e95b243e655e788076c545ca6a1f6bf1558",
+            .hash = "sokol-0.1.0-pb1HK_0CLwBZEK_EZfeR-l9Mtt-BBIuucIZ-c5tLDZxc",
         },
     },
     .paths = .{

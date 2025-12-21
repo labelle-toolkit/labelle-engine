@@ -9,6 +9,7 @@
 const std = @import("std");
 const labelle = @import("labelle");
 const ecs = @import("ecs");
+const input_mod = @import("input");
 const build_options = @import("build_options");
 
 // Re-export build options for downstream users
@@ -76,6 +77,12 @@ pub const CameraSlot = loader.CameraSlot;
 // Re-export ECS types
 pub const Registry = ecs.Registry;
 pub const Entity = ecs.Entity;
+
+// Re-export Input types
+pub const Input = input_mod.Input;
+pub const KeyboardKey = input_mod.KeyboardKey;
+pub const MouseButton = input_mod.MouseButton;
+pub const MousePosition = input_mod.MousePosition;
 
 // Re-export project config types
 pub const ProjectConfig = project_config.ProjectConfig;
