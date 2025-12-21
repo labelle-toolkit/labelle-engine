@@ -57,6 +57,12 @@ pub const Plugin = struct {
     /// Module name exported by the package (e.g., "pathfinding" for labelle-pathfinding)
     /// If not provided, defaults to the plugin name with hyphens replaced by underscores
     module: ?[]const u8 = null,
+    /// Components type exported by the plugin. If null, no Components are included.
+    /// Examples:
+    ///   - null: don't include any Components from this plugin (default)
+    ///   - "Components": use plugin.Components
+    ///   - "Components(MyItem)": use plugin.Components(MyItem) for parameterized types
+    components: ?[]const u8 = null,
 };
 
 /// Atlas resource declaration

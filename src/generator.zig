@@ -188,7 +188,14 @@ fn generateMainZigRaylib(
     var buf: std.ArrayListUnmanaged(u8) = .{};
     const writer = buf.writer(allocator);
 
-    const has_plugins = config.plugins.len > 0;
+    // Check if any plugin contributes Components
+    var has_plugin_components = false;
+    for (config.plugins) |plugin| {
+        if (plugin.components != null) {
+            has_plugin_components = true;
+            break;
+        }
+    }
 
     // Pre-compute sanitized plugin names for Zig identifiers
     var plugin_zig_names = try allocator.alloc([]const u8, config.plugins.len);
@@ -243,10 +250,11 @@ fn generateMainZigRaylib(
         try zts.print(main_raylib_tmpl, "prefab_registry_end", .{}, writer);
     }
 
-    // Component registry - use ComponentRegistryMulti when plugins are present
-    if (has_plugins) {
+    // Component registry - use ComponentRegistryMulti when plugins contribute Components
+    if (has_plugin_components) {
         // Use ComponentRegistryMulti to merge base components with plugin components
         if (components.len == 0) {
+            // Empty start template already includes closing brace
             try zts.print(main_raylib_tmpl, "component_registry_multi_empty_start", .{}, writer);
         } else {
             try zts.print(main_raylib_tmpl, "component_registry_multi_start", .{}, writer);
@@ -254,11 +262,13 @@ fn generateMainZigRaylib(
                 const type_name = capitalize(name);
                 try zts.print(main_raylib_tmpl, "component_registry_multi_item", .{ type_name[0..name.len], type_name[0..name.len] }, writer);
             }
+            try zts.print(main_raylib_tmpl, "component_registry_multi_base_end", .{}, writer);
         }
-        try zts.print(main_raylib_tmpl, "component_registry_multi_base_end", .{}, writer);
-        // Add plugin Components
-        for (plugin_zig_names) |zig_name| {
-            try zts.print(main_raylib_tmpl, "component_registry_multi_plugin", .{zig_name}, writer);
+        // Add plugin Components (only for plugins that specify a components field)
+        for (config.plugins, 0..) |plugin, i| {
+            if (plugin.components) |components_expr| {
+                try zts.print(main_raylib_tmpl, "component_registry_multi_plugin", .{ plugin_zig_names[i], components_expr }, writer);
+            }
         }
         try zts.print(main_raylib_tmpl, "component_registry_multi_end", .{}, writer);
     } else {
