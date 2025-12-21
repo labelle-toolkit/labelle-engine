@@ -51,6 +51,7 @@ pub fn coerceValue(comptime FieldType: type, comptime data_value: anytype) Field
 
 /// Build a struct from comptime anonymous struct data.
 /// Recursively coerces nested fields.
+/// Raises compile error for missing required fields (fields without defaults).
 pub fn buildStruct(comptime StructType: type, comptime data: anytype) StructType {
     const fields = std.meta.fields(StructType);
     var result: StructType = undefined;
@@ -63,7 +64,7 @@ pub fn buildStruct(comptime StructType: type, comptime data: anytype) StructType
             const default_ptr: *const field.type = @ptrCast(@alignCast(ptr));
             @field(result, field.name) = default_ptr.*;
         } else {
-            @field(result, field.name) = std.mem.zeroes(field.type);
+            @compileError("Missing required field '" ++ field.name ++ "' for struct '" ++ @typeName(StructType) ++ "'");
         }
     }
 
