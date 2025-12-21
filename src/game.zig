@@ -25,6 +25,7 @@ const std = @import("std");
 const labelle = @import("labelle");
 const ecs = @import("ecs");
 const input_mod = @import("input");
+const audio_mod = @import("audio");
 const render_pipeline_mod = @import("render_pipeline.zig");
 
 const Allocator = std.mem.Allocator;
@@ -33,6 +34,7 @@ const RetainedEngine = render_pipeline_mod.RetainedEngine;
 const Registry = ecs.Registry;
 const Entity = ecs.Entity;
 const Input = input_mod.Input;
+const Audio = audio_mod.Audio;
 
 // Re-export render pipeline types
 pub const RenderPipeline = render_pipeline_mod.RenderPipeline;
@@ -83,6 +85,7 @@ pub const Game = struct {
     registry: Registry,
     pipeline: RenderPipeline,
     input: Input,
+    audio: Audio,
 
     // Scene management
     scenes: std.StringHashMap(SceneEntry),
@@ -113,6 +116,7 @@ pub const Game = struct {
         errdefer pipeline.deinit();
 
         const input = Input.init();
+        const audio = Audio.init();
 
         // Build the Game struct. Note: pipeline.engine currently points to the
         // local `retained_engine` variable above, which will become invalid after
@@ -123,6 +127,7 @@ pub const Game = struct {
             .registry = registry,
             .pipeline = pipeline,
             .input = input,
+            .audio = audio,
             .scenes = std.StringHashMap(SceneEntry).init(allocator),
             .current_scene_name = null,
             .pending_scene_change = null,
@@ -155,6 +160,7 @@ pub const Game = struct {
         self.pipeline.deinit();
         self.registry.deinit();
         self.input.deinit();
+        self.audio.deinit();
         self.retained_engine.deinit();
     }
 
@@ -375,6 +381,9 @@ pub const Game = struct {
             // Sync ECS state to RetainedEngine
             self.pipeline.sync(&self.registry);
 
+            // Update audio (for music streaming)
+            self.audio.update();
+
             // Render
             self.retained_engine.beginFrame();
             self.retained_engine.render();
@@ -460,6 +469,11 @@ pub const Game = struct {
     /// Get access to the input system
     pub fn getInput(self: *Game) *Input {
         return &self.input;
+    }
+
+    /// Get access to the audio system
+    pub fn getAudio(self: *Game) *Audio {
+        return &self.audio;
     }
 
     /// Get delta time from retained engine

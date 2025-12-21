@@ -57,6 +57,13 @@ pub fn build(b: *std.Build) void {
     // labelle-gfx v0.15.0+ re-exports SDL to avoid Zig module conflicts
     const sdl = labelle_dep.builder.modules.get("sdl").?;
 
+    // zaudio (miniaudio wrapper) for sokol/SDL audio backends
+    const zaudio_dep = b.dependency("zaudio", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const zaudio = zaudio_dep.module("root");
+
     const zspec_dep = b.dependency("zspec", .{
         .target = target,
         .optimize = optimize,
@@ -100,6 +107,23 @@ pub fn build(b: *std.Build) void {
         },
     });
 
+    // Create the Audio interface module that wraps the selected backend
+    const audio_interface = b.addModule("audio", .{
+        .root_source_file = b.path("src/audio/interface.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "build_options", .module = build_options_mod },
+            .{ .name = "raylib", .module = raylib },
+            .{ .name = "zaudio", .module = zaudio },
+        },
+    });
+
+    // Link miniaudio library for audio module (only needed for sokol/SDL backends)
+    if (backend != .raylib) {
+        audio_interface.linkLibrary(zaudio_dep.artifact("miniaudio"));
+    }
+
     // Main module
     const engine_mod = b.addModule("labelle-engine", .{
         .root_source_file = b.path("src/scene.zig"),
@@ -109,6 +133,7 @@ pub fn build(b: *std.Build) void {
             .{ .name = "labelle", .module = labelle },
             .{ .name = "ecs", .module = ecs_interface },
             .{ .name = "input", .module = input_interface },
+            .{ .name = "audio", .module = audio_interface },
             .{ .name = "build_options", .module = build_options_mod },
         },
     });
@@ -124,6 +149,7 @@ pub fn build(b: *std.Build) void {
                 .{ .name = "labelle", .module = labelle },
                 .{ .name = "ecs", .module = ecs_interface },
                 .{ .name = "input", .module = input_interface },
+                .{ .name = "audio", .module = audio_interface },
                 .{ .name = "build_options", .module = build_options_mod },
             },
         }),
@@ -145,6 +171,7 @@ pub fn build(b: *std.Build) void {
                 .{ .name = "labelle", .module = labelle },
                 .{ .name = "ecs", .module = ecs_interface },
                 .{ .name = "input", .module = input_interface },
+                .{ .name = "audio", .module = audio_interface },
                 .{ .name = "build_options", .module = build_options_mod },
             },
         }),
