@@ -98,7 +98,8 @@ fn hasSpriteInComponents(comptime entity_def: anytype) bool {
 }
 
 /// Get position from entity definition's .components.Position
-fn getPositionFromComponents(comptime entity_def: anytype) struct { x: f32, y: f32 } {
+/// Returns null if no Position component is defined
+fn getPositionFromComponents(comptime entity_def: anytype) ?struct { x: f32, y: f32 } {
     if (@hasField(@TypeOf(entity_def), "components")) {
         if (@hasField(@TypeOf(entity_def.components), "Position")) {
             const pos = entity_def.components.Position;
@@ -108,7 +109,7 @@ fn getPositionFromComponents(comptime entity_def: anytype) struct { x: f32, y: f
             };
         }
     }
-    return .{ .x = 0, .y = 0 };
+    return null;
 }
 
 /// Get sprite name from sprite data (.name or .sprite_name field)
@@ -357,7 +358,7 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
             const entity = game.createEntity();
 
             // Get position from .components.Position, relative to parent
-            const local_pos = getPositionFromComponents(entity_def);
+            const local_pos = getPositionFromComponents(entity_def) orelse .{ .x = 0, .y = 0 };
             const pos_x = parent_x + local_pos.x;
             const pos_y = parent_y + local_pos.y;
 
@@ -398,7 +399,7 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
             const entity = game.createEntity();
 
             // Get position from .components.Position, relative to parent
-            const local_pos = getPositionFromComponents(entity_def);
+            const local_pos = getPositionFromComponents(entity_def) orelse .{ .x = 0, .y = 0 };
             const child_x = parent_x + local_pos.x;
             const child_y = parent_y + local_pos.y;
             game.addPosition(entity, Position{ .x = child_x, .y = child_y });
@@ -649,14 +650,8 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
         /// Get position for a prefab entity: scene .components.Position overrides prefab .components.Position
         fn getPrefabPosition(comptime prefab_name: []const u8, comptime entity_def: anytype) struct { x: f32, y: f32 } {
             // Scene-level Position takes precedence
-            if (@hasField(@TypeOf(entity_def), "components")) {
-                if (@hasField(@TypeOf(entity_def.components), "Position")) {
-                    const pos = entity_def.components.Position;
-                    return .{
-                        .x = getFieldOrDefault(pos, "x", @as(f32, 0)),
-                        .y = getFieldOrDefault(pos, "y", @as(f32, 0)),
-                    };
-                }
+            if (getPositionFromComponents(entity_def)) |pos| {
+                return pos;
             }
             // Fall back to prefab's Position
             if (comptime Prefabs.hasComponents(prefab_name)) {
@@ -749,7 +744,7 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
             const entity = game.createEntity();
 
             // Get position from .components.Position
-            const pos = getPositionFromComponents(entity_def);
+            const pos = getPositionFromComponents(entity_def) orelse .{ .x = 0, .y = 0 };
 
             // Add Position component
             game.addPosition(entity, Position{
@@ -794,7 +789,7 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
             const entity = game.createEntity();
 
             // Get position from .components.Position
-            const pos = getPositionFromComponents(entity_def);
+            const pos = getPositionFromComponents(entity_def) orelse .{ .x = 0, .y = 0 };
 
             // Add Position component
             game.addPosition(entity, Position{

@@ -201,7 +201,7 @@ pub const MERGE_SPRITE_WITH_OVERRIDES = struct {
 };
 
 pub const PREFAB_REGISTRY = struct {
-    // Test prefab data using new .components format (Position is separate from Sprite)
+    // Test prefab data using new .components format (Position and Sprite are separate components)
     const test_player_prefab = .{
         .components = .{
             .Position = .{ .x = 100, .y = 200 },
