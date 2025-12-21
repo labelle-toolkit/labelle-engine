@@ -4,7 +4,7 @@
 
 /// Keyboard key codes (compatible with raylib key codes)
 pub const KeyboardKey = enum(c_int) {
-    null = 0,
+    key_null = 0,
     // Alphanumeric keys
     apostrophe = 39,
     comma = 44,

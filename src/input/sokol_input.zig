@@ -132,8 +132,7 @@ pub fn isKeyReleased(self: *const Self, key: KeyboardKey) bool {
 
 /// Check if a mouse button is currently held down
 pub fn isMouseButtonDown(self: *const Self, button: MouseButton) bool {
-    const idx = @as(usize, @intCast(@intFromEnum(button)));
-    if (idx < MAX_MOUSE_BUTTONS) {
+    if (mouseButtonToIndex(button)) |idx| {
         return self.mouse_states[idx].down;
     }
     return false;
@@ -141,8 +140,7 @@ pub fn isMouseButtonDown(self: *const Self, button: MouseButton) bool {
 
 /// Check if a mouse button was pressed this frame
 pub fn isMouseButtonPressed(self: *const Self, button: MouseButton) bool {
-    const idx = @as(usize, @intCast(@intFromEnum(button)));
-    if (idx < MAX_MOUSE_BUTTONS) {
+    if (mouseButtonToIndex(button)) |idx| {
         return self.mouse_states[idx].pressed;
     }
     return false;
@@ -150,8 +148,7 @@ pub fn isMouseButtonPressed(self: *const Self, button: MouseButton) bool {
 
 /// Check if a mouse button was released this frame
 pub fn isMouseButtonReleased(self: *const Self, button: MouseButton) bool {
-    const idx = @as(usize, @intCast(@intFromEnum(button)));
-    if (idx < MAX_MOUSE_BUTTONS) {
+    if (mouseButtonToIndex(button)) |idx| {
         return self.mouse_states[idx].released;
     }
     return false;
@@ -172,7 +169,16 @@ pub fn getMouseWheelMove(self: *const Self) f32 {
 /// Convert KeyboardKey enum to array index
 fn keyToIndex(key: KeyboardKey) ?usize {
     const val = @intFromEnum(key);
-    if (val >= 0 and val < MAX_KEYS) {
+    if (val < MAX_KEYS) {
+        return @intCast(val);
+    }
+    return null;
+}
+
+/// Convert MouseButton enum to array index
+fn mouseButtonToIndex(button: MouseButton) ?usize {
+    const val = @intFromEnum(button);
+    if (val < MAX_MOUSE_BUTTONS) {
         return @intCast(val);
     }
     return null;
@@ -182,7 +188,7 @@ fn keyToIndex(key: KeyboardKey) ?usize {
 /// Sokol keycodes match GLFW/raylib values, so we can use them directly
 fn sokolToKeyIndex(keycode: sapp.Keycode) ?usize {
     const val = @intFromEnum(keycode);
-    if (val >= 0 and val < MAX_KEYS) {
+    if (val < MAX_KEYS) {
         return @intCast(val);
     }
     return null;
@@ -191,7 +197,7 @@ fn sokolToKeyIndex(keycode: sapp.Keycode) ?usize {
 /// Convert sokol mouse button to our index
 fn sokolToMouseIndex(button: sapp.Mousebutton) ?usize {
     const val = @intFromEnum(button);
-    if (val >= 0 and val < MAX_MOUSE_BUTTONS) {
+    if (val < MAX_MOUSE_BUTTONS) {
         return @intCast(val);
     }
     return null;
