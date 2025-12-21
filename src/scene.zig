@@ -10,6 +10,7 @@ const std = @import("std");
 const labelle = @import("labelle");
 const ecs = @import("ecs");
 const input_mod = @import("input");
+const audio_mod = @import("audio");
 const build_options = @import("build_options");
 
 // Re-export build options for downstream users
@@ -83,6 +84,12 @@ pub const Input = input_mod.Input;
 pub const KeyboardKey = input_mod.KeyboardKey;
 pub const MouseButton = input_mod.MouseButton;
 pub const MousePosition = input_mod.MousePosition;
+
+// Re-export Audio types
+pub const Audio = audio_mod.Audio;
+pub const SoundId = audio_mod.SoundId;
+pub const MusicId = audio_mod.MusicId;
+pub const AudioError = audio_mod.AudioError;
 
 // Re-export project config types
 pub const ProjectConfig = project_config.ProjectConfig;
