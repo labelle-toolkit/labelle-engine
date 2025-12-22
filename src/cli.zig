@@ -258,8 +258,12 @@ fn runGenerate(allocator: std.mem.Allocator, options: Options) !void {
             return err;
         };
         // Get output directory for display (after successful generation)
-        const output_dir = generator.getOutputDir(allocator, options.project_path) catch ".labelle";
-        defer if (output_dir.ptr != ".labelle".ptr) allocator.free(output_dir);
+        var must_free_output_dir = true;
+        const output_dir = generator.getOutputDir(allocator, options.project_path) catch blk: {
+            must_free_output_dir = false;
+            break :blk ".labelle";
+        };
+        defer if (must_free_output_dir) allocator.free(output_dir);
         std.debug.print("Generated:\n", .{});
         std.debug.print("  - {s}/build.zig.zon\n", .{output_dir});
         std.debug.print("  - {s}/build.zig\n", .{output_dir});
