@@ -55,11 +55,16 @@ fn fetchPackageHash(allocator: std.mem.Allocator, url: []const u8) !?[]const u8 
         return null;
     };
 
+    // Wait for process and check exit status
     const term = child.wait() catch {
         return null;
     };
 
     if (term.Exited != 0) {
+        // Log stderr on failure for debugging
+        if (stderr_buf.items.len > 0) {
+            std.debug.print("zig fetch failed for '{s}':\n{s}\n", .{ url, stderr_buf.items });
+        }
         return null;
     }
 
@@ -102,31 +107,23 @@ pub fn generateBuildZon(allocator: std.mem.Allocator, config: ProjectConfig, opt
     // Write engine dependency (path or URL)
     if (options.engine_path) |path| {
         try zts.print(build_zig_zon_tmpl, "engine_path", .{path}, writer);
-    } else {
-        // URL mode - try to fetch hash if enabled and version provided
-        if (options.engine_version) |engine_version| {
-            if (options.fetch_hashes) {
-                const engine_url = try std.fmt.allocPrint(allocator, "git+https://github.com/labelle-toolkit/labelle-engine#v{s}", .{engine_version});
-                defer allocator.free(engine_url);
+    } else if (options.fetch_hashes and options.engine_version != null) {
+        // URL mode with hash fetching enabled
+        const engine_version = options.engine_version.?;
+        const engine_url = try std.fmt.allocPrint(allocator, "git+https://github.com/labelle-toolkit/labelle-engine#v{s}", .{engine_version});
+        defer allocator.free(engine_url);
 
-                std.debug.print("Fetching labelle-engine hash...\n", .{});
-                if (try fetchPackageHash(allocator, engine_url)) |hash| {
-                    defer allocator.free(hash);
-                    // Template args: version, hash
-                    try zts.print(build_zig_zon_tmpl, "engine_url", .{ engine_version, hash }, writer);
-                } else {
-                    // Fetch failed, fall back to no-hash template
-                    std.debug.print("Warning: Could not fetch engine hash, using placeholder\n", .{});
-                    try zts.print(build_zig_zon_tmpl, "engine_url_no_hash", .{}, writer);
-                }
-            } else {
-                // Hashes disabled, use no-hash template
-                try zts.print(build_zig_zon_tmpl, "engine_url_no_hash", .{}, writer);
-            }
+        std.debug.print("Fetching labelle-engine hash...\n", .{});
+        if (try fetchPackageHash(allocator, engine_url)) |hash| {
+            defer allocator.free(hash);
+            try zts.print(build_zig_zon_tmpl, "engine_url", .{ engine_version, hash }, writer);
         } else {
-            // No version provided, use no-hash template
+            std.debug.print("Warning: Could not fetch engine hash, using placeholder\n", .{});
             try zts.print(build_zig_zon_tmpl, "engine_url_no_hash", .{}, writer);
         }
+    } else {
+        // Hashes disabled or no version provided
+        try zts.print(build_zig_zon_tmpl, "engine_url_no_hash", .{}, writer);
     }
     try zts.print(build_zig_zon_tmpl, "engine_end", .{}, writer);
 
