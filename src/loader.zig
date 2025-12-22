@@ -276,12 +276,12 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
 
             // Add components from prefab definition (excluding Sprite and Position which are already added)
             if (comptime Prefabs.hasComponents(prefab_name)) {
-                try addComponentsExcludingSprite(game, scene, entity, Prefabs.getComponents(prefab_name), pos_x, pos_y);
+                try addComponentsExcluding(game, scene, entity, Prefabs.getComponents(prefab_name), pos_x, pos_y, .{ "Sprite", "Position" });
             }
 
             // Add/override components from entity definition (excluding Sprite and Position)
             if (@hasField(@TypeOf(entity_def), "components")) {
-                try addComponentsExcludingSprite(game, scene, entity, entity_def.components, pos_x, pos_y);
+                try addComponentsExcluding(game, scene, entity, entity_def.components, pos_x, pos_y, .{ "Sprite", "Position" });
             }
 
             return .{
@@ -345,7 +345,7 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
             try game.addShape(entity, shape);
 
             // Add other components (excluding Shape and Position which we already handled)
-            try addComponentsExcludingShape(game, scene, entity, entity_def.components, pos_x, pos_y);
+            try addComponentsExcluding(game, scene, entity, entity_def.components, pos_x, pos_y, .{ "Shape", "Position" });
 
             return .{
                 .entity = entity,
@@ -387,7 +387,7 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
             });
 
             // Add other components (excluding Sprite and Position)
-            try addComponentsExcludingSprite(game, scene, entity, entity_def.components, pos_x, pos_y);
+            try addComponentsExcluding(game, scene, entity, entity_def.components, pos_x, pos_y, .{ "Sprite", "Position" });
 
             return .{
                 .entity = entity,
@@ -416,7 +416,7 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
 
             // Add components (recursively handles nested entities), excluding Position
             if (@hasField(@TypeOf(entity_def), "components")) {
-                try addComponentsExcludingPosition(game, scene, entity, entity_def.components, child_x, child_y);
+                try addComponentsExcluding(game, scene, entity, entity_def.components, child_x, child_y, .{"Position"});
             }
 
             return .{
@@ -488,62 +488,28 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
             }
         }
 
-        /// Add all components except Sprite and Position (for use when Sprite is in .components block
-        /// and has already been handled separately via game.addSprite(), and Position via game.addPosition()).
-        fn addComponentsExcludingSprite(
+        /// Add all components except those in the excluded_names tuple.
+        /// Used when certain components (like Position, Sprite, Shape) are handled separately.
+        fn addComponentsExcluding(
             game: *Game,
             scene: ?*Scene,
             entity: Entity,
             comptime components_data: anytype,
             parent_x: f32,
             parent_y: f32,
+            comptime excluded_names: anytype,
         ) !void {
             const data_fields = comptime std.meta.fieldNames(@TypeOf(components_data));
-            inline for (data_fields) |field_name| {
-                // Skip Sprite and Position - they're handled specially
-                if (comptime !std.mem.eql(u8, field_name, "Sprite") and !std.mem.eql(u8, field_name, "Position")) {
-                    const field_data = @field(components_data, field_name);
-                    try addComponentWithNestedEntities(game, scene, entity, field_name, field_data, parent_x, parent_y);
-                }
-            }
-        }
 
-        /// Add all components except Position (for data-only entities where Position is handled separately).
-        fn addComponentsExcludingPosition(
-            game: *Game,
-            scene: ?*Scene,
-            entity: Entity,
-            comptime components_data: anytype,
-            parent_x: f32,
-            parent_y: f32,
-        ) !void {
-            const data_fields = comptime std.meta.fieldNames(@TypeOf(components_data));
-            inline for (data_fields) |field_name| {
-                // Skip Position - it's handled specially via game.addPosition()
-                if (comptime !std.mem.eql(u8, field_name, "Position")) {
-                    const field_data = @field(components_data, field_name);
-                    try addComponentWithNestedEntities(game, scene, entity, field_name, field_data, parent_x, parent_y);
+            data_field_loop: inline for (data_fields) |field_name| {
+                // Check if this field should be excluded
+                inline for (excluded_names) |excluded| {
+                    if (comptime std.mem.eql(u8, field_name, excluded)) {
+                        continue :data_field_loop;
+                    }
                 }
-            }
-        }
-
-        /// Add all components except Shape and Position (for use when Shape is in .components block
-        /// and has already been handled separately via game.addShape(), and Position via game.addPosition()).
-        fn addComponentsExcludingShape(
-            game: *Game,
-            scene: ?*Scene,
-            entity: Entity,
-            comptime components_data: anytype,
-            parent_x: f32,
-            parent_y: f32,
-        ) !void {
-            const data_fields = comptime std.meta.fieldNames(@TypeOf(components_data));
-            inline for (data_fields) |field_name| {
-                // Skip Shape and Position - they're handled specially
-                if (comptime !std.mem.eql(u8, field_name, "Shape") and !std.mem.eql(u8, field_name, "Position")) {
-                    const field_data = @field(components_data, field_name);
-                    try addComponentWithNestedEntities(game, scene, entity, field_name, field_data, parent_x, parent_y);
-                }
+                const field_data = @field(components_data, field_name);
+                try addComponentWithNestedEntities(game, scene, entity, field_name, field_data, parent_x, parent_y);
             }
         }
 
@@ -633,7 +599,7 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
 
             // Add components from prefab definition (excluding Sprite which is already added)
             if (comptime Prefabs.hasComponents(prefab_name)) {
-                try addComponentsExcludingSprite(game, scene, entity, Prefabs.getComponents(prefab_name), x, y);
+                try addComponentsExcluding(game, scene, entity, Prefabs.getComponents(prefab_name), x, y, .{ "Sprite", "Position" });
             }
 
             // Add entity to scene
@@ -744,12 +710,12 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
 
             // Add components from prefab definition (excluding Sprite and Position which are already added)
             if (comptime Prefabs.hasComponents(prefab_name)) {
-                try addComponentsExcludingSprite(game, scene, entity, Prefabs.getComponents(prefab_name), pos.x, pos.y);
+                try addComponentsExcluding(game, scene, entity, Prefabs.getComponents(prefab_name), pos.x, pos.y, .{ "Sprite", "Position" });
             }
 
             // Add/override components from scene definition (excluding Sprite and Position)
             if (@hasField(@TypeOf(entity_def), "components")) {
-                try addComponentsExcludingSprite(game, scene, entity, entity_def.components, pos.x, pos.y);
+                try addComponentsExcluding(game, scene, entity, entity_def.components, pos.x, pos.y, .{ "Sprite", "Position" });
             }
 
             return .{
@@ -796,7 +762,7 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
             });
 
             // Add other components (excluding Sprite which we already handled)
-            try addComponentsExcludingSprite(game, scene, entity, entity_def.components, pos.x, pos.y);
+            try addComponentsExcluding(game, scene, entity, entity_def.components, pos.x, pos.y, .{ "Sprite", "Position" });
 
             return .{
                 .entity = entity,
@@ -828,7 +794,7 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
             });
 
             // Add components (handles nested entity creation), excluding Position which we already added
-            try addComponentsExcludingPosition(game, scene, entity, entity_def.components, pos.x, pos.y);
+            try addComponentsExcluding(game, scene, entity, entity_def.components, pos.x, pos.y, .{"Position"});
 
             return .{
                 .entity = entity,
@@ -894,7 +860,7 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
             try game.addShape(entity, shape);
 
             // Add other components (excluding Shape and Position which we already handled)
-            try addComponentsExcludingShape(game, scene, entity, entity_def.components, pos.x, pos.y);
+            try addComponentsExcluding(game, scene, entity, entity_def.components, pos.x, pos.y, .{ "Shape", "Position" });
 
             return .{
                 .entity = entity,
