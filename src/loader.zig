@@ -97,6 +97,14 @@ fn hasSpriteInComponents(comptime entity_def: anytype) bool {
     return false;
 }
 
+/// Check if entity definition has a Shape component in its .components block
+fn hasShapeInComponents(comptime entity_def: anytype) bool {
+    if (@hasField(@TypeOf(entity_def), "components")) {
+        return @hasField(@TypeOf(entity_def.components), "Shape");
+    }
+    return false;
+}
+
 /// Simple position struct for loader internal use
 const Pos = struct { x: f32, y: f32 };
 
@@ -211,9 +219,9 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
                 return try createChildPrefabEntity(game, scene, entity_def, parent_x, parent_y);
             }
 
-            // Check if this is a shape entity
-            if (@hasField(@TypeOf(entity_def), "shape")) {
-                return try createChildShapeEntity(game, scene, entity_def, parent_x, parent_y);
+            // Check if this has Shape in .components (new format)
+            if (comptime hasShapeInComponents(entity_def)) {
+                return try createChildShapeComponentEntity(game, scene, entity_def, parent_x, parent_y);
             }
 
             // Check if this has Sprite in .components
@@ -221,8 +229,12 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
                 return try createChildSpriteEntity(game, scene, entity_def, parent_x, parent_y);
             }
 
-            // Data-only entity (no visual)
-            return try createChildDataEntity(game, scene, entity_def, parent_x, parent_y);
+            // Check if this has components (data-only entity, no visual)
+            if (@hasField(@TypeOf(entity_def), "components")) {
+                return try createChildDataEntity(game, scene, entity_def, parent_x, parent_y);
+            }
+
+            @compileError("Child entity must have .prefab or .components field");
         }
 
         /// Create a child entity that references a prefab
@@ -268,12 +280,12 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
 
             // Add components from prefab definition (excluding Sprite and Position which are already added)
             if (comptime Prefabs.hasComponents(prefab_name)) {
-                try addComponentsExcludingSprite(game, scene, entity, Prefabs.getComponents(prefab_name), pos_x, pos_y);
+                try addComponentsExcluding(game, scene, entity, Prefabs.getComponents(prefab_name), pos_x, pos_y, .{ "Sprite", "Position" });
             }
 
             // Add/override components from entity definition (excluding Sprite and Position)
             if (@hasField(@TypeOf(entity_def), "components")) {
-                try addComponentsExcludingSprite(game, scene, entity, entity_def.components, pos_x, pos_y);
+                try addComponentsExcluding(game, scene, entity, entity_def.components, pos_x, pos_y, .{ "Sprite", "Position" });
             }
 
             return .{
@@ -285,60 +297,59 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
             };
         }
 
-        /// Create a child shape entity with relative positioning
-        fn createChildShapeEntity(
+        /// Create a child shape entity (Shape in .components) with relative positioning
+        fn createChildShapeComponentEntity(
             game: *Game,
             scene: ?*Scene,
             comptime entity_def: anytype,
             parent_x: f32,
             parent_y: f32,
         ) !EntityInstance {
-            const shape_def = entity_def.shape;
+            const shape_data = entity_def.components.Shape;
             const entity = game.createEntity();
 
-            // Position is relative to parent
-            const pos_x = parent_x + getFieldOrDefault(shape_def, "x", @as(f32, 0));
-            const pos_y = parent_y + getFieldOrDefault(shape_def, "y", @as(f32, 0));
+            // Get position from .components.Position, relative to parent
+            const local_pos = getPositionFromComponents(entity_def) orelse Pos{ .x = 0, .y = 0 };
+            const pos_x = parent_x + local_pos.x;
+            const pos_y = parent_y + local_pos.y;
 
             game.addPosition(entity, Position{ .x = pos_x, .y = pos_y });
 
             // Build shape based on type
-            const shape_type = shape_def.type;
+            const shape_type = shape_data.type;
             var shape: Shape = switch (shape_type) {
-                .circle => Shape.circle(getFieldOrDefault(shape_def, "radius", @as(f32, 10))),
+                .circle => Shape.circle(getFieldOrDefault(shape_data, "radius", @as(f32, 10))),
                 .rectangle => Shape.rectangle(
-                    getFieldOrDefault(shape_def, "width", @as(f32, 10)),
-                    getFieldOrDefault(shape_def, "height", @as(f32, 10)),
+                    getFieldOrDefault(shape_data, "width", @as(f32, 10)),
+                    getFieldOrDefault(shape_data, "height", @as(f32, 10)),
                 ),
                 .line => Shape.line(
-                    getFieldOrDefault(shape_def, "end_x", @as(f32, 10)),
-                    getFieldOrDefault(shape_def, "end_y", @as(f32, 0)),
-                    getFieldOrDefault(shape_def, "thickness", @as(f32, 1)),
+                    getFieldOrDefault(shape_data, "end_x", @as(f32, 10)),
+                    getFieldOrDefault(shape_data, "end_y", @as(f32, 0)),
+                    getFieldOrDefault(shape_data, "thickness", @as(f32, 1)),
                 ),
                 else => @compileError("Unknown shape type in nested entity definition"),
             };
 
             // Color
-            if (@hasField(@TypeOf(shape_def), "color")) {
+            if (@hasField(@TypeOf(shape_data), "color")) {
                 shape.color = .{
-                    .r = shape_def.color.r,
-                    .g = shape_def.color.g,
-                    .b = shape_def.color.b,
-                    .a = if (@hasField(@TypeOf(shape_def.color), "a")) shape_def.color.a else 255,
+                    .r = shape_data.color.r,
+                    .g = shape_data.color.g,
+                    .b = shape_data.color.b,
+                    .a = if (@hasField(@TypeOf(shape_data.color), "a")) shape_data.color.a else 255,
                 };
             }
 
             // z_index
-            if (@hasField(@TypeOf(shape_def), "z_index")) {
-                shape.z_index = shape_def.z_index;
+            if (@hasField(@TypeOf(shape_data), "z_index")) {
+                shape.z_index = shape_data.z_index;
             }
 
             try game.addShape(entity, shape);
 
-            // Add components
-            if (@hasField(@TypeOf(entity_def), "components")) {
-                try addComponentsWithNestedEntities(game, scene, entity, entity_def.components, pos_x, pos_y);
-            }
+            // Add other components (excluding Shape and Position which we already handled)
+            try addComponentsExcluding(game, scene, entity, entity_def.components, pos_x, pos_y, .{ "Shape", "Position" });
 
             return .{
                 .entity = entity,
@@ -380,7 +391,7 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
             });
 
             // Add other components (excluding Sprite and Position)
-            try addComponentsExcludingSprite(game, scene, entity, entity_def.components, pos_x, pos_y);
+            try addComponentsExcluding(game, scene, entity, entity_def.components, pos_x, pos_y, .{ "Sprite", "Position" });
 
             return .{
                 .entity = entity,
@@ -408,9 +419,7 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
             game.addPosition(entity, Position{ .x = child_x, .y = child_y });
 
             // Add components (recursively handles nested entities), excluding Position
-            if (@hasField(@TypeOf(entity_def), "components")) {
-                try addComponentsExcludingPosition(game, scene, entity, entity_def.components, child_x, child_y);
-            }
+            try addComponentsExcluding(game, scene, entity, entity_def.components, child_x, child_y, .{"Position"});
 
             return .{
                 .entity = entity,
@@ -481,42 +490,28 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
             }
         }
 
-        /// Add all components except Sprite and Position (for use when Sprite is in .components block
-        /// and has already been handled separately via game.addSprite(), and Position via game.addPosition()).
-        fn addComponentsExcludingSprite(
+        /// Add all components except those in the excluded_names tuple.
+        /// Used when certain components (like Position, Sprite, Shape) are handled separately.
+        fn addComponentsExcluding(
             game: *Game,
             scene: ?*Scene,
             entity: Entity,
             comptime components_data: anytype,
             parent_x: f32,
             parent_y: f32,
+            comptime excluded_names: anytype,
         ) !void {
             const data_fields = comptime std.meta.fieldNames(@TypeOf(components_data));
-            inline for (data_fields) |field_name| {
-                // Skip Sprite and Position - they're handled specially
-                if (comptime !std.mem.eql(u8, field_name, "Sprite") and !std.mem.eql(u8, field_name, "Position")) {
-                    const field_data = @field(components_data, field_name);
-                    try addComponentWithNestedEntities(game, scene, entity, field_name, field_data, parent_x, parent_y);
-                }
-            }
-        }
 
-        /// Add all components except Position (for data-only entities where Position is handled separately).
-        fn addComponentsExcludingPosition(
-            game: *Game,
-            scene: ?*Scene,
-            entity: Entity,
-            comptime components_data: anytype,
-            parent_x: f32,
-            parent_y: f32,
-        ) !void {
-            const data_fields = comptime std.meta.fieldNames(@TypeOf(components_data));
-            inline for (data_fields) |field_name| {
-                // Skip Position - it's handled specially via game.addPosition()
-                if (comptime !std.mem.eql(u8, field_name, "Position")) {
-                    const field_data = @field(components_data, field_name);
-                    try addComponentWithNestedEntities(game, scene, entity, field_name, field_data, parent_x, parent_y);
+            data_field_loop: inline for (data_fields) |field_name| {
+                // Check if this field should be excluded
+                inline for (excluded_names) |excluded| {
+                    if (comptime std.mem.eql(u8, field_name, excluded)) {
+                        continue :data_field_loop;
+                    }
                 }
+                const field_data = @field(components_data, field_name);
+                try addComponentWithNestedEntities(game, scene, entity, field_name, field_data, parent_x, parent_y);
             }
         }
 
@@ -606,7 +601,7 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
 
             // Add components from prefab definition (excluding Sprite which is already added)
             if (comptime Prefabs.hasComponents(prefab_name)) {
-                try addComponentsExcludingSprite(game, scene, entity, Prefabs.getComponents(prefab_name), x, y);
+                try addComponentsExcluding(game, scene, entity, Prefabs.getComponents(prefab_name), x, y, .{ "Sprite", "Position" });
             }
 
             // Add entity to scene
@@ -632,9 +627,9 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
                 return try loadPrefabEntity(entity_def, ctx, scene);
             }
 
-            // Check if this is a shape entity
-            if (@hasField(@TypeOf(entity_def), "shape")) {
-                return try loadShapeEntity(entity_def, ctx, scene);
+            // Check if this has Shape in .components (new format)
+            if (comptime hasShapeInComponents(entity_def)) {
+                return try loadShapeComponentEntity(entity_def, ctx, scene);
             }
 
             // Check if this has Sprite in .components
@@ -647,7 +642,7 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
                 return try loadDataOnlyEntity(entity_def, ctx, scene);
             }
 
-            @compileError("Entity must have .prefab, .shape, or .components field");
+            @compileError("Entity must have .prefab or .components field");
         }
 
         /// Get position for a prefab entity: scene .components.Position overrides prefab .components.Position
@@ -717,12 +712,12 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
 
             // Add components from prefab definition (excluding Sprite and Position which are already added)
             if (comptime Prefabs.hasComponents(prefab_name)) {
-                try addComponentsExcludingSprite(game, scene, entity, Prefabs.getComponents(prefab_name), pos.x, pos.y);
+                try addComponentsExcluding(game, scene, entity, Prefabs.getComponents(prefab_name), pos.x, pos.y, .{ "Sprite", "Position" });
             }
 
             // Add/override components from scene definition (excluding Sprite and Position)
             if (@hasField(@TypeOf(entity_def), "components")) {
-                try addComponentsExcludingSprite(game, scene, entity, entity_def.components, pos.x, pos.y);
+                try addComponentsExcluding(game, scene, entity, entity_def.components, pos.x, pos.y, .{ "Sprite", "Position" });
             }
 
             return .{
@@ -769,7 +764,7 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
             });
 
             // Add other components (excluding Sprite which we already handled)
-            try addComponentsExcludingSprite(game, scene, entity, entity_def.components, pos.x, pos.y);
+            try addComponentsExcluding(game, scene, entity, entity_def.components, pos.x, pos.y, .{ "Sprite", "Position" });
 
             return .{
                 .entity = entity,
@@ -801,7 +796,7 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
             });
 
             // Add components (handles nested entity creation), excluding Position which we already added
-            try addComponentsExcludingPosition(game, scene, entity, entity_def.components, pos.x, pos.y);
+            try addComponentsExcluding(game, scene, entity, entity_def.components, pos.x, pos.y, .{"Position"});
 
             return .{
                 .entity = entity,
@@ -812,64 +807,62 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
             };
         }
 
-        /// Load a shape entity
-        fn loadShapeEntity(
+        /// Load a shape entity (Shape defined in .components block)
+        fn loadShapeComponentEntity(
             comptime entity_def: anytype,
             ctx: SceneContext,
             scene: *Scene,
         ) !EntityInstance {
-            const shape_def = entity_def.shape;
             const game = ctx.game;
+            const shape_data = entity_def.components.Shape;
 
             // Create ECS entity
             const entity = game.createEntity();
 
-            const pos_x = getFieldOrDefault(shape_def, "x", @as(f32, 0));
-            const pos_y = getFieldOrDefault(shape_def, "y", @as(f32, 0));
+            // Get position from .components.Position
+            const pos = getPositionFromComponents(entity_def) orelse Pos{ .x = 0, .y = 0 };
 
             // Add Position component
             game.addPosition(entity, Position{
-                .x = pos_x,
-                .y = pos_y,
+                .x = pos.x,
+                .y = pos.y,
             });
 
             // Build shape based on type
-            const shape_type = shape_def.type;
+            const shape_type = shape_data.type;
             var shape: Shape = switch (shape_type) {
-                .circle => Shape.circle(getFieldOrDefault(shape_def, "radius", @as(f32, 10))),
+                .circle => Shape.circle(getFieldOrDefault(shape_data, "radius", @as(f32, 10))),
                 .rectangle => Shape.rectangle(
-                    getFieldOrDefault(shape_def, "width", @as(f32, 10)),
-                    getFieldOrDefault(shape_def, "height", @as(f32, 10)),
+                    getFieldOrDefault(shape_data, "width", @as(f32, 10)),
+                    getFieldOrDefault(shape_data, "height", @as(f32, 10)),
                 ),
                 .line => Shape.line(
-                    getFieldOrDefault(shape_def, "end_x", @as(f32, 10)),
-                    getFieldOrDefault(shape_def, "end_y", @as(f32, 0)),
-                    getFieldOrDefault(shape_def, "thickness", @as(f32, 1)),
+                    getFieldOrDefault(shape_data, "end_x", @as(f32, 10)),
+                    getFieldOrDefault(shape_data, "end_y", @as(f32, 0)),
+                    getFieldOrDefault(shape_data, "thickness", @as(f32, 1)),
                 ),
                 else => @compileError("Unknown shape type in scene definition"),
             };
 
             // Color
-            if (@hasField(@TypeOf(shape_def), "color")) {
+            if (@hasField(@TypeOf(shape_data), "color")) {
                 shape.color = .{
-                    .r = shape_def.color.r,
-                    .g = shape_def.color.g,
-                    .b = shape_def.color.b,
-                    .a = if (@hasField(@TypeOf(shape_def.color), "a")) shape_def.color.a else 255,
+                    .r = shape_data.color.r,
+                    .g = shape_data.color.g,
+                    .b = shape_data.color.b,
+                    .a = if (@hasField(@TypeOf(shape_data.color), "a")) shape_data.color.a else 255,
                 };
             }
 
             // z_index
-            if (@hasField(@TypeOf(shape_def), "z_index")) {
-                shape.z_index = shape_def.z_index;
+            if (@hasField(@TypeOf(shape_data), "z_index")) {
+                shape.z_index = shape_data.z_index;
             }
 
             try game.addShape(entity, shape);
 
-            // Add components from scene definition (handles nested entity creation)
-            if (@hasField(@TypeOf(entity_def), "components")) {
-                try addComponentsWithNestedEntities(game, scene, entity, entity_def.components, pos_x, pos_y);
-            }
+            // Add other components (excluding Shape and Position which we already handled)
+            try addComponentsExcluding(game, scene, entity, entity_def.components, pos.x, pos.y, .{ "Shape", "Position" });
 
             return .{
                 .entity = entity,
