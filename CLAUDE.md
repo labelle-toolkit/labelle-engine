@@ -148,7 +148,7 @@ Both backends implement a common interface defined in `src/ecs/`.
 
 ### Project Generator
 
-The `zig build generate` command reads `project.labelle` and scans prefabs/, components/, scripts/ folders to generate:
+The `labelle generate` command reads `project.labelle` and scans prefabs/, components/, scripts/ folders to generate:
 - `.labelle/build.zig.zon` (dependencies)
 - `.labelle/build.zig` (build configuration)
 - `main.zig` (wires up registries and game loop - stays in project root for imports)
