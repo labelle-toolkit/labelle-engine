@@ -419,9 +419,7 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
             game.addPosition(entity, Position{ .x = child_x, .y = child_y });
 
             // Add components (recursively handles nested entities), excluding Position
-            if (@hasField(@TypeOf(entity_def), "components")) {
-                try addComponentsExcluding(game, scene, entity, entity_def.components, child_x, child_y, .{"Position"});
-            }
+            try addComponentsExcluding(game, scene, entity, entity_def.components, child_x, child_y, .{"Position"});
 
             return .{
                 .entity = entity,
