@@ -50,7 +50,7 @@ pub fn build(b: *std.Build) void {{
     const exe = b.addExecutable(.{{
         .name = "{s}",
         .root_module = b.createModule(.{{
-            .root_source_file = b.path("main.zig"),
+            .root_source_file = b.path("../main.zig"),
             .target = target,
             .optimize = optimize,
             .imports = &.{{
@@ -74,7 +74,7 @@ pub fn build(b: *std.Build) void {{
     const exe = b.addExecutable(.{{
         .name = "{s}",
         .root_module = b.createModule(.{{
-            .root_source_file = b.path("main.zig"),
+            .root_source_file = b.path("../main.zig"),
             .target = target,
             .optimize = optimize,
             .imports = &.{{
@@ -91,6 +91,8 @@ pub fn build(b: *std.Build) void {{
 
     const run_cmd = b.addRunArtifact(exe);
     run_cmd.step.dependOn(b.getInstallStep());
+    // Set working directory to project root (parent of output directory)
+    run_cmd.setCwd(b.path(".."));
 
     const run_step = b.step("run", "Run the game");
     run_step.dependOn(&run_cmd.step);

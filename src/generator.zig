@@ -445,15 +445,25 @@ pub fn generateProject(allocator: std.mem.Allocator, project_path: []const u8, o
     const main_zig = try generateMainZig(allocator, config, prefabs, components, scripts);
     defer allocator.free(main_zig);
 
+    // Create output directory path
+    const output_dir_path = try std.fs.path.join(allocator, &.{ project_path, config.getOutputDir() });
+    defer allocator.free(output_dir_path);
+
+    // Ensure output directory exists
+    const cwd = std.fs.cwd();
+    cwd.makeDir(output_dir_path) catch |err| {
+        if (err != error.PathAlreadyExists) return err;
+    };
+
     // File paths
-    const build_zig_zon_path = try std.fs.path.join(allocator, &.{ project_path, "build.zig.zon" });
+    // build.zig and build.zig.zon go in output directory
+    const build_zig_zon_path = try std.fs.path.join(allocator, &.{ output_dir_path, "build.zig.zon" });
     defer allocator.free(build_zig_zon_path);
-    const build_zig_path = try std.fs.path.join(allocator, &.{ project_path, "build.zig" });
+    const build_zig_path = try std.fs.path.join(allocator, &.{ output_dir_path, "build.zig" });
     defer allocator.free(build_zig_path);
+    // main.zig stays in project root (needs project-relative imports for prefabs, components, scripts, scenes)
     const main_zig_path = try std.fs.path.join(allocator, &.{ project_path, "main.zig" });
     defer allocator.free(main_zig_path);
-
-    const cwd = std.fs.cwd();
 
     // Generate build.zig.zon with placeholder fingerprint first
     const initial_build_zig_zon = try generateBuildZon(allocator, config, .{
@@ -468,7 +478,7 @@ pub fn generateProject(allocator: std.mem.Allocator, project_path: []const u8, o
     try cwd.writeFile(.{ .sub_path = main_zig_path, .data = main_zig });
 
     // Run zig build to get the correct fingerprint from the error message
-    const fingerprint = try detectFingerprint(allocator, project_path);
+    const fingerprint = try detectFingerprint(allocator, output_dir_path);
 
     // Regenerate build.zig.zon with correct fingerprint
     const final_build_zig_zon = try generateBuildZon(allocator, config, .{
@@ -578,10 +588,24 @@ pub fn generateMainOnly(allocator: std.mem.Allocator, project_path: []const u8) 
     const main_zig = try generateMainZig(allocator, config, prefabs, components, scripts);
     defer allocator.free(main_zig);
 
-    // Write main.zig to project root
+    // Write main.zig to project root (needs project-relative imports)
     const main_zig_path = try std.fs.path.join(allocator, &.{ project_path, "main.zig" });
     defer allocator.free(main_zig_path);
 
     const cwd = std.fs.cwd();
     try cwd.writeFile(.{ .sub_path = main_zig_path, .data = main_zig });
+}
+
+/// Get the output directory path for a project
+pub fn getOutputDir(allocator: std.mem.Allocator, project_path: []const u8) ![]const u8 {
+    // Load project config to get output_dir
+    const labelle_path = try std.fs.path.join(allocator, &.{ project_path, "project.labelle" });
+    defer allocator.free(labelle_path);
+
+    const config = try ProjectConfig.load(allocator, labelle_path);
+    // Must join path before freeing config, since output_dir points into config memory
+    const result = try std.fs.path.join(allocator, &.{ project_path, config.getOutputDir() });
+    config.deinit(allocator);
+
+    return result;
 }

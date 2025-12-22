@@ -86,14 +86,16 @@ jobs:
       - name: Generate example build files
         run: |
           # Generate build.zig and build.zig.zon for examples with local engine path
-          zig build generate -- --engine-path ../.. usage/example_1
-          zig build generate -- --engine-path ../.. usage/example_2
-          zig build generate -- --engine-path ../.. usage/example_4
+          # Note: --engine-path is relative to .labelle/ output directory, so ../../.. goes up to repo root
+          zig build generate -- --engine-path ../../.. usage/example_1
+          zig build generate -- --engine-path ../../.. usage/example_2
+          zig build generate -- --engine-path ../../.. usage/example_4
 
           # Fix fingerprints - Zig requires exact fingerprints that we can't predict
           # Run build once to get suggested values, then update
+          # Build files are now in .labelle/ subdirectory
           for example in usage/example_1 usage/example_2 usage/example_4; do
-            cd $example
+            cd $example/.labelle
             # Try to build, capture error with suggested fingerprint
             BUILD_OUTPUT=$(zig build 2>&1 || true)
             FINGERPRINT=$(echo "$BUILD_OUTPUT" | grep -oP 'use this value: \K0x[a-f0-9]+' | head -1 || true)
@@ -108,33 +110,33 @@ jobs:
               # Add paths before closing brace
               sed -i 's/^}$/    .paths = .{ "build.zig", "build.zig.zon", "main.zig", "project.labelle", "scenes", "prefabs", "components", "scripts", "resources" },\n}/' build.zig.zon
             fi
-            cd ../..
+            cd ../../..
           done
 
       - name: Build and run example_1 (raylib)
         env:
           CI_TEST: "1"
         run: |
-          cd usage/example_1
+          cd usage/example_1/.labelle
           xvfb-run -a zig build run
 
       - name: Build and run example_2 (sokol)
         env:
           CI_TEST: "1"
         run: |
-          cd usage/example_2
+          cd usage/example_2/.labelle
           xvfb-run -a zig build run
 
       - name: Build and run example_4 with zig_ecs backend
         env:
           CI_TEST: "1"
         run: |
-          cd usage/example_4
+          cd usage/example_4/.labelle
           xvfb-run -a zig build run -Decs_backend=zig_ecs
 
       - name: Build and run example_4 with zflecs backend
         env:
           CI_TEST: "1"
         run: |
-          cd usage/example_4
+          cd usage/example_4/.labelle
           xvfb-run -a zig build run -Decs_backend=zflecs

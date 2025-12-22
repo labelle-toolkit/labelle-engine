@@ -108,6 +108,15 @@ pub const ProjectConfig = struct {
     camera: CameraConfig = .{},
     resources: Resources = .{},
     plugins: []const Plugin = &.{},
+    /// Output directory for generated build files (build.zig, build.zig.zon)
+    /// Relative to the project root. Default: ".labelle"
+    /// Note: main.zig stays in the project root for module import compatibility.
+    output_dir: ?[]const u8 = null,
+
+    /// Get the output directory (uses default ".labelle" if not specified)
+    pub fn getOutputDir(self: ProjectConfig) []const u8 {
+        return self.output_dir orelse ".labelle";
+    }
 
     /// Load project configuration from a .labelle file
     pub fn load(allocator: std.mem.Allocator, path: []const u8) !ProjectConfig {
