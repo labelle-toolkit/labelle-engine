@@ -32,6 +32,7 @@ const Command = enum {
     generate,
     build,
     run,
+    update,
     help,
     version,
 };
@@ -68,6 +69,7 @@ pub fn main() !void {
         .generate => try runGenerate(allocator, options),
         .build => try runBuild(allocator, options),
         .run => try runRun(allocator, options),
+        .update => try runUpdate(allocator, options),
         .help => printHelp(),
         .version => printVersion(),
     }
@@ -90,6 +92,8 @@ fn parseArgs(args: []const []const u8) Options {
         options.command = .build;
     } else if (std.mem.eql(u8, cmd_str, "run")) {
         options.command = .run;
+    } else if (std.mem.eql(u8, cmd_str, "update")) {
+        options.command = .update;
     } else if (std.mem.eql(u8, cmd_str, "help") or std.mem.eql(u8, cmd_str, "--help") or std.mem.eql(u8, cmd_str, "-h")) {
         options.command = .help;
     } else if (std.mem.eql(u8, cmd_str, "version") or std.mem.eql(u8, cmd_str, "--version") or std.mem.eql(u8, cmd_str, "-v")) {
@@ -253,9 +257,12 @@ fn runGenerate(allocator: std.mem.Allocator, options: Options) !void {
             std.debug.print("Error generating project: {}\n", .{err});
             return err;
         };
+        // Get output directory for display (after successful generation)
+        const output_dir = generator.getOutputDir(allocator, options.project_path) catch ".labelle";
+        defer if (output_dir.ptr != ".labelle".ptr) allocator.free(output_dir);
         std.debug.print("Generated:\n", .{});
-        std.debug.print("  - build.zig.zon\n", .{});
-        std.debug.print("  - build.zig\n", .{});
+        std.debug.print("  - {s}/build.zig.zon\n", .{output_dir});
+        std.debug.print("  - {s}/build.zig\n", .{output_dir});
         std.debug.print("  - main.zig\n", .{});
     }
 }
@@ -266,6 +273,10 @@ fn runBuild(allocator: std.mem.Allocator, options: Options) !void {
     generator.generateMainOnly(allocator, options.project_path) catch |err| {
         std.debug.print("Warning: Could not regenerate main.zig: {}\n", .{err});
     };
+
+    // Get output directory where build.zig is located
+    const output_dir = try generator.getOutputDir(allocator, options.project_path);
+    defer allocator.free(output_dir);
 
     std.debug.print("Building project...\n", .{});
 
@@ -290,9 +301,9 @@ fn runBuild(allocator: std.mem.Allocator, options: Options) !void {
         try argv.append(allocator, ecs_arg);
     }
 
-    // Change to project directory and run zig build
+    // Change to output directory (where build.zig is located) and run zig build
     var child = std.process.Child.init(argv.items, allocator);
-    child.cwd = if (std.mem.eql(u8, options.project_path, ".")) null else options.project_path;
+    child.cwd = output_dir;
 
     // Inherit stdio
     child.stdin_behavior = .Inherit;
@@ -308,6 +319,10 @@ fn runRun(allocator: std.mem.Allocator, options: Options) !void {
     generator.generateMainOnly(allocator, options.project_path) catch |err| {
         std.debug.print("Warning: Could not regenerate main.zig: {}\n", .{err});
     };
+
+    // Get output directory where build.zig is located
+    const output_dir = try generator.getOutputDir(allocator, options.project_path);
+    defer allocator.free(output_dir);
 
     std.debug.print("Building and running project...\n", .{});
 
@@ -333,9 +348,9 @@ fn runRun(allocator: std.mem.Allocator, options: Options) !void {
         try argv.append(allocator, ecs_arg);
     }
 
-    // Change to project directory and run zig build run
+    // Change to output directory (where build.zig is located) and run zig build run
     var child = std.process.Child.init(argv.items, allocator);
-    child.cwd = if (std.mem.eql(u8, options.project_path, ".")) null else options.project_path;
+    child.cwd = output_dir;
 
     // Inherit stdio
     child.stdin_behavior = .Inherit;
@@ -343,6 +358,41 @@ fn runRun(allocator: std.mem.Allocator, options: Options) !void {
     child.stderr_behavior = .Inherit;
 
     _ = try child.spawnAndWait();
+}
+
+fn runUpdate(allocator: std.mem.Allocator, options: Options) !void {
+    std.debug.print("Updating project to labelle-engine {s}...\n", .{version});
+
+    // Get output directory
+    const output_dir = try generator.getOutputDir(allocator, options.project_path);
+    defer allocator.free(output_dir);
+
+    // Clear cache directories
+    std.debug.print("Clearing cache directories...\n", .{});
+    const cache_dirs = [_][]const u8{ "zig-cache", ".zig-cache", "zig-out" };
+    const cwd = std.fs.cwd();
+
+    for (cache_dirs) |cache_dir| {
+        // Try to delete in project root
+        const project_cache = try std.fs.path.join(allocator, &.{ options.project_path, cache_dir });
+        defer allocator.free(project_cache);
+        cwd.deleteTree(project_cache) catch {};
+
+        // Try to delete in output directory
+        const output_cache = try std.fs.path.join(allocator, &.{ output_dir, cache_dir });
+        defer allocator.free(output_cache);
+        cwd.deleteTree(output_cache) catch {};
+    }
+
+    // Regenerate project files
+    std.debug.print("Regenerating project files...\n", .{});
+    try generator.generateProject(allocator, options.project_path, .{
+        .engine_path = options.engine_path,
+    });
+
+    std.debug.print("Update complete!\n", .{});
+    std.debug.print("  - Cleared cache directories\n", .{});
+    std.debug.print("  - Regenerated build files for labelle-engine {s}\n", .{version});
 }
 
 fn printHelp() void {
@@ -357,6 +407,7 @@ fn printHelp() void {
         \\    generate        Generate project files from project.labelle
         \\    build           Build the project
         \\    run             Build and run the project
+        \\    update          Update project to current CLI version
         \\    help            Show this help information
         \\    version         Show version information
         \\
@@ -372,6 +423,7 @@ fn printHelp() void {
         \\    labelle build --release ./game    Build in release mode
         \\    labelle run                       Build and run
         \\    labelle run --release ./game      Run in release mode
+        \\    labelle update                    Update to current CLI version
         \\
         \\For more information on a command, use:
         \\    labelle <command> --help
@@ -470,6 +522,34 @@ fn printCommandHelp(command: Command) void {
                 \\    labelle run --release
                 \\    labelle run --release ./my-game
                 \\    labelle run --backend sokol ./my-game
+                \\
+            ;
+            std.debug.print("{s}", .{help});
+        },
+        .update => {
+            const help =
+                \\labelle update - Update project to current CLI version
+                \\
+                \\USAGE:
+                \\    labelle update [path]
+                \\
+                \\ARGUMENTS:
+                \\    path                        Path to project directory (default: current dir)
+                \\
+                \\OPTIONS:
+                \\    --engine-path <path>        Use local engine path (for development)
+                \\
+                \\DESCRIPTION:
+                \\    Updates the project's engine dependency to match the current CLI version.
+                \\    This command:
+                \\      - Clears cache directories (zig-cache, .zig-cache, zig-out)
+                \\      - Regenerates build.zig.zon with updated fingerprint
+                \\      - Regenerates build.zig and main.zig
+                \\
+                \\EXAMPLES:
+                \\    labelle update
+                \\    labelle update ./my-game
+                \\    labelle update --engine-path ../labelle-engine
                 \\
             ;
             std.debug.print("{s}", .{help});
