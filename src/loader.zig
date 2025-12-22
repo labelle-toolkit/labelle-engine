@@ -229,8 +229,12 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
                 return try createChildSpriteEntity(game, scene, entity_def, parent_x, parent_y);
             }
 
-            // Data-only entity (no visual)
-            return try createChildDataEntity(game, scene, entity_def, parent_x, parent_y);
+            // Check if this has components (data-only entity, no visual)
+            if (@hasField(@TypeOf(entity_def), "components")) {
+                return try createChildDataEntity(game, scene, entity_def, parent_x, parent_y);
+            }
+
+            @compileError("Child entity must have .prefab or .components field");
         }
 
         /// Create a child entity that references a prefab
