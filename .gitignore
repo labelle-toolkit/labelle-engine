@@ -8,8 +8,7 @@ usage/*/zig-out/
 
 # Generated files (created automatically by labelle-generate)
 usage/*/main.zig
-usage/*/build.zig
-usage/*/build.zig.zon
+usage/*/.labelle/
 
 # Screenshots from CI tests
 screenshot_*.png

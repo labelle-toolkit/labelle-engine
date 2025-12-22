@@ -19,11 +19,21 @@
 .engine_url
             // For local development, replace .url with:
             // .path = "path/to/labelle-engine",
+            .url = "git+https://github.com/labelle-toolkit/labelle-engine#v{s}",
+            .hash = "{s}",
+.engine_url_no_hash
+            // For local development, replace .url with:
+            // .path = "path/to/labelle-engine",
             .url = "git+https://github.com/labelle-toolkit/labelle-engine",
             // .hash = "...",  // Add after first build
 .engine_end
         }},
 .plugin
+        .@"{s}" = .{{
+            .url = "git+https://{s}#v{s}",
+            .hash = "{s}",
+        }},
+.plugin_no_hash
         .@"{s}" = .{{
             .url = "git+https://{s}#v{s}",
             // .hash = "...",  // Add after first build

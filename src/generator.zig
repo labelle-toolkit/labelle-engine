@@ -35,12 +35,59 @@ fn sanitizeZigIdentifier(allocator: std.mem.Allocator, name: []const u8) ![]cons
     return result;
 }
 
+/// Fetch package hash using zig fetch command
+/// Returns the hash string or null if fetch fails
+fn fetchPackageHash(allocator: std.mem.Allocator, url: []const u8) !?[]const u8 {
+    // Run: zig fetch "<url>"
+    var child = std.process.Child.init(&.{ "zig", "fetch", url }, allocator);
+    child.stderr_behavior = .Pipe;
+    child.stdout_behavior = .Pipe;
+
+    try child.spawn();
+
+    // Collect output
+    var stdout_buf: std.ArrayListUnmanaged(u8) = .{};
+    defer stdout_buf.deinit(allocator);
+    var stderr_buf: std.ArrayListUnmanaged(u8) = .{};
+    defer stderr_buf.deinit(allocator);
+
+    _ = child.collectOutput(allocator, &stdout_buf, &stderr_buf, 64 * 1024) catch {
+        return null;
+    };
+
+    // Wait for process and check exit status
+    const term = child.wait() catch {
+        return null;
+    };
+
+    if (term.Exited != 0) {
+        // Log stderr on failure for debugging
+        if (stderr_buf.items.len > 0) {
+            std.debug.print("zig fetch failed for '{s}':\n{s}\n", .{ url, stderr_buf.items });
+        }
+        return null;
+    }
+
+    // stdout contains the hash (trimmed)
+    const stdout = std.mem.trim(u8, stdout_buf.items, &std.ascii.whitespace);
+    if (stdout.len == 0) {
+        return null;
+    }
+
+    return try allocator.dupe(u8, stdout);
+}
+
 /// Options for generating build.zig.zon
 pub const BuildZonOptions = struct {
     /// Path to labelle-engine (for local development). If null, uses URL.
     engine_path: ?[]const u8 = null,
     /// Package fingerprint. If null, uses placeholder (0x0).
     fingerprint: ?u64 = null,
+    /// Engine version for URL mode (e.g., "0.13.0"). Required when engine_path is null.
+    engine_version: ?[]const u8 = null,
+    /// If true, fetch dependency hashes using zig fetch (slower but produces valid build.zig.zon).
+    /// Only applies when engine_path is null (URL mode).
+    fetch_hashes: bool = true,
 };
 
 /// Generate build.zig.zon content
@@ -60,22 +107,56 @@ pub fn generateBuildZon(allocator: std.mem.Allocator, config: ProjectConfig, opt
     // Write engine dependency (path or URL)
     if (options.engine_path) |path| {
         try zts.print(build_zig_zon_tmpl, "engine_path", .{path}, writer);
+    } else if (options.fetch_hashes and options.engine_version != null) {
+        // URL mode with hash fetching enabled
+        const engine_version = options.engine_version.?;
+        const engine_url = try std.fmt.allocPrint(allocator, "git+https://github.com/labelle-toolkit/labelle-engine#v{s}", .{engine_version});
+        defer allocator.free(engine_url);
+
+        std.debug.print("Fetching labelle-engine hash...\n", .{});
+        if (try fetchPackageHash(allocator, engine_url)) |hash| {
+            defer allocator.free(hash);
+            try zts.print(build_zig_zon_tmpl, "engine_url", .{ engine_version, hash }, writer);
+        } else {
+            std.debug.print("Warning: Could not fetch engine hash, using placeholder\n", .{});
+            try zts.print(build_zig_zon_tmpl, "engine_url_no_hash", .{}, writer);
+        }
     } else {
-        try zts.print(build_zig_zon_tmpl, "engine_url", .{}, writer);
+        // Hashes disabled or no version provided
+        try zts.print(build_zig_zon_tmpl, "engine_url_no_hash", .{}, writer);
     }
     try zts.print(build_zig_zon_tmpl, "engine_end", .{}, writer);
 
     // Write plugin dependencies
     for (config.plugins) |plugin| {
         // Use custom URL if provided, otherwise default to github.com/labelle-toolkit/{name}
+        var allocated_url = false;
         const plugin_url = plugin.url orelse blk: {
+            allocated_url = true;
             const default_url = try std.fmt.allocPrint(allocator, "github.com/labelle-toolkit/{s}", .{plugin.name});
             break :blk default_url;
         };
-        defer if (plugin.url == null) allocator.free(plugin_url);
+        defer if (allocated_url) allocator.free(plugin_url);
 
-        // Template args: name, url, version
-        try zts.print(build_zig_zon_tmpl, "plugin", .{ plugin.name, plugin_url, plugin.version }, writer);
+        // Try to fetch hash if enabled
+        if (options.fetch_hashes) {
+            const full_url = try std.fmt.allocPrint(allocator, "git+https://{s}#v{s}", .{ plugin_url, plugin.version });
+            defer allocator.free(full_url);
+
+            std.debug.print("Fetching {s} hash...\n", .{plugin.name});
+            if (try fetchPackageHash(allocator, full_url)) |hash| {
+                defer allocator.free(hash);
+                // Template args: name, url, version, hash
+                try zts.print(build_zig_zon_tmpl, "plugin", .{ plugin.name, plugin_url, plugin.version, hash }, writer);
+            } else {
+                // Fetch failed, fall back to no-hash template
+                std.debug.print("Warning: Could not fetch hash for {s}, using placeholder\n", .{plugin.name});
+                try zts.print(build_zig_zon_tmpl, "plugin_no_hash", .{ plugin.name, plugin_url, plugin.version }, writer);
+            }
+        } else {
+            // Hashes disabled
+            try zts.print(build_zig_zon_tmpl, "plugin_no_hash", .{ plugin.name, plugin_url, plugin.version }, writer);
+        }
     }
 
     // Write closing
@@ -402,6 +483,11 @@ fn scanFolderWithExtension(allocator: std.mem.Allocator, path: []const u8, exten
 pub const GenerateOptions = struct {
     /// Path to labelle-engine (for local development). If null, uses URL.
     engine_path: ?[]const u8 = null,
+    /// Engine version for URL mode (e.g., "0.13.0"). If null, hashes won't be fetched.
+    engine_version: ?[]const u8 = null,
+    /// If true, fetch dependency hashes using zig fetch (slower but produces valid build.zig.zon).
+    /// Only applies when engine_path is null (URL mode).
+    fetch_hashes: bool = true,
 };
 
 /// Generate all project files (build.zig, build.zig.zon, main.zig)
@@ -465,10 +551,12 @@ pub fn generateProject(allocator: std.mem.Allocator, project_path: []const u8, o
     const main_zig_path = try std.fs.path.join(allocator, &.{ project_path, "main.zig" });
     defer allocator.free(main_zig_path);
 
-    // Generate build.zig.zon with placeholder fingerprint first
+    // Generate build.zig.zon with placeholder fingerprint first (skip hash fetching on first pass)
     const initial_build_zig_zon = try generateBuildZon(allocator, config, .{
         .engine_path = options.engine_path,
+        .engine_version = options.engine_version,
         .fingerprint = null, // placeholder 0x0
+        .fetch_hashes = false, // Skip hashes on first pass to detect fingerprint quickly
     });
     defer allocator.free(initial_build_zig_zon);
 
@@ -480,10 +568,12 @@ pub fn generateProject(allocator: std.mem.Allocator, project_path: []const u8, o
     // Run zig build to get the correct fingerprint from the error message
     const fingerprint = try detectFingerprint(allocator, output_dir_path);
 
-    // Regenerate build.zig.zon with correct fingerprint
+    // Regenerate build.zig.zon with correct fingerprint and fetch hashes if enabled
     const final_build_zig_zon = try generateBuildZon(allocator, config, .{
         .engine_path = options.engine_path,
+        .engine_version = options.engine_version,
         .fingerprint = fingerprint,
+        .fetch_hashes = options.fetch_hashes,
     });
     defer allocator.free(final_build_zig_zon);
 
