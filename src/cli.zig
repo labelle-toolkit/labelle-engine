@@ -375,13 +375,13 @@ fn runUpdate(allocator: std.mem.Allocator, options: Options) !void {
     for (cache_dirs) |cache_dir| {
         // Try to delete in project root
         const project_cache = try std.fs.path.join(allocator, &.{ options.project_path, cache_dir });
-        defer allocator.free(project_cache);
         cwd.deleteTree(project_cache) catch {};
+        allocator.free(project_cache);
 
         // Try to delete in output directory
         const output_cache = try std.fs.path.join(allocator, &.{ output_dir, cache_dir });
-        defer allocator.free(output_cache);
         cwd.deleteTree(output_cache) catch {};
+        allocator.free(output_cache);
     }
 
     // Regenerate project files
