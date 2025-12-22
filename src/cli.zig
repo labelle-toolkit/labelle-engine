@@ -47,6 +47,8 @@ const Options = struct {
     backend: ?[]const u8 = null,
     ecs_backend: ?[]const u8 = null,
     show_help: bool = false,
+    /// If false, skip fetching dependency hashes (faster but requires manual hash addition)
+    fetch_hashes: bool = true,
 };
 
 pub fn main() !void {
@@ -135,6 +137,8 @@ fn parseArgs(args: []const []const u8) Options {
             }
         } else if (std.mem.startsWith(u8, arg, "--ecs-backend=")) {
             options.ecs_backend = arg["--ecs-backend=".len..];
+        } else if (std.mem.eql(u8, arg, "--no-fetch")) {
+            options.fetch_hashes = false;
         } else if (!std.mem.startsWith(u8, arg, "-")) {
             // Positional argument
             if (options.command == .init and options.project_name == null) {
@@ -227,6 +231,8 @@ fn runInit(allocator: std.mem.Allocator, options: Options) !void {
     std.debug.print("Generating build files...\n", .{});
     try generator.generateProject(allocator, name, .{
         .engine_path = options.engine_path,
+        .engine_version = version,
+        .fetch_hashes = options.fetch_hashes,
     });
 
     std.debug.print("\nProject created successfully!\n", .{});
@@ -253,6 +259,8 @@ fn runGenerate(allocator: std.mem.Allocator, options: Options) !void {
         std.debug.print("Generating project files for: {s}\n", .{options.project_path});
         generator.generateProject(allocator, options.project_path, .{
             .engine_path = options.engine_path,
+            .engine_version = version,
+            .fetch_hashes = options.fetch_hashes,
         }) catch |err| {
             std.debug.print("Error generating project: {}\n", .{err});
             return err;
@@ -392,6 +400,8 @@ fn runUpdate(allocator: std.mem.Allocator, options: Options) !void {
     std.debug.print("Regenerating project files...\n", .{});
     try generator.generateProject(allocator, options.project_path, .{
         .engine_path = options.engine_path,
+        .engine_version = version,
+        .fetch_hashes = options.fetch_hashes,
     });
 
     std.debug.print("Update complete!\n", .{});
@@ -468,15 +478,21 @@ fn printCommandHelp(command: Command) void {
                 \\OPTIONS:
                 \\    --main-only                 Only regenerate main.zig
                 \\    --engine-path <path>        Use local engine path (for development)
+                \\    --no-fetch                  Skip fetching dependency hashes (faster, offline)
                 \\
                 \\DESCRIPTION:
                 \\    Generates build.zig, build.zig.zon, and main.zig based on the
                 \\    project.labelle configuration and folder contents (components,
                 \\    prefabs, scripts, scenes).
                 \\
+                \\    By default, dependency hashes are fetched using 'zig fetch' to ensure
+                \\    the generated build.zig.zon works immediately. Use --no-fetch to skip
+                \\    this step for faster generation (hashes must be added manually).
+                \\
                 \\EXAMPLES:
                 \\    labelle generate
                 \\    labelle generate --main-only
+                \\    labelle generate --no-fetch
                 \\    labelle generate ./my-project
                 \\
             ;

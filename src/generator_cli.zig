@@ -7,11 +7,16 @@
 //   --main-only           Only generate main.zig (not build.zig or build.zig.zon)
 //   --all                 Generate all files (default for new projects)
 //   --engine-path <path>  Use local path to labelle-engine (for development)
+//   --no-fetch            Skip fetching dependency hashes (faster, offline)
 //
 // If no path is provided, uses current directory.
 
 const std = @import("std");
 const generator = @import("generator.zig");
+
+// Version from build.zig.zon (imported as module)
+const build_zon = @import("build_zon");
+const version = build_zon.version;
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -25,6 +30,7 @@ pub fn main() !void {
     var project_path: []const u8 = ".";
     var main_only = false;
     var engine_path: ?[]const u8 = null;
+    var fetch_hashes = true;
 
     // Parse args
     var i: usize = 1;
@@ -41,6 +47,8 @@ pub fn main() !void {
             }
         } else if (std.mem.startsWith(u8, arg, "--engine-path=")) {
             engine_path = arg["--engine-path=".len..];
+        } else if (std.mem.eql(u8, arg, "--no-fetch")) {
+            fetch_hashes = false;
         } else if (!std.mem.startsWith(u8, arg, "-")) {
             project_path = arg;
         }
@@ -58,6 +66,8 @@ pub fn main() !void {
         std.debug.print("Generating project files for: {s}\n", .{project_path});
         generator.generateProject(allocator, project_path, .{
             .engine_path = engine_path,
+            .engine_version = version,
+            .fetch_hashes = fetch_hashes,
         }) catch |err| {
             std.debug.print("Error generating project: {}\n", .{err});
             return err;
