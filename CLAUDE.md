@@ -80,8 +80,8 @@ const Loader = engine.SceneLoader(Prefabs, Components, Scripts);
     .entities = .{
         // Prefab with position:
         .{ .prefab = "player", .components = .{ .Position = .{ .x = 400, .y = 300 } } },
-        // Shape entity (position inside .shape block):
-        .{ .shape = .{ .type = .circle, .x = 100, .y = 100, .radius = 50, .color = .{ .r = 255 } } },
+        // Shape entity (Shape component with Position):
+        .{ .components = .{ .Position = .{ .x = 100, .y = 100 }, .Shape = .{ .type = .circle, .radius = 50, .color = .{ .r = 255 } } } },
         // Sprite entity with position in .components:
         .{ .components = .{ .Position = .{ .x = 300, .y = 150 }, .Sprite = .{ .name = "gem.png" }, .Health = .{ .current = 50 } } },
         // Data-only entity (no visual):
