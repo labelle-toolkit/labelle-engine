@@ -455,6 +455,14 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
                         // This field is []const Entity - create child entities from the tuple
                         const entity_defs = @field(comp_data, field_name);
                         @field(component, field_name) = try createChildEntities(game, scene, entity_defs, parent_x, parent_y);
+                    } else if (comptime zon.isEntity(comp_field.type)) {
+                        // This field is a single Entity - create child entity from definition
+                        const entity_def = @field(comp_data, field_name);
+                        const instance = try createChildEntity(game, scene, entity_def, parent_x, parent_y);
+                        if (scene) |s| {
+                            try s.addEntity(instance);
+                        }
+                        @field(component, field_name) = instance.entity;
                     } else {
                         // Regular field - coerce to handle nested structs and tuples
                         const data_value = @field(comp_data, field_name);

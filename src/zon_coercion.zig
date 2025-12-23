@@ -98,3 +98,8 @@ pub fn isEntitySlice(comptime FieldType: type) bool {
     }
     return false;
 }
+
+/// Check if a field type is a single Entity (not a slice)
+pub fn isEntity(comptime FieldType: type) bool {
+    return FieldType == Entity;
+}
