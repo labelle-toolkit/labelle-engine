@@ -4,6 +4,7 @@ const engine = @import("labelle-engine");
 const Game = engine.Game;
 const Scene = engine.Scene;
 const Position = engine.Position;
+const Sprite = engine.Sprite;
 const Entity = engine.Entity;
 
 // Import components
@@ -50,7 +51,6 @@ pub fn init(game: *Game, scene: *Scene) void {
             }
 
             // Verify child entity has Sprite component (from prefab reference)
-            const Sprite = engine.Sprite;
             if (registry.tryGet(Sprite, child_entity)) |sprite| {
                 std.debug.assert(std.mem.eql(u8, sprite.sprite_name, "child_node"));
                 std.debug.print("Child Sprite = {s} (expected child_node)\n", .{sprite.sprite_name});
@@ -58,7 +58,7 @@ pub fn init(game: *Game, scene: *Scene) void {
                 @panic("Expected Sprite component on child entity (prefab reference)");
             }
 
-            // Verify child entity position (parent at 100,200 + shape offset 20,30 = 120,230)
+            // Verify child entity position (parent at 100,200 + local position offset 20,30 = 120,230)
             if (registry.tryGet(Position, child_entity)) |child_pos| {
                 std.debug.assert(child_pos.x == 120);
                 std.debug.assert(child_pos.y == 230);
