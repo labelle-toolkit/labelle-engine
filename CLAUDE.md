@@ -108,6 +108,45 @@ const Loader = engine.SceneLoader(Prefabs, Components, Scripts);
 
 For `.custom`, also specify `.pivot_x` and `.pivot_y` (0.0-1.0).
 
+**Prefab composition** (using prefabs inside entity fields):
+
+Components can have `Entity` or `[]const Entity` fields that reference other entities. These can use prefab references with optional component overrides:
+
+```zig
+// Component definitions
+const Room = struct {
+    movement_nodes: []const Entity = &.{},  // entity list
+};
+
+const Weapon = struct {
+    projectile: Entity = Entity.invalid,     // single entity
+};
+```
+
+In prefabs or scenes, use prefab references in entity fields:
+```zig
+// Entity list with prefab references
+.Room = .{
+    .movement_nodes = .{
+        .{ .prefab = "movement_node", .components = .{ .Position = .{ .x = 26 } } },
+        .{ .prefab = "movement_node", .components = .{ .Position = .{ .x = 78 } } },
+    },
+},
+
+// Single entity with prefab reference
+.Weapon = .{
+    .projectile = .{ .prefab = "bullet", .components = .{ .Damage = .{ .value = 20 } } },
+},
+
+// Mix prefab references with inline definitions
+.Room = .{
+    .movement_nodes = .{
+        .{ .prefab = "movement_node" },
+        .{ .components = .{ .Position = .{ .x = 50 }, .Shape = .{ .type = .circle, .radius = 5 } } },
+    },
+},
+```
+
 **Script definition** (scripts/*.zig):
 ```zig
 pub fn init(game: *Game, scene: *Scene) void { ... }  // optional

@@ -172,6 +172,21 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
         /// When scene is null:
         /// - Caller is responsible for entity cleanup (destroy via registry)
         /// - Allocated slice ownership transfers to caller (must free via game.allocator)
+        /// Create a child entity and track it in the scene for cleanup.
+        fn createAndTrackChildEntity(
+            game: *Game,
+            scene: ?*Scene,
+            comptime entity_def: anytype,
+            parent_x: f32,
+            parent_y: f32,
+        ) !EntityInstance {
+            const instance = try createChildEntity(game, scene, entity_def, parent_x, parent_y);
+            if (scene) |s| {
+                try s.addEntity(instance);
+            }
+            return instance;
+        }
+
         fn createChildEntities(
             game: *Game,
             scene: ?*Scene,
@@ -187,13 +202,7 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
             // Create each child entity
             inline for (0..entity_count) |i| {
                 const entity_def = entity_defs[i];
-                const instance = try createChildEntity(game, scene, entity_def, parent_x, parent_y);
-
-                // Track child entity in scene for cleanup
-                if (scene) |s| {
-                    try s.addEntity(instance);
-                }
-
+                const instance = try createAndTrackChildEntity(game, scene, entity_def, parent_x, parent_y);
                 entities[i] = instance.entity;
             }
 
@@ -455,6 +464,11 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
                         // This field is []const Entity - create child entities from the tuple
                         const entity_defs = @field(comp_data, field_name);
                         @field(component, field_name) = try createChildEntities(game, scene, entity_defs, parent_x, parent_y);
+                    } else if (comptime zon.isEntity(comp_field.type)) {
+                        // This field is a single Entity - create child entity from definition
+                        const entity_def = @field(comp_data, field_name);
+                        const instance = try createAndTrackChildEntity(game, scene, entity_def, parent_x, parent_y);
+                        @field(component, field_name) = instance.entity;
                     } else {
                         // Regular field - coerce to handle nested structs and tuples
                         const data_value = @field(comp_data, field_name);

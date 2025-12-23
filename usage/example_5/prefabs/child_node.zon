@@ -1,0 +1,6 @@
+.{
+    .components = .{
+        .Position = .{ .x = 0, .y = 0 },
+        .Sprite = .{ .name = "child_node", .z_index = 110 },
+    },
+}

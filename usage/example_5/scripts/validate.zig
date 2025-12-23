@@ -4,7 +4,7 @@ const engine = @import("labelle-engine");
 const Game = engine.Game;
 const Scene = engine.Scene;
 const Position = engine.Position;
-const Shape = engine.Shape;
+const Sprite = engine.Sprite;
 const Entity = engine.Entity;
 
 // Import components
@@ -50,19 +50,15 @@ pub fn init(game: *Game, scene: *Scene) void {
                 @panic("Expected Child_data component on child entity");
             }
 
-            // Verify child entity has Shape component (nested entity visual support)
-            if (registry.tryGet(Shape, child_entity)) |shape| {
-                std.debug.assert(shape.shape == .circle);
-                std.debug.assert(shape.shape.circle.radius == 8);
-                std.debug.print("Child Shape = circle with radius {} (expected 8)\n", .{shape.shape.circle.radius});
-                std.debug.print("Child Shape color = ({}, {}, {}, {}) (expected 100, 150, 255, 200)\n", .{
-                    shape.color.r, shape.color.g, shape.color.b, shape.color.a,
-                });
+            // Verify child entity has Sprite component (from prefab reference)
+            if (registry.tryGet(Sprite, child_entity)) |sprite| {
+                std.debug.assert(std.mem.eql(u8, sprite.sprite_name, "child_node"));
+                std.debug.print("Child Sprite = {s} (expected child_node)\n", .{sprite.sprite_name});
             } else {
-                @panic("Expected Shape component on child entity (nested entity visuals)");
+                @panic("Expected Sprite component on child entity (prefab reference)");
             }
 
-            // Verify child entity position (parent at 100,200 + shape offset 20,30 = 120,230)
+            // Verify child entity position (parent at 100,200 + local position offset 20,30 = 120,230)
             if (registry.tryGet(Position, child_entity)) |child_pos| {
                 std.debug.assert(child_pos.x == 120);
                 std.debug.assert(child_pos.y == 230);
