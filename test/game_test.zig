@@ -32,5 +32,15 @@ pub const GAME_EXPORTS = struct {
         test "Game has getScreenSize method" {
             try expect.toBeTrue(@hasDecl(Game, "getScreenSize"));
         }
+
+        test "ScreenSize type is exported" {
+            try expect.toBeTrue(@hasDecl(engine, "ScreenSize"));
+        }
+
+        test "ScreenSize has width and height fields" {
+            const ScreenSize = engine.ScreenSize;
+            try expect.toBeTrue(@hasField(ScreenSize, "width"));
+            try expect.toBeTrue(@hasField(ScreenSize, "height"));
+        }
     };
 };

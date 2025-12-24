@@ -78,6 +78,12 @@ const SceneEntry = struct {
 /// Frame callback type for custom game loop logic
 pub const FrameCallback = *const fn (*Game, f32) void;
 
+/// Screen size dimensions
+pub const ScreenSize = struct {
+    width: i32,
+    height: i32,
+};
+
 /// Game facade - main entry point for GUI-generated projects
 pub const Game = struct {
     allocator: Allocator,
@@ -511,7 +517,7 @@ pub const Game = struct {
     }
 
     /// Get current screen/window size
-    pub fn getScreenSize(self: *const Game) struct { width: i32, height: i32 } {
+    pub fn getScreenSize(self: *const Game) ScreenSize {
         const size = self.retained_engine.getWindowSize();
         return .{ .width = size.w, .height = size.h };
     }
