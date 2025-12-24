@@ -100,7 +100,7 @@ const sprite_spec = describe("Sprite component", .{
         pub fn t(_: void) !void {
             var sprite = Sprite{};
             sprite.container = .viewport;
-            try std.testing.expect(sprite.container != null);
+            try std.testing.expectEqual(Container.viewport, sprite.container.?);
         }
     }.t),
 
@@ -118,7 +118,7 @@ const sprite_spec = describe("Sprite component", .{
             var sprite = Sprite{};
             sprite.container = .camera_viewport;
             const visual = sprite.toVisual();
-            try std.testing.expect(visual.container != null);
+            try std.testing.expectEqual(Container.camera_viewport, visual.container.?);
         }
     }.t),
 });
