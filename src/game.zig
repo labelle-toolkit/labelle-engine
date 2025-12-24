@@ -485,5 +485,35 @@ pub const Game = struct {
     pub fn isRunning(self: *const Game) bool {
         return self.running and self.retained_engine.isRunning();
     }
+
+    // ==================== Fullscreen ====================
+
+    /// Toggle between fullscreen and windowed mode
+    pub fn toggleFullscreen(self: *Game) void {
+        self.retained_engine.toggleFullscreen();
+    }
+
+    /// Set fullscreen mode explicitly
+    pub fn setFullscreen(self: *Game, fullscreen: bool) void {
+        self.retained_engine.setFullscreen(fullscreen);
+    }
+
+    /// Check if window is currently in fullscreen mode
+    pub fn isFullscreen(self: *const Game) bool {
+        return self.retained_engine.isFullscreen();
+    }
+
+    // ==================== Screen Size ====================
+
+    /// Check if screen size changed since last frame (fullscreen toggle, window resize)
+    pub fn screenSizeChanged(self: *const Game) bool {
+        return self.retained_engine.screenSizeChanged();
+    }
+
+    /// Get current screen/window size
+    pub fn getScreenSize(self: *const Game) struct { width: i32, height: i32 } {
+        const size = self.retained_engine.getWindowSize();
+        return .{ .width = size.w, .height = size.h };
+    }
 };
 
