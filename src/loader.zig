@@ -153,9 +153,9 @@ fn parseSpriteContainer(comptime sprite_data: anytype) ?Container {
     const container_data = sprite_data.container;
     const ContainerType = @TypeOf(container_data);
 
-    // Check if it's one of the enum tags
-    if (ContainerType == @TypeOf(Container.infer)) {
-        return container_data;
+    // Check if it's one of the enum tags or an enum literal from .zon
+    if (ContainerType == @TypeOf(Container.infer) or @typeInfo(ContainerType) == .enum_literal) {
+        return @as(Container, container_data);
     }
 
     // Check if it's a struct with width/height (explicit container)
