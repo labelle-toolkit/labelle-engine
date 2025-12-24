@@ -11,6 +11,8 @@ const Text = engine.Text;
 const RenderPipeline = engine.RenderPipeline;
 const Color = engine.Color;
 const Layer = engine.Layer;
+const SizeMode = engine.SizeMode;
+const Container = engine.Container;
 
 test "render_pipeline_test" {
     zspec.runAll(@This());
@@ -69,6 +71,54 @@ const sprite_spec = describe("Sprite component", .{
             sprite.layer = .ui;
             const visual = sprite.toVisual();
             try std.testing.expectEqual(Layer.ui, visual.layer);
+        }
+    }.t),
+
+    it("size_mode defaults to none", struct {
+        pub fn t(_: void) !void {
+            const sprite = Sprite{};
+            try std.testing.expectEqual(SizeMode.none, sprite.size_mode);
+        }
+    }.t),
+
+    it("container defaults to null", struct {
+        pub fn t(_: void) !void {
+            const sprite = Sprite{};
+            try std.testing.expectEqual(@as(?Container, null), sprite.container);
+        }
+    }.t),
+
+    it("can set size_mode to cover", struct {
+        pub fn t(_: void) !void {
+            var sprite = Sprite{};
+            sprite.size_mode = .cover;
+            try std.testing.expectEqual(SizeMode.cover, sprite.size_mode);
+        }
+    }.t),
+
+    it("can set container to viewport", struct {
+        pub fn t(_: void) !void {
+            var sprite = Sprite{};
+            sprite.container = .viewport;
+            try std.testing.expect(sprite.container != null);
+        }
+    }.t),
+
+    it("toVisual includes size_mode", struct {
+        pub fn t(_: void) !void {
+            var sprite = Sprite{};
+            sprite.size_mode = .stretch;
+            const visual = sprite.toVisual();
+            try std.testing.expectEqual(SizeMode.stretch, visual.size_mode);
+        }
+    }.t),
+
+    it("toVisual includes container", struct {
+        pub fn t(_: void) !void {
+            var sprite = Sprite{};
+            sprite.container = .camera_viewport;
+            const visual = sprite.toVisual();
+            try std.testing.expect(visual.container != null);
         }
     }.t),
 });

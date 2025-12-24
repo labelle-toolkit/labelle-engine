@@ -65,6 +65,8 @@ pub const Shape = render_pipeline_mod.Shape;
 pub const Color = render_pipeline_mod.Color;
 pub const ShapeVisual = render_pipeline_mod.ShapeVisual;
 pub const Layer = render_pipeline_mod.Layer;
+pub const SizeMode = render_pipeline_mod.SizeMode;
+pub const Container = render_pipeline_mod.Container;
 
 /// Scene-level camera configuration
 pub const SceneCameraConfig = struct {
@@ -133,6 +135,43 @@ fn getSpriteName(comptime sprite_data: anytype) []const u8 {
     } else {
         return "";
     }
+}
+
+/// Parse container specification from sprite data.
+/// Supports:
+///   - Not present: returns null (default behavior)
+///   - .infer: Container.infer
+///   - .viewport: Container.viewport
+///   - .camera_viewport: Container.camera_viewport
+///   - .{ .width = W, .height = H }: Container.size(W, H)
+///   - .{ .x = X, .y = Y, .width = W, .height = H }: Container.rect(X, Y, W, H)
+fn parseSpriteContainer(comptime sprite_data: anytype) ?Container {
+    if (!@hasField(@TypeOf(sprite_data), "container")) {
+        return null;
+    }
+
+    const container_data = sprite_data.container;
+    const ContainerType = @TypeOf(container_data);
+
+    // Check if it's one of the enum tags
+    if (ContainerType == @TypeOf(Container.infer)) {
+        return container_data;
+    }
+
+    // Check if it's a struct with width/height (explicit container)
+    if (@typeInfo(ContainerType) == .@"struct") {
+        const has_width = @hasField(ContainerType, "width");
+        const has_height = @hasField(ContainerType, "height");
+
+        if (has_width and has_height) {
+            const x = getFieldOrDefault(container_data, "x", @as(f32, 0));
+            const y = getFieldOrDefault(container_data, "y", @as(f32, 0));
+            return Container.rect(x, y, container_data.width, container_data.height);
+        }
+    }
+
+    // Default to null if we can't parse it
+    return null;
 }
 
 /// Apply camera configuration from comptime config data to a camera
@@ -287,6 +326,8 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
                 .pivot_x = sprite_config.pivot_x,
                 .pivot_y = sprite_config.pivot_y,
                 .layer = sprite_config.layer,
+                .size_mode = sprite_config.size_mode,
+                .container = sprite_config.container,
             });
 
             // Add components from prefab definition (excluding Sprite and Position which are already added)
@@ -405,6 +446,8 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
                 .pivot_x = getFieldOrDefault(sprite_data, "pivot_x", @as(f32, 0.5)),
                 .pivot_y = getFieldOrDefault(sprite_data, "pivot_y", @as(f32, 0.5)),
                 .layer = getFieldOrDefault(sprite_data, "layer", Layer.world),
+                .size_mode = getFieldOrDefault(sprite_data, "size_mode", SizeMode.none),
+                .container = parseSpriteContainer(sprite_data),
             });
 
             // Add other components (excluding Sprite and Position)
@@ -620,6 +663,8 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
                 .pivot_x = sprite_config.pivot_x,
                 .pivot_y = sprite_config.pivot_y,
                 .layer = sprite_config.layer,
+                .size_mode = sprite_config.size_mode,
+                .container = sprite_config.container,
             });
 
             // Add components from prefab definition (excluding Sprite which is already added)
@@ -732,6 +777,8 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
                 .pivot_x = sprite_config.pivot_x,
                 .pivot_y = sprite_config.pivot_y,
                 .layer = sprite_config.layer,
+                .size_mode = sprite_config.size_mode,
+                .container = sprite_config.container,
             });
 
             // Add components from prefab definition (excluding Sprite and Position which are already added)
@@ -786,6 +833,8 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
                 .pivot_x = getFieldOrDefault(sprite_data, "pivot_x", @as(f32, 0.5)),
                 .pivot_y = getFieldOrDefault(sprite_data, "pivot_y", @as(f32, 0.5)),
                 .layer = getFieldOrDefault(sprite_data, "layer", Layer.world),
+                .size_mode = getFieldOrDefault(sprite_data, "size_mode", SizeMode.none),
+                .container = parseSpriteContainer(sprite_data),
             });
 
             // Add other components (excluding Sprite which we already handled)
