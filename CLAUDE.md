@@ -271,6 +271,61 @@ Layer behavior:
 - `.world` uses world coordinates (affected by camera position and zoom)
 - Z-index within each layer determines draw order
 
+### Sprite Sizing Modes
+
+Sprites can be sized to fill a container using CSS-like sizing modes:
+
+| Mode | Behavior |
+|------|----------|
+| `.none` | Default - use sprite's natural size |
+| `.stretch` | Stretch to fill container exactly (may distort) |
+| `.cover` | Scale uniformly to cover entire container (may crop) |
+| `.contain` | Scale uniformly to fit inside container (may letterbox) |
+| `.scale_down` | Like contain but never scales up |
+| `.repeat` | Tile the sprite to fill container |
+
+**Container options:**
+- `.infer` - Infer from layer space (screen-space uses screen size)
+- `.viewport` - Use full screen dimensions
+- `.camera_viewport` - Use camera's visible world area
+- `.{ .width = W, .height = H }` - Explicit size at origin
+- `.{ .x = X, .y = Y, .width = W, .height = H }` - Explicit rectangle
+
+**Usage in .zon files:**
+```zig
+// Fullscreen background that covers the screen
+.{ .components = .{
+    .Position = .{ .x = 0, .y = 0 },
+    .Sprite = .{
+        .name = "background.png",
+        .layer = .background,
+        .size_mode = .cover,
+        .container = .viewport,
+    },
+}},
+
+// Tiled background pattern
+.{ .components = .{
+    .Position = .{ .x = 0, .y = 0 },
+    .Sprite = .{
+        .name = "grass_tile.png",
+        .layer = .background,
+        .size_mode = .repeat,
+        .container = .viewport,
+    },
+}},
+
+// UI panel with explicit size
+.{ .components = .{
+    .Position = .{ .x = 100, .y = 100 },
+    .Sprite = .{
+        .name = "panel.png",
+        .size_mode = .stretch,
+        .container = .{ .width = 400, .height = 300 },
+    },
+}},
+```
+
 ### Important Patterns
 
 - Lifecycle hooks use `u64` for entity and `*anyopaque` for game to avoid circular imports

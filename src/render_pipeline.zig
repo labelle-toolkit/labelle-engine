@@ -46,6 +46,10 @@ pub const Layer = labelle.DefaultLayers;
 pub const LayerConfig = labelle.LayerConfig;
 pub const LayerSpace = labelle.LayerSpace;
 
+// Sizing system - re-export labelle-gfx sizing types
+pub const SizeMode = labelle.SizeMode;
+pub const Container = labelle.Container;
+
 // ECS types
 pub const Registry = ecs.Registry;
 pub const Entity = ecs.Entity;
@@ -90,6 +94,10 @@ pub const Sprite = struct {
     pivot_y: f32 = 0.5,
     /// Rendering layer (background, world, or ui)
     layer: Layer = .world,
+    /// Sizing mode for container-based rendering (stretch, cover, contain, scale_down, repeat)
+    size_mode: SizeMode = .none,
+    /// Container specification for sized sprites (null = infer from layer space)
+    container: ?Container = null,
 
     pub fn toVisual(self: Sprite) SpriteVisual {
         return .{
@@ -106,6 +114,8 @@ pub const Sprite = struct {
             .pivot_x = self.pivot_x,
             .pivot_y = self.pivot_y,
             .layer = self.layer,
+            .size_mode = self.size_mode,
+            .container = self.container,
         };
     }
 };

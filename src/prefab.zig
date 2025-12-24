@@ -24,6 +24,10 @@ pub const Pivot = labelle.Pivot;
 // Re-export layer types from labelle-gfx
 pub const Layer = labelle.DefaultLayers;
 
+// Re-export sizing types from labelle-gfx
+pub const SizeMode = labelle.SizeMode;
+pub const Container = labelle.Container;
+
 // Z-index constants
 pub const ZIndex = struct {
     pub const background: u8 = 0;
@@ -44,6 +48,10 @@ pub const SpriteConfig = struct {
     pivot_y: f32 = 0.5,
     /// Rendering layer (background, world, or ui)
     layer: Layer = .world,
+    /// Sizing mode for container-based rendering (stretch, cover, contain, scale_down, repeat)
+    size_mode: SizeMode = .none,
+    /// Container specification for sized sprites (null = infer from layer space)
+    container: ?Container = null,
 };
 
 /// Comptime prefab registry - maps prefab names to their comptime data

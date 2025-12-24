@@ -55,6 +55,8 @@ pub const Color = render_pipeline.Color;
 pub const Layer = render_pipeline.Layer;
 pub const LayerConfig = render_pipeline.LayerConfig;
 pub const LayerSpace = render_pipeline.LayerSpace;
+pub const SizeMode = render_pipeline.SizeMode;
+pub const Container = render_pipeline.Container;
 
 /// Built-in component types that can be used in .zon prefab/scene files.
 /// These are automatically included in the ComponentRegistry by the generator.

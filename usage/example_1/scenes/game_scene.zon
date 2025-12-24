@@ -1,8 +1,10 @@
 // Game Scene - demonstrates labelle-engine scene loading with labelle rendering
 //
 // This scene defines:
+// - A tiled background using sprite sizing modes
 // - A player character with animations
 // - Multiple enemies patrolling
+// - A UI overlay sprite with explicit container sizing
 //
 // All entities reference sprites from the characters atlas loaded at comptime.
 
@@ -10,6 +12,19 @@
     .name = "game_scene",
     .scripts = .{ "gravity", "player_input" },
     .entities = .{
+        // Tiled background - demonstrates .repeat sizing mode with viewport container
+        .{
+            .components = .{
+                .Position = .{ .x = 0, .y = 0 },
+                .Sprite = .{
+                    .name = "idle_0001",
+                    .layer = .background,
+                    .size_mode = .repeat,
+                    .container = .viewport,
+                },
+            },
+        },
+
         // Ball at top of screen with gravity
         .{
             .components = .{
@@ -69,6 +84,19 @@
                 .Position = .{ .x = 200, .y = 150 },
                 .Sprite = .{ .name = "idle_0003", .scale = 1.5 },
                 .Health = .{ .current = 75, .max = 75 },
+            },
+        },
+
+        // UI overlay - demonstrates .contain sizing with explicit container dimensions
+        .{
+            .components = .{
+                .Position = .{ .x = 10, .y = 10 },
+                .Sprite = .{
+                    .name = "walk_0001",
+                    .layer = .ui,
+                    .size_mode = .contain,
+                    .container = .{ .width = 64, .height = 64 },
+                },
             },
         },
     },
