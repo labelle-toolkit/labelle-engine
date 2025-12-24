@@ -39,6 +39,7 @@ pub const SpriteVisual = RetainedEngine.SpriteVisual;
 pub const ShapeVisual = RetainedEngine.ShapeVisual;
 pub const TextVisual = RetainedEngine.TextVisual;
 pub const Color = labelle.retained_engine.Color;
+pub const ShapeType = labelle.retained_engine.Shape;
 
 // Layer system - re-export labelle-gfx layer types
 pub const Layer = labelle.DefaultLayers;
@@ -111,7 +112,7 @@ pub const Sprite = struct {
 
 /// Shape component - renders geometric primitives
 pub const Shape = struct {
-    shape: ShapeVisual.Shape,
+    shape: ShapeType,
     color: Color = Color.white,
     rotation: f32 = 0,
     z_index: u8 = 128,
