@@ -8,6 +8,9 @@ A declarative 2D game engine for Zig with comptime scene definitions and pluggab
 - **Entity Component System** - Pluggable ECS with support for zig_ecs and zflecs backends
 - **Prefab System** - Reusable entity templates with lifecycle hooks
 - **Script System** - Scene-level scripts with init/update/deinit lifecycle
+- **Layer System** - Built-in background, world, and UI layers with automatic screen/world-space handling
+- **Sprite Sizing Modes** - CSS-like sizing (stretch, cover, contain, repeat) for backgrounds and UI
+- **Fullscreen Support** - Toggle fullscreen and detect screen resize events
 - **Multiple Graphics Backends** - raylib (default) and sokol support
 - **Project Generator** - Auto-generate build files from `project.labelle` configuration
 - **Dirty Tracking** - Efficient render pipeline that only syncs changed state
@@ -23,7 +26,7 @@ Add labelle-engine to your `build.zig.zon`:
 ```zig
 .dependencies = .{
     .@"labelle-engine" = .{
-        .url = "git+https://github.com/labelle-toolkit/labelle-engine?ref=v0.9.0#<commit-hash>",
+        .url = "git+https://github.com/labelle-toolkit/labelle-engine?ref=v0.16.0#<commit-hash>",
         .hash = "<hash>",
     },
 },
