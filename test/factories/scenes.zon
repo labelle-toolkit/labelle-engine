@@ -1,0 +1,78 @@
+.{
+    .simple = .{
+        .name = "simple",
+        .entities = .{
+            .{ .prefab = "player" },
+        },
+    },
+    .with_scripts = .{
+        .name = "with_scripts",
+        .scripts = .{ "gravity", "movement" },
+        .entities = .{
+            .{ .prefab = "player" },
+        },
+    },
+    .with_overrides = .{
+        .name = "with_overrides",
+        .entities = .{
+            .{ .prefab = "player", .x = 500, .y = 300 },
+            .{ .prefab = "enemy", .x = 100 },
+        },
+    },
+    .with_components = .{
+        .name = "with_components",
+        .entities = .{
+            .{
+                .prefab = "player",
+                .components = .{
+                    .Velocity = .{ .x = 10, .y = 0 },
+                    .Health = .{ .current = 50, .max = 100 },
+                },
+            },
+        },
+    },
+    .with_camera = .{
+        .name = "with_camera",
+        .camera = .{ .x = 100, .y = 50, .zoom = 2.0 },
+        .entities = .{
+            .{ .prefab = "player" },
+        },
+    },
+    .inline_sprite = .{
+        .name = "inline_sprite",
+        .entities = .{
+            .{
+                .components = .{
+                    .Position = .{ .x = 200, .y = 150 },
+                    .Sprite = .{ .name = "gem.png" },
+                },
+            },
+        },
+    },
+    .inline_shape = .{
+        .name = "inline_shape",
+        .entities = .{
+            .{
+                .components = .{
+                    .Position = .{ .x = 100, .y = 100 },
+                    .Shape = .{
+                        .type = .circle,
+                        .radius = 50,
+                        .color = .{ .r = 255, .g = 0, .b = 0 },
+                    },
+                },
+            },
+        },
+    },
+    .data_only = .{
+        .name = "data_only",
+        .entities = .{
+            .{
+                .components = .{
+                    .Position = .{ .x = 50, .y = 75 },
+                    .Health = .{ .current = 100, .max = 100 },
+                },
+            },
+        },
+    },
+}

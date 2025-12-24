@@ -35,10 +35,16 @@ pub const RetainedEngine = switch (Backend) {
 pub const EntityId = labelle.EntityId;
 pub const TextureId = labelle.TextureId;
 pub const FontId = labelle.FontId;
-pub const SpriteVisual = labelle.SpriteVisual;
-pub const ShapeVisual = labelle.ShapeVisual;
-pub const TextVisual = labelle.TextVisual;
+pub const SpriteVisual = RetainedEngine.SpriteVisual;
+pub const ShapeVisual = RetainedEngine.ShapeVisual;
+pub const TextVisual = RetainedEngine.TextVisual;
 pub const Color = labelle.retained_engine.Color;
+pub const ShapeType = labelle.retained_engine.Shape;
+
+// Layer system - re-export labelle-gfx layer types
+pub const Layer = labelle.DefaultLayers;
+pub const LayerConfig = labelle.LayerConfig;
+pub const LayerSpace = labelle.LayerSpace;
 
 // ECS types
 pub const Registry = ecs.Registry;
@@ -82,6 +88,8 @@ pub const Sprite = struct {
     pivot_x: f32 = 0.5,
     /// Custom pivot Y coordinate (0.0-1.0), used when pivot == .custom
     pivot_y: f32 = 0.5,
+    /// Rendering layer (background, world, or ui)
+    layer: Layer = .world,
 
     pub fn toVisual(self: Sprite) SpriteVisual {
         return .{
@@ -97,17 +105,20 @@ pub const Sprite = struct {
             .pivot = self.pivot,
             .pivot_x = self.pivot_x,
             .pivot_y = self.pivot_y,
+            .layer = self.layer,
         };
     }
 };
 
 /// Shape component - renders geometric primitives
 pub const Shape = struct {
-    shape: ShapeVisual.Shape,
+    shape: ShapeType,
     color: Color = Color.white,
     rotation: f32 = 0,
     z_index: u8 = 128,
     visible: bool = true,
+    /// Rendering layer (background, world, or ui)
+    layer: Layer = .world,
 
     pub fn toVisual(self: Shape) ShapeVisual {
         return .{
@@ -116,6 +127,7 @@ pub const Shape = struct {
             .rotation = self.rotation,
             .z_index = self.z_index,
             .visible = self.visible,
+            .layer = self.layer,
         };
     }
 
@@ -141,6 +153,8 @@ pub const Text = struct {
     color: Color = Color.white,
     z_index: u8 = 128,
     visible: bool = true,
+    /// Rendering layer (background, world, or ui)
+    layer: Layer = .world,
 
     pub fn toVisual(self: Text) TextVisual {
         return .{
@@ -150,6 +164,7 @@ pub const Text = struct {
             .color = self.color,
             .z_index = self.z_index,
             .visible = self.visible,
+            .layer = self.layer,
         };
     }
 };

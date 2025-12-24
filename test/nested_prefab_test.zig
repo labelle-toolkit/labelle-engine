@@ -5,6 +5,9 @@ const expect = zspec.expect;
 const engine = @import("labelle-engine");
 const prefab = engine.prefab;
 
+// Import factory definitions from .zon files
+const nested_prefab_defs = @import("factories/nested_prefabs.zon");
+
 test {
     zspec.runAll(@This());
 }
@@ -21,20 +24,8 @@ pub const PREFAB_WITH_COMPONENTS = struct {
         value: i32 = 0,
     };
 
-    // Prefab with Foo and Bar components (like qux in example_5)
-    const qux_prefab = .{
-        .sprite = .{
-            .name = "qux",
-            .z_index = 100,
-        },
-        .components = .{
-            .Foo = .{ .value = 42 },
-            .Bar = .{},
-        },
-    };
-
     const TestPrefabs = prefab.PrefabRegistry(.{
-        .qux = qux_prefab,
+        .qux = nested_prefab_defs.qux,
     });
 
     pub const HAS_COMPONENTS = struct {
@@ -223,32 +214,12 @@ pub const PREFAB_IN_ENTITY_FIELDS = struct {
     };
 
     // ----------------------------------------
-    // Test Prefabs (factories for prefab definitions)
-    // ----------------------------------------
-
-    /// Prefab for movement nodes
-    const movement_node_prefab = .{
-        .components = .{
-            .Sprite = .{ .name = "node.png" },
-            .MovementNode = .{},
-        },
-    };
-
-    /// Prefab for bullets/projectiles
-    const bullet_prefab = .{
-        .components = .{
-            .Sprite = .{ .name = "bullet.png" },
-            .Damage = .{ .value = 10 },
-        },
-    };
-
-    // ----------------------------------------
-    // Test Registries Factory
+    // Test Registries Factory (using .zon definitions)
     // ----------------------------------------
 
     const TestPrefabs = prefab.PrefabRegistry(.{
-        .movement_node = movement_node_prefab,
-        .bullet = bullet_prefab,
+        .movement_node = nested_prefab_defs.movement_node,
+        .bullet = nested_prefab_defs.bullet,
     });
 
     const TestComponents = component.ComponentRegistry(struct {
