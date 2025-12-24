@@ -19,6 +19,8 @@ const SpriteConfigFactory = Factory.defineFrom(prefab.SpriteConfig, sprite_confi
 const ScaledSpriteFactory = Factory.defineFrom(prefab.SpriteConfig, sprite_configs.scaled);
 const FullSpriteFactory = Factory.defineFrom(prefab.SpriteConfig, sprite_configs.full);
 const BaseMergeSpriteFactory = Factory.defineFrom(prefab.SpriteConfig, sprite_configs.base_for_merge);
+const UiLayerSpriteFactory = Factory.defineFrom(prefab.SpriteConfig, sprite_configs.ui_layer);
+const BackgroundLayerSpriteFactory = Factory.defineFrom(prefab.SpriteConfig, sprite_configs.background_layer);
 
 pub const SPRITE_CONFIG = struct {
     pub const DEFAULTS = struct {
@@ -32,6 +34,11 @@ pub const SPRITE_CONFIG = struct {
             try expect.equal(config.pivot, .center);
             try expect.equal(config.pivot_x, 0.5);
             try expect.equal(config.pivot_y, 0.5);
+        }
+
+        test "layer defaults to world" {
+            const config = SpriteConfigFactory.build(.{});
+            try expect.equal(config.layer, .world);
         }
     };
 
@@ -81,6 +88,16 @@ pub const SPRITE_CONFIG = struct {
             try expect.equal(config.rotation, 90);
             try expect.toBeTrue(config.flip_x);
             try expect.toBeFalse(config.flip_y);
+        }
+
+        test "can set layer to ui" {
+            const config = UiLayerSpriteFactory.build(.{});
+            try expect.equal(config.layer, .ui);
+        }
+
+        test "can set layer to background" {
+            const config = BackgroundLayerSpriteFactory.build(.{});
+            try expect.equal(config.layer, .background);
         }
     };
 };
@@ -154,6 +171,25 @@ pub const MERGE_SPRITE_WITH_OVERRIDES = struct {
         }
     };
 
+    pub const LAYER_OVERRIDES = struct {
+        test "uses override layer when specified" {
+            const base = SpriteConfigFactory.build(.{ .layer = .world });
+            const merged = prefab.mergeSpriteWithOverrides(base, .{ .layer = .ui });
+            try expect.equal(merged.layer, .ui);
+        }
+
+        test "uses base layer when not overridden" {
+            const base = UiLayerSpriteFactory.build(.{});
+            const merged = prefab.mergeSpriteWithOverrides(base, .{});
+            try expect.equal(merged.layer, .ui);
+        }
+
+        test "can override to background layer" {
+            const base = SpriteConfigFactory.build(.{});
+            const merged = prefab.mergeSpriteWithOverrides(base, .{ .layer = .background });
+            try expect.equal(merged.layer, .background);
+        }
+    };
 
     pub const COMPLEX_MERGING = struct {
         test "merges multiple fields correctly" {

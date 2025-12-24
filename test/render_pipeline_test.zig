@@ -10,6 +10,7 @@ const Shape = engine.Shape;
 const Text = engine.Text;
 const RenderPipeline = engine.RenderPipeline;
 const Color = engine.Color;
+const Layer = engine.Layer;
 
 test "render_pipeline_test" {
     zspec.runAll(@This());
@@ -46,12 +47,28 @@ const sprite_spec = describe("Sprite component", .{
         }
     }.t),
 
+    it("layer defaults to world", struct {
+        pub fn t(_: void) !void {
+            const sprite = Sprite{};
+            try std.testing.expectEqual(Layer.world, sprite.layer);
+        }
+    }.t),
+
     it("converts to visual", struct {
         pub fn t(_: void) !void {
             const sprite = Sprite{ .scale = 2.0, .z_index = 50 };
             const visual = sprite.toVisual();
             try std.testing.expectEqual(@as(f32, 2.0), visual.scale);
             try std.testing.expectEqual(@as(u8, 50), visual.z_index);
+        }
+    }.t),
+
+    it("toVisual includes layer", struct {
+        pub fn t(_: void) !void {
+            var sprite = Sprite{};
+            sprite.layer = .ui;
+            const visual = sprite.toVisual();
+            try std.testing.expectEqual(Layer.ui, visual.layer);
         }
     }.t),
 });
@@ -81,6 +98,13 @@ const shape_spec = describe("Shape component", .{
         }
     }.t),
 
+    it("layer defaults to world", struct {
+        pub fn t(_: void) !void {
+            const shape = Shape.circle(50);
+            try std.testing.expectEqual(Layer.world, shape.layer);
+        }
+    }.t),
+
     it("converts to visual", struct {
         pub fn t(_: void) !void {
             var shape = Shape.circle(30);
@@ -92,6 +116,15 @@ const shape_spec = describe("Shape component", .{
             try std.testing.expectEqual(@as(u8, 0), visual.color.g);
         }
     }.t),
+
+    it("toVisual includes layer", struct {
+        pub fn t(_: void) !void {
+            var shape = Shape.circle(30);
+            shape.layer = .background;
+            const visual = shape.toVisual();
+            try std.testing.expectEqual(Layer.background, visual.layer);
+        }
+    }.t),
 });
 
 const text_spec = describe("Text component", .{
@@ -100,6 +133,22 @@ const text_spec = describe("Text component", .{
             const text = Text{};
             try std.testing.expectEqual(@as(f32, 16), text.size);
             try std.testing.expectEqual(true, text.visible);
+        }
+    }.t),
+
+    it("layer defaults to world", struct {
+        pub fn t(_: void) !void {
+            const text = Text{};
+            try std.testing.expectEqual(Layer.world, text.layer);
+        }
+    }.t),
+
+    it("toVisual includes layer", struct {
+        pub fn t(_: void) !void {
+            var text = Text{};
+            text.layer = .ui;
+            const visual = text.toVisual();
+            try std.testing.expectEqual(Layer.ui, visual.layer);
         }
     }.t),
 });
