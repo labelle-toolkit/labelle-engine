@@ -230,6 +230,35 @@ game.disableMultiCamera();               // Return to single camera
 
 Camera priority: Scene `.cameras`/`.camera` overrides project `.camera` settings.
 
+### Fullscreen and Screen Resize
+
+The Game facade provides fullscreen control and screen resize detection:
+
+```zig
+// Fullscreen control
+game.toggleFullscreen();           // Toggle between fullscreen and windowed
+game.setFullscreen(true);          // Explicit fullscreen control
+game.setFullscreen(false);
+const is_fs = game.isFullscreen(); // Query fullscreen state
+
+// Screen size detection
+if (game.screenSizeChanged()) {
+    const size = game.getScreenSize();
+    // Reposition UI elements, recalculate layouts, etc.
+    // size.width, size.height
+}
+```
+
+**Use case: Fullscreen toggle key**
+```zig
+// In a script
+pub fn update(game: *Game, scene: *Scene, dt: f32) void {
+    if (game.getInput().isKeyPressed(.f11)) {
+        game.toggleFullscreen();
+    }
+}
+```
+
 Named camera slots: `main` (0), `player2` (1), `minimap` (2), `camera3` (3).
 
 ### Layer System

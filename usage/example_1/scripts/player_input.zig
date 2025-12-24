@@ -55,6 +55,11 @@ pub fn update(
             game.quit();
         }
 
+        // Toggle fullscreen on F11
+        if (input.isKeyPressed(.f11)) {
+            game.toggleFullscreen();
+        }
+
         // Only control first entity with velocity
         break;
     }
