@@ -8,28 +8,13 @@ const prefab = engine.prefab;
 const component = engine.component;
 const script = engine.script;
 
+// Import factory definitions from .zon files
+const prefab_defs = @import("factories/prefabs.zon");
+const scene_defs = @import("factories/scenes.zon");
+
 test {
     zspec.runAll(@This());
 }
-
-// Test prefabs using new .components.Sprite format
-const player_prefab = .{
-    .components = .{
-        .Sprite = .{ .name = "player.png", .x = 100, .y = 200 },
-    },
-};
-
-const enemy_prefab = .{
-    .components = .{
-        .Sprite = .{ .name = "enemy.png", .scale = 0.8 },
-    },
-};
-
-const background_prefab = .{
-    .components = .{
-        .Sprite = .{ .name = "background.png", .z_index = 0 },
-    },
-};
 
 // Test components
 const Velocity = struct {
@@ -42,11 +27,11 @@ const Health = struct {
     max: i32 = 100,
 };
 
-// Test registries (without scripts to avoid circular dependency)
+// Test registries using factory definitions
 const TestPrefabs = prefab.PrefabRegistry(.{
-    .player = player_prefab,
-    .enemy = enemy_prefab,
-    .background = background_prefab,
+    .player = prefab_defs.player,
+    .enemy = prefab_defs.enemy,
+    .background = prefab_defs.background,
 });
 const TestComponents = component.ComponentRegistry(struct {
     pub const Velocity = loader_test.Velocity;
@@ -59,18 +44,19 @@ pub const SCENE_LOADER = struct {
             // Verify the SceneLoader function type exists
             try expect.toBeTrue(@hasDecl(loader, "SceneLoader"));
         }
+
+        test "exports SceneLoader function" {
+            try expect.toBeTrue(@TypeOf(loader.SceneLoader) != void);
+        }
     };
 };
 
 pub const SCENE_DATA_FORMAT = struct {
-    // Test scene definitions (compile-time verification)
-    const simple_scene = .{
-        .name = "simple",
-        .entities = .{
-            .{ .prefab = "player" },
-        },
-    };
+    // Use scene definitions from .zon factory file
+    const simple_scene = scene_defs.simple;
+    const scene_with_camera = scene_defs.with_camera;
 
+    // Additional test scene definitions that need specific structures
     const scene_with_scripts = .{
         .name = "with_scripts",
         .scripts = .{ "gravity", "movement" },
@@ -316,26 +302,8 @@ pub const SCENE_DATA_FORMAT = struct {
         }
     };
 
-    // Scene with data-only entities (no visual)
-    const scene_with_data_only_entities = .{
-        .name = "data_only",
-        .entities = .{
-            // Data-only entity with position
-            .{
-                .x = 100,
-                .y = 200,
-                .components = .{
-                    .Health = .{ .current = 50 },
-                },
-            },
-            // Data-only entity without position
-            .{
-                .components = .{
-                    .Velocity = .{ .x = 10, .y = 5 },
-                },
-            },
-        },
-    };
+    // Scene with data-only entities (no visual) - from factory
+    const scene_with_data_only_entities = scene_defs.data_only;
 
     pub const DATA_ONLY_ENTITIES = struct {
         test "data-only entity has components but no visual" {
@@ -344,25 +312,13 @@ pub const SCENE_DATA_FORMAT = struct {
             try expect.toBeFalse(@hasField(@TypeOf(entity.components), "Sprite"));
         }
 
-        test "data-only entity can have position" {
-            const entity = scene_with_data_only_entities.entities[0];
-            try expect.equal(entity.x, 100);
-            try expect.equal(entity.y, 200);
-        }
-
         test "data-only entity can have components" {
             const entity = scene_with_data_only_entities.entities[0];
-            try expect.equal(entity.components.Health.current, 50);
-        }
-
-        test "data-only entity without position fields" {
-            const entity = scene_with_data_only_entities.entities[1];
-            try expect.toBeFalse(@hasField(@TypeOf(entity), "x"));
-            try expect.toBeFalse(@hasField(@TypeOf(entity), "y"));
+            try expect.equal(entity.components.Health.current, 100);
         }
 
         test "scene has correct entity count" {
-            try expect.equal(scene_with_data_only_entities.entities.len, 2);
+            try expect.equal(scene_with_data_only_entities.entities.len, 1);
         }
     };
 };

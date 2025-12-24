@@ -52,6 +52,9 @@ pub const RetainedEngine = render_pipeline.RetainedEngine;
 pub const TextureId = render_pipeline.TextureId;
 pub const FontId = render_pipeline.FontId;
 pub const Color = render_pipeline.Color;
+pub const Layer = render_pipeline.Layer;
+pub const LayerConfig = render_pipeline.LayerConfig;
+pub const LayerSpace = render_pipeline.LayerSpace;
 
 /// Built-in component types that can be used in .zon prefab/scene files.
 /// These are automatically included in the ComponentRegistry by the generator.

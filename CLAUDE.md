@@ -232,6 +232,45 @@ Camera priority: Scene `.cameras`/`.camera` overrides project `.camera` settings
 
 Named camera slots: `main` (0), `player2` (1), `minimap` (2), `camera3` (3).
 
+### Layer System
+
+The engine provides three built-in layers for organizing rendering:
+
+- `.background` - Screen-space, rendered first (behind everything)
+- `.world` - World-space, camera-transformed (default for game objects)
+- `.ui` - Screen-space, rendered last (always on top)
+
+**Using layers in .zon files:**
+```zig
+// In scene .zon
+.entities = .{
+    // Background image (screen-space, doesn't move with camera)
+    .{ .components = .{ .Position = .{ .x = 0, .y = 0 }, .Sprite = .{ .name = "bg.png", .layer = .background } } },
+    // Game object (world-space, moves with camera)
+    .{ .prefab = "player" },  // defaults to .world layer
+    // UI element (screen-space, always visible)
+    .{ .components = .{ .Position = .{ .x = 10, .y = 10 }, .Sprite = .{ .name = "health_bar.png", .layer = .ui } } },
+}
+
+// In prefab .zon - set default layer for all instances
+.{
+    .components = .{
+        .Position = .{ .x = 0, .y = 0 },
+        .Sprite = .{ .name = "ui_button.png", .layer = .ui },
+    },
+}
+```
+
+**Using layers in Shape components:**
+```zig
+.Shape = .{ .type = .circle, .radius = 50, .color = .{ .r = 255 }, .layer = .ui }
+```
+
+Layer behavior:
+- `.background` and `.ui` use screen coordinates (fixed to screen, ignores camera)
+- `.world` uses world coordinates (affected by camera position and zoom)
+- Z-index within each layer determines draw order
+
 ### Important Patterns
 
 - Lifecycle hooks use `u64` for entity and `*anyopaque` for game to avoid circular imports

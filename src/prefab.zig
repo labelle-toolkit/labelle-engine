@@ -21,6 +21,9 @@ const labelle = @import("labelle");
 // Re-export Pivot from labelle-gfx
 pub const Pivot = labelle.Pivot;
 
+// Re-export layer types from labelle-gfx
+pub const Layer = labelle.DefaultLayers;
+
 // Z-index constants
 pub const ZIndex = struct {
     pub const background: u8 = 0;
@@ -39,6 +42,8 @@ pub const SpriteConfig = struct {
     pivot: Pivot = .center,
     pivot_x: f32 = 0.5,
     pivot_y: f32 = 0.5,
+    /// Rendering layer (background, world, or ui)
+    layer: Layer = .world,
 };
 
 /// Comptime prefab registry - maps prefab names to their comptime data

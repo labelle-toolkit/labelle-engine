@@ -64,6 +64,7 @@ pub const Sprite = render_pipeline_mod.Sprite;
 pub const Shape = render_pipeline_mod.Shape;
 pub const Color = render_pipeline_mod.Color;
 pub const ShapeVisual = render_pipeline_mod.ShapeVisual;
+pub const Layer = render_pipeline_mod.Layer;
 
 /// Scene-level camera configuration
 pub const SceneCameraConfig = struct {
@@ -285,6 +286,7 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
                 .pivot = sprite_config.pivot,
                 .pivot_x = sprite_config.pivot_x,
                 .pivot_y = sprite_config.pivot_y,
+                .layer = sprite_config.layer,
             });
 
             // Add components from prefab definition (excluding Sprite and Position which are already added)
@@ -355,6 +357,11 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
                 shape.z_index = shape_data.z_index;
             }
 
+            // layer
+            if (@hasField(@TypeOf(shape_data), "layer")) {
+                shape.layer = shape_data.layer;
+            }
+
             try game.addShape(entity, shape);
 
             // Add other components (excluding Shape and Position which we already handled)
@@ -397,6 +404,7 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
                 .pivot = getFieldOrDefault(sprite_data, "pivot", render_pipeline_mod.Pivot.center),
                 .pivot_x = getFieldOrDefault(sprite_data, "pivot_x", @as(f32, 0.5)),
                 .pivot_y = getFieldOrDefault(sprite_data, "pivot_y", @as(f32, 0.5)),
+                .layer = getFieldOrDefault(sprite_data, "layer", Layer.world),
             });
 
             // Add other components (excluding Sprite and Position)
@@ -611,6 +619,7 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
                 .pivot = sprite_config.pivot,
                 .pivot_x = sprite_config.pivot_x,
                 .pivot_y = sprite_config.pivot_y,
+                .layer = sprite_config.layer,
             });
 
             // Add components from prefab definition (excluding Sprite which is already added)
@@ -722,6 +731,7 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
                 .pivot = sprite_config.pivot,
                 .pivot_x = sprite_config.pivot_x,
                 .pivot_y = sprite_config.pivot_y,
+                .layer = sprite_config.layer,
             });
 
             // Add components from prefab definition (excluding Sprite and Position which are already added)
@@ -775,6 +785,7 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
                 .pivot = getFieldOrDefault(sprite_data, "pivot", render_pipeline_mod.Pivot.center),
                 .pivot_x = getFieldOrDefault(sprite_data, "pivot_x", @as(f32, 0.5)),
                 .pivot_y = getFieldOrDefault(sprite_data, "pivot_y", @as(f32, 0.5)),
+                .layer = getFieldOrDefault(sprite_data, "layer", Layer.world),
             });
 
             // Add other components (excluding Sprite which we already handled)
@@ -871,6 +882,11 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
             // z_index
             if (@hasField(@TypeOf(shape_data), "z_index")) {
                 shape.z_index = shape_data.z_index;
+            }
+
+            // layer
+            if (@hasField(@TypeOf(shape_data), "layer")) {
+                shape.layer = shape_data.layer;
             }
 
             try game.addShape(entity, shape);

@@ -1,0 +1,19 @@
+.{
+    .player = .{
+        .components = .{
+            .Position = .{ .x = 100, .y = 200 },
+            .Sprite = .{ .name = "player.png", .scale = 2.0 },
+        },
+    },
+    .enemy = .{
+        .components = .{
+            .Sprite = .{ .name = "enemy.png", .scale = 0.8 },
+            .Health = .{ .current = 50, .max = 50 },
+        },
+    },
+    .background = .{
+        .components = .{
+            .Sprite = .{ .name = "background.png", .z_index = 0 },
+        },
+    },
+}
