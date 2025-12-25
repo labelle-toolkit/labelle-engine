@@ -1,0 +1,18 @@
+.{
+    .fingerprint = 0xbfa24d6614acc952,
+    .name = .example_hooks_generator,
+    .version = "0.1.0",
+    .dependencies = .{
+        .@"labelle-engine" = .{
+            .path = "../..",
+        },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "main.zig",
+        "project.labelle",
+        "scenes",
+        "hooks",
+    },
+}

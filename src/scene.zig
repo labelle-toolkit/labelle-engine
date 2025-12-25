@@ -26,6 +26,7 @@ pub const build_helpers = @import("build_helpers.zig");
 pub const render_pipeline = @import("render_pipeline.zig");
 pub const project_config = @import("project_config.zig");
 pub const generator = @import("generator.zig");
+pub const hooks = @import("hooks.zig");
 
 // Re-export commonly used types
 pub const SpriteConfig = prefab.SpriteConfig;
@@ -38,6 +39,7 @@ pub const ScriptFns = script.ScriptFns;
 pub const InitFn = script.InitFn;
 pub const DeinitFn = script.DeinitFn;
 pub const Game = game.Game;
+pub const GameWith = game.GameWith;
 pub const GameConfig = game.GameConfig;
 pub const WindowConfig = game.WindowConfig;
 pub const ScreenSize = game.ScreenSize;
@@ -100,6 +102,18 @@ pub const AudioError = audio_mod.AudioError;
 // Re-export project config types
 pub const ProjectConfig = project_config.ProjectConfig;
 pub const Plugin = project_config.Plugin;
+
+// Re-export hook types
+pub const EngineHook = hooks.EngineHook;
+pub const HookPayload = hooks.HookPayload;
+pub const HookDispatcher = hooks.HookDispatcher;
+pub const EngineHookDispatcher = hooks.EngineHookDispatcher;
+pub const EmptyEngineDispatcher = hooks.EmptyEngineDispatcher;
+pub const MergeHooks = hooks.MergeHooks;
+pub const MergeEngineHooks = hooks.MergeEngineHooks;
+pub const FrameInfo = hooks.FrameInfo;
+pub const SceneInfo = hooks.SceneInfo;
+pub const EntityInfo = hooks.EntityInfo;
 
 /// Context passed to prefab lifecycle functions and scene loading
 /// Uses Game facade for unified access to ECS, pipeline, and engine

@@ -13,8 +13,6 @@
 
 const std = @import("std");
 const engine = @import("labelle-engine");
-
-const Game = engine.Game;
 const ProjectConfig = engine.ProjectConfig;
 
 .plugin_import
@@ -27,6 +25,8 @@ const {s}_comp = @import("components/{s}.zig");
 pub const {s} = {s}_comp.{s};
 .script_import
 const {s}_script = @import("scripts/{s}.zig");
+.hook_import
+const {s}_hooks = @import("hooks/{s}.zig");
 .main_module
 const main_module = @This();
 .prefab_registry_empty
@@ -91,6 +91,15 @@ pub const Scripts = engine.ScriptRegistry(struct {{
     pub const {s} = {s}_script;
 .script_registry_end
 }});
+.hooks_empty
+const Game = engine.Game;
+.hooks_start
+const Hooks = engine.MergeEngineHooks(.{{
+.hooks_item
+    {s}_hooks,
+.hooks_end
+}});
+const Game = engine.GameWith(Hooks);
 .loader
 pub const Loader = engine.SceneLoader(Prefabs, Components, Scripts);
 pub const initial_scene = @import("scenes/{s}.zon");
