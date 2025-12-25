@@ -142,10 +142,6 @@ pub fn generateBuildZon(allocator: std.mem.Allocator, config: ProjectConfig, opt
         const ref = plugin.getRef();
         const is_version = plugin.isVersionRef();
 
-        // Determine template names based on ref type
-        const template_with_hash = if (is_version) "plugin_version" else "plugin_ref";
-        const template_no_hash = if (is_version) "plugin_version_no_hash" else "plugin_ref_no_hash";
-
         // Build URL: version uses #v{version}, branch/commit use #{ref}
         const full_url = if (is_version)
             try std.fmt.allocPrint(allocator, "git+https://{s}#v{s}", .{ plugin_url, ref })
@@ -154,19 +150,32 @@ pub fn generateBuildZon(allocator: std.mem.Allocator, config: ProjectConfig, opt
         defer allocator.free(full_url);
 
         // Try to fetch hash if enabled
+        // Note: zts.print requires comptime section names, so we can't DRY this with variables
         if (options.fetch_hashes) {
             std.debug.print("Fetching {s} hash...\n", .{plugin.name});
             if (try fetchPackageHash(allocator, full_url)) |hash| {
                 defer allocator.free(hash);
-                try zts.print(build_zig_zon_tmpl, template_with_hash, .{ plugin.name, plugin_url, ref, hash }, writer);
+                if (is_version) {
+                    try zts.print(build_zig_zon_tmpl, "plugin_version", .{ plugin.name, plugin_url, ref, hash }, writer);
+                } else {
+                    try zts.print(build_zig_zon_tmpl, "plugin_ref", .{ plugin.name, plugin_url, ref, hash }, writer);
+                }
             } else {
                 // Fetch failed, fall back to no-hash template
                 std.debug.print("Warning: Could not fetch hash for {s}, using placeholder\n", .{plugin.name});
-                try zts.print(build_zig_zon_tmpl, template_no_hash, .{ plugin.name, plugin_url, ref }, writer);
+                if (is_version) {
+                    try zts.print(build_zig_zon_tmpl, "plugin_version_no_hash", .{ plugin.name, plugin_url, ref }, writer);
+                } else {
+                    try zts.print(build_zig_zon_tmpl, "plugin_ref_no_hash", .{ plugin.name, plugin_url, ref }, writer);
+                }
             }
         } else {
             // Hashes disabled
-            try zts.print(build_zig_zon_tmpl, template_no_hash, .{ plugin.name, plugin_url, ref }, writer);
+            if (is_version) {
+                try zts.print(build_zig_zon_tmpl, "plugin_version_no_hash", .{ plugin.name, plugin_url, ref }, writer);
+            } else {
+                try zts.print(build_zig_zon_tmpl, "plugin_ref_no_hash", .{ plugin.name, plugin_url, ref }, writer);
+            }
         }
     }
 
