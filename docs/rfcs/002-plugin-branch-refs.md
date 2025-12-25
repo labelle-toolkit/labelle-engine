@@ -24,6 +24,16 @@ This limitation makes it difficult to:
 3. Test unreleased plugin features
 4. Work with forked repositories
 
+## Important Note: Zig dependency hashes
+
+Zig dependencies in `build.zig.zon` typically include a **content hash** (`.hash`) for reproducible builds. The generator currently computes this hash via `zig fetch`.
+
+This means:
+
+- **`version`/tags**: stable, reproducible, recommended default.
+- **`commit`**: stable and reproducible (best for CI pinning without a release tag).
+- **`branch`**: convenient for development, but **does not automatically "track latest"** unless you **regenerate** (or otherwise refresh) `build.zig.zon` so the hash is updated when the branch tip moves.
+
 ## Design
 
 ### Current Plugin Schema
@@ -55,6 +65,18 @@ const Plugin = struct {
     components: ?[]const u8 = null,
 };
 ```
+
+### Validation Rules
+
+After parsing `project.labelle`, validate that for each plugin:
+
+- **Exactly one** of `version`, `branch`, or `commit` is set.
+- **`name`** must be non-empty.
+- **`commit`** must look like a git SHA (recommended: hex string length 7–40).
+
+If invalid, return a clear error that identifies the plugin by name and the offending fields.
+
+> Note: `std.zon.parse.fromSlice` does not enforce mutual exclusivity; validation must happen **after** parsing (e.g., in `ProjectConfig.load` or immediately after `load` in the generator/CLI).
 
 ### Usage Examples
 
@@ -107,12 +129,27 @@ Generates: `git+https://github.com/myuser/labelle-tasks-fork#my-feature`
 ```
 Generates: `git+https://gitlab.com/myorg/my-plugin#develop`
 
+### URL Handling
+
+Current generator behavior assumes `url` is a host/path like `github.com/org/repo` and will build:
+
+- `git+https://{url}#{ref}`
+
+This RFC keeps that behavior for compatibility. If a full URL with scheme is provided (e.g. `https://…`), the implementation should either:
+
+- **Reject** it with a clear error ("url must be host/path, omit scheme"), **or**
+- **Normalize** it (strip `https://` / `http://` and `git+https://`) before generation.
+
+Pick one and document it in `CLAUDE.md` / generator help text.
+
 ## Implementation Plan
 
 ### Phase 1: Schema Update
 1. Update `ProjectConfig` in `src/project_config.zig`:
    - Add `branch` and `commit` fields to Plugin struct
-   - Add validation: exactly one of `version`, `branch`, or `commit` must be set
+   - Add post-parse validation: exactly one of `version`, `branch`, or `commit` must be set
+   - Validate `commit` format (recommended: hex length 7–40)
+   - Decide and enforce URL normalization/rejection rules for `url` with scheme
 
 ### Phase 2: Generator Update
 2. Update `src/generator.zig`:
@@ -120,6 +157,8 @@ Generates: `git+https://gitlab.com/myorg/my-plugin#develop`
    - For `version`: use `#v{version}` suffix
    - For `branch`: use `#{branch}` suffix
    - For `commit`: use `#{commit}` suffix
+   - Continue to fetch `.hash` via `zig fetch` when enabled
+   - Clarify in docs/help that `branch` requires regeneration to pick up new commits (hash changes)
 
 ### Phase 3: CLI Update
 3. Update CLI if needed for `labelle init` templates
@@ -127,6 +166,13 @@ Generates: `git+https://gitlab.com/myorg/my-plugin#develop`
 ### Phase 4: Documentation
 4. Update CLAUDE.md with new plugin reference options
 5. Add examples to usage/ directory
+
+### Phase 5: Tests
+6. Add/extend tests to cover:
+   - Backcompat: `version`-only plugin parses and generates identical URLs as today
+   - Validation errors: none set, two set, empty name
+   - Ref generation: `#v{version}` vs `#{branch}` vs `#{commit}`
+   - `commit` format validation (accept 7–40 hex, reject other strings)
 
 ## Files to Modify
 
@@ -157,9 +203,10 @@ Require users to specify full URLs for non-version refs.
 
 ## Open Questions
 
-1. Should we warn when using `branch` in production builds?
-2. Should `commit` require full SHA or allow short refs?
-3. Default behavior when neither version/branch/commit specified?
+1. Should we warn when using `branch` in production builds (since it encourages non-repro workflows unless regenerated)?
+2. Should `commit` require full SHA or allow short refs? (Recommendation: allow 7–40 hex.)
+3. Default behavior when neither version/branch/commit specified? (Recommendation: treat as error; require explicit ref.)
+4. Should `url` accept full URLs with scheme or be restricted to host/path? (Pick one and enforce it.)
 
 ## References
 

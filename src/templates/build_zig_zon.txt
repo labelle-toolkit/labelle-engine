@@ -28,14 +28,24 @@
             // .hash = "...",  // Add after first build
 .engine_end
         }},
-.plugin
+.plugin_version
         .@"{s}" = .{{
             .url = "git+https://{s}#v{s}",
             .hash = "{s}",
         }},
-.plugin_no_hash
+.plugin_version_no_hash
         .@"{s}" = .{{
             .url = "git+https://{s}#v{s}",
+            // .hash = "...",  // Add after first build
+        }},
+.plugin_ref
+        .@"{s}" = .{{
+            .url = "git+https://{s}#{s}",
+            .hash = "{s}",
+        }},
+.plugin_ref_no_hash
+        .@"{s}" = .{{
+            .url = "git+https://{s}#{s}",
             // .hash = "...",  // Add after first build
         }},
 .deps_end

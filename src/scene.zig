@@ -102,6 +102,7 @@ pub const AudioError = audio_mod.AudioError;
 // Re-export project config types
 pub const ProjectConfig = project_config.ProjectConfig;
 pub const Plugin = project_config.Plugin;
+pub const PluginValidationError = project_config.PluginValidationError;
 
 // Re-export hook types
 pub const EngineHook = hooks.EngineHook;
