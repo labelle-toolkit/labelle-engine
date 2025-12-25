@@ -8,6 +8,7 @@ A declarative 2D game engine for Zig with comptime scene definitions and pluggab
 - **Entity Component System** - Pluggable ECS with support for zig_ecs and zflecs backends
 - **Prefab System** - Reusable entity templates with lifecycle hooks
 - **Script System** - Scene-level scripts with init/update/deinit lifecycle
+- **Hook System** - Type-safe, zero-overhead engine lifecycle hooks (game_init, scene_load, frame_start, etc.)
 - **Layer System** - Built-in background, world, and UI layers with automatic screen/world-space handling
 - **Sprite Sizing Modes** - CSS-like sizing (stretch, cover, contain, repeat) for backgrounds and UI
 - **Fullscreen Support** - Toggle fullscreen and detect screen resize events
@@ -26,7 +27,7 @@ Add labelle-engine to your `build.zig.zon`:
 ```zig
 .dependencies = .{
     .@"labelle-engine" = .{
-        .url = "git+https://github.com/labelle-toolkit/labelle-engine?ref=v0.16.0#<commit-hash>",
+        .url = "git+https://github.com/labelle-toolkit/labelle-engine?ref=v0.17.0#<commit-hash>",
         .hash = "<hash>",
     },
 },
@@ -156,6 +157,8 @@ my_game/
     health.zig
   scripts/
     movement.zig
+  hooks/
+    game_hooks.zig
   scenes/
     main.zon
 ```
@@ -184,6 +187,8 @@ See the `usage/` directory for complete examples:
 - **example_1** - Basic game with prefabs, components, and scripts (raylib)
 - **example_2** - Sokol backend demonstration
 - **example_3** - Plugin integration (labelle-pathfinding)
+- **example_hooks** - Two-way plugin hook binding pattern
+- **example_hooks_generator** - Hooks folder pattern with generator
 
 Run examples:
 ```bash
