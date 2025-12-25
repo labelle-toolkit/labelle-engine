@@ -62,10 +62,30 @@ pub fn main() !void {
     try game.run();
 }
 
-fn loadMainScene(_: *Game) !void {
-    // This function is called when the scene loads.
-    // The hooks in hooks/game_hooks.zig will automatically receive:
-    // - scene_load event (with scene name "main")
-    // - entity_created events (for any entities created here)
-    std.log.info("[main] Main scene loaded - hooks are firing!", .{});
+fn loadMainScene(game: *Game) !void {
+    // Create a circle
+    const circle = game.createEntity();
+    game.addComponent(engine.Position, circle, .{ .x = 400, .y = 300 });
+    var circle_shape = engine.Shape.circle(50);
+    circle_shape.color = .{ .r = 100, .g = 150, .b = 255, .a = 255 };
+    game.addComponent(engine.Shape, circle, circle_shape);
+    game.getPipeline().trackEntity(circle, .shape) catch {};
+
+    // Create a rectangle
+    const rect = game.createEntity();
+    game.addComponent(engine.Position, rect, .{ .x = 250, .y = 200 });
+    var rect_shape = engine.Shape.rectangle(120, 80);
+    rect_shape.color = .{ .r = 255, .g = 100, .b = 100, .a = 255 };
+    game.addComponent(engine.Shape, rect, rect_shape);
+    game.getPipeline().trackEntity(rect, .shape) catch {};
+
+    // Create another circle
+    const circle2 = game.createEntity();
+    game.addComponent(engine.Position, circle2, .{ .x = 550, .y = 200 });
+    var circle2_shape = engine.Shape.circle(30);
+    circle2_shape.color = .{ .r = 100, .g = 255, .b = 100, .a = 255 };
+    game.addComponent(engine.Shape, circle2, circle2_shape);
+    game.getPipeline().trackEntity(circle2, .shape) catch {};
+
+    std.log.info("[main] Scene loaded with 3 shapes", .{});
 }
