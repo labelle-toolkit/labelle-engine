@@ -38,7 +38,8 @@ pub const SceneInfo = struct {
 
 /// Entity information for entity lifecycle hooks.
 pub const EntityInfo = struct {
-    /// The entity ID (as u64 for backend compatibility).
+    /// The entity ID (as u64 for backend compatibility with zig_ecs/zflecs).
+    /// Use `engine.entityFromU64()` / `engine.entityToU64()` to convert.
     entity_id: u64,
     /// Name of the prefab used to create this entity, if any.
     prefab_name: ?[]const u8 = null,

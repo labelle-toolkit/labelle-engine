@@ -221,6 +221,8 @@ The engine provides a type-safe, comptime-based hook system for observing engine
 - `scene_load` / `scene_unload` - Scene transitions
 - `entity_created` / `entity_destroyed` - Entity lifecycle
 
+> **Note on `game_init`:** This hook fires during `Game.init()` before the struct is in its final memory location. Handlers should not store or use `*Game` pointers. For logic requiring a stable Game pointer, use `scene_load` or call after `game.fixPointers()`.
+
 **Basic usage:**
 ```zig
 const engine = @import("labelle-engine");
@@ -301,9 +303,12 @@ const GameTasksHandlers = struct {
     }
 };
 const TasksDispatcher = TasksPlugin.Dispatcher(GameTasksHandlers);
+
+// The plugin emits events using the dispatcher:
+// TasksDispatcher.emit(.{ .task_completed = .{ .name = "build_house" } });
 ```
 
-See `usage/example_hooks/` for a complete example.
+See `usage/example_hooks/` for a complete two-way binding example.
 
 ### Camera System
 
