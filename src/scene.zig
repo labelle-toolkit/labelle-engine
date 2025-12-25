@@ -127,20 +127,20 @@ pub const SceneContext = struct {
     }
 
     /// Get the underlying Game pointer (as base Game type)
-    pub fn game(self: *SceneContext) *Game {
+    pub fn game(self: *const SceneContext) *Game {
         return @ptrCast(@alignCast(self.game_ptr));
     }
 
     // Convenience accessors
-    pub fn registry(self: *SceneContext) *Registry {
+    pub fn registry(self: *const SceneContext) *Registry {
         return self.game().getRegistry();
     }
 
-    pub fn pipeline(self: *SceneContext) *RenderPipeline {
+    pub fn pipeline(self: *const SceneContext) *RenderPipeline {
         return self.game().getPipeline();
     }
 
-    pub fn allocator(self: *SceneContext) std.mem.Allocator {
+    pub fn allocator(self: *const SceneContext) std.mem.Allocator {
         return self.game().allocator;
     }
 };
