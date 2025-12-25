@@ -27,7 +27,7 @@ Add labelle-engine to your `build.zig.zon`:
 ```zig
 .dependencies = .{
     .@"labelle-engine" = .{
-        .url = "git+https://github.com/labelle-toolkit/labelle-engine?ref=v0.17.0#<commit-hash>",
+        .url = "git+https://github.com/labelle-toolkit/labelle-engine?ref=v0.18.0#<commit-hash>",
         .hash = "<hash>",
     },
 },
