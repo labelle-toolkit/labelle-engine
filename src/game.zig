@@ -27,6 +27,7 @@ const ecs = @import("ecs");
 const input_mod = @import("input");
 const audio_mod = @import("audio");
 const render_pipeline_mod = @import("render_pipeline.zig");
+const hooks_mod = @import("hooks.zig");
 
 const Allocator = std.mem.Allocator;
 // Use the backend-aware RetainedEngine from render_pipeline
@@ -84,25 +85,53 @@ pub const ScreenSize = struct {
     height: i32,
 };
 
-/// Game facade - main entry point for GUI-generated projects
-pub const Game = struct {
-    allocator: Allocator,
-    retained_engine: RetainedEngine,
-    registry: Registry,
-    pipeline: RenderPipeline,
-    input: Input,
-    audio: Audio,
+/// Game facade - main entry point for GUI-generated projects.
+/// Use `GameWith(MyHooks)` to enable lifecycle hooks, or just `Game` for no hooks.
+pub fn GameWith(comptime Hooks: type) type {
+    // Determine if hooks are enabled (Hooks is not void and not empty struct)
+    const hooks_enabled = comptime blk: {
+        if (Hooks == void) break :blk false;
+        const info = @typeInfo(Hooks);
+        if (info == .@"struct" and info.@"struct".decls.len == 0) break :blk false;
+        break :blk true;
+    };
 
-    // Scene management
-    scenes: std.StringHashMap(SceneEntry),
-    current_scene_name: ?[]const u8,
-    pending_scene_change: ?[]const u8,
+    return struct {
+        const Self = @This();
 
-    // Game state
-    running: bool,
+        /// The hook dispatcher type for this game instance.
+        pub const HookDispatcher = if (hooks_enabled)
+            hooks_mod.EngineHookDispatcher(Hooks)
+        else
+            hooks_mod.EmptyEngineDispatcher;
 
-    /// Initialize a new game instance
-    pub fn init(allocator: Allocator, config: GameConfig) !Game {
+        allocator: Allocator,
+        retained_engine: RetainedEngine,
+        registry: Registry,
+        pipeline: RenderPipeline,
+        input: Input,
+        audio: Audio,
+
+        // Scene management
+        scenes: std.StringHashMap(SceneEntry),
+        current_scene_name: ?[]const u8,
+        pending_scene_change: ?[]const u8,
+
+        // Game state
+        running: bool,
+
+        // Frame tracking (for hooks)
+        frame_number: u64 = 0,
+
+        /// Emit a hook event. No-op if hooks are disabled.
+        inline fn emitHook(payload: hooks_mod.HookPayload) void {
+            if (hooks_enabled) {
+                HookDispatcher.emit(payload);
+            }
+        }
+
+        /// Initialize a new game instance
+        pub fn init(allocator: Allocator, config: GameConfig) !Self {
         var retained_engine = try RetainedEngine.init(allocator, .{
             .window = .{
                 .width = config.window.width,
@@ -124,35 +153,43 @@ pub const Game = struct {
         const input = Input.init();
         const audio = Audio.init();
 
-        // Build the Game struct. Note: pipeline.engine currently points to the
-        // local `retained_engine` variable above, which will become invalid after
-        // the struct is moved to the caller's stack.
-        return Game{
-            .allocator = allocator,
-            .retained_engine = retained_engine,
-            .registry = registry,
-            .pipeline = pipeline,
-            .input = input,
-            .audio = audio,
-            .scenes = std.StringHashMap(SceneEntry).init(allocator),
-            .current_scene_name = null,
-            .pending_scene_change = null,
-            .running = true,
-        };
-    }
+            // Build the struct. Note: pipeline.engine currently points to the
+            // local `retained_engine` variable above, which will become invalid after
+            // the struct is moved to the caller's stack.
+            const game = Self{
+                .allocator = allocator,
+                .retained_engine = retained_engine,
+                .registry = registry,
+                .pipeline = pipeline,
+                .input = input,
+                .audio = audio,
+                .scenes = std.StringHashMap(SceneEntry).init(allocator),
+                .current_scene_name = null,
+                .pending_scene_change = null,
+                .running = true,
+            };
+
+            // Emit game_init hook
+            emitHook(.{ .game_init = {} });
+
+            return game;
+        }
 
     /// Fix internal pointers after the Game struct has been moved.
     /// MUST be called immediately after init() when the struct is in its final location.
     /// Example:
     ///   var game = try Game.init(allocator, config);
     ///   game.fixPointers();
-    pub fn fixPointers(self: *Game) void {
+    pub fn fixPointers(self: *Self) void {
         self.pipeline.engine = &self.retained_engine;
     }
 
-    /// Clean up all resources
-    pub fn deinit(self: *Game) void {
-        self.unloadCurrentScene();
+        /// Clean up all resources
+        pub fn deinit(self: *Self) void {
+            // Emit game_deinit hook before cleanup
+            emitHook(.{ .game_deinit = {} });
+
+            self.unloadCurrentScene();
 
         // Free owned strings
         if (self.current_scene_name) |name| {
@@ -170,40 +207,43 @@ pub const Game = struct {
         self.retained_engine.deinit();
     }
 
-    /// Unload the current scene (helper to avoid duplication)
-    fn unloadCurrentScene(self: *Game) void {
-        if (self.current_scene_name) |name| {
-            if (self.scenes.get(name)) |entry| {
-                if (entry.hooks.onUnload) |onUnload| {
-                    onUnload(self);
+        /// Unload the current scene (helper to avoid duplication)
+        fn unloadCurrentScene(self: *Self) void {
+            if (self.current_scene_name) |name| {
+                // Emit scene_unload hook
+                emitHook(.{ .scene_unload = .{ .name = name } });
+
+                if (self.scenes.get(name)) |entry| {
+                    if (entry.hooks.onUnload) |onUnload| {
+                        onUnload(self);
+                    }
                 }
             }
-        }
 
-        // Clear all tracked entities from pipeline and destroy their visuals
-        self.pipeline.clear();
-    }
+            // Clear all tracked entities from pipeline and destroy their visuals
+            self.pipeline.clear();
+        }
 
     // ==================== Entity Management ====================
 
     /// Create a new entity
-    pub fn createEntity(self: *Game) Entity {
+    pub fn createEntity(self: *Self) Entity {
         return self.registry.create();
     }
 
     /// Destroy an entity and its visual representation
-    pub fn destroyEntity(self: *Game, entity: Entity) void {
+    pub fn destroyEntity(self: *Self, entity: Entity) void {
         self.pipeline.untrackEntity(entity);
         self.registry.destroy(entity);
     }
 
     /// Add Position component to an entity
-    pub fn addPosition(self: *Game, entity: Entity, pos: Position) void {
+    pub fn addPosition(self: *Self, entity: Entity, pos: Position) void {
         self.registry.add(entity, pos);
     }
 
     /// Set Position component (marks dirty for sync)
-    pub fn setPosition(self: *Game, entity: Entity, pos: Position) void {
+    pub fn setPosition(self: *Self, entity: Entity, pos: Position) void {
         if (self.registry.tryGet(Position, entity)) |p| {
             p.* = pos;
             self.pipeline.markPositionDirty(entity);
@@ -211,65 +251,65 @@ pub const Game = struct {
     }
 
     /// Get Position component
-    pub fn getPosition(self: *Game, entity: Entity) ?*Position {
+    pub fn getPosition(self: *Self, entity: Entity) ?*Position {
         return self.registry.tryGet(Position, entity);
     }
 
     /// Add Sprite component and track for rendering
-    pub fn addSprite(self: *Game, entity: Entity, sprite: Sprite) !void {
+    pub fn addSprite(self: *Self, entity: Entity, sprite: Sprite) !void {
         self.registry.add(entity, sprite);
         try self.pipeline.trackEntity(entity, .sprite);
     }
 
     /// Add Shape component and track for rendering
-    pub fn addShape(self: *Game, entity: Entity, shape: Shape) !void {
+    pub fn addShape(self: *Self, entity: Entity, shape: Shape) !void {
         self.registry.add(entity, shape);
         try self.pipeline.trackEntity(entity, .shape);
     }
 
     /// Add Text component and track for rendering
-    pub fn addText(self: *Game, entity: Entity, text: Text) !void {
+    pub fn addText(self: *Self, entity: Entity, text: Text) !void {
         self.registry.add(entity, text);
         try self.pipeline.trackEntity(entity, .text);
     }
 
     /// Remove Sprite component and stop tracking for rendering
-    pub fn removeSprite(self: *Game, entity: Entity) void {
+    pub fn removeSprite(self: *Self, entity: Entity) void {
         self.pipeline.untrackEntity(entity);
         self.registry.remove(Sprite, entity);
     }
 
     /// Remove Shape component and stop tracking for rendering
-    pub fn removeShape(self: *Game, entity: Entity) void {
+    pub fn removeShape(self: *Self, entity: Entity) void {
         self.pipeline.untrackEntity(entity);
         self.registry.remove(Shape, entity);
     }
 
     /// Remove Text component and stop tracking for rendering
-    pub fn removeText(self: *Game, entity: Entity) void {
+    pub fn removeText(self: *Self, entity: Entity) void {
         self.pipeline.untrackEntity(entity);
         self.registry.remove(Text, entity);
     }
 
     /// Add a custom component to an entity
-    pub fn addComponent(self: *Game, comptime T: type, entity: Entity, component: T) void {
+    pub fn addComponent(self: *Self, comptime T: type, entity: Entity, component: T) void {
         self.registry.add(entity, component);
     }
 
     /// Get a component from an entity
-    pub fn getComponent(self: *Game, comptime T: type, entity: Entity) ?*T {
+    pub fn getComponent(self: *Self, comptime T: type, entity: Entity) ?*T {
         return self.registry.tryGet(T, entity);
     }
 
     // ==================== Asset Loading ====================
 
     /// Load a texture and return its ID
-    pub fn loadTexture(self: *Game, path: [:0]const u8) !TextureId {
+    pub fn loadTexture(self: *Self, path: [:0]const u8) !TextureId {
         return self.retained_engine.loadTexture(path);
     }
 
     /// Load a texture atlas
-    pub fn loadAtlas(self: *Game, name: []const u8, json_path: [:0]const u8, texture_path: [:0]const u8) !void {
+    pub fn loadAtlas(self: *Self, name: []const u8, json_path: [:0]const u8, texture_path: [:0]const u8) !void {
         return self.retained_engine.loadAtlas(name, json_path, texture_path);
     }
 
@@ -277,7 +317,7 @@ pub const Game = struct {
 
     /// Register a scene with the game
     pub fn registerScene(
-        self: *Game,
+        self: *Self,
         comptime name: []const u8,
         comptime loader_fn: fn (*Game) anyerror!void,
         hooks: SceneHooks,
@@ -296,7 +336,7 @@ pub const Game = struct {
 
     /// Register a scene without hooks (convenience method)
     pub fn registerSceneSimple(
-        self: *Game,
+        self: *Self,
         comptime name: []const u8,
         comptime loader_fn: fn (*Game) anyerror!void,
     ) !void {
@@ -304,7 +344,7 @@ pub const Game = struct {
     }
 
     /// Set the active scene immediately
-    pub fn setScene(self: *Game, name: []const u8) !void {
+    pub fn setScene(self: *Self, name: []const u8) !void {
         // Unload current scene
         self.unloadCurrentScene();
 
@@ -326,18 +366,21 @@ pub const Game = struct {
         const entry = self.scenes.get(name) orelse return error.SceneNotFound;
         try entry.loader_fn(self);
 
-        // Own the scene name by duplicating it
-        self.current_scene_name = try self.allocator.dupe(u8, name);
+            // Own the scene name by duplicating it
+            self.current_scene_name = try self.allocator.dupe(u8, name);
 
-        // Call onLoad hook
-        if (entry.hooks.onLoad) |onLoad| {
-            onLoad(self);
+            // Call onLoad hook
+            if (entry.hooks.onLoad) |onLoad| {
+                onLoad(self);
+            }
+
+            // Emit scene_load hook
+            emitHook(.{ .scene_load = .{ .name = name } });
         }
-    }
 
     /// Queue a scene change to happen at the end of the current frame
     /// This is safe to call from within scripts
-    pub fn queueSceneChange(self: *Game, name: []const u8) void {
+    pub fn queueSceneChange(self: *Self, name: []const u8) void {
         // Free any existing pending change
         if (self.pending_scene_change) |old| {
             self.allocator.free(old);
@@ -347,12 +390,12 @@ pub const Game = struct {
     }
 
     /// Get the name of the current scene
-    pub fn getCurrentSceneName(self: *const Game) ?[]const u8 {
+    pub fn getCurrentSceneName(self: *const Self) ?[]const u8 {
         return self.current_scene_name;
     }
 
     /// Stop the game loop
-    pub fn quit(self: *Game) void {
+    pub fn quit(self: *Self) void {
         self.running = false;
     }
 
@@ -364,7 +407,7 @@ pub const Game = struct {
     /// For sokol backend, use sokol's callback-based event loop directly:
     /// - Register a sokol event callback that calls `game.getInput().processEvent(event)`
     /// - In your frame callback, call `game.getInput().beginFrame()` at the start
-    pub fn run(self: *Game) !void {
+    pub fn run(self: *Self) !void {
         try self.runWithCallback(null);
     }
 
@@ -372,154 +415,166 @@ pub const Game = struct {
     ///
     /// Note: This polling-style game loop works with raylib and SDL backends.
     /// For sokol backend, you must use sokol's callback-based architecture instead.
-    pub fn runWithCallback(self: *Game, callback: ?FrameCallback) !void {
-        while (self.running and self.retained_engine.isRunning()) {
-            // Begin input frame (clears per-frame state)
-            self.input.beginFrame();
+        pub fn runWithCallback(self: *Self, callback: ?FrameCallback) !void {
+            while (self.running and self.retained_engine.isRunning()) {
+                const dt = self.retained_engine.getDeltaTime();
 
-            const dt = self.retained_engine.getDeltaTime();
+                // Emit frame_start hook
+                emitHook(.{ .frame_start = .{ .frame_number = self.frame_number, .dt = dt } });
 
-            // Call custom frame callback if provided
-            if (callback) |cb| {
-                cb(self, dt);
-            }
+                // Begin input frame (clears per-frame state)
+                self.input.beginFrame();
 
-            // Sync ECS state to RetainedEngine
-            self.pipeline.sync(&self.registry);
-
-            // Update audio (for music streaming)
-            self.audio.update();
-
-            // Render
-            self.retained_engine.beginFrame();
-            self.retained_engine.render();
-            self.retained_engine.endFrame();
-
-            // Handle pending scene change
-            if (self.pending_scene_change) |next_scene| {
-                defer {
-                    self.allocator.free(next_scene);
-                    self.pending_scene_change = null;
+                // Call custom frame callback if provided
+                if (callback) |cb| {
+                    cb(self, dt);
                 }
-                try self.setScene(next_scene);
+
+                // Sync ECS state to RetainedEngine
+                self.pipeline.sync(&self.registry);
+
+                // Update audio (for music streaming)
+                self.audio.update();
+
+                // Render
+                self.retained_engine.beginFrame();
+                self.retained_engine.render();
+                self.retained_engine.endFrame();
+
+                // Handle pending scene change
+                if (self.pending_scene_change) |next_scene| {
+                    defer {
+                        self.allocator.free(next_scene);
+                        self.pending_scene_change = null;
+                    }
+                    try self.setScene(next_scene);
+                }
+
+                // Emit frame_end hook
+                emitHook(.{ .frame_end = .{ .frame_number = self.frame_number, .dt = dt } });
+
+                self.frame_number += 1;
             }
         }
-    }
 
     // ==================== Camera ====================
 
     /// Set the primary camera position
-    pub fn setCameraPosition(self: *Game, x: f32, y: f32) void {
+    pub fn setCameraPosition(self: *Self, x: f32, y: f32) void {
         self.retained_engine.setCameraPosition(x, y);
     }
 
     /// Set the primary camera zoom level
-    pub fn setCameraZoom(self: *Game, zoom: f32) void {
+    pub fn setCameraZoom(self: *Self, zoom: f32) void {
         self.retained_engine.setZoom(zoom);
     }
 
     /// Get the primary camera (for advanced use)
-    pub fn getCamera(self: *Game) *labelle.Camera {
+    pub fn getCamera(self: *Self) *labelle.Camera {
         return self.retained_engine.getCamera();
     }
 
     // ==================== Multi-Camera ====================
 
     /// Get a camera by index (0-3)
-    pub fn getCameraAt(self: *Game, index: u2) *labelle.Camera {
+    pub fn getCameraAt(self: *Self, index: u2) *labelle.Camera {
         return self.retained_engine.getCameraAt(index);
     }
 
     /// Get the camera manager (for advanced multi-camera control)
-    pub fn getCameraManager(self: *Game) *labelle.CameraManager {
+    pub fn getCameraManager(self: *Self) *labelle.CameraManager {
         return self.retained_engine.getCameraManager();
     }
 
     /// Set up split-screen with a predefined layout
-    pub fn setupSplitScreen(self: *Game, layout: labelle.SplitScreenLayout) void {
+    pub fn setupSplitScreen(self: *Self, layout: labelle.SplitScreenLayout) void {
         self.retained_engine.setupSplitScreen(layout);
     }
 
     /// Disable multi-camera mode (return to single camera)
-    pub fn disableMultiCamera(self: *Game) void {
+    pub fn disableMultiCamera(self: *Self) void {
         self.retained_engine.disableMultiCamera();
     }
 
     /// Check if multi-camera mode is enabled
-    pub fn isMultiCameraEnabled(self: *const Game) bool {
+    pub fn isMultiCameraEnabled(self: *const Self) bool {
         return self.retained_engine.isMultiCameraEnabled();
     }
 
     /// Set which cameras are active (bitmask: bit 0 = camera 0, etc.)
-    pub fn setActiveCameras(self: *Game, mask: u4) void {
+    pub fn setActiveCameras(self: *Self, mask: u4) void {
         self.retained_engine.setActiveCameras(mask);
     }
 
     // ==================== Accessors ====================
 
     /// Get access to the retained engine (for advanced use)
-    pub fn getRetainedEngine(self: *Game) *RetainedEngine {
+    pub fn getRetainedEngine(self: *Self) *RetainedEngine {
         return &self.retained_engine;
     }
 
     /// Get access to the ECS registry (for advanced use)
-    pub fn getRegistry(self: *Game) *Registry {
+    pub fn getRegistry(self: *Self) *Registry {
         return &self.registry;
     }
 
     /// Get access to the render pipeline (for advanced use)
-    pub fn getPipeline(self: *Game) *RenderPipeline {
+    pub fn getPipeline(self: *Self) *RenderPipeline {
         return &self.pipeline;
     }
 
     /// Get access to the input system
-    pub fn getInput(self: *Game) *Input {
+    pub fn getInput(self: *Self) *Input {
         return &self.input;
     }
 
     /// Get access to the audio system
-    pub fn getAudio(self: *Game) *Audio {
+    pub fn getAudio(self: *Self) *Audio {
         return &self.audio;
     }
 
     /// Get delta time from retained engine
-    pub fn getDeltaTime(self: *Game) f32 {
+    pub fn getDeltaTime(self: *Self) f32 {
         return self.retained_engine.getDeltaTime();
     }
 
     /// Check if the game is still running
-    pub fn isRunning(self: *const Game) bool {
+    pub fn isRunning(self: *const Self) bool {
         return self.running and self.retained_engine.isRunning();
     }
 
     // ==================== Fullscreen ====================
 
     /// Toggle between fullscreen and windowed mode
-    pub fn toggleFullscreen(self: *Game) void {
+    pub fn toggleFullscreen(self: *Self) void {
         self.retained_engine.toggleFullscreen();
     }
 
     /// Set fullscreen mode explicitly
-    pub fn setFullscreen(self: *Game, fullscreen: bool) void {
+    pub fn setFullscreen(self: *Self, fullscreen: bool) void {
         self.retained_engine.setFullscreen(fullscreen);
     }
 
     /// Check if window is currently in fullscreen mode
-    pub fn isFullscreen(self: *const Game) bool {
+    pub fn isFullscreen(self: *const Self) bool {
         return self.retained_engine.isFullscreen();
     }
 
     // ==================== Screen Size ====================
 
     /// Check if screen size changed since last frame (fullscreen toggle, window resize)
-    pub fn screenSizeChanged(self: *const Game) bool {
+    pub fn screenSizeChanged(self: *const Self) bool {
         return self.retained_engine.screenSizeChanged();
     }
 
     /// Get current screen/window size
-    pub fn getScreenSize(self: *const Game) ScreenSize {
-        const size = self.retained_engine.getWindowSize();
-        return .{ .width = size.w, .height = size.h };
-    }
-};
+    pub fn getScreenSize(self: *const Self) ScreenSize {
+            const size = self.retained_engine.getWindowSize();
+            return .{ .width = size.w, .height = size.h };
+        }
+    };
+}
 
+/// Default Game type with hooks disabled for backwards compatibility.
+/// Use `GameWith(MyHooks)` to enable lifecycle hooks.
+pub const Game = GameWith(void);
