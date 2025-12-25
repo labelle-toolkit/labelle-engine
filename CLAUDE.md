@@ -211,6 +211,53 @@ The output directory can be customized via `output_dir` in `project.labelle` (de
 5. Each frame: scripts update components, `RenderPipeline.sync()` pushes dirty state to graphics
 6. On destroy: prefab `onDestroy()` hook called, `RenderPipeline.untrackEntity()` removes visual
 
+### Hook System
+
+The engine provides a type-safe, comptime-based hook system for observing engine lifecycle events with zero runtime overhead.
+
+**Engine hooks:**
+- `game_init` / `game_deinit` - Game lifecycle
+- `frame_start` / `frame_end` - Frame boundaries
+- `scene_load` / `scene_unload` - Scene transitions
+- `entity_created` / `entity_destroyed` - Entity lifecycle
+
+**Usage:**
+```zig
+const engine = @import("labelle-engine");
+
+// Define hook handlers
+const MyHooks = struct {
+    pub fn scene_load(payload: engine.HookPayload) void {
+        const info = payload.scene_load;
+        std.log.info("Scene loaded: {s}", .{info.name});
+    }
+
+    pub fn entity_created(payload: engine.HookPayload) void {
+        const info = payload.entity_created;
+        std.log.info("Entity created: {d}", .{info.entity_id});
+    }
+};
+
+// Create dispatcher
+const Dispatcher = engine.EngineHookDispatcher(MyHooks);
+
+// Emit hooks (done by engine internally)
+Dispatcher.emit(.{ .scene_load = .{ .name = "main" } });
+```
+
+**Plugin hooks:** Plugins can define their own hook enums and payloads:
+```zig
+// In plugin
+pub const MyPluginHook = enum { on_task_complete, on_state_change };
+pub const MyPluginPayload = union(MyPluginHook) {
+    on_task_complete: TaskInfo,
+    on_state_change: StateInfo,
+};
+
+// Game creates dispatcher for plugin hooks
+const PluginDispatcher = engine.HookDispatcher(MyPluginHook, MyPluginPayload, MyHandlers);
+```
+
 ### Camera System
 
 The Game facade provides direct camera control methods:
