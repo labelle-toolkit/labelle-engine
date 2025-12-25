@@ -2,7 +2,7 @@
 //
 // Generates build.zig, build.zig.zon, and main.zig based on:
 // - project.labelle configuration
-// - Folder contents (prefabs/, components/, scripts/, scenes/)
+// - Folder contents (prefabs/, components/, scripts/, scenes/, hooks/)
 //
 // Usage:
 //   const generator = @import("labelle-engine").generator;
@@ -278,6 +278,7 @@ fn generateMainZigRaylib(
     prefabs: []const []const u8,
     components: []const []const u8,
     scripts: []const []const u8,
+    hooks: []const []const u8,
 ) ![]const u8 {
     var buf: std.ArrayListUnmanaged(u8) = .{};
     const writer = buf.writer(allocator);
@@ -335,6 +336,11 @@ fn generateMainZigRaylib(
     // Script imports
     for (scripts) |name| {
         try zts.print(main_raylib_tmpl, "script_import", .{ name, name }, writer);
+    }
+
+    // Hook imports
+    for (hooks) |name| {
+        try zts.print(main_raylib_tmpl, "hook_import", .{ name, name }, writer);
     }
 
     // Main module reference
@@ -395,6 +401,17 @@ fn generateMainZigRaylib(
         try zts.print(main_raylib_tmpl, "script_registry_end", .{}, writer);
     }
 
+    // Hooks (merged engine hooks and Game type)
+    if (hooks.len == 0) {
+        try zts.print(main_raylib_tmpl, "hooks_empty", .{}, writer);
+    } else {
+        try zts.print(main_raylib_tmpl, "hooks_start", .{}, writer);
+        for (hooks) |name| {
+            try zts.print(main_raylib_tmpl, "hooks_item", .{name}, writer);
+        }
+        try zts.print(main_raylib_tmpl, "hooks_end", .{}, writer);
+    }
+
     // Loader and initial scene
     try zts.print(main_raylib_tmpl, "loader", .{config.initial_scene}, writer);
 
@@ -437,9 +454,10 @@ pub fn generateMainZig(
     prefabs: []const []const u8,
     components: []const []const u8,
     scripts: []const []const u8,
+    hooks: []const []const u8,
 ) ![]const u8 {
     return switch (config.backend) {
-        .raylib => generateMainZigRaylib(allocator, config, prefabs, components, scripts),
+        .raylib => generateMainZigRaylib(allocator, config, prefabs, components, scripts, hooks),
         .sokol => generateMainZigSokol(allocator, config),
     };
 }
@@ -524,11 +542,19 @@ pub fn generateProject(allocator: std.mem.Allocator, project_path: []const u8, o
         allocator.free(scripts);
     }
 
+    const hooks_path = try std.fs.path.join(allocator, &.{ project_path, "hooks" });
+    defer allocator.free(hooks_path);
+    const hooks = try scanFolder(allocator, hooks_path);
+    defer {
+        for (hooks) |h| allocator.free(h);
+        allocator.free(hooks);
+    }
+
     // Generate build.zig and main.zig first
     const build_zig = try generateBuildZig(allocator, config);
     defer allocator.free(build_zig);
 
-    const main_zig = try generateMainZig(allocator, config, prefabs, components, scripts);
+    const main_zig = try generateMainZig(allocator, config, prefabs, components, scripts, hooks);
     defer allocator.free(main_zig);
 
     // Create output directory path
@@ -674,8 +700,16 @@ pub fn generateMainOnly(allocator: std.mem.Allocator, project_path: []const u8) 
         allocator.free(scripts);
     }
 
+    const hooks_path = try std.fs.path.join(allocator, &.{ project_path, "hooks" });
+    defer allocator.free(hooks_path);
+    const hooks = try scanFolder(allocator, hooks_path);
+    defer {
+        for (hooks) |h| allocator.free(h);
+        allocator.free(hooks);
+    }
+
     // Generate main.zig
-    const main_zig = try generateMainZig(allocator, config, prefabs, components, scripts);
+    const main_zig = try generateMainZig(allocator, config, prefabs, components, scripts, hooks);
     defer allocator.free(main_zig);
 
     // Write main.zig to project root (needs project-relative imports)

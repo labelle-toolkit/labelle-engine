@@ -221,42 +221,89 @@ The engine provides a type-safe, comptime-based hook system for observing engine
 - `scene_load` / `scene_unload` - Scene transitions
 - `entity_created` / `entity_destroyed` - Entity lifecycle
 
-**Usage:**
+**Basic usage:**
 ```zig
 const engine = @import("labelle-engine");
 
 // Define hook handlers
 const MyHooks = struct {
+    pub fn game_init(_: engine.HookPayload) void {
+        std.log.info("Game started!", .{});
+    }
+
     pub fn scene_load(payload: engine.HookPayload) void {
         const info = payload.scene_load;
         std.log.info("Scene loaded: {s}", .{info.name});
     }
+};
 
-    pub fn entity_created(payload: engine.HookPayload) void {
-        const info = payload.entity_created;
-        std.log.info("Entity created: {d}", .{info.entity_id});
+// Create Game with hooks enabled
+const Game = engine.GameWith(MyHooks);
+```
+
+**Hooks folder (generator):** When using the project generator, hooks are automatically scanned from the `hooks/` folder. Each `.zig` file should export public functions matching hook names:
+
+```zig
+// hooks/game_hooks.zig
+const std = @import("std");
+const engine = @import("labelle-engine");
+
+pub fn game_init(_: engine.HookPayload) void {
+    std.log.info("Game started!", .{});
+}
+
+pub fn scene_load(payload: engine.HookPayload) void {
+    const info = payload.scene_load;
+    std.log.info("Scene loaded: {s}", .{info.name});
+}
+```
+
+The generator automatically merges all hook files using `MergeEngineHooks`.
+
+**Two-way plugin binding:** Use `MergeEngineHooks` to combine game hooks with plugin hooks:
+```zig
+// Plugin defines engine hooks it wants to receive
+const TasksPlugin = struct {
+    pub const EngineHooks = struct {
+        pub fn frame_start(payload: engine.HookPayload) void {
+            // Plugin updates each frame
+        }
+    };
+
+    // Plugin's own hook types for game to subscribe to
+    pub const Hook = enum { task_completed, task_started };
+    pub const Payload = union(Hook) {
+        task_completed: TaskInfo,
+        task_started: TaskInfo,
+    };
+
+    pub fn Dispatcher(comptime GameHandlers: type) type {
+        return engine.HookDispatcher(Hook, Payload, GameHandlers);
     }
 };
 
-// Create dispatcher
-const Dispatcher = engine.EngineHookDispatcher(MyHooks);
-
-// Emit hooks (done by engine internally)
-Dispatcher.emit(.{ .scene_load = .{ .name = "main" } });
-```
-
-**Plugin hooks:** Plugins can define their own hook enums and payloads:
-```zig
-// In plugin
-pub const MyPluginHook = enum { on_task_complete, on_state_change };
-pub const MyPluginPayload = union(MyPluginHook) {
-    on_task_complete: TaskInfo,
-    on_state_change: StateInfo,
+// Game merges its hooks with plugin hooks
+const GameHooks = struct {
+    pub fn game_init(_: engine.HookPayload) void {
+        std.log.info("Game started!", .{});
+    }
 };
 
-// Game creates dispatcher for plugin hooks
-const PluginDispatcher = engine.HookDispatcher(MyPluginHook, MyPluginPayload, MyHandlers);
+// Both GameHooks.game_init AND TasksPlugin.EngineHooks.frame_start will be called
+const AllHooks = engine.MergeEngineHooks(.{ GameHooks, TasksPlugin.EngineHooks });
+const Game = engine.GameWith(AllHooks);
+
+// Game subscribes to plugin events
+const GameTasksHandlers = struct {
+    pub fn task_completed(payload: TasksPlugin.Payload) void {
+        const info = payload.task_completed;
+        std.log.info("Task done: {s}", .{info.name});
+    }
+};
+const TasksDispatcher = TasksPlugin.Dispatcher(GameTasksHandlers);
 ```
+
+See `usage/example_hooks/` for a complete example.
 
 ### Camera System
 

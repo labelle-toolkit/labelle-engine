@@ -69,11 +69,24 @@ pub const EntityInfo = types.EntityInfo;
 // Re-export dispatcher
 pub const HookDispatcher = dispatcher.HookDispatcher;
 pub const EmptyDispatcher = dispatcher.EmptyDispatcher;
+pub const MergeHooks = dispatcher.MergeHooks;
 
 /// Convenience type for creating an engine hook dispatcher.
 /// Equivalent to `HookDispatcher(EngineHook, HookPayload, HookMap)`.
 pub fn EngineHookDispatcher(comptime HookMap: type) type {
     return HookDispatcher(EngineHook, HookPayload, HookMap);
+}
+
+/// Convenience type for merging multiple engine hook handler structs.
+/// Equivalent to `MergeHooks(EngineHook, HookPayload, handler_structs)`.
+///
+/// Example:
+/// ```zig
+/// const AllHooks = MergeEngineHooks(.{ GameHooks, PluginHooks });
+/// const Game = engine.GameWith(AllHooks);
+/// ```
+pub fn MergeEngineHooks(comptime handler_structs: anytype) type {
+    return MergeHooks(EngineHook, HookPayload, handler_structs);
 }
 
 /// An empty engine hook dispatcher with no handlers.

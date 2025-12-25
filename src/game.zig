@@ -37,6 +37,18 @@ const Entity = ecs.Entity;
 const Input = input_mod.Input;
 const Audio = audio_mod.Audio;
 
+// Entity <-> u64 conversion for hook payloads (matches src/scene.zig helpers)
+// We keep this local to avoid importing scene.zig (and risking cycles).
+const EntityBits = std.meta.Int(.unsigned, @bitSizeOf(Entity));
+comptime {
+    if (@sizeOf(Entity) > @sizeOf(u64)) {
+        @compileError("Entity must fit in u64 for hook payloads");
+    }
+}
+fn entityToU64(entity: Entity) u64 {
+    return @as(u64, @intCast(@as(EntityBits, @bitCast(entity))));
+}
+
 // Re-export render pipeline types
 pub const RenderPipeline = render_pipeline_mod.RenderPipeline;
 pub const Position = render_pipeline_mod.Position;
@@ -85,8 +97,13 @@ pub fn GameWith(comptime Hooks: type) type {
         const Self = @This();
 
         /// The hook dispatcher type for this game instance.
+        /// If Hooks already has an 'emit' method (e.g., from MergeHooks), use it directly.
+        /// Otherwise, wrap it with EngineHookDispatcher.
         pub const HookDispatcher = if (hooks_enabled)
-            hooks_mod.EngineHookDispatcher(Hooks)
+            if (@hasDecl(Hooks, "emit"))
+                Hooks // Already a dispatcher (e.g., from MergeHooks)
+            else
+                hooks_mod.EngineHookDispatcher(Hooks)
         else
             hooks_mod.EmptyEngineDispatcher;
 
@@ -153,27 +170,27 @@ pub fn GameWith(comptime Hooks: type) type {
         const input = Input.init();
         const audio = Audio.init();
 
-            // Build the struct. Note: pipeline.engine currently points to the
-            // local `retained_engine` variable above, which will become invalid after
-            // the struct is moved to the caller's stack.
-            const game = Self{
-                .allocator = allocator,
-                .retained_engine = retained_engine,
-                .registry = registry,
-                .pipeline = pipeline,
-                .input = input,
-                .audio = audio,
-                .scenes = std.StringHashMap(SceneEntry).init(allocator),
-                .current_scene_name = null,
-                .pending_scene_change = null,
-                .running = true,
-            };
+        // Build the struct. Note: pipeline.engine currently points to the
+        // local `retained_engine` variable above, which will become invalid after
+        // the struct is moved to the caller's stack.
+        const game = Self{
+            .allocator = allocator,
+            .retained_engine = retained_engine,
+            .registry = registry,
+            .pipeline = pipeline,
+            .input = input,
+            .audio = audio,
+            .scenes = std.StringHashMap(SceneEntry).init(allocator),
+            .current_scene_name = null,
+            .pending_scene_change = null,
+            .running = true,
+        };
 
-            // Emit game_init hook
-            emitHook(.{ .game_init = {} });
+        // Emit game_init hook
+        emitHook(.{ .game_init = {} });
 
-            return game;
-        }
+        return game;
+    }
 
     /// Fix internal pointers after the Game struct has been moved.
     /// MUST be called immediately after init() when the struct is in its final location.
@@ -228,11 +245,16 @@ pub fn GameWith(comptime Hooks: type) type {
 
     /// Create a new entity
     pub fn createEntity(self: *Self) Entity {
-        return self.registry.create();
+        const entity = self.registry.create();
+        // Emit entity_created hook (prefab_name is unknown at this layer)
+        emitHook(.{ .entity_created = .{ .entity_id = entityToU64(entity), .prefab_name = null } });
+        return entity;
     }
 
     /// Destroy an entity and its visual representation
     pub fn destroyEntity(self: *Self, entity: Entity) void {
+        // Emit entity_destroyed hook before destruction
+        emitHook(.{ .entity_destroyed = .{ .entity_id = entityToU64(entity), .prefab_name = null } });
         self.pipeline.untrackEntity(entity);
         self.registry.destroy(entity);
     }
@@ -366,17 +388,17 @@ pub fn GameWith(comptime Hooks: type) type {
         const entry = self.scenes.get(name) orelse return error.SceneNotFound;
         try entry.loader_fn(self);
 
-            // Own the scene name by duplicating it
-            self.current_scene_name = try self.allocator.dupe(u8, name);
+        // Own the scene name by duplicating it
+        self.current_scene_name = try self.allocator.dupe(u8, name);
 
-            // Call onLoad hook
-            if (entry.hooks.onLoad) |onLoad| {
-                onLoad(self);
-            }
-
-            // Emit scene_load hook
-            emitHook(.{ .scene_load = .{ .name = name } });
+        // Call onLoad hook
+        if (entry.hooks.onLoad) |onLoad| {
+            onLoad(self);
         }
+
+        // Emit scene_load hook
+        emitHook(.{ .scene_load = .{ .name = name } });
+    }
 
     /// Queue a scene change to happen at the end of the current frame
     /// This is safe to call from within scripts
@@ -569,9 +591,9 @@ pub fn GameWith(comptime Hooks: type) type {
 
     /// Get current screen/window size
     pub fn getScreenSize(self: *const Self) ScreenSize {
-            const size = self.retained_engine.getWindowSize();
-            return .{ .width = size.w, .height = size.h };
-        }
+        const size = self.retained_engine.getWindowSize();
+        return .{ .width = size.w, .height = size.h };
+    }
     };
 }
 

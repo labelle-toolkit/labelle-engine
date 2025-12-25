@@ -321,6 +321,176 @@ pub const EMPTY_ENGINE_DISPATCHER = struct {
 };
 
 // ============================================
+// Test MergeHooks
+// ============================================
+
+const MergeHooks = hooks.MergeHooks;
+
+// State for tracking merged handler calls
+var merge_handler_a_called: bool = false;
+var merge_handler_b_called: bool = false;
+var merge_update_count: u32 = 0;
+
+const MergeHandlersA = struct {
+    pub fn on_start(_: TestPayload) void {
+        merge_handler_a_called = true;
+    }
+
+    pub fn on_update(_: TestPayload) void {
+        merge_update_count += 1;
+    }
+};
+
+const MergeHandlersB = struct {
+    pub fn on_start(_: TestPayload) void {
+        merge_handler_b_called = true;
+    }
+
+    pub fn on_update(_: TestPayload) void {
+        merge_update_count += 1;
+    }
+
+    pub fn on_end(_: TestPayload) void {
+        // Handler B has on_end, Handler A doesn't
+    }
+};
+
+const MergeHandlersEmpty = struct {};
+
+pub const MERGE_HOOKS = struct {
+    pub const EMIT = struct {
+        test "calls handlers from both structs" {
+            const Merged = MergeHooks(TestHook, TestPayload, .{ MergeHandlersA, MergeHandlersB });
+
+            merge_handler_a_called = false;
+            merge_handler_b_called = false;
+            Merged.emit(.{ .on_start = {} });
+
+            try expect.toBeTrue(merge_handler_a_called);
+            try expect.toBeTrue(merge_handler_b_called);
+        }
+
+        test "calls overlapping hooks in order" {
+            const Merged = MergeHooks(TestHook, TestPayload, .{ MergeHandlersA, MergeHandlersB });
+
+            merge_update_count = 0;
+            Merged.emit(.{ .on_update = 0.016 });
+
+            // Both handlers should be called
+            try expect.equal(merge_update_count, 2);
+        }
+
+        test "calls hook that only exists in one struct" {
+            const Merged = MergeHooks(TestHook, TestPayload, .{ MergeHandlersA, MergeHandlersB });
+
+            // on_end only exists in MergeHandlersB - should not crash
+            Merged.emit(.{ .on_end = {} });
+        }
+
+        test "is no-op when no struct has handler" {
+            const Merged = MergeHooks(TestHook, TestPayload, .{ MergeHandlersEmpty, MergeHandlersEmpty });
+
+            // Should not crash
+            Merged.emit(.{ .on_start = {} });
+            Merged.emit(.{ .on_update = 0.016 });
+            Merged.emit(.{ .on_end = {} });
+        }
+    };
+
+    pub const HAS_HANDLER = struct {
+        test "returns true if any struct has handler" {
+            const Merged = MergeHooks(TestHook, TestPayload, .{ MergeHandlersA, MergeHandlersB });
+
+            try expect.toBeTrue(Merged.hasHandler(.on_start));
+            try expect.toBeTrue(Merged.hasHandler(.on_update));
+            try expect.toBeTrue(Merged.hasHandler(.on_end));
+        }
+
+        test "returns false if no struct has handler" {
+            // MergeHandlersA has on_start and on_update but not on_end
+            const Merged = MergeHooks(TestHook, TestPayload, .{MergeHandlersA});
+
+            try expect.toBeTrue(Merged.hasHandler(.on_start));
+            try expect.toBeTrue(Merged.hasHandler(.on_update));
+            try expect.toBeFalse(Merged.hasHandler(.on_end));
+        }
+    };
+
+    pub const HANDLER_COUNT = struct {
+        test "counts unique hooks with handlers" {
+            const Merged = MergeHooks(TestHook, TestPayload, .{ MergeHandlersA, MergeHandlersB });
+
+            // All 3 hooks have at least one handler
+            try expect.equal(Merged.handlerCount(), 3);
+        }
+
+        test "does not double-count overlapping handlers" {
+            // Both structs have on_start and on_update, but handlerCount counts unique hooks
+            const Merged = MergeHooks(TestHook, TestPayload, .{ MergeHandlersA, MergeHandlersB });
+
+            try expect.equal(Merged.handlerCount(), 3);
+        }
+    };
+
+    pub const TOTAL_HANDLER_COUNT = struct {
+        test "counts all handlers including duplicates" {
+            const Merged = MergeHooks(TestHook, TestPayload, .{ MergeHandlersA, MergeHandlersB });
+
+            // A has: on_start, on_update (2)
+            // B has: on_start, on_update, on_end (3)
+            // Total: 5
+            try expect.equal(Merged.totalHandlerCount(), 5);
+        }
+    };
+
+    pub const EMPTY_MERGE = struct {
+        test "empty tuple has no handlers" {
+            const Merged = MergeHooks(TestHook, TestPayload, .{});
+
+            try expect.toBeFalse(Merged.hasHandler(.on_start));
+            try expect.toBeFalse(Merged.hasHandler(.on_update));
+            try expect.toBeFalse(Merged.hasHandler(.on_end));
+            try expect.equal(Merged.handlerCount(), 0);
+            try expect.equal(Merged.totalHandlerCount(), 0);
+        }
+
+        test "single empty struct has no handlers" {
+            const Merged = MergeHooks(TestHook, TestPayload, .{MergeHandlersEmpty});
+
+            try expect.equal(Merged.handlerCount(), 0);
+        }
+    };
+};
+
+pub const MERGE_ENGINE_HOOKS = struct {
+    const GameHooks = struct {
+        pub fn game_init(_: HookPayload) void {}
+    };
+
+    const PluginHooks = struct {
+        pub fn game_init(_: HookPayload) void {}
+        pub fn frame_start(_: HookPayload) void {}
+    };
+
+    test "creates valid merged dispatcher" {
+        const Merged = engine.MergeEngineHooks(.{ GameHooks, PluginHooks });
+
+        try expect.toBeTrue(Merged.hasHandler(.game_init));
+        try expect.toBeTrue(Merged.hasHandler(.frame_start));
+        try expect.toBeFalse(Merged.hasHandler(.game_deinit));
+    }
+
+    test "counts handlers correctly" {
+        const Merged = engine.MergeEngineHooks(.{ GameHooks, PluginHooks });
+
+        // 2 unique hooks have handlers: game_init, frame_start
+        try expect.equal(Merged.handlerCount(), 2);
+        // 3 total handlers: game_init (2), frame_start (1)
+        try expect.equal(Merged.totalHandlerCount(), 3);
+    }
+};
+
+// ============================================
 // Test Module Exports
 // ============================================
 
@@ -356,5 +526,13 @@ pub const MODULE_EXPORTS = struct {
 
     test "hooks module exports HookDispatcher" {
         _ = engine.HookDispatcher;
+    }
+
+    test "hooks module exports MergeHooks" {
+        _ = engine.MergeHooks;
+    }
+
+    test "hooks module exports MergeEngineHooks" {
+        _ = engine.MergeEngineHooks;
     }
 };

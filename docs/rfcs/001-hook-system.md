@@ -32,17 +32,18 @@ A unified hook system would:
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                         Game                                 │
-│  ┌─────────────────┐  ┌─────────────────┐                   │
-│  │ HookRegistry    │  │ PluginHooks     │                   │
-│  │ (engine events) │  │ (plugin events) │                   │
-│  └────────┬────────┘  └────────┬────────┘                   │
-│           │                    │                             │
-│           ▼                    ▼                             │
-│  ┌─────────────────────────────────────────┐                │
-│  │            HookDispatcher               │                │
-│  │  - register(hook, callback)             │                │
-│  │  - emit(hook, payload)                  │                │
-│  └─────────────────────────────────────────┘                │
+│  ┌──────────────────────────────┐  ┌──────────────────────┐ │
+│  │ Engine HookMap (comptime)    │  │ Plugin HookMap        │ │
+│  │ - struct of handler fns      │  │ - struct of handler fns│ │
+│  └──────────────┬───────────────┘  └──────────┬───────────┘ │
+│                 │                              │             │
+│                 ▼                              ▼             │
+│  ┌────────────────────────────────────────────────────────┐  │
+│  │ HookDispatcher (comptime)                              │  │
+│  │ - emit(payload_union)                                 │  │
+│  │ - hasHandler(hook_tag)                                │  │
+│  │ - MergeHooks(...) to combine multiple HookMaps         │  │
+│  └────────────────────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -61,21 +62,14 @@ pub const EngineHook = enum {
     // Scene lifecycle
     scene_load,
     scene_unload,
-    scene_update,
-
     // Entity lifecycle
     entity_created,
     entity_destroyed,
-
-    // Input events
-    input_key_pressed,
-    input_key_released,
-
-    // Rendering
-    render_begin,
-    render_end,
 };
 ```
+
+Notes:
+- This RFC originally proposed additional hooks (`scene_update`, input, render). Those are still good candidates, but **are not implemented in the current PR**.
 
 ### 2. Hook Payload
 
@@ -90,16 +84,9 @@ pub const HookPayload = union(EngineHook) {
 
     scene_load: SceneInfo,
     scene_unload: SceneInfo,
-    scene_update: struct { scene: *Scene, dt: f32 },
 
     entity_created: EntityInfo,
     entity_destroyed: EntityInfo,
-
-    input_key_pressed: KeyInfo,
-    input_key_released: KeyInfo,
-
-    render_begin: void,
-    render_end: void,
 };
 
 pub const FrameInfo = struct {
@@ -109,17 +96,13 @@ pub const FrameInfo = struct {
 
 pub const SceneInfo = struct {
     name: []const u8,
-    scene: *Scene,
 };
 
 pub const EntityInfo = struct {
-    entity: Entity,
+    /// Engine uses `u64` for backend compatibility (zig_ecs vs zflecs).
+    /// Use `engine.entityFromU64()` / `engine.entityToU64()` when converting.
+    entity_id: u64,
     prefab_name: ?[]const u8,
-};
-
-pub const KeyInfo = struct {
-    key: Key,
-    modifiers: Modifiers,
 };
 ```
 
@@ -223,8 +206,17 @@ pub const SceneHooks = struct {
     onUnload: ?*const fn (*Game) void = null,
 };
 
-// After - use hook system
-game.hooks.emit(.scene_load, .{ .name = scene_name, .scene = scene });
+// Now: the engine emits `scene_load` / `scene_unload` automatically
+// when you call `game.setScene(...)` / when the current scene unloads.
+//
+// To observe it, define handlers and use GameWith:
+const MyHooks = struct {
+    pub fn scene_load(payload: engine.HookPayload) void {
+        const info = payload.scene_load;
+        std.log.info("Scene loaded: {s}", .{info.name});
+    }
+};
+const Game = engine.GameWith(MyHooks);
 ```
 
 #### Entity Lifecycle Migration
@@ -233,9 +225,10 @@ game.hooks.emit(.scene_load, .{ .name = scene_name, .scene = scene });
 onUpdate: ?*const fn (u64, *anyopaque, f32) void = null,
 onDestroy: ?*const fn (u64, *anyopaque) void = null,
 
-// After - emit hooks
-game.hooks.emit(.entity_created, .{ .entity = entity, .prefab_name = prefab });
-game.hooks.emit(.entity_destroyed, .{ .entity = entity, .prefab_name = prefab });
+// Now: the engine emits `entity_created` / `entity_destroyed` automatically
+// from `Game.createEntity()` / `Game.destroyEntity()`.
+//
+// Note: at the Game layer, `prefab_name` is not known, so it is currently null.
 ```
 
 ## Usage Examples
@@ -366,11 +359,11 @@ const PluginDispatcher = engine.hooks.HookDispatcher(
    - `scene_load` after scene loads ✅
    - `scene_unload` before scene unloads ✅
 
-3. Entity hooks (future):
-   - `entity_created` when entity is added to scene
-   - `entity_destroyed` when entity is removed
+3. Entity hooks:
+   - `entity_created` ✅ (emitted by `Game.createEntity()`, prefab_name currently null)
+   - `entity_destroyed` ✅ (emitted by `Game.destroyEntity()`, prefab_name currently null)
 
-### Phase 3: Plugin Hook Pattern
+### Phase 3: Plugin Hook Pattern ✅
 1. Document pattern for plugins to define their own hooks:
    ```zig
    // In plugin: define hook enum and payloads
@@ -385,9 +378,16 @@ const PluginDispatcher = engine.hooks.HookDispatcher(
    );
    ```
 
-2. Add example showing labelle-tasks integration pattern
+2. Two-way plugin binding with `MergeHooks` / `MergeEngineHooks`:
+   ```zig
+   // Merge game hooks with plugin's engine hooks
+   const AllHooks = engine.MergeEngineHooks(.{ GameHooks, PluginHooks });
+   const Game = engine.GameWith(AllHooks);
+   ```
 
-### Phase 4: Testing & Documentation
+3. Full example in `usage/example_hooks/` demonstrating plugin integration
+
+### Phase 4: Testing & Documentation ✅
 1. Create `test/hooks_test.zig` with tests for:
    - Hook dispatch with handlers
    - Hook dispatch without handlers (no-op)
@@ -395,6 +395,26 @@ const PluginDispatcher = engine.hooks.HookDispatcher(
    - Payload data correctness
 
 2. Add documentation in CLAUDE.md for hook system usage
+
+### Phase 5: Generator Integration ✅
+1. Generator scans `hooks/` folder for `.zig` files
+2. Each hook file should export public functions matching hook names
+3. Generated code merges all hook files using `MergeEngineHooks`
+4. Projects without a hooks folder use `engine.Game` directly
+
+Example hook file (`hooks/game_hooks.zig`):
+```zig
+const engine = @import("labelle-engine");
+
+pub fn game_init(_: engine.HookPayload) void {
+    // Handle game init
+}
+
+pub fn scene_load(payload: engine.HookPayload) void {
+    const info = payload.scene_load;
+    std.log.info("Scene loaded: {s}", .{info.name});
+}
+```
 
 ## Files Created/Modified
 
@@ -408,6 +428,8 @@ const PluginDispatcher = engine.hooks.HookDispatcher(
 ### Modified Files ✅
 - `src/game.zig` - Add GameWith(Hooks) parameterization, emit lifecycle hooks
 - `src/scene.zig` (module entry) - Re-export hook types and GameWith
+- `src/generator.zig` - Scan hooks/ folder, generate MergeEngineHooks code
+- `src/templates/main_raylib.txt` - Hook import and registry template sections
 - `CLAUDE.md` - Document hook system usage
 
 ## Design Decisions
@@ -419,6 +441,8 @@ const PluginDispatcher = engine.hooks.HookDispatcher(
 3. **Separate Dispatchers**: Each plugin has its own HookDispatcher. Games subscribe to each plugin's hooks separately. This provides clear namespacing and avoids coordination issues.
 
 4. **No Priority/Async**: Keep initial implementation simple. Priority ordering and async hooks can be added later if needed.
+
+5. **game_init Timing**: The `game_init` hook fires at the end of `Game.init()` before the struct is moved to its final stack location. Handlers should not rely on `*Game` pointers at this point. For operations requiring a stable Game pointer, use `scene_load` or wait until after `fixPointers()` is called.
 
 ## Alternatives Considered
 
