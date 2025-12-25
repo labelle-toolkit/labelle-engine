@@ -17,4 +17,5 @@ test {
     _ = @import("audio_test.zig");
     _ = @import("game_test.zig");
     _ = @import("hooks_test.zig");
+    _ = @import("project_config_test.zig");
 }

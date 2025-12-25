@@ -164,8 +164,43 @@ pub fn deinit(game: *Game, scene: *Scene) void { ... }  // optional
     .ecs_backend = .zig_ecs,   // or .zflecs
     .window = .{ .width = 800, .height = 600, .title = "My Game" },
     .camera = .{ .x = 0, .y = 0, .zoom = 1.0 },  // optional - default camera position
+    .plugins = .{
+        // Version tag (recommended for production)
+        .{ .name = "labelle-tasks", .version = "0.5.0" },
+
+        // Branch reference (development/CI)
+        .{ .name = "labelle-gui", .branch = "main" },
+
+        // Commit SHA (pinned to specific commit)
+        .{ .name = "labelle-pathfinding", .commit = "abc123def456" },
+
+        // Custom URL with fork
+        .{
+            .name = "labelle-tasks",
+            .url = "github.com/myuser/labelle-tasks-fork",
+            .branch = "my-feature",
+        },
+    },
 }
 ```
+
+**Plugin reference types** (mutually exclusive - exactly one required):
+
+| Field | Format | Generated URL |
+|-------|--------|---------------|
+| `.version` | Semver string | `#v{version}` (e.g., `#v0.5.0`) |
+| `.branch` | Branch name | `#{branch}` (e.g., `#main`) |
+| `.commit` | 7-40 hex chars | `#{commit}` (e.g., `#abc123f`) |
+
+**Important notes:**
+- `version` is recommended for production (stable, reproducible)
+- `commit` is good for CI pinning without a release tag (stable)
+- `branch` requires regenerating `build.zig.zon` to pick up new commits (hash changes)
+- `url` must be host/path format (no `https://` or `git+` prefix)
+
+**Optional plugin fields:**
+- `.module` - Override the module name (default: plugin name with `-` replaced by `_`)
+- `.components` - Include plugin's Components in ComponentRegistryMulti
 
 ### Graphics Backends
 

@@ -50,9 +50,18 @@ pub const EcsBackend = enum {
 /// Plugin dependency declaration
 pub const Plugin = struct {
     name: []const u8,
-    version: []const u8,
+
+    // Reference type (mutually exclusive, exactly one required)
+    /// Version tag reference (generates #v{version})
+    version: ?[]const u8 = null,
+    /// Branch reference (generates #{branch})
+    branch: ?[]const u8 = null,
+    /// Commit SHA reference (generates #{commit}). Must be 7-40 hex characters.
+    commit: ?[]const u8 = null,
+
     /// GitHub repository URL (e.g., "github.com/labelle-toolkit/labelle-pathfinding")
     /// If not provided, defaults to "github.com/labelle-toolkit/{name}"
+    /// Must be host/path format without scheme (no "https://")
     url: ?[]const u8 = null,
     /// Module name exported by the package (e.g., "pathfinding" for labelle-pathfinding)
     /// If not provided, defaults to the plugin name with hyphens replaced by underscores
@@ -63,6 +72,71 @@ pub const Plugin = struct {
     ///   - "Components": use plugin.Components
     ///   - "Components(MyItem)": use plugin.Components(MyItem) for parameterized types
     components: ?[]const u8 = null,
+
+    /// Validate the plugin configuration
+    pub fn validate(self: Plugin) PluginValidationError!void {
+        // Name must be non-empty
+        if (self.name.len == 0) {
+            return PluginValidationError.EmptyName;
+        }
+
+        // Count how many ref types are set
+        var ref_count: u8 = 0;
+        if (self.version != null) ref_count += 1;
+        if (self.branch != null) ref_count += 1;
+        if (self.commit != null) ref_count += 1;
+
+        if (ref_count == 0) {
+            return PluginValidationError.NoRefSpecified;
+        }
+        if (ref_count > 1) {
+            return PluginValidationError.MultipleRefsSpecified;
+        }
+
+        // Validate commit format if specified (7-40 hex characters)
+        if (self.commit) |commit_sha| {
+            if (commit_sha.len < 7 or commit_sha.len > 40) {
+                return PluginValidationError.InvalidCommitLength;
+            }
+            for (commit_sha) |c| {
+                if (!std.ascii.isHex(c)) {
+                    return PluginValidationError.InvalidCommitFormat;
+                }
+            }
+        }
+
+        // Validate URL format if specified (must not have scheme)
+        if (self.url) |url_str| {
+            if (std.mem.startsWith(u8, url_str, "https://") or
+                std.mem.startsWith(u8, url_str, "http://") or
+                std.mem.startsWith(u8, url_str, "git+https://"))
+            {
+                return PluginValidationError.UrlContainsScheme;
+            }
+        }
+    }
+
+    /// Get the git reference string for URL generation
+    pub fn getRef(self: Plugin) []const u8 {
+        if (self.commit) |c| return c;
+        if (self.branch) |b| return b;
+        // version is prefixed with 'v' in the generator
+        return self.version.?;
+    }
+
+    /// Check if this plugin uses a version tag (vs branch/commit)
+    pub fn isVersionRef(self: Plugin) bool {
+        return self.version != null;
+    }
+};
+
+pub const PluginValidationError = error{
+    EmptyName,
+    NoRefSpecified,
+    MultipleRefsSpecified,
+    InvalidCommitLength,
+    InvalidCommitFormat,
+    UrlContainsScheme,
 };
 
 /// Atlas resource declaration
@@ -136,7 +210,14 @@ pub const ProjectConfig = struct {
             return error.UnexpectedEof;
         }
 
-        return std.zon.parse.fromSlice(ProjectConfig, allocator, content, null, .{});
+        const config = try std.zon.parse.fromSlice(ProjectConfig, allocator, content, null, .{});
+
+        // Validate all plugins
+        for (config.plugins) |plugin| {
+            try plugin.validate();
+        }
+
+        return config;
     }
 
     /// Free resources allocated during parsing
