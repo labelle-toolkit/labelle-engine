@@ -17,11 +17,13 @@ const ProjectConfig = engine.ProjectConfig;
 
 // Hook imports - generator scans hooks/ folder for .zig files
 const game_hooks = @import("hooks/game_hooks.zig");
+const analytics_hooks = @import("hooks/analytics_hooks.zig");
 
 // Merge all hook files (generator does this automatically)
+// Both handlers for the same event will be called in order
 const Hooks = engine.MergeEngineHooks(.{
     game_hooks,
-    // Additional hook files would be listed here
+    analytics_hooks,
 });
 
 // Create Game with hooks enabled
