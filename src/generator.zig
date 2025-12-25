@@ -299,6 +299,7 @@ fn generateMainZigRaylib(
     components: []const []const u8,
     scripts: []const []const u8,
     hooks: []const []const u8,
+    task_hooks: TaskHookScanResult,
 ) ![]const u8 {
     var buf: std.ArrayListUnmanaged(u8) = .{};
     const writer = buf.writer(allocator);
@@ -432,6 +433,33 @@ fn generateMainZigRaylib(
         try zts.print(main_raylib_tmpl, "hooks_end", .{}, writer);
     }
 
+    // Task engine with auto-wired hooks (if task hooks detected and labelle-tasks plugin configured)
+    if (task_hooks.has_task_hooks and task_hooks.tasks_plugin != null) {
+        const plugin = task_hooks.tasks_plugin.?;
+
+        // Get plugin zig name
+        const plugin_zig_name = try sanitizeZigIdentifier(allocator, plugin.name);
+        defer allocator.free(plugin_zig_name);
+
+        // Get type parameters (required for TaskEngine)
+        const id_type = plugin.id_type orelse "u32"; // default to u32
+        const item_type = plugin.item_type orelse @panic("labelle-tasks plugin requires item_type when task hooks are detected");
+
+        // Generate TaskEngine type
+        // task_engine_start: plugin_name, id_type, item_type
+        try zts.print(main_raylib_tmpl, "task_engine_start", .{ plugin_zig_name, id_type, item_type }, writer);
+
+        // Add hook files that contain task hooks
+        for (task_hooks.hook_files_with_tasks) |name| {
+            try zts.print(main_raylib_tmpl, "task_engine_hook_item", .{name}, writer);
+        }
+
+        // task_engine_end: plugin_name, id_type, item_type (3 times), plugin_name, id_type, item_type
+        try zts.print(main_raylib_tmpl, "task_engine_end", .{ plugin_zig_name, id_type, item_type, plugin_zig_name, id_type, item_type }, writer);
+    } else {
+        try zts.print(main_raylib_tmpl, "task_engine_empty", .{}, writer);
+    }
+
     // Loader and initial scene
     try zts.print(main_raylib_tmpl, "loader", .{config.initial_scene}, writer);
 
@@ -475,9 +503,10 @@ pub fn generateMainZig(
     components: []const []const u8,
     scripts: []const []const u8,
     hooks: []const []const u8,
+    task_hooks: TaskHookScanResult,
 ) ![]const u8 {
     return switch (config.backend) {
-        .raylib => generateMainZigRaylib(allocator, config, prefabs, components, scripts, hooks),
+        .raylib => generateMainZigRaylib(allocator, config, prefabs, components, scripts, hooks, task_hooks),
         .sokol => generateMainZigSokol(allocator, config),
     };
 }
@@ -515,6 +544,95 @@ fn scanFolderWithExtension(allocator: std.mem.Allocator, path: []const u8, exten
     }
 
     return names.toOwnedSlice(allocator);
+}
+
+/// Known task hook function names that trigger TaskEngine generation
+const task_hook_names = [_][]const u8{
+    "pickup_started",
+    "process_started",
+    "store_started",
+    "worker_released",
+};
+
+/// Result of scanning for task hooks
+pub const TaskHookScanResult = struct {
+    /// Whether any task hooks were found
+    has_task_hooks: bool,
+    /// List of hook file names that contain task hooks
+    hook_files_with_tasks: []const []const u8,
+    /// The labelle-tasks plugin config (if found)
+    tasks_plugin: ?project_config.Plugin,
+
+    pub fn deinit(self: *TaskHookScanResult, allocator: std.mem.Allocator) void {
+        allocator.free(self.hook_files_with_tasks);
+    }
+};
+
+/// Scan hook files for task hook function declarations.
+/// Returns information about which files contain task hooks.
+pub fn scanForTaskHooks(
+    allocator: std.mem.Allocator,
+    hooks_path: []const u8,
+    hook_files: []const []const u8,
+    config: ProjectConfig,
+) !TaskHookScanResult {
+    var files_with_tasks: std.ArrayListUnmanaged([]const u8) = .{};
+    errdefer files_with_tasks.deinit(allocator);
+
+    // Find the labelle-tasks plugin if configured
+    var tasks_plugin: ?project_config.Plugin = null;
+    for (config.plugins) |plugin| {
+        if (std.mem.eql(u8, plugin.name, "labelle-tasks")) {
+            tasks_plugin = plugin;
+            break;
+        }
+    }
+
+    // Scan each hook file for task hook function declarations
+    for (hook_files) |hook_name| {
+        const file_path = try std.fmt.allocPrint(allocator, "{s}/{s}.zig", .{ hooks_path, hook_name });
+        defer allocator.free(file_path);
+
+        if (try fileContainsTaskHooks(allocator, file_path)) {
+            try files_with_tasks.append(allocator, hook_name);
+        }
+    }
+
+    return .{
+        .has_task_hooks = files_with_tasks.items.len > 0,
+        .hook_files_with_tasks = try files_with_tasks.toOwnedSlice(allocator),
+        .tasks_plugin = tasks_plugin,
+    };
+}
+
+/// Check if a file contains any task hook function declarations.
+fn fileContainsTaskHooks(allocator: std.mem.Allocator, file_path: []const u8) !bool {
+    const file = std.fs.cwd().openFile(file_path, .{}) catch |err| {
+        if (err == error.FileNotFound) return false;
+        return err;
+    };
+    defer file.close();
+
+    // Read file content
+    const stat = try file.stat();
+    if (stat.size > 1024 * 1024) return false; // Skip files > 1MB
+
+    const content = try allocator.alloc(u8, stat.size);
+    defer allocator.free(content);
+    const bytes_read = try file.readAll(content);
+
+    // Look for task hook function declarations
+    // Pattern: "pub fn <hook_name>("
+    for (task_hook_names) |hook_name| {
+        const pattern = try std.fmt.allocPrint(allocator, "pub fn {s}(", .{hook_name});
+        defer allocator.free(pattern);
+
+        if (std.mem.indexOf(u8, content[0..bytes_read], pattern) != null) {
+            return true;
+        }
+    }
+
+    return false;
 }
 
 /// Options for project generation
@@ -570,11 +688,15 @@ pub fn generateProject(allocator: std.mem.Allocator, project_path: []const u8, o
         allocator.free(hooks);
     }
 
+    // Scan for task hooks in hook files
+    var task_hooks = try scanForTaskHooks(allocator, hooks_path, hooks, config);
+    defer task_hooks.deinit(allocator);
+
     // Generate build.zig and main.zig first
     const build_zig = try generateBuildZig(allocator, config);
     defer allocator.free(build_zig);
 
-    const main_zig = try generateMainZig(allocator, config, prefabs, components, scripts, hooks);
+    const main_zig = try generateMainZig(allocator, config, prefabs, components, scripts, hooks, task_hooks);
     defer allocator.free(main_zig);
 
     // Create output directory path
@@ -728,8 +850,12 @@ pub fn generateMainOnly(allocator: std.mem.Allocator, project_path: []const u8) 
         allocator.free(hooks);
     }
 
+    // Scan for task hooks in hook files
+    var task_hooks = try scanForTaskHooks(allocator, hooks_path, hooks, config);
+    defer task_hooks.deinit(allocator);
+
     // Generate main.zig
-    const main_zig = try generateMainZig(allocator, config, prefabs, components, scripts, hooks);
+    const main_zig = try generateMainZig(allocator, config, prefabs, components, scripts, hooks, task_hooks);
     defer allocator.free(main_zig);
 
     // Write main.zig to project root (needs project-relative imports)

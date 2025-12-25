@@ -73,6 +73,14 @@ pub const Plugin = struct {
     ///   - "Components(MyItem)": use plugin.Components(MyItem) for parameterized types
     components: ?[]const u8 = null,
 
+    // Plugin-specific type parameters (for parameterized plugins like labelle-tasks)
+    /// Entity ID type for task engine (e.g., "u32", "u64")
+    /// Required for labelle-tasks plugin when task hooks are detected.
+    id_type: ?[]const u8 = null,
+    /// Item type for task engine (e.g., "components.items.ItemType")
+    /// Required for labelle-tasks plugin when task hooks are detected.
+    item_type: ?[]const u8 = null,
+
     /// Validate the plugin configuration
     pub fn validate(self: Plugin) PluginValidationError!void {
         // Name must be non-empty

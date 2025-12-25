@@ -1,0 +1,22 @@
+.{
+    .fingerprint = 0x376f8a04e4e56b3a,
+    .name = .example_tasks_plugin,
+    .version = "0.1.0",
+    .dependencies = .{
+        .@"labelle-engine" = .{
+            .path = "../..",
+        },
+        .@"labelle-tasks" = .{
+            .path = "../../../labelle-tasks",
+        },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "main.zig",
+        "project.labelle",
+        "scenes",
+        "hooks",
+        "components",
+    },
+}
