@@ -119,23 +119,29 @@ pub const EntityInfo = hooks.EntityInfo;
 /// Context passed to prefab lifecycle functions and scene loading
 /// Uses Game facade for unified access to ECS, pipeline, and engine
 pub const SceneContext = struct {
-    game: *Game,
+    game_ptr: *anyopaque,
 
-    pub fn init(g: *Game) SceneContext {
-        return .{ .game = g };
+    /// Initialize SceneContext with any GameWith(Hooks) type
+    pub fn init(g: anytype) SceneContext {
+        return .{ .game_ptr = @ptrCast(g) };
+    }
+
+    /// Get the underlying Game pointer (as base Game type)
+    pub fn game(self: *SceneContext) *Game {
+        return @ptrCast(@alignCast(self.game_ptr));
     }
 
     // Convenience accessors
     pub fn registry(self: *SceneContext) *Registry {
-        return self.game.getRegistry();
+        return self.game().getRegistry();
     }
 
     pub fn pipeline(self: *SceneContext) *RenderPipeline {
-        return self.game.getPipeline();
+        return self.game().getPipeline();
     }
 
     pub fn allocator(self: *SceneContext) std.mem.Allocator {
-        return self.game.allocator;
+        return self.game().allocator;
     }
 };
 
@@ -174,7 +180,7 @@ pub const Scene = struct {
 
         for (self.scripts) |script_fns| {
             if (script_fns.init) |init_fn| {
-                init_fn(self.ctx.game, self);
+                init_fn(self.ctx.game(), self);
             }
         }
     }
@@ -190,7 +196,7 @@ pub const Scene = struct {
             while (i > 0) {
                 i -= 1;
                 if (self.scripts[i].deinit) |deinit_fn| {
-                    deinit_fn(self.ctx.game, self);
+                    deinit_fn(self.ctx.game(), self);
                 }
             }
         }
@@ -198,7 +204,7 @@ pub const Scene = struct {
         // Call onDestroy for all entities and destroy ECS entities
         for (self.entities.items) |*instance| {
             if (instance.onDestroy) |destroy_fn| {
-                destroy_fn(entityToU64(instance.entity), @ptrCast(self.ctx.game));
+                destroy_fn(entityToU64(instance.entity), @ptrCast(self.ctx.game()));
             }
             pipe.untrackEntity(instance.entity);
             reg.destroy(instance.entity);
@@ -221,14 +227,14 @@ pub const Scene = struct {
         // Call prefab onUpdate hooks
         for (self.entities.items) |*entity_instance| {
             if (entity_instance.onUpdate) |update_fn| {
-                update_fn(entityToU64(entity_instance.entity), @ptrCast(self.ctx.game), dt);
+                update_fn(entityToU64(entity_instance.entity), @ptrCast(self.ctx.game()), dt);
             }
         }
 
         // Call scene script update functions
         for (self.scripts) |script_fns| {
             if (script_fns.update) |update_fn| {
-                update_fn(self.ctx.game, self, dt);
+                update_fn(self.ctx.game(), self, dt);
             }
         }
     }

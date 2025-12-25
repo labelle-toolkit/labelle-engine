@@ -599,7 +599,7 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
             if (@hasField(@TypeOf(scene_data), "cameras")) {
                 // Named cameras for multi-camera setup
                 const cameras = scene_data.cameras;
-                const game = ctx.game;
+                const game = ctx.game();
 
                 inline for (@typeInfo(@TypeOf(cameras)).@"struct".fields) |field| {
                     const cam = @field(cameras, field.name);
@@ -609,7 +609,7 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
                 }
             } else if (@hasField(@TypeOf(scene_data), "camera")) {
                 // Single camera (primary camera)
-                applyCameraConfig(scene_data.camera, ctx.game.getCamera());
+                applyCameraConfig(scene_data.camera, ctx.game().getCamera());
             }
 
             // Process each entity definition
@@ -640,7 +640,7 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
                 }
             }
 
-            const game = ctx.game;
+            const game = ctx.game();
 
             // Create ECS entity
             const entity = game.createEntity();
@@ -748,7 +748,7 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
                 }
             }
 
-            const game = ctx.game;
+            const game = ctx.game();
 
             // Create ECS entity
             const entity = game.createEntity();
@@ -806,7 +806,7 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
             ctx: SceneContext,
             scene: *Scene,
         ) !EntityInstance {
-            const game = ctx.game;
+            const game = ctx.game();
             const sprite_data = entity_def.components.Sprite;
 
             // Create ECS entity
@@ -855,7 +855,7 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
             ctx: SceneContext,
             scene: *Scene,
         ) !EntityInstance {
-            const game = ctx.game;
+            const game = ctx.game();
 
             // Create ECS entity
             const entity = game.createEntity();
@@ -887,7 +887,7 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
             ctx: SceneContext,
             scene: *Scene,
         ) !EntityInstance {
-            const game = ctx.game;
+            const game = ctx.game();
             const shape_data = entity_def.components.Shape;
 
             // Create ECS entity
