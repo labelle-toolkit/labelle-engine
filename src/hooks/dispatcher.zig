@@ -57,15 +57,17 @@ pub fn HookDispatcher(
         ///
         /// If no handler is registered for the hook, this is a no-op.
         pub inline fn emit(payload: PayloadUnion) void {
-            const hook = std.meta.activeTag(payload);
-            const hook_name = @tagName(hook);
-
-            // Check if HookMap has a handler for this hook
-            if (@hasDecl(HookMap, hook_name)) {
-                const handler = @field(HookMap, hook_name);
-                handler(payload);
+            // Use inline switch to resolve hook name at comptime
+            switch (payload) {
+                inline else => |_, tag| {
+                    const hook_name = @tagName(tag);
+                    if (@hasDecl(HookMap, hook_name)) {
+                        const handler = @field(HookMap, hook_name);
+                        handler(payload);
+                    }
+                    // No handler registered - that's fine, just a no-op
+                },
             }
-            // No handler registered - that's fine, just a no-op
         }
 
         /// Check at comptime if a hook has a handler registered.

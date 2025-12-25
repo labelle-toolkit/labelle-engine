@@ -64,21 +64,6 @@ pub const GameConfig = struct {
     clear_color: Color = .{ .r = 30, .g = 35, .b = 45 },
 };
 
-/// Scene lifecycle hooks
-pub const SceneHooks = struct {
-    onLoad: ?*const fn (*Game) void = null,
-    onUnload: ?*const fn (*Game) void = null,
-};
-
-/// Internal scene data storage
-const SceneEntry = struct {
-    loader_fn: *const fn (*Game) anyerror!void,
-    hooks: SceneHooks,
-};
-
-/// Frame callback type for custom game loop logic
-pub const FrameCallback = *const fn (*Game, f32) void;
-
 /// Screen size dimensions
 pub const ScreenSize = struct {
     width: i32,
@@ -104,6 +89,21 @@ pub fn GameWith(comptime Hooks: type) type {
             hooks_mod.EngineHookDispatcher(Hooks)
         else
             hooks_mod.EmptyEngineDispatcher;
+
+        /// Scene lifecycle hooks
+        pub const SceneHooks = struct {
+            onLoad: ?*const fn (*Self) void = null,
+            onUnload: ?*const fn (*Self) void = null,
+        };
+
+        /// Internal scene data storage
+        const SceneEntry = struct {
+            loader_fn: *const fn (*Self) anyerror!void,
+            hooks: SceneHooks,
+        };
+
+        /// Frame callback type for custom game loop logic
+        pub const FrameCallback = *const fn (*Self, f32) void;
 
         allocator: Allocator,
         retained_engine: RetainedEngine,
@@ -319,11 +319,11 @@ pub fn GameWith(comptime Hooks: type) type {
     pub fn registerScene(
         self: *Self,
         comptime name: []const u8,
-        comptime loader_fn: fn (*Game) anyerror!void,
+        comptime loader_fn: fn (*Self) anyerror!void,
         hooks: SceneHooks,
     ) !void {
         const wrapper = struct {
-            fn load(game: *Game) anyerror!void {
+            fn load(game: *Self) anyerror!void {
                 return loader_fn(game);
             }
         }.load;
@@ -338,7 +338,7 @@ pub fn GameWith(comptime Hooks: type) type {
     pub fn registerSceneSimple(
         self: *Self,
         comptime name: []const u8,
-        comptime loader_fn: fn (*Game) anyerror!void,
+        comptime loader_fn: fn (*Self) anyerror!void,
     ) !void {
         try self.registerScene(name, loader_fn, .{});
     }

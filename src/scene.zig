@@ -39,6 +39,7 @@ pub const ScriptFns = script.ScriptFns;
 pub const InitFn = script.InitFn;
 pub const DeinitFn = script.DeinitFn;
 pub const Game = game.Game;
+pub const GameWith = game.GameWith;
 pub const GameConfig = game.GameConfig;
 pub const WindowConfig = game.WindowConfig;
 pub const ScreenSize = game.ScreenSize;
