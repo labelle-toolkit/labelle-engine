@@ -1,7 +1,8 @@
 # RFC 001: Hook System for labelle-engine
 
-**Status**: Draft
+**Status**: Implemented
 **Created**: 2025-12-24
+**Updated**: 2025-12-25
 
 ## Summary
 
@@ -124,27 +125,33 @@ pub const KeyInfo = struct {
 
 ### 3. Hook Registry (Comptime)
 
-Similar to existing registries, define hooks at compile time:
+Similar to existing registries, define hooks at compile time. Handler functions receive
+the full `HookPayload` union and extract the relevant field:
 
 ```zig
 // In game's main.zig
-const Hooks = engine.HookRegistry(struct {
-    // Engine hooks
-    pub const on_scene_load = onSceneLoad;
-    pub const on_entity_created = onEntityCreated;
+const MyHooks = struct {
+    pub fn scene_load(payload: engine.HookPayload) void {
+        const info = payload.scene_load;
+        std.log.info("Scene loaded: {s}", .{info.name});
+    }
 
-    // Plugin hooks (from labelle-tasks)
-    pub const on_step_completed = tasks.onStepCompleted;
-    pub const on_worker_released = tasks.onWorkerReleased;
-});
+    pub fn entity_created(payload: engine.HookPayload) void {
+        const info = payload.entity_created;
+        std.log.info("Entity created: {d}", .{info.entity_id});
+    }
 
-fn onSceneLoad(game: *Game, info: SceneInfo) void {
-    // Handle scene load
-}
+    pub fn frame_start(payload: engine.HookPayload) void {
+        const info = payload.frame_start;
+        // Only log every 60 frames
+        if (info.frame_number % 60 == 0) {
+            std.log.info("Frame {d}", .{info.frame_number});
+        }
+    }
+};
 
-fn onEntityCreated(game: *Game, info: EntityInfo) void {
-    // Handle entity creation
-}
+// Create Game type with hooks enabled
+const Game = engine.GameWith(MyHooks);
 ```
 
 ### 4. Plugin Hook Definition
@@ -180,20 +187,22 @@ Zero-overhead hook dispatch via comptime:
 
 ```zig
 /// Creates a hook dispatcher from a comptime hook map.
-/// Each field in HookMap should be a function matching the expected signature for that hook.
+/// Each field in HookMap should be a function taking (payload: PayloadUnion) -> void.
 pub fn HookDispatcher(comptime HookEnum: type, comptime PayloadUnion: type, comptime HookMap: type) type {
     return struct {
         /// Emit a hook event. Resolved entirely at comptime - no runtime overhead.
-        pub inline fn emit(game: *Game, payload: PayloadUnion) void {
-            const hook = std.meta.activeTag(payload);
-            inline for (std.meta.fields(HookMap)) |field| {
-                if (comptime std.mem.eql(u8, field.name, @tagName(hook))) {
-                    const handler = @field(HookMap, field.name);
-                    handler(game, payload);
-                    return;
-                }
+        pub inline fn emit(payload: PayloadUnion) void {
+            // Use inline switch to resolve hook name at comptime
+            switch (payload) {
+                inline else => |_, tag| {
+                    const hook_name = @tagName(tag);
+                    if (@hasDecl(HookMap, hook_name)) {
+                        const handler = @field(HookMap, hook_name);
+                        handler(payload);
+                    }
+                    // No handler registered - that's fine, just a no-op
+                },
             }
-            // No handler registered for this hook - that's fine
         }
 
         /// Check at comptime if a hook has a handler registered.
@@ -231,97 +240,107 @@ game.hooks.emit(.entity_destroyed, .{ .entity = entity, .prefab_name = prefab })
 
 ## Usage Examples
 
-### Basic Game Hook Registration
+### Basic Game with Hooks
 
 ```zig
 // main.zig
+const std = @import("std");
 const engine = @import("labelle-engine");
 
-pub fn main() !void {
-    var game = try engine.Game.init(allocator, config);
-    defer game.deinit();
-
-    // Register hooks
-    game.hooks.register(.scene_load, onSceneLoad);
-    game.hooks.register(.entity_created, onEntityCreated);
-    game.hooks.register(.frame_end, onFrameEnd);
-
-    try game.run();
-}
-
-fn onSceneLoad(game: *engine.Game, info: engine.SceneInfo) void {
-    std.log.info("Scene loaded: {s}", .{info.name});
-}
-
-fn onEntityCreated(game: *engine.Game, info: engine.EntityInfo) void {
-    if (info.prefab_name) |name| {
-        std.log.info("Entity created from prefab: {s}", .{name});
+// Define hook handlers - only implement the hooks you care about
+const MyHooks = struct {
+    pub fn game_init(_: engine.HookPayload) void {
+        std.log.info("[hook] Game initialized", .{});
     }
-}
 
-fn onFrameEnd(game: *engine.Game, info: engine.FrameInfo) void {
-    // Analytics, debug overlay, etc.
-}
-```
+    pub fn game_deinit(_: engine.HookPayload) void {
+        std.log.info("[hook] Game shutting down", .{});
+    }
 
-### Plugin Integration (labelle-tasks)
+    pub fn frame_start(payload: engine.HookPayload) void {
+        const info = payload.frame_start;
+        // Only log every 60 frames to avoid spam
+        if (info.frame_number % 60 == 0) {
+            std.log.info("[hook] Frame {d} started (dt: {d:.3}ms)", .{
+                info.frame_number,
+                info.dt * 1000,
+            });
+        }
+    }
 
-```zig
-// main.zig with labelle-tasks
-const engine = @import("labelle-engine");
-const tasks = @import("labelle-tasks");
+    pub fn scene_load(payload: engine.HookPayload) void {
+        const info = payload.scene_load;
+        std.log.info("[hook] Scene loaded: {s}", .{info.name});
+    }
+};
+
+// Create Game type with hooks enabled
+const Game = engine.GameWith(MyHooks);
 
 pub fn main() !void {
-    var game = try engine.Game.init(allocator, config);
-    defer game.deinit();
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
 
-    // Initialize tasks plugin
-    var task_engine = tasks.Engine.init(allocator, .{
-        // Connect task hooks to game hooks
-        .hooks = game.createPluginHooks(tasks.TasksHook, tasks.TasksPayload),
+    // Initialize game - game_init hook fires automatically
+    var game = try Game.init(allocator, .{
+        .window = .{ .width = 800, .height = 600, .title = "My Game" },
     });
+    game.fixPointers();
+    defer game.deinit(); // game_deinit hook fires
 
-    // Game subscribes to task events
-    task_engine.hooks.register(.step_completed, onStepCompleted);
-    task_engine.hooks.register(.worker_released, onWorkerReleased);
+    try game.registerSceneSimple("main", loadMainScene);
+    try game.setScene("main"); // scene_load hook fires
 
+    // Run game loop - frame_start/frame_end hooks fire each frame
     try game.run();
 }
 
-fn onStepCompleted(game: *engine.Game, info: tasks.StepInfo) void {
-    // Play completion sound, update UI, etc.
-    game.audio.play("step_complete.wav");
-}
-
-fn onWorkerReleased(game: *engine.Game, info: tasks.WorkerInfo) void {
-    // Update worker sprite animation
-    if (game.getRegistry().tryGet(Sprite, info.entity)) |sprite| {
-        sprite.animation = .idle;
-    }
+fn loadMainScene(_: *Game) !void {
+    std.log.info("Loading main scene...", .{});
 }
 ```
 
-### Comptime Hook Registry (Zero-Overhead)
+### Game Without Hooks (Default)
 
 ```zig
-// For maximum performance, use comptime registration
-const Hooks = engine.HookRegistry(struct {
-    pub fn on_scene_load(game: *Game, info: SceneInfo) void {
-        // Inlined at compile time
-    }
+// For games that don't need hooks, just use engine.Game directly
+const engine = @import("labelle-engine");
 
-    pub fn on_frame_end(game: *Game, info: FrameInfo) void {
-        // Inlined at compile time
-    }
-});
+pub fn main() !void {
+    var game = try engine.Game.init(allocator, config);
+    defer game.deinit();
+    try game.run();
+}
+```
 
-// In Game initialization
-const Game = engine.GameWith(Hooks);
+### Plugin Hook Pattern
+
+Plugins can define their own hook systems following the same pattern:
+
+```zig
+// In your plugin
+pub const MyPluginHook = enum {
+    on_task_complete,
+    on_state_change,
+};
+
+pub const MyPluginPayload = union(MyPluginHook) {
+    on_task_complete: TaskInfo,
+    on_state_change: StateInfo,
+};
+
+// Games create dispatchers for plugin hooks
+const PluginDispatcher = engine.hooks.HookDispatcher(
+    MyPluginHook,
+    MyPluginPayload,
+    MyPluginHandlers
+);
 ```
 
 ## Implementation Plan
 
-### Phase 1: Core Hook Infrastructure
+### Phase 1: Core Hook Infrastructure ✅
 1. Create `src/hooks.zig` with:
    - `EngineHook` enum (game_init, game_deinit, scene_load, scene_unload, entity_created, entity_destroyed, frame_start, frame_end)
    - `HookPayload` tagged union with payload types for each hook
@@ -329,26 +348,25 @@ const Game = engine.GameWith(Hooks);
    - Payload structs (FrameInfo, SceneInfo, EntityInfo)
 
 2. Create `src/hooks/` directory structure:
-   - `src/hooks/types.zig` - Core types and enums
+   - `src/hooks/types.zig` - Core types, enums, and payload structs
    - `src/hooks/dispatcher.zig` - HookDispatcher implementation
-   - `src/hooks/payloads.zig` - Payload struct definitions
 
-### Phase 2: Engine Integration
-1. Add `HookRegistry` type parameter to Game:
+### Phase 2: Engine Integration ✅
+1. Add `GameWith(Hooks)` type parameter to Game:
    ```zig
    pub fn GameWith(comptime Hooks: type) type { ... }
-   pub const Game = GameWith(struct {}); // Default: no hooks
+   pub const Game = GameWith(void); // Default: no hooks (compiles to no-ops)
    ```
 
 2. Add emit points in game.zig:
-   - `game_init` after initialization
-   - `game_deinit` before cleanup
-   - `frame_start` at beginning of frame
-   - `frame_end` at end of frame
-   - `scene_load` after scene loads
-   - `scene_unload` before scene unloads
+   - `game_init` after initialization ✅
+   - `game_deinit` before cleanup ✅
+   - `frame_start` at beginning of frame ✅
+   - `frame_end` at end of frame ✅
+   - `scene_load` after scene loads ✅
+   - `scene_unload` before scene unloads ✅
 
-3. Add emit points in scene.zig:
+3. Entity hooks (future):
    - `entity_created` when entity is added to scene
    - `entity_destroyed` when entity is removed
 
@@ -378,19 +396,18 @@ const Game = engine.GameWith(Hooks);
 
 2. Add documentation in CLAUDE.md for hook system usage
 
-## Files to Create/Modify
+## Files Created/Modified
 
-### New Files
+### New Files ✅
 - `src/hooks.zig` - Main module, re-exports all hook types
-- `src/hooks/types.zig` - EngineHook enum, HookPayload union
+- `src/hooks/types.zig` - EngineHook enum, HookPayload union, payload structs
 - `src/hooks/dispatcher.zig` - HookDispatcher comptime generic
-- `src/hooks/payloads.zig` - FrameInfo, SceneInfo, EntityInfo structs
-- `test/hooks_test.zig` - Hook system tests
+- `usage/example_hooks/` - Working example demonstrating hook system
+- `docs/rfcs/001-hook-system.md` - This RFC document
 
-### Modified Files
+### Modified Files ✅
 - `src/game.zig` - Add GameWith(Hooks) parameterization, emit lifecycle hooks
-- `src/scene.zig` - Emit entity_created/entity_destroyed hooks
-- `src/scene.zig` (module entry) - Re-export hook types
+- `src/scene.zig` (module entry) - Re-export hook types and GameWith
 - `CLAUDE.md` - Document hook system usage
 
 ## Design Decisions
