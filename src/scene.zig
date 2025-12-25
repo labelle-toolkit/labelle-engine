@@ -108,6 +108,7 @@ pub const EngineHook = hooks.EngineHook;
 pub const HookPayload = hooks.HookPayload;
 pub const HookDispatcher = hooks.HookDispatcher;
 pub const EngineHookDispatcher = hooks.EngineHookDispatcher;
+pub const EmptyEngineDispatcher = hooks.EmptyEngineDispatcher;
 pub const FrameInfo = hooks.FrameInfo;
 pub const SceneInfo = hooks.SceneInfo;
 pub const EntityInfo = hooks.EntityInfo;

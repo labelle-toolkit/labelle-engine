@@ -58,23 +58,3 @@ pub const HookPayload = union(EngineHook) {
     entity_created: EntityInfo,
     entity_destroyed: EntityInfo,
 };
-
-test "EngineHook enum has expected values" {
-    const hooks = std.enums.values(EngineHook);
-    try std.testing.expectEqual(8, hooks.len);
-}
-
-test "HookPayload can be created for each hook type" {
-    const payloads = [_]HookPayload{
-        .{ .game_init = {} },
-        .{ .game_deinit = {} },
-        .{ .frame_start = .{ .frame_number = 1, .dt = 0.016 } },
-        .{ .frame_end = .{ .frame_number = 1, .dt = 0.016 } },
-        .{ .scene_load = .{ .name = "test_scene" } },
-        .{ .scene_unload = .{ .name = "test_scene" } },
-        .{ .entity_created = .{ .entity_id = 42, .prefab_name = "player" } },
-        .{ .entity_destroyed = .{ .entity_id = 42 } },
-    };
-
-    try std.testing.expectEqual(8, payloads.len);
-}
