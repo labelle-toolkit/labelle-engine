@@ -45,6 +45,13 @@ pub fn coerceValue(comptime FieldType: type, comptime data_value: anytype) Field
         const arr_info = field_info.array;
         const data_info = @typeInfo(DataType);
         if (data_info == .@"struct" and data_info.@"struct".is_tuple) {
+            const tuple_len = data_info.@"struct".fields.len;
+            if (tuple_len != arr_info.len) {
+                @compileError(std.fmt.comptimePrint(
+                    "Array size mismatch: expected {d} elements, got {d}",
+                    .{ arr_info.len, tuple_len },
+                ));
+            }
             var array: [arr_info.len]arr_info.child = undefined;
             inline for (0..arr_info.len) |i| {
                 array[i] = coerceValue(arr_info.child, data_value[i]);
