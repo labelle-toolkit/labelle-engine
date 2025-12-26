@@ -48,6 +48,10 @@
             .url = "git+https://{s}#{s}",
             // .hash = "...",  // Add after first build
         }},
+.plugin_path
+        .@"{s}" = .{{
+            .path = "{s}",
+        }},
 .deps_end
     }},
     .paths = .{{

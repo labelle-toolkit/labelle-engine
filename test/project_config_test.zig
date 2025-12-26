@@ -304,4 +304,91 @@ pub const PLUGIN_VALIDATION = struct {
             try expect.toBeTrue(std.mem.eql(u8, plugin.components.?, "Components"));
         }
     };
+
+    pub const PATH_REF = struct {
+        test "path only is valid" {
+            const plugin = Plugin{
+                .name = "labelle-tasks",
+                .path = "../labelle-tasks",
+            };
+            try plugin.validate();
+        }
+
+        test "absolute path is valid" {
+            const plugin = Plugin{
+                .name = "labelle-pathfinding",
+                .path = "/Users/dev/labelle-pathfinding",
+            };
+            try plugin.validate();
+        }
+
+        test "isPathBased returns true" {
+            const plugin = Plugin{
+                .name = "labelle-tasks",
+                .path = "../labelle-tasks",
+            };
+            try expect.toBeTrue(plugin.isPathBased());
+        }
+
+        test "isPathBased returns false for version" {
+            const plugin = Plugin{
+                .name = "labelle-tasks",
+                .version = "0.5.0",
+            };
+            try expect.toBeFalse(plugin.isPathBased());
+        }
+
+        test "path with version is invalid" {
+            const plugin = Plugin{
+                .name = "labelle-tasks",
+                .path = "../labelle-tasks",
+                .version = "0.5.0",
+            };
+            try std.testing.expectError(PluginValidationError.PathWithRemoteRef, plugin.validate());
+        }
+
+        test "path with branch is invalid" {
+            const plugin = Plugin{
+                .name = "labelle-tasks",
+                .path = "../labelle-tasks",
+                .branch = "main",
+            };
+            try std.testing.expectError(PluginValidationError.PathWithRemoteRef, plugin.validate());
+        }
+
+        test "path with commit is invalid" {
+            const plugin = Plugin{
+                .name = "labelle-tasks",
+                .path = "../labelle-tasks",
+                .commit = "abc123f",
+            };
+            try std.testing.expectError(PluginValidationError.PathWithRemoteRef, plugin.validate());
+        }
+
+        test "empty path is invalid" {
+            const plugin = Plugin{
+                .name = "labelle-tasks",
+                .path = "",
+            };
+            try std.testing.expectError(PluginValidationError.EmptyPath, plugin.validate());
+        }
+
+        test "path with module override is valid" {
+            const plugin = Plugin{
+                .name = "labelle-tasks",
+                .path = "../labelle-tasks",
+                .module = "tasks",
+            };
+            try plugin.validate();
+        }
+
+        test "path with components is valid" {
+            const plugin = Plugin{
+                .name = "labelle-tasks",
+                .path = "../labelle-tasks",
+                .components = "Components",
+            };
+            try plugin.validate();
+        }
+    };
 };

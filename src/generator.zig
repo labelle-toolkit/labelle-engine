@@ -129,7 +129,14 @@ pub fn generateBuildZon(allocator: std.mem.Allocator, config: ProjectConfig, opt
 
     // Write plugin dependencies
     for (config.plugins) |plugin| {
-        // Use custom URL if provided, otherwise default to github.com/labelle-toolkit/{name}
+        // Check if this is a local path plugin
+        if (plugin.isPathBased()) {
+            std.debug.print("Using local path for {s}: {s}\n", .{ plugin.name, plugin.path.? });
+            try zts.print(build_zig_zon_tmpl, "plugin_path", .{ plugin.name, plugin.path.? }, writer);
+            continue;
+        }
+
+        // Remote plugin: use custom URL if provided, otherwise default to github.com/labelle-toolkit/{name}
         var allocated_url = false;
         const plugin_url = plugin.url orelse blk: {
             allocated_url = true;

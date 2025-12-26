@@ -51,17 +51,20 @@ pub const EcsBackend = enum {
 pub const Plugin = struct {
     name: []const u8,
 
-    // Reference type (mutually exclusive, exactly one required)
+    // Reference type (mutually exclusive, exactly one required for remote plugins)
     /// Version tag reference (generates #v{version})
     version: ?[]const u8 = null,
     /// Branch reference (generates #{branch})
     branch: ?[]const u8 = null,
     /// Commit SHA reference (generates #{commit}). Must be 7-40 hex characters.
     commit: ?[]const u8 = null,
+    /// Local filesystem path (for development/testing). Mutually exclusive with version/branch/commit.
+    path: ?[]const u8 = null,
 
     /// GitHub repository URL (e.g., "github.com/labelle-toolkit/labelle-pathfinding")
     /// If not provided, defaults to "github.com/labelle-toolkit/{name}"
     /// Must be host/path format without scheme (no "https://")
+    /// Ignored when path is set.
     url: ?[]const u8 = null,
     /// Module name exported by the package (e.g., "pathfinding" for labelle-pathfinding)
     /// If not provided, defaults to the plugin name with hyphens replaced by underscores
@@ -88,7 +91,19 @@ pub const Plugin = struct {
             return PluginValidationError.EmptyName;
         }
 
-        // Count how many ref types are set
+        // If path is specified, it's a local plugin - no other refs allowed
+        if (self.path != null) {
+            if (self.version != null or self.branch != null or self.commit != null) {
+                return PluginValidationError.PathWithRemoteRef;
+            }
+            // Path must be non-empty
+            if (self.path.?.len == 0) {
+                return PluginValidationError.EmptyPath;
+            }
+            return; // Local plugin is valid
+        }
+
+        // Remote plugin: exactly one of version/branch/commit required
         var ref_count: u8 = 0;
         if (self.version != null) ref_count += 1;
         if (self.branch != null) ref_count += 1;
@@ -136,6 +151,11 @@ pub const Plugin = struct {
     pub fn isVersionRef(self: Plugin) bool {
         return self.version != null;
     }
+
+    /// Check if this plugin uses a local path (vs remote URL)
+    pub fn isPathBased(self: Plugin) bool {
+        return self.path != null;
+    }
 };
 
 pub const PluginValidationError = error{
@@ -145,6 +165,8 @@ pub const PluginValidationError = error{
     InvalidCommitLength,
     InvalidCommitFormat,
     UrlContainsScheme,
+    PathWithRemoteRef,
+    EmptyPath,
 };
 
 /// Atlas resource declaration
