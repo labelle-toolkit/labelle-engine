@@ -178,6 +178,74 @@ pub const ZON_COERCION = struct {
         try expect.equal(result[1], 2);
         try expect.equal(result[2], 3);
     }
+
+    test "coerceValue handles fixed-size array from tuple" {
+        const Item = struct {
+            value: u32 = 0,
+        };
+
+        const Container = struct {
+            items: [2]Item = undefined,
+        };
+
+        const zon_data = .{
+            .items = .{
+                .{ .value = 10 },
+                .{ .value = 20 },
+            },
+        };
+
+        const result = comptime zon.buildStruct(Container, zon_data);
+        try expect.equal(result.items[0].value, 10);
+        try expect.equal(result.items[1].value, 20);
+    }
+
+    test "coerceValue handles nested structs in fixed-size array" {
+        const Inner = struct {
+            x: i32 = 0,
+            y: i32 = 0,
+        };
+
+        const Slot = struct {
+            components: Inner = .{},
+        };
+
+        const Workstation = struct {
+            slots: [3]Slot = undefined,
+        };
+
+        const zon_data = .{
+            .slots = .{
+                .{ .components = .{ .x = -60, .y = 0 } },
+                .{ .components = .{ .x = 0, .y = 0 } },
+                .{ .components = .{ .x = 60, .y = 0 } },
+            },
+        };
+
+        const result = comptime zon.buildStruct(Workstation, zon_data);
+        try expect.equal(result.slots[0].components.x, -60);
+        try expect.equal(result.slots[1].components.x, 0);
+        try expect.equal(result.slots[2].components.x, 60);
+    }
+
+    test "coerceValue handles single element fixed-size array" {
+        const Item = struct {
+            name: []const u8 = "",
+        };
+
+        const Container = struct {
+            items: [1]Item = undefined,
+        };
+
+        const zon_data = .{
+            .items = .{
+                .{ .name = "first" },
+            },
+        };
+
+        const result = comptime zon.buildStruct(Container, zon_data);
+        try expect.toBeTrue(std.mem.eql(u8, result.items[0].name, "first"));
+    }
 };
 
 // ============================================

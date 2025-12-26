@@ -40,6 +40,19 @@ pub fn coerceValue(comptime FieldType: type, comptime data_value: anytype) Field
         }
     }
 
+    // Handle fixed-size array coercion (tuple to array)
+    if (field_info == .array) {
+        const arr_info = field_info.array;
+        const data_info = @typeInfo(DataType);
+        if (data_info == .@"struct" and data_info.@"struct".is_tuple) {
+            var array: [arr_info.len]arr_info.child = undefined;
+            inline for (0..arr_info.len) |i| {
+                array[i] = coerceValue(arr_info.child, data_value[i]);
+            }
+            return array;
+        }
+    }
+
     // Handle nested struct coercion
     if (field_info == .@"struct" and @typeInfo(DataType) == .@"struct") {
         return buildStruct(FieldType, data_value);
