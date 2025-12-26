@@ -131,7 +131,6 @@ pub fn generateBuildZon(allocator: std.mem.Allocator, config: ProjectConfig, opt
     for (config.plugins) |plugin| {
         // Check if this is a local path plugin
         if (plugin.isPathBased()) {
-            std.debug.print("Using local path for {s}: {s}\n", .{ plugin.name, plugin.path.? });
             try zts.print(build_zig_zon_tmpl, "plugin_path", .{ plugin.name, plugin.path.? }, writer);
             continue;
         }

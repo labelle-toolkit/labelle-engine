@@ -390,5 +390,20 @@ pub const PLUGIN_VALIDATION = struct {
             };
             try plugin.validate();
         }
+
+        test "getRef should not be called on path-based plugins" {
+            // getRef() assumes version/branch/commit is set.
+            // Path-based plugins have none of these, so getRef() would panic.
+            // Generator code must check isPathBased() before calling getRef().
+            const plugin = Plugin{
+                .name = "labelle-tasks",
+                .path = "../labelle-tasks",
+            };
+            try expect.toBeTrue(plugin.isPathBased());
+            // Verify that path-based plugins don't have remote refs
+            try expect.toBeNull(plugin.version);
+            try expect.toBeNull(plugin.branch);
+            try expect.toBeNull(plugin.commit);
+        }
     };
 };
