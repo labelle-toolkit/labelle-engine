@@ -87,6 +87,36 @@ pub fn ComponentRegistryMulti(comptime ComponentMaps: anytype) type {
                 addComponent(registry, entity, field_name, field_data);
             }
         }
+
+        /// Register component lifecycle callbacks for all component types declared in the maps.
+        ///
+        /// This calls `ecs.registerComponentCallbacks()` for each component type, which
+        /// will wire `onAdd`/`onRemove` hooks (and enable `onSet` via `setComponent()`).
+        ///
+        /// For overlapping component names, only the first map (in tuple order) wins.
+        pub fn registerCallbacks(registry: *Registry) void {
+            inline for (maps_info.@"struct".fields, 0..) |field, map_idx| {
+                const Map = @field(ComponentMaps, field.name);
+                inline for (std.meta.declarations(Map)) |decl| {
+                    const decl_val = @field(Map, decl.name);
+                    if (@TypeOf(decl_val) != type) continue;
+
+                    // Respect lookup semantics: if an earlier map declares the same name,
+                    // skip this one to avoid duplicate registration.
+                    comptime var shadowed = false;
+                    inline for (0..map_idx) |prev_idx| {
+                        const PrevMap = @field(ComponentMaps, maps_info.@"struct".fields[prev_idx].name);
+                        if (@hasDecl(PrevMap, decl.name)) {
+                            shadowed = true;
+                            break;
+                        }
+                    }
+                    if (shadowed) continue;
+
+                    ecs.registerComponentCallbacks(registry, decl_val);
+                }
+            }
+        }
     };
 }
 
@@ -140,6 +170,18 @@ pub fn ComponentRegistry(comptime ComponentMap: type) type {
                 const field_data = @field(components_data, field_name);
                 // This will error at comptime if field_name doesn't exist in ComponentMap
                 addComponent(registry, entity, field_name, field_data);
+            }
+        }
+
+        /// Register component lifecycle callbacks for all component types declared in this map.
+        ///
+        /// This calls `ecs.registerComponentCallbacks()` for each component type, which
+        /// will wire `onAdd`/`onRemove` hooks (and enable `onSet` via `setComponent()`).
+        pub fn registerCallbacks(registry: *Registry) void {
+            inline for (names) |decl| {
+                const decl_val = @field(ComponentMap, decl.name);
+                if (@TypeOf(decl_val) != type) continue;
+                ecs.registerComponentCallbacks(registry, decl_val);
             }
         }
     };

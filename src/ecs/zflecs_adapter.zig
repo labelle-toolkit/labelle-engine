@@ -11,12 +11,6 @@
 const std = @import("std");
 const flecs = @import("zflecs");
 
-/// Payload for component lifecycle callbacks.
-/// Matches the ComponentPayload struct in hooks/types.zig.
-const ComponentPayload = struct {
-    entity_id: u64,
-};
-
 /// Register component lifecycle callbacks if the component type defines them.
 /// Supports onAdd, onSet, and onRemove callbacks.
 ///

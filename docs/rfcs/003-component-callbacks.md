@@ -346,7 +346,7 @@ pub const Damage = struct {
    - Handler can fetch the component value if needed via `game.getComponent(entity, T)`
    - Avoids complexity of passing component data with different lifetime semantics across backends
 
-5. **Zero configuration**: If a component has `onAdd`/`onSet`/`onRemove` functions, they're automatically wired. No explicit registration step.
+5. **Explicit registration**: Components with callbacks must be registered via `ecs.registerComponentCallbacks(registry, T)` before use. This gives users control over when callbacks are wired and avoids hidden initialization costs.
 
 6. **Backward compatible**: Existing components without callbacks work unchanged.
 

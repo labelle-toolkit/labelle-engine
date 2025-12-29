@@ -74,14 +74,12 @@ fn typeArrayFromStruct(comptime T: type) [std.meta.fields(T).len]type {
 /// The underlying integer type that stores Entity bits (for callback wrappers)
 const EntityBits = std.meta.Int(.unsigned, @bitSizeOf(Entity));
 
-/// Payload for component lifecycle callbacks.
-/// Matches the ComponentPayload struct in hooks/types.zig.
-const ComponentPayload = struct {
-    entity_id: u64,
-};
-
 /// Register component lifecycle callbacks if the component type defines them.
 /// Supports onAdd, onSet, and onRemove callbacks.
+///
+/// Note: onSet is NOT registered as a zig-ecs signal because we want it to only
+/// fire via setComponent() for consistent behavior with zflecs backend.
+/// onSet is triggered manually in setComponent().
 pub fn registerComponentCallbacks(registry: *Registry, comptime T: type) void {
     // onAdd - called when component is added to an entity
     if (@hasDecl(T, "onAdd")) {
@@ -92,17 +90,6 @@ pub fn registerComponentCallbacks(registry: *Registry, comptime T: type) void {
             }
         };
         registry.inner.onConstruct(T).connect(AddWrapper.callback);
-    }
-
-    // onSet - called when component value is replaced/updated
-    if (@hasDecl(T, "onSet")) {
-        const SetWrapper = struct {
-            fn callback(_: *zig_ecs.Registry, entity: Entity) void {
-                const entity_u64: u64 = @as(EntityBits, @bitCast(entity));
-                T.onSet(.{ .entity_id = entity_u64 });
-            }
-        };
-        registry.inner.onUpdate(T).connect(SetWrapper.callback);
     }
 
     // onRemove - called when component is removed from an entity
