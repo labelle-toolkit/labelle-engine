@@ -137,6 +137,47 @@ fn getSpriteName(comptime sprite_data: anytype) []const u8 {
     }
 }
 
+/// Build a Shape from flattened shape data.
+/// Used by both loadShapePrefabEntity and loadShapeComponentEntity to reduce duplication.
+fn buildShapeFromData(comptime shape_data: anytype, comptime error_context: []const u8) Shape {
+    const shape_type = shape_data.type;
+    var shape: Shape = switch (shape_type) {
+        .circle => Shape.circle(getFieldOrDefault(shape_data, "radius", @as(f32, 10))),
+        .rectangle => Shape.rectangle(
+            getFieldOrDefault(shape_data, "width", @as(f32, 10)),
+            getFieldOrDefault(shape_data, "height", @as(f32, 10)),
+        ),
+        .line => Shape.line(
+            getFieldOrDefault(shape_data, "end_x", @as(f32, 10)),
+            getFieldOrDefault(shape_data, "end_y", @as(f32, 0)),
+            getFieldOrDefault(shape_data, "thickness", @as(f32, 1)),
+        ),
+        else => @compileError("Unknown shape type in " ++ error_context),
+    };
+
+    // Color
+    if (@hasField(@TypeOf(shape_data), "color")) {
+        shape.color = .{
+            .r = shape_data.color.r,
+            .g = shape_data.color.g,
+            .b = shape_data.color.b,
+            .a = if (@hasField(@TypeOf(shape_data.color), "a")) shape_data.color.a else 255,
+        };
+    }
+
+    // z_index
+    if (@hasField(@TypeOf(shape_data), "z_index")) {
+        shape.z_index = shape_data.z_index;
+    }
+
+    // layer
+    if (@hasField(@TypeOf(shape_data), "layer")) {
+        shape.layer = shape_data.layer;
+    }
+
+    return shape;
+}
+
 /// Parse container specification from sprite data.
 /// Supports:
 ///   - Not present: returns null (default behavior)
@@ -790,49 +831,13 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
                 .y = pos.y,
             });
 
-            // Build shape based on type (same logic as loadShapeComponentEntity)
-            const shape_type = shape_data.type;
-            var shape: Shape = switch (shape_type) {
-                .circle => Shape.circle(getFieldOrDefault(shape_data, "radius", @as(f32, 10))),
-                .rectangle => Shape.rectangle(
-                    getFieldOrDefault(shape_data, "width", @as(f32, 10)),
-                    getFieldOrDefault(shape_data, "height", @as(f32, 10)),
-                ),
-                .line => Shape.line(
-                    getFieldOrDefault(shape_data, "end_x", @as(f32, 10)),
-                    getFieldOrDefault(shape_data, "end_y", @as(f32, 0)),
-                    getFieldOrDefault(shape_data, "thickness", @as(f32, 1)),
-                ),
-                else => @compileError("Unknown shape type in prefab definition"),
-            };
-
-            // Color
-            if (@hasField(@TypeOf(shape_data), "color")) {
-                shape.color = .{
-                    .r = shape_data.color.r,
-                    .g = shape_data.color.g,
-                    .b = shape_data.color.b,
-                    .a = if (@hasField(@TypeOf(shape_data.color), "a")) shape_data.color.a else 255,
-                };
-            }
-
-            // z_index
-            if (@hasField(@TypeOf(shape_data), "z_index")) {
-                shape.z_index = shape_data.z_index;
-            }
-
-            // layer
-            if (@hasField(@TypeOf(shape_data), "layer")) {
-                shape.layer = shape_data.layer;
-            }
-
-            // Add shape to render pipeline (crucial for rendering)
+            // Build and add shape to render pipeline
+            const shape = buildShapeFromData(shape_data, "prefab definition");
             try game.addShape(entity, shape);
 
             // Add other components from prefab (excluding Shape and Position which we already handled)
-            if (comptime Prefabs.hasComponents(prefab_name)) {
-                try addComponentsExcluding(game, scene, entity, prefab_components, pos.x, pos.y, .{ "Shape", "Position" });
-            }
+            // Note: hasComponents is guaranteed true since hasShape checks it
+            try addComponentsExcluding(game, scene, entity, prefab_components, pos.x, pos.y, .{ "Shape", "Position" });
 
             // Add/override components from scene definition (excluding Shape and Position)
             if (@hasField(@TypeOf(entity_def), "components")) {
@@ -1009,42 +1014,8 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
                 .y = pos.y,
             });
 
-            // Build shape based on type
-            const shape_type = shape_data.type;
-            var shape: Shape = switch (shape_type) {
-                .circle => Shape.circle(getFieldOrDefault(shape_data, "radius", @as(f32, 10))),
-                .rectangle => Shape.rectangle(
-                    getFieldOrDefault(shape_data, "width", @as(f32, 10)),
-                    getFieldOrDefault(shape_data, "height", @as(f32, 10)),
-                ),
-                .line => Shape.line(
-                    getFieldOrDefault(shape_data, "end_x", @as(f32, 10)),
-                    getFieldOrDefault(shape_data, "end_y", @as(f32, 0)),
-                    getFieldOrDefault(shape_data, "thickness", @as(f32, 1)),
-                ),
-                else => @compileError("Unknown shape type in scene definition"),
-            };
-
-            // Color
-            if (@hasField(@TypeOf(shape_data), "color")) {
-                shape.color = .{
-                    .r = shape_data.color.r,
-                    .g = shape_data.color.g,
-                    .b = shape_data.color.b,
-                    .a = if (@hasField(@TypeOf(shape_data.color), "a")) shape_data.color.a else 255,
-                };
-            }
-
-            // z_index
-            if (@hasField(@TypeOf(shape_data), "z_index")) {
-                shape.z_index = shape_data.z_index;
-            }
-
-            // layer
-            if (@hasField(@TypeOf(shape_data), "layer")) {
-                shape.layer = shape_data.layer;
-            }
-
+            // Build and add shape to render pipeline
+            const shape = buildShapeFromData(shape_data, "scene definition");
             try game.addShape(entity, shape);
 
             // Add other components (excluding Shape and Position which we already handled)

@@ -128,13 +128,11 @@ pub fn isEntity(comptime FieldType: type) bool {
 /// Flattened format: .{ .type = .circle, .radius = 20, .color = ... }
 /// Returns true if data has a .type field and component has a 'shape' union field.
 pub fn isFlattenedShapeComponent(comptime ComponentType: type, comptime data: anytype) bool {
-    const DataType = @TypeOf(data);
-    if (!@hasField(DataType, "type")) return false;
+    if (!@hasField(@TypeOf(data), "type")) return false;
 
-    const comp_fields = std.meta.fields(ComponentType);
-    for (comp_fields) |cf| {
-        if (std.mem.eql(u8, cf.name, "shape")) {
-            if (@typeInfo(cf.type) == .@"union") return true;
+    inline for (std.meta.fields(ComponentType)) |field| {
+        if (comptime std.mem.eql(u8, field.name, "shape")) {
+            return @typeInfo(field.type) == .@"union";
         }
     }
     return false;
