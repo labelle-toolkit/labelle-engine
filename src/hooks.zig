@@ -64,6 +64,7 @@ pub const EngineHook = types.EngineHook;
 pub const HookPayload = types.HookPayload;
 pub const FrameInfo = types.FrameInfo;
 pub const SceneInfo = types.SceneInfo;
+pub const SceneBeforeLoadInfo = types.SceneBeforeLoadInfo;
 pub const EntityInfo = types.EntityInfo;
 pub const ComponentPayload = types.ComponentPayload;
 pub const GameInitInfo = types.GameInitInfo;

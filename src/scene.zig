@@ -114,6 +114,7 @@ pub const MergeHooks = hooks.MergeHooks;
 pub const MergeEngineHooks = hooks.MergeEngineHooks;
 pub const FrameInfo = hooks.FrameInfo;
 pub const SceneInfo = hooks.SceneInfo;
+pub const SceneBeforeLoadInfo = hooks.SceneBeforeLoadInfo;
 pub const EntityInfo = hooks.EntityInfo;
 pub const ComponentPayload = hooks.ComponentPayload;
 pub const GameInitInfo = hooks.GameInitInfo;

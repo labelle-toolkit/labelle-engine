@@ -41,9 +41,9 @@ const NoPrefabEntityFactory = Factory.defineFrom(EntityInfo, hook_payloads.entit
 
 pub const ENGINE_HOOK = struct {
     pub const ENUM_VALUES = struct {
-        test "has 8 hook types" {
+        test "has 9 hook types" {
             const hook_values = std.enums.values(EngineHook);
-            try expect.equal(hook_values.len, 8);
+            try expect.equal(hook_values.len, 9);
         }
 
         test "includes game lifecycle hooks" {
@@ -57,6 +57,7 @@ pub const ENGINE_HOOK = struct {
         }
 
         test "includes scene hooks" {
+            _ = EngineHook.scene_before_load;
             _ = EngineHook.scene_load;
             _ = EngineHook.scene_unload;
         }
@@ -168,6 +169,28 @@ pub const HOOK_PAYLOAD = struct {
             try expect.equal(payload.frame_end.frame_number, 60);
         }
 
+        test "can create scene_before_load payload" {
+            const payload: HookPayload = .{ .scene_before_load = .{
+                .name = "bakery",
+                .allocator = std.testing.allocator,
+            } };
+            try expect.toBeTrue(std.mem.eql(u8, payload.scene_before_load.name, "bakery"));
+            // Verify allocator is set correctly by checking vtable pointer
+            try expect.equal(payload.scene_before_load.allocator.vtable, std.testing.allocator.vtable);
+        }
+
+        test "scene_before_load payload has allocator" {
+            const payload: HookPayload = .{ .scene_before_load = .{
+                .name = "test",
+                .allocator = std.testing.allocator,
+            } };
+            const info = payload.scene_before_load;
+            // Verify allocator is accessible and usable
+            const ptr = try info.allocator.alloc(u8, 16);
+            defer info.allocator.free(ptr);
+            try expect.equal(ptr.len, 16);
+        }
+
         test "can create scene_load payload" {
             const scene_info = SceneInfoFactory.build(.{});
             const payload: HookPayload = .{ .scene_load = scene_info };
@@ -194,18 +217,19 @@ pub const HOOK_PAYLOAD = struct {
         }
     };
 
-    test "all 8 payload types can be created" {
+    test "all 9 payload types can be created" {
         const payloads = [_]HookPayload{
             .{ .game_init = .{ .allocator = std.testing.allocator } },
             .{ .game_deinit = {} },
             .{ .frame_start = FirstFrameFactory.build(.{}) },
             .{ .frame_end = FirstFrameFactory.build(.{}) },
+            .{ .scene_before_load = .{ .name = "test", .allocator = std.testing.allocator } },
             .{ .scene_load = SceneInfoFactory.build(.{}) },
             .{ .scene_unload = SceneInfoFactory.build(.{}) },
             .{ .entity_created = PlayerEntityFactory.build(.{}) },
             .{ .entity_destroyed = PlayerEntityFactory.build(.{}) },
         };
-        try expect.equal(payloads.len, 8);
+        try expect.equal(payloads.len, 9);
     }
 };
 
@@ -531,6 +555,11 @@ pub const MODULE_EXPORTS = struct {
 
     test "hooks module exports GameInitInfo" {
         const info = engine.GameInitInfo{ .allocator = std.testing.allocator };
+        _ = info;
+    }
+
+    test "hooks module exports SceneBeforeLoadInfo" {
+        const info = engine.SceneBeforeLoadInfo{ .name = "test", .allocator = std.testing.allocator };
         _ = info;
     }
 

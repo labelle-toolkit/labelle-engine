@@ -15,6 +15,7 @@ pub const EngineHook = enum {
     frame_end,
 
     // Scene lifecycle
+    scene_before_load,
     scene_load,
     scene_unload,
 
@@ -35,6 +36,15 @@ pub const FrameInfo = struct {
 pub const SceneInfo = struct {
     /// Name of the scene.
     name: []const u8,
+};
+
+/// Scene before load information.
+/// Passed to scene_before_load hook before entities are created.
+pub const SceneBeforeLoadInfo = struct {
+    /// Name of the scene about to be loaded.
+    name: []const u8,
+    /// The allocator used by the game, available for initializing scene-scoped subsystems.
+    allocator: Allocator,
 };
 
 /// Entity information for entity lifecycle hooks.
@@ -69,6 +79,7 @@ pub const HookPayload = union(EngineHook) {
     frame_start: FrameInfo,
     frame_end: FrameInfo,
 
+    scene_before_load: SceneBeforeLoadInfo,
     scene_load: SceneInfo,
     scene_unload: SceneInfo,
 
