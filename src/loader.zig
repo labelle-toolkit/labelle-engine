@@ -759,6 +759,102 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
                 }
             }
 
+            // Route to shape-based or sprite-based prefab loading
+            if (comptime Prefabs.hasShape(prefab_name)) {
+                return loadShapePrefabEntity(entity_def, ctx, scene);
+            } else {
+                return loadSpritePrefabEntity(entity_def, ctx, scene);
+            }
+        }
+
+        /// Load a shape-based prefab entity
+        fn loadShapePrefabEntity(
+            comptime entity_def: anytype,
+            ctx: SceneContext,
+            scene: *Scene,
+        ) !EntityInstance {
+            const prefab_name = entity_def.prefab;
+            const game = ctx.game();
+            const prefab_components = Prefabs.getComponents(prefab_name);
+            const shape_data = prefab_components.Shape;
+
+            // Create ECS entity
+            const entity = game.createEntity();
+
+            // Get position from .components.Position (scene overrides prefab)
+            const pos = getPrefabPosition(prefab_name, entity_def);
+
+            // Add Position component
+            game.addPosition(entity, Position{
+                .x = pos.x,
+                .y = pos.y,
+            });
+
+            // Build shape based on type (same logic as loadShapeComponentEntity)
+            const shape_type = shape_data.type;
+            var shape: Shape = switch (shape_type) {
+                .circle => Shape.circle(getFieldOrDefault(shape_data, "radius", @as(f32, 10))),
+                .rectangle => Shape.rectangle(
+                    getFieldOrDefault(shape_data, "width", @as(f32, 10)),
+                    getFieldOrDefault(shape_data, "height", @as(f32, 10)),
+                ),
+                .line => Shape.line(
+                    getFieldOrDefault(shape_data, "end_x", @as(f32, 10)),
+                    getFieldOrDefault(shape_data, "end_y", @as(f32, 0)),
+                    getFieldOrDefault(shape_data, "thickness", @as(f32, 1)),
+                ),
+                else => @compileError("Unknown shape type in prefab definition"),
+            };
+
+            // Color
+            if (@hasField(@TypeOf(shape_data), "color")) {
+                shape.color = .{
+                    .r = shape_data.color.r,
+                    .g = shape_data.color.g,
+                    .b = shape_data.color.b,
+                    .a = if (@hasField(@TypeOf(shape_data.color), "a")) shape_data.color.a else 255,
+                };
+            }
+
+            // z_index
+            if (@hasField(@TypeOf(shape_data), "z_index")) {
+                shape.z_index = shape_data.z_index;
+            }
+
+            // layer
+            if (@hasField(@TypeOf(shape_data), "layer")) {
+                shape.layer = shape_data.layer;
+            }
+
+            // Add shape to render pipeline (crucial for rendering)
+            try game.addShape(entity, shape);
+
+            // Add other components from prefab (excluding Shape and Position which we already handled)
+            if (comptime Prefabs.hasComponents(prefab_name)) {
+                try addComponentsExcluding(game, scene, entity, prefab_components, pos.x, pos.y, .{ "Shape", "Position" });
+            }
+
+            // Add/override components from scene definition (excluding Shape and Position)
+            if (@hasField(@TypeOf(entity_def), "components")) {
+                try addComponentsExcluding(game, scene, entity, entity_def.components, pos.x, pos.y, .{ "Shape", "Position" });
+            }
+
+            return .{
+                .entity = entity,
+                .visual_type = .shape,
+                .prefab_name = prefab_name,
+                .onUpdate = null,
+                .onDestroy = null,
+            };
+        }
+
+        /// Load a sprite-based prefab entity
+        fn loadSpritePrefabEntity(
+            comptime entity_def: anytype,
+            ctx: SceneContext,
+            scene: *Scene,
+        ) !EntityInstance {
+            const prefab_name = entity_def.prefab;
             const game = ctx.game();
 
             // Create ECS entity

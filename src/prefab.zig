@@ -107,6 +107,20 @@ pub fn PrefabRegistry(comptime prefab_map: anytype) type {
             return @hasField(@TypeOf(prefab_data), "components");
         }
 
+        /// Check if prefab has a Shape component (for shape-based prefabs)
+        pub fn hasShape(comptime name: []const u8) bool {
+            if (!hasComponents(name)) return false;
+            const components = get(name).components;
+            return @hasField(@TypeOf(components), "Shape");
+        }
+
+        /// Check if prefab has a Sprite component (for sprite-based prefabs)
+        pub fn hasSprite(comptime name: []const u8) bool {
+            if (!hasComponents(name)) return false;
+            const components = get(name).components;
+            return @hasField(@TypeOf(components), "Sprite");
+        }
+
         /// Get prefab components data (for use with ComponentRegistry.addComponents)
         pub fn getComponents(comptime name: []const u8) @TypeOf(@field(get(name), "components")) {
             return get(name).components;
