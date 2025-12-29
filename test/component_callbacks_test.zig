@@ -298,24 +298,29 @@ pub const ON_SET_CALLBACK = struct {
     };
 
     pub const SET_COMPONENT_ADD = struct {
-        test "setComponent on entity without component triggers onAdd" {
+        test "setComponent on entity without component triggers onAdd, not onSet" {
             resetTestState();
 
             var registry = ecs.Registry.init(std.testing.allocator);
             defer registry.deinit();
 
-            ecs.registerComponentCallbacks(&registry, TestMana);
+            ecs.registerComponentCallbacks(&registry, TestFullLifecycle);
 
             const entity = registry.create();
-            // Entity has no TestMana component yet
+            // Entity has no TestFullLifecycle component yet
 
             // setComponent should add it and trigger onAdd
-            registry.setComponent(entity, TestMana{ .current = 50, .max = 100 });
+            registry.setComponent(entity, TestFullLifecycle{ .value = 50 });
 
-            // Verify component was added
-            const comp = registry.tryGet(TestMana, entity);
+            // Verify onAdd was called, and onSet was NOT
+            try expect.toBeTrue(test_on_add_called);
+            try expect.equal(test_on_add_call_count, 1);
+            try expect.toBeFalse(test_on_set_called);
+
+            // Verify component was added correctly
+            const comp = registry.tryGet(TestFullLifecycle, entity);
             try std.testing.expect(comp != null);
-            try expect.equal(comp.?.current, 50);
+            try expect.equal(comp.?.value, 50);
         }
     };
 
@@ -461,12 +466,20 @@ pub const FULL_LIFECYCLE = struct {
 
         const entity = registry.create();
 
-        // Add triggers onAdd
+        // 1. Add triggers onAdd
         registry.add(entity, TestFullLifecycle{ .value = 1 });
         try expect.toBeTrue(test_on_add_called);
         try expect.equal(test_on_add_call_count, 1);
+        try expect.toBeFalse(test_on_set_called);
+        try expect.toBeFalse(test_on_remove_called);
 
-        // Remove triggers onRemove
+        // 2. Set triggers onSet
+        registry.setComponent(entity, TestFullLifecycle{ .value = 2 });
+        try expect.toBeTrue(test_on_set_called);
+        try expect.equal(test_on_set_call_count, 1);
+        try expect.equal(test_on_add_call_count, 1); // onAdd not called again
+
+        // 3. Remove triggers onRemove
         registry.remove(TestFullLifecycle, entity);
         try expect.toBeTrue(test_on_remove_called);
         try expect.equal(test_on_remove_call_count, 1);
