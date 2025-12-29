@@ -3,6 +3,7 @@
     .name = .labelle_engine,
     .version = "0.21.0",
     .minimum_zig_version = "0.15.2",
+    .releases_url = "https://api.github.com/repos/labelle-toolkit/labelle-engine/releases/latest",
     .dependencies = .{
         .zig_ecs = .{
             .url = "git+https://github.com/prime31/zig-ecs#dbf3647c2cc4f327fe87067e40f8436c7f87f209",
