@@ -256,7 +256,7 @@ The engine provides a type-safe, comptime-based hook system for observing engine
 - `scene_load` / `scene_unload` - Scene transitions
 - `entity_created` / `entity_destroyed` - Entity lifecycle
 
-> **Note on `game_init`:** This hook fires during `Game.init()` before the struct is in its final memory location. Handlers should not store or use `*Game` pointers. For logic requiring a stable Game pointer, use `scene_load` or call after `game.fixPointers()`.
+> **Note on `game_init`:** This hook fires during `Game.init()` before the struct is in its final memory location. Handlers should not store or use `*Game` pointers. For logic requiring a stable Game pointer, use `scene_load` or call after `game.fixPointers()`. The `game_init` payload includes an allocator for initializing subsystems.
 
 **Basic usage:**
 ```zig
@@ -264,7 +264,10 @@ const engine = @import("labelle-engine");
 
 // Define hook handlers
 const MyHooks = struct {
-    pub fn game_init(_: engine.HookPayload) void {
+    pub fn game_init(payload: engine.HookPayload) void {
+        const info = payload.game_init;
+        // Allocator available for early initialization
+        _ = info.allocator;
         std.log.info("Game started!", .{});
     }
 
@@ -285,7 +288,10 @@ const Game = engine.GameWith(MyHooks);
 const std = @import("std");
 const engine = @import("labelle-engine");
 
-pub fn game_init(_: engine.HookPayload) void {
+pub fn game_init(payload: engine.HookPayload) void {
+    const info = payload.game_init;
+    // Use allocator for early subsystem initialization
+    _ = info.allocator;
     std.log.info("Game started!", .{});
 }
 

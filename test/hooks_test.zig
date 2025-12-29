@@ -12,6 +12,7 @@ const SceneInfo = hooks.SceneInfo;
 const EntityInfo = hooks.EntityInfo;
 const HookDispatcher = hooks.HookDispatcher;
 const EmptyDispatcher = hooks.EmptyDispatcher;
+const GameInitInfo = hooks.GameInitInfo;
 
 // Import factory definitions from .zon file
 const hook_payloads = @import("factories/hook_payloads.zon");
@@ -136,8 +137,17 @@ pub const ENTITY_INFO = struct {
 pub const HOOK_PAYLOAD = struct {
     pub const CREATION = struct {
         test "can create game_init payload" {
-            const payload: HookPayload = .{ .game_init = {} };
+            const payload: HookPayload = .{ .game_init = .{ .allocator = std.testing.allocator } };
             try expect.equal(std.meta.activeTag(payload), .game_init);
+        }
+
+        test "game_init payload has allocator" {
+            const payload: HookPayload = .{ .game_init = .{ .allocator = std.testing.allocator } };
+            const info = payload.game_init;
+            // Verify allocator is accessible and usable
+            const ptr = try info.allocator.alloc(u8, 16);
+            defer info.allocator.free(ptr);
+            try expect.equal(ptr.len, 16);
         }
 
         test "can create game_deinit payload" {
@@ -186,7 +196,7 @@ pub const HOOK_PAYLOAD = struct {
 
     test "all 8 payload types can be created" {
         const payloads = [_]HookPayload{
-            .{ .game_init = {} },
+            .{ .game_init = .{ .allocator = std.testing.allocator } },
             .{ .game_deinit = {} },
             .{ .frame_start = FirstFrameFactory.build(.{}) },
             .{ .frame_end = FirstFrameFactory.build(.{}) },
@@ -500,7 +510,7 @@ pub const MODULE_EXPORTS = struct {
     }
 
     test "hooks module exports HookPayload" {
-        const payload: engine.HookPayload = .{ .game_init = {} };
+        const payload: engine.HookPayload = .{ .game_init = .{ .allocator = std.testing.allocator } };
         _ = payload;
     }
 
@@ -516,6 +526,11 @@ pub const MODULE_EXPORTS = struct {
 
     test "hooks module exports EntityInfo" {
         const info = engine.EntityInfo{ .entity_id = 42 };
+        _ = info;
+    }
+
+    test "hooks module exports GameInitInfo" {
+        const info = engine.GameInitInfo{ .allocator = std.testing.allocator };
         _ = info;
     }
 

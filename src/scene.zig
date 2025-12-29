@@ -116,6 +116,7 @@ pub const FrameInfo = hooks.FrameInfo;
 pub const SceneInfo = hooks.SceneInfo;
 pub const EntityInfo = hooks.EntityInfo;
 pub const ComponentPayload = hooks.ComponentPayload;
+pub const GameInitInfo = hooks.GameInitInfo;
 
 /// Context passed to prefab lifecycle functions and scene loading
 /// Uses Game facade for unified access to ECS, pipeline, and engine

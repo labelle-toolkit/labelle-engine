@@ -66,6 +66,7 @@ pub const FrameInfo = types.FrameInfo;
 pub const SceneInfo = types.SceneInfo;
 pub const EntityInfo = types.EntityInfo;
 pub const ComponentPayload = types.ComponentPayload;
+pub const GameInitInfo = types.GameInitInfo;
 
 // Re-export dispatcher
 pub const HookDispatcher = dispatcher.HookDispatcher;

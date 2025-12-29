@@ -3,6 +3,7 @@
 //! Defines the core hook enum and payload union for engine lifecycle events.
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 
 /// Built-in hooks for engine lifecycle events.
 /// Games can register handlers for any of these hooks.
@@ -54,10 +55,16 @@ pub const ComponentPayload = struct {
     entity_id: u64,
 };
 
+/// Game initialization info passed to game_init hook.
+pub const GameInitInfo = struct {
+    /// The allocator used by the game, available for initializing subsystems.
+    allocator: Allocator,
+};
+
 /// Type-safe payload union for engine hooks.
 /// Each hook type has its corresponding payload type.
 pub const HookPayload = union(EngineHook) {
-    game_init: void,
+    game_init: GameInitInfo,
     game_deinit: void,
     frame_start: FrameInfo,
     frame_end: FrameInfo,
