@@ -612,6 +612,8 @@ fn fetchReleaseFromUrl(allocator: std.mem.Allocator, url: []const u8) !ReleaseIn
         },
     }) catch |err| {
         std.debug.print("Failed to run curl: {}\n", .{err});
+        std.debug.print("The 'labelle upgrade' command requires curl to be installed.\n", .{});
+        std.debug.print("Please install curl or download manually from GitHub releases.\n", .{});
         return error.CurlFailed;
     };
     defer allocator.free(result.stdout);
@@ -768,6 +770,7 @@ fn downloadAsset(allocator: std.mem.Allocator, url: []const u8) ![]u8 {
         .max_output_bytes = 50 * 1024 * 1024,
     }) catch |err| {
         std.debug.print("Failed to run curl: {}\n", .{err});
+        std.debug.print("The 'labelle upgrade' command requires curl to be installed.\n", .{});
         return error.DownloadFailed;
     };
     defer allocator.free(result.stderr);
@@ -804,26 +807,40 @@ fn installRawBinary(exe_path: []const u8, binary_data: []const u8) !void {
     const exe_dir_path = std.fs.path.dirname(exe_path) orelse return error.InvalidExecutablePath;
     const exe_base = std.fs.path.basename(exe_path);
 
+    var tmp_base_buf: [std.fs.max_name_bytes]u8 = undefined;
+    const tmp_base = std.fmt.bufPrint(&tmp_base_buf, "{s}.new", .{exe_base}) catch return error.PathTooLong;
+
     var backup_base_buf: [std.fs.max_name_bytes]u8 = undefined;
     const backup_base = std.fmt.bufPrint(&backup_base_buf, "{s}.bak", .{exe_base}) catch return error.PathTooLong;
 
     var exe_dir = try std.fs.openDirAbsolute(exe_dir_path, .{});
     defer exe_dir.close();
 
-    // Remove old backup if exists
+    // 1. Write new binary to a temporary file first (atomic preparation)
+    {
+        const file = try exe_dir.createFile(tmp_base, .{ .mode = 0o755 });
+        defer file.close();
+        try file.writeAll(binary_data);
+    }
+    // Clean up temp file on any error after this point
+    errdefer exe_dir.deleteFile(tmp_base) catch {};
+
+    // 2. Remove old backup if exists
     exe_dir.deleteFile(backup_base) catch {};
 
-    // Rename current to backup (best-effort, allows first install)
+    // 3. Rename current executable to backup (best-effort, allows first install)
     exe_dir.rename(exe_base, backup_base) catch |err| {
         if (err != error.FileNotFound) return err;
     };
 
-    // Write new binary (replace current executable name)
-    const file = try exe_dir.createFile(exe_base, .{ .mode = 0o755 });
-    defer file.close();
-    try file.writeAll(binary_data);
+    // 4. Atomically rename temp file to target executable
+    exe_dir.rename(tmp_base, exe_base) catch |rename_err| {
+        // If rename fails, try to restore the backup
+        exe_dir.rename(backup_base, exe_base) catch {};
+        return rename_err;
+    };
 
-    // Remove backup on success
+    // 5. Remove backup on success
     exe_dir.deleteFile(backup_base) catch {};
 }
 
@@ -880,7 +897,9 @@ fn installFromTarGz(allocator: std.mem.Allocator, exe_path: []const u8, compress
             "-C",
             extract_path,
         },
-    }) catch {
+    }) catch |err| {
+        std.debug.print("Failed to run tar: {}\n", .{err});
+        std.debug.print("The 'labelle upgrade' command requires tar to be installed.\n", .{});
         return error.TarExtractionFailed;
     };
     defer allocator.free(result.stdout);
