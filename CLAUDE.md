@@ -253,10 +253,12 @@ The engine provides a type-safe, comptime-based hook system for observing engine
 **Engine hooks:**
 - `game_init` / `game_deinit` - Game lifecycle
 - `frame_start` / `frame_end` - Frame boundaries
-- `scene_load` / `scene_unload` - Scene transitions
+- `scene_before_load` / `scene_load` / `scene_unload` - Scene transitions
 - `entity_created` / `entity_destroyed` - Entity lifecycle
 
 > **Note on `game_init`:** This hook fires during `Game.init()` before the struct is in its final memory location. Handlers should not store or use `*Game` pointers. For logic requiring a stable Game pointer, use `scene_load` or call after `game.fixPointers()`. The `game_init` payload includes an allocator for initializing subsystems.
+
+> **Note on `scene_before_load`:** This hook fires before entities are created, providing the scene name and an allocator. Use it to initialize scene-scoped subsystems (like task engines) that components need during their `onAdd` callbacks.
 
 **Basic usage:**
 ```zig
@@ -269,6 +271,13 @@ const MyHooks = struct {
         // Allocator available for early initialization
         _ = info.allocator;
         std.log.info("Game started!", .{});
+    }
+
+    pub fn scene_before_load(payload: engine.HookPayload) void {
+        const info = payload.scene_before_load;
+        // Initialize scene-scoped subsystems before entities are created
+        // info.allocator is available for dynamic allocations
+        std.log.info("Loading scene: {s}", .{info.name});
     }
 
     pub fn scene_load(payload: engine.HookPayload) void {

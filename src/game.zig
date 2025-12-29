@@ -390,8 +390,13 @@ pub fn GameWith(comptime Hooks: type) type {
         self.pipeline.deinit();
         self.pipeline = RenderPipeline.init(self.allocator, &self.retained_engine);
 
-        // Load new scene
+        // Look up scene entry
         const entry = self.scenes.get(name) orelse return error.SceneNotFound;
+
+        // Emit scene_before_load hook before entities are created
+        emitHook(.{ .scene_before_load = .{ .name = name, .allocator = self.allocator } });
+
+        // Load new scene (creates entities, triggers component callbacks)
         try entry.loader_fn(self);
 
         // Own the scene name by duplicating it
