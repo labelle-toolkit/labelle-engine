@@ -594,54 +594,54 @@ fn fetchReleaseByTag(allocator: std.mem.Allocator, tag: []const u8) !ReleaseInfo
 }
 
 fn fetchReleaseFromUrl(allocator: std.mem.Allocator, url: []const u8) !ReleaseInfo {
-    // Use curl with timeouts and proper error handling
-    const result = std.process.Child.run(.{
-        .allocator = allocator,
-        .argv = &.{
-            "/usr/bin/curl", // Use absolute path to avoid PATH hijacking
-            "-fsSL", // fail silently on HTTP errors, show errors, silent, follow redirects
-            "--connect-timeout",
-            "10", // 10 second connection timeout
-            "--max-time",
-            "30", // 30 second total timeout
-            "-H",
-            "User-Agent: labelle-cli",
-            "-H",
-            "Accept: application/vnd.github.v3+json",
-            url,
-        },
+    // Use Zig's built-in HTTP client (no external dependencies)
+    const response_data = httpGet(allocator, url, &.{
+        .{ .name = "User-Agent", .value = "labelle-cli" },
+        .{ .name = "Accept", .value = "application/vnd.github.v3+json" },
     }) catch |err| {
-        std.debug.print("Failed to run curl: {}\n", .{err});
-        std.debug.print("The 'labelle upgrade' command requires curl to be installed.\n", .{});
-        std.debug.print("Please install curl or download manually from GitHub releases.\n", .{});
-        return error.CurlFailed;
+        std.debug.print("HTTP request failed: {}\n", .{err});
+        return error.HttpRequestFailed;
     };
-    defer allocator.free(result.stdout);
-    defer allocator.free(result.stderr);
+    defer allocator.free(response_data);
 
-    const ok = switch (result.term) {
-        .Exited => |code| code == 0,
-        else => false,
-    };
-    if (!ok) {
-        // Check for common curl error codes
-        if (result.stderr.len > 0) {
-            std.debug.print("curl error: {s}\n", .{result.stderr});
-        }
-        return error.CurlFailed;
-    }
-
-    // Check if response looks like JSON (basic validation)
-    if (result.stdout.len == 0) {
+    // Check if response is empty
+    if (response_data.len == 0) {
         return error.EmptyResponse;
     }
 
     // Check if it's an error response (GitHub returns JSON errors)
-    if (std.mem.indexOf(u8, result.stdout, "\"message\":\"Not Found\"") != null) {
+    if (std.mem.indexOf(u8, response_data, "\"message\":\"Not Found\"") != null) {
         return error.ReleaseNotFound;
     }
 
-    return parseReleaseJson(allocator, result.stdout);
+    return parseReleaseJson(allocator, response_data);
+}
+
+/// Perform an HTTP GET request and return the response body
+fn httpGet(allocator: std.mem.Allocator, url: []const u8, extra_headers: []const std.http.Header) ![]u8 {
+    var client: std.http.Client = .{ .allocator = allocator };
+    defer client.deinit();
+
+    // Use Allocating writer to collect response body (Zig 0.15 std.Io.Writer)
+    var response_writer: std.Io.Writer.Allocating = .init(allocator);
+    errdefer response_writer.deinit();
+
+    const result = client.fetch(.{
+        .location = .{ .url = url },
+        .method = .GET,
+        .extra_headers = extra_headers,
+        .response_writer = &response_writer.writer,
+    }) catch |err| {
+        std.debug.print("HTTP fetch failed: {}\n", .{err});
+        return error.HttpFetchFailed;
+    };
+
+    if (result.status != .ok) {
+        std.debug.print("HTTP error: {d} {s}\n", .{ @intFromEnum(result.status), @tagName(result.status) });
+        return error.HttpStatusError;
+    }
+
+    return response_writer.toOwnedSlice();
 }
 
 fn parseReleaseJson(allocator: std.mem.Allocator, json_data: []const u8) !ReleaseInfo {
@@ -755,39 +755,13 @@ fn findAsset(assets: []const ReleaseInfo.Asset) ?AssetInfo {
 }
 
 fn downloadAsset(allocator: std.mem.Allocator, url: []const u8) ![]u8 {
-    // Use curl to download the asset (handles redirects and HTTPS properly)
-    const result = std.process.Child.run(.{
-        .allocator = allocator,
-        .argv = &.{
-            "/usr/bin/curl", // Use absolute path to avoid PATH hijacking
-            "-fsSL", // fail silently on HTTP errors, show errors, silent, follow redirects
-            "--connect-timeout",
-            "10", // 10 second connection timeout
-            "--max-time",
-            "120", // 120 second total timeout (binary can be large)
-            url,
-        },
-        .max_output_bytes = 50 * 1024 * 1024,
+    // Use Zig's built-in HTTP client to download the asset
+    return httpGet(allocator, url, &.{
+        .{ .name = "User-Agent", .value = "labelle-cli" },
     }) catch |err| {
-        std.debug.print("Failed to run curl: {}\n", .{err});
-        std.debug.print("The 'labelle upgrade' command requires curl to be installed.\n", .{});
+        std.debug.print("Download failed: {}\n", .{err});
         return error.DownloadFailed;
     };
-    defer allocator.free(result.stderr);
-
-    const ok = switch (result.term) {
-        .Exited => |code| code == 0,
-        else => false,
-    };
-    if (!ok) {
-        if (result.stderr.len > 0) {
-            std.debug.print("curl error: {s}\n", .{result.stderr});
-        }
-        allocator.free(result.stdout);
-        return error.DownloadFailed;
-    }
-
-    return result.stdout;
 }
 
 fn installBinary(allocator: std.mem.Allocator, exe_path: []const u8, binary_data: []const u8, asset_name: []const u8) !void {
@@ -851,90 +825,53 @@ fn installFromTarGz(allocator: std.mem.Allocator, exe_path: []const u8, compress
     };
     defer tmp_dir.close();
 
-    // Generate unique filenames using random suffix
+    // Generate unique directory name using random suffix
     var random_bytes: [8]u8 = undefined;
     std.crypto.random.bytes(&random_bytes);
     var random_suffix: [16]u8 = undefined;
-    // Format bytes as hex string
     for (random_bytes, 0..) |byte, i| {
         const hex_chars = "0123456789abcdef";
         random_suffix[i * 2] = hex_chars[byte >> 4];
         random_suffix[i * 2 + 1] = hex_chars[byte & 0x0f];
     }
 
-    var archive_name_buf: [64]u8 = undefined;
-    const tmp_archive = std.fmt.bufPrint(&archive_name_buf, "labelle-upgrade-{s}.tar.gz", .{random_suffix[0..16]}) catch unreachable;
-
     var extract_dir_buf: [64]u8 = undefined;
     const tmp_extracted = std.fmt.bufPrint(&extract_dir_buf, "labelle-upgrade-{s}", .{random_suffix[0..16]}) catch unreachable;
 
-    // Build absolute paths for tar command
-    var archive_path_buf: [128]u8 = undefined;
-    const archive_path = std.fmt.bufPrint(&archive_path_buf, "/tmp/{s}", .{tmp_archive}) catch unreachable;
-
-    var extract_path_buf: [128]u8 = undefined;
-    const extract_path = std.fmt.bufPrint(&extract_path_buf, "/tmp/{s}", .{tmp_extracted}) catch unreachable;
-
-    // Write the archive
-    {
-        const file = try tmp_dir.createFile(tmp_archive, .{ .mode = 0o600 });
-        defer file.close();
-        try file.writeAll(compressed_data);
-    }
-    defer tmp_dir.deleteFile(tmp_archive) catch {};
-
-    // Create extraction directory with restricted permissions
+    // Create extraction directory
     tmp_dir.makeDir(tmp_extracted) catch {};
     defer tmp_dir.deleteTree(tmp_extracted) catch {};
 
-    // Extract using tar with absolute path
-    const result = std.process.Child.run(.{
-        .allocator = allocator,
-        .argv = &.{
-            "/usr/bin/tar", // Use absolute path to avoid PATH hijacking
-            "-xzf",
-            archive_path,
-            "-C",
-            extract_path,
-        },
-    }) catch |err| {
-        std.debug.print("Failed to run tar: {}\n", .{err});
-        std.debug.print("The 'labelle upgrade' command requires tar to be installed.\n", .{});
-        return error.TarExtractionFailed;
-    };
-    defer allocator.free(result.stdout);
-    defer allocator.free(result.stderr);
-
-    const ok = switch (result.term) {
-        .Exited => |code| code == 0,
-        else => false,
-    };
-    if (!ok) {
-        if (result.stderr.len > 0) {
-            std.debug.print("tar error: {s}\n", .{result.stderr});
-        }
-        return error.TarExtractionFailed;
-    }
-
-    // Find the labelle binary in extracted files (exact name match for security)
     var extracted_dir = try tmp_dir.openDir(tmp_extracted, .{ .iterate = true });
     defer extracted_dir.close();
 
+    // Use Zig's built-in gzip decompression and tar extraction (no external dependencies)
+    // Create a fixed reader from compressed_data
+    var reader = std.Io.Reader.fixed(compressed_data);
+
+    // Decompress gzip and extract tar in one pass
+    var decompress_buffer: [std.compress.flate.max_window_len]u8 = undefined;
+    var decompressor = std.compress.flate.Decompress.init(&reader, .gzip, &decompress_buffer);
+
+    // Extract tar contents to the temp directory
+    std.tar.pipeToFileSystem(extracted_dir, &decompressor.reader, .{}) catch |err| {
+        std.debug.print("Tar extraction failed: {}\n", .{err});
+        return error.TarExtractionFailed;
+    };
+
+    // Find the labelle binary in extracted files (exact name match for security)
     var iter = extracted_dir.iterate();
     while (try iter.next()) |entry| {
         // Only accept exact name "labelle" for security
         if (std.mem.eql(u8, entry.name, "labelle") and entry.kind == .file) {
-            // Read the extracted binary
+            // Read the extracted binary using readToEndAlloc
             const extracted_file = try extracted_dir.openFile(entry.name, .{});
             defer extracted_file.close();
 
-            const stat = try extracted_file.stat();
-            const size: usize = @intCast(stat.size);
-            const binary_data = try allocator.alloc(u8, size);
+            const binary_data = extracted_file.readToEndAlloc(allocator, 50 * 1024 * 1024) catch {
+                return error.ReadFailed;
+            };
             defer allocator.free(binary_data);
-
-            const n = try extracted_file.readAll(binary_data);
-            if (n != size) return error.ShortRead;
 
             // Install it
             try installRawBinary(exe_path, binary_data);
