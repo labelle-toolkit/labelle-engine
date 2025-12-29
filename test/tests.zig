@@ -18,4 +18,5 @@ test {
     _ = @import("game_test.zig");
     _ = @import("hooks_test.zig");
     _ = @import("project_config_test.zig");
+    _ = @import("component_callbacks_test.zig");
 }

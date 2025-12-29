@@ -1,0 +1,8 @@
+.{
+    .components = .{
+        .Position = .{ .x = 0, .y = 0 },
+        // Enemy also has Health and Spawned - callbacks will fire
+        .Health = .{ .current = 50, .max = 50 },
+        .Spawned = .{ .frame = 0 },
+    },
+}
