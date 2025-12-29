@@ -26,10 +26,10 @@ pub fn registerComponentCallbacks(registry: *Registry, comptime T: type) void {
         return;
     }
 
-    // Ensure component is registered first
-    if (flecs.id(T) == 0) {
-        flecs.COMPONENT(registry.world, T);
-    }
+    // Always register component with this world - flecs.COMPONENT is idempotent per-world
+    // but we must call it for each new world (e.g., after scene change recreates the registry).
+    // Do NOT use `flecs.id(T) == 0` as that value may be stale from a previous world.
+    flecs.COMPONENT(registry.world, T);
 
     // Build type hooks struct with defined callbacks
     // Note: onSet is intentionally NOT included here - it's handled manually in setComponent()
@@ -120,14 +120,12 @@ pub const Registry = struct {
 
     /// Add a component to an entity
     /// Note: flecs requires components to be registered before use.
-    /// This adapter auto-registers components on first use.
+    /// This adapter auto-registers components on each call to handle world recreation.
     pub fn add(self: *Registry, entity: Entity, component: anytype) void {
         const T = @TypeOf(component);
-        // flecs.id(T) returns 0 if not yet registered
-        // COMPONENT macro checks internally if already registered, so safe to call
-        if (flecs.id(T) == 0) {
-            flecs.COMPONENT(self.world, T);
-        }
+        // Always register - COMPONENT is idempotent per-world, and we need to handle
+        // world recreation (scene changes). Don't use flecs.id(T) == 0 as it may be stale.
+        flecs.COMPONENT(self.world, T);
         _ = flecs.set(self.world, entity.toFlecs(), T, component);
     }
 
@@ -135,10 +133,8 @@ pub const Registry = struct {
     /// Note: Direct mutation via the returned pointer will NOT trigger onSet callbacks.
     /// Use setComponent() to update a component and trigger onSet.
     pub fn tryGet(self: *Registry, comptime T: type, entity: Entity) ?*T {
-        // Component must be registered to get it
-        if (flecs.id(T) == 0) {
-            flecs.COMPONENT(self.world, T);
-        }
+        // Always register - handles world recreation after scene changes
+        flecs.COMPONENT(self.world, T);
         return flecs.get_mut(self.world, entity.toFlecs(), T);
     }
 
@@ -147,9 +143,8 @@ pub const Registry = struct {
     /// If the entity already has the component, it will be replaced (triggering onSet).
     pub fn setComponent(self: *Registry, entity: Entity, component: anytype) void {
         const T = @TypeOf(component);
-        if (flecs.id(T) == 0) {
-            flecs.COMPONENT(self.world, T);
-        }
+        // Always register - handles world recreation after scene changes
+        flecs.COMPONENT(self.world, T);
 
         const has_component = flecs.get_mut(self.world, entity.toFlecs(), T) != null;
 
@@ -168,18 +163,16 @@ pub const Registry = struct {
 
     /// Remove a component from an entity
     pub fn remove(self: *Registry, comptime T: type, entity: Entity) void {
-        if (flecs.id(T) == 0) {
-            flecs.COMPONENT(self.world, T);
-        }
+        // Always register - handles world recreation after scene changes
+        flecs.COMPONENT(self.world, T);
         flecs.remove(self.world, entity.toFlecs(), T);
     }
 
     /// Create an iterator for entities with a single component
     /// This is where flecs really shines - archetype iteration
     pub fn each(self: *Registry, comptime T: type) flecs.iter_t {
-        if (flecs.id(T) == 0) {
-            flecs.COMPONENT(self.world, T);
-        }
+        // Always register - handles world recreation after scene changes
+        flecs.COMPONENT(self.world, T);
         return flecs.each(self.world, T);
     }
 

@@ -586,7 +586,7 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
             ctx: SceneContext,
         ) !Scene {
             // Register component lifecycle callbacks (onAdd, onSet, onRemove) for all components.
-            // This is done once per registry; subsequent calls are no-ops for already-registered types.
+            // This must be called for each new registry/world (e.g., after scene changes).
             Components.registerCallbacks(ctx.game().getRegistry());
 
             // Get script lifecycle function bundles if scene has scripts defined

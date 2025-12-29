@@ -318,6 +318,55 @@ pub const ON_SET_CALLBACK = struct {
             try expect.equal(comp.?.current, 50);
         }
     };
+
+    pub const ON_SET_NOT_FIRED_ON_INITIAL_ADD = struct {
+        test "onSet does NOT fire on initial add via registry.add" {
+            resetTestState();
+
+            var registry = ecs.Registry.init(std.testing.allocator);
+            defer registry.deinit();
+
+            ecs.registerComponentCallbacks(&registry, TestFullLifecycle);
+
+            const entity = registry.create();
+
+            // Initial add - should trigger onAdd but NOT onSet
+            registry.add(entity, TestFullLifecycle{ .value = 42 });
+
+            try expect.toBeTrue(test_on_add_called);
+            try expect.equal(test_on_add_call_count, 1);
+            try expect.toBeFalse(test_on_set_called);
+            try expect.equal(test_on_set_call_count, 0);
+        }
+
+        test "onSet does NOT fire on initial add via setComponent" {
+            resetTestState();
+
+            var registry = ecs.Registry.init(std.testing.allocator);
+            defer registry.deinit();
+
+            ecs.registerComponentCallbacks(&registry, TestFullLifecycle);
+
+            const entity = registry.create();
+            // Entity has no component yet
+
+            // setComponent on new entity - should trigger onAdd but NOT onSet
+            registry.setComponent(entity, TestFullLifecycle{ .value = 42 });
+
+            try expect.toBeTrue(test_on_add_called);
+            try expect.equal(test_on_add_call_count, 1);
+            try expect.toBeFalse(test_on_set_called);
+            try expect.equal(test_on_set_call_count, 0);
+
+            // Now update the component - THIS should trigger onSet
+            registry.setComponent(entity, TestFullLifecycle{ .value = 100 });
+
+            try expect.toBeTrue(test_on_set_called);
+            try expect.equal(test_on_set_call_count, 1);
+            // onAdd should still be 1 (not fired again)
+            try expect.equal(test_on_add_call_count, 1);
+        }
+    };
 };
 
 pub const ON_REMOVE_CALLBACK = struct {
