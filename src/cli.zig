@@ -148,16 +148,16 @@ fn parseArgs(args: []const []const u8) Options {
             options.ecs_backend = arg["--ecs-backend=".len..];
         } else if (std.mem.eql(u8, arg, "--no-fetch")) {
             options.fetch_hashes = false;
-        } else if (std.mem.eql(u8, arg, "--check") or std.mem.eql(u8, arg, "-c")) {
+        } else if (options.command == .upgrade and (std.mem.eql(u8, arg, "--check") or std.mem.eql(u8, arg, "-c"))) {
             options.upgrade_check_only = true;
-        } else if (std.mem.eql(u8, arg, "--force") or std.mem.eql(u8, arg, "-f")) {
+        } else if (options.command == .upgrade and (std.mem.eql(u8, arg, "--force") or std.mem.eql(u8, arg, "-f"))) {
             options.upgrade_force = true;
-        } else if (std.mem.eql(u8, arg, "--version") and options.command == .upgrade) {
+        } else if (options.command == .upgrade and std.mem.eql(u8, arg, "--version")) {
             i += 1;
             if (i < args.len) {
                 options.upgrade_version = args[i];
             }
-        } else if (std.mem.startsWith(u8, arg, "--version=") and options.command == .upgrade) {
+        } else if (options.command == .upgrade and std.mem.startsWith(u8, arg, "--version=")) {
             options.upgrade_version = arg["--version=".len..];
         } else if (!std.mem.startsWith(u8, arg, "-")) {
             // Positional argument
@@ -430,50 +430,80 @@ fn runUpdate(allocator: std.mem.Allocator, options: Options) !void {
 }
 
 fn runUpgrade(allocator: std.mem.Allocator, options: Options) !void {
+    // Check if upgrade is supported on this platform
+    if (builtin.os.tag == .windows) {
+        std.debug.print("Error: 'labelle upgrade' is not supported on Windows.\n", .{});
+        std.debug.print("Please download the latest version manually from:\n", .{});
+        std.debug.print("  https://github.com/labelle-toolkit/labelle-engine/releases\n", .{});
+        return error.UnsupportedPlatform;
+    }
+
     std.debug.print("Checking for updates...\n", .{});
 
-    // Fetch latest release info from GitHub
-    const release_info = fetchLatestRelease(allocator) catch |err| {
-        std.debug.print("Error: Could not fetch release information from GitHub.\n", .{});
-        std.debug.print("Please check your internet connection and try again.\n", .{});
-        if (err == error.ConnectionRefused or err == error.NetworkUnreachable) {
-            std.debug.print("Network error: {}\n", .{err});
+    // Determine which release to fetch
+    const target_version_input = options.upgrade_version;
+
+    // Fetch release info - either specific version or latest
+    const release_info = if (target_version_input) |ver|
+        fetchReleaseByTag(allocator, ver) catch |err| {
+            std.debug.print("Error: Could not fetch release {s} from GitHub.\n", .{ver});
+            std.debug.print("Please verify the version exists and try again.\n", .{});
+            return err;
         }
-        return err;
-    };
+    else
+        fetchLatestRelease(allocator) catch |err| {
+            std.debug.print("Error: Could not fetch release information from GitHub.\n", .{});
+            std.debug.print("Please check your internet connection and try again.\n", .{});
+            return err;
+        };
     defer release_info.deinit(allocator);
 
-    const target_version = options.upgrade_version orelse release_info.tag_name;
+    const target_version = release_info.tag_name;
 
     std.debug.print("Current version: {s}\n", .{version});
-    std.debug.print("Latest version:  {s}\n", .{release_info.tag_name});
-    if (options.upgrade_version) |v| {
+    if (target_version_input) |v| {
         std.debug.print("Target version:  {s}\n", .{v});
+    } else {
+        std.debug.print("Latest version:  {s}\n", .{target_version});
     }
     std.debug.print("\n", .{});
 
     // Compare versions
-    const is_latest = std.mem.eql(u8, version, stripVersionPrefix(target_version));
-    if (is_latest and !options.upgrade_force) {
-        std.debug.print("You are already on the latest version!\n", .{});
+    const is_same = std.mem.eql(u8, version, stripVersionPrefix(target_version));
+    if (is_same and !options.upgrade_force) {
+        if (target_version_input != null) {
+            std.debug.print("You are already on version {s}!\n", .{target_version});
+        } else {
+            std.debug.print("You are already on the latest version!\n", .{});
+        }
         return;
     }
 
     if (options.upgrade_check_only) {
-        if (!is_latest) {
-            std.debug.print("A new version is available: {s}\n", .{target_version});
+        if (!is_same) {
+            std.debug.print("Version {s} is available.\n", .{target_version});
             std.debug.print("Run 'labelle upgrade' to install it.\n", .{});
         }
         return;
     }
 
-    // Get platform-specific asset
-    const platform = getPlatformString();
+    // Get platform-specific asset (comptime-known for security)
+    const platform = comptime getPlatformString();
+    if (comptime std.mem.eql(u8, platform, "unknown")) {
+        std.debug.print("Error: Unsupported platform.\n", .{});
+        std.debug.print("Please build from source.\n", .{});
+        return error.UnsupportedPlatform;
+    }
+
     std.debug.print("Downloading labelle {s} for {s}...\n", .{ target_version, platform });
 
-    // Find the matching asset
-    const asset = findAsset(release_info.assets, platform) orelse {
+    // Find the matching asset with exact name matching
+    const asset = findAsset(release_info.assets) orelse {
         std.debug.print("Error: No pre-built binary available for {s}.\n", .{platform});
+        std.debug.print("Available assets:\n", .{});
+        for (release_info.assets) |a| {
+            std.debug.print("  - {s}\n", .{a.name});
+        }
         std.debug.print("Please build from source or check available releases.\n", .{});
         return error.NoBinaryForPlatform;
     };
@@ -484,6 +514,12 @@ fn runUpgrade(allocator: std.mem.Allocator, options: Options) !void {
         return err;
     };
     defer allocator.free(binary_data);
+
+    // Verify we got some data
+    if (binary_data.len == 0) {
+        std.debug.print("Error: Downloaded file is empty.\n", .{});
+        return error.EmptyDownload;
+    }
 
     // Get current executable path
     const exe_path = std.fs.selfExePath(&exe_path_buf) catch |err| {
@@ -525,14 +561,49 @@ const ReleaseInfo = struct {
 };
 
 fn fetchLatestRelease(allocator: std.mem.Allocator) !ReleaseInfo {
-    const url = releases_url;
+    return fetchReleaseFromUrl(allocator, releases_url);
+}
 
-    // Use curl to fetch the release info (handles HTTPS properly)
+fn fetchReleaseByTag(allocator: std.mem.Allocator, tag: []const u8) !ReleaseInfo {
+    // Normalize tag - add 'v' prefix if not present
+    const normalized_tag = if (std.mem.startsWith(u8, tag, "v"))
+        tag
+    else blk: {
+        const buf = try allocator.alloc(u8, tag.len + 1);
+        buf[0] = 'v';
+        @memcpy(buf[1..], tag);
+        break :blk buf;
+    };
+    defer if (!std.mem.startsWith(u8, tag, "v")) allocator.free(normalized_tag);
+
+    // Build URL for specific tag: .../releases/tags/vX.Y.Z
+    // Base URL is like: https://api.github.com/repos/labelle-toolkit/labelle-engine/releases/latest
+    // We need: https://api.github.com/repos/labelle-toolkit/labelle-engine/releases/tags/vX.Y.Z
+    const base_url = releases_url;
+    const latest_suffix = "/latest";
+
+    if (!std.mem.endsWith(u8, base_url, latest_suffix)) {
+        return error.InvalidReleasesUrl;
+    }
+
+    const base_without_latest = base_url[0 .. base_url.len - latest_suffix.len];
+    const tag_url = try std.fmt.allocPrint(allocator, "{s}/tags/{s}", .{ base_without_latest, normalized_tag });
+    defer allocator.free(tag_url);
+
+    return fetchReleaseFromUrl(allocator, tag_url);
+}
+
+fn fetchReleaseFromUrl(allocator: std.mem.Allocator, url: []const u8) !ReleaseInfo {
+    // Use curl with timeouts and proper error handling
     const result = std.process.Child.run(.{
         .allocator = allocator,
         .argv = &.{
-            "curl",
-            "-s", // silent
+            "/usr/bin/curl", // Use absolute path to avoid PATH hijacking
+            "-fsSL", // fail silently on HTTP errors, show errors, silent, follow redirects
+            "--connect-timeout",
+            "10", // 10 second connection timeout
+            "--max-time",
+            "30", // 30 second total timeout
             "-H",
             "User-Agent: labelle-cli",
             "-H",
@@ -546,8 +617,26 @@ fn fetchLatestRelease(allocator: std.mem.Allocator) !ReleaseInfo {
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);
 
-    if (result.term.Exited != 0) {
+    const ok = switch (result.term) {
+        .Exited => |code| code == 0,
+        else => false,
+    };
+    if (!ok) {
+        // Check for common curl error codes
+        if (result.stderr.len > 0) {
+            std.debug.print("curl error: {s}\n", .{result.stderr});
+        }
         return error.CurlFailed;
+    }
+
+    // Check if response looks like JSON (basic validation)
+    if (result.stdout.len == 0) {
+        return error.EmptyResponse;
+    }
+
+    // Check if it's an error response (GitHub returns JSON errors)
+    if (std.mem.indexOf(u8, result.stdout, "\"message\":\"Not Found\"") != null) {
+        return error.ReleaseNotFound;
     }
 
     return parseReleaseJson(allocator, result.stdout);
@@ -559,15 +648,25 @@ fn parseReleaseJson(allocator: std.mem.Allocator, json_data: []const u8) !Releas
     };
     defer parsed.deinit();
 
+    // Validate root is an object
+    if (parsed.value != .object) {
+        return error.JsonParseError;
+    }
     const root = parsed.value.object;
 
-    // Get tag_name
+    // Get tag_name with type validation
     const tag_name_value = root.get("tag_name") orelse return error.MissingTagName;
+    if (tag_name_value != .string) {
+        return error.JsonParseError;
+    }
     const tag_name = try allocator.dupe(u8, tag_name_value.string);
     errdefer allocator.free(tag_name);
 
-    // Get assets
+    // Get assets with type validation
     const assets_value = root.get("assets") orelse return error.MissingAssets;
+    if (assets_value != .array) {
+        return error.JsonParseError;
+    }
     const assets_array = assets_value.array;
 
     var assets = try allocator.alloc(ReleaseInfo.Asset, assets_array.items.len);
@@ -575,9 +674,13 @@ fn parseReleaseJson(allocator: std.mem.Allocator, json_data: []const u8) !Releas
 
     var asset_count: usize = 0;
     for (assets_array.items) |asset_value| {
+        if (asset_value != .object) continue;
         const asset_obj = asset_value.object;
+
         const name_val = asset_obj.get("name") orelse continue;
         const url_val = asset_obj.get("browser_download_url") orelse continue;
+
+        if (name_val != .string or url_val != .string) continue;
 
         assets[asset_count] = .{
             .name = try allocator.dupe(u8, name_val.string),
@@ -627,11 +730,23 @@ const AssetInfo = struct {
     name: []const u8,
 };
 
-fn findAsset(assets: []const ReleaseInfo.Asset, platform: []const u8) ?AssetInfo {
+fn findAsset(assets: []const ReleaseInfo.Asset) ?AssetInfo {
+    // Get platform at comptime for security (exact name matching)
+    const platform = comptime getPlatformString();
+
+    // Expected asset names (exact match for security)
+    const expected_names = [_][]const u8{
+        // Primary format: labelle-{platform}.tar.gz
+        "labelle-" ++ platform ++ ".tar.gz",
+        // Alternative: labelle-{platform}
+        "labelle-" ++ platform,
+    };
+
     for (assets) |asset| {
-        // Look for asset matching platform (e.g., "labelle-darwin-arm64" or "labelle-darwin-arm64.tar.gz")
-        if (std.mem.indexOf(u8, asset.name, platform) != null) {
-            return .{ .url = asset.browser_download_url, .name = asset.name };
+        for (expected_names) |expected| {
+            if (std.mem.eql(u8, asset.name, expected)) {
+                return .{ .url = asset.browser_download_url, .name = asset.name };
+            }
         }
     }
     return null;
@@ -642,10 +757,12 @@ fn downloadAsset(allocator: std.mem.Allocator, url: []const u8) ![]u8 {
     const result = std.process.Child.run(.{
         .allocator = allocator,
         .argv = &.{
-            "curl",
-            "-s",    // silent
-            "-L",    // follow redirects
-            "-f",    // fail on HTTP errors
+            "/usr/bin/curl", // Use absolute path to avoid PATH hijacking
+            "-fsSL", // fail silently on HTTP errors, show errors, silent, follow redirects
+            "--connect-timeout",
+            "10", // 10 second connection timeout
+            "--max-time",
+            "120", // 120 second total timeout (binary can be large)
             url,
         },
         .max_output_bytes = 50 * 1024 * 1024,
@@ -655,7 +772,14 @@ fn downloadAsset(allocator: std.mem.Allocator, url: []const u8) ![]u8 {
     };
     defer allocator.free(result.stderr);
 
-    if (result.term.Exited != 0) {
+    const ok = switch (result.term) {
+        .Exited => |code| code == 0,
+        else => false,
+    };
+    if (!ok) {
+        if (result.stderr.len > 0) {
+            std.debug.print("curl error: {s}\n", .{result.stderr});
+        }
         allocator.free(result.stdout);
         return error.DownloadFailed;
     }
@@ -668,6 +792,8 @@ fn installBinary(allocator: std.mem.Allocator, exe_path: []const u8, binary_data
     if (std.mem.endsWith(u8, asset_name, ".tar.gz") or std.mem.endsWith(u8, asset_name, ".tgz")) {
         // Extract using tar command
         try installFromTarGz(allocator, exe_path, binary_data);
+    } else if (std.mem.endsWith(u8, asset_name, ".zip")) {
+        return error.UnsupportedArchiveFormat;
     } else {
         // Raw binary - install directly
         try installRawBinary(exe_path, binary_data);
@@ -675,58 +801,84 @@ fn installBinary(allocator: std.mem.Allocator, exe_path: []const u8, binary_data
 }
 
 fn installRawBinary(exe_path: []const u8, binary_data: []const u8) !void {
-    // Create backup of current binary
-    var backup_path_buf: [std.fs.max_path_bytes]u8 = undefined;
-    const backup_path = std.fmt.bufPrint(&backup_path_buf, "{s}.bak", .{exe_path}) catch return error.PathTooLong;
+    const exe_dir_path = std.fs.path.dirname(exe_path) orelse return error.InvalidExecutablePath;
+    const exe_base = std.fs.path.basename(exe_path);
 
-    const cwd = std.fs.cwd();
+    var backup_base_buf: [std.fs.max_name_bytes]u8 = undefined;
+    const backup_base = std.fmt.bufPrint(&backup_base_buf, "{s}.bak", .{exe_base}) catch return error.PathTooLong;
+
+    var exe_dir = try std.fs.openDirAbsolute(exe_dir_path, .{});
+    defer exe_dir.close();
 
     // Remove old backup if exists
-    cwd.deleteFile(backup_path) catch {};
+    exe_dir.deleteFile(backup_base) catch {};
 
-    // Rename current to backup
-    cwd.rename(exe_path, backup_path) catch |err| {
-        if (err != error.FileNotFound) {
-            return err;
-        }
+    // Rename current to backup (best-effort, allows first install)
+    exe_dir.rename(exe_base, backup_base) catch |err| {
+        if (err != error.FileNotFound) return err;
     };
 
-    // Write new binary
-    const file = try cwd.createFile(exe_path, .{ .mode = 0o755 });
+    // Write new binary (replace current executable name)
+    const file = try exe_dir.createFile(exe_base, .{ .mode = 0o755 });
     defer file.close();
     try file.writeAll(binary_data);
 
     // Remove backup on success
-    cwd.deleteFile(backup_path) catch {};
+    exe_dir.deleteFile(backup_base) catch {};
 }
 
 fn installFromTarGz(allocator: std.mem.Allocator, exe_path: []const u8, compressed_data: []const u8) !void {
-    // Write compressed data to temp file
-    const tmp_dir = std.fs.cwd();
-    const tmp_archive = ".labelle-upgrade.tar.gz";
-    const tmp_extracted = ".labelle-upgrade-extracted";
+    // Use system temp directory for security (not cwd which could be untrusted)
+    var tmp_dir = std.fs.openDirAbsolute("/tmp", .{}) catch {
+        return error.TempDirNotAvailable;
+    };
+    defer tmp_dir.close();
+
+    // Generate unique filenames using random suffix
+    var random_bytes: [8]u8 = undefined;
+    std.crypto.random.bytes(&random_bytes);
+    var random_suffix: [16]u8 = undefined;
+    // Format bytes as hex string
+    for (random_bytes, 0..) |byte, i| {
+        const hex_chars = "0123456789abcdef";
+        random_suffix[i * 2] = hex_chars[byte >> 4];
+        random_suffix[i * 2 + 1] = hex_chars[byte & 0x0f];
+    }
+
+    var archive_name_buf: [64]u8 = undefined;
+    const tmp_archive = std.fmt.bufPrint(&archive_name_buf, "labelle-upgrade-{s}.tar.gz", .{random_suffix[0..16]}) catch unreachable;
+
+    var extract_dir_buf: [64]u8 = undefined;
+    const tmp_extracted = std.fmt.bufPrint(&extract_dir_buf, "labelle-upgrade-{s}", .{random_suffix[0..16]}) catch unreachable;
+
+    // Build absolute paths for tar command
+    var archive_path_buf: [128]u8 = undefined;
+    const archive_path = std.fmt.bufPrint(&archive_path_buf, "/tmp/{s}", .{tmp_archive}) catch unreachable;
+
+    var extract_path_buf: [128]u8 = undefined;
+    const extract_path = std.fmt.bufPrint(&extract_path_buf, "/tmp/{s}", .{tmp_extracted}) catch unreachable;
 
     // Write the archive
     {
-        const file = try tmp_dir.createFile(tmp_archive, .{});
+        const file = try tmp_dir.createFile(tmp_archive, .{ .mode = 0o600 });
         defer file.close();
         try file.writeAll(compressed_data);
     }
     defer tmp_dir.deleteFile(tmp_archive) catch {};
 
-    // Create extraction directory
+    // Create extraction directory with restricted permissions
     tmp_dir.makeDir(tmp_extracted) catch {};
     defer tmp_dir.deleteTree(tmp_extracted) catch {};
 
-    // Extract using tar
+    // Extract using tar with absolute path
     const result = std.process.Child.run(.{
         .allocator = allocator,
         .argv = &.{
-            "tar",
+            "/usr/bin/tar", // Use absolute path to avoid PATH hijacking
             "-xzf",
-            tmp_archive,
+            archive_path,
             "-C",
-            tmp_extracted,
+            extract_path,
         },
     }) catch {
         return error.TarExtractionFailed;
@@ -734,26 +886,36 @@ fn installFromTarGz(allocator: std.mem.Allocator, exe_path: []const u8, compress
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);
 
-    if (result.term.Exited != 0) {
+    const ok = switch (result.term) {
+        .Exited => |code| code == 0,
+        else => false,
+    };
+    if (!ok) {
+        if (result.stderr.len > 0) {
+            std.debug.print("tar error: {s}\n", .{result.stderr});
+        }
         return error.TarExtractionFailed;
     }
 
-    // Find the labelle binary in extracted files
+    // Find the labelle binary in extracted files (exact name match for security)
     var extracted_dir = try tmp_dir.openDir(tmp_extracted, .{ .iterate = true });
     defer extracted_dir.close();
 
     var iter = extracted_dir.iterate();
     while (try iter.next()) |entry| {
-        if (std.mem.indexOf(u8, entry.name, "labelle") != null and entry.kind == .file) {
+        // Only accept exact name "labelle" for security
+        if (std.mem.eql(u8, entry.name, "labelle") and entry.kind == .file) {
             // Read the extracted binary
             const extracted_file = try extracted_dir.openFile(entry.name, .{});
             defer extracted_file.close();
 
             const stat = try extracted_file.stat();
-            const binary_data = try allocator.alloc(u8, stat.size);
+            const size: usize = @intCast(stat.size);
+            const binary_data = try allocator.alloc(u8, size);
             defer allocator.free(binary_data);
 
-            _ = try extracted_file.readAll(binary_data);
+            const n = try extracted_file.readAll(binary_data);
+            if (n != size) return error.ShortRead;
 
             // Install it
             try installRawBinary(exe_path, binary_data);
