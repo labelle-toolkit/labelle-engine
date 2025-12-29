@@ -346,7 +346,7 @@ pub const Damage = struct {
    - Handler can fetch the component value if needed via `game.getComponent(entity, T)`
    - Avoids complexity of passing component data with different lifetime semantics across backends
 
-5. **Explicit registration**: Components with callbacks must be registered via `ecs.registerComponentCallbacks(registry, T)` before use. This gives users control over when callbacks are wired and avoids hidden initialization costs.
+5. **Automatic registration**: The `SceneLoader.load()` function automatically registers callbacks for all components in the `ComponentRegistry`. Users just define callbacks on their components - no manual registration needed.
 
 6. **Backward compatible**: Existing components without callbacks work unchanged.
 
