@@ -186,8 +186,8 @@ pub fn GameWith(comptime Hooks: type) type {
             .running = true,
         };
 
-        // Emit game_init hook
-        emitHook(.{ .game_init = {} });
+        // Emit game_init hook with allocator for early subsystem initialization
+        emitHook(.{ .game_init = .{ .allocator = allocator } });
 
         return game;
     }
