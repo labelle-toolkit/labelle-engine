@@ -505,6 +505,13 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
             const comp_fields = @typeInfo(ComponentType).@"struct".fields;
             var component: ComponentType = undefined;
 
+            // Check for flattened Shape format: .{ .type = .circle, .radius = 20, .color = ... }
+            if (comptime zon.isFlattenedShapeComponent(ComponentType, comp_data)) {
+                component = zon.buildFlattenedShapeComponent(ComponentType, comp_data);
+                game.getRegistry().add(parent_entity, component);
+                return;
+            }
+
             // Process each field in the component type
             inline for (comp_fields) |comp_field| {
                 const field_name = comp_field.name;
