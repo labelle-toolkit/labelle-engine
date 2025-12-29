@@ -175,6 +175,8 @@ pub const HOOK_PAYLOAD = struct {
                 .allocator = std.testing.allocator,
             } };
             try expect.toBeTrue(std.mem.eql(u8, payload.scene_before_load.name, "bakery"));
+            // Verify allocator is set correctly by checking vtable pointer
+            try expect.equal(payload.scene_before_load.allocator.vtable, std.testing.allocator.vtable);
         }
 
         test "scene_before_load payload has allocator" {
