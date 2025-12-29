@@ -65,6 +65,7 @@ pub const HookPayload = types.HookPayload;
 pub const FrameInfo = types.FrameInfo;
 pub const SceneInfo = types.SceneInfo;
 pub const EntityInfo = types.EntityInfo;
+pub const ComponentPayload = types.ComponentPayload;
 
 // Re-export dispatcher
 pub const HookDispatcher = dispatcher.HookDispatcher;

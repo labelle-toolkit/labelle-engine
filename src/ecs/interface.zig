@@ -46,6 +46,7 @@ pub fn EcsInterface(comptime Impl: type) type {
         if (!@hasDecl(R, "destroy")) @compileError("Registry must have destroy method");
         if (!@hasDecl(R, "add")) @compileError("Registry must have add method");
         if (!@hasDecl(R, "tryGet")) @compileError("Registry must have tryGet method");
+        if (!@hasDecl(R, "setComponent")) @compileError("Registry must have setComponent method");
         if (!@hasDecl(R, "remove")) @compileError("Registry must have remove method");
     }
 
@@ -100,6 +101,18 @@ pub fn entityEql(a: Entity, b: Entity) error{NotImplemented}!bool {
         return a.eql(b);
     }
     return error.NotImplemented;
+}
+
+/// Register component lifecycle callbacks if the component type defines them.
+/// Components can define these callbacks:
+/// - `pub fn onAdd(payload: ComponentPayload) void` - called when component is added
+/// - `pub fn onSet(payload: ComponentPayload) void` - called when component is updated via setComponent()
+/// - `pub fn onRemove(payload: ComponentPayload) void` - called when component is removed
+///
+/// Note: Use registry.setComponent() to update components and trigger onSet.
+/// Direct mutation via tryGet() pointers will NOT trigger onSet.
+pub fn registerComponentCallbacks(registry: *Registry, comptime T: type) void {
+    BackendImpl.registerComponentCallbacks(registry, T);
 }
 
 test "Entity interface availability" {

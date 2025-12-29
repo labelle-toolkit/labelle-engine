@@ -1,0 +1,9 @@
+.{
+    .components = .{
+        .Position = .{ .x = 0, .y = 0 },
+        // Health and Spawned components have onAdd callbacks
+        // When this prefab is instantiated, both callbacks will fire
+        .Health = .{ .current = 100, .max = 100 },
+        .Spawned = .{ .frame = 0 },
+    },
+}

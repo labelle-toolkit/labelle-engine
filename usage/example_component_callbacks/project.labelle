@@ -1,0 +1,13 @@
+.{
+    .version = 1,
+    .name = "example_component_callbacks",
+    .initial_scene = "main",
+    .backend = .raylib,
+    .ecs_backend = .zig_ecs,
+    .window = .{
+        .width = 800,
+        .height = 600,
+        .title = "Component Callbacks Example",
+        .target_fps = 60,
+    },
+}

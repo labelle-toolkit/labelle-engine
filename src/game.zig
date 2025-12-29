@@ -318,6 +318,12 @@ pub fn GameWith(comptime Hooks: type) type {
         self.registry.add(entity, component);
     }
 
+    /// Set/update a custom component on an entity (triggers component `onSet` if defined).
+    /// If the entity doesn't have the component yet, this will add it.
+    pub fn setComponent(self: *Self, entity: Entity, component: anytype) void {
+        self.registry.setComponent(entity, component);
+    }
+
     /// Get a component from an entity
     pub fn getComponent(self: *Self, comptime T: type, entity: Entity) ?*T {
         return self.registry.tryGet(T, entity);

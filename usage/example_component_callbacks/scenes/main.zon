@@ -1,0 +1,42 @@
+// Main scene demonstrating component onAdd callbacks
+//
+// When this scene loads, each entity with Health or Spawned components
+// will trigger their onAdd callbacks. Check the console output to see
+// the log messages from each component's onAdd function.
+
+.{
+    .name = "main",
+    .entities = .{
+        // Player - has Health and Spawned components (2 callbacks fire)
+        .{
+            .prefab = "player",
+            .components = .{
+                .Position = .{ .x = 400, .y = 300 },
+            },
+        },
+
+        // Enemy 1 - has Health and Spawned components (2 callbacks fire)
+        .{
+            .prefab = "enemy",
+            .components = .{
+                .Position = .{ .x = 200, .y = 200 },
+            },
+        },
+
+        // Enemy 2 - has Health and Spawned components (2 callbacks fire)
+        .{
+            .prefab = "enemy",
+            .components = .{
+                .Position = .{ .x = 600, .y = 200 },
+            },
+        },
+
+        // Inline entity with only Health (1 callback fires)
+        .{
+            .components = .{
+                .Position = .{ .x = 400, .y = 500 },
+                .Health = .{ .current = 75, .max = 75 },
+            },
+        },
+    },
+}

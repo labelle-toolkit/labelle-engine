@@ -45,6 +45,15 @@ pub const EntityInfo = struct {
     prefab_name: ?[]const u8 = null,
 };
 
+/// Payload for component lifecycle callbacks (onAdd, onSet, onRemove).
+/// Components can define these callbacks directly on their struct to react
+/// to lifecycle events.
+pub const ComponentPayload = struct {
+    /// The entity ID (as u64 for backend compatibility with zig_ecs/zflecs).
+    /// Use `engine.entityFromU64()` to convert to Entity type.
+    entity_id: u64,
+};
+
 /// Type-safe payload union for engine hooks.
 /// Each hook type has its corresponding payload type.
 pub const HookPayload = union(EngineHook) {

@@ -1,0 +1,19 @@
+// Example: Component Callbacks
+.{
+    .fingerprint = 0xd86b1d3e8745f8d8,
+    .name = .example_component_callbacks,
+    .version = "0.1.0",
+    .dependencies = .{
+        .@"labelle-engine" = .{
+            .path = "../..",
+        },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "main.zig",
+        "components",
+        "prefabs",
+        "scenes",
+    },
+}
