@@ -544,3 +544,57 @@ pub const MODULE_EXPORTS = struct {
         ecs.registerComponentCallbacks(&registry, TestHealth);
     }
 };
+
+pub const VIEW_WITH_CALLBACKS = struct {
+    test "single-component view works with components that have callbacks" {
+        resetTestState();
+
+        var registry = ecs.Registry.init(std.testing.allocator);
+        defer registry.deinit();
+
+        ecs.registerComponentCallbacks(&registry, TestHealth);
+
+        // Create entities with the component
+        const entity1 = registry.create();
+        const entity2 = registry.create();
+        registry.add(entity1, TestHealth{ .amount = 100 });
+        registry.add(entity2, TestHealth{ .amount = 50 });
+
+        // Query using single-component view - this was causing the type mismatch
+        var view = registry.view(.{TestHealth});
+        var count: u32 = 0;
+        var iter = view.entityIterator();
+        while (iter.next()) |entity| {
+            const health = registry.tryGet(TestHealth, entity);
+            try std.testing.expect(health != null);
+            count += 1;
+        }
+
+        try expect.equal(count, 2);
+    }
+
+    test "multi-component view works with components that have callbacks" {
+        resetTestState();
+
+        var registry = ecs.Registry.init(std.testing.allocator);
+        defer registry.deinit();
+
+        ecs.registerComponentCallbacks(&registry, TestHealth);
+        ecs.registerComponentCallbacks(&registry, TestMana);
+
+        // Create entity with both components
+        const entity = registry.create();
+        registry.add(entity, TestHealth{ .amount = 100 });
+        registry.add(entity, TestMana{ .current = 50 });
+
+        // Query using multi-component view
+        var view = registry.view(.{ TestHealth, TestMana });
+        var count: u32 = 0;
+        var iter = view.entityIterator();
+        while (iter.next()) |_| {
+            count += 1;
+        }
+
+        try expect.equal(count, 1);
+    }
+};
