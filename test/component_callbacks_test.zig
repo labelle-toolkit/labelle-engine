@@ -545,8 +545,14 @@ pub const MODULE_EXPORTS = struct {
     }
 };
 
+// View tests only apply to zig_ecs backend (zflecs uses different iteration API)
 pub const VIEW_WITH_CALLBACKS = struct {
+    // Check if we're using zig_ecs backend (which has view() method)
+    const has_view = @hasDecl(ecs.Registry, "view");
+
     test "single-component view works with components that have callbacks" {
+        if (!has_view) return; // Skip for zflecs backend
+
         resetTestState();
 
         var registry = ecs.Registry.init(std.testing.allocator);
@@ -574,6 +580,8 @@ pub const VIEW_WITH_CALLBACKS = struct {
     }
 
     test "multi-component view works with components that have callbacks" {
+        if (!has_view) return; // Skip for zflecs backend
+
         resetTestState();
 
         var registry = ecs.Registry.init(std.testing.allocator);
