@@ -73,6 +73,11 @@ pub fn coerceValue(comptime FieldType: type, comptime data_value: anytype) Field
 /// Recursively coerces nested fields.
 /// Raises compile error for missing required fields (fields without defaults).
 pub fn buildStruct(comptime StructType: type, comptime data: anytype) StructType {
+    return buildStructWithContext(StructType, data, "struct");
+}
+
+/// Build a struct with a custom context string for error messages.
+fn buildStructWithContext(comptime StructType: type, comptime data: anytype, comptime context: []const u8) StructType {
     const fields = std.meta.fields(StructType);
     var result: StructType = undefined;
 
@@ -84,7 +89,7 @@ pub fn buildStruct(comptime StructType: type, comptime data: anytype) StructType
             const default_ptr: *const field.type = @ptrCast(@alignCast(ptr));
             @field(result, field.name) = default_ptr.*;
         } else {
-            @compileError("Missing required field '" ++ field.name ++ "' for struct '" ++ @typeName(StructType) ++ "'");
+            @compileError("Missing required field '" ++ field.name ++ "' for " ++ context ++ " '" ++ @typeName(StructType) ++ "'");
         }
     }
 
@@ -123,3 +128,78 @@ pub fn isEntitySlice(comptime FieldType: type) bool {
 pub fn isEntity(comptime FieldType: type) bool {
     return FieldType == Entity;
 }
+
+/// Check if a component uses flattened shape syntax.
+/// Flattened format: .{ .type = .circle, .radius = 20, .color = ... }
+/// Returns true if data has a .type field and component has a 'shape' union field.
+pub fn isFlattenedShapeComponent(comptime ComponentType: type, comptime data: anytype) bool {
+    if (!@hasField(@TypeOf(data), "type")) return false;
+
+    inline for (std.meta.fields(ComponentType)) |field| {
+        if (comptime std.mem.eql(u8, field.name, "shape")) {
+            return @typeInfo(field.type) == .@"union";
+        }
+    }
+    return false;
+}
+
+/// Build a Shape-like component from flattened format.
+/// Flattened format: .{ .type = .rectangle, .width = 80, .height = 60, .color = ... }
+/// The .type field determines the union variant, shape-specific fields (width, height, radius, etc.)
+/// are used to construct the inner union, and remaining fields (color, etc.) are component fields.
+pub fn buildFlattenedShapeComponent(comptime ComponentType: type, comptime data: anytype) ComponentType {
+    const comp_fields = std.meta.fields(ComponentType);
+    var result: ComponentType = undefined;
+
+    // Find the 'shape' field (the union field)
+    const shape_field_info = comptime blk: {
+        for (comp_fields) |cf| {
+            if (std.mem.eql(u8, cf.name, "shape")) {
+                break :blk cf;
+            }
+        }
+        @compileError("Component does not have a 'shape' field");
+    };
+
+    const ShapeUnionType = shape_field_info.type;
+    const union_info = @typeInfo(ShapeUnionType).@"union";
+
+    // Get the shape type from .type field
+    const type_value = @field(data, "type");
+    const type_name = @tagName(type_value);
+
+    // Build the shape union
+    comptime var found_match = false;
+    inline for (union_info.fields) |union_field| {
+        if (comptime std.mem.eql(u8, union_field.name, type_name)) {
+            found_match = true;
+            const inner_value = buildStructWithContext(union_field.type, data, "flattened shape");
+            result.shape = @unionInit(ShapeUnionType, type_name, inner_value);
+        }
+    }
+
+    if (!found_match) {
+        @compileError("Unknown shape type '" ++ type_name ++ "' in flattened shape component");
+    }
+
+    // Fill in the remaining component fields (color, rotation, z_index, etc.)
+    inline for (comp_fields) |comp_field| {
+        if (comptime std.mem.eql(u8, comp_field.name, "shape")) {
+            // Already handled above
+            continue;
+        }
+
+        if (@hasField(@TypeOf(data), comp_field.name)) {
+            const data_value = @field(data, comp_field.name);
+            @field(result, comp_field.name) = coerceValue(comp_field.type, data_value);
+        } else if (comp_field.default_value_ptr) |ptr| {
+            const default_ptr: *const comp_field.type = @ptrCast(@alignCast(ptr));
+            @field(result, comp_field.name) = default_ptr.*;
+        } else {
+            @compileError("Missing required field '" ++ comp_field.name ++ "' for component");
+        }
+    }
+
+    return result;
+}
+

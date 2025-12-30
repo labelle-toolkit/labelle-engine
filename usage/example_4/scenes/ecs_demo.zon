@@ -38,5 +38,17 @@
                 .Bouncer = .{ .speed_x = 100, .speed_y = -130 },
             },
         },
+        // Red circle demonstrating flattened Shape syntax
+        .{
+            .components = .{
+                .Position = .{ .x = 400, .y = 500 },
+                .Shape = .{
+                    .type = .circle,
+                    .radius = 25,
+                    .color = .{ .r = 255, .g = 50, .b = 50, .a = 255 },
+                },
+                .Bouncer = .{ .speed_x = -80, .speed_y = 110 },
+            },
+        },
     },
 }
