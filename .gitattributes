@@ -1,0 +1,28 @@
+# Ensure consistent line endings across platforms
+* text=auto eol=lf
+
+# Zig source files
+*.zig text
+
+# Template files (critical for zts parsing)
+*.txt text
+
+# Build files
+*.zon text
+
+# Shell scripts
+*.sh text
+
+# Windows batch files need CRLF
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Binary files (prevent line ending conversion)
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.ttf binary
+*.woff binary
+*.woff2 binary
