@@ -13,6 +13,21 @@ const zig_ecs = @import("zig_ecs");
 /// Entity type from zig-ecs (does not have 'invalid' or 'eql' - use interface helpers)
 pub const Entity = zig_ecs.Entity;
 
+/// Module-level game pointer for component callbacks.
+/// Set via setGamePtr() before component callbacks can access the game.
+var game_ptr: ?*anyopaque = null;
+
+/// Set the game pointer for component callbacks to access.
+/// Must be called before any component callbacks fire.
+pub fn setGamePtr(ptr: *anyopaque) void {
+    game_ptr = ptr;
+}
+
+/// Get the game pointer. Returns null if not set.
+pub fn getGamePtr() ?*anyopaque {
+    return game_ptr;
+}
+
 /// View for iterating entities with specific components
 pub fn View(comptime Components: type) type {
     return struct {
@@ -86,7 +101,11 @@ pub fn registerComponentCallbacks(registry: *Registry, comptime T: type) void {
         const AddWrapper = struct {
             fn callback(_: *zig_ecs.Registry, entity: Entity) void {
                 const entity_u64: u64 = @as(EntityBits, @bitCast(entity));
-                T.onAdd(.{ .entity_id = entity_u64 });
+                if (game_ptr) |gp| {
+                    T.onAdd(.{ .entity_id = entity_u64, .game_ptr = gp });
+                } else {
+                    std.log.warn("[zig_ecs_adapter] onAdd callback fired but game_ptr not set for component {s}", .{@typeName(T)});
+                }
             }
         };
         registry.inner.onConstruct(T).connect(AddWrapper.callback);
@@ -97,7 +116,11 @@ pub fn registerComponentCallbacks(registry: *Registry, comptime T: type) void {
         const RemoveWrapper = struct {
             fn callback(_: *zig_ecs.Registry, entity: Entity) void {
                 const entity_u64: u64 = @as(EntityBits, @bitCast(entity));
-                T.onRemove(.{ .entity_id = entity_u64 });
+                if (game_ptr) |gp| {
+                    T.onRemove(.{ .entity_id = entity_u64, .game_ptr = gp });
+                } else {
+                    std.log.warn("[zig_ecs_adapter] onRemove callback fired but game_ptr not set for component {s}", .{@typeName(T)});
+                }
             }
         };
         registry.inner.onDestruct(T).connect(RemoveWrapper.callback);
@@ -151,7 +174,11 @@ pub const Registry = struct {
             // Trigger onSet callback if defined
             if (@hasDecl(T, "onSet")) {
                 const entity_u64: u64 = @as(EntityBits, @bitCast(entity));
-                T.onSet(.{ .entity_id = entity_u64 });
+                if (game_ptr) |gp| {
+                    T.onSet(.{ .entity_id = entity_u64, .game_ptr = gp });
+                } else {
+                    std.log.warn("[zig_ecs_adapter] onSet callback fired but game_ptr not set for component {s}", .{@typeName(T)});
+                }
             }
         } else {
             // Component doesn't exist - add it (onAdd will be triggered by the signal)

@@ -11,6 +11,21 @@
 const std = @import("std");
 const flecs = @import("zflecs");
 
+/// Module-level game pointer for component callbacks.
+/// Set via setGamePtr() before component callbacks can access the game.
+var game_ptr: ?*anyopaque = null;
+
+/// Set the game pointer for component callbacks to access.
+/// Must be called before any component callbacks fire.
+pub fn setGamePtr(ptr: *anyopaque) void {
+    game_ptr = ptr;
+}
+
+/// Get the game pointer. Returns null if not set.
+pub fn getGamePtr() ?*anyopaque {
+    return game_ptr;
+}
+
 /// Register component lifecycle callbacks if the component type defines them.
 /// Supports onAdd, onSet, and onRemove callbacks.
 ///
@@ -42,7 +57,11 @@ pub fn registerComponentCallbacks(registry: *Registry, comptime T: type) void {
                 const entities = it.entities();
                 var i: usize = 0;
                 while (i < it.count()) : (i += 1) {
-                    T.onAdd(.{ .entity_id = entities[i] });
+                    if (game_ptr) |gp| {
+                        T.onAdd(.{ .entity_id = entities[i], .game_ptr = gp });
+                    } else {
+                        std.log.warn("[zflecs_adapter] onAdd callback fired but game_ptr not set for component {s}", .{@typeName(T)});
+                    }
                 }
             }
         };
@@ -56,7 +75,11 @@ pub fn registerComponentCallbacks(registry: *Registry, comptime T: type) void {
                 const entities = it.entities();
                 var i: usize = 0;
                 while (i < it.count()) : (i += 1) {
-                    T.onRemove(.{ .entity_id = entities[i] });
+                    if (game_ptr) |gp| {
+                        T.onRemove(.{ .entity_id = entities[i], .game_ptr = gp });
+                    } else {
+                        std.log.warn("[zflecs_adapter] onRemove callback fired but game_ptr not set for component {s}", .{@typeName(T)});
+                    }
                 }
             }
         };
@@ -155,7 +178,11 @@ pub const Registry = struct {
         // (onAdd is handled by flecs hook, onSet is NOT registered as flecs hook)
         if (has_component) {
             if (@hasDecl(T, "onSet")) {
-                T.onSet(.{ .entity_id = entity.id });
+                if (game_ptr) |gp| {
+                    T.onSet(.{ .entity_id = entity.id, .game_ptr = gp });
+                } else {
+                    std.log.warn("[zflecs_adapter] onSet callback fired but game_ptr not set for component {s}", .{@typeName(T)});
+                }
             }
         }
         // If component didn't exist, flecs fires on_add hook only

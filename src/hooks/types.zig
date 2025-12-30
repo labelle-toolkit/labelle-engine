@@ -63,6 +63,16 @@ pub const ComponentPayload = struct {
     /// The entity ID (as u64 for backend compatibility with zig_ecs/zflecs).
     /// Use `engine.entityFromU64()` to convert to Entity type.
     entity_id: u64,
+
+    /// Opaque pointer to the Game instance.
+    /// Use `getGame()` to get a typed pointer.
+    game_ptr: *anyopaque,
+
+    /// Get a typed pointer to the Game instance.
+    /// Usage: `const game = payload.getGame(Game);`
+    pub fn getGame(self: ComponentPayload, comptime GameType: type) *GameType {
+        return @ptrCast(@alignCast(self.game_ptr));
+    }
 };
 
 /// Game initialization info passed to game_init hook.

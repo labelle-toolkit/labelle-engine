@@ -1,6 +1,8 @@
 const std = @import("std");
 const engine = @import("labelle-engine");
 
+const Game = engine.Game;
+
 /// Health component with full lifecycle callbacks.
 /// Demonstrates onAdd, onSet, and onRemove callbacks.
 pub const Health = struct {
@@ -8,8 +10,13 @@ pub const Health = struct {
     max: i32 = 100,
 
     /// Called automatically when Health is added to an entity.
+    /// The payload includes a game pointer for registry access.
     pub fn onAdd(payload: engine.ComponentPayload) void {
         std.log.info("[Health.onAdd] Entity {d} now has health!", .{payload.entity_id});
+
+        // Example: Access game and registry from the payload
+        const game = payload.getGame(Game);
+        _ = game; // Game is available for queries if needed
     }
 
     /// Called when Health component value is set/replaced.

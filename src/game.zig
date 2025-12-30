@@ -199,6 +199,9 @@ pub fn GameWith(comptime Hooks: type) type {
     ///   game.fixPointers();
     pub fn fixPointers(self: *Self) void {
         self.pipeline.engine = &self.retained_engine;
+
+        // Set the game pointer for component callbacks to access
+        ecs.setGamePtr(self);
     }
 
         /// Clean up all resources

@@ -115,6 +115,17 @@ pub fn registerComponentCallbacks(registry: *Registry, comptime T: type) void {
     BackendImpl.registerComponentCallbacks(registry, T);
 }
 
+/// Set the game pointer for component callbacks to access.
+/// Must be called before any component callbacks fire (typically in Game.init).
+pub fn setGamePtr(ptr: *anyopaque) void {
+    BackendImpl.setGamePtr(ptr);
+}
+
+/// Get the game pointer. Returns null if not set.
+pub fn getGamePtr() ?*anyopaque {
+    return BackendImpl.getGamePtr();
+}
+
 test "Entity interface availability" {
     // Just verify the comptime flags compile correctly
     _ = has_invalid_entity;
