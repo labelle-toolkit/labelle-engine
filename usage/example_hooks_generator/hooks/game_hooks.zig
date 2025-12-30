@@ -7,7 +7,7 @@
 // Available hooks:
 // - game_init / game_deinit
 // - frame_start / frame_end
-// - scene_load / scene_unload
+// - scene_before_load / scene_load / scene_unload
 // - entity_created / entity_destroyed
 
 const std = @import("std");
@@ -37,9 +37,25 @@ pub fn frame_start(payload: engine.HookPayload) void {
     }
 }
 
+/// Called before a scene starts loading - use for pre-load initialization
+pub fn scene_before_load(payload: engine.HookPayload) void {
+    const info = payload.scene_before_load;
+    std.log.info("[hooks] Scene '{s}' is about to load (allocator available for setup)", .{info.name});
+    // The allocator (info.allocator) can be used to initialize scene-scoped subsystems
+    // before entities are created
+}
+
+/// Called after a scene finishes loading
 pub fn scene_load(payload: engine.HookPayload) void {
     const info = payload.scene_load;
     std.log.info("[hooks] Scene loaded: {s}", .{info.name});
+}
+
+/// Called when a scene is about to unload - use for cleanup
+pub fn scene_unload(payload: engine.HookPayload) void {
+    const info = payload.scene_unload;
+    std.log.info("[hooks] Scene unloading: {s}", .{info.name});
+    // Use this hook to clean up scene-scoped resources, save state, etc.
 }
 
 pub fn entity_created(payload: engine.HookPayload) void {

@@ -126,10 +126,23 @@ const TasksPlugin = struct {
             initialized = false;
         }
 
+        /// Called before scene loads - plugin could prepare for new scene
+        pub fn scene_before_load(payload: engine.HookPayload) void {
+            const info = payload.scene_before_load;
+            std.log.info("[tasks] Scene '{s}' about to load - preparing task queue", .{info.name});
+            // Could use info.allocator to initialize scene-scoped resources
+        }
+
         /// Called when scene loads - plugin could load scene-specific tasks
         pub fn scene_load(payload: engine.HookPayload) void {
             const info = payload.scene_load;
             std.log.info("[tasks] Scene '{s}' loaded - plugin could load scene-specific tasks here", .{info.name});
+        }
+
+        /// Called when scene unloads - plugin cleans up scene-specific state
+        pub fn scene_unload(payload: engine.HookPayload) void {
+            const info = payload.scene_unload;
+            std.log.info("[tasks] Scene '{s}' unloading - cleaning up pending tasks", .{info.name});
         }
     };
 
@@ -190,9 +203,19 @@ const GameHooks = struct {
         }
     }
 
+    pub fn scene_before_load(payload: engine.HookPayload) void {
+        const info = payload.scene_before_load;
+        std.log.info("[game] Scene about to load: {s}", .{info.name});
+    }
+
     pub fn scene_load(payload: engine.HookPayload) void {
         const info = payload.scene_load;
         std.log.info("[game] Scene loaded: {s}", .{info.name});
+    }
+
+    pub fn scene_unload(payload: engine.HookPayload) void {
+        const info = payload.scene_unload;
+        std.log.info("[game] Scene unloading: {s}", .{info.name});
     }
 };
 
