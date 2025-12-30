@@ -130,7 +130,7 @@ pub const initial_scene = @import("scenes/{s}.zon");
 const State = struct {{
     allocator: std.mem.Allocator = undefined,
     game: ?*Game = null,
-    scene: ?*Loader.Scene = null,
+    scene: ?*engine.Scene = null,
     project: ?ProjectConfig = null,
     title: ?[:0]u8 = null,
     initialized: bool = false,
@@ -142,7 +142,7 @@ var state: State = .{{}};
 
 // Allocated storage for game and scene (needed because sokol callbacks can't return errors)
 var game_storage: Game = undefined;
-var scene_storage: Loader.Scene = undefined;
+var scene_storage: engine.Scene = undefined;
 
 .init_cb
 // Sokol app callbacks
