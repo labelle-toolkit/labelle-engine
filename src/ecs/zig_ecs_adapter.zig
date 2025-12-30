@@ -13,6 +13,37 @@ const zig_ecs = @import("zig_ecs");
 /// Entity type from zig-ecs (does not have 'invalid' or 'eql' - use interface helpers)
 pub const Entity = zig_ecs.Entity;
 
+/// Module-level game pointer for component callbacks.
+///
+/// This is a **process-global singleton** shared by all `Registry` instances
+/// using this adapter. It is intended for the common case where there is a
+/// single "game" object per process that component callbacks need to access.
+///
+/// Limitations:
+/// - Multiple registries **cannot** have different game pointers at the same time.
+/// - Tests that create multiple registries must ensure they either share the same
+///   game object or carefully control sequencing.
+///
+/// If you require per-registry game pointers, you must extend the `Registry`
+/// type to carry that state explicitly instead of relying on this global.
+var game_ptr: ?*anyopaque = null;
+
+/// Set the global game pointer for component callbacks to access.
+/// Pass null to clear the game pointer during cleanup.
+///
+/// In normal usage this is set automatically by `Game.fixPointers()`, so you
+/// usually do not need to call this directly unless you are wiring a custom
+/// game/registry setup.
+pub fn setGamePtr(ptr: ?*anyopaque) void {
+    game_ptr = ptr;
+}
+
+/// Get the global game pointer. Returns null if not set.
+pub fn getGamePtr() ?*anyopaque {
+    return game_ptr;
+}
+
+
 /// View for iterating entities with specific components
 pub fn View(comptime Components: type) type {
     return struct {
@@ -86,7 +117,11 @@ pub fn registerComponentCallbacks(registry: *Registry, comptime T: type) void {
         const AddWrapper = struct {
             fn callback(_: *zig_ecs.Registry, entity: Entity) void {
                 const entity_u64: u64 = @as(EntityBits, @bitCast(entity));
-                T.onAdd(.{ .entity_id = entity_u64 });
+                if (game_ptr) |gp| {
+                    T.onAdd(.{ .entity_id = entity_u64, .game_ptr = gp });
+                } else {
+                    std.log.warn("[zig_ecs_adapter] onAdd callback fired but game_ptr not set for component {s}", .{@typeName(T)});
+                }
             }
         };
         registry.inner.onConstruct(T).connect(AddWrapper.callback);
@@ -97,7 +132,11 @@ pub fn registerComponentCallbacks(registry: *Registry, comptime T: type) void {
         const RemoveWrapper = struct {
             fn callback(_: *zig_ecs.Registry, entity: Entity) void {
                 const entity_u64: u64 = @as(EntityBits, @bitCast(entity));
-                T.onRemove(.{ .entity_id = entity_u64 });
+                if (game_ptr) |gp| {
+                    T.onRemove(.{ .entity_id = entity_u64, .game_ptr = gp });
+                } else {
+                    std.log.warn("[zig_ecs_adapter] onRemove callback fired but game_ptr not set for component {s}", .{@typeName(T)});
+                }
             }
         };
         registry.inner.onDestruct(T).connect(RemoveWrapper.callback);
@@ -151,7 +190,11 @@ pub const Registry = struct {
             // Trigger onSet callback if defined
             if (@hasDecl(T, "onSet")) {
                 const entity_u64: u64 = @as(EntityBits, @bitCast(entity));
-                T.onSet(.{ .entity_id = entity_u64 });
+                if (game_ptr) |gp| {
+                    T.onSet(.{ .entity_id = entity_u64, .game_ptr = gp });
+                } else {
+                    std.log.warn("[zig_ecs_adapter] onSet callback fired but game_ptr not set for component {s}", .{@typeName(T)});
+                }
             }
         } else {
             // Component doesn't exist - add it (onAdd will be triggered by the signal)

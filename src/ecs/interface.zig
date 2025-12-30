@@ -115,6 +115,24 @@ pub fn registerComponentCallbacks(registry: *Registry, comptime T: type) void {
     BackendImpl.registerComponentCallbacks(registry, T);
 }
 
+/// Set the global game pointer for component callbacks to access.
+/// Pass null to clear the game pointer during cleanup.
+///
+/// If this is not called before a callback runs, the callback will log a warning
+/// and its body will be skipped (no game pointer–dependent logic will execute).
+///
+/// In normal usage this is set automatically by `Game.fixPointers()`, so you
+/// usually do not need to call this directly unless you are wiring a custom
+/// game/registry setup.
+pub fn setGamePtr(ptr: ?*anyopaque) void {
+    BackendImpl.setGamePtr(ptr);
+}
+
+/// Get the global game pointer. Returns null if not set.
+pub fn getGamePtr() ?*anyopaque {
+    return BackendImpl.getGamePtr();
+}
+
 test "Entity interface availability" {
     // Just verify the comptime flags compile correctly
     _ = has_invalid_entity;

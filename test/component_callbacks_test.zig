@@ -19,6 +19,9 @@ var test_on_remove_called: bool = false;
 var test_on_remove_entity_id: u64 = 0;
 var test_on_remove_call_count: u32 = 0;
 
+/// Dummy game instance for testing callbacks
+var test_game_instance: u8 = 0;
+
 fn resetTestState() void {
     test_on_add_called = false;
     test_on_add_entity_id = 0;
@@ -29,6 +32,9 @@ fn resetTestState() void {
     test_on_remove_called = false;
     test_on_remove_entity_id = 0;
     test_on_remove_call_count = 0;
+
+    // Set up the game pointer for component callbacks
+    ecs.setGamePtr(&test_game_instance);
 }
 
 // Test component with onAdd callback
@@ -111,16 +117,25 @@ test {
     zspec.runAll(@This());
 }
 
+/// Dummy game pointer for testing ComponentPayload
+var dummy_game: u8 = 0;
+
 pub const COMPONENT_PAYLOAD = struct {
     pub const CREATION = struct {
-        test "can create ComponentPayload with entity_id" {
-            const payload = ComponentPayload{ .entity_id = 42 };
+        test "can create ComponentPayload with entity_id and game_ptr" {
+            const payload = ComponentPayload{ .entity_id = 42, .game_ptr = &dummy_game };
             try expect.equal(payload.entity_id, 42);
         }
 
         test "entity_id can hold large values" {
-            const payload = ComponentPayload{ .entity_id = 0xFFFFFFFFFFFFFFFF };
+            const payload = ComponentPayload{ .entity_id = 0xFFFFFFFFFFFFFFFF, .game_ptr = &dummy_game };
             try expect.equal(payload.entity_id, 0xFFFFFFFFFFFFFFFF);
+        }
+
+        test "getGame returns the game pointer" {
+            const payload = ComponentPayload{ .entity_id = 42, .game_ptr = &dummy_game };
+            const game = payload.getGame(u8);
+            try expect.equal(game, &dummy_game);
         }
     };
 };
@@ -532,7 +547,7 @@ pub const COMPONENTS_WITHOUT_CALLBACKS = struct {
 
 pub const MODULE_EXPORTS = struct {
     test "ComponentPayload is exported from engine" {
-        const payload: engine.ComponentPayload = .{ .entity_id = 1 };
+        const payload: engine.ComponentPayload = .{ .entity_id = 1, .game_ptr = &dummy_game };
         _ = payload;
     }
 
