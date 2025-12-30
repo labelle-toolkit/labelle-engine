@@ -1,0 +1,15 @@
+.{
+    .version = 1,
+    .name = "example_sdl2",
+    .description = "Demonstrates SDL2 backend with full hook support",
+    .initial_scene = "main",
+    .backend = .sdl2,
+    .window = .{
+        .width = 800,
+        .height = 600,
+        .title = "SDL2 Backend Example",
+        .target_fps = 60,
+    },
+    .resources = .{},
+    .plugins = .{},
+}
