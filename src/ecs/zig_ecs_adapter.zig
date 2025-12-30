@@ -167,6 +167,16 @@ pub const Registry = struct {
     /// Determine the view type based on the number of components
     /// Single component -> BasicView (optimized), multiple -> MultiView
     fn ViewType(comptime includes: anytype) type {
+        comptime {
+            const T = @TypeOf(includes);
+            const ti = @typeInfo(T);
+            if (ti != .@"struct" or !ti.@"struct".is_tuple) {
+                @compileError("view() expects a tuple of types, e.g. '.{MyComponent}'");
+            }
+            if (includes.len == 0) {
+                @compileError("view() requires at least one component type; empty tuples are not supported");
+            }
+        }
         if (includes.len == 1) return zig_ecs.BasicView(includes[0]);
         return zig_ecs.MultiView(includes, .{});
     }
