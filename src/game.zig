@@ -209,6 +209,9 @@ pub fn GameWith(comptime Hooks: type) type {
             // Emit game_deinit hook before cleanup
             emitHook(.{ .game_deinit = {} });
 
+            // Clear game pointer to prevent use-after-free in component callbacks
+            ecs.setGamePtr(null);
+
             self.unloadCurrentScene();
 
         // Free owned strings

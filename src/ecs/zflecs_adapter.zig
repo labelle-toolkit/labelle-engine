@@ -12,19 +12,35 @@ const std = @import("std");
 const flecs = @import("zflecs");
 
 /// Module-level game pointer for component callbacks.
-/// Set via setGamePtr() before component callbacks can access the game.
+///
+/// This is a **process-global singleton** shared by all `Registry` instances
+/// using this adapter. It is intended for the common case where there is a
+/// single "game" object per process that component callbacks need to access.
+///
+/// Limitations:
+/// - Multiple registries **cannot** have different game pointers at the same time.
+/// - Tests that create multiple registries must ensure they either share the same
+///   game object or carefully control sequencing.
+///
+/// If you require per-registry game pointers, you must extend the `Registry`
+/// type to carry that state explicitly instead of relying on this global.
 var game_ptr: ?*anyopaque = null;
 
-/// Set the game pointer for component callbacks to access.
-/// Must be called before any component callbacks fire.
-pub fn setGamePtr(ptr: *anyopaque) void {
+/// Set the global game pointer for component callbacks to access.
+/// Pass null to clear the game pointer during cleanup.
+///
+/// In normal usage this is set automatically by `Game.fixPointers()`, so you
+/// usually do not need to call this directly unless you are wiring a custom
+/// game/registry setup.
+pub fn setGamePtr(ptr: ?*anyopaque) void {
     game_ptr = ptr;
 }
 
-/// Get the game pointer. Returns null if not set.
+/// Get the global game pointer. Returns null if not set.
 pub fn getGamePtr() ?*anyopaque {
     return game_ptr;
 }
+
 
 /// Register component lifecycle callbacks if the component type defines them.
 /// Supports onAdd, onSet, and onRemove callbacks.
