@@ -88,13 +88,14 @@ jobs:
           # Generate build.zig and build.zig.zon for examples with local engine path
           # Note: --engine-path is relative to .labelle/ output directory, so ../../.. goes up to repo root
           zig build generate -- --engine-path ../../.. usage/example_1
-          zig build generate -- --engine-path ../../.. usage/example_2
+          # SKIPPED: example_2 (sokol) has sgl.setup() issue - see labelle-gfx#146
+          # zig build generate -- --engine-path ../../.. usage/example_2
           zig build generate -- --engine-path ../../.. usage/example_4
 
           # Fix fingerprints - Zig requires exact fingerprints that we can't predict
           # Run build once to get suggested values, then update
           # Build files are now in .labelle/ subdirectory
-          for example in usage/example_1 usage/example_2 usage/example_4; do
+          for example in usage/example_1 usage/example_4; do
             cd $example/.labelle
             # Try to build, capture error with suggested fingerprint
             BUILD_OUTPUT=$(zig build 2>&1 || true)
@@ -120,12 +121,13 @@ jobs:
           cd usage/example_1/.labelle
           xvfb-run -a zig build run
 
-      - name: Build and run example_2 (sokol)
-        env:
-          CI_TEST: "1"
-        run: |
-          cd usage/example_2/.labelle
-          xvfb-run -a zig build run
+      # SKIPPED: Sokol backend has sgl.setup() issue - see labelle-gfx#146
+      # - name: Build and run example_2 (sokol)
+      #   env:
+      #     CI_TEST: "1"
+      #   run: |
+      #     cd usage/example_2/.labelle
+      #     xvfb-run -a zig build run
 
       - name: Build and run example_4 with zig_ecs backend
         env:
