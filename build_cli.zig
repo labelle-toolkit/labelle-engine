@@ -1,4 +1,5 @@
 const std = @import("std");
+const build_utils = @import("build_utils.zig");
 
 /// Minimal build file for the labelle CLI executable only.
 /// This avoids loading graphics dependencies (SDL2, raylib, etc.)
@@ -18,19 +19,6 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("build.zig.zon"),
     });
 
-    // Main CLI executable
-    const cli_exe = b.addExecutable(.{
-        .name = "labelle",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/cli.zig"),
-            .target = target,
-            .optimize = optimize,
-            .imports = &.{
-                .{ .name = "zts", .module = zts },
-                .{ .name = "build_zon", .module = build_zon_mod },
-            },
-        }),
-    });
-
-    b.installArtifact(cli_exe);
+    // Use shared CLI build logic
+    _ = build_utils.addCli(b, target, optimize, zts, build_zon_mod);
 }
