@@ -1,4 +1,5 @@
 const std = @import("std");
+const build_utils = @import("build_utils.zig");
 
 /// Graphics backend selection
 pub const Backend = enum {
@@ -222,20 +223,8 @@ pub fn build(b: *std.Build) void {
     generate_step.dependOn(&run_generator.step);
 
     // Main CLI executable - unified interface for labelle projects
-    const cli_exe = b.addExecutable(.{
-        .name = "labelle",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/cli.zig"),
-            .target = target,
-            .optimize = optimize,
-            .imports = &.{
-                .{ .name = "zts", .module = zts },
-                .{ .name = "build_zon", .module = build_zon_mod },
-            },
-        }),
-    });
-
-    b.installArtifact(cli_exe);
+    // Uses shared build logic from build_utils.zig
+    _ = build_utils.addCli(b, target, optimize, zts, build_zon_mod);
 
     // Benchmark executable - compares ECS backend performance
     const bench_exe = b.addExecutable(.{
