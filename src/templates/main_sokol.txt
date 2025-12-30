@@ -182,7 +182,7 @@ export fn init() void {{
     if (state.project) |project| {{
         for (project.resources.atlases) |atlas| {{
             state.game.?.loadAtlas(atlas.name, atlas.json, atlas.texture) catch |err| {{
-                std.debug.print("Failed to load atlas {s}: {{}}\n", .{{ atlas.name, err }});
+                std.debug.print("Failed to load atlas {{s}}: {{{{}}}}\n", .{{ atlas.name, err }});
             }};
         }}
 
