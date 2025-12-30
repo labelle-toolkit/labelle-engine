@@ -7,8 +7,8 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    // Default to SDL backend for this example
-    const backend = b.option(Backend, "backend", "Graphics backend") orelse .sdl;
+    // Default to Sokol backend for this example
+    const backend = b.option(Backend, "backend", "Graphics backend") orelse .sokol;
     const ecs_backend = b.option(EcsBackend, "ecs_backend", "ECS backend") orelse .zig_ecs;
 
     const engine_dep = b.dependency("labelle-engine", .{
@@ -20,7 +20,7 @@ pub fn build(b: *std.Build) void {
     const engine_mod = engine_dep.module("labelle-engine");
 
     const exe = b.addExecutable(.{
-        .name = "example_sdl2",
+        .name = "example_sokol",
         .root_module = b.createModule(.{
             .root_source_file = b.path("main.zig"),
             .target = target,
@@ -30,12 +30,6 @@ pub fn build(b: *std.Build) void {
             },
         }),
     });
-
-    // Link SDL2 libraries (required for SDL backend)
-    exe.linkSystemLibrary("SDL2");
-    exe.linkSystemLibrary("SDL2_image");
-    exe.linkSystemLibrary("SDL2_ttf");
-
     b.installArtifact(exe);
 
     const run_cmd = b.addRunArtifact(exe);

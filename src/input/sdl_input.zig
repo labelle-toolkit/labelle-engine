@@ -277,39 +277,39 @@ fn sdlScancodeToKeyIndex(scancode: sdl.Scancode) ?usize {
         // Lock keys
         .caps_lock => 280,
         .scroll_lock => 281,
-        .num_lock => 282,
+        .num_lock_clear => 282,
         .print_screen => 283,
         .pause => 284,
 
         // Modifier keys (GLFW values)
         .left_shift => 340,
-        .left_ctrl => 341,
+        .left_control => 341,
         .left_alt => 342,
         .left_gui => 343,
         .right_shift => 344,
-        .right_ctrl => 345,
+        .right_control => 345,
         .right_alt => 346,
         .right_gui => 347,
-        .menu => 348,
+        .application => 348,
 
         // Keypad
-        .kp_0 => 320,
-        .kp_1 => 321,
-        .kp_2 => 322,
-        .kp_3 => 323,
-        .kp_4 => 324,
-        .kp_5 => 325,
-        .kp_6 => 326,
-        .kp_7 => 327,
-        .kp_8 => 328,
-        .kp_9 => 329,
-        .kp_period => 330,
-        .kp_divide => 331,
-        .kp_multiply => 332,
-        .kp_minus => 333,
-        .kp_plus => 334,
-        .kp_enter => 335,
-        .kp_equals => 336,
+        .keypad_0 => 320,
+        .keypad_1 => 321,
+        .keypad_2 => 322,
+        .keypad_3 => 323,
+        .keypad_4 => 324,
+        .keypad_5 => 325,
+        .keypad_6 => 326,
+        .keypad_7 => 327,
+        .keypad_8 => 328,
+        .keypad_9 => 329,
+        .keypad_period => 330,
+        .keypad_divide => 331,
+        .keypad_multiply => 332,
+        .keypad_minus => 333,
+        .keypad_plus => 334,
+        .keypad_enter => 335,
+        .keypad_equals => 336,
 
         else => null,
     };
@@ -328,8 +328,8 @@ fn sdlMouseButtonToIndex(button: sdl.MouseButton) ?usize {
         .left => @intFromEnum(types.MouseButton.left),
         .right => @intFromEnum(types.MouseButton.right),
         .middle => @intFromEnum(types.MouseButton.middle),
-        .x1 => @intFromEnum(types.MouseButton.back), // SDL X1 = Back button
-        .x2 => @intFromEnum(types.MouseButton.forward), // SDL X2 = Forward button
+        .extra_1 => @intFromEnum(types.MouseButton.back), // SDL X1 = Back button
+        .extra_2 => @intFromEnum(types.MouseButton.forward), // SDL X2 = Forward button
     };
     return mapped;
 }

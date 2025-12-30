@@ -1,0 +1,18 @@
+.{
+    .fingerprint = 0xe7c8b22c115be791,
+    .name = .example_sokol,
+    .version = "0.1.0",
+    .dependencies = .{
+        .@"labelle-engine" = .{
+            .path = "../..",
+        },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "main.zig",
+        "project.labelle",
+        "scenes",
+        "hooks",
+    },
+}
