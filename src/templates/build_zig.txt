@@ -71,6 +71,7 @@ pub fn build(b: *std.Build) void {{
         .optimize = optimize,
     }});
     const sokol_mod = sokol_dep.module("sokol");
+    const labelle_gfx_mod = labelle_dep.module("labelle");
 
     const exe = b.addExecutable(.{{
         .name = "{s}",
@@ -81,6 +82,7 @@ pub fn build(b: *std.Build) void {{
             .imports = &.{{
                 .{{ .name = "labelle-engine", .module = engine_mod }},
                 .{{ .name = "sokol", .module = sokol_mod }},
+                .{{ .name = "labelle-gfx", .module = labelle_gfx_mod }},
 .sokol_exe_end
             }},
         }}),
