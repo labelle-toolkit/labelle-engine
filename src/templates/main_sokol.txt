@@ -136,6 +136,7 @@ const State = struct {{
     initialized: bool = false,
     should_quit: bool = false,
     ci_test: bool = false,
+    frame_count: u32 = 0,
 }};
 
 var state: State = .{{}};
@@ -166,9 +167,14 @@ export fn init() void {{
         return;
     }};
 
-    // Initialize game (sokol backend handles its own window, so we pass null window config)
+    // Initialize game (sokol backend handles its own window via sokol_app)
     game_storage = Game.init(state.allocator, .{{
-        .window = null, // Sokol manages its own window
+        .window = .{{
+            .width = state.project.?.window.width,
+            .height = state.project.?.window.height,
+            .title = state.title.?,
+            .target_fps = state.project.?.window.target_fps,
+        }},
         .clear_color = .{{ .r = 30, .g = 35, .b = 45 }},
     }}) catch |err| {{
         std.debug.print("Failed to initialize game: {{}}\n", .{{err}});
@@ -223,9 +229,9 @@ export fn frame() void {{
     if (!state.initialized or state.game == null or state.scene == null) return;
 
     // CI test mode: exit after 10 frames
+    state.frame_count += 1;
     if (state.ci_test) {{
-        const frame_count = state.game.?.getRetainedEngine().frame_count orelse 0;
-        if (frame_count > 10) {{
+        if (state.frame_count > 10) {{
             state.should_quit = true;
             sapp.quit();
             return;
