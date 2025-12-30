@@ -16,6 +16,7 @@
 
 const std = @import("std");
 const engine = @import("labelle-engine");
+const ProjectConfig = engine.ProjectConfig;
 
 // Sokol bindings - imported directly from labelle-gfx dependency
 const sokol = @import("sokol");
@@ -23,18 +24,128 @@ const sg = sokol.gfx;
 const sgl = sokol.gl;
 const sapp = sokol.app;
 
+.plugin_import
+const {s} = @import("{s}");
+.prefab_import
+const {s}_prefab = @import("prefabs/{s}.zon");
+.component_import
+const {s}_comp = @import("components/{s}.zig");
+.component_export
+pub const {s} = {s}_comp.{s};
+.script_import
+const {s}_script = @import("scripts/{s}.zig");
+.hook_import
+const {s}_hooks = @import("hooks/{s}.zig");
+.main_module
+const main_module = @This();
+.prefab_registry_empty
+pub const Prefabs = engine.PrefabRegistry(.{{}});
+.prefab_registry_start
+pub const Prefabs = engine.PrefabRegistry(.{{
+.prefab_registry_item
+    .{s} = {s}_prefab,
+.prefab_registry_end
+}});
+.component_registry_empty
+pub const Components = engine.ComponentRegistry(struct {{
+    // Engine built-in components
+    pub const Position = engine.Position;
+    pub const Sprite = engine.Sprite;
+    pub const Shape = engine.Shape;
+    pub const Text = engine.Text;
+}});
+.component_registry_start
+pub const Components = engine.ComponentRegistry(struct {{
+    // Engine built-in components
+    pub const Position = engine.Position;
+    pub const Sprite = engine.Sprite;
+    pub const Shape = engine.Shape;
+    pub const Text = engine.Text;
+    // Project components
+.component_registry_item
+    pub const {s} = main_module.{s};
+.component_registry_end
+}});
+.component_registry_multi_empty_start
+pub const Components = engine.ComponentRegistryMulti(.{{
+    struct {{
+        // Engine built-in components
+        pub const Position = engine.Position;
+        pub const Sprite = engine.Sprite;
+        pub const Shape = engine.Shape;
+        pub const Text = engine.Text;
+    }},
+.component_registry_multi_start
+pub const Components = engine.ComponentRegistryMulti(.{{
+    struct {{
+        // Engine built-in components
+        pub const Position = engine.Position;
+        pub const Sprite = engine.Sprite;
+        pub const Shape = engine.Shape;
+        pub const Text = engine.Text;
+        // Project components
+.component_registry_multi_item
+        pub const {s} = main_module.{s};
+.component_registry_multi_base_end
+    }},
+.component_registry_multi_plugin
+    {s}.{s},
+.component_registry_multi_end
+}});
+.script_registry_empty
+pub const Scripts = engine.ScriptRegistry(struct {{}});
+.script_registry_start
+pub const Scripts = engine.ScriptRegistry(struct {{
+.script_registry_item
+    pub const {s} = {s}_script;
+.script_registry_end
+}});
+.hooks_empty
+const Game = engine.Game;
+.hooks_start
+const Hooks = engine.MergeEngineHooks(.{{
+.hooks_item
+    {s}_hooks,
+.hooks_end
+}});
+const Game = engine.GameWith(Hooks);
+.task_engine_empty
+
+.task_engine_start
+// Task engine with auto-wired hooks
+const TaskHooks = {s}.hooks.MergeTasksHooks({s}, {s}, .{{
+.task_engine_hook_item
+    {s}_hooks,
+.task_engine_end
+}});
+const TaskDispatcher = {s}.hooks.HookDispatcher({s}, {s}, TaskHooks);
+pub const TaskEngine = {s}.EngineWithHooks({s}, {s}, TaskDispatcher);
+.loader
+pub const Loader = engine.SceneLoader(Prefabs, Components, Scripts);
+pub const initial_scene = @import("scenes/{s}.zon");
+
 .state
 // Global state for sokol callback pattern
 const State = struct {{
-    pass_action: sg.PassAction = .{{}},
+    allocator: std.mem.Allocator = undefined,
+    game: ?*Game = null,
+    scene: ?*engine.Scene = null,
+    project: ?ProjectConfig = null,
+    title: ?[:0]const u8 = null,
     frame_count: u32 = 0,
+    ci_test: bool = false,
+    initialized: bool = false,
 }};
 
 var state: State = .{{}};
+var gpa: std.heap.GeneralPurposeAllocator(.{{}}) = .{{}};
 
 .init_cb
 // Sokol app callbacks
 export fn init() void {{
+    state.allocator = gpa.allocator();
+    state.ci_test = std.posix.getenv("CI_TEST") != null;
+
     // Initialize sokol_gfx
     sg.setup(.{{
         .environment = sokol.glue.environment(),
@@ -46,70 +157,143 @@ export fn init() void {{
         .logger = .{{ .func = sokol.log.func }},
     }});
 
-    // Setup clear color (dark blue-gray)
-    state.pass_action.colors[0] = .{{
-        .load_action = .CLEAR,
-        .clear_value = .{{ .r = 0.118, .g = 0.137, .b = 0.176, .a = 1.0 }},
+    // Load project config
+    state.project = ProjectConfig.load(state.allocator, "project.labelle") catch |err| {{
+        std.debug.print("Failed to load project.labelle: {{any}}\n", .{{err}});
+        return;
     }};
 
+    // Convert title to sentinel-terminated string
+    state.title = state.allocator.dupeZ(u8, state.project.?.window.title) catch {{
+        std.debug.print("Failed to allocate title\n", .{{}});
+        return;
+    }};
+
+    // Initialize game
+    const game_ptr = state.allocator.create(Game) catch {{
+        std.debug.print("Failed to allocate game\n", .{{}});
+        return;
+    }};
+    game_ptr.* = Game.init(state.allocator, .{{
+        .window = .{{
+            .width = state.project.?.window.width,
+            .height = state.project.?.window.height,
+            .title = state.title.?,
+            .target_fps = state.project.?.window.target_fps,
+            .hidden = state.ci_test,
+        }},
+        .clear_color = .{{ .r = 30, .g = 35, .b = 45 }},
+    }}) catch |err| {{
+        std.debug.print("Failed to init game: {{any}}\n", .{{err}});
+        state.allocator.destroy(game_ptr);
+        return;
+    }};
+    game_ptr.fixPointers();
+    state.game = game_ptr;
+
+    // Load atlases from project config
+    for (state.project.?.resources.atlases) |atlas| {{
+        state.game.?.loadAtlas(atlas.name, atlas.json, atlas.texture) catch |err| {{
+            std.debug.print("Failed to load atlas {{s}}: {{any}}\n", .{{ atlas.name, err }});
+        }};
+    }}
+
+    // Apply camera configuration from project
+    if (state.project.?.camera.x != null or state.project.?.camera.y != null) {{
+        state.game.?.setCameraPosition(state.project.?.camera.x orelse 0, state.project.?.camera.y orelse 0);
+    }}
+    if (state.project.?.camera.zoom != 1.0) {{
+        state.game.?.setCameraZoom(state.project.?.camera.zoom);
+    }}
+
+    const ctx = engine.SceneContext.init(state.game.?);
+
+    // Emit scene_before_load hook for initial scene (mirrors Game.setScene behavior)
+    Game.HookDispatcher.emit(.{{ .scene_before_load = .{{ .name = initial_scene.name, .allocator = state.allocator }} }});
+
+    // Load initial scene
+    const scene_ptr = state.allocator.create(engine.Scene) catch {{
+        std.debug.print("Failed to allocate scene\n", .{{}});
+        return;
+    }};
+    scene_ptr.* = Loader.load(initial_scene, ctx) catch |err| {{
+        std.debug.print("Failed to load scene: {{any}}\n", .{{err}});
+        state.allocator.destroy(scene_ptr);
+        return;
+    }};
+    state.scene = scene_ptr;
+
+    // Emit scene_load hook for initial scene (mirrors Game.setScene behavior)
+    Game.HookDispatcher.emit(.{{ .scene_load = .{{ .name = initial_scene.name }} }});
+
+    state.initialized = true;
     std.debug.print("Sokol backend initialized successfully!\n", .{{}});
     std.debug.print("Window size: {{}}x{{}}\n", .{{ sapp.width(), sapp.height() }});
 }}
 
 .frame_cb
 export fn frame() void {{
+    if (!state.initialized) return;
+
     state.frame_count += 1;
 
     // Get delta time
     const dt: f32 = @floatCast(sapp.frameDuration());
-    _ = dt;
 
-    // Begin render pass
-    sg.beginPass(.{{
-        .action = state.pass_action,
-        .swapchain = sokol.glue.swapchain(),
-    }});
+    // Update scene
+    if (state.scene) |scene| {{
+        scene.update(dt);
+    }}
 
-    // Setup sokol_gl for 2D drawing
-    sgl.defaults();
-    sgl.matrixModeProjection();
-    sgl.loadIdentity();
+    // Sync render pipeline
+    if (state.game) |game| {{
+        game.getPipeline().sync(game.getRegistry());
 
-    const w: f32 = @floatFromInt(sapp.width());
-    const h: f32 = @floatFromInt(sapp.height());
-    sgl.ortho(0, w, h, 0, -1, 1);
-
-    sgl.matrixModeModelview();
-    sgl.loadIdentity();
-
-    // TODO: Add your rendering code here
-    // Example: draw a rectangle
-    sgl.beginQuads();
-    sgl.c3f(0.5, 0.7, 1.0); // light blue
-    sgl.v2f(100, 100);
-    sgl.v2f(200, 100);
-    sgl.v2f(200, 200);
-    sgl.v2f(100, 200);
-    sgl.end();
-
-    // Draw sgl commands
-    sgl.draw();
-
-    // End render pass
-    sg.endPass();
-    sg.commit();
+        const re = game.getRetainedEngine();
+        re.beginFrame();
+        re.render();
+        re.endFrame();
+    }}
 
     // Auto-exit for CI testing
-    const ci_test = std.posix.getenv("CI_TEST") != null;
-    if (ci_test and state.frame_count > 10) {{
+    if (state.ci_test and state.frame_count > 10) {{
         sapp.quit();
     }}
 }}
 
 .cleanup_cb
 export fn cleanup() void {{
+    if (state.initialized) {{
+        // Emit scene_unload hook for initial scene on exit (mirrors Game.setScene behavior)
+        Game.HookDispatcher.emit(.{{ .scene_unload = .{{ .name = initial_scene.name }} }});
+    }}
+
+    if (state.scene) |scene| {{
+        scene.deinit();
+        state.allocator.destroy(scene);
+        state.scene = null;
+    }}
+
+    if (state.game) |game| {{
+        game.deinit();
+        state.allocator.destroy(game);
+        state.game = null;
+    }}
+
+    if (state.title) |title| {{
+        state.allocator.free(title);
+        state.title = null;
+    }}
+
+    if (state.project) |project| {{
+        project.deinit(state.allocator);
+        state.project = null;
+    }}
+
     sgl.shutdown();
     sg.shutdown();
+    _ = gpa.deinit();
+
     std.debug.print("Sokol backend cleanup complete.\n", .{{}});
 }}
 
