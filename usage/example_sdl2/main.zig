@@ -8,6 +8,9 @@
 // 1. Import hook files from hooks/
 // 2. Merge them with MergeEngineHooks
 // 3. Create Game using GameWith(Hooks)
+//
+// Note: SDL backend has an initWindow error in labelle-gfx. Tracked in:
+// https://github.com/labelle-toolkit/labelle-gfx/issues/145
 // ============================================================================
 
 const std = @import("std");
