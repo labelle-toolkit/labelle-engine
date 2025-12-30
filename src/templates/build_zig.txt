@@ -15,6 +15,7 @@ const std = @import("std");
 pub const Backend = enum {{
     raylib,
     sokol,
+    sdl,
 }};
 
 /// ECS backend selection (must match labelle-engine)
@@ -81,6 +82,19 @@ pub fn build(b: *std.Build) void {{
                 .{{ .name = "labelle-engine", .module = engine_mod }},
                 .{{ .name = "sokol", .module = sokol_mod }},
 .sokol_exe_end
+            }},
+        }}),
+    }});
+.sdl_exe_start
+    const exe = b.addExecutable(.{{
+        .name = "{s}",
+        .root_module = b.createModule(.{{
+            .root_source_file = b.path("../main.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{{
+                .{{ .name = "labelle-engine", .module = engine_mod }},
+.sdl_exe_end
             }},
         }}),
     }});

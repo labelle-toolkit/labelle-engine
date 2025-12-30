@@ -39,6 +39,7 @@ const std = @import("std");
 pub const Backend = enum {
     raylib,
     sokol,
+    sdl,
 };
 
 /// ECS backend selection
