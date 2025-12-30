@@ -3,7 +3,7 @@
     .name = "example_sdl2",
     .description = "Demonstrates SDL2 backend with full hook support",
     .initial_scene = "main",
-    .backend = .sdl2,
+    .backend = .sdl,
     .window = .{
         .width = 800,
         .height = 600,

@@ -1,5 +1,5 @@
 .{
-    .fingerprint = 0x0,
+    .fingerprint = 0x293b0f2b5f678d94,
     .name = .example_sdl2,
     .version = "0.1.0",
     .dependencies = .{

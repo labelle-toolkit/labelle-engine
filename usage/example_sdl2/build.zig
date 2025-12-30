@@ -1,14 +1,14 @@
 const std = @import("std");
 
-pub const Backend = enum { raylib, sokol, sdl2 };
+pub const Backend = enum { raylib, sokol, sdl };
 pub const EcsBackend = enum { zig_ecs, zflecs };
 
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    // Default to SDL2 backend for this example
-    const backend = b.option(Backend, "backend", "Graphics backend") orelse .sdl2;
+    // Default to SDL backend for this example
+    const backend = b.option(Backend, "backend", "Graphics backend") orelse .sdl;
     const ecs_backend = b.option(EcsBackend, "ecs_backend", "ECS backend") orelse .zig_ecs;
 
     const engine_dep = b.dependency("labelle-engine", .{
