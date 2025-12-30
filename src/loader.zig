@@ -800,11 +800,13 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
                 }
             }
 
-            // Route to shape-based or sprite-based prefab loading
+            // Route to shape-based, sprite-based, or data-only prefab loading
             if (comptime Prefabs.hasShape(prefab_name)) {
                 return loadShapePrefabEntity(entity_def, ctx, scene);
-            } else {
+            } else if (comptime Prefabs.hasSprite(prefab_name)) {
                 return loadSpritePrefabEntity(entity_def, ctx, scene);
+            } else {
+                return loadDataOnlyPrefabEntity(entity_def, ctx, scene);
             }
         }
 
@@ -906,6 +908,45 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
             return .{
                 .entity = entity,
                 .visual_type = .sprite,
+                .prefab_name = prefab_name,
+                .onUpdate = null,
+                .onDestroy = null,
+            };
+        }
+
+        /// Load a data-only prefab entity (no visual, just components)
+        fn loadDataOnlyPrefabEntity(
+            comptime entity_def: anytype,
+            ctx: SceneContext,
+            scene: *Scene,
+        ) !EntityInstance {
+            const prefab_name = entity_def.prefab;
+            const game = ctx.game();
+            const prefab_components = Prefabs.getComponents(prefab_name);
+
+            // Create ECS entity
+            const entity = game.createEntity();
+
+            // Get position from .components.Position (scene overrides prefab)
+            const pos = getPrefabPosition(prefab_name, entity_def);
+
+            // Add Position component
+            game.addPosition(entity, Position{
+                .x = pos.x,
+                .y = pos.y,
+            });
+
+            // Add components from prefab (excluding Position which we already handled)
+            try addComponentsExcluding(game, scene, entity, prefab_components, pos.x, pos.y, .{"Position"});
+
+            // Add/override components from scene definition (excluding Position)
+            if (@hasField(@TypeOf(entity_def), "components")) {
+                try addComponentsExcluding(game, scene, entity, entity_def.components, pos.x, pos.y, .{"Position"});
+            }
+
+            return .{
+                .entity = entity,
+                .visual_type = .none,
                 .prefab_name = prefab_name,
                 .onUpdate = null,
                 .onDestroy = null,
