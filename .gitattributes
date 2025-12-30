@@ -1,0 +1,18 @@
+# Ensure consistent line endings across platforms
+* text=auto eol=lf
+
+# Zig source files
+*.zig text eol=lf
+
+# Template files (critical for zts parsing)
+*.txt text eol=lf
+
+# Build files
+*.zon text eol=lf
+
+# Shell scripts
+*.sh text eol=lf
+
+# Windows batch files need CRLF
+*.bat text eol=crlf
+*.cmd text eol=crlf
