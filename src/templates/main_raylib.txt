@@ -157,8 +157,15 @@ pub fn main() !void {{
     }}
 
     const ctx = engine.SceneContext.init(&game);
+
+    // Emit scene_before_load hook for initial scene (mirrors Game.setScene behavior)
+    Game.HookDispatcher.emit(.{{ .scene_before_load = .{{ .name = initial_scene.name, .allocator = allocator }} }});
+
     var scene = try Loader.load(initial_scene, ctx);
     defer scene.deinit();
+
+    // Emit scene_load hook for initial scene (mirrors Game.setScene behavior)
+    Game.HookDispatcher.emit(.{{ .scene_load = .{{ .name = initial_scene.name }} }});
 
     if (ci_test) return;
 
