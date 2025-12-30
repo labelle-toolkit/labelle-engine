@@ -1,7 +1,7 @@
 .{
     .fingerprint = 0x246cb614beb913ae,
     .name = .labelle_engine,
-    .version = "0.28.0",
+    .version = "0.28.1",
     .minimum_zig_version = "0.15.2",
     .releases_url = "https://api.github.com/repos/labelle-toolkit/labelle-engine/releases/latest",
     .dependencies = .{
@@ -41,6 +41,7 @@
     .paths = .{
         "build.zig",
         "build.zig.zon",
+        "build_utils.zig",
         "src",
         "test",
         "usage",
