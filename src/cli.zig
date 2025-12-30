@@ -631,6 +631,7 @@ fn httpGet(allocator: std.mem.Allocator, url: []const u8, extra_headers: []const
         .method = .GET,
         .extra_headers = extra_headers,
         .response_writer = &response_writer.writer,
+        .redirect_behavior = std.http.Client.Request.RedirectBehavior.init(10),
     }) catch |err| {
         std.debug.print("HTTP fetch failed: {}\n", .{err});
         return error.HttpFetchFailed;
