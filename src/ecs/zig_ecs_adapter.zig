@@ -164,9 +164,27 @@ pub const Registry = struct {
         self.inner.remove(T, entity);
     }
 
+    /// Determine the view type based on the number of components
+    /// Single component -> BasicView (optimized), multiple -> MultiView
+    fn ViewType(comptime includes: anytype) type {
+        comptime {
+            const T = @TypeOf(includes);
+            const ti = @typeInfo(T);
+            if (ti != .@"struct" or !ti.@"struct".is_tuple) {
+                @compileError("view() expects a tuple of types, e.g. '.{MyComponent}'");
+            }
+            if (includes.len == 0) {
+                @compileError("view() requires at least one component type; empty tuples are not supported");
+            }
+        }
+        if (includes.len == 1) return zig_ecs.BasicView(includes[0]);
+        return zig_ecs.MultiView(includes, .{});
+    }
+
     /// Create a view for iterating entities with specific components
     /// Usage: var view = registry.view(.{ Position, Velocity });
-    pub fn view(self: *Registry, comptime includes: anytype) zig_ecs.MultiView(includes, .{}) {
+    /// Note: Single-component views return BasicView for better performance
+    pub fn view(self: *Registry, comptime includes: anytype) ViewType(includes) {
         return self.inner.view(includes, .{});
     }
 

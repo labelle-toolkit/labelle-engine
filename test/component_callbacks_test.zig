@@ -544,3 +544,79 @@ pub const MODULE_EXPORTS = struct {
         ecs.registerComponentCallbacks(&registry, TestHealth);
     }
 };
+
+// View tests only apply to zig_ecs backend (zflecs uses different iteration API)
+pub const VIEW_WITH_CALLBACKS = struct {
+    // Check if we're using zig_ecs backend (which has view() method)
+    const has_view = @hasDecl(ecs.Registry, "view");
+
+    test "single-component view works with components that have callbacks" {
+        if (!has_view) return; // Skip for zflecs backend
+
+        resetTestState();
+
+        var registry = ecs.Registry.init(std.testing.allocator);
+        defer registry.deinit();
+
+        ecs.registerComponentCallbacks(&registry, TestHealth);
+
+        // Create entities with the component
+        const entity1 = registry.create();
+        const entity2 = registry.create();
+        registry.add(entity1, TestHealth{ .amount = 100 });
+        registry.add(entity2, TestHealth{ .amount = 50 });
+
+        // Query using single-component view - this was causing the type mismatch
+        var view = registry.view(.{TestHealth});
+        var count: u32 = 0;
+        var found_100: bool = false;
+        var found_50: bool = false;
+        var iter = view.entityIterator();
+        while (iter.next()) |entity| {
+            const health = registry.tryGet(TestHealth, entity);
+            try std.testing.expect(health != null);
+            // Verify we can access the actual component values
+            if (health.?.amount == 100) found_100 = true;
+            if (health.?.amount == 50) found_50 = true;
+            count += 1;
+        }
+
+        try expect.equal(count, 2);
+        try expect.toBeTrue(found_100);
+        try expect.toBeTrue(found_50);
+    }
+
+    test "multi-component view works with components that have callbacks" {
+        if (!has_view) return; // Skip for zflecs backend
+
+        resetTestState();
+
+        var registry = ecs.Registry.init(std.testing.allocator);
+        defer registry.deinit();
+
+        ecs.registerComponentCallbacks(&registry, TestHealth);
+        ecs.registerComponentCallbacks(&registry, TestMana);
+
+        // Create entity with both components
+        const entity = registry.create();
+        registry.add(entity, TestHealth{ .amount = 100 });
+        registry.add(entity, TestMana{ .current = 50 });
+
+        // Query using multi-component view
+        var view = registry.view(.{ TestHealth, TestMana });
+        var count: u32 = 0;
+        var iter = view.entityIterator();
+        while (iter.next()) |e| {
+            // Verify we can access both component values correctly
+            const health = registry.tryGet(TestHealth, e);
+            const mana = registry.tryGet(TestMana, e);
+            try std.testing.expect(health != null);
+            try std.testing.expect(mana != null);
+            try expect.equal(health.?.amount, 100);
+            try expect.equal(mana.?.current, 50);
+            count += 1;
+        }
+
+        try expect.equal(count, 1);
+    }
+};
