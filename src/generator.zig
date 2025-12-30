@@ -483,12 +483,170 @@ fn generateMainZigRaylib(
 fn generateMainZigSokol(
     allocator: std.mem.Allocator,
     config: ProjectConfig,
+    prefabs: []const []const u8,
+    components: []const []const u8,
+    scripts: []const []const u8,
+    hooks: []const []const u8,
+    task_hooks: TaskHookScanResult,
 ) ![]const u8 {
     var buf: std.ArrayListUnmanaged(u8) = .{};
     const writer = buf.writer(allocator);
 
+    // Check if any plugin contributes Components
+    var has_plugin_components = false;
+    for (config.plugins) |plugin| {
+        if (plugin.components != null) {
+            has_plugin_components = true;
+            break;
+        }
+    }
+
+    // Pre-compute sanitized plugin names for Zig identifiers
+    var plugin_zig_names = try allocator.alloc([]const u8, config.plugins.len);
+    defer {
+        for (plugin_zig_names) |name| allocator.free(name);
+        allocator.free(plugin_zig_names);
+    }
+    for (config.plugins, 0..) |plugin, i| {
+        plugin_zig_names[i] = try sanitizeZigIdentifier(allocator, plugin.name);
+    }
+
+    // Pre-compute PascalCase names for components
+    var component_pascal_names = try allocator.alloc(PascalCaseResult, components.len);
+    defer allocator.free(component_pascal_names);
+    for (components, 0..) |name, i| {
+        component_pascal_names[i] = toPascalCase(name);
+    }
+
     // Header with project name
     try zts.print(main_sokol_tmpl, "header", .{config.name}, writer);
+
+    // Plugin imports (using sanitized identifier and original name for import path)
+    for (config.plugins, 0..) |plugin, i| {
+        try zts.print(main_sokol_tmpl, "plugin_import", .{ plugin_zig_names[i], plugin.name }, writer);
+    }
+
+    // Prefab imports
+    for (prefabs) |name| {
+        try zts.print(main_sokol_tmpl, "prefab_import", .{ name, name }, writer);
+    }
+
+    // Component imports
+    for (components) |name| {
+        try zts.print(main_sokol_tmpl, "component_import", .{ name, name }, writer);
+    }
+
+    // Component exports (with PascalCase type names)
+    for (components, 0..) |name, i| {
+        const pascal = component_pascal_names[i];
+        try zts.print(main_sokol_tmpl, "component_export", .{ pascal.buf[0..pascal.len], name, pascal.buf[0..pascal.len] }, writer);
+    }
+
+    // Script imports
+    for (scripts) |name| {
+        try zts.print(main_sokol_tmpl, "script_import", .{ name, name }, writer);
+    }
+
+    // Hook imports
+    for (hooks) |name| {
+        try zts.print(main_sokol_tmpl, "hook_import", .{ name, name }, writer);
+    }
+
+    // Main module reference
+    try zts.print(main_sokol_tmpl, "main_module", .{}, writer);
+
+    // Prefab registry
+    if (prefabs.len == 0) {
+        try zts.print(main_sokol_tmpl, "prefab_registry_empty", .{}, writer);
+    } else {
+        try zts.print(main_sokol_tmpl, "prefab_registry_start", .{}, writer);
+        for (prefabs) |name| {
+            try zts.print(main_sokol_tmpl, "prefab_registry_item", .{ name, name }, writer);
+        }
+        try zts.print(main_sokol_tmpl, "prefab_registry_end", .{}, writer);
+    }
+
+    // Component registry - use ComponentRegistryMulti when plugins contribute Components
+    if (has_plugin_components) {
+        // Use ComponentRegistryMulti to merge base components with plugin components
+        if (components.len == 0) {
+            try zts.print(main_sokol_tmpl, "component_registry_multi_empty_start", .{}, writer);
+        } else {
+            try zts.print(main_sokol_tmpl, "component_registry_multi_start", .{}, writer);
+            for (component_pascal_names) |pascal| {
+                try zts.print(main_sokol_tmpl, "component_registry_multi_item", .{ pascal.buf[0..pascal.len], pascal.buf[0..pascal.len] }, writer);
+            }
+            try zts.print(main_sokol_tmpl, "component_registry_multi_base_end", .{}, writer);
+        }
+        // Add plugin Components (only for plugins that specify a components field)
+        for (config.plugins, 0..) |plugin, i| {
+            if (plugin.components) |components_expr| {
+                try zts.print(main_sokol_tmpl, "component_registry_multi_plugin", .{ plugin_zig_names[i], components_expr }, writer);
+            }
+        }
+        try zts.print(main_sokol_tmpl, "component_registry_multi_end", .{}, writer);
+    } else {
+        // No plugins - use simple ComponentRegistry
+        if (components.len == 0) {
+            try zts.print(main_sokol_tmpl, "component_registry_empty", .{}, writer);
+        } else {
+            try zts.print(main_sokol_tmpl, "component_registry_start", .{}, writer);
+            for (component_pascal_names) |pascal| {
+                try zts.print(main_sokol_tmpl, "component_registry_item", .{ pascal.buf[0..pascal.len], pascal.buf[0..pascal.len] }, writer);
+            }
+            try zts.print(main_sokol_tmpl, "component_registry_end", .{}, writer);
+        }
+    }
+
+    // Script registry
+    if (scripts.len == 0) {
+        try zts.print(main_sokol_tmpl, "script_registry_empty", .{}, writer);
+    } else {
+        try zts.print(main_sokol_tmpl, "script_registry_start", .{}, writer);
+        for (scripts) |name| {
+            try zts.print(main_sokol_tmpl, "script_registry_item", .{ name, name }, writer);
+        }
+        try zts.print(main_sokol_tmpl, "script_registry_end", .{}, writer);
+    }
+
+    // Hooks (merged engine hooks and Game type)
+    if (hooks.len == 0) {
+        try zts.print(main_sokol_tmpl, "hooks_empty", .{}, writer);
+    } else {
+        try zts.print(main_sokol_tmpl, "hooks_start", .{}, writer);
+        for (hooks) |name| {
+            try zts.print(main_sokol_tmpl, "hooks_item", .{name}, writer);
+        }
+        try zts.print(main_sokol_tmpl, "hooks_end", .{}, writer);
+    }
+
+    // Task engine with auto-wired hooks (if task hooks detected and labelle-tasks plugin configured)
+    if (task_hooks.has_task_hooks and task_hooks.tasks_plugin != null) {
+        const plugin = task_hooks.tasks_plugin.?;
+
+        // Get plugin zig name
+        const plugin_zig_name = try sanitizeZigIdentifier(allocator, plugin.name);
+        defer allocator.free(plugin_zig_name);
+
+        // Get type parameters (required for TaskEngine)
+        const id_type = plugin.id_type orelse "u32"; // default to u32
+        const item_type = plugin.item_type orelse @panic("labelle-tasks plugin requires item_type when task hooks are detected");
+
+        // Generate TaskEngine type
+        try zts.print(main_sokol_tmpl, "task_engine_start", .{ plugin_zig_name, id_type, item_type }, writer);
+
+        // Add hook files that contain task hooks
+        for (task_hooks.hook_files_with_tasks) |name| {
+            try zts.print(main_sokol_tmpl, "task_engine_hook_item", .{name}, writer);
+        }
+
+        try zts.print(main_sokol_tmpl, "task_engine_end", .{ plugin_zig_name, id_type, item_type, plugin_zig_name, id_type, item_type }, writer);
+    } else {
+        try zts.print(main_sokol_tmpl, "task_engine_empty", .{}, writer);
+    }
+
+    // Loader and initial scene
+    try zts.print(main_sokol_tmpl, "loader", .{config.initial_scene}, writer);
 
     // State struct
     try zts.print(main_sokol_tmpl, "state", .{}, writer);
@@ -685,7 +843,7 @@ pub fn generateMainZig(
 ) ![]const u8 {
     return switch (config.backend) {
         .raylib => generateMainZigRaylib(allocator, config, prefabs, components, scripts, hooks, task_hooks),
-        .sokol => generateMainZigSokol(allocator, config),
+        .sokol => generateMainZigSokol(allocator, config, prefabs, components, scripts, hooks, task_hooks),
         .sdl => generateMainZigSdl(allocator, config, prefabs, components, scripts, hooks, task_hooks),
     };
 }
