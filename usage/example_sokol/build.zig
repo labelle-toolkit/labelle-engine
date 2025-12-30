@@ -7,9 +7,8 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    // Default to raylib backend for rendering compatibility
-    // Use -Dbackend=sokol to test the sokol-specific callback architecture
-    const backend = b.option(Backend, "backend", "Graphics backend") orelse .raylib;
+    // Default to Sokol backend for this example
+    const backend = b.option(Backend, "backend", "Graphics backend") orelse .sokol;
     const ecs_backend = b.option(EcsBackend, "ecs_backend", "ECS backend") orelse .zig_ecs;
 
     const engine_dep = b.dependency("labelle-engine", .{

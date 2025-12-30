@@ -1,20 +1,17 @@
 // ============================================================================
 // Example: Sokol Backend with Full Hook Support
 // ============================================================================
-// This example demonstrates the hook system with the Sokol-style callback
-// architecture (init, frame, cleanup, event). While the default build uses
-// raylib for rendering compatibility, the code structure demonstrates how
-// hooks work with sokol's callback pattern.
-//
-// To run with sokol backend: zig build run -Dbackend=sokol
-// To run with raylib backend: zig build run (default)
+// This example demonstrates the Sokol backend with the hook system.
+// Sokol uses a callback-based architecture where the main loop is driven by
+// sokol_app callbacks (init, frame, cleanup, event).
 //
 // The key pattern is:
 // 1. Import hook files from hooks/
 // 2. Merge them with MergeEngineHooks
 // 3. Create Game using GameWith(Hooks)
 //
-// Note: Sokol shape rendering may have limitations in labelle-gfx.
+// Note: Shape rendering with sokol backend is tracked in:
+// https://github.com/labelle-toolkit/labelle-gfx/issues/144
 // ============================================================================
 
 const std = @import("std");
