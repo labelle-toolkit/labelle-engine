@@ -9,6 +9,7 @@
 
 const std = @import("std");
 const zig_ecs = @import("zig_ecs");
+const query_facade = @import("query.zig");
 
 /// Entity type from zig-ecs (does not have 'invalid' or 'eql' - use interface helpers)
 pub const Entity = zig_ecs.Entity;
@@ -235,4 +236,81 @@ pub const Registry = struct {
     pub fn basicView(self: *Registry, comptime T: type) zig_ecs.BasicView(T) {
         return self.inner.basicView(T);
     }
+
+    /// Create a query for the given component types
+    /// Zero-sized components are used as filters only
+    /// WARNING: zig_ecs cannot filter by tags - they are added but not checked
+    pub fn query(self: *Registry, comptime components: anytype) Query(components) {
+        return Query(components).init(self);
+    }
 };
+
+/// Query type for zig_ecs backend
+/// Provides the unified query API with each() callback iteration
+pub fn Query(comptime components: anytype) type {
+    const separated = query_facade.separateComponents(components);
+    const data_types = separated.data;
+
+    return struct {
+        registry: *Registry,
+
+        const Self = @This();
+
+        pub fn init(registry: *Registry) Self {
+            return .{ .registry = registry };
+        }
+
+        /// Iterate with a callback function
+        /// Callback receives: (entity: Entity, data_ptr1: *T1, data_ptr2: *T2, ...)
+        /// Note: zig_ecs view() requires tuple literals, so we use a switch for 1-4 components.
+        pub fn each(self: Self, callback: anytype) void {
+            if (data_types.len == 0) {
+                return;
+            }
+
+            // zig_ecs view() requires tuple literals (.{T1, T2, ...}), not runtime tuples.
+            // Using a switch to generate the correct tuple for each component count.
+            switch (data_types.len) {
+                1 => {
+                    var view_iter = self.registry.inner.view(.{data_types[0]}, .{});
+                    var iter = view_iter.entityIterator();
+                    while (iter.next()) |entity| {
+                        const c0 = self.registry.inner.tryGet(data_types[0], entity).?;
+                        callback(entity, c0);
+                    }
+                },
+                2 => {
+                    var view_iter = self.registry.inner.view(.{ data_types[0], data_types[1] }, .{});
+                    var iter = view_iter.entityIterator();
+                    while (iter.next()) |entity| {
+                        const c0 = self.registry.inner.tryGet(data_types[0], entity).?;
+                        const c1 = self.registry.inner.tryGet(data_types[1], entity).?;
+                        callback(entity, c0, c1);
+                    }
+                },
+                3 => {
+                    var view_iter = self.registry.inner.view(.{ data_types[0], data_types[1], data_types[2] }, .{});
+                    var iter = view_iter.entityIterator();
+                    while (iter.next()) |entity| {
+                        const c0 = self.registry.inner.tryGet(data_types[0], entity).?;
+                        const c1 = self.registry.inner.tryGet(data_types[1], entity).?;
+                        const c2 = self.registry.inner.tryGet(data_types[2], entity).?;
+                        callback(entity, c0, c1, c2);
+                    }
+                },
+                4 => {
+                    var view_iter = self.registry.inner.view(.{ data_types[0], data_types[1], data_types[2], data_types[3] }, .{});
+                    var iter = view_iter.entityIterator();
+                    while (iter.next()) |entity| {
+                        const c0 = self.registry.inner.tryGet(data_types[0], entity).?;
+                        const c1 = self.registry.inner.tryGet(data_types[1], entity).?;
+                        const c2 = self.registry.inner.tryGet(data_types[2], entity).?;
+                        const c3 = self.registry.inner.tryGet(data_types[3], entity).?;
+                        callback(entity, c0, c1, c2, c3);
+                    }
+                },
+                else => @compileError("zig_ecs query supports a maximum of 4 data components"),
+            }
+        }
+    };
+}
