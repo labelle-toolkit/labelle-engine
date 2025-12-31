@@ -11,10 +11,7 @@ pub const loader = @import("loader.zig");
 pub const prefab = @import("prefab.zig");
 pub const component = @import("component.zig");
 pub const script = @import("script.zig");
-
-// Re-export from parent scene.zig for Scene, SceneContext, EntityInstance
-// These types have complex dependencies and remain in the parent module
-const scene_types = @import("../scene.zig");
+pub const core = @import("core.zig");
 
 // Loader exports
 pub const SceneLoader = loader.SceneLoader;
@@ -40,9 +37,10 @@ pub const ScriptFns = script.ScriptFns;
 pub const InitFn = script.InitFn;
 pub const UpdateFn = script.UpdateFn;
 pub const DeinitFn = script.DeinitFn;
-pub const Game = script.Game;
 
-// Scene types (from parent module)
-pub const Scene = scene_types.Scene;
-pub const SceneContext = scene_types.SceneContext;
-pub const EntityInstance = scene_types.EntityInstance;
+// Scene types (from core.zig)
+pub const Scene = core.Scene;
+pub const SceneContext = core.SceneContext;
+pub const EntityInstance = core.EntityInstance;
+pub const Entity = core.Entity;
+pub const Game = core.Game;

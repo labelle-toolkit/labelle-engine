@@ -1,35 +1,44 @@
-// Script registry - maps script names to lifecycle functions for scene loading
-//
-// Scripts can implement any combination of these optional lifecycle hooks:
-// - init(game: *Game, scene: *Scene) void    - Called when scene loads
-// - update(game: *Game, scene: *Scene, dt: f32) void - Called every frame
-// - deinit(game: *Game, scene: *Scene) void  - Called when scene unloads
-//
-// Usage:
-// const Scripts = engine.ScriptRegistry(struct {
-//     pub const gravity = @import("scripts/gravity.zig");
-//     pub const floating = @import("scripts/floating.zig");
-// });
-//
-// Then in scene .zon:
-// .{ .name = "demo", .scripts = .{ "gravity", "floating" }, .entities = ... }
+//! Script registry - maps script names to lifecycle functions for scene loading
+//!
+//! Scripts can implement any combination of these optional lifecycle hooks:
+//! - init(game: *anyopaque, scene: *anyopaque) void    - Called when scene loads
+//! - update(game: *anyopaque, scene: *anyopaque, dt: f32) void - Called every frame
+//! - deinit(game: *anyopaque, scene: *anyopaque) void  - Called when scene unloads
+//!
+//! In script implementations, cast the pointers:
+//! ```zig
+//! pub fn update(game_ptr: *anyopaque, scene_ptr: *anyopaque, dt: f32) void {
+//!     const game: *Game = @ptrCast(@alignCast(game_ptr));
+//!     const scene: *Scene = @ptrCast(@alignCast(scene_ptr));
+//!     // ... use game and scene
+//! }
+//! ```
+//!
+//! Usage:
+//! const Scripts = engine.ScriptRegistry(struct {
+//!     pub const gravity = @import("scripts/gravity.zig");
+//!     pub const floating = @import("scripts/floating.zig");
+//! });
+//!
+//! Then in scene .zon:
+//! .{ .name = "demo", .scripts = .{ "gravity", "floating" }, .entities = ... }
 
 const std = @import("std");
-const game_mod = @import("../engine/game.zig");
-const scene_mod = @import("../scene.zig");
-
-pub const Game = game_mod.Game;
-pub const Scene = scene_mod.Scene;
 
 /// Script init function signature - called when scene loads
-pub const InitFn = *const fn (*Game, *Scene) void;
+/// Parameters are opaque to avoid circular dependencies.
+/// Cast to *Game and *Scene in implementations.
+pub const InitFn = *const fn (*anyopaque, *anyopaque) void;
 
 /// Script update function signature - called every frame
-/// Scripts receive Game (for ECS/rendering access) and Scene (for scene-specific data)
-pub const UpdateFn = *const fn (*Game, *Scene, f32) void;
+/// Parameters are opaque to avoid circular dependencies.
+/// Cast to *Game and *Scene in implementations.
+pub const UpdateFn = *const fn (*anyopaque, *anyopaque, f32) void;
 
 /// Script deinit function signature - called when scene unloads
-pub const DeinitFn = *const fn (*Game, *Scene) void;
+/// Parameters are opaque to avoid circular dependencies.
+/// Cast to *Game and *Scene in implementations.
+pub const DeinitFn = *const fn (*anyopaque, *anyopaque) void;
 
 /// Bundle of script lifecycle functions
 pub const ScriptFns = struct {
@@ -51,10 +60,10 @@ pub fn ScriptRegistry(comptime ScriptMap: type) type {
             return @hasDecl(ScriptMap, name);
         }
 
-        /// Get script's update function by name (for backwards compatibility)
+        /// Get script's update function by name
         pub fn getUpdateFn(comptime name: []const u8) UpdateFn {
             const script_module = @field(ScriptMap, name);
-            return script_module.update;
+            return @ptrCast(&script_module.update);
         }
 
         /// Get all lifecycle functions for a script by name
@@ -62,13 +71,13 @@ pub fn ScriptRegistry(comptime ScriptMap: type) type {
             const script_module = @field(ScriptMap, name);
             // Scripts are imported as types, so check declarations on the type itself
             return .{
-                .init = if (@hasDecl(script_module, "init")) script_module.init else null,
-                .update = if (@hasDecl(script_module, "update")) script_module.update else null,
-                .deinit = if (@hasDecl(script_module, "deinit")) script_module.deinit else null,
+                .init = if (@hasDecl(script_module, "init")) @ptrCast(&script_module.init) else null,
+                .update = if (@hasDecl(script_module, "update")) @ptrCast(&script_module.update) else null,
+                .deinit = if (@hasDecl(script_module, "deinit")) @ptrCast(&script_module.deinit) else null,
             };
         }
 
-        /// Get all update functions for a list of script names (backwards compatibility)
+        /// Get all update functions for a list of script names
         pub fn getUpdateFns(comptime script_names: anytype) []const UpdateFn {
             comptime {
                 var fns: [script_names.len]UpdateFn = undefined;
@@ -99,4 +108,3 @@ pub fn ScriptRegistry(comptime ScriptMap: type) type {
         }
     };
 }
-

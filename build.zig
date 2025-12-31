@@ -154,9 +154,9 @@ pub fn build(b: *std.Build) void {
         },
     });
 
-    // Main module (unified entry point - backward compatible)
+    // Main module (unified entry point with namespaced submodules)
     const engine_mod = b.addModule("labelle-engine", .{
-        .root_source_file = b.path("src/scene.zig"),
+        .root_source_file = b.path("src/root.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{
@@ -172,7 +172,7 @@ pub fn build(b: *std.Build) void {
     // Unit tests (standard zig test)
     const unit_tests = b.addTest(.{
         .root_module = b.createModule(.{
-            .root_source_file = b.path("src/scene.zig"),
+            .root_source_file = b.path("src/root.zig"),
             .target = target,
             .optimize = optimize,
             .imports = &.{
