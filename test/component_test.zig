@@ -3,7 +3,7 @@ const zspec = @import("zspec");
 const expect = zspec.expect;
 
 const engine = @import("labelle-engine");
-const component = engine.component;
+const component = engine.scene.component;
 
 test {
     zspec.runAll(@This());

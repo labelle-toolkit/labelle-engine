@@ -22,14 +22,6 @@ pub const render = @import("render/mod.zig");
 pub const scene = @import("scene/mod.zig");
 pub const engine = @import("engine/mod.zig");
 
-// Submodule aliases (for direct access)
-pub const loader = scene.loader;
-pub const prefab = scene.prefab;
-pub const script = scene.script;
-pub const component = scene.component;
-pub const zon_coercion = core.zon;
-pub const scene_mod = scene;
-
 // Build configuration
 pub const build_helpers = @import("build_helpers.zig");
 pub const project_config = @import("tools/project_config.zig");
