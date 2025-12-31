@@ -301,6 +301,34 @@ pub fn GameWith(comptime Hooks: type) type {
         return self.registry.tryGet(Position, entity);
     }
 
+    /// Set z_index on entity's visual component (Sprite, Shape, or Text)
+    /// Marks visual dirty for sync to graphics
+    pub fn setZIndex(self: *Self, entity: Entity, z_index: u8) void {
+        var updated = false;
+
+        // Try Sprite
+        if (self.registry.tryGet(Sprite, entity)) |sprite| {
+            sprite.z_index = z_index;
+            updated = true;
+        }
+
+        // Try Shape
+        if (self.registry.tryGet(Shape, entity)) |shape| {
+            shape.z_index = z_index;
+            updated = true;
+        }
+
+        // Try Text
+        if (self.registry.tryGet(Text, entity)) |text| {
+            text.z_index = z_index;
+            updated = true;
+        }
+
+        if (updated) {
+            self.pipeline.markVisualDirty(entity);
+        }
+    }
+
     /// Add Sprite component and track for rendering
     pub fn addSprite(self: *Self, entity: Entity, sprite: Sprite) !void {
         self.registry.add(entity, sprite);

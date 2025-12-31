@@ -67,6 +67,7 @@ pub const ShapeVisual = render_pipeline_mod.ShapeVisual;
 pub const Layer = render_pipeline_mod.Layer;
 pub const SizeMode = render_pipeline_mod.SizeMode;
 pub const Container = render_pipeline_mod.Container;
+pub const Text = render_pipeline_mod.Text;
 
 /// Scene-level camera configuration
 pub const SceneCameraConfig = struct {
@@ -104,6 +105,14 @@ fn hasSpriteInComponents(comptime entity_def: anytype) bool {
 fn hasShapeInComponents(comptime entity_def: anytype) bool {
     if (@hasField(@TypeOf(entity_def), "components")) {
         return @hasField(@TypeOf(entity_def.components), "Shape");
+    }
+    return false;
+}
+
+/// Check if entity definition has a Text component in its .components block
+fn hasTextInComponents(comptime entity_def: anytype) bool {
+    if (@hasField(@TypeOf(entity_def), "components")) {
+        return @hasField(@TypeOf(entity_def.components), "Text");
     }
     return false;
 }
@@ -176,6 +185,49 @@ fn buildShapeFromData(comptime shape_data: anytype, comptime error_context: []co
     }
 
     return shape;
+}
+
+/// Build a Text from text data.
+/// Used by loadTextComponentEntity.
+fn buildTextFromData(comptime text_data: anytype) Text {
+    var text: Text = .{};
+
+    // text content
+    if (@hasField(@TypeOf(text_data), "text")) {
+        text.text = text_data.text;
+    }
+
+    // size
+    if (@hasField(@TypeOf(text_data), "size")) {
+        text.size = text_data.size;
+    }
+
+    // color
+    if (@hasField(@TypeOf(text_data), "color")) {
+        text.color = .{
+            .r = text_data.color.r,
+            .g = text_data.color.g,
+            .b = text_data.color.b,
+            .a = if (@hasField(@TypeOf(text_data.color), "a")) text_data.color.a else 255,
+        };
+    }
+
+    // z_index
+    if (@hasField(@TypeOf(text_data), "z_index")) {
+        text.z_index = text_data.z_index;
+    }
+
+    // layer
+    if (@hasField(@TypeOf(text_data), "layer")) {
+        text.layer = text_data.layer;
+    }
+
+    // visible
+    if (@hasField(@TypeOf(text_data), "visible")) {
+        text.visible = text_data.visible;
+    }
+
+    return text;
 }
 
 /// Parse container specification from sprite data.
@@ -312,6 +364,11 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
             // Check if this has Shape in .components (new format)
             if (comptime hasShapeInComponents(entity_def)) {
                 return try createChildShapeComponentEntity(game, scene, entity_def, parent_x, parent_y);
+            }
+
+            // Check if this has Text in .components
+            if (comptime hasTextInComponents(entity_def)) {
+                return try createChildTextComponentEntity(game, scene, entity_def, parent_x, parent_y);
             }
 
             // Check if this has Sprite in .components
@@ -452,6 +509,40 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
             return .{
                 .entity = entity,
                 .visual_type = .shape,
+                .prefab_name = null,
+                .onUpdate = null,
+                .onDestroy = null,
+            };
+        }
+
+        /// Create a child text entity (Text in .components) with relative positioning
+        fn createChildTextComponentEntity(
+            game: *Game,
+            scene: ?*Scene,
+            comptime entity_def: anytype,
+            parent_x: f32,
+            parent_y: f32,
+        ) !EntityInstance {
+            const text_data = entity_def.components.Text;
+            const entity = game.createEntity();
+
+            // Get position from .components.Position, relative to parent
+            const local_pos = getPositionFromComponents(entity_def) orelse Pos{ .x = 0, .y = 0 };
+            const pos_x = parent_x + local_pos.x;
+            const pos_y = parent_y + local_pos.y;
+
+            game.addPosition(entity, Position{ .x = pos_x, .y = pos_y });
+
+            // Build and add text to render pipeline
+            const text = buildTextFromData(text_data);
+            try game.addText(entity, text);
+
+            // Add other components (excluding Text and Position which we already handled)
+            try addComponentsExcluding(game, scene, entity, entity_def.components, pos_x, pos_y, .{ "Text", "Position" });
+
+            return .{
+                .entity = entity,
+                .visual_type = .text,
                 .prefab_name = null,
                 .onUpdate = null,
                 .onDestroy = null,
@@ -750,6 +841,11 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
             // Check if this has Shape in .components (new format)
             if (comptime hasShapeInComponents(entity_def)) {
                 return try loadShapeComponentEntity(entity_def, ctx, scene);
+            }
+
+            // Check if this has Text in .components
+            if (comptime hasTextInComponents(entity_def)) {
+                return try loadTextComponentEntity(entity_def, ctx, scene);
             }
 
             // Check if this has Sprite in .components
@@ -1065,6 +1161,43 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
             return .{
                 .entity = entity,
                 .visual_type = .shape,
+                .prefab_name = null,
+                .onUpdate = null,
+                .onDestroy = null,
+            };
+        }
+
+        /// Load a text entity (Text defined in .components block)
+        fn loadTextComponentEntity(
+            comptime entity_def: anytype,
+            ctx: SceneContext,
+            scene: *Scene,
+        ) !EntityInstance {
+            const game = ctx.game();
+            const text_data = entity_def.components.Text;
+
+            // Create ECS entity
+            const entity = game.createEntity();
+
+            // Get position from .components.Position
+            const pos = getPositionFromComponents(entity_def) orelse Pos{ .x = 0, .y = 0 };
+
+            // Add Position component
+            game.addPosition(entity, Position{
+                .x = pos.x,
+                .y = pos.y,
+            });
+
+            // Build and add text to render pipeline
+            const text = buildTextFromData(text_data);
+            try game.addText(entity, text);
+
+            // Add other components (excluding Text and Position which we already handled)
+            try addComponentsExcluding(game, scene, entity, entity_def.components, pos.x, pos.y, .{ "Text", "Position" });
+
+            return .{
+                .entity = entity,
+                .visual_type = .text,
                 .prefab_name = null,
                 .onUpdate = null,
                 .onDestroy = null,
