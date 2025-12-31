@@ -278,6 +278,24 @@ pub fn GameWith(comptime Hooks: type) type {
         }
     }
 
+    /// Set Position using x, y coordinates directly (marks dirty for sync)
+    pub fn setPositionXY(self: *Self, entity: Entity, x: f32, y: f32) void {
+        if (self.registry.tryGet(Position, entity)) |p| {
+            p.x = x;
+            p.y = y;
+            self.pipeline.markPositionDirty(entity);
+        }
+    }
+
+    /// Move Position by delta values (marks dirty for sync)
+    pub fn movePosition(self: *Self, entity: Entity, dx: f32, dy: f32) void {
+        if (self.registry.tryGet(Position, entity)) |p| {
+            p.x += dx;
+            p.y += dy;
+            self.pipeline.markPositionDirty(entity);
+        }
+    }
+
     /// Get Position component
     pub fn getPosition(self: *Self, entity: Entity) ?*Position {
         return self.registry.tryGet(Position, entity);
