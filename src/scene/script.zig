@@ -5,9 +5,10 @@
 //! - update(game: *anyopaque, scene: *anyopaque, dt: f32) void - Called every frame
 //! - deinit(game: *anyopaque, scene: *anyopaque) void  - Called when scene unloads
 //!
-//! In script implementations, cast the pointers:
+//! In script implementations, cast the pointers to your project's Game type:
 //! ```zig
 //! pub fn update(game_ptr: *anyopaque, scene_ptr: *anyopaque, dt: f32) void {
+//!     // Cast to the Game type used in your main.zig (e.g., *Game or *GameWith(MyHooks))
 //!     const game: *Game = @ptrCast(@alignCast(game_ptr));
 //!     const scene: *Scene = @ptrCast(@alignCast(scene_ptr));
 //!     // ... use game and scene

@@ -80,7 +80,7 @@ pub const Scene = struct {
 
         for (self.scripts) |script_fns| {
             if (script_fns.init) |init_fn| {
-                init_fn(@ptrCast(self.ctx.game()), @ptrCast(self));
+                init_fn(self.ctx.game_ptr, @ptrCast(self));
             }
         }
     }
@@ -96,7 +96,7 @@ pub const Scene = struct {
             while (i > 0) {
                 i -= 1;
                 if (self.scripts[i].deinit) |deinit_fn| {
-                    deinit_fn(@ptrCast(self.ctx.game()), @ptrCast(self));
+                    deinit_fn(self.ctx.game_ptr, @ptrCast(self));
                 }
             }
         }
@@ -134,7 +134,7 @@ pub const Scene = struct {
         // Call scene script update functions
         for (self.scripts) |script_fns| {
             if (script_fns.update) |update_fn| {
-                update_fn(@ptrCast(self.ctx.game()), @ptrCast(self), dt);
+                update_fn(self.ctx.game_ptr, @ptrCast(self), dt);
             }
         }
     }

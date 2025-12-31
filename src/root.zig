@@ -14,7 +14,7 @@ const build_options = @import("build_options");
 
 // Core submodules
 pub const core = @import("core/mod.zig");
-pub const ecs = @import("ecs").ecs;
+pub const ecs = @import("ecs");
 pub const input = @import("input");
 pub const audio = @import("audio");
 pub const hooks = @import("hooks/mod.zig");
