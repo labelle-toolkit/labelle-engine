@@ -202,4 +202,3 @@ pub fn buildFlattenedShapeComponent(comptime ComponentType: type, comptime data:
 
     return result;
 }
-

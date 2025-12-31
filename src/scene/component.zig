@@ -11,7 +11,7 @@
 
 const std = @import("std");
 const ecs = @import("ecs");
-const zon = @import("zon_coercion.zig");
+const zon = @import("../core/zon_coercion.zig");
 
 pub const Registry = ecs.Registry;
 pub const Entity = ecs.Entity;

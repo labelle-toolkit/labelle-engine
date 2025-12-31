@@ -38,13 +38,13 @@
 
 const std = @import("std");
 const ecs = @import("ecs");
-const zon = @import("zon_coercion.zig");
+const zon = @import("../core/zon_coercion.zig");
 const prefab_mod = @import("prefab.zig");
-const scene_mod = @import("scene.zig");
+const core_mod = @import("core.zig");
 const component_mod = @import("component.zig");
 const script_mod = @import("script.zig");
-const render_pipeline_mod = @import("render_pipeline.zig");
-const game_mod = @import("game.zig");
+const render_pipeline_mod = @import("../render/pipeline.zig");
+const game_mod = @import("../engine/game.zig");
 
 pub const Registry = ecs.Registry;
 pub const Entity = ecs.Entity;
@@ -52,10 +52,10 @@ pub const Entity = ecs.Entity;
 pub const SpriteConfig = prefab_mod.SpriteConfig;
 pub const PrefabRegistry = prefab_mod.PrefabRegistry;
 pub const ZIndex = prefab_mod.ZIndex;
-pub const Scene = scene_mod.Scene;
-pub const SceneContext = scene_mod.SceneContext;
-pub const EntityInstance = scene_mod.EntityInstance;
-pub const VisualType = scene_mod.VisualType;
+pub const Scene = core_mod.Scene;
+pub const SceneContext = core_mod.SceneContext;
+pub const EntityInstance = core_mod.EntityInstance;
+pub const VisualType = core_mod.VisualType;
 pub const Game = game_mod.Game;
 
 // Render pipeline types

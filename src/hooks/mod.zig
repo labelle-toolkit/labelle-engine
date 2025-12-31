@@ -1,4 +1,4 @@
-//! Hook System
+//! Hook System Module
 //!
 //! A type-safe, comptime-based hook/event system for labelle-engine.
 //!
@@ -56,8 +56,8 @@
 //! );
 //! ```
 
-const types = @import("hooks/types.zig");
-const dispatcher = @import("hooks/dispatcher.zig");
+const types = @import("types.zig");
+const dispatcher = @import("dispatcher.zig");
 
 // Re-export types
 pub const EngineHook = types.EngineHook;

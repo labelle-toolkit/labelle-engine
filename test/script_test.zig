@@ -39,11 +39,24 @@ pub const MODULE_STRUCTURE = struct {
         try expect.toBeTrue(@hasDecl(script, "UpdateFn"));
     }
 
-    test "script module exports Game" {
-        try expect.toBeTrue(@hasDecl(script, "Game"));
+    test "script module exports InitFn" {
+        try expect.toBeTrue(@hasDecl(script, "InitFn"));
     }
 
-    test "script module exports Scene" {
-        try expect.toBeTrue(@hasDecl(script, "Scene"));
+    test "script module exports DeinitFn" {
+        try expect.toBeTrue(@hasDecl(script, "DeinitFn"));
+    }
+
+    test "script module exports ScriptFns" {
+        try expect.toBeTrue(@hasDecl(script, "ScriptFns"));
+    }
+
+    // Game and Scene are imported from engine and scene modules respectively
+    test "Game available from engine module" {
+        try expect.toBeTrue(@hasDecl(engine.engine, "Game"));
+    }
+
+    test "Scene available from scene module" {
+        try expect.toBeTrue(@hasDecl(engine.scene_mod, "Scene"));
     }
 };
