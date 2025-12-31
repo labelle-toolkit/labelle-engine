@@ -125,7 +125,36 @@ pub fn build(b: *std.Build) void {
         audio_interface.linkLibrary(zaudio_dep.artifact("miniaudio"));
     }
 
-    // Main module
+    // Core module - foundation types (entity utils, zon coercion)
+    _ = b.addModule("labelle-core", .{
+        .root_source_file = b.path("src/core/mod.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "ecs", .module = ecs_interface },
+        },
+    });
+
+    // Hooks module - event/hook system
+    _ = b.addModule("labelle-hooks", .{
+        .root_source_file = b.path("src/hooks/mod.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    // Render module - visual rendering pipeline
+    _ = b.addModule("labelle-render", .{
+        .root_source_file = b.path("src/render/mod.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "labelle", .module = labelle },
+            .{ .name = "ecs", .module = ecs_interface },
+            .{ .name = "build_options", .module = build_options_mod },
+        },
+    });
+
+    // Main module (unified entry point - backward compatible)
     const engine_mod = b.addModule("labelle-engine", .{
         .root_source_file = b.path("src/scene.zig"),
         .target = target,
