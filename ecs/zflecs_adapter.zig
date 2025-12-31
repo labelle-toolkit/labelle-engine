@@ -260,6 +260,9 @@ pub fn Query(comptime components: anytype) type {
         /// Callback receives: (entity: Entity, data_ptr1: *T1, data_ptr2: *T2, ...)
         pub fn each(self: Self, callback: anytype) void {
             // Build the query terms
+            comptime {
+                if (components.len > 32) @compileError("zflecs query supports a maximum of 32 components");
+            }
             var terms: [32]flecs.term_t = @splat(.{});
 
             // Add data component terms
@@ -283,9 +286,8 @@ pub fn Query(comptime components: anytype) type {
                 // Get component arrays for this archetype chunk
                 var field_ptrs: [data_types.len][*]u8 = undefined;
                 inline for (0..data_types.len) |i| {
-                    if (flecs.field(&it, data_types[i], i)) |ptr| {
-                        field_ptrs[i] = @ptrCast(ptr);
-                    }
+                    // Query should only yield tables containing all components, so field should never be null
+                    field_ptrs[i] = if (flecs.field(&it, data_types[i], i)) |ptr| @ptrCast(ptr) else unreachable;
                 }
 
                 const entities = it.entities();

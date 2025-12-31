@@ -21,6 +21,7 @@
 const std = @import("std");
 
 /// Separates component types into data components (non-zero-sized) and tag components (zero-sized)
+/// Note: Uses slice concatenation at comptime which is efficient for small component counts.
 pub fn separateComponents(comptime components: anytype) struct {
     data: []const type,
     tags: []const type,

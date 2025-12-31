@@ -262,12 +262,14 @@ pub fn Query(comptime components: anytype) type {
 
         /// Iterate with a callback function
         /// Callback receives: (entity: Entity, data_ptr1: *T1, data_ptr2: *T2, ...)
+        /// Note: zig_ecs view() requires tuple literals, so we use a switch for 1-4 components.
         pub fn each(self: Self, callback: anytype) void {
             if (data_types.len == 0) {
                 return;
             }
 
-            // Use comptime switch to generate the correct tuple type for view
+            // zig_ecs view() requires tuple literals (.{T1, T2, ...}), not runtime tuples.
+            // Using a switch to generate the correct tuple for each component count.
             switch (data_types.len) {
                 1 => {
                     var view_iter = self.registry.inner.view(.{data_types[0]}, .{});
@@ -307,7 +309,7 @@ pub fn Query(comptime components: anytype) type {
                         callback(entity, c0, c1, c2, c3);
                     }
                 },
-                else => @compileError("Unsupported number of data components (max 4)"),
+                else => @compileError("zig_ecs query supports a maximum of 4 data components"),
             }
         }
     };
