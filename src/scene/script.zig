@@ -15,8 +15,8 @@
 // .{ .name = "demo", .scripts = .{ "gravity", "floating" }, .entities = ... }
 
 const std = @import("std");
-const game_mod = @import("game.zig");
-const scene_mod = @import("scene.zig");
+const game_mod = @import("../game.zig");
+const scene_mod = @import("../scene.zig");
 
 pub const Game = game_mod.Game;
 pub const Scene = scene_mod.Scene;

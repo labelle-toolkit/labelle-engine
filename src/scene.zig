@@ -16,10 +16,11 @@ const build_options = @import("build_options");
 // Re-export build options for downstream users
 pub const Backend = build_options.backend;
 
-pub const prefab = @import("prefab.zig");
-pub const loader = @import("loader.zig");
-pub const component = @import("component.zig");
-pub const script = @import("script.zig");
+pub const prefab = @import("scene/prefab.zig");
+pub const loader = @import("scene/loader.zig");
+pub const component = @import("scene/component.zig");
+pub const script = @import("scene/script.zig");
+pub const scene_mod = @import("scene/mod.zig");
 pub const zon_coercion = @import("core/zon_coercion.zig");
 pub const core = @import("core/mod.zig");
 pub const game = @import("game.zig");
