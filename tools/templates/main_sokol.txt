@@ -150,6 +150,17 @@ var scene_storage: engine.Scene = undefined;
 export fn init() void {{
     state.ci_test = std.posix.getenv("CI_TEST") != null;
 
+    // Initialize sokol_gfx with sokol_app's rendering context
+    sg.setup(.{{
+        .environment = sokol.glue.environment(),
+        .logger = .{{ .func = sokol.log.func }},
+    }});
+
+    // Initialize sokol_gl for 2D drawing (must be after sg.setup)
+    sgl.setup(.{{
+        .logger = .{{ .func = sokol.log.func }},
+    }});
+
     // Use page allocator for simplicity in callback context
     state.allocator = std.heap.page_allocator;
 
@@ -247,11 +258,26 @@ export fn frame() void {{
     // Sync ECS components to graphics
     state.game.?.getPipeline().sync(state.game.?.getRegistry());
 
-    // Render
+    // Begin sokol render pass (required for sokol backend)
+    var pass_action: sg.PassAction = .{{}};
+    pass_action.colors[0] = .{{
+        .load_action = .CLEAR,
+        .clear_value = .{{ .r = 0.118, .g = 0.137, .b = 0.176, .a = 1.0 }},
+    }};
+    sg.beginPass(.{{
+        .action = pass_action,
+        .swapchain = sokol.glue.swapchain(),
+    }});
+
+    // Render using the retained engine
     const re = state.game.?.getRetainedEngine();
     re.beginFrame();
     re.render();
     re.endFrame();
+
+    // End sokol render pass and commit
+    sg.endPass();
+    sg.commit();
 }}
 
 .cleanup_cb
@@ -286,6 +312,10 @@ export fn cleanup() void {{
         state.allocator.free(title);
         state.title = null;
     }}
+
+    // Cleanup sokol in reverse order of initialization
+    sgl.shutdown();
+    sg.shutdown();
 
     std.debug.print("Sokol backend cleanup complete.\n", .{{}});
 }}

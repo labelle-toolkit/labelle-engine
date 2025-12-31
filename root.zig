@@ -36,6 +36,10 @@ pub const Camera = labelle_gfx.Camera;
 pub const CameraManager = labelle_gfx.CameraManager;
 pub const SplitScreenLayout = labelle_gfx.SplitScreenLayout;
 
+// Low-level graphics backends (for direct access when needed)
+pub const SokolBackend = labelle_gfx.SokolBackend;
+pub const RaylibBackend = labelle_gfx.RaylibBackend;
+
 // Convenience re-exports for common types
 pub const Game = engine.Game;
 pub const GameWith = engine.GameWith;
