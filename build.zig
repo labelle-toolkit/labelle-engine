@@ -85,7 +85,7 @@ pub fn build(b: *std.Build) void {
 
     // Create the ECS interface module that wraps the selected backend
     const ecs_interface = b.addModule("ecs", .{
-        .root_source_file = b.path("src/ecs/interface.zig"),
+        .root_source_file = b.path("ecs/interface.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{
@@ -97,7 +97,7 @@ pub fn build(b: *std.Build) void {
 
     // Create the Input interface module that wraps the selected backend
     const input_interface = b.addModule("input", .{
-        .root_source_file = b.path("src/input/interface.zig"),
+        .root_source_file = b.path("input/interface.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{
@@ -110,7 +110,7 @@ pub fn build(b: *std.Build) void {
 
     // Create the Audio interface module that wraps the selected backend
     const audio_interface = b.addModule("audio", .{
-        .root_source_file = b.path("src/audio/interface.zig"),
+        .root_source_file = b.path("audio/interface.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{
@@ -127,7 +127,7 @@ pub fn build(b: *std.Build) void {
 
     // Core module - foundation types (entity utils, zon coercion)
     _ = b.addModule("labelle-core", .{
-        .root_source_file = b.path("src/core/mod.zig"),
+        .root_source_file = b.path("core/mod.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{
@@ -137,14 +137,14 @@ pub fn build(b: *std.Build) void {
 
     // Hooks module - event/hook system
     _ = b.addModule("labelle-hooks", .{
-        .root_source_file = b.path("src/hooks/mod.zig"),
+        .root_source_file = b.path("hooks/mod.zig"),
         .target = target,
         .optimize = optimize,
     });
 
     // Render module - visual rendering pipeline
     _ = b.addModule("labelle-render", .{
-        .root_source_file = b.path("src/render/mod.zig"),
+        .root_source_file = b.path("render/mod.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{
@@ -156,7 +156,7 @@ pub fn build(b: *std.Build) void {
 
     // Main module (unified entry point with namespaced submodules)
     const engine_mod = b.addModule("labelle-engine", .{
-        .root_source_file = b.path("src/root.zig"),
+        .root_source_file = b.path("root.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{
@@ -172,7 +172,7 @@ pub fn build(b: *std.Build) void {
     // Unit tests (standard zig test)
     const unit_tests = b.addTest(.{
         .root_module = b.createModule(.{
-            .root_source_file = b.path("src/root.zig"),
+            .root_source_file = b.path("root.zig"),
             .target = target,
             .optimize = optimize,
             .imports = &.{
@@ -228,7 +228,7 @@ pub fn build(b: *std.Build) void {
     const generator_exe = b.addExecutable(.{
         .name = "labelle-generate",
         .root_module = b.createModule(.{
-            .root_source_file = b.path("src/generator_cli.zig"),
+            .root_source_file = b.path("tools/generator_cli.zig"),
             .target = target,
             .optimize = optimize,
             .imports = &.{
@@ -259,7 +259,7 @@ pub fn build(b: *std.Build) void {
     const bench_exe = b.addExecutable(.{
         .name = "ecs-benchmark",
         .root_module = b.createModule(.{
-            .root_source_file = b.path("src/ecs/benchmark.zig"),
+            .root_source_file = b.path("ecs/benchmark.zig"),
             .target = target,
             .optimize = .ReleaseFast, // Always use ReleaseFast for benchmarks
             .imports = &.{
