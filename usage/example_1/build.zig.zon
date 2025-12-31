@@ -13,7 +13,7 @@
     .version = "0.1.0",
     .dependencies = .{
         .@"labelle-engine" = .{
-            // For local development, use path:
+            // .path = "path/to/labelle-engine",
             .path = "../..",
         },
     },
