@@ -10,6 +10,7 @@
 
 const std = @import("std");
 const flecs = @import("zflecs");
+const query_facade = @import("query.zig");
 
 /// Module-level game pointer for component callbacks.
 ///
@@ -223,4 +224,99 @@ pub const Registry = struct {
     pub fn getWorld(self: *Registry) *flecs.world_t {
         return self.world;
     }
+
+    /// Create a query for the given component types
+    /// Zero-sized components are used as filters only
+    pub fn query(self: *Registry, comptime components: anytype) Query(components) {
+        return Query(components).init(self);
+    }
 };
+
+/// Query type for zflecs backend
+/// Handles both data components and tag filters
+pub fn Query(comptime components: anytype) type {
+    const separated = query_facade.separateComponents(components);
+    const data_types = separated.data;
+    const tag_types = separated.tags;
+
+    return struct {
+        registry: *Registry,
+
+        const Self = @This();
+
+        pub fn init(registry: *Registry) Self {
+            // Register all components before creating query
+            inline for (components) |T| {
+                if (@sizeOf(T) == 0) {
+                    flecs.TAG(registry.world, T);
+                } else {
+                    flecs.COMPONENT(registry.world, T);
+                }
+            }
+            return .{ .registry = registry };
+        }
+
+        /// Iterate with a callback function
+        /// Callback receives: (entity: Entity, data_ptr1: *T1, data_ptr2: *T2, ...)
+        pub fn each(self: Self, callback: anytype) void {
+            // Build the query terms
+            var terms: [32]flecs.term_t = @splat(.{});
+
+            // Add data component terms
+            inline for (data_types, 0..) |T, i| {
+                terms[i] = .{ .id = flecs.id(T) };
+            }
+
+            // Add tag terms
+            inline for (tag_types, 0..) |T, i| {
+                terms[data_types.len + i] = .{ .id = flecs.id(T) };
+            }
+
+            const flecs_query = flecs.query_init(self.registry.world, &.{
+                .terms = terms,
+            }) catch @panic("Failed to create flecs query");
+            defer flecs.query_fini(flecs_query);
+
+            var it = flecs.query_iter(self.registry.world, flecs_query);
+
+            while (flecs.query_next(&it)) {
+                // Get component arrays for this archetype chunk
+                var field_ptrs: [data_types.len][*]u8 = undefined;
+                inline for (0..data_types.len) |i| {
+                    if (flecs.field(&it, data_types[i], i)) |ptr| {
+                        field_ptrs[i] = @ptrCast(ptr);
+                    }
+                }
+
+                const entities = it.entities();
+                const count = it.count();
+
+                // Iterate over entities in this chunk
+                for (0..count) |idx| {
+                    const entity = Entity.fromFlecs(entities[idx]);
+                    callWithFields(entity, &field_ptrs, idx, callback);
+                }
+            }
+        }
+
+        fn callWithFields(entity: Entity, field_ptrs: *const [data_types.len][*]u8, idx: usize, callback: anytype) void {
+            var args: std.meta.Tuple(&[_]type{Entity} ++ blk: {
+                var types: [data_types.len]type = undefined;
+                for (0..data_types.len) |i| {
+                    types[i] = *data_types[i];
+                }
+                break :blk types;
+            }) = undefined;
+
+            args[0] = entity;
+
+            inline for (0..data_types.len) |i| {
+                const T = data_types[i];
+                const base_ptr: [*]T = @ptrCast(@alignCast(field_ptrs[i]));
+                args[i + 1] = &base_ptr[idx];
+            }
+
+            @call(.auto, callback, args);
+        }
+    };
+}

@@ -48,6 +48,7 @@ pub fn EcsInterface(comptime Impl: type) type {
         if (!@hasDecl(R, "tryGet")) @compileError("Registry must have tryGet method");
         if (!@hasDecl(R, "setComponent")) @compileError("Registry must have setComponent method");
         if (!@hasDecl(R, "remove")) @compileError("Registry must have remove method");
+        if (!@hasDecl(R, "query")) @compileError("Registry must have query method");
     }
 
     return struct {
@@ -68,6 +69,9 @@ const BackendImpl = switch (backend) {
     .zflecs => @import("zflecs_adapter.zig"),
 };
 
+// Import query facade utilities
+const query_facade = @import("query.zig");
+
 // Apply the interface to verify the backend at compile time
 const Interface = EcsInterface(BackendImpl);
 
@@ -77,6 +81,13 @@ pub const Entity = Interface.Entity;
 
 /// Registry type - the main ECS container that manages entities and components
 pub const Registry = Interface.Registry;
+
+/// Query type for backend-agnostic iteration
+/// Usage: var q = registry.query(.{ Position, Velocity });
+pub const Query = BackendImpl.Query;
+
+/// Separates component types into data (non-zero-sized) and tags (zero-sized)
+pub const separateComponents = query_facade.separateComponents;
 
 /// Size of entity ID in bytes (for interop with external systems)
 pub const entity_size = @sizeOf(Entity);
