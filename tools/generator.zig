@@ -20,11 +20,11 @@ const project_config = @import("project_config.zig");
 const ProjectConfig = project_config.ProjectConfig;
 
 // Embed templates at compile time
-const build_zig_zon_tmpl = @embedFile("../templates/build_zig_zon.txt");
-const build_zig_tmpl = @embedFile("../templates/build_zig.txt");
-const main_raylib_tmpl = @embedFile("../templates/main_raylib.txt");
-const main_sokol_tmpl = @embedFile("../templates/main_sokol.txt");
-const main_sdl_tmpl = @embedFile("../templates/main_sdl.txt");
+const build_zig_zon_tmpl = @embedFile("templates/build_zig_zon.txt");
+const build_zig_tmpl = @embedFile("templates/build_zig.txt");
+const main_raylib_tmpl = @embedFile("templates/main_raylib.txt");
+const main_sokol_tmpl = @embedFile("templates/main_sokol.txt");
+const main_sdl_tmpl = @embedFile("templates/main_sdl.txt");
 
 /// Sanitize a project name to be a valid Zig identifier
 /// Replaces hyphens with underscores
