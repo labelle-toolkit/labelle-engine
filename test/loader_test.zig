@@ -3,10 +3,10 @@ const zspec = @import("zspec");
 const expect = zspec.expect;
 
 const engine = @import("labelle-engine");
-const loader = engine.loader;
-const prefab = engine.prefab;
-const component = engine.component;
-const script = engine.script;
+const loader = engine.scene.loader;
+const prefab = engine.scene.prefab;
+const component = engine.scene.component;
+const script = engine.scene.script;
 
 // Import factory definitions from .zon files
 const prefab_defs = @import("factories/prefabs.zon");

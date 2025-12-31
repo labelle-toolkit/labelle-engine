@@ -4,7 +4,7 @@ const expect = zspec.expect;
 const Factory = zspec.Factory;
 
 const engine = @import("labelle-engine");
-const prefab = engine.prefab;
+const prefab = engine.scene.prefab;
 
 // Import factory definitions from .zon files
 const sprite_configs = @import("factories/sprite_configs.zon");

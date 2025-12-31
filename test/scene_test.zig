@@ -90,19 +90,19 @@ pub const MODULE_EXPORTS = struct {
 
     pub const SUBMODULE_EXPORTS = struct {
         test "exports prefab submodule" {
-            try expect.toBeTrue(@hasDecl(engine, "prefab"));
+            try expect.toBeTrue(@hasDecl(engine.scene, "prefab"));
         }
 
         test "exports loader submodule" {
-            try expect.toBeTrue(@hasDecl(engine, "loader"));
+            try expect.toBeTrue(@hasDecl(engine.scene, "loader"));
         }
 
         test "exports component submodule" {
-            try expect.toBeTrue(@hasDecl(engine, "component"));
+            try expect.toBeTrue(@hasDecl(engine.scene, "component"));
         }
 
         test "exports script submodule" {
-            try expect.toBeTrue(@hasDecl(engine, "script"));
+            try expect.toBeTrue(@hasDecl(engine.scene, "script"));
         }
     };
 };

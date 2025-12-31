@@ -3,7 +3,7 @@ const zspec = @import("zspec");
 const expect = zspec.expect;
 
 const engine = @import("labelle-engine");
-const prefab = engine.prefab;
+const prefab = engine.scene.prefab;
 
 // Import factory definitions from .zon files
 const nested_prefab_defs = @import("factories/nested_prefabs.zon");
@@ -74,13 +74,13 @@ pub const PREFAB_WITH_COMPONENTS = struct {
 };
 
 pub const SCENE_LOADER_API = struct {
-    const loader = engine.loader;
+    const loader = engine.scene.loader;
 
     test "SceneLoader exports instantiatePrefab function" {
         // Verify the SceneLoader type has the instantiatePrefab method
         const TestPrefabs = prefab.PrefabRegistry(.{});
-        const TestComponents = engine.component.ComponentRegistry(struct {});
-        const TestScripts = engine.script.ScriptRegistry(struct {});
+        const TestComponents = engine.scene.component.ComponentRegistry(struct {});
+        const TestScripts = engine.scene.script.ScriptRegistry(struct {});
         const TestLoader = loader.SceneLoader(TestPrefabs, TestComponents, TestScripts);
 
         try expect.toBeTrue(@hasDecl(TestLoader, "instantiatePrefab"));
@@ -88,7 +88,7 @@ pub const SCENE_LOADER_API = struct {
 };
 
 pub const ZON_COERCION = struct {
-    const zon = engine.zon_coercion;
+    const zon = engine.core.zon;
     const ecs = @import("ecs");
     const Entity = ecs.Entity;
 
@@ -255,9 +255,9 @@ pub const ZON_COERCION = struct {
 pub const PREFAB_IN_ENTITY_FIELDS = struct {
     const ecs = @import("ecs");
     const Entity = ecs.Entity;
-    const loader = engine.loader;
-    const component = engine.component;
-    const script = engine.script;
+    const loader = engine.scene.loader;
+    const component = engine.scene.component;
+    const script = engine.scene.script;
 
     // ----------------------------------------
     // Test Components (factories for test data)

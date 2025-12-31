@@ -3,7 +3,7 @@ const zspec = @import("zspec");
 const expect = zspec.expect;
 
 const engine = @import("labelle-engine");
-const script = engine.script;
+const script = engine.scene.script;
 
 test {
     zspec.runAll(@This());
@@ -57,6 +57,6 @@ pub const MODULE_STRUCTURE = struct {
     }
 
     test "Scene available from scene module" {
-        try expect.toBeTrue(@hasDecl(engine.scene_mod, "Scene"));
+        try expect.toBeTrue(@hasDecl(engine.scene, "Scene"));
     }
 };
