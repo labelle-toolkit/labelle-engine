@@ -26,7 +26,7 @@ const labelle = @import("labelle");
 const ecs = @import("ecs");
 const input_mod = @import("input");
 const audio_mod = @import("audio");
-const render_pipeline_mod = @import("render_pipeline.zig");
+const render_pipeline_mod = @import("render/pipeline.zig");
 const hooks_mod = @import("hooks.zig");
 
 const Allocator = std.mem.Allocator;

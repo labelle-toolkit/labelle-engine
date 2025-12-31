@@ -43,7 +43,7 @@ const prefab_mod = @import("prefab.zig");
 const scene_mod = @import("scene.zig");
 const component_mod = @import("component.zig");
 const script_mod = @import("script.zig");
-const render_pipeline_mod = @import("render_pipeline.zig");
+const render_pipeline_mod = @import("render/pipeline.zig");
 const game_mod = @import("game.zig");
 
 pub const Registry = ecs.Registry;
