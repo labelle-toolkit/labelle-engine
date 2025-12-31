@@ -12,7 +12,7 @@ pub fn addCli(
     const cli_exe = b.addExecutable(.{
         .name = "labelle",
         .root_module = b.createModule(.{
-            .root_source_file = b.path("src/cli.zig"),
+            .root_source_file = b.path("tools/cli.zig"),
             .target = target,
             .optimize = optimize,
             .imports = &.{

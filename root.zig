@@ -32,8 +32,8 @@ pub const scene_mod = scene;
 
 // Build configuration
 pub const build_helpers = @import("build_helpers.zig");
-pub const project_config = @import("project_config.zig");
-pub const generator = @import("generator.zig");
+pub const project_config = @import("tools/project_config.zig");
+pub const generator = @import("tools/generator.zig");
 pub const ProjectConfig = project_config.ProjectConfig;
 
 // Re-export build options
@@ -43,6 +43,10 @@ pub const Backend = build_options.backend;
 pub const Camera = labelle_gfx.Camera;
 pub const CameraManager = labelle_gfx.CameraManager;
 pub const SplitScreenLayout = labelle_gfx.SplitScreenLayout;
+
+// Low-level graphics backends (for direct access when needed)
+pub const SokolBackend = labelle_gfx.SokolBackend;
+pub const RaylibBackend = labelle_gfx.RaylibBackend;
 
 // Convenience re-exports for common types
 pub const Game = engine.Game;

@@ -18,7 +18,7 @@
 
 const std = @import("std");
 const Build = std.Build;
-const generator = @import("generator.zig");
+const generator = @import("tools/generator.zig");
 
 /// Scan a folder for .zig files and add them as anonymous imports to a module
 /// This is useful for build.zig to auto-discover scripts/components/prefabs
