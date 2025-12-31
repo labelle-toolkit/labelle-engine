@@ -20,7 +20,8 @@ pub const prefab = @import("prefab.zig");
 pub const loader = @import("loader.zig");
 pub const component = @import("component.zig");
 pub const script = @import("script.zig");
-pub const zon_coercion = @import("zon_coercion.zig");
+pub const zon_coercion = @import("core/zon_coercion.zig");
+pub const core = @import("core/mod.zig");
 pub const game = @import("game.zig");
 pub const build_helpers = @import("build_helpers.zig");
 pub const render_pipeline = @import("render_pipeline.zig");
@@ -288,16 +289,8 @@ pub const EntityInstance = struct {
     }
 };
 
-/// The underlying integer type that stores Entity bits
-pub const EntityBits = std.meta.Int(.unsigned, @bitSizeOf(Entity));
-
-/// Convert Entity to u64 for lifecycle hooks
-pub fn entityToU64(entity: Entity) u64 {
-    return @as(EntityBits, @bitCast(entity));
-}
-
-/// Convert u64 back to Entity in lifecycle hooks
-pub fn entityFromU64(value: u64) Entity {
-    return @bitCast(@as(EntityBits, @truncate(value)));
-}
+// Re-export entity utilities from core module
+pub const EntityBits = core.EntityBits;
+pub const entityToU64 = core.entityToU64;
+pub const entityFromU64 = core.entityFromU64;
 
