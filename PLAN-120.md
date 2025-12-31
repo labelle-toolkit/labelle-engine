@@ -71,7 +71,7 @@ Layer 3: engine/ -> all above
 3. Move `zon_coercion.zig` to `src/core/`
 4. Create `mod.zig` re-exporting both
 
-### Phase 2: Hooks Module Update
+### Phase 2: Hooks Module Update ✅
 **Files to modify:**
 - `src/hooks/mod.zig` (new)
 - `src/hooks.zig` (update to thin wrapper)
@@ -80,7 +80,7 @@ Layer 3: engine/ -> all above
 1. Create `src/hooks/mod.zig` mirroring current `hooks.zig` structure
 2. Update `src/hooks.zig` to re-export from `mod.zig`
 
-### Phase 3: Render Module
+### Phase 3: Render Module ✅
 **Files to create/modify:**
 - `src/render/mod.zig` (new)
 - `src/render/pipeline.zig` (move from render_pipeline.zig)
@@ -93,7 +93,7 @@ Layer 3: engine/ -> all above
 4. Create `mod.zig` with all exports
 5. Update `render_pipeline.zig` (now `pipeline.zig`) imports
 
-### Phase 4: Scene Module
+### Phase 4: Scene Module ✅
 **Files to create/modify:**
 - `src/scene/mod.zig` (new)
 - `src/scene/scene.zig` (new - extract from src/scene.zig)
@@ -109,7 +109,7 @@ Layer 3: engine/ -> all above
 4. Create `mod.zig` with all exports
 5. Update internal imports in all moved files
 
-### Phase 5: Engine Module
+### Phase 5: Engine Module ✅
 **Files to create/modify:**
 - `src/engine/mod.zig` (new)
 - `src/engine/game.zig` (move from src/game.zig)
@@ -120,7 +120,7 @@ Layer 3: engine/ -> all above
 3. Create `mod.zig` exporting Game types
 4. Update imports
 
-### Phase 6: Root Module & build.zig
+### Phase 6: Root Module & build.zig ✅
 **Files to create/modify:**
 - `src/root.zig` (new - replaces scene.zig as entry)
 - `build.zig` (update module definitions)
@@ -133,7 +133,7 @@ Layer 3: engine/ -> all above
    - `labelle-render` -> `src/render/mod.zig`
 3. Rename/remove old `scene.zig`
 
-### Phase 7: Cleanup & Testing
+### Phase 7: Cleanup & Testing ✅
 1. Run `zig build test` after each phase
 2. Test all example projects: `cd usage/example_* && zig build run`
 3. Update CLAUDE.md with new structure
