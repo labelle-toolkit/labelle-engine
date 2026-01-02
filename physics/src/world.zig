@@ -224,7 +224,7 @@ pub const PhysicsWorld = struct {
         const body_id = self.body_map.get(entity) orelse return error.NoBody;
 
         // Convert shape to Box2D format (pixels to meters)
-        const shape = self.convertShape(collider.shape);
+        const shape = try self.convertShape(collider.shape);
 
         const fixture_def = box2d.FixtureDef{
             .shape = shape,
@@ -373,7 +373,12 @@ pub const PhysicsWorld = struct {
 
     // Internal helpers
 
-    fn convertShape(self: *const PhysicsWorld, shape: components.Shape) box2d.Shape {
+    const ConvertShapeError = error{
+        /// Chain shapes are not yet implemented
+        ChainShapeNotImplemented,
+    };
+
+    fn convertShape(self: *const PhysicsWorld, shape: components.Shape) ConvertShapeError!box2d.Shape {
         const ppm = self.pixels_per_meter;
         return switch (shape) {
             .box => |b| .{ .box = .{
@@ -400,7 +405,7 @@ pub const PhysicsWorld = struct {
                 } };
             },
             .chain => {
-                @panic("Chain shapes are not yet implemented in physics world");
+                return error.ChainShapeNotImplemented;
             },
         };
     }
