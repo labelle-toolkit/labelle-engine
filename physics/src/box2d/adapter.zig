@@ -89,6 +89,18 @@ pub const ContactEvent = struct {
     is_begin: bool,
 };
 
+/// Hit event from Box2D (high-impulse collision)
+pub const HitEvent = struct {
+    body_a: BodyId,
+    body_b: BodyId,
+    point: [2]f32,
+    normal: [2]f32,
+    /// The normal impulse applied to resolve the collision
+    normal_impulse: f32,
+    /// The tangential impulse applied for friction
+    tangent_impulse: f32,
+};
+
 /// Sensor event from Box2D
 pub const SensorEventData = struct {
     sensor_body: BodyId,
@@ -126,9 +138,15 @@ pub const ContactEventIterator = struct {
         }
 
         // Then iterate through end events
-        if (self.end_index < self.end_count) {
+        while (self.end_index < self.end_count) {
             const event = self.end_events[self.end_index];
             self.end_index += 1;
+
+            // Per Box2D docs, end event shapes may have been destroyed
+            // Skip invalid shapes to avoid undefined behavior
+            if (!c.b2Shape_IsValid(event.shapeIdA) or !c.b2Shape_IsValid(event.shapeIdB)) {
+                continue;
+            }
 
             // Get body IDs from shape IDs
             const body_a = c.b2Shape_GetBody(event.shapeIdA);
@@ -175,9 +193,15 @@ pub const SensorEventIterator = struct {
         }
 
         // Then iterate through end (exit) events
-        if (self.end_index < self.end_count) {
+        while (self.end_index < self.end_count) {
             const event = self.end_events[self.end_index];
             self.end_index += 1;
+
+            // Per Box2D docs, end event shapes may have been destroyed
+            // Skip invalid shapes to avoid undefined behavior
+            if (!c.b2Shape_IsValid(event.sensorShapeId) or !c.b2Shape_IsValid(event.visitorShapeId)) {
+                continue;
+            }
 
             // Get body IDs from shape IDs
             const sensor_body = c.b2Shape_GetBody(event.sensorShapeId);
@@ -187,6 +211,35 @@ pub const SensorEventIterator = struct {
                 .sensor_body = sensor_body,
                 .other_body = visitor_body,
                 .is_enter = false,
+            };
+        }
+
+        return null;
+    }
+};
+
+/// Hit event iterator - iterates over collision hit events from Box2D
+pub const HitEventIterator = struct {
+    hit_events: [*c]c.b2ContactHitEvent,
+    hit_count: usize,
+    hit_index: usize = 0,
+
+    pub fn next(self: *HitEventIterator) ?HitEvent {
+        if (self.hit_index < self.hit_count) {
+            const event = self.hit_events[self.hit_index];
+            self.hit_index += 1;
+
+            // Get body IDs from shape IDs
+            const body_a = c.b2Shape_GetBody(event.shapeIdA);
+            const body_b = c.b2Shape_GetBody(event.shapeIdB);
+
+            return HitEvent{
+                .body_a = body_a,
+                .body_b = body_b,
+                .point = .{ event.point.x, event.point.y },
+                .normal = .{ event.normal.x, event.normal.y },
+                .normal_impulse = event.normalImpulse,
+                .tangent_impulse = event.tangentImpulse,
             };
         }
 
@@ -373,6 +426,17 @@ pub const World = struct {
             .end_events = events.endEvents,
             .begin_count = @intCast(events.beginCount),
             .end_count = @intCast(events.endCount),
+        };
+    }
+
+    /// Get hit events iterator for current step
+    /// Hit events are generated for high-impulse collisions (useful for sound/damage)
+    /// Note: Event data is transient - do not store references after the next step
+    pub fn getHitEvents(self: *World) HitEventIterator {
+        const events = c.b2World_GetContactEvents(self.world_id);
+        return .{
+            .hit_events = events.hitEvents,
+            .hit_count = @intCast(events.hitCount),
         };
     }
 };
