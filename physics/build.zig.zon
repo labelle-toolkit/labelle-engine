@@ -1,0 +1,23 @@
+.{
+    .name = .labelle_physics,
+    .version = "0.1.0",
+    .minimum_zig_version = "0.15.2",
+    .dependencies = .{
+        // Box2D physics engine via allyourcodebase
+        .box2d = .{
+            .url = "git+https://github.com/allyourcodebase/box2d#main",
+            .hash = "N/A", // Will be updated on first build
+        },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "mod.zig",
+        "components.zig",
+        "world.zig",
+        "systems.zig",
+        "debug.zig",
+        "benchmark.zig",
+        "box2d",
+    },
+}
