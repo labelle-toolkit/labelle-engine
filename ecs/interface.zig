@@ -144,6 +144,30 @@ pub fn getGamePtr() ?*anyopaque {
     return BackendImpl.getGamePtr();
 }
 
+// ============================================
+// Entity conversion utilities
+// ============================================
+
+/// The underlying integer type that stores Entity bits
+pub const EntityBits = std.meta.Int(.unsigned, @bitSizeOf(Entity));
+
+/// Convert Entity to u64 for lifecycle hooks and external systems
+pub fn entityToU64(entity: Entity) u64 {
+    return @as(EntityBits, @bitCast(entity));
+}
+
+/// Convert u64 back to Entity from lifecycle hooks and external systems
+pub fn entityFromU64(value: u64) Entity {
+    return @bitCast(@as(EntityBits, @truncate(value)));
+}
+
+// Compile-time verification that Entity fits in u64
+comptime {
+    if (@sizeOf(Entity) > @sizeOf(u64)) {
+        @compileError("Entity must fit in u64 for lifecycle hooks");
+    }
+}
+
 test "Entity interface availability" {
     // Just verify the comptime flags compile correctly
     _ = has_invalid_entity;

@@ -73,6 +73,7 @@ pub const FontId = render.FontId;
 pub const VisualType = render.VisualType;
 pub const LayerConfig = render.LayerConfig;
 pub const LayerSpace = render.LayerSpace;
+pub const RenderComponents = render.Components;
 
 // ECS types
 pub const Registry = @import("ecs").Registry;

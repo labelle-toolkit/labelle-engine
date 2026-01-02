@@ -26,7 +26,7 @@ const labelle = @import("labelle");
 const ecs = @import("ecs");
 const input_mod = @import("input");
 const audio_mod = @import("audio");
-const render_pipeline_mod = @import("../render/pipeline.zig");
+const render_pipeline_mod = @import("../render/src/pipeline.zig");
 const hooks_mod = @import("../hooks/mod.zig");
 
 const Allocator = std.mem.Allocator;
@@ -202,6 +202,9 @@ pub fn GameWith(comptime Hooks: type) type {
 
         // Set the game pointer for component callbacks to access
         ecs.setGamePtr(self);
+
+        // Set the global pipeline pointer for render component callbacks
+        render_pipeline_mod.setGlobalPipeline(&self.pipeline);
     }
 
         /// Clean up all resources
@@ -211,6 +214,9 @@ pub fn GameWith(comptime Hooks: type) type {
 
             // Clear game pointer to prevent use-after-free in component callbacks
             ecs.setGamePtr(null);
+
+            // Clear global pipeline pointer
+            render_pipeline_mod.setGlobalPipeline(null);
 
             self.unloadCurrentScene();
 

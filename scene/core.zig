@@ -5,7 +5,7 @@
 const std = @import("std");
 const ecs = @import("ecs");
 const core_mod = @import("../core/mod.zig");
-const render_mod = @import("../render/pipeline.zig");
+const render_mod = @import("../render/src/pipeline.zig");
 const engine_mod = @import("../engine/game.zig");
 const script_mod = @import("script.zig");
 
