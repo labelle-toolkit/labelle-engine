@@ -48,9 +48,15 @@ pub const Shape = union(enum) {
     box: struct {
         half_width: f32,
         half_height: f32,
+        /// Local offset from body center
+        offset: [2]f32 = .{ 0, 0 },
+        /// Local rotation in radians
+        angle: f32 = 0,
     },
     circle: struct {
         radius: f32,
+        /// Local offset from body center
+        offset: [2]f32 = .{ 0, 0 },
     },
     edge: struct {
         start: [2]f32,
@@ -320,12 +326,15 @@ pub const World = struct {
 
         const shape_id = switch (def.shape) {
             .box => |box| blk: {
-                const polygon = c.b2MakeBox(box.half_width, box.half_height);
+                // Use b2MakeOffsetBox for boxes with offset/rotation
+                const center = c.b2Vec2{ .x = box.offset[0], .y = box.offset[1] };
+                const rotation = c.b2MakeRot(box.angle);
+                const polygon = c.b2MakeOffsetBox(box.half_width, box.half_height, center, rotation);
                 break :blk c.b2CreatePolygonShape(body_id, &shape_def, &polygon);
             },
             .circle => |circle| blk: {
                 const circle_shape = c.b2Circle{
-                    .center = .{ .x = 0, .y = 0 },
+                    .center = .{ .x = circle.offset[0], .y = circle.offset[1] },
                     .radius = circle.radius,
                 };
                 break :blk c.b2CreateCircleShape(body_id, &shape_def, &circle_shape);

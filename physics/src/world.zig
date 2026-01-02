@@ -227,8 +227,8 @@ pub const PhysicsWorld = struct {
     pub fn addCollider(self: *PhysicsWorld, entity: u64, collider: Collider) !void {
         const body_id = self.body_map.get(entity) orelse return error.NoBody;
 
-        // Convert shape to Box2D format (pixels to meters)
-        const shape = try self.convertShape(collider.shape);
+        // Convert shape to Box2D format (pixels to meters) with offset/angle
+        const shape = try self.convertShape(collider.shape, collider.offset, collider.angle);
 
         const fixture_def = box2d.FixtureDef{
             .shape = shape,
@@ -385,26 +385,51 @@ pub const PhysicsWorld = struct {
 
     // Internal helpers
 
-    fn convertShape(self: *const PhysicsWorld, shape: components.Shape) ConvertShapeError!box2d.Shape {
+    fn convertShape(self: *const PhysicsWorld, shape: components.Shape, offset: [2]f32, angle: f32) ConvertShapeError!box2d.Shape {
         const ppm = self.pixels_per_meter;
+        // Convert offset from pixels to meters
+        const offset_meters: [2]f32 = .{ offset[0] / ppm, offset[1] / ppm };
+
         return switch (shape) {
             .box => |b| .{ .box = .{
                 .half_width = (b.width / 2) / ppm,
                 .half_height = (b.height / 2) / ppm,
+                .offset = offset_meters,
+                .angle = angle,
             } },
-            .circle => |c| .{ .circle = .{ .radius = c.radius / ppm } },
-            .edge => |e| .{ .edge = .{
-                .start = .{ e.start[0] / ppm, e.start[1] / ppm },
-                .end = .{ e.end[0] / ppm, e.end[1] / ppm },
+            .circle => |c| .{ .circle = .{
+                .radius = c.radius / ppm,
+                .offset = offset_meters,
             } },
+            .edge => |e| blk: {
+                // Apply offset and rotation to edge endpoints
+                const cos_a = @cos(angle);
+                const sin_a = @sin(angle);
+                const start_rotated: [2]f32 = .{
+                    (e.start[0] * cos_a - e.start[1] * sin_a) / ppm + offset_meters[0],
+                    (e.start[0] * sin_a + e.start[1] * cos_a) / ppm + offset_meters[1],
+                };
+                const end_rotated: [2]f32 = .{
+                    (e.end[0] * cos_a - e.end[1] * sin_a) / ppm + offset_meters[0],
+                    (e.end[0] * sin_a + e.end[1] * cos_a) / ppm + offset_meters[1],
+                };
+                break :blk .{ .edge = .{
+                    .start = start_rotated,
+                    .end = end_rotated,
+                } };
+            },
             .polygon => |p| blk: {
-                // Convert vertices to meters
+                // Convert and transform vertices (rotate then translate)
+                const cos_a = @cos(angle);
+                const sin_a = @sin(angle);
                 var vertices: [8][2]f32 = undefined;
                 const count = @min(p.vertices.len, 8);
                 for (0..count) |i| {
+                    const x = p.vertices[i][0];
+                    const y = p.vertices[i][1];
                     vertices[i] = .{
-                        p.vertices[i][0] / ppm,
-                        p.vertices[i][1] / ppm,
+                        (x * cos_a - y * sin_a) / ppm + offset_meters[0],
+                        (x * sin_a + y * cos_a) / ppm + offset_meters[1],
                     };
                 }
                 break :blk .{ .polygon = .{
