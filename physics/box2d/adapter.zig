@@ -142,8 +142,9 @@ pub const World = struct {
         c.b2DestroyWorld(self.world_id);
     }
 
-    /// Step the physics simulation
-    pub fn step(self: *World, time_step: f32, sub_step_count: i32, _: i32) void {
+    /// Step the physics simulation (Box2D 3.x API)
+    /// sub_step_count: Number of sub-steps for improved simulation quality
+    pub fn step(self: *World, time_step: f32, sub_step_count: i32) void {
         c.b2World_Step(self.world_id, time_step, sub_step_count);
     }
 

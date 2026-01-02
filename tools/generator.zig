@@ -222,7 +222,7 @@ pub fn generateBuildZig(allocator: std.mem.Allocator, config: ProjectConfig) ![]
 
     // Write common header (includes backend options)
     // Template args: graphics_backend (x2), ecs_backend (x2), physics (x2)
-    try zts.print(build_zig_tmpl, "header", .{ default_backend, default_backend, default_ecs_backend, default_ecs_backend, physics_str, physics_enabled }, writer);
+    try zts.print(build_zig_tmpl, "header", .{ default_backend, default_backend, default_ecs_backend, default_ecs_backend, physics_str, physics_str }, writer);
 
     // Write plugin dependency declarations
     // Sanitize plugin names for use as Zig identifiers

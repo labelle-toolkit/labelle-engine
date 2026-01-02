@@ -83,8 +83,7 @@ pub const PhysicsWorld = struct {
 
     // Simulation parameters
     time_step: f32,
-    velocity_iterations: i32,
-    position_iterations: i32,
+    sub_step_count: i32,
     accumulator: f32,
 
     /// Pixels per meter scale (Box2D works best with meters)
@@ -100,10 +99,8 @@ pub const PhysicsWorld = struct {
     pub const Config = struct {
         /// Physics time step (default: 1/60 second for 60 FPS)
         time_step: f32 = 1.0 / 60.0,
-        /// Velocity solver iterations (higher = more accurate but slower)
-        velocity_iterations: i32 = 8,
-        /// Position solver iterations
-        position_iterations: i32 = 3,
+        /// Sub-step count for improved simulation quality (Box2D 3.x)
+        sub_step_count: i32 = 4,
         /// Pixels per meter conversion (Box2D uses meters internally)
         pixels_per_meter: f32 = 100.0,
     };
@@ -128,8 +125,7 @@ pub const PhysicsWorld = struct {
             .sensor_enter_events = .{},
             .sensor_exit_events = .{},
             .time_step = config.time_step,
-            .velocity_iterations = config.velocity_iterations,
-            .position_iterations = config.position_iterations,
+            .sub_step_count = config.sub_step_count,
             .accumulator = 0,
             .pixels_per_meter = config.pixels_per_meter,
         };
@@ -286,8 +282,7 @@ pub const PhysicsWorld = struct {
         while (self.accumulator >= self.time_step) {
             self.world.step(
                 self.time_step,
-                self.velocity_iterations,
-                self.position_iterations,
+                self.sub_step_count,
             );
             self.processCollisionEvents();
             self.accumulator -= self.time_step;
@@ -458,7 +453,12 @@ pub const PhysicsWorld = struct {
 /// Convert BodyId to u64 for use as SparseSet key
 /// Box2D's BodyId is typically an index or handle that can be represented as u64
 fn bodyIdToU64(body_id: box2d.BodyId) u64 {
-    // BodyId is a struct with index fields - convert to unique u64
-    // This depends on Box2D's actual BodyId structure
+    // BodyId is a struct: { index1: i32, world0: u16, generation: u16 } = 8 bytes
+    // This matches u64 exactly, so bitcast is safe
+    comptime {
+        if (@sizeOf(box2d.BodyId) != @sizeOf(u64)) {
+            @compileError("b2BodyId size mismatch - expected 8 bytes for bitcast to u64");
+        }
+    }
     return @bitCast(body_id);
 }
