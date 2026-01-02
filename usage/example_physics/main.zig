@@ -1,97 +1,99 @@
+// ============================================================================
 // Physics Demo - main.zig
-//
-// Demonstrates physics integration with labelle-engine.
-// Left click: spawn box, Right click: spawn circle, R: reset
+// ============================================================================
+// Demonstrates physics integration with Box2D using prefabs, scenes, and scripts.
+// Left click: spawn box, Right click: spawn circle, R: reset scene
+// ============================================================================
 
 const std = @import("std");
 const engine = @import("labelle-engine");
-const physics = @import("labelle-physics");
 
-// Physics components
-const RigidBody = physics.RigidBody;
-const Collider = physics.Collider;
+const Game = engine.Game;
+const ProjectConfig = engine.ProjectConfig;
+
+// Import prefabs
+const dynamic_box_prefab = @import("prefabs/dynamic_box.zon");
+const dynamic_circle_prefab = @import("prefabs/dynamic_circle.zon");
+
+// Import components
+const physics_body_comp = @import("components/physics_body.zig");
+pub const PhysicsBody = physics_body_comp.PhysicsBody;
+
+// Import scripts
+const physics_demo_script = @import("scripts/physics_demo.zig");
+
+const main_module = @This();
+
+pub const Prefabs = engine.PrefabRegistry(.{
+    .dynamic_box = dynamic_box_prefab,
+    .dynamic_circle = dynamic_circle_prefab,
+});
+
+pub const Components = engine.ComponentRegistry(struct {
+    pub const PhysicsBody = main_module.PhysicsBody;
+});
+
+pub const Scripts = engine.ScriptRegistry(struct {
+    pub const physics_demo = physics_demo_script;
+});
+
+pub const Loader = engine.SceneLoader(Prefabs, Components, Scripts);
+
+pub const initial_scene = @import("scenes/main.zon");
 
 pub fn main() !void {
+    const ci_test = std.posix.getenv("CI_TEST") != null;
+
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    // Initialize game
-    var game = try engine.Game.init(allocator, .{
+    const project = try ProjectConfig.load(allocator, "project.labelle");
+    defer project.deinit(allocator);
+
+    const title = try allocator.dupeZ(u8, project.window.title);
+    defer allocator.free(title);
+
+    var game = try Game.init(allocator, .{
         .window = .{
-            .width = 800,
-            .height = 600,
-            .title = "labelle-engine: Physics Demo",
+            .width = project.window.width,
+            .height = project.window.height,
+            .title = title,
+            .target_fps = project.window.target_fps,
+            .hidden = ci_test,
         },
+        .clear_color = .{ .r = 40, .g = 45, .b = 55 },
     });
     game.fixPointers();
     defer game.deinit();
 
-    // Center camera on scene (window is 800x600, so center at 400,300)
-    game.setCameraPosition(400, 300);
-
-    // Initialize physics world
-    var physics_world = try physics.PhysicsWorld.init(allocator, .{ 0, 980 });
-    defer physics_world.deinit();
-
-    // Create ground
-    {
-        const ground = game.createEntity();
-        game.addPosition(ground, .{ .x = 400, .y = 550 });
-        var ground_shape = engine.Shape.rectangle(700, 20);
-        ground_shape.color = .{ .r = 100, .g = 100, .b = 100, .a = 255 };
-        try game.addShape(ground, ground_shape);
-        try physics_world.createBody(engine.entityToU64(ground), RigidBody{ .body_type = .static }, .{ .x = 400, .y = 550 });
-        try physics_world.addCollider(engine.entityToU64(ground), Collider{
-            .shape = .{ .box = .{ .width = 700, .height = 20 } },
-        });
+    // Apply camera configuration from project
+    if (project.camera.x != null or project.camera.y != null) {
+        game.setCameraPosition(project.camera.x orelse 0, project.camera.y orelse 0);
+    }
+    if (project.camera.zoom != 1.0) {
+        game.setCameraZoom(project.camera.zoom);
     }
 
-    // Create a single ball with gravity
-    try spawnCircle(&game, &physics_world, 400, 100, 30, .{ .r = 255, .g = 100, .b = 100, .a = 255 });
+    const ctx = engine.SceneContext.init(&game);
+    var scene = try Loader.load(initial_scene, ctx);
+    defer scene.deinit();
 
-    var spawn_timer: f32 = 0;
-    var rng = std.Random.DefaultPrng.init(@intCast(std.time.milliTimestamp()));
+    // For CI test, run a few frames and exit
+    if (ci_test) {
+        std.debug.print("CI_TEST mode: running physics simulation\n", .{});
+        var elapsed: f32 = 0;
+        while (elapsed < 3.0) {
+            const dt: f32 = 1.0 / 60.0;
+            scene.update(dt);
+            elapsed += dt;
+        }
+        return;
+    }
 
-    // Main loop
     while (game.isRunning()) {
-        // Poll input events at start of frame
-        game.getInput().beginFrame();
-
         const dt = game.getDeltaTime();
-        spawn_timer -= dt;
-
-        // Input handling
-        const input = game.getInput();
-
-        // Spawn on click
-        if (input.isMouseButtonDown(.left) and spawn_timer <= 0) {
-            const pos = input.getMousePosition();
-            const size: f32 = @floatFromInt(rng.random().intRangeAtMost(u32, 20, 50));
-            const color = randomColor(&rng);
-            try spawnBox(&game, &physics_world, pos.x, pos.y, size, color);
-            spawn_timer = 0.1;
-        }
-        if (input.isMouseButtonDown(.right) and spawn_timer <= 0) {
-            const pos = input.getMousePosition();
-            const radius: f32 = @floatFromInt(rng.random().intRangeAtMost(u32, 10, 30));
-            const color = randomColor(&rng);
-            try spawnCircle(&game, &physics_world, pos.x, pos.y, radius, color);
-            spawn_timer = 0.1;
-        }
-
-        // Update physics
-        physics_world.update(dt);
-
-        // Sync physics positions to ECS
-        for (physics_world.entities()) |entity_id| {
-            if (physics_world.getPosition(entity_id)) |pos| {
-                const entity = engine.entityFromU64(entity_id);
-                game.setPositionXY(entity, pos[0], pos[1]);
-            }
-        }
-
-        // Render
+        scene.update(dt);
         game.getPipeline().sync(game.getRegistry());
 
         const re = game.getRetainedEngine();
@@ -99,53 +101,4 @@ pub fn main() !void {
         re.render();
         re.endFrame();
     }
-}
-
-fn spawnBox(
-    game: *engine.Game,
-    physics_world: *physics.PhysicsWorld,
-    x: f32,
-    y: f32,
-    size: f32,
-    color: engine.Color,
-) !void {
-    const entity = game.createEntity();
-    game.addPosition(entity, .{ .x = x, .y = y });
-    var shape = engine.Shape.rectangle(size, size);
-    shape.color = color;
-    try game.addShape(entity, shape);
-    try physics_world.createBody(engine.entityToU64(entity), RigidBody{ .body_type = .dynamic }, .{ .x = x, .y = y });
-    try physics_world.addCollider(engine.entityToU64(entity), Collider{
-        .shape = .{ .box = .{ .width = size, .height = size } },
-        .restitution = 0.4,
-    });
-}
-
-fn spawnCircle(
-    game: *engine.Game,
-    physics_world: *physics.PhysicsWorld,
-    x: f32,
-    y: f32,
-    radius: f32,
-    color: engine.Color,
-) !void {
-    const entity = game.createEntity();
-    game.addPosition(entity, .{ .x = x, .y = y });
-    var shape = engine.Shape.circle(radius);
-    shape.color = color;
-    try game.addShape(entity, shape);
-    try physics_world.createBody(engine.entityToU64(entity), RigidBody{ .body_type = .dynamic }, .{ .x = x, .y = y });
-    try physics_world.addCollider(engine.entityToU64(entity), Collider{
-        .shape = .{ .circle = .{ .radius = radius } },
-        .restitution = 0.7,
-    });
-}
-
-fn randomColor(rng: *std.Random.DefaultPrng) engine.Color {
-    return .{
-        .r = @intCast(rng.random().intRangeAtMost(u8, 100, 255)),
-        .g = @intCast(rng.random().intRangeAtMost(u8, 100, 255)),
-        .b = @intCast(rng.random().intRangeAtMost(u8, 100, 255)),
-        .a = 255,
-    };
 }

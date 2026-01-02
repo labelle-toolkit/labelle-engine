@@ -23,17 +23,17 @@
 const std = @import("std");
 
 // Core types
-pub const PhysicsWorld = @import("world.zig").PhysicsWorld;
-pub const CollisionEvent = @import("world.zig").CollisionEvent;
-pub const SensorEvent = @import("world.zig").SensorEvent;
-pub const FixtureList = @import("world.zig").FixtureList;
-pub const DEFAULT_MAX_ENTITIES = @import("world.zig").DEFAULT_MAX_ENTITIES;
+pub const PhysicsWorld = @import("src/world.zig").PhysicsWorld;
+pub const CollisionEvent = @import("src/world.zig").CollisionEvent;
+pub const SensorEvent = @import("src/world.zig").SensorEvent;
+pub const FixtureList = @import("src/world.zig").FixtureList;
+pub const DEFAULT_MAX_ENTITIES = @import("src/world.zig").DEFAULT_MAX_ENTITIES;
 
 // Data structures
-pub const SparseSet = @import("sparse_set.zig").SparseSet;
+pub const SparseSet = @import("src/sparse_set.zig").SparseSet;
 
 // Components (user-facing, serializable to .zon)
-pub const components = @import("components.zig");
+pub const components = @import("src/components.zig");
 pub const RigidBody = components.RigidBody;
 pub const Collider = components.Collider;
 pub const Velocity = components.Velocity;
@@ -41,13 +41,13 @@ pub const BodyType = components.BodyType;
 pub const Shape = components.Shape;
 
 // Systems
-pub const systems = @import("systems.zig");
+pub const systems = @import("src/systems.zig");
 
 // Debug rendering
-pub const debug = @import("debug.zig");
+pub const debug = @import("src/debug.zig");
 
 // Box2D adapter (internal, but exposed for advanced use)
-pub const box2d = @import("box2d/adapter.zig");
+pub const box2d = @import("src/box2d/adapter.zig");
 
 test {
     std.testing.refAllDecls(@This());

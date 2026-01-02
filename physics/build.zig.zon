@@ -1,4 +1,5 @@
 .{
+    .fingerprint = 0x512e08af38d9d39c,
     .name = .labelle_physics,
     .version = "0.1.0",
     .minimum_zig_version = "0.15.2",
@@ -8,16 +9,18 @@
             .url = "git+https://github.com/allyourcodebase/box2d#main",
             .hash = "box2d-3.1.1-crFBk74aAAD-TJGY5mHVDB0sV5JntTq0MnlaHYxb5yl5",
         },
+        // ZSpec testing framework
+        .zspec = .{
+            .url = "git+https://github.com/apotema/zspec#main",
+            .hash = "zspec-0.6.0-jaKLbU5DAwAYa0jR0cnFGuIbSrxD6ojh-oyXj9ooyb3V",
+        },
     },
     .paths = .{
         "build.zig",
         "build.zig.zon",
         "mod.zig",
-        "components.zig",
-        "world.zig",
-        "systems.zig",
-        "debug.zig",
-        "benchmark.zig",
-        "box2d",
+        "src",
+        "test",
+        "benchmark",
     },
 }

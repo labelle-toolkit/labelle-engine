@@ -83,6 +83,21 @@ jobs:
 
           exit $TEST_EXIT_CODE
 
+      - name: Run physics module tests
+        shell: bash
+        run: |
+          echo "::group::🧪 Running physics module tests"
+          cd physics
+          zig build test 2>&1 | tee physics_test_output.txt
+          echo "::endgroup::"
+
+          # Add to summary
+          PASSED=$(grep -oE '[0-9]+ of [0-9]+ tests passed' physics_test_output.txt | grep -oE '^[0-9]+' || echo "0")
+          TOTAL=$(grep -oE '[0-9]+ of [0-9]+ tests passed' physics_test_output.txt | sed 's/.* of \([0-9]*\) tests.*/\1/' || echo "0")
+          echo "## 🎮 Physics Module Tests" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "✅ **$PASSED of $TOTAL physics tests passed**" >> $GITHUB_STEP_SUMMARY
+
       - name: Generate example build files
         run: |
           # Generate build.zig and build.zig.zon for examples with local engine path

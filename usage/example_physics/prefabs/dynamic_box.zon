@@ -1,0 +1,20 @@
+// Dynamic Box Prefab
+// A box that falls under gravity
+.{
+    .components = .{
+        .Position = .{ .x = 0, .y = 0 },
+        .Shape = .{
+            .type = .rectangle,
+            .width = 40,
+            .height = 40,
+            .color = .{ .r = 200, .g = 100, .b = 50, .a = 255 },
+        },
+        .PhysicsBody = .{
+            .body_type = .dynamic,
+            .collider_type = .box,
+            .width = 40,
+            .height = 40,
+            .restitution = 0.3,
+        },
+    },
+}

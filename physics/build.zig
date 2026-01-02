@@ -6,34 +6,63 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    // Physics module can be built standalone for testing
-    const physics_mod = addPhysicsModule(b, target, optimize, null, null);
-
-    // Unit tests for physics module
-    const unit_tests = b.addTest(.{
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("mod.zig"),
-            .target = target,
-            .optimize = optimize,
-        }),
+    // Box2D dependency
+    const box2d_dep = b.dependency("box2d", .{
+        .target = target,
+        .optimize = optimize,
     });
 
-    const run_unit_tests = b.addRunArtifact(unit_tests);
-    const test_step = b.step("test", "Run physics module tests");
-    test_step.dependOn(&run_unit_tests.step);
+    // ZSpec dependency
+    const zspec_dep = b.dependency("zspec", .{
+        .target = target,
+        .optimize = optimize,
+    });
+
+    // Physics module
+    const physics_mod = b.addModule("labelle-physics", .{
+        .root_source_file = b.path("mod.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    physics_mod.addImport("box2d", box2d_dep.module("box2d"));
+    physics_mod.linkLibrary(box2d_dep.artifact("box2d"));
+
+    // ZSpec tests
+    const zspec_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("test/tests.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "zspec", .module = zspec_dep.module("zspec") },
+                .{ .name = "labelle-physics", .module = physics_mod },
+            },
+        }),
+        .test_runner = .{ .path = zspec_dep.path("src/runner.zig"), .mode = .simple },
+    });
+    zspec_tests.root_module.linkLibrary(box2d_dep.artifact("box2d"));
+
+    const run_zspec_tests = b.addRunArtifact(zspec_tests);
+    const zspec_test_step = b.step("zspec", "Run zspec tests");
+    zspec_test_step.dependOn(&run_zspec_tests.step);
+
+    // Main test step runs zspec tests
+    const test_step = b.step("test", "Run all tests");
+    test_step.dependOn(&run_zspec_tests.step);
 
     // Benchmark executable
     const bench_exe = b.addExecutable(.{
         .name = "physics-benchmark",
         .root_module = b.createModule(.{
-            .root_source_file = b.path("benchmark.zig"),
+            .root_source_file = b.path("benchmark/benchmark.zig"),
             .target = target,
             .optimize = .ReleaseFast,
+            .imports = &.{
+                .{ .name = "labelle-physics", .module = physics_mod },
+            },
         }),
     });
-
-    // Link Box2D
-    linkBox2d(b, bench_exe, target, optimize);
+    bench_exe.root_module.linkLibrary(box2d_dep.artifact("box2d"));
 
     b.installArtifact(bench_exe);
 
@@ -42,8 +71,6 @@ pub fn build(b: *std.Build) void {
 
     const bench_step = b.step("bench", "Run physics benchmarks");
     bench_step.dependOn(&run_bench.step);
-
-    _ = physics_mod;
 }
 
 /// Add physics module to a parent build
@@ -96,18 +123,4 @@ pub fn addPhysicsModule(
     physics_mod.linkLibrary(box2d_dep.artifact("box2d"));
 
     return physics_mod;
-}
-
-/// Link Box2D to an artifact (for executables/tests)
-fn linkBox2d(
-    b: *std.Build,
-    artifact: *std.Build.Step.Compile,
-    target: std.Build.ResolvedTarget,
-    optimize: std.builtin.OptimizeMode,
-) void {
-    const box2d_dep = b.dependency("box2d", .{
-        .target = target,
-        .optimize = optimize,
-    });
-    artifact.linkLibrary(box2d_dep.artifact("box2d"));
 }

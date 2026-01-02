@@ -4,10 +4,10 @@
 //! Run with: zig build bench (in physics directory)
 
 const std = @import("std");
-const PhysicsWorld = @import("world.zig").PhysicsWorld;
-const components = @import("components.zig");
-const RigidBody = components.RigidBody;
-const Collider = components.Collider;
+const physics = @import("labelle-physics");
+const PhysicsWorld = physics.PhysicsWorld;
+const RigidBody = physics.RigidBody;
+const Collider = physics.Collider;
 
 const Timer = std.time.Timer;
 

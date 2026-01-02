@@ -9,11 +9,15 @@
         .title = "labelle-engine: Physics Demo",
         .target_fps = 60,
     },
+    .camera = .{
+        .x = 400,
+        .y = 300,
+    },
     .physics = .{
         .enabled = true,
-        .gravity = .{ 0, 980 },  // pixels/sec^2 (positive Y = down)
+        .gravity = .{ 0, 980 },
         .pixels_per_meter = 100,
-        .debug_draw = true,
+        .debug_draw = false,
     },
     .plugins = .{},
 }

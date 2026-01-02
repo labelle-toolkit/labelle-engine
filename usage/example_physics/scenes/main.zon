@@ -1,14 +1,23 @@
+// Physics Demo Scene
+// Falling boxes and circles with ground and walls
+// Left click: spawn box, Right click: spawn circle, R: reset
 .{
     .name = "main",
     .scripts = .{"physics_demo"},
+    .camera = .{ .x = 400, .y = 300 },
+
     .entities = .{
         // Ground (static body)
         .{
             .components = .{
                 .Position = .{ .x = 400, .y = 550 },
                 .Shape = .{ .type = .rectangle, .width = 700, .height = 20, .color = .{ .r = 100, .g = 100, .b = 100 } },
-                .RigidBody = .{ .body_type = .static },
-                .Collider = .{ .shape = .{ .box = .{ .width = 700, .height = 20 } } },
+                .PhysicsBody = .{
+                    .body_type = .static,
+                    .collider_type = .box,
+                    .width = 700,
+                    .height = 20,
+                },
             },
         },
         // Left wall
@@ -16,8 +25,12 @@
             .components = .{
                 .Position = .{ .x = 50, .y = 300 },
                 .Shape = .{ .type = .rectangle, .width = 20, .height = 500, .color = .{ .r = 100, .g = 100, .b = 100 } },
-                .RigidBody = .{ .body_type = .static },
-                .Collider = .{ .shape = .{ .box = .{ .width = 20, .height = 500 } } },
+                .PhysicsBody = .{
+                    .body_type = .static,
+                    .collider_type = .box,
+                    .width = 20,
+                    .height = 500,
+                },
             },
         },
         // Right wall
@@ -25,50 +38,58 @@
             .components = .{
                 .Position = .{ .x = 750, .y = 300 },
                 .Shape = .{ .type = .rectangle, .width = 20, .height = 500, .color = .{ .r = 100, .g = 100, .b = 100 } },
-                .RigidBody = .{ .body_type = .static },
-                .Collider = .{ .shape = .{ .box = .{ .width = 20, .height = 500 } } },
+                .PhysicsBody = .{
+                    .body_type = .static,
+                    .collider_type = .box,
+                    .width = 20,
+                    .height = 500,
+                },
             },
         },
-        // Dynamic boxes
+        // Dynamic box (red)
         .{
+            .prefab = "dynamic_box",
             .components = .{
                 .Position = .{ .x = 200, .y = 100 },
-                .Shape = .{ .type = .rectangle, .width = 40, .height = 40, .color = .{ .r = 200, .g = 50, .b = 50 } },
-                .RigidBody = .{ .body_type = .dynamic },
-                .Collider = .{ .shape = .{ .box = .{ .width = 40, .height = 40 } }, .restitution = 0.3 },
+                .Shape = .{ .color = .{ .r = 200, .g = 50, .b = 50 } },
             },
         },
+        // Dynamic box (green)
         .{
+            .prefab = "dynamic_box",
             .components = .{
                 .Position = .{ .x = 400, .y = 50 },
-                .Shape = .{ .type = .rectangle, .width = 50, .height = 50, .color = .{ .r = 50, .g = 200, .b = 50 } },
-                .RigidBody = .{ .body_type = .dynamic },
-                .Collider = .{ .shape = .{ .box = .{ .width = 50, .height = 50 } }, .restitution = 0.5 },
+                .Shape = .{ .color = .{ .r = 50, .g = 200, .b = 50 } },
             },
         },
+        // Dynamic box (blue, taller) - inline definition instead of prefab
         .{
             .components = .{
                 .Position = .{ .x = 600, .y = 150 },
                 .Shape = .{ .type = .rectangle, .width = 30, .height = 60, .color = .{ .r = 50, .g = 50, .b = 200 } },
-                .RigidBody = .{ .body_type = .dynamic },
-                .Collider = .{ .shape = .{ .box = .{ .width = 30, .height = 60 } }, .restitution = 0.2 },
+                .PhysicsBody = .{
+                    .body_type = .dynamic,
+                    .collider_type = .box,
+                    .width = 30,
+                    .height = 60,
+                    .restitution = 0.2,
+                },
             },
         },
-        // Dynamic circle
+        // Dynamic circle (yellow)
         .{
+            .prefab = "dynamic_circle",
             .components = .{
                 .Position = .{ .x = 300, .y = 200 },
-                .Shape = .{ .type = .circle, .radius = 25, .color = .{ .r = 200, .g = 200, .b = 50 } },
-                .RigidBody = .{ .body_type = .dynamic },
-                .Collider = .{ .shape = .{ .circle = .{ .radius = 25 } }, .restitution = 0.8 },
+                .Shape = .{ .radius = 25, .color = .{ .r = 200, .g = 200, .b = 50 } },
             },
         },
+        // Dynamic circle (purple)
         .{
+            .prefab = "dynamic_circle",
             .components = .{
                 .Position = .{ .x = 500, .y = 80 },
-                .Shape = .{ .type = .circle, .radius = 20, .color = .{ .r = 200, .g = 100, .b = 200 } },
-                .RigidBody = .{ .body_type = .dynamic },
-                .Collider = .{ .shape = .{ .circle = .{ .radius = 20 } }, .restitution = 0.9 },
+                .Shape = .{ .color = .{ .r = 200, .g = 100, .b = 200 } },
             },
         },
     },
