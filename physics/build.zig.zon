@@ -6,7 +6,7 @@
     .dependencies = .{
         // Box2D physics engine via allyourcodebase (pinned to specific commit)
         .box2d = .{
-            .url = "git+https://github.com/allyourcodebase/box2d#0482245bf59b",
+            .url = "git+https://github.com/allyourcodebase/box2d#0482245bf59bec743a7cb29961a480c3f7497f0c",
             .hash = "box2d-3.1.1-crFBk74aAAD-TJGY5mHVDB0sV5JntTq0MnlaHYxb5yl5",
         },
         // ZSpec testing framework
