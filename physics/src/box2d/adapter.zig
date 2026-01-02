@@ -96,26 +96,100 @@ pub const SensorEventData = struct {
     is_enter: bool,
 };
 
-/// Contact event iterator
+/// Contact event iterator - iterates over begin/end touch events from Box2D
 pub const ContactEventIterator = struct {
-    world: *World,
-    index: usize = 0,
+    begin_events: [*c]c.b2ContactBeginTouchEvent,
+    end_events: [*c]c.b2ContactEndTouchEvent,
+    begin_count: usize,
+    end_count: usize,
+    begin_index: usize = 0,
+    end_index: usize = 0,
 
     pub fn next(self: *ContactEventIterator) ?ContactEvent {
-        // TODO: Implement actual Box2D contact iteration
-        _ = self;
+        // First iterate through begin events
+        if (self.begin_index < self.begin_count) {
+            const event = self.begin_events[self.begin_index];
+            self.begin_index += 1;
+
+            // Get body IDs from shape IDs
+            const body_a = c.b2Shape_GetBody(event.shapeIdA);
+            const body_b = c.b2Shape_GetBody(event.shapeIdB);
+
+            return ContactEvent{
+                .body_a = body_a,
+                .body_b = body_b,
+                .point = .{ 0, 0 }, // Begin events don't have contact point
+                .normal = .{ 0, 0 },
+                .impulse = 0,
+                .is_begin = true,
+            };
+        }
+
+        // Then iterate through end events
+        if (self.end_index < self.end_count) {
+            const event = self.end_events[self.end_index];
+            self.end_index += 1;
+
+            // Get body IDs from shape IDs
+            const body_a = c.b2Shape_GetBody(event.shapeIdA);
+            const body_b = c.b2Shape_GetBody(event.shapeIdB);
+
+            return ContactEvent{
+                .body_a = body_a,
+                .body_b = body_b,
+                .point = .{ 0, 0 },
+                .normal = .{ 0, 0 },
+                .impulse = 0,
+                .is_begin = false,
+            };
+        }
+
         return null;
     }
 };
 
-/// Sensor event iterator
+/// Sensor event iterator - iterates over sensor begin/end events from Box2D
 pub const SensorEventIterator = struct {
-    world: *World,
-    index: usize = 0,
+    begin_events: [*c]c.b2SensorBeginTouchEvent,
+    end_events: [*c]c.b2SensorEndTouchEvent,
+    begin_count: usize,
+    end_count: usize,
+    begin_index: usize = 0,
+    end_index: usize = 0,
 
     pub fn next(self: *SensorEventIterator) ?SensorEventData {
-        // TODO: Implement actual Box2D sensor iteration
-        _ = self;
+        // First iterate through begin (enter) events
+        if (self.begin_index < self.begin_count) {
+            const event = self.begin_events[self.begin_index];
+            self.begin_index += 1;
+
+            // Get body IDs from shape IDs
+            const sensor_body = c.b2Shape_GetBody(event.sensorShapeId);
+            const visitor_body = c.b2Shape_GetBody(event.visitorShapeId);
+
+            return SensorEventData{
+                .sensor_body = sensor_body,
+                .other_body = visitor_body,
+                .is_enter = true,
+            };
+        }
+
+        // Then iterate through end (exit) events
+        if (self.end_index < self.end_count) {
+            const event = self.end_events[self.end_index];
+            self.end_index += 1;
+
+            // Get body IDs from shape IDs
+            const sensor_body = c.b2Shape_GetBody(event.sensorShapeId);
+            const visitor_body = c.b2Shape_GetBody(event.visitorShapeId);
+
+            return SensorEventData{
+                .sensor_body = sensor_body,
+                .other_body = visitor_body,
+                .is_enter = false,
+            };
+        }
+
         return null;
     }
 };
@@ -278,13 +352,27 @@ pub const World = struct {
         c.b2Body_ApplyForceToCenter(body_id, .{ .x = force[0], .y = force[1] }, true);
     }
 
-    /// Get contact events iterator
+    /// Get contact events iterator for current step
+    /// Note: Event data is transient - do not store references after the next step
     pub fn getContactEvents(self: *World) ContactEventIterator {
-        return .{ .world = self };
+        const events = c.b2World_GetContactEvents(self.world_id);
+        return .{
+            .begin_events = events.beginEvents,
+            .end_events = events.endEvents,
+            .begin_count = @intCast(events.beginCount),
+            .end_count = @intCast(events.endCount),
+        };
     }
 
-    /// Get sensor events iterator
+    /// Get sensor events iterator for current step
+    /// Note: Event data is transient - do not store references after the next step
     pub fn getSensorEvents(self: *World) SensorEventIterator {
-        return .{ .world = self };
+        const events = c.b2World_GetSensorEvents(self.world_id);
+        return .{
+            .begin_events = events.beginEvents,
+            .end_events = events.endEvents,
+            .begin_count = @intCast(events.beginCount),
+            .end_count = @intCast(events.endCount),
+        };
     }
 };
