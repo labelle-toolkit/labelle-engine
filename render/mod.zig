@@ -20,13 +20,18 @@
 //!
 //! // Add components - tracking happens automatically via onAdd callback
 //! registry.add(entity, render.Position{ .x = 100, .y = 200 });
-//! registry.add(entity, render.Sprite{ .sprite_name = "player.png" });
+//! registry.add(entity, render.Sprite{ .name = "player.png" });
 //!
 //! // In game loop - sync dirty state to graphics
 //! pipeline.sync(&registry);
 //! ```
 
 const std = @import("std");
+
+// Sprite configuration and merging (for prefabs)
+pub const sprite = @import("src/sprite.zig");
+pub const SpriteConfig = sprite.SpriteConfig;
+pub const getMergedSpriteConfig = sprite.getMergedSpriteConfig;
 
 // Components
 pub const components = @import("src/components.zig");

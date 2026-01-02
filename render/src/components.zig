@@ -84,7 +84,8 @@ pub const Position = struct {
 /// ```
 pub const Sprite = struct {
     texture: TextureId = .invalid,
-    sprite_name: []const u8 = "",
+    /// Sprite name - matches texture/atlas sprite name for lookup
+    name: []const u8 = "",
     scale: f32 = 1,
     rotation: f32 = 0,
     flip_x: bool = false,
@@ -108,7 +109,7 @@ pub const Sprite = struct {
     pub fn toVisual(self: Sprite) SpriteVisual {
         return .{
             .texture = self.texture,
-            .sprite_name = self.sprite_name,
+            .sprite_name = self.name,
             .scale = self.scale,
             .rotation = self.rotation,
             .flip_x = self.flip_x,
@@ -160,7 +161,7 @@ pub const Sprite = struct {
 ///
 /// Example in .zon:
 /// ```
-/// .Shape = .{ .type = .circle, .radius = 50, .color = .{ .r = 255, .g = 0, .b = 0 } },
+/// .Shape = .{ .shape = .{ .circle = .{ .radius = 50 } }, .color = .{ .r = 255, .g = 0, .b = 0 } },
 /// ```
 pub const Shape = struct {
     shape: ShapeType,

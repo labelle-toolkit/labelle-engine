@@ -19,6 +19,17 @@ pub fn coerceValue(comptime FieldType: type, comptime data_value: anytype) Field
     const DataType = @TypeOf(data_value);
     const field_info = @typeInfo(FieldType);
 
+    // Handle optional types - unwrap and coerce the child type
+    if (field_info == .optional) {
+        const ChildType = field_info.optional.child;
+        // Check for null
+        if (DataType == @TypeOf(null)) {
+            return null;
+        }
+        // Coerce to the child type and wrap in optional
+        return coerceValue(ChildType, data_value);
+    }
+
     // Handle slice types
     if (field_info == .pointer) {
         const ptr_info = field_info.pointer;
@@ -79,6 +90,7 @@ pub fn coerceValue(comptime FieldType: type, comptime data_value: anytype) Field
 /// Supports:
 /// - Single-field anonymous struct: .{ .box = .{ .width = 50 } } -> Union.box
 /// - Enum literal for void payloads: .idle -> State.idle
+/// - Payload-matching struct: .{ .width = 50, .height = 50 } -> Container.explicit (if fields match)
 fn coerceToUnion(comptime UnionType: type, comptime data_value: anytype) UnionType {
     const DataType = @TypeOf(data_value);
     const data_info = @typeInfo(DataType);
@@ -102,31 +114,42 @@ fn coerceToUnion(comptime UnionType: type, comptime data_value: anytype) UnionTy
         @compileError("No union variant named '" ++ tag_name ++ "' in " ++ @typeName(UnionType));
     }
 
-    // Case 2: Single-field anonymous struct maps to union variant
-    // Example: .{ .box = .{ .width = 50, .height = 50 } } -> Shape.box
+    // Case 2: Anonymous struct - could be variant selector or direct payload
     if (data_info == .@"struct") {
         const data_fields = data_info.@"struct".fields;
 
-        if (data_fields.len != 1) {
-            @compileError("Expected single-field struct for union coercion, got " ++
-                std.fmt.comptimePrint("{d}", .{data_fields.len}) ++ " fields. " ++
-                "Use .{ .variant_name = payload } syntax for " ++ @typeName(UnionType));
-        }
+        // Case 2a: Single-field struct where field name matches a union variant
+        // Example: .{ .box = .{ .width = 50, .height = 50 } } -> Shape.box
+        if (data_fields.len == 1) {
+            const field_name = data_fields[0].name;
 
-        const variant_name = data_fields[0].name;
-        const variant_value = @field(data_value, variant_name);
-
-        // Find matching union variant
-        inline for (union_info.fields) |union_field| {
-            if (comptime std.mem.eql(u8, union_field.name, variant_name)) {
-                // Recursively coerce the payload
-                const coerced_payload = coerceValue(union_field.type, variant_value);
-                return @unionInit(UnionType, variant_name, coerced_payload);
+            // Check if this field name matches a union variant
+            inline for (union_info.fields) |union_field| {
+                if (comptime std.mem.eql(u8, union_field.name, field_name)) {
+                    // This is the variant selector pattern
+                    const variant_value = @field(data_value, field_name);
+                    const coerced_payload = coerceValue(union_field.type, variant_value);
+                    return @unionInit(UnionType, field_name, coerced_payload);
+                }
             }
         }
 
-        @compileError("No union variant named '" ++ variant_name ++ "' in " ++ @typeName(UnionType) ++
-            ". Available variants: " ++ unionVariantNames(union_info));
+        // Case 2b: Multi-field struct that matches a union variant's payload type
+        // Example: .{ .width = 400, .height = 300 } -> Container.explicit
+        // Find a union variant whose payload struct has compatible fields
+        inline for (union_info.fields) |union_field| {
+            const payload_info = @typeInfo(union_field.type);
+            if (payload_info == .@"struct") {
+                // Check if data fields are compatible with this payload struct
+                if (comptime structFieldsCompatible(DataType, union_field.type)) {
+                    const coerced_payload = buildStruct(union_field.type, data_value);
+                    return @unionInit(UnionType, union_field.name, coerced_payload);
+                }
+            }
+        }
+
+        @compileError("Cannot coerce struct to union type " ++ @typeName(UnionType) ++
+            ". Use .{ .variant_name = payload } syntax or ensure struct fields match a variant's payload.");
     }
 
     // Case 3: Direct assignment if types match
@@ -136,6 +159,28 @@ fn coerceToUnion(comptime UnionType: type, comptime data_value: anytype) UnionTy
 
     @compileError("Cannot coerce " ++ @typeName(DataType) ++ " to union type " ++ @typeName(UnionType) ++
         ". Use .{ .variant_name = payload } or .variant_name (for void payloads).");
+}
+
+/// Check if all fields in DataType exist in TargetType (for struct compatibility)
+fn structFieldsCompatible(comptime DataType: type, comptime TargetType: type) bool {
+    const data_fields = @typeInfo(DataType).@"struct".fields;
+    const target_fields = @typeInfo(TargetType).@"struct".fields;
+
+    // All data fields must exist in target
+    for (data_fields) |df| {
+        var found = false;
+        for (target_fields) |tf| {
+            if (std.mem.eql(u8, df.name, tf.name)) {
+                found = true;
+                break;
+            }
+        }
+        if (!found) return false;
+    }
+
+    // Target must have at least some required fields from data, or all fields must have defaults
+    // For now, just check that we have at least one matching field
+    return data_fields.len > 0;
 }
 
 /// Helper to format union variant names for error messages
@@ -221,76 +266,115 @@ pub fn isEntity(comptime FieldType: type) bool {
     return FieldType == Entity;
 }
 
-/// Check if a component uses flattened shape syntax.
-/// Flattened format: .{ .type = .circle, .radius = 20, .color = ... }
-/// Returns true if data has a .type field and component has a 'shape' union field.
-pub fn isFlattenedShapeComponent(comptime ComponentType: type, comptime data: anytype) bool {
-    if (!@hasField(@TypeOf(data), "type")) return false;
+/// Merge two comptime structs, with overrides taking precedence.
+/// Returns a new anonymous struct with all fields from base, plus any
+/// fields from overrides (which override base values).
+///
+/// Used for prefab + scene component merging:
+///   const merged = mergeStructs(prefab_component, scene_override);
+///
+/// Example:
+///   base = .{ .x = 10, .y = 20, .color = .red }
+///   overrides = .{ .color = .blue }
+///   result = .{ .x = 10, .y = 20, .color = .blue }
+pub fn mergeStructs(comptime base: anytype, comptime overrides: anytype) MergedStructType(@TypeOf(base), @TypeOf(overrides)) {
+    const BaseType = @TypeOf(base);
+    const OverridesType = @TypeOf(overrides);
 
-    inline for (std.meta.fields(ComponentType)) |field| {
-        if (comptime std.mem.eql(u8, field.name, "shape")) {
-            return @typeInfo(field.type) == .@"union";
-        }
-    }
-    return false;
-}
+    var result: MergedStructType(BaseType, OverridesType) = undefined;
 
-/// Build a Shape-like component from flattened format.
-/// Flattened format: .{ .type = .rectangle, .width = 80, .height = 60, .color = ... }
-/// The .type field determines the union variant, shape-specific fields (width, height, radius, etc.)
-/// are used to construct the inner union, and remaining fields (color, etc.) are component fields.
-pub fn buildFlattenedShapeComponent(comptime ComponentType: type, comptime data: anytype) ComponentType {
-    const comp_fields = std.meta.fields(ComponentType);
-    var result: ComponentType = undefined;
-
-    // Find the 'shape' field (the union field)
-    const shape_field_info = comptime blk: {
-        for (comp_fields) |cf| {
-            if (std.mem.eql(u8, cf.name, "shape")) {
-                break :blk cf;
-            }
-        }
-        @compileError("Component does not have a 'shape' field");
-    };
-
-    const ShapeUnionType = shape_field_info.type;
-    const union_info = @typeInfo(ShapeUnionType).@"union";
-
-    // Get the shape type from .type field
-    const type_value = @field(data, "type");
-    const type_name = @tagName(type_value);
-
-    // Build the shape union
-    comptime var found_match = false;
-    inline for (union_info.fields) |union_field| {
-        if (comptime std.mem.eql(u8, union_field.name, type_name)) {
-            found_match = true;
-            const inner_value = buildStructWithContext(union_field.type, data, "flattened shape");
-            result.shape = @unionInit(ShapeUnionType, type_name, inner_value);
-        }
-    }
-
-    if (!found_match) {
-        @compileError("Unknown shape type '" ++ type_name ++ "' in flattened shape component");
-    }
-
-    // Fill in the remaining component fields (color, rotation, z_index, etc.)
-    inline for (comp_fields) |comp_field| {
-        if (comptime std.mem.eql(u8, comp_field.name, "shape")) {
-            // Already handled above
-            continue;
-        }
-
-        if (@hasField(@TypeOf(data), comp_field.name)) {
-            const data_value = @field(data, comp_field.name);
-            @field(result, comp_field.name) = coerceValue(comp_field.type, data_value);
-        } else if (comp_field.default_value_ptr) |ptr| {
-            const default_ptr: *const comp_field.type = @ptrCast(@alignCast(ptr));
-            @field(result, comp_field.name) = default_ptr.*;
+    // Copy all fields from base
+    inline for (std.meta.fields(BaseType)) |field| {
+        if (@hasField(OverridesType, field.name)) {
+            // Override takes precedence
+            @field(result, field.name) = @field(overrides, field.name);
         } else {
-            @compileError("Missing required field '" ++ comp_field.name ++ "' for component");
+            @field(result, field.name) = @field(base, field.name);
+        }
+    }
+
+    // Add fields that exist only in overrides (not in base)
+    inline for (std.meta.fields(OverridesType)) |field| {
+        if (!@hasField(BaseType, field.name)) {
+            @field(result, field.name) = @field(overrides, field.name);
         }
     }
 
     return result;
+}
+
+/// Compute the merged struct type from two struct types.
+/// The result type has all fields from both, with overrides type taking
+/// precedence for field types when names conflict.
+fn MergedStructType(comptime BaseType: type, comptime OverridesType: type) type {
+    const base_fields = std.meta.fields(BaseType);
+    const override_fields = std.meta.fields(OverridesType);
+
+    // Count total unique fields
+    comptime var field_count = base_fields.len;
+    inline for (override_fields) |of| {
+        if (!@hasField(BaseType, of.name)) {
+            field_count += 1;
+        }
+    }
+
+    // Build the fields array
+    comptime var fields: [field_count]std.builtin.Type.StructField = undefined;
+    comptime var i = 0;
+
+    // Add base fields (with override type if overridden)
+    inline for (base_fields) |bf| {
+        // Check if this field is overridden
+        if (@hasField(OverridesType, bf.name)) {
+            // Find the override field to get its type
+            inline for (override_fields) |of| {
+                if (comptime std.mem.eql(u8, of.name, bf.name)) {
+                    fields[i] = .{
+                        .name = bf.name,
+                        .type = of.type,
+                        .default_value_ptr = null,
+                        .is_comptime = false,
+                        .alignment = @alignOf(of.type),
+                    };
+                }
+            }
+        } else {
+            fields[i] = .{
+                .name = bf.name,
+                .type = bf.type,
+                .default_value_ptr = null,
+                .is_comptime = false,
+                .alignment = @alignOf(bf.type),
+            };
+        }
+        i += 1;
+    }
+
+    // Add override-only fields
+    inline for (override_fields) |of| {
+        if (!@hasField(BaseType, of.name)) {
+            fields[i] = .{
+                .name = of.name,
+                .type = of.type,
+                .default_value_ptr = null,
+                .is_comptime = false,
+                .alignment = @alignOf(of.type),
+            };
+            i += 1;
+        }
+    }
+
+    return @Type(.{
+        .@"struct" = .{
+            .layout = .auto,
+            .fields = &fields,
+            .decls = &.{},
+            .is_tuple = false,
+        },
+    });
+}
+
+/// Check if a struct type has any fields
+pub fn hasFields(comptime T: type) bool {
+    return std.meta.fields(T).len > 0;
 }

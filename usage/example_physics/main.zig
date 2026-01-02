@@ -33,6 +33,10 @@ pub const Prefabs = engine.PrefabRegistry(.{
 });
 
 pub const Components = engine.ComponentRegistry(struct {
+    // Engine built-in components
+    pub const Position = engine.Position;
+    pub const Shape = engine.Shape;
+    // Project components
     pub const RigidBody = main_module.RigidBody;
     pub const Collider = main_module.Collider;
 });

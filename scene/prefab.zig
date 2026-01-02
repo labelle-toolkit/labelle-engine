@@ -16,43 +16,15 @@
 // }
 
 const std = @import("std");
-const labelle = @import("labelle");
 
-// Re-export Pivot from labelle-gfx
-pub const Pivot = labelle.Pivot;
-
-// Re-export layer types from labelle-gfx
-pub const Layer = labelle.DefaultLayers;
-
-// Re-export sizing types from labelle-gfx
-pub const SizeMode = labelle.SizeMode;
-pub const Container = labelle.Container;
-
-// Z-index constants
-pub const ZIndex = struct {
-    pub const background: u8 = 0;
-    pub const characters: u8 = 128;
-    pub const foreground: u8 = 255;
-};
-
-/// Sprite configuration for prefabs (visual properties only, position is in Position component)
-pub const SpriteConfig = struct {
-    name: []const u8 = "",
-    z_index: u8 = ZIndex.characters,
-    scale: f32 = 1.0,
-    rotation: f32 = 0,
-    flip_x: bool = false,
-    flip_y: bool = false,
-    pivot: Pivot = .center,
-    pivot_x: f32 = 0.5,
-    pivot_y: f32 = 0.5,
-    /// Rendering layer (background, world, or ui)
-    layer: Layer = .world,
-    /// Sizing mode for container-based rendering (stretch, cover, contain, scale_down, repeat)
-    size_mode: SizeMode = .none,
-    /// Container specification for sized sprites (null = infer from layer space)
-    container: ?Container = null,
-};
+// Import sprite configuration from render module
+const sprite_mod = @import("../render/src/sprite.zig");
+pub const SpriteConfig = sprite_mod.SpriteConfig;
+pub const ZIndex = sprite_mod.ZIndex;
+pub const Pivot = sprite_mod.Pivot;
+pub const Layer = sprite_mod.Layer;
+pub const SizeMode = sprite_mod.SizeMode;
+pub const Container = sprite_mod.Container;
 
 /// Comptime prefab registry - maps prefab names to their comptime data
 /// Usage:
@@ -76,49 +48,10 @@ pub fn PrefabRegistry(comptime prefab_map: anytype) type {
             return @field(prefab_map, name);
         }
 
-        /// Get sprite config from a prefab, applying overrides
-        /// Sprite is expected in .components.Sprite
-        pub fn getSprite(comptime name: []const u8, comptime overrides: anytype) SpriteConfig {
-            const prefab_data = get(name);
-            const base_sprite = if (@hasField(@TypeOf(prefab_data), "components") and
-                @hasField(@TypeOf(prefab_data.components), "Sprite"))
-                toSpriteConfig(prefab_data.components.Sprite)
-            else
-                SpriteConfig{};
-
-            return mergeSpriteWithOverrides(base_sprite, overrides);
-        }
-
-        /// Convert comptime sprite data to SpriteConfig
-        /// Only copies fields that exist in SpriteConfig (ignores unknown fields like x/y)
-        fn toSpriteConfig(comptime data: anytype) SpriteConfig {
-            var result = SpriteConfig{};
-            inline for (@typeInfo(@TypeOf(data)).@"struct".fields) |field| {
-                if (@hasField(SpriteConfig, field.name)) {
-                    @field(result, field.name) = @field(data, field.name);
-                }
-            }
-            return result;
-        }
-
         /// Check if prefab has components
         pub fn hasComponents(comptime name: []const u8) bool {
             const prefab_data = get(name);
             return @hasField(@TypeOf(prefab_data), "components");
-        }
-
-        /// Check if prefab has a Shape component (for shape-based prefabs)
-        pub fn hasShape(comptime name: []const u8) bool {
-            if (!hasComponents(name)) return false;
-            const components = get(name).components;
-            return @hasField(@TypeOf(components), "Shape");
-        }
-
-        /// Check if prefab has a Sprite component (for sprite-based prefabs)
-        pub fn hasSprite(comptime name: []const u8) bool {
-            if (!hasComponents(name)) return false;
-            const components = get(name).components;
-            return @hasField(@TypeOf(components), "Sprite");
         }
 
         /// Get prefab components data (for use with ComponentRegistry.addComponents)
@@ -128,29 +61,3 @@ pub fn PrefabRegistry(comptime prefab_map: anytype) type {
     };
 }
 
-/// Apply overrides from a comptime struct to a result struct
-fn applyOverrides(result: anytype, comptime overrides: anytype) void {
-    inline for (@typeInfo(@TypeOf(result.*)).@"struct".fields) |field| {
-        if (@hasField(@TypeOf(overrides), field.name)) {
-            @field(result, field.name) = @field(overrides, field.name);
-        }
-    }
-}
-
-/// Merge sprite config with overrides from scene data
-pub fn mergeSpriteWithOverrides(
-    base: SpriteConfig,
-    comptime overrides: anytype,
-) SpriteConfig {
-    var result = base;
-
-    // Apply top-level overrides (x, y, scale, etc. directly on entity def)
-    applyOverrides(&result, overrides);
-
-    // Apply overrides from .components.Sprite if present
-    if (@hasField(@TypeOf(overrides), "components") and @hasField(@TypeOf(overrides.components), "Sprite")) {
-        applyOverrides(&result, overrides.components.Sprite);
-    }
-
-    return result;
-}

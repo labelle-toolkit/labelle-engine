@@ -49,9 +49,7 @@ const game_mod = @import("../engine/game.zig");
 pub const Registry = ecs.Registry;
 pub const Entity = ecs.Entity;
 
-pub const SpriteConfig = prefab_mod.SpriteConfig;
 pub const PrefabRegistry = prefab_mod.PrefabRegistry;
-pub const ZIndex = prefab_mod.ZIndex;
 pub const Scene = core_mod.Scene;
 pub const SceneContext = core_mod.SceneContext;
 pub const EntityInstance = core_mod.EntityInstance;
@@ -60,15 +58,6 @@ pub const Game = game_mod.Game;
 
 // Render pipeline types
 pub const Position = render_pipeline_mod.Position;
-pub const Sprite = render_pipeline_mod.Sprite;
-pub const Shape = render_pipeline_mod.Shape;
-pub const Color = render_pipeline_mod.Color;
-pub const ShapeVisual = render_pipeline_mod.ShapeVisual;
-pub const Layer = render_pipeline_mod.Layer;
-pub const SizeMode = render_pipeline_mod.SizeMode;
-pub const Container = render_pipeline_mod.Container;
-pub const Text = render_pipeline_mod.Text;
-pub const Pivot = render_pipeline_mod.Pivot;
 
 /// Scene-level camera configuration
 pub const SceneCameraConfig = struct {
@@ -94,30 +83,6 @@ fn getFieldOrDefault(comptime data: anytype, comptime field_name: []const u8, co
     }
 }
 
-/// Check if entity definition has a Sprite component in its .components block
-fn hasSpriteInComponents(comptime entity_def: anytype) bool {
-    if (@hasField(@TypeOf(entity_def), "components")) {
-        return @hasField(@TypeOf(entity_def.components), "Sprite");
-    }
-    return false;
-}
-
-/// Check if entity definition has a Shape component in its .components block
-fn hasShapeInComponents(comptime entity_def: anytype) bool {
-    if (@hasField(@TypeOf(entity_def), "components")) {
-        return @hasField(@TypeOf(entity_def.components), "Shape");
-    }
-    return false;
-}
-
-/// Check if entity definition has a Text component in its .components block
-fn hasTextInComponents(comptime entity_def: anytype) bool {
-    if (@hasField(@TypeOf(entity_def), "components")) {
-        return @hasField(@TypeOf(entity_def.components), "Text");
-    }
-    return false;
-}
-
 /// Simple position struct for loader internal use
 const Pos = struct { x: f32, y: f32 };
 
@@ -133,138 +98,6 @@ fn getPositionFromComponents(comptime entity_def: anytype) ?Pos {
             };
         }
     }
-    return null;
-}
-
-/// Get sprite name from sprite data (.name or .sprite_name field)
-fn getSpriteName(comptime sprite_data: anytype) []const u8 {
-    if (@hasField(@TypeOf(sprite_data), "name")) {
-        return sprite_data.name;
-    } else if (@hasField(@TypeOf(sprite_data), "sprite_name")) {
-        return sprite_data.sprite_name;
-    } else {
-        return "";
-    }
-}
-
-/// Build a Shape from flattened shape data.
-/// Used by both loadShapePrefabEntity and loadShapeComponentEntity to reduce duplication.
-fn buildShapeFromData(comptime shape_data: anytype, comptime error_context: []const u8) Shape {
-    const shape_type = shape_data.type;
-    var shape: Shape = switch (shape_type) {
-        .circle => Shape.circle(getFieldOrDefault(shape_data, "radius", @as(f32, 10))),
-        .rectangle => Shape.rectangle(
-            getFieldOrDefault(shape_data, "width", @as(f32, 10)),
-            getFieldOrDefault(shape_data, "height", @as(f32, 10)),
-        ),
-        .line => Shape.line(
-            getFieldOrDefault(shape_data, "end_x", @as(f32, 10)),
-            getFieldOrDefault(shape_data, "end_y", @as(f32, 0)),
-            getFieldOrDefault(shape_data, "thickness", @as(f32, 1)),
-        ),
-        else => @compileError("Unknown shape type in " ++ error_context),
-    };
-
-    // Color
-    if (@hasField(@TypeOf(shape_data), "color")) {
-        shape.color = .{
-            .r = shape_data.color.r,
-            .g = shape_data.color.g,
-            .b = shape_data.color.b,
-            .a = if (@hasField(@TypeOf(shape_data.color), "a")) shape_data.color.a else 255,
-        };
-    }
-
-    // z_index
-    if (@hasField(@TypeOf(shape_data), "z_index")) {
-        shape.z_index = shape_data.z_index;
-    }
-
-    // layer
-    if (@hasField(@TypeOf(shape_data), "layer")) {
-        shape.layer = shape_data.layer;
-    }
-
-    return shape;
-}
-
-/// Build a Text from text data.
-/// Used by loadTextComponentEntity.
-fn buildTextFromData(comptime text_data: anytype) Text {
-    var text: Text = .{};
-
-    // text content
-    if (@hasField(@TypeOf(text_data), "text")) {
-        text.text = text_data.text;
-    }
-
-    // size
-    if (@hasField(@TypeOf(text_data), "size")) {
-        text.size = text_data.size;
-    }
-
-    // color
-    if (@hasField(@TypeOf(text_data), "color")) {
-        text.color = .{
-            .r = text_data.color.r,
-            .g = text_data.color.g,
-            .b = text_data.color.b,
-            .a = if (@hasField(@TypeOf(text_data.color), "a")) text_data.color.a else 255,
-        };
-    }
-
-    // z_index
-    if (@hasField(@TypeOf(text_data), "z_index")) {
-        text.z_index = text_data.z_index;
-    }
-
-    // layer
-    if (@hasField(@TypeOf(text_data), "layer")) {
-        text.layer = text_data.layer;
-    }
-
-    // visible
-    if (@hasField(@TypeOf(text_data), "visible")) {
-        text.visible = text_data.visible;
-    }
-
-    return text;
-}
-
-/// Parse container specification from sprite data.
-/// Supports:
-///   - Not present: returns null (default behavior)
-///   - .infer: Container.infer
-///   - .viewport: Container.viewport
-///   - .camera_viewport: Container.camera_viewport
-///   - .{ .width = W, .height = H }: Container.size(W, H)
-///   - .{ .x = X, .y = Y, .width = W, .height = H }: Container.rect(X, Y, W, H)
-fn parseSpriteContainer(comptime sprite_data: anytype) ?Container {
-    if (!@hasField(@TypeOf(sprite_data), "container")) {
-        return null;
-    }
-
-    const container_data = sprite_data.container;
-    const ContainerType = @TypeOf(container_data);
-
-    // Check if it's one of the enum tags or an enum literal from .zon
-    if (ContainerType == @TypeOf(Container.infer) or @typeInfo(ContainerType) == .enum_literal) {
-        return @as(Container, container_data);
-    }
-
-    // Check if it's a struct with width/height (explicit container)
-    if (@typeInfo(ContainerType) == .@"struct") {
-        const has_width = @hasField(ContainerType, "width");
-        const has_height = @hasField(ContainerType, "height");
-
-        if (has_width and has_height) {
-            const x = getFieldOrDefault(container_data, "x", @as(f32, 0));
-            const y = getFieldOrDefault(container_data, "y", @as(f32, 0));
-            return Container.rect(x, y, container_data.width, container_data.height);
-        }
-    }
-
-    // Default to null if we can't parse it
     return null;
 }
 
@@ -348,8 +181,10 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
             return entities;
         }
 
-        /// Create a single child entity with support for shapes, sprites, prefabs, or data-only.
+        /// Create a single child entity with support for prefabs or inline components.
         /// Positions are relative to parent.
+        /// Visual components (Sprite, Shape, Text) are handled uniformly through
+        /// addComponentsExcluding, with their onAdd callbacks handling pipeline registration.
         fn createChildEntity(
             game: *Game,
             scene: ?*Scene,
@@ -362,30 +197,16 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
                 return try createChildPrefabEntity(game, scene, entity_def, parent_x, parent_y);
             }
 
-            // Check if this has Shape in .components (new format)
-            if (comptime hasShapeInComponents(entity_def)) {
-                return try createChildShapeComponentEntity(game, scene, entity_def, parent_x, parent_y);
-            }
-
-            // Check if this has Text in .components
-            if (comptime hasTextInComponents(entity_def)) {
-                return try createChildTextComponentEntity(game, scene, entity_def, parent_x, parent_y);
-            }
-
-            // Check if this has Sprite in .components
-            if (comptime hasSpriteInComponents(entity_def)) {
-                return try createChildSpriteEntity(game, scene, entity_def, parent_x, parent_y);
-            }
-
-            // Check if this has components (data-only entity, no visual)
+            // Inline entity with components - visual type is determined by which components are present
             if (@hasField(@TypeOf(entity_def), "components")) {
-                return try createChildDataEntity(game, scene, entity_def, parent_x, parent_y);
+                return try createChildComponentEntity(game, scene, entity_def, parent_x, parent_y);
             }
 
             @compileError("Child entity must have .prefab or .components field");
         }
 
-        /// Create a child entity that references a prefab
+        /// Create a child entity that references a prefab.
+        /// Uses uniform component handling - visual components are registered via onAdd callbacks.
         fn createChildPrefabEntity(
             game: *Game,
             scene: ?*Scene,
@@ -404,9 +225,6 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
 
             const entity = game.createEntity();
 
-            // Get sprite config from prefab with entity_def overrides (excludes position)
-            const sprite_config = Prefabs.getSprite(prefab_name, entity_def);
-
             // Get position from .components.Position (scene overrides prefab), relative to parent
             const local_pos = getPrefabPosition(prefab_name, entity_def);
             const pos_x = parent_x + local_pos.x;
@@ -414,189 +232,49 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
 
             game.addPosition(entity, Position{ .x = pos_x, .y = pos_y });
 
-            try game.addSprite(entity, Sprite{
-                .sprite_name = sprite_config.name,
-                .scale = sprite_config.scale,
-                .rotation = sprite_config.rotation,
-                .flip_x = sprite_config.flip_x,
-                .flip_y = sprite_config.flip_y,
-                .z_index = sprite_config.z_index,
-                .pivot = sprite_config.pivot,
-                .pivot_x = sprite_config.pivot_x,
-                .pivot_y = sprite_config.pivot_y,
-                .layer = sprite_config.layer,
-                .size_mode = sprite_config.size_mode,
-                .container = sprite_config.container,
-            });
-
-            // Add components from prefab definition (excluding Sprite and Position which are already added)
+            // Add components from prefab, merging with entity_def overrides where present
             if (comptime Prefabs.hasComponents(prefab_name)) {
-                try addComponentsExcluding(game, scene, entity, Prefabs.getComponents(prefab_name), pos_x, pos_y, .{ "Sprite", "Position" });
+                const prefab_components = Prefabs.getComponents(prefab_name);
+                const scene_components = if (@hasField(@TypeOf(entity_def), "components"))
+                    entity_def.components
+                else
+                    .{};
+
+                try addMergedPrefabComponents(game, scene, entity, prefab_components, scene_components, pos_x, pos_y);
             }
 
-            // Add/override components from entity definition (excluding Sprite and Position)
+            // Add entity_def-only components (components in entity_def that don't exist in prefab)
             if (@hasField(@TypeOf(entity_def), "components")) {
-                try addComponentsExcluding(game, scene, entity, entity_def.components, pos_x, pos_y, .{ "Sprite", "Position" });
+                if (comptime Prefabs.hasComponents(prefab_name)) {
+                    const prefab_components = Prefabs.getComponents(prefab_name);
+                    try addSceneOnlyComponents(game, scene, entity, prefab_components, entity_def.components, pos_x, pos_y);
+                } else {
+                    try addComponentsExcluding(game, scene, entity, entity_def.components, pos_x, pos_y, .{"Position"});
+                }
             }
 
             return .{
                 .entity = entity,
-                .visual_type = .sprite,
+                .visual_type = comptime getVisualTypeFromPrefab(prefab_name),
                 .prefab_name = prefab_name,
                 .onUpdate = null,
                 .onDestroy = null,
             };
         }
 
-        /// Create a child shape entity (Shape in .components) with relative positioning
-        fn createChildShapeComponentEntity(
-            game: *Game,
-            scene: ?*Scene,
-            comptime entity_def: anytype,
-            parent_x: f32,
-            parent_y: f32,
-        ) !EntityInstance {
-            const shape_data = entity_def.components.Shape;
-            const entity = game.createEntity();
-
-            // Get position from .components.Position, relative to parent
-            const local_pos = getPositionFromComponents(entity_def) orelse Pos{ .x = 0, .y = 0 };
-            const pos_x = parent_x + local_pos.x;
-            const pos_y = parent_y + local_pos.y;
-
-            game.addPosition(entity, Position{ .x = pos_x, .y = pos_y });
-
-            // Build shape based on type
-            const shape_type = shape_data.type;
-            var shape: Shape = switch (shape_type) {
-                .circle => Shape.circle(getFieldOrDefault(shape_data, "radius", @as(f32, 10))),
-                .rectangle => Shape.rectangle(
-                    getFieldOrDefault(shape_data, "width", @as(f32, 10)),
-                    getFieldOrDefault(shape_data, "height", @as(f32, 10)),
-                ),
-                .line => Shape.line(
-                    getFieldOrDefault(shape_data, "end_x", @as(f32, 10)),
-                    getFieldOrDefault(shape_data, "end_y", @as(f32, 0)),
-                    getFieldOrDefault(shape_data, "thickness", @as(f32, 1)),
-                ),
-                else => @compileError("Unknown shape type in nested entity definition"),
-            };
-
-            // Color
-            if (@hasField(@TypeOf(shape_data), "color")) {
-                shape.color = .{
-                    .r = shape_data.color.r,
-                    .g = shape_data.color.g,
-                    .b = shape_data.color.b,
-                    .a = if (@hasField(@TypeOf(shape_data.color), "a")) shape_data.color.a else 255,
-                };
-            }
-
-            // z_index
-            if (@hasField(@TypeOf(shape_data), "z_index")) {
-                shape.z_index = shape_data.z_index;
-            }
-
-            // layer
-            if (@hasField(@TypeOf(shape_data), "layer")) {
-                shape.layer = shape_data.layer;
-            }
-
-            try game.addShape(entity, shape);
-
-            // Add other components (excluding Shape and Position which we already handled)
-            try addComponentsExcluding(game, scene, entity, entity_def.components, pos_x, pos_y, .{ "Shape", "Position" });
-
-            return .{
-                .entity = entity,
-                .visual_type = .shape,
-                .prefab_name = null,
-                .onUpdate = null,
-                .onDestroy = null,
-            };
+        /// Determine visual type from component definitions at compile time
+        fn getVisualTypeFromComponents(comptime components: anytype) VisualType {
+            // Priority: sprite > shape > text > none
+            if (@hasField(@TypeOf(components), "Sprite")) return .sprite;
+            if (@hasField(@TypeOf(components), "Shape")) return .shape;
+            if (@hasField(@TypeOf(components), "Text")) return .text;
+            return .none;
         }
 
-        /// Create a child text entity (Text in .components) with relative positioning
-        fn createChildTextComponentEntity(
-            game: *Game,
-            scene: ?*Scene,
-            comptime entity_def: anytype,
-            parent_x: f32,
-            parent_y: f32,
-        ) !EntityInstance {
-            const text_data = entity_def.components.Text;
-            const entity = game.createEntity();
-
-            // Get position from .components.Position, relative to parent
-            const local_pos = getPositionFromComponents(entity_def) orelse Pos{ .x = 0, .y = 0 };
-            const pos_x = parent_x + local_pos.x;
-            const pos_y = parent_y + local_pos.y;
-
-            game.addPosition(entity, Position{ .x = pos_x, .y = pos_y });
-
-            // Build and add text to render pipeline
-            const text = buildTextFromData(text_data);
-            try game.addText(entity, text);
-
-            // Add other components (excluding Text and Position which we already handled)
-            try addComponentsExcluding(game, scene, entity, entity_def.components, pos_x, pos_y, .{ "Text", "Position" });
-
-            return .{
-                .entity = entity,
-                .visual_type = .text,
-                .prefab_name = null,
-                .onUpdate = null,
-                .onDestroy = null,
-            };
-        }
-
-        /// Create a child sprite entity (Sprite in .components) with relative positioning
-        fn createChildSpriteEntity(
-            game: *Game,
-            scene: ?*Scene,
-            comptime entity_def: anytype,
-            parent_x: f32,
-            parent_y: f32,
-        ) !EntityInstance {
-            const sprite_data = entity_def.components.Sprite;
-            const entity = game.createEntity();
-
-            // Get position from .components.Position, relative to parent
-            const local_pos = getPositionFromComponents(entity_def) orelse Pos{ .x = 0, .y = 0 };
-            const pos_x = parent_x + local_pos.x;
-            const pos_y = parent_y + local_pos.y;
-
-            game.addPosition(entity, Position{ .x = pos_x, .y = pos_y });
-
-            try game.addSprite(entity, Sprite{
-                .sprite_name = getSpriteName(sprite_data),
-                .z_index = getFieldOrDefault(sprite_data, "z_index", ZIndex.characters),
-                .scale = getFieldOrDefault(sprite_data, "scale", @as(f32, 1.0)),
-                .rotation = getFieldOrDefault(sprite_data, "rotation", @as(f32, 0)),
-                .flip_x = getFieldOrDefault(sprite_data, "flip_x", false),
-                .flip_y = getFieldOrDefault(sprite_data, "flip_y", false),
-                .pivot = getFieldOrDefault(sprite_data, "pivot", Pivot.center),
-                .pivot_x = getFieldOrDefault(sprite_data, "pivot_x", @as(f32, 0.5)),
-                .pivot_y = getFieldOrDefault(sprite_data, "pivot_y", @as(f32, 0.5)),
-                .layer = getFieldOrDefault(sprite_data, "layer", Layer.world),
-                .size_mode = getFieldOrDefault(sprite_data, "size_mode", SizeMode.none),
-                .container = parseSpriteContainer(sprite_data),
-            });
-
-            // Add other components (excluding Sprite and Position)
-            try addComponentsExcluding(game, scene, entity, entity_def.components, pos_x, pos_y, .{ "Sprite", "Position" });
-
-            return .{
-                .entity = entity,
-                .visual_type = .sprite,
-                .prefab_name = null,
-                .onUpdate = null,
-                .onDestroy = null,
-            };
-        }
-
-        /// Create a data-only child entity (no visual)
-        fn createChildDataEntity(
+        /// Create a child entity from inline component definitions.
+        /// Handles all component types uniformly - visual components (Sprite, Shape, Text)
+        /// are registered with the render pipeline via their onAdd callbacks.
+        fn createChildComponentEntity(
             game: *Game,
             scene: ?*Scene,
             comptime entity_def: anytype,
@@ -611,12 +289,13 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
             const child_y = parent_y + local_pos.y;
             game.addPosition(entity, Position{ .x = child_x, .y = child_y });
 
-            // Add components (recursively handles nested entities), excluding Position
+            // Add all components (Sprite/Shape/Text handled via fromZonData, others generically)
+            // Position is excluded since we already added it above
             try addComponentsExcluding(game, scene, entity, entity_def.components, child_x, child_y, .{"Position"});
 
             return .{
                 .entity = entity,
-                .visual_type = .none,
+                .visual_type = comptime getVisualTypeFromComponents(entity_def.components),
                 .prefab_name = null,
                 .onUpdate = null,
                 .onDestroy = null,
@@ -634,16 +313,10 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
             parent_x: f32,
             parent_y: f32,
         ) !void {
+            // Generic component handling
             const ComponentType = Components.getType(comp_name);
             const comp_fields = @typeInfo(ComponentType).@"struct".fields;
             var component: ComponentType = undefined;
-
-            // Check for flattened Shape format: .{ .type = .circle, .radius = 20, .color = ... }
-            if (comptime zon.isFlattenedShapeComponent(ComponentType, comp_data)) {
-                component = zon.buildFlattenedShapeComponent(ComponentType, comp_data);
-                game.getRegistry().add(parent_entity, component);
-                return;
-            }
 
             // Process each field in the component type
             inline for (comp_fields) |comp_field| {
@@ -767,6 +440,7 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
 
         /// Instantiate a prefab at runtime with a specific world position.
         /// Returns the created entity and adds it to the scene.
+        /// Uses uniform component handling - visual components are registered via onAdd callbacks.
         ///
         /// Usage (where Loader = SceneLoader(Prefabs, Components, Scripts)):
         ///   const entity = try Loader.instantiatePrefab("player", &scene, ctx, 100, 200);
@@ -789,37 +463,19 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
             // Create ECS entity
             const entity = game.createEntity();
 
-            // Get sprite config from prefab (no scene overrides for runtime instantiation)
-            const sprite_config = Prefabs.getSprite(prefab_name, .{});
-
-            // Add Position component (sprite_config.x/y are ignored for runtime instantiation)
+            // Add Position component
             game.addPosition(entity, Position{ .x = x, .y = y });
 
-            // Add Sprite component and track for rendering
-            try game.addSprite(entity, Sprite{
-                .sprite_name = sprite_config.name,
-                .scale = sprite_config.scale,
-                .rotation = sprite_config.rotation,
-                .flip_x = sprite_config.flip_x,
-                .flip_y = sprite_config.flip_y,
-                .z_index = sprite_config.z_index,
-                .pivot = sprite_config.pivot,
-                .pivot_x = sprite_config.pivot_x,
-                .pivot_y = sprite_config.pivot_y,
-                .layer = sprite_config.layer,
-                .size_mode = sprite_config.size_mode,
-                .container = sprite_config.container,
-            });
-
-            // Add components from prefab definition (excluding Sprite which is already added)
+            // Add all components from prefab (excluding Position which we already handled)
+            // Visual components (Sprite, Shape, Text) are registered with pipeline via onAdd callbacks
             if (comptime Prefabs.hasComponents(prefab_name)) {
-                try addComponentsExcluding(game, scene, entity, Prefabs.getComponents(prefab_name), x, y, .{ "Sprite", "Position" });
+                try addComponentsExcluding(game, scene, entity, Prefabs.getComponents(prefab_name), x, y, .{"Position"});
             }
 
             // Add entity to scene
             try scene.addEntity(.{
                 .entity = entity,
-                .visual_type = .sprite,
+                .visual_type = comptime getVisualTypeFromPrefab(prefab_name),
                 .prefab_name = prefab_name,
                 .onUpdate = null,
                 .onDestroy = null,
@@ -828,7 +484,9 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
             return entity;
         }
 
-        /// Load a single entity from its definition
+        /// Load a single entity from its definition.
+        /// Visual components (Sprite, Shape, Text) are handled uniformly through
+        /// addComponentsExcluding, with their onAdd callbacks handling pipeline registration.
         fn loadEntity(
             comptime entity_def: anytype,
             ctx: SceneContext,
@@ -839,24 +497,9 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
                 return try loadPrefabEntity(entity_def, ctx, scene);
             }
 
-            // Check if this has Shape in .components (new format)
-            if (comptime hasShapeInComponents(entity_def)) {
-                return try loadShapeComponentEntity(entity_def, ctx, scene);
-            }
-
-            // Check if this has Text in .components
-            if (comptime hasTextInComponents(entity_def)) {
-                return try loadTextComponentEntity(entity_def, ctx, scene);
-            }
-
-            // Check if this has Sprite in .components
-            if (comptime hasSpriteInComponents(entity_def)) {
-                return try loadSpriteEntity(entity_def, ctx, scene);
-            }
-
-            // Check if this has components (data-only entity, no visual)
+            // Inline entity with components
             if (@hasField(@TypeOf(entity_def), "components")) {
-                return try loadDataOnlyEntity(entity_def, ctx, scene);
+                return try loadComponentEntity(entity_def, ctx, scene);
             }
 
             @compileError("Entity must have .prefab or .components field");
@@ -882,7 +525,16 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
             return Pos{ .x = 0, .y = 0 };
         }
 
-        /// Load an entity that references a prefab (comptime lookup)
+        /// Determine visual type from prefab components at compile time
+        fn getVisualTypeFromPrefab(comptime prefab_name: []const u8) VisualType {
+            if (!Prefabs.hasComponents(prefab_name)) return .none;
+            const components = Prefabs.getComponents(prefab_name);
+            return getVisualTypeFromComponents(components);
+        }
+
+        /// Load an entity that references a prefab (comptime lookup).
+        /// Uses uniform component handling with proper merging - prefab components
+        /// are merged with scene overrides, allowing partial overrides of any field.
         fn loadPrefabEntity(
             comptime entity_def: anytype,
             ctx: SceneContext,
@@ -897,26 +549,7 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
                 }
             }
 
-            // Route to shape-based, sprite-based, or data-only prefab loading
-            if (comptime Prefabs.hasShape(prefab_name)) {
-                return loadShapePrefabEntity(entity_def, ctx, scene);
-            } else if (comptime Prefabs.hasSprite(prefab_name)) {
-                return loadSpritePrefabEntity(entity_def, ctx, scene);
-            } else {
-                return loadDataOnlyPrefabEntity(entity_def, ctx, scene);
-            }
-        }
-
-        /// Load a shape-based prefab entity
-        fn loadShapePrefabEntity(
-            comptime entity_def: anytype,
-            ctx: SceneContext,
-            scene: *Scene,
-        ) !EntityInstance {
-            const prefab_name = entity_def.prefab;
             const game = ctx.game();
-            const prefab_components = Prefabs.getComponents(prefab_name);
-            const shape_data = prefab_components.Shape;
 
             // Create ECS entity
             const entity = game.createEntity();
@@ -930,177 +563,98 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
                 .y = pos.y,
             });
 
-            // Build and add shape to render pipeline
-            const shape = buildShapeFromData(shape_data, "prefab definition");
-            try game.addShape(entity, shape);
-
-            // Add other components from prefab (excluding Shape and Position which we already handled)
-            // Note: hasComponents is guaranteed true since hasShape checks it
-            try addComponentsExcluding(game, scene, entity, prefab_components, pos.x, pos.y, .{ "Shape", "Position" });
-
-            // Add/override components from scene definition (excluding Shape and Position)
-            if (@hasField(@TypeOf(entity_def), "components")) {
-                try addComponentsExcluding(game, scene, entity, entity_def.components, pos.x, pos.y, .{ "Shape", "Position" });
-            }
-
-            return .{
-                .entity = entity,
-                .visual_type = .shape,
-                .prefab_name = prefab_name,
-                .onUpdate = null,
-                .onDestroy = null,
-            };
-        }
-
-        /// Load a sprite-based prefab entity
-        fn loadSpritePrefabEntity(
-            comptime entity_def: anytype,
-            ctx: SceneContext,
-            scene: *Scene,
-        ) !EntityInstance {
-            const prefab_name = entity_def.prefab;
-            const game = ctx.game();
-
-            // Create ECS entity
-            const entity = game.createEntity();
-
-            // Get sprite config from prefab with scene overrides (excludes position)
-            const sprite_config = Prefabs.getSprite(prefab_name, entity_def);
-
-            // Get position from .components.Position (scene overrides prefab)
-            const pos = getPrefabPosition(prefab_name, entity_def);
-
-            // Add Position component
-            game.addPosition(entity, Position{
-                .x = pos.x,
-                .y = pos.y,
-            });
-
-            // Add Sprite component and track for rendering
-            try game.addSprite(entity, Sprite{
-                .sprite_name = sprite_config.name,
-                .scale = sprite_config.scale,
-                .rotation = sprite_config.rotation,
-                .flip_x = sprite_config.flip_x,
-                .flip_y = sprite_config.flip_y,
-                .z_index = sprite_config.z_index,
-                .pivot = sprite_config.pivot,
-                .pivot_x = sprite_config.pivot_x,
-                .pivot_y = sprite_config.pivot_y,
-                .layer = sprite_config.layer,
-                .size_mode = sprite_config.size_mode,
-                .container = sprite_config.container,
-            });
-
-            // Add components from prefab definition (excluding Sprite and Position which are already added)
+            // Add components from prefab, merging with scene overrides where present
             if (comptime Prefabs.hasComponents(prefab_name)) {
-                try addComponentsExcluding(game, scene, entity, Prefabs.getComponents(prefab_name), pos.x, pos.y, .{ "Sprite", "Position" });
+                const prefab_components = Prefabs.getComponents(prefab_name);
+                const scene_components = if (@hasField(@TypeOf(entity_def), "components"))
+                    entity_def.components
+                else
+                    .{};
+
+                try addMergedPrefabComponents(game, scene, entity, prefab_components, scene_components, pos.x, pos.y);
             }
 
-            // Add/override components from scene definition (excluding Sprite and Position)
+            // Add scene-only components (components in scene that don't exist in prefab)
             if (@hasField(@TypeOf(entity_def), "components")) {
-                try addComponentsExcluding(game, scene, entity, entity_def.components, pos.x, pos.y, .{ "Sprite", "Position" });
+                if (comptime Prefabs.hasComponents(prefab_name)) {
+                    const prefab_components = Prefabs.getComponents(prefab_name);
+                    try addSceneOnlyComponents(game, scene, entity, prefab_components, entity_def.components, pos.x, pos.y);
+                } else {
+                    // No prefab components, add all scene components
+                    try addComponentsExcluding(game, scene, entity, entity_def.components, pos.x, pos.y, .{"Position"});
+                }
             }
 
             return .{
                 .entity = entity,
-                .visual_type = .sprite,
+                .visual_type = comptime getVisualTypeFromPrefab(prefab_name),
                 .prefab_name = prefab_name,
                 .onUpdate = null,
                 .onDestroy = null,
             };
         }
 
-        /// Load a data-only prefab entity (no visual, just components)
-        fn loadDataOnlyPrefabEntity(
-            comptime entity_def: anytype,
-            ctx: SceneContext,
-            scene: *Scene,
-        ) !EntityInstance {
-            const prefab_name = entity_def.prefab;
-            const game = ctx.game();
-            const prefab_components = Prefabs.getComponents(prefab_name);
+        /// Add prefab components with scene overrides merged in.
+        /// For each component in prefab_components:
+        ///   - If scene_components has the same component, merge the two
+        ///   - Otherwise, use prefab component as-is
+        fn addMergedPrefabComponents(
+            game: *Game,
+            scene: ?*Scene,
+            entity: Entity,
+            comptime prefab_components: anytype,
+            comptime scene_components: anytype,
+            parent_x: f32,
+            parent_y: f32,
+        ) !void {
+            const prefab_fields = comptime std.meta.fieldNames(@TypeOf(prefab_components));
 
-            // Create ECS entity
-            const entity = game.createEntity();
+            inline for (prefab_fields) |field_name| {
+                // Skip Position - already handled
+                if (comptime std.mem.eql(u8, field_name, "Position")) continue;
 
-            // Get position from .components.Position (scene overrides prefab)
-            const pos = getPrefabPosition(prefab_name, entity_def);
+                const prefab_data = @field(prefab_components, field_name);
 
-            // Add Position component
-            game.addPosition(entity, Position{
-                .x = pos.x,
-                .y = pos.y,
-            });
-
-            // Add components from prefab (excluding Position which we already handled)
-            try addComponentsExcluding(game, scene, entity, prefab_components, pos.x, pos.y, .{"Position"});
-
-            // Add/override components from scene definition (excluding Position)
-            if (@hasField(@TypeOf(entity_def), "components")) {
-                try addComponentsExcluding(game, scene, entity, entity_def.components, pos.x, pos.y, .{"Position"});
+                if (@hasField(@TypeOf(scene_components), field_name)) {
+                    // Merge prefab + scene override
+                    const scene_data = @field(scene_components, field_name);
+                    const merged_data = zon.mergeStructs(prefab_data, scene_data);
+                    try addComponentWithNestedEntities(game, scene, entity, field_name, merged_data, parent_x, parent_y);
+                } else {
+                    // Use prefab data as-is
+                    try addComponentWithNestedEntities(game, scene, entity, field_name, prefab_data, parent_x, parent_y);
+                }
             }
-
-            return .{
-                .entity = entity,
-                .visual_type = .none,
-                .prefab_name = prefab_name,
-                .onUpdate = null,
-                .onDestroy = null,
-            };
         }
 
-        /// Load a sprite entity (Sprite defined in .components block)
-        fn loadSpriteEntity(
-            comptime entity_def: anytype,
-            ctx: SceneContext,
-            scene: *Scene,
-        ) !EntityInstance {
-            const game = ctx.game();
-            const sprite_data = entity_def.components.Sprite;
+        /// Add components that exist only in scene (not in prefab).
+        fn addSceneOnlyComponents(
+            game: *Game,
+            scene: ?*Scene,
+            entity: Entity,
+            comptime prefab_components: anytype,
+            comptime scene_components: anytype,
+            parent_x: f32,
+            parent_y: f32,
+        ) !void {
+            const scene_fields = comptime std.meta.fieldNames(@TypeOf(scene_components));
 
-            // Create ECS entity
-            const entity = game.createEntity();
+            inline for (scene_fields) |field_name| {
+                // Skip Position - already handled
+                if (comptime std.mem.eql(u8, field_name, "Position")) continue;
 
-            // Get position from .components.Position
-            const pos = getPositionFromComponents(entity_def) orelse Pos{ .x = 0, .y = 0 };
+                // Skip components that exist in prefab (already handled by addMergedPrefabComponents)
+                if (@hasField(@TypeOf(prefab_components), field_name)) continue;
 
-            // Add Position component
-            game.addPosition(entity, Position{
-                .x = pos.x,
-                .y = pos.y,
-            });
-
-            // Add Sprite component
-            try game.addSprite(entity, Sprite{
-                .sprite_name = getSpriteName(sprite_data),
-                .z_index = getFieldOrDefault(sprite_data, "z_index", ZIndex.characters),
-                .scale = getFieldOrDefault(sprite_data, "scale", @as(f32, 1.0)),
-                .rotation = getFieldOrDefault(sprite_data, "rotation", @as(f32, 0)),
-                .flip_x = getFieldOrDefault(sprite_data, "flip_x", false),
-                .flip_y = getFieldOrDefault(sprite_data, "flip_y", false),
-                .pivot = getFieldOrDefault(sprite_data, "pivot", Pivot.center),
-                .pivot_x = getFieldOrDefault(sprite_data, "pivot_x", @as(f32, 0.5)),
-                .pivot_y = getFieldOrDefault(sprite_data, "pivot_y", @as(f32, 0.5)),
-                .layer = getFieldOrDefault(sprite_data, "layer", Layer.world),
-                .size_mode = getFieldOrDefault(sprite_data, "size_mode", SizeMode.none),
-                .container = parseSpriteContainer(sprite_data),
-            });
-
-            // Add other components (excluding Sprite which we already handled)
-            try addComponentsExcluding(game, scene, entity, entity_def.components, pos.x, pos.y, .{ "Sprite", "Position" });
-
-            return .{
-                .entity = entity,
-                .visual_type = .sprite,
-                .prefab_name = null,
-                .onUpdate = null,
-                .onDestroy = null,
-            };
+                const scene_data = @field(scene_components, field_name);
+                try addComponentWithNestedEntities(game, scene, entity, field_name, scene_data, parent_x, parent_y);
+            }
         }
 
-        /// Load a data-only entity (no visual, just components)
-        fn loadDataOnlyEntity(
+        /// Load an inline entity with components.
+        /// Handles all component types uniformly - visual components (Sprite, Shape, Text)
+        /// are registered with the render pipeline via their onAdd callbacks.
+        fn loadComponentEntity(
             comptime entity_def: anytype,
             ctx: SceneContext,
             scene: *Scene,
@@ -1119,86 +673,13 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
                 .y = pos.y,
             });
 
-            // Add components (handles nested entity creation), excluding Position which we already added
+            // Add all components (Sprite/Shape/Text handled via fromZonData, others generically)
+            // Position is excluded since we already added it above
             try addComponentsExcluding(game, scene, entity, entity_def.components, pos.x, pos.y, .{"Position"});
 
             return .{
                 .entity = entity,
-                .visual_type = .none,
-                .prefab_name = null,
-                .onUpdate = null,
-                .onDestroy = null,
-            };
-        }
-
-        /// Load a shape entity (Shape defined in .components block)
-        fn loadShapeComponentEntity(
-            comptime entity_def: anytype,
-            ctx: SceneContext,
-            scene: *Scene,
-        ) !EntityInstance {
-            const game = ctx.game();
-            const shape_data = entity_def.components.Shape;
-
-            // Create ECS entity
-            const entity = game.createEntity();
-
-            // Get position from .components.Position
-            const pos = getPositionFromComponents(entity_def) orelse Pos{ .x = 0, .y = 0 };
-
-            // Add Position component
-            game.addPosition(entity, Position{
-                .x = pos.x,
-                .y = pos.y,
-            });
-
-            // Build and add shape to render pipeline
-            const shape = buildShapeFromData(shape_data, "scene definition");
-            try game.addShape(entity, shape);
-
-            // Add other components (excluding Shape and Position which we already handled)
-            try addComponentsExcluding(game, scene, entity, entity_def.components, pos.x, pos.y, .{ "Shape", "Position" });
-
-            return .{
-                .entity = entity,
-                .visual_type = .shape,
-                .prefab_name = null,
-                .onUpdate = null,
-                .onDestroy = null,
-            };
-        }
-
-        /// Load a text entity (Text defined in .components block)
-        fn loadTextComponentEntity(
-            comptime entity_def: anytype,
-            ctx: SceneContext,
-            scene: *Scene,
-        ) !EntityInstance {
-            const game = ctx.game();
-            const text_data = entity_def.components.Text;
-
-            // Create ECS entity
-            const entity = game.createEntity();
-
-            // Get position from .components.Position
-            const pos = getPositionFromComponents(entity_def) orelse Pos{ .x = 0, .y = 0 };
-
-            // Add Position component
-            game.addPosition(entity, Position{
-                .x = pos.x,
-                .y = pos.y,
-            });
-
-            // Build and add text to render pipeline
-            const text = buildTextFromData(text_data);
-            try game.addText(entity, text);
-
-            // Add other components (excluding Text and Position which we already handled)
-            try addComponentsExcluding(game, scene, entity, entity_def.components, pos.x, pos.y, .{ "Text", "Position" });
-
-            return .{
-                .entity = entity,
-                .visual_type = .text,
+                .visual_type = comptime getVisualTypeFromComponents(entity_def.components),
                 .prefab_name = null,
                 .onUpdate = null,
                 .onDestroy = null,
