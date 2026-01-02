@@ -1,7 +1,10 @@
 // Physics Demo Script
 //
-// Initializes physics world and syncs positions.
+// Demonstrates ECS-native physics using physics.Systems.
 // Left click: spawn box, Right click: spawn circle, R: reset
+//
+// Key pattern: Use PhysicsSystems.initBodies() and PhysicsSystems.update()
+// for automatic ECS integration. Query collisions via Touching component.
 
 const std = @import("std");
 const engine = @import("labelle-engine");
@@ -16,8 +19,11 @@ const Shape = engine.Shape;
 // Physics components
 const RigidBody = physics.RigidBody;
 const Collider = physics.Collider;
-const BodyType = physics.BodyType;
+const Touching = physics.Touching;
 const PhysicsWorld = physics.PhysicsWorld;
+
+// Create parameterized physics systems for our Position type
+const PhysicsSystems = physics.Systems(Position);
 
 // Script state
 var physics_world: ?PhysicsWorld = null;
@@ -28,11 +34,10 @@ var initialized: bool = false;
 const spawn_cooldown: f32 = 0.1;
 
 pub fn init(game: *Game, scene: *Scene) void {
+    _ = scene;
     script_allocator = game.allocator;
-    const registry = game.getRegistry();
-    const pipeline = game.getPipeline();
 
-    // Initialize physics world with gravity
+    // Initialize physics world with gravity (pixels/sec^2)
     physics_world = PhysicsWorld.init(script_allocator, .{ 0, 980 }) catch |err| {
         std.log.err("Failed to init physics: {}", .{err});
         return;
@@ -41,39 +46,11 @@ pub fn init(game: *Game, scene: *Scene) void {
     initialized = true;
     spawn_timer = 0;
 
-    std.log.info("Physics demo: scanning {} entities", .{scene.entities.items.len});
+    // Initialize physics bodies for all entities with RigidBody + Position
+    // This is called once on scene load to set up existing entities
+    PhysicsSystems.initBodies(&(physics_world.?), game.getRegistry());
 
-    // Find all entities with RigidBody and Position components
-    for (scene.entities.items) |entity_instance| {
-        const entity = entity_instance.entity;
-
-        const pos = registry.tryGet(Position, entity) orelse continue;
-        const rigid_body = registry.tryGet(RigidBody, entity) orelse continue;
-        const collider = registry.tryGet(Collider, entity) orelse continue;
-
-        std.log.info("Found entity with RigidBody+Collider: pos=({d:.1}, {d:.1}), type={s}", .{
-            pos.x,
-            pos.y,
-            @tagName(rigid_body.body_type),
-        });
-
-        var pw = &(physics_world.?);
-
-        // Create physics body
-        pw.createBody(engine.entityToU64(entity), rigid_body.*, .{ .x = pos.x, .y = pos.y }) catch |err| {
-            std.log.err("Failed to create body for entity: {}", .{err});
-            continue;
-        };
-
-        // Add collider
-        pw.addCollider(engine.entityToU64(entity), collider.*) catch |err| {
-            std.log.err("Failed to add collider: {}", .{err});
-        };
-
-        pipeline.markPositionDirty(entity);
-    }
-
-    std.log.info("Physics demo initialized with {} entities", .{scene.entities.items.len});
+    std.log.info("Physics demo initialized", .{});
 }
 
 pub fn update(game: *Game, scene: *Scene, dt: f32) void {
@@ -82,25 +59,33 @@ pub fn update(game: *Game, scene: *Scene, dt: f32) void {
     if (!initialized or physics_world == null) return;
 
     const registry = game.getRegistry();
-    const pipeline = game.getPipeline();
     const input = game.getInput();
 
     var pw = &(physics_world.?);
 
-    // Update physics simulation
-    pw.update(dt);
+    // Initialize any new entities (spawned this frame)
+    PhysicsSystems.initBodies(pw, registry);
 
-    // Sync physics positions to ECS
-    for (pw.entities()) |entity_id| {
-        if (pw.getPosition(entity_id)) |phys_pos| {
-            const entity = engine.entityFromU64(entity_id);
-            if (registry.tryGet(Position, entity)) |pos| {
-                pos.x = phys_pos[0];
-                pos.y = phys_pos[1];
-                pipeline.markPositionDirty(entity);
-            }
-        }
-    }
+    // Main physics update - handles:
+    // 1. Syncing kinematic transforms ECS -> physics
+    // 2. Syncing Velocity components to physics
+    // 3. Stepping the physics simulation
+    // 4. Syncing physics transforms back to ECS (Position.x, Position.y, Position.rotation)
+    // 5. Syncing physics velocities back to Velocity components
+    // 6. Updating Touching components from collision events
+    PhysicsSystems.update(pw, registry, dt);
+
+    // Example: Query collision state via Touching component (37x faster than events)
+    // var query = registry.query(.{ Position, Touching });
+    // while (query.next()) |item| {
+    //     const touching = item.get(Touching);
+    //     if (!touching.isEmpty()) {
+    //         // Entity is touching something
+    //         for (touching.slice()) |other_id| {
+    //             // Handle collision with other_id
+    //         }
+    //     }
+    // }
 
     // Spawn timer
     spawn_timer -= dt;
@@ -124,6 +109,8 @@ pub fn update(game: *Game, scene: *Scene, dt: f32) void {
 }
 
 fn spawnBox(game: *Game, pw: *PhysicsWorld) void {
+    _ = pw; // Physics body created by systems.initBodies next frame
+
     const mouse_pos = game.getInput().getMousePosition();
 
     // Random color and size
@@ -134,6 +121,7 @@ fn spawnBox(game: *Game, pw: *PhysicsWorld) void {
     const size: f32 = @floatFromInt(rng.random().intRangeAtMost(u32, 20, 50));
 
     const entity = game.createEntity();
+    const registry = game.getRegistry();
 
     // Add Position
     game.addPosition(entity, .{ .x = mouse_pos.x, .y = mouse_pos.y });
@@ -143,18 +131,17 @@ fn spawnBox(game: *Game, pw: *PhysicsWorld) void {
     shape.color = .{ .r = r, .g = g, .b = b, .a = 255 };
     game.addShape(entity, shape) catch return;
 
-    // Add to physics world
-    pw.createBody(engine.entityToU64(entity), RigidBody{
-        .body_type = .dynamic,
-    }, .{ .x = mouse_pos.x, .y = mouse_pos.y }) catch return;
-
-    pw.addCollider(engine.entityToU64(entity), Collider{
+    // Add physics components - body will be created automatically by systems.initBodies
+    registry.set(entity, RigidBody{ .body_type = .dynamic });
+    registry.set(entity, Collider{
         .shape = .{ .box = .{ .width = size, .height = size } },
         .restitution = 0.4,
-    }) catch return;
+    });
 }
 
 fn spawnCircle(game: *Game, pw: *PhysicsWorld) void {
+    _ = pw; // Physics body created by systems.initBodies next frame
+
     const mouse_pos = game.getInput().getMousePosition();
 
     var rng = std.Random.DefaultPrng.init(@intCast(std.time.milliTimestamp()));
@@ -164,6 +151,7 @@ fn spawnCircle(game: *Game, pw: *PhysicsWorld) void {
     const radius: f32 = @floatFromInt(rng.random().intRangeAtMost(u32, 10, 30));
 
     const entity = game.createEntity();
+    const registry = game.getRegistry();
 
     game.addPosition(entity, .{ .x = mouse_pos.x, .y = mouse_pos.y });
 
@@ -171,14 +159,12 @@ fn spawnCircle(game: *Game, pw: *PhysicsWorld) void {
     shape.color = .{ .r = r, .g = g, .b = b, .a = 255 };
     game.addShape(entity, shape) catch return;
 
-    pw.createBody(engine.entityToU64(entity), RigidBody{
-        .body_type = .dynamic,
-    }, .{ .x = mouse_pos.x, .y = mouse_pos.y }) catch return;
-
-    pw.addCollider(engine.entityToU64(entity), Collider{
+    // Add physics components - body will be created automatically by systems.initBodies
+    registry.set(entity, RigidBody{ .body_type = .dynamic });
+    registry.set(entity, Collider{
         .shape = .{ .circle = .{ .radius = radius } },
         .restitution = 0.7,
-    }) catch return;
+    });
 }
 
 pub fn deinit(game: *Game, scene: *Scene) void {

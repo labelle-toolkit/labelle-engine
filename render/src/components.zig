@@ -57,15 +57,18 @@ pub const ComponentPayload = @import("../../hooks/types.zig").ComponentPayload;
 // Position Component
 // ============================================
 
-/// Position component - source of truth for entity location
+/// Position component - source of truth for entity location and rotation
 ///
 /// Example in .zon:
 /// ```
 /// .Position = .{ .x = 100, .y = 200 },
+/// .Position = .{ .x = 100, .y = 200, .rotation = 0.785 },  // 45 degrees
 /// ```
 pub const Position = struct {
     x: f32 = 0,
     y: f32 = 0,
+    /// Rotation in radians (used by physics and rendering)
+    rotation: f32 = 0,
 
     pub fn toGfx(self: Position) labelle.retained_engine.Position {
         return .{ .x = self.x, .y = self.y };
