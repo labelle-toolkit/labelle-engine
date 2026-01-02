@@ -839,8 +839,11 @@ fn generateMainZigSdl(
     return buf.toOwnedSlice(allocator);
 }
 
-/// Generate main.zig content for bgfx backend
-fn generateMainZigBgfx(
+/// Generic main.zig generator for GLFW-based backends (bgfx, zgpu)
+/// Reduces code duplication by parameterizing the template and optional sections.
+fn generateMainZigGlfw(
+    comptime template: []const u8,
+    comptime include_native_helpers: bool,
     allocator: std.mem.Allocator,
     config: ProjectConfig,
     prefabs: []const []const u8,
@@ -879,102 +882,102 @@ fn generateMainZigBgfx(
     }
 
     // Header with project name
-    try zts.print(main_bgfx_tmpl, "header", .{config.name}, writer);
+    try zts.print(template, "header", .{config.name}, writer);
 
     // Plugin imports
     for (config.plugins, 0..) |plugin, i| {
-        try zts.print(main_bgfx_tmpl, "plugin_import", .{ plugin_zig_names[i], plugin.name }, writer);
+        try zts.print(template, "plugin_import", .{ plugin_zig_names[i], plugin.name }, writer);
     }
 
     // Prefab imports
     for (prefabs) |name| {
-        try zts.print(main_bgfx_tmpl, "prefab_import", .{ name, name }, writer);
+        try zts.print(template, "prefab_import", .{ name, name }, writer);
     }
 
     // Component imports
     for (components) |name| {
-        try zts.print(main_bgfx_tmpl, "component_import", .{ name, name }, writer);
+        try zts.print(template, "component_import", .{ name, name }, writer);
     }
 
     // Component exports
     for (components, 0..) |name, i| {
         const pascal = component_pascal_names[i];
-        try zts.print(main_bgfx_tmpl, "component_export", .{ pascal.buf[0..pascal.len], name, pascal.buf[0..pascal.len] }, writer);
+        try zts.print(template, "component_export", .{ pascal.buf[0..pascal.len], name, pascal.buf[0..pascal.len] }, writer);
     }
 
     // Script imports
     for (scripts) |name| {
-        try zts.print(main_bgfx_tmpl, "script_import", .{ name, name }, writer);
+        try zts.print(template, "script_import", .{ name, name }, writer);
     }
 
     // Hook imports
     for (hooks) |name| {
-        try zts.print(main_bgfx_tmpl, "hook_import", .{ name, name }, writer);
+        try zts.print(template, "hook_import", .{ name, name }, writer);
     }
 
     // Main module reference
-    try zts.print(main_bgfx_tmpl, "main_module", .{}, writer);
+    try zts.print(template, "main_module", .{}, writer);
 
     // Prefab registry
     if (prefabs.len == 0) {
-        try zts.print(main_bgfx_tmpl, "prefab_registry_empty", .{}, writer);
+        try zts.print(template, "prefab_registry_empty", .{}, writer);
     } else {
-        try zts.print(main_bgfx_tmpl, "prefab_registry_start", .{}, writer);
+        try zts.print(template, "prefab_registry_start", .{}, writer);
         for (prefabs) |name| {
-            try zts.print(main_bgfx_tmpl, "prefab_registry_item", .{ name, name }, writer);
+            try zts.print(template, "prefab_registry_item", .{ name, name }, writer);
         }
-        try zts.print(main_bgfx_tmpl, "prefab_registry_end", .{}, writer);
+        try zts.print(template, "prefab_registry_end", .{}, writer);
     }
 
     // Component registry
     if (has_plugin_components) {
         if (components.len == 0) {
-            try zts.print(main_bgfx_tmpl, "component_registry_multi_empty_start", .{}, writer);
+            try zts.print(template, "component_registry_multi_empty_start", .{}, writer);
         } else {
-            try zts.print(main_bgfx_tmpl, "component_registry_multi_start", .{}, writer);
+            try zts.print(template, "component_registry_multi_start", .{}, writer);
             for (component_pascal_names) |pascal| {
-                try zts.print(main_bgfx_tmpl, "component_registry_multi_item", .{ pascal.buf[0..pascal.len], pascal.buf[0..pascal.len] }, writer);
+                try zts.print(template, "component_registry_multi_item", .{ pascal.buf[0..pascal.len], pascal.buf[0..pascal.len] }, writer);
             }
-            try zts.print(main_bgfx_tmpl, "component_registry_multi_base_end", .{}, writer);
+            try zts.print(template, "component_registry_multi_base_end", .{}, writer);
         }
         for (config.plugins, 0..) |plugin, i| {
             if (plugin.components) |components_expr| {
-                try zts.print(main_bgfx_tmpl, "component_registry_multi_plugin", .{ plugin_zig_names[i], components_expr }, writer);
+                try zts.print(template, "component_registry_multi_plugin", .{ plugin_zig_names[i], components_expr }, writer);
             }
         }
-        try zts.print(main_bgfx_tmpl, "component_registry_multi_end", .{}, writer);
+        try zts.print(template, "component_registry_multi_end", .{}, writer);
     } else {
         if (components.len == 0) {
-            try zts.print(main_bgfx_tmpl, "component_registry_empty", .{}, writer);
+            try zts.print(template, "component_registry_empty", .{}, writer);
         } else {
-            try zts.print(main_bgfx_tmpl, "component_registry_start", .{}, writer);
+            try zts.print(template, "component_registry_start", .{}, writer);
             for (component_pascal_names) |pascal| {
-                try zts.print(main_bgfx_tmpl, "component_registry_item", .{ pascal.buf[0..pascal.len], pascal.buf[0..pascal.len] }, writer);
+                try zts.print(template, "component_registry_item", .{ pascal.buf[0..pascal.len], pascal.buf[0..pascal.len] }, writer);
             }
-            try zts.print(main_bgfx_tmpl, "component_registry_end", .{}, writer);
+            try zts.print(template, "component_registry_end", .{}, writer);
         }
     }
 
     // Script registry
     if (scripts.len == 0) {
-        try zts.print(main_bgfx_tmpl, "script_registry_empty", .{}, writer);
+        try zts.print(template, "script_registry_empty", .{}, writer);
     } else {
-        try zts.print(main_bgfx_tmpl, "script_registry_start", .{}, writer);
+        try zts.print(template, "script_registry_start", .{}, writer);
         for (scripts) |name| {
-            try zts.print(main_bgfx_tmpl, "script_registry_item", .{ name, name }, writer);
+            try zts.print(template, "script_registry_item", .{ name, name }, writer);
         }
-        try zts.print(main_bgfx_tmpl, "script_registry_end", .{}, writer);
+        try zts.print(template, "script_registry_end", .{}, writer);
     }
 
     // Hooks
     if (hooks.len == 0) {
-        try zts.print(main_bgfx_tmpl, "hooks_empty", .{}, writer);
+        try zts.print(template, "hooks_empty", .{}, writer);
     } else {
-        try zts.print(main_bgfx_tmpl, "hooks_start", .{}, writer);
+        try zts.print(template, "hooks_start", .{}, writer);
         for (hooks) |name| {
-            try zts.print(main_bgfx_tmpl, "hooks_item", .{name}, writer);
+            try zts.print(template, "hooks_item", .{name}, writer);
         }
-        try zts.print(main_bgfx_tmpl, "hooks_end", .{}, writer);
+        try zts.print(template, "hooks_end", .{}, writer);
     }
 
     // Task engine
@@ -985,25 +988,40 @@ fn generateMainZigBgfx(
         const id_type = plugin.id_type orelse "u32";
         const item_type = plugin.item_type orelse @panic("labelle-tasks plugin requires item_type when task hooks are detected");
 
-        try zts.print(main_bgfx_tmpl, "task_engine_start", .{ plugin_zig_name, id_type, item_type }, writer);
+        try zts.print(template, "task_engine_start", .{ plugin_zig_name, id_type, item_type }, writer);
         for (task_hooks.hook_files_with_tasks) |name| {
-            try zts.print(main_bgfx_tmpl, "task_engine_hook_item", .{name}, writer);
+            try zts.print(template, "task_engine_hook_item", .{name}, writer);
         }
-        try zts.print(main_bgfx_tmpl, "task_engine_end", .{ plugin_zig_name, id_type, item_type, plugin_zig_name, id_type, item_type }, writer);
+        try zts.print(template, "task_engine_end", .{ plugin_zig_name, id_type, item_type, plugin_zig_name, id_type, item_type }, writer);
     } else {
-        try zts.print(main_bgfx_tmpl, "task_engine_empty", .{}, writer);
+        try zts.print(template, "task_engine_empty", .{}, writer);
     }
 
     // Loader and initial scene
-    try zts.print(main_bgfx_tmpl, "loader", .{config.initial_scene}, writer);
+    try zts.print(template, "loader", .{config.initial_scene}, writer);
 
-    // Native helpers
-    try zts.print(main_bgfx_tmpl, "native_helpers", .{}, writer);
+    // Native helpers (only for bgfx backend)
+    if (include_native_helpers) {
+        try zts.print(template, "native_helpers", .{}, writer);
+    }
 
     // Main function
-    try zts.print(main_bgfx_tmpl, "main_fn", .{}, writer);
+    try zts.print(template, "main_fn", .{}, writer);
 
     return buf.toOwnedSlice(allocator);
+}
+
+/// Generate main.zig content for bgfx backend
+fn generateMainZigBgfx(
+    allocator: std.mem.Allocator,
+    config: ProjectConfig,
+    prefabs: []const []const u8,
+    components: []const []const u8,
+    scripts: []const []const u8,
+    hooks: []const []const u8,
+    task_hooks: TaskHookScanResult,
+) ![]const u8 {
+    return generateMainZigGlfw(main_bgfx_tmpl, true, allocator, config, prefabs, components, scripts, hooks, task_hooks);
 }
 
 /// Generate main.zig content for zgpu backend
@@ -1016,158 +1034,7 @@ fn generateMainZigZgpu(
     hooks: []const []const u8,
     task_hooks: TaskHookScanResult,
 ) ![]const u8 {
-    var buf: std.ArrayListUnmanaged(u8) = .{};
-    const writer = buf.writer(allocator);
-
-    // Check if any plugin contributes Components
-    var has_plugin_components = false;
-    for (config.plugins) |plugin| {
-        if (plugin.components != null) {
-            has_plugin_components = true;
-            break;
-        }
-    }
-
-    // Pre-compute sanitized plugin names for Zig identifiers
-    var plugin_zig_names = try allocator.alloc([]const u8, config.plugins.len);
-    defer {
-        for (plugin_zig_names) |name| allocator.free(name);
-        allocator.free(plugin_zig_names);
-    }
-    for (config.plugins, 0..) |plugin, i| {
-        plugin_zig_names[i] = try sanitizeZigIdentifier(allocator, plugin.name);
-    }
-
-    // Pre-compute PascalCase names for components
-    var component_pascal_names = try allocator.alloc(PascalCaseResult, components.len);
-    defer allocator.free(component_pascal_names);
-    for (components, 0..) |name, i| {
-        component_pascal_names[i] = toPascalCase(name);
-    }
-
-    // Header with project name
-    try zts.print(main_zgpu_tmpl, "header", .{config.name}, writer);
-
-    // Plugin imports
-    for (config.plugins, 0..) |plugin, i| {
-        try zts.print(main_zgpu_tmpl, "plugin_import", .{ plugin_zig_names[i], plugin.name }, writer);
-    }
-
-    // Prefab imports
-    for (prefabs) |name| {
-        try zts.print(main_zgpu_tmpl, "prefab_import", .{ name, name }, writer);
-    }
-
-    // Component imports
-    for (components) |name| {
-        try zts.print(main_zgpu_tmpl, "component_import", .{ name, name }, writer);
-    }
-
-    // Component exports
-    for (components, 0..) |name, i| {
-        const pascal = component_pascal_names[i];
-        try zts.print(main_zgpu_tmpl, "component_export", .{ pascal.buf[0..pascal.len], name, pascal.buf[0..pascal.len] }, writer);
-    }
-
-    // Script imports
-    for (scripts) |name| {
-        try zts.print(main_zgpu_tmpl, "script_import", .{ name, name }, writer);
-    }
-
-    // Hook imports
-    for (hooks) |name| {
-        try zts.print(main_zgpu_tmpl, "hook_import", .{ name, name }, writer);
-    }
-
-    // Main module reference
-    try zts.print(main_zgpu_tmpl, "main_module", .{}, writer);
-
-    // Prefab registry
-    if (prefabs.len == 0) {
-        try zts.print(main_zgpu_tmpl, "prefab_registry_empty", .{}, writer);
-    } else {
-        try zts.print(main_zgpu_tmpl, "prefab_registry_start", .{}, writer);
-        for (prefabs) |name| {
-            try zts.print(main_zgpu_tmpl, "prefab_registry_item", .{ name, name }, writer);
-        }
-        try zts.print(main_zgpu_tmpl, "prefab_registry_end", .{}, writer);
-    }
-
-    // Component registry
-    if (has_plugin_components) {
-        if (components.len == 0) {
-            try zts.print(main_zgpu_tmpl, "component_registry_multi_empty_start", .{}, writer);
-        } else {
-            try zts.print(main_zgpu_tmpl, "component_registry_multi_start", .{}, writer);
-            for (component_pascal_names) |pascal| {
-                try zts.print(main_zgpu_tmpl, "component_registry_multi_item", .{ pascal.buf[0..pascal.len], pascal.buf[0..pascal.len] }, writer);
-            }
-            try zts.print(main_zgpu_tmpl, "component_registry_multi_base_end", .{}, writer);
-        }
-        for (config.plugins, 0..) |plugin, i| {
-            if (plugin.components) |components_expr| {
-                try zts.print(main_zgpu_tmpl, "component_registry_multi_plugin", .{ plugin_zig_names[i], components_expr }, writer);
-            }
-        }
-        try zts.print(main_zgpu_tmpl, "component_registry_multi_end", .{}, writer);
-    } else {
-        if (components.len == 0) {
-            try zts.print(main_zgpu_tmpl, "component_registry_empty", .{}, writer);
-        } else {
-            try zts.print(main_zgpu_tmpl, "component_registry_start", .{}, writer);
-            for (component_pascal_names) |pascal| {
-                try zts.print(main_zgpu_tmpl, "component_registry_item", .{ pascal.buf[0..pascal.len], pascal.buf[0..pascal.len] }, writer);
-            }
-            try zts.print(main_zgpu_tmpl, "component_registry_end", .{}, writer);
-        }
-    }
-
-    // Script registry
-    if (scripts.len == 0) {
-        try zts.print(main_zgpu_tmpl, "script_registry_empty", .{}, writer);
-    } else {
-        try zts.print(main_zgpu_tmpl, "script_registry_start", .{}, writer);
-        for (scripts) |name| {
-            try zts.print(main_zgpu_tmpl, "script_registry_item", .{ name, name }, writer);
-        }
-        try zts.print(main_zgpu_tmpl, "script_registry_end", .{}, writer);
-    }
-
-    // Hooks
-    if (hooks.len == 0) {
-        try zts.print(main_zgpu_tmpl, "hooks_empty", .{}, writer);
-    } else {
-        try zts.print(main_zgpu_tmpl, "hooks_start", .{}, writer);
-        for (hooks) |name| {
-            try zts.print(main_zgpu_tmpl, "hooks_item", .{name}, writer);
-        }
-        try zts.print(main_zgpu_tmpl, "hooks_end", .{}, writer);
-    }
-
-    // Task engine
-    if (task_hooks.has_task_hooks and task_hooks.tasks_plugin != null) {
-        const plugin = task_hooks.tasks_plugin.?;
-        const plugin_zig_name = try sanitizeZigIdentifier(allocator, plugin.name);
-        defer allocator.free(plugin_zig_name);
-        const id_type = plugin.id_type orelse "u32";
-        const item_type = plugin.item_type orelse @panic("labelle-tasks plugin requires item_type when task hooks are detected");
-
-        try zts.print(main_zgpu_tmpl, "task_engine_start", .{ plugin_zig_name, id_type, item_type }, writer);
-        for (task_hooks.hook_files_with_tasks) |name| {
-            try zts.print(main_zgpu_tmpl, "task_engine_hook_item", .{name}, writer);
-        }
-        try zts.print(main_zgpu_tmpl, "task_engine_end", .{ plugin_zig_name, id_type, item_type, plugin_zig_name, id_type, item_type }, writer);
-    } else {
-        try zts.print(main_zgpu_tmpl, "task_engine_empty", .{}, writer);
-    }
-
-    // Loader and initial scene
-    try zts.print(main_zgpu_tmpl, "loader", .{config.initial_scene}, writer);
-
-    // Main function
-    try zts.print(main_zgpu_tmpl, "main_fn", .{}, writer);
-
-    return buf.toOwnedSlice(allocator);
+    return generateMainZigGlfw(main_zgpu_tmpl, false, allocator, config, prefabs, components, scripts, hooks, task_hooks);
 }
 
 /// Generate main.zig content based on folder contents
