@@ -8,10 +8,11 @@
             .radius = 20,
             .color = .{ .r = 200, .g = 200, .b = 100, .a = 255 },
         },
-        .PhysicsBody = .{
+        .RigidBody = .{
             .body_type = .dynamic,
-            .collider_type = .circle,
-            .radius = 20,
+        },
+        .Collider = .{
+            .shape = .{ .circle = .{ .radius = 20 } },
             .restitution = 0.7,
         },
     },
