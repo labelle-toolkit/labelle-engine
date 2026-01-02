@@ -141,41 +141,12 @@ pub const SpriteConfig = struct {
                 }
                 // Handle container specially since it needs parsing
                 if (@hasField(@TypeOf(sprite_overrides), "container")) {
-                    result.container = parseContainerFromData(sprite_overrides);
+                    result.container = parseContainer(sprite_overrides);
                 }
             }
         }
 
         return result;
-    }
-
-    /// Parse container from a struct that has a container field
-    fn parseContainerFromData(comptime data: anytype) ?Container {
-        if (!@hasField(@TypeOf(data), "container")) {
-            return null;
-        }
-
-        const container_data = data.container;
-        const ContainerType = @TypeOf(container_data);
-
-        // Check if it's one of the enum tags or an enum literal from .zon
-        if (ContainerType == @TypeOf(Container.infer) or @typeInfo(ContainerType) == .enum_literal) {
-            return @as(Container, container_data);
-        }
-
-        // Check if it's a struct with width/height (explicit container)
-        if (@typeInfo(ContainerType) == .@"struct") {
-            const has_width = @hasField(ContainerType, "width");
-            const has_height = @hasField(ContainerType, "height");
-
-            if (has_width and has_height) {
-                const x = getFieldOrDefault(container_data, "x", @as(f32, 0));
-                const y = getFieldOrDefault(container_data, "y", @as(f32, 0));
-                return Container.rect(x, y, container_data.width, container_data.height);
-            }
-        }
-
-        return null;
     }
 };
 

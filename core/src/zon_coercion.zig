@@ -136,7 +136,10 @@ fn coerceToUnion(comptime UnionType: type, comptime data_value: anytype) UnionTy
 
         // Case 2b: Multi-field struct that matches a union variant's payload type
         // Example: .{ .width = 400, .height = 300 } -> Container.explicit
-        // Find a union variant whose payload struct has compatible fields
+        // Find a union variant whose payload struct has compatible fields.
+        // Note: If multiple variants have compatible payload types, the first one
+        // in declaration order will be selected. Use explicit variant syntax
+        // (.{ .variant_name = payload }) to avoid ambiguity.
         inline for (union_info.fields) |union_field| {
             const payload_info = @typeInfo(union_field.type);
             if (payload_info == .@"struct") {

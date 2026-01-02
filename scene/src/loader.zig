@@ -22,9 +22,9 @@
 //         .{ .prefab = "player", .components = .{ .Position = .{ .x = 400, .y = 300 } } },
 //         .{ .prefab = "player", .pivot = .bottom_center },  // pivot override, position defaults to (0,0)
 //         .{ .prefab = "background" },
-//         // Shape entities (position inside .shape block):
-//         .{ .shape = .{ .type = .circle, .x = 100, .y = 100, .radius = 50, .color = .{ .r = 255, .g = 0, .b = 0, .a = 255 } } },
-//         .{ .shape = .{ .type = .rectangle, .x = 200, .y = 200, .width = 100, .height = 50 } },
+//         // Shape entities (Position and Shape in .components):
+//         .{ .components = .{ .Position = .{ .x = 100, .y = 100 }, .Shape = .{ .shape = .{ .circle = .{ .radius = 50 } }, .color = .{ .r = 255, .g = 0, .b = 0, .a = 255 } } } },
+//         .{ .components = .{ .Position = .{ .x = 200, .y = 200 }, .Shape = .{ .shape = .{ .rectangle = .{ .width = 100, .height = 50 } } } } },
 //         // Sprite entities with position in .components:
 //         .{ .components = .{ .Position = .{ .x = 300, .y = 150 }, .Sprite = .{ .name = "gem.png" }, .Health = .{ .current = 50 } } },
 //         // Data-only entities (no visual):
