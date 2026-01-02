@@ -5,16 +5,21 @@
 const std = @import("std");
 const ecs = @import("ecs");
 const core_mod = @import("../../core/mod.zig");
-const render_mod = @import("../../render/src/pipeline.zig");
 const engine_mod = @import("../../engine/game.zig");
 const script_mod = @import("script.zig");
 
 pub const Entity = ecs.Entity;
 pub const Registry = ecs.Registry;
 pub const Game = engine_mod.Game;
-pub const RenderPipeline = render_mod.RenderPipeline;
-pub const VisualType = render_mod.VisualType;
 pub const entityToU64 = core_mod.entityToU64;
+
+/// Visual type for entity instances (render-agnostic)
+pub const VisualType = enum {
+    none, // Entity has no visual (e.g., nested data-only entities)
+    sprite,
+    shape,
+    text,
+};
 
 /// Context passed to prefab lifecycle functions and scene loading
 /// Uses Game facade for unified access to ECS, pipeline, and engine
@@ -34,10 +39,6 @@ pub const SceneContext = struct {
     // Convenience accessors
     pub fn registry(self: *const SceneContext) *Registry {
         return self.game().getRegistry();
-    }
-
-    pub fn pipeline(self: *const SceneContext) *RenderPipeline {
-        return self.game().getPipeline();
     }
 
     pub fn allocator(self: *const SceneContext) std.mem.Allocator {
@@ -87,8 +88,7 @@ pub const Scene = struct {
 
     pub fn deinit(self: *Scene) void {
         const alloc = self.ctx.allocator();
-        const reg = self.ctx.registry();
-        const pipe = self.ctx.pipeline();
+        const g = self.ctx.game();
 
         // Call script deinit functions (in reverse order for proper cleanup)
         if (self.initialized) {
@@ -104,10 +104,10 @@ pub const Scene = struct {
         // Call onDestroy for all entities and destroy ECS entities
         for (self.entities.items) |*instance| {
             if (instance.onDestroy) |destroy_fn| {
-                destroy_fn(entityToU64(instance.entity), @ptrCast(self.ctx.game()));
+                destroy_fn(entityToU64(instance.entity), @ptrCast(g));
             }
-            pipe.untrackEntity(instance.entity);
-            reg.destroy(instance.entity);
+            g.getPipeline().untrackEntity(instance.entity);
+            g.getRegistry().destroy(instance.entity);
         }
         self.entities.deinit(alloc);
 

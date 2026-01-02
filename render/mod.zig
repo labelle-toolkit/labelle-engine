@@ -31,6 +31,7 @@ const std = @import("std");
 // Sprite configuration and merging (for prefabs)
 pub const sprite = @import("src/sprite.zig");
 pub const SpriteConfig = sprite.SpriteConfig;
+pub const ZIndex = sprite.ZIndex;
 pub const getMergedSpriteConfig = sprite.getMergedSpriteConfig;
 
 // Components

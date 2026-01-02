@@ -5,6 +5,7 @@ const Factory = zspec.Factory;
 
 const engine = @import("labelle-engine");
 const prefab = engine.scene.prefab;
+const render = engine.render;
 
 // Import factory definitions from .zon files
 const sprite_configs = @import("factories/sprite_configs.zon");
@@ -14,13 +15,13 @@ test {
     zspec.runAll(@This());
 }
 
-// Define factories from .zon files
-const SpriteConfigFactory = Factory.defineFrom(prefab.SpriteConfig, sprite_configs.default);
-const ScaledSpriteFactory = Factory.defineFrom(prefab.SpriteConfig, sprite_configs.scaled);
-const FullSpriteFactory = Factory.defineFrom(prefab.SpriteConfig, sprite_configs.full);
-const BaseMergeSpriteFactory = Factory.defineFrom(prefab.SpriteConfig, sprite_configs.base_for_merge);
-const UiLayerSpriteFactory = Factory.defineFrom(prefab.SpriteConfig, sprite_configs.ui_layer);
-const BackgroundLayerSpriteFactory = Factory.defineFrom(prefab.SpriteConfig, sprite_configs.background_layer);
+// Define factories from .zon files (using render module's SpriteConfig)
+const SpriteConfigFactory = Factory.defineFrom(render.SpriteConfig, sprite_configs.default);
+const ScaledSpriteFactory = Factory.defineFrom(render.SpriteConfig, sprite_configs.scaled);
+const FullSpriteFactory = Factory.defineFrom(render.SpriteConfig, sprite_configs.full);
+const BaseMergeSpriteFactory = Factory.defineFrom(render.SpriteConfig, sprite_configs.base_for_merge);
+const UiLayerSpriteFactory = Factory.defineFrom(render.SpriteConfig, sprite_configs.ui_layer);
+const BackgroundLayerSpriteFactory = Factory.defineFrom(render.SpriteConfig, sprite_configs.background_layer);
 
 pub const SPRITE_CONFIG = struct {
     pub const DEFAULTS = struct {
@@ -276,14 +277,14 @@ pub const PREFAB_REGISTRY = struct {
 
 pub const ZINDEX = struct {
     test "background is lowest" {
-        try expect.equal(prefab.ZIndex.background, 0);
+        try expect.equal(render.ZIndex.background, 0);
     }
 
     test "characters is middle" {
-        try expect.equal(prefab.ZIndex.characters, 128);
+        try expect.equal(render.ZIndex.characters, 128);
     }
 
     test "foreground is highest" {
-        try expect.equal(prefab.ZIndex.foreground, 255);
+        try expect.equal(render.ZIndex.foreground, 255);
     }
 };
