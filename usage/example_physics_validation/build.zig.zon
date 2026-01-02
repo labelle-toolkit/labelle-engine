@@ -1,0 +1,20 @@
+.{
+    .fingerprint = 0xa01bb5b6aed95993,
+    .name = .example_physics_validation,
+    .version = "0.1.0",
+    .dependencies = .{
+        .@"labelle-engine" = .{
+            .path = "../..",
+        },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "main.zig",
+        "project.labelle",
+        "scenes",
+        "prefabs",
+        "components",
+        "scripts",
+    },
+}

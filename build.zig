@@ -23,6 +23,7 @@ pub fn build(b: *std.Build) void {
     // Build options
     const backend = b.option(Backend, "backend", "Graphics backend to use (default: raylib)") orelse .raylib;
     const ecs_backend = b.option(EcsBackend, "ecs_backend", "ECS backend to use (default: zig_ecs)") orelse .zig_ecs;
+    const physics_enabled = b.option(bool, "physics", "Enable physics module (Box2D)") orelse false;
 
     // ECS dependencies
     const ecs_dep = b.dependency("zig_ecs", .{
@@ -83,7 +84,25 @@ pub fn build(b: *std.Build) void {
     const build_options = b.addOptions();
     build_options.addOption(Backend, "backend", backend);
     build_options.addOption(EcsBackend, "ecs_backend", ecs_backend);
+    build_options.addOption(bool, "physics_enabled", physics_enabled);
     const build_options_mod = build_options.createModule();
+
+    // Physics module (optional, enabled with -Dphysics=true)
+    var physics_module: ?*std.Build.Module = null;
+    if (physics_enabled) {
+        const box2d_dep = b.dependency("box2d", .{
+            .target = target,
+            .optimize = optimize,
+        });
+
+        physics_module = b.addModule("labelle-physics", .{
+            .root_source_file = b.path("physics/mod.zig"),
+            .target = target,
+            .optimize = optimize,
+        });
+        physics_module.?.addImport("box2d", box2d_dep.module("box2d"));
+        physics_module.?.linkLibrary(box2d_dep.artifact("box2d"));
+    }
 
     // Create the ECS interface module that wraps the selected backend
     const ecs_interface = b.addModule("ecs", .{
@@ -169,6 +188,11 @@ pub fn build(b: *std.Build) void {
             .{ .name = "build_options", .module = build_options_mod },
         },
     });
+
+    // Add physics module to engine if enabled
+    if (physics_module) |physics| {
+        engine_mod.addImport("physics", physics);
+    }
 
 
     // Unit tests (standard zig test)

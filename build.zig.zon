@@ -37,6 +37,11 @@
             .url = "git+https://github.com/zig-gamedev/zaudio#bb93ad665b89e302d4515a36b44cb8e73eaf6766",
             .hash = "zaudio-0.11.0-dev-_M-91kHvPwAlW8MCRI4XiTbTeihqB8Zspgiuw-6Gqgdz",
         },
+        // Physics - Box2D via allyourcodebase
+        .box2d = .{
+            .url = "git+https://github.com/allyourcodebase/box2d#main",
+            .hash = "box2d-3.1.1-crFBk74aAAD-TJGY5mHVDB0sV5JntTq0MnlaHYxb5yl5",
+        },
     },
     .paths = .{
         "build.zig",
@@ -50,6 +55,7 @@
         "engine",
         "hooks",
         "input",
+        "physics",
         "render",
         "scene",
         "tools",
