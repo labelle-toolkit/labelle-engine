@@ -183,8 +183,8 @@ pub const World = struct {
 
         var shape_def = c.b2DefaultShapeDef();
         shape_def.density = def.density;
-        shape_def.friction = def.friction;
-        shape_def.restitution = def.restitution;
+        shape_def.material.friction = def.friction;
+        shape_def.material.restitution = def.restitution;
         shape_def.isSensor = def.is_sensor;
         shape_def.filter.categoryBits = def.filter.category_bits;
         shape_def.filter.maskBits = def.filter.mask_bits;

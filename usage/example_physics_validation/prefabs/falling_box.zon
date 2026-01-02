@@ -1,0 +1,18 @@
+// Falling Box Prefab
+// A box that will fall under gravity
+.{
+    .components = .{
+        .Position = .{ .x = 400, .y = 100 },
+        .Shape = .{
+            .type = .rectangle,
+            .width = 50,
+            .height = 50,
+            .color = .{ .r = 200, .g = 100, .b = 50, .a = 255 },
+        },
+        // Custom component to mark this entity for physics
+        .GravityBody = .{
+            .body_type = .dynamic,
+            .restitution = 0.3,
+        },
+    },
+}

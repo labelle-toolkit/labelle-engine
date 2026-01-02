@@ -3,11 +3,10 @@
 //! Wraps the Box2D physics world and manages entity <-> body mappings.
 //! All physics runtime state is stored here, keeping ECS components clean.
 //!
-//! Uses SparseSet for O(1) lookups with cache-friendly iteration.
+//! Uses HashMap for O(1) lookups with arbitrary entity IDs.
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const SparseSet = @import("sparse_set.zig").SparseSet;
 const components = @import("components.zig");
 const RigidBody = components.RigidBody;
 const Collider = components.Collider;
@@ -63,17 +62,18 @@ pub const DEFAULT_MAX_ENTITIES: usize = 100_000;
 /// Manages the Box2D world and all entity <-> body mappings.
 /// Collision events are buffered each step and queryable via the event accessors.
 ///
-/// Uses SparseSet for O(1) lookups with cache-friendly iteration (5-10x faster than HashMap).
+/// Uses HashMap for O(1) lookups with arbitrary entity IDs.
 pub const PhysicsWorld = struct {
     allocator: Allocator,
 
     /// Underlying Box2D world
     world: box2d.World,
 
-    // Entity <-> Body mappings using SparseSet (O(1) lookup, cache-friendly iteration)
-    body_map: SparseSet(box2d.BodyId),        // entity -> body_id
-    entity_map: SparseSet(u64),                // body_id (as u64) -> entity
-    fixture_map: SparseSet(FixtureList),       // entity -> fixtures
+    // Entity <-> Body mappings using HashMap (O(1) lookup, handles arbitrary entity IDs)
+    body_map: std.AutoHashMap(u64, box2d.BodyId),        // entity -> body_id
+    entity_map: std.AutoHashMap(u64, u64),               // body_id (as u64) -> entity
+    fixture_map: std.AutoHashMap(u64, FixtureList),      // entity -> fixtures
+    entity_list: std.ArrayList(u64),                      // for iteration
 
     // Collision event buffers (cleared each step)
     collision_begin_events: std.ArrayList(CollisionEvent),
@@ -89,9 +89,6 @@ pub const PhysicsWorld = struct {
 
     /// Pixels per meter scale (Box2D works best with meters)
     pixels_per_meter: f32,
-
-    /// Max entity ID supported
-    max_entities: usize,
 
     /// Initialize physics world
     ///
@@ -109,10 +106,6 @@ pub const PhysicsWorld = struct {
         position_iterations: i32 = 3,
         /// Pixels per meter conversion (Box2D uses meters internally)
         pixels_per_meter: f32 = 100.0,
-        /// Maximum entity ID supported (affects memory usage)
-        max_entities: usize = DEFAULT_MAX_ENTITIES,
-        /// Initial capacity for entity storage
-        initial_capacity: usize = 1024,
     };
 
     /// Initialize with custom configuration
@@ -126,19 +119,19 @@ pub const PhysicsWorld = struct {
         return PhysicsWorld{
             .allocator = allocator,
             .world = try box2d.World.init(gravity_meters),
-            .body_map = try SparseSet(box2d.BodyId).init(allocator, config.max_entities, config.initial_capacity),
-            .entity_map = try SparseSet(u64).init(allocator, config.max_entities, config.initial_capacity),
-            .fixture_map = try SparseSet(FixtureList).init(allocator, config.max_entities, config.initial_capacity),
-            .collision_begin_events = std.ArrayList(CollisionEvent).init(allocator),
-            .collision_end_events = std.ArrayList(CollisionEvent).init(allocator),
-            .sensor_enter_events = std.ArrayList(SensorEvent).init(allocator),
-            .sensor_exit_events = std.ArrayList(SensorEvent).init(allocator),
+            .body_map = std.AutoHashMap(u64, box2d.BodyId).init(allocator),
+            .entity_map = std.AutoHashMap(u64, u64).init(allocator),
+            .fixture_map = std.AutoHashMap(u64, FixtureList).init(allocator),
+            .entity_list = .{},
+            .collision_begin_events = .{},
+            .collision_end_events = .{},
+            .sensor_enter_events = .{},
+            .sensor_exit_events = .{},
             .time_step = config.time_step,
             .velocity_iterations = config.velocity_iterations,
             .position_iterations = config.position_iterations,
             .accumulator = 0,
             .pixels_per_meter = config.pixels_per_meter,
-            .max_entities = config.max_entities,
         };
     }
 
@@ -147,10 +140,11 @@ pub const PhysicsWorld = struct {
         self.body_map.deinit();
         self.entity_map.deinit();
         self.fixture_map.deinit();
-        self.collision_begin_events.deinit();
-        self.collision_end_events.deinit();
-        self.sensor_enter_events.deinit();
-        self.sensor_exit_events.deinit();
+        self.entity_list.deinit(self.allocator);
+        self.collision_begin_events.deinit(self.allocator);
+        self.collision_end_events.deinit(self.allocator);
+        self.sensor_enter_events.deinit(self.allocator);
+        self.sensor_exit_events.deinit(self.allocator);
         self.world.deinit();
     }
 
@@ -173,12 +167,12 @@ pub const PhysicsWorld = struct {
 
     /// Get number of physics bodies
     pub fn bodyCount(self: *const PhysicsWorld) usize {
-        return self.body_map.len();
+        return self.body_map.count();
     }
 
-    /// Iterate over all entities with physics bodies (cache-friendly)
+    /// Iterate over all entities with physics bodies
     pub fn entities(self: *const PhysicsWorld) []const u64 {
-        return self.body_map.keys();
+        return self.entity_list.items;
     }
 
     /// Create physics body for entity
@@ -220,10 +214,11 @@ pub const PhysicsWorld = struct {
         // Create body
         const body_id = try self.world.createBody(body_def);
 
-        // Store mappings using SparseSet
+        // Store mappings using HashMap
         try self.body_map.put(entity, body_id);
         try self.entity_map.put(bodyIdToU64(body_id), entity);
         try self.fixture_map.put(entity, FixtureList{});
+        try self.entity_list.append(self.allocator, entity);
     }
 
     /// Add collider to entity's physics body
@@ -259,15 +254,23 @@ pub const PhysicsWorld = struct {
     pub fn destroyBody(self: *PhysicsWorld, entity: u64) void {
         if (self.body_map.get(entity)) |body_id| {
             // Remove from entity_map first
-            self.entity_map.remove(bodyIdToU64(body_id));
+            _ = self.entity_map.remove(bodyIdToU64(body_id));
             // Destroy the Box2D body
             self.world.destroyBody(body_id);
         }
 
         // Remove from body_map
-        self.body_map.remove(entity);
+        _ = self.body_map.remove(entity);
         // Remove fixtures list
-        self.fixture_map.remove(entity);
+        _ = self.fixture_map.remove(entity);
+
+        // Remove from entity list
+        for (self.entity_list.items, 0..) |e, i| {
+            if (e == entity) {
+                _ = self.entity_list.swapRemove(i);
+                break;
+            }
+        }
     }
 
     /// Step physics simulation with fixed timestep accumulator
@@ -297,7 +300,7 @@ pub const PhysicsWorld = struct {
     }
 
     /// Get body position in pixels
-    pub fn getPosition(self: *const PhysicsWorld, entity: u64) ?[2]f32 {
+    pub fn getPosition(self: *PhysicsWorld, entity: u64) ?[2]f32 {
         const body_id = self.body_map.get(entity) orelse return null;
         const pos_meters = self.world.getPosition(body_id);
         return .{
@@ -307,7 +310,7 @@ pub const PhysicsWorld = struct {
     }
 
     /// Get body rotation in radians
-    pub fn getAngle(self: *const PhysicsWorld, entity: u64) ?f32 {
+    pub fn getAngle(self: *PhysicsWorld, entity: u64) ?f32 {
         const body_id = self.body_map.get(entity) orelse return null;
         return self.world.getAngle(body_id);
     }
@@ -426,9 +429,9 @@ pub const PhysicsWorld = struct {
             };
 
             if (contact.is_begin) {
-                self.collision_begin_events.append(event) catch {};
+                self.collision_begin_events.append(self.allocator, event) catch {};
             } else {
-                self.collision_end_events.append(event) catch {};
+                self.collision_end_events.append(self.allocator, event) catch {};
             }
         }
 
@@ -444,9 +447,9 @@ pub const PhysicsWorld = struct {
             };
 
             if (sensor.is_enter) {
-                self.sensor_enter_events.append(event) catch {};
+                self.sensor_enter_events.append(self.allocator, event) catch {};
             } else {
-                self.sensor_exit_events.append(event) catch {};
+                self.sensor_exit_events.append(self.allocator, event) catch {};
             }
         }
     }
