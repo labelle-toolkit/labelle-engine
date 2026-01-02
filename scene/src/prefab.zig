@@ -17,15 +17,6 @@
 
 const std = @import("std");
 
-// Import sprite configuration from render module
-const sprite_mod = @import("../render/src/sprite.zig");
-pub const SpriteConfig = sprite_mod.SpriteConfig;
-pub const ZIndex = sprite_mod.ZIndex;
-pub const Pivot = sprite_mod.Pivot;
-pub const Layer = sprite_mod.Layer;
-pub const SizeMode = sprite_mod.SizeMode;
-pub const Container = sprite_mod.Container;
-
 /// Comptime prefab registry - maps prefab names to their comptime data
 /// Usage:
 ///   const Prefabs = PrefabRegistry(.{
@@ -60,4 +51,3 @@ pub fn PrefabRegistry(comptime prefab_map: anytype) type {
         }
     };
 }
-

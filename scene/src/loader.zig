@@ -38,13 +38,12 @@
 
 const std = @import("std");
 const ecs = @import("ecs");
-const zon = @import("../core/src/zon_coercion.zig");
+const zon = @import("../../core/src/zon_coercion.zig");
 const prefab_mod = @import("prefab.zig");
 const core_mod = @import("core.zig");
 const component_mod = @import("component.zig");
 const script_mod = @import("script.zig");
-const render_pipeline_mod = @import("../render/src/pipeline.zig");
-const game_mod = @import("../engine/game.zig");
+const game_mod = @import("../../engine/game.zig");
 
 pub const Registry = ecs.Registry;
 pub const Entity = ecs.Entity;
@@ -56,8 +55,6 @@ pub const EntityInstance = core_mod.EntityInstance;
 pub const VisualType = core_mod.VisualType;
 pub const Game = game_mod.Game;
 
-// Render pipeline types
-pub const Position = render_pipeline_mod.Position;
 
 /// Scene-level camera configuration
 pub const SceneCameraConfig = struct {
@@ -126,6 +123,9 @@ fn applyCameraConfig(comptime config: anytype, camera: anytype) void {
 
 /// Scene loader that combines .zon scene data with comptime prefab and component/script registries
 pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime Scripts: type) type {
+    // Get Position type from Components registry (must be registered)
+    const Position = Components.getType("Position");
+
     return struct {
         const Self = @This();
 
@@ -230,7 +230,7 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
             const pos_x = parent_x + local_pos.x;
             const pos_y = parent_y + local_pos.y;
 
-            game.addPosition(entity, Position{ .x = pos_x, .y = pos_y });
+            game.getRegistry().add(entity, Position{ .x = pos_x, .y = pos_y });
 
             // Add components from prefab, merging with entity_def overrides where present
             if (comptime Prefabs.hasComponents(prefab_name)) {
@@ -287,7 +287,7 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
             const local_pos = getPositionFromComponents(entity_def) orelse Pos{ .x = 0, .y = 0 };
             const child_x = parent_x + local_pos.x;
             const child_y = parent_y + local_pos.y;
-            game.addPosition(entity, Position{ .x = child_x, .y = child_y });
+            game.getRegistry().add(entity, Position{ .x = child_x, .y = child_y });
 
             // Add all components (Sprite/Shape/Text handled via fromZonData, others generically)
             // Position is excluded since we already added it above
@@ -464,7 +464,7 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
             const entity = game.createEntity();
 
             // Add Position component
-            game.addPosition(entity, Position{ .x = x, .y = y });
+            game.getRegistry().add(entity, Position{ .x = x, .y = y });
 
             // Add all components from prefab (excluding Position which we already handled)
             // Visual components (Sprite, Shape, Text) are registered with pipeline via onAdd callbacks
@@ -558,10 +558,7 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
             const pos = getPrefabPosition(prefab_name, entity_def);
 
             // Add Position component
-            game.addPosition(entity, Position{
-                .x = pos.x,
-                .y = pos.y,
-            });
+            game.getRegistry().add(entity, Position{ .x = pos.x, .y = pos.y });
 
             // Add components from prefab, merging with scene overrides where present
             if (comptime Prefabs.hasComponents(prefab_name)) {
@@ -668,10 +665,7 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
             const pos = getPositionFromComponents(entity_def) orelse Pos{ .x = 0, .y = 0 };
 
             // Add Position component
-            game.addPosition(entity, Position{
-                .x = pos.x,
-                .y = pos.y,
-            });
+            game.getRegistry().add(entity, Position{ .x = pos.x, .y = pos.y });
 
             // Add all components (Sprite/Shape/Text handled via fromZonData, others generically)
             // Position is excluded since we already added it above

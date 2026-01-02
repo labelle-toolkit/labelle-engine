@@ -76,10 +76,18 @@ pub const PREFAB_WITH_COMPONENTS = struct {
 pub const SCENE_LOADER_API = struct {
     const loader = engine.scene.loader;
 
+    /// Minimal Position type for tests
+    const Position = struct {
+        x: f32 = 0,
+        y: f32 = 0,
+    };
+
     test "SceneLoader exports instantiatePrefab function" {
         // Verify the SceneLoader type has the instantiatePrefab method
         const TestPrefabs = prefab.PrefabRegistry(.{});
-        const TestComponents = engine.scene.component.ComponentRegistry(struct {});
+        const TestComponents = engine.scene.component.ComponentRegistry(struct {
+            pub const Position = SCENE_LOADER_API.Position;
+        });
         const TestScripts = engine.scene.script.ScriptRegistry(struct {});
         const TestLoader = loader.SceneLoader(TestPrefabs, TestComponents, TestScripts);
 
@@ -281,6 +289,12 @@ pub const PREFAB_IN_ENTITY_FIELDS = struct {
         value: i32 = 10,
     };
 
+    /// Minimal Position type for tests
+    const Position = struct {
+        x: f32 = 0,
+        y: f32 = 0,
+    };
+
     // ----------------------------------------
     // Test Registries Factory (using .zon definitions)
     // ----------------------------------------
@@ -291,6 +305,7 @@ pub const PREFAB_IN_ENTITY_FIELDS = struct {
     });
 
     const TestComponents = component.ComponentRegistry(struct {
+        pub const Position = PREFAB_IN_ENTITY_FIELDS.Position;
         pub const Room = PREFAB_IN_ENTITY_FIELDS.Room;
         pub const Weapon = PREFAB_IN_ENTITY_FIELDS.Weapon;
         pub const MovementNode = PREFAB_IN_ENTITY_FIELDS.MovementNode;
