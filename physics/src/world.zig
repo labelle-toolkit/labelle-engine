@@ -220,6 +220,10 @@ pub const PhysicsWorld = struct {
     }
 
     /// Add collider to entity's physics body
+    ///
+    /// Errors:
+    /// - `error.NoBody`: Entity does not have a physics body
+    /// - `error.ChainShapeNotImplemented`: Chain shapes are not yet supported
     pub fn addCollider(self: *PhysicsWorld, entity: u64, collider: Collider) !void {
         const body_id = self.body_map.get(entity) orelse return error.NoBody;
 
@@ -371,12 +375,15 @@ pub const PhysicsWorld = struct {
         return self.sensor_exit_events.items;
     }
 
-    // Internal helpers
+    // Error types
 
-    const ConvertShapeError = error{
+    /// Errors that can occur when converting component shapes to Box2D shapes
+    pub const ConvertShapeError = error{
         /// Chain shapes are not yet implemented
         ChainShapeNotImplemented,
     };
+
+    // Internal helpers
 
     fn convertShape(self: *const PhysicsWorld, shape: components.Shape) ConvertShapeError!box2d.Shape {
         const ppm = self.pixels_per_meter;

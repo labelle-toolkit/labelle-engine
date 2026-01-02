@@ -136,4 +136,21 @@ pub const PhysicsWorldTests = struct {
 
         try expect.toBeTrue(world.entities().len == 0);
     }
+
+    test "returns error for chain shapes" {
+        var world = try PWorld.init(std.testing.allocator, .{ 0, 980 });
+        defer world.deinit();
+
+        const entity_id: u64 = 1;
+        try world.createBody(entity_id, RBody{ .body_type = .static }, .{ .x = 0, .y = 0 });
+
+        const chain_collider = Coll{
+            .shape = .{ .chain = .{ .vertices = &.{}, .loop = false } },
+        };
+
+        try std.testing.expectError(
+            error.ChainShapeNotImplemented,
+            world.addCollider(entity_id, chain_collider),
+        );
+    }
 };
