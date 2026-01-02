@@ -83,6 +83,21 @@ jobs:
 
           exit $TEST_EXIT_CODE
 
+      - name: Run core module tests
+        shell: bash
+        run: |
+          echo "::group::🧪 Running core module tests"
+          cd core
+          zig build test 2>&1 | tee core_test_output.txt
+          echo "::endgroup::"
+
+          # Add to summary
+          PASSED=$(grep -oE '[0-9]+ of [0-9]+ tests passed' core_test_output.txt | grep -oE '^[0-9]+' || echo "0")
+          TOTAL=$(grep -oE '[0-9]+ of [0-9]+ tests passed' core_test_output.txt | sed 's/.* of \([0-9]*\) tests.*/\1/' || echo "0")
+          echo "## 🧱 Core Module Tests" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "✅ **$PASSED of $TOTAL core tests passed**" >> $GITHUB_STEP_SUMMARY
+
       - name: Run physics module tests
         shell: bash
         run: |
