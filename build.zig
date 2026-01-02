@@ -147,7 +147,7 @@ pub fn build(b: *std.Build) void {
     }
 
     // Core module - foundation types (entity utils, zon coercion)
-    _ = b.addModule("labelle-core", .{
+    const core_mod = b.addModule("labelle-core", .{
         .root_source_file = b.path("core/mod.zig"),
         .target = target,
         .optimize = optimize,
@@ -238,9 +238,28 @@ pub fn build(b: *std.Build) void {
     const zspec_test_step = b.step("zspec", "Run zspec tests");
     zspec_test_step.dependOn(&run_zspec_tests.step);
 
-    // Main test step runs zspec tests
+    // Core module tests
+    const core_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("core/test/tests.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "zspec", .module = zspec },
+                .{ .name = "labelle-core", .module = core_mod },
+            },
+        }),
+        .test_runner = .{ .path = zspec_dep.path("src/runner.zig"), .mode = .simple },
+    });
+
+    const run_core_tests = b.addRunArtifact(core_tests);
+    const core_test_step = b.step("core-test", "Run core module tests");
+    core_test_step.dependOn(&run_core_tests.step);
+
+    // Main test step runs all module tests
     const test_step = b.step("test", "Run all tests");
     test_step.dependOn(&run_zspec_tests.step);
+    test_step.dependOn(&run_core_tests.step);
 
     // Note: Examples have their own build.zig and are built separately
     // To run example_1: cd usage/example_1 && zig build run
