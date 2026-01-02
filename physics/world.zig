@@ -3,7 +3,9 @@
 //! Wraps the Box2D physics world and manages entity <-> body mappings.
 //! All physics runtime state is stored here, keeping ECS components clean.
 //!
-//! Uses HashMap for O(1) lookups with arbitrary entity IDs.
+//! Uses HashMap for O(1) lookups. HashMap was chosen over SparseSet because
+//! entity IDs include generation bits (not just sequential indices), making
+//! them unsuitable for sparse array indexing without excessive memory usage.
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
@@ -46,6 +48,8 @@ pub const FixtureList = struct {
         if (self.count < 8) {
             self.fixtures[self.count] = fixture;
             self.count += 1;
+        } else {
+            std.log.warn("FixtureList full (max 8 fixtures per entity). Dropping fixture.", .{});
         }
     }
 
@@ -61,8 +65,6 @@ pub const DEFAULT_MAX_ENTITIES: usize = 100_000;
 ///
 /// Manages the Box2D world and all entity <-> body mappings.
 /// Collision events are buffered each step and queryable via the event accessors.
-///
-/// Uses HashMap for O(1) lookups with arbitrary entity IDs.
 pub const PhysicsWorld = struct {
     allocator: Allocator,
 
@@ -397,10 +399,8 @@ pub const PhysicsWorld = struct {
                     .vertices = vertices[0..count],
                 } };
             },
-            .chain => |c| blk: {
-                _ = c;
-                // TODO: Implement chain shape conversion
-                break :blk .{ .box = .{ .half_width = 1, .half_height = 1 } };
+            .chain => {
+                @panic("Chain shapes are not yet implemented in physics world");
             },
         };
     }
