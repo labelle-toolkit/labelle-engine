@@ -43,7 +43,7 @@ const prefab_mod = @import("prefab.zig");
 const core_mod = @import("core.zig");
 const component_mod = @import("component.zig");
 const script_mod = @import("script.zig");
-const render_pipeline_mod = @import("../render/pipeline.zig");
+const render_pipeline_mod = @import("../render/src/pipeline.zig");
 const game_mod = @import("../engine/game.zig");
 
 pub const Registry = ecs.Registry;
@@ -68,6 +68,7 @@ pub const Layer = render_pipeline_mod.Layer;
 pub const SizeMode = render_pipeline_mod.SizeMode;
 pub const Container = render_pipeline_mod.Container;
 pub const Text = render_pipeline_mod.Text;
+pub const Pivot = render_pipeline_mod.Pivot;
 
 /// Scene-level camera configuration
 pub const SceneCameraConfig = struct {
@@ -574,7 +575,7 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
                 .rotation = getFieldOrDefault(sprite_data, "rotation", @as(f32, 0)),
                 .flip_x = getFieldOrDefault(sprite_data, "flip_x", false),
                 .flip_y = getFieldOrDefault(sprite_data, "flip_y", false),
-                .pivot = getFieldOrDefault(sprite_data, "pivot", render_pipeline_mod.Pivot.center),
+                .pivot = getFieldOrDefault(sprite_data, "pivot", Pivot.center),
                 .pivot_x = getFieldOrDefault(sprite_data, "pivot_x", @as(f32, 0.5)),
                 .pivot_y = getFieldOrDefault(sprite_data, "pivot_y", @as(f32, 0.5)),
                 .layer = getFieldOrDefault(sprite_data, "layer", Layer.world),
@@ -1078,7 +1079,7 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
                 .rotation = getFieldOrDefault(sprite_data, "rotation", @as(f32, 0)),
                 .flip_x = getFieldOrDefault(sprite_data, "flip_x", false),
                 .flip_y = getFieldOrDefault(sprite_data, "flip_y", false),
-                .pivot = getFieldOrDefault(sprite_data, "pivot", render_pipeline_mod.Pivot.center),
+                .pivot = getFieldOrDefault(sprite_data, "pivot", Pivot.center),
                 .pivot_x = getFieldOrDefault(sprite_data, "pivot_x", @as(f32, 0.5)),
                 .pivot_y = getFieldOrDefault(sprite_data, "pivot_y", @as(f32, 0.5)),
                 .layer = getFieldOrDefault(sprite_data, "layer", Layer.world),

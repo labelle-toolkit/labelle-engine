@@ -1,196 +1,76 @@
-// Render Pipeline - bridges ECS components to RetainedEngine
-//
-// This module provides:
-// - Position component with dirty tracking
-// - Sprite, Shape, Text components that wrap labelle-gfx visual types
-// - RenderPipeline that syncs ECS state to RetainedEngine
-//
-// Usage:
-//   var pipeline = RenderPipeline.init(allocator, &retained_engine);
-//   defer pipeline.deinit();
-//
-//   // Create entity with position and sprite
-//   const entity = registry.create();
-//   registry.add(entity, Position{ .x = 100, .y = 200 });
-//   registry.add(entity, Sprite{ .texture = tex_id });
-//   pipeline.trackEntity(entity, .sprite);
-//
-//   // In game loop - sync dirty positions to gfx
-//   pipeline.sync(&registry);
+//! Render Pipeline - bridges ECS components to RetainedEngine
+//!
+//! This module provides the RenderPipeline that syncs ECS state to the graphics backend.
+//! Components are defined in components.zig.
+//!
+//! Usage:
+//!   var pipeline = RenderPipeline.init(allocator, &retained_engine);
+//!   defer pipeline.deinit();
+//!
+//!   // Create entity with position and sprite
+//!   const entity = registry.create();
+//!   registry.add(entity, Position{ .x = 100, .y = 200 });
+//!   registry.add(entity, Sprite{ .texture = tex_id });
+//!   // Sprite.onAdd callback automatically tracks the entity
+//!
+//!   // In game loop - sync dirty positions to gfx
+//!   pipeline.sync(&registry);
 
 const std = @import("std");
 const labelle = @import("labelle");
 const ecs = @import("ecs");
 const build_options = @import("build_options");
+const components = @import("components.zig");
 
-// Backend selection - use the configured backend from build options
-const Backend = build_options.backend;
+// Re-export component types
+pub const Position = components.Position;
+pub const Sprite = components.Sprite;
+pub const Shape = components.Shape;
+pub const Text = components.Text;
+pub const VisualType = components.VisualType;
+pub const Pivot = components.Pivot;
 
-// Get RetainedEngine for the selected backend
-pub const RetainedEngine = switch (Backend) {
-    .raylib => labelle.RetainedEngine,
-    .sokol => labelle.withBackend(labelle.SokolBackend).RetainedEngine,
-    .sdl => labelle.withBackend(labelle.SdlBackend).RetainedEngine,
-    .bgfx => labelle.withBackend(labelle.BgfxBackend).RetainedEngine,
-    .zgpu => labelle.withBackend(labelle.ZgpuBackend).RetainedEngine,
-};
-pub const EntityId = labelle.EntityId;
-pub const TextureId = labelle.TextureId;
-pub const FontId = labelle.FontId;
-pub const SpriteVisual = RetainedEngine.SpriteVisual;
-pub const ShapeVisual = RetainedEngine.ShapeVisual;
-pub const TextVisual = RetainedEngine.TextVisual;
-pub const Color = labelle.retained_engine.Color;
-pub const ShapeType = labelle.retained_engine.Shape;
+// Re-export backend types
+pub const RetainedEngine = components.RetainedEngine;
+pub const EntityId = components.EntityId;
+pub const TextureId = components.TextureId;
+pub const FontId = components.FontId;
+pub const SpriteVisual = components.SpriteVisual;
+pub const ShapeVisual = components.ShapeVisual;
+pub const TextVisual = components.TextVisual;
+pub const Color = components.Color;
+pub const ShapeType = components.ShapeType;
 
-// Layer system - re-export labelle-gfx layer types
-pub const Layer = labelle.DefaultLayers;
-pub const LayerConfig = labelle.LayerConfig;
-pub const LayerSpace = labelle.LayerSpace;
-
-// Sizing system - re-export labelle-gfx sizing types
-pub const SizeMode = labelle.SizeMode;
-pub const Container = labelle.Container;
+// Re-export layer and sizing types
+pub const Layer = components.Layer;
+pub const LayerConfig = components.LayerConfig;
+pub const LayerSpace = components.LayerSpace;
+pub const SizeMode = components.SizeMode;
+pub const Container = components.Container;
 
 // ECS types
-pub const Registry = ecs.Registry;
-pub const Entity = ecs.Entity;
+pub const Registry = components.Registry;
+pub const Entity = components.Entity;
 
 // ============================================
-// Position Component
+// Global Pipeline Access
 // ============================================
+// Used by component lifecycle callbacks (onAdd/onRemove) to access the pipeline.
+// Set by Game.fixPointers().
 
-/// Position component - source of truth for entity location
-pub const Position = struct {
-    x: f32 = 0,
-    y: f32 = 0,
+var global_pipeline: ?*RenderPipeline = null;
 
-    pub fn toGfx(self: Position) labelle.retained_engine.Position {
-        return .{ .x = self.x, .y = self.y };
-    }
-};
+/// Get the global pipeline pointer (for component callbacks).
+/// Returns null if not yet initialized.
+pub fn getGlobalPipeline() ?*RenderPipeline {
+    return global_pipeline;
+}
 
-// ============================================
-// Visual Components (wrap labelle-gfx types)
-// ============================================
-
-/// Pivot point for sprite positioning and rotation
-pub const Pivot = labelle.Pivot;
-
-/// Sprite component - references a texture/sprite for rendering
-pub const Sprite = struct {
-    texture: TextureId = .invalid,
-    sprite_name: []const u8 = "",
-    scale: f32 = 1,
-    rotation: f32 = 0,
-    flip_x: bool = false,
-    flip_y: bool = false,
-    tint: Color = Color.white,
-    z_index: u8 = 128,
-    visible: bool = true,
-    /// Pivot point for positioning and rotation (defaults to center)
-    pivot: Pivot = .center,
-    /// Custom pivot X coordinate (0.0-1.0), used when pivot == .custom
-    pivot_x: f32 = 0.5,
-    /// Custom pivot Y coordinate (0.0-1.0), used when pivot == .custom
-    pivot_y: f32 = 0.5,
-    /// Rendering layer (background, world, or ui)
-    layer: Layer = .world,
-    /// Sizing mode for container-based rendering (stretch, cover, contain, scale_down, repeat)
-    size_mode: SizeMode = .none,
-    /// Container specification for sized sprites (null = infer from layer space)
-    container: ?Container = null,
-
-    pub fn toVisual(self: Sprite) SpriteVisual {
-        return .{
-            .texture = self.texture,
-            .sprite_name = self.sprite_name,
-            .scale = self.scale,
-            .rotation = self.rotation,
-            .flip_x = self.flip_x,
-            .flip_y = self.flip_y,
-            .tint = self.tint,
-            .z_index = self.z_index,
-            .visible = self.visible,
-            .pivot = self.pivot,
-            .pivot_x = self.pivot_x,
-            .pivot_y = self.pivot_y,
-            .layer = self.layer,
-            .size_mode = self.size_mode,
-            .container = self.container,
-        };
-    }
-};
-
-/// Shape component - renders geometric primitives
-pub const Shape = struct {
-    shape: ShapeType,
-    color: Color = Color.white,
-    rotation: f32 = 0,
-    z_index: u8 = 128,
-    visible: bool = true,
-    /// Rendering layer (background, world, or ui)
-    layer: Layer = .world,
-
-    pub fn toVisual(self: Shape) ShapeVisual {
-        return .{
-            .shape = self.shape,
-            .color = self.color,
-            .rotation = self.rotation,
-            .z_index = self.z_index,
-            .visible = self.visible,
-            .layer = self.layer,
-        };
-    }
-
-    // Convenience constructors
-    pub fn circle(radius: f32) Shape {
-        return .{ .shape = .{ .circle = .{ .radius = radius } } };
-    }
-
-    pub fn rectangle(width: f32, height: f32) Shape {
-        return .{ .shape = .{ .rectangle = .{ .width = width, .height = height } } };
-    }
-
-    pub fn line(end_x: f32, end_y: f32, thickness: f32) Shape {
-        return .{ .shape = .{ .line = .{ .end = .{ .x = end_x, .y = end_y }, .thickness = thickness } } };
-    }
-};
-
-/// Text component - renders text with a font
-pub const Text = struct {
-    font: FontId = .invalid,
-    text: [:0]const u8 = "",
-    size: f32 = 16,
-    color: Color = Color.white,
-    z_index: u8 = 128,
-    visible: bool = true,
-    /// Rendering layer (background, world, or ui)
-    layer: Layer = .world,
-
-    pub fn toVisual(self: Text) TextVisual {
-        return .{
-            .font = self.font,
-            .text = self.text,
-            .size = self.size,
-            .color = self.color,
-            .z_index = self.z_index,
-            .visible = self.visible,
-            .layer = self.layer,
-        };
-    }
-};
-
-// ============================================
-// Visual Type Enum
-// ============================================
-
-pub const VisualType = enum {
-    none, // Entity has no visual (e.g., nested data-only entities)
-    sprite,
-    shape,
-    text,
-};
+/// Set the global pipeline pointer.
+/// Called by Game.fixPointers() after the Game struct is in its final location.
+pub fn setGlobalPipeline(pipeline: ?*RenderPipeline) void {
+    global_pipeline = pipeline;
+}
 
 // ============================================
 // Tracked Entity
@@ -381,4 +261,3 @@ pub const RenderPipeline = struct {
         return self.tracked.count();
     }
 };
-

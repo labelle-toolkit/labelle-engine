@@ -3,14 +3,43 @@
 //! This module provides the rendering layer that bridges ECS components
 //! to the graphics backend (labelle-gfx RetainedEngine).
 //!
-//! Contents:
-//! - Position, Sprite, Shape, Text components
-//! - RenderPipeline for syncing ECS state to graphics
-//! - Layer, sizing, and visual type definitions
+//! ## Components
+//! - `Position` - Entity location (x, y coordinates)
+//! - `Sprite` - Texture/sprite for rendering with pivot, layer, sizing options
+//! - `Shape` - Geometric primitives (circle, rectangle, line)
+//! - `Text` - Text rendering with font
+//!
+//! ## Automatic Tracking
+//! Visual components (Sprite, Shape, Text) have lifecycle callbacks that
+//! automatically track/untrack entities with the RenderPipeline when
+//! added/removed from the ECS.
+//!
+//! ## Usage
+//! ```zig
+//! const render = @import("labelle-engine").render;
+//!
+//! // Add components - tracking happens automatically via onAdd callback
+//! registry.add(entity, render.Position{ .x = 100, .y = 200 });
+//! registry.add(entity, render.Sprite{ .sprite_name = "player.png" });
+//!
+//! // In game loop - sync dirty state to graphics
+//! pipeline.sync(&registry);
+//! ```
 
-const pipeline = @import("pipeline.zig");
+const std = @import("std");
+
+// Components
+pub const components = @import("src/components.zig");
+pub const Position = components.Position;
+pub const Sprite = components.Sprite;
+pub const Shape = components.Shape;
+pub const Text = components.Text;
+pub const VisualType = components.VisualType;
+pub const Pivot = components.Pivot;
+pub const Components = components.Components;
 
 // Backend and engine types
+const pipeline = @import("src/pipeline.zig");
 pub const RetainedEngine = pipeline.RetainedEngine;
 pub const EntityId = pipeline.EntityId;
 pub const TextureId = pipeline.TextureId;
@@ -34,13 +63,13 @@ pub const Container = pipeline.Container;
 pub const Registry = pipeline.Registry;
 pub const Entity = pipeline.Entity;
 
-// Visual components
-pub const Position = pipeline.Position;
-pub const Pivot = pipeline.Pivot;
-pub const Sprite = pipeline.Sprite;
-pub const Shape = pipeline.Shape;
-pub const Text = pipeline.Text;
-pub const VisualType = pipeline.VisualType;
-
 // Render pipeline
 pub const RenderPipeline = pipeline.RenderPipeline;
+
+// Global pipeline access (for component callbacks)
+pub const getGlobalPipeline = pipeline.getGlobalPipeline;
+pub const setGlobalPipeline = pipeline.setGlobalPipeline;
+
+test {
+    std.testing.refAllDecls(@This());
+}
