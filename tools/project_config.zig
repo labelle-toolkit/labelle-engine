@@ -41,6 +41,7 @@ pub const Backend = enum {
     sokol,
     sdl,
     bgfx,
+    zgpu,
 };
 
 /// ECS backend selection

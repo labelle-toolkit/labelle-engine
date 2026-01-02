@@ -157,12 +157,13 @@ pub fn AudioInterface(comptime Impl: type) type {
 }
 
 // Select and validate audio backend based on graphics backend
-// Raylib has its own audio system; sokol, SDL, and bgfx use miniaudio via zaudio
+// Raylib has its own audio system; sokol, SDL, bgfx, and zgpu use miniaudio via zaudio
 const BackendImpl = switch (backend) {
     .raylib => @import("raylib_audio.zig"),
     .sokol => @import("miniaudio_audio.zig"),
     .sdl => @import("miniaudio_audio.zig"),
     .bgfx => @import("miniaudio_audio.zig"),
+    .zgpu => @import("miniaudio_audio.zig"),
 };
 
 /// The Audio type for the selected backend

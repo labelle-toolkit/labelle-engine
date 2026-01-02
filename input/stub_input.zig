@@ -1,7 +1,7 @@
 //! Stub Input Backend
 //!
 //! A no-op input implementation for backends that handle input
-//! directly in their main loop (like bgfx with GLFW).
+//! directly in their main loop (like bgfx/zgpu with GLFW).
 //!
 //! This stub implements all required methods but returns "no input".
 //! The actual input handling happens in the generated main.zig template.
