@@ -23,6 +23,12 @@
 //           .y = 0,
 //           .zoom = 1.0,   // 1.0 = 100% zoom
 //       },
+//       .physics = .{
+//           .enabled = true,           // Enable Box2D physics (default: false)
+//           .gravity = .{ 0, 980 },    // pixels/sec² (positive Y = down)
+//           .pixels_per_meter = 100.0, // Scale factor for Box2D
+//           .debug_draw = false,       // Render collision shapes
+//       },
 //       .plugins = .{
 //           .{ .name = "labelle-pathfinding", .version = "2.5.0", .module = "pathfinding" },
 //       },
@@ -203,6 +209,24 @@ pub const WindowConfig = struct {
     resizable: bool = false,
 };
 
+/// Physics configuration
+pub const PhysicsConfig = struct {
+    /// Enable physics module (Box2D)
+    enabled: bool = false,
+    /// Gravity in pixels/sec² (positive Y = down for screen coordinates)
+    gravity: [2]f32 = .{ 0, 980 },
+    /// Pixels per meter conversion (Box2D uses meters internally)
+    pixels_per_meter: f32 = 100.0,
+    /// Enable debug rendering of collision shapes
+    debug_draw: bool = false,
+    /// Fixed timestep for physics simulation (default: 1/60 for 60 FPS)
+    time_step: f32 = 1.0 / 60.0,
+    /// Velocity solver iterations (higher = more accurate)
+    velocity_iterations: i32 = 8,
+    /// Position solver iterations
+    position_iterations: i32 = 3,
+};
+
 /// Project configuration loaded from .labelle file
 pub const ProjectConfig = struct {
     version: u32,
@@ -215,6 +239,7 @@ pub const ProjectConfig = struct {
     camera: CameraConfig = .{},
     resources: Resources = .{},
     plugins: []const Plugin = &.{},
+    physics: PhysicsConfig = .{},
     /// Output directory for generated build files (build.zig, build.zig.zon)
     /// Relative to the project root. Default: ".labelle"
     /// Note: main.zig stays in the project root for module import compatibility.

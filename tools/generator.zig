@@ -217,9 +217,12 @@ pub fn generateBuildZig(allocator: std.mem.Allocator, config: ProjectConfig) ![]
         .zflecs => "zflecs",
     };
 
+    const physics_enabled = config.physics.enabled;
+    const physics_str = if (physics_enabled) "true" else "false";
+
     // Write common header (includes backend options)
-    // Template args: graphics_backend (x2), ecs_backend (x2)
-    try zts.print(build_zig_tmpl, "header", .{ default_backend, default_backend, default_ecs_backend, default_ecs_backend }, writer);
+    // Template args: graphics_backend (x2), ecs_backend (x2), physics (x2)
+    try zts.print(build_zig_tmpl, "header", .{ default_backend, default_backend, default_ecs_backend, default_ecs_backend, physics_str, physics_enabled }, writer);
 
     // Write plugin dependency declarations
     // Sanitize plugin names for use as Zig identifiers

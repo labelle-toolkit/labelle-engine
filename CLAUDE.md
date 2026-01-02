@@ -164,6 +164,12 @@ pub fn deinit(game: *Game, scene: *Scene) void { ... }  // optional
     .ecs_backend = .zig_ecs,   // or .zflecs
     .window = .{ .width = 800, .height = 600, .title = "My Game" },
     .camera = .{ .x = 0, .y = 0, .zoom = 1.0 },  // optional - default camera position
+    .physics = .{  // optional - enables Box2D physics
+        .enabled = true,
+        .gravity = .{ 0, 980 },    // pixels/sec² (positive Y = down)
+        .pixels_per_meter = 100.0, // Box2D scale factor
+        .debug_draw = false,       // render collision shapes
+    },
     .plugins = .{
         // Version tag (recommended for production)
         .{ .name = "labelle-tasks", .version = "0.5.0" },
@@ -219,6 +225,45 @@ zig build -Decs_backend=zflecs
 ```
 
 Both backends implement a common interface defined in `src/ecs/`.
+
+### Physics Module
+
+Optional Box2D physics integration, enabled via `physics.enabled = true` in project.labelle:
+
+```bash
+zig build -Dphysics=true   # Enable physics at build time
+```
+
+**Physics components** (from `engine.physics`):
+- `RigidBody` - Dynamic, static, or kinematic body type
+- `Collider` - Box or circle collision shape with friction/restitution
+- `Velocity` - Linear and angular velocity
+
+**Usage pattern:**
+```zig
+const physics = @import("labelle-physics");
+
+// Create physics world
+var physics_world = try physics.PhysicsWorld.init(allocator, .{ 0, 980 });
+defer physics_world.deinit();
+
+// Create body and collider
+try physics_world.createBody(entity.toU64(), RigidBody{ .body_type = .dynamic }, .{ .x = x, .y = y });
+try physics_world.addCollider(entity.toU64(), Collider{
+    .shape = .{ .box = .{ .width = 50, .height = 50 } },
+    .restitution = 0.4,
+});
+
+// In game loop
+physics_world.update(dt);
+for (physics_world.entities()) |entity_id| {
+    if (physics_world.getPosition(entity_id)) |pos| {
+        game.setPosition(engine.Entity.fromU64(entity_id), pos[0], pos[1]) catch {};
+    }
+}
+```
+
+See `usage/example_physics/` for a complete demo.
 
 ### Project Generator
 
