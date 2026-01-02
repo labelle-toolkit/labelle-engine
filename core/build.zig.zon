@@ -9,9 +9,9 @@
             .url = "git+https://github.com/prime31/zig-ecs#dbf3647c2cc4f327fe87067e40f8436c7f87f209",
             .hash = "entt-1.0.0-qJPtbNLVAgDPXaUbyRSsBTK75Cr1WujUA92kToJugWry",
         },
-        // ZSpec testing framework
+        // ZSpec testing framework - must match main engine's zspec
         .zspec = .{
-            .url = "git+https://github.com/apotema/zspec#main",
+            .url = "git+https://github.com/apotema/zspec#71c901d6e74b2d5a8c556d4c74ced9b91446d8a4",
             .hash = "zspec-0.6.0-jaKLbU5DAwAYa0jR0cnFGuIbSrxD6ojh-oyXj9ooyb3V",
         },
     },
