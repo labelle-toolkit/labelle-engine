@@ -80,6 +80,9 @@ pub fn main() !void {
 
     // Main loop
     while (game.isRunning()) {
+        // Poll input events at start of frame
+        game.getInput().beginFrame();
+
         const dt = game.getDeltaTime();
         spawn_timer -= dt;
 
