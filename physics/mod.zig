@@ -40,6 +40,10 @@ pub const Velocity = components.Velocity;
 pub const BodyType = components.BodyType;
 pub const Shape = components.Shape;
 
+// ZON-friendly component (avoids tagged union limitation)
+pub const PhysicsBody = components.PhysicsBody;
+pub const ColliderType = components.ColliderType;
+
 // Systems
 pub const systems = @import("src/systems.zig");
 

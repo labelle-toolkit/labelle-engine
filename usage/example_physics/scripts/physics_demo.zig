@@ -13,10 +13,10 @@ const Entity = engine.Entity;
 const Position = engine.Position;
 const Shape = engine.Shape;
 
-// Import component from local components folder
-const PhysicsBody = @import("../components/physics_body.zig").PhysicsBody;
-const BodyType = @import("../components/physics_body.zig").BodyType;
-const ColliderType = @import("../components/physics_body.zig").ColliderType;
+// Physics components (exported from physics module)
+const PhysicsBody = physics.PhysicsBody;
+const BodyType = physics.BodyType;
+const ColliderType = physics.ColliderType;
 
 const RigidBody = physics.RigidBody;
 const Collider = physics.Collider;

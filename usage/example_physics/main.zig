@@ -11,13 +11,15 @@ const engine = @import("labelle-engine");
 const Game = engine.Game;
 const ProjectConfig = engine.ProjectConfig;
 
+// Import physics module for components
+const physics = @import("labelle-physics");
+
 // Import prefabs
 const dynamic_box_prefab = @import("prefabs/dynamic_box.zon");
 const dynamic_circle_prefab = @import("prefabs/dynamic_circle.zon");
 
-// Import components
-const physics_body_comp = @import("components/physics_body.zig");
-pub const PhysicsBody = physics_body_comp.PhysicsBody;
+// Physics components (exported from physics module)
+pub const PhysicsBody = physics.PhysicsBody;
 
 // Import scripts
 const physics_demo_script = @import("scripts/physics_demo.zig");
