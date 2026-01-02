@@ -5,6 +5,7 @@ const Factory = zspec.Factory;
 
 const engine = @import("labelle-engine");
 const prefab = engine.scene.prefab;
+const render = engine.render;
 
 // Import factory definitions from .zon files
 const sprite_configs = @import("factories/sprite_configs.zon");
@@ -14,13 +15,13 @@ test {
     zspec.runAll(@This());
 }
 
-// Define factories from .zon files
-const SpriteConfigFactory = Factory.defineFrom(prefab.SpriteConfig, sprite_configs.default);
-const ScaledSpriteFactory = Factory.defineFrom(prefab.SpriteConfig, sprite_configs.scaled);
-const FullSpriteFactory = Factory.defineFrom(prefab.SpriteConfig, sprite_configs.full);
-const BaseMergeSpriteFactory = Factory.defineFrom(prefab.SpriteConfig, sprite_configs.base_for_merge);
-const UiLayerSpriteFactory = Factory.defineFrom(prefab.SpriteConfig, sprite_configs.ui_layer);
-const BackgroundLayerSpriteFactory = Factory.defineFrom(prefab.SpriteConfig, sprite_configs.background_layer);
+// Define factories from .zon files (using render module's SpriteConfig)
+const SpriteConfigFactory = Factory.defineFrom(render.SpriteConfig, sprite_configs.default);
+const ScaledSpriteFactory = Factory.defineFrom(render.SpriteConfig, sprite_configs.scaled);
+const FullSpriteFactory = Factory.defineFrom(render.SpriteConfig, sprite_configs.full);
+const BaseMergeSpriteFactory = Factory.defineFrom(render.SpriteConfig, sprite_configs.base_for_merge);
+const UiLayerSpriteFactory = Factory.defineFrom(render.SpriteConfig, sprite_configs.ui_layer);
+const BackgroundLayerSpriteFactory = Factory.defineFrom(render.SpriteConfig, sprite_configs.background_layer);
 
 pub const SPRITE_CONFIG = struct {
     pub const DEFAULTS = struct {
@@ -102,17 +103,17 @@ pub const SPRITE_CONFIG = struct {
     };
 };
 
-pub const MERGE_SPRITE_WITH_OVERRIDES = struct {
+pub const SPRITE_CONFIG_MERGE = struct {
     pub const SCALE_OVERRIDES = struct {
         test "uses override scale when specified" {
             const base = ScaledSpriteFactory.build(.{});
-            const merged = prefab.mergeSpriteWithOverrides(base, .{ .scale = 3.0 });
+            const merged = base.merge(.{ .scale = 3.0 });
             try expect.equal(merged.scale, 3.0);
         }
 
         test "uses base scale when not overridden" {
             const base = ScaledSpriteFactory.build(.{});
-            const merged = prefab.mergeSpriteWithOverrides(base, .{});
+            const merged = base.merge(.{});
             try expect.equal(merged.scale, 2.0);
         }
     };
@@ -120,13 +121,13 @@ pub const MERGE_SPRITE_WITH_OVERRIDES = struct {
     pub const ROTATION_OVERRIDES = struct {
         test "uses override rotation when specified" {
             const base = SpriteConfigFactory.build(.{ .rotation = 45 });
-            const merged = prefab.mergeSpriteWithOverrides(base, .{ .rotation = 90 });
+            const merged = base.merge(.{ .rotation = 90 });
             try expect.equal(merged.rotation, 90);
         }
 
         test "uses base rotation when not overridden" {
             const base = SpriteConfigFactory.build(.{ .rotation = 45 });
-            const merged = prefab.mergeSpriteWithOverrides(base, .{});
+            const merged = base.merge(.{});
             try expect.equal(merged.rotation, 45);
         }
     };
@@ -134,25 +135,25 @@ pub const MERGE_SPRITE_WITH_OVERRIDES = struct {
     pub const FLIP_OVERRIDES = struct {
         test "flip_x uses override when specified" {
             const base = SpriteConfigFactory.build(.{ .flip_x = false });
-            const merged = prefab.mergeSpriteWithOverrides(base, .{ .flip_x = true });
+            const merged = base.merge(.{ .flip_x = true });
             try expect.toBeTrue(merged.flip_x);
         }
 
         test "flip_x uses base when not overridden" {
             const base = SpriteConfigFactory.build(.{ .flip_x = true });
-            const merged = prefab.mergeSpriteWithOverrides(base, .{});
+            const merged = base.merge(.{});
             try expect.toBeTrue(merged.flip_x);
         }
 
         test "flip_y uses override when specified" {
             const base = SpriteConfigFactory.build(.{ .flip_y = false });
-            const merged = prefab.mergeSpriteWithOverrides(base, .{ .flip_y = true });
+            const merged = base.merge(.{ .flip_y = true });
             try expect.toBeTrue(merged.flip_y);
         }
 
         test "flip_y uses base when not overridden" {
             const base = SpriteConfigFactory.build(.{ .flip_y = true });
-            const merged = prefab.mergeSpriteWithOverrides(base, .{});
+            const merged = base.merge(.{});
             try expect.toBeTrue(merged.flip_y);
         }
     };
@@ -160,13 +161,13 @@ pub const MERGE_SPRITE_WITH_OVERRIDES = struct {
     pub const PIVOT_OVERRIDES = struct {
         test "uses override pivot when specified" {
             const base = SpriteConfigFactory.build(.{ .pivot = .top_left });
-            const merged = prefab.mergeSpriteWithOverrides(base, .{ .pivot = .bottom_center });
+            const merged = base.merge(.{ .pivot = .bottom_center });
             try expect.equal(merged.pivot, .bottom_center);
         }
 
         test "uses base pivot when not overridden" {
             const base = SpriteConfigFactory.build(.{ .pivot = .bottom_center });
-            const merged = prefab.mergeSpriteWithOverrides(base, .{});
+            const merged = base.merge(.{});
             try expect.equal(merged.pivot, .bottom_center);
         }
     };
@@ -174,19 +175,19 @@ pub const MERGE_SPRITE_WITH_OVERRIDES = struct {
     pub const LAYER_OVERRIDES = struct {
         test "uses override layer when specified" {
             const base = SpriteConfigFactory.build(.{ .layer = .world });
-            const merged = prefab.mergeSpriteWithOverrides(base, .{ .layer = .ui });
+            const merged = base.merge(.{ .layer = .ui });
             try expect.equal(merged.layer, .ui);
         }
 
         test "uses base layer when not overridden" {
             const base = UiLayerSpriteFactory.build(.{});
-            const merged = prefab.mergeSpriteWithOverrides(base, .{});
+            const merged = base.merge(.{});
             try expect.equal(merged.layer, .ui);
         }
 
         test "can override to background layer" {
             const base = SpriteConfigFactory.build(.{});
-            const merged = prefab.mergeSpriteWithOverrides(base, .{ .layer = .background });
+            const merged = base.merge(.{ .layer = .background });
             try expect.equal(merged.layer, .background);
         }
     };
@@ -200,7 +201,7 @@ pub const MERGE_SPRITE_WITH_OVERRIDES = struct {
                 .flip_x = true,
                 .flip_y = false,
             });
-            const merged = prefab.mergeSpriteWithOverrides(base, .{
+            const merged = base.merge(.{
                 .rotation = 90,
                 .flip_x = false,
                 .flip_y = true,
@@ -215,7 +216,7 @@ pub const MERGE_SPRITE_WITH_OVERRIDES = struct {
 
         test "empty overrides preserve all base values" {
             const base = BaseMergeSpriteFactory.build(.{});
-            const merged = prefab.mergeSpriteWithOverrides(base, .{});
+            const merged = base.merge(.{});
 
             try expect.toBeTrue(std.mem.eql(u8, merged.name, "base.png"));
             try expect.equal(merged.z_index, 10);
@@ -259,18 +260,6 @@ pub const PREFAB_REGISTRY = struct {
         try expect.equal(player.components.Position.y, 200);
     }
 
-    test "getSprite returns sprite config" {
-        const sprite = TestPrefabs.getSprite("player", .{});
-        try expect.toBeTrue(std.mem.eql(u8, sprite.name, "player.png"));
-        try expect.equal(sprite.scale, 2.0);
-    }
-
-    test "getSprite applies overrides" {
-        const sprite = TestPrefabs.getSprite("player", .{ .scale = 3.0 });
-        try expect.toBeTrue(std.mem.eql(u8, sprite.name, "player.png"));
-        try expect.equal(sprite.scale, 3.0);
-    }
-
     test "hasComponents returns true when prefab has components" {
         try expect.toBeTrue(TestPrefabs.hasComponents("enemy"));
     }
@@ -288,14 +277,14 @@ pub const PREFAB_REGISTRY = struct {
 
 pub const ZINDEX = struct {
     test "background is lowest" {
-        try expect.equal(prefab.ZIndex.background, 0);
+        try expect.equal(render.ZIndex.background, 0);
     }
 
     test "characters is middle" {
-        try expect.equal(prefab.ZIndex.characters, 128);
+        try expect.equal(render.ZIndex.characters, 128);
     }
 
     test "foreground is highest" {
-        try expect.equal(prefab.ZIndex.foreground, 255);
+        try expect.equal(render.ZIndex.foreground, 255);
     }
 };

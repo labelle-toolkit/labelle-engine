@@ -52,8 +52,8 @@ pub fn init(game: *Game, scene: *Scene) void {
 
             // Verify child entity has Sprite component (from prefab reference)
             if (registry.tryGet(Sprite, child_entity)) |sprite| {
-                std.debug.assert(std.mem.eql(u8, sprite.sprite_name, "child_node"));
-                std.debug.print("Child Sprite = {s} (expected child_node)\n", .{sprite.sprite_name});
+                std.debug.assert(std.mem.eql(u8, sprite.name, "child_node"));
+                std.debug.print("Child Sprite = {s} (expected child_node)\n", .{sprite.name});
             } else {
                 @panic("Expected Sprite component on child entity (prefab reference)");
             }

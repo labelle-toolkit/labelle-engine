@@ -11,7 +11,7 @@
         .{
             .components = .{
                 .Position = .{ .x = 400, .y = 550 },
-                .Shape = .{ .type = .rectangle, .width = 700, .height = 20, .color = .{ .r = 100, .g = 100, .b = 100 } },
+                .Shape = .{ .shape = .{ .rectangle = .{ .width = 700, .height = 20 } }, .color = .{ .r = 100, .g = 100, .b = 100 } },
                 .RigidBody = .{ .body_type = .static },
                 .Collider = .{ .shape = .{ .box = .{ .width = 700, .height = 20 } } },
             },
@@ -20,7 +20,7 @@
         .{
             .components = .{
                 .Position = .{ .x = 50, .y = 300 },
-                .Shape = .{ .type = .rectangle, .width = 20, .height = 500, .color = .{ .r = 100, .g = 100, .b = 100 } },
+                .Shape = .{ .shape = .{ .rectangle = .{ .width = 20, .height = 500 } }, .color = .{ .r = 100, .g = 100, .b = 100 } },
                 .RigidBody = .{ .body_type = .static },
                 .Collider = .{ .shape = .{ .box = .{ .width = 20, .height = 500 } } },
             },
@@ -29,7 +29,7 @@
         .{
             .components = .{
                 .Position = .{ .x = 750, .y = 300 },
-                .Shape = .{ .type = .rectangle, .width = 20, .height = 500, .color = .{ .r = 100, .g = 100, .b = 100 } },
+                .Shape = .{ .shape = .{ .rectangle = .{ .width = 20, .height = 500 } }, .color = .{ .r = 100, .g = 100, .b = 100 } },
                 .RigidBody = .{ .body_type = .static },
                 .Collider = .{ .shape = .{ .box = .{ .width = 20, .height = 500 } } },
             },
@@ -54,7 +54,7 @@
         .{
             .components = .{
                 .Position = .{ .x = 600, .y = 150 },
-                .Shape = .{ .type = .rectangle, .width = 30, .height = 60, .color = .{ .r = 50, .g = 50, .b = 200 } },
+                .Shape = .{ .shape = .{ .rectangle = .{ .width = 30, .height = 60 } }, .color = .{ .r = 50, .g = 50, .b = 200 } },
                 .RigidBody = .{ .body_type = .dynamic },
                 .Collider = .{
                     .shape = .{ .box = .{ .width = 30, .height = 60 } },
@@ -67,7 +67,7 @@
             .prefab = "dynamic_circle",
             .components = .{
                 .Position = .{ .x = 300, .y = 200 },
-                .Shape = .{ .radius = 25, .color = .{ .r = 200, .g = 200, .b = 50 } },
+                .Shape = .{ .shape = .{ .circle = .{ .radius = 25 } }, .color = .{ .r = 200, .g = 200, .b = 50 } },
             },
         },
         // Dynamic circle (purple)

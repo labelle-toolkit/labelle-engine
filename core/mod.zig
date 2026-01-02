@@ -23,5 +23,5 @@ pub const coerceValue = zon_coercion.coerceValue;
 pub const tupleToSlice = zon_coercion.tupleToSlice;
 pub const isEntity = zon_coercion.isEntity;
 pub const isEntitySlice = zon_coercion.isEntitySlice;
-pub const isFlattenedShapeComponent = zon_coercion.isFlattenedShapeComponent;
-pub const buildFlattenedShapeComponent = zon_coercion.buildFlattenedShapeComponent;
+pub const mergeStructs = zon_coercion.mergeStructs;
+pub const hasFields = zon_coercion.hasFields;

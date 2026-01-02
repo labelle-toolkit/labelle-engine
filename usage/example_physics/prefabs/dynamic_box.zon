@@ -4,9 +4,7 @@
     .components = .{
         .Position = .{ .x = 0, .y = 0 },
         .Shape = .{
-            .type = .rectangle,
-            .width = 40,
-            .height = 40,
+            .shape = .{ .rectangle = .{ .width = 40, .height = 40 } },
             .color = .{ .r = 200, .g = 100, .b = 50, .a = 255 },
         },
         .RigidBody = .{

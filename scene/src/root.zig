@@ -20,12 +20,6 @@ pub const CameraSlot = loader.CameraSlot;
 
 // Prefab exports
 pub const PrefabRegistry = prefab.PrefabRegistry;
-pub const SpriteConfig = prefab.SpriteConfig;
-pub const ZIndex = prefab.ZIndex;
-pub const Pivot = prefab.Pivot;
-pub const Layer = prefab.Layer;
-pub const SizeMode = prefab.SizeMode;
-pub const Container = prefab.Container;
 
 // Component exports
 pub const ComponentRegistry = component.ComponentRegistry;

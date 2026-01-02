@@ -19,7 +19,7 @@ pub const input = @import("input");
 pub const audio = @import("audio");
 pub const hooks = @import("hooks/mod.zig");
 pub const render = @import("render/mod.zig");
-pub const scene = @import("scene/mod.zig");
+pub const scene = @import("scene/src/root.zig");
 pub const engine = @import("engine/mod.zig");
 
 // Build configuration
