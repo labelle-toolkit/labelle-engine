@@ -51,9 +51,11 @@ jobs:
           set -e
           echo "::endgroup::"
 
-          # Parse test results for summary
-          PASSED=$(grep -oE '[0-9]+ of [0-9]+ tests passed' test_output.txt | grep -oE '^[0-9]+' || echo "0")
-          TOTAL=$(grep -oE '[0-9]+ of [0-9]+ tests passed' test_output.txt | sed 's/.* of \([0-9]*\) tests.*/\1/' || echo "0")
+          # Parse test results for summary (sum all test results from multiple modules)
+          PASSED=$(grep -oE '[0-9]+ of [0-9]+ tests passed' test_output.txt | grep -oE '^[0-9]+' | awk '{sum+=$1} END {print sum}')
+          TOTAL=$(grep -oE '[0-9]+ of [0-9]+ tests passed' test_output.txt | sed 's/.* of \([0-9]*\) tests.*/\1/' | awk '{sum+=$1} END {print sum}')
+          PASSED=${PASSED:-0}
+          TOTAL=${TOTAL:-0}
 
           # Export for badge
           echo "passed=$PASSED" >> $GITHUB_OUTPUT
