@@ -1,13 +1,13 @@
 .{
-    .fingerprint = 0x7a3f12bc45e8d91a,
+    .fingerprint = 0x67d0b17d13e9e388,
     .name = .labelle_core,
     .version = "0.1.0",
     .minimum_zig_version = "0.15.2",
     .dependencies = .{
-        // ECS (for Entity type)
+        // ECS (for Entity type) - must match main engine's zig_ecs
         .zig_ecs = .{
-            .url = "git+https://github.com/apotema/zig-ecs#0.4.0",
-            .hash = "zig_ecs-0.4.0-x-6y88hBl7-WkEuwBXEJVdKqq-TFq3bGPsW0eG6s8wh3",
+            .url = "git+https://github.com/prime31/zig-ecs#dbf3647c2cc4f327fe87067e40f8436c7f87f209",
+            .hash = "entt-1.0.0-qJPtbNLVAgDPXaUbyRSsBTK75Cr1WujUA92kToJugWry",
         },
         // ZSpec testing framework
         .zspec = .{
