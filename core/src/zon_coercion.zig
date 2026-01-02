@@ -139,14 +139,43 @@ fn coerceToUnion(comptime UnionType: type, comptime data_value: anytype) UnionTy
 }
 
 /// Helper to format union variant names for error messages
+/// Uses pre-calculated buffer size to avoid O(n^2) string concatenation
 fn unionVariantNames(comptime union_info: std.builtin.Type.Union) []const u8 {
     comptime {
-        var names: []const u8 = "";
-        for (union_info.fields, 0..) |field, i| {
-            if (i > 0) names = names ++ ", ";
-            names = names ++ "." ++ field.name;
+        if (union_info.fields.len == 0) {
+            return "";
         }
-        return names;
+
+        // Calculate total buffer size needed
+        var total_len: usize = 0;
+        // Account for ", " between names (n-1 separators)
+        if (union_info.fields.len > 1) {
+            total_len += (union_info.fields.len - 1) * 2;
+        }
+        // Account for "." prefix and field name for each field
+        for (union_info.fields) |field| {
+            total_len += 1 + field.name.len;
+        }
+
+        // Build the string in a fixed buffer
+        var buf: [total_len]u8 = undefined;
+        var pos: usize = 0;
+
+        for (union_info.fields, 0..) |field, i| {
+            if (i > 0) {
+                buf[pos] = ',';
+                buf[pos + 1] = ' ';
+                pos += 2;
+            }
+            buf[pos] = '.';
+            pos += 1;
+            for (field.name) |c| {
+                buf[pos] = c;
+                pos += 1;
+            }
+        }
+
+        return &buf;
     }
 }
 

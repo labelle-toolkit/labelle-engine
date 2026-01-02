@@ -20,12 +20,7 @@ pub fn build(b: *std.Build) void {
     });
 
     // Core module
-    const core_mod = b.addModule("labelle-core", .{
-        .root_source_file = b.path("mod.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    core_mod.addImport("ecs", ecs_module);
+    const core_mod = createCoreModule(b, target, optimize, ecs_module, "mod.zig");
 
     // ZSpec tests
     const zspec_tests = b.addTest(.{
@@ -58,14 +53,24 @@ pub fn addCoreModule(
     optimize: std.builtin.OptimizeMode,
     ecs_module: *std.Build.Module,
 ) *std.Build.Module {
+    return createCoreModule(b, target, optimize, ecs_module, "core/mod.zig");
+}
+
+/// Helper to create core module with configurable root path
+fn createCoreModule(
+    b: *std.Build,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    ecs_module: *std.Build.Module,
+    root_source_path: []const u8,
+) *std.Build.Module {
     const core_mod = b.addModule("labelle-core", .{
-        .root_source_file = b.path("core/mod.zig"),
+        .root_source_file = b.path(root_source_path),
         .target = target,
         .optimize = optimize,
         .imports = &.{
             .{ .name = "ecs", .module = ecs_module },
         },
     });
-
     return core_mod;
 }
