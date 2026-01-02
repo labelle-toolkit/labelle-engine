@@ -6,6 +6,7 @@ pub const Backend = enum {
     raylib,
     sokol,
     sdl,
+    bgfx,
 };
 
 /// ECS backend selection

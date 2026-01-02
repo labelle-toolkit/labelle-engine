@@ -31,6 +31,7 @@ pub const RetainedEngine = switch (Backend) {
     .raylib => labelle.RetainedEngine,
     .sokol => labelle.withBackend(labelle.SokolBackend).RetainedEngine,
     .sdl => labelle.withBackend(labelle.SdlBackend).RetainedEngine,
+    .bgfx => labelle.withBackend(labelle.BgfxBackend).RetainedEngine,
 };
 pub const EntityId = labelle.EntityId;
 pub const TextureId = labelle.TextureId;

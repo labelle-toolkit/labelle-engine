@@ -16,6 +16,7 @@ pub const Backend = enum {{
     raylib,
     sokol,
     sdl,
+    bgfx,
 }};
 
 /// ECS backend selection (must match labelle-engine)
@@ -97,6 +98,39 @@ pub fn build(b: *std.Build) void {{
             .imports = &.{{
                 .{{ .name = "labelle-engine", .module = engine_mod }},
 .sdl_exe_end
+            }},
+        }}),
+    }});
+.bgfx_exe_start
+    // Get labelle-gfx dependency for bgfx bindings
+    const labelle_dep = engine_dep.builder.dependency("labelle-gfx", .{{
+        .target = target,
+        .optimize = optimize,
+    }});
+    const zbgfx_dep = labelle_dep.builder.dependency("zbgfx", .{{
+        .target = target,
+        .optimize = optimize,
+    }});
+    const zglfw_dep = labelle_dep.builder.dependency("zglfw", .{{
+        .target = target,
+        .optimize = optimize,
+    }});
+    const zbgfx_mod = zbgfx_dep.module("zbgfx");
+    const zglfw_mod = zglfw_dep.module("zglfw");
+    const labelle_gfx_mod = labelle_dep.module("labelle");
+
+    const exe = b.addExecutable(.{{
+        .name = "{s}",
+        .root_module = b.createModule(.{{
+            .root_source_file = b.path("../main.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{{
+                .{{ .name = "labelle-engine", .module = engine_mod }},
+                .{{ .name = "zbgfx", .module = zbgfx_mod }},
+                .{{ .name = "zglfw", .module = zglfw_mod }},
+                .{{ .name = "labelle-gfx", .module = labelle_gfx_mod }},
+.bgfx_exe_end
             }},
         }}),
     }});

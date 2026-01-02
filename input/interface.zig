@@ -118,6 +118,7 @@ const BackendImpl = switch (backend) {
     .raylib => @import("raylib_input.zig"),
     .sokol => @import("sokol_input.zig"),
     .sdl => @import("sdl_input.zig"),
+    .bgfx => @import("stub_input.zig"), // bgfx handles input via GLFW in main loop
 };
 
 /// The Input type for the selected backend
