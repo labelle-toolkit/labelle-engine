@@ -6,7 +6,7 @@
         // Box2D physics engine via allyourcodebase
         .box2d = .{
             .url = "git+https://github.com/allyourcodebase/box2d#main",
-            .hash = "N/A", // Will be updated on first build
+            .hash = "box2d-3.1.1-crFBk74aAAD-TJGY5mHVDB0sV5JntTq0MnlaHYxb5yl5",
         },
     },
     .paths = .{

@@ -1,0 +1,19 @@
+.{
+    .version = 1,
+    .name = "example_physics",
+    .description = "labelle-engine physics demo with falling boxes",
+    .initial_scene = "main",
+    .window = .{
+        .width = 800,
+        .height = 600,
+        .title = "labelle-engine: Physics Demo",
+        .target_fps = 60,
+    },
+    .physics = .{
+        .enabled = true,
+        .gravity = .{ 0, 980 },  // pixels/sec^2 (positive Y = down)
+        .pixels_per_meter = 100,
+        .debug_draw = true,
+    },
+    .plugins = .{},
+}
