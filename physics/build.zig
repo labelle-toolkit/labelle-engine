@@ -71,6 +71,76 @@ pub fn build(b: *std.Build) void {
 
     const bench_step = b.step("bench", "Run physics benchmarks");
     bench_step.dependOn(&run_bench.step);
+
+    // Velocity benchmark
+    const velocity_bench_exe = b.addExecutable(.{
+        .name = "velocity-benchmark",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("benchmark/velocity_benchmark.zig"),
+            .target = target,
+            .optimize = .ReleaseFast,
+            .imports = &.{
+                .{ .name = "labelle-physics", .module = physics_mod },
+            },
+        }),
+    });
+    velocity_bench_exe.root_module.linkLibrary(box2d_dep.artifact("box2d"));
+    b.installArtifact(velocity_bench_exe);
+
+    const run_velocity_bench = b.addRunArtifact(velocity_bench_exe);
+    run_velocity_bench.step.dependOn(b.getInstallStep());
+
+    const velocity_bench_step = b.step("bench-velocity", "Run velocity control benchmark");
+    velocity_bench_step.dependOn(&run_velocity_bench.step);
+
+    // Collision benchmark
+    const collision_bench_exe = b.addExecutable(.{
+        .name = "collision-benchmark",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("benchmark/collision_benchmark.zig"),
+            .target = target,
+            .optimize = .ReleaseFast,
+            .imports = &.{
+                .{ .name = "labelle-physics", .module = physics_mod },
+            },
+        }),
+    });
+    collision_bench_exe.root_module.linkLibrary(box2d_dep.artifact("box2d"));
+    b.installArtifact(collision_bench_exe);
+
+    const run_collision_bench = b.addRunArtifact(collision_bench_exe);
+    run_collision_bench.step.dependOn(b.getInstallStep());
+
+    const collision_bench_step = b.step("bench-collision", "Run collision query benchmark");
+    collision_bench_step.dependOn(&run_collision_bench.step);
+
+    // Compound shapes benchmark
+    const compound_bench_exe = b.addExecutable(.{
+        .name = "compound-benchmark",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("benchmark/compound_benchmark.zig"),
+            .target = target,
+            .optimize = .ReleaseFast,
+            .imports = &.{
+                .{ .name = "labelle-physics", .module = physics_mod },
+            },
+        }),
+    });
+    compound_bench_exe.root_module.linkLibrary(box2d_dep.artifact("box2d"));
+    b.installArtifact(compound_bench_exe);
+
+    const run_compound_bench = b.addRunArtifact(compound_bench_exe);
+    run_compound_bench.step.dependOn(b.getInstallStep());
+
+    const compound_bench_step = b.step("bench-compound", "Run compound shapes benchmark");
+    compound_bench_step.dependOn(&run_compound_bench.step);
+
+    // All benchmarks step
+    const all_bench_step = b.step("bench-all", "Run all physics benchmarks");
+    all_bench_step.dependOn(&run_bench.step);
+    all_bench_step.dependOn(&run_velocity_bench.step);
+    all_bench_step.dependOn(&run_collision_bench.step);
+    all_bench_step.dependOn(&run_compound_bench.step);
 }
 
 /// Add physics module to a parent build

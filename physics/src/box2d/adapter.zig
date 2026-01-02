@@ -390,7 +390,7 @@ pub const World = struct {
     }
 
     /// Get linear velocity
-    pub fn getLinearVelocity(self: *World, body_id: BodyId) [2]f32 {
+    pub fn getLinearVelocity(self: *const World, body_id: BodyId) [2]f32 {
         _ = self;
         const vel = c.b2Body_GetLinearVelocity(body_id);
         return .{ vel.x, vel.y };
