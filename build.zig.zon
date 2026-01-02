@@ -14,8 +14,8 @@
             .hash = "zflecs-0.2.0-dev-1PN3ym9mOgCyE8w0DdK_Uf7FAob-nm0Dp_lZKR3QyJaC",
         },
         .@"labelle-gfx" = .{
-            .url = "git+https://github.com/labelle-toolkit/labelle-gfx?ref=v0.17.0#3b8475a8c67139ba341a72aaf0f5aaaee7344455",
-            .hash = "labelle_gfx-0.17.0-WZ2XcABoBwApqTqj-CgwuAwUVG43Z9uaox1UFiJ3d8o4",
+            .url = "git+https://github.com/labelle-toolkit/labelle-gfx?ref=v0.19.0#7aab329a11f0b896da84eb5d5e9303c5b5fd807f",
+            .hash = "labelle_gfx-0.19.0-WZ2XcLDGCQBXE7vt4mWicpPZi1R6PVPPL9g_NltGjNdu",
         },
         .zspec = .{
             .url = "git+https://github.com/apotema/zspec#71c901d6e74b2d5a8c556d4c74ced9b91446d8a4",
