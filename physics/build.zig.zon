@@ -4,9 +4,9 @@
     .version = "0.1.0",
     .minimum_zig_version = "0.15.2",
     .dependencies = .{
-        // Box2D physics engine via allyourcodebase
+        // Box2D physics engine via allyourcodebase (pinned to specific commit)
         .box2d = .{
-            .url = "git+https://github.com/allyourcodebase/box2d#main",
+            .url = "git+https://github.com/allyourcodebase/box2d#0482245bf59b",
             .hash = "box2d-3.1.1-crFBk74aAAD-TJGY5mHVDB0sV5JntTq0MnlaHYxb5yl5",
         },
         // ZSpec testing framework
