@@ -153,4 +153,47 @@ pub const PhysicsWorldTests = struct {
             world.addCollider(entity_id, chain_collider),
         );
     }
+
+    test "can add box collider with offset" {
+        var world = try PWorld.init(std.testing.allocator, .{ 0, 980 });
+        defer world.deinit();
+
+        const entity_id: u64 = 1;
+        try world.createBody(entity_id, RBody{ .body_type = .dynamic }, .{ .x = 100, .y = 100 });
+        try world.addCollider(entity_id, Coll{
+            .shape = .{ .box = .{ .width = 50, .height = 50 } },
+            .offset = .{ 25, 0 }, // Offset to the right
+        });
+
+        try expect.toBeTrue(world.entities().len == 1);
+    }
+
+    test "can add box collider with offset and rotation" {
+        var world = try PWorld.init(std.testing.allocator, .{ 0, 980 });
+        defer world.deinit();
+
+        const entity_id: u64 = 1;
+        try world.createBody(entity_id, RBody{ .body_type = .dynamic }, .{ .x = 100, .y = 100 });
+        try world.addCollider(entity_id, Coll{
+            .shape = .{ .box = .{ .width = 50, .height = 50 } },
+            .offset = .{ 25, 0 },
+            .angle = std.math.pi / 4.0, // 45 degree rotation
+        });
+
+        try expect.toBeTrue(world.entities().len == 1);
+    }
+
+    test "can add circle collider with offset" {
+        var world = try PWorld.init(std.testing.allocator, .{ 0, 980 });
+        defer world.deinit();
+
+        const entity_id: u64 = 1;
+        try world.createBody(entity_id, RBody{ .body_type = .dynamic }, .{ .x = 100, .y = 100 });
+        try world.addCollider(entity_id, Coll{
+            .shape = .{ .circle = .{ .radius = 25 } },
+            .offset = .{ 50, 0 }, // Offset to the right
+        });
+
+        try expect.toBeTrue(world.entities().len == 1);
+    }
 };
