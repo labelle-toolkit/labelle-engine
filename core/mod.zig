@@ -7,8 +7,8 @@
 //! - Entity utilities for lifecycle hooks (entityToU64, entityFromU64)
 //! - ZON coercion utilities for comptime struct building
 
-const entity_utils = @import("entity_utils.zig");
-const zon_coercion = @import("zon_coercion.zig");
+const entity_utils = @import("src/entity_utils.zig");
+const zon_coercion = @import("src/zon_coercion.zig");
 
 // Re-export entity utilities
 pub const Entity = entity_utils.Entity;

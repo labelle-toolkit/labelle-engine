@@ -51,9 +51,11 @@ jobs:
           set -e
           echo "::endgroup::"
 
-          # Parse test results for summary
-          PASSED=$(grep -oE '[0-9]+ of [0-9]+ tests passed' test_output.txt | grep -oE '^[0-9]+' || echo "0")
-          TOTAL=$(grep -oE '[0-9]+ of [0-9]+ tests passed' test_output.txt | sed 's/.* of \([0-9]*\) tests.*/\1/' || echo "0")
+          # Parse test results for summary (sum all test results from multiple modules)
+          PASSED=$(grep -oE '[0-9]+ of [0-9]+ tests passed' test_output.txt | grep -oE '^[0-9]+' | awk '{sum+=$1} END {print sum}')
+          TOTAL=$(grep -oE '[0-9]+ of [0-9]+ tests passed' test_output.txt | sed 's/.* of \([0-9]*\) tests.*/\1/' | awk '{sum+=$1} END {print sum}')
+          PASSED=${PASSED:-0}
+          TOTAL=${TOTAL:-0}
 
           # Export for badge
           echo "passed=$PASSED" >> $GITHUB_OUTPUT
@@ -83,12 +85,39 @@ jobs:
 
           exit $TEST_EXIT_CODE
 
+      - name: Run core module tests
+        shell: bash
+        run: |
+          echo "::group::🧪 Running core module tests"
+          cd core
+          set +e
+          zig build test 2>&1 | tee core_test_output.txt
+          TEST_EXIT_CODE=${PIPESTATUS[0]}
+          set -e
+          echo "::endgroup::"
+
+          # Add to summary
+          PASSED=$(grep -oE '[0-9]+ of [0-9]+ tests passed' core_test_output.txt | grep -oE '^[0-9]+' || echo "0")
+          TOTAL=$(grep -oE '[0-9]+ of [0-9]+ tests passed' core_test_output.txt | sed 's/.* of \([0-9]*\) tests.*/\1/' || echo "0")
+          echo "## 🧱 Core Module Tests" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          if [ "$TEST_EXIT_CODE" -eq 0 ]; then
+            echo "✅ **$PASSED of $TOTAL core tests passed**" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "❌ **Core tests failed: $PASSED/$TOTAL passed**" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          exit $TEST_EXIT_CODE
+
       - name: Run physics module tests
         shell: bash
         run: |
           echo "::group::🧪 Running physics module tests"
           cd physics
+          set +e
           zig build test 2>&1 | tee physics_test_output.txt
+          TEST_EXIT_CODE=${PIPESTATUS[0]}
+          set -e
           echo "::endgroup::"
 
           # Add to summary
@@ -96,7 +125,13 @@ jobs:
           TOTAL=$(grep -oE '[0-9]+ of [0-9]+ tests passed' physics_test_output.txt | sed 's/.* of \([0-9]*\) tests.*/\1/' || echo "0")
           echo "## 🎮 Physics Module Tests" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "✅ **$PASSED of $TOTAL physics tests passed**" >> $GITHUB_STEP_SUMMARY
+          if [ "$TEST_EXIT_CODE" -eq 0 ]; then
+            echo "✅ **$PASSED of $TOTAL physics tests passed**" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "❌ **Physics tests failed: $PASSED/$TOTAL passed**" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          exit $TEST_EXIT_CODE
 
       - name: Generate example build files
         run: |

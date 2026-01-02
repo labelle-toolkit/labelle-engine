@@ -13,13 +13,10 @@ const Entity = engine.Entity;
 const Position = engine.Position;
 const Shape = engine.Shape;
 
-// Physics components (exported from physics module)
-const PhysicsBody = physics.PhysicsBody;
-const BodyType = physics.BodyType;
-const ColliderType = physics.ColliderType;
-
+// Physics components
 const RigidBody = physics.RigidBody;
 const Collider = physics.Collider;
+const BodyType = physics.BodyType;
 const PhysicsWorld = physics.PhysicsWorld;
 
 // Script state
@@ -46,49 +43,30 @@ pub fn init(game: *Game, scene: *Scene) void {
 
     std.log.info("Physics demo: scanning {} entities", .{scene.entities.items.len});
 
-    // Find all entities with PhysicsBody and Position components
+    // Find all entities with RigidBody and Position components
     for (scene.entities.items) |entity_instance| {
         const entity = entity_instance.entity;
 
         const pos = registry.tryGet(Position, entity) orelse continue;
-        const physics_body = registry.tryGet(PhysicsBody, entity) orelse continue;
+        const rigid_body = registry.tryGet(RigidBody, entity) orelse continue;
+        const collider = registry.tryGet(Collider, entity) orelse continue;
 
-        std.log.info("Found entity with PhysicsBody: pos=({d:.1}, {d:.1}), type={s}", .{
+        std.log.info("Found entity with RigidBody+Collider: pos=({d:.1}, {d:.1}), type={s}", .{
             pos.x,
             pos.y,
-            @tagName(physics_body.body_type),
+            @tagName(rigid_body.body_type),
         });
 
-        // Create physics body
-        const body_type: physics.BodyType = switch (physics_body.body_type) {
-            .dynamic => .dynamic,
-            .static => .static,
-            .kinematic => .kinematic,
-        };
-
         var pw = &(physics_world.?);
-        pw.createBody(engine.entityToU64(entity), RigidBody{
-            .body_type = body_type,
-        }, .{ .x = pos.x, .y = pos.y }) catch |err| {
+
+        // Create physics body
+        pw.createBody(engine.entityToU64(entity), rigid_body.*, .{ .x = pos.x, .y = pos.y }) catch |err| {
             std.log.err("Failed to create body for entity: {}", .{err});
             continue;
         };
 
-        // Add collider based on PhysicsBody collider type
-        const collider: Collider = switch (physics_body.collider_type) {
-            .box => .{
-                .shape = .{ .box = .{ .width = physics_body.width, .height = physics_body.height } },
-                .restitution = physics_body.restitution,
-                .friction = physics_body.friction,
-            },
-            .circle => .{
-                .shape = .{ .circle = .{ .radius = physics_body.radius } },
-                .restitution = physics_body.restitution,
-                .friction = physics_body.friction,
-            },
-        };
-
-        pw.addCollider(engine.entityToU64(entity), collider) catch |err| {
+        // Add collider
+        pw.addCollider(engine.entityToU64(entity), collider.*) catch |err| {
             std.log.err("Failed to add collider: {}", .{err});
         };
 

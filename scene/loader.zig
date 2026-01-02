@@ -38,7 +38,7 @@
 
 const std = @import("std");
 const ecs = @import("ecs");
-const zon = @import("../core/zon_coercion.zig");
+const zon = @import("../core/src/zon_coercion.zig");
 const prefab_mod = @import("prefab.zig");
 const core_mod = @import("core.zig");
 const component_mod = @import("component.zig");

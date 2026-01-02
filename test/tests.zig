@@ -20,4 +20,5 @@ test {
     _ = @import("project_config_test.zig");
     _ = @import("component_callbacks_test.zig");
     _ = @import("query_test.zig");
+    // Note: zon_coercion_test.zig moved to core/test/
 }
