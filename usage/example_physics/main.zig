@@ -24,6 +24,7 @@ pub fn main() !void {
             .title = "labelle-engine: Physics Demo",
         },
     });
+    game.fixPointers();
     defer game.deinit();
 
     // Initialize physics world
@@ -32,46 +33,37 @@ pub fn main() !void {
 
     // Create ground
     {
-        const ground = try game.createEntity();
-        try game.setPosition(ground, 400, 550);
-        try game.addShape(ground, .{
-            .type = .rectangle,
-            .width = 700,
-            .height = 20,
-            .color = .{ .r = 100, .g = 100, .b = 100, .a = 255 },
-        });
-        try physics_world.createBody(ground.toU64(), RigidBody{ .body_type = .static }, .{ .x = 400, .y = 550 });
-        try physics_world.addCollider(ground.toU64(), Collider{
+        const ground = game.createEntity();
+        game.setPositionXY(ground, 400, 550);
+        var ground_shape = engine.Shape.rectangle(700, 20);
+        ground_shape.color = .{ .r = 100, .g = 100, .b = 100, .a = 255 };
+        try game.addShape(ground, ground_shape);
+        try physics_world.createBody(engine.entityToU64(ground), RigidBody{ .body_type = .static }, .{ .x = 400, .y = 550 });
+        try physics_world.addCollider(engine.entityToU64(ground), Collider{
             .shape = .{ .box = .{ .width = 700, .height = 20 } },
         });
     }
 
     // Create walls
     {
-        const left_wall = try game.createEntity();
-        try game.setPosition(left_wall, 50, 300);
-        try game.addShape(left_wall, .{
-            .type = .rectangle,
-            .width = 20,
-            .height = 500,
-            .color = .{ .r = 100, .g = 100, .b = 100, .a = 255 },
-        });
-        try physics_world.createBody(left_wall.toU64(), RigidBody{ .body_type = .static }, .{ .x = 50, .y = 300 });
-        try physics_world.addCollider(left_wall.toU64(), Collider{
+        const left_wall = game.createEntity();
+        game.setPositionXY(left_wall, 50, 300);
+        var left_wall_shape = engine.Shape.rectangle(20, 500);
+        left_wall_shape.color = .{ .r = 100, .g = 100, .b = 100, .a = 255 };
+        try game.addShape(left_wall, left_wall_shape);
+        try physics_world.createBody(engine.entityToU64(left_wall), RigidBody{ .body_type = .static }, .{ .x = 50, .y = 300 });
+        try physics_world.addCollider(engine.entityToU64(left_wall), Collider{
             .shape = .{ .box = .{ .width = 20, .height = 500 } },
         });
     }
     {
-        const right_wall = try game.createEntity();
-        try game.setPosition(right_wall, 750, 300);
-        try game.addShape(right_wall, .{
-            .type = .rectangle,
-            .width = 20,
-            .height = 500,
-            .color = .{ .r = 100, .g = 100, .b = 100, .a = 255 },
-        });
-        try physics_world.createBody(right_wall.toU64(), RigidBody{ .body_type = .static }, .{ .x = 750, .y = 300 });
-        try physics_world.addCollider(right_wall.toU64(), Collider{
+        const right_wall = game.createEntity();
+        game.setPositionXY(right_wall, 750, 300);
+        var right_wall_shape = engine.Shape.rectangle(20, 500);
+        right_wall_shape.color = .{ .r = 100, .g = 100, .b = 100, .a = 255 };
+        try game.addShape(right_wall, right_wall_shape);
+        try physics_world.createBody(engine.entityToU64(right_wall), RigidBody{ .body_type = .static }, .{ .x = 750, .y = 300 });
+        try physics_world.addCollider(engine.entityToU64(right_wall), Collider{
             .shape = .{ .box = .{ .width = 20, .height = 500 } },
         });
     }
@@ -87,7 +79,7 @@ pub fn main() !void {
     var rng = std.Random.DefaultPrng.init(@intCast(std.time.milliTimestamp()));
 
     // Main loop
-    while (!game.shouldClose()) {
+    while (game.isRunning()) {
         const dt = game.getDeltaTime();
         spawn_timer -= dt;
 
@@ -116,15 +108,18 @@ pub fn main() !void {
         // Sync physics positions to ECS
         for (physics_world.entities()) |entity_id| {
             if (physics_world.getPosition(entity_id)) |pos| {
-                const entity = engine.Entity.fromU64(entity_id);
-                game.setPosition(entity, pos[0], pos[1]) catch {};
+                const entity = engine.entityFromU64(entity_id);
+                game.setPositionXY(entity, pos[0], pos[1]);
             }
         }
 
         // Render
-        game.beginFrame();
-        game.render();
-        game.endFrame();
+        game.getPipeline().sync(game.getRegistry());
+
+        const re = game.getRetainedEngine();
+        re.beginFrame();
+        re.render();
+        re.endFrame();
     }
 }
 
@@ -136,16 +131,13 @@ fn spawnBox(
     size: f32,
     color: engine.Color,
 ) !void {
-    const entity = try game.createEntity();
-    try game.setPosition(entity, x, y);
-    try game.addShape(entity, .{
-        .type = .rectangle,
-        .width = size,
-        .height = size,
-        .color = color,
-    });
-    try physics_world.createBody(entity.toU64(), RigidBody{ .body_type = .dynamic }, .{ .x = x, .y = y });
-    try physics_world.addCollider(entity.toU64(), Collider{
+    const entity = game.createEntity();
+    game.setPositionXY(entity, x, y);
+    var shape = engine.Shape.rectangle(size, size);
+    shape.color = color;
+    try game.addShape(entity, shape);
+    try physics_world.createBody(engine.entityToU64(entity), RigidBody{ .body_type = .dynamic }, .{ .x = x, .y = y });
+    try physics_world.addCollider(engine.entityToU64(entity), Collider{
         .shape = .{ .box = .{ .width = size, .height = size } },
         .restitution = 0.4,
     });
@@ -159,15 +151,13 @@ fn spawnCircle(
     radius: f32,
     color: engine.Color,
 ) !void {
-    const entity = try game.createEntity();
-    try game.setPosition(entity, x, y);
-    try game.addShape(entity, .{
-        .type = .circle,
-        .radius = radius,
-        .color = color,
-    });
-    try physics_world.createBody(entity.toU64(), RigidBody{ .body_type = .dynamic }, .{ .x = x, .y = y });
-    try physics_world.addCollider(entity.toU64(), Collider{
+    const entity = game.createEntity();
+    game.setPositionXY(entity, x, y);
+    var shape = engine.Shape.circle(radius);
+    shape.color = color;
+    try game.addShape(entity, shape);
+    try physics_world.createBody(engine.entityToU64(entity), RigidBody{ .body_type = .dynamic }, .{ .x = x, .y = y });
+    try physics_world.addCollider(engine.entityToU64(entity), Collider{
         .shape = .{ .circle = .{ .radius = radius } },
         .restitution = 0.7,
     });

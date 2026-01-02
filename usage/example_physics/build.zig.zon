@@ -1,5 +1,5 @@
 .{
-    .fingerprint = 0xd3adb33fc0d3cafe,
+    .fingerprint = 0xf09290d0bee39db1,
     .name = .example_physics,
     .version = "0.1.0",
     .dependencies = .{
