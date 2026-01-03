@@ -18,13 +18,14 @@ pub const ReadyCallbackEntry = struct {
 };
 
 /// Convert a comptime string to lowercase (public for testing)
-pub fn toLowercase(comptime str: []const u8) []const u8 {
+pub fn toLowercase(comptime str: []const u8) *const [str.len]u8 {
     comptime {
         var result: [str.len]u8 = undefined;
         for (str, 0..) |c, i| {
             result[i] = if (c >= 'A' and c <= 'Z') c + 32 else c;
         }
-        return &result;
+        const final = result;
+        return &final;
     }
 }
 

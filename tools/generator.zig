@@ -557,8 +557,8 @@ fn generateMainZigRaylib(
             // Mark this hook file as used by a plugin (won't be included directly in MergeEngineHooks)
             hook_files_used_by_plugins.put(hook_file, {}) catch {};
 
-            // Get item type from bind arg
-            const item_type = if (plugin.bind.len > 0) plugin.bind[0].arg else "void";
+            // Get item type: use explicit item_arg if specified, otherwise first bind arg
+            const item_type = eh.item_arg orelse (if (plugin.bind.len > 0) plugin.bind[0].arg else "void");
 
             // Generate: const plugin_engine_hooks = plugin.createEngineHooks(GameId, ItemType, hook_file.GameHooks);
             // Template args: plugin_zig_name, plugin_zig_name, create_fn, item_type, hook_file, struct_name

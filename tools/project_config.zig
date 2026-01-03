@@ -82,6 +82,8 @@ pub const EngineHooksDeclaration = struct {
     /// Reference to the game's task hooks struct (e.g., "task_hooks.GameHooks")
     /// This is a struct in the hooks/ folder that defines game-specific task handlers
     task_hooks: []const u8,
+    /// Optional: explicit item type arg (e.g., "Items"). If not specified, uses first bind arg.
+    item_arg: ?[]const u8 = null,
 };
 
 /// Plugin dependency declaration

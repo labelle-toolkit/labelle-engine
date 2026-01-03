@@ -65,7 +65,7 @@ pub const PARENT_REF_CONVENTION = struct {
         workstation: Entity = getInvalidEntity(), // Parent reference - matches "Workstation"
 
         // onReady callback for testing
-        pub fn onReady(payload: loader.ReadyPayload) void {
+        pub fn onReady(payload: loader.ComponentPayload) void {
             _ = payload;
             // Would be called after hierarchy is complete
         }

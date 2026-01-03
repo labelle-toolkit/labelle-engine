@@ -323,19 +323,16 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
                 if (comptime comp_field.type == Entity) {
                     // Check at runtime if this is a parent reference field
                     // Convention: field name matches parent component name (lowercased)
-                    var is_parent_ref = false;
-                    if (parent_ctx) |ctx| {
-                        if (field_name.len == ctx.component_name.len) {
-                            is_parent_ref = true;
-                            inline for (field_name, 0..) |f, i| {
-                                const p = ctx.component_name[i];
-                                const lower_p = if (p >= 'A' and p <= 'Z') p + 32 else p;
-                                if (f != lower_p) {
-                                    is_parent_ref = false;
-                                }
-                            }
+                    const is_parent_ref = is_parent_ref: {
+                        const ctx = parent_ctx orelse break :is_parent_ref false;
+                        if (field_name.len != ctx.component_name.len) break :is_parent_ref false;
+                        inline for (field_name, 0..) |f, i| {
+                            const p = ctx.component_name[i];
+                            const lower_p = if (p >= 'A' and p <= 'Z') p + 32 else p;
+                            if (f != lower_p) break :is_parent_ref false;
                         }
-                    }
+                        break :is_parent_ref true;
+                    };
 
                     if (is_parent_ref) {
                         // Auto-populate parent reference field
