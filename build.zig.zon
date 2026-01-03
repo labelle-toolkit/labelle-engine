@@ -14,7 +14,7 @@
             .hash = "zflecs-0.2.0-dev-1PN3ym9mOgCyE8w0DdK_Uf7FAob-nm0Dp_lZKR3QyJaC",
         },
         .@"labelle-gfx" = .{
-            .url = "git+https://github.com/labelle-toolkit/labelle-gfx?ref=v0.20.0#a2a4629",
+            .url = "git+https://github.com/labelle-toolkit/labelle-gfx?ref=v0.20.0#a2a46297c75c9511a0308c90f63d2fe3c76439d2",
             .hash = "labelle_gfx-0.20.0-WZ2XcDLqCQA_RlYxJPlWx7pnF6DUE5Cx0rPM01a5LgAA",
         },
         .zspec = .{
