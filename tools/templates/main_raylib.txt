@@ -114,8 +114,6 @@ pub const Scripts = engine.ScriptRegistry(struct {{
 .plugin_engine_hooks
 const {s}_engine_hooks = {s}.{s}(GameId, {s}, {s}_hooks.{s});
 pub const {s}Context = {s}_engine_hooks.Context;
-pub const {s}MovementAction = {s}_engine_hooks.MovementAction;
-pub const {s}PendingMovement = {s}_engine_hooks.PendingMovement;
 .hooks_empty
 const Game = engine.Game;
 .hooks_start

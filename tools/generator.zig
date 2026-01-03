@@ -563,8 +563,6 @@ fn generateMainZigRaylib(
             // Generate: const plugin_engine_hooks = plugin.createEngineHooks(GameId, ItemType, hook_file.GameHooks);
             // Template args: plugin_zig_name, plugin_zig_name, create_fn, item_type, hook_file, struct_name
             //                plugin_zig_name (for Context export prefix), plugin_zig_name
-            //                plugin_zig_name (for MovementAction prefix), plugin_zig_name
-            //                plugin_zig_name (for PendingMovement prefix), plugin_zig_name
             try zts.print(main_raylib_tmpl, "plugin_engine_hooks", .{
                 plugin_zig_names[i], // for const name
                 plugin_zig_names[i], // for plugin module
@@ -574,10 +572,6 @@ fn generateMainZigRaylib(
                 struct_name,         // GameHooks
                 plugin_zig_names[i], // Context prefix
                 plugin_zig_names[i], // Context value
-                plugin_zig_names[i], // MovementAction prefix
-                plugin_zig_names[i], // MovementAction value
-                plugin_zig_names[i], // PendingMovement prefix
-                plugin_zig_names[i], // PendingMovement value
             }, writer);
         }
     }
