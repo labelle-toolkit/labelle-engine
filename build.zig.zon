@@ -42,6 +42,11 @@
             .url = "git+https://github.com/allyourcodebase/box2d#0482245bf59bec743a7cb29961a480c3f7497f0c",
             .hash = "box2d-3.1.1-crFBk74aAAD-TJGY5mHVDB0sV5JntTq0MnlaHYxb5yl5",
         },
+        // ECS - mr_ecs (alternative ECS backend, formerly ZCS)
+        .mr_ecs = .{
+            .url = "git+https://codeberg.org/Games-by-Mason/mr_ecs#main",
+            .hash = "mr_ecs-0.1.1-RsdJ_aJdAwDFp4iSogn_ESsPyb9b6-1GUqLEuTcUhFAg",
+        },
     },
     .paths = .{
         "build.zig",

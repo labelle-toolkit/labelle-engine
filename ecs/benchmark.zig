@@ -205,6 +205,11 @@ fn benchViewIteration(registry: *Registry) void {
                 }
             }
         },
+        .mr_ecs => {
+            // mr_ecs uses archetype-based iteration via Entities.iterator()
+            // Note: Requires Zig 0.16+ - this branch should not be compiled on 0.15
+            @compileError("mr_ecs benchmark requires Zig 0.16.0+");
+        },
     }
 }
 
@@ -227,6 +232,7 @@ pub fn main() !void {
     const backend_name = switch (build_options.ecs_backend) {
         .zig_ecs => "zig_ecs",
         .zflecs => "zflecs",
+        .mr_ecs => "mr_ecs",
     };
 
     std.debug.print("\n", .{});
