@@ -317,6 +317,7 @@ fn generateMainZigRaylib(
     allocator: std.mem.Allocator,
     config: ProjectConfig,
     prefabs: []const []const u8,
+    enums: []const []const u8,
     components: []const []const u8,
     scripts: []const []const u8,
     hooks: []const []const u8,
@@ -325,12 +326,15 @@ fn generateMainZigRaylib(
     var buf: std.ArrayListUnmanaged(u8) = .{};
     const writer = buf.writer(allocator);
 
-    // Check if any plugin contributes Components
+    // Check if any plugin contributes Components or has bindings
     var has_plugin_components = false;
+    var has_plugin_bindings = false;
     for (config.plugins) |plugin| {
         if (plugin.components != null) {
             has_plugin_components = true;
-            break;
+        }
+        if (plugin.hasBindings()) {
+            has_plugin_bindings = true;
         }
     }
 
@@ -342,6 +346,13 @@ fn generateMainZigRaylib(
     }
     for (config.plugins, 0..) |plugin, i| {
         plugin_zig_names[i] = try sanitizeZigIdentifier(allocator, plugin.name);
+    }
+
+    // Pre-compute PascalCase names for enums
+    var enum_pascal_names = try allocator.alloc(PascalCaseResult, enums.len);
+    defer allocator.free(enum_pascal_names);
+    for (enums, 0..) |name, i| {
+        enum_pascal_names[i] = toPascalCase(name);
     }
 
     // Pre-compute PascalCase names for components
@@ -357,6 +368,24 @@ fn generateMainZigRaylib(
     // Plugin imports (using sanitized identifier and original name for import path)
     for (config.plugins, 0..) |plugin, i| {
         try zts.print(main_raylib_tmpl, "plugin_import", .{ plugin_zig_names[i], plugin.name }, writer);
+    }
+
+    // Enum imports
+    for (enums) |name| {
+        try zts.print(main_raylib_tmpl, "enum_import", .{ name, name }, writer);
+    }
+
+    // Enum exports (with PascalCase type names)
+    for (enums, 0..) |name, i| {
+        const pascal = enum_pascal_names[i];
+        try zts.print(main_raylib_tmpl, "enum_export", .{ pascal.buf[0..pascal.len], name, pascal.buf[0..pascal.len] }, writer);
+    }
+
+    // Plugin bind declarations (generates consts like: const labelle_tasksBindItems = labelle_tasks.bind(Items);)
+    for (config.plugins, 0..) |plugin, i| {
+        for (plugin.bind) |bind_decl| {
+            try zts.print(main_raylib_tmpl, "plugin_bind", .{ plugin_zig_names[i], bind_decl.arg, plugin_zig_names[i], bind_decl.func, bind_decl.arg }, writer);
+        }
     }
 
     // Prefab imports
@@ -399,26 +428,85 @@ fn generateMainZigRaylib(
         try zts.print(main_raylib_tmpl, "prefab_registry_end", .{}, writer);
     }
 
-    // Component registry - use ComponentRegistryMulti when plugins contribute Components
+    // Component registry - determine which registry type to use
+    // Check if any bind declaration has expanded components
+    var has_expanded_bind_components = false;
+    for (config.plugins) |plugin| {
+        for (plugin.bind) |bind_decl| {
+            if (bind_decl.components.len > 0) {
+                has_expanded_bind_components = true;
+                break;
+            }
+        }
+        if (has_expanded_bind_components) break;
+    }
+
+    // Use ComponentRegistryMulti only when plugins contribute their own Components type
+    // When we only have bind components (expanded in struct), use simple ComponentRegistry
     if (has_plugin_components) {
-        // Use ComponentRegistryMulti to merge base components with plugin components
-        if (components.len == 0) {
-            // Empty start template already includes closing brace
+        // Use ComponentRegistryMulti to merge base components with plugin Components
+        if (components.len == 0 and !has_expanded_bind_components) {
             try zts.print(main_raylib_tmpl, "component_registry_multi_empty_start", .{}, writer);
         } else {
             try zts.print(main_raylib_tmpl, "component_registry_multi_start", .{}, writer);
             for (component_pascal_names) |pascal| {
                 try zts.print(main_raylib_tmpl, "component_registry_multi_item", .{ pascal.buf[0..pascal.len], pascal.buf[0..pascal.len] }, writer);
             }
+
+            // Add bind component declarations INSIDE the struct
+            for (config.plugins, 0..) |plugin, i| {
+                for (plugin.bind) |bind_decl| {
+                    if (bind_decl.components.len > 0) {
+                        var comp_iter = std.mem.splitSequence(u8, bind_decl.components, ",");
+                        while (comp_iter.next()) |comp_name| {
+                            const trimmed = std.mem.trim(u8, comp_name, " ");
+                            if (trimmed.len > 0) {
+                                try zts.print(main_raylib_tmpl, "bind_component_item", .{ trimmed, plugin_zig_names[i], bind_decl.arg, trimmed }, writer);
+                            }
+                        }
+                    }
+                }
+            }
+
             try zts.print(main_raylib_tmpl, "component_registry_multi_base_end", .{}, writer);
         }
-        // Add plugin Components (only for plugins that specify a components field)
+
+        // Add plugin Components
         for (config.plugins, 0..) |plugin, i| {
             if (plugin.components) |components_expr| {
                 try zts.print(main_raylib_tmpl, "component_registry_multi_plugin", .{ plugin_zig_names[i], components_expr }, writer);
             }
         }
+        // Add bind types as tuple elements only if no components specified
+        for (config.plugins, 0..) |plugin, i| {
+            for (plugin.bind) |bind_decl| {
+                if (bind_decl.components.len == 0) {
+                    try zts.print(main_raylib_tmpl, "component_registry_multi_bind", .{ plugin_zig_names[i], bind_decl.arg }, writer);
+                }
+            }
+        }
         try zts.print(main_raylib_tmpl, "component_registry_multi_end", .{}, writer);
+    } else if (has_expanded_bind_components) {
+        // Only bind components - use simple ComponentRegistry (avoids comptime issues)
+        try zts.print(main_raylib_tmpl, "component_registry_start", .{}, writer);
+        for (component_pascal_names) |pascal| {
+            try zts.print(main_raylib_tmpl, "component_registry_item", .{ pascal.buf[0..pascal.len], pascal.buf[0..pascal.len] }, writer);
+        }
+        // Add bind component declarations
+        for (config.plugins, 0..) |plugin, i| {
+            for (plugin.bind) |bind_decl| {
+                if (bind_decl.components.len > 0) {
+                    var comp_iter = std.mem.splitSequence(u8, bind_decl.components, ",");
+                    while (comp_iter.next()) |comp_name| {
+                        const trimmed = std.mem.trim(u8, comp_name, " ");
+                        if (trimmed.len > 0) {
+                            try zts.print(main_raylib_tmpl, "component_registry_bind_item", .{ trimmed, plugin_zig_names[i], bind_decl.arg, trimmed }, writer);
+                        }
+                    }
+                }
+            }
+        }
+        try zts.print(main_raylib_tmpl, "component_registry_end", .{}, writer);
     } else {
         // No plugins - use simple ComponentRegistry
         if (components.len == 0) {
@@ -463,8 +551,11 @@ fn generateMainZigRaylib(
         defer allocator.free(plugin_zig_name);
 
         // Get type parameters (required for TaskEngine)
-        const id_type = plugin.id_type orelse "u32"; // default to u32
-        const item_type = plugin.item_type orelse @panic("labelle-tasks plugin requires item_type when task hooks are detected");
+        // id_type defaults to u32, item_type can come from bind arg or explicit item_type field
+        const id_type = plugin.id_type orelse "u32";
+        const item_type = plugin.item_type orelse
+            (if (plugin.bind.len > 0) plugin.bind[0].arg else null) orelse
+            @panic("labelle-tasks plugin requires item_type or bind declaration when task hooks are detected");
 
         // Generate TaskEngine type
         // task_engine_start: plugin_name, id_type, item_type
@@ -495,11 +586,16 @@ fn generateMainZigSokol(
     allocator: std.mem.Allocator,
     config: ProjectConfig,
     prefabs: []const []const u8,
+    enums: []const []const u8,
     components: []const []const u8,
     scripts: []const []const u8,
     hooks: []const []const u8,
     task_hooks: TaskHookScanResult,
 ) ![]const u8 {
+    // Sokol backend uses same logic as raylib - delegate to avoid duplication
+    // For now, sokol templates don't have enum/bind sections, so skip them
+    _ = enums;
+
     var buf: std.ArrayListUnmanaged(u8) = .{};
     const writer = buf.writer(allocator);
 
@@ -640,8 +736,11 @@ fn generateMainZigSokol(
         defer allocator.free(plugin_zig_name);
 
         // Get type parameters (required for TaskEngine)
-        const id_type = plugin.id_type orelse "u32"; // default to u32
-        const item_type = plugin.item_type orelse @panic("labelle-tasks plugin requires item_type when task hooks are detected");
+        // id_type defaults to u32, item_type can come from bind arg or explicit item_type field
+        const id_type = plugin.id_type orelse "u32";
+        const item_type = plugin.item_type orelse
+            (if (plugin.bind.len > 0) plugin.bind[0].arg else null) orelse
+            @panic("labelle-tasks plugin requires item_type or bind declaration when task hooks are detected");
 
         // Generate TaskEngine type
         try zts.print(main_sokol_tmpl, "task_engine_start", .{ plugin_zig_name, id_type, item_type }, writer);
@@ -679,11 +778,15 @@ fn generateMainZigSdl(
     allocator: std.mem.Allocator,
     config: ProjectConfig,
     prefabs: []const []const u8,
+    enums: []const []const u8,
     components: []const []const u8,
     scripts: []const []const u8,
     hooks: []const []const u8,
     task_hooks: TaskHookScanResult,
 ) ![]const u8 {
+    // SDL backend - for now, skip enum/bind sections (templates not updated yet)
+    _ = enums;
+
     var buf: std.ArrayListUnmanaged(u8) = .{};
     const writer = buf.writer(allocator);
 
@@ -819,8 +922,11 @@ fn generateMainZigSdl(
         const plugin_zig_name = try sanitizeZigIdentifier(allocator, plugin.name);
         defer allocator.free(plugin_zig_name);
 
+        // id_type defaults to u32, item_type can come from bind arg or explicit item_type field
         const id_type = plugin.id_type orelse "u32";
-        const item_type = plugin.item_type orelse @panic("labelle-tasks plugin requires item_type when task hooks are detected");
+        const item_type = plugin.item_type orelse
+            (if (plugin.bind.len > 0) plugin.bind[0].arg else null) orelse
+            @panic("labelle-tasks plugin requires item_type or bind declaration when task hooks are detected");
 
         try zts.print(main_sdl_tmpl, "task_engine_start", .{ plugin_zig_name, id_type, item_type }, writer);
 
@@ -850,6 +956,7 @@ fn generateMainZigGlfw(
     allocator: std.mem.Allocator,
     config: ProjectConfig,
     prefabs: []const []const u8,
+    enums: []const []const u8,
     components: []const []const u8,
     scripts: []const []const u8,
     hooks: []const []const u8,
@@ -858,12 +965,15 @@ fn generateMainZigGlfw(
     var buf: std.ArrayListUnmanaged(u8) = .{};
     const writer = buf.writer(allocator);
 
-    // Check if any plugin contributes Components
+    // Check if any plugin contributes Components or has bindings
     var has_plugin_components = false;
+    var has_plugin_bindings = false;
     for (config.plugins) |plugin| {
         if (plugin.components != null) {
             has_plugin_components = true;
-            break;
+        }
+        if (plugin.hasBindings()) {
+            has_plugin_bindings = true;
         }
     }
 
@@ -875,6 +985,13 @@ fn generateMainZigGlfw(
     }
     for (config.plugins, 0..) |plugin, i| {
         plugin_zig_names[i] = try sanitizeZigIdentifier(allocator, plugin.name);
+    }
+
+    // Pre-compute PascalCase names for enums
+    var enum_pascal_names = try allocator.alloc(PascalCaseResult, enums.len);
+    defer allocator.free(enum_pascal_names);
+    for (enums, 0..) |name, i| {
+        enum_pascal_names[i] = toPascalCase(name);
     }
 
     // Pre-compute PascalCase names for components
@@ -890,6 +1007,24 @@ fn generateMainZigGlfw(
     // Plugin imports
     for (config.plugins, 0..) |plugin, i| {
         try zts.print(template, "plugin_import", .{ plugin_zig_names[i], plugin.name }, writer);
+    }
+
+    // Enum imports
+    for (enums) |name| {
+        try zts.print(template, "enum_import", .{ name, name }, writer);
+    }
+
+    // Enum exports (with PascalCase type names)
+    for (enums, 0..) |name, i| {
+        const pascal = enum_pascal_names[i];
+        try zts.print(template, "enum_export", .{ pascal.buf[0..pascal.len], name, pascal.buf[0..pascal.len] }, writer);
+    }
+
+    // Plugin bind declarations (generates consts like: const labelle_tasksBindItems = labelle_tasks.bind(Items);)
+    for (config.plugins, 0..) |plugin, i| {
+        for (plugin.bind) |bind_decl| {
+            try zts.print(template, "plugin_bind", .{ plugin_zig_names[i], bind_decl.arg, plugin_zig_names[i], bind_decl.func, bind_decl.arg }, writer);
+        }
     }
 
     // Prefab imports
@@ -932,20 +1067,64 @@ fn generateMainZigGlfw(
         try zts.print(template, "prefab_registry_end", .{}, writer);
     }
 
-    // Component registry
-    if (has_plugin_components) {
-        if (components.len == 0) {
+    // Component registry - use ComponentRegistryMulti when plugins contribute Components or bindings
+    if (has_plugin_components or has_plugin_bindings) {
+        // Check if any bind declaration has expanded components (to avoid using empty_start)
+        var has_expanded_bind_components = false;
+        for (config.plugins) |plugin| {
+            for (plugin.bind) |bind_decl| {
+                if (bind_decl.components.len > 0) {
+                    has_expanded_bind_components = true;
+                    break;
+                }
+            }
+            if (has_expanded_bind_components) break;
+        }
+
+        // Use ComponentRegistryMulti to merge base components with plugin components
+        if (components.len == 0 and !has_expanded_bind_components) {
+            // Empty start template already includes closing brace
             try zts.print(template, "component_registry_multi_empty_start", .{}, writer);
         } else {
             try zts.print(template, "component_registry_multi_start", .{}, writer);
             for (component_pascal_names) |pascal| {
                 try zts.print(template, "component_registry_multi_item", .{ pascal.buf[0..pascal.len], pascal.buf[0..pascal.len] }, writer);
             }
+
+            // Add bind component declarations INSIDE the struct (if components are specified)
+            for (config.plugins, 0..) |plugin, i| {
+                for (plugin.bind) |bind_decl| {
+                    if (bind_decl.components.len > 0) {
+                        // Split comma-separated component names and generate declarations
+                        var comp_iter = std.mem.splitSequence(u8, bind_decl.components, ",");
+                        while (comp_iter.next()) |comp_name| {
+                            const trimmed = std.mem.trim(u8, comp_name, " ");
+                            if (trimmed.len > 0) {
+                                // bind_component_item: comp_name, plugin_zig_name, bind_arg, comp_name
+                                try zts.print(template, "bind_component_item", .{ trimmed, plugin_zig_names[i], bind_decl.arg, trimmed }, writer);
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Close the base struct
             try zts.print(template, "component_registry_multi_base_end", .{}, writer);
         }
+
+        // Add plugin Components (only for plugins that specify a components field)
         for (config.plugins, 0..) |plugin, i| {
             if (plugin.components) |components_expr| {
                 try zts.print(template, "component_registry_multi_plugin", .{ plugin_zig_names[i], components_expr }, writer);
+            }
+        }
+        // Add plugin bind types as tuple elements ONLY if no components specified
+        // (otherwise they were expanded inside the struct)
+        for (config.plugins, 0..) |plugin, i| {
+            for (plugin.bind) |bind_decl| {
+                if (bind_decl.components.len == 0) {
+                    try zts.print(template, "component_registry_multi_bind", .{ plugin_zig_names[i], bind_decl.arg }, writer);
+                }
             }
         }
         try zts.print(template, "component_registry_multi_end", .{}, writer);
@@ -988,8 +1167,11 @@ fn generateMainZigGlfw(
         const plugin = task_hooks.tasks_plugin.?;
         const plugin_zig_name = try sanitizeZigIdentifier(allocator, plugin.name);
         defer allocator.free(plugin_zig_name);
+        // id_type defaults to u32, item_type can come from bind arg or explicit item_type field
         const id_type = plugin.id_type orelse "u32";
-        const item_type = plugin.item_type orelse @panic("labelle-tasks plugin requires item_type when task hooks are detected");
+        const item_type = plugin.item_type orelse
+            (if (plugin.bind.len > 0) plugin.bind[0].arg else null) orelse
+            @panic("labelle-tasks plugin requires item_type or bind declaration when task hooks are detected");
 
         try zts.print(template, "task_engine_start", .{ plugin_zig_name, id_type, item_type }, writer);
         for (task_hooks.hook_files_with_tasks) |name| {
@@ -1019,12 +1201,13 @@ fn generateMainZigBgfx(
     allocator: std.mem.Allocator,
     config: ProjectConfig,
     prefabs: []const []const u8,
+    enums: []const []const u8,
     components: []const []const u8,
     scripts: []const []const u8,
     hooks: []const []const u8,
     task_hooks: TaskHookScanResult,
 ) ![]const u8 {
-    return generateMainZigGlfw(main_bgfx_tmpl, true, allocator, config, prefabs, components, scripts, hooks, task_hooks);
+    return generateMainZigGlfw(main_bgfx_tmpl, true, allocator, config, prefabs, enums, components, scripts, hooks, task_hooks);
 }
 
 /// Generate main.zig content for zgpu backend
@@ -1032,12 +1215,13 @@ fn generateMainZigZgpu(
     allocator: std.mem.Allocator,
     config: ProjectConfig,
     prefabs: []const []const u8,
+    enums: []const []const u8,
     components: []const []const u8,
     scripts: []const []const u8,
     hooks: []const []const u8,
     task_hooks: TaskHookScanResult,
 ) ![]const u8 {
-    return generateMainZigGlfw(main_zgpu_tmpl, false, allocator, config, prefabs, components, scripts, hooks, task_hooks);
+    return generateMainZigGlfw(main_zgpu_tmpl, false, allocator, config, prefabs, enums, components, scripts, hooks, task_hooks);
 }
 
 /// Generate main.zig content based on folder contents
@@ -1045,17 +1229,18 @@ pub fn generateMainZig(
     allocator: std.mem.Allocator,
     config: ProjectConfig,
     prefabs: []const []const u8,
+    enums: []const []const u8,
     components: []const []const u8,
     scripts: []const []const u8,
     hooks: []const []const u8,
     task_hooks: TaskHookScanResult,
 ) ![]const u8 {
     return switch (config.backend) {
-        .raylib => generateMainZigRaylib(allocator, config, prefabs, components, scripts, hooks, task_hooks),
-        .sokol => generateMainZigSokol(allocator, config, prefabs, components, scripts, hooks, task_hooks),
-        .sdl => generateMainZigSdl(allocator, config, prefabs, components, scripts, hooks, task_hooks),
-        .bgfx => generateMainZigBgfx(allocator, config, prefabs, components, scripts, hooks, task_hooks),
-        .zgpu => generateMainZigZgpu(allocator, config, prefabs, components, scripts, hooks, task_hooks),
+        .raylib => generateMainZigRaylib(allocator, config, prefabs, enums, components, scripts, hooks, task_hooks),
+        .sokol => generateMainZigSokol(allocator, config, prefabs, enums, components, scripts, hooks, task_hooks),
+        .sdl => generateMainZigSdl(allocator, config, prefabs, enums, components, scripts, hooks, task_hooks),
+        .bgfx => generateMainZigBgfx(allocator, config, prefabs, enums, components, scripts, hooks, task_hooks),
+        .zgpu => generateMainZigZgpu(allocator, config, prefabs, enums, components, scripts, hooks, task_hooks),
     };
 }
 
@@ -1212,6 +1397,14 @@ pub fn generateProject(allocator: std.mem.Allocator, project_path: []const u8, o
         allocator.free(prefabs);
     }
 
+    const enums_path = try std.fs.path.join(allocator, &.{ project_path, "enums" });
+    defer allocator.free(enums_path);
+    const enums = try scanFolder(allocator, enums_path);
+    defer {
+        for (enums) |e| allocator.free(e);
+        allocator.free(enums);
+    }
+
     const components_path = try std.fs.path.join(allocator, &.{ project_path, "components" });
     defer allocator.free(components_path);
     const components = try scanFolder(allocator, components_path);
@@ -1244,7 +1437,7 @@ pub fn generateProject(allocator: std.mem.Allocator, project_path: []const u8, o
     const build_zig = try generateBuildZig(allocator, config);
     defer allocator.free(build_zig);
 
-    const main_zig = try generateMainZig(allocator, config, prefabs, components, scripts, hooks, task_hooks);
+    const main_zig = try generateMainZig(allocator, config, prefabs, enums, components, scripts, hooks, task_hooks);
     defer allocator.free(main_zig);
 
     // Create output directory path
@@ -1374,6 +1567,14 @@ pub fn generateMainOnly(allocator: std.mem.Allocator, project_path: []const u8) 
         allocator.free(prefabs);
     }
 
+    const enums_path = try std.fs.path.join(allocator, &.{ project_path, "enums" });
+    defer allocator.free(enums_path);
+    const enums = try scanFolder(allocator, enums_path);
+    defer {
+        for (enums) |e| allocator.free(e);
+        allocator.free(enums);
+    }
+
     const components_path = try std.fs.path.join(allocator, &.{ project_path, "components" });
     defer allocator.free(components_path);
     const components = try scanFolder(allocator, components_path);
@@ -1403,7 +1604,7 @@ pub fn generateMainOnly(allocator: std.mem.Allocator, project_path: []const u8) 
     defer task_hooks.deinit(allocator);
 
     // Generate main.zig
-    const main_zig = try generateMainZig(allocator, config, prefabs, components, scripts, hooks, task_hooks);
+    const main_zig = try generateMainZig(allocator, config, prefabs, enums, components, scripts, hooks, task_hooks);
     defer allocator.free(main_zig);
 
     // Write main.zig to project root (needs project-relative imports)

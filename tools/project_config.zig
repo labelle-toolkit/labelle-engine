@@ -56,6 +56,19 @@ pub const EcsBackend = enum {
     zflecs,
 };
 
+/// Bind declaration for plugin component parameterization
+pub const BindDeclaration = struct {
+    /// Function name to call on the plugin (e.g., "bind")
+    func: []const u8,
+    /// Type argument to pass to the bind function (e.g., "Items")
+    /// This is a type name exported from the enums/ folder
+    arg: []const u8 = "",
+    /// Comma-separated list of component names exported by the bind function
+    /// (e.g., "Storage,Worker,DanglingItem,Workstation")
+    /// These will be expanded into the component registry struct
+    components: []const u8 = "",
+};
+
 /// Plugin dependency declaration
 pub const Plugin = struct {
     name: []const u8,
@@ -84,6 +97,15 @@ pub const Plugin = struct {
     ///   - "Components": use plugin.Components
     ///   - "Components(MyItem)": use plugin.Components(MyItem) for parameterized types
     components: ?[]const u8 = null,
+    /// Bind declarations for plugin component parameterization.
+    /// Each bind calls a function on the plugin that returns a struct with component types.
+    /// Example:
+    ///   .bind = .{
+    ///       .{ .func = "bind", .args = .{"enums.items.ItemType"} },
+    ///   },
+    /// Generates: const PluginBind0 = plugin.bind(enums.items.ItemType);
+    /// Then includes PluginBind0.Storage, PluginBind0.Worker, etc. in ComponentRegistry.
+    bind: []const BindDeclaration = &.{},
 
     // Plugin-specific type parameters (for parameterized plugins like labelle-tasks)
     /// Entity ID type for task engine (e.g., "u32", "u64")
@@ -164,6 +186,11 @@ pub const Plugin = struct {
     /// Check if this plugin uses a local path (vs remote URL)
     pub fn isPathBased(self: Plugin) bool {
         return self.path != null;
+    }
+
+    /// Check if this plugin has bind declarations
+    pub fn hasBindings(self: Plugin) bool {
+        return self.bind.len > 0;
     }
 };
 

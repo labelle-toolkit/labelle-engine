@@ -27,6 +27,12 @@ const ZgpuBackend = gfx.ZgpuBackend;
 
 .plugin_import
 const {s} = @import("{s}");
+.enum_import
+const {s}_enum = @import("enums/{s}.zig");
+.enum_export
+pub const {s} = {s}_enum.{s};
+.plugin_bind
+const {s}Bind{s} = {s}.{s}({s});
 .prefab_import
 const {s}_prefab = @import("prefabs/{s}.zon");
 .component_import
@@ -87,10 +93,14 @@ pub const Components = engine.ComponentRegistryMulti(.{{
         // Project components
 .component_registry_multi_item
         pub const {s} = main_module.{s};
+.bind_component_item
+        pub const {s} = {s}Bind{s}.{s};
 .component_registry_multi_base_end
     }},
 .component_registry_multi_plugin
     {s}.{s},
+.component_registry_multi_bind
+    {s}Bind{s},
 .component_registry_multi_end
 }});
 .script_registry_empty
