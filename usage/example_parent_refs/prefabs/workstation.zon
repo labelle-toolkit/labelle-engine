@@ -1,0 +1,41 @@
+// Workstation prefab with nested Storage entities
+// Demonstrates parent reference convention (RFC #169):
+// - Each nested Storage entity will have its `workstation` field
+//   automatically set to this workstation's entity
+.{
+    .components = .{
+        .Position = .{ .x = 0, .y = 0 },
+        .Shape = .{
+            .shape = .{ .rectangle = .{ .width = 100, .height = 80 } },
+            .color = .{ .r = 100, .g = 100, .b = 200, .a = 255 },
+        },
+        .Workstation = .{
+            .process_duration = 120,
+            // Nested entities - each Storage will have workstation=parent set automatically
+            .storages = .{
+                // Input storage (left side)
+                .{
+                    .components = .{
+                        .Position = .{ .x = -60, .y = 0 },
+                        .Shape = .{
+                            .shape = .{ .rectangle = .{ .width = 20, .height = 20 } },
+                            .color = .{ .r = 50, .g = 200, .b = 50, .a = 255 },
+                        },
+                        .Storage = .{ .role = .iis },
+                    },
+                },
+                // Output storage (right side)
+                .{
+                    .components = .{
+                        .Position = .{ .x = 60, .y = 0 },
+                        .Shape = .{
+                            .shape = .{ .rectangle = .{ .width = 20, .height = 20 } },
+                            .color = .{ .r = 200, .g = 50, .b = 50, .a = 255 },
+                        },
+                        .Storage = .{ .role = .ios },
+                    },
+                },
+            },
+        },
+    },
+}

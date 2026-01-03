@@ -1,0 +1,19 @@
+// Example: Parent References & onReady Callbacks
+.{
+    .fingerprint = 0x6a990a99f1f861c6,
+    .name = .example_parent_refs,
+    .version = "0.1.0",
+    .dependencies = .{
+        .@"labelle-engine" = .{
+            .path = "../..",
+        },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "main.zig",
+        "components",
+        "prefabs",
+        "scenes",
+    },
+}
