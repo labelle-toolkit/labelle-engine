@@ -221,34 +221,41 @@ pub const PhysicsWorld = struct {
 
     /// Add collider to entity's physics body
     ///
+    /// Supports both single shapes and compound shapes (shapes array).
+    /// Each shape in a compound collider becomes a separate Box2D fixture,
+    /// sharing the collider's material properties (friction, restitution, etc.).
+    ///
     /// Errors:
     /// - `error.NoBody`: Entity does not have a physics body
     /// - `error.ChainShapeNotImplemented`: Chain shapes are not yet supported
     pub fn addCollider(self: *PhysicsWorld, entity: u64, collider: Collider) !void {
         const body_id = self.body_map.get(entity) orelse return error.NoBody;
 
-        // Convert shape to Box2D format (pixels to meters) with offset/angle
-        const shape = try self.convertShape(collider.shape, collider.offset, collider.angle);
+        // Iterate over all shapes (single or compound) using the iterator
+        var iter = collider.shapeIterator();
+        while (iter.next()) |shape_entry| {
+            const shape = try self.convertShape(shape_entry.shape, shape_entry.offset, shape_entry.angle);
 
-        const fixture_def = box2d.FixtureDef{
-            .shape = shape,
-            .density = collider.density,
-            .friction = collider.friction,
-            .restitution = collider.restitution,
-            .restitution_threshold = collider.restitution_threshold,
-            .is_sensor = collider.is_sensor,
-            .filter = .{
-                .category_bits = collider.category_bits,
-                .mask_bits = collider.mask_bits,
-                .group_index = collider.group_index,
-            },
-        };
+            const fixture_def = box2d.FixtureDef{
+                .shape = shape,
+                .density = collider.density,
+                .friction = collider.friction,
+                .restitution = collider.restitution,
+                .restitution_threshold = collider.restitution_threshold,
+                .is_sensor = collider.is_sensor,
+                .filter = .{
+                    .category_bits = collider.category_bits,
+                    .mask_bits = collider.mask_bits,
+                    .group_index = collider.group_index,
+                },
+            };
 
-        const fixture_id = try self.world.createFixture(body_id, fixture_def);
+            const fixture_id = try self.world.createFixture(body_id, fixture_def);
 
-        // Store fixture in the FixtureList
-        if (self.fixture_map.getPtr(entity)) |fixture_list| {
-            fixture_list.add(fixture_id);
+            // Store fixture in the FixtureList
+            if (self.fixture_map.getPtr(entity)) |fixture_list| {
+                fixture_list.add(fixture_id);
+            }
         }
     }
 

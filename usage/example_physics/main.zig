@@ -21,6 +21,7 @@ const dynamic_circle_prefab = @import("prefabs/dynamic_circle.zon");
 // Physics components (exported from physics module)
 pub const RigidBody = physics.RigidBody;
 pub const Collider = physics.Collider;
+pub const Touching = physics.Touching;
 
 // Import scripts
 const physics_demo_script = @import("scripts/physics_demo.zig");
@@ -36,9 +37,10 @@ pub const Components = engine.ComponentRegistry(struct {
     // Engine built-in components
     pub const Position = engine.Position;
     pub const Shape = engine.Shape;
-    // Project components
+    // Physics components
     pub const RigidBody = main_module.RigidBody;
     pub const Collider = main_module.Collider;
+    pub const Touching = main_module.Touching;
 });
 
 pub const Scripts = engine.ScriptRegistry(struct {

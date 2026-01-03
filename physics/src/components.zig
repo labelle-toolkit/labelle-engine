@@ -92,22 +92,50 @@ pub const Shape = union(enum) {
     },
 };
 
+/// Shape entry for compound colliders
+/// Each entry represents a single shape with its own offset and rotation
+pub const ShapeEntry = struct {
+    /// The collision shape
+    shape: Shape,
+    /// Offset from entity center (in pixels)
+    offset: [2]f32 = .{ 0, 0 },
+    /// Rotation offset in radians
+    angle: f32 = 0,
+};
+
+/// Maximum shapes per collider (based on benchmark results)
+pub const MAX_SHAPES: usize = 8;
+
 /// Collider configuration
 ///
-/// Defines the collision shape and material properties.
+/// Defines collision shape(s) and material properties.
 /// Must be paired with RigidBody for physics simulation.
 ///
-/// Example in .zon:
+/// Single shape example:
 /// ```
 /// .Collider = .{
 ///     .shape = .{ .box = .{ .width = 32, .height = 32 } },
 ///     .friction = 0.3,
-///     .restitution = 0.1,
+/// },
+/// ```
+///
+/// Compound shape example (L-shaped):
+/// ```
+/// .Collider = .{
+///     .shapes = &.{
+///         .{ .shape = .{ .box = .{ .width = 50, .height = 20 } }, .offset = .{ 0, 0 } },
+///         .{ .shape = .{ .box = .{ .width = 20, .height = 50 } }, .offset = .{ 15, 15 } },
+///     },
 /// },
 /// ```
 pub const Collider = struct {
-    /// Collision shape (required)
-    shape: Shape,
+    /// Single collision shape (use for simple colliders)
+    /// If null, uses shapes array instead
+    shape: ?Shape = null,
+
+    /// Multiple shapes for compound colliders (per benchmark: 2500x faster than multi-component)
+    /// Use this for L-shapes, T-shapes, complex characters, etc.
+    shapes: []const ShapeEntry = &.{},
 
     /// Density in kg/m² (affects mass when using density-based mass)
     density: f32 = 1.0,
@@ -136,11 +164,56 @@ pub const Collider = struct {
     /// Positive = always collide with same group
     group_index: i16 = 0,
 
-    /// Offset from entity position (for compound shapes)
+    /// Offset from entity position (for single shape only)
     offset: [2]f32 = .{ 0, 0 },
 
-    /// Rotation offset in radians
+    /// Rotation offset in radians (for single shape only)
     angle: f32 = 0,
+
+    /// Returns an iterator over all shapes in this collider
+    pub fn shapeIterator(self: *const Collider) ShapeIterator {
+        return ShapeIterator.init(self);
+    }
+
+    /// Shape iterator for unified access to single or compound shapes
+    pub const ShapeIterator = struct {
+        collider: *const Collider,
+        index: usize = 0,
+
+        pub fn init(collider: *const Collider) ShapeIterator {
+            return .{ .collider = collider };
+        }
+
+        pub fn next(self: *ShapeIterator) ?ShapeEntry {
+            // If single shape is set, return it first
+            if (self.index == 0 and self.collider.shape != null) {
+                self.index = 1;
+                return ShapeEntry{
+                    .shape = self.collider.shape.?,
+                    .offset = self.collider.offset,
+                    .angle = self.collider.angle,
+                };
+            }
+
+            // Then iterate compound shapes
+            const shapes_start: usize = if (self.collider.shape != null) 1 else 0;
+            const shapes_index = self.index - shapes_start;
+
+            if (shapes_index < self.collider.shapes.len) {
+                self.index += 1;
+                return self.collider.shapes[shapes_index];
+            }
+
+            return null;
+        }
+
+        pub fn count(self: *const ShapeIterator) usize {
+            var n: usize = 0;
+            if (self.collider.shape != null) n += 1;
+            n += self.collider.shapes.len;
+            return n;
+        }
+    };
 };
 
 /// Velocity component for direct velocity access
@@ -158,6 +231,93 @@ pub const Velocity = struct {
 
     /// Angular velocity in radians per second
     angular: f32 = 0,
+};
+
+/// Maximum entities that can be touching at once
+pub const MAX_TOUCHING: usize = 8;
+
+/// Touching component - queryable collision state (auto-managed by physics)
+///
+/// This component is automatically added/updated by the physics system.
+/// It provides O(1) collision queries via standard ECS queries.
+/// Per benchmark: 37x faster iteration than central registry.
+///
+/// Example query in game code:
+/// ```zig
+/// var query = registry.query(.{ Position, Touching });
+/// while (query.next()) |e, pos, touching| {
+///     for (touching.slice()) |other| {
+///         // e is touching other
+///     }
+/// }
+/// ```
+///
+/// Sensor overlap example:
+/// ```zig
+/// var sensors = registry.query(.{ Collider, Touching });
+/// while (sensors.next()) |e, collider, touching| {
+///     if (collider.is_sensor) {
+///         // touching.slice() contains overlapping entities
+///     }
+/// }
+/// ```
+pub const Touching = struct {
+    /// Entity IDs currently touching this entity
+    entities: [MAX_TOUCHING]u64 = undefined,
+    /// Number of valid entries in entities array
+    count: u8 = 0,
+
+    /// Check if touching a specific entity
+    pub fn contains(self: *const Touching, entity: u64) bool {
+        for (self.entities[0..self.count]) |e| {
+            if (e == entity) return true;
+        }
+        return false;
+    }
+
+    /// Get slice of all touching entities
+    pub fn slice(self: *const Touching) []const u64 {
+        return self.entities[0..self.count];
+    }
+
+    /// Add an entity to the touching list (used internally by physics)
+    pub fn add(self: *Touching, entity: u64) void {
+        // Check if already present
+        for (self.entities[0..self.count]) |e| {
+            if (e == entity) return;
+        }
+        // Add if space available
+        if (self.count < MAX_TOUCHING) {
+            self.entities[self.count] = entity;
+            self.count += 1;
+        } else {
+            std.log.warn("Touching component full (max: {}). Dropping contact.", .{MAX_TOUCHING});
+        }
+    }
+
+    /// Remove an entity from the touching list (used internally by physics)
+    pub fn remove(self: *Touching, entity: u64) void {
+        for (0..self.count) |i| {
+            if (self.entities[i] == entity) {
+                // Swap with last element
+                if (i < self.count - 1) {
+                    self.entities[i] = self.entities[self.count - 1];
+                }
+                self.count -= 1;
+                return;
+            }
+        }
+    }
+
+    /// Clear all touching entities (used internally by physics)
+    pub fn clear(self: *Touching) void {
+        self.count = 0;
+    }
+
+    /// Check if not touching anything
+    pub fn isEmpty(self: *const Touching) bool {
+        return self.count == 0;
+    }
 };
 
 
