@@ -21,6 +21,8 @@ const {s} = @import("{s}");
 const {s}_enum = @import("enums/{s}.zig");
 .enum_export
 pub const {s} = {s}_enum.{s};
+.game_id_export
+pub const GameId = {s};
 .plugin_bind
 const {s}Bind{s} = {s}.{s}({s});
 .plugin_bind_struct_start
@@ -109,12 +111,19 @@ pub const Scripts = engine.ScriptRegistry(struct {{
     pub const {s} = {s}_script;
 .script_registry_end
 }});
+.plugin_engine_hooks
+const {s}_engine_hooks = {s}.{s}(GameId, {s}, {s}_hooks.{s});
+pub const {s}Context = {s}_engine_hooks.Context;
+pub const {s}MovementAction = {s}_engine_hooks.MovementAction;
+pub const {s}PendingMovement = {s}_engine_hooks.PendingMovement;
 .hooks_empty
 const Game = engine.Game;
 .hooks_start
 const Hooks = engine.MergeEngineHooks(.{{
 .hooks_item
     {s}_hooks,
+.hooks_plugin_item
+    {s}_engine_hooks,
 .hooks_end
 }});
 const Game = engine.GameWith(Hooks);
