@@ -15,6 +15,19 @@ const std = @import("std");
 const mr_ecs = @import("mr_ecs");
 const query_facade = @import("query.zig");
 
+// ============================================
+// Default capacity configuration
+// ============================================
+
+/// Default maximum number of entities
+pub const DEFAULT_ENTITY_CAPACITY: u32 = 100000;
+/// Default maximum number of archetypes
+pub const DEFAULT_ARCH_CAPACITY: u32 = 256;
+/// Default number of chunks to allocate
+pub const DEFAULT_CHUNK_COUNT: u16 = 1024;
+/// Default size of a single chunk in bytes
+pub const DEFAULT_CHUNK_SIZE: u32 = 65536;
+
 /// Module-level game pointer for component callbacks.
 ///
 /// This is a **process-global singleton** shared by all `Registry` instances
@@ -77,6 +90,10 @@ pub const Entity = packed struct {
     }
 };
 
+/// The underlying integer type that stores Entity bits (for callback wrappers)
+/// This ensures consistent entity ID handling across all backends
+const EntityBits = std.meta.Int(.unsigned, @bitSizeOf(Entity));
+
 /// Registry wrapper that delegates to mr_ecs Entities
 pub const Registry = struct {
     inner: mr_ecs.Entities,
@@ -87,10 +104,10 @@ pub const Registry = struct {
         const inner = mr_ecs.Entities.init(.{
             .gpa = allocator,
             .cap = .{
-                .entities = 100000,
-                .arches = 256,
-                .chunks = 1024,
-                .chunk = 65536,
+                .entities = DEFAULT_ENTITY_CAPACITY,
+                .arches = DEFAULT_ARCH_CAPACITY,
+                .chunks = DEFAULT_CHUNK_COUNT,
+                .chunk = DEFAULT_CHUNK_SIZE,
             },
         }) catch @panic("Failed to initialize mr_ecs Entities");
 
@@ -135,7 +152,7 @@ pub const Registry = struct {
         // Trigger onAdd callback if defined
         if (@hasDecl(T, "onAdd")) {
             if (game_ptr) |gp| {
-                const entity_u64: u64 = @bitCast(entity.inner.key);
+                const entity_u64: u64 = @as(EntityBits, @bitCast(entity));
                 T.onAdd(.{ .entity_id = entity_u64, .game_ptr = gp });
             } else {
                 std.log.warn("[mr_ecs_adapter] onAdd callback fired but game_ptr not set for component {s}", .{@typeName(T)});
@@ -168,7 +185,7 @@ pub const Registry = struct {
             // Trigger onSet callback if defined
             if (@hasDecl(T, "onSet")) {
                 if (game_ptr) |gp| {
-                    const entity_u64: u64 = @bitCast(entity.inner.key);
+                    const entity_u64: u64 = @as(EntityBits, @bitCast(entity));
                     T.onSet(.{ .entity_id = entity_u64, .game_ptr = gp });
                 } else {
                     std.log.warn("[mr_ecs_adapter] onSet callback fired but game_ptr not set for component {s}", .{@typeName(T)});
@@ -193,7 +210,7 @@ pub const Registry = struct {
         // Trigger onRemove callback if defined (before removal)
         if (@hasDecl(T, "onRemove")) {
             if (game_ptr) |gp| {
-                const entity_u64: u64 = @bitCast(entity.inner.key);
+                const entity_u64: u64 = @as(EntityBits, @bitCast(entity));
                 T.onRemove(.{ .entity_id = entity_u64, .game_ptr = gp });
             } else {
                 std.log.warn("[mr_ecs_adapter] onRemove callback fired but game_ptr not set for component {s}", .{@typeName(T)});
