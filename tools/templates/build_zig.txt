@@ -48,6 +48,9 @@ pub fn build(b: *std.Build) void {{
     const {s}_dep = b.dependency("{s}", .{{
         .target = target,
         .optimize = optimize,
+        .backend = backend,
+        .ecs_backend = ecs_backend,
+        .physics = physics_enabled,
     }});
     const {s}_mod = {s}_dep.module("{s}");
 

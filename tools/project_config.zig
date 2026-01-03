@@ -56,6 +56,36 @@ pub const EcsBackend = enum {
     zflecs,
 };
 
+/// Game ID type selection (entity identifier type)
+pub const GameIdType = enum {
+    u32,
+    u64,
+};
+
+/// Bind declaration for plugin component parameterization
+pub const BindDeclaration = struct {
+    /// Function name to call on the plugin (e.g., "bind")
+    func: []const u8,
+    /// Type argument to pass to the bind function (e.g., "Items")
+    /// This is a type name exported from the enums/ folder
+    arg: []const u8 = "",
+    /// Comma-separated list of component names exported by the bind function
+    /// (e.g., "Storage,Worker,DanglingItem,Workstation")
+    /// These will be expanded into the component registry struct
+    components: []const u8 = "",
+};
+
+/// Engine hooks declaration for plugin-provided engine lifecycle hooks
+pub const EngineHooksDeclaration = struct {
+    /// Function name to call on the plugin (e.g., "createEngineHooks")
+    create: []const u8,
+    /// Reference to the game's task hooks struct (e.g., "task_hooks.GameHooks")
+    /// This is a struct in the hooks/ folder that defines game-specific task handlers
+    task_hooks: []const u8,
+    /// Optional: explicit item type arg (e.g., "Items"). If not specified, uses first bind arg.
+    item_arg: ?[]const u8 = null,
+};
+
 /// Plugin dependency declaration
 pub const Plugin = struct {
     name: []const u8,
@@ -84,14 +114,25 @@ pub const Plugin = struct {
     ///   - "Components": use plugin.Components
     ///   - "Components(MyItem)": use plugin.Components(MyItem) for parameterized types
     components: ?[]const u8 = null,
-
-    // Plugin-specific type parameters (for parameterized plugins like labelle-tasks)
-    /// Entity ID type for task engine (e.g., "u32", "u64")
-    /// Required for labelle-tasks plugin when task hooks are detected.
-    id_type: ?[]const u8 = null,
-    /// Item type for task engine (e.g., "components.items.ItemType")
-    /// Required for labelle-tasks plugin when task hooks are detected.
-    item_type: ?[]const u8 = null,
+    /// Bind declarations for plugin component parameterization.
+    /// Each bind calls a function on the plugin that returns a struct with component types.
+    /// Example:
+    ///   .bind = .{
+    ///       .{ .func = "bind", .arg = "Items" },
+    ///   },
+    /// Generates: const PluginBindItems = plugin.bind(Items);
+    /// Then includes PluginBindItems.Storage, PluginBindItems.Worker, etc. in ComponentRegistry.
+    bind: []const BindDeclaration = &.{},
+    /// Engine hooks declaration for plugin-provided engine lifecycle hooks.
+    /// When specified, the generator creates engine hooks from the plugin and merges them.
+    /// Example:
+    ///   .engine_hooks = .{
+    ///       .create = "createEngineHooks",
+    ///       .task_hooks = "task_hooks.GameHooks",
+    ///   },
+    /// Generates: const plugin_engine_hooks = plugin.createEngineHooks(GameId, Items, task_hooks.GameHooks);
+    /// Then includes plugin_engine_hooks in MergeEngineHooks.
+    engine_hooks: ?EngineHooksDeclaration = null,
 
     /// Validate the plugin configuration
     pub fn validate(self: Plugin) PluginValidationError!void {
@@ -165,6 +206,16 @@ pub const Plugin = struct {
     pub fn isPathBased(self: Plugin) bool {
         return self.path != null;
     }
+
+    /// Check if this plugin has bind declarations
+    pub fn hasBindings(self: Plugin) bool {
+        return self.bind.len > 0;
+    }
+
+    /// Check if this plugin provides engine hooks
+    pub fn hasEngineHooks(self: Plugin) bool {
+        return self.engine_hooks != null;
+    }
 };
 
 pub const PluginValidationError = error{
@@ -235,6 +286,9 @@ pub const ProjectConfig = struct {
     initial_scene: []const u8,
     backend: Backend = .raylib,
     ecs_backend: EcsBackend = .zig_ecs,
+    /// Game ID type (entity identifier type). Default: u64
+    /// This affects plugin integrations like labelle-tasks that need to know the entity ID type.
+    game_id: GameIdType = .u64,
     window: WindowConfig = .{},
     camera: CameraConfig = .{},
     resources: Resources = .{},

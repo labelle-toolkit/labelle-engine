@@ -1,0 +1,74 @@
+// Main scene demonstrating parent references and onReady callbacks
+//
+// When this scene loads:
+// 1. Workstation entity is created
+// 2. Workstation.onAdd fires
+// 3. Storage entities are created (parent ref set before add)
+// 4. Storage.onAdd fires for each storage
+// 5. Workstation.storages array is populated
+// 6. --- Hierarchy complete ---
+// 7. Workstation.onReady fires
+// 8. Storage.onReady fires for each storage (can now access siblings)
+.{
+    .name = "main",
+    .entities = .{
+        // Title label
+        .{
+            .components = .{
+                .Position = .{ .x = 400, .y = 50 },
+                .Text = .{
+                    .text = "Parent References & onReady Example",
+                    .size = 24,
+                    .color = .{ .r = 255, .g = 255, .b = 255, .a = 255 },
+                },
+            },
+        },
+        // Workstation 1 - at center-left
+        .{
+            .prefab = "workstation",
+            .components = .{
+                .Position = .{ .x = 250, .y = 300 },
+            },
+        },
+        // Workstation 2 - at center-right
+        .{
+            .prefab = "workstation",
+            .components = .{
+                .Position = .{ .x = 550, .y = 300 },
+            },
+        },
+        // Description label
+        .{
+            .components = .{
+                .Position = .{ .x = 400, .y = 500 },
+                .Text = .{
+                    .text = "Each workstation has 2 nested storages with auto-populated parent refs",
+                    .size = 14,
+                    .color = .{ .r = 180, .g = 180, .b = 180, .a = 255 },
+                },
+            },
+        },
+        // Legend - Input storage
+        .{
+            .components = .{
+                .Position = .{ .x = 200, .y = 550 },
+                .Text = .{
+                    .text = "Green = Input Storage (IIS)",
+                    .size = 12,
+                    .color = .{ .r = 50, .g = 200, .b = 50, .a = 255 },
+                },
+            },
+        },
+        // Legend - Output storage
+        .{
+            .components = .{
+                .Position = .{ .x = 500, .y = 550 },
+                .Text = .{
+                    .text = "Red = Output Storage (IOS)",
+                    .size = 12,
+                    .color = .{ .r = 200, .g = 50, .b = 50, .a = 255 },
+                },
+            },
+        },
+    },
+}
