@@ -61,7 +61,7 @@ pub fn update(game: *Game, scene: *Scene, dt: f32) void {
     const registry = game.getRegistry();
     const input = game.getInput();
 
-    var pw = &(physics_world.?);
+    const pw = &(physics_world.?);
 
     // Initialize any new entities (spawned this frame)
     PhysicsSystems.initBodies(pw, registry);
@@ -74,6 +74,16 @@ pub fn update(game: *Game, scene: *Scene, dt: f32) void {
     // 5. Syncing physics velocities back to Velocity components
     // 6. Updating Touching components from collision events
     PhysicsSystems.update(pw, registry, dt);
+
+    // Mark all dynamic body positions as dirty for render pipeline
+    // (Physics systems update ECS positions, but render pipeline needs notification)
+    var pipeline = game.getPipeline();
+    var body_query = registry.query(.{RigidBody});
+    while (body_query.next()) |item| {
+        if (item.get(RigidBody).body_type == .dynamic) {
+            pipeline.markPositionDirty(item.entity);
+        }
+    }
 
     // Example: Query collision state via Touching component (37x faster than events)
     // var query = registry.query(.{ Position, Touching });

@@ -94,7 +94,7 @@ pub fn Systems(comptime Position: type) type {
             world: *PhysicsWorld,
             registry: anytype,
         ) void {
-            const EntityType = @TypeOf(registry).Entity;
+            const EntityType = std.meta.Child(@TypeOf(registry)).EntityType;
 
             // Iterate over all physics bodies and check if entity still exists
             var entities_to_remove = std.ArrayList(u64).init(world.allocator);
@@ -264,7 +264,7 @@ pub fn Systems(comptime Position: type) type {
             world: *PhysicsWorld,
             registry: anytype,
         ) void {
-            const EntityType = @TypeOf(registry).Entity;
+            const EntityType = std.meta.Child(@TypeOf(registry)).EntityType;
 
             // Process collision begin events - add to Touching
             for (world.getCollisionBeginEvents()) |event| {
@@ -340,7 +340,18 @@ fn entityToU64(entity: anytype) u64 {
     } else if (@typeInfo(T) == .int) {
         return @intCast(entity);
     } else {
-        return @bitCast(entity);
+        // For packed structs, convert to their backing integer type first
+        const info = @typeInfo(T);
+        if (info == .@"struct" and info.@"struct".backing_integer != null) {
+            const BackingInt = info.@"struct".backing_integer.?;
+            const as_int: BackingInt = @bitCast(entity);
+            return @intCast(as_int);
+        }
+        // Fallback for same-size types
+        if (@bitSizeOf(T) == 64) {
+            return @bitCast(entity);
+        }
+        @compileError("Cannot convert entity type to u64");
     }
 }
 
@@ -350,6 +361,17 @@ fn entityFromU64(id: u64, comptime EntityType: type) EntityType {
     } else if (@typeInfo(EntityType) == .int) {
         return @intCast(id);
     } else {
-        return @bitCast(id);
+        // For packed structs, convert via their backing integer type
+        const info = @typeInfo(EntityType);
+        if (info == .@"struct" and info.@"struct".backing_integer != null) {
+            const BackingInt = info.@"struct".backing_integer.?;
+            const as_int: BackingInt = @intCast(id);
+            return @bitCast(as_int);
+        }
+        // Fallback for same-size types
+        if (@bitSizeOf(EntityType) == 64) {
+            return @bitCast(id);
+        }
+        @compileError("Cannot convert u64 to entity type");
     }
 }

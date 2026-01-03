@@ -148,6 +148,9 @@ pub fn registerComponentCallbacks(registry: *Registry, comptime T: type) void {
 pub const Registry = struct {
     inner: zig_ecs.Registry,
 
+    /// Entity type exposed for external code to access via @TypeOf(registry).Entity
+    pub const EntityType = Entity;
+
     /// Initialize a new registry
     pub fn init(allocator: std.mem.Allocator) Registry {
         return .{ .inner = zig_ecs.Registry.init(allocator) };
@@ -203,9 +206,36 @@ pub const Registry = struct {
         }
     }
 
+    /// Alias for setComponent - for compatibility with physics systems
+    pub fn set(self: *Registry, entity: Entity, component: anytype) void {
+        self.setComponent(entity, component);
+    }
+
     /// Remove a component from an entity
     pub fn remove(self: *Registry, comptime T: type, entity: Entity) void {
         self.inner.remove(T, entity);
+    }
+
+    /// Try to get a mutable pointer to a component (alias for tryGet)
+    /// For compatibility with systems that use tryGetPtr naming
+    pub fn tryGetPtr(self: *Registry, comptime T: type, entity: Entity) ?*T {
+        return self.tryGet(T, entity);
+    }
+
+    /// Check if an entity is valid (exists in the registry)
+    pub fn isValid(self: *Registry, entity: Entity) bool {
+        return self.inner.valid(entity);
+    }
+
+    /// Mark a component as dirty (for render pipeline sync)
+    /// Currently a no-op - the render pipeline handles its own dirty tracking
+    pub fn markDirty(self: *Registry, entity: Entity, comptime T: type) void {
+        _ = self;
+        _ = entity;
+        _ = T;
+        // No-op: The render pipeline tracks dirty state independently.
+        // Physics systems call this but the actual dirty tracking happens
+        // via position component mutation detection.
     }
 
     /// Determine the view type based on the number of components
@@ -246,18 +276,84 @@ pub const Registry = struct {
 };
 
 /// Query type for zig_ecs backend
-/// Provides the unified query API with each() callback iteration
+/// Provides the unified query API with both each() callback and next() iterator patterns
 pub fn Query(comptime components: anytype) type {
     const separated = query_facade.separateComponents(components);
     const data_types = separated.data;
 
+    // Determine the inner view type based on component count
+    const InnerViewType = switch (data_types.len) {
+        0 => void,
+        1 => zig_ecs.BasicView(data_types[0]),
+        2 => zig_ecs.MultiView(.{ data_types[0], data_types[1] }, .{}),
+        3 => zig_ecs.MultiView(.{ data_types[0], data_types[1], data_types[2] }, .{}),
+        4 => zig_ecs.MultiView(.{ data_types[0], data_types[1], data_types[2], data_types[3] }, .{}),
+        else => @compileError("zig_ecs query supports a maximum of 4 data components"),
+    };
+
+    // Iterator type - get from the view's entityIterator return type
+    // BasicView (1 component) returns ReverseSliceIterator, MultiView has .Iterator
+    const InnerIterType = if (data_types.len == 0)
+        void
+    else if (data_types.len == 1)
+        @import("zig_ecs").utils.ReverseSliceIterator(Entity)
+    else
+        InnerViewType.Iterator;
+
     return struct {
         registry: *Registry,
+        view: InnerViewType,
+        iter: ?InnerIterType,
 
         const Self = @This();
 
+        /// Query item returned by next()
+        pub const Item = struct {
+            entity: Entity,
+            registry_inner: *zig_ecs.Registry,
+
+            /// Get a component pointer by type
+            pub fn get(self: Item, comptime T: type) *T {
+                return self.registry_inner.tryGet(T, self.entity).?;
+            }
+        };
+
         pub fn init(registry: *Registry) Self {
-            return .{ .registry = registry };
+            if (data_types.len == 0) {
+                return .{ .registry = registry, .view = {}, .iter = null };
+            }
+            const view = switch (data_types.len) {
+                1 => registry.inner.view(.{data_types[0]}, .{}),
+                2 => registry.inner.view(.{ data_types[0], data_types[1] }, .{}),
+                3 => registry.inner.view(.{ data_types[0], data_types[1], data_types[2] }, .{}),
+                4 => registry.inner.view(.{ data_types[0], data_types[1], data_types[2], data_types[3] }, .{}),
+                else => unreachable,
+            };
+            // Don't create iterator here - the view will be moved when struct is returned
+            // Iterator is lazily created on first next() call
+            return .{
+                .registry = registry,
+                .view = view,
+                .iter = null,
+            };
+        }
+
+        /// Get next item in iteration, or null if done
+        pub fn next(self: *Self) ?Item {
+            if (data_types.len == 0) return null;
+
+            // Lazily initialize iterator from the stored view
+            if (self.iter == null) {
+                self.iter = self.view.entityIterator();
+            }
+
+            if (self.iter.?.next()) |entity| {
+                return Item{
+                    .entity = entity,
+                    .registry_inner = &self.registry.inner,
+                };
+            }
+            return null;
         }
 
         /// Iterate with a callback function
