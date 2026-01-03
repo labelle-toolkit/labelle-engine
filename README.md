@@ -9,6 +9,9 @@ A declarative 2D game engine for Zig with comptime scene definitions and pluggab
 - **Prefab System** - Reusable entity templates with lifecycle hooks
 - **Script System** - Scene-level scripts with init/update/deinit lifecycle
 - **Hook System** - Type-safe, zero-overhead engine lifecycle hooks (game_init, scene_load, frame_start, etc.)
+- **Parent References** - Auto-populate entity references matching parent component names
+- **onReady Callbacks** - Component callbacks executed after entity hierarchy is complete
+- **Plugin System** - Bind declarations and engine hooks for plugin integration
 - **Layer System** - Built-in background, world, and UI layers with automatic screen/world-space handling
 - **Sprite Sizing Modes** - CSS-like sizing (stretch, cover, contain, repeat) for backgrounds and UI
 - **Fullscreen Support** - Toggle fullscreen and detect screen resize events
@@ -27,7 +30,7 @@ Add labelle-engine to your `build.zig.zon`:
 ```zig
 .dependencies = .{
     .@"labelle-engine" = .{
-        .url = "git+https://github.com/labelle-toolkit/labelle-engine?ref=v0.18.2#<commit-hash>",
+        .url = "git+https://github.com/labelle-toolkit/labelle-engine#v0.32.0",
         .hash = "<hash>",
     },
 },
@@ -189,6 +192,7 @@ See the `usage/` directory for complete examples:
 - **example_3** - Plugin integration (labelle-pathfinding)
 - **example_hooks** - Two-way plugin hook binding pattern
 - **example_hooks_generator** - Hooks folder pattern with generator
+- **example_parent_refs** - Parent references and onReady callbacks
 
 Run examples:
 ```bash
@@ -227,4 +231,5 @@ MIT License - see LICENSE for details.
 labelle-engine is part of the [labelle-toolkit](https://github.com/labelle-toolkit) ecosystem:
 
 - [labelle-gfx](https://github.com/labelle-toolkit/labelle-gfx) - Graphics library
+- [labelle-tasks](https://github.com/labelle-toolkit/labelle-tasks) - Task orchestration engine
 - [labelle-pathfinding](https://github.com/labelle-toolkit/labelle-pathfinding) - Pathfinding algorithms

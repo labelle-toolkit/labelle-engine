@@ -147,6 +147,42 @@ In prefabs or scenes, use prefab references in entity fields:
 },
 ```
 
+**Parent references and onReady callbacks** (RFC #169):
+
+Components with `Entity` fields matching a parent component name (lowercased) are auto-populated:
+
+```zig
+// Component with parent reference
+const Storage = struct {
+    role: enum { eis, iis, ios, eos } = .ios,
+    workstation: Entity = Entity.invalid,  // Auto-populated when nested under Workstation
+
+    // Called after entity hierarchy is complete
+    pub fn onReady(payload: loader.ComponentPayload) void {
+        // Access parent via payload.entity, payload.registry, payload.game
+    }
+};
+
+const Workstation = struct {
+    process_duration: u32 = 60,
+    output_storages: []const Entity = &.{},  // Child entities created from prefab refs
+};
+```
+
+In scenes/prefabs, nested entities get parent references auto-populated:
+```zig
+.{
+    .prefab = "workstation",
+    .components = .{
+        .Workstation = .{
+            .output_storages = .{
+                .{ .prefab = "storage" },  // Storage.workstation auto-set to parent
+            },
+        },
+    },
+}
+```
+
 **Script definition** (scripts/*.zig):
 ```zig
 pub fn init(game: *Game, scene: *Scene) void { ... }  // optional
@@ -207,6 +243,57 @@ pub fn deinit(game: *Game, scene: *Scene) void { ... }  // optional
 **Optional plugin fields:**
 - `.module` - Override the module name (default: plugin name with `-` replaced by `_`)
 - `.components` - Include plugin's Components in ComponentRegistryMulti
+- `.bind` - Component parameterization (see below)
+- `.engine_hooks` - Plugin-provided engine lifecycle hooks (see below)
+
+**Plugin bind declarations:**
+
+Bind allows plugins to export parameterized component types:
+
+```zig
+.plugins = .{
+    .{
+        .name = "labelle-tasks",
+        .version = "1.0.0",
+        .bind = .{
+            .{ .func = "bind", .arg = "Items", .components = "Storage,Worker,Workstation" },
+        },
+    },
+},
+```
+
+Generates: `const labelle_tasksBindItems = labelle_tasks.bind(Items);`
+
+Components are then available as `labelle_tasksBindItems.Storage`, etc.
+
+**Plugin engine_hooks:**
+
+Auto-wire plugin lifecycle hooks into the engine:
+
+```zig
+.plugins = .{
+    .{
+        .name = "labelle-tasks",
+        .version = "1.0.0",
+        .bind = .{
+            .{ .func = "bind", .arg = "Items", .components = "Storage,Worker" },
+        },
+        .engine_hooks = .{
+            .create = "createEngineHooks",
+            .task_hooks = "task_hooks.GameHooks",
+            .item_arg = "Items",  // optional: explicit item type
+        },
+    },
+},
+```
+
+Generates:
+```zig
+const labelle_tasks_engine_hooks = labelle_tasks.createEngineHooks(GameId, Items, task_hooks_hooks.GameHooks);
+pub const labelle_tasksContext = labelle_tasks_engine_hooks.Context;
+```
+
+The engine hooks are automatically merged into `MergeEngineHooks`.
 
 ### Graphics Backends
 
