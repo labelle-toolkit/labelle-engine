@@ -14,6 +14,7 @@ pub const Backend = enum {
 pub const EcsBackend = enum {
     zig_ecs,
     zflecs,
+    mr_ecs,
 };
 
 pub fn build(b: *std.Build) void {
@@ -37,6 +38,15 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     const zflecs_module = zflecs_dep.module("root");
+
+    // mr_ecs module - only loaded when explicitly selected (requires Zig 0.16+)
+    const mr_ecs_module: ?*std.Build.Module = if (ecs_backend == .mr_ecs) blk: {
+        const mr_ecs_dep = b.dependency("mr_ecs", .{
+            .target = target,
+            .optimize = optimize,
+        });
+        break :blk mr_ecs_dep.module("mr_ecs");
+    } else null;
 
     const labelle_dep = b.dependency("labelle-gfx", .{
         .target = target,
@@ -115,6 +125,10 @@ pub fn build(b: *std.Build) void {
             .{ .name = "zflecs", .module = zflecs_module },
         },
     });
+    // Add mr_ecs if selected (requires Zig 0.16+)
+    if (mr_ecs_module) |m| {
+        ecs_interface.addImport("mr_ecs", m);
+    }
 
     // Create the Input interface module that wraps the selected backend
     const input_interface = b.addModule("input", .{
@@ -301,19 +315,24 @@ pub fn build(b: *std.Build) void {
     _ = build_utils.addCli(b, target, optimize, zts, build_zon_mod);
 
     // Benchmark executable - compares ECS backend performance
+    const bench_module = b.createModule(.{
+        .root_source_file = b.path("ecs/benchmark.zig"),
+        .target = target,
+        .optimize = .ReleaseFast, // Always use ReleaseFast for benchmarks
+        .imports = &.{
+            .{ .name = "ecs", .module = ecs_interface },
+            .{ .name = "build_options", .module = build_options_mod },
+            .{ .name = "zig_ecs", .module = zig_ecs_module },
+            .{ .name = "zflecs", .module = zflecs_module },
+        },
+    });
+    // Add mr_ecs if selected (requires Zig 0.16+)
+    if (mr_ecs_module) |m| {
+        bench_module.addImport("mr_ecs", m);
+    }
     const bench_exe = b.addExecutable(.{
         .name = "ecs-benchmark",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("ecs/benchmark.zig"),
-            .target = target,
-            .optimize = .ReleaseFast, // Always use ReleaseFast for benchmarks
-            .imports = &.{
-                .{ .name = "ecs", .module = ecs_interface },
-                .{ .name = "build_options", .module = build_options_mod },
-                .{ .name = "zig_ecs", .module = zig_ecs_module },
-                .{ .name = "zflecs", .module = zflecs_module },
-            },
-        }),
+        .root_module = bench_module,
     });
 
     b.installArtifact(bench_exe);

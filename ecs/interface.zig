@@ -9,6 +9,7 @@
 // Supported backends:
 // - zig_ecs (default): prime31/zig-ecs - A Zig port of EnTT
 // - zflecs: zig-gamedev/zflecs - Zig bindings for flecs (high-performance C ECS)
+// - mr_ecs: Games-by-Mason/mr_ecs - Archetype-based ECS with persistent entity keys
 //
 // Usage:
 //   const ecs = @import("ecs");
@@ -64,9 +65,14 @@ pub fn EcsInterface(comptime Impl: type) type {
 }
 
 // Import the appropriate backend adapter
+// Note: mr_ecs requires Zig 0.16+ and is only imported when explicitly selected
 const BackendImpl = switch (backend) {
     .zig_ecs => @import("zig_ecs_adapter.zig"),
     .zflecs => @import("zflecs_adapter.zig"),
+    .mr_ecs => if (@hasDecl(@This(), "mr_ecs"))
+        @import("mr_ecs_adapter.zig")
+    else
+        @compileError("mr_ecs backend requires Zig 0.16.0+ - please use zig_ecs or zflecs"),
 };
 
 // Import query facade utilities
