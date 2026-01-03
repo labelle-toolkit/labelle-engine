@@ -229,6 +229,9 @@ pub fn Systems(comptime Position: type) type {
                 pos.x = new_pos[0];
                 pos.y = new_pos[1];
                 pos.rotation = new_angle;
+
+                // Mark as dirty for render pipeline
+                registry.markDirty(item.entity, Position);
             }
         }
 

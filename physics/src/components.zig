@@ -290,6 +290,8 @@ pub const Touching = struct {
         if (self.count < MAX_TOUCHING) {
             self.entities[self.count] = entity;
             self.count += 1;
+        } else {
+            std.log.warn("Touching component full (max: {}). Dropping contact.", .{MAX_TOUCHING});
         }
     }
 
