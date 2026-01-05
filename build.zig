@@ -143,6 +143,18 @@ pub fn build(b: *std.Build) void {
         },
     });
 
+    // Create the Graphics interface module that wraps the selected backend
+    // This allows plugins to use graphics types without pulling in specific backend modules
+    const graphics_interface = b.addModule("graphics", .{
+        .root_source_file = b.path("graphics/interface.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "build_options", .module = build_options_mod },
+            .{ .name = "labelle", .module = labelle },
+        },
+    });
+
     // Create the Audio interface module that wraps the selected backend
     const audio_interface = b.addModule("audio", .{
         .root_source_file = b.path("audio/interface.zig"),
@@ -178,12 +190,13 @@ pub fn build(b: *std.Build) void {
     });
 
     // Render module - visual rendering pipeline
+    // Uses graphics interface instead of labelle directly to avoid module collisions
     _ = b.addModule("labelle-render", .{
         .root_source_file = b.path("render/mod.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{
-            .{ .name = "labelle", .module = labelle },
+            .{ .name = "graphics", .module = graphics_interface },
             .{ .name = "ecs", .module = ecs_interface },
             .{ .name = "build_options", .module = build_options_mod },
         },
@@ -196,6 +209,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .imports = &.{
             .{ .name = "labelle", .module = labelle },
+            .{ .name = "graphics", .module = graphics_interface },
             .{ .name = "ecs", .module = ecs_interface },
             .{ .name = "input", .module = input_interface },
             .{ .name = "audio", .module = audio_interface },
@@ -217,6 +231,7 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
             .imports = &.{
                 .{ .name = "labelle", .module = labelle },
+                .{ .name = "graphics", .module = graphics_interface },
                 .{ .name = "ecs", .module = ecs_interface },
                 .{ .name = "input", .module = input_interface },
                 .{ .name = "audio", .module = audio_interface },
@@ -239,6 +254,7 @@ pub fn build(b: *std.Build) void {
                 .{ .name = "zspec", .module = zspec },
                 .{ .name = "labelle-engine", .module = engine_mod },
                 .{ .name = "labelle", .module = labelle },
+                .{ .name = "graphics", .module = graphics_interface },
                 .{ .name = "ecs", .module = ecs_interface },
                 .{ .name = "input", .module = input_interface },
                 .{ .name = "audio", .module = audio_interface },

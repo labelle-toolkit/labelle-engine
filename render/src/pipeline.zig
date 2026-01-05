@@ -17,9 +17,8 @@
 //!   pipeline.sync(&registry);
 
 const std = @import("std");
-const labelle = @import("labelle");
+const graphics = @import("graphics");
 const ecs = @import("ecs");
-const build_options = @import("build_options");
 const components = @import("components.zig");
 
 // Re-export component types
@@ -170,7 +169,7 @@ pub const RenderPipeline = struct {
 
     /// Sync all dirty entities to the RetainedEngine
     pub fn sync(self: *RenderPipeline, registry: *Registry) void {
-        const GfxPosition = labelle.retained_engine.Position;
+        const GfxPosition = graphics.Position;
 
         for (self.tracked.values()) |*tracked| {
             const entity_id = toEntityId(tracked.entity);
