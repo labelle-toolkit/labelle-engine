@@ -6,6 +6,22 @@
 //! - Option C: Bitmask approach (compact, limited entities)
 //!
 //! Run with: zig build bench-collision (in physics directory)
+//!
+//! ## Benchmark Methodology
+//!
+//! This benchmark measures **steady-state performance** where collision state is
+//! already populated. The add/remove operations loop multiple iterations over the
+//! same pairs, which means:
+//! - Add operations measure the cost of checking existing entries (early-return)
+//! - Remove operations measure the cost of removing/re-adding entries
+//!
+//! This models a game loop where collision state persists across frames with
+//! incremental updates, rather than a fresh build each frame.
+//!
+//! ## Memory Accounting
+//!
+//! Memory figures are **approximate** and measure only the primary data structures.
+//! Actual memory usage may be higher due to allocator overhead and alignment.
 
 const std = @import("std");
 const physics = @import("labelle-physics");
@@ -284,6 +300,9 @@ fn benchOptionC(allocator: std.mem.Allocator) !BenchResults {
     // For this benchmark, we use a smaller entity count that fits in bitmask
     const BITMASK_ENTITIES: usize = 64;
     const BITMASK_PAIRS: usize = 200;
+
+    // Compile-time check: bitmask approach requires entities fit in u64
+    comptime std.debug.assert(BITMASK_ENTITIES <= 64);
 
     const masks = try allocator.alloc(u64, BITMASK_ENTITIES);
     defer allocator.free(masks);

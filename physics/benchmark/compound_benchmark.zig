@@ -6,6 +6,26 @@
 //! - Option C: Child entities approach (hierarchy of single-shape entities)
 //!
 //! Run with: zig build bench-compound (in physics directory)
+//!
+//! ## Architectural Tradeoffs
+//!
+//! - **Option A (Multi-component)**: Most flexible for ECS queries. Each shape
+//!   can be queried/modified independently. Higher per-entity overhead.
+//!
+//! - **Option B (Shapes array)**: Single component, fixed max shapes. Best cache
+//!   locality for iterating all shapes. Limited flexibility.
+//!
+//! - **Option C (Child entities)**: Each shape is a full entity with parent ref.
+//!   Most ECS-native but highest overhead for parent-child lookups.
+//!
+//! ## Benchmark Methodology
+//!
+//! Create/update/query operations are measured separately. Create benchmarks
+//! reset state between iterations to measure fresh allocation costs.
+//!
+//! ## Memory Accounting
+//!
+//! Memory figures are **approximate** and include primary data structures only.
 
 const std = @import("std");
 const physics = @import("labelle-physics");

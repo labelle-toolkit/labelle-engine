@@ -6,6 +6,24 @@
 //! - Option C: Velocity embedded in RigidBody component
 //!
 //! Run with: zig build bench-velocity (in physics directory)
+//!
+//! ## Architectural Tradeoffs
+//!
+//! - **Option A (Direct)**: Simplest approach. World is source of truth. No sync
+//!   overhead but requires world access for every velocity read/write.
+//!
+//! - **Option B (Component)**: ECS-style dedicated Velocity component. Allows
+//!   systems to iterate velocities without physics world access. Requires sync
+//!   to/from Box2D each frame.
+//!
+//! - **Option C (Embedded)**: Velocity stored directly on RigidBody. Single
+//!   component per entity but larger component size. Still requires sync.
+//!
+//! ## Benchmark Methodology
+//!
+//! Each option performs the same logical operations (set/get/mixed velocity updates)
+//! to enable fair comparison. The "ops/ms" metric uses consistent operation counts
+//! across all options for relative comparison.
 
 const std = @import("std");
 const physics = @import("labelle-physics");

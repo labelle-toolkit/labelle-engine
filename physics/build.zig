@@ -72,8 +72,9 @@ pub fn build(b: *std.Build) void {
     const bench_step = b.step("bench", "Run physics benchmarks");
     bench_step.dependOn(&run_bench.step);
 
-    // Helper to add a benchmark executable
-    const addBenchmark = struct {
+    // Helper to add a physics benchmark executable
+    // Usage: zig build bench-all (runs all benchmarks)
+    const addPhysicsBenchmark = struct {
         fn add(
             builder: *std.Build,
             tgt: std.Build.ResolvedTarget,
@@ -108,7 +109,7 @@ pub fn build(b: *std.Build) void {
         }
     }.add;
 
-    const run_velocity_step = addBenchmark(
+    const run_velocity_step = addPhysicsBenchmark(
         b,
         target,
         physics_mod,
@@ -119,7 +120,7 @@ pub fn build(b: *std.Build) void {
         "Run velocity control benchmark",
     );
 
-    const run_collision_step = addBenchmark(
+    const run_collision_step = addPhysicsBenchmark(
         b,
         target,
         physics_mod,
@@ -130,7 +131,7 @@ pub fn build(b: *std.Build) void {
         "Run collision query benchmark",
     );
 
-    const run_compound_step = addBenchmark(
+    const run_compound_step = addPhysicsBenchmark(
         b,
         target,
         physics_mod,
