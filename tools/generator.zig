@@ -1464,6 +1464,9 @@ pub fn generateProject(allocator: std.mem.Allocator, project_path: []const u8, o
     const config = try ProjectConfig.load(allocator, labelle_path);
     defer config.deinit(allocator);
 
+    // Use engine_version from project.labelle if specified, otherwise use CLI's version
+    const effective_engine_version = config.engine_version orelse options.engine_version;
+
     // Scan folders
     const prefabs_path = try std.fs.path.join(allocator, &.{ project_path, "prefabs" });
     defer allocator.free(prefabs_path);
@@ -1539,7 +1542,7 @@ pub fn generateProject(allocator: std.mem.Allocator, project_path: []const u8, o
     // Generate build.zig.zon with placeholder fingerprint first (skip hash fetching on first pass)
     const initial_build_zig_zon = try generateBuildZon(allocator, config, .{
         .engine_path = options.engine_path,
-        .engine_version = options.engine_version,
+        .engine_version = effective_engine_version,
         .fingerprint = null, // placeholder 0x0
         .fetch_hashes = false, // Skip hashes on first pass to detect fingerprint quickly
     });
@@ -1556,7 +1559,7 @@ pub fn generateProject(allocator: std.mem.Allocator, project_path: []const u8, o
     // Regenerate build.zig.zon with correct fingerprint and fetch hashes if enabled
     const final_build_zig_zon = try generateBuildZon(allocator, config, .{
         .engine_path = options.engine_path,
-        .engine_version = options.engine_version,
+        .engine_version = effective_engine_version,
         .fingerprint = fingerprint,
         .fetch_hashes = options.fetch_hashes,
     });
