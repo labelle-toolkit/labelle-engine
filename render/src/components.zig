@@ -9,42 +9,32 @@
 //! register/unregister entities with the RenderPipeline.
 
 const std = @import("std");
-const labelle = @import("labelle");
+const graphics = @import("graphics");
 const ecs = @import("ecs");
-const build_options = @import("build_options");
 
-// Backend selection - use the configured backend from build options
-const Backend = build_options.backend;
+// Re-export graphics types via the interface (avoids module collisions)
+pub const RetainedEngine = graphics.RetainedEngine;
+pub const EntityId = graphics.EntityId;
+pub const TextureId = graphics.TextureId;
+pub const FontId = graphics.FontId;
+pub const SpriteVisual = graphics.SpriteVisual;
+pub const ShapeVisual = graphics.ShapeVisual;
+pub const TextVisual = graphics.TextVisual;
+pub const Color = graphics.Color;
+pub const ShapeType = graphics.ShapeType;
+pub const GfxPosition = graphics.Position;
 
-// Get RetainedEngine for the selected backend
-pub const RetainedEngine = switch (Backend) {
-    .raylib => labelle.RetainedEngine,
-    .sokol => labelle.withBackend(labelle.SokolBackend).RetainedEngine,
-    .sdl => labelle.withBackend(labelle.SdlBackend).RetainedEngine,
-    .bgfx => labelle.withBackend(labelle.BgfxBackend).RetainedEngine,
-    .zgpu => labelle.withBackend(labelle.ZgpuBackend).RetainedEngine,
-};
+// Layer system
+pub const Layer = graphics.Layer;
+pub const LayerConfig = graphics.LayerConfig;
+pub const LayerSpace = graphics.LayerSpace;
 
-pub const EntityId = labelle.EntityId;
-pub const TextureId = labelle.TextureId;
-pub const FontId = labelle.FontId;
-pub const SpriteVisual = RetainedEngine.SpriteVisual;
-pub const ShapeVisual = RetainedEngine.ShapeVisual;
-pub const TextVisual = RetainedEngine.TextVisual;
-pub const Color = labelle.retained_engine.Color;
-pub const ShapeType = labelle.retained_engine.Shape;
+// Sizing system
+pub const SizeMode = graphics.SizeMode;
+pub const Container = graphics.Container;
 
-// Layer system - re-export labelle-gfx layer types
-pub const Layer = labelle.DefaultLayers;
-pub const LayerConfig = labelle.LayerConfig;
-pub const LayerSpace = labelle.LayerSpace;
-
-// Sizing system - re-export labelle-gfx sizing types
-pub const SizeMode = labelle.SizeMode;
-pub const Container = labelle.Container;
-
-// Pivot system - re-export labelle-gfx pivot types
-pub const Pivot = labelle.Pivot;
+// Pivot system
+pub const Pivot = graphics.Pivot;
 
 // ECS types
 pub const Registry = ecs.Registry;
@@ -70,7 +60,7 @@ pub const Position = struct {
     /// Rotation in radians (used by physics and rendering)
     rotation: f32 = 0,
 
-    pub fn toGfx(self: Position) labelle.retained_engine.Position {
+    pub fn toGfx(self: Position) GfxPosition {
         return .{ .x = self.x, .y = self.y };
     }
 };

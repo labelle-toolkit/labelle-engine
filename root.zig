@@ -17,6 +17,7 @@ pub const core = @import("core/mod.zig");
 pub const ecs = @import("ecs");
 pub const input = @import("input");
 pub const audio = @import("audio");
+pub const graphics = @import("graphics");
 pub const hooks = @import("hooks/mod.zig");
 pub const render = @import("render/mod.zig");
 pub const scene = @import("scene/src/root.zig");
