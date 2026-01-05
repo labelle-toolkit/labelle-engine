@@ -180,6 +180,24 @@ zig build -Dbackend=sokol
 zig build -Decs_backend=zflecs
 ```
 
+## Physics Benchmarks
+
+The physics module includes benchmarks for ECS integration patterns. Run them with:
+
+```bash
+cd physics && zig build bench-all
+```
+
+**Key findings for ECS integration:**
+
+| Pattern | Best Approach | Performance Gain |
+|---------|---------------|------------------|
+| Compound Shapes | Shapes array in component | 2400x faster than multi-component |
+| Velocity Control | Component sync for R/W loops | 1.66x faster than direct methods |
+| Collision State | Bitmask (≤64 entities) | 9x faster queries |
+
+See [CLAUDE.md](CLAUDE.md) for detailed design recommendations.
+
 ## Examples
 
 See the `usage/` directory for complete examples:
