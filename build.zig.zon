@@ -59,6 +59,7 @@
         "core",
         "ecs",
         "engine",
+        "graphics",
         "hooks",
         "input",
         "physics",
