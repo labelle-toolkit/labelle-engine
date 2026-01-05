@@ -283,6 +283,8 @@ pub const ProjectConfig = struct {
     version: u32,
     name: []const u8,
     description: []const u8 = "",
+    /// labelle-engine version to use for generation. Used by the CLI.
+    engine_version: ?[]const u8 = null,
     initial_scene: []const u8,
     backend: Backend = .raylib,
     ecs_backend: EcsBackend = .zig_ecs,

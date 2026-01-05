@@ -1,5 +1,4 @@
 const std = @import("std");
-const build_utils = @import("build_utils.zig");
 
 /// Graphics backend selection
 pub const Backend = enum {
@@ -325,10 +324,6 @@ pub fn build(b: *std.Build) void {
 
     const generate_step = b.step("generate", "Generate project files from project.labelle");
     generate_step.dependOn(&run_generator.step);
-
-    // Main CLI executable - unified interface for labelle projects
-    // Uses shared build logic from build_utils.zig
-    _ = build_utils.addCli(b, target, optimize, zts, build_zon_mod);
 
     // Benchmark executable - compares ECS backend performance
     const bench_module = b.createModule(.{
