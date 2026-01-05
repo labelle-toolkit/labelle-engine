@@ -85,7 +85,8 @@ pub fn main() !void {
     // ========================================================================
 
     // Create the task engine (uses auto-generated type with wired hooks)
-    var task_engine = TaskEngine.init(allocator);
+    // task_hooks is a comptime struct type with static methods, so we instantiate it as {}
+    var task_engine = TaskEngine.init(allocator, TaskDispatcher.init(task_hooks{}));
     defer task_engine.deinit();
 
     // Define storage entity IDs (in a real game these would be from the ECS)
@@ -96,51 +97,28 @@ pub fn main() !void {
     const BAKERY_ID: u32 = 200;
     const BAKER_ID: u32 = 300;
 
-    // Create storages
-    _ = task_engine.addStorage(PANTRY_ID, .{
-        .slots = &.{
-            .{ .item = .Flour, .capacity = 20 },
-            .{ .item = .Water, .capacity = 20 },
-        },
-    });
-    _ = task_engine.addStorage(BAKERY_IIS_ID, .{
-        .slots = &.{
-            .{ .item = .Flour, .capacity = 2 },
-            .{ .item = .Water, .capacity = 1 },
-        },
-    });
-    _ = task_engine.addStorage(BAKERY_IOS_ID, .{
-        .slots = &.{
-            .{ .item = .Bread, .capacity = 1 },
-        },
-    });
-    _ = task_engine.addStorage(BREAD_SHELF_ID, .{
-        .slots = &.{
-            .{ .item = .Bread, .capacity = 10 },
-        },
-    });
+    // Create storages (new simplified API - each storage holds one item type)
+    try task_engine.addStorage(PANTRY_ID, .Flour); // Pantry has flour
+    try task_engine.addStorage(BAKERY_IIS_ID, null); // Empty internal input
+    try task_engine.addStorage(BAKERY_IOS_ID, null); // Empty internal output
+    try task_engine.addStorage(BREAD_SHELF_ID, null); // Empty bread shelf
 
     // Create workstation
-    _ = task_engine.addWorkstation(BAKERY_ID, .{
+    try task_engine.addWorkstation(BAKERY_ID, .{
         .eis = &.{PANTRY_ID},
-        .iis = BAKERY_IIS_ID,
-        .ios = BAKERY_IOS_ID,
+        .iis = &.{BAKERY_IIS_ID},
+        .ios = &.{BAKERY_IOS_ID},
         .eos = &.{BREAD_SHELF_ID},
-        .process_duration = 60, // 1 second at 60 FPS
     });
 
     // Add a worker
-    _ = task_engine.addWorker(BAKER_ID, .{});
-
-    // Add ingredients to pantry
-    _ = task_engine.addToStorage(PANTRY_ID, .Flour, 10);
-    _ = task_engine.addToStorage(PANTRY_ID, .Water, 10);
+    try task_engine.addWorker(BAKER_ID);
 
     std.log.info("Task engine initialized with bakery workstation", .{});
     std.log.info("Hooks will fire as the worker processes tasks", .{});
 
     // Simulate: Worker becomes available (triggers pickup_started hook)
-    task_engine.notifyWorkerIdle(BAKER_ID);
+    _ = task_engine.workerAvailable(BAKER_ID);
 
     if (ci_test) return;
 
@@ -151,19 +129,19 @@ pub fn main() !void {
         _ = dt;
         scene.update(0);
 
-        // Update task engine (handles process timers)
-        task_engine.update();
-
         // Simulate worker completing steps (in a real game this would be
         // triggered by the pathfinding/movement system)
         if (frame == 30) {
             // Worker arrived at EIS, pickup complete
-            task_engine.notifyPickupComplete(BAKER_ID);
+            _ = task_engine.pickupCompleted(BAKER_ID);
+        }
+        if (frame == 60) {
+            // Work/process complete
+            _ = task_engine.workCompleted(BAKERY_ID);
         }
         if (frame == 90) {
-            // Process complete happens automatically via update()
-            // then worker needs to arrive at EOS
-            task_engine.notifyStoreComplete(BAKER_ID);
+            // Worker arrived at EOS, store complete
+            _ = task_engine.storeCompleted(BAKER_ID);
         }
 
         game.getPipeline().sync(game.getRegistry());
@@ -177,7 +155,5 @@ pub fn main() !void {
         if (frame > 120) break; // Exit after demo
     }
 
-    std.log.info("Demo complete! Bread produced: {d}", .{
-        task_engine.getStorageQuantity(BREAD_SHELF_ID, .Bread),
-    });
+    std.log.info("Demo complete!", .{});
 }

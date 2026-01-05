@@ -42,7 +42,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-    const labelle_pathfinding_mod = labelle_pathfinding_dep.module("pathfinding");
+    const labelle_pathfinding_mod = labelle_pathfinding_dep.module("labelle_pathfinding");
 
     const exe = b.addExecutable(.{
         .name = "example_3",

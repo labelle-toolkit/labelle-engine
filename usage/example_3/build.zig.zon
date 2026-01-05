@@ -17,8 +17,8 @@
             .path = "../..",
         },
         .@"labelle-pathfinding" = .{
-            .url = "git+https://github.com/labelle-toolkit/labelle-pathfinding#v2.5.0",
-            .hash = "labelle_pathfinding-2.5.0-hUbROYtzAgBMHjXOktSO0l6YZBp16_z7p32HYi9TCAVx",
+            .url = "git+https://github.com/labelle-toolkit/labelle-pathfinding#v2.7.0",
+            .hash = "labelle_pathfinding-2.7.0-hUbROfQKAwA30MD4dcNFvYazkRbFgQqn0Hrvz42lUHhf",
         },
     },
     .paths = .{
