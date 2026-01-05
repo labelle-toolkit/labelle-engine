@@ -70,7 +70,7 @@ fn benchOptionA(allocator: std.mem.Allocator) !BenchResults {
         fn remove(self: *@This(), entity: u64) void {
             for (self.entities.items, 0..) |e, i| {
                 if (e == entity) {
-                    _ = self.entities.orderedRemove(i);
+                    _ = self.entities.swapRemove(i);
                     return;
                 }
             }
