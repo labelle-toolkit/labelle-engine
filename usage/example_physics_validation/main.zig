@@ -28,6 +28,12 @@ pub const Prefabs = engine.PrefabRegistry(.{
 });
 
 pub const Components = engine.ComponentRegistry(struct {
+    // Engine built-in components
+    pub const Position = engine.Position;
+    pub const Sprite = engine.Sprite;
+    pub const Shape = engine.Shape;
+    pub const Text = engine.Text;
+    // Project components
     pub const GravityBody = main_module.GravityBody;
 });
 

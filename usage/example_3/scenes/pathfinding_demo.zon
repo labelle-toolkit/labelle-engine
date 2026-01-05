@@ -1,5 +1,6 @@
 .{
     .name = "pathfinding_demo",
     .scripts = .{ "pathfinding" },
+    .camera = .{ .x = 310, .y = 270 },
     .entities = .{},
 }
