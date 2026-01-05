@@ -315,7 +315,41 @@ Both backends implement a common interface defined in `src/ecs/`.
 
 ### Physics Module
 
-Optional Box2D physics integration, enabled via `physics.enabled = true` in project.labelle:
+Optional Box2D physics integration, enabled via `physics.enabled = true` in project.labelle.
+
+#### ECS Integration Design Decisions
+
+Based on benchmark results (run with `zig build bench-all` in `physics/`), these are the recommended patterns for ECS integration:
+
+| Pattern | Recommendation | Rationale |
+|---------|----------------|-----------|
+| **Compound Shapes** | Shapes array in Collider | 2400x faster create, 3-5x faster update, 3x less memory |
+| **Velocity Control** | Component sync for mixed R/W | 1.66x faster for read-modify-write loops vs direct methods |
+| **Collision State** | Bitmask for ≤64 entities, per-entity list otherwise | Bitmask is 9x faster but limited to 64 entities |
+
+**Compound Shapes** - Use a fixed-size shapes array within the Collider component:
+```zig
+const Collider = struct {
+    shapes: [MAX_SHAPES]Shape = undefined,
+    shape_count: usize = 0,
+    // ...
+};
+```
+
+**Velocity Control** - For systems that read-modify-write velocities frequently (damping, forces), use a synced Velocity component rather than direct world method calls:
+```zig
+// Preferred for mixed read/write patterns
+for (velocities) |*v| {
+    v.linear = .{ v.linear[0] * 0.99, v.linear[1] * 0.99 };
+}
+// Sync to Box2D once per frame
+```
+
+**Collision State** - For small entity pools (≤64), bitmasks provide excellent performance:
+```zig
+const CollisionMask = u64;  // Each bit = touching entity ID
+```
+For larger scenes, use per-entity touching lists (Option A pattern).
 
 ```bash
 zig build -Dphysics=true   # Enable physics at build time

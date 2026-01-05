@@ -71,6 +71,83 @@ pub fn build(b: *std.Build) void {
 
     const bench_step = b.step("bench", "Run physics benchmarks");
     bench_step.dependOn(&run_bench.step);
+
+    // Helper to add a physics benchmark executable
+    // Usage: zig build bench-all (runs all benchmarks)
+    const addPhysicsBenchmark = struct {
+        fn add(
+            builder: *std.Build,
+            tgt: std.Build.ResolvedTarget,
+            physics: *std.Build.Module,
+            box2d: *std.Build.Dependency,
+            comptime source: []const u8,
+            comptime exe_name: []const u8,
+            comptime step_name: []const u8,
+            comptime description: []const u8,
+        ) *std.Build.Step {
+            const exe = builder.addExecutable(.{
+                .name = exe_name,
+                .root_module = builder.createModule(.{
+                    .root_source_file = builder.path(source),
+                    .target = tgt,
+                    .optimize = .ReleaseFast,
+                    .imports = &.{
+                        .{ .name = "labelle-physics", .module = physics },
+                    },
+                }),
+            });
+            exe.root_module.linkLibrary(box2d.artifact("box2d"));
+            builder.installArtifact(exe);
+
+            const run = builder.addRunArtifact(exe);
+            run.step.dependOn(builder.getInstallStep());
+
+            const step = builder.step(step_name, description);
+            step.dependOn(&run.step);
+
+            return &run.step;
+        }
+    }.add;
+
+    const run_velocity_step = addPhysicsBenchmark(
+        b,
+        target,
+        physics_mod,
+        box2d_dep,
+        "benchmark/velocity_benchmark.zig",
+        "velocity-benchmark",
+        "bench-velocity",
+        "Run velocity control benchmark",
+    );
+
+    const run_collision_step = addPhysicsBenchmark(
+        b,
+        target,
+        physics_mod,
+        box2d_dep,
+        "benchmark/collision_benchmark.zig",
+        "collision-benchmark",
+        "bench-collision",
+        "Run collision query benchmark",
+    );
+
+    const run_compound_step = addPhysicsBenchmark(
+        b,
+        target,
+        physics_mod,
+        box2d_dep,
+        "benchmark/compound_benchmark.zig",
+        "compound-benchmark",
+        "bench-compound",
+        "Run compound shapes benchmark",
+    );
+
+    // All benchmarks step
+    const all_bench_step = b.step("bench-all", "Run all physics benchmarks");
+    all_bench_step.dependOn(&run_bench.step);
+    all_bench_step.dependOn(run_velocity_step);
+    all_bench_step.dependOn(run_collision_step);
+    all_bench_step.dependOn(run_compound_step);
 }
 
 /// Add physics module to a parent build
