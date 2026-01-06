@@ -140,6 +140,9 @@ pub fn GameWith(comptime Hooks: type) type {
         // Frame tracking (for hooks)
         frame_number: u64 = 0,
 
+        // Deferred screenshot request (taken after render, before endFrame)
+        pending_screenshot_filename: ?[:0]const u8 = null,
+
         /// Emit a hook event. No-op if hooks are disabled.
         inline fn emitHook(payload: hooks_mod.HookPayload) void {
             if (hooks_enabled) {
@@ -226,6 +229,9 @@ pub fn GameWith(comptime Hooks: type) type {
         }
         if (self.pending_scene_change) |name| {
             self.allocator.free(name);
+        }
+        if (self.pending_screenshot_filename) |filename| {
+            self.allocator.free(filename);
         }
 
         self.scenes.deinit();
@@ -530,6 +536,10 @@ pub fn GameWith(comptime Hooks: type) type {
                 // Render
                 self.retained_engine.beginFrame();
                 self.retained_engine.render();
+
+                // Process deferred screenshot (after render, before endFrame)
+                self.processPendingScreenshot();
+
                 self.retained_engine.endFrame();
 
                 // Handle pending scene change
@@ -662,6 +672,32 @@ pub fn GameWith(comptime Hooks: type) type {
     pub fn getScreenSize(self: *const Self) ScreenSize {
         const size = self.retained_engine.getWindowSize();
         return .{ .width = size.w, .height = size.h };
+    }
+
+    // ==================== Screenshot ====================
+
+    /// Request a screenshot of the current frame to be saved to a file.
+    /// The screenshot is captured at the end of the frame after rendering is complete.
+    /// The filename should include the extension (e.g., "screenshot.png").
+    pub fn takeScreenshot(self: *Self, filename: [*:0]const u8) void {
+        // Free any pending screenshot request
+        if (self.pending_screenshot_filename) |old| {
+            self.allocator.free(old);
+        }
+        // Duplicate the filename to store until end of frame
+        self.pending_screenshot_filename = std.fmt.allocPrintZ(self.allocator, "{s}", .{filename}) catch {
+            std.log.err("Failed to allocate memory for screenshot filename", .{});
+            return;
+        };
+    }
+
+    /// Internal: Process pending screenshot request (called after render)
+    fn processPendingScreenshot(self: *Self) void {
+        if (self.pending_screenshot_filename) |filename| {
+            self.retained_engine.takeScreenshot(filename.ptr);
+            self.allocator.free(filename);
+            self.pending_screenshot_filename = null;
+        }
     }
     };
 }

@@ -576,6 +576,27 @@ pub fn update(game: *Game, scene: *Scene, dt: f32) void {
 
 Named camera slots: `main` (0), `player2` (1), `minimap` (2), `camera3` (3).
 
+### Screenshot
+
+Capture screenshots of the game window:
+
+```zig
+// Take a screenshot (saves to working directory)
+game.takeScreenshot("screenshot.png");
+
+// With counter for multiple screenshots
+var counter: u32 = 0;
+// ...
+if (game.getInput().isKeyPressed(.f12)) {
+    counter += 1;
+    var buf: [64]u8 = undefined;
+    const filename = std.fmt.bufPrintZ(&buf, "screenshot_{d:0>4}.png", .{counter}) catch "screenshot.png";
+    game.takeScreenshot(filename);
+}
+```
+
+**Note:** Screenshots are captured at the end of the frame after all rendering is complete. You can call `game.takeScreenshot()` at any point in your game logic.
+
 ### Layer System
 
 The engine provides three built-in layers for organizing rendering:
