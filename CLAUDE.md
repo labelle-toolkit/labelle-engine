@@ -595,7 +595,7 @@ if (game.getInput().isKeyPressed(.f12)) {
 }
 ```
 
-**Note:** Call `takeScreenshot()` after rendering is complete for best results. The screenshot captures the current framebuffer content.
+**Note:** Screenshots are captured at the end of the frame after all rendering is complete. You can call `game.takeScreenshot()` at any point in your game logic.
 
 ### Layer System
 
