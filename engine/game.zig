@@ -663,6 +663,15 @@ pub fn GameWith(comptime Hooks: type) type {
         const size = self.retained_engine.getWindowSize();
         return .{ .width = size.w, .height = size.h };
     }
+
+    // ==================== Screenshot ====================
+
+    /// Take a screenshot of the current frame and save to file.
+    /// The filename should include the extension (e.g., "screenshot.png").
+    /// Note: Call this after render() but before endFrame() for best results.
+    pub fn takeScreenshot(self: *const Self, filename: [*:0]const u8) void {
+        self.retained_engine.takeScreenshot(filename);
+    }
     };
 }
 
