@@ -517,6 +517,9 @@ pub fn GameWith(comptime Hooks: type) type {
 
         // Emit scene_load hook
         emitHook(.{ .scene_load = .{ .name = name } });
+
+        // Apply current gizmo visibility state to newly created gizmos
+        self.updateGizmoVisibility();
     }
 
     /// Queue a scene change to happen at the end of the current frame
@@ -788,29 +791,38 @@ pub fn GameWith(comptime Hooks: type) type {
 
     /// Set visibility of a gizmo entity's visual components.
     fn setGizmoEntityVisible(self: *Self, entity: Entity, visible: bool) void {
+        var changed = false;
         // Update Sprite visibility if present
         if (self.registry.tryGet(Sprite, entity)) |sprite| {
             var updated = sprite.*;
             updated.visible = visible;
             self.registry.add(entity, updated);
+            changed = true;
         }
         // Update Shape visibility if present
         if (self.registry.tryGet(Shape, entity)) |shape| {
             var updated = shape.*;
             updated.visible = visible;
             self.registry.add(entity, updated);
+            changed = true;
         }
         // Update Text visibility if present
         if (self.registry.tryGet(Text, entity)) |text| {
             var updated = text.*;
             updated.visible = visible;
             self.registry.add(entity, updated);
+            changed = true;
         }
         // Update Icon visibility if present
         if (self.registry.tryGet(Icon, entity)) |icon| {
             var updated = icon.*;
             updated.visible = visible;
             self.registry.add(entity, updated);
+            changed = true;
+        }
+        // Mark dirty so render pipeline syncs the change
+        if (changed) {
+            self.pipeline.markVisualDirty(entity);
         }
     }
 
