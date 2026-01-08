@@ -1,0 +1,72 @@
+.{
+    .name = "hud",
+    .elements = .{
+        // Score label at top-left
+        .{
+            .Label = .{
+                .id = "score",
+                .text = "Score: 0",
+                .position = .{ .x = 10, .y = 10 },
+                .font_size = 20,
+                .color = .{ .r = 255, .g = 255, .b = 255 },
+            },
+        },
+        // Health bar below score
+        .{
+            .ProgressBar = .{
+                .id = "health",
+                .position = .{ .x = 10, .y = 40 },
+                .size = .{ .width = 200, .height = 20 },
+                .value = 0.75,
+                .color = .{ .r = 200, .g = 50, .b = 50 },
+            },
+        },
+        // Stats panel on the right
+        .{
+            .Panel = .{
+                .id = "stats_panel",
+                .position = .{ .x = 590, .y = 10 },
+                .size = .{ .width = 200, .height = 120 },
+                .background_color = .{ .r = 40, .g = 40, .b = 40, .a = 200 },
+                .children = .{
+                    .{
+                        .Label = .{
+                            .text = "Stats",
+                            .position = .{ .x = 600, .y = 20 },
+                            .font_size = 16,
+                            .color = .{ .r = 200, .g = 200, .b = 200 },
+                        },
+                    },
+                    .{
+                        .Label = .{
+                            .id = "fps",
+                            .text = "FPS: 60",
+                            .position = .{ .x = 600, .y = 45 },
+                            .font_size = 14,
+                            .color = .{ .r = 150, .g = 150, .b = 150 },
+                        },
+                    },
+                    .{
+                        .Label = .{
+                            .id = "entities",
+                            .text = "Entities: 0",
+                            .position = .{ .x = 600, .y = 65 },
+                            .font_size = 14,
+                            .color = .{ .r = 150, .g = 150, .b = 150 },
+                        },
+                    },
+                },
+            },
+        },
+        // Pause button at bottom
+        .{
+            .Button = .{
+                .id = "pause",
+                .text = "Pause",
+                .position = .{ .x = 350, .y = 560 },
+                .size = .{ .width = 100, .height = 30 },
+                .on_click = "onPause",
+            },
+        },
+    },
+}

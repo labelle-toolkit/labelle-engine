@@ -67,6 +67,9 @@ const Loader = engine.SceneLoader(Prefabs, Components, Scripts);
     .name = "level1",
     .scripts = .{"gravity"},
 
+    // GUI views to render with this scene (optional):
+    .gui_views = .{"hud", "minimap"},
+
     // Single camera (configures primary camera):
     .camera = .{ .x = 0, .y = 0, .zoom = 1.0 },
 
@@ -784,6 +787,113 @@ Sprites can be sized to fill a container using CSS-like sizing modes:
     },
 }},
 ```
+
+### GUI Module
+
+Optional immediate-mode GUI system with multi-backend support. Currently supports raylib-based rendering (raygui backend).
+
+**Build options:**
+```bash
+zig build -Dgui_backend=raygui  # Enable GUI (default: none)
+```
+
+**GUI element types:**
+- `Label` - Text display
+- `Button` - Clickable button with optional callback
+- `ProgressBar` - Value bar (0.0-1.0)
+- `Panel` - Container with background and children
+- `Checkbox` - Toggle with label
+- `Slider` - Value slider with min/max
+- `Image` - Texture display (planned)
+
+**Declarative GUI views (.zon files):**
+```zig
+// gui/hud.zon
+.{
+    .name = "hud",
+    .elements = .{
+        .{ .Label = .{ .id = "score", .text = "Score: 0", .position = .{ .x = 10, .y = 10 }, .font_size = 20 } },
+        .{ .ProgressBar = .{ .id = "health", .position = .{ .x = 10, .y = 40 }, .value = 0.75 } },
+        .{ .Button = .{ .id = "pause", .text = "Pause", .position = .{ .x = 350, .y = 560 }, .on_click = "onPause" } },
+        .{ .Panel = .{
+            .id = "stats",
+            .position = .{ .x = 590, .y = 10 },
+            .size = .{ .width = 200, .height = 100 },
+            .children = .{
+                .{ .Label = .{ .text = "FPS: 60", .position = .{ .x = 600, .y = 20 } } },
+            },
+        }},
+    },
+}
+```
+
+**Using ViewRegistry:**
+```zig
+const labelle = @import("labelle-engine");
+
+// Import GUI views
+const Views = labelle.ViewRegistry(.{
+    .hud = @import("gui/hud.zon"),
+    .pause_menu = @import("gui/pause_menu.zon"),
+});
+
+// Empty Scripts for callbacks (currently just logged)
+const Scripts = struct {
+    pub fn has(comptime _: []const u8) bool { return false; }
+};
+
+// In game loop - render GUI on top of scene
+const re = game.getRetainedEngine();
+re.beginFrame();
+re.render();
+game.renderGuiView(Views, Scripts, "hud");  // Render single view
+re.endFrame();
+```
+
+**Scene-based GUI loading:**
+
+Scenes can specify which GUI views to render via the `.gui_views` field:
+
+```zig
+// scenes/main.zon
+.{
+    .name = "main",
+    .gui_views = .{"hud", "minimap"},  // Views to render with this scene
+    .entities = .{ ... },
+}
+```
+
+```zig
+// In main.zig - load scene and render its GUI views
+var scene = try Loader.load(@import("scenes/main.zon"), labelle.SceneContext.init(&game));
+defer scene.deinit();
+
+while (game.isRunning()) {
+    const re = game.getRetainedEngine();
+    re.beginFrame();
+    re.render();
+    game.renderSceneGui(&scene, Views, Scripts);  // Renders hud + minimap
+    re.endFrame();
+}
+```
+
+**Game API:**
+```zig
+game.setGuiEnabled(false);  // Disable GUI rendering
+game.setGuiEnabled(true);   // Enable GUI rendering
+const enabled = game.isGuiEnabled();
+
+// Render specific view (manual)
+game.renderGuiView(Views, Scripts, "hud");
+
+// Render multiple views (manual)
+game.renderGui(Views, Scripts, &.{"hud", "minimap"});
+
+// Render views from scene's .gui_views field
+game.renderSceneGui(&scene, Views, Scripts);
+```
+
+See `usage/example_gui/` for a complete demo.
 
 ### Important Patterns
 

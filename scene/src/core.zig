@@ -51,16 +51,24 @@ pub const Scene = struct {
     name: []const u8,
     entities: std.ArrayListUnmanaged(EntityInstance),
     scripts: []const script_mod.ScriptFns,
+    /// GUI view names to render with this scene (from .gui_views in scene .zon)
+    gui_view_names: []const []const u8 = &.{},
     ctx: SceneContext,
     initialized: bool = false,
     /// Tracks allocated entity slices for cleanup (used by nested entity composition)
     allocated_entity_slices: std.ArrayListUnmanaged([]Entity) = .{},
 
-    pub fn init(name: []const u8, scripts: []const script_mod.ScriptFns, ctx: SceneContext) Scene {
+    pub fn init(
+        name: []const u8,
+        scripts: []const script_mod.ScriptFns,
+        gui_view_names: []const []const u8,
+        ctx: SceneContext,
+    ) Scene {
         return .{
             .name = name,
             .entities = .{},
             .scripts = scripts,
+            .gui_view_names = gui_view_names,
             .ctx = ctx,
             .initialized = false,
             .allocated_entity_slices = .{},

@@ -445,7 +445,13 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
             else
                 &[_]script_mod.ScriptFns{};
 
-            var scene = Scene.init(scene_data.name, script_fns, ctx);
+            // Get GUI view names if scene has gui_views defined
+            const gui_view_names = comptime if (@hasField(@TypeOf(scene_data), "gui_views"))
+                zon.tupleToSlice([]const u8, scene_data.gui_views)
+            else
+                &[_][]const u8{};
+
+            var scene = Scene.init(scene_data.name, script_fns, gui_view_names, ctx);
             errdefer scene.deinit();
 
             // Apply scene-level camera configuration if present

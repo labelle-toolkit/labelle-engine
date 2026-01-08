@@ -1,0 +1,16 @@
+.{
+    .fingerprint = 0xd5301f5e8f0ad736,
+    .name = .example_gui,
+    .version = "0.1.0",
+    .dependencies = .{
+        .@"labelle-engine" = .{
+            .path = "../..",
+        },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "main.zig",
+        "gui",
+    },
+}

@@ -17,6 +17,7 @@ pub const core = @import("core/mod.zig");
 pub const ecs = @import("ecs");
 pub const input = @import("input");
 pub const audio = @import("audio");
+pub const gui = @import("gui");
 pub const graphics = @import("graphics");
 pub const hooks = @import("hooks/mod.zig");
 pub const render = @import("render/mod.zig");
@@ -113,6 +114,13 @@ pub const Audio = audio.Audio;
 pub const SoundId = audio.SoundId;
 pub const MusicId = audio.MusicId;
 pub const AudioError = audio.AudioError;
+
+// GUI types
+pub const Gui = gui.Gui;
+pub const GuiBackend = gui.GuiBackend;
+pub const GuiElement = gui.GuiElement;
+pub const ViewRegistry = gui.ViewRegistry;
+pub const ViewDef = gui.ViewDef;
 
 /// Built-in component types for .zon prefab/scene files.
 pub const BuiltinComponents = struct {
