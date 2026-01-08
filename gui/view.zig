@@ -195,14 +195,16 @@ pub fn ViewRegistry(comptime view_map: anytype) type {
 
         /// Get all view names in this registry
         pub fn names() []const []const u8 {
-            comptime {
+            // Comptime-evaluated array stored as static const
+            const result = comptime blk: {
                 const fields = std.meta.fields(@TypeOf(view_map));
-                var result: [fields.len][]const u8 = undefined;
+                var arr: [fields.len][]const u8 = undefined;
                 for (fields, 0..) |field, i| {
-                    result[i] = field.name;
+                    arr[i] = field.name;
                 }
-                return &result;
-            }
+                break :blk arr;
+            };
+            return &result;
         }
 
         /// Get the number of views in this registry

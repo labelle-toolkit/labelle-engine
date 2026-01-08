@@ -189,10 +189,11 @@ pub fn slider(self: *Self, sl: types.Slider) f32 {
     // Calculate range (guard against division by zero)
     const range = sl.max - sl.min;
     const has_range = range > 0;
+    const has_width = sl.size.width > 0;
 
     // Calculate new value if dragging
     var current_value = sl.value;
-    if (dragging and has_range) {
+    if (dragging and has_range and has_width) {
         const relative_x = mouse_pos.x - sl.position.x;
         const normalized = std.math.clamp(relative_x / sl.size.width, 0, 1);
         current_value = sl.min + normalized * range;
