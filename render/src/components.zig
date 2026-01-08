@@ -313,7 +313,8 @@ const Self = @This();
 /// ```
 pub const Gizmo = struct {
     /// Reference to the parent entity this gizmo is attached to
-    parent_entity: Entity = Entity.invalid,
+    /// Optional because some ECS backends don't support Entity.invalid sentinel
+    parent_entity: ?Entity = null,
     /// Offset from parent position
     offset_x: f32 = 0,
     offset_y: f32 = 0,
