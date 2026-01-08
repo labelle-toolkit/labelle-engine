@@ -21,13 +21,19 @@ pub fn SparseSet(comptime T: type) type {
 
         pub fn init(allocator: Allocator, max_keys: usize, initial_capacity: usize) !Self {
             const sparse = try allocator.alloc(?u32, max_keys);
+            errdefer allocator.free(sparse);
             @memset(sparse, null);
+
+            const dense_keys = try allocator.alloc(u64, initial_capacity);
+            errdefer allocator.free(dense_keys);
+
+            const dense_values = try allocator.alloc(T, initial_capacity);
 
             return Self{
                 .allocator = allocator,
                 .sparse = sparse,
-                .dense_keys = try allocator.alloc(u64, initial_capacity),
-                .dense_values = try allocator.alloc(T, initial_capacity),
+                .dense_keys = dense_keys,
+                .dense_values = dense_values,
                 .count = 0,
                 .capacity = initial_capacity,
                 .max_key = max_keys,
