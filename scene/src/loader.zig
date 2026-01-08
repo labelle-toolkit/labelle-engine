@@ -771,15 +771,8 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
 
                 // Handle BoundingBox gizmos specially - they create a Shape from parent's visual bounds
                 if (comptime std.mem.eql(u8, field_name, "BoundingBox")) {
-                    // Create BoundingBox component from gizmo data
-                    const bbox = render.BoundingBox{
-                        .color = if (@hasField(@TypeOf(gizmo_data), "color")) zon.coerceValue(render.Color, gizmo_data.color) else .{ .r = 0, .g = 255, .b = 0, .a = 200 },
-                        .padding = if (@hasField(@TypeOf(gizmo_data), "padding")) gizmo_data.padding else 0,
-                        .thickness = if (@hasField(@TypeOf(gizmo_data), "thickness")) gizmo_data.thickness else 1,
-                        .visible = if (@hasField(@TypeOf(gizmo_data), "visible")) gizmo_data.visible else true,
-                        .z_index = if (@hasField(@TypeOf(gizmo_data), "z_index")) gizmo_data.z_index else 255,
-                        .layer = if (@hasField(@TypeOf(gizmo_data), "layer")) gizmo_data.layer else .ui,
-                    };
+                    // Create BoundingBox component from gizmo data using buildStruct (handles defaults)
+                    const bbox = zon.buildStruct(render.BoundingBox, gizmo_data);
 
                     // Store BoundingBox component for reference
                     game.getRegistry().add(gizmo_entity, bbox);

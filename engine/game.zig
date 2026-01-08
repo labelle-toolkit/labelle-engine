@@ -792,33 +792,17 @@ pub fn GameWith(comptime Hooks: type) type {
     /// Set visibility of a gizmo entity's visual components.
     fn setGizmoEntityVisible(self: *Self, entity: Entity, visible: bool) void {
         var changed = false;
-        // Update Sprite visibility if present
-        if (self.registry.tryGet(Sprite, entity)) |sprite| {
-            var updated = sprite.*;
-            updated.visible = visible;
-            self.registry.add(entity, updated);
-            changed = true;
-        }
-        // Update Shape visibility if present
-        if (self.registry.tryGet(Shape, entity)) |shape| {
-            var updated = shape.*;
-            updated.visible = visible;
-            self.registry.add(entity, updated);
-            changed = true;
-        }
-        // Update Text visibility if present
-        if (self.registry.tryGet(Text, entity)) |text| {
-            var updated = text.*;
-            updated.visible = visible;
-            self.registry.add(entity, updated);
-            changed = true;
-        }
-        // Update Icon visibility if present
-        if (self.registry.tryGet(Icon, entity)) |icon| {
-            var updated = icon.*;
-            updated.visible = visible;
-            self.registry.add(entity, updated);
-            changed = true;
+        // Update visibility for all visual component types
+        const visual_components = .{ Sprite, Shape, Text, Icon };
+        inline for (visual_components) |ComponentType| {
+            if (self.registry.tryGet(ComponentType, entity)) |comp| {
+                var updated = comp.*;
+                if (updated.visible != visible) {
+                    updated.visible = visible;
+                    self.registry.add(entity, updated);
+                    changed = true;
+                }
+            }
         }
         // Mark dirty so render pipeline syncs the change
         if (changed) {
@@ -894,15 +878,16 @@ pub fn GameWith(comptime Hooks: type) type {
     }
 
     /// Clear standalone gizmos in a specific group.
+    /// Uses O(n) single-pass filter instead of O(n²) orderedRemove loop.
     pub fn clearGizmoGroup(self: *Self, group: []const u8) void {
-        var i: usize = 0;
-        while (i < self.standalone_gizmos.items.len) {
-            if (std.mem.eql(u8, self.standalone_gizmos.items[i].group, group)) {
-                _ = self.standalone_gizmos.orderedRemove(i);
-            } else {
-                i += 1;
+        var write_idx: usize = 0;
+        for (self.standalone_gizmos.items) |item| {
+            if (!std.mem.eql(u8, item.group, group)) {
+                self.standalone_gizmos.items[write_idx] = item;
+                write_idx += 1;
             }
         }
+        self.standalone_gizmos.shrinkRetainingCapacity(write_idx);
     }
 
     /// Render standalone gizmos.
