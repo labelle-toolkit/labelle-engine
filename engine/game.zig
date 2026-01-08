@@ -176,6 +176,7 @@ pub fn GameWith(comptime Hooks: type) type {
         // GUI state
         gui_enabled: bool = true,
         gui: gui_mod.Gui,
+        gui_runtime_values: std.StringHashMap(gui_mod.RuntimeValue),
 
         /// Emit a hook event. No-op if hooks are disabled.
         inline fn emitHook(payload: hooks_mod.HookPayload) void {
@@ -229,6 +230,7 @@ pub fn GameWith(comptime Hooks: type) type {
             .standalone_gizmos = standalone_gizmos_list,
             .selected_entities = selected_entities_bitset,
             .gui = gui_mod.Gui.init(),
+            .gui_runtime_values = std.StringHashMap(gui_mod.RuntimeValue).init(allocator),
         };
 
         // Emit game_init hook with allocator for early subsystem initialization
@@ -279,6 +281,7 @@ pub fn GameWith(comptime Hooks: type) type {
         self.scenes.deinit();
         self.standalone_gizmos.deinit(self.allocator);
         self.selected_entities.deinit();
+        self.gui_runtime_values.deinit();
         self.gui.deinit();
         self.pipeline.deinit();
         self.registry.deinit();
@@ -996,6 +999,54 @@ pub fn GameWith(comptime Hooks: type) type {
         return self.gui_enabled;
     }
 
+    // ==================== GUI Runtime Updates ====================
+
+    /// Set a text value for a GUI element (Label, Button).
+    /// The value persists until cleared with clearGuiValue().
+    pub fn setGuiText(self: *Self, id: []const u8, text: []const u8) void {
+        self.gui_runtime_values.put(id, .{ .text = text }) catch {};
+    }
+
+    /// Set a numeric value for a GUI element (ProgressBar, Slider).
+    /// The value persists until cleared with clearGuiValue().
+    pub fn setGuiValue(self: *Self, id: []const u8, value: f32) void {
+        self.gui_runtime_values.put(id, .{ .value = value }) catch {};
+    }
+
+    /// Set a checked state for a GUI element (Checkbox).
+    /// The value persists until cleared with clearGuiValue().
+    pub fn setGuiChecked(self: *Self, id: []const u8, checked: bool) void {
+        self.gui_runtime_values.put(id, .{ .checked = checked }) catch {};
+    }
+
+    /// Set the position of a GUI element.
+    /// The value persists until cleared with clearGuiValue().
+    pub fn setGuiPosition(self: *Self, id: []const u8, x: f32, y: f32) void {
+        self.gui_runtime_values.put(id, .{ .position = .{ .x = x, .y = y } }) catch {};
+    }
+
+    /// Set the visibility of a GUI element.
+    /// Hidden elements are not rendered.
+    pub fn setGuiVisible(self: *Self, id: []const u8, visible: bool) void {
+        self.gui_runtime_values.put(id, .{ .visible = visible }) catch {};
+    }
+
+    /// Get the current runtime value for a GUI element, if any.
+    pub fn getGuiRuntimeValue(self: *const Self, id: []const u8) ?gui_mod.RuntimeValue {
+        return self.gui_runtime_values.get(id);
+    }
+
+    /// Clear a runtime value override for a GUI element.
+    /// The element will revert to its .zon definition.
+    pub fn clearGuiValue(self: *Self, id: []const u8) void {
+        _ = self.gui_runtime_values.remove(id);
+    }
+
+    /// Clear all runtime GUI value overrides.
+    pub fn clearAllGuiValues(self: *Self) void {
+        self.gui_runtime_values.clearRetainingCapacity();
+    }
+
     /// Render GUI from a ViewRegistry.
     /// Call this after re.render() in your main loop:
     /// ```zig
@@ -1037,27 +1088,102 @@ pub fn GameWith(comptime Hooks: type) type {
         }
     }
 
-    /// Internal: Render a single GUI element.
+    /// Internal: Render a single GUI element with runtime overrides applied.
     fn renderGuiElement(self: *Self, element: gui_mod.GuiElement, comptime Scripts: type) void {
+        const id = element.getId();
+
+        // Check visibility override first
+        if (id.len > 0) {
+            if (self.gui_runtime_values.get(id)) |runtime_val| {
+                if (runtime_val == .visible and !runtime_val.visible) {
+                    return; // Element is hidden
+                }
+            }
+        }
+
         switch (element) {
-            .Label => |lbl| self.gui.label(lbl),
+            .Label => |lbl| {
+                var modified_lbl = lbl;
+                if (id.len > 0) {
+                    if (self.gui_runtime_values.get(id)) |runtime_val| {
+                        switch (runtime_val) {
+                            .text => |text| modified_lbl.text = text,
+                            .position => |pos| modified_lbl.position = pos,
+                            else => {},
+                        }
+                    }
+                }
+                self.gui.label(modified_lbl);
+            },
             .Button => |btn| {
-                if (self.gui.button(btn)) {
+                var modified_btn = btn;
+                if (id.len > 0) {
+                    if (self.gui_runtime_values.get(id)) |runtime_val| {
+                        switch (runtime_val) {
+                            .text => |text| modified_btn.text = text,
+                            .position => |pos| modified_btn.position = pos,
+                            else => {},
+                        }
+                    }
+                }
+                if (self.gui.button(modified_btn)) {
                     // Button was clicked - call script callback if defined
                     if (btn.on_click) |callback_name| {
                         self.invokeGuiCallback(Scripts, callback_name);
                     }
                 }
             },
-            .ProgressBar => |bar| self.gui.progressBar(bar),
+            .ProgressBar => |bar| {
+                var modified_bar = bar;
+                if (id.len > 0) {
+                    if (self.gui_runtime_values.get(id)) |runtime_val| {
+                        switch (runtime_val) {
+                            .value => |val| modified_bar.value = val,
+                            .position => |pos| modified_bar.position = pos,
+                            else => {},
+                        }
+                    }
+                }
+                self.gui.progressBar(modified_bar);
+            },
             .Panel => |panel| {
-                self.gui.beginPanel(panel);
+                var modified_panel = panel;
+                if (id.len > 0) {
+                    if (self.gui_runtime_values.get(id)) |runtime_val| {
+                        switch (runtime_val) {
+                            .position => |pos| modified_panel.position = pos,
+                            else => {},
+                        }
+                    }
+                }
+                self.gui.beginPanel(modified_panel);
                 self.renderGuiElements(panel.children, Scripts);
                 self.gui.endPanel();
             },
-            .Image => |img| self.gui.image(img),
+            .Image => |img| {
+                var modified_img = img;
+                if (id.len > 0) {
+                    if (self.gui_runtime_values.get(id)) |runtime_val| {
+                        switch (runtime_val) {
+                            .position => |pos| modified_img.position = pos,
+                            else => {},
+                        }
+                    }
+                }
+                self.gui.image(modified_img);
+            },
             .Checkbox => |cb| {
-                if (self.gui.checkbox(cb)) {
+                var modified_cb = cb;
+                if (id.len > 0) {
+                    if (self.gui_runtime_values.get(id)) |runtime_val| {
+                        switch (runtime_val) {
+                            .checked => |checked| modified_cb.checked = checked,
+                            .position => |pos| modified_cb.position = pos,
+                            else => {},
+                        }
+                    }
+                }
+                if (self.gui.checkbox(modified_cb)) {
                     // Checkbox was toggled - call script callback if defined
                     if (cb.on_change) |callback_name| {
                         self.invokeGuiCallback(Scripts, callback_name);
@@ -1065,8 +1191,18 @@ pub fn GameWith(comptime Hooks: type) type {
                 }
             },
             .Slider => |sl| {
-                const new_value = self.gui.slider(sl);
-                if (new_value != sl.value) {
+                var modified_sl = sl;
+                if (id.len > 0) {
+                    if (self.gui_runtime_values.get(id)) |runtime_val| {
+                        switch (runtime_val) {
+                            .value => |val| modified_sl.value = val,
+                            .position => |pos| modified_sl.position = pos,
+                            else => {},
+                        }
+                    }
+                }
+                const new_value = self.gui.slider(modified_sl);
+                if (new_value != modified_sl.value) {
                     // Slider value changed - call script callback if defined
                     if (sl.on_change) |callback_name| {
                         self.invokeGuiCallback(Scripts, callback_name);

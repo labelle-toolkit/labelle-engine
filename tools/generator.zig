@@ -321,6 +321,7 @@ fn generateMainZigRaylib(
     components: []const []const u8,
     scripts: []const []const u8,
     hooks: []const []const u8,
+    gui_views: []const []const u8,
     task_hooks: TaskHookScanResult,
 ) ![]const u8 {
     var buf: std.ArrayListUnmanaged(u8) = .{};
@@ -419,6 +420,11 @@ fn generateMainZigRaylib(
     // Hook imports
     for (hooks) |name| {
         try zts.print(main_raylib_tmpl, "hook_import", .{ name, name }, writer);
+    }
+
+    // GUI view imports
+    for (gui_views) |name| {
+        try zts.print(main_raylib_tmpl, "gui_import", .{ name, name }, writer);
     }
 
     // Main module reference
@@ -538,6 +544,17 @@ fn generateMainZigRaylib(
         try zts.print(main_raylib_tmpl, "script_registry_end", .{}, writer);
     }
 
+    // View registry (GUI views)
+    if (gui_views.len == 0) {
+        try zts.print(main_raylib_tmpl, "view_registry_empty", .{}, writer);
+    } else {
+        try zts.print(main_raylib_tmpl, "view_registry_start", .{}, writer);
+        for (gui_views) |name| {
+            try zts.print(main_raylib_tmpl, "view_registry_item", .{ name, name }, writer);
+        }
+        try zts.print(main_raylib_tmpl, "view_registry_end", .{}, writer);
+    }
+
     // Plugin engine hooks (for plugins with engine_hooks config)
     // This generates createEngineHooks calls and exports Context, MovementAction, PendingMovement
     var plugin_engine_hooks_count: usize = 0;
@@ -654,11 +671,13 @@ fn generateMainZigSokol(
     components: []const []const u8,
     scripts: []const []const u8,
     hooks: []const []const u8,
+    gui_views: []const []const u8,
     task_hooks: TaskHookScanResult,
 ) ![]const u8 {
     // Sokol backend uses same logic as raylib - delegate to avoid duplication
-    // For now, sokol templates don't have enum/bind sections, so skip them
+    // For now, sokol templates don't have enum/bind/gui sections, so skip them
     _ = enums;
+    _ = gui_views;
 
     var buf: std.ArrayListUnmanaged(u8) = .{};
     const writer = buf.writer(allocator);
@@ -850,10 +869,12 @@ fn generateMainZigSdl(
     components: []const []const u8,
     scripts: []const []const u8,
     hooks: []const []const u8,
+    gui_views: []const []const u8,
     task_hooks: TaskHookScanResult,
 ) ![]const u8 {
-    // SDL backend - for now, skip enum/bind sections (templates not updated yet)
+    // SDL backend - for now, skip enum/bind/gui sections (templates not updated yet)
     _ = enums;
+    _ = gui_views;
 
     var buf: std.ArrayListUnmanaged(u8) = .{};
     const writer = buf.writer(allocator);
@@ -1032,8 +1053,11 @@ fn generateMainZigGlfw(
     components: []const []const u8,
     scripts: []const []const u8,
     hooks: []const []const u8,
+    gui_views: []const []const u8,
     task_hooks: TaskHookScanResult,
 ) ![]const u8 {
+    // GUI views not yet supported on GLFW backends (templates not updated)
+    _ = gui_views;
     var buf: std.ArrayListUnmanaged(u8) = .{};
     const writer = buf.writer(allocator);
 
@@ -1281,9 +1305,10 @@ fn generateMainZigBgfx(
     components: []const []const u8,
     scripts: []const []const u8,
     hooks: []const []const u8,
+    gui_views: []const []const u8,
     task_hooks: TaskHookScanResult,
 ) ![]const u8 {
-    return generateMainZigGlfw(main_bgfx_tmpl, true, allocator, config, prefabs, enums, components, scripts, hooks, task_hooks);
+    return generateMainZigGlfw(main_bgfx_tmpl, true, allocator, config, prefabs, enums, components, scripts, hooks, gui_views, task_hooks);
 }
 
 /// Generate main.zig content for zgpu backend
@@ -1295,9 +1320,10 @@ fn generateMainZigZgpu(
     components: []const []const u8,
     scripts: []const []const u8,
     hooks: []const []const u8,
+    gui_views: []const []const u8,
     task_hooks: TaskHookScanResult,
 ) ![]const u8 {
-    return generateMainZigGlfw(main_zgpu_tmpl, false, allocator, config, prefabs, enums, components, scripts, hooks, task_hooks);
+    return generateMainZigGlfw(main_zgpu_tmpl, false, allocator, config, prefabs, enums, components, scripts, hooks, gui_views, task_hooks);
 }
 
 /// Generate main.zig content based on folder contents
@@ -1309,14 +1335,15 @@ pub fn generateMainZig(
     components: []const []const u8,
     scripts: []const []const u8,
     hooks: []const []const u8,
+    gui_views: []const []const u8,
     task_hooks: TaskHookScanResult,
 ) ![]const u8 {
     return switch (config.backend) {
-        .raylib => generateMainZigRaylib(allocator, config, prefabs, enums, components, scripts, hooks, task_hooks),
-        .sokol => generateMainZigSokol(allocator, config, prefabs, enums, components, scripts, hooks, task_hooks),
-        .sdl => generateMainZigSdl(allocator, config, prefabs, enums, components, scripts, hooks, task_hooks),
-        .bgfx => generateMainZigBgfx(allocator, config, prefabs, enums, components, scripts, hooks, task_hooks),
-        .zgpu => generateMainZigZgpu(allocator, config, prefabs, enums, components, scripts, hooks, task_hooks),
+        .raylib => generateMainZigRaylib(allocator, config, prefabs, enums, components, scripts, hooks, gui_views, task_hooks),
+        .sokol => generateMainZigSokol(allocator, config, prefabs, enums, components, scripts, hooks, gui_views, task_hooks),
+        .sdl => generateMainZigSdl(allocator, config, prefabs, enums, components, scripts, hooks, gui_views, task_hooks),
+        .bgfx => generateMainZigBgfx(allocator, config, prefabs, enums, components, scripts, hooks, gui_views, task_hooks),
+        .zgpu => generateMainZigZgpu(allocator, config, prefabs, enums, components, scripts, hooks, gui_views, task_hooks),
     };
 }
 
@@ -1508,6 +1535,14 @@ pub fn generateProject(allocator: std.mem.Allocator, project_path: []const u8, o
         allocator.free(hooks);
     }
 
+    const gui_path = try std.fs.path.join(allocator, &.{ project_path, "gui" });
+    defer allocator.free(gui_path);
+    const gui_views = try scanZonFolder(allocator, gui_path);
+    defer {
+        for (gui_views) |v| allocator.free(v);
+        allocator.free(gui_views);
+    }
+
     // Scan for task hooks in hook files
     var task_hooks = try scanForTaskHooks(allocator, hooks_path, hooks, config);
     defer task_hooks.deinit(allocator);
@@ -1516,7 +1551,7 @@ pub fn generateProject(allocator: std.mem.Allocator, project_path: []const u8, o
     const build_zig = try generateBuildZig(allocator, config);
     defer allocator.free(build_zig);
 
-    const main_zig = try generateMainZig(allocator, config, prefabs, enums, components, scripts, hooks, task_hooks);
+    const main_zig = try generateMainZig(allocator, config, prefabs, enums, components, scripts, hooks, gui_views, task_hooks);
     defer allocator.free(main_zig);
 
     // Create output directory path
@@ -1678,12 +1713,20 @@ pub fn generateMainOnly(allocator: std.mem.Allocator, project_path: []const u8) 
         allocator.free(hooks);
     }
 
+    const gui_path = try std.fs.path.join(allocator, &.{ project_path, "gui" });
+    defer allocator.free(gui_path);
+    const gui_views = try scanZonFolder(allocator, gui_path);
+    defer {
+        for (gui_views) |v| allocator.free(v);
+        allocator.free(gui_views);
+    }
+
     // Scan for task hooks in hook files
     var task_hooks = try scanForTaskHooks(allocator, hooks_path, hooks, config);
     defer task_hooks.deinit(allocator);
 
     // Generate main.zig
-    const main_zig = try generateMainZig(allocator, config, prefabs, enums, components, scripts, hooks, task_hooks);
+    const main_zig = try generateMainZig(allocator, config, prefabs, enums, components, scripts, hooks, gui_views, task_hooks);
     defer allocator.free(main_zig);
 
     // Write main.zig to project root (needs project-relative imports)

@@ -41,6 +41,8 @@ pub const {s} = {s}_comp.{s};
 const {s}_script = @import("scripts/{s}.zig");
 .hook_import
 const {s}_hooks = @import("hooks/{s}.zig");
+.gui_import
+const {s}_view = @import("gui/{s}.zon");
 .main_module
 const main_module = @This();
 .prefab_registry_empty
@@ -110,6 +112,14 @@ pub const Scripts = engine.ScriptRegistry(struct {{
 .script_registry_item
     pub const {s} = {s}_script;
 .script_registry_end
+}});
+.view_registry_empty
+pub const Views = engine.ViewRegistry(.{{}});
+.view_registry_start
+pub const Views = engine.ViewRegistry(.{{
+.view_registry_item
+    .{s} = {s}_view,
+.view_registry_end
 }});
 .plugin_engine_hooks
 const {s}_engine_hooks = {s}.{s}(GameId, {s}, {s}_hooks.{s});

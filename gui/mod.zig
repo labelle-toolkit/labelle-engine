@@ -41,6 +41,7 @@ pub const Slider = types.Slider;
 pub const Color = types.Color;
 pub const Position = types.Position;
 pub const Size = types.Size;
+pub const RuntimeValue = types.RuntimeValue;
 
 // View registry
 pub const view = @import("view.zig");

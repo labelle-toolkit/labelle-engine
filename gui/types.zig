@@ -134,6 +134,21 @@ pub const Slider = struct {
     on_change: ?[]const u8 = null,
 };
 
+/// Runtime value override for GUI elements
+/// Used to dynamically update element values without modifying .zon definitions
+pub const RuntimeValue = union(enum) {
+    /// Text value (for Label, Button)
+    text: []const u8,
+    /// Numeric value (for ProgressBar, Slider)
+    value: f32,
+    /// Boolean value (for Checkbox)
+    checked: bool,
+    /// Position override
+    position: Position,
+    /// Visibility override
+    visible: bool,
+};
+
 /// Union of all GUI element types
 pub const GuiElement = union(enum) {
     Label: Label,

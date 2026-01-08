@@ -893,6 +893,44 @@ game.renderGui(Views, Scripts, &.{"hud", "minimap"});
 game.renderSceneGui(&scene, Views, Scripts);
 ```
 
+**Runtime GUI Updates:**
+
+Update GUI element values at runtime without modifying .zon definitions:
+
+```zig
+// Update text (Label, Button)
+game.setGuiText("score", "Score: 100");
+
+// Update numeric value (ProgressBar, Slider)
+game.setGuiValue("health", player_health / max_health);
+
+// Update checkbox state
+game.setGuiChecked("mute", is_muted);
+
+// Update position
+game.setGuiPosition("tooltip", mouse_x + 10, mouse_y + 10);
+
+// Hide/show elements
+game.setGuiVisible("pause_menu", is_paused);
+
+// Get current runtime value
+if (game.getGuiRuntimeValue("health")) |val| {
+    if (val == .value) {
+        const current = val.value;
+    }
+}
+
+// Clear runtime overrides
+game.clearGuiValue("score");     // Revert single element
+game.clearAllGuiValues();        // Revert all elements
+```
+
+**Note:** Runtime values are identified by the `id` field in GUI element definitions:
+```zig
+// gui/hud.zon
+.{ .ProgressBar = .{ .id = "health", .position = .{ .x = 10, .y = 40 }, .value = 1.0 } },
+```
+
 See `usage/example_gui/` for a complete demo.
 
 ### Important Patterns
