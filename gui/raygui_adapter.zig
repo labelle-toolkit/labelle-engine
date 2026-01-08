@@ -186,19 +186,23 @@ pub fn slider(self: *Self, sl: types.Slider) f32 {
     const hover = rl.checkCollisionPointRec(mouse_pos, rect);
     const dragging = hover and rl.isMouseButtonDown(.left);
 
+    // Calculate range (guard against division by zero)
+    const range = sl.max - sl.min;
+    const has_range = range > 0;
+
     // Calculate new value if dragging
     var current_value = sl.value;
-    if (dragging) {
+    if (dragging and has_range) {
         const relative_x = mouse_pos.x - sl.position.x;
         const normalized = std.math.clamp(relative_x / sl.size.width, 0, 1);
-        current_value = sl.min + normalized * (sl.max - sl.min);
+        current_value = sl.min + normalized * range;
     }
 
     // Draw track background
     rl.drawRectangleRec(rect, .{ .r = 40, .g = 40, .b = 40, .a = 255 });
 
-    // Draw filled portion
-    const normalized_value = (current_value - sl.min) / (sl.max - sl.min);
+    // Draw filled portion (handle division by zero when min == max)
+    const normalized_value = if (has_range) (current_value - sl.min) / range else 0;
     const fill_width = sl.size.width * normalized_value;
     if (fill_width > 0) {
         rl.drawRectangle(

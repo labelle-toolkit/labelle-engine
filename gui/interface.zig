@@ -26,6 +26,9 @@ pub fn GuiInterface(comptime Impl: type) type {
         if (!@hasDecl(Impl, "progressBar")) @compileError("GUI backend must have progressBar()");
         if (!@hasDecl(Impl, "beginPanel")) @compileError("GUI backend must have beginPanel()");
         if (!@hasDecl(Impl, "endPanel")) @compileError("GUI backend must have endPanel()");
+        if (!@hasDecl(Impl, "image")) @compileError("GUI backend must have image()");
+        if (!@hasDecl(Impl, "checkbox")) @compileError("GUI backend must have checkbox()");
+        if (!@hasDecl(Impl, "slider")) @compileError("GUI backend must have slider()");
     }
     return Impl;
 }
