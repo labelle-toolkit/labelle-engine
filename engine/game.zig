@@ -143,6 +143,9 @@ pub fn GameWith(comptime Hooks: type) type {
         // Deferred screenshot request (taken after render, before endFrame)
         pending_screenshot_filename: ?[:0]const u8 = null,
 
+        // Gizmos visibility (debug-only visualization)
+        gizmos_enabled: bool = true,
+
         /// Emit a hook event. No-op if hooks are disabled.
         inline fn emitHook(payload: hooks_mod.HookPayload) void {
             if (hooks_enabled) {
@@ -672,6 +675,46 @@ pub fn GameWith(comptime Hooks: type) type {
     pub fn getScreenSize(self: *const Self) ScreenSize {
         const size = self.retained_engine.getWindowSize();
         return .{ .width = size.w, .height = size.h };
+    }
+
+    // ==================== Gizmos ====================
+
+    /// Enable or disable gizmo rendering.
+    /// Gizmos are debug-only visualizations that are stripped in release builds.
+    /// When disabled, gizmo entities are hidden but not destroyed.
+    pub fn setGizmosEnabled(self: *Self, enabled: bool) void {
+        if (self.gizmos_enabled == enabled) return;
+        self.gizmos_enabled = enabled;
+
+        // Update visibility of all gizmo entities
+        const Gizmo = render_pipeline_mod.Gizmo;
+        var view = self.registry.view(.{Gizmo});
+        var iter = view.entityIterator();
+        while (iter.next()) |entity| {
+            // Update Sprite visibility if present
+            if (self.registry.tryGet(Sprite, entity)) |sprite| {
+                var updated_sprite = sprite.*;
+                updated_sprite.visible = enabled;
+                self.registry.add(entity, updated_sprite);
+            }
+            // Update Shape visibility if present
+            if (self.registry.tryGet(Shape, entity)) |shape| {
+                var updated_shape = shape.*;
+                updated_shape.visible = enabled;
+                self.registry.add(entity, updated_shape);
+            }
+            // Update Text visibility if present
+            if (self.registry.tryGet(Text, entity)) |text| {
+                var updated_text = text.*;
+                updated_text.visible = enabled;
+                self.registry.add(entity, updated_text);
+            }
+        }
+    }
+
+    /// Check if gizmos are currently enabled.
+    pub fn areGizmosEnabled(self: *const Self) bool {
+        return self.gizmos_enabled;
     }
 
     // ==================== Screenshot ====================

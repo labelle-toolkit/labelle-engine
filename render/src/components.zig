@@ -287,11 +287,44 @@ const Self = @This();
 
 /// Built-in render components for use with ComponentRegistryMulti.
 /// Games can include this in their component registry to get Position, Sprite, Shape, Text.
+// ============================================
+// Gizmo Marker Component
+// ============================================
+
+/// Gizmo marker component - marks an entity as a debug gizmo
+///
+/// Gizmos are debug-only visualizations that:
+/// - Are only created in debug builds (stripped in release)
+/// - Can be toggled on/off at runtime via game.setGizmosEnabled()
+/// - Inherit position from their parent entity
+///
+/// Example in .zon:
+/// ```
+/// .{
+///     .gizmos = .{
+///         .Text = .{ .text = "Player", .size = 12 },
+///         .Shape = .{ .shape = .{ .circle = .{ .radius = 5 } }, .color = .{ .r = 255 } },
+///     },
+///     .components = .{
+///         .Position = .{ .x = 100, .y = 100 },
+///         .Sprite = .{ .name = "player.png" },
+///     },
+/// }
+/// ```
+pub const Gizmo = struct {
+    /// Reference to the parent entity this gizmo is attached to
+    parent_entity: Entity = Entity.invalid,
+    /// Offset from parent position
+    offset_x: f32 = 0,
+    offset_y: f32 = 0,
+};
+
 pub const Components = struct {
     pub const Position = Self.Position;
     pub const Sprite = Self.Sprite;
     pub const Shape = Self.Shape;
     pub const Text = Self.Text;
+    pub const Gizmo = Self.Gizmo;
 };
 
 // ============================================

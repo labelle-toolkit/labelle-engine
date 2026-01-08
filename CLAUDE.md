@@ -100,7 +100,31 @@ const Loader = engine.SceneLoader(Prefabs, Components, Scripts);
         .Sprite = .{ .name = "idle", .pivot = .bottom_center },
         .Health = .{ .current = 100, .max = 100 },  // optional custom components
     },
+    .gizmos = .{  // debug-only visualizations (stripped in release builds)
+        .Text = .{ .text = "Player", .size = 12, .y = -20 },
+        .Shape = .{ .shape = .{ .circle = .{ .radius = 5 } }, .color = .{ .r = 255 } },
+    },
 }
+```
+
+**Gizmos** (debug visualizations):
+
+Gizmos are debug-only visualizations attached to entities. They are:
+- Only created in debug builds (stripped in release via `@import("builtin").mode`)
+- Can be toggled at runtime via `game.setGizmosEnabled(false)`
+- Inherit position from their parent entity with optional offset
+
+```zig
+// In prefab or scene entity definition
+.gizmos = .{
+    .Text = .{ .text = "Entity Name", .size = 10, .y = -15 },  // label above entity
+    .Shape = .{ .shape = .{ .circle = .{ .radius = 3 } }, .color = .{ .r = 255 } },  // origin marker
+},
+
+// Toggle at runtime
+game.setGizmosEnabled(false);  // Hide all gizmos
+game.setGizmosEnabled(true);   // Show all gizmos
+const enabled = game.areGizmosEnabled();
 ```
 
 **Pivot values:**

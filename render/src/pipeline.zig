@@ -26,6 +26,7 @@ pub const Position = components.Position;
 pub const Sprite = components.Sprite;
 pub const Shape = components.Shape;
 pub const Text = components.Text;
+pub const Gizmo = components.Gizmo;
 pub const VisualType = components.VisualType;
 pub const Pivot = components.Pivot;
 
