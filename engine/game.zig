@@ -24,6 +24,7 @@
 const std = @import("std");
 const labelle = @import("labelle");
 const ecs = @import("ecs");
+const core = @import("../core/mod.zig");
 const input_mod = @import("input");
 const audio_mod = @import("audio");
 const render_pipeline_mod = @import("../render/src/pipeline.zig");
@@ -86,6 +87,10 @@ pub const ScreenSize = struct {
     width: i32,
     height: i32,
 };
+
+/// Max selectable entities for SparseSet allocation.
+/// 10k entities uses ~40KB memory and covers most game scenarios.
+const max_selectable_entities: usize = 10_000;
 
 /// Game facade - main entry point for GUI-generated projects.
 /// Use `GameWith(MyHooks)` to enable lifecycle hooks, or just `Game` for no hooks.
@@ -165,7 +170,9 @@ pub fn GameWith(comptime Hooks: type) type {
         standalone_gizmos: std.ArrayList(StandaloneGizmo),
 
         // Entity selection tracking (for selected-only gizmos)
-        selected_entities: std.AutoHashMap(Entity, void),
+        // Uses SparseSet for O(1) contains() - 3x faster than HashMap
+        // Max 10k entities supports most game scenarios; uses ~40KB memory
+        selected_entities: core.SparseSet(void),
 
         /// Emit a hook event. No-op if hooks are disabled.
         inline fn emitHook(payload: hooks_mod.HookPayload) void {
@@ -199,9 +206,8 @@ pub fn GameWith(comptime Hooks: type) type {
 
         // Initialize collections
         // ArrayList uses .empty in Zig 0.15, allocator passed to methods
-        // AutoHashMap still uses .init(allocator)
         const standalone_gizmos_list = std.ArrayList(StandaloneGizmo).empty;
-        const selected_entities_map = std.AutoHashMap(Entity, void).init(allocator);
+        const selected_entities_set = try core.SparseSet(void).init(allocator, max_selectable_entities, 16);
 
         // Build the struct. Note: pipeline.engine currently points to the
         // local `retained_engine` variable above, which will become invalid after
@@ -218,7 +224,7 @@ pub fn GameWith(comptime Hooks: type) type {
             .pending_scene_change = null,
             .running = true,
             .standalone_gizmos = standalone_gizmos_list,
-            .selected_entities = selected_entities_map,
+            .selected_entities = selected_entities_set,
         };
 
         // Emit game_init hook with allocator for early subsystem initialization
@@ -291,6 +297,12 @@ pub fn GameWith(comptime Hooks: type) type {
 
             // Clear all tracked entities from pipeline and destroy their visuals
             self.pipeline.clear();
+
+            // Clear entity selections (prevents stale references to destroyed entities)
+            self.selected_entities.clear();
+
+            // Clear standalone gizmos
+            self.standalone_gizmos.clearRetainingCapacity();
         }
 
     // ==================== Entity Management ====================
@@ -728,25 +740,25 @@ pub fn GameWith(comptime Hooks: type) type {
 
     /// Select an entity (for selected-only gizmo visibility).
     pub fn selectEntity(self: *Self, entity: Entity) void {
-        self.selected_entities.put(entity, {}) catch return;
+        self.selected_entities.put(entityToU64(entity), {}) catch return;
         self.updateGizmoVisibility();
     }
 
     /// Deselect an entity.
     pub fn deselectEntity(self: *Self, entity: Entity) void {
-        _ = self.selected_entities.remove(entity);
+        self.selected_entities.remove(entityToU64(entity));
         self.updateGizmoVisibility();
     }
 
     /// Clear all entity selections.
     pub fn clearSelection(self: *Self) void {
-        self.selected_entities.clearRetainingCapacity();
+        self.selected_entities.clear();
         self.updateGizmoVisibility();
     }
 
     /// Check if an entity is selected.
     pub fn isEntitySelected(self: *const Self, entity: Entity) bool {
-        return self.selected_entities.contains(entity);
+        return self.selected_entities.contains(entityToU64(entity));
     }
 
     /// Update visibility of all gizmos based on their visibility mode and selection state.
