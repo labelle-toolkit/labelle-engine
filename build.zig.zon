@@ -48,12 +48,6 @@
             .url = "git+https://codeberg.org/Games-by-Mason/mr_ecs#21c0e20adee646e2e97071be93e6b18ada4b5333",
             .hash = "mr_ecs-0.1.1-RsdJ_aJdAwDFp4iSogn_ESsPyb9b6-1GUqLEuTcUhFAg",
         },
-        // GUI - microui (tiny immediate-mode UI library)
-        // Using git URL with commit hash for reproducible builds
-        .microui = .{
-            .url = "git+https://github.com/rxi/microui#0850aba860959c3e75fb3e97120ca92957f9d057",
-            .hash = "N-V-__8AAN01AgArjqdDf0-9WcQ-Tm9ktg3-lswYAUMte1Y_",
-        },
     },
     .paths = .{
         "build.zig",

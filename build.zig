@@ -193,18 +193,6 @@ pub fn build(b: *std.Build) void {
         },
     });
 
-    // Add microui C source and headers only when microui backend is selected
-    // This avoids compiling C code unnecessarily for other backends
-    if (gui_backend == .microui) {
-        const microui_dep = b.dependency("microui", .{});
-        gui_interface.addIncludePath(microui_dep.path("src"));
-        gui_interface.addCSourceFile(.{
-            .file = microui_dep.path("src/microui.c"),
-            .flags = &.{"-std=c99"},
-        });
-        gui_interface.link_libc = true;
-    }
-
     // Core module - foundation types (entity utils, zon coercion)
     const core_mod = b.addModule("labelle-core", .{
         .root_source_file = b.path("core/mod.zig"),
