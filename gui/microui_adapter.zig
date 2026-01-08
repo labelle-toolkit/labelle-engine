@@ -20,10 +20,12 @@ const Self = @This();
 ctx: mu.mu_Context,
 
 // Text width callback for microui (uses raylib's default font)
-fn textWidth(_: ?*mu.mu_Font, text: [*c]const u8, len: c_int) callconv(.c) c_int {
+// mu_Font is typedef'd to void*, so we use ?*anyopaque
+fn textWidth(_: ?*anyopaque, text: [*c]const u8, len: c_int) callconv(.c) c_int {
     if (len == -1) {
-        // Null-terminated string
-        return @intCast(rl.measureText(text, 16));
+        // Null-terminated string - convert C string to sentinel-terminated slice
+        const text_slice: [:0]const u8 = std.mem.span(text);
+        return @intCast(rl.measureText(text_slice, 16));
     } else {
         // Use a temporary buffer for non-null-terminated strings
         var buf: [256]u8 = undefined;
@@ -31,25 +33,35 @@ fn textWidth(_: ?*mu.mu_Font, text: [*c]const u8, len: c_int) callconv(.c) c_int
         const copy_len = @min(actual_len, buf.len - 1);
         @memcpy(buf[0..copy_len], text[0..copy_len]);
         buf[copy_len] = 0;
-        return @intCast(rl.measureText(&buf, 16));
+        const sentinel_buf: [:0]const u8 = buf[0..copy_len :0];
+        return @intCast(rl.measureText(sentinel_buf, 16));
     }
 }
 
 // Text height callback for microui
-fn textHeight(_: ?*mu.mu_Font) callconv(.c) c_int {
+fn textHeight(_: ?*anyopaque) callconv(.c) c_int {
     return 16; // Default font height
 }
 
 pub fn init() Self {
-    var self = Self{
+    // Just return with undefined context - it will be properly initialized
+    // in fixPointers() after the struct is in its final memory location.
+    // This avoids issues with self-referential pointers being invalidated
+    // when the struct is copied on return.
+    return Self{
         .ctx = undefined,
     };
+}
 
+/// Initialize the microui context after the struct is in its final memory location.
+/// mu_Context has internal self-referential pointers (style -> _style) that become
+/// invalid when the struct is copied. By initializing here, we ensure all pointers
+/// are valid.
+pub fn fixPointers(self: *Self) void {
+    // Initialize microui context now that we're in our final location
     mu.mu_init(&self.ctx);
     self.ctx.text_width = textWidth;
     self.ctx.text_height = textHeight;
-
-    return self;
 }
 
 pub fn deinit(self: *Self) void {
@@ -59,7 +71,6 @@ pub fn deinit(self: *Self) void {
 
 pub fn beginFrame(self: *Self) void {
     // Forward input to microui
-    mu.mu_input_begin(&self.ctx);
 
     // Mouse position
     const mouse_pos = rl.getMousePosition();
@@ -70,42 +81,42 @@ pub fn beginFrame(self: *Self) void {
     mu.mu_input_scroll(&self.ctx, @intFromFloat(scroll.x * -30), @intFromFloat(scroll.y * -30));
 
     // Mouse buttons
-    if (rl.isMouseButtonPressed(.mouse_button_left)) {
+    if (rl.isMouseButtonPressed(.left)) {
         mu.mu_input_mousedown(&self.ctx, @intFromFloat(mouse_pos.x), @intFromFloat(mouse_pos.y), mu.MU_MOUSE_LEFT);
     }
-    if (rl.isMouseButtonReleased(.mouse_button_left)) {
+    if (rl.isMouseButtonReleased(.left)) {
         mu.mu_input_mouseup(&self.ctx, @intFromFloat(mouse_pos.x), @intFromFloat(mouse_pos.y), mu.MU_MOUSE_LEFT);
     }
-    if (rl.isMouseButtonPressed(.mouse_button_right)) {
+    if (rl.isMouseButtonPressed(.right)) {
         mu.mu_input_mousedown(&self.ctx, @intFromFloat(mouse_pos.x), @intFromFloat(mouse_pos.y), mu.MU_MOUSE_RIGHT);
     }
-    if (rl.isMouseButtonReleased(.mouse_button_right)) {
+    if (rl.isMouseButtonReleased(.right)) {
         mu.mu_input_mouseup(&self.ctx, @intFromFloat(mouse_pos.x), @intFromFloat(mouse_pos.y), mu.MU_MOUSE_RIGHT);
     }
 
     // Keyboard modifiers
-    if (rl.isKeyPressed(.key_left_shift) or rl.isKeyPressed(.key_right_shift)) {
+    if (rl.isKeyPressed(.left_shift) or rl.isKeyPressed(.right_shift)) {
         mu.mu_input_keydown(&self.ctx, mu.MU_KEY_SHIFT);
     }
-    if (rl.isKeyReleased(.key_left_shift) or rl.isKeyReleased(.key_right_shift)) {
+    if (rl.isKeyReleased(.left_shift) or rl.isKeyReleased(.right_shift)) {
         mu.mu_input_keyup(&self.ctx, mu.MU_KEY_SHIFT);
     }
-    if (rl.isKeyPressed(.key_left_control) or rl.isKeyPressed(.key_right_control)) {
+    if (rl.isKeyPressed(.left_control) or rl.isKeyPressed(.right_control)) {
         mu.mu_input_keydown(&self.ctx, mu.MU_KEY_CTRL);
     }
-    if (rl.isKeyReleased(.key_left_control) or rl.isKeyReleased(.key_right_control)) {
+    if (rl.isKeyReleased(.left_control) or rl.isKeyReleased(.right_control)) {
         mu.mu_input_keyup(&self.ctx, mu.MU_KEY_CTRL);
     }
-    if (rl.isKeyPressed(.key_enter) or rl.isKeyPressed(.key_kp_enter)) {
+    if (rl.isKeyPressed(.enter) or rl.isKeyPressed(.kp_enter)) {
         mu.mu_input_keydown(&self.ctx, mu.MU_KEY_RETURN);
     }
-    if (rl.isKeyReleased(.key_enter) or rl.isKeyReleased(.key_kp_enter)) {
+    if (rl.isKeyReleased(.enter) or rl.isKeyReleased(.kp_enter)) {
         mu.mu_input_keyup(&self.ctx, mu.MU_KEY_RETURN);
     }
-    if (rl.isKeyPressed(.key_backspace)) {
+    if (rl.isKeyPressed(.backspace)) {
         mu.mu_input_keydown(&self.ctx, mu.MU_KEY_BACKSPACE);
     }
-    if (rl.isKeyReleased(.key_backspace)) {
+    if (rl.isKeyReleased(.backspace)) {
         mu.mu_input_keyup(&self.ctx, mu.MU_KEY_BACKSPACE);
     }
 
@@ -121,7 +132,7 @@ pub fn beginFrame(self: *Self) void {
         char = rl.getCharPressed();
     }
 
-    mu.mu_input_end(&self.ctx);
+    // microui doesn't have mu_input_end - just start the frame
     mu.mu_begin(&self.ctx);
 }
 
@@ -129,13 +140,18 @@ pub fn endFrame(self: *Self) void {
     mu.mu_end(&self.ctx);
 
     // Render microui draw commands using raylib
-    var cmd: [*c]mu.mu_Command = undefined;
+    // cmd must be NULL initially for mu_next_command to work correctly
+    var cmd: [*c]mu.mu_Command = null;
     while (mu.mu_next_command(&self.ctx, &cmd) != 0) {
         switch (cmd.*.type) {
             mu.MU_COMMAND_TEXT => {
                 const text_cmd = @as(*mu.mu_TextCommand, @ptrCast(cmd));
+                // Convert C char array to sentinel-terminated slice for raylib
+                // Get a pointer to the C string array, cast to sentinel-terminated pointer, then span it
+                const c_str: [*:0]const u8 = @ptrCast(&text_cmd.str);
+                const text_slice: [:0]const u8 = std.mem.span(c_str);
                 rl.drawText(
-                    &text_cmd.str,
+                    text_slice,
                     text_cmd.pos.x,
                     text_cmd.pos.y,
                     16,
@@ -216,14 +232,17 @@ fn muColorToRl(c: mu.mu_Color) rl.Color {
     return .{ .r = c.r, .g = c.g, .b = c.b, .a = c.a };
 }
 
-// Convert types.Color to microui color
-fn typesColorToMu(c: types.Color) mu.mu_Color {
-    return .{ .r = c.r, .g = c.g, .b = c.b, .a = c.a };
-}
-
 pub fn label(self: *Self, lbl: types.Label) void {
-    // Use raw draw for positioned labels (microui uses layout-based positioning)
-    mu.mu_draw_text(&self.ctx, self.ctx.style.*.font, lbl.text.ptr, @intCast(lbl.text.len), mu.mu_vec2(@intFromFloat(lbl.position.x), @intFromFloat(lbl.position.y)), typesColorToMu(lbl.color));
+    _ = self;
+    // Render labels directly with raylib (not using microui's layout system)
+    const text_z: [:0]const u8 = @ptrCast(lbl.text);
+    rl.drawText(
+        text_z,
+        @intFromFloat(lbl.position.x),
+        @intFromFloat(lbl.position.y),
+        @intFromFloat(lbl.font_size),
+        rl.Color{ .r = lbl.color.r, .g = lbl.color.g, .b = lbl.color.b, .a = lbl.color.a },
+    );
 }
 
 pub fn button(self: *Self, btn: types.Button) bool {
@@ -244,18 +263,20 @@ pub fn button(self: *Self, btn: types.Button) bool {
     };
 
     const hover = rl.checkCollisionPointRec(mouse_pos, rect);
-    const clicked = hover and rl.isMouseButtonPressed(.mouse_button_left);
+    const clicked = hover and rl.isMouseButtonPressed(.left);
 
     // Draw button
     const bg_color = if (hover) rl.Color{ .r = 100, .g = 100, .b = 100, .a = 255 } else rl.Color{ .r = 75, .g = 75, .b = 75, .a = 255 };
     rl.drawRectangle(x, y, w, h, bg_color);
     rl.drawRectangleLines(x, y, w, h, rl.Color{ .r = 200, .g = 200, .b = 200, .a = 255 });
 
-    // Draw text centered
-    const text_width = rl.measureText(@ptrCast(btn.text.ptr), 16);
+    // Draw text centered - need to ensure null-termination for raylib
+    // btn.text is already a Zig slice, use it directly if it's sentinel-terminated
+    const text_z: [:0]const u8 = @ptrCast(btn.text);
+    const text_width = rl.measureText(text_z, 16);
     const text_x = x + @divTrunc(w, 2) - @divTrunc(text_width, 2);
     const text_y = y + @divTrunc(h, 2) - 8;
-    rl.drawText(@ptrCast(btn.text.ptr), text_x, text_y, 16, rl.Color.white);
+    rl.drawText(text_z, text_x, text_y, 16, rl.Color.white);
 
     return clicked;
 }
@@ -330,7 +351,7 @@ pub fn checkbox(self: *Self, cb: types.Checkbox) bool {
 
     const mouse_pos = rl.getMousePosition();
     const hover = rl.checkCollisionPointRec(mouse_pos, box_rect);
-    const clicked = hover and rl.isMouseButtonPressed(.mouse_button_left);
+    const clicked = hover and rl.isMouseButtonPressed(.left);
 
     // Draw checkbox
     const bg_color = if (hover) rl.Color{ .r = 80, .g = 80, .b = 80, .a = 255 } else rl.Color{ .r = 60, .g = 60, .b = 60, .a = 255 };
@@ -344,7 +365,8 @@ pub fn checkbox(self: *Self, cb: types.Checkbox) bool {
     }
 
     // Draw label
-    rl.drawText(@ptrCast(cb.text.ptr), x + size + 6, y + 1, 16, rl.Color.white);
+    const text_z: [:0]const u8 = @ptrCast(cb.text);
+    rl.drawText(text_z, x + size + 6, y + 1, 16, rl.Color.white);
 
     return clicked;
 }
@@ -380,7 +402,7 @@ pub fn slider(self: *Self, sl: types.Slider) f32 {
 
     // Handle input
     var new_value = sl.value;
-    if (hover and rl.isMouseButtonDown(.mouse_button_left)) {
+    if (hover and rl.isMouseButtonDown(.left)) {
         const relative_x = mouse_pos.x - sl.position.x;
         const new_normalized = std.math.clamp(relative_x / sl.size.width, 0, 1);
         new_value = sl.min + new_normalized * range;

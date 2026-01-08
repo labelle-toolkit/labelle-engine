@@ -250,6 +250,9 @@ pub fn GameWith(comptime Hooks: type) type {
 
         // Set the global pipeline pointer for render component callbacks
         render_pipeline_mod.setGlobalPipeline(&self.pipeline);
+
+        // Fix GUI internal pointers (microui has self-referential pointers)
+        self.gui.fixPointers();
     }
 
         /// Clean up all resources

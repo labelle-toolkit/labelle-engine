@@ -16,6 +16,7 @@ pub const EcsBackend = enum {
 pub const GuiBackend = enum {
     none,
     raygui,
+    microui,
 };
 
 pub fn build(b: *std.Build) void {
