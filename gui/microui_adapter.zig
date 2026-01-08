@@ -22,8 +22,8 @@ const MOUSE_SCROLL_SENSITIVITY: f32 = -30.0;
 const TEXT_BUFFER_SIZE: usize = 256;
 const CANVAS_WINDOW_NAME = "##canvas";
 
-// microui context
-ctx: mu.mu_Context,
+// microui context - requires 8-byte alignment for mu_Command in command buffer
+ctx: mu.mu_Context align(8),
 // Track whether scissor mode is active to properly balance begin/end calls
 scissor_active: bool = false,
 // Track whether canvas window is open
