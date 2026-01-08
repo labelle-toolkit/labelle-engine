@@ -122,7 +122,7 @@ pub fn build(b: *std.Build) void {{
         .optimize = optimize,
     }});
     const zbgfx_mod = zbgfx_dep.module("zbgfx");
-    const zglfw_mod = zglfw_dep.module("zglfw");
+    const zglfw_mod = zglfw_dep.module("root");
     const labelle_gfx_mod = labelle_dep.module("labelle");
 
     const exe = b.addExecutable(.{{
@@ -140,6 +140,8 @@ pub fn build(b: *std.Build) void {{
             }},
         }}),
     }});
+    exe.linkLibrary(zbgfx_dep.artifact("bgfx"));
+    exe.linkLibrary(zglfw_dep.artifact("glfw"));
 .zgpu_exe_start
     // Get labelle-gfx dependency for zgpu bindings
     const labelle_dep = engine_dep.builder.dependency("labelle-gfx", .{{
@@ -154,8 +156,8 @@ pub fn build(b: *std.Build) void {{
         .target = target,
         .optimize = optimize,
     }});
-    const zgpu_mod = zgpu_dep.module("zgpu");
-    const zglfw_mod = zglfw_dep.module("zglfw");
+    const zgpu_mod = zgpu_dep.module("root");
+    const zglfw_mod = zglfw_dep.module("root");
     const labelle_gfx_mod = labelle_dep.module("labelle");
 
     const exe = b.addExecutable(.{{
@@ -173,6 +175,7 @@ pub fn build(b: *std.Build) void {{
             }},
         }}),
     }});
+    exe.linkLibrary(zglfw_dep.artifact("glfw"));
 .plugin_import
                 .{{ .name = "{s}", .module = {s}_mod }},
 .footer
