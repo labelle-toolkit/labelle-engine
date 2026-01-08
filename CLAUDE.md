@@ -67,6 +67,9 @@ const Loader = engine.SceneLoader(Prefabs, Components, Scripts);
     .name = "level1",
     .scripts = .{"gravity"},
 
+    // GUI views to render with this scene (optional):
+    .gui_views = .{"hud", "minimap"},
+
     // Single camera (configures primary camera):
     .camera = .{ .x = 0, .y = 0, .zoom = 1.0 },
 
@@ -847,17 +850,47 @@ game.renderGuiView(Views, Scripts, "hud");  // Render single view
 re.endFrame();
 ```
 
+**Scene-based GUI loading:**
+
+Scenes can specify which GUI views to render via the `.gui_views` field:
+
+```zig
+// scenes/main.zon
+.{
+    .name = "main",
+    .gui_views = .{"hud", "minimap"},  // Views to render with this scene
+    .entities = .{ ... },
+}
+```
+
+```zig
+// In main.zig - load scene and render its GUI views
+var scene = try Loader.load(@import("scenes/main.zon"), labelle.SceneContext.init(&game));
+defer scene.deinit();
+
+while (game.isRunning()) {
+    const re = game.getRetainedEngine();
+    re.beginFrame();
+    re.render();
+    game.renderSceneGui(&scene, Views, Scripts);  // Renders hud + minimap
+    re.endFrame();
+}
+```
+
 **Game API:**
 ```zig
 game.setGuiEnabled(false);  // Disable GUI rendering
 game.setGuiEnabled(true);   // Enable GUI rendering
 const enabled = game.isGuiEnabled();
 
-// Render specific view
+// Render specific view (manual)
 game.renderGuiView(Views, Scripts, "hud");
 
-// Render multiple views
+// Render multiple views (manual)
 game.renderGui(Views, Scripts, &.{"hud", "minimap"});
+
+// Render views from scene's .gui_views field
+game.renderSceneGui(&scene, Views, Scripts);
 ```
 
 See `usage/example_gui/` for a complete demo.

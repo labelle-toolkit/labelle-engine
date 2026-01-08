@@ -13,6 +13,15 @@ const Scripts = struct {
     }
 };
 
+// Minimal components and prefabs for scene loading
+const Components = labelle.ComponentRegistry(struct {
+    pub const Position = labelle.Position;
+});
+
+const Prefabs = labelle.PrefabRegistry(.{});
+
+const Loader = labelle.SceneLoader(Prefabs, Components, Scripts);
+
 pub fn main() !void {
     const ci_test = std.posix.getenv("CI_TEST") != null;
 
@@ -32,6 +41,10 @@ pub fn main() !void {
     game.fixPointers();
     defer game.deinit();
 
+    // Load scene with GUI views
+    var scene = try Loader.load(@import("scenes/main.zon"), labelle.SceneContext.init(&game));
+    defer scene.deinit();
+
     if (ci_test) return;
 
     while (game.isRunning()) {
@@ -39,8 +52,9 @@ pub fn main() !void {
         re.beginFrame();
         re.render();
 
-        // Render GUI on top of everything
-        game.renderGuiView(Views, Scripts, "hud");
+        // Render GUI views associated with the scene
+        // (loads views from scene's .gui_views field)
+        game.renderSceneGui(&scene, Views, Scripts);
 
         re.endFrame();
     }

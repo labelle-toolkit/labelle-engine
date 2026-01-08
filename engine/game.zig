@@ -1086,6 +1086,48 @@ pub fn GameWith(comptime Hooks: type) type {
         std.log.debug("GUI callback: {s}", .{callback_name});
     }
 
+    /// Render GUI views associated with a scene.
+    ///
+    /// Renders all views specified in the scene's .gui_views field.
+    /// Call this after re.render() in your main loop:
+    /// ```zig
+    /// re.beginFrame();
+    /// re.render();
+    /// game.renderSceneGui(&scene, Views, Scripts);
+    /// re.endFrame();
+    /// ```
+    pub fn renderSceneGui(self: *Self, scene: anytype, comptime Views: type, comptime Scripts: type) void {
+        if (!self.gui_enabled) return;
+
+        // Check if scene has gui_view_names field
+        const SceneType = @TypeOf(scene.*);
+        if (!@hasField(SceneType, "gui_view_names")) return;
+
+        const view_names = scene.gui_view_names;
+        if (view_names.len == 0) return;
+
+        self.gui.beginFrame();
+
+        // For each view name in the scene, check if it exists in Views registry
+        for (view_names) |active_name| {
+            self.renderViewByName(Views, Scripts, active_name);
+        }
+
+        self.gui.endFrame();
+    }
+
+    /// Internal: Render a view by runtime name using comptime Views lookup.
+    fn renderViewByName(self: *Self, comptime Views: type, comptime Scripts: type, name: []const u8) void {
+        // Use comptime iteration over Views to match the runtime name
+        inline for (comptime Views.names()) |view_name| {
+            if (std.mem.eql(u8, view_name, name)) {
+                const view_def = Views.get(view_name);
+                self.renderGuiElements(view_def.elements, Scripts);
+                return;
+            }
+        }
+    }
+
     // ==================== Screenshot ====================
 
     /// Request a screenshot of the current frame to be saved to a file.
