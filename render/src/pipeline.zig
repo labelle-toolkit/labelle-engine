@@ -27,8 +27,12 @@ pub const Sprite = components.Sprite;
 pub const Shape = components.Shape;
 pub const Text = components.Text;
 pub const Gizmo = components.Gizmo;
+pub const GizmoVisibility = components.GizmoVisibility;
+pub const Icon = components.Icon;
+pub const BoundingBox = components.BoundingBox;
 pub const VisualType = components.VisualType;
 pub const Pivot = components.Pivot;
+pub const GfxPosition = components.GfxPosition;
 
 // Re-export backend types
 pub const RetainedEngine = components.RetainedEngine;
@@ -170,8 +174,6 @@ pub const RenderPipeline = struct {
 
     /// Sync all dirty entities to the RetainedEngine
     pub fn sync(self: *RenderPipeline, registry: *Registry) void {
-        const GfxPosition = graphics.Position;
-
         for (self.tracked.values()) |*tracked| {
             const entity_id = toEntityId(tracked.entity);
 

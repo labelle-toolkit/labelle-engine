@@ -13,5 +13,7 @@
         .Text = .{ .text = "Player", .size = 14, .y = -35, .color = .{ .r = 255, .g = 255, .b = 0, .a = 255 } },
         // Origin marker (small red dot)
         .Shape = .{ .shape = .{ .circle = .{ .radius = 3 } }, .color = .{ .r = 255, .g = 0, .b = 0, .a = 255 } },
+        // Auto-sized bounding box (green outline around entity visual)
+        .BoundingBox = .{ .color = .{ .r = 0, .g = 255, .b = 0, .a = 200 }, .padding = 2, .thickness = 1 },
     },
 }

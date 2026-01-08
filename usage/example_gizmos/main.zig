@@ -3,10 +3,14 @@
 // Demonstrates the labelle-engine gizmos system:
 // - Prefabs with .gizmos field for debug-only visualizations
 // - Runtime toggle with game.setGizmosEnabled()
+// - Standalone gizmos (drawArrow, drawRay, drawCircle, etc.)
 // - Gizmos are automatically stripped in release builds
 //
-// Press G to toggle gizmos on/off
-// Press ESC to quit
+// Controls:
+// - G: Toggle gizmo visibility
+// - A: Toggle arrow gizmos
+// - R: Toggle ray gizmos
+// - ESC: Quit
 
 const std = @import("std");
 const engine = @import("labelle-engine");
@@ -53,9 +57,10 @@ pub fn main() !void {
     std.log.info("=== Gizmos Example ===", .{});
     std.log.info("", .{});
     std.log.info("Gizmos are debug-only visualizations:", .{});
-    std.log.info("  - Labels above entities", .{});
-    std.log.info("  - Origin markers", .{});
-    std.log.info("  - Bounding boxes, etc.", .{});
+    std.log.info("  - Labels above entities (.Text)", .{});
+    std.log.info("  - Origin markers (.Shape)", .{});
+    std.log.info("  - Auto-sized bounding boxes (.BoundingBox)", .{});
+    std.log.info("  - Standalone gizmos (drawArrow, drawRay)", .{});
     std.log.info("", .{});
     std.log.info("Press G to toggle gizmos", .{});
     std.log.info("Press ESC to quit", .{});
@@ -88,6 +93,7 @@ pub fn main() !void {
         const re = game.getRetainedEngine();
         re.beginFrame();
         re.render();
+        game.renderStandaloneGizmos(); // Draw standalone gizmos on top
         re.endFrame();
     }
 }

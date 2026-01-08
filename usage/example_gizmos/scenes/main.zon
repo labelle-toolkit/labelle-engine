@@ -21,6 +21,8 @@
             },
             .gizmos = .{
                 .Text = .{ .text = "Item", .size = 12, .y = -25, .color = .{ .r = 100, .g = 255, .b = 100, .a = 255 } },
+                // Yellow bounding box for item
+                .BoundingBox = .{ .color = .{ .r = 255, .g = 255, .b = 0, .a = 200 }, .padding = 5 },
             },
         },
     },

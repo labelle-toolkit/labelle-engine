@@ -291,6 +291,16 @@ const Self = @This();
 // Gizmo Marker Component
 // ============================================
 
+/// Gizmo visibility modes
+pub const GizmoVisibility = enum {
+    /// Always show when gizmos are enabled
+    always,
+    /// Only show when parent entity is selected
+    selected_only,
+    /// Never show (disabled)
+    never,
+};
+
 /// Gizmo marker component - marks an entity as a debug gizmo
 ///
 /// Gizmos are debug-only visualizations that:
@@ -318,6 +328,127 @@ pub const Gizmo = struct {
     /// Offset from parent position
     offset_x: f32 = 0,
     offset_y: f32 = 0,
+    /// Visibility mode (always, selected_only, never)
+    visibility: GizmoVisibility = .always,
+    /// Group name for group-based toggling
+    group: []const u8 = "",
+};
+
+// ============================================
+// Icon Component (for gizmos)
+// ============================================
+
+/// Icon component - displays a small image marker (used for gizmo markers/waypoints)
+///
+/// Icon is a simplified sprite intended for debug visualizations like:
+/// - Waypoint markers
+/// - Spawn point indicators
+/// - Debug indicators
+///
+/// Example in .zon:
+/// ```
+/// .gizmos = .{
+///     .Icon = .{ .name = "waypoint_marker.png", .scale = 0.5 },
+/// },
+/// ```
+pub const Icon = struct {
+    texture: TextureId = .invalid,
+    /// Sprite/texture name for lookup
+    name: []const u8 = "",
+    scale: f32 = 1.0,
+    tint: Color = Color.white,
+    visible: bool = true,
+    z_index: u8 = 128,
+    /// Rendering layer (defaults to ui so it draws on top)
+    layer: Layer = .ui,
+
+    /// Convert Icon to Sprite for internal rendering
+    pub fn toSprite(self: Icon) Sprite {
+        return .{
+            .texture = self.texture,
+            .name = self.name,
+            .scale = self.scale,
+            .tint = self.tint,
+            .visible = self.visible,
+            .z_index = self.z_index,
+            .pivot = .center,
+            .layer = self.layer,
+        };
+    }
+
+    /// Convert to SpriteVisual for direct rendering
+    pub fn toVisual(self: Icon) SpriteVisual {
+        return self.toSprite().toVisual();
+    }
+
+    // ==================== Lifecycle Callbacks ====================
+
+    /// Called when Icon component is added to an entity.
+    pub fn onAdd(payload: ComponentPayload) void {
+        const pipeline = @import("pipeline.zig");
+        if (pipeline.getGlobalPipeline()) |p| {
+            const entity = ecs.entityFromU64(payload.entity_id);
+            p.trackEntity(entity, .sprite) catch |err| {
+                std.log.err("Failed to track icon entity: {}", .{err});
+            };
+        }
+    }
+
+    /// Called when Icon component is removed from an entity.
+    pub fn onRemove(payload: ComponentPayload) void {
+        const pipeline = @import("pipeline.zig");
+        if (pipeline.getGlobalPipeline()) |p| {
+            const entity = ecs.entityFromU64(payload.entity_id);
+            p.untrackEntity(entity);
+        }
+    }
+};
+
+// ============================================
+// BoundingBox Component (for gizmos)
+// ============================================
+
+/// BoundingBox gizmo component - draws a rectangle outline around an entity's visual bounds
+///
+/// Used for debugging to visualize entity bounds, collision areas, etc.
+/// The bounding box is calculated from the parent entity's visual component (Sprite or Shape)
+/// at runtime, so it automatically adapts to sprite dimensions from the texture atlas.
+///
+/// Example in .zon:
+/// ```
+/// .gizmos = .{
+///     .BoundingBox = .{ .color = .{ .r = 0, .g = 255, .b = 0, .a = 128 }, .padding = 2 },
+/// },
+/// ```
+pub const BoundingBox = struct {
+    /// Outline color
+    color: Color = .{ .r = 0, .g = 255, .b = 0, .a = 200 },
+    /// Padding around the visual bounds (in pixels)
+    padding: f32 = 0,
+    /// Line thickness for the outline
+    thickness: f32 = 1,
+    /// Whether to show the bounding box
+    visible: bool = true,
+    /// Z-index for rendering order
+    z_index: u8 = 255, // Draw on top by default
+    /// Rendering layer (defaults to ui so it draws on top)
+    layer: Layer = .ui,
+
+    /// Convert to a Shape component for a given width/height
+    pub fn toShape(self: BoundingBox, width: f32, height: f32) Shape {
+        return .{
+            .shape = .{ .rectangle = .{
+                .width = width + self.padding * 2,
+                .height = height + self.padding * 2,
+                .fill = .outline,
+                .thickness = self.thickness,
+            } },
+            .color = self.color,
+            .z_index = self.z_index,
+            .visible = self.visible,
+            .layer = self.layer,
+        };
+    }
 };
 
 pub const Components = struct {
@@ -326,6 +457,9 @@ pub const Components = struct {
     pub const Shape = Self.Shape;
     pub const Text = Self.Text;
     pub const Gizmo = Self.Gizmo;
+    pub const GizmoVisibility = Self.GizmoVisibility;
+    pub const Icon = Self.Icon;
+    pub const BoundingBox = Self.BoundingBox;
 };
 
 // ============================================

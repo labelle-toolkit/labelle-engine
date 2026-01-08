@@ -769,8 +769,35 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
                     .offset_y = offset_y,
                 });
 
-                // Add the visual component (Shape, Text, Sprite)
-                try addComponentWithNestedEntities(game, scene, gizmo_entity, field_name, gizmo_data, parent_x + offset_x, parent_y + offset_y, no_parent, ready_queue);
+                // Handle BoundingBox gizmos specially - they create a Shape from parent's visual bounds
+                if (comptime std.mem.eql(u8, field_name, "BoundingBox")) {
+                    // Create BoundingBox component from gizmo data
+                    const bbox = render.BoundingBox{
+                        .color = if (@hasField(@TypeOf(gizmo_data), "color")) zon.coerceValue(render.Color, gizmo_data.color) else .{ .r = 0, .g = 255, .b = 0, .a = 200 },
+                        .padding = if (@hasField(@TypeOf(gizmo_data), "padding")) gizmo_data.padding else 0,
+                        .thickness = if (@hasField(@TypeOf(gizmo_data), "thickness")) gizmo_data.thickness else 1,
+                        .visible = if (@hasField(@TypeOf(gizmo_data), "visible")) gizmo_data.visible else true,
+                        .z_index = if (@hasField(@TypeOf(gizmo_data), "z_index")) gizmo_data.z_index else 255,
+                        .layer = if (@hasField(@TypeOf(gizmo_data), "layer")) gizmo_data.layer else .ui,
+                    };
+
+                    // Store BoundingBox component for reference
+                    game.getRegistry().add(gizmo_entity, bbox);
+
+                    // Get parent entity's visual bounds and create Shape
+                    if (game.getEntityVisualBounds(parent_entity)) |bounds| {
+                        const shape = bbox.toShape(bounds.width, bounds.height);
+                        game.getRegistry().add(gizmo_entity, shape);
+                    } else {
+                        // Fallback to a small default shape if bounds unavailable
+                        const shape = bbox.toShape(32, 32);
+                        game.getRegistry().add(gizmo_entity, shape);
+                        std.log.warn("BoundingBox gizmo: could not get parent visual bounds, using default 32x32", .{});
+                    }
+                } else {
+                    // Add the visual component (Shape, Text, Sprite, Icon)
+                    try addComponentWithNestedEntities(game, scene, gizmo_entity, field_name, gizmo_data, parent_x + offset_x, parent_y + offset_y, no_parent, ready_queue);
+                }
 
                 // Track in scene for cleanup
                 if (scene) |s| {
@@ -790,6 +817,8 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
             if (comptime std.mem.eql(u8, comp_name, "Sprite")) return .sprite;
             if (comptime std.mem.eql(u8, comp_name, "Shape")) return .shape;
             if (comptime std.mem.eql(u8, comp_name, "Text")) return .text;
+            if (comptime std.mem.eql(u8, comp_name, "Icon")) return .sprite;
+            if (comptime std.mem.eql(u8, comp_name, "BoundingBox")) return .shape;
             return .none;
         }
 

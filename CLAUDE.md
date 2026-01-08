@@ -113,18 +113,88 @@ Gizmos are debug-only visualizations attached to entities. They are:
 - Only created in debug builds (stripped in release via `@import("builtin").mode`)
 - Can be toggled at runtime via `game.setGizmosEnabled(false)`
 - Inherit position from their parent entity with optional offset
+- Support visibility modes: `.always`, `.selected_only`, `.never`
 
 ```zig
 // In prefab or scene entity definition
 .gizmos = .{
     .Text = .{ .text = "Entity Name", .size = 10, .y = -15 },  // label above entity
     .Shape = .{ .shape = .{ .circle = .{ .radius = 3 } }, .color = .{ .r = 255 } },  // origin marker
+    .BoundingBox = .{ .color = .{ .r = 0, .g = 255, .b = 0, .a = 200 }, .padding = 2 },  // auto-sized outline
 },
 
 // Toggle at runtime
 game.setGizmosEnabled(false);  // Hide all gizmos
 game.setGizmosEnabled(true);   // Show all gizmos
 const enabled = game.areGizmosEnabled();
+```
+
+**BoundingBox Gizmo** (auto-sized from parent visual):
+
+The BoundingBox gizmo automatically calculates its size from the parent entity's visual component (Sprite or Shape) and draws an outline rectangle:
+
+```zig
+// In prefab or scene gizmos
+.gizmos = .{
+    // Simple bounding box (green outline)
+    .BoundingBox = .{},  // defaults: green, no padding, 1px thickness
+
+    // Customized bounding box
+    .BoundingBox = .{
+        .color = .{ .r = 255, .g = 50, .b = 50, .a = 180 },  // red, semi-transparent
+        .padding = 5,      // extra pixels around visual bounds
+        .thickness = 2,    // line thickness
+        .visible = true,   // can be toggled
+        .z_index = 255,    // draw on top
+        .layer = .ui,      // render in UI layer (screen-space)
+    },
+},
+```
+
+BoundingBox bounds are calculated from:
+- **Shape components**: Uses shape dimensions (circle radius×2, rectangle width/height, etc.)
+- **Sprite components**: Looks up sprite dimensions from texture atlas, scaled by sprite.scale
+
+**Standalone Gizmos** (not bound to entities):
+
+Draw gizmos directly without creating entities. Useful for velocity vectors, debug rays, etc.
+
+```zig
+// In script update()
+pub fn update(game: *Game, scene: *Scene, dt: f32) void {
+    // Clear previous frame's gizmos
+    game.clearGizmos();
+
+    // Draw arrow from point A to point B (e.g., velocity vector)
+    game.drawArrow(pos.x, pos.y, pos.x + vel.x, pos.y + vel.y, Color{ .r = 255, .g = 0, .b = 0, .a = 255 });
+
+    // Draw ray from origin in direction for length (e.g., raycast)
+    game.drawRay(pos.x, pos.y, dir_x, dir_y, 100, Color{ .r = 0, .g = 255, .b = 0, .a = 255 });
+
+    // Draw basic shapes
+    game.drawLine(x1, y1, x2, y2, Color{ .r = 255, .g = 255, .b = 255, .a = 255 });
+    game.drawCircle(x, y, radius, Color{ .r = 0, .g = 0, .b = 255, .a = 200 });
+    game.drawRect(x, y, width, height, Color{ .r = 255, .g = 100, .b = 0, .a = 150 });
+}
+
+// In main loop - render gizmos after scene render
+re.beginFrame();
+re.render();
+game.renderStandaloneGizmos();  // Draw standalone gizmos on top
+re.endFrame();
+```
+
+**Gizmo Visibility Modes:**
+- `.always` - Show when gizmos are enabled (default)
+- `.selected_only` - Only show when parent entity is selected
+- `.never` - Never show (disabled)
+
+**Entity Selection** (for selected-only gizmos):
+```zig
+game.selectEntity(entity);     // Mark entity as selected
+game.deselectEntity(entity);   // Deselect entity
+game.clearSelection();         // Clear all selections
+const selected = game.isEntitySelected(entity);  // Check selection state
 ```
 
 **Pivot values:**
