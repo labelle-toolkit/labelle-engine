@@ -1,0 +1,18 @@
+.{
+    .fingerprint = 0xfe3a6920f689bc26,
+    .name = .example_gizmos,
+    .version = "0.1.0",
+    .dependencies = .{
+        .@"labelle-engine" = .{
+            .path = "../..",
+        },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "main.zig",
+        "prefabs",
+        "scenes",
+        "scripts",
+    },
+}

@@ -1,0 +1,13 @@
+.{
+    .components = .{
+        .Position = .{ .x = 0, .y = 0 },
+        .Shape = .{
+            .shape = .{ .rectangle = .{ .width = 30, .height = 30 } },
+            .color = .{ .r = 255, .g = 100, .b = 100, .a = 255 },
+        },
+    },
+    .gizmos = .{
+        // Label above the entity
+        .Text = .{ .text = "Enemy", .size = 14, .y = -30, .color = .{ .r = 255, .g = 100, .b = 100, .a = 255 } },
+    },
+}

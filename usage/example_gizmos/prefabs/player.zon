@@ -1,0 +1,17 @@
+.{
+    .components = .{
+        .Position = .{ .x = 0, .y = 0 },
+        .Shape = .{
+            .shape = .{ .circle = .{ .radius = 20 } },
+            .color = .{ .r = 100, .g = 150, .b = 255, .a = 255 },
+        },
+    },
+    // Gizmos are debug-only visualizations
+    // They are stripped in release builds
+    .gizmos = .{
+        // Label above the entity
+        .Text = .{ .text = "Player", .size = 14, .y = -35, .color = .{ .r = 255, .g = 255, .b = 0, .a = 255 } },
+        // Origin marker (small red dot)
+        .Shape = .{ .shape = .{ .circle = .{ .radius = 3 } }, .color = .{ .r = 255, .g = 0, .b = 0, .a = 255 } },
+    },
+}

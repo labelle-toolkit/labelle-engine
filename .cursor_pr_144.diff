@@ -1,0 +1,4967 @@
+diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+index 3ec3d8c..87af736 100644
+--- a/.github/workflows/ci.yml
++++ b/.github/workflows/ci.yml
+@@ -83,6 +83,21 @@ jobs:
+ 
+           exit $TEST_EXIT_CODE
+ 
++      - name: Run physics module tests
++        shell: bash
++        run: |
++          echo "::group::🧪 Running physics module tests"
++          cd physics
++          zig build test 2>&1 | tee physics_test_output.txt
++          echo "::endgroup::"
++
++          # Add to summary
++          PASSED=$(grep -oE '[0-9]+ of [0-9]+ tests passed' physics_test_output.txt | grep -oE '^[0-9]+' || echo "0")
++          TOTAL=$(grep -oE '[0-9]+ of [0-9]+ tests passed' physics_test_output.txt | sed 's/.* of \([0-9]*\) tests.*/\1/' || echo "0")
++          echo "## 🎮 Physics Module Tests" >> $GITHUB_STEP_SUMMARY
++          echo "" >> $GITHUB_STEP_SUMMARY
++          echo "✅ **$PASSED of $TOTAL physics tests passed**" >> $GITHUB_STEP_SUMMARY
++
+       - name: Generate example build files
+         run: |
+           # Generate build.zig and build.zig.zon for examples with local engine path
+diff --git a/CLAUDE.md b/CLAUDE.md
+index 6917460..8250bb7 100644
+--- a/CLAUDE.md
++++ b/CLAUDE.md
+@@ -164,6 +164,12 @@ pub fn deinit(game: *Game, scene: *Scene) void { ... }  // optional
+     .ecs_backend = .zig_ecs,   // or .zflecs
+     .window = .{ .width = 800, .height = 600, .title = "My Game" },
+     .camera = .{ .x = 0, .y = 0, .zoom = 1.0 },  // optional - default camera position
++    .physics = .{  // optional - enables Box2D physics
++        .enabled = true,
++        .gravity = .{ 0, 980 },    // pixels/sec² (positive Y = down)
++        .pixels_per_meter = 100.0, // Box2D scale factor
++        .debug_draw = false,       // render collision shapes
++    },
+     .plugins = .{
+         // Version tag (recommended for production)
+         .{ .name = "labelle-tasks", .version = "0.5.0" },
+@@ -220,6 +226,45 @@ zig build -Decs_backend=zflecs
+ 
+ Both backends implement a common interface defined in `src/ecs/`.
+ 
++### Physics Module
++
++Optional Box2D physics integration, enabled via `physics.enabled = true` in project.labelle:
++
++```bash
++zig build -Dphysics=true   # Enable physics at build time
++```
++
++**Physics components** (from `engine.physics`):
++- `RigidBody` - Dynamic, static, or kinematic body type
++- `Collider` - Box or circle collision shape with friction/restitution
++- `Velocity` - Linear and angular velocity
++
++**Usage pattern:**
++```zig
++const physics = @import("labelle-physics");
++
++// Create physics world
++var physics_world = try physics.PhysicsWorld.init(allocator, .{ 0, 980 });
++defer physics_world.deinit();
++
++// Create body and collider
++try physics_world.createBody(entity.toU64(), RigidBody{ .body_type = .dynamic }, .{ .x = x, .y = y });
++try physics_world.addCollider(entity.toU64(), Collider{
++    .shape = .{ .box = .{ .width = 50, .height = 50 } },
++    .restitution = 0.4,
++});
++
++// In game loop
++physics_world.update(dt);
++for (physics_world.entities()) |entity_id| {
++    if (physics_world.getPosition(entity_id)) |pos| {
++        game.setPosition(engine.Entity.fromU64(entity_id), pos[0], pos[1]) catch {};
++    }
++}
++```
++
++See `usage/example_physics/` for a complete demo.
++
+ ### Project Generator
+ 
+ The `labelle generate` command reads `project.labelle` and scans prefabs/, components/, scripts/ folders to generate:
+diff --git a/build.zig b/build.zig
+index f928071..36e095a 100644
+--- a/build.zig
++++ b/build.zig
+@@ -23,6 +23,7 @@ pub fn build(b: *std.Build) void {
+     // Build options
+     const backend = b.option(Backend, "backend", "Graphics backend to use (default: raylib)") orelse .raylib;
+     const ecs_backend = b.option(EcsBackend, "ecs_backend", "ECS backend to use (default: zig_ecs)") orelse .zig_ecs;
++    const physics_enabled = b.option(bool, "physics", "Enable physics module (Box2D)") orelse false;
+ 
+     // ECS dependencies
+     const ecs_dep = b.dependency("zig_ecs", .{
+@@ -83,8 +84,26 @@ pub fn build(b: *std.Build) void {
+     const build_options = b.addOptions();
+     build_options.addOption(Backend, "backend", backend);
+     build_options.addOption(EcsBackend, "ecs_backend", ecs_backend);
++    build_options.addOption(bool, "physics_enabled", physics_enabled);
+     const build_options_mod = build_options.createModule();
+ 
++    // Physics module (optional, enabled with -Dphysics=true)
++    var physics_module: ?*std.Build.Module = null;
++    if (physics_enabled) {
++        const box2d_dep = b.dependency("box2d", .{
++            .target = target,
++            .optimize = optimize,
++        });
++
++        physics_module = b.addModule("labelle-physics", .{
++            .root_source_file = b.path("physics/mod.zig"),
++            .target = target,
++            .optimize = optimize,
++        });
++        physics_module.?.addImport("box2d", box2d_dep.module("box2d"));
++        physics_module.?.linkLibrary(box2d_dep.artifact("box2d"));
++    }
++
+     // Create the ECS interface module that wraps the selected backend
+     const ecs_interface = b.addModule("ecs", .{
+         .root_source_file = b.path("ecs/interface.zig"),
+@@ -170,6 +189,11 @@ pub fn build(b: *std.Build) void {
+         },
+     });
+ 
++    // Add physics module to engine if enabled
++    if (physics_module) |physics| {
++        engine_mod.addImport("physics", physics);
++    }
++
+ 
+     // Unit tests (standard zig test)
+     const unit_tests = b.addTest(.{
+diff --git a/build.zig.zon b/build.zig.zon
+index d9f53e2..25d1bce 100644
+--- a/build.zig.zon
++++ b/build.zig.zon
+@@ -37,6 +37,11 @@
+             .url = "git+https://github.com/zig-gamedev/zaudio#bb93ad665b89e302d4515a36b44cb8e73eaf6766",
+             .hash = "zaudio-0.11.0-dev-_M-91kHvPwAlW8MCRI4XiTbTeihqB8Zspgiuw-6Gqgdz",
+         },
++        // Physics - Box2D via allyourcodebase
++        .box2d = .{
++            .url = "git+https://github.com/allyourcodebase/box2d#main",
++            .hash = "box2d-3.1.1-crFBk74aAAD-TJGY5mHVDB0sV5JntTq0MnlaHYxb5yl5",
++        },
+     },
+     .paths = .{
+         "build.zig",
+@@ -50,6 +55,7 @@
+         "engine",
+         "hooks",
+         "input",
++        "physics",
+         "render",
+         "scene",
+         "tools",
+diff --git a/physics/benchmark/benchmark.zig b/physics/benchmark/benchmark.zig
+new file mode 100644
+index 0000000..379602e
+--- /dev/null
++++ b/physics/benchmark/benchmark.zig
+@@ -0,0 +1,264 @@
++//! Physics Benchmarks
++//!
++//! Performance benchmarks for the physics module.
++//! Run with: zig build bench (in physics directory)
++
++const std = @import("std");
++const physics = @import("labelle-physics");
++const PhysicsWorld = physics.PhysicsWorld;
++const RigidBody = physics.RigidBody;
++const Collider = physics.Collider;
++
++const Timer = std.time.Timer;
++
++pub fn main() !void {
++    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
++    defer _ = gpa.deinit();
++    const allocator = gpa.allocator();
++
++    std.debug.print("\n=== Physics Module Benchmarks ===\n\n", .{});
++
++    try benchBodyLifecycle(allocator);
++    try benchSimulationStep(allocator, 100);
++    try benchSimulationStep(allocator, 1000);
++    try benchSimulationStep(allocator, 5000);
++    try benchCollisionDetection(allocator);
++    try benchCollisionQuery(allocator);
++    try benchEcsSync(allocator);
++
++    std.debug.print("\n=== Benchmarks Complete ===\n", .{});
++}
++
++/// Benchmark body creation and destruction
++fn benchBodyLifecycle(allocator: std.mem.Allocator) !void {
++    std.debug.print("Body Lifecycle (create/destroy 10000 bodies):\n", .{});
++
++    var world = try PhysicsWorld.init(allocator, .{ 0, 9.8 * 100 });
++    defer world.deinit();
++
++    const iterations = 10000;
++    var timer = try Timer.start();
++
++    // Create bodies
++    for (0..iterations) |i| {
++        const entity: u64 = @intCast(i);
++        try world.createBody(entity, RigidBody{}, .{
++            .x = @floatFromInt(i % 100 * 10),
++            .y = @floatFromInt(i / 100 * 10),
++        });
++    }
++
++    const create_ns = timer.read();
++    timer.reset();
++
++    // Destroy bodies
++    for (0..iterations) |i| {
++        world.destroyBody(@intCast(i));
++    }
++
++    const destroy_ns = timer.read();
++
++    std.debug.print("  Create: {d:.2}ms ({d:.0} bodies/ms)\n", .{
++        @as(f64, @floatFromInt(create_ns)) / 1_000_000,
++        @as(f64, iterations) / (@as(f64, @floatFromInt(create_ns)) / 1_000_000),
++    });
++    std.debug.print("  Destroy: {d:.2}ms ({d:.0} bodies/ms)\n\n", .{
++        @as(f64, @floatFromInt(destroy_ns)) / 1_000_000,
++        @as(f64, iterations) / (@as(f64, @floatFromInt(destroy_ns)) / 1_000_000),
++    });
++}
++
++/// Benchmark physics step with varying body counts
++fn benchSimulationStep(allocator: std.mem.Allocator, body_count: usize) !void {
++    std.debug.print("Simulation Step ({} dynamic bodies):\n", .{body_count});
++
++    var world = try PhysicsWorld.init(allocator, .{ 0, 9.8 * 100 });
++    defer world.deinit();
++
++    // Create ground (static)
++    try world.createBody(0, RigidBody{ .body_type = .static }, .{ .x = 0, .y = 500 });
++    try world.addCollider(0, Collider{
++        .shape = .{ .box = .{ .width = 1000, .height = 20 } },
++    });
++
++    // Create dynamic bodies in a grid
++    for (1..body_count + 1) |i| {
++        const entity: u64 = @intCast(i);
++        const row = i / 50;
++        const col = i % 50;
++        try world.createBody(entity, RigidBody{}, .{
++            .x = @as(f32, @floatFromInt(col)) * 15 + 50,
++            .y = @as(f32, @floatFromInt(row)) * 15 + 50,
++        });
++        try world.addCollider(entity, Collider{
++            .shape = .{ .circle = .{ .radius = 5 } },
++        });
++    }
++
++    // Warm up
++    for (0..10) |_| {
++        world.update(1.0 / 60.0);
++    }
++
++    // Benchmark
++    const iterations = 100;
++    var timer = try Timer.start();
++
++    for (0..iterations) |_| {
++        world.update(1.0 / 60.0);
++    }
++
++    const total_ns = timer.read();
++    const avg_ns = total_ns / iterations;
++    const avg_ms = @as(f64, @floatFromInt(avg_ns)) / 1_000_000;
++
++    std.debug.print("  Average step: {d:.3}ms ({d:.1} FPS equivalent)\n", .{
++        avg_ms,
++        1000.0 / avg_ms,
++    });
++    std.debug.print("  Total ({} steps): {d:.2}ms\n\n", .{
++        iterations,
++        @as(f64, @floatFromInt(total_ns)) / 1_000_000,
++    });
++}
++
++/// Benchmark collision detection with many overlapping bodies
++fn benchCollisionDetection(allocator: std.mem.Allocator) !void {
++    std.debug.print("Collision Detection (500 overlapping circles):\n", .{});
++
++    var world = try PhysicsWorld.init(allocator, .{ 0, 0 }); // No gravity
++    defer world.deinit();
++
++    // Create overlapping circles in a small area
++    const body_count: usize = 500;
++    for (0..body_count) |i| {
++        const entity: u64 = @intCast(i);
++        const angle = @as(f32, @floatFromInt(i)) * (std.math.pi * 2.0 / @as(f32, @floatFromInt(body_count)));
++        const radius: f32 = 50 + @as(f32, @floatFromInt(i % 10)) * 5;
++        try world.createBody(entity, RigidBody{}, .{
++            .x = 250 + @cos(angle) * radius,
++            .y = 250 + @sin(angle) * radius,
++        });
++        try world.addCollider(entity, Collider{
++            .shape = .{ .circle = .{ .radius = 20 } },
++        });
++    }
++
++    // Warm up
++    for (0..10) |_| {
++        world.update(1.0 / 60.0);
++    }
++
++    // Benchmark
++    const iterations = 100;
++    var timer = try Timer.start();
++
++    for (0..iterations) |_| {
++        world.update(1.0 / 60.0);
++    }
++
++    const total_ns = timer.read();
++    const avg_ns = total_ns / iterations;
++
++    std.debug.print("  Average step: {d:.3}ms\n", .{
++        @as(f64, @floatFromInt(avg_ns)) / 1_000_000,
++    });
++
++    // Count collisions
++    world.update(1.0 / 60.0);
++    std.debug.print("  Collision events per frame: {}\n\n", .{
++        world.getCollisionBeginEvents().len,
++    });
++}
++
++/// Benchmark collision event query API
++fn benchCollisionQuery(allocator: std.mem.Allocator) !void {
++    std.debug.print("Collision Query API:\n", .{});
++
++    var world = try PhysicsWorld.init(allocator, .{ 0, 9.8 * 100 });
++    defer world.deinit();
++
++    // Create bodies that will collide
++    for (0..100) |i| {
++        const entity: u64 = @intCast(i);
++        try world.createBody(entity, RigidBody{}, .{
++            .x = @as(f32, @floatFromInt(i % 10)) * 30 + 100,
++            .y = @as(f32, @floatFromInt(i / 10)) * 30 + 100,
++        });
++        try world.addCollider(entity, Collider{
++            .shape = .{ .box = .{ .width = 28, .height = 28 } },
++        });
++    }
++
++    // Run simulation to generate collisions
++    for (0..60) |_| {
++        world.update(1.0 / 60.0);
++    }
++
++    // Benchmark query iteration
++    const iterations = 10000;
++    var timer = try Timer.start();
++    var total_events: usize = 0;
++
++    for (0..iterations) |_| {
++        world.update(1.0 / 60.0);
++        total_events += world.getCollisionBeginEvents().len;
++        total_events += world.getCollisionEndEvents().len;
++    }
++
++    const total_ns = timer.read();
++
++    std.debug.print("  {} iterations: {d:.2}ms\n", .{
++        iterations,
++        @as(f64, @floatFromInt(total_ns)) / 1_000_000,
++    });
++    std.debug.print("  Total events processed: {}\n", .{total_events});
++    std.debug.print("  Avg query time: {d:.0}ns\n\n", .{
++        @as(f64, @floatFromInt(total_ns)) / @as(f64, @floatFromInt(iterations)),
++    });
++}
++
++/// Benchmark ECS synchronization overhead
++fn benchEcsSync(allocator: std.mem.Allocator) !void {
++    std.debug.print("ECS Sync Overhead (position read/write):\n", .{});
++
++    var world = try PhysicsWorld.init(allocator, .{ 0, 9.8 * 100 });
++    defer world.deinit();
++
++    const body_count: usize = 1000;
++    for (0..body_count) |i| {
++        const entity: u64 = @intCast(i);
++        try world.createBody(entity, RigidBody{}, .{
++            .x = @as(f32, @floatFromInt(i % 50)) * 15,
++            .y = @as(f32, @floatFromInt(i / 50)) * 15,
++        });
++    }
++
++    // Benchmark getPosition calls
++    const iterations = 10000;
++    var timer = try Timer.start();
++
++    for (0..iterations) |_| {
++        for (0..body_count) |i| {
++            _ = world.getPosition(@intCast(i));
++        }
++    }
++
++    const read_ns = timer.read();
++    timer.reset();
++
++    // Benchmark setLinearVelocity calls
++    for (0..iterations) |_| {
++        for (0..body_count) |i| {
++            world.setLinearVelocity(@intCast(i), .{ 10, 0 });
++        }
++    }
++
++    const write_ns = timer.read();
++
++    const reads_per_ms = @as(f64, @floatFromInt(iterations * body_count)) / (@as(f64, @floatFromInt(read_ns)) / 1_000_000);
++    const writes_per_ms = @as(f64, @floatFromInt(iterations * body_count)) / (@as(f64, @floatFromInt(write_ns)) / 1_000_000);
++
++    std.debug.print("  Position reads: {d:.0}/ms\n", .{reads_per_ms});
++    std.debug.print("  Velocity writes: {d:.0}/ms\n\n", .{writes_per_ms});
++}
+diff --git a/physics/benchmark/storage_benchmark.zig b/physics/benchmark/storage_benchmark.zig
+new file mode 100644
+index 0000000..f6ba47f
+--- /dev/null
++++ b/physics/benchmark/storage_benchmark.zig
+@@ -0,0 +1,656 @@
++//! Physics Storage Benchmark
++//!
++//! Compares HashMap vs SparseSet vs ECS Component storage for entity->body mappings.
++//! Run with: zig build-exe storage_benchmark.zig -OReleaseFast && ./storage_benchmark
++
++const std = @import("std");
++
++// Mock BodyId for benchmarking
++const BodyId = u64;
++
++// ============================================================================
++// Option 1: Sparse Set
++// ============================================================================
++
++pub const SparseSet = struct {
++    const Self = @This();
++
++    allocator: std.mem.Allocator,
++    sparse: []?u32,       // entity_id -> dense_index
++    dense: []u64,         // dense_index -> entity_id
++    data: []BodyId,       // dense_index -> body_id
++    count: usize,
++    capacity: usize,
++    max_entity: usize,
++
++    pub fn init(allocator: std.mem.Allocator, max_entities: usize, initial_capacity: usize) !Self {
++        const sparse = try allocator.alloc(?u32, max_entities);
++        @memset(sparse, null);
++
++        return Self{
++            .allocator = allocator,
++            .sparse = sparse,
++            .dense = try allocator.alloc(u64, initial_capacity),
++            .data = try allocator.alloc(BodyId, initial_capacity),
++            .count = 0,
++            .capacity = initial_capacity,
++            .max_entity = max_entities,
++        };
++    }
++
++    pub fn deinit(self: *Self) void {
++        self.allocator.free(self.sparse);
++        self.allocator.free(self.dense);
++        self.allocator.free(self.data);
++    }
++
++    pub fn insert(self: *Self, entity: u64, body_id: BodyId) !void {
++        if (entity >= self.max_entity) return error.EntityOutOfRange;
++
++        // Already exists - update
++        if (self.sparse[entity]) |idx| {
++            self.data[idx] = body_id;
++            return;
++        }
++
++        // Grow if needed
++        if (self.count >= self.capacity) {
++            const new_cap = self.capacity * 2;
++            self.dense = try self.allocator.realloc(self.dense, new_cap);
++            self.data = try self.allocator.realloc(self.data, new_cap);
++            self.capacity = new_cap;
++        }
++
++        const idx: u32 = @intCast(self.count);
++        self.sparse[entity] = idx;
++        self.dense[idx] = entity;
++        self.data[idx] = body_id;
++        self.count += 1;
++    }
++
++    pub fn get(self: *const Self, entity: u64) ?BodyId {
++        if (entity >= self.max_entity) return null;
++        const idx = self.sparse[entity] orelse return null;
++        return self.data[idx];
++    }
++
++    pub fn contains(self: *const Self, entity: u64) bool {
++        if (entity >= self.max_entity) return false;
++        return self.sparse[entity] != null;
++    }
++
++    pub fn remove(self: *Self, entity: u64) void {
++        if (entity >= self.max_entity) return;
++        const idx = self.sparse[entity] orelse return;
++
++        // Swap with last element
++        const last_idx = self.count - 1;
++        if (idx != last_idx) {
++            const last_entity = self.dense[last_idx];
++            self.dense[idx] = last_entity;
++            self.data[idx] = self.data[last_idx];
++            self.sparse[last_entity] = idx;
++        }
++
++        self.sparse[entity] = null;
++        self.count -= 1;
++    }
++
++    // Iterator for cache-friendly iteration
++    pub fn iterate(self: *const Self) []const BodyId {
++        return self.data[0..self.count];
++    }
++
++    pub fn iterateEntities(self: *const Self) []const u64 {
++        return self.dense[0..self.count];
++    }
++};
++
++// ============================================================================
++// Option 2: Mock ECS Component Storage (simulates zig_ecs behavior)
++// ============================================================================
++
++pub const EcsComponentStorage = struct {
++    const Self = @This();
++
++    // Simulates ECS component storage with sparse set internally
++    // This is what zig_ecs uses under the hood
++    inner: SparseSet,
++
++    pub fn init(allocator: std.mem.Allocator, max_entities: usize, initial_capacity: usize) !Self {
++        return Self{
++            .inner = try SparseSet.init(allocator, max_entities, initial_capacity),
++        };
++    }
++
++    pub fn deinit(self: *Self) void {
++        self.inner.deinit();
++    }
++
++    // ECS-style API
++    pub fn set(self: *Self, entity: u64, body_id: BodyId) !void {
++        try self.inner.insert(entity, body_id);
++    }
++
++    pub fn get(self: *const Self, entity: u64) ?BodyId {
++        return self.inner.get(entity);
++    }
++
++    pub fn tryGet(self: *const Self, entity: u64) ?*const BodyId {
++        if (entity >= self.inner.max_entity) return null;
++        const idx = self.inner.sparse[entity] orelse return null;
++        return &self.inner.data[idx];
++    }
++
++    pub fn remove(self: *Self, entity: u64) void {
++        self.inner.remove(entity);
++    }
++
++    pub fn iterate(self: *const Self) []const BodyId {
++        return self.inner.iterate();
++    }
++};
++
++// ============================================================================
++// HashMap (baseline for comparison)
++// ============================================================================
++
++pub const HashMapStorage = struct {
++    const Self = @This();
++
++    map: std.AutoHashMap(u64, BodyId),
++
++    pub fn init(allocator: std.mem.Allocator) Self {
++        return Self{
++            .map = std.AutoHashMap(u64, BodyId).init(allocator),
++        };
++    }
++
++    pub fn deinit(self: *Self) void {
++        self.map.deinit();
++    }
++
++    pub fn insert(self: *Self, entity: u64, body_id: BodyId) !void {
++        try self.map.put(entity, body_id);
++    }
++
++    pub fn get(self: *const Self, entity: u64) ?BodyId {
++        return self.map.get(entity);
++    }
++
++    pub fn contains(self: *const Self, entity: u64) bool {
++        return self.map.contains(entity);
++    }
++
++    pub fn remove(self: *Self, entity: u64) void {
++        _ = self.map.remove(entity);
++    }
++};
++
++// ============================================================================
++// Benchmarks
++// ============================================================================
++
++const WARMUP_ITERATIONS = 100;
++const BENCH_ITERATIONS = 1000;
++const ENTITY_COUNTS = [_]usize{ 100, 1000, 10000, 50000 };
++
++pub fn main() !void {
++    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
++    defer _ = gpa.deinit();
++    const allocator = gpa.allocator();
++
++    std.debug.print("\n============================================================\n", .{});
++    std.debug.print("  Physics Storage Benchmark: HashMap vs SparseSet vs ECS\n", .{});
++    std.debug.print("============================================================\n\n", .{});
++
++    for (ENTITY_COUNTS) |entity_count| {
++        std.debug.print("--- {} entities ---\n\n", .{entity_count});
++
++        try benchInsert(allocator, entity_count);
++        try benchLookup(allocator, entity_count);
++        try benchIteration(allocator, entity_count);
++        try benchRemove(allocator, entity_count);
++        try benchMixedWorkload(allocator, entity_count);
++
++        std.debug.print("\n", .{});
++    }
++}
++
++fn benchInsert(allocator: std.mem.Allocator, entity_count: usize) !void {
++    std.debug.print("INSERT ({} entities):\n", .{entity_count});
++
++    // HashMap
++    {
++        var total_ns: u64 = 0;
++        for (0..BENCH_ITERATIONS) |_| {
++            var storage = HashMapStorage.init(allocator);
++            defer storage.deinit();
++
++            var timer = try std.time.Timer.start();
++            for (0..entity_count) |i| {
++                try storage.insert(@intCast(i), @intCast(i * 100));
++            }
++            total_ns += timer.read();
++        }
++        const avg_ns = total_ns / BENCH_ITERATIONS;
++        std.debug.print("  HashMap:   {d:>8.2} us  ({d:.0} inserts/us)\n", .{
++            @as(f64, @floatFromInt(avg_ns)) / 1000,
++            @as(f64, @floatFromInt(entity_count)) / (@as(f64, @floatFromInt(avg_ns)) / 1000),
++        });
++    }
++
++    // SparseSet
++    {
++        var total_ns: u64 = 0;
++        for (0..BENCH_ITERATIONS) |_| {
++            var storage = try SparseSet.init(allocator, entity_count + 1000, 256);
++            defer storage.deinit();
++
++            var timer = try std.time.Timer.start();
++            for (0..entity_count) |i| {
++                try storage.insert(@intCast(i), @intCast(i * 100));
++            }
++            total_ns += timer.read();
++        }
++        const avg_ns = total_ns / BENCH_ITERATIONS;
++        std.debug.print("  SparseSet: {d:>8.2} us  ({d:.0} inserts/us)\n", .{
++            @as(f64, @floatFromInt(avg_ns)) / 1000,
++            @as(f64, @floatFromInt(entity_count)) / (@as(f64, @floatFromInt(avg_ns)) / 1000),
++        });
++    }
++
++    // ECS Component
++    {
++        var total_ns: u64 = 0;
++        for (0..BENCH_ITERATIONS) |_| {
++            var storage = try EcsComponentStorage.init(allocator, entity_count + 1000, 256);
++            defer storage.deinit();
++
++            var timer = try std.time.Timer.start();
++            for (0..entity_count) |i| {
++                try storage.set(@intCast(i), @intCast(i * 100));
++            }
++            total_ns += timer.read();
++        }
++        const avg_ns = total_ns / BENCH_ITERATIONS;
++        std.debug.print("  ECS:       {d:>8.2} us  ({d:.0} inserts/us)\n", .{
++            @as(f64, @floatFromInt(avg_ns)) / 1000,
++            @as(f64, @floatFromInt(entity_count)) / (@as(f64, @floatFromInt(avg_ns)) / 1000),
++        });
++    }
++}
++
++fn benchLookup(allocator: std.mem.Allocator, entity_count: usize) !void {
++    std.debug.print("LOOKUP ({} random lookups):\n", .{entity_count * 10});
++
++    // Pre-generate random lookup order
++    var rng = std.Random.DefaultPrng.init(42);
++    const lookup_order = try allocator.alloc(u64, entity_count * 10);
++    defer allocator.free(lookup_order);
++    for (lookup_order) |*id| {
++        id.* = rng.random().uintLessThan(u64, entity_count);
++    }
++
++    // HashMap
++    {
++        var storage = HashMapStorage.init(allocator);
++        defer storage.deinit();
++        for (0..entity_count) |i| {
++            try storage.insert(@intCast(i), @intCast(i * 100));
++        }
++
++        var total_ns: u64 = 0;
++        var checksum: u64 = 0;
++        for (0..BENCH_ITERATIONS) |_| {
++            var timer = try std.time.Timer.start();
++            for (lookup_order) |entity| {
++                checksum +%= storage.get(entity) orelse 0;
++            }
++            total_ns += timer.read();
++        }
++        const avg_ns = total_ns / BENCH_ITERATIONS;
++        std.debug.print("  HashMap:   {d:>8.2} us  ({d:.0} lookups/us) [checksum: {}]\n", .{
++            @as(f64, @floatFromInt(avg_ns)) / 1000,
++            @as(f64, @floatFromInt(lookup_order.len)) / (@as(f64, @floatFromInt(avg_ns)) / 1000),
++            checksum % 1000,
++        });
++    }
++
++    // SparseSet
++    {
++        var storage = try SparseSet.init(allocator, entity_count + 1000, 256);
++        defer storage.deinit();
++        for (0..entity_count) |i| {
++            try storage.insert(@intCast(i), @intCast(i * 100));
++        }
++
++        var total_ns: u64 = 0;
++        var checksum: u64 = 0;
++        for (0..BENCH_ITERATIONS) |_| {
++            var timer = try std.time.Timer.start();
++            for (lookup_order) |entity| {
++                checksum +%= storage.get(entity) orelse 0;
++            }
++            total_ns += timer.read();
++        }
++        const avg_ns = total_ns / BENCH_ITERATIONS;
++        std.debug.print("  SparseSet: {d:>8.2} us  ({d:.0} lookups/us) [checksum: {}]\n", .{
++            @as(f64, @floatFromInt(avg_ns)) / 1000,
++            @as(f64, @floatFromInt(lookup_order.len)) / (@as(f64, @floatFromInt(avg_ns)) / 1000),
++            checksum % 1000,
++        });
++    }
++
++    // ECS Component
++    {
++        var storage = try EcsComponentStorage.init(allocator, entity_count + 1000, 256);
++        defer storage.deinit();
++        for (0..entity_count) |i| {
++            try storage.set(@intCast(i), @intCast(i * 100));
++        }
++
++        var total_ns: u64 = 0;
++        var checksum: u64 = 0;
++        for (0..BENCH_ITERATIONS) |_| {
++            var timer = try std.time.Timer.start();
++            for (lookup_order) |entity| {
++                checksum +%= storage.get(entity) orelse 0;
++            }
++            total_ns += timer.read();
++        }
++        const avg_ns = total_ns / BENCH_ITERATIONS;
++        std.debug.print("  ECS:       {d:>8.2} us  ({d:.0} lookups/us) [checksum: {}]\n", .{
++            @as(f64, @floatFromInt(avg_ns)) / 1000,
++            @as(f64, @floatFromInt(lookup_order.len)) / (@as(f64, @floatFromInt(avg_ns)) / 1000),
++            checksum % 1000,
++        });
++    }
++}
++
++fn benchIteration(allocator: std.mem.Allocator, entity_count: usize) !void {
++    std.debug.print("ITERATION (sum all body IDs):\n", .{});
++
++    // HashMap
++    {
++        var storage = HashMapStorage.init(allocator);
++        defer storage.deinit();
++        for (0..entity_count) |i| {
++            try storage.insert(@intCast(i), @intCast(i * 100));
++        }
++
++        var total_ns: u64 = 0;
++        var checksum: u64 = 0;
++        for (0..BENCH_ITERATIONS) |_| {
++            var timer = try std.time.Timer.start();
++            var iter = storage.map.valueIterator();
++            while (iter.next()) |v| {
++                checksum +%= v.*;
++            }
++            total_ns += timer.read();
++        }
++        const avg_ns = total_ns / BENCH_ITERATIONS;
++        std.debug.print("  HashMap:   {d:>8.2} us  ({d:.0} items/us) [checksum: {}]\n", .{
++            @as(f64, @floatFromInt(avg_ns)) / 1000,
++            @as(f64, @floatFromInt(entity_count)) / (@as(f64, @floatFromInt(avg_ns)) / 1000),
++            checksum % 1000,
++        });
++    }
++
++    // SparseSet
++    {
++        var storage = try SparseSet.init(allocator, entity_count + 1000, 256);
++        defer storage.deinit();
++        for (0..entity_count) |i| {
++            try storage.insert(@intCast(i), @intCast(i * 100));
++        }
++
++        var total_ns: u64 = 0;
++        var checksum: u64 = 0;
++        for (0..BENCH_ITERATIONS) |_| {
++            var timer = try std.time.Timer.start();
++            for (storage.iterate()) |body_id| {
++                checksum +%= body_id;
++            }
++            total_ns += timer.read();
++        }
++        const avg_ns = total_ns / BENCH_ITERATIONS;
++        std.debug.print("  SparseSet: {d:>8.2} us  ({d:.0} items/us) [checksum: {}]\n", .{
++            @as(f64, @floatFromInt(avg_ns)) / 1000,
++            @as(f64, @floatFromInt(entity_count)) / (@as(f64, @floatFromInt(avg_ns)) / 1000),
++            checksum % 1000,
++        });
++    }
++
++    // ECS Component
++    {
++        var storage = try EcsComponentStorage.init(allocator, entity_count + 1000, 256);
++        defer storage.deinit();
++        for (0..entity_count) |i| {
++            try storage.set(@intCast(i), @intCast(i * 100));
++        }
++
++        var total_ns: u64 = 0;
++        var checksum: u64 = 0;
++        for (0..BENCH_ITERATIONS) |_| {
++            var timer = try std.time.Timer.start();
++            for (storage.iterate()) |body_id| {
++                checksum +%= body_id;
++            }
++            total_ns += timer.read();
++        }
++        const avg_ns = total_ns / BENCH_ITERATIONS;
++        std.debug.print("  ECS:       {d:>8.2} us  ({d:.0} items/us) [checksum: {}]\n", .{
++            @as(f64, @floatFromInt(avg_ns)) / 1000,
++            @as(f64, @floatFromInt(entity_count)) / (@as(f64, @floatFromInt(avg_ns)) / 1000),
++            checksum % 1000,
++        });
++    }
++}
++
++fn benchRemove(allocator: std.mem.Allocator, entity_count: usize) !void {
++    std.debug.print("REMOVE (remove half the entities):\n", .{});
++
++    const remove_count = entity_count / 2;
++
++    // HashMap
++    {
++        var total_ns: u64 = 0;
++        for (0..BENCH_ITERATIONS) |_| {
++            var storage = HashMapStorage.init(allocator);
++            defer storage.deinit();
++            for (0..entity_count) |i| {
++                try storage.insert(@intCast(i), @intCast(i * 100));
++            }
++
++            var timer = try std.time.Timer.start();
++            for (0..remove_count) |i| {
++                storage.remove(@intCast(i * 2)); // Remove even entities
++            }
++            total_ns += timer.read();
++        }
++        const avg_ns = total_ns / BENCH_ITERATIONS;
++        std.debug.print("  HashMap:   {d:>8.2} us  ({d:.0} removes/us)\n", .{
++            @as(f64, @floatFromInt(avg_ns)) / 1000,
++            @as(f64, @floatFromInt(remove_count)) / (@as(f64, @floatFromInt(avg_ns)) / 1000),
++        });
++    }
++
++    // SparseSet
++    {
++        var total_ns: u64 = 0;
++        for (0..BENCH_ITERATIONS) |_| {
++            var storage = try SparseSet.init(allocator, entity_count + 1000, 256);
++            defer storage.deinit();
++            for (0..entity_count) |i| {
++                try storage.insert(@intCast(i), @intCast(i * 100));
++            }
++
++            var timer = try std.time.Timer.start();
++            for (0..remove_count) |i| {
++                storage.remove(@intCast(i * 2));
++            }
++            total_ns += timer.read();
++        }
++        const avg_ns = total_ns / BENCH_ITERATIONS;
++        std.debug.print("  SparseSet: {d:>8.2} us  ({d:.0} removes/us)\n", .{
++            @as(f64, @floatFromInt(avg_ns)) / 1000,
++            @as(f64, @floatFromInt(remove_count)) / (@as(f64, @floatFromInt(avg_ns)) / 1000),
++        });
++    }
++
++    // ECS Component
++    {
++        var total_ns: u64 = 0;
++        for (0..BENCH_ITERATIONS) |_| {
++            var storage = try EcsComponentStorage.init(allocator, entity_count + 1000, 256);
++            defer storage.deinit();
++            for (0..entity_count) |i| {
++                try storage.set(@intCast(i), @intCast(i * 100));
++            }
++
++            var timer = try std.time.Timer.start();
++            for (0..remove_count) |i| {
++                storage.remove(@intCast(i * 2));
++            }
++            total_ns += timer.read();
++        }
++        const avg_ns = total_ns / BENCH_ITERATIONS;
++        std.debug.print("  ECS:       {d:>8.2} us  ({d:.0} removes/us)\n", .{
++            @as(f64, @floatFromInt(avg_ns)) / 1000,
++            @as(f64, @floatFromInt(remove_count)) / (@as(f64, @floatFromInt(avg_ns)) / 1000),
++        });
++    }
++}
++
++fn benchMixedWorkload(allocator: std.mem.Allocator, entity_count: usize) !void {
++    std.debug.print("MIXED (insert, lookup, remove cycle):\n", .{});
++
++    const ops_per_cycle = entity_count / 10;
++
++    // HashMap
++    {
++        var storage = HashMapStorage.init(allocator);
++        defer storage.deinit();
++
++        // Pre-populate
++        for (0..entity_count) |i| {
++            try storage.insert(@intCast(i), @intCast(i * 100));
++        }
++
++        var total_ns: u64 = 0;
++        var next_entity: u64 = entity_count;
++        var checksum: u64 = 0;
++
++        for (0..BENCH_ITERATIONS) |iter| {
++            var timer = try std.time.Timer.start();
++
++            // Lookups
++            for (0..ops_per_cycle) |i| {
++                const lookup_id: u64 = (i + iter * 7) % entity_count;
++                checksum +%= storage.get(lookup_id) orelse 0;
++            }
++
++            // Removes
++            for (0..ops_per_cycle / 2) |i| {
++                const remove_id: u64 = (i + iter * 13) % entity_count;
++                storage.remove(remove_id);
++            }
++
++            // Inserts
++            for (0..ops_per_cycle / 2) |_| {
++                try storage.insert(next_entity, next_entity * 100);
++                next_entity += 1;
++            }
++
++            total_ns += timer.read();
++        }
++        const avg_ns = total_ns / BENCH_ITERATIONS;
++        std.debug.print("  HashMap:   {d:>8.2} us  [checksum: {}]\n", .{
++            @as(f64, @floatFromInt(avg_ns)) / 1000,
++            checksum % 1000,
++        });
++    }
++
++    // SparseSet
++    {
++        const max_entities = entity_count + BENCH_ITERATIONS * ops_per_cycle;
++        var storage = try SparseSet.init(allocator, max_entities, 256);
++        defer storage.deinit();
++
++        for (0..entity_count) |i| {
++            try storage.insert(@intCast(i), @intCast(i * 100));
++        }
++
++        var total_ns: u64 = 0;
++        var next_entity: u64 = entity_count;
++        var checksum: u64 = 0;
++
++        for (0..BENCH_ITERATIONS) |iter| {
++            var timer = try std.time.Timer.start();
++
++            for (0..ops_per_cycle) |i| {
++                const lookup_id: u64 = (i + iter * 7) % entity_count;
++                checksum +%= storage.get(lookup_id) orelse 0;
++            }
++
++            for (0..ops_per_cycle / 2) |i| {
++                const remove_id: u64 = (i + iter * 13) % entity_count;
++                storage.remove(remove_id);
++            }
++
++            for (0..ops_per_cycle / 2) |_| {
++                try storage.insert(next_entity, next_entity * 100);
++                next_entity += 1;
++            }
++
++            total_ns += timer.read();
++        }
++        const avg_ns = total_ns / BENCH_ITERATIONS;
++        std.debug.print("  SparseSet: {d:>8.2} us  [checksum: {}]\n", .{
++            @as(f64, @floatFromInt(avg_ns)) / 1000,
++            checksum % 1000,
++        });
++    }
++
++    // ECS Component
++    {
++        const max_entities = entity_count + BENCH_ITERATIONS * ops_per_cycle;
++        var storage = try EcsComponentStorage.init(allocator, max_entities, 256);
++        defer storage.deinit();
++
++        for (0..entity_count) |i| {
++            try storage.set(@intCast(i), @intCast(i * 100));
++        }
++
++        var total_ns: u64 = 0;
++        var next_entity: u64 = entity_count;
++        var checksum: u64 = 0;
++
++        for (0..BENCH_ITERATIONS) |iter| {
++            var timer = try std.time.Timer.start();
++
++            for (0..ops_per_cycle) |i| {
++                const lookup_id: u64 = (i + iter * 7) % entity_count;
++                checksum +%= storage.get(lookup_id) orelse 0;
++            }
++
++            for (0..ops_per_cycle / 2) |i| {
++                const remove_id: u64 = (i + iter * 13) % entity_count;
++                storage.remove(remove_id);
++            }
++
++            for (0..ops_per_cycle / 2) |_| {
++                try storage.set(next_entity, next_entity * 100);
++                next_entity += 1;
++            }
++
++            total_ns += timer.read();
++        }
++        const avg_ns = total_ns / BENCH_ITERATIONS;
++        std.debug.print("  ECS:       {d:>8.2} us  [checksum: {}]\n", .{
++            @as(f64, @floatFromInt(avg_ns)) / 1000,
++            checksum % 1000,
++        });
++    }
++}
+diff --git a/physics/build.zig b/physics/build.zig
+new file mode 100644
+index 0000000..bd2cd50
+--- /dev/null
++++ b/physics/build.zig
+@@ -0,0 +1,126 @@
++const std = @import("std");
++
++/// Physics module build configuration
++/// Standalone physics module with Box2D backend
++pub fn build(b: *std.Build) void {
++    const target = b.standardTargetOptions(.{});
++    const optimize = b.standardOptimizeOption(.{});
++
++    // Box2D dependency
++    const box2d_dep = b.dependency("box2d", .{
++        .target = target,
++        .optimize = optimize,
++    });
++
++    // ZSpec dependency
++    const zspec_dep = b.dependency("zspec", .{
++        .target = target,
++        .optimize = optimize,
++    });
++
++    // Physics module
++    const physics_mod = b.addModule("labelle-physics", .{
++        .root_source_file = b.path("mod.zig"),
++        .target = target,
++        .optimize = optimize,
++    });
++    physics_mod.addImport("box2d", box2d_dep.module("box2d"));
++    physics_mod.linkLibrary(box2d_dep.artifact("box2d"));
++
++    // ZSpec tests
++    const zspec_tests = b.addTest(.{
++        .root_module = b.createModule(.{
++            .root_source_file = b.path("test/tests.zig"),
++            .target = target,
++            .optimize = optimize,
++            .imports = &.{
++                .{ .name = "zspec", .module = zspec_dep.module("zspec") },
++                .{ .name = "labelle-physics", .module = physics_mod },
++            },
++        }),
++        .test_runner = .{ .path = zspec_dep.path("src/runner.zig"), .mode = .simple },
++    });
++    zspec_tests.root_module.linkLibrary(box2d_dep.artifact("box2d"));
++
++    const run_zspec_tests = b.addRunArtifact(zspec_tests);
++    const zspec_test_step = b.step("zspec", "Run zspec tests");
++    zspec_test_step.dependOn(&run_zspec_tests.step);
++
++    // Main test step runs zspec tests
++    const test_step = b.step("test", "Run all tests");
++    test_step.dependOn(&run_zspec_tests.step);
++
++    // Benchmark executable
++    const bench_exe = b.addExecutable(.{
++        .name = "physics-benchmark",
++        .root_module = b.createModule(.{
++            .root_source_file = b.path("benchmark/benchmark.zig"),
++            .target = target,
++            .optimize = .ReleaseFast,
++            .imports = &.{
++                .{ .name = "labelle-physics", .module = physics_mod },
++            },
++        }),
++    });
++    bench_exe.root_module.linkLibrary(box2d_dep.artifact("box2d"));
++
++    b.installArtifact(bench_exe);
++
++    const run_bench = b.addRunArtifact(bench_exe);
++    run_bench.step.dependOn(b.getInstallStep());
++
++    const bench_step = b.step("bench", "Run physics benchmarks");
++    bench_step.dependOn(&run_bench.step);
++}
++
++/// Add physics module to a parent build
++/// Called by labelle-engine's build.zig when physics is enabled
++pub fn addPhysicsModule(
++    b: *std.Build,
++    target: std.Build.ResolvedTarget,
++    optimize: std.builtin.OptimizeMode,
++    ecs_module: ?*std.Build.Module,
++    build_options_mod: ?*std.Build.Module,
++) *std.Build.Module {
++    // Box2D dependency
++    const box2d_dep = b.dependency("box2d", .{
++        .target = target,
++        .optimize = optimize,
++    });
++
++    var imports = std.ArrayList(std.Build.Module.Import).init(b.allocator);
++
++    // Add Box2D
++    imports.append(.{
++        .name = "box2d",
++        .module = box2d_dep.module("box2d"),
++    }) catch @panic("OOM");
++
++    // Add ECS interface if provided (for entity types)
++    if (ecs_module) |ecs| {
++        imports.append(.{
++            .name = "ecs",
++            .module = ecs,
++        }) catch @panic("OOM");
++    }
++
++    // Add build options if provided
++    if (build_options_mod) |opts| {
++        imports.append(.{
++            .name = "build_options",
++            .module = opts,
++        }) catch @panic("OOM");
++    }
++
++    const physics_mod = b.addModule("labelle-physics", .{
++        .root_source_file = b.path("physics/mod.zig"),
++        .target = target,
++        .optimize = optimize,
++        .imports = imports.toOwnedSlice() catch @panic("OOM"),
++    });
++
++    // Link Box2D library
++    physics_mod.linkLibrary(box2d_dep.artifact("box2d"));
++
++    return physics_mod;
++}
+diff --git a/physics/build.zig.zon b/physics/build.zig.zon
+new file mode 100644
+index 0000000..f0c6497
+--- /dev/null
++++ b/physics/build.zig.zon
+@@ -0,0 +1,26 @@
++.{
++    .fingerprint = 0x512e08af38d9d39c,
++    .name = .labelle_physics,
++    .version = "0.1.0",
++    .minimum_zig_version = "0.15.2",
++    .dependencies = .{
++        // Box2D physics engine via allyourcodebase
++        .box2d = .{
++            .url = "git+https://github.com/allyourcodebase/box2d#main",
++            .hash = "box2d-3.1.1-crFBk74aAAD-TJGY5mHVDB0sV5JntTq0MnlaHYxb5yl5",
++        },
++        // ZSpec testing framework
++        .zspec = .{
++            .url = "git+https://github.com/apotema/zspec#main",
++            .hash = "zspec-0.6.0-jaKLbU5DAwAYa0jR0cnFGuIbSrxD6ojh-oyXj9ooyb3V",
++        },
++    },
++    .paths = .{
++        "build.zig",
++        "build.zig.zon",
++        "mod.zig",
++        "src",
++        "test",
++        "benchmark",
++    },
++}
+diff --git a/physics/mod.zig b/physics/mod.zig
+new file mode 100644
+index 0000000..4706d6d
+--- /dev/null
++++ b/physics/mod.zig
+@@ -0,0 +1,58 @@
++//! labelle-physics - 2D Physics Module for labelle-engine
++//!
++//! Provides physics simulation via Box2D, integrated with the ECS.
++//!
++//! ## Quick Start
++//! ```zig
++//! const physics = @import("labelle-physics");
++//!
++//! // Initialize physics world
++//! var world = try physics.PhysicsWorld.init(allocator, .{ 0, 9.8 });
++//! defer world.deinit();
++//!
++//! // In game loop:
++//! physics.systems.physicsInitSystem(&world, registry);
++//! physics.systems.physicsSystem(&world, registry, dt);
++//!
++//! // Query collision events:
++//! for (world.getCollisionBeginEvents()) |event| {
++//!     // Handle collision
++//! }
++//! ```
++
++const std = @import("std");
++
++// Core types
++pub const PhysicsWorld = @import("src/world.zig").PhysicsWorld;
++pub const CollisionEvent = @import("src/world.zig").CollisionEvent;
++pub const SensorEvent = @import("src/world.zig").SensorEvent;
++pub const FixtureList = @import("src/world.zig").FixtureList;
++pub const DEFAULT_MAX_ENTITIES = @import("src/world.zig").DEFAULT_MAX_ENTITIES;
++
++// Data structures
++pub const SparseSet = @import("src/sparse_set.zig").SparseSet;
++
++// Components (user-facing, serializable to .zon)
++pub const components = @import("src/components.zig");
++pub const RigidBody = components.RigidBody;
++pub const Collider = components.Collider;
++pub const Velocity = components.Velocity;
++pub const BodyType = components.BodyType;
++pub const Shape = components.Shape;
++
++// ZON-friendly component (avoids tagged union limitation)
++pub const PhysicsBody = components.PhysicsBody;
++pub const ColliderType = components.ColliderType;
++
++// Systems
++pub const systems = @import("src/systems.zig");
++
++// Debug rendering
++pub const debug = @import("src/debug.zig");
++
++// Box2D adapter (internal, but exposed for advanced use)
++pub const box2d = @import("src/box2d/adapter.zig");
++
++test {
++    std.testing.refAllDecls(@This());
++}
+diff --git a/physics/src/box2d/adapter.zig b/physics/src/box2d/adapter.zig
+new file mode 100644
+index 0000000..5fd109d
+--- /dev/null
++++ b/physics/src/box2d/adapter.zig
+@@ -0,0 +1,290 @@
++//! Box2D Adapter
++//!
++//! Wraps the Box2D C API with a Zig-friendly interface.
++//! Uses allyourcodebase/box2d bindings.
++
++const std = @import("std");
++const c = @cImport({
++    @cInclude("box2d/box2d.h");
++});
++
++/// Opaque body identifier
++pub const BodyId = c.b2BodyId;
++
++/// Opaque fixture identifier
++pub const FixtureId = c.b2ShapeId;
++
++/// Body type
++pub const BodyType = enum {
++    static,
++    kinematic,
++    dynamic,
++
++    fn toC(self: BodyType) c.b2BodyType {
++        return switch (self) {
++            .static => c.b2_staticBody,
++            .kinematic => c.b2_kinematicBody,
++            .dynamic => c.b2_dynamicBody,
++        };
++    }
++};
++
++/// Body definition
++pub const BodyDef = struct {
++    body_type: BodyType = .dynamic,
++    position: [2]f32 = .{ 0, 0 },
++    angle: f32 = 0,
++    linear_damping: f32 = 0,
++    angular_damping: f32 = 0,
++    gravity_scale: f32 = 1,
++    fixed_rotation: bool = false,
++    bullet: bool = false,
++    awake: bool = true,
++    allow_sleep: bool = true,
++};
++
++/// Shape types
++pub const Shape = union(enum) {
++    box: struct {
++        half_width: f32,
++        half_height: f32,
++    },
++    circle: struct {
++        radius: f32,
++    },
++    edge: struct {
++        start: [2]f32,
++        end: [2]f32,
++    },
++    polygon: struct {
++        vertices: []const [2]f32,
++    },
++};
++
++/// Collision filter
++pub const Filter = struct {
++    category_bits: u16 = 0x0001,
++    mask_bits: u16 = 0xFFFF,
++    group_index: i16 = 0,
++};
++
++/// Fixture definition
++pub const FixtureDef = struct {
++    shape: Shape,
++    density: f32 = 1.0,
++    friction: f32 = 0.3,
++    restitution: f32 = 0.0,
++    restitution_threshold: f32 = 1.0,
++    is_sensor: bool = false,
++    filter: Filter = .{},
++};
++
++/// Contact event from Box2D
++pub const ContactEvent = struct {
++    body_a: BodyId,
++    body_b: BodyId,
++    point: [2]f32,
++    normal: [2]f32,
++    impulse: f32,
++    is_begin: bool,
++};
++
++/// Sensor event from Box2D
++pub const SensorEventData = struct {
++    sensor_body: BodyId,
++    other_body: BodyId,
++    is_enter: bool,
++};
++
++/// Contact event iterator
++pub const ContactEventIterator = struct {
++    world: *World,
++    index: usize = 0,
++
++    pub fn next(self: *ContactEventIterator) ?ContactEvent {
++        // TODO: Implement actual Box2D contact iteration
++        _ = self;
++        return null;
++    }
++};
++
++/// Sensor event iterator
++pub const SensorEventIterator = struct {
++    world: *World,
++    index: usize = 0,
++
++    pub fn next(self: *SensorEventIterator) ?SensorEventData {
++        // TODO: Implement actual Box2D sensor iteration
++        _ = self;
++        return null;
++    }
++};
++
++/// Box2D World wrapper
++pub const World = struct {
++    world_id: c.b2WorldId,
++
++    /// Initialize a new physics world
++    pub fn init(gravity: [2]f32) !World {
++        var world_def = c.b2DefaultWorldDef();
++        world_def.gravity = .{ .x = gravity[0], .y = gravity[1] };
++
++        const world_id = c.b2CreateWorld(&world_def);
++        if (!c.b2World_IsValid(world_id)) {
++            return error.FailedToCreateWorld;
++        }
++
++        return World{ .world_id = world_id };
++    }
++
++    /// Clean up world resources
++    pub fn deinit(self: *World) void {
++        c.b2DestroyWorld(self.world_id);
++    }
++
++    /// Step the physics simulation (Box2D 3.x API)
++    /// sub_step_count: Number of sub-steps for improved simulation quality
++    pub fn step(self: *World, time_step: f32, sub_step_count: i32) void {
++        c.b2World_Step(self.world_id, time_step, sub_step_count);
++    }
++
++    /// Create a physics body
++    pub fn createBody(self: *World, def: BodyDef) !BodyId {
++        var body_def = c.b2DefaultBodyDef();
++        body_def.type = def.body_type.toC();
++        body_def.position = .{ .x = def.position[0], .y = def.position[1] };
++        body_def.rotation = c.b2MakeRot(def.angle);
++        body_def.linearDamping = def.linear_damping;
++        body_def.angularDamping = def.angular_damping;
++        body_def.gravityScale = def.gravity_scale;
++        body_def.fixedRotation = def.fixed_rotation;
++        body_def.isBullet = def.bullet;
++        body_def.isAwake = def.awake;
++        body_def.enableSleep = def.allow_sleep;
++
++        const body_id = c.b2CreateBody(self.world_id, &body_def);
++        if (!c.b2Body_IsValid(body_id)) {
++            return error.FailedToCreateBody;
++        }
++
++        return body_id;
++    }
++
++    /// Destroy a physics body
++    pub fn destroyBody(self: *World, body_id: BodyId) void {
++        _ = self;
++        if (c.b2Body_IsValid(body_id)) {
++            c.b2DestroyBody(body_id);
++        }
++    }
++
++    /// Create a fixture/shape on a body
++    pub fn createFixture(self: *World, body_id: BodyId, def: FixtureDef) !FixtureId {
++        _ = self;
++
++        var shape_def = c.b2DefaultShapeDef();
++        shape_def.density = def.density;
++        shape_def.material.friction = def.friction;
++        shape_def.material.restitution = def.restitution;
++        shape_def.isSensor = def.is_sensor;
++        shape_def.filter.categoryBits = def.filter.category_bits;
++        shape_def.filter.maskBits = def.filter.mask_bits;
++        shape_def.filter.groupIndex = def.filter.group_index;
++
++        const shape_id = switch (def.shape) {
++            .box => |box| blk: {
++                const polygon = c.b2MakeBox(box.half_width, box.half_height);
++                break :blk c.b2CreatePolygonShape(body_id, &shape_def, &polygon);
++            },
++            .circle => |circle| blk: {
++                const circle_shape = c.b2Circle{
++                    .center = .{ .x = 0, .y = 0 },
++                    .radius = circle.radius,
++                };
++                break :blk c.b2CreateCircleShape(body_id, &shape_def, &circle_shape);
++            },
++            .edge => |edge| blk: {
++                const segment = c.b2Segment{
++                    .point1 = .{ .x = edge.start[0], .y = edge.start[1] },
++                    .point2 = .{ .x = edge.end[0], .y = edge.end[1] },
++                };
++                break :blk c.b2CreateSegmentShape(body_id, &shape_def, &segment);
++            },
++            .polygon => |poly| blk: {
++                if (poly.vertices.len < 3 or poly.vertices.len > 8) {
++                    return error.InvalidPolygon;
++                }
++
++                var points: [8]c.b2Vec2 = undefined;
++                for (poly.vertices, 0..) |v, i| {
++                    points[i] = .{ .x = v[0], .y = v[1] };
++                }
++
++                const hull = c.b2ComputeHull(&points, @intCast(poly.vertices.len));
++                const polygon = c.b2MakePolygon(&hull, 0);
++                break :blk c.b2CreatePolygonShape(body_id, &shape_def, &polygon);
++            },
++        };
++
++        if (!c.b2Shape_IsValid(shape_id)) {
++            return error.FailedToCreateShape;
++        }
++
++        return shape_id;
++    }
++
++    /// Get body position
++    pub fn getPosition(self: *World, body_id: BodyId) [2]f32 {
++        _ = self;
++        const pos = c.b2Body_GetPosition(body_id);
++        return .{ pos.x, pos.y };
++    }
++
++    /// Get body angle
++    pub fn getAngle(self: *World, body_id: BodyId) f32 {
++        _ = self;
++        const rot = c.b2Body_GetRotation(body_id);
++        return c.b2Rot_GetAngle(rot);
++    }
++
++    /// Set body transform
++    pub fn setTransform(self: *World, body_id: BodyId, position: [2]f32, angle: f32) void {
++        _ = self;
++        c.b2Body_SetTransform(body_id, .{ .x = position[0], .y = position[1] }, c.b2MakeRot(angle));
++    }
++
++    /// Get linear velocity
++    pub fn getLinearVelocity(self: *World, body_id: BodyId) [2]f32 {
++        _ = self;
++        const vel = c.b2Body_GetLinearVelocity(body_id);
++        return .{ vel.x, vel.y };
++    }
++
++    /// Set linear velocity
++    pub fn setLinearVelocity(self: *World, body_id: BodyId, velocity: [2]f32) void {
++        _ = self;
++        c.b2Body_SetLinearVelocity(body_id, .{ .x = velocity[0], .y = velocity[1] });
++    }
++
++    /// Apply impulse at center of mass
++    pub fn applyLinearImpulse(self: *World, body_id: BodyId, impulse: [2]f32) void {
++        _ = self;
++        c.b2Body_ApplyLinearImpulseToCenter(body_id, .{ .x = impulse[0], .y = impulse[1] }, true);
++    }
++
++    /// Apply force at center of mass
++    pub fn applyForce(self: *World, body_id: BodyId, force: [2]f32) void {
++        _ = self;
++        c.b2Body_ApplyForceToCenter(body_id, .{ .x = force[0], .y = force[1] }, true);
++    }
++
++    /// Get contact events iterator
++    pub fn getContactEvents(self: *World) ContactEventIterator {
++        return .{ .world = self };
++    }
++
++    /// Get sensor events iterator
++    pub fn getSensorEvents(self: *World) SensorEventIterator {
++        return .{ .world = self };
++    }
++};
+diff --git a/physics/src/components.zig b/physics/src/components.zig
+new file mode 100644
+index 0000000..07f53ea
+--- /dev/null
++++ b/physics/src/components.zig
+@@ -0,0 +1,285 @@
++//! Physics Components
++//!
++//! User-facing components for physics simulation. These components are:
++//! - Pure data (no runtime pointers)
++//! - Serializable to .zon scene files
++//! - Configured by the user, read by the physics system
++//!
++//! Runtime physics state (body IDs, fixtures) is stored internally
++//! in PhysicsWorld, not in these components.
++
++const std = @import("std");
++
++/// Body type determines how the physics engine treats the body
++pub const BodyType = enum {
++    /// Never moves - use for ground, walls, platforms
++    static,
++    /// Moved by code, not physics - use for moving platforms, elevators
++    kinematic,
++    /// Fully simulated by physics - use for players, projectiles, debris
++    dynamic,
++};
++
++/// Rigid body dynamics configuration
++///
++/// Add this component to make an entity participate in physics simulation.
++/// The actual physics body is created/managed internally by PhysicsWorld.
++///
++/// Example in .zon:
++/// ```
++/// .RigidBody = .{ .body_type = .dynamic, .mass = 1.0 },
++/// ```
++pub const RigidBody = struct {
++    /// How the physics engine treats this body
++    body_type: BodyType = .dynamic,
++
++    /// Mass in kg (only used for dynamic bodies)
++    mass: f32 = 1.0,
++
++    /// Gravity multiplier (0 = no gravity, 1 = normal, 2 = double)
++    gravity_scale: f32 = 1.0,
++
++    /// Linear velocity damping (0 = no damping, higher = more friction)
++    linear_damping: f32 = 0.0,
++
++    /// Angular velocity damping (0 = no damping)
++    angular_damping: f32 = 0.0,
++
++    /// Prevent rotation (useful for characters)
++    fixed_rotation: bool = false,
++
++    /// Enable continuous collision detection for fast-moving objects
++    /// (prevents tunneling through thin walls)
++    bullet: bool = false,
++
++    /// Initial awake state (sleeping bodies don't simulate until disturbed)
++    awake: bool = true,
++
++    /// Can this body sleep when at rest? (improves performance)
++    allow_sleep: bool = true,
++};
++
++/// Collision shape types
++pub const Shape = union(enum) {
++    /// Axis-aligned box (most common for platformers)
++    box: struct {
++        width: f32,
++        height: f32,
++    },
++
++    /// Circle (good for balls, wheels, or simple characters)
++    circle: struct {
++        radius: f32,
++    },
++
++    /// Convex polygon (max 8 vertices in Box2D)
++    polygon: struct {
++        /// Vertices in local space, counter-clockwise order
++        vertices: []const [2]f32,
++    },
++
++    /// Edge/line segment (for terrain, one-sided platforms)
++    edge: struct {
++        start: [2]f32,
++        end: [2]f32,
++    },
++
++    /// Chain of edges (for complex terrain outlines)
++    chain: struct {
++        vertices: []const [2]f32,
++        /// If true, creates a closed loop
++        loop: bool = false,
++    },
++};
++
++/// Collider configuration
++///
++/// Defines the collision shape and material properties.
++/// Must be paired with RigidBody for physics simulation.
++///
++/// Example in .zon:
++/// ```
++/// .Collider = .{
++///     .shape = .{ .box = .{ .width = 32, .height = 32 } },
++///     .friction = 0.3,
++///     .restitution = 0.1,
++/// },
++/// ```
++pub const Collider = struct {
++    /// Collision shape (required)
++    shape: Shape,
++
++    /// Density in kg/m² (affects mass when using density-based mass)
++    density: f32 = 1.0,
++
++    /// Friction coefficient (0 = ice, 1 = rubber)
++    friction: f32 = 0.3,
++
++    /// Bounciness (0 = no bounce, 1 = perfect bounce)
++    restitution: f32 = 0.0,
++
++    /// Restitution velocity threshold (velocities below this won't bounce)
++    restitution_threshold: f32 = 1.0,
++
++    /// If true, collider triggers events but has no physical response
++    /// (use for trigger zones, pickups, damage areas)
++    is_sensor: bool = false,
++
++    /// Collision filtering - what categories this collider belongs to
++    category_bits: u16 = 0x0001,
++
++    /// Collision filtering - what categories this collider collides with
++    mask_bits: u16 = 0xFFFF,
++
++    /// Group index for fine-grained collision control
++    /// Negative = never collide with same group
++    /// Positive = always collide with same group
++    group_index: i16 = 0,
++
++    /// Offset from entity position (for compound shapes)
++    offset: [2]f32 = .{ 0, 0 },
++
++    /// Rotation offset in radians
++    angle: f32 = 0,
++};
++
++/// Velocity component for direct velocity access
++///
++/// Optional - physics bodies have velocity internally, but this component
++/// allows direct access/modification from game code.
++///
++/// Example in .zon:
++/// ```
++/// .Velocity = .{ .linear = .{ 100, 0 } },  // Moving right at 100 units/sec
++/// ```
++pub const Velocity = struct {
++    /// Linear velocity in units per second
++    linear: [2]f32 = .{ 0, 0 },
++
++    /// Angular velocity in radians per second
++    angular: f32 = 0,
++};
++
++/// ZON-friendly physics body component
++///
++/// This component is designed to be used in .zon scene files where tagged unions
++/// are not supported. It combines RigidBody and Collider into a single flat struct.
++///
++/// The physics system converts this to internal RigidBody + Collider at runtime.
++///
++/// Example in .zon:
++/// ```
++/// .PhysicsBody = .{
++///     .body_type = .dynamic,
++///     .collider_type = .box,
++///     .width = 50,
++///     .height = 50,
++///     .restitution = 0.5,
++/// },
++/// ```
++pub const PhysicsBody = struct {
++    /// How the physics engine treats this body
++    body_type: BodyType = .dynamic,
++
++    /// Collider shape type
++    collider_type: ColliderType = .box,
++
++    // Box collider dimensions
++    width: f32 = 50,
++    height: f32 = 50,
++
++    // Circle collider radius
++    radius: f32 = 25,
++
++    // Physics material properties
++    restitution: f32 = 0.5,
++    friction: f32 = 0.3,
++    density: f32 = 1.0,
++
++    // Optional body properties
++    gravity_scale: f32 = 1.0,
++    fixed_rotation: bool = false,
++    is_sensor: bool = false,
++
++    /// Convert to internal RigidBody component
++    pub fn toRigidBody(self: PhysicsBody) RigidBody {
++        return RigidBody{
++            .body_type = self.body_type,
++            .gravity_scale = self.gravity_scale,
++            .fixed_rotation = self.fixed_rotation,
++        };
++    }
++
++    /// Convert to internal Collider component
++    pub fn toCollider(self: PhysicsBody) Collider {
++        const shape: Shape = switch (self.collider_type) {
++            .box => .{ .box = .{ .width = self.width, .height = self.height } },
++            .circle => .{ .circle = .{ .radius = self.radius } },
++        };
++
++        return Collider{
++            .shape = shape,
++            .restitution = self.restitution,
++            .friction = self.friction,
++            .density = self.density,
++            .is_sensor = self.is_sensor,
++        };
++    }
++};
++
++/// Collider type for ZON-compatible PhysicsBody
++pub const ColliderType = enum {
++    box,
++    circle,
++};
++
++// Tests
++test "RigidBody defaults" {
++    const rb = RigidBody{};
++    try std.testing.expectEqual(BodyType.dynamic, rb.body_type);
++    try std.testing.expectEqual(@as(f32, 1.0), rb.mass);
++    try std.testing.expectEqual(@as(f32, 1.0), rb.gravity_scale);
++    try std.testing.expect(rb.awake);
++    try std.testing.expect(rb.allow_sleep);
++    try std.testing.expect(!rb.fixed_rotation);
++    try std.testing.expect(!rb.bullet);
++}
++
++test "Collider defaults" {
++    const collider = Collider{
++        .shape = .{ .box = .{ .width = 32, .height = 32 } },
++    };
++    try std.testing.expectEqual(@as(f32, 1.0), collider.density);
++    try std.testing.expectEqual(@as(f32, 0.3), collider.friction);
++    try std.testing.expectEqual(@as(f32, 0.0), collider.restitution);
++    try std.testing.expect(!collider.is_sensor);
++    try std.testing.expectEqual(@as(u16, 0x0001), collider.category_bits);
++    try std.testing.expectEqual(@as(u16, 0xFFFF), collider.mask_bits);
++}
++
++test "Shape variants" {
++    const box = Shape{ .box = .{ .width = 10, .height = 20 } };
++    const circle = Shape{ .circle = .{ .radius = 5 } };
++    const edge = Shape{ .edge = .{ .start = .{ 0, 0 }, .end = .{ 100, 0 } } };
++
++    switch (box) {
++        .box => |b| {
++            try std.testing.expectEqual(@as(f32, 10), b.width);
++            try std.testing.expectEqual(@as(f32, 20), b.height);
++        },
++        else => unreachable,
++    }
++
++    switch (circle) {
++        .circle => |c| try std.testing.expectEqual(@as(f32, 5), c.radius),
++        else => unreachable,
++    }
++
++    switch (edge) {
++        .edge => |e| {
++            try std.testing.expectEqual(@as(f32, 0), e.start[0]);
++            try std.testing.expectEqual(@as(f32, 100), e.end[0]);
++        },
++        else => unreachable,
++    }
++}
+diff --git a/physics/src/debug.zig b/physics/src/debug.zig
+new file mode 100644
+index 0000000..cb21a55
+--- /dev/null
++++ b/physics/src/debug.zig
+@@ -0,0 +1,252 @@
++//! Physics Debug Rendering
++//!
++//! Provides debug visualization for physics bodies and collision shapes.
++//! Useful during development to see collision boundaries.
++
++const std = @import("std");
++const PhysicsWorld = @import("world.zig").PhysicsWorld;
++const components = @import("components.zig");
++
++/// Debug draw configuration
++pub const DebugDrawConfig = struct {
++    /// Draw collision shapes
++    draw_shapes: bool = true,
++    /// Draw shape outlines only (vs filled)
++    draw_wireframe: bool = true,
++    /// Draw center of mass
++    draw_center_of_mass: bool = false,
++    /// Draw velocity vectors
++    draw_velocities: bool = false,
++    /// Draw AABB bounding boxes
++    draw_aabbs: bool = false,
++    /// Draw contact points
++    draw_contacts: bool = true,
++    /// Draw sensors
++    draw_sensors: bool = true,
++
++    // Colors (RGBA)
++    static_color: [4]u8 = .{ 100, 100, 100, 200 },
++    kinematic_color: [4]u8 = .{ 100, 100, 200, 200 },
++    dynamic_color: [4]u8 = .{ 100, 200, 100, 200 },
++    sensor_color: [4]u8 = .{ 200, 200, 100, 150 },
++    contact_color: [4]u8 = .{ 255, 0, 0, 255 },
++    velocity_color: [4]u8 = .{ 0, 100, 255, 255 },
++};
++
++/// Debug draw interface
++///
++/// Implement this interface to render debug shapes with your graphics backend.
++pub const DebugDrawInterface = struct {
++    /// Draw a filled circle
++    drawCircleFn: *const fn (ctx: *anyopaque, center: [2]f32, radius: f32, color: [4]u8) void,
++    /// Draw a circle outline
++    drawCircleOutlineFn: *const fn (ctx: *anyopaque, center: [2]f32, radius: f32, color: [4]u8) void,
++    /// Draw a filled polygon
++    drawPolygonFn: *const fn (ctx: *anyopaque, vertices: [][2]f32, color: [4]u8) void,
++    /// Draw a polygon outline
++    drawPolygonOutlineFn: *const fn (ctx: *anyopaque, vertices: [][2]f32, color: [4]u8) void,
++    /// Draw a line segment
++    drawLineFn: *const fn (ctx: *anyopaque, start: [2]f32, end: [2]f32, color: [4]u8) void,
++    /// Draw a point
++    drawPointFn: *const fn (ctx: *anyopaque, point: [2]f32, size: f32, color: [4]u8) void,
++    /// Context pointer passed to all draw functions
++    ctx: *anyopaque,
++
++    pub fn drawCircle(self: *const DebugDrawInterface, center: [2]f32, radius: f32, color: [4]u8) void {
++        self.drawCircleFn(self.ctx, center, radius, color);
++    }
++
++    pub fn drawCircleOutline(self: *const DebugDrawInterface, center: [2]f32, radius: f32, color: [4]u8) void {
++        self.drawCircleOutlineFn(self.ctx, center, radius, color);
++    }
++
++    pub fn drawPolygon(self: *const DebugDrawInterface, vertices: [][2]f32, color: [4]u8) void {
++        self.drawPolygonFn(self.ctx, vertices, color);
++    }
++
++    pub fn drawPolygonOutline(self: *const DebugDrawInterface, vertices: [][2]f32, color: [4]u8) void {
++        self.drawPolygonOutlineFn(self.ctx, vertices, color);
++    }
++
++    pub fn drawLine(self: *const DebugDrawInterface, start: [2]f32, end: [2]f32, color: [4]u8) void {
++        self.drawLineFn(self.ctx, start, end, color);
++    }
++
++    pub fn drawPoint(self: *const DebugDrawInterface, point: [2]f32, size: f32, color: [4]u8) void {
++        self.drawPointFn(self.ctx, point, size, color);
++    }
++};
++
++/// Draw physics debug visualization
++pub fn draw(
++    world: *PhysicsWorld,
++    registry: anytype,
++    draw_interface: *const DebugDrawInterface,
++    config: DebugDrawConfig,
++) void {
++    if (config.draw_shapes) {
++        drawShapes(world, registry, draw_interface, config);
++    }
++
++    if (config.draw_velocities) {
++        drawVelocities(world, registry, draw_interface, config);
++    }
++
++    if (config.draw_contacts) {
++        drawContacts(world, draw_interface, config);
++    }
++}
++
++fn drawShapes(
++    world: *PhysicsWorld,
++    registry: anytype,
++    draw_interface: *const DebugDrawInterface,
++    config: DebugDrawConfig,
++) void {
++    const Position = @TypeOf(registry).Position;
++
++    var query = registry.query(.{ components.RigidBody, components.Collider, Position });
++    while (query.next()) |item| {
++        const rb = item.get(components.RigidBody);
++        const collider = item.get(components.Collider);
++        const pos = item.get(Position);
++
++        // Choose color based on body type and sensor state
++        const color = if (collider.is_sensor)
++            config.sensor_color
++        else switch (rb.body_type) {
++            .static => config.static_color,
++            .kinematic => config.kinematic_color,
++            .dynamic => config.dynamic_color,
++        };
++
++        // Get actual physics position if available
++        const entity = entityToU64(item.entity);
++        const draw_pos = if (world.getPosition(entity)) |p| p else .{ pos.x, pos.y };
++
++        drawShape(draw_interface, collider.shape, draw_pos, collider.offset, color, config.draw_wireframe, world.pixels_per_meter);
++    }
++}
++
++fn drawShape(
++    draw_interface: *const DebugDrawInterface,
++    shape: components.Shape,
++    position: [2]f32,
++    offset: [2]f32,
++    color: [4]u8,
++    wireframe: bool,
++    _: f32,
++) void {
++    const center: [2]f32 = .{
++        position[0] + offset[0],
++        position[1] + offset[1],
++    };
++
++    switch (shape) {
++        .box => |box| {
++            const hw = box.width / 2;
++            const hh = box.height / 2;
++            var vertices = [_][2]f32{
++                .{ center[0] - hw, center[1] - hh },
++                .{ center[0] + hw, center[1] - hh },
++                .{ center[0] + hw, center[1] + hh },
++                .{ center[0] - hw, center[1] + hh },
++            };
++            if (wireframe) {
++                draw_interface.drawPolygonOutline(&vertices, color);
++            } else {
++                draw_interface.drawPolygon(&vertices, color);
++            }
++        },
++        .circle => |circle| {
++            if (wireframe) {
++                draw_interface.drawCircleOutline(center, circle.radius, color);
++            } else {
++                draw_interface.drawCircle(center, circle.radius, color);
++            }
++        },
++        .edge => |edge| {
++            draw_interface.drawLine(
++                .{ center[0] + edge.start[0], center[1] + edge.start[1] },
++                .{ center[0] + edge.end[0], center[1] + edge.end[1] },
++                color,
++            );
++        },
++        .polygon => |poly| {
++            if (poly.vertices.len < 3) return;
++
++            // Transform vertices to world space
++            var transformed: [8][2]f32 = undefined;
++            const count = @min(poly.vertices.len, 8);
++            for (0..count) |i| {
++                transformed[i] = .{
++                    center[0] + poly.vertices[i][0],
++                    center[1] + poly.vertices[i][1],
++                };
++            }
++
++            if (wireframe) {
++                draw_interface.drawPolygonOutline(transformed[0..count], color);
++            } else {
++                draw_interface.drawPolygon(transformed[0..count], color);
++            }
++        },
++        .chain => {
++            // TODO: Draw chain shapes
++        },
++    }
++}
++
++fn drawVelocities(
++    world: *PhysicsWorld,
++    registry: anytype,
++    draw_interface: *const DebugDrawInterface,
++    config: DebugDrawConfig,
++) void {
++    const Position = @TypeOf(registry).Position;
++
++    var query = registry.query(.{ components.RigidBody, Position });
++    while (query.next()) |item| {
++        const entity = entityToU64(item.entity);
++        const pos = world.getPosition(entity) orelse continue;
++        const vel = world.getLinearVelocity(entity) orelse continue;
++
++        // Scale velocity for visualization
++        const scale: f32 = 0.1;
++        const end: [2]f32 = .{
++            pos[0] + vel[0] * scale,
++            pos[1] + vel[1] * scale,
++        };
++
++        draw_interface.drawLine(pos, end, config.velocity_color);
++    }
++}
++
++fn drawContacts(
++    world: *PhysicsWorld,
++    draw_interface: *const DebugDrawInterface,
++    config: DebugDrawConfig,
++) void {
++    // Draw collision contact points
++    for (world.getCollisionBeginEvents()) |event| {
++        draw_interface.drawPoint(event.contact_point, 5, config.contact_color);
++
++        // Draw normal
++        const normal_end: [2]f32 = .{
++            event.contact_point[0] + event.normal[0] * 10,
++            event.contact_point[1] + event.normal[1] * 10,
++        };
++        draw_interface.drawLine(event.contact_point, normal_end, config.contact_color);
++    }
++}
++
++fn entityToU64(entity: anytype) u64 {
++    const T = @TypeOf(entity);
++    if (@hasField(T, "id")) {
++        return @intCast(entity.id);
++    } else if (@typeInfo(T) == .int) {
++        return @intCast(entity);
++    } else {
++        return @bitCast(entity);
++    }
++}
+diff --git a/physics/src/sparse_set.zig b/physics/src/sparse_set.zig
+new file mode 100644
+index 0000000..f06582e
+--- /dev/null
++++ b/physics/src/sparse_set.zig
+@@ -0,0 +1,215 @@
++//! Sparse Set
++//!
++//! O(1) lookup, insert, remove with cache-friendly iteration.
++//! Used for entity -> physics body mappings.
++
++const std = @import("std");
++const Allocator = std.mem.Allocator;
++
++/// Generic sparse set for mapping u64 keys to values of type T
++pub fn SparseSet(comptime T: type) type {
++    return struct {
++        const Self = @This();
++
++        allocator: Allocator,
++        sparse: []?u32,      // key -> dense_index
++        dense_keys: []u64,   // dense_index -> key
++        dense_values: []T,   // dense_index -> value
++        count: usize,
++        capacity: usize,
++        max_key: usize,
++
++        pub fn init(allocator: Allocator, max_keys: usize, initial_capacity: usize) !Self {
++            const sparse = try allocator.alloc(?u32, max_keys);
++            @memset(sparse, null);
++
++            return Self{
++                .allocator = allocator,
++                .sparse = sparse,
++                .dense_keys = try allocator.alloc(u64, initial_capacity),
++                .dense_values = try allocator.alloc(T, initial_capacity),
++                .count = 0,
++                .capacity = initial_capacity,
++                .max_key = max_keys,
++            };
++        }
++
++        pub fn deinit(self: *Self) void {
++            self.allocator.free(self.sparse);
++            self.allocator.free(self.dense_keys);
++            self.allocator.free(self.dense_values);
++        }
++
++        /// Insert or update a key-value pair
++        pub fn put(self: *Self, key: u64, value: T) !void {
++            if (key >= self.max_key) return error.KeyOutOfRange;
++
++            // Update existing
++            if (self.sparse[key]) |idx| {
++                self.dense_values[idx] = value;
++                return;
++            }
++
++            // Grow if needed
++            if (self.count >= self.capacity) {
++                const new_cap = self.capacity * 2;
++                self.dense_keys = try self.allocator.realloc(self.dense_keys, new_cap);
++                self.dense_values = try self.allocator.realloc(self.dense_values, new_cap);
++                self.capacity = new_cap;
++            }
++
++            const idx: u32 = @intCast(self.count);
++            self.sparse[key] = idx;
++            self.dense_keys[idx] = key;
++            self.dense_values[idx] = value;
++            self.count += 1;
++        }
++
++        /// Get value for key
++        pub fn get(self: *const Self, key: u64) ?T {
++            if (key >= self.max_key) return null;
++            const idx = self.sparse[key] orelse return null;
++            return self.dense_values[idx];
++        }
++
++        /// Get pointer to value for key
++        pub fn getPtr(self: *Self, key: u64) ?*T {
++            if (key >= self.max_key) return null;
++            const idx = self.sparse[key] orelse return null;
++            return &self.dense_values[idx];
++        }
++
++        /// Check if key exists
++        pub fn contains(self: *const Self, key: u64) bool {
++            if (key >= self.max_key) return false;
++            return self.sparse[key] != null;
++        }
++
++        /// Remove key-value pair
++        pub fn remove(self: *Self, key: u64) void {
++            if (key >= self.max_key) return;
++            const idx = self.sparse[key] orelse return;
++
++            // Swap with last element
++            const last_idx = self.count - 1;
++            if (idx != last_idx) {
++                const last_key = self.dense_keys[last_idx];
++                self.dense_keys[idx] = last_key;
++                self.dense_values[idx] = self.dense_values[last_idx];
++                self.sparse[last_key] = idx;
++            }
++
++            self.sparse[key] = null;
++            self.count -= 1;
++        }
++
++        /// Clear all entries
++        pub fn clear(self: *Self) void {
++            for (self.dense_keys[0..self.count]) |key| {
++                self.sparse[key] = null;
++            }
++            self.count = 0;
++        }
++
++        /// Iterate over all values (cache-friendly)
++        pub fn values(self: *const Self) []const T {
++            return self.dense_values[0..self.count];
++        }
++
++        /// Iterate over all keys
++        pub fn keys(self: *const Self) []const u64 {
++            return self.dense_keys[0..self.count];
++        }
++
++        /// Get key-value pairs for iteration
++        pub const Entry = struct {
++            key: u64,
++            value: *T,
++        };
++
++        pub fn iterator(self: *Self) Iterator {
++            return .{ .set = self, .index = 0 };
++        }
++
++        pub const Iterator = struct {
++            set: *Self,
++            index: usize,
++
++            pub fn next(self: *Iterator) ?Entry {
++                if (self.index >= self.set.count) return null;
++                const entry = Entry{
++                    .key = self.set.dense_keys[self.index],
++                    .value = &self.set.dense_values[self.index],
++                };
++                self.index += 1;
++                return entry;
++            }
++        };
++
++        /// Number of entries
++        pub fn len(self: *const Self) usize {
++            return self.count;
++        }
++    };
++}
++
++// Tests
++test "SparseSet basic operations" {
++    const allocator = std.testing.allocator;
++
++    var set = try SparseSet(u64).init(allocator, 1000, 16);
++    defer set.deinit();
++
++    // Insert
++    try set.put(5, 500);
++    try set.put(10, 1000);
++    try set.put(3, 300);
++
++    // Get
++    try std.testing.expectEqual(@as(?u64, 500), set.get(5));
++    try std.testing.expectEqual(@as(?u64, 1000), set.get(10));
++    try std.testing.expectEqual(@as(?u64, 300), set.get(3));
++    try std.testing.expectEqual(@as(?u64, null), set.get(999));
++
++    // Contains
++    try std.testing.expect(set.contains(5));
++    try std.testing.expect(!set.contains(999));
++
++    // Update
++    try set.put(5, 555);
++    try std.testing.expectEqual(@as(?u64, 555), set.get(5));
++
++    // Remove
++    set.remove(10);
++    try std.testing.expect(!set.contains(10));
++    try std.testing.expectEqual(@as(usize, 2), set.len());
++
++    // Iteration
++    var sum: u64 = 0;
++    for (set.values()) |v| {
++        sum += v;
++    }
++    try std.testing.expectEqual(@as(u64, 855), sum); // 555 + 300
++}
++
++test "SparseSet iteration order stable after remove" {
++    const allocator = std.testing.allocator;
++
++    var set = try SparseSet(u32).init(allocator, 100, 16);
++    defer set.deinit();
++
++    try set.put(1, 10);
++    try set.put(2, 20);
++    try set.put(3, 30);
++    try set.put(4, 40);
++
++    // Remove middle element
++    set.remove(2);
++
++    // Should still iterate all remaining
++    var sum: u32 = 0;
++    for (set.values()) |v| {
++        sum += v;
++    }
++    try std.testing.expectEqual(@as(u32, 80), sum); // 10 + 30 + 40
++}
+diff --git a/physics/src/systems.zig b/physics/src/systems.zig
+new file mode 100644
+index 0000000..c182f1f
+--- /dev/null
++++ b/physics/src/systems.zig
+@@ -0,0 +1,225 @@
++//! Physics Systems
++//!
++//! ECS systems for physics simulation. These integrate the physics world
++//! with the ECS registry, handling body creation, synchronization, and cleanup.
++
++const std = @import("std");
++const PhysicsWorld = @import("world.zig").PhysicsWorld;
++const components = @import("components.zig");
++const RigidBody = components.RigidBody;
++const Collider = components.Collider;
++const Velocity = components.Velocity;
++
++/// Initialize physics bodies for new entities with RigidBody + Position components.
++///
++/// Call this each frame before the physics update to handle newly created entities.
++/// Entities that already have physics bodies are skipped.
++///
++/// Example:
++/// ```zig
++/// physics.systems.initBodies(&physics_world, registry);
++/// ```
++pub fn initBodies(
++    world: *PhysicsWorld,
++    registry: anytype,
++) void {
++    // Query for entities with RigidBody and Position
++    var query = registry.query(.{ RigidBody, @TypeOf(registry).Position });
++    while (query.next()) |item| {
++        const entity = entityToU64(item.entity);
++
++        // Skip if already has physics body
++        if (world.hasBody(entity)) continue;
++
++        const rb = item.get(RigidBody);
++        const pos = item.get(@TypeOf(registry).Position);
++
++        world.createBody(entity, rb.*, .{ .x = pos.x, .y = pos.y }) catch |err| {
++            std.log.err("Failed to create physics body for entity {}: {}", .{ entity, err });
++            continue;
++        };
++
++        // Add collider if present
++        if (registry.tryGet(item.entity, Collider)) |collider| {
++            world.addCollider(entity, collider.*) catch |err| {
++                std.log.err("Failed to add collider for entity {}: {}", .{ entity, err });
++            };
++        }
++    }
++}
++
++/// Clean up physics bodies for destroyed entities.
++///
++/// Call this after entity destruction to remove orphaned physics bodies.
++/// Alternatively, integrate with entity_destroyed hook.
++pub fn cleanupBodies(
++    world: *PhysicsWorld,
++    registry: anytype,
++) void {
++    // Iterate over all physics bodies and check if entity still exists
++    var entities_to_remove = std.ArrayList(u64).init(world.allocator);
++    defer entities_to_remove.deinit();
++
++    var iter = world.body_map.keyIterator();
++    while (iter.next()) |entity| {
++        // Check if entity exists in registry
++        const ecs_entity = entityFromU64(entity.*, @TypeOf(registry).Entity);
++        if (!registry.isValid(ecs_entity)) {
++            entities_to_remove.append(entity.*) catch continue;
++        }
++    }
++
++    // Remove orphaned bodies
++    for (entities_to_remove.items) |entity| {
++        world.destroyBody(entity);
++    }
++}
++
++/// Main physics update system.
++///
++/// Steps the physics simulation and syncs results back to ECS Position components.
++/// Uses fixed timestep internally for deterministic simulation.
++///
++/// Example:
++/// ```zig
++/// physics.systems.update(&physics_world, registry, dt);
++/// ```
++pub fn update(
++    world: *PhysicsWorld,
++    registry: anytype,
++    dt: f32,
++) void {
++    // 1. Sync kinematic bodies from ECS -> Physics
++    syncKinematicBodies(world, registry);
++
++    // 2. Sync velocity components to physics (if used)
++    syncVelocityToPhysics(world, registry);
++
++    // 3. Step physics simulation
++    world.update(dt);
++
++    // 4. Sync physics positions back to ECS
++    syncPositionsToEcs(world, registry);
++
++    // 5. Sync physics velocities back to Velocity components (if used)
++    syncVelocityFromPhysics(world, registry);
++}
++
++/// Sync kinematic body positions from ECS to physics.
++///
++/// Kinematic bodies are controlled by game code, so their positions
++/// come from the ECS Position component.
++fn syncKinematicBodies(
++    world: *PhysicsWorld,
++    registry: anytype,
++) void {
++    var query = registry.query(.{ RigidBody, @TypeOf(registry).Position });
++    while (query.next()) |item| {
++        const rb = item.get(RigidBody);
++
++        // Only sync kinematic bodies (they're moved by code, not physics)
++        if (rb.body_type != .kinematic) continue;
++
++        const entity = entityToU64(item.entity);
++        const body_id = world.getBodyId(entity) orelse continue;
++
++        const pos = item.get(@TypeOf(registry).Position);
++        const target_pos: [2]f32 = .{
++            pos.x / world.pixels_per_meter,
++            pos.y / world.pixels_per_meter,
++        };
++
++        // Move kinematic body to target position
++        world.world.setTransform(body_id, target_pos, world.world.getAngle(body_id));
++    }
++}
++
++/// Sync Velocity components to physics bodies.
++fn syncVelocityToPhysics(
++    world: *PhysicsWorld,
++    registry: anytype,
++) void {
++    var query = registry.query(.{ Velocity, RigidBody });
++    while (query.next()) |item| {
++        const rb = item.get(RigidBody);
++
++        // Only sync dynamic bodies
++        if (rb.body_type != .dynamic) continue;
++
++        const entity = entityToU64(item.entity);
++        const vel = item.get(Velocity);
++
++        world.setLinearVelocity(entity, vel.linear);
++        // Angular velocity sync could be added here
++    }
++}
++
++/// Sync physics positions back to ECS Position components.
++///
++/// Dynamic bodies have their positions updated by the physics simulation.
++fn syncPositionsToEcs(
++    world: *PhysicsWorld,
++    registry: anytype,
++) void {
++    var query = registry.query(.{ RigidBody, @TypeOf(registry).Position });
++    while (query.next()) |item| {
++        const rb = item.get(RigidBody);
++
++        // Only sync dynamic bodies (physics controls their position)
++        if (rb.body_type != .dynamic) continue;
++
++        const entity = entityToU64(item.entity);
++        const new_pos = world.getPosition(entity) orelse continue;
++
++        var pos = item.get(@TypeOf(registry).Position);
++        pos.x = new_pos[0];
++        pos.y = new_pos[1];
++
++        // Mark as dirty for render pipeline
++        registry.markDirty(item.entity, @TypeOf(registry).Position);
++    }
++}
++
++/// Sync physics velocities back to Velocity components.
++fn syncVelocityFromPhysics(
++    world: *PhysicsWorld,
++    registry: anytype,
++) void {
++    var query = registry.query(.{ Velocity, RigidBody });
++    while (query.next()) |item| {
++        const rb = item.get(RigidBody);
++
++        // Only sync dynamic bodies
++        if (rb.body_type != .dynamic) continue;
++
++        const entity = entityToU64(item.entity);
++        const new_vel = world.getLinearVelocity(entity) orelse continue;
++
++        var vel = item.get(Velocity);
++        vel.linear = new_vel;
++        // Angular velocity sync could be added here
++    }
++}
++
++// Entity conversion helpers (handle different ECS backends)
++
++fn entityToU64(entity: anytype) u64 {
++    const T = @TypeOf(entity);
++    if (@hasField(T, "id")) {
++        return @intCast(entity.id);
++    } else if (@typeInfo(T) == .int) {
++        return @intCast(entity);
++    } else {
++        return @bitCast(entity);
++    }
++}
++
++fn entityFromU64(id: u64, comptime EntityType: type) EntityType {
++    if (@hasField(EntityType, "id")) {
++        return .{ .id = @intCast(id) };
++    } else if (@typeInfo(EntityType) == .int) {
++        return @intCast(id);
++    } else {
++        return @bitCast(id);
++    }
++}
+diff --git a/physics/src/world.zig b/physics/src/world.zig
+new file mode 100644
+index 0000000..7001ceb
+--- /dev/null
++++ b/physics/src/world.zig
+@@ -0,0 +1,464 @@
++//! Physics World
++//!
++//! Wraps the Box2D physics world and manages entity <-> body mappings.
++//! All physics runtime state is stored here, keeping ECS components clean.
++//!
++//! Uses HashMap for O(1) lookups. HashMap was chosen over SparseSet because
++//! entity IDs include generation bits (not just sequential indices), making
++//! them unsuitable for sparse array indexing without excessive memory usage.
++
++const std = @import("std");
++const Allocator = std.mem.Allocator;
++const components = @import("components.zig");
++const RigidBody = components.RigidBody;
++const Collider = components.Collider;
++const BodyType = components.BodyType;
++
++// Box2D bindings
++const box2d = @import("box2d/adapter.zig");
++
++/// Collision event between two entities
++pub const CollisionEvent = struct {
++    /// First entity in the collision
++    entity_a: u64,
++    /// Second entity in the collision
++    entity_b: u64,
++    /// World-space contact point
++    contact_point: [2]f32,
++    /// Contact normal (points from A to B)
++    normal: [2]f32,
++    /// Collision impulse magnitude
++    impulse: f32,
++};
++
++/// Sensor overlap event
++pub const SensorEvent = struct {
++    /// The sensor entity
++    sensor_entity: u64,
++    /// The entity that entered/exited the sensor
++    other_entity: u64,
++};
++
++/// Fixture list for an entity (up to 8 fixtures per entity)
++pub const FixtureList = struct {
++    fixtures: [8]box2d.FixtureId = undefined,
++    count: u8 = 0,
++
++    pub fn add(self: *FixtureList, fixture: box2d.FixtureId) void {
++        if (self.count < 8) {
++            self.fixtures[self.count] = fixture;
++            self.count += 1;
++        } else {
++            std.log.warn("FixtureList full (max 8 fixtures per entity). Dropping fixture.", .{});
++        }
++    }
++
++    pub fn slice(self: *const FixtureList) []const box2d.FixtureId {
++        return self.fixtures[0..self.count];
++    }
++};
++
++/// Default max entities (can be configured)
++pub const DEFAULT_MAX_ENTITIES: usize = 100_000;
++
++/// Physics world wrapper
++///
++/// Manages the Box2D world and all entity <-> body mappings.
++/// Collision events are buffered each step and queryable via the event accessors.
++pub const PhysicsWorld = struct {
++    allocator: Allocator,
++
++    /// Underlying Box2D world
++    world: box2d.World,
++
++    // Entity <-> Body mappings using HashMap (O(1) lookup, handles arbitrary entity IDs)
++    body_map: std.AutoHashMap(u64, box2d.BodyId),        // entity -> body_id
++    entity_map: std.AutoHashMap(u64, u64),               // body_id (as u64) -> entity
++    fixture_map: std.AutoHashMap(u64, FixtureList),      // entity -> fixtures
++    entity_list: std.ArrayList(u64),                      // for iteration
++
++    // Collision event buffers (cleared each step)
++    collision_begin_events: std.ArrayList(CollisionEvent),
++    collision_end_events: std.ArrayList(CollisionEvent),
++    sensor_enter_events: std.ArrayList(SensorEvent),
++    sensor_exit_events: std.ArrayList(SensorEvent),
++
++    // Simulation parameters
++    time_step: f32,
++    sub_step_count: i32,
++    accumulator: f32,
++
++    /// Pixels per meter scale (Box2D works best with meters)
++    pixels_per_meter: f32,
++
++    /// Initialize physics world
++    ///
++    /// gravity: World gravity in pixels/sec² (will be converted to meters internally)
++    pub fn init(allocator: Allocator, gravity: [2]f32) !PhysicsWorld {
++        return initWithConfig(allocator, gravity, .{});
++    }
++
++    pub const Config = struct {
++        /// Physics time step (default: 1/60 second for 60 FPS)
++        time_step: f32 = 1.0 / 60.0,
++        /// Sub-step count for improved simulation quality (Box2D 3.x)
++        sub_step_count: i32 = 4,
++        /// Pixels per meter conversion (Box2D uses meters internally)
++        pixels_per_meter: f32 = 100.0,
++    };
++
++    /// Initialize with custom configuration
++    pub fn initWithConfig(allocator: Allocator, gravity: [2]f32, config: Config) !PhysicsWorld {
++        // Convert gravity from pixels to meters
++        const gravity_meters: [2]f32 = .{
++            gravity[0] / config.pixels_per_meter,
++            gravity[1] / config.pixels_per_meter,
++        };
++
++        return PhysicsWorld{
++            .allocator = allocator,
++            .world = try box2d.World.init(gravity_meters),
++            .body_map = std.AutoHashMap(u64, box2d.BodyId).init(allocator),
++            .entity_map = std.AutoHashMap(u64, u64).init(allocator),
++            .fixture_map = std.AutoHashMap(u64, FixtureList).init(allocator),
++            .entity_list = .{},
++            .collision_begin_events = .{},
++            .collision_end_events = .{},
++            .sensor_enter_events = .{},
++            .sensor_exit_events = .{},
++            .time_step = config.time_step,
++            .sub_step_count = config.sub_step_count,
++            .accumulator = 0,
++            .pixels_per_meter = config.pixels_per_meter,
++        };
++    }
++
++    /// Clean up all resources
++    pub fn deinit(self: *PhysicsWorld) void {
++        self.body_map.deinit();
++        self.entity_map.deinit();
++        self.fixture_map.deinit();
++        self.entity_list.deinit(self.allocator);
++        self.collision_begin_events.deinit(self.allocator);
++        self.collision_end_events.deinit(self.allocator);
++        self.sensor_enter_events.deinit(self.allocator);
++        self.sensor_exit_events.deinit(self.allocator);
++        self.world.deinit();
++    }
++
++    /// Check if entity has a physics body
++    pub fn hasBody(self: *const PhysicsWorld, entity: u64) bool {
++        return self.body_map.contains(entity);
++    }
++
++    /// Get body ID for entity (if exists)
++    pub fn getBodyId(self: *const PhysicsWorld, entity: u64) ?box2d.BodyId {
++        return self.body_map.get(entity);
++    }
++
++    /// Get entity for body ID (if exists)
++    pub fn getEntity(self: *const PhysicsWorld, body_id: box2d.BodyId) ?u64 {
++        // Convert BodyId to u64 for lookup
++        const body_key = bodyIdToU64(body_id);
++        return self.entity_map.get(body_key);
++    }
++
++    /// Get number of physics bodies
++    pub fn bodyCount(self: *const PhysicsWorld) usize {
++        return self.body_map.count();
++    }
++
++    /// Iterate over all entities with physics bodies
++    pub fn entities(self: *const PhysicsWorld) []const u64 {
++        return self.entity_list.items;
++    }
++
++    /// Create physics body for entity
++    ///
++    /// position: Entity position in pixels
++    pub fn createBody(
++        self: *PhysicsWorld,
++        entity: u64,
++        rigid_body: RigidBody,
++        position: struct { x: f32, y: f32 },
++    ) !void {
++        // Don't create duplicate bodies
++        if (self.hasBody(entity)) return;
++
++        // Convert position to meters
++        const pos_meters: [2]f32 = .{
++            position.x / self.pixels_per_meter,
++            position.y / self.pixels_per_meter,
++        };
++
++        // Create body definition
++        const body_def = box2d.BodyDef{
++            .body_type = switch (rigid_body.body_type) {
++                .static => .static,
++                .kinematic => .kinematic,
++                .dynamic => .dynamic,
++            },
++            .position = pos_meters,
++            .angle = 0,
++            .linear_damping = rigid_body.linear_damping,
++            .angular_damping = rigid_body.angular_damping,
++            .gravity_scale = rigid_body.gravity_scale,
++            .fixed_rotation = rigid_body.fixed_rotation,
++            .bullet = rigid_body.bullet,
++            .awake = rigid_body.awake,
++            .allow_sleep = rigid_body.allow_sleep,
++        };
++
++        // Create body
++        const body_id = try self.world.createBody(body_def);
++
++        // Store mappings using HashMap
++        try self.body_map.put(entity, body_id);
++        try self.entity_map.put(bodyIdToU64(body_id), entity);
++        try self.fixture_map.put(entity, FixtureList{});
++        try self.entity_list.append(self.allocator, entity);
++    }
++
++    /// Add collider to entity's physics body
++    pub fn addCollider(self: *PhysicsWorld, entity: u64, collider: Collider) !void {
++        const body_id = self.body_map.get(entity) orelse return error.NoBody;
++
++        // Convert shape to Box2D format (pixels to meters)
++        const shape = self.convertShape(collider.shape);
++
++        const fixture_def = box2d.FixtureDef{
++            .shape = shape,
++            .density = collider.density,
++            .friction = collider.friction,
++            .restitution = collider.restitution,
++            .restitution_threshold = collider.restitution_threshold,
++            .is_sensor = collider.is_sensor,
++            .filter = .{
++                .category_bits = collider.category_bits,
++                .mask_bits = collider.mask_bits,
++                .group_index = collider.group_index,
++            },
++        };
++
++        const fixture_id = try self.world.createFixture(body_id, fixture_def);
++
++        // Store fixture in the FixtureList
++        if (self.fixture_map.getPtr(entity)) |fixture_list| {
++            fixture_list.add(fixture_id);
++        }
++    }
++
++    /// Remove physics body for entity
++    pub fn destroyBody(self: *PhysicsWorld, entity: u64) void {
++        if (self.body_map.get(entity)) |body_id| {
++            // Remove from entity_map first
++            _ = self.entity_map.remove(bodyIdToU64(body_id));
++            // Destroy the Box2D body
++            self.world.destroyBody(body_id);
++        }
++
++        // Remove from body_map
++        _ = self.body_map.remove(entity);
++        // Remove fixtures list
++        _ = self.fixture_map.remove(entity);
++
++        // Remove from entity list
++        for (self.entity_list.items, 0..) |e, i| {
++            if (e == entity) {
++                _ = self.entity_list.swapRemove(i);
++                break;
++            }
++        }
++    }
++
++    /// Step physics simulation with fixed timestep accumulator
++    pub fn update(self: *PhysicsWorld, dt: f32) void {
++        // Clear event buffers
++        self.collision_begin_events.clearRetainingCapacity();
++        self.collision_end_events.clearRetainingCapacity();
++        self.sensor_enter_events.clearRetainingCapacity();
++        self.sensor_exit_events.clearRetainingCapacity();
++
++        // Fixed timestep accumulator
++        self.accumulator += dt;
++        while (self.accumulator >= self.time_step) {
++            self.world.step(
++                self.time_step,
++                self.sub_step_count,
++            );
++            self.processCollisionEvents();
++            self.accumulator -= self.time_step;
++        }
++    }
++
++    /// Get interpolation alpha for smooth rendering between physics steps
++    pub fn getInterpolationAlpha(self: *const PhysicsWorld) f32 {
++        return self.accumulator / self.time_step;
++    }
++
++    /// Get body position in pixels
++    pub fn getPosition(self: *PhysicsWorld, entity: u64) ?[2]f32 {
++        const body_id = self.body_map.get(entity) orelse return null;
++        const pos_meters = self.world.getPosition(body_id);
++        return .{
++            pos_meters[0] * self.pixels_per_meter,
++            pos_meters[1] * self.pixels_per_meter,
++        };
++    }
++
++    /// Get body rotation in radians
++    pub fn getAngle(self: *PhysicsWorld, entity: u64) ?f32 {
++        const body_id = self.body_map.get(entity) orelse return null;
++        return self.world.getAngle(body_id);
++    }
++
++    /// Get body linear velocity in pixels/sec
++    pub fn getLinearVelocity(self: *const PhysicsWorld, entity: u64) ?[2]f32 {
++        const body_id = self.body_map.get(entity) orelse return null;
++        const vel_meters = self.world.getLinearVelocity(body_id);
++        return .{
++            vel_meters[0] * self.pixels_per_meter,
++            vel_meters[1] * self.pixels_per_meter,
++        };
++    }
++
++    /// Set body linear velocity in pixels/sec
++    pub fn setLinearVelocity(self: *PhysicsWorld, entity: u64, velocity: [2]f32) void {
++        const body_id = self.body_map.get(entity) orelse return;
++        self.world.setLinearVelocity(body_id, .{
++            velocity[0] / self.pixels_per_meter,
++            velocity[1] / self.pixels_per_meter,
++        });
++    }
++
++    /// Apply impulse at center of mass (pixels * kg / sec)
++    pub fn applyLinearImpulse(self: *PhysicsWorld, entity: u64, impulse: [2]f32) void {
++        const body_id = self.body_map.get(entity) orelse return;
++        self.world.applyLinearImpulse(body_id, .{
++            impulse[0] / self.pixels_per_meter,
++            impulse[1] / self.pixels_per_meter,
++        });
++    }
++
++    /// Apply force at center of mass (pixels * kg / sec²)
++    pub fn applyForce(self: *PhysicsWorld, entity: u64, force: [2]f32) void {
++        const body_id = self.body_map.get(entity) orelse return;
++        self.world.applyForce(body_id, .{
++            force[0] / self.pixels_per_meter,
++            force[1] / self.pixels_per_meter,
++        });
++    }
++
++    // Event queries
++
++    /// Get collision begin events from last physics step
++    pub fn getCollisionBeginEvents(self: *const PhysicsWorld) []const CollisionEvent {
++        return self.collision_begin_events.items;
++    }
++
++    /// Get collision end events from last physics step
++    pub fn getCollisionEndEvents(self: *const PhysicsWorld) []const CollisionEvent {
++        return self.collision_end_events.items;
++    }
++
++    /// Get sensor enter events from last physics step
++    pub fn getSensorEnterEvents(self: *const PhysicsWorld) []const SensorEvent {
++        return self.sensor_enter_events.items;
++    }
++
++    /// Get sensor exit events from last physics step
++    pub fn getSensorExitEvents(self: *const PhysicsWorld) []const SensorEvent {
++        return self.sensor_exit_events.items;
++    }
++
++    // Internal helpers
++
++    fn convertShape(self: *const PhysicsWorld, shape: components.Shape) box2d.Shape {
++        const ppm = self.pixels_per_meter;
++        return switch (shape) {
++            .box => |b| .{ .box = .{
++                .half_width = (b.width / 2) / ppm,
++                .half_height = (b.height / 2) / ppm,
++            } },
++            .circle => |c| .{ .circle = .{ .radius = c.radius / ppm } },
++            .edge => |e| .{ .edge = .{
++                .start = .{ e.start[0] / ppm, e.start[1] / ppm },
++                .end = .{ e.end[0] / ppm, e.end[1] / ppm },
++            } },
++            .polygon => |p| blk: {
++                // Convert vertices to meters
++                var vertices: [8][2]f32 = undefined;
++                const count = @min(p.vertices.len, 8);
++                for (0..count) |i| {
++                    vertices[i] = .{
++                        p.vertices[i][0] / ppm,
++                        p.vertices[i][1] / ppm,
++                    };
++                }
++                break :blk .{ .polygon = .{
++                    .vertices = vertices[0..count],
++                } };
++            },
++            .chain => {
++                @panic("Chain shapes are not yet implemented in physics world");
++            },
++        };
++    }
++
++    fn processCollisionEvents(self: *PhysicsWorld) void {
++        // Get contact events from Box2D and convert to our format
++        var contact_iter = self.world.getContactEvents();
++        while (contact_iter.next()) |contact| {
++            const entity_a = self.entity_map.get(bodyIdToU64(contact.body_a)) orelse continue;
++            const entity_b = self.entity_map.get(bodyIdToU64(contact.body_b)) orelse continue;
++
++            const event = CollisionEvent{
++                .entity_a = entity_a,
++                .entity_b = entity_b,
++                .contact_point = .{
++                    contact.point[0] * self.pixels_per_meter,
++                    contact.point[1] * self.pixels_per_meter,
++                },
++                .normal = contact.normal,
++                .impulse = contact.impulse * self.pixels_per_meter,
++            };
++
++            if (contact.is_begin) {
++                self.collision_begin_events.append(self.allocator, event) catch {};
++            } else {
++                self.collision_end_events.append(self.allocator, event) catch {};
++            }
++        }
++
++        // Get sensor events
++        var sensor_iter = self.world.getSensorEvents();
++        while (sensor_iter.next()) |sensor| {
++            const sensor_entity = self.entity_map.get(bodyIdToU64(sensor.sensor_body)) orelse continue;
++            const other_entity = self.entity_map.get(bodyIdToU64(sensor.other_body)) orelse continue;
++
++            const event = SensorEvent{
++                .sensor_entity = sensor_entity,
++                .other_entity = other_entity,
++            };
++
++            if (sensor.is_enter) {
++                self.sensor_enter_events.append(self.allocator, event) catch {};
++            } else {
++                self.sensor_exit_events.append(self.allocator, event) catch {};
++            }
++        }
++    }
++};
++
++/// Convert BodyId to u64 for use as SparseSet key
++/// Box2D's BodyId is typically an index or handle that can be represented as u64
++fn bodyIdToU64(body_id: box2d.BodyId) u64 {
++    // BodyId is a struct: { index1: i32, world0: u16, generation: u16 } = 8 bytes
++    // This matches u64 exactly, so bitcast is safe
++    comptime {
++        if (@sizeOf(box2d.BodyId) != @sizeOf(u64)) {
++            @compileError("b2BodyId size mismatch - expected 8 bytes for bitcast to u64");
++        }
++    }
++    return @bitCast(body_id);
++}
+diff --git a/physics/test/tests.zig b/physics/test/tests.zig
+new file mode 100644
+index 0000000..3243c8b
+--- /dev/null
++++ b/physics/test/tests.zig
+@@ -0,0 +1,139 @@
++//! Physics Module Tests
++//!
++//! BDD-style tests using zspec for labelle-physics.
++
++const std = @import("std");
++const zspec = @import("zspec");
++const expect = zspec.expect;
++const physics = @import("labelle-physics");
++
++const PWorld = physics.PhysicsWorld;
++const RBody = physics.RigidBody;
++const Coll = physics.Collider;
++
++test {
++    zspec.runAll(@This());
++}
++
++pub const PhysicsWorldTests = struct {
++    test "can be initialized with gravity" {
++        var world = try PWorld.init(std.testing.allocator, .{ 0, 980 });
++        defer world.deinit();
++
++        // World should be initialized
++        try expect.toBeTrue(world.entities().len == 0);
++    }
++
++    test "can create static bodies" {
++        var world = try PWorld.init(std.testing.allocator, .{ 0, 980 });
++        defer world.deinit();
++
++        const entity_id: u64 = 1;
++        try world.createBody(entity_id, RBody{ .body_type = .static }, .{ .x = 100, .y = 200 });
++
++        try expect.toBeTrue(world.entities().len == 1);
++    }
++
++    test "can create dynamic bodies" {
++        var world = try PWorld.init(std.testing.allocator, .{ 0, 980 });
++        defer world.deinit();
++
++        const entity_id: u64 = 1;
++        try world.createBody(entity_id, RBody{ .body_type = .dynamic }, .{ .x = 100, .y = 100 });
++
++        try expect.toBeTrue(world.entities().len == 1);
++    }
++
++    test "can add box colliders" {
++        var world = try PWorld.init(std.testing.allocator, .{ 0, 980 });
++        defer world.deinit();
++
++        const entity_id: u64 = 1;
++        try world.createBody(entity_id, RBody{ .body_type = .dynamic }, .{ .x = 100, .y = 100 });
++        try world.addCollider(entity_id, Coll{
++            .shape = .{ .box = .{ .width = 50, .height = 50 } },
++            .restitution = 0.5,
++        });
++
++        try expect.toBeTrue(world.entities().len == 1);
++    }
++
++    test "can add circle colliders" {
++        var world = try PWorld.init(std.testing.allocator, .{ 0, 980 });
++        defer world.deinit();
++
++        const entity_id: u64 = 1;
++        try world.createBody(entity_id, RBody{ .body_type = .dynamic }, .{ .x = 100, .y = 100 });
++        try world.addCollider(entity_id, Coll{
++            .shape = .{ .circle = .{ .radius = 25 } },
++            .restitution = 0.7,
++        });
++
++        try expect.toBeTrue(world.entities().len == 1);
++    }
++
++    test "updates positions during simulation" {
++        var world = try PWorld.init(std.testing.allocator, .{ 0, 980 });
++        defer world.deinit();
++
++        const entity_id: u64 = 1;
++        try world.createBody(entity_id, RBody{ .body_type = .dynamic }, .{ .x = 100, .y = 100 });
++        try world.addCollider(entity_id, Coll{
++            .shape = .{ .box = .{ .width = 50, .height = 50 } },
++        });
++
++        const initial_pos = world.getPosition(entity_id).?;
++        const initial_y = initial_pos[1];
++
++        // Simulate for a bit
++        var elapsed: f32 = 0;
++        while (elapsed < 1.0) : (elapsed += 1.0 / 60.0) {
++            world.update(1.0 / 60.0);
++        }
++
++        const final_pos = world.getPosition(entity_id).?;
++        const final_y = final_pos[1];
++
++        // Body should have fallen (Y increased due to gravity)
++        try expect.toBeTrue(final_y > initial_y);
++    }
++
++    test "static bodies don't move" {
++        var world = try PWorld.init(std.testing.allocator, .{ 0, 980 });
++        defer world.deinit();
++
++        const entity_id: u64 = 1;
++        try world.createBody(entity_id, RBody{ .body_type = .static }, .{ .x = 100, .y = 200 });
++        try world.addCollider(entity_id, Coll{
++            .shape = .{ .box = .{ .width = 100, .height = 20 } },
++        });
++
++        const initial_pos = world.getPosition(entity_id).?;
++
++        // Simulate for a bit
++        var elapsed: f32 = 0;
++        while (elapsed < 1.0) : (elapsed += 1.0 / 60.0) {
++            world.update(1.0 / 60.0);
++        }
++
++        const final_pos = world.getPosition(entity_id).?;
++
++        // Static body should not have moved
++        try std.testing.expectApproxEqAbs(initial_pos[0], final_pos[0], 0.001);
++        try std.testing.expectApproxEqAbs(initial_pos[1], final_pos[1], 0.001);
++    }
++
++    test "can remove bodies" {
++        var world = try PWorld.init(std.testing.allocator, .{ 0, 980 });
++        defer world.deinit();
++
++        const entity_id: u64 = 1;
++        try world.createBody(entity_id, RBody{ .body_type = .dynamic }, .{ .x = 100, .y = 100 });
++
++        try expect.toBeTrue(world.entities().len == 1);
++
++        world.destroyBody(entity_id);
++
++        try expect.toBeTrue(world.entities().len == 0);
++    }
++};
+diff --git a/rfc/RFC-002-physics-integration.md b/rfc/RFC-002-physics-integration.md
+new file mode 100644
+index 0000000..1093de6
+--- /dev/null
++++ b/rfc/RFC-002-physics-integration.md
+@@ -0,0 +1,483 @@
++# RFC-002: Physics Integration
++
++## Summary
++
++Add 2D physics support to labelle-engine via a new `physics/` module with its own `build.zig`, integrating Box2D through ECS components.
++
++## Goals
++
++1. Provide physics components (RigidBody, Collider) that work with the existing ECS
++2. Keep physics optional - projects that don't need it shouldn't pay the cost
++3. Maintain the declarative .zon scene approach
++4. Support both zig_ecs and zflecs backends
++
++## Module Structure
++
++```
++labelle-engine/
++├── physics/
++│   ├── build.zig          # Standalone build for physics module
++│   ├── mod.zig            # Main module entry point
++│   ├── world.zig          # Physics world wrapper
++│   ├── components.zig     # RigidBody, Collider, etc.
++│   ├── systems.zig        # Physics update systems
++│   ├── debug.zig          # Debug rendering
++│   └── box2d/
++│       └── adapter.zig    # Box2D-specific implementation
++├── build.zig              # Main engine build (imports physics)
++└── ...
++```
++
++## Build System Design
++
++### Option A: Submodule with Feature Flag
++
++```zig
++// labelle-engine/build.zig
++const physics_enabled = b.option(bool, "physics", "Enable physics module") orelse false;
++
++if (physics_enabled) {
++    const physics_mod = b.addModule("labelle-physics", .{
++        .root_source_file = b.path("physics/mod.zig"),
++        // ...
++    });
++    engine_mod.addImport("physics", physics_mod);
++}
++```
++
++### Option B: Separate build.zig (Recommended)
++
++```zig
++// physics/build.zig
++pub fn build(b: *std.Build) void {
++    // Standalone physics module build
++}
++
++pub fn addPhysicsModule(b: *std.Build, ...) *std.Build.Module {
++    // Called by parent build.zig when physics is enabled
++}
++```
++
++**Recommendation**: Option B - keeps physics self-contained, easier to test independently.
++
++---
++
++## ECS Integration Design
++
++### Core Components (User-Facing)
++
++```zig
++// physics/components.zig
++
++/// Rigid body dynamics - user configuration only, no runtime state
++pub const RigidBody = struct {
++    body_type: BodyType = .dynamic,
++    mass: f32 = 1.0,
++    gravity_scale: f32 = 1.0,
++    linear_damping: f32 = 0.0,
++    angular_damping: f32 = 0.0,
++    fixed_rotation: bool = false,
++    bullet: bool = false,  // CCD for fast-moving objects
++
++    pub const BodyType = enum {
++        static,    // Never moves
++        kinematic, // Moved by code, not physics
++        dynamic,   // Fully simulated
++    };
++};
++
++/// Collision shape - user configuration only
++pub const Collider = struct {
++    shape: Shape,
++    density: f32 = 1.0,
++    friction: f32 = 0.3,
++    restitution: f32 = 0.0,  // Bounciness
++    is_sensor: bool = false,  // Triggers events but no collision response
++
++    pub const Shape = union(enum) {
++        box: struct { width: f32, height: f32 },
++        circle: struct { radius: f32 },
++        polygon: struct { vertices: []const [2]f32 },
++        edge: struct { start: [2]f32, end: [2]f32 },
++    };
++};
++
++/// Velocity component (optional, for direct access)
++pub const Velocity = struct {
++    linear: [2]f32 = .{ 0, 0 },
++    angular: f32 = 0,
++};
++```
++
++### Internal Physics State (Managed by PhysicsWorld)
++
++```zig
++// physics/world.zig
++
++/// Internal mapping - NOT exposed as ECS components
++/// Keeps user components clean and serializable
++pub const PhysicsWorld = struct {
++    world: box2d.World,
++
++    // Entity <-> Physics body mapping (internal storage)
++    body_map: std.AutoHashMap(Entity, BodyId),
++    entity_map: std.AutoHashMap(BodyId, Entity),
++    fixture_map: std.AutoHashMap(Entity, FixtureId),
++
++    // ...
++};
++```
++
++**Benefits of separate storage:**
++- Components remain pure data (serializable to .zon)
++- No runtime pointers in ECS storage
++- Physics state doesn't leak into game logic
++- Easy to reset physics without touching ECS
++- Cleaner memory layout for ECS iteration
++
++### Scene .zon Integration
++
++```zig
++// scenes/level1.zon
++.{
++    .name = "level1",
++    .entities = .{
++        // Static ground
++        .{
++            .components = .{
++                .Position = .{ .x = 400, .y = 550 },
++                .RigidBody = .{ .body_type = .static },
++                .Collider = .{ .shape = .{ .box = .{ .width = 800, .height = 20 } } },
++                .Shape = .{ .type = .rectangle, .width = 800, .height = 20 },
++            },
++        },
++        // Dynamic ball
++        .{
++            .components = .{
++                .Position = .{ .x = 400, .y = 100 },
++                .RigidBody = .{ .body_type = .dynamic, .mass = 1.0 },
++                .Collider = .{ .shape = .{ .circle = .{ .radius = 20 } } },
++                .Shape = .{ .type = .circle, .radius = 20 },
++            },
++        },
++    },
++}
++```
++
++---
++
++## Physics World Management
++
++### World Wrapper
++
++```zig
++// physics/world.zig
++
++pub const PhysicsWorld = struct {
++    allocator: Allocator,
++    world: box2d.World,
++
++    // Entity <-> Body mappings using SparseSet (5-10x faster than HashMap)
++    // O(1) lookup, O(1) insert/remove, cache-friendly iteration
++    body_map: SparseSet(BodyId),        // entity -> body_id
++    entity_map: SparseSet(u64),          // body_id -> entity
++    fixture_map: SparseSet(FixtureList), // entity -> fixtures
++
++    // Collision event buffers (cleared each step)
++    collision_begin_events: std.ArrayList(CollisionEvent),
++    collision_end_events: std.ArrayList(CollisionEvent),
++    sensor_enter_events: std.ArrayList(SensorEvent),
++    sensor_exit_events: std.ArrayList(SensorEvent),
++
++    // Simulation parameters
++    time_step: f32 = 1.0 / 60.0,
++    velocity_iterations: i32 = 8,
++    position_iterations: i32 = 3,
++    accumulator: f32 = 0,
++    pixels_per_meter: f32 = 100.0,
++    max_entities: usize = 100_000,
++
++    pub fn init(allocator: Allocator, gravity: [2]f32) !PhysicsWorld { ... }
++    pub fn deinit(self: *PhysicsWorld) void { ... }
++
++    /// Check if entity has a physics body - O(1)
++    pub fn hasBody(self: *const PhysicsWorld, entity: u64) bool {
++        return self.body_map.contains(entity);
++    }
++
++    /// Get number of physics bodies
++    pub fn bodyCount(self: *const PhysicsWorld) usize {
++        return self.body_map.len();
++    }
++
++    /// Iterate all entities with physics bodies (cache-friendly)
++    pub fn entities(self: *const PhysicsWorld) []const u64 {
++        return self.body_map.keys();
++    }
++
++    /// Step physics simulation with fixed timestep
++    pub fn update(self: *PhysicsWorld, dt: f32) void { ... }
++
++    /// Create body from ECS entity
++    pub fn createBody(self: *PhysicsWorld, entity: u64, rigid_body: RigidBody, position: Position) !void { ... }
++
++    /// Remove body for entity
++    pub fn destroyBody(self: *PhysicsWorld, entity: u64) void { ... }
++
++    // Collision event queries
++    pub fn getCollisionBeginEvents(self: *const PhysicsWorld) []const CollisionEvent { ... }
++    pub fn getCollisionEndEvents(self: *const PhysicsWorld) []const CollisionEvent { ... }
++    pub fn getSensorEnterEvents(self: *const PhysicsWorld) []const SensorEvent { ... }
++    pub fn getSensorExitEvents(self: *const PhysicsWorld) []const SensorEvent { ... }
++};
++```
++
++### System Integration
++
++```zig
++// physics/systems.zig
++
++/// Called each frame to update physics and sync positions
++pub fn physicsSystem(world: *PhysicsWorld, registry: *Registry, dt: f32) void {
++    // 1. Sync kinematic bodies from ECS -> Physics
++    syncKinematicBodies(world, registry);
++
++    // 2. Step physics simulation
++    world.update(dt);
++
++    // 3. Sync dynamic bodies from Physics -> ECS
++    world.syncToEcs(registry);
++}
++
++/// Initialize physics bodies for new entities (checks internal body_map)
++pub fn physicsInitSystem(world: *PhysicsWorld, registry: *Registry) void {
++    var query = registry.query(.{ RigidBody, Position });
++    while (query.next()) |item| {
++        // Check if entity already has a physics body (via internal storage)
++        if (!world.hasBody(item.entity)) {
++            const rb = item.get(RigidBody);
++            const pos = item.get(Position);
++            world.createBody(item.entity, rb.*, pos.*);
++        }
++    }
++}
++```
++
++---
++
++## Collision Events (Query API)
++
++The primary collision event interface uses a query-based approach for performance:
++
++```zig
++// physics/world.zig
++
++pub const CollisionEvent = struct {
++    entity_a: Entity,
++    entity_b: Entity,
++    contact_point: [2]f32,
++    normal: [2]f32,
++    impulse: f32,
++};
++
++pub const PhysicsWorld = struct {
++    // ... existing fields ...
++
++    // Collision event buffers (cleared each step)
++    collision_begin_events: std.ArrayList(CollisionEvent),
++    collision_end_events: std.ArrayList(CollisionEvent),
++    sensor_enter_events: std.ArrayList(SensorEvent),
++    sensor_exit_events: std.ArrayList(SensorEvent),
++
++    /// Query collision events from last physics step
++    pub fn getCollisionBeginEvents(self: *const PhysicsWorld) []const CollisionEvent {
++        return self.collision_begin_events.items;
++    }
++
++    pub fn getCollisionEndEvents(self: *const PhysicsWorld) []const CollisionEvent {
++        return self.collision_end_events.items;
++    }
++
++    pub fn getSensorEnterEvents(self: *const PhysicsWorld) []const SensorEvent {
++        return self.sensor_enter_events.items;
++    }
++
++    pub fn getSensorExitEvents(self: *const PhysicsWorld) []const SensorEvent {
++        return self.sensor_exit_events.items;
++    }
++};
++```
++
++**Usage in game code:**
++
++```zig
++// In a script or system
++pub fn update(game: *Game, physics_world: *PhysicsWorld, dt: f32) void {
++    // Process collision events
++    for (physics_world.getCollisionBeginEvents()) |event| {
++        // Handle collision between event.entity_a and event.entity_b
++        if (hasComponent(event.entity_a, Health)) {
++            applyDamage(event.entity_a, event.impulse);
++        }
++    }
++
++    // Process sensor events (triggers)
++    for (physics_world.getSensorEnterEvents()) |event| {
++        if (isTriggerZone(event.sensor_entity)) {
++            activateTrigger(event.sensor_entity, event.other_entity);
++        }
++    }
++}
++```
++
++### Alternative: Hook Integration (Benchmark)
++
++For comparison, hooks can also be implemented:
++
++```zig
++// Physics hooks for game code (alternative approach to benchmark)
++pub const PhysicsHooks = struct {
++    pub fn collision_begin(payload: HookPayload) void {
++        const info = payload.collision_begin;
++        // info.entity_a, info.entity_b, info.contact_point
++    }
++
++    pub fn collision_end(payload: HookPayload) void {
++        const info = payload.collision_end;
++    }
++
++    pub fn sensor_enter(payload: HookPayload) void {
++        const info = payload.sensor_enter;
++    }
++
++    pub fn sensor_exit(payload: HookPayload) void {
++        const info = payload.sensor_exit;
++    }
++};
++```
++
++Benchmarks will determine if Query API is faster than hooks as assumed.
++
++---
++
++## Usage Example
++
++### In Generated main.zig
++
++```zig
++const physics = @import("labelle-physics");
++
++pub fn main() !void {
++    // ... existing setup ...
++
++    // Initialize physics world
++    var physics_world = try physics.PhysicsWorld.init(allocator, .{ 0, 9.8 });
++    defer physics_world.deinit();
++
++    // Main loop
++    while (!window.shouldClose()) {
++        // ... input handling ...
++
++        // Update physics
++        physics.systems.physicsInitSystem(&physics_world, game.getRegistry());
++        physics.systems.physicsSystem(&physics_world, game.getRegistry(), dt);
++
++        // ... rendering ...
++    }
++}
++```
++
++### In project.labelle
++
++```zig
++.{
++    .name = "my_physics_game",
++    .physics = .{
++        .enabled = true,
++        .gravity = .{ 0, 9.8 },
++        .debug_draw = true,
++    },
++    // ...
++}
++```
++
++---
++
++## Design Decisions
++
++1. **Component Storage**: ~~Should physics runtime state (`_body_id`) be stored in the component, or in a separate internal component?~~
++   - **DECIDED**: Option B - Separate internal storage in `PhysicsWorld` using **SparseSet** (5-10x faster than HashMap)
++
++2. **Position Ownership**: Who owns Position during physics simulation?
++   - **DECIDED**: Option A - Physics writes directly to Position component (simpler, standard pattern)
++
++3. **Collision Callbacks**: How should collision events be exposed?
++   - **DECIDED**: Option B - Query API for collision events each frame (assumed faster)
++   - Benchmark against Option A (hooks) to validate assumption
++   - Every physics adapter must include benchmarks
++
++4. **Multiple Worlds**: Should we support multiple physics worlds (e.g., for different scenes)?
++   - **DECIDED**: No - Single world, simplifies implementation
++
++5. **Determinism**: Should we prioritize cross-platform determinism (important for netcode)?
++   - **DECIDED**: Yes - Cross-platform determinism is a priority for netcode/replays
++
++---
++
++## Storage Performance (SparseSet vs HashMap)
++
++Benchmarks comparing storage strategies for entity->body mappings (50k entities):
++
++| Operation | HashMap | SparseSet | Improvement |
++|-----------|---------|-----------|-------------|
++| Insert | 42 ops/us | 312 ops/us | **7.4x faster** |
++| Lookup | 128 ops/us | 830 ops/us | **6.5x faster** |
++| Iteration | 1069 items/us | 13k items/us | **12x faster** |
++| Remove | 111 ops/us | 801 ops/us | **7.2x faster** |
++| Mixed workload | 134 us | 16 us | **8.4x faster** |
++
++SparseSet provides O(1) operations with cache-friendly dense array iteration, making it ideal for the physics body mappings where we frequently iterate over all bodies during simulation sync.
++
++---
++
++## Benchmarking Requirements
++
++Every physics adapter must include benchmarks to validate performance characteristics:
++
++```zig
++// physics/benchmark.zig
++
++pub fn runBenchmarks(allocator: Allocator) !void {
++    // 1. Body creation/destruction throughput
++    try benchBodyLifecycle(allocator);
++
++    // 2. Simulation step performance (varying entity counts)
++    try benchSimulationStep(allocator, 100);
++    try benchSimulationStep(allocator, 1000);
++    try benchSimulationStep(allocator, 10000);
++
++    // 3. Collision detection (broad phase + narrow phase)
++    try benchCollisionDetection(allocator);
++
++    // 4. Query API vs Hooks for collision events
++    try benchCollisionQuery(allocator);
++    try benchCollisionHooks(allocator);
++
++    // 5. ECS sync overhead
++    try benchEcsSync(allocator);
++}
++```
++
++---
++
++## Implementation Order
++
++1. [ ] Create `physics/build.zig` with Box2D dependency
++2. [ ] Implement basic `PhysicsWorld` wrapper
++3. [ ] Add `RigidBody` and `Collider` components
++4. [ ] Implement ECS sync systems
++5. [ ] Add collision hooks
++6. [ ] Update generator for physics configuration
++7. [ ] Create `usage/example_physics` demo
++8. [ ] Add debug rendering
++9. [ ] Write tests and documentation
+diff --git a/tools/generator.zig b/tools/generator.zig
+index 1726804..ba44fe3 100644
+--- a/tools/generator.zig
++++ b/tools/generator.zig
+@@ -217,9 +217,12 @@ pub fn generateBuildZig(allocator: std.mem.Allocator, config: ProjectConfig) ![]
+         .zflecs => "zflecs",
+     };
+ 
++    const physics_enabled = config.physics.enabled;
++    const physics_str = if (physics_enabled) "true" else "false";
++
+     // Write common header (includes backend options)
+-    // Template args: graphics_backend (x2), ecs_backend (x2)
+-    try zts.print(build_zig_tmpl, "header", .{ default_backend, default_backend, default_ecs_backend, default_ecs_backend }, writer);
++    // Template args: graphics_backend (x2), ecs_backend (x2), physics (x2)
++    try zts.print(build_zig_tmpl, "header", .{ default_backend, default_backend, default_ecs_backend, default_ecs_backend, physics_str, physics_str }, writer);
+ 
+     // Write plugin dependency declarations
+     // Sanitize plugin names for use as Zig identifiers
+diff --git a/tools/project_config.zig b/tools/project_config.zig
+index 7d9d0b1..b36148d 100644
+--- a/tools/project_config.zig
++++ b/tools/project_config.zig
+@@ -23,6 +23,12 @@
+ //           .y = 0,
+ //           .zoom = 1.0,   // 1.0 = 100% zoom
+ //       },
++//       .physics = .{
++//           .enabled = true,           // Enable Box2D physics (default: false)
++//           .gravity = .{ 0, 980 },    // pixels/sec² (positive Y = down)
++//           .pixels_per_meter = 100.0, // Scale factor for Box2D
++//           .debug_draw = false,       // Render collision shapes
++//       },
+ //       .plugins = .{
+ //           .{ .name = "labelle-pathfinding", .version = "2.5.0", .module = "pathfinding" },
+ //       },
+@@ -203,6 +209,24 @@ pub const WindowConfig = struct {
+     resizable: bool = false,
+ };
+ 
++/// Physics configuration
++pub const PhysicsConfig = struct {
++    /// Enable physics module (Box2D)
++    enabled: bool = false,
++    /// Gravity in pixels/sec² (positive Y = down for screen coordinates)
++    gravity: [2]f32 = .{ 0, 980 },
++    /// Pixels per meter conversion (Box2D uses meters internally)
++    pixels_per_meter: f32 = 100.0,
++    /// Enable debug rendering of collision shapes
++    debug_draw: bool = false,
++    /// Fixed timestep for physics simulation (default: 1/60 for 60 FPS)
++    time_step: f32 = 1.0 / 60.0,
++    /// Velocity solver iterations (higher = more accurate)
++    velocity_iterations: i32 = 8,
++    /// Position solver iterations
++    position_iterations: i32 = 3,
++};
++
+ /// Project configuration loaded from .labelle file
+ pub const ProjectConfig = struct {
+     version: u32,
+@@ -215,6 +239,7 @@ pub const ProjectConfig = struct {
+     camera: CameraConfig = .{},
+     resources: Resources = .{},
+     plugins: []const Plugin = &.{},
++    physics: PhysicsConfig = .{},
+     /// Output directory for generated build files (build.zig, build.zig.zon)
+     /// Relative to the project root. Default: ".labelle"
+     /// Note: main.zig stays in the project root for module import compatibility.
+diff --git a/tools/templates/build_zig.txt b/tools/templates/build_zig.txt
+index 17ff108..d9f8c41 100644
+--- a/tools/templates/build_zig.txt
++++ b/tools/templates/build_zig.txt
+@@ -33,12 +33,14 @@ pub fn build(b: *std.Build) void {{
+     // Backend options - can be overridden via -Dbackend and -Decs_backend
+     const backend = b.option(Backend, "backend", "Graphics backend to use (default: {s})") orelse .{s};
+     const ecs_backend = b.option(EcsBackend, "ecs_backend", "ECS backend to use (default: {s})") orelse .{s};
++    const physics_enabled = b.option(bool, "physics", "Enable physics module (default: {s})") orelse {s};
+ 
+     const engine_dep = b.dependency("labelle-engine", .{{
+         .target = target,
+         .optimize = optimize,
+         .backend = backend,
+         .ecs_backend = ecs_backend,
++        .physics = physics_enabled,
+     }});
+     const engine_mod = engine_dep.module("labelle-engine");
+ 
+diff --git a/usage/example_physics/build.zig b/usage/example_physics/build.zig
+new file mode 100644
+index 0000000..3991f8d
+--- /dev/null
++++ b/usage/example_physics/build.zig
+@@ -0,0 +1,54 @@
++// Physics Example Build
++// Demonstrates physics integration with labelle-engine
++
++const std = @import("std");
++
++pub const Backend = enum {
++    raylib,
++    sokol,
++};
++
++pub const EcsBackend = enum {
++    zig_ecs,
++    zflecs,
++};
++
++pub fn build(b: *std.Build) void {
++    const target = b.standardTargetOptions(.{});
++    const optimize = b.standardOptimizeOption(.{});
++
++    const backend = b.option(Backend, "backend", "Graphics backend (default: raylib)") orelse .raylib;
++    const ecs_backend = b.option(EcsBackend, "ecs_backend", "ECS backend (default: zig_ecs)") orelse .zig_ecs;
++
++    const engine_dep = b.dependency("labelle-engine", .{
++        .target = target,
++        .optimize = optimize,
++        .backend = backend,
++        .ecs_backend = ecs_backend,
++        .physics = true, // Enable physics module
++    });
++    const engine_mod = engine_dep.module("labelle-engine");
++
++    // Get physics module separately for direct access
++    const physics_mod = engine_dep.module("labelle-physics");
++
++    const exe = b.addExecutable(.{
++        .name = "example_physics",
++        .root_module = b.createModule(.{
++            .root_source_file = b.path("main.zig"),
++            .target = target,
++            .optimize = optimize,
++            .imports = &.{
++                .{ .name = "labelle-engine", .module = engine_mod },
++                .{ .name = "labelle-physics", .module = physics_mod },
++            },
++        }),
++    });
++    b.installArtifact(exe);
++
++    const run_cmd = b.addRunArtifact(exe);
++    run_cmd.step.dependOn(b.getInstallStep());
++
++    const run_step = b.step("run", "Run the physics demo");
++    run_step.dependOn(&run_cmd.step);
++}
+diff --git a/usage/example_physics/build.zig.zon b/usage/example_physics/build.zig.zon
+new file mode 100644
+index 0000000..0f2f570
+--- /dev/null
++++ b/usage/example_physics/build.zig.zon
+@@ -0,0 +1,22 @@
++.{
++    .fingerprint = 0xf09290d0bee39db1,
++    .name = .example_physics,
++    .version = "0.1.0",
++    .dependencies = .{
++        .@"labelle-engine" = .{
++            .path = "../..",
++        },
++    },
++    .paths = .{
++        "build.zig",
++        "build.zig.zon",
++        "main.zig",
++        "project.labelle",
++        "scenes",
++        "prefabs",
++        "components",
++        "scripts",
++        "hooks",
++        "resources",
++    },
++}
+diff --git a/usage/example_physics/main.zig b/usage/example_physics/main.zig
+new file mode 100644
+index 0000000..86313b8
+--- /dev/null
++++ b/usage/example_physics/main.zig
+@@ -0,0 +1,106 @@
++// ============================================================================
++// Physics Demo - main.zig
++// ============================================================================
++// Demonstrates physics integration with Box2D using prefabs, scenes, and scripts.
++// Left click: spawn box, Right click: spawn circle, R: reset scene
++// ============================================================================
++
++const std = @import("std");
++const engine = @import("labelle-engine");
++
++const Game = engine.Game;
++const ProjectConfig = engine.ProjectConfig;
++
++// Import physics module for components
++const physics = @import("labelle-physics");
++
++// Import prefabs
++const dynamic_box_prefab = @import("prefabs/dynamic_box.zon");
++const dynamic_circle_prefab = @import("prefabs/dynamic_circle.zon");
++
++// Physics components (exported from physics module)
++pub const PhysicsBody = physics.PhysicsBody;
++
++// Import scripts
++const physics_demo_script = @import("scripts/physics_demo.zig");
++
++const main_module = @This();
++
++pub const Prefabs = engine.PrefabRegistry(.{
++    .dynamic_box = dynamic_box_prefab,
++    .dynamic_circle = dynamic_circle_prefab,
++});
++
++pub const Components = engine.ComponentRegistry(struct {
++    pub const PhysicsBody = main_module.PhysicsBody;
++});
++
++pub const Scripts = engine.ScriptRegistry(struct {
++    pub const physics_demo = physics_demo_script;
++});
++
++pub const Loader = engine.SceneLoader(Prefabs, Components, Scripts);
++
++pub const initial_scene = @import("scenes/main.zon");
++
++pub fn main() !void {
++    const ci_test = std.posix.getenv("CI_TEST") != null;
++
++    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
++    defer _ = gpa.deinit();
++    const allocator = gpa.allocator();
++
++    const project = try ProjectConfig.load(allocator, "project.labelle");
++    defer project.deinit(allocator);
++
++    const title = try allocator.dupeZ(u8, project.window.title);
++    defer allocator.free(title);
++
++    var game = try Game.init(allocator, .{
++        .window = .{
++            .width = project.window.width,
++            .height = project.window.height,
++            .title = title,
++            .target_fps = project.window.target_fps,
++            .hidden = ci_test,
++        },
++        .clear_color = .{ .r = 40, .g = 45, .b = 55 },
++    });
++    game.fixPointers();
++    defer game.deinit();
++
++    // Apply camera configuration from project
++    if (project.camera.x != null or project.camera.y != null) {
++        game.setCameraPosition(project.camera.x orelse 0, project.camera.y orelse 0);
++    }
++    if (project.camera.zoom != 1.0) {
++        game.setCameraZoom(project.camera.zoom);
++    }
++
++    const ctx = engine.SceneContext.init(&game);
++    var scene = try Loader.load(initial_scene, ctx);
++    defer scene.deinit();
++
++    // For CI test, run a few frames and exit
++    if (ci_test) {
++        std.debug.print("CI_TEST mode: running physics simulation\n", .{});
++        var elapsed: f32 = 0;
++        while (elapsed < 3.0) {
++            const dt: f32 = 1.0 / 60.0;
++            scene.update(dt);
++            elapsed += dt;
++        }
++        return;
++    }
++
++    while (game.isRunning()) {
++        const dt = game.getDeltaTime();
++        scene.update(dt);
++        game.getPipeline().sync(game.getRegistry());
++
++        const re = game.getRetainedEngine();
++        re.beginFrame();
++        re.render();
++        re.endFrame();
++    }
++}
+diff --git a/usage/example_physics/prefabs/dynamic_box.zon b/usage/example_physics/prefabs/dynamic_box.zon
+new file mode 100644
+index 0000000..acbe10b
+--- /dev/null
++++ b/usage/example_physics/prefabs/dynamic_box.zon
+@@ -0,0 +1,20 @@
++// Dynamic Box Prefab
++// A box that falls under gravity
++.{
++    .components = .{
++        .Position = .{ .x = 0, .y = 0 },
++        .Shape = .{
++            .type = .rectangle,
++            .width = 40,
++            .height = 40,
++            .color = .{ .r = 200, .g = 100, .b = 50, .a = 255 },
++        },
++        .PhysicsBody = .{
++            .body_type = .dynamic,
++            .collider_type = .box,
++            .width = 40,
++            .height = 40,
++            .restitution = 0.3,
++        },
++    },
++}
+diff --git a/usage/example_physics/prefabs/dynamic_circle.zon b/usage/example_physics/prefabs/dynamic_circle.zon
+new file mode 100644
+index 0000000..f473199
+--- /dev/null
++++ b/usage/example_physics/prefabs/dynamic_circle.zon
+@@ -0,0 +1,18 @@
++// Dynamic Circle Prefab
++// A circle that bounces under gravity
++.{
++    .components = .{
++        .Position = .{ .x = 0, .y = 0 },
++        .Shape = .{
++            .type = .circle,
++            .radius = 20,
++            .color = .{ .r = 200, .g = 200, .b = 100, .a = 255 },
++        },
++        .PhysicsBody = .{
++            .body_type = .dynamic,
++            .collider_type = .circle,
++            .radius = 20,
++            .restitution = 0.7,
++        },
++    },
++}
+diff --git a/usage/example_physics/project.labelle b/usage/example_physics/project.labelle
+new file mode 100644
+index 0000000..5d4cc3f
+--- /dev/null
++++ b/usage/example_physics/project.labelle
+@@ -0,0 +1,23 @@
++.{
++    .version = 1,
++    .name = "example_physics",
++    .description = "labelle-engine physics demo with falling boxes",
++    .initial_scene = "main",
++    .window = .{
++        .width = 800,
++        .height = 600,
++        .title = "labelle-engine: Physics Demo",
++        .target_fps = 60,
++    },
++    .camera = .{
++        .x = 400,
++        .y = 300,
++    },
++    .physics = .{
++        .enabled = true,
++        .gravity = .{ 0, 980 },
++        .pixels_per_meter = 100,
++        .debug_draw = false,
++    },
++    .plugins = .{},
++}
+diff --git a/usage/example_physics/scenes/main.zon b/usage/example_physics/scenes/main.zon
+new file mode 100644
+index 0000000..392b555
+--- /dev/null
++++ b/usage/example_physics/scenes/main.zon
+@@ -0,0 +1,96 @@
++// Physics Demo Scene
++// Falling boxes and circles with ground and walls
++// Left click: spawn box, Right click: spawn circle, R: reset
++.{
++    .name = "main",
++    .scripts = .{"physics_demo"},
++    .camera = .{ .x = 400, .y = 300 },
++
++    .entities = .{
++        // Ground (static body)
++        .{
++            .components = .{
++                .Position = .{ .x = 400, .y = 550 },
++                .Shape = .{ .type = .rectangle, .width = 700, .height = 20, .color = .{ .r = 100, .g = 100, .b = 100 } },
++                .PhysicsBody = .{
++                    .body_type = .static,
++                    .collider_type = .box,
++                    .width = 700,
++                    .height = 20,
++                },
++            },
++        },
++        // Left wall
++        .{
++            .components = .{
++                .Position = .{ .x = 50, .y = 300 },
++                .Shape = .{ .type = .rectangle, .width = 20, .height = 500, .color = .{ .r = 100, .g = 100, .b = 100 } },
++                .PhysicsBody = .{
++                    .body_type = .static,
++                    .collider_type = .box,
++                    .width = 20,
++                    .height = 500,
++                },
++            },
++        },
++        // Right wall
++        .{
++            .components = .{
++                .Position = .{ .x = 750, .y = 300 },
++                .Shape = .{ .type = .rectangle, .width = 20, .height = 500, .color = .{ .r = 100, .g = 100, .b = 100 } },
++                .PhysicsBody = .{
++                    .body_type = .static,
++                    .collider_type = .box,
++                    .width = 20,
++                    .height = 500,
++                },
++            },
++        },
++        // Dynamic box (red)
++        .{
++            .prefab = "dynamic_box",
++            .components = .{
++                .Position = .{ .x = 200, .y = 100 },
++                .Shape = .{ .color = .{ .r = 200, .g = 50, .b = 50 } },
++            },
++        },
++        // Dynamic box (green)
++        .{
++            .prefab = "dynamic_box",
++            .components = .{
++                .Position = .{ .x = 400, .y = 50 },
++                .Shape = .{ .color = .{ .r = 50, .g = 200, .b = 50 } },
++            },
++        },
++        // Dynamic box (blue, taller) - inline definition instead of prefab
++        .{
++            .components = .{
++                .Position = .{ .x = 600, .y = 150 },
++                .Shape = .{ .type = .rectangle, .width = 30, .height = 60, .color = .{ .r = 50, .g = 50, .b = 200 } },
++                .PhysicsBody = .{
++                    .body_type = .dynamic,
++                    .collider_type = .box,
++                    .width = 30,
++                    .height = 60,
++                    .restitution = 0.2,
++                },
++            },
++        },
++        // Dynamic circle (yellow)
++        .{
++            .prefab = "dynamic_circle",
++            .components = .{
++                .Position = .{ .x = 300, .y = 200 },
++                .Shape = .{ .radius = 25, .color = .{ .r = 200, .g = 200, .b = 50 } },
++            },
++        },
++        // Dynamic circle (purple)
++        .{
++            .prefab = "dynamic_circle",
++            .components = .{
++                .Position = .{ .x = 500, .y = 80 },
++                .Shape = .{ .color = .{ .r = 200, .g = 100, .b = 200 } },
++            },
++        },
++    },
++}
+diff --git a/usage/example_physics/scripts/physics_demo.zig b/usage/example_physics/scripts/physics_demo.zig
+new file mode 100644
+index 0000000..d3911cc
+--- /dev/null
++++ b/usage/example_physics/scripts/physics_demo.zig
+@@ -0,0 +1,217 @@
++// Physics Demo Script
++//
++// Initializes physics world and syncs positions.
++// Left click: spawn box, Right click: spawn circle, R: reset
++
++const std = @import("std");
++const engine = @import("labelle-engine");
++const physics = @import("labelle-physics");
++
++const Game = engine.Game;
++const Scene = engine.Scene;
++const Entity = engine.Entity;
++const Position = engine.Position;
++const Shape = engine.Shape;
++
++// Physics components (exported from physics module)
++const PhysicsBody = physics.PhysicsBody;
++const BodyType = physics.BodyType;
++const ColliderType = physics.ColliderType;
++
++const RigidBody = physics.RigidBody;
++const Collider = physics.Collider;
++const PhysicsWorld = physics.PhysicsWorld;
++
++// Script state
++var physics_world: ?PhysicsWorld = null;
++var spawn_timer: f32 = 0;
++var script_allocator: std.mem.Allocator = undefined;
++var initialized: bool = false;
++
++const spawn_cooldown: f32 = 0.1;
++
++pub fn init(game: *Game, scene: *Scene) void {
++    script_allocator = game.allocator;
++    const registry = game.getRegistry();
++    const pipeline = game.getPipeline();
++
++    // Initialize physics world with gravity
++    physics_world = PhysicsWorld.init(script_allocator, .{ 0, 980 }) catch |err| {
++        std.log.err("Failed to init physics: {}", .{err});
++        return;
++    };
++
++    initialized = true;
++    spawn_timer = 0;
++
++    std.log.info("Physics demo: scanning {} entities", .{scene.entities.items.len});
++
++    // Find all entities with PhysicsBody and Position components
++    for (scene.entities.items) |entity_instance| {
++        const entity = entity_instance.entity;
++
++        const pos = registry.tryGet(Position, entity) orelse continue;
++        const physics_body = registry.tryGet(PhysicsBody, entity) orelse continue;
++
++        std.log.info("Found entity with PhysicsBody: pos=({d:.1}, {d:.1}), type={s}", .{
++            pos.x,
++            pos.y,
++            @tagName(physics_body.body_type),
++        });
++
++        // Create physics body
++        const body_type: physics.BodyType = switch (physics_body.body_type) {
++            .dynamic => .dynamic,
++            .static => .static,
++            .kinematic => .kinematic,
++        };
++
++        var pw = &(physics_world.?);
++        pw.createBody(engine.entityToU64(entity), RigidBody{
++            .body_type = body_type,
++        }, .{ .x = pos.x, .y = pos.y }) catch |err| {
++            std.log.err("Failed to create body for entity: {}", .{err});
++            continue;
++        };
++
++        // Add collider based on PhysicsBody collider type
++        const collider: Collider = switch (physics_body.collider_type) {
++            .box => .{
++                .shape = .{ .box = .{ .width = physics_body.width, .height = physics_body.height } },
++                .restitution = physics_body.restitution,
++                .friction = physics_body.friction,
++            },
++            .circle => .{
++                .shape = .{ .circle = .{ .radius = physics_body.radius } },
++                .restitution = physics_body.restitution,
++                .friction = physics_body.friction,
++            },
++        };
++
++        pw.addCollider(engine.entityToU64(entity), collider) catch |err| {
++            std.log.err("Failed to add collider: {}", .{err});
++        };
++
++        pipeline.markPositionDirty(entity);
++    }
++
++    std.log.info("Physics demo initialized with {} entities", .{scene.entities.items.len});
++}
++
++pub fn update(game: *Game, scene: *Scene, dt: f32) void {
++    _ = scene;
++
++    if (!initialized or physics_world == null) return;
++
++    const registry = game.getRegistry();
++    const pipeline = game.getPipeline();
++    const input = game.getInput();
++
++    var pw = &(physics_world.?);
++
++    // Update physics simulation
++    pw.update(dt);
++
++    // Sync physics positions to ECS
++    for (pw.entities()) |entity_id| {
++        if (pw.getPosition(entity_id)) |phys_pos| {
++            const entity = engine.entityFromU64(entity_id);
++            if (registry.tryGet(Position, entity)) |pos| {
++                pos.x = phys_pos[0];
++                pos.y = phys_pos[1];
++                pipeline.markPositionDirty(entity);
++            }
++        }
++    }
++
++    // Spawn timer
++    spawn_timer -= dt;
++
++    // Spawn box on left click
++    if (input.isMouseButtonDown(.left) and spawn_timer <= 0) {
++        spawnBox(game, pw);
++        spawn_timer = spawn_cooldown;
++    }
++
++    // Spawn circle on right click
++    if (input.isMouseButtonDown(.right) and spawn_timer <= 0) {
++        spawnCircle(game, pw);
++        spawn_timer = spawn_cooldown;
++    }
++
++    // Reset scene on R key
++    if (input.isKeyPressed(.r)) {
++        game.queueSceneChange("main");
++    }
++}
++
++fn spawnBox(game: *Game, pw: *PhysicsWorld) void {
++    const mouse_pos = game.getInput().getMousePosition();
++
++    // Random color and size
++    var rng = std.Random.DefaultPrng.init(@intCast(std.time.milliTimestamp()));
++    const r: u8 = @intCast(rng.random().intRangeAtMost(u8, 100, 255));
++    const g: u8 = @intCast(rng.random().intRangeAtMost(u8, 100, 255));
++    const b: u8 = @intCast(rng.random().intRangeAtMost(u8, 100, 255));
++    const size: f32 = @floatFromInt(rng.random().intRangeAtMost(u32, 20, 50));
++
++    const entity = game.createEntity();
++
++    // Add Position
++    game.addPosition(entity, .{ .x = mouse_pos.x, .y = mouse_pos.y });
++
++    // Add Shape for rendering
++    var shape = engine.Shape.rectangle(size, size);
++    shape.color = .{ .r = r, .g = g, .b = b, .a = 255 };
++    game.addShape(entity, shape) catch return;
++
++    // Add to physics world
++    pw.createBody(engine.entityToU64(entity), RigidBody{
++        .body_type = .dynamic,
++    }, .{ .x = mouse_pos.x, .y = mouse_pos.y }) catch return;
++
++    pw.addCollider(engine.entityToU64(entity), Collider{
++        .shape = .{ .box = .{ .width = size, .height = size } },
++        .restitution = 0.4,
++    }) catch return;
++}
++
++fn spawnCircle(game: *Game, pw: *PhysicsWorld) void {
++    const mouse_pos = game.getInput().getMousePosition();
++
++    var rng = std.Random.DefaultPrng.init(@intCast(std.time.milliTimestamp()));
++    const r: u8 = @intCast(rng.random().intRangeAtMost(u8, 100, 255));
++    const g: u8 = @intCast(rng.random().intRangeAtMost(u8, 100, 255));
++    const b: u8 = @intCast(rng.random().intRangeAtMost(u8, 100, 255));
++    const radius: f32 = @floatFromInt(rng.random().intRangeAtMost(u32, 10, 30));
++
++    const entity = game.createEntity();
++
++    game.addPosition(entity, .{ .x = mouse_pos.x, .y = mouse_pos.y });
++
++    var shape = engine.Shape.circle(radius);
++    shape.color = .{ .r = r, .g = g, .b = b, .a = 255 };
++    game.addShape(entity, shape) catch return;
++
++    pw.createBody(engine.entityToU64(entity), RigidBody{
++        .body_type = .dynamic,
++    }, .{ .x = mouse_pos.x, .y = mouse_pos.y }) catch return;
++
++    pw.addCollider(engine.entityToU64(entity), Collider{
++        .shape = .{ .circle = .{ .radius = radius } },
++        .restitution = 0.7,
++    }) catch return;
++}
++
++pub fn deinit(game: *Game, scene: *Scene) void {
++    _ = game;
++    _ = scene;
++
++    if (physics_world) |*pw| {
++        pw.deinit();
++        physics_world = null;
++    }
++
++    spawn_timer = 0;
++    initialized = false;
++}
+diff --git a/usage/example_physics_validation/build.zig b/usage/example_physics_validation/build.zig
+new file mode 100644
+index 0000000..05991a1
+--- /dev/null
++++ b/usage/example_physics_validation/build.zig
+@@ -0,0 +1,52 @@
++// Physics Validation Example Build
++// Demonstrates physics integration with prefabs and validation script
++
++const std = @import("std");
++
++pub const Backend = enum {
++    raylib,
++    sokol,
++};
++
++pub const EcsBackend = enum {
++    zig_ecs,
++    zflecs,
++};
++
++pub fn build(b: *std.Build) void {
++    const target = b.standardTargetOptions(.{});
++    const optimize = b.standardOptimizeOption(.{});
++
++    const backend = b.option(Backend, "backend", "Graphics backend (default: raylib)") orelse .raylib;
++    const ecs_backend = b.option(EcsBackend, "ecs_backend", "ECS backend (default: zig_ecs)") orelse .zig_ecs;
++
++    const engine_dep = b.dependency("labelle-engine", .{
++        .target = target,
++        .optimize = optimize,
++        .backend = backend,
++        .ecs_backend = ecs_backend,
++        .physics = true, // Enable physics module
++    });
++    const engine_mod = engine_dep.module("labelle-engine");
++    const physics_mod = engine_dep.module("labelle-physics");
++
++    const exe = b.addExecutable(.{
++        .name = "example_physics_validation",
++        .root_module = b.createModule(.{
++            .root_source_file = b.path("main.zig"),
++            .target = target,
++            .optimize = optimize,
++            .imports = &.{
++                .{ .name = "labelle-engine", .module = engine_mod },
++                .{ .name = "labelle-physics", .module = physics_mod },
++            },
++        }),
++    });
++    b.installArtifact(exe);
++
++    const run_cmd = b.addRunArtifact(exe);
++    run_cmd.step.dependOn(b.getInstallStep());
++
++    const run_step = b.step("run", "Run the physics validation test");
++    run_step.dependOn(&run_cmd.step);
++}
+diff --git a/usage/example_physics_validation/build.zig.zon b/usage/example_physics_validation/build.zig.zon
+new file mode 100644
+index 0000000..985a2ba
+--- /dev/null
++++ b/usage/example_physics_validation/build.zig.zon
+@@ -0,0 +1,20 @@
++.{
++    .fingerprint = 0xa01bb5b6aed95993,
++    .name = .example_physics_validation,
++    .version = "0.1.0",
++    .dependencies = .{
++        .@"labelle-engine" = .{
++            .path = "../..",
++        },
++    },
++    .paths = .{
++        "build.zig",
++        "build.zig.zon",
++        "main.zig",
++        "project.labelle",
++        "scenes",
++        "prefabs",
++        "components",
++        "scripts",
++    },
++}
+diff --git a/usage/example_physics_validation/components/gravity_body.zig b/usage/example_physics_validation/components/gravity_body.zig
+new file mode 100644
+index 0000000..c143c00
+--- /dev/null
++++ b/usage/example_physics_validation/components/gravity_body.zig
+@@ -0,0 +1,15 @@
++// GravityBody Component
++// Marks an entity for physics simulation with gravity
++
++pub const BodyType = enum {
++    dynamic,
++    static,
++    kinematic,
++};
++
++pub const GravityBody = struct {
++    body_type: BodyType = .dynamic,
++    restitution: f32 = 0.5,
++    friction: f32 = 0.3,
++    density: f32 = 1.0,
++};
+diff --git a/usage/example_physics_validation/main.zig b/usage/example_physics_validation/main.zig
+new file mode 100644
+index 0000000..4b37397
+--- /dev/null
++++ b/usage/example_physics_validation/main.zig
+@@ -0,0 +1,104 @@
++// ============================================================================
++// Physics Validation Example - main.zig
++// ============================================================================
++// Demonstrates physics gravity using prefabs and a validation script
++// that checks entities have moved after 2 seconds.
++// ============================================================================
++
++const std = @import("std");
++const engine = @import("labelle-engine");
++
++const Game = engine.Game;
++const ProjectConfig = engine.ProjectConfig;
++
++// Import prefabs
++const falling_box_prefab = @import("prefabs/falling_box.zon");
++
++// Import components
++const gravity_body_comp = @import("components/gravity_body.zig");
++pub const GravityBody = gravity_body_comp.GravityBody;
++
++// Import scripts
++const gravity_validator_script = @import("scripts/gravity_validator.zig");
++
++const main_module = @This();
++
++pub const Prefabs = engine.PrefabRegistry(.{
++    .falling_box = falling_box_prefab,
++});
++
++pub const Components = engine.ComponentRegistry(struct {
++    pub const GravityBody = main_module.GravityBody;
++});
++
++pub const Scripts = engine.ScriptRegistry(struct {
++    pub const gravity_validator = gravity_validator_script;
++});
++
++pub const Loader = engine.SceneLoader(Prefabs, Components, Scripts);
++
++pub const initial_scene = @import("scenes/main.zon");
++
++pub fn main() !void {
++    const ci_test = std.posix.getenv("CI_TEST") != null;
++
++    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
++    defer _ = gpa.deinit();
++    const allocator = gpa.allocator();
++
++    const project = try ProjectConfig.load(allocator, "project.labelle");
++    defer project.deinit(allocator);
++
++    // Convert title to sentinel-terminated string for window creation
++    const title = try allocator.dupeZ(u8, project.window.title);
++    defer allocator.free(title);
++
++    var game = try Game.init(allocator, .{
++        .window = .{
++            .width = project.window.width,
++            .height = project.window.height,
++            .title = title,
++            .target_fps = project.window.target_fps,
++            .hidden = ci_test,
++        },
++        .clear_color = .{ .r = 40, .g = 45, .b = 55 },
++    });
++    game.fixPointers();
++    defer game.deinit();
++
++    // Apply camera configuration from project
++    if (project.camera.x != null or project.camera.y != null) {
++        game.setCameraPosition(project.camera.x orelse 0, project.camera.y orelse 0);
++    }
++    if (project.camera.zoom != 1.0) {
++        game.setCameraZoom(project.camera.zoom);
++    }
++
++    const ctx = engine.SceneContext.init(&game);
++    var scene = try Loader.load(initial_scene, ctx);
++    defer scene.deinit();
++
++    // For CI test, just validate and exit
++    if (ci_test) {
++        std.debug.print("CI_TEST mode: running validation\n", .{});
++        // Run a few update cycles to let physics settle
++        var elapsed: f32 = 0;
++        while (elapsed < 3.0) {
++            const dt: f32 = 1.0 / 60.0;
++            scene.update(dt);
++            elapsed += dt;
++        }
++        return;
++    }
++
++    while (game.isRunning()) {
++        const dt = game.getDeltaTime();
++        scene.update(dt);
++        game.getPipeline().sync(game.getRegistry());
++
++        const re = game.getRetainedEngine();
++        re.beginFrame();
++        re.render();
++        re.endFrame();
++    }
++}
+diff --git a/usage/example_physics_validation/prefabs/falling_box.zon b/usage/example_physics_validation/prefabs/falling_box.zon
+new file mode 100644
+index 0000000..0209c35
+--- /dev/null
++++ b/usage/example_physics_validation/prefabs/falling_box.zon
+@@ -0,0 +1,18 @@
++// Falling Box Prefab
++// A box that will fall under gravity
++.{
++    .components = .{
++        .Position = .{ .x = 400, .y = 100 },
++        .Shape = .{
++            .type = .rectangle,
++            .width = 50,
++            .height = 50,
++            .color = .{ .r = 200, .g = 100, .b = 50, .a = 255 },
++        },
++        // Custom component to mark this entity for physics
++        .GravityBody = .{
++            .body_type = .dynamic,
++            .restitution = 0.3,
++        },
++    },
++}
+diff --git a/usage/example_physics_validation/project.labelle b/usage/example_physics_validation/project.labelle
+new file mode 100644
+index 0000000..0795ff6
+--- /dev/null
++++ b/usage/example_physics_validation/project.labelle
+@@ -0,0 +1,19 @@
++.{
++    .version = 1,
++    .name = "example_physics_validation",
++    .description = "Physics gravity validation test using prefabs",
++    .initial_scene = "main",
++    .window = .{
++        .width = 800,
++        .height = 600,
++        .title = "Physics Validation Test",
++        .target_fps = 60,
++    },
++    .physics = .{
++        .enabled = true,
++        .gravity = .{ 0, 980 },
++        .pixels_per_meter = 100,
++        .debug_draw = false,
++    },
++    .plugins = .{},
++}
+diff --git a/usage/example_physics_validation/scenes/main.zon b/usage/example_physics_validation/scenes/main.zon
+new file mode 100644
+index 0000000..72333b6
+--- /dev/null
++++ b/usage/example_physics_validation/scenes/main.zon
+@@ -0,0 +1,43 @@
++// Main Scene - Physics Validation Test
++// Spawns falling boxes and validates their positions change over time
++.{
++    .name = "main",
++    .scripts = .{"gravity_validator"},
++
++    .entities = .{
++        // Ground (static body)
++        .{
++            .components = .{
++                .Position = .{ .x = 400, .y = 550 },
++                .Shape = .{
++                    .type = .rectangle,
++                    .width = 700,
++                    .height = 20,
++                    .color = .{ .r = 100, .g = 100, .b = 100, .a = 255 },
++                },
++                .GravityBody = .{
++                    .body_type = .static,
++                },
++            },
++        },
++
++        // Falling box using prefab (starts at y=100)
++        .{
++            .prefab = "falling_box",
++            .components = .{
++                .Position = .{ .x = 300, .y = 100 },
++            },
++        },
++
++        // Another falling box at different position
++        .{
++            .prefab = "falling_box",
++            .components = .{
++                .Position = .{ .x = 500, .y = 50 },
++                .Shape = .{
++                    .color = .{ .r = 50, .g = 150, .b = 200, .a = 255 },
++                },
++            },
++        },
++    },
++}
+diff --git a/usage/example_physics_validation/scripts/gravity_validator.zig b/usage/example_physics_validation/scripts/gravity_validator.zig
+new file mode 100644
+index 0000000..ea329fb
+--- /dev/null
++++ b/usage/example_physics_validation/scripts/gravity_validator.zig
+@@ -0,0 +1,231 @@
++// Gravity Validator Script
++//
++// Validates that entities with GravityBody component fall under gravity.
++// After VALIDATION_SECONDS, checks that dynamic bodies have moved from
++// their initial positions.
++
++const std = @import("std");
++const engine = @import("labelle-engine");
++const physics = @import("labelle-physics");
++
++const Game = engine.Game;
++const Scene = engine.Scene;
++const Entity = engine.Entity;
++const Position = engine.Position;
++const Shape = engine.Shape;
++
++// Import component from local components folder
++const GravityBody = @import("../components/gravity_body.zig").GravityBody;
++const BodyType = @import("../components/gravity_body.zig").BodyType;
++
++const RigidBody = physics.RigidBody;
++const Collider = physics.Collider;
++const PhysicsWorld = physics.PhysicsWorld;
++
++/// Seconds to wait before validating positions
++const VALIDATION_SECONDS: f32 = 2.0;
++
++/// Minimum distance an entity must have moved to pass validation
++const MIN_MOVEMENT: f32 = 50.0;
++
++/// Tracked entity data
++const TrackedEntity = struct {
++    entity: Entity,
++    initial_y: f32,
++    is_dynamic: bool,
++};
++
++/// Script state (module-level static variables)
++var physics_world: ?PhysicsWorld = null;
++var tracked_entities: std.ArrayList(TrackedEntity) = .{};
++var elapsed_time: f32 = 0;
++var validation_done: bool = false;
++var script_allocator: std.mem.Allocator = undefined;
++var initialized: bool = false;
++
++pub fn init(game: *Game, scene: *Scene) void {
++    script_allocator = game.allocator;
++    const registry = game.getRegistry();
++    const pipeline = game.getPipeline();
++
++    // Initialize physics world with gravity (positive Y = down in screen coords)
++    physics_world = PhysicsWorld.init(script_allocator, .{ 0, 980 }) catch |err| {
++        std.log.err("Failed to init physics: {}", .{err});
++        return;
++    };
++
++    tracked_entities = .{};
++    initialized = true;
++
++    std.log.info("Gravity validator: scanning {} entities", .{scene.entities.items.len});
++
++    // Find all entities with GravityBody and Position components
++    for (scene.entities.items) |entity_instance| {
++        const entity = entity_instance.entity;
++
++        // Check for required components
++        const pos = registry.tryGet(Position, entity) orelse continue;
++        const shape = registry.tryGet(Shape, entity) orelse continue;
++        const gravity_body = registry.tryGet(GravityBody, entity) orelse continue;
++
++        const is_dynamic = gravity_body.body_type == .dynamic;
++
++        std.log.info("Found entity with GravityBody: pos=({d:.1}, {d:.1}), dynamic={}", .{
++            pos.x, pos.y, is_dynamic,
++        });
++
++        // Track initial position for validation
++        tracked_entities.append(script_allocator, .{
++            .entity = entity,
++            .initial_y = pos.y,
++            .is_dynamic = is_dynamic,
++        }) catch continue;
++
++        // Create physics body
++        const body_type: physics.BodyType = switch (gravity_body.body_type) {
++            .dynamic => .dynamic,
++            .static => .static,
++            .kinematic => .kinematic,
++        };
++
++        var pw = &(physics_world.?);
++        pw.createBody(engine.entityToU64(entity), RigidBody{
++            .body_type = body_type,
++        }, .{ .x = pos.x, .y = pos.y }) catch |err| {
++            std.log.err("Failed to create body for entity: {}", .{err});
++            continue;
++        };
++
++        // Add collider based on shape type
++        const collider: Collider = switch (shape.shape) {
++            .rectangle => |rect| .{
++                .shape = .{ .box = .{ .width = rect.width, .height = rect.height } },
++                .restitution = gravity_body.restitution,
++                .friction = gravity_body.friction,
++            },
++            .circle => |circ| .{
++                .shape = .{ .circle = .{ .radius = circ.radius } },
++                .restitution = gravity_body.restitution,
++                .friction = gravity_body.friction,
++            },
++            else => continue,
++        };
++
++        pw.addCollider(engine.entityToU64(entity), collider) catch |err| {
++            std.log.err("Failed to add collider: {}", .{err});
++        };
++
++        // Mark entity as tracked by pipeline for rendering
++        pipeline.markPositionDirty(entity);
++    }
++
++    std.log.info("Gravity validator initialized. Tracking {} entities. Validation in {d:.1}s", .{
++        tracked_entities.items.len,
++        VALIDATION_SECONDS,
++    });
++}
++
++pub fn update(game: *Game, scene: *Scene, dt: f32) void {
++    _ = scene;
++
++    if (!initialized or physics_world == null) return;
++
++    const registry = game.getRegistry();
++    const pipeline = game.getPipeline();
++
++    var pw = &(physics_world.?);
++
++    // Update physics simulation
++    pw.update(dt);
++
++    // Sync physics positions to ECS
++    for (pw.entities()) |entity_id| {
++        if (pw.getPosition(entity_id)) |phys_pos| {
++            const entity = engine.entityFromU64(entity_id);
++            if (registry.tryGet(Position, entity)) |pos| {
++                pos.x = phys_pos[0];
++                pos.y = phys_pos[1];
++                pipeline.markPositionDirty(entity);
++            }
++        }
++    }
++
++    // Track elapsed time
++    elapsed_time += dt;
++
++    // Perform validation after VALIDATION_SECONDS
++    if (!validation_done and elapsed_time >= VALIDATION_SECONDS) {
++        validation_done = true;
++        performValidation(game);
++    }
++}
++
++fn performValidation(game: *Game) void {
++    const registry = game.getRegistry();
++
++    std.log.info("=== GRAVITY VALIDATION RESULTS ===", .{});
++    std.log.info("Elapsed time: {d:.2}s", .{elapsed_time});
++
++    var passed: u32 = 0;
++    var failed: u32 = 0;
++    var skipped: u32 = 0;
++
++    for (tracked_entities.items) |tracked| {
++        // Skip static bodies (they shouldn't move)
++        if (!tracked.is_dynamic) {
++            skipped += 1;
++            continue;
++        }
++
++        // Get current position
++        const current_pos = registry.tryGet(Position, tracked.entity) orelse {
++            std.log.warn("Entity no longer has position", .{});
++            failed += 1;
++            continue;
++        };
++
++        const movement = current_pos.y - tracked.initial_y;
++        const moved_enough = movement >= MIN_MOVEMENT;
++
++        if (moved_enough) {
++            passed += 1;
++            std.log.info("PASS: Entity moved {d:.1} pixels (initial_y={d:.1}, current_y={d:.1})", .{
++                movement,
++                tracked.initial_y,
++                current_pos.y,
++            });
++        } else {
++            failed += 1;
++            std.log.err("FAIL: Entity only moved {d:.1} pixels (expected >= {d:.1})", .{
++                movement,
++                MIN_MOVEMENT,
++            });
++        }
++    }
++
++    std.log.info("=== SUMMARY ===", .{});
++    std.log.info("Passed: {}, Failed: {}, Skipped (static): {}", .{ passed, failed, skipped });
++
++    if (failed == 0 and passed > 0) {
++        std.log.info("SUCCESS: All dynamic entities are falling correctly!", .{});
++    } else if (failed > 0) {
++        std.log.err("FAILURE: Some entities did not move as expected", .{});
++    }
++}
++
++pub fn deinit(game: *Game, scene: *Scene) void {
++    _ = game;
++    _ = scene;
++
++    if (physics_world) |*pw| {
++        pw.deinit();
++        physics_world = null;
++    }
++
++    tracked_entities.deinit(script_allocator);
++    tracked_entities = .{};
++
++    elapsed_time = 0;
++    validation_done = false;
++    initialized = false;
++}
