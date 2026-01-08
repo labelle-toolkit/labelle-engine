@@ -6,9 +6,11 @@
 //! Contents:
 //! - Entity utilities for lifecycle hooks (entityToU64, entityFromU64)
 //! - ZON coercion utilities for comptime struct building
+//! - SparseSet for O(1) lookup data structures
 
 const entity_utils = @import("src/entity_utils.zig");
 const zon_coercion = @import("src/zon_coercion.zig");
+const sparse_set = @import("src/sparse_set.zig");
 
 // Re-export entity utilities
 pub const Entity = entity_utils.Entity;
@@ -25,3 +27,6 @@ pub const isEntity = zon_coercion.isEntity;
 pub const isEntitySlice = zon_coercion.isEntitySlice;
 pub const mergeStructs = zon_coercion.mergeStructs;
 pub const hasFields = zon_coercion.hasFields;
+
+// Re-export SparseSet
+pub const SparseSet = sparse_set.SparseSet;

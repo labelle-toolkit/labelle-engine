@@ -64,6 +64,7 @@
 // For .custom pivot, also specify .pivot_x and .pivot_y (0.0-1.0)
 
 const std = @import("std");
+const builtin = @import("builtin");
 const ecs = @import("ecs");
 const zon = @import("../../core/src/zon_coercion.zig");
 const prefab_mod = @import("prefab.zig");
@@ -72,6 +73,7 @@ const component_mod = @import("component.zig");
 const script_mod = @import("script.zig");
 const game_mod = @import("../../engine/game.zig");
 const loader_types = @import("loader/types.zig");
+const render = @import("../../render/src/pipeline.zig");
 
 pub const Registry = ecs.Registry;
 pub const Entity = ecs.Entity;
@@ -649,6 +651,15 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
                 }
             }
 
+            // Create gizmo entities (debug builds only)
+            // First check scene-level gizmos (can override prefab gizmos)
+            if (@hasField(@TypeOf(entity_def), "gizmos")) {
+                try createGizmoEntities(game, scene, entity, entity_def.gizmos, pos.x, pos.y, ready_queue);
+            } else if (comptime Prefabs.hasGizmos(prefab_name)) {
+                // Fall back to prefab gizmos if no scene-level override
+                try createGizmoEntities(game, scene, entity, Prefabs.getGizmos(prefab_name), pos.x, pos.y, ready_queue);
+            }
+
             return .{
                 .entity = entity,
                 .visual_type = comptime getVisualTypeFromPrefab(prefab_name),
@@ -719,6 +730,91 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
             }
         }
 
+        /// Create gizmo entities for debug visualization.
+        /// Gizmos are only created in debug builds and are attached to a parent entity.
+        /// Each gizmo entity gets a Gizmo marker component for visibility toggling.
+        fn createGizmoEntities(
+            game: *Game,
+            scene: ?*Scene,
+            parent_entity: Entity,
+            comptime gizmos_data: anytype,
+            parent_x: f32,
+            parent_y: f32,
+            ready_queue: *std.ArrayList(ReadyCallbackEntry),
+        ) !void {
+            // Only create gizmos in debug builds
+            if (builtin.mode != .Debug) return;
+
+            const gizmo_fields = @typeInfo(@TypeOf(gizmos_data)).@"struct".fields;
+
+            // Process each gizmo definition (these are component definitions like Shape, Text, Sprite)
+            inline for (gizmo_fields) |field| {
+                const field_name = field.name;
+                const gizmo_data = @field(gizmos_data, field_name);
+
+                // Create a new entity for this gizmo
+                const gizmo_entity = game.createEntity();
+
+                // Get offset from the gizmo data's Position if present, otherwise use 0,0
+                const offset_x: f32 = if (@hasField(@TypeOf(gizmo_data), "x")) gizmo_data.x else 0;
+                const offset_y: f32 = if (@hasField(@TypeOf(gizmo_data), "y")) gizmo_data.y else 0;
+
+                // Add Position at parent position + offset
+                game.getRegistry().add(gizmo_entity, Position{ .x = parent_x + offset_x, .y = parent_y + offset_y });
+
+                // Add Gizmo marker component with parent reference
+                game.getRegistry().add(gizmo_entity, render.Gizmo{
+                    .parent_entity = parent_entity,
+                    .offset_x = offset_x,
+                    .offset_y = offset_y,
+                });
+
+                // Handle BoundingBox gizmos specially - they create a Shape from parent's visual bounds
+                if (comptime std.mem.eql(u8, field_name, "BoundingBox")) {
+                    // Create BoundingBox component from gizmo data using buildStruct (handles defaults)
+                    const bbox = zon.buildStruct(render.BoundingBox, gizmo_data);
+
+                    // Store BoundingBox component for reference
+                    game.getRegistry().add(gizmo_entity, bbox);
+
+                    // Get parent entity's visual bounds and create Shape
+                    if (game.getEntityVisualBounds(parent_entity)) |bounds| {
+                        const shape = bbox.toShape(bounds.width, bounds.height);
+                        game.getRegistry().add(gizmo_entity, shape);
+                    } else {
+                        // Fallback to a small default shape if bounds unavailable
+                        const shape = bbox.toShape(32, 32);
+                        game.getRegistry().add(gizmo_entity, shape);
+                        std.log.warn("BoundingBox gizmo: could not get parent visual bounds, using default 32x32", .{});
+                    }
+                } else {
+                    // Add the visual component (Shape, Text, Sprite, Icon)
+                    try addComponentWithNestedEntities(game, scene, gizmo_entity, field_name, gizmo_data, parent_x + offset_x, parent_y + offset_y, no_parent, ready_queue);
+                }
+
+                // Track in scene for cleanup
+                if (scene) |s| {
+                    try s.addEntity(.{
+                        .entity = gizmo_entity,
+                        .visual_type = comptime getVisualTypeFromGizmo(field_name),
+                        .prefab_name = null,
+                        .onUpdate = null,
+                        .onDestroy = null,
+                    });
+                }
+            }
+        }
+
+        /// Determine visual type from gizmo component name at compile time
+        fn getVisualTypeFromGizmo(comptime comp_name: []const u8) VisualType {
+            if (comptime std.mem.eql(u8, comp_name, "Sprite")) return .sprite;
+            if (comptime std.mem.eql(u8, comp_name, "Shape")) return .shape;
+            if (comptime std.mem.eql(u8, comp_name, "Text")) return .text;
+            if (comptime std.mem.eql(u8, comp_name, "Icon")) return .sprite;
+            if (comptime std.mem.eql(u8, comp_name, "BoundingBox")) return .shape;
+            return .none;
+        }
+
         /// Load an inline entity with components.
         /// Handles all component types uniformly - visual components (Sprite, Shape, Text)
         /// are registered with the render pipeline via their onAdd callbacks.
@@ -742,6 +838,11 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
             // Add all components (Sprite/Shape/Text handled via fromZonData, others generically)
             // Position is excluded since we already added it above
             try addComponentsExcluding(game, scene, entity, entity_def.components, pos.x, pos.y, .{"Position"}, no_parent, ready_queue);
+
+            // Create gizmo entities if present (debug builds only)
+            if (@hasField(@TypeOf(entity_def), "gizmos")) {
+                try createGizmoEntities(game, scene, entity, entity_def.gizmos, pos.x, pos.y, ready_queue);
+            }
 
             return .{
                 .entity = entity,

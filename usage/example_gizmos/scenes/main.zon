@@ -1,0 +1,29 @@
+.{
+    .name = "main",
+    .scripts = .{"gizmo_toggle"},
+    .camera = .{ .x = -400, .y = -300 },
+    .entities = .{
+        // Player at center
+        .{ .prefab = "player", .components = .{ .Position = .{ .x = 400, .y = 300 } } },
+        // Enemies around the player
+        .{ .prefab = "enemy", .components = .{ .Position = .{ .x = 200, .y = 200 } } },
+        .{ .prefab = "enemy", .components = .{ .Position = .{ .x = 600, .y = 200 } } },
+        .{ .prefab = "enemy", .components = .{ .Position = .{ .x = 200, .y = 400 } } },
+        .{ .prefab = "enemy", .components = .{ .Position = .{ .x = 600, .y = 400 } } },
+        // Inline entity with gizmos (no prefab)
+        .{
+            .components = .{
+                .Position = .{ .x = 400, .y = 500 },
+                .Shape = .{
+                    .shape = .{ .circle = .{ .radius = 15 } },
+                    .color = .{ .r = 100, .g = 255, .b = 100, .a = 255 },
+                },
+            },
+            .gizmos = .{
+                .Text = .{ .text = "Item", .size = 12, .y = -25, .color = .{ .r = 100, .g = 255, .b = 100, .a = 255 } },
+                // Yellow bounding box for item
+                .BoundingBox = .{ .color = .{ .r = 255, .g = 255, .b = 0, .a = 200 }, .padding = 5 },
+            },
+        },
+    },
+}

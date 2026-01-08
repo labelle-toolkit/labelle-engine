@@ -59,6 +59,11 @@ pub const VisualType = render_pipeline_mod.VisualType;
 pub const Color = render_pipeline_mod.Color;
 pub const TextureId = render_pipeline_mod.TextureId;
 pub const FontId = render_pipeline_mod.FontId;
+pub const ShapeType = render_pipeline_mod.ShapeType;
+pub const GfxPosition = render_pipeline_mod.GfxPosition;
+pub const Icon = render_pipeline_mod.Icon;
+pub const GizmoVisibility = render_pipeline_mod.GizmoVisibility;
+pub const BoundingBox = render_pipeline_mod.BoundingBox;
 
 /// Configuration for window creation
 pub const WindowConfig = struct {
@@ -81,6 +86,10 @@ pub const ScreenSize = struct {
     width: i32,
     height: i32,
 };
+
+/// Max selectable entities for SparseSet allocation.
+/// 10k entities uses ~40KB memory and covers most game scenarios.
+const max_selectable_entities: usize = 10_000;
 
 /// Game facade - main entry point for GUI-generated projects.
 /// Use `GameWith(MyHooks)` to enable lifecycle hooks, or just `Game` for no hooks.
@@ -122,6 +131,16 @@ pub fn GameWith(comptime Hooks: type) type {
         /// Frame callback type for custom game loop logic
         pub const FrameCallback = *const fn (*Self, f32) void;
 
+        /// Standalone gizmo that persists until cleared.
+        /// Used for runtime gizmo drawing without creating entities.
+        pub const StandaloneGizmo = struct {
+            shape: labelle.retained_engine.Shape,
+            x: f32,
+            y: f32,
+            color: labelle.retained_engine.Color,
+            group: []const u8 = "",
+        };
+
         allocator: Allocator,
         retained_engine: RetainedEngine,
         registry: Registry,
@@ -142,6 +161,16 @@ pub fn GameWith(comptime Hooks: type) type {
 
         // Deferred screenshot request (taken after render, before endFrame)
         pending_screenshot_filename: ?[:0]const u8 = null,
+
+        // Gizmos visibility (debug-only visualization)
+        gizmos_enabled: bool = true,
+
+        // Standalone gizmos (not bound to entities)
+        standalone_gizmos: std.ArrayList(StandaloneGizmo),
+
+        // Entity selection tracking (for selected-only gizmos)
+        // Uses DynamicBitSet for O(1) bit operations - minimal memory (~1.25KB for 10k entities)
+        selected_entities: std.DynamicBitSet,
 
         /// Emit a hook event. No-op if hooks are disabled.
         inline fn emitHook(payload: hooks_mod.HookPayload) void {
@@ -173,6 +202,11 @@ pub fn GameWith(comptime Hooks: type) type {
         const input = Input.init();
         const audio = Audio.init();
 
+        // Initialize collections
+        // ArrayList uses .empty in Zig 0.15, allocator passed to methods
+        const standalone_gizmos_list = std.ArrayList(StandaloneGizmo).empty;
+        const selected_entities_bitset = try std.DynamicBitSet.initEmpty(allocator, max_selectable_entities);
+
         // Build the struct. Note: pipeline.engine currently points to the
         // local `retained_engine` variable above, which will become invalid after
         // the struct is moved to the caller's stack.
@@ -187,6 +221,8 @@ pub fn GameWith(comptime Hooks: type) type {
             .current_scene_name = null,
             .pending_scene_change = null,
             .running = true,
+            .standalone_gizmos = standalone_gizmos_list,
+            .selected_entities = selected_entities_bitset,
         };
 
         // Emit game_init hook with allocator for early subsystem initialization
@@ -235,6 +271,8 @@ pub fn GameWith(comptime Hooks: type) type {
         }
 
         self.scenes.deinit();
+        self.standalone_gizmos.deinit(self.allocator);
+        self.selected_entities.deinit();
         self.pipeline.deinit();
         self.registry.deinit();
         self.input.deinit();
@@ -257,6 +295,12 @@ pub fn GameWith(comptime Hooks: type) type {
 
             // Clear all tracked entities from pipeline and destroy their visuals
             self.pipeline.clear();
+
+            // Clear entity selections (prevents stale references to destroyed entities)
+            self.selected_entities.setRangeValue(.{ .start = 0, .end = self.selected_entities.capacity() }, false);
+
+            // Clear standalone gizmos
+            self.standalone_gizmos.clearRetainingCapacity();
         }
 
     // ==================== Entity Management ====================
@@ -473,6 +517,9 @@ pub fn GameWith(comptime Hooks: type) type {
 
         // Emit scene_load hook
         emitHook(.{ .scene_load = .{ .name = name } });
+
+        // Apply current gizmo visibility state to newly created gizmos
+        self.updateGizmoVisibility();
     }
 
     /// Queue a scene change to happen at the end of the current frame
@@ -674,6 +721,262 @@ pub fn GameWith(comptime Hooks: type) type {
         return .{ .width = size.w, .height = size.h };
     }
 
+    // ==================== Gizmos ====================
+
+    /// Enable or disable gizmo rendering.
+    /// Gizmos are debug-only visualizations that are stripped in release builds.
+    /// When disabled, gizmo entities are hidden but not destroyed.
+    pub fn setGizmosEnabled(self: *Self, enabled: bool) void {
+        if (self.gizmos_enabled == enabled) return;
+        self.gizmos_enabled = enabled;
+        self.updateGizmoVisibility();
+    }
+
+    /// Check if gizmos are currently enabled.
+    pub fn areGizmosEnabled(self: *const Self) bool {
+        return self.gizmos_enabled;
+    }
+
+    // ==================== Entity Selection ====================
+
+    /// Select an entity (for selected-only gizmo visibility).
+    pub fn selectEntity(self: *Self, entity: Entity) void {
+        const idx = entityToU64(entity);
+        if (idx < max_selectable_entities) {
+            self.selected_entities.set(@intCast(idx));
+            self.updateGizmoVisibility();
+        }
+    }
+
+    /// Deselect an entity.
+    pub fn deselectEntity(self: *Self, entity: Entity) void {
+        const idx = entityToU64(entity);
+        if (idx < max_selectable_entities) {
+            self.selected_entities.unset(@intCast(idx));
+            self.updateGizmoVisibility();
+        }
+    }
+
+    /// Clear all entity selections.
+    pub fn clearSelection(self: *Self) void {
+        self.selected_entities.setRangeValue(.{ .start = 0, .end = self.selected_entities.capacity() }, false);
+        self.updateGizmoVisibility();
+    }
+
+    /// Check if an entity is selected.
+    pub fn isEntitySelected(self: *const Self, entity: Entity) bool {
+        const idx = entityToU64(entity);
+        if (idx >= max_selectable_entities) return false;
+        return self.selected_entities.isSet(@intCast(idx));
+    }
+
+    /// Update visibility of all gizmos based on their visibility mode and selection state.
+    fn updateGizmoVisibility(self: *Self) void {
+        const Gizmo = render_pipeline_mod.Gizmo;
+
+        var view = self.registry.view(.{Gizmo});
+        var iter = view.entityIterator();
+        while (iter.next()) |entity| {
+            if (self.registry.tryGet(Gizmo, entity)) |gizmo| {
+                const should_show = switch (gizmo.visibility) {
+                    .always => self.gizmos_enabled,
+                    .selected_only => self.gizmos_enabled and
+                        (gizmo.parent_entity != null and self.isEntitySelected(gizmo.parent_entity.?)),
+                    .never => false,
+                };
+                self.setGizmoEntityVisible(entity, should_show);
+            }
+        }
+    }
+
+    /// Set visibility of a gizmo entity's visual components.
+    fn setGizmoEntityVisible(self: *Self, entity: Entity, visible: bool) void {
+        var changed = false;
+        // Update visibility for all visual component types
+        const visual_components = .{ Sprite, Shape, Text, Icon };
+        inline for (visual_components) |ComponentType| {
+            if (self.registry.tryGet(ComponentType, entity)) |comp| {
+                var updated = comp.*;
+                if (updated.visible != visible) {
+                    updated.visible = visible;
+                    self.registry.add(entity, updated);
+                    changed = true;
+                }
+            }
+        }
+        // Mark dirty so render pipeline syncs the change
+        if (changed) {
+            self.pipeline.markVisualDirty(entity);
+        }
+    }
+
+    // ==================== Standalone Gizmos ====================
+
+    /// Shape primitive union type (circle, rectangle, line, arrow, ray, etc.)
+    /// from labelle-gfx visuals module. Used for standalone gizmo drawing.
+    pub const GizmoShape = labelle.retained_engine.Shape;
+
+    /// Draw a standalone gizmo (not bound to any entity).
+    /// Gizmo persists until clearGizmos() is called.
+    /// No-op in release builds or when gizmos are disabled.
+    pub fn drawGizmo(self: *Self, shape: GizmoShape, x: f32, y: f32, color: Color) void {
+        if (@import("builtin").mode != .Debug) return;
+        if (!self.gizmos_enabled) return;
+
+        self.standalone_gizmos.append(self.allocator, .{
+            .shape = shape,
+            .x = x,
+            .y = y,
+            .color = color,
+        }) catch return;
+    }
+
+    /// Draw an arrow gizmo from point (x1, y1) to point (x2, y2).
+    /// No-op in release builds or when gizmos are disabled.
+    pub fn drawArrow(self: *Self, x1: f32, y1: f32, x2: f32, y2: f32, color: Color) void {
+        self.drawGizmo(.{ .arrow = .{
+            .delta = .{ .x = x2 - x1, .y = y2 - y1 },
+        } }, x1, y1, color);
+    }
+
+    /// Draw a ray gizmo from origin in direction for given length.
+    /// Direction should be normalized for predictable results.
+    /// No-op in release builds or when gizmos are disabled.
+    pub fn drawRay(self: *Self, x: f32, y: f32, dir_x: f32, dir_y: f32, length: f32, color: Color) void {
+        self.drawGizmo(.{ .ray = .{
+            .direction = .{ .x = dir_x, .y = dir_y },
+            .length = length,
+        } }, x, y, color);
+    }
+
+    /// Draw a line gizmo from point (x1, y1) to point (x2, y2).
+    /// No-op in release builds or when gizmos are disabled.
+    pub fn drawLine(self: *Self, x1: f32, y1: f32, x2: f32, y2: f32, color: Color) void {
+        self.drawGizmo(.{ .line = .{
+            .end = .{ .x = x2 - x1, .y = y2 - y1 },
+        } }, x1, y1, color);
+    }
+
+    /// Draw a circle gizmo at position with given radius.
+    /// No-op in release builds or when gizmos are disabled.
+    pub fn drawCircle(self: *Self, x: f32, y: f32, radius: f32, color: Color) void {
+        self.drawGizmo(.{ .circle = .{ .radius = radius } }, x, y, color);
+    }
+
+    /// Draw a rectangle gizmo at position with given dimensions.
+    /// No-op in release builds or when gizmos are disabled.
+    pub fn drawRect(self: *Self, x: f32, y: f32, width: f32, height: f32, color: Color) void {
+        self.drawGizmo(.{ .rectangle = .{
+            .width = width,
+            .height = height,
+        } }, x, y, color);
+    }
+
+    /// Clear all standalone gizmos.
+    pub fn clearGizmos(self: *Self) void {
+        self.standalone_gizmos.clearRetainingCapacity();
+    }
+
+    /// Clear standalone gizmos in a specific group.
+    /// Uses O(n) single-pass filter instead of O(n²) orderedRemove loop.
+    pub fn clearGizmoGroup(self: *Self, group: []const u8) void {
+        var write_idx: usize = 0;
+        for (self.standalone_gizmos.items) |item| {
+            if (!std.mem.eql(u8, item.group, group)) {
+                self.standalone_gizmos.items[write_idx] = item;
+                write_idx += 1;
+            }
+        }
+        self.standalone_gizmos.shrinkRetainingCapacity(write_idx);
+    }
+
+    /// Render standalone gizmos.
+    /// Call this after re.render() but before re.endFrame() in your main loop:
+    /// ```zig
+    /// re.beginFrame();
+    /// re.render();
+    /// game.renderStandaloneGizmos();  // Draw gizmos on top
+    /// re.endFrame();
+    /// ```
+    /// No-op in release builds or when gizmos are disabled.
+    pub fn renderStandaloneGizmos(self: *Self) void {
+        if (@import("builtin").mode != .Debug) return;
+        if (!self.gizmos_enabled) return;
+
+        for (self.standalone_gizmos.items) |gizmo| {
+            self.retained_engine.drawShape(gizmo.shape, .{ .x = gizmo.x, .y = gizmo.y }, gizmo.color);
+        }
+    }
+
+    // ==================== Visual Bounds ====================
+
+    /// Visual bounds (width and height) of an entity.
+    pub const VisualBounds = struct {
+        width: f32,
+        height: f32,
+    };
+
+    /// Get the visual bounds (width, height) of an entity based on its visual component.
+    /// Returns null if the entity has no visual component or dimensions cannot be determined.
+    ///
+    /// For Shape components: calculates bounds from shape definition.
+    /// For Sprite components: looks up sprite dimensions from texture manager.
+    pub fn getEntityVisualBounds(self: *Self, entity: Entity) ?VisualBounds {
+        // Try Shape first (dimensions are directly available)
+        if (self.registry.tryGet(Shape, entity)) |shape| {
+            return getShapeBounds(shape.shape);
+        }
+
+        // Try Sprite (need to look up from texture manager)
+        if (self.registry.tryGet(Sprite, entity)) |sprite| {
+            return self.getSpriteBounds(sprite);
+        }
+
+        return null;
+    }
+
+    /// Get bounds from a Shape definition.
+    fn getShapeBounds(shape: ShapeType) ?VisualBounds {
+        return switch (shape) {
+            .circle => |c| .{ .width = c.radius * 2, .height = c.radius * 2 },
+            .rectangle => |r| .{ .width = r.width, .height = r.height },
+            .line => |l| .{
+                .width = @abs(l.end.x) + l.thickness,
+                .height = @abs(l.end.y) + l.thickness,
+            },
+            .triangle => |t| .{
+                .width = @max(@max(0, t.p2.x), t.p3.x) - @min(@min(0, t.p2.x), t.p3.x),
+                .height = @max(@max(0, t.p2.y), t.p3.y) - @min(@min(0, t.p2.y), t.p3.y),
+            },
+            .polygon => |p| .{
+                .width = p.radius * 2,
+                .height = p.radius * 2,
+            },
+            .arrow => |a| .{
+                .width = @abs(a.delta.x) + a.head_size,
+                .height = @abs(a.delta.y) + a.head_size,
+            },
+            .ray => |r| .{
+                .width = @abs(r.direction.x * r.length) + r.thickness,
+                .height = @abs(r.direction.y * r.length) + r.thickness,
+            },
+        };
+    }
+
+    /// Get bounds from a Sprite by looking up dimensions from texture manager.
+    fn getSpriteBounds(self: *Self, sprite: *const Sprite) ?VisualBounds {
+        const texture_manager = self.retained_engine.getTextureManager();
+        if (texture_manager.findSprite(sprite.name)) |result| {
+            const width: f32 = @floatFromInt(result.sprite.getWidth());
+            const height: f32 = @floatFromInt(result.sprite.getHeight());
+            return .{
+                .width = width * sprite.scale,
+                .height = height * sprite.scale,
+            };
+        }
+        return null;
+    }
+
     // ==================== Screenshot ====================
 
     /// Request a screenshot of the current frame to be saved to a file.
@@ -685,7 +988,8 @@ pub fn GameWith(comptime Hooks: type) type {
             self.allocator.free(old);
         }
         // Duplicate the filename to store until end of frame
-        self.pending_screenshot_filename = std.fmt.allocPrintZ(self.allocator, "{s}", .{filename}) catch {
+        const slice = std.mem.span(filename);
+        self.pending_screenshot_filename = self.allocator.dupeZ(u8, slice) catch {
             std.log.err("Failed to allocate memory for screenshot filename", .{});
             return;
         };

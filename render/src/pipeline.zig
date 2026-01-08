@@ -26,8 +26,13 @@ pub const Position = components.Position;
 pub const Sprite = components.Sprite;
 pub const Shape = components.Shape;
 pub const Text = components.Text;
+pub const Gizmo = components.Gizmo;
+pub const GizmoVisibility = components.GizmoVisibility;
+pub const Icon = components.Icon;
+pub const BoundingBox = components.BoundingBox;
 pub const VisualType = components.VisualType;
 pub const Pivot = components.Pivot;
+pub const GfxPosition = components.GfxPosition;
 
 // Re-export backend types
 pub const RetainedEngine = components.RetainedEngine;
@@ -169,8 +174,6 @@ pub const RenderPipeline = struct {
 
     /// Sync all dirty entities to the RetainedEngine
     pub fn sync(self: *RenderPipeline, registry: *Registry) void {
-        const GfxPosition = graphics.Position;
-
         for (self.tracked.values()) |*tracked| {
             const entity_id = toEntityId(tracked.entity);
 
@@ -182,11 +185,15 @@ pub const RenderPipeline = struct {
                 switch (tracked.visual_type) {
                     .none => {}, // No visual to create for data-only entities
                     .sprite => {
+                        // Check for Sprite first, then Icon (which renders as sprite)
                         if (registry.tryGet(Sprite, tracked.entity)) |sprite| {
                             self.engine.createSprite(entity_id, sprite.toVisual(), pos);
                             creation_succeeded = true;
+                        } else if (registry.tryGet(Icon, tracked.entity)) |icon| {
+                            self.engine.createSprite(entity_id, icon.toVisual(), pos);
+                            creation_succeeded = true;
                         } else {
-                            std.log.warn("Entity tracked as sprite but missing Sprite component", .{});
+                            std.log.warn("Entity tracked as sprite but missing Sprite/Icon component", .{});
                         }
                     },
                     .shape => {
@@ -216,10 +223,13 @@ pub const RenderPipeline = struct {
                 switch (tracked.visual_type) {
                     .none => {}, // No visual to update for data-only entities
                     .sprite => {
+                        // Check for Sprite first, then Icon (which renders as sprite)
                         if (registry.tryGet(Sprite, tracked.entity)) |sprite| {
                             self.engine.updateSprite(entity_id, sprite.toVisual());
+                        } else if (registry.tryGet(Icon, tracked.entity)) |icon| {
+                            self.engine.updateSprite(entity_id, icon.toVisual());
                         } else {
-                            std.log.warn("Entity tracked as sprite but missing Sprite component during update", .{});
+                            std.log.warn("Entity tracked as sprite but missing Sprite/Icon component during update", .{});
                         }
                     },
                     .shape => {
