@@ -95,6 +95,15 @@ pub fn build(b: *std.Build) void {{
         }}),
     }});
 .sdl_exe_start
+    // Get labelle-gfx dependency for SDL bindings
+    const labelle_dep = engine_dep.builder.dependency("labelle-gfx", .{{
+        .target = target,
+        .optimize = optimize,
+    }});
+    const SdlSdk = @import("sdl");
+    const sdl_sdk = SdlSdk.init(labelle_dep.builder, .{{ .dep_name = "sdl" }});
+    const sdl_mod = sdl_sdk.getWrapperModule();
+
     const exe = b.addExecutable(.{{
         .name = "{s}",
         .root_module = b.createModule(.{{
@@ -103,10 +112,14 @@ pub fn build(b: *std.Build) void {{
             .optimize = optimize,
             .imports = &.{{
                 .{{ .name = "labelle-engine", .module = engine_mod }},
+                .{{ .name = "sdl2", .module = sdl_mod }},
 .sdl_exe_end
             }},
         }}),
     }});
+    sdl_sdk.link(exe, .dynamic, .SDL2);
+    sdl_sdk.link(exe, .dynamic, .SDL2_ttf);
+    exe.linkSystemLibrary("SDL2_image");
 .bgfx_exe_start
     // Get labelle-gfx dependency for bgfx bindings
     const labelle_dep = engine_dep.builder.dependency("labelle-gfx", .{{
@@ -176,6 +189,11 @@ pub fn build(b: *std.Build) void {{
         }}),
     }});
     exe.linkLibrary(zglfw_dep.artifact("glfw"));
+    exe.linkLibrary(zgpu_dep.artifact("zdawn"));
+
+    // Add Dawn library paths (required for zgpu to find prebuilt Dawn)
+    const zgpu_build = @import("zgpu");
+    zgpu_build.addLibraryPathsTo(exe);
 .plugin_import
                 .{{ .name = "{s}", .module = {s}_mod }},
 .footer

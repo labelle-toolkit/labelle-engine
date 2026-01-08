@@ -188,6 +188,11 @@ pub fn generateBuildZon(allocator: std.mem.Allocator, config: ProjectConfig, opt
         }
     }
 
+    // Write zgpu dependency if using zgpu backend (needed for @import("zgpu") in build.zig)
+    if (config.backend == .zgpu) {
+        try zts.print(build_zig_zon_tmpl, "zgpu_dep", .{}, writer);
+    }
+
     // Write closing
     try zts.print(build_zig_zon_tmpl, "deps_end", .{}, writer);
 
