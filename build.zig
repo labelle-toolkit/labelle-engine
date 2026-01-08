@@ -16,6 +16,15 @@ pub const EcsBackend = enum {
     mr_ecs,
 };
 
+/// GUI backend selection
+pub const GuiBackend = enum {
+    none,
+    raygui,
+    // imgui,    // TODO: Phase 2
+    // nuklear,  // TODO: Phase 3
+    // microui,  // TODO: Phase 4
+};
+
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
@@ -23,6 +32,7 @@ pub fn build(b: *std.Build) void {
     // Build options
     const backend = b.option(Backend, "backend", "Graphics backend to use (default: raylib)") orelse .raylib;
     const ecs_backend = b.option(EcsBackend, "ecs_backend", "ECS backend to use (default: zig_ecs)") orelse .zig_ecs;
+    const gui_backend = b.option(GuiBackend, "gui_backend", "GUI backend to use (default: none)") orelse .none;
     const physics_enabled = b.option(bool, "physics", "Enable physics module (Box2D)") orelse false;
 
     // ECS dependencies
@@ -93,6 +103,7 @@ pub fn build(b: *std.Build) void {
     const build_options = b.addOptions();
     build_options.addOption(Backend, "backend", backend);
     build_options.addOption(EcsBackend, "ecs_backend", ecs_backend);
+    build_options.addOption(GuiBackend, "gui_backend", gui_backend);
     build_options.addOption(bool, "physics_enabled", physics_enabled);
     const build_options_mod = build_options.createModule();
 
@@ -171,6 +182,17 @@ pub fn build(b: *std.Build) void {
         audio_interface.linkLibrary(zaudio_dep.artifact("miniaudio"));
     }
 
+    // Create the GUI interface module that wraps the selected backend
+    const gui_interface = b.addModule("gui", .{
+        .root_source_file = b.path("gui/mod.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "build_options", .module = build_options_mod },
+            .{ .name = "raylib", .module = raylib },
+        },
+    });
+
     // Core module - foundation types (entity utils, zon coercion)
     const core_mod = b.addModule("labelle-core", .{
         .root_source_file = b.path("core/mod.zig"),
@@ -212,6 +234,7 @@ pub fn build(b: *std.Build) void {
             .{ .name = "ecs", .module = ecs_interface },
             .{ .name = "input", .module = input_interface },
             .{ .name = "audio", .module = audio_interface },
+            .{ .name = "gui", .module = gui_interface },
             .{ .name = "build_options", .module = build_options_mod },
         },
     });
