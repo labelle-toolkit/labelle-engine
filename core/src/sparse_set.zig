@@ -60,7 +60,12 @@ pub fn SparseSet(comptime T: type) type {
             if (self.count >= self.capacity) {
                 const new_cap = self.capacity * 2;
                 self.dense_keys = try self.allocator.realloc(self.dense_keys, new_cap);
-                self.dense_values = try self.allocator.realloc(self.dense_values, new_cap);
+                // If dense_values realloc fails, shrink dense_keys back to maintain consistency
+                self.dense_values = self.allocator.realloc(self.dense_values, new_cap) catch |err| {
+                    // Shrink dense_keys back (shrinking shouldn't fail)
+                    self.dense_keys = self.allocator.realloc(self.dense_keys, self.capacity) catch self.dense_keys;
+                    return err;
+                };
                 self.capacity = new_cap;
             }
 
