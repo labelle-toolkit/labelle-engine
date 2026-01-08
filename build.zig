@@ -20,9 +20,9 @@ pub const EcsBackend = enum {
 pub const GuiBackend = enum {
     none,
     raygui,
+    microui,
     // imgui,    // TODO: Phase 2
     // nuklear,  // TODO: Phase 3
-    // microui,  // TODO: Phase 4
 };
 
 pub fn build(b: *std.Build) void {

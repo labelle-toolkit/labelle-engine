@@ -16,6 +16,7 @@ pub fn GuiInterface(comptime Impl: type) type {
     comptime {
         // Required lifecycle methods
         if (!@hasDecl(Impl, "init")) @compileError("GUI backend must have init()");
+        if (!@hasDecl(Impl, "fixPointers")) @compileError("GUI backend must have fixPointers()");
         if (!@hasDecl(Impl, "deinit")) @compileError("GUI backend must have deinit()");
         if (!@hasDecl(Impl, "beginFrame")) @compileError("GUI backend must have beginFrame()");
         if (!@hasDecl(Impl, "endFrame")) @compileError("GUI backend must have endFrame()");
@@ -36,6 +37,7 @@ pub fn GuiInterface(comptime Impl: type) type {
 /// Backend implementation selected at build time
 const BackendImpl = switch (backend) {
     .raygui => @import("raygui_adapter.zig"),
+    .microui => @import("microui_adapter.zig"),
     .none => @import("stub_adapter.zig"),
 };
 

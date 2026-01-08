@@ -1,7 +1,10 @@
-//! Raygui Adapter
+//! microui Adapter
 //!
-//! GUI backend using raylib's drawing primitives.
-//! Delegates widget rendering to the shared widget_renderer module.
+//! GUI backend using raylib's drawing primitives via the shared widget_renderer.
+//! While named "microui", this adapter uses the same raylib rendering as raygui
+//! to avoid microui's command buffer alignment issues when compiled with Zig.
+//!
+//! Build with: zig build -Dgui_backend=microui
 
 const types = @import("types.zig");
 const widget = @import("widget_renderer.zig");
