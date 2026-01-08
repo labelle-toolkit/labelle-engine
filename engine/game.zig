@@ -24,7 +24,6 @@
 const std = @import("std");
 const labelle = @import("labelle");
 const ecs = @import("ecs");
-const core = @import("../core/mod.zig");
 const input_mod = @import("input");
 const audio_mod = @import("audio");
 const render_pipeline_mod = @import("../render/src/pipeline.zig");
@@ -170,9 +169,8 @@ pub fn GameWith(comptime Hooks: type) type {
         standalone_gizmos: std.ArrayList(StandaloneGizmo),
 
         // Entity selection tracking (for selected-only gizmos)
-        // Uses SparseSet for O(1) contains() - 3x faster than HashMap
-        // Max 10k entities supports most game scenarios; uses ~40KB memory
-        selected_entities: core.SparseSet(void),
+        // Uses DynamicBitSet for O(1) bit operations - minimal memory (~1.25KB for 10k entities)
+        selected_entities: std.DynamicBitSet,
 
         /// Emit a hook event. No-op if hooks are disabled.
         inline fn emitHook(payload: hooks_mod.HookPayload) void {
@@ -207,7 +205,7 @@ pub fn GameWith(comptime Hooks: type) type {
         // Initialize collections
         // ArrayList uses .empty in Zig 0.15, allocator passed to methods
         const standalone_gizmos_list = std.ArrayList(StandaloneGizmo).empty;
-        const selected_entities_set = try core.SparseSet(void).init(allocator, max_selectable_entities, 16);
+        const selected_entities_bitset = try std.DynamicBitSet.initEmpty(allocator, max_selectable_entities);
 
         // Build the struct. Note: pipeline.engine currently points to the
         // local `retained_engine` variable above, which will become invalid after
@@ -224,7 +222,7 @@ pub fn GameWith(comptime Hooks: type) type {
             .pending_scene_change = null,
             .running = true,
             .standalone_gizmos = standalone_gizmos_list,
-            .selected_entities = selected_entities_set,
+            .selected_entities = selected_entities_bitset,
         };
 
         // Emit game_init hook with allocator for early subsystem initialization
@@ -299,7 +297,7 @@ pub fn GameWith(comptime Hooks: type) type {
             self.pipeline.clear();
 
             // Clear entity selections (prevents stale references to destroyed entities)
-            self.selected_entities.clear();
+            self.selected_entities.setRangeValue(.{ .start = 0, .end = self.selected_entities.capacity() }, false);
 
             // Clear standalone gizmos
             self.standalone_gizmos.clearRetainingCapacity();
@@ -740,25 +738,33 @@ pub fn GameWith(comptime Hooks: type) type {
 
     /// Select an entity (for selected-only gizmo visibility).
     pub fn selectEntity(self: *Self, entity: Entity) void {
-        self.selected_entities.put(entityToU64(entity), {}) catch return;
-        self.updateGizmoVisibility();
+        const idx = entityToU64(entity);
+        if (idx < max_selectable_entities) {
+            self.selected_entities.set(@intCast(idx));
+            self.updateGizmoVisibility();
+        }
     }
 
     /// Deselect an entity.
     pub fn deselectEntity(self: *Self, entity: Entity) void {
-        self.selected_entities.remove(entityToU64(entity));
-        self.updateGizmoVisibility();
+        const idx = entityToU64(entity);
+        if (idx < max_selectable_entities) {
+            self.selected_entities.unset(@intCast(idx));
+            self.updateGizmoVisibility();
+        }
     }
 
     /// Clear all entity selections.
     pub fn clearSelection(self: *Self) void {
-        self.selected_entities.clear();
+        self.selected_entities.setRangeValue(.{ .start = 0, .end = self.selected_entities.capacity() }, false);
         self.updateGizmoVisibility();
     }
 
     /// Check if an entity is selected.
     pub fn isEntitySelected(self: *const Self, entity: Entity) bool {
-        return self.selected_entities.contains(entityToU64(entity));
+        const idx = entityToU64(entity);
+        if (idx >= max_selectable_entities) return false;
+        return self.selected_entities.isSet(@intCast(idx));
     }
 
     /// Update visibility of all gizmos based on their visibility mode and selection state.
