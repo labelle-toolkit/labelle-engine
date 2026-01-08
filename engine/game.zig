@@ -26,6 +26,7 @@ const labelle = @import("labelle");
 const ecs = @import("ecs");
 const input_mod = @import("input");
 const audio_mod = @import("audio");
+const gui_mod = @import("gui");
 const render_pipeline_mod = @import("../render/src/pipeline.zig");
 const hooks_mod = @import("../hooks/mod.zig");
 
@@ -172,6 +173,10 @@ pub fn GameWith(comptime Hooks: type) type {
         // Uses DynamicBitSet for O(1) bit operations - minimal memory (~1.25KB for 10k entities)
         selected_entities: std.DynamicBitSet,
 
+        // GUI state
+        gui_enabled: bool = true,
+        gui: gui_mod.Gui,
+
         /// Emit a hook event. No-op if hooks are disabled.
         inline fn emitHook(payload: hooks_mod.HookPayload) void {
             if (hooks_enabled) {
@@ -223,6 +228,7 @@ pub fn GameWith(comptime Hooks: type) type {
             .running = true,
             .standalone_gizmos = standalone_gizmos_list,
             .selected_entities = selected_entities_bitset,
+            .gui = gui_mod.Gui.init(),
         };
 
         // Emit game_init hook with allocator for early subsystem initialization
@@ -273,6 +279,7 @@ pub fn GameWith(comptime Hooks: type) type {
         self.scenes.deinit();
         self.standalone_gizmos.deinit(self.allocator);
         self.selected_entities.deinit();
+        self.gui.deinit();
         self.pipeline.deinit();
         self.registry.deinit();
         self.input.deinit();
@@ -975,6 +982,108 @@ pub fn GameWith(comptime Hooks: type) type {
             };
         }
         return null;
+    }
+
+    // ==================== GUI ====================
+
+    /// Enable or disable GUI rendering.
+    pub fn setGuiEnabled(self: *Self, enabled: bool) void {
+        self.gui_enabled = enabled;
+    }
+
+    /// Check if GUI is currently enabled.
+    pub fn isGuiEnabled(self: *const Self) bool {
+        return self.gui_enabled;
+    }
+
+    /// Render GUI from a ViewRegistry.
+    /// Call this after re.render() in your main loop:
+    /// ```zig
+    /// re.beginFrame();
+    /// re.render();
+    /// game.renderGui(Views, Scripts);
+    /// re.endFrame();
+    /// ```
+    pub fn renderGui(self: *Self, comptime Views: type, comptime Scripts: type, comptime view_names: []const []const u8) void {
+        if (!self.gui_enabled) return;
+
+        self.gui.beginFrame();
+
+        inline for (view_names) |view_name| {
+            if (Views.has(view_name)) {
+                const view_def = Views.get(view_name);
+                self.renderGuiElements(view_def.elements, Scripts);
+            }
+        }
+
+        self.gui.endFrame();
+    }
+
+    /// Render a single GUI view by name.
+    pub fn renderGuiView(self: *Self, comptime Views: type, comptime Scripts: type, comptime view_name: []const u8) void {
+        if (!self.gui_enabled) return;
+        if (!Views.has(view_name)) return;
+
+        self.gui.beginFrame();
+        const view_def = Views.get(view_name);
+        self.renderGuiElements(view_def.elements, Scripts);
+        self.gui.endFrame();
+    }
+
+    /// Internal: Render a list of GUI elements.
+    fn renderGuiElements(self: *Self, elements: []const gui_mod.GuiElement, comptime Scripts: type) void {
+        for (elements) |element| {
+            self.renderGuiElement(element, Scripts);
+        }
+    }
+
+    /// Internal: Render a single GUI element.
+    fn renderGuiElement(self: *Self, element: gui_mod.GuiElement, comptime Scripts: type) void {
+        switch (element) {
+            .Label => |lbl| self.gui.label(lbl),
+            .Button => |btn| {
+                if (self.gui.button(btn)) {
+                    // Button was clicked - call script callback if defined
+                    if (btn.on_click) |callback_name| {
+                        self.invokeGuiCallback(Scripts, callback_name);
+                    }
+                }
+            },
+            .ProgressBar => |bar| self.gui.progressBar(bar),
+            .Panel => |panel| {
+                self.gui.beginPanel(panel);
+                self.renderGuiElements(panel.children, Scripts);
+                self.gui.endPanel();
+            },
+            .Image => |img| self.gui.image(img),
+            .Checkbox => |cb| {
+                if (self.gui.checkbox(cb)) {
+                    // Checkbox was toggled - call script callback if defined
+                    if (cb.on_change) |callback_name| {
+                        self.invokeGuiCallback(Scripts, callback_name);
+                    }
+                }
+            },
+            .Slider => |sl| {
+                const new_value = self.gui.slider(sl);
+                if (new_value != sl.value) {
+                    // Slider value changed - call script callback if defined
+                    if (sl.on_change) |callback_name| {
+                        self.invokeGuiCallback(Scripts, callback_name);
+                    }
+                }
+            },
+        }
+    }
+
+    /// Internal: Invoke a GUI callback by name from the Scripts registry.
+    fn invokeGuiCallback(self: *Self, comptime Scripts: type, callback_name: []const u8) void {
+        // Scripts registry is comptime, so we can't dynamically lookup by runtime string.
+        // For now, callbacks are just logged. A full implementation would require
+        // a different approach (e.g., callback function pointers in elements).
+        _ = self;
+        _ = Scripts;
+        std.log.debug("GUI callback: {s}", .{callback_name});
     }
 
     // ==================== Screenshot ====================

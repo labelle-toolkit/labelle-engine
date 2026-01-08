@@ -27,8 +27,10 @@ pub fn endFrame(self: *Self) void {
 
 pub fn label(self: *Self, lbl: types.Label) void {
     _ = self;
+    // Text from .zon literals is null-terminated
+    const text: [:0]const u8 = @ptrCast(lbl.text[0..lbl.text.len :0]);
     rl.drawText(
-        @ptrCast(lbl.text.ptr),
+        text,
         @intFromFloat(lbl.position.x),
         @intFromFloat(lbl.position.y),
         @intFromFloat(lbl.font_size),
@@ -47,7 +49,7 @@ pub fn button(self: *Self, btn: types.Button) bool {
 
     const mouse_pos = rl.getMousePosition();
     const hover = rl.checkCollisionPointRec(mouse_pos, rect);
-    const clicked = hover and rl.isMouseButtonPressed(.mouse_button_left);
+    const clicked = hover and rl.isMouseButtonPressed(.left);
 
     // Draw button background
     const bg_color: rl.Color = if (hover)
@@ -61,10 +63,11 @@ pub fn button(self: *Self, btn: types.Button) bool {
 
     // Draw text centered
     const font_size: i32 = 16;
-    const text_width = rl.measureText(@ptrCast(btn.text.ptr), font_size);
+    const text: [:0]const u8 = @ptrCast(btn.text[0..btn.text.len :0]);
+    const text_width = rl.measureText(text, font_size);
     const text_x = @as(i32, @intFromFloat(btn.position.x + btn.size.width / 2)) - @divFloor(text_width, 2);
     const text_y = @as(i32, @intFromFloat(btn.position.y + btn.size.height / 2)) - @divFloor(font_size, 2);
-    rl.drawText(@ptrCast(btn.text.ptr), text_x, text_y, font_size, rl.Color.white);
+    rl.drawText(text, text_x, text_y, font_size, rl.Color.white);
 
     return clicked;
 }
@@ -133,7 +136,7 @@ pub fn checkbox(self: *Self, cb: types.Checkbox) bool {
 
     const mouse_pos = rl.getMousePosition();
     const hover = rl.checkCollisionPointRec(mouse_pos, rect);
-    const clicked = hover and rl.isMouseButtonPressed(.mouse_button_left);
+    const clicked = hover and rl.isMouseButtonPressed(.left);
 
     // Draw checkbox background
     const bg_color: rl.Color = if (hover)
@@ -157,8 +160,9 @@ pub fn checkbox(self: *Self, cb: types.Checkbox) bool {
 
     // Draw label
     if (cb.text.len > 0) {
+        const text: [:0]const u8 = @ptrCast(cb.text[0..cb.text.len :0]);
         rl.drawText(
-            @ptrCast(cb.text.ptr),
+            text,
             @intFromFloat(cb.position.x + box_size + 8),
             @intFromFloat(cb.position.y + 2),
             16,
@@ -180,7 +184,7 @@ pub fn slider(self: *Self, sl: types.Slider) f32 {
 
     const mouse_pos = rl.getMousePosition();
     const hover = rl.checkCollisionPointRec(mouse_pos, rect);
-    const dragging = hover and rl.isMouseButtonDown(.mouse_button_left);
+    const dragging = hover and rl.isMouseButtonDown(.left);
 
     // Calculate new value if dragging
     var current_value = sl.value;
