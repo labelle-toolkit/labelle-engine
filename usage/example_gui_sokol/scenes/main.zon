@@ -1,0 +1,7 @@
+.{
+    .name = "main",
+    // GUI views to render with this scene
+    .gui_views = .{"hud"},
+    // Scene entities
+    .entities = .{},
+}

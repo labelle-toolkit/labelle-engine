@@ -1,0 +1,314 @@
+.{
+    .name = "hud",
+    .elements = .{
+        // Title at top center
+        .{
+            .Label = .{
+                .id = "title",
+                .text = "GUI Demo",
+                .position = .{ .x = 340, .y = 10 },
+                .font_size = 24,
+                .color = .{ .r = 255, .g = 255, .b = 100 },
+            },
+        },
+        // Score label at top-left
+        .{
+            .Label = .{
+                .id = "score",
+                .text = "Score: 1250",
+                .position = .{ .x = 10, .y = 10 },
+                .font_size = 20,
+                .color = .{ .r = 255, .g = 255, .b = 255 },
+            },
+        },
+        // Health bar below score
+        .{
+            .Label = .{
+                .text = "Health",
+                .position = .{ .x = 10, .y = 40 },
+                .font_size = 14,
+                .color = .{ .r = 200, .g = 200, .b = 200 },
+            },
+        },
+        .{
+            .ProgressBar = .{
+                .id = "health",
+                .position = .{ .x = 10, .y = 58 },
+                .size = .{ .width = 200, .height = 16 },
+                .value = 0.75,
+                .color = .{ .r = 200, .g = 50, .b = 50 },
+            },
+        },
+        // Mana bar
+        .{
+            .Label = .{
+                .text = "Mana",
+                .position = .{ .x = 10, .y = 82 },
+                .font_size = 14,
+                .color = .{ .r = 200, .g = 200, .b = 200 },
+            },
+        },
+        .{
+            .ProgressBar = .{
+                .id = "mana",
+                .position = .{ .x = 10, .y = 100 },
+                .size = .{ .width = 200, .height = 16 },
+                .value = 0.45,
+                .color = .{ .r = 50, .g = 100, .b = 200 },
+            },
+        },
+        // Experience bar
+        .{
+            .Label = .{
+                .text = "Experience",
+                .position = .{ .x = 10, .y = 124 },
+                .font_size = 14,
+                .color = .{ .r = 200, .g = 200, .b = 200 },
+            },
+        },
+        .{
+            .ProgressBar = .{
+                .id = "exp",
+                .position = .{ .x = 10, .y = 142 },
+                .size = .{ .width = 200, .height = 16 },
+                .value = 0.30,
+                .color = .{ .r = 100, .g = 200, .b = 100 },
+            },
+        },
+        // Stats panel on the right
+        .{
+            .Panel = .{
+                .id = "stats_panel",
+                .position = .{ .x = 590, .y = 10 },
+                .size = .{ .width = 200, .height = 150 },
+                .background_color = .{ .r = 40, .g = 40, .b = 40, .a = 220 },
+                .children = .{
+                    .{
+                        .Label = .{
+                            .text = "Statistics",
+                            .position = .{ .x = 600, .y = 20 },
+                            .font_size = 18,
+                            .color = .{ .r = 255, .g = 200, .b = 100 },
+                        },
+                    },
+                    .{
+                        .Label = .{
+                            .id = "fps",
+                            .text = "FPS: 60",
+                            .position = .{ .x = 600, .y = 50 },
+                            .font_size = 14,
+                            .color = .{ .r = 150, .g = 150, .b = 150 },
+                        },
+                    },
+                    .{
+                        .Label = .{
+                            .id = "entities",
+                            .text = "Entities: 42",
+                            .position = .{ .x = 600, .y = 70 },
+                            .font_size = 14,
+                            .color = .{ .r = 150, .g = 150, .b = 150 },
+                        },
+                    },
+                    .{
+                        .Label = .{
+                            .text = "Time: 03:45",
+                            .position = .{ .x = 600, .y = 90 },
+                            .font_size = 14,
+                            .color = .{ .r = 150, .g = 150, .b = 150 },
+                        },
+                    },
+                    .{
+                        .Label = .{
+                            .text = "Level: 5",
+                            .position = .{ .x = 600, .y = 110 },
+                            .font_size = 14,
+                            .color = .{ .r = 150, .g = 150, .b = 150 },
+                        },
+                    },
+                },
+            },
+        },
+        // Settings panel
+        .{
+            .Panel = .{
+                .id = "settings_panel",
+                .position = .{ .x = 590, .y = 170 },
+                .size = .{ .width = 200, .height = 200 },
+                .background_color = .{ .r = 40, .g = 40, .b = 40, .a = 220 },
+                .children = .{
+                    .{
+                        .Label = .{
+                            .text = "Settings",
+                            .position = .{ .x = 600, .y = 180 },
+                            .font_size = 18,
+                            .color = .{ .r = 255, .g = 200, .b = 100 },
+                        },
+                    },
+                    .{
+                        .Checkbox = .{
+                            .id = "sound",
+                            .text = "Sound",
+                            .position = .{ .x = 600, .y = 210 },
+                            .checked = true,
+                            .on_change = "onSoundToggle",
+                        },
+                    },
+                    .{
+                        .Checkbox = .{
+                            .id = "music",
+                            .text = "Music",
+                            .position = .{ .x = 600, .y = 235 },
+                            .checked = true,
+                            .on_change = "onMusicToggle",
+                        },
+                    },
+                    .{
+                        .Checkbox = .{
+                            .id = "fullscreen",
+                            .text = "Fullscreen",
+                            .position = .{ .x = 600, .y = 260 },
+                            .checked = false,
+                            .on_change = "onFullscreenToggle",
+                        },
+                    },
+                    .{
+                        .Label = .{
+                            .text = "Volume",
+                            .position = .{ .x = 600, .y = 290 },
+                            .font_size = 14,
+                            .color = .{ .r = 180, .g = 180, .b = 180 },
+                        },
+                    },
+                    .{
+                        .Slider = .{
+                            .id = "volume",
+                            .position = .{ .x = 600, .y = 310 },
+                            .size = .{ .width = 180, .height = 16 },
+                            .value = 0.7,
+                            .min = 0,
+                            .max = 1,
+                            .on_change = "onVolumeChange",
+                        },
+                    },
+                    .{
+                        .Label = .{
+                            .text = "Brightness",
+                            .position = .{ .x = 600, .y = 335 },
+                            .font_size = 14,
+                            .color = .{ .r = 180, .g = 180, .b = 180 },
+                        },
+                    },
+                    .{
+                        .Slider = .{
+                            .id = "brightness",
+                            .position = .{ .x = 600, .y = 355 },
+                            .size = .{ .width = 180, .height = 16 },
+                            .value = 0.5,
+                            .min = 0,
+                            .max = 1,
+                            .on_change = "onBrightnessChange",
+                        },
+                    },
+                },
+            },
+        },
+        // Inventory panel on the left
+        .{
+            .Panel = .{
+                .id = "inventory_panel",
+                .position = .{ .x = 10, .y = 180 },
+                .size = .{ .width = 200, .height = 150 },
+                .background_color = .{ .r = 40, .g = 40, .b = 40, .a = 220 },
+                .children = .{
+                    .{
+                        .Label = .{
+                            .text = "Inventory",
+                            .position = .{ .x = 20, .y = 190 },
+                            .font_size = 18,
+                            .color = .{ .r = 255, .g = 200, .b = 100 },
+                        },
+                    },
+                    .{
+                        .Label = .{
+                            .text = "Sword x1",
+                            .position = .{ .x = 20, .y = 220 },
+                            .font_size = 14,
+                            .color = .{ .r = 180, .g = 180, .b = 180 },
+                        },
+                    },
+                    .{
+                        .Label = .{
+                            .text = "Shield x1",
+                            .position = .{ .x = 20, .y = 240 },
+                            .font_size = 14,
+                            .color = .{ .r = 180, .g = 180, .b = 180 },
+                        },
+                    },
+                    .{
+                        .Label = .{
+                            .text = "Potion x5",
+                            .position = .{ .x = 20, .y = 260 },
+                            .font_size = 14,
+                            .color = .{ .r = 180, .g = 180, .b = 180 },
+                        },
+                    },
+                    .{
+                        .Label = .{
+                            .text = "Gold: 250",
+                            .position = .{ .x = 20, .y = 290 },
+                            .font_size = 14,
+                            .color = .{ .r = 255, .g = 215, .b = 0 },
+                        },
+                    },
+                },
+            },
+        },
+        // Action buttons at bottom
+        .{
+            .Panel = .{
+                .id = "actions_panel",
+                .position = .{ .x = 250, .y = 520 },
+                .size = .{ .width = 300, .height = 70 },
+                .background_color = .{ .r = 30, .g = 30, .b = 30, .a = 200 },
+                .children = .{
+                    .{
+                        .Button = .{
+                            .id = "attack",
+                            .text = "Attack",
+                            .position = .{ .x = 260, .y = 535 },
+                            .size = .{ .width = 80, .height = 30 },
+                            .on_click = "onAttack",
+                        },
+                    },
+                    .{
+                        .Button = .{
+                            .id = "defend",
+                            .text = "Defend",
+                            .position = .{ .x = 350, .y = 535 },
+                            .size = .{ .width = 80, .height = 30 },
+                            .on_click = "onDefend",
+                        },
+                    },
+                    .{
+                        .Button = .{
+                            .id = "pause",
+                            .text = "Pause",
+                            .position = .{ .x = 440, .y = 535 },
+                            .size = .{ .width = 80, .height = 30 },
+                            .on_click = "onPause",
+                        },
+                    },
+                },
+            },
+        },
+        // Mini info at bottom left
+        .{
+            .Label = .{
+                .text = "Press ESC to exit",
+                .position = .{ .x = 10, .y = 575 },
+                .font_size = 12,
+                .color = .{ .r = 100, .g = 100, .b = 100 },
+            },
+        },
+    },
+}

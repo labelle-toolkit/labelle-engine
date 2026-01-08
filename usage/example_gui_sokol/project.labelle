@@ -1,0 +1,15 @@
+.{
+    .version = 1,
+    .name = "example_gui_sokol",
+    .description = "GUI demo with Sokol backend",
+    .initial_scene = "main",
+    .backend = .sokol,
+    .window = .{
+        .width = 800,
+        .height = 600,
+        .title = "GUI Example (Sokol)",
+        .target_fps = 60,
+    },
+    .resources = .{},
+    .plugins = .{},
+}
