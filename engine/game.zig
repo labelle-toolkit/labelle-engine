@@ -728,7 +728,8 @@ pub fn GameWith(comptime Hooks: type) type {
             self.allocator.free(old);
         }
         // Duplicate the filename to store until end of frame
-        self.pending_screenshot_filename = std.fmt.allocPrintZ(self.allocator, "{s}", .{filename}) catch {
+        const slice = std.mem.span(filename);
+        self.pending_screenshot_filename = self.allocator.dupeZ(u8, slice) catch {
             std.log.err("Failed to allocate memory for screenshot filename", .{});
             return;
         };
