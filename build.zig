@@ -20,9 +20,9 @@ pub const EcsBackend = enum {
 pub const GuiBackend = enum {
     none,
     raygui,
+    microui,
     // imgui,    // TODO: Phase 2
     // nuklear,  // TODO: Phase 3
-    // microui,  // TODO: Phase 4
 };
 
 pub fn build(b: *std.Build) void {
@@ -182,6 +182,9 @@ pub fn build(b: *std.Build) void {
         audio_interface.linkLibrary(zaudio_dep.artifact("miniaudio"));
     }
 
+    // microui dependency (for microui GUI backend)
+    const microui_dep = b.dependency("microui", .{});
+
     // Create the GUI interface module that wraps the selected backend
     const gui_interface = b.addModule("gui", .{
         .root_source_file = b.path("gui/mod.zig"),
@@ -192,6 +195,14 @@ pub fn build(b: *std.Build) void {
             .{ .name = "raylib", .module = raylib },
         },
     });
+
+    // Add microui C source and headers for the microui backend
+    gui_interface.addIncludePath(microui_dep.path("src"));
+    gui_interface.addCSourceFile(.{
+        .file = microui_dep.path("src/microui.c"),
+        .flags = &.{"-std=c99"},
+    });
+    gui_interface.link_libc = true;
 
     // Core module - foundation types (entity utils, zon coercion)
     const core_mod = b.addModule("labelle-core", .{

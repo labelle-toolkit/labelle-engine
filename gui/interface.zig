@@ -36,6 +36,7 @@ pub fn GuiInterface(comptime Impl: type) type {
 /// Backend implementation selected at build time
 const BackendImpl = switch (backend) {
     .raygui => @import("raygui_adapter.zig"),
+    .microui => @import("microui_adapter.zig"),
     .none => @import("stub_adapter.zig"),
 };
 
