@@ -71,6 +71,13 @@ fn initBackend(self: *Self) void {
         return;
     };
 
+    // Get swapchain format (required for render pipeline)
+    // Check this BEFORE initializing GLFW to avoid double-init on retry
+    const swapchain_format = WgpuNativeBackend.getSwapchainFormat() orelse {
+        std.log.debug("imgui_wgpu_native: swapchain format not ready yet", .{});
+        return;
+    };
+
     // Get framebuffer size from window
     const fb_size = window.getFramebufferSize();
     self.fb_width = @intCast(fb_size[0]);
@@ -79,12 +86,6 @@ fn initBackend(self: *Self) void {
     // Initialize GLFW backend for input handling
     // The last parameter (install_callbacks) should be true to handle input
     _ = c.ImGui_ImplGlfw_InitForOther(@ptrCast(window), true);
-
-    // Get swapchain format (required for render pipeline)
-    const swapchain_format = WgpuNativeBackend.getSwapchainFormat() orelse {
-        std.log.debug("imgui_wgpu_native: swapchain format not ready yet", .{});
-        return;
-    };
 
     // Initialize WebGPU backend for rendering
     var init_info = c.ImGui_ImplWGPU_InitInfo{

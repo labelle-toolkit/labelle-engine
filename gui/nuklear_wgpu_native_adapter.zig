@@ -59,8 +59,7 @@ pub fn image(self: *Self, img: types.Image) void {
 
 pub fn checkbox(self: *Self, cb: types.Checkbox) bool {
     _ = self;
-    _ = cb;
-    return false;
+    return cb.checked;
 }
 
 pub fn slider(self: *Self, sl: types.Slider) f32 {

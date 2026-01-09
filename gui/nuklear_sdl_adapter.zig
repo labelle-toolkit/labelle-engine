@@ -18,6 +18,8 @@ const NkState = struct {
     atlas: nk.FontAtlas,
     font: *nk.Font,
     null_tex: nk.NullTexture,
+    // Track if atlas.end() has been called (required before using font)
+    atlas_finalized: bool,
 };
 
 // Pointer to heap-allocated nuklear state
@@ -49,24 +51,13 @@ pub fn init() Self {
     nk_state.font = nk_state.atlas.addDefault(18.0, null);
 
     // Bake font atlas to RGBA texture
-    const bake_result = nk_state.atlas.bake(.rgba32);
-    const pixels = bake_result[0];
-    const width = bake_result[1];
-    const height = bake_result[2];
+    // NOTE: Do NOT call atlas.end() here - it invalidates the baked pixel data
+    // We defer atlas.end() and context init to createFontTexture() when renderer is available
+    _ = nk_state.atlas.bake(.rgba32);
+    nk_state.atlas_finalized = false;
 
-    // Font texture will be created when renderer is available
-    _ = pixels;
-    _ = width;
-    _ = height;
-
-    // End atlas baking with null texture handle for now
-    nk_state.atlas.end(
-        nk.Handle{ .id = 0 },
-        &nk_state.null_tex,
-    );
-
-    // Initialize context with font
-    nk_state.ctx = nk.Context.initDefault(nk_state.font.handle());
+    // Context will be initialized in createFontTexture() after atlas.end()
+    nk_state.ctx = undefined;
 
     return Self{
         .nk_state = nk_state,
@@ -82,7 +73,9 @@ pub fn fixPointers(self: *Self) void {
 }
 
 pub fn deinit(self: *Self) void {
-    self.nk_state.ctx.free();
+    if (self.nk_state.atlas_finalized) {
+        self.nk_state.ctx.free();
+    }
     self.nk_state.atlas.clear();
     if (self.font_texture) |tex| {
         tex.destroy();
@@ -98,9 +91,11 @@ pub fn setRenderer(self: *Self, renderer: sdl.Renderer) void {
 }
 
 fn createFontTexture(self: *Self) void {
+    if (self.nk_state.atlas_finalized) return;
+
     const renderer = self.renderer orelse return;
 
-    // Re-bake atlas to get pixel data
+    // Get baked atlas data (atlas.end() not yet called, so data is still valid)
     const bake_result = self.nk_state.atlas.bake(.rgba32);
     const pixels = bake_result[0];
     const width: usize = @intCast(bake_result[1]);
@@ -111,10 +106,23 @@ fn createFontTexture(self: *Self) void {
     tex.update(pixels, width * 4, null) catch {};
     tex.setBlendMode(.blend) catch {};
     self.font_texture = tex;
+
+    // Now finalize the atlas - this invalidates baked pixel data
+    self.nk_state.atlas.end(
+        nk.Handle{ .id = 0 }, // SDL textures don't need nuklear handle
+        &self.nk_state.null_tex,
+    );
+
+    // Initialize nuklear context with font (must be after atlas.end())
+    self.nk_state.ctx = nk.Context.initDefault(self.nk_state.font.handle());
+    self.nk_state.atlas_finalized = true;
 }
 
 pub fn beginFrame(self: *Self) void {
     self.window_counter = 0;
+
+    // Skip if context not initialized yet
+    if (!self.nk_state.atlas_finalized) return;
 
     // Begin nuklear input
     var input = self.nk_state.ctx.input();
@@ -126,6 +134,9 @@ pub fn beginFrame(self: *Self) void {
 }
 
 pub fn endFrame(self: *Self) void {
+    // Skip if context not initialized yet
+    if (!self.nk_state.atlas_finalized) return;
+
     if (self.renderer == null) {
         self.nk_state.ctx.clear();
         return;
