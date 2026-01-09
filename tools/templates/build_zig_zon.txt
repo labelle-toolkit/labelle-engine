@@ -52,6 +52,11 @@
         .@"{s}" = .{{
             .path = "{s}",
         }},
+.sdl_dep
+        .sdl = .{{
+            .url = "git+https://github.com/ikskuh/SDL.zig#a7e95b5fcc5b0d68921c148778609d2fe248c3d8",
+            .hash = "SDL2-0.0.0-yMCQivWqBABTfB8opAADsLCGxxu20vijLBW2hHdpTR-L",
+        }},
 .zgpu_dep
         .zgpu = .{{
             .url = "git+https://github.com/zig-gamedev/zgpu#b582a62c13af1a8228f72c47ea2eaa21259760eb",
