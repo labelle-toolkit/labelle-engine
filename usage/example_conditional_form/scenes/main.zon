@@ -1,0 +1,7 @@
+.{
+    .name = "main",
+    // GUI views to render with this scene
+    .gui_views = .{"monster_form"},
+    // Scene entities (empty for this GUI-only example)
+    .entities = .{},
+}

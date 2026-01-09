@@ -76,7 +76,8 @@
 //! Custom setters are called instead of direct field assignment when available.
 
 const std = @import("std");
-const gui_hooks = @import("hooks.zig");
+const root = @import("labelle-engine");
+const gui_hooks = root.gui_hooks;
 
 /// Creates a FormBinder for the given form state type.
 ///
@@ -302,9 +303,9 @@ pub fn FormBinder(comptime FormStateType: type, comptime form_id: []const u8) ty
             // If form doesn't have visibility rules, return empty map (all visible)
             if (!hasVisibilityRules()) return visibility;
 
-            // Get the VisibilityRules declaration
+            // Get the VisibilityRules type
             const VisibilityRules = @field(FormStateType, "VisibilityRules");
-            const rules_type_info = @typeInfo(@TypeOf(VisibilityRules));
+            const rules_type_info = @typeInfo(VisibilityRules);
 
             // Iterate through visibility rules
             inline for (rules_type_info.@"struct".fields) |field| {

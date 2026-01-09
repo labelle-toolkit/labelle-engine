@@ -23,6 +23,8 @@
 //! game.renderGui(Scripts);
 //! ```
 
+const root = @import("labelle-engine");
+
 // Backend interface
 pub const interface = @import("interface.zig");
 pub const Gui = interface.Gui;
@@ -49,7 +51,7 @@ pub const ViewDef = view.ViewDef;
 pub const EmptyViewRegistry = view.EmptyViewRegistry;
 
 // Hook system for GUI interactions
-pub const hooks = @import("hooks.zig");
+pub const hooks = root.gui_hooks;
 pub const GuiHook = hooks.GuiHook;
 pub const GuiHookPayload = hooks.GuiHookPayload;
 pub const GuiHookDispatcher = hooks.GuiHookDispatcher;
@@ -68,6 +70,6 @@ pub const FormBinder = form_binder.FormBinder;
 test {
     _ = @import("view.zig");
     _ = @import("types.zig");
-    _ = @import("hooks.zig");
+    _ = root.gui_hooks;
     _ = @import("form_binder.zig");
 }

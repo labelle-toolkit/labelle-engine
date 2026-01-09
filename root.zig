@@ -20,6 +20,7 @@ pub const audio = @import("audio");
 pub const gui = @import("gui");
 pub const graphics = @import("graphics");
 pub const hooks = @import("hooks/mod.zig");
+pub const gui_hooks = @import("hooks/gui/mod.zig");
 pub const render = @import("render/mod.zig");
 pub const scene = @import("scene/src/root.zig");
 pub const engine = @import("engine/mod.zig");
