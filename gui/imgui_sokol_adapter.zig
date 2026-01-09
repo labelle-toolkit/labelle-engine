@@ -1,17 +1,14 @@
 //! ImGui Sokol Adapter
 //!
 //! GUI backend using Dear ImGui with sokol rendering.
-//! Uses zgui for Zig bindings to ImGui.
-//!
-//! NOTE: Full ImGui support with sokol is not yet available.
-//! Sokol doesn't expose a GLFW window handle needed by zgui's GLFW+OpenGL backend.
-//! ImGui widgets will be skipped. Use zgpu backend for full ImGui support.
+//! Uses dcimgui (cimgui) for ImGui API and sokol_imgui for rendering.
 //!
 //! Build with: zig build -Dbackend=sokol -Dgui_backend=imgui
 
 const std = @import("std");
 const types = @import("types.zig");
-const zgui = @import("zgui");
+const cimgui = @import("cimgui");
+const simgui = @import("sokol_imgui.zig");
 
 const Self = @This();
 
@@ -21,24 +18,45 @@ window_counter: u32,
 // Panel nesting level
 panel_depth: u32,
 
-// Allocator for zgui
-allocator: std.mem.Allocator,
+// Track if backend is initialized
+backend_initialized: bool,
 
-// Track if warning shown
-warned: bool,
+// Screen dimensions for frame setup
+width: i32,
+height: i32,
 
 pub fn init() Self {
-    const allocator = std.heap.page_allocator;
-
-    // Initialize zgui core (backend not initialized - no GLFW window access)
-    zgui.init(allocator);
-
     return Self{
         .window_counter = 0,
         .panel_depth = 0,
-        .allocator = allocator,
-        .warned = false,
+        .backend_initialized = false,
+        .width = 800,
+        .height = 600,
     };
+}
+
+fn initBackend(self: *Self) void {
+    if (self.backend_initialized) return;
+
+    // Check if sokol_gfx is ready before initializing sokol_imgui
+    // sokol_imgui requires sokol_gfx to be initialized first
+    if (!simgui.isGfxValid()) {
+        std.log.debug("imgui_sokol: waiting for sokol_gfx to be ready", .{});
+        return;
+    }
+
+    // Check if sokol_app is in valid state (required for Metal backend)
+    // sokol_app's _sapp.valid is only true during callbacks (init/frame/cleanup)
+    if (!simgui.isAppValid()) {
+        std.log.debug("imgui_sokol: waiting for sokol_app to be in valid callback state", .{});
+        return;
+    }
+
+    // Initialize sokol_imgui (creates ImGui context internally)
+    simgui.setup(.{});
+
+    self.backend_initialized = true;
+    std.log.info("imgui_sokol: backend initialized with sokol_imgui + dcimgui", .{});
 }
 
 pub fn fixPointers(self: *Self) void {
@@ -46,167 +64,178 @@ pub fn fixPointers(self: *Self) void {
 }
 
 pub fn deinit(self: *Self) void {
-    _ = self;
-    zgui.deinit();
+    if (self.backend_initialized) {
+        simgui.shutdown();
+    }
 }
 
 pub fn beginFrame(self: *Self) void {
     self.window_counter = 0;
 
-    if (!self.warned) {
-        std.log.warn("imgui_sokol: ImGui not available with sokol backend", .{});
-        std.log.warn("imgui_sokol: Use zgpu backend for ImGui support", .{});
-        self.warned = true;
+    // Lazy init backend on first frame
+    if (!self.backend_initialized) {
+        self.initBackend();
     }
-    // Skip ImGui processing since we can't render it
+
+    if (!self.backend_initialized) return;
+
+    // Start new ImGui frame via sokol_imgui
+    simgui.newFrame(.{
+        .width = self.width,
+        .height = self.height,
+        .delta_time = 1.0 / 60.0, // TODO: get actual delta time from sokol_app
+    });
 }
 
 pub fn endFrame(self: *Self) void {
-    _ = self;
-    // Skip - nothing to render with sokol backend
+    if (!self.backend_initialized) return;
+
+    // Render ImGui via sokol_imgui
+    simgui.render();
 }
 
-fn nextWindowName(self: *Self, buf: []u8) [:0]const u8 {
+/// Set screen dimensions (should be called when window resizes)
+pub fn setScreenSize(self: *Self, width: i32, height: i32) void {
+    self.width = width;
+    self.height = height;
+}
+
+fn nextWindowName(self: *Self, buf: []u8) [*:0]const u8 {
     self.window_counter += 1;
     const result = std.fmt.bufPrintZ(buf, "##w{d}", .{self.window_counter}) catch {
         buf[0] = '#';
         buf[1] = '#';
         buf[2] = 'w';
         buf[3] = 0;
-        return buf[0..3 :0];
+        return @ptrCast(&buf[0]);
     };
-    return result;
+    return result.ptr;
 }
 
 pub fn label(self: *Self, lbl: types.Label) void {
+    if (!self.backend_initialized) return;
+
+    const color = cimgui.ImVec4{
+        .x = @as(f32, @floatFromInt(lbl.color.r)) / 255.0,
+        .y = @as(f32, @floatFromInt(lbl.color.g)) / 255.0,
+        .z = @as(f32, @floatFromInt(lbl.color.b)) / 255.0,
+        .w = @as(f32, @floatFromInt(lbl.color.a)) / 255.0,
+    };
+
     if (self.panel_depth > 0) {
-        zgui.textColored(
-            .{ @as(f32, @floatFromInt(lbl.color.r)) / 255.0, @as(f32, @floatFromInt(lbl.color.g)) / 255.0, @as(f32, @floatFromInt(lbl.color.b)) / 255.0, @as(f32, @floatFromInt(lbl.color.a)) / 255.0 },
-            "{s}",
-            .{lbl.text},
-        );
+        cimgui.igTextColored(color, "%s", lbl.text.ptr);
     } else {
         var name_buf: [32]u8 = undefined;
         const name = self.nextWindowName(&name_buf);
 
-        zgui.setNextWindowPos(.{ .x = lbl.position.x, .y = lbl.position.y });
-        zgui.setNextWindowSize(.{ .w = @floatFromInt(lbl.text.len * 10), .h = lbl.font_size + 8 });
+        cimgui.igSetNextWindowPos(.{ .x = lbl.position.x, .y = lbl.position.y }, 0);
+        cimgui.igSetNextWindowSize(.{ .x = @floatFromInt(lbl.text.len * 10), .y = lbl.font_size + 8 }, 0);
 
-        if (zgui.begin(name, .{
-            .flags = .{
-                .no_title_bar = true,
-                .no_resize = true,
-                .no_move = true,
-                .no_scrollbar = true,
-                .no_background = true,
-                .no_mouse_inputs = true,
-            },
-        })) {
-            zgui.textColored(
-                .{ @as(f32, @floatFromInt(lbl.color.r)) / 255.0, @as(f32, @floatFromInt(lbl.color.g)) / 255.0, @as(f32, @floatFromInt(lbl.color.b)) / 255.0, @as(f32, @floatFromInt(lbl.color.a)) / 255.0 },
-                "{s}",
-                .{lbl.text},
-            );
+        const flags = cimgui.ImGuiWindowFlags_NoTitleBar |
+            cimgui.ImGuiWindowFlags_NoResize |
+            cimgui.ImGuiWindowFlags_NoMove |
+            cimgui.ImGuiWindowFlags_NoScrollbar |
+            cimgui.ImGuiWindowFlags_NoBackground |
+            cimgui.ImGuiWindowFlags_NoMouseInputs;
+
+        if (cimgui.igBegin(name, null, flags)) {
+            cimgui.igTextColored(color, "%s", lbl.text.ptr);
         }
-        zgui.end();
+        cimgui.igEnd();
     }
 }
 
 pub fn button(self: *Self, btn: types.Button) bool {
+    if (!self.backend_initialized) return false;
+
     // Convert text to null-terminated
     var text_buf: [256]u8 = undefined;
     const text_z = std.fmt.bufPrintZ(&text_buf, "{s}", .{btn.text}) catch return false;
 
     if (self.panel_depth > 0) {
-        return zgui.button(text_z, .{ .w = btn.size.width, .h = btn.size.height });
+        // dcimgui's igButton only takes label (no size parameter)
+        return cimgui.igButton(text_z.ptr);
     } else {
         var name_buf: [32]u8 = undefined;
         const name = self.nextWindowName(&name_buf);
 
-        zgui.setNextWindowPos(.{ .x = btn.position.x, .y = btn.position.y });
-        zgui.setNextWindowSize(.{ .w = btn.size.width + 16, .h = btn.size.height + 16 });
+        cimgui.igSetNextWindowPos(.{ .x = btn.position.x, .y = btn.position.y }, 0);
+        cimgui.igSetNextWindowSize(.{ .x = btn.size.width + 16, .y = btn.size.height + 16 }, 0);
 
         var clicked = false;
-        if (zgui.begin(name, .{
-            .flags = .{
-                .no_title_bar = true,
-                .no_resize = true,
-                .no_move = true,
-                .no_scrollbar = true,
-                .no_background = true,
-            },
-        })) {
-            clicked = zgui.button(text_z, .{ .w = btn.size.width, .h = btn.size.height });
+        const flags = cimgui.ImGuiWindowFlags_NoTitleBar |
+            cimgui.ImGuiWindowFlags_NoResize |
+            cimgui.ImGuiWindowFlags_NoMove |
+            cimgui.ImGuiWindowFlags_NoScrollbar |
+            cimgui.ImGuiWindowFlags_NoBackground;
+
+        if (cimgui.igBegin(name, null, flags)) {
+            clicked = cimgui.igButton(text_z.ptr);
         }
-        zgui.end();
+        cimgui.igEnd();
 
         return clicked;
     }
 }
 
 pub fn progressBar(self: *Self, bar: types.ProgressBar) void {
+    if (!self.backend_initialized) return;
+
     if (self.panel_depth > 0) {
-        zgui.progressBar(.{
-            .fraction = bar.value,
-            .overlay = null,
-            .w = bar.size.width,
-            .h = bar.size.height,
-        });
+        cimgui.igProgressBar(bar.value, .{ .x = bar.size.width, .y = bar.size.height }, null);
     } else {
         var name_buf: [32]u8 = undefined;
         const name = self.nextWindowName(&name_buf);
 
-        zgui.setNextWindowPos(.{ .x = bar.position.x, .y = bar.position.y });
-        zgui.setNextWindowSize(.{ .w = bar.size.width + 16, .h = bar.size.height + 16 });
+        cimgui.igSetNextWindowPos(.{ .x = bar.position.x, .y = bar.position.y }, 0);
+        cimgui.igSetNextWindowSize(.{ .x = bar.size.width + 16, .y = bar.size.height + 16 }, 0);
 
-        if (zgui.begin(name, .{
-            .flags = .{
-                .no_title_bar = true,
-                .no_resize = true,
-                .no_move = true,
-                .no_scrollbar = true,
-                .no_background = true,
-            },
-        })) {
-            zgui.progressBar(.{
-                .fraction = bar.value,
-                .overlay = null,
-                .w = bar.size.width,
-                .h = bar.size.height,
-            });
+        const flags = cimgui.ImGuiWindowFlags_NoTitleBar |
+            cimgui.ImGuiWindowFlags_NoResize |
+            cimgui.ImGuiWindowFlags_NoMove |
+            cimgui.ImGuiWindowFlags_NoScrollbar |
+            cimgui.ImGuiWindowFlags_NoBackground;
+
+        if (cimgui.igBegin(name, null, flags)) {
+            cimgui.igProgressBar(bar.value, .{ .x = bar.size.width, .y = bar.size.height }, null);
         }
-        zgui.end();
+        cimgui.igEnd();
     }
 }
 
 pub fn beginPanel(self: *Self, panel: types.Panel) void {
+    if (!self.backend_initialized) return;
+
     var name_buf: [32]u8 = undefined;
     const name = self.nextWindowName(&name_buf);
 
-    zgui.setNextWindowPos(.{ .x = panel.position.x, .y = panel.position.y });
-    zgui.setNextWindowSize(.{ .w = panel.size.width, .h = panel.size.height });
+    cimgui.igSetNextWindowPos(.{ .x = panel.position.x, .y = panel.position.y }, 0);
+    cimgui.igSetNextWindowSize(.{ .x = panel.size.width, .y = panel.size.height }, 0);
 
-    _ = zgui.begin(name, .{
-        .flags = .{
-            .no_resize = true,
-            .no_move = true,
-            .no_collapse = true,
-        },
-    });
+    const flags = cimgui.ImGuiWindowFlags_NoResize |
+        cimgui.ImGuiWindowFlags_NoMove |
+        cimgui.ImGuiWindowFlags_NoCollapse;
+
+    _ = cimgui.igBegin(name, null, flags);
     self.panel_depth += 1;
 }
 
 pub fn endPanel(self: *Self) void {
+    if (!self.backend_initialized) return;
+
     self.panel_depth -= 1;
-    zgui.end();
+    cimgui.igEnd();
 }
 
 pub fn image(self: *Self, img: types.Image) void {
     _ = self;
     _ = img;
+    // TODO: Implement image rendering with sokol textures
 }
 
 pub fn checkbox(self: *Self, cb: types.Checkbox) bool {
+    if (!self.backend_initialized) return cb.checked;
+
     var checked = cb.checked;
 
     // Convert text to null-terminated
@@ -214,64 +243,55 @@ pub fn checkbox(self: *Self, cb: types.Checkbox) bool {
     const text_z = std.fmt.bufPrintZ(&text_buf, "{s}", .{cb.text}) catch return checked;
 
     if (self.panel_depth > 0) {
-        _ = zgui.checkbox(text_z, .{ .v = &checked });
+        _ = cimgui.igCheckbox(text_z.ptr, &checked);
     } else {
         var name_buf: [32]u8 = undefined;
         const name = self.nextWindowName(&name_buf);
 
         const text_len: usize = cb.text.len;
-        zgui.setNextWindowPos(.{ .x = cb.position.x, .y = cb.position.y });
-        zgui.setNextWindowSize(.{ .w = @as(f32, @floatFromInt(text_len * 8)) + 50, .h = 40 });
+        cimgui.igSetNextWindowPos(.{ .x = cb.position.x, .y = cb.position.y }, 0);
+        cimgui.igSetNextWindowSize(.{ .x = @as(f32, @floatFromInt(text_len * 8)) + 50, .y = 40 }, 0);
 
-        if (zgui.begin(name, .{
-            .flags = .{
-                .no_title_bar = true,
-                .no_resize = true,
-                .no_move = true,
-                .no_scrollbar = true,
-                .no_background = true,
-            },
-        })) {
-            _ = zgui.checkbox(text_z, .{ .v = &checked });
+        const flags = cimgui.ImGuiWindowFlags_NoTitleBar |
+            cimgui.ImGuiWindowFlags_NoResize |
+            cimgui.ImGuiWindowFlags_NoMove |
+            cimgui.ImGuiWindowFlags_NoScrollbar |
+            cimgui.ImGuiWindowFlags_NoBackground;
+
+        if (cimgui.igBegin(name, null, flags)) {
+            _ = cimgui.igCheckbox(text_z.ptr, &checked);
         }
-        zgui.end();
+        cimgui.igEnd();
     }
 
     return checked;
 }
 
 pub fn slider(self: *Self, sl: types.Slider) f32 {
+    if (!self.backend_initialized) return sl.value;
+
     var value = sl.value;
 
     if (self.panel_depth > 0) {
-        _ = zgui.sliderFloat("##slider", .{
-            .v = &value,
-            .min = sl.min,
-            .max = sl.max,
-        });
+        // dcimgui's igSliderFloat has 4 args: label, v, v_min, v_max
+        _ = cimgui.igSliderFloat("##slider", &value, sl.min, sl.max);
     } else {
         var name_buf: [32]u8 = undefined;
         const name = self.nextWindowName(&name_buf);
 
-        zgui.setNextWindowPos(.{ .x = sl.position.x, .y = sl.position.y });
-        zgui.setNextWindowSize(.{ .w = sl.size.width + 16, .h = sl.size.height + 16 });
+        cimgui.igSetNextWindowPos(.{ .x = sl.position.x, .y = sl.position.y }, 0);
+        cimgui.igSetNextWindowSize(.{ .x = sl.size.width + 16, .y = sl.size.height + 16 }, 0);
 
-        if (zgui.begin(name, .{
-            .flags = .{
-                .no_title_bar = true,
-                .no_resize = true,
-                .no_move = true,
-                .no_scrollbar = true,
-                .no_background = true,
-            },
-        })) {
-            _ = zgui.sliderFloat("##slider", .{
-                .v = &value,
-                .min = sl.min,
-                .max = sl.max,
-            });
+        const flags = cimgui.ImGuiWindowFlags_NoTitleBar |
+            cimgui.ImGuiWindowFlags_NoResize |
+            cimgui.ImGuiWindowFlags_NoMove |
+            cimgui.ImGuiWindowFlags_NoScrollbar |
+            cimgui.ImGuiWindowFlags_NoBackground;
+
+        if (cimgui.igBegin(name, null, flags)) {
+            _ = cimgui.igSliderFloat("##slider", &value, sl.min, sl.max);
         }
-        zgui.end();
+        cimgui.igEnd();
     }
 
     return value;

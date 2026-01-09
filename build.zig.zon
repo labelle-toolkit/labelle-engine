@@ -62,6 +62,12 @@
             .url = "git+https://github.com/raylib-extras/rlImGui#dc7f97679a024eee8f5f009e77cc311748200415",
             .hash = "N-V-__8AAC-taQCKZ-3IjRuWJ-5Dc47QKHDPEmqlwXhvjBGq",
         },
+        // GUI - dcimgui (Dear ImGui C/Zig distribution for sokol integration)
+        // Used with sokol_imgui for sokol + ImGui support
+        .cimgui = .{
+            .url = "git+https://github.com/floooh/dcimgui#4bc7f9147073585b46e81ec750bffda2eb6d6832",
+            .hash = "cimgui-0.1.0-44ClkdQjlQDAxGXHT035QPGsTEex3c7VXeDkqJG8eUqO",
+        },
     },
     .paths = .{
         "build.zig",

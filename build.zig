@@ -67,6 +67,9 @@ pub fn build(b: *std.Build) void {
     // labelle-gfx uses the raylib-zig fork with getGLFWWindow() for ImGui integration
     const raylib = labelle_dep.builder.modules.get("raylib").?;
 
+    // sokol dependency - DO NOT pass with_sokol_imgui here as it changes the
+    // dependency hash and conflicts with labelle-gfx's sokol. For ImGui support,
+    // we'll compile sokol_imgui separately (similar to rlImGui approach).
     const sokol_dep = b.dependency("sokol", .{
         .target = target,
         .optimize = optimize,
@@ -214,7 +217,8 @@ pub fn build(b: *std.Build) void {
     } else null;
 
     // zgui/ImGui dependency (optional, loaded when gui_backend is imgui)
-    const zgui_dep: ?*std.Build.Dependency = if (gui_backend == .imgui) blk: {
+    // Note: sokol uses dcimgui instead of zgui for ImGui integration
+    const zgui_dep: ?*std.Build.Dependency = if (gui_backend == .imgui and backend != .sokol) blk: {
         // zgui backend enum matches zgui/build.zig Backend enum
         const ZguiBackend = enum {
             no_backend,
@@ -237,7 +241,7 @@ pub fn build(b: *std.Build) void {
         // Select appropriate zgui backend based on graphics backend
         const zgui_backend: ZguiBackend = switch (backend) {
             .raylib => .no_backend, // raylib uses rlImGui for ImGui integration
-            .sokol => .glfw_opengl3, // sokol can use GLFW+OpenGL
+            .sokol => unreachable, // sokol uses dcimgui, not zgui
             .sdl => .sdl2_renderer, // SDL uses SDL2 renderer
             .bgfx => .glfw, // bgfx uses GLFW (rendering handled separately)
             .zgpu => .glfw_wgpu, // zgpu uses GLFW+WebGPU
@@ -247,6 +251,16 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = optimize,
             .backend = zgui_backend,
+        });
+    } else null;
+
+    // dcimgui dependency for sokol + ImGui integration
+    // sokol uses dcimgui + sokol_imgui instead of zgui
+    // Note: We compile sokol_imgui.c separately to avoid modifying sokol's dependency hash
+    const cimgui_dep: ?*std.Build.Dependency = if (gui_backend == .imgui and backend == .sokol) blk: {
+        break :blk b.dependency("cimgui", .{
+            .target = target,
+            .optimize = optimize,
         });
     } else null;
 
@@ -335,6 +349,64 @@ pub fn build(b: *std.Build) void {
             gui_interface.addIncludePath(dep.path("libs/imgui"));
             gui_interface.addIncludePath(raylib_c_dep.path("src"));
         }
+    }
+
+    // Add cimgui module and link library to GUI if using imgui backend with sokol
+    // sokol uses dcimgui + sokol_imgui instead of zgui
+    if (cimgui_dep) |dep| {
+        gui_interface.addImport("cimgui", dep.module("cimgui"));
+        gui_interface.linkLibrary(dep.artifact("cimgui_clib"));
+
+        // Add include paths for cImport to find cimgui.h
+        gui_interface.addIncludePath(dep.path("src"));
+
+        // Compile sokol_imgui.c as a separate library
+        // sokol_imgui provides the bridge between ImGui and sokol_gfx
+        const sokol_imgui_mod = b.createModule(.{
+            .target = target,
+            .optimize = optimize,
+        });
+
+        // Determine sokol backend define based on target platform
+        const sokol_backend_define: []const u8 = switch (target.result.os.tag) {
+            .macos, .ios => "-DSOKOL_METAL",
+            .windows => "-DSOKOL_D3D11",
+            .linux, .freebsd, .openbsd => "-DSOKOL_GLCORE",
+            .emscripten => "-DSOKOL_GLES3",
+            else => "-DSOKOL_GLCORE",
+        };
+
+        // Add sokol_imgui.c source file
+        sokol_imgui_mod.addCSourceFile(.{
+            .file = sokol_dep.path("src/sokol/c/sokol_imgui.c"),
+            .flags = &.{
+                "-DIMPL",
+                sokol_backend_define,
+                "-fno-sanitize=undefined",
+            },
+        });
+
+        // Add include paths for sokol headers and cimgui headers
+        sokol_imgui_mod.addIncludePath(sokol_dep.path("src/sokol/c"));
+        sokol_imgui_mod.addIncludePath(dep.path("src"));
+
+        // Link against cimgui
+        sokol_imgui_mod.linkLibrary(dep.artifact("cimgui_clib"));
+
+        // Link against sokol (for sokol_gfx)
+        sokol_imgui_mod.linkLibrary(sokol_dep.artifact("sokol_clib"));
+
+        // Create static library from the module
+        const sokol_imgui_lib = b.addLibrary(.{
+            .name = "sokol_imgui",
+            .root_module = sokol_imgui_mod,
+        });
+
+        // Link sokol_imgui to GUI interface
+        gui_interface.linkLibrary(sokol_imgui_lib);
+
+        // Add sokol headers include path for sokol_imgui.zig cImport
+        gui_interface.addIncludePath(sokol_dep.path("src/sokol/c"));
     }
 
     // Core module - foundation types (entity utils, zon coercion)
