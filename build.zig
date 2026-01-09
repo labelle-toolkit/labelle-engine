@@ -80,6 +80,19 @@ pub fn build(b: *std.Build) void {
     // labelle-gfx v0.15.0+ re-exports SDL to avoid Zig module conflicts
     const sdl = labelle_dep.builder.modules.get("sdl").?;
 
+    // zbgfx and zgpu - get from labelle-gfx's transitive dependencies
+    const zbgfx_dep = labelle_dep.builder.dependency("zbgfx", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const zbgfx = zbgfx_dep.module("zbgfx");
+
+    const zgpu_dep = labelle_dep.builder.dependency("zgpu", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const zgpu = zgpu_dep.module("root");
+
     // zaudio (miniaudio wrapper) for sokol/SDL audio backends
     const zaudio_dep = b.dependency("zaudio", .{
         .target = target,
@@ -204,6 +217,10 @@ pub fn build(b: *std.Build) void {
         .imports = &.{
             .{ .name = "build_options", .module = build_options_mod },
             .{ .name = "raylib", .module = raylib },
+            .{ .name = "sokol", .module = sokol },
+            .{ .name = "sdl2", .module = sdl },
+            .{ .name = "zbgfx", .module = zbgfx },
+            .{ .name = "zgpu", .module = zgpu },
         },
     });
 
