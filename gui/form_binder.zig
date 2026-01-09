@@ -241,6 +241,112 @@ pub fn FormBinder(comptime FormStateType: type, comptime form_id: []const u8) ty
 
             return &result;
         }
+
+        // ====================================================================
+        // Conditional Field Visibility Support
+        // ====================================================================
+
+        /// Element visibility map type
+        pub const ElementMap = std.StringHashMap(bool);
+
+        /// Check if form state has visibility rules defined
+        fn hasVisibilityRules() bool {
+            return @hasDecl(FormStateType, "VisibilityRules");
+        }
+
+        /// Evaluate visibility for a single element based on form state
+        ///
+        /// Returns true if element should be visible, false if hidden.
+        /// If no visibility rule exists for the element, returns true (always visible).
+        ///
+        /// Example:
+        /// ```zig
+        /// const visible = binder.evaluateVisibility("boss_title_label");
+        /// ```
+        pub fn evaluateVisibility(self: Self, element_id: []const u8) bool {
+            // If form doesn't have visibility rules, everything is visible
+            if (!hasVisibilityRules()) return true;
+
+            // Check if form state has isVisible method
+            if (@hasDecl(FormStateType, "isVisible")) {
+                return self.form_state.isVisible(element_id);
+            }
+
+            // Default: visible
+            return true;
+        }
+
+        /// Update visibility for all elements based on form state
+        ///
+        /// This method evaluates visibility rules and updates an element visibility map.
+        /// The map can then be used by the GUI rendering system to show/hide elements.
+        ///
+        /// Returns a map of element IDs to visibility state.
+        ///
+        /// Example:
+        /// ```zig
+        /// var visibility = try binder.updateVisibility(allocator);
+        /// defer visibility.deinit();
+        ///
+        /// // Check if element should be rendered
+        /// if (visibility.get("boss_title_label")) |visible| {
+        ///     if (visible) {
+        ///         // Render the element
+        ///     }
+        /// }
+        /// ```
+        pub fn updateVisibility(self: Self, allocator: std.mem.Allocator) !ElementMap {
+            var visibility = ElementMap.init(allocator);
+            errdefer visibility.deinit();
+
+            // If form doesn't have visibility rules, return empty map (all visible)
+            if (!hasVisibilityRules()) return visibility;
+
+            // Get the VisibilityRules declaration
+            const VisibilityRules = @field(FormStateType, "VisibilityRules");
+            const rules_type_info = @typeInfo(@TypeOf(VisibilityRules));
+
+            // Iterate through visibility rules
+            inline for (rules_type_info.@"struct".fields) |field| {
+                const element_id = field.name;
+                const is_visible = self.evaluateVisibility(element_id);
+                try visibility.put(element_id, is_visible);
+            }
+
+            return visibility;
+        }
+
+        /// Simplified visibility update that takes a callback
+        ///
+        /// This is useful when you want to directly update GUI elements without
+        /// maintaining a separate visibility map.
+        ///
+        /// Example:
+        /// ```zig
+        /// try binder.updateVisibilityWith(struct {
+        ///     fn callback(element_id: []const u8, visible: bool) void {
+        ///         game.setElementVisible(element_id, visible);
+        ///     }
+        /// }.callback);
+        /// ```
+        pub fn updateVisibilityWith(
+            self: Self,
+            comptime callback: fn (element_id: []const u8, visible: bool) void,
+        ) void {
+            // If form doesn't have visibility rules, nothing to do
+            if (!hasVisibilityRules()) return;
+
+            // Get the VisibilityRules declaration
+            const VisibilityRules = @field(FormStateType, "VisibilityRules");
+            const rules_type_info = @typeInfo(@TypeOf(VisibilityRules));
+
+            // Iterate through visibility rules and call callback
+            inline for (rules_type_info.@"struct".fields) |field| {
+                const element_id = field.name;
+                const is_visible = self.evaluateVisibility(element_id);
+                callback(element_id, is_visible);
+            }
+        }
     };
 }
 
@@ -378,4 +484,161 @@ test "FormBinder - custom setter" {
 
     // Should be clamped to 90 by custom setter
     try testing.expectEqual(@as(f32, 90), form.clamped_value);
+}
+
+test "FormBinder - conditional visibility basic" {
+    const TestForm = struct {
+        is_boss: bool = false,
+        boss_health: f32 = 1000,
+
+        // Define visibility rules
+        pub const VisibilityRules = struct {
+            boss_health_label: void = {},
+            boss_health_slider: void = {},
+        };
+
+        // Evaluate visibility based on is_boss field
+        pub fn isVisible(self: @This(), element_id: []const u8) bool {
+            if (std.mem.eql(u8, element_id, "boss_health_label") or
+                std.mem.eql(u8, element_id, "boss_health_slider"))
+            {
+                return self.is_boss;
+            }
+            return true;
+        }
+    };
+
+    var form = TestForm{};
+    const Binder = FormBinder(TestForm, "test_form");
+    const binder = Binder.init(&form);
+
+    // Initially not boss - boss fields should be hidden
+    try testing.expect(!binder.evaluateVisibility("boss_health_label"));
+    try testing.expect(!binder.evaluateVisibility("boss_health_slider"));
+
+    // Enable boss mode
+    form.is_boss = true;
+
+    // Boss fields should now be visible
+    try testing.expect(binder.evaluateVisibility("boss_health_label"));
+    try testing.expect(binder.evaluateVisibility("boss_health_slider"));
+
+    // Non-rule elements always visible
+    try testing.expect(binder.evaluateVisibility("some_other_element"));
+}
+
+test "FormBinder - conditional visibility with map" {
+    const TestForm = struct {
+        show_advanced: bool = false,
+
+        pub const VisibilityRules = struct {
+            advanced_panel: void = {},
+            advanced_option1: void = {},
+            advanced_option2: void = {},
+        };
+
+        pub fn isVisible(self: @This(), element_id: []const u8) bool {
+            if (std.mem.eql(u8, element_id, "advanced_panel") or
+                std.mem.eql(u8, element_id, "advanced_option1") or
+                std.mem.eql(u8, element_id, "advanced_option2"))
+            {
+                return self.show_advanced;
+            }
+            return true;
+        }
+    };
+
+    var form = TestForm{};
+    const Binder = FormBinder(TestForm, "test_form");
+    const binder = Binder.init(&form);
+
+    // Get visibility map (advanced hidden)
+    var visibility = try binder.updateVisibility(testing.allocator);
+    defer visibility.deinit();
+
+    try testing.expect(visibility.get("advanced_panel").? == false);
+    try testing.expect(visibility.get("advanced_option1").? == false);
+    try testing.expect(visibility.get("advanced_option2").? == false);
+
+    // Enable advanced mode
+    form.show_advanced = true;
+
+    // Get updated visibility map
+    var visibility2 = try binder.updateVisibility(testing.allocator);
+    defer visibility2.deinit();
+
+    try testing.expect(visibility2.get("advanced_panel").? == true);
+    try testing.expect(visibility2.get("advanced_option1").? == true);
+    try testing.expect(visibility2.get("advanced_option2").? == true);
+}
+
+test "FormBinder - conditional visibility with callback" {
+    const TestForm = struct {
+        class: enum { Warrior, Mage, Rogue } = .Warrior,
+
+        pub const VisibilityRules = struct {
+            warrior_weapon: void = {},
+            mage_spell: void = {},
+            rogue_stealth: void = {},
+        };
+
+        pub fn isVisible(self: @This(), element_id: []const u8) bool {
+            if (std.mem.eql(u8, element_id, "warrior_weapon")) {
+                return self.class == .Warrior;
+            } else if (std.mem.eql(u8, element_id, "mage_spell")) {
+                return self.class == .Mage;
+            } else if (std.mem.eql(u8, element_id, "rogue_stealth")) {
+                return self.class == .Rogue;
+            }
+            return true;
+        }
+    };
+
+    var form = TestForm{ .class = .Mage };
+    const Binder = FormBinder(TestForm, "test_form");
+    const binder = Binder.init(&form);
+
+    // Track visibility updates via callback
+    const TestContext = struct {
+        var warrior_visible: bool = true;
+        var mage_visible: bool = true;
+        var rogue_visible: bool = true;
+
+        fn callback(element_id: []const u8, visible: bool) void {
+            if (std.mem.eql(u8, element_id, "warrior_weapon")) {
+                warrior_visible = visible;
+            } else if (std.mem.eql(u8, element_id, "mage_spell")) {
+                mage_visible = visible;
+            } else if (std.mem.eql(u8, element_id, "rogue_stealth")) {
+                rogue_visible = visible;
+            }
+        }
+    };
+
+    // Update visibility (class = Mage)
+    binder.updateVisibilityWith(TestContext.callback);
+
+    try testing.expect(TestContext.warrior_visible == false);
+    try testing.expect(TestContext.mage_visible == true);
+    try testing.expect(TestContext.rogue_visible == false);
+}
+
+test "FormBinder - form without visibility rules" {
+    const TestForm = struct {
+        name: [32:0]u8 = std.mem.zeroes([32:0]u8),
+        health: f32 = 100,
+        // No VisibilityRules defined
+    };
+
+    var form = TestForm{};
+    const Binder = FormBinder(TestForm, "test_form");
+    const binder = Binder.init(&form);
+
+    // All elements should be visible (no rules)
+    try testing.expect(binder.evaluateVisibility("any_element"));
+
+    // Empty visibility map (all visible by default)
+    var visibility = try binder.updateVisibility(testing.allocator);
+    defer visibility.deinit();
+    try testing.expectEqual(@as(usize, 0), visibility.count());
 }
