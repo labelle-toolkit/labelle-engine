@@ -1253,13 +1253,14 @@ pub fn GameWith(comptime Hooks: type) type {
         /// Render GUI views with both visibility and value state overrides.
         ///
         /// Allows full runtime control over element visibility AND values (checkboxes, sliders).
+        /// Updates value_state when user interacts with elements.
         pub fn renderSceneGuiWithState(
             self: *Self,
             scene: anytype,
             comptime Views: type,
             comptime Scripts: type,
             visibility_state: *const gui_mod.VisibilityState,
-            value_state: *const gui_mod.ValueState,
+            value_state: *gui_mod.ValueState,
         ) void {
             if (!self.gui_enabled) return;
 
@@ -1285,7 +1286,7 @@ pub fn GameWith(comptime Hooks: type) type {
             comptime Scripts: type,
             name: []const u8,
             visibility_state: *const gui_mod.VisibilityState,
-            value_state: *const gui_mod.ValueState,
+            value_state: *gui_mod.ValueState,
         ) void {
             inline for (comptime Views.names()) |view_name| {
                 if (std.mem.eql(u8, view_name, name)) {
@@ -1302,7 +1303,7 @@ pub fn GameWith(comptime Hooks: type) type {
             elements: []const gui_mod.GuiElement,
             comptime Scripts: type,
             visibility_state: *const gui_mod.VisibilityState,
-            value_state: *const gui_mod.ValueState,
+            value_state: *gui_mod.ValueState,
         ) void {
             for (elements) |element| {
                 self.renderGuiElementWithState(element, Scripts, visibility_state, value_state);
@@ -1310,12 +1311,13 @@ pub fn GameWith(comptime Hooks: type) type {
         }
 
         /// Internal: Render single element with full state overrides.
+        /// Updates value_state when user interacts with elements.
         fn renderGuiElementWithState(
             self: *Self,
             element: gui_mod.GuiElement,
             comptime Scripts: type,
             visibility_state: *const gui_mod.VisibilityState,
-            value_state: *const gui_mod.ValueState,
+            value_state: *gui_mod.ValueState,
         ) void {
             const element_id = element.getId();
             const is_visible = if (element_id.len > 0)
@@ -1349,6 +1351,13 @@ pub fn GameWith(comptime Hooks: type) type {
                     }
 
                     if (self.gui.checkbox(modified_cb)) {
+                        // User toggled checkbox - update value state
+                        if (element_id.len > 0) {
+                            const new_value = !modified_cb.checked;
+                            value_state.setCheckbox(element_id, new_value) catch {};
+                        }
+
+                        // Invoke callback if defined
                         if (cb.on_change) |callback_name| {
                             self.invokeGuiCallback(Scripts, callback_name);
                         }
@@ -1363,6 +1372,12 @@ pub fn GameWith(comptime Hooks: type) type {
 
                     const new_value = self.gui.slider(modified_sl);
                     if (new_value != modified_sl.value) {
+                        // User changed slider - update value state
+                        if (element_id.len > 0) {
+                            value_state.setSlider(element_id, new_value) catch {};
+                        }
+
+                        // Invoke callback if defined
                         if (sl.on_change) |callback_name| {
                             self.invokeGuiCallback(Scripts, callback_name);
                         }
