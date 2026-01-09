@@ -36,7 +36,6 @@ const WidgetCall = union(enum) {
 memory: []u8 = &.{},
 allocator: std.mem.Allocator = undefined,
 initialized: bool = false,
-clay_context: ?*clay.Clay_Context = null,
 
 // Collector pattern storage
 widget_calls: std.ArrayList(WidgetCall) = undefined,
@@ -88,7 +87,7 @@ pub fn beginFrame(self: *Self) void {
             self.memory.ptr,
         );
 
-        self.clay_context = clay.Clay_Initialize(
+        _ = clay.Clay_Initialize(
             arena,
             .{ .width = self.screen_width, .height = self.screen_height },
             .{

@@ -1,0 +1,18 @@
+.{
+    .fingerprint = 0x4712549e5c5bafd8,
+    .name = .example_clay_gui,
+    .version = "0.1.0",
+    .minimum_zig_version = "0.15.2",
+    .dependencies = .{
+        .@"labelle-engine" = .{
+            .path = "../..",
+        },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "main.zig",
+        "gui",
+        "scenes",
+    },
+}
