@@ -14,8 +14,8 @@
             .hash = "zflecs-0.2.0-dev-1PN3ym9mOgCyE8w0DdK_Uf7FAob-nm0Dp_lZKR3QyJaC",
         },
         .@"labelle-gfx" = .{
-            .url = "git+https://github.com/labelle-toolkit/labelle-gfx#2a7bf38910fa1ef282ce14f0be77d58af9d44ec1",
-            .hash = "labelle_gfx-0.22.0-WZ2XcOZyCgD01PSkzQpRUFRxAAMgAnNfQWwM4hzlVvRl",
+            .url = "git+https://github.com/labelle-toolkit/labelle-gfx#5aa6ecf35b404dcfae230e1f7679450eeafe64bf",
+            .hash = "labelle_gfx-0.23.0-WZ2XcFqACgAAk9o8zltO7SUIcF1LIA-WHOtUZjuPEUlD",
         },
         .zspec = .{
             .url = "git+https://github.com/apotema/zspec#71c901d6e74b2d5a8c556d4c74ced9b91446d8a4",
@@ -24,10 +24,6 @@
         .zts = .{
             .url = "git+https://github.com/zigster64/zts#ca98e23fcf1a4fa331c80f5cd2e72f6838daf7ee",
             .hash = "zts-0.14.1-_M80Of22AgBwArz6uCXR49IoEjlzNt5yhu7KV8cWl5jr",
-        },
-        .raylib_zig = .{
-            .url = "git+https://github.com/raylib-zig/raylib-zig#a4d18b2d1cf8fdddec68b5b084535fca0475f466",
-            .hash = "raylib_zig-5.6.0-dev-KE8REL5MBQAf3p497t52Xw9P7ojndIkVOWPXnLiLLw2P",
         },
         .sokol = .{
             .url = "git+https://github.com/floooh/sokol-zig.git#bb1a4e95b243e655e788076c545ca6a1f6bf1558",
@@ -59,6 +55,12 @@
         .zgui = .{
             .url = "git+https://github.com/labelle-toolkit/zgui#716efbd8631562daf8f86e094c6d47c4e5d86ce2",
             .hash = "zgui-0.6.0-dev--L6sZHD4bQD-lWVOLJkhLeabyi4-FmgFoESvgnCQ4i6k",
+        },
+        // GUI - rlImGui (raylib + ImGui integration)
+        // Bridges raylib input/rendering with ImGui - avoids GLFW symbol conflicts
+        .rlimgui = .{
+            .url = "git+https://github.com/raylib-extras/rlImGui#dc7f97679a024eee8f5f009e77cc311748200415",
+            .hash = "N-V-__8AAC-taQCKZ-3IjRuWJ-5Dc47QKHDPEmqlwXhvjBGq",
         },
     },
     .paths = .{

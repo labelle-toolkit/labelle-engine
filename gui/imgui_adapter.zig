@@ -1,19 +1,18 @@
 //! ImGui Raylib Adapter
 //!
-//! GUI backend using Dear ImGui with raylib rendering.
-//! Uses zgui for Zig bindings to ImGui.
+//! GUI backend using Dear ImGui with raylib via rlImGui.
 //!
-//! NOTE: Full ImGui support with raylib is not yet available.
-//! Raylib's internal GLFW window is not exposed, which prevents zgui's
-//! GLFW+OpenGL backend from initializing properly. ImGui widgets will be
-//! processed but not rendered. For full ImGui support, use the zgpu backend.
+//! rlImGui provides a bridge between raylib and ImGui that:
+//! - Uses raylib's input handling (not GLFW directly)
+//! - Renders ImGui using raylib's rlgl low-level API
+//! - Avoids GLFW symbol conflicts
 //!
 //! Build with: zig build -Dbackend=raylib -Dgui_backend=imgui
 
 const std = @import("std");
 const types = @import("types.zig");
 const zgui = @import("zgui");
-const raylib = @import("raylib");
+const rlimgui = @import("rlimgui.zig");
 
 const Self = @This();
 
@@ -29,52 +28,26 @@ allocator: std.mem.Allocator,
 // Track if backend is initialized
 backend_initialized: bool,
 
-// Framebuffer size
-fb_width: u32,
-fb_height: u32,
-
-// Track if we've warned about missing implementation
-warned: bool,
-
 pub fn init() Self {
-    const allocator = std.heap.page_allocator;
-
-    // Initialize zgui core (not the backend yet - that needs window context)
-    zgui.init(allocator);
-
     return Self{
         .window_counter = 0,
         .panel_depth = 0,
-        .allocator = allocator,
+        .allocator = std.heap.page_allocator,
         .backend_initialized = false,
-        .fb_width = 800,
-        .fb_height = 600,
-        .warned = false,
     };
 }
 
 fn initBackend(self: *Self) void {
-    if (self.warned) return;
+    if (self.backend_initialized) return;
 
-    // Check if raylib window is ready
-    if (!raylib.isWindowReady()) {
-        return;
-    }
+    // Initialize zgui's Zig-side buffers (needed for text formatting)
+    zgui.init(self.allocator);
 
-    // NOTE: Raylib's getWindowHandle() returns the native window handle
-    // (NSWindow on macOS, HWND on Windows), NOT the GLFWwindow pointer.
-    // zgui's GLFW+OpenGL backend requires a GLFWwindow* which raylib
-    // doesn't expose.
-    //
-    // Since we can't properly initialize ImGui's rendering backend with raylib,
-    // we skip all ImGui processing. Use raygui/microui with raylib instead,
-    // or use the zgpu backend for full ImGui support.
+    // Initialize rlImGui with dark theme (creates ImGui context)
+    rlimgui.setup(true);
 
-    std.log.warn("imgui_raylib: ImGui not available with raylib backend", .{});
-    std.log.warn("imgui_raylib: Use zgpu backend for ImGui, or raygui/microui with raylib", .{});
-    self.warned = true;
-
-    // Leave backend_initialized = false so all widget functions return early
+    self.backend_initialized = true;
+    std.log.info("imgui_raylib: backend initialized with rlImGui", .{});
 }
 
 pub fn fixPointers(self: *Self) void {
@@ -82,25 +55,31 @@ pub fn fixPointers(self: *Self) void {
 }
 
 pub fn deinit(self: *Self) void {
-    _ = self;
-    // Note: We don't call zgui.backend.deinit() since we never initialized the backend
-    zgui.deinit();
+    if (self.backend_initialized) {
+        rlimgui.shutdown();
+        zgui.deinit();
+    }
 }
 
 pub fn beginFrame(self: *Self) void {
     self.window_counter = 0;
 
-    // Check if we should warn about unsupported backend
-    if (!self.warned) {
+    // Lazy init backend on first frame
+    if (!self.backend_initialized) {
         self.initBackend();
     }
 
-    // Skip ImGui processing since we can't render it
+    if (!self.backend_initialized) return;
+
+    // Start new ImGui frame via rlImGui
+    rlimgui.begin();
 }
 
 pub fn endFrame(self: *Self) void {
-    _ = self;
-    // Skip - nothing to render with raylib backend
+    if (!self.backend_initialized) return;
+
+    // End frame and render via rlImGui
+    rlimgui.end();
 }
 
 fn nextWindowName(self: *Self, buf: []u8) [:0]const u8 {

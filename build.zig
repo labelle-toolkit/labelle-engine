@@ -63,12 +63,9 @@ pub fn build(b: *std.Build) void {
     });
     const labelle = labelle_dep.module("labelle");
 
-    // Input backend dependencies
-    const raylib_dep = b.dependency("raylib_zig", .{
-        .target = target,
-        .optimize = optimize,
-    });
-    const raylib = raylib_dep.module("raylib");
+    // raylib module - get from labelle-gfx's re-exported module
+    // labelle-gfx uses the raylib-zig fork with getGLFWWindow() for ImGui integration
+    const raylib = labelle_dep.builder.modules.get("raylib").?;
 
     const sokol_dep = b.dependency("sokol", .{
         .target = target,
@@ -239,7 +236,7 @@ pub fn build(b: *std.Build) void {
 
         // Select appropriate zgui backend based on graphics backend
         const zgui_backend: ZguiBackend = switch (backend) {
-            .raylib => .glfw_opengl3, // raylib uses GLFW+OpenGL
+            .raylib => .no_backend, // raylib uses rlImGui for ImGui integration
             .sokol => .glfw_opengl3, // sokol can use GLFW+OpenGL
             .sdl => .sdl2_renderer, // SDL uses SDL2 renderer
             .bgfx => .glfw, // bgfx uses GLFW (rendering handled separately)
@@ -283,6 +280,60 @@ pub fn build(b: *std.Build) void {
         // Link OpenGL framework on macOS for glfw_opengl3 backend
         if (target.result.os.tag == .macos and (backend == .raylib or backend == .sokol)) {
             gui_interface.linkFramework("OpenGL", .{});
+        }
+
+        // For raylib backend, compile and link rlImGui (raylib + ImGui bridge)
+        if (backend == .raylib) {
+            const rlimgui_dep = b.dependency("rlimgui", .{});
+            const raylib_zig_dep = labelle_dep.builder.dependency("raylib_zig", .{
+                .target = target,
+                .optimize = optimize,
+            });
+
+            // Create a module for rlImGui C++ sources
+            const rlimgui_mod = b.createModule(.{
+                .target = target,
+                .optimize = optimize,
+                .link_libcpp = true,
+            });
+
+            // Add rlImGui source file
+            rlimgui_mod.addCSourceFile(.{
+                .file = rlimgui_dep.path("rlImGui.cpp"),
+                .flags = &.{
+                    "-std=c++11",
+                    "-fno-sanitize=undefined",
+                    "-DNO_FONT_AWESOME", // Disable Font Awesome (optional feature)
+                },
+            });
+
+            // Add include paths for ImGui (from zgui) and rlImGui headers
+            rlimgui_mod.addIncludePath(dep.path("libs/imgui"));
+            rlimgui_mod.addIncludePath(rlimgui_dep.path(""));
+
+            // Add raylib include path - raylib headers are in the raylib submodule
+            const raylib_c_dep = raylib_zig_dep.builder.dependency("raylib", .{
+                .target = target,
+                .optimize = optimize,
+            });
+            rlimgui_mod.addIncludePath(raylib_c_dep.path("src"));
+
+            // Link against imgui
+            rlimgui_mod.linkLibrary(dep.artifact("imgui"));
+
+            // Create static library from the module
+            const rlimgui_lib = b.addLibrary(.{
+                .name = "rlimgui",
+                .root_module = rlimgui_mod,
+            });
+
+            // Link rlImGui to GUI interface
+            gui_interface.linkLibrary(rlimgui_lib);
+
+            // Add rlimgui include path so cImport can find rlImGui.h
+            gui_interface.addIncludePath(rlimgui_dep.path(""));
+            gui_interface.addIncludePath(dep.path("libs/imgui"));
+            gui_interface.addIncludePath(raylib_c_dep.path("src"));
         }
     }
 
