@@ -62,6 +62,7 @@ pub const GuiBackend = enum {
     raygui,
     microui,
     nuklear,
+    imgui,
 };
 
 /// Game ID type selection (entity identifier type)
