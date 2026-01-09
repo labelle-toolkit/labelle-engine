@@ -312,7 +312,6 @@ pub fn checkbox(self: *Self, cb: types.Checkbox) bool {
         var name_buf: [32]u8 = undefined;
         const name = self.nextWindowName(&name_buf);
 
-        const text_len: usize = cb.text.len;
         zgui.setNextWindowPos(.{ .x = cb.position.x, .y = cb.position.y });
         const text_size = zgui.calcTextSize(cb.text, .{});
         zgui.setNextWindowSize(.{ .w = text_size[0] + 50, .h = 40 });
