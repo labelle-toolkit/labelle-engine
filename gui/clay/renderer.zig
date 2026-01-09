@@ -70,17 +70,22 @@ fn drawRectangle(config: clay.RectangleRenderData, bounds: clay.BoundingBox) voi
 }
 
 fn drawText(config: clay.TextRenderData, bounds: clay.BoundingBox) void {
-    // Create null-terminated buffer for raylib
+    // Use a temporary arena allocator to avoid large stack allocation
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
     const text_slice = config.string_contents.chars[0..@intCast(config.string_contents.length)];
-    const max_len = @min(text_slice.len, 4096);
-    var buf: [4096:0]u8 = undefined;
-    @memcpy(buf[0..max_len], text_slice[0..max_len]);
-    buf[max_len] = 0;
+    const text_nt = allocator.allocSentinel(u8, text_slice.len, 0) catch {
+        std.debug.print("Failed to allocate for drawText\n", .{});
+        return;
+    };
+    @memcpy(text_nt[0..text_slice.len], text_slice);
 
     const color = clayColorToRaylib(config.text_color);
 
     rl.drawText(
-        &buf,
+        text_nt,
         @intFromFloat(bounds.x),
         @intFromFloat(bounds.y),
         @intCast(config.font_size),

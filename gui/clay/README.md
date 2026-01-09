@@ -76,31 +76,30 @@ Rendering interface between Clay and labelle-gfx.
 - [x] Create C bindings stubs
 - [x] Document architecture
 
-### Phase 2: Clay C Library Integration (TODO)
-- [ ] Add Clay as a dependency in `build.zig.zon`
-- [ ] Create C wrapper if needed
-- [ ] Implement actual C bindings
-- [ ] Test Clay initialization
+### Phase 2: Clay C Library Integration ✅
+- [x] Add Clay as a dependency in `build.zig.zon` (using zclay v0.2.2)
+- [x] Implement C bindings via zclay
+- [x] Test Clay initialization
 
-### Phase 3: Adapter Implementation (TODO)
-- [ ] Implement `init()` with Clay initialization
-- [ ] Implement `beginFrame()` / `endFrame()`
-- [ ] Implement element methods (button, label, etc.)
-- [ ] Map labelle types to Clay layout configs
-- [ ] Handle layout calculation
+### Phase 3: Adapter Implementation ✅
+- [x] Implement `init()` with Clay initialization
+- [x] Implement `beginFrame()` / `endFrame()`
+- [x] Implement element methods (button, label, checkbox, slider, progressBar, image, panel)
+- [x] Map labelle types to Clay layout configs
+- [x] Handle layout calculation with collector pattern
 
-### Phase 4: Renderer Implementation (TODO)
-- [ ] Implement raylib renderer
-- [ ] Implement sokol renderer  
-- [ ] Implement SDL renderer
-- [ ] Test with each backend
+### Phase 4: Renderer Implementation ✅
+- [x] Implement raylib renderer
+- [ ] Implement sokol renderer (future work)
+- [ ] Implement SDL renderer (future work)
+- [x] Test with raylib backend
 
-### Phase 5: Integration & Testing (TODO)
-- [ ] Add Clay to GUI backend enum in `interface.zig`
-- [ ] Create example usage
-- [ ] Write tests
-- [ ] Performance benchmarks
-- [ ] Documentation
+### Phase 5: Integration & Testing ✅
+- [x] Add Clay to GUI backend enum in `interface.zig`
+- [x] Create example usage (`usage/example_clay_gui`)
+- [x] Integration testing
+- [ ] Performance benchmarks (future work)
+- [x] Documentation
 
 ## Usage Example (Future)
 

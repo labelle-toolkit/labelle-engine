@@ -57,12 +57,8 @@ pub fn fixPointers(_: *Self) void {
 
 pub fn deinit(self: *Self) void {
     if (self.initialized) {
-        if (self.widget_calls.items.len > 0 or self.widget_calls.capacity > 0) {
-            self.widget_calls.deinit(self.allocator);
-        }
-        if (self.memory.len > 0) {
-            self.allocator.free(self.memory);
-        }
+        self.widget_calls.deinit(self.allocator);
+        self.allocator.free(self.memory);
         _ = self.gpa.deinit();
         self.initialized = false;
     }
@@ -94,7 +90,7 @@ pub fn beginFrame(self: *Self) void {
         );
 
         // Set text measurement function for Clay layout calculations
-        clay.setMeasureTextFunction(void, {}, measureTextCallback);
+        clay.setMeasureTextFunction(*Self, self, measureTextCallback);
 
         self.initialized = true;
     }
@@ -409,18 +405,20 @@ fn errorHandler(error_data: clay.ErrorData) callconv(.c) void {
 fn measureTextCallback(
     text: []const u8,
     config: *clay.TextElementConfig,
-    userData: void,
+    userData: *Self,
 ) clay.Dimensions {
-    _ = userData;
+    const self = userData;
 
-    // Create a null-terminated buffer for raylib
-    const max_len = @min(text.len, 4096);
-    var buf: [4096:0]u8 = undefined;
-    @memcpy(buf[0..max_len], text[0..max_len]);
-    buf[max_len] = 0;
+    // Use the adapter's allocator to create a temporary null-terminated string
+    const text_nt = self.allocator.allocSentinel(u8, text.len, 0) catch |err| {
+        std.debug.print("Failed to allocate for text measurement: {any}\n", .{err});
+        return .{ .w = 0, .h = 0 };
+    };
+    defer self.allocator.free(text_nt);
+    @memcpy(text_nt[0..text.len], text);
 
     // Measure using raylib
-    const text_width = rl.measureText(&buf, @intCast(config.font_size));
+    const text_width = rl.measureText(text_nt, @intCast(config.font_size));
     const text_height = config.font_size;
 
     return .{
