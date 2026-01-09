@@ -95,13 +95,9 @@ pub fn build(b: *std.Build) void {{
         }}),
     }});
 .sdl_exe_start
-    // Get labelle-gfx dependency for SDL bindings
-    const labelle_dep = engine_dep.builder.dependency("labelle-gfx", .{{
-        .target = target,
-        .optimize = optimize,
-    }});
+    // SDL SDK is declared as a direct dependency in build.zig.zon
     const SdlSdk = @import("sdl");
-    const sdl_sdk = SdlSdk.init(labelle_dep.builder, .{{ .dep_name = "sdl" }});
+    const sdl_sdk = SdlSdk.init(b, .{{ .dep_name = "sdl" }});
     const sdl_mod = sdl_sdk.getWrapperModule();
 
     const exe = b.addExecutable(.{{
