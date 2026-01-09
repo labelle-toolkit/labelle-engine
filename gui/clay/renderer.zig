@@ -9,35 +9,32 @@ const clay = @import("bindings.zig").clay;
 const rl = @import("raylib");
 
 /// Process Clay render commands and draw them using raylib
-pub fn processRenderCommands(render_commands: clay.Clay_RenderCommandArray) void {
-    var i: u32 = 0;
-    while (i < render_commands.length) : (i += 1) {
-        const cmd = render_commands.internalArray[i];
-
-        switch (cmd.commandType) {
-            clay.CLAY_RENDER_COMMAND_TYPE_RECTANGLE => {
-                drawRectangle(cmd.config.rectangleElementConfig.*, cmd.boundingBox);
+pub fn processRenderCommands(render_commands: []clay.RenderCommand) void {
+    for (render_commands) |cmd| {
+        switch (cmd.command_type) {
+            .rectangle => {
+                drawRectangle(cmd.render_data.rectangle, cmd.bounding_box);
             },
-            clay.CLAY_RENDER_COMMAND_TYPE_TEXT => {
-                drawText(cmd.config.textElementConfig.*, cmd.text, cmd.boundingBox);
+            .text => {
+                drawText(cmd.render_data.text, cmd.bounding_box);
             },
-            clay.CLAY_RENDER_COMMAND_TYPE_IMAGE => {
-                drawImage(cmd.config.imageElementConfig.*, cmd.boundingBox);
+            .image => {
+                drawImage(cmd.render_data.image, cmd.bounding_box);
             },
-            clay.CLAY_RENDER_COMMAND_TYPE_SCISSOR_START => {
-                startScissor(cmd.boundingBox);
+            .scissor_start => {
+                startScissor(cmd.bounding_box);
             },
-            clay.CLAY_RENDER_COMMAND_TYPE_SCISSOR_END => {
+            .scissor_end => {
                 endScissor();
             },
-            clay.CLAY_RENDER_COMMAND_TYPE_BORDER => {
-                drawBorder(cmd.config.borderElementConfig.*, cmd.boundingBox);
+            .border => {
+                drawBorder(cmd.render_data.border, cmd.bounding_box);
             },
-            clay.CLAY_RENDER_COMMAND_TYPE_CUSTOM => {
+            .custom => {
                 // Custom render commands not yet supported
             },
-            else => {
-                // Unknown command type
+            .none => {
+                // Skip none commands
             },
         }
     }
@@ -47,7 +44,7 @@ pub fn processRenderCommands(render_commands: clay.Clay_RenderCommandArray) void
 // Render Command Handlers
 // ============================================================================
 
-fn drawRectangle(config: clay.Clay_RectangleElementConfig, bounds: clay.Clay_BoundingBox) void {
+fn drawRectangle(config: clay.RectangleRenderData, bounds: clay.BoundingBox) void {
     const rect = rl.Rectangle{
         .x = bounds.x,
         .y = bounds.y,
@@ -55,42 +52,43 @@ fn drawRectangle(config: clay.Clay_RectangleElementConfig, bounds: clay.Clay_Bou
         .height = bounds.height,
     };
 
-    const color = clayColorToRaylib(config.color);
+    const color = clayColorToRaylib(config.background_color);
 
     // Check if we need rounded corners
-    const has_rounded = config.cornerRadius.topLeft > 0 or
-        config.cornerRadius.topRight > 0 or
-        config.cornerRadius.bottomLeft > 0 or
-        config.cornerRadius.bottomRight > 0;
+    const has_rounded = config.corner_radius.top_left > 0 or
+        config.corner_radius.top_right > 0 or
+        config.corner_radius.bottom_left > 0 or
+        config.corner_radius.bottom_right > 0;
 
     if (has_rounded) {
         // Use the maximum corner radius for simplicity
-        const radius = @max(@max(config.cornerRadius.topLeft, config.cornerRadius.topRight), @max(config.cornerRadius.bottomLeft, config.cornerRadius.bottomRight));
+        const radius = @max(@max(config.corner_radius.top_left, config.corner_radius.top_right), @max(config.corner_radius.bottom_left, config.corner_radius.bottom_right));
         rl.drawRectangleRounded(rect, radius / @min(bounds.width, bounds.height), 8, color);
     } else {
         rl.drawRectangleRec(rect, color);
     }
 }
 
-fn drawText(config: clay.Clay_TextElementConfig, text: clay.Clay_String, bounds: clay.Clay_BoundingBox) void {
+fn drawText(config: clay.TextRenderData, bounds: clay.BoundingBox) void {
     // Create null-terminated buffer for raylib
-    const max_len = @min(text.length, 4096);
+    const text_slice = config.string_contents.chars[0..@intCast(config.string_contents.length)];
+    const max_len = @min(text_slice.len, 4096);
     var buf: [4096:0]u8 = undefined;
-    @memcpy(buf[0..max_len], text.chars[0..max_len]);
+    @memcpy(buf[0..max_len], text_slice[0..max_len]);
     buf[max_len] = 0;
 
-    const color = clayColorToRaylib(config.textColor);
+    const color = clayColorToRaylib(config.text_color);
 
     rl.drawText(
         &buf,
         @intFromFloat(bounds.x),
         @intFromFloat(bounds.y),
-        @intCast(config.fontSize),
+        @intCast(config.font_size),
         color,
     );
 }
 
-fn drawImage(config: clay.Clay_ImageElementConfig, bounds: clay.Clay_BoundingBox) void {
+fn drawImage(config: clay.ImageRenderData, bounds: clay.BoundingBox) void {
     _ = config;
 
     // For now, draw a placeholder rectangle
@@ -105,7 +103,7 @@ fn drawImage(config: clay.Clay_ImageElementConfig, bounds: clay.Clay_BoundingBox
     rl.drawRectangleRec(rect, placeholder_color);
 }
 
-fn drawBorder(config: clay.Clay_BorderElementConfig, bounds: clay.Clay_BoundingBox) void {
+fn drawBorder(config: clay.BorderRenderData, bounds: clay.BoundingBox) void {
     const color = clayColorToRaylib(config.color);
     const rect = rl.Rectangle{
         .x = bounds.x,
@@ -117,12 +115,12 @@ fn drawBorder(config: clay.Clay_BorderElementConfig, bounds: clay.Clay_BoundingB
     // Draw border with the specified width
     // Clay borders can have different widths on each side, but raylib's drawRectangleLinesEx
     // uses uniform thickness. We'll use the maximum border width.
-    const thickness = @max(@max(config.width.left, config.width.right), @max(config.width.top, config.width.bottom));
+    const thickness: f32 = @floatFromInt(@max(@max(config.width.left, config.width.right), @max(config.width.top, config.width.bottom)));
 
     rl.drawRectangleLinesEx(rect, thickness, color);
 }
 
-fn startScissor(bounds: clay.Clay_BoundingBox) void {
+fn startScissor(bounds: clay.BoundingBox) void {
     rl.beginScissorMode(
         @intFromFloat(bounds.x),
         @intFromFloat(bounds.y),
@@ -139,11 +137,11 @@ fn endScissor() void {
 // Helper Functions
 // ============================================================================
 
-fn clayColorToRaylib(color: clay.Clay_Color) rl.Color {
+fn clayColorToRaylib(color: clay.Color) rl.Color {
     return rl.Color{
-        .r = @intFromFloat(color.r),
-        .g = @intFromFloat(color.g),
-        .b = @intFromFloat(color.b),
-        .a = @intFromFloat(color.a),
+        .r = @intFromFloat(color[0]),
+        .g = @intFromFloat(color[1]),
+        .b = @intFromFloat(color[2]),
+        .a = @intFromFloat(color[3]),
     };
 }
