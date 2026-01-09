@@ -138,14 +138,46 @@ Four comprehensive tests verify:
    - Would need enum reflection logic
    - Deferred to full implementation
 
+## Critical Design Decision: Event Timing
+
+**Issue Identified**: GUI events must NOT execute during rendering or script execution to avoid ECS/script conflicts.
+
+**Solution**: Event queue with deferred processing (see `game-loop-integration.md`)
+
+### Architecture
+
+```zig
+while (game.isRunning()) {
+    systems.fixedUpdate(dt);
+    
+    // ✅ SAFE POINT: Process queued GUI events
+    game.processGuiEvents(GuiDispatcher);
+    
+    systems.update(dt);
+    render();
+    game.renderGui(...);  // ← Events QUEUED here, not executed
+}
+```
+
+### Prevents Race Conditions
+
+1. ✅ **ECS conflicts** - No add/remove during system iteration
+2. ✅ **Script conflicts** - No concurrent modifications
+3. ✅ **Render conflicts** - No component removal during draw list build
+4. ✅ **Deterministic order** - FIFO queue guarantees
+
+**Reference**: See `game-loop-integration.md` for complete design.
+
 ## Next Steps for Full Implementation
 
-### Phase 1: Complete Hook System (Week 1-2)
+### Phase 1: Event Queue & Hook System (Week 1-2)
 
-1. Add `gui_events` queue to `Game` struct
-2. Implement `processGuiEvents()` method
-3. Add text field support to backend interface
-4. Add text input hooks to `GuiHook` enum
+1. Add `gui_events: ArrayList(GuiHookPayload)` to `Game` struct
+2. Implement `queueGuiEvent()` method (called by backends)
+3. Implement `processGuiEvents(Dispatcher)` method (called by game loop)
+4. Add text field support to backend interface
+5. Add text input hooks to `GuiHook` enum
+6. Document safe processing point in game loop examples
 
 ### Phase 2: Backend Integration (Week 2-3)
 
@@ -250,14 +282,40 @@ pub const Gui = struct {
 };
 ```
 
-### ✅ Keep Hybrid Backend Approach
+### ✅ Keep Hybrid Backend Approach with Event Queue
 
 **Confirmed**: All backends should:
-1. Return interaction state immediately (immediate-mode)
-2. Optionally queue events if element has ID
+1. Return interaction state immediately (immediate-mode pattern preserved)
+2. Queue events via `game.queueGuiEvent()` if element has ID
 3. Zero overhead if no ID provided
 
-Example code pattern works perfectly.
+**Example backend pattern**:
+```zig
+pub fn button(self: *Self, btn: types.Button) bool {
+    const clicked = widget.drawButton(btn);
+    
+    if (clicked and btn.id.len > 0) {
+        // Queue for deferred processing
+        self.game.queueGuiEvent(.{
+            .button_clicked = .{
+                .element = btn,
+                .mouse_pos = getMousePos(),
+                .frame_number = self.game.frame_number,
+            },
+        }) catch |err| {
+            std.log.err("Failed to queue GUI event: {}", .{err});
+        };
+    }
+    
+    return clicked;  // Still return immediately
+}
+```
+
+**Benefits**:
+- ✅ Immediate return for UI responsiveness
+- ✅ Deferred execution for ECS safety
+- ✅ Backward compatible
+- ✅ Best of both worlds
 
 ## Performance Notes
 
@@ -268,9 +326,20 @@ Example code pattern works perfectly.
 - Comptime overhead: negligible
 
 **Expected Runtime Performance**:
+- Event queueing: O(1) amortized (ArrayList append)
 - Event dispatch: ~1-5ns per event (inline function call)
 - Field routing: 0ns (resolved at comptime)
-- Memory overhead: 0 bytes (stateless binder)
+- Memory overhead FormBinder: 0 bytes (stateless)
+- Memory overhead event queue: ~100 bytes per event × queue size
+  - Typical: 1-10 events/frame = ~1KB
+  - Worst case: 100 events/frame = ~10KB
+  - Mitigation: Use `clearRetainingCapacity()` to reuse allocations
+
+**Optimization tip**:
+```zig
+// Pre-allocate queue capacity to avoid hitches
+try game.gui_events.ensureTotalCapacity(32);
+```
 
 ## Conclusion
 
@@ -305,3 +374,4 @@ Test coverage:        4 tests, 100% of core paths
 - FormBinder Design: `docs/rfcs/0001-gui-interaction-hooks/approach-d-formbinder.md`
 - Simple Explanation: `docs/rfcs/0001-gui-interaction-hooks/approach-d-simple-explanation.md`
 - Backend Compatibility: `docs/rfcs/0001-gui-interaction-hooks/backend-compatibility.md`
+- **Game Loop Integration**: `docs/rfcs/0001-gui-interaction-hooks/game-loop-integration.md` ⭐
