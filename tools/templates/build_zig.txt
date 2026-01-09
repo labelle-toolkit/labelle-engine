@@ -122,8 +122,12 @@ pub fn build(b: *std.Build) void {{
         .optimize = optimize,
     }});
     const zbgfx_mod = zbgfx_dep.module("zbgfx");
-    const zglfw_mod = zglfw_dep.module("zglfw");
+    const zglfw_mod = zglfw_dep.module("root");
     const labelle_gfx_mod = labelle_dep.module("labelle");
+
+    // Get native libraries for linking
+    const bgfx_lib = zbgfx_dep.artifact("bgfx");
+    const glfw_lib = zglfw_dep.artifact("glfw");
 
     const exe = b.addExecutable(.{{
         .name = "{s}",
@@ -154,9 +158,12 @@ pub fn build(b: *std.Build) void {{
         .target = target,
         .optimize = optimize,
     }});
-    const zgpu_mod = zgpu_dep.module("zgpu");
-    const zglfw_mod = zglfw_dep.module("zglfw");
+    const zgpu_mod = zgpu_dep.module("root");
+    const zglfw_mod = zglfw_dep.module("root");
     const labelle_gfx_mod = labelle_dep.module("labelle");
+
+    // Get native libraries for linking
+    const glfw_lib = zglfw_dep.artifact("glfw");
 
     const exe = b.addExecutable(.{{
         .name = "{s}",
@@ -175,6 +182,16 @@ pub fn build(b: *std.Build) void {{
     }});
 .plugin_import
                 .{{ .name = "{s}", .module = {s}_mod }},
+.bgfx_link
+    // Link bgfx and glfw native libraries
+    exe.linkLibrary(bgfx_lib);
+    exe.linkLibrary(glfw_lib);
+
+.zgpu_link
+    // Link glfw and Dawn (WebGPU) native libraries
+    exe.linkLibrary(glfw_lib);
+    exe.linkLibrary(zgpu_dep.artifact("zdawn"));
+
 .footer
     b.installArtifact(exe);
 
