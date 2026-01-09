@@ -94,22 +94,9 @@ pub const FormManager = struct {
         var field_iter = self.fields.iterator();
         while (field_iter.next()) |entry| {
             entry.value_ptr.deinit(self.allocator);
-            self.allocator.free(entry.key_ptr.*);
         }
         self.fields.deinit();
-        
-        // Clean up form metadata keys
-        var form_iter = self.forms.iterator();
-        while (form_iter.next()) |entry| {
-            self.allocator.free(entry.key_ptr.*);
-        }
         self.forms.deinit();
-        
-        // Clean up validator keys
-        var validator_iter = self.validators.iterator();
-        while (validator_iter.next()) |entry| {
-            self.allocator.free(entry.key_ptr.*);
-        }
         self.validators.deinit();
     }
     
@@ -130,29 +117,34 @@ pub const FormManager = struct {
     
     /// Set a field value (string)
     pub fn setString(self: *FormManager, element_id: []const u8, value: []const u8) !void {
-        // Free old value if exists
-        if (self.fields.get(element_id)) |old_value| {
-            old_value.deinit(self.allocator);
-        }
-        
-        const element_id_owned = try self.allocator.dupe(u8, element_id);
         const value_owned = try self.allocator.dupe(u8, value);
-        
-        try self.fields.put(element_id_owned, .{ .string = value_owned });
+        const gop = try self.fields.getOrPut(element_id);
+        if (gop.found_existing) {
+            gop.value_ptr.deinit(self.allocator);
+        } else {
+            gop.key_ptr.* = try self.allocator.dupe(u8, element_id);
+        }
+        gop.value_ptr.* = .{ .string = value_owned };
         self.markFormDirty(element_id);
     }
-    
+
     /// Set a field value (float)
     pub fn setFloat(self: *FormManager, element_id: []const u8, value: f32) !void {
-        const element_id_owned = try self.allocator.dupe(u8, element_id);
-        try self.fields.put(element_id_owned, .{ .float = value });
+        const gop = try self.fields.getOrPut(element_id);
+        if (!gop.found_existing) {
+            gop.key_ptr.* = try self.allocator.dupe(u8, element_id);
+        }
+        gop.value_ptr.* = .{ .float = value };
         self.markFormDirty(element_id);
     }
-    
+
     /// Set a field value (bool)
     pub fn setBool(self: *FormManager, element_id: []const u8, value: bool) !void {
-        const element_id_owned = try self.allocator.dupe(u8, element_id);
-        try self.fields.put(element_id_owned, .{ .bool = value });
+        const gop = try self.fields.getOrPut(element_id);
+        if (!gop.found_existing) {
+            gop.key_ptr.* = try self.allocator.dupe(u8, element_id);
+        }
+        gop.value_ptr.* = .{ .bool = value };
         self.markFormDirty(element_id);
     }
     

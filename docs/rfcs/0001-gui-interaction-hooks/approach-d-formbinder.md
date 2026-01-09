@@ -202,15 +202,8 @@ pub fn FormBinder(
         
         /// Capitalize first character of field name
         fn capitalizeFirst(comptime str: []const u8) []const u8 {
-            comptime {
-                if (str.len == 0) return str;
-                var result: [str.len]u8 = undefined;
-                result[0] = std.ascii.toUpper(str[0]);
-                for (str[1..], 1..) |c, i| {
-                    result[i] = c;
-                }
-                return &result;
-            }
+            if (str.len == 0) return "";
+            return &[_]u8{std.ascii.toUpper(str[0])} ++ str[1..];
         }
     };
 }
