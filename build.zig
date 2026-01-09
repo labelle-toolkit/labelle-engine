@@ -93,6 +93,13 @@ pub fn build(b: *std.Build) void {
     });
     const zgpu = zgpu_dep.module("root");
 
+    // zglfw - GLFW bindings for zgpu
+    const zglfw_dep = labelle_dep.builder.dependency("zglfw", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const zglfw = zglfw_dep.module("root");
+
     // zaudio (miniaudio wrapper) for sokol/SDL audio backends
     const zaudio_dep = b.dependency("zaudio", .{
         .target = target,
@@ -209,8 +216,8 @@ pub fn build(b: *std.Build) void {
         break :blk nuklear_dep.module("nuklear");
     } else null;
 
-    // zgui/ImGui module (optional, loaded when gui_backend is imgui)
-    const zgui_module: ?*std.Build.Module = if (gui_backend == .imgui) blk: {
+    // zgui/ImGui dependency (optional, loaded when gui_backend is imgui)
+    const zgui_dep: ?*std.Build.Dependency = if (gui_backend == .imgui) blk: {
         // zgui backend enum matches zgui/build.zig Backend enum
         const ZguiBackend = enum {
             no_backend,
@@ -239,12 +246,11 @@ pub fn build(b: *std.Build) void {
             .zgpu => .glfw_wgpu, // zgpu uses GLFW+WebGPU
         };
 
-        const zgui_dep = b.dependency("zgui", .{
+        break :blk b.dependency("zgui", .{
             .target = target,
             .optimize = optimize,
             .backend = zgui_backend,
         });
-        break :blk zgui_dep.module("root");
     } else null;
 
     // Create the GUI interface module that wraps the selected backend
@@ -259,6 +265,8 @@ pub fn build(b: *std.Build) void {
             .{ .name = "sdl2", .module = sdl },
             .{ .name = "zbgfx", .module = zbgfx },
             .{ .name = "zgpu", .module = zgpu },
+            .{ .name = "labelle", .module = labelle }, // For zgpu context access
+            .{ .name = "zglfw", .module = zglfw }, // For GLFW window access
         },
     });
 
@@ -267,9 +275,15 @@ pub fn build(b: *std.Build) void {
         gui_interface.addImport("nuklear", nk);
     }
 
-    // Add zgui module to GUI if using imgui backend
-    if (zgui_module) |zgui_mod| {
-        gui_interface.addImport("zgui", zgui_mod);
+    // Add zgui module and link library to GUI if using imgui backend
+    if (zgui_dep) |dep| {
+        gui_interface.addImport("zgui", dep.module("root"));
+        gui_interface.linkLibrary(dep.artifact("imgui"));
+
+        // Link OpenGL framework on macOS for glfw_opengl3 backend
+        if (target.result.os.tag == .macos and (backend == .raylib or backend == .sokol)) {
+            gui_interface.linkFramework("OpenGL", .{});
+        }
     }
 
     // Core module - foundation types (entity utils, zon coercion)

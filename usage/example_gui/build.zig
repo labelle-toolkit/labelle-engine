@@ -18,6 +18,7 @@ pub const GuiBackend = enum {
     raygui,
     microui,
     nuklear,
+    imgui,
 };
 
 pub fn build(b: *std.Build) void {

@@ -14,7 +14,7 @@
             .hash = "zflecs-0.2.0-dev-1PN3ym9mOgCyE8w0DdK_Uf7FAob-nm0Dp_lZKR3QyJaC",
         },
         .@"labelle-gfx" = .{
-            .url = "git+https://github.com/labelle-toolkit/labelle-gfx#8357cc348d55b3b539a2bc806eaf14bc76bda7d7",
+            .url = "git+https://github.com/labelle-toolkit/labelle-gfx#2a7bf38910fa1ef282ce14f0be77d58af9d44ec1",
             .hash = "labelle_gfx-0.22.0-WZ2XcOZyCgD01PSkzQpRUFRxAAMgAnNfQWwM4hzlVvRl",
         },
         .zspec = .{
@@ -55,9 +55,10 @@
             .hash = "nuklear-4.12.8-xEV9YmKbEgA0wPaW62YKUCfEWonKXegmMBHeu6ljdhyh",
         },
         // GUI - Dear ImGui (industry standard immediate-mode GUI)
+        // Using labelle-toolkit fork with Dawn WebGPU backend fix
         .zgui = .{
-            .url = "git+https://github.com/zig-gamedev/zgui#main",
-            .hash = "zgui-0.6.0-dev--L6sZHr3bQCeckUeL9YPiARJirsOyjQUZlrg7JxbPzbp",
+            .url = "git+https://github.com/labelle-toolkit/zgui#716efbd8631562daf8f86e094c6d47c4e5d86ce2",
+            .hash = "zgui-0.6.0-dev--L6sZHD4bQD-lWVOLJkhLeabyi4-FmgFoESvgnCQ4i6k",
         },
     },
     .paths = .{
