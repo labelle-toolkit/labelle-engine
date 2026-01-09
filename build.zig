@@ -22,7 +22,7 @@ pub const GuiBackend = enum {
     raygui,
     microui,
     nuklear,
-    // imgui,    // TODO: Future
+    imgui,
 };
 
 pub fn build(b: *std.Build) void {
@@ -209,6 +209,44 @@ pub fn build(b: *std.Build) void {
         break :blk nuklear_dep.module("nuklear");
     } else null;
 
+    // zgui/ImGui module (optional, loaded when gui_backend is imgui)
+    const zgui_module: ?*std.Build.Module = if (gui_backend == .imgui) blk: {
+        // zgui backend enum matches zgui/build.zig Backend enum
+        const ZguiBackend = enum {
+            no_backend,
+            glfw_wgpu,
+            glfw_opengl3,
+            glfw_vulkan,
+            glfw_dx12,
+            win32_dx12,
+            glfw,
+            sdl2_opengl3,
+            osx_metal,
+            sdl2,
+            sdl2_renderer,
+            sdl3,
+            sdl3_opengl3,
+            sdl3_renderer,
+            sdl3_gpu,
+        };
+
+        // Select appropriate zgui backend based on graphics backend
+        const zgui_backend: ZguiBackend = switch (backend) {
+            .raylib => .glfw_opengl3, // raylib uses GLFW+OpenGL
+            .sokol => .glfw_opengl3, // sokol can use GLFW+OpenGL
+            .sdl => .sdl2_renderer, // SDL uses SDL2 renderer
+            .bgfx => .glfw, // bgfx uses GLFW (rendering handled separately)
+            .zgpu => .glfw_wgpu, // zgpu uses GLFW+WebGPU
+        };
+
+        const zgui_dep = b.dependency("zgui", .{
+            .target = target,
+            .optimize = optimize,
+            .backend = zgui_backend,
+        });
+        break :blk zgui_dep.module("root");
+    } else null;
+
     // Create the GUI interface module that wraps the selected backend
     const gui_interface = b.addModule("gui", .{
         .root_source_file = b.path("gui/mod.zig"),
@@ -227,6 +265,11 @@ pub fn build(b: *std.Build) void {
     // Add nuklear module to GUI if using nuklear backend
     if (nuklear_module) |nk| {
         gui_interface.addImport("nuklear", nk);
+    }
+
+    // Add zgui module to GUI if using imgui backend
+    if (zgui_module) |zgui_mod| {
+        gui_interface.addImport("zgui", zgui_mod);
     }
 
     // Core module - foundation types (entity utils, zon coercion)

@@ -54,6 +54,11 @@
             .url = "git+https://github.com/labelle-toolkit/zig-nuklear#1179a71e9a1bfcb2e52f27fc0bcdf96bdc5ef0d0",
             .hash = "nuklear-4.12.8-xEV9YmKbEgA0wPaW62YKUCfEWonKXegmMBHeu6ljdhyh",
         },
+        // GUI - Dear ImGui (industry standard immediate-mode GUI)
+        .zgui = .{
+            .url = "git+https://github.com/zig-gamedev/zgui#main",
+            .hash = "zgui-0.6.0-dev--L6sZHr3bQCeckUeL9YPiARJirsOyjQUZlrg7JxbPzbp",
+        },
     },
     .paths = .{
         "build.zig",

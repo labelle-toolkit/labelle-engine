@@ -47,11 +47,23 @@ fn selectNuklearAdapter() type {
     };
 }
 
+/// Select imgui adapter based on graphics backend
+fn selectImguiAdapter() type {
+    return switch (gfx_backend) {
+        .sokol => @import("imgui_sokol_adapter.zig"),
+        .sdl => @import("imgui_sdl_adapter.zig"),
+        .bgfx => @import("imgui_bgfx_adapter.zig"),
+        .zgpu => @import("imgui_zgpu_adapter.zig"),
+        else => @import("imgui_adapter.zig"), // raylib (default)
+    };
+}
+
 /// Backend implementation selected at build time
 const BackendImpl = switch (gui_backend) {
     .raygui => @import("raygui_adapter.zig"),
     .microui => @import("microui_adapter.zig"),
     .nuklear => selectNuklearAdapter(),
+    .imgui => selectImguiAdapter(),
     .none => @import("stub_adapter.zig"),
 };
 
