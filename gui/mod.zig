@@ -48,8 +48,26 @@ pub const ViewRegistry = view.ViewRegistry;
 pub const ViewDef = view.ViewDef;
 pub const EmptyViewRegistry = view.EmptyViewRegistry;
 
+// Hook system for GUI interactions
+pub const hooks = @import("hooks.zig");
+pub const GuiHook = hooks.GuiHook;
+pub const GuiHookPayload = hooks.GuiHookPayload;
+pub const GuiHookDispatcher = hooks.GuiHookDispatcher;
+pub const MergeGuiHooks = hooks.MergeGuiHooks;
+pub const EmptyGuiDispatcher = hooks.EmptyGuiDispatcher;
+pub const ButtonClickedInfo = hooks.ButtonClickedInfo;
+pub const CheckboxChangedInfo = hooks.CheckboxChangedInfo;
+pub const SliderChangedInfo = hooks.SliderChangedInfo;
+pub const MousePosition = hooks.MousePosition;
+
+// Form state management
+pub const form_binder = @import("form_binder.zig");
+pub const FormBinder = form_binder.FormBinder;
+
 // Tests
 test {
     _ = @import("view.zig");
     _ = @import("types.zig");
+    _ = @import("hooks.zig");
+    _ = @import("form_binder.zig");
 }
