@@ -1,17 +1,16 @@
 //! ImGui SDL Adapter
 //!
 //! GUI backend using Dear ImGui with SDL2 renderer.
-//! Uses zgui for Zig bindings to ImGui.
-//!
-//! NOTE: Full ImGui support with SDL is not yet available.
-//! SDL window/renderer handles need to be passed to zgui's backend.
-//! ImGui widgets will be skipped. Use zgpu backend for full ImGui support.
+//! Uses zgui for Zig bindings to ImGui and SDL2 backend for rendering.
 //!
 //! Build with: zig build -Dbackend=sdl -Dgui_backend=imgui
 
 const std = @import("std");
 const types = @import("types.zig");
 const zgui = @import("zgui");
+const labelle = @import("labelle");
+
+const SdlBackend = labelle.SdlBackend;
 
 const Self = @This();
 
@@ -24,21 +23,54 @@ panel_depth: u32,
 // Allocator for zgui
 allocator: std.mem.Allocator,
 
-// Track if warning shown
-warned: bool,
+// Track if backend is initialized
+backend_initialized: bool,
 
 pub fn init() Self {
     const allocator = std.heap.page_allocator;
 
-    // Initialize zgui core (backend not initialized - need SDL window/renderer)
+    // Initialize zgui core (backend initialized lazily when window is available)
     zgui.init(allocator);
+
+    std.log.info("SDL ImGui adapter: initialized", .{});
 
     return Self{
         .window_counter = 0,
         .panel_depth = 0,
         .allocator = allocator,
-        .warned = false,
+        .backend_initialized = false,
     };
+}
+
+fn initBackend(self: *Self) void {
+    if (self.backend_initialized) return;
+
+    // Get SDL window and renderer from labelle-gfx SdlBackend
+    const sdl_window = SdlBackend.getWindow() orelse {
+        std.log.debug("imgui_sdl: SDL window not ready yet", .{});
+        return;
+    };
+
+    const sdl_renderer = SdlBackend.getRenderer() orelse {
+        std.log.debug("imgui_sdl: SDL renderer not ready yet", .{});
+        return;
+    };
+
+    // Initialize zgui's SDL2 backend for input and rendering
+    // The backend needs the raw SDL pointers
+    zgui.backend.initSdl2(@ptrCast(sdl_window.ptr), @ptrCast(sdl_renderer.ptr));
+
+    // Register render callback with the backend
+    SdlBackend.registerGuiRenderCallback(guiRenderCallback);
+
+    self.backend_initialized = true;
+    std.log.info("imgui_sdl: backend initialized", .{});
+}
+
+/// Render callback invoked by SdlBackend during endDrawing()
+fn guiRenderCallback() void {
+    // Render ImGui draw data using zgui's SDL2 renderer backend
+    zgui.backend.drawSdl2();
 }
 
 pub fn fixPointers(self: *Self) void {
@@ -46,24 +78,35 @@ pub fn fixPointers(self: *Self) void {
 }
 
 pub fn deinit(self: *Self) void {
-    _ = self;
+    if (self.backend_initialized) {
+        SdlBackend.unregisterGuiRenderCallback();
+        zgui.backend.deinitSdl2();
+    }
+
     zgui.deinit();
 }
 
 pub fn beginFrame(self: *Self) void {
     self.window_counter = 0;
 
-    if (!self.warned) {
-        std.log.warn("imgui_sdl: ImGui not available with SDL backend", .{});
-        std.log.warn("imgui_sdl: Use zgpu backend for ImGui support", .{});
-        self.warned = true;
+    // Lazy init backend on first frame
+    if (!self.backend_initialized) {
+        self.initBackend();
     }
-    // Skip ImGui processing since we can't render it
+
+    if (!self.backend_initialized) return;
+
+    // Start new ImGui frame
+    zgui.backend.newFrameSdl2();
+    zgui.newFrame();
 }
 
-pub fn endFrame(self: *Self) void {
-    _ = self;
-    // Skip - nothing to render with SDL backend
+pub fn endFrame(self: *const Self) void {
+    if (!self.backend_initialized) return;
+
+    // Finalize ImGui frame - prepares draw data
+    // Actual rendering happens in guiRenderCallback when SdlBackend calls it
+    zgui.render();
 }
 
 fn nextWindowName(self: *Self, buf: []u8) [:0]const u8 {
@@ -79,6 +122,8 @@ fn nextWindowName(self: *Self, buf: []u8) [:0]const u8 {
 }
 
 pub fn label(self: *Self, lbl: types.Label) void {
+    if (!self.backend_initialized) return;
+
     if (self.panel_depth > 0) {
         zgui.textColored(
             .{ @as(f32, @floatFromInt(lbl.color.r)) / 255.0, @as(f32, @floatFromInt(lbl.color.g)) / 255.0, @as(f32, @floatFromInt(lbl.color.b)) / 255.0, @as(f32, @floatFromInt(lbl.color.a)) / 255.0 },
@@ -113,6 +158,8 @@ pub fn label(self: *Self, lbl: types.Label) void {
 }
 
 pub fn button(self: *Self, btn: types.Button) bool {
+    if (!self.backend_initialized) return false;
+
     // Convert text to null-terminated
     var text_buf: [256]u8 = undefined;
     const text_z = std.fmt.bufPrintZ(&text_buf, "{s}", .{btn.text}) catch return false;
@@ -145,6 +192,8 @@ pub fn button(self: *Self, btn: types.Button) bool {
 }
 
 pub fn progressBar(self: *Self, bar: types.ProgressBar) void {
+    if (!self.backend_initialized) return;
+
     if (self.panel_depth > 0) {
         zgui.progressBar(.{
             .fraction = bar.value,
@@ -180,6 +229,8 @@ pub fn progressBar(self: *Self, bar: types.ProgressBar) void {
 }
 
 pub fn beginPanel(self: *Self, panel: types.Panel) void {
+    if (!self.backend_initialized) return;
+
     var name_buf: [32]u8 = undefined;
     const name = self.nextWindowName(&name_buf);
 
@@ -197,6 +248,8 @@ pub fn beginPanel(self: *Self, panel: types.Panel) void {
 }
 
 pub fn endPanel(self: *Self) void {
+    if (!self.backend_initialized) return;
+
     self.panel_depth -= 1;
     zgui.end();
 }
@@ -204,9 +257,12 @@ pub fn endPanel(self: *Self) void {
 pub fn image(self: *Self, img: types.Image) void {
     _ = self;
     _ = img;
+    // TODO: Implement image rendering with SDL textures
 }
 
 pub fn checkbox(self: *Self, cb: types.Checkbox) bool {
+    if (!self.backend_initialized) return cb.checked;
+
     var checked = cb.checked;
 
     // Convert text to null-terminated
@@ -241,6 +297,8 @@ pub fn checkbox(self: *Self, cb: types.Checkbox) bool {
 }
 
 pub fn slider(self: *Self, sl: types.Slider) f32 {
+    if (!self.backend_initialized) return sl.value;
+
     var value = sl.value;
 
     if (self.panel_depth > 0) {
