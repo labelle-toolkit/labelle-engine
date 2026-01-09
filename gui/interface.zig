@@ -66,6 +66,7 @@ const BackendImpl = switch (gui_backend) {
     .microui => @import("microui_adapter.zig"),
     .nuklear => selectNuklearAdapter(),
     .imgui => selectImguiAdapter(),
+    .clay => @import("clay/adapter.zig"),
     .none => @import("stub_adapter.zig"),
 };
 

@@ -68,6 +68,11 @@
             .url = "git+https://github.com/floooh/dcimgui#4bc7f9147073585b46e81ec750bffda2eb6d6832",
             .hash = "cimgui-0.1.0-44ClkdQjlQDAxGXHT035QPGsTEex3c7VXeDkqJG8eUqO",
         },
+        // GUI - Clay UI (Zig bindings for high-performance layout library)
+        .zclay = .{
+            .url = "git+https://github.com/johan0A/clay-zig-bindings?ref=v0.2.2+0.14#18cc9c148f02c3f00f824cc3a36db5030fd3de34",
+            .hash = "zclay-0.2.2-Ej1rkJfRAABn4fTSKQ1Rn54ssdmyCsuBT3zjrdhSxTO4",
+        },
     },
     .paths = .{
         "build.zig",

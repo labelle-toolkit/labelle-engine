@@ -302,6 +302,13 @@ pub fn generateBuildZig(allocator: std.mem.Allocator, config: ProjectConfig) ![]
         .wgpu_native => try zts.print(build_zig_tmpl, "wgpu_native_exe_end", .{}, writer),
     }
 
+    // Write backend-specific library linking (bgfx/zgpu need native libs)
+    switch (config.backend) {
+        .bgfx => try zts.print(build_zig_tmpl, "bgfx_link", .{}, writer),
+        .zgpu => try zts.print(build_zig_tmpl, "zgpu_link", .{}, writer),
+        else => {},
+    }
+
     // Write common footer
     try zts.print(build_zig_tmpl, "footer", .{}, writer);
 

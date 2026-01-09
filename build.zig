@@ -24,6 +24,7 @@ pub const GuiBackend = enum {
     microui,
     nuklear,
     imgui,
+    clay,
 };
 
 pub fn build(b: *std.Build) void {
@@ -126,6 +127,13 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     const zts = zts_dep.module("zts");
+
+    // Clay UI dependency (Zig bindings)
+    const zclay_dep = b.dependency("zclay", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const zclay = zclay_dep.module("zclay");
 
     // Build options module for compile-time configuration (create once, reuse everywhere)
     const build_options = b.addOptions();
@@ -289,6 +297,7 @@ pub fn build(b: *std.Build) void {
             .{ .name = "wgpu", .module = wgpu_native }, // For wgpu_native ImGui adapter
             .{ .name = "labelle", .module = labelle }, // For zgpu/wgpu_native context access
             .{ .name = "zglfw", .module = zglfw }, // For GLFW window access
+            .{ .name = "zclay", .module = zclay },
         },
     });
 
@@ -563,7 +572,6 @@ pub fn build(b: *std.Build) void {
     if (physics_module) |physics| {
         engine_mod.addImport("physics", physics);
     }
-
 
     // Unit tests (standard zig test)
     const unit_tests = b.addTest(.{
