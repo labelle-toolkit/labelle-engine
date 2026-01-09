@@ -17,6 +17,7 @@ pub const GuiBackend = enum {
     none,
     raygui,
     microui,
+    nuklear,
 };
 
 pub fn build(b: *std.Build) void {
@@ -54,9 +55,22 @@ pub fn build(b: *std.Build) void {
     const run_sokol_microui = b.step("run-sokol-microui", "Run with sokol + microui");
     run_sokol_microui.dependOn(&b.addRunArtifact(sokol_microui).step);
 
+    // Raylib + Nuklear
+    const raylib_nuklear = createExecutable(b, target, optimize, .raylib, .zig_ecs, .nuklear, "example_gui_raylib_nuklear");
+    const run_raylib_nuklear = b.step("run-raylib-nuklear", "Run with raylib + nuklear");
+    run_raylib_nuklear.dependOn(&b.addRunArtifact(raylib_nuklear).step);
+
+    // Sokol + Nuklear
+    const sokol_nuklear = createExecutable(b, target, optimize, .sokol, .zig_ecs, .nuklear, "example_gui_sokol_nuklear");
+    const run_sokol_nuklear = b.step("run-sokol-nuklear", "Run with sokol + nuklear");
+    run_sokol_nuklear.dependOn(&b.addRunArtifact(sokol_nuklear).step);
+
     // Shortcut aliases
     const run_microui = b.step("run-microui", "Alias for run-raylib-microui");
     run_microui.dependOn(run_raylib_microui);
+
+    const run_nuklear = b.step("run-nuklear", "Alias for run-raylib-nuklear");
+    run_nuklear.dependOn(run_raylib_nuklear);
 
     const run_sokol = b.step("run-sokol", "Alias for run-sokol-raygui");
     run_sokol.dependOn(run_sokol_raygui);

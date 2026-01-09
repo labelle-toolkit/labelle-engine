@@ -21,8 +21,8 @@ pub const GuiBackend = enum {
     none,
     raygui,
     microui,
-    // imgui,    // TODO: Phase 2
-    // nuklear,  // TODO: Phase 3
+    nuklear,
+    // imgui,    // TODO: Future
 };
 
 pub fn build(b: *std.Build) void {
@@ -182,6 +182,20 @@ pub fn build(b: *std.Build) void {
         audio_interface.linkLibrary(zaudio_dep.artifact("miniaudio"));
     }
 
+    // Nuklear module (optional, loaded when gui_backend is nuklear)
+    const nuklear_module: ?*std.Build.Module = if (gui_backend == .nuklear) blk: {
+        const nuklear_dep = b.dependency("nuklear", .{
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+            .vertex_backend = true,
+            .font_baking = true,
+            .default_font = true,
+            .no_stb_rect_pack = true, // Raylib already provides stb_rect_pack
+        });
+        break :blk nuklear_dep.module("nuklear");
+    } else null;
+
     // Create the GUI interface module that wraps the selected backend
     const gui_interface = b.addModule("gui", .{
         .root_source_file = b.path("gui/mod.zig"),
@@ -192,6 +206,11 @@ pub fn build(b: *std.Build) void {
             .{ .name = "raylib", .module = raylib },
         },
     });
+
+    // Add nuklear module to GUI if using nuklear backend
+    if (nuklear_module) |nk| {
+        gui_interface.addImport("nuklear", nk);
+    }
 
     // Core module - foundation types (entity utils, zon coercion)
     const core_mod = b.addModule("labelle-core", .{

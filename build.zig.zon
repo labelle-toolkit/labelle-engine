@@ -48,6 +48,12 @@
             .url = "git+https://codeberg.org/Games-by-Mason/mr_ecs#21c0e20adee646e2e97071be93e6b18ada4b5333",
             .hash = "mr_ecs-0.1.1-RsdJ_aJdAwDFp4iSogn_ESsPyb9b6-1GUqLEuTcUhFAg",
         },
+        // GUI - Nuklear (immediate-mode GUI library)
+        // Fork updated for Zig 0.15.2 compatibility
+        .nuklear = .{
+            .url = "git+https://github.com/labelle-toolkit/zig-nuklear#1179a71e9a1bfcb2e52f27fc0bcdf96bdc5ef0d0",
+            .hash = "nuklear-4.12.8-xEV9YmKbEgA0wPaW62YKUCfEWonKXegmMBHeu6ljdhyh",
+        },
     },
     .paths = .{
         "build.zig",
