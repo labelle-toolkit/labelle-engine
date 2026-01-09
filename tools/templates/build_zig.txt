@@ -153,8 +153,6 @@ pub fn build(b: *std.Build) void {{
             }},
         }}),
     }});
-    exe.linkLibrary(zbgfx_dep.artifact("bgfx"));
-    exe.linkLibrary(zglfw_dep.artifact("glfw"));
 .zgpu_exe_start
     // Get labelle-gfx dependency for zgpu bindings
     const labelle_dep = engine_dep.builder.dependency("labelle-gfx", .{{
@@ -191,12 +189,6 @@ pub fn build(b: *std.Build) void {{
             }},
         }}),
     }});
-    exe.linkLibrary(zglfw_dep.artifact("glfw"));
-    exe.linkLibrary(zgpu_dep.artifact("zdawn"));
-
-    // Add Dawn library paths (required for zgpu to find prebuilt Dawn)
-    const zgpu_build = @import("zgpu");
-    zgpu_build.addLibraryPathsTo(exe);
 .plugin_import
                 .{{ .name = "{s}", .module = {s}_mod }},
 .bgfx_link
