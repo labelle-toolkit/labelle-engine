@@ -21,6 +21,7 @@ pub const GuiBackend = enum {
     none,
     raygui,
     microui,
+    clay,
     // imgui,    // TODO: Phase 2
     // nuklear,  // TODO: Phase 3
 };
@@ -98,6 +99,13 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     const zts = zts_dep.module("zts");
+
+    // Clay UI dependency (Zig bindings)
+    const zclay_dep = b.dependency("zclay", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const zclay = zclay_dep.module("zclay");
 
     // Build options module for compile-time configuration (create once, reuse everywhere)
     const build_options = b.addOptions();
@@ -190,6 +198,7 @@ pub fn build(b: *std.Build) void {
         .imports = &.{
             .{ .name = "build_options", .module = build_options_mod },
             .{ .name = "raylib", .module = raylib },
+            .{ .name = "zclay", .module = zclay },
         },
     });
 
@@ -243,7 +252,6 @@ pub fn build(b: *std.Build) void {
     if (physics_module) |physics| {
         engine_mod.addImport("physics", physics);
     }
-
 
     // Unit tests (standard zig test)
     const unit_tests = b.addTest(.{

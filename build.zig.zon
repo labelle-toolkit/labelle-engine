@@ -48,10 +48,10 @@
             .url = "git+https://codeberg.org/Games-by-Mason/mr_ecs#21c0e20adee646e2e97071be93e6b18ada4b5333",
             .hash = "mr_ecs-0.1.1-RsdJ_aJdAwDFp4iSogn_ESsPyb9b6-1GUqLEuTcUhFAg",
         },
-        // GUI - Clay UI (high-performance layout library)
-        .clay = .{
-            .url = "git+https://github.com/nicbarker/clay#main",
-            .hash = "",
+        // GUI - Clay UI (Zig bindings for high-performance layout library)
+        .zclay = .{
+            .url = "git+https://github.com/johan0A/clay-zig-bindings?ref=v0.2.2+0.14#18cc9c148f02c3f00f824cc3a36db5030fd3de34",
+            .hash = "zclay-0.2.2-Ej1rkJfRAABn4fTSKQ1Rn54ssdmyCsuBT3zjrdhSxTO4",
         },
     },
     .paths = .{
