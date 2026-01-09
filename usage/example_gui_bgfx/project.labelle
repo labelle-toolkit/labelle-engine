@@ -1,9 +1,10 @@
 .{
     .version = 1,
     .name = "example_gui_bgfx",
-    .description = "GUI demo with bgfx backend",
+    .description = "GUI demo with ImGui and bgfx backend",
     .initial_scene = "main",
     .backend = .bgfx,
+    .gui_backend = .imgui,
     .window = .{
         .width = 800,
         .height = 600,

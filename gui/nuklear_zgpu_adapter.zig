@@ -19,6 +19,8 @@ const NkState = struct {
     atlas: nk.FontAtlas,
     font: *nk.Font,
     null_tex: nk.NullTexture,
+    // Track if atlas.end() has been called (required before using font)
+    atlas_finalized: bool,
 };
 
 /// Vertex for colored primitives
@@ -71,17 +73,13 @@ pub fn init() Self {
     nk_state.font = nk_state.atlas.addDefault(18.0, null);
 
     // Bake font atlas - texture will be created when graphics context is available
-    const bake_result = nk_state.atlas.bake(.rgba32);
-    _ = bake_result;
+    // NOTE: Do NOT call atlas.end() here - it invalidates the baked pixel data
+    // We defer atlas.end() and context init to createFontTexture() when gctx is available
+    _ = nk_state.atlas.bake(.rgba32);
+    nk_state.atlas_finalized = false;
 
-    // End atlas baking with null texture handle for now
-    nk_state.atlas.end(
-        nk.Handle{ .id = 0 },
-        &nk_state.null_tex,
-    );
-
-    // Initialize context with font
-    nk_state.ctx = nk.Context.initDefault(nk_state.font.handle());
+    // Context will be initialized in createFontTexture() after atlas.end()
+    nk_state.ctx = undefined;
 
     return Self{
         .nk_state = nk_state,
@@ -104,7 +102,9 @@ pub fn fixPointers(self: *Self) void {
 }
 
 pub fn deinit(self: *Self) void {
-    self.nk_state.ctx.free();
+    if (self.nk_state.atlas_finalized) {
+        self.nk_state.ctx.free();
+    }
     self.nk_state.atlas.clear();
 
     if (self.font_texture_view) |view| view.release();
@@ -124,9 +124,11 @@ pub fn setGraphicsContext(self: *Self, gctx: *zgpu.GraphicsContext) void {
 }
 
 fn createFontTexture(self: *Self) void {
+    if (self.nk_state.atlas_finalized) return;
+
     const gctx = self.gctx orelse return;
 
-    // Re-bake atlas to get pixel data
+    // Get baked atlas data (atlas.end() not yet called, so data is still valid)
     const bake_result = self.nk_state.atlas.bake(.rgba32);
     const pixels = bake_result[0];
     const width: u32 = @intCast(bake_result[1]);
@@ -153,6 +155,16 @@ fn createFontTexture(self: *Self) void {
         // Create texture view
         self.font_texture_view = tex.createView(&.{});
     }
+
+    // Now finalize the atlas - this invalidates baked pixel data
+    self.nk_state.atlas.end(
+        nk.Handle{ .id = 0 },
+        &self.nk_state.null_tex,
+    );
+
+    // Initialize nuklear context with font (must be after atlas.end())
+    self.nk_state.ctx = nk.Context.initDefault(self.nk_state.font.handle());
+    self.nk_state.atlas_finalized = true;
 }
 
 pub fn beginFrame(self: *Self) void {
@@ -162,12 +174,18 @@ pub fn beginFrame(self: *Self) void {
     self.vertices.clearRetainingCapacity();
     self.indices.clearRetainingCapacity();
 
+    // Skip if context not initialized yet
+    if (!self.nk_state.atlas_finalized) return;
+
     // Begin nuklear input
     var input = self.nk_state.ctx.input();
     input.end();
 }
 
 pub fn endFrame(self: *Self) void {
+    // Skip if context not initialized yet
+    if (!self.nk_state.atlas_finalized) return;
+
     // Render nuklear command buffer to vertex/index lists
     self.renderCommandBuffer();
 

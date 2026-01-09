@@ -14,8 +14,8 @@
             .hash = "zflecs-0.2.0-dev-1PN3ym9mOgCyE8w0DdK_Uf7FAob-nm0Dp_lZKR3QyJaC",
         },
         .@"labelle-gfx" = .{
-            .url = "git+https://github.com/labelle-toolkit/labelle-gfx#8357cc348d55b3b539a2bc806eaf14bc76bda7d7",
-            .hash = "labelle_gfx-0.22.0-WZ2XcOZyCgD01PSkzQpRUFRxAAMgAnNfQWwM4hzlVvRl",
+            .url = "git+https://github.com/labelle-toolkit/labelle-gfx#v0.27.0",
+            .hash = "labelle_gfx-0.27.0-WZ2XcOffCwCrt2lc77nldt1fAHznbxxqvBo_mbrhi4Ec",
         },
         .zspec = .{
             .url = "git+https://github.com/apotema/zspec#71c901d6e74b2d5a8c556d4c74ced9b91446d8a4",
@@ -24,10 +24,6 @@
         .zts = .{
             .url = "git+https://github.com/zigster64/zts#ca98e23fcf1a4fa331c80f5cd2e72f6838daf7ee",
             .hash = "zts-0.14.1-_M80Of22AgBwArz6uCXR49IoEjlzNt5yhu7KV8cWl5jr",
-        },
-        .raylib_zig = .{
-            .url = "git+https://github.com/raylib-zig/raylib-zig#a4d18b2d1cf8fdddec68b5b084535fca0475f466",
-            .hash = "raylib_zig-5.6.0-dev-KE8REL5MBQAf3p497t52Xw9P7ojndIkVOWPXnLiLLw2P",
         },
         .sokol = .{
             .url = "git+https://github.com/floooh/sokol-zig.git#bb1a4e95b243e655e788076c545ca6a1f6bf1558",
@@ -53,6 +49,29 @@
         .nuklear = .{
             .url = "git+https://github.com/labelle-toolkit/zig-nuklear#1179a71e9a1bfcb2e52f27fc0bcdf96bdc5ef0d0",
             .hash = "nuklear-4.12.8-xEV9YmKbEgA0wPaW62YKUCfEWonKXegmMBHeu6ljdhyh",
+        },
+        // GUI - Dear ImGui (industry standard immediate-mode GUI)
+        // Using labelle-toolkit fork with Dawn WebGPU backend fix
+        .zgui = .{
+            .url = "git+https://github.com/labelle-toolkit/zgui#716efbd8631562daf8f86e094c6d47c4e5d86ce2",
+            .hash = "zgui-0.6.0-dev--L6sZHD4bQD-lWVOLJkhLeabyi4-FmgFoESvgnCQ4i6k",
+        },
+        // GUI - rlImGui (raylib + ImGui integration)
+        // Bridges raylib input/rendering with ImGui - avoids GLFW symbol conflicts
+        .rlimgui = .{
+            .url = "git+https://github.com/raylib-extras/rlImGui#dc7f97679a024eee8f5f009e77cc311748200415",
+            .hash = "N-V-__8AAC-taQCKZ-3IjRuWJ-5Dc47QKHDPEmqlwXhvjBGq",
+        },
+        // GUI - dcimgui (Dear ImGui C/Zig distribution for sokol integration)
+        // Used with sokol_imgui for sokol + ImGui support
+        .cimgui = .{
+            .url = "git+https://github.com/floooh/dcimgui#4bc7f9147073585b46e81ec750bffda2eb6d6832",
+            .hash = "cimgui-0.1.0-44ClkdQjlQDAxGXHT035QPGsTEex3c7VXeDkqJG8eUqO",
+        },
+        // GUI - Clay UI (Zig bindings for high-performance layout library)
+        .zclay = .{
+            .url = "git+https://github.com/johan0A/clay-zig-bindings?ref=v0.2.2+0.14#18cc9c148f02c3f00f824cc3a36db5030fd3de34",
+            .hash = "zclay-0.2.2-Ej1rkJfRAABn4fTSKQ1Rn54ssdmyCsuBT3zjrdhSxTO4",
         },
     },
     .paths = .{

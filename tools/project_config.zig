@@ -48,6 +48,7 @@ pub const Backend = enum {
     sdl,
     bgfx,
     zgpu,
+    wgpu_native,
 };
 
 /// ECS backend selection
@@ -62,6 +63,7 @@ pub const GuiBackend = enum {
     raygui,
     microui,
     nuklear,
+    imgui,
 };
 
 /// Game ID type selection (entity identifier type)

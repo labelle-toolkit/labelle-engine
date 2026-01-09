@@ -43,7 +43,20 @@ fn selectNuklearAdapter() type {
         .sdl => @import("nuklear_sdl_adapter.zig"),
         .bgfx => @import("nuklear_bgfx_adapter.zig"),
         .zgpu => @import("nuklear_zgpu_adapter.zig"),
+        .wgpu_native => @import("nuklear_wgpu_native_adapter.zig"),
         else => @import("nuklear_adapter.zig"), // raylib (default)
+    };
+}
+
+/// Select imgui adapter based on graphics backend
+fn selectImguiAdapter() type {
+    return switch (gfx_backend) {
+        .sokol => @import("imgui_sokol_adapter.zig"),
+        .sdl => @import("imgui_sdl_adapter.zig"),
+        .bgfx => @import("imgui_bgfx_adapter.zig"),
+        .zgpu => @import("imgui_zgpu_adapter.zig"),
+        .wgpu_native => @import("imgui_wgpu_native_adapter.zig"),
+        else => @import("imgui_adapter.zig"), // raylib (default)
     };
 }
 
@@ -52,6 +65,8 @@ const BackendImpl = switch (gui_backend) {
     .raygui => @import("raygui_adapter.zig"),
     .microui => @import("microui_adapter.zig"),
     .nuklear => selectNuklearAdapter(),
+    .imgui => selectImguiAdapter(),
+    .clay => @import("clay/adapter.zig"),
     .none => @import("stub_adapter.zig"),
 };
 

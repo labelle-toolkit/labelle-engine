@@ -7,6 +7,7 @@ pub const Backend = enum {
     sdl,
     bgfx,
     zgpu,
+    wgpu_native,
 };
 
 /// ECS backend selection
@@ -22,7 +23,8 @@ pub const GuiBackend = enum {
     raygui,
     microui,
     nuklear,
-    // imgui,    // TODO: Future
+    imgui,
+    clay,
 };
 
 pub fn build(b: *std.Build) void {
@@ -63,13 +65,13 @@ pub fn build(b: *std.Build) void {
     });
     const labelle = labelle_dep.module("labelle");
 
-    // Input backend dependencies
-    const raylib_dep = b.dependency("raylib_zig", .{
-        .target = target,
-        .optimize = optimize,
-    });
-    const raylib = raylib_dep.module("raylib");
+    // raylib module - get from labelle-gfx's re-exported module
+    // labelle-gfx uses the raylib-zig fork with getGLFWWindow() for ImGui integration
+    const raylib = labelle_dep.builder.modules.get("raylib").?;
 
+    // sokol dependency - DO NOT pass with_sokol_imgui here as it changes the
+    // dependency hash and conflicts with labelle-gfx's sokol. For ImGui support,
+    // we'll compile sokol_imgui separately (similar to rlImGui approach).
     const sokol_dep = b.dependency("sokol", .{
         .target = target,
         .optimize = optimize,
@@ -93,6 +95,20 @@ pub fn build(b: *std.Build) void {
     });
     const zgpu = zgpu_dep.module("root");
 
+    // wgpu_native - lower-level WebGPU bindings (alternative to zgpu)
+    const wgpu_native_dep = labelle_dep.builder.dependency("wgpu_native_zig", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const wgpu_native = wgpu_native_dep.module("wgpu");
+
+    // zglfw - GLFW bindings for zgpu/wgpu_native
+    const zglfw_dep = labelle_dep.builder.dependency("zglfw", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const zglfw = zglfw_dep.module("root");
+
     // zaudio (miniaudio wrapper) for sokol/SDL audio backends
     const zaudio_dep = b.dependency("zaudio", .{
         .target = target,
@@ -111,6 +127,13 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     const zts = zts_dep.module("zts");
+
+    // Clay UI dependency (Zig bindings)
+    const zclay_dep = b.dependency("zclay", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const zclay = zclay_dep.module("zclay");
 
     // Build options module for compile-time configuration (create once, reuse everywhere)
     const build_options = b.addOptions();
@@ -163,6 +186,7 @@ pub fn build(b: *std.Build) void {
             .{ .name = "raylib", .module = raylib },
             .{ .name = "sokol", .module = sokol },
             .{ .name = "sdl2", .module = sdl },
+            .{ .name = "zglfw", .module = zglfw }, // For zgpu/wgpu_native input
         },
     });
 
@@ -209,6 +233,55 @@ pub fn build(b: *std.Build) void {
         break :blk nuklear_dep.module("nuklear");
     } else null;
 
+    // zgui/ImGui dependency (optional, loaded when gui_backend is imgui)
+    // Note: sokol uses dcimgui instead of zgui for ImGui integration
+    const zgui_dep: ?*std.Build.Dependency = if (gui_backend == .imgui and backend != .sokol) blk: {
+        // zgui backend enum matches zgui/build.zig Backend enum
+        const ZguiBackend = enum {
+            no_backend,
+            glfw_wgpu,
+            glfw_opengl3,
+            glfw_vulkan,
+            glfw_dx12,
+            win32_dx12,
+            glfw,
+            sdl2_opengl3,
+            osx_metal,
+            sdl2,
+            sdl2_renderer,
+            sdl3,
+            sdl3_opengl3,
+            sdl3_renderer,
+            sdl3_gpu,
+        };
+
+        // Select appropriate zgui backend based on graphics backend
+        const zgui_backend: ZguiBackend = switch (backend) {
+            .raylib => .no_backend, // raylib uses rlImGui for ImGui integration
+            .sokol => unreachable, // sokol uses dcimgui, not zgui
+            .sdl => .sdl2_renderer, // SDL uses SDL2 renderer
+            .bgfx => .glfw, // bgfx uses GLFW (rendering handled separately)
+            .zgpu => .glfw_wgpu, // zgpu uses GLFW+WebGPU
+            .wgpu_native => .no_backend, // wgpu_native uses custom ImGui adapter
+        };
+
+        break :blk b.dependency("zgui", .{
+            .target = target,
+            .optimize = optimize,
+            .backend = zgui_backend,
+        });
+    } else null;
+
+    // dcimgui dependency for sokol + ImGui integration
+    // sokol uses dcimgui + sokol_imgui instead of zgui
+    // Note: We compile sokol_imgui.c separately to avoid modifying sokol's dependency hash
+    const cimgui_dep: ?*std.Build.Dependency = if (gui_backend == .imgui and backend == .sokol) blk: {
+        break :blk b.dependency("cimgui", .{
+            .target = target,
+            .optimize = optimize,
+        });
+    } else null;
+
     // Create the GUI interface module that wraps the selected backend
     const gui_interface = b.addModule("gui", .{
         .root_source_file = b.path("gui/mod.zig"),
@@ -221,12 +294,232 @@ pub fn build(b: *std.Build) void {
             .{ .name = "sdl2", .module = sdl },
             .{ .name = "zbgfx", .module = zbgfx },
             .{ .name = "zgpu", .module = zgpu },
+            .{ .name = "wgpu", .module = wgpu_native }, // For wgpu_native ImGui adapter
+            .{ .name = "labelle", .module = labelle }, // For zgpu/wgpu_native context access
+            .{ .name = "zglfw", .module = zglfw }, // For GLFW window access
+            .{ .name = "zclay", .module = zclay },
         },
     });
 
     // Add nuklear module to GUI if using nuklear backend
     if (nuklear_module) |nk| {
         gui_interface.addImport("nuklear", nk);
+    }
+
+    // Add zgui module and link library to GUI if using imgui backend
+    if (zgui_dep) |dep| {
+        gui_interface.addImport("zgui", dep.module("root"));
+        gui_interface.linkLibrary(dep.artifact("imgui"));
+
+        // Link OpenGL framework on macOS for glfw_opengl3 backend
+        // Note: sokol uses cimgui_dep instead of zgui_dep, so only raylib is relevant here
+        if (target.result.os.tag == .macos and backend == .raylib) {
+            gui_interface.linkFramework("OpenGL", .{});
+        }
+
+        // For raylib backend, compile and link rlImGui (raylib + ImGui bridge)
+        if (backend == .raylib) {
+            const rlimgui_dep = b.dependency("rlimgui", .{});
+            const raylib_zig_dep = labelle_dep.builder.dependency("raylib_zig", .{
+                .target = target,
+                .optimize = optimize,
+            });
+
+            // Create a module for rlImGui C++ sources
+            const rlimgui_mod = b.createModule(.{
+                .target = target,
+                .optimize = optimize,
+                .link_libcpp = true,
+            });
+
+            // Add rlImGui source file
+            rlimgui_mod.addCSourceFile(.{
+                .file = rlimgui_dep.path("rlImGui.cpp"),
+                .flags = &.{
+                    "-std=c++11",
+                    "-fno-sanitize=undefined",
+                    "-DNO_FONT_AWESOME", // Disable Font Awesome (optional feature)
+                },
+            });
+
+            // Add include paths for ImGui (from zgui) and rlImGui headers
+            rlimgui_mod.addIncludePath(dep.path("libs/imgui"));
+            rlimgui_mod.addIncludePath(rlimgui_dep.path(""));
+
+            // Add raylib include path - raylib headers are in the raylib submodule
+            const raylib_c_dep = raylib_zig_dep.builder.dependency("raylib", .{
+                .target = target,
+                .optimize = optimize,
+            });
+            rlimgui_mod.addIncludePath(raylib_c_dep.path("src"));
+
+            // Link against imgui
+            rlimgui_mod.linkLibrary(dep.artifact("imgui"));
+
+            // Create static library from the module
+            const rlimgui_lib = b.addLibrary(.{
+                .name = "rlimgui",
+                .root_module = rlimgui_mod,
+            });
+
+            // Link rlImGui to GUI interface
+            gui_interface.linkLibrary(rlimgui_lib);
+
+            // Add rlimgui include path so cImport can find rlImGui.h
+            gui_interface.addIncludePath(rlimgui_dep.path(""));
+            gui_interface.addIncludePath(dep.path("libs/imgui"));
+            gui_interface.addIncludePath(raylib_c_dep.path("src"));
+        }
+    }
+
+    // Add cimgui module and link library to GUI if using imgui backend with sokol
+    // sokol uses dcimgui + sokol_imgui instead of zgui
+    if (cimgui_dep) |dep| {
+        gui_interface.addImport("cimgui", dep.module("cimgui"));
+        gui_interface.linkLibrary(dep.artifact("cimgui_clib"));
+
+        // Add include paths for cImport to find cimgui.h
+        gui_interface.addIncludePath(dep.path("src"));
+
+        // Compile sokol_imgui.c as a separate library
+        // sokol_imgui provides the bridge between ImGui and sokol_gfx
+        const sokol_imgui_mod = b.createModule(.{
+            .target = target,
+            .optimize = optimize,
+        });
+
+        // Determine sokol backend define based on target platform
+        // Supported: macOS/iOS (Metal), Windows (D3D11), Linux/BSD (OpenGL), Web (GLES3)
+        // Other platforms default to OpenGL Core which may not work
+        const sokol_backend_define: []const u8 = switch (target.result.os.tag) {
+            .macos, .ios => "-DSOKOL_METAL",
+            .windows => "-DSOKOL_D3D11",
+            .linux, .freebsd, .openbsd => "-DSOKOL_GLCORE",
+            .emscripten => "-DSOKOL_GLES3",
+            else => "-DSOKOL_GLCORE", // Fallback, may not work on all platforms
+        };
+
+        // Add sokol_imgui.c source file
+        sokol_imgui_mod.addCSourceFile(.{
+            .file = sokol_dep.path("src/sokol/c/sokol_imgui.c"),
+            .flags = &.{
+                "-DIMPL",
+                sokol_backend_define,
+                "-fno-sanitize=undefined",
+            },
+        });
+
+        // Add include paths for sokol headers and cimgui headers
+        sokol_imgui_mod.addIncludePath(sokol_dep.path("src/sokol/c"));
+        sokol_imgui_mod.addIncludePath(dep.path("src"));
+
+        // Link against cimgui
+        sokol_imgui_mod.linkLibrary(dep.artifact("cimgui_clib"));
+
+        // Link against sokol (for sokol_gfx)
+        sokol_imgui_mod.linkLibrary(sokol_dep.artifact("sokol_clib"));
+
+        // Create static library from the module
+        const sokol_imgui_lib = b.addLibrary(.{
+            .name = "sokol_imgui",
+            .root_module = sokol_imgui_mod,
+        });
+
+        // Link sokol_imgui to GUI interface
+        gui_interface.linkLibrary(sokol_imgui_lib);
+
+        // Add sokol headers include path for sokol_imgui.zig cImport
+        gui_interface.addIncludePath(sokol_dep.path("src/sokol/c"));
+    }
+
+    // Compile imgui_impl_wgpu.cpp for wgpu_native backend
+    // wgpu_native needs IMGUI_IMPL_WEBGPU_BACKEND_WGPU define (not Dawn)
+    if (zgui_dep) |dep| {
+        if (backend == .wgpu_native) {
+            // Get wgpu_native's include path from the target-specific dependency
+            // wgpu_native_zig uses lazy dependencies like "wgpu_macos_aarch64_release"
+            // We need to compute the same target name to get the headers
+            const target_res = target.result;
+            const os_str = @tagName(target_res.os.tag);
+            const arch_str = @tagName(target_res.cpu.arch);
+            const mode_str = switch (optimize) {
+                .Debug => "debug",
+                else => "release",
+            };
+            const abi_str: [:0]const u8 = switch (target_res.os.tag) {
+                .ios => switch (target_res.abi) {
+                    .simulator => "_simulator",
+                    else => "",
+                },
+                .windows => switch (target_res.abi) {
+                    .msvc => "_msvc",
+                    else => "_gnu",
+                },
+                else => "",
+            };
+
+            // Format: wgpu_<os>_<arch><abi>_<mode>
+            const target_name_slices = [_][:0]const u8{ "wgpu_", os_str, "_", arch_str, abi_str, "_", mode_str };
+            const wgpu_target_name = std.mem.concatWithSentinel(b.allocator, u8, &target_name_slices, 0) catch @panic("OOM");
+
+            // Get the wgpu binary package through wgpu_native_zig's builder
+            const wgpu_binary_dep = wgpu_native_dep.builder.lazyDependency(wgpu_target_name, .{});
+            const wgpu_include_path = if (wgpu_binary_dep) |wdep|
+                wdep.path("include")
+            else blk: {
+                std.log.warn("Could not find wgpu binary dependency '{s}' for ImGui backend", .{wgpu_target_name});
+                break :blk wgpu_native_dep.path("include"); // Fallback (will fail at compile time)
+            };
+
+            // Create a module for ImGui wgpu_native backend sources
+            const imgui_wgpu_mod = b.createModule(.{
+                .target = target,
+                .optimize = optimize,
+                .link_libcpp = true,
+            });
+
+            // Compile imgui_impl_wgpu.cpp with IMGUI_IMPL_WEBGPU_BACKEND_WGPU define
+            imgui_wgpu_mod.addCSourceFile(.{
+                .file = dep.path("libs/imgui/backends/imgui_impl_wgpu.cpp"),
+                .flags = &.{
+                    "-std=c++11",
+                    "-fno-sanitize=undefined",
+                    "-DIMGUI_IMPL_WEBGPU_BACKEND_WGPU", // Use wgpu-native API, not Dawn
+                },
+            });
+
+            // Compile imgui_impl_glfw.cpp for input handling
+            imgui_wgpu_mod.addCSourceFile(.{
+                .file = dep.path("libs/imgui/backends/imgui_impl_glfw.cpp"),
+                .flags = &.{
+                    "-std=c++11",
+                    "-fno-sanitize=undefined",
+                },
+            });
+
+            // Add include paths
+            imgui_wgpu_mod.addIncludePath(dep.path("libs/imgui")); // ImGui headers
+            imgui_wgpu_mod.addIncludePath(wgpu_include_path); // wgpu_native WebGPU headers
+            imgui_wgpu_mod.addIncludePath(zglfw_dep.path("libs/glfw/include")); // GLFW headers
+
+            // Link against zgui's imgui library for core ImGui symbols
+            imgui_wgpu_mod.linkLibrary(dep.artifact("imgui"));
+
+            // Create static library from the module
+            const imgui_wgpu_lib = b.addLibrary(.{
+                .name = "imgui_wgpu_native",
+                .root_module = imgui_wgpu_mod,
+            });
+
+            // Link to GUI interface
+            gui_interface.linkLibrary(imgui_wgpu_lib);
+
+            // Add include paths for Zig cImport
+            gui_interface.addIncludePath(dep.path("libs/imgui"));
+            gui_interface.addIncludePath(dep.path("libs/imgui/backends"));
+            gui_interface.addIncludePath(wgpu_include_path);
+            gui_interface.addIncludePath(zglfw_dep.path("libs/glfw/include"));
+        }
     }
 
     // Core module - foundation types (entity utils, zon coercion)
@@ -279,7 +572,6 @@ pub fn build(b: *std.Build) void {
     if (physics_module) |physics| {
         engine_mod.addImport("physics", physics);
     }
-
 
     // Unit tests (standard zig test)
     const unit_tests = b.addTest(.{

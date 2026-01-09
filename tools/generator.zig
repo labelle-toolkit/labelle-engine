@@ -27,6 +27,7 @@ const main_sokol_tmpl = @embedFile("templates/main_sokol.txt");
 const main_sdl_tmpl = @embedFile("templates/main_sdl.txt");
 const main_bgfx_tmpl = @embedFile("templates/main_bgfx.txt");
 const main_zgpu_tmpl = @embedFile("templates/main_zgpu.txt");
+const main_wgpu_native_tmpl = @embedFile("templates/main_wgpu_native.txt");
 
 /// Sanitize a project name to be a valid Zig identifier
 /// Replaces hyphens with underscores
@@ -218,6 +219,7 @@ pub fn generateBuildZig(allocator: std.mem.Allocator, config: ProjectConfig) ![]
         .sdl => "sdl",
         .bgfx => "bgfx",
         .zgpu => "zgpu",
+        .wgpu_native => "wgpu_native",
     };
 
     const default_ecs_backend = switch (config.ecs_backend) {
@@ -230,6 +232,7 @@ pub fn generateBuildZig(allocator: std.mem.Allocator, config: ProjectConfig) ![]
         .raygui => "raygui",
         .microui => "microui",
         .nuklear => "nuklear",
+        .imgui => "imgui",
     };
 
     const physics_enabled = config.physics.enabled;
@@ -280,6 +283,7 @@ pub fn generateBuildZig(allocator: std.mem.Allocator, config: ProjectConfig) ![]
         .sdl => try zts.print(build_zig_tmpl, "sdl_exe_start", .{zig_name}, writer),
         .bgfx => try zts.print(build_zig_tmpl, "bgfx_exe_start", .{zig_name}, writer),
         .zgpu => try zts.print(build_zig_tmpl, "zgpu_exe_start", .{zig_name}, writer),
+        .wgpu_native => try zts.print(build_zig_tmpl, "wgpu_native_exe_start", .{zig_name}, writer),
     }
 
     // Write plugin imports
@@ -295,6 +299,14 @@ pub fn generateBuildZig(allocator: std.mem.Allocator, config: ProjectConfig) ![]
         .sdl => try zts.print(build_zig_tmpl, "sdl_exe_end", .{}, writer),
         .bgfx => try zts.print(build_zig_tmpl, "bgfx_exe_end", .{}, writer),
         .zgpu => try zts.print(build_zig_tmpl, "zgpu_exe_end", .{}, writer),
+        .wgpu_native => try zts.print(build_zig_tmpl, "wgpu_native_exe_end", .{}, writer),
+    }
+
+    // Write backend-specific library linking (bgfx/zgpu need native libs)
+    switch (config.backend) {
+        .bgfx => try zts.print(build_zig_tmpl, "bgfx_link", .{}, writer),
+        .zgpu => try zts.print(build_zig_tmpl, "zgpu_link", .{}, writer),
+        else => {},
     }
 
     // Write common footer
@@ -1315,6 +1327,20 @@ fn generateMainZigZgpu(
     return generateMainZigGlfw(main_zgpu_tmpl, false, allocator, config, prefabs, enums, components, scripts, hooks, task_hooks);
 }
 
+/// Generate main.zig content for wgpu_native backend
+fn generateMainZigWgpuNative(
+    allocator: std.mem.Allocator,
+    config: ProjectConfig,
+    prefabs: []const []const u8,
+    enums: []const []const u8,
+    components: []const []const u8,
+    scripts: []const []const u8,
+    hooks: []const []const u8,
+    task_hooks: TaskHookScanResult,
+) ![]const u8 {
+    return generateMainZigGlfw(main_wgpu_native_tmpl, false, allocator, config, prefabs, enums, components, scripts, hooks, task_hooks);
+}
+
 /// Generate main.zig content based on folder contents
 pub fn generateMainZig(
     allocator: std.mem.Allocator,
@@ -1332,6 +1358,7 @@ pub fn generateMainZig(
         .sdl => generateMainZigSdl(allocator, config, prefabs, enums, components, scripts, hooks, task_hooks),
         .bgfx => generateMainZigBgfx(allocator, config, prefabs, enums, components, scripts, hooks, task_hooks),
         .zgpu => generateMainZigZgpu(allocator, config, prefabs, enums, components, scripts, hooks, task_hooks),
+        .wgpu_native => generateMainZigWgpuNative(allocator, config, prefabs, enums, components, scripts, hooks, task_hooks),
     };
 }
 
