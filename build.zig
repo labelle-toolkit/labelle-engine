@@ -420,6 +420,96 @@ pub fn build(b: *std.Build) void {
         gui_interface.addIncludePath(sokol_dep.path("src/sokol/c"));
     }
 
+    // Compile imgui_impl_wgpu.cpp for wgpu_native backend
+    // wgpu_native needs IMGUI_IMPL_WEBGPU_BACKEND_WGPU define (not Dawn)
+    if (zgui_dep) |dep| {
+        if (backend == .wgpu_native) {
+            // Get wgpu_native's include path from the target-specific dependency
+            // wgpu_native_zig uses lazy dependencies like "wgpu_macos_aarch64_release"
+            // We need to compute the same target name to get the headers
+            const target_res = target.result;
+            const os_str = @tagName(target_res.os.tag);
+            const arch_str = @tagName(target_res.cpu.arch);
+            const mode_str = switch (optimize) {
+                .Debug => "debug",
+                else => "release",
+            };
+            const abi_str: [:0]const u8 = switch (target_res.os.tag) {
+                .ios => switch (target_res.abi) {
+                    .simulator => "_simulator",
+                    else => "",
+                },
+                .windows => switch (target_res.abi) {
+                    .msvc => "_msvc",
+                    else => "_gnu",
+                },
+                else => "",
+            };
+
+            // Format: wgpu_<os>_<arch><abi>_<mode>
+            const target_name_slices = [_][:0]const u8{ "wgpu_", os_str, "_", arch_str, abi_str, "_", mode_str };
+            const wgpu_target_name = std.mem.concatWithSentinel(b.allocator, u8, &target_name_slices, 0) catch @panic("OOM");
+
+            // Get the wgpu binary package through wgpu_native_zig's builder
+            const wgpu_binary_dep = wgpu_native_dep.builder.lazyDependency(wgpu_target_name, .{});
+            const wgpu_include_path = if (wgpu_binary_dep) |wdep|
+                wdep.path("include")
+            else blk: {
+                std.log.warn("Could not find wgpu binary dependency '{s}' for ImGui backend", .{wgpu_target_name});
+                break :blk wgpu_native_dep.path("include"); // Fallback (will fail at compile time)
+            };
+
+            // Create a module for ImGui wgpu_native backend sources
+            const imgui_wgpu_mod = b.createModule(.{
+                .target = target,
+                .optimize = optimize,
+                .link_libcpp = true,
+            });
+
+            // Compile imgui_impl_wgpu.cpp with IMGUI_IMPL_WEBGPU_BACKEND_WGPU define
+            imgui_wgpu_mod.addCSourceFile(.{
+                .file = dep.path("libs/imgui/backends/imgui_impl_wgpu.cpp"),
+                .flags = &.{
+                    "-std=c++11",
+                    "-fno-sanitize=undefined",
+                    "-DIMGUI_IMPL_WEBGPU_BACKEND_WGPU", // Use wgpu-native API, not Dawn
+                },
+            });
+
+            // Compile imgui_impl_glfw.cpp for input handling
+            imgui_wgpu_mod.addCSourceFile(.{
+                .file = dep.path("libs/imgui/backends/imgui_impl_glfw.cpp"),
+                .flags = &.{
+                    "-std=c++11",
+                    "-fno-sanitize=undefined",
+                },
+            });
+
+            // Add include paths
+            imgui_wgpu_mod.addIncludePath(dep.path("libs/imgui")); // ImGui headers
+            imgui_wgpu_mod.addIncludePath(wgpu_include_path); // wgpu_native WebGPU headers
+            imgui_wgpu_mod.addIncludePath(zglfw_dep.path("libs/glfw/include")); // GLFW headers
+
+            // Link against zgui's imgui library for core ImGui symbols
+            imgui_wgpu_mod.linkLibrary(dep.artifact("imgui"));
+
+            // Create static library from the module
+            const imgui_wgpu_lib = b.addLibrary(.{
+                .name = "imgui_wgpu_native",
+                .root_module = imgui_wgpu_mod,
+            });
+
+            // Link to GUI interface
+            gui_interface.linkLibrary(imgui_wgpu_lib);
+
+            // Add include paths for Zig cImport
+            gui_interface.addIncludePath(dep.path("libs/imgui"));
+            gui_interface.addIncludePath(dep.path("libs/imgui/backends"));
+            gui_interface.addIncludePath(wgpu_include_path);
+            gui_interface.addIncludePath(zglfw_dep.path("libs/glfw/include"));
+        }
+    }
+
     // Core module - foundation types (entity utils, zon coercion)
     const core_mod = b.addModule("labelle-core", .{
         .root_source_file = b.path("core/mod.zig"),

@@ -27,3 +27,10 @@ pub const Position = labelle.retained_engine.Position;
 pub const Layer = labelle.DefaultLayers;
 pub const LayerConfig = labelle.LayerConfig;
 pub const LayerSpace = labelle.LayerSpace;
+
+// Sizing system
+pub const SizeMode = labelle.SizeMode;
+pub const Container = labelle.Container;
+
+// Pivot system
+pub const Pivot = labelle.Pivot;
