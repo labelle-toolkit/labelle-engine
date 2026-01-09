@@ -115,6 +115,7 @@ const BackendImpl = switch (backend) {
     .sdl => @import("sdl_graphics.zig"),
     .bgfx => @import("bgfx_graphics.zig"),
     .zgpu => @import("zgpu_graphics.zig"),
+    .wgpu_native => @import("wgpu_native_graphics.zig"),
 };
 
 // Apply the interface to verify the backend at compile time
