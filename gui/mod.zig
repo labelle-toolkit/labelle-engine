@@ -66,10 +66,15 @@ pub const MousePosition = hooks.MousePosition;
 pub const form_binder = @import("form_binder.zig");
 pub const FormBinder = form_binder.FormBinder;
 
+// Runtime state management
+pub const runtime_state = @import("runtime_state.zig");
+pub const VisibilityState = runtime_state.VisibilityState;
+
 // Tests
 test {
     _ = @import("view.zig");
     _ = @import("types.zig");
     _ = root.gui_hooks;
     _ = @import("form_binder.zig");
+    _ = @import("runtime_state.zig");
 }
