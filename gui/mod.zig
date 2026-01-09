@@ -69,6 +69,7 @@ pub const FormBinder = form_binder.FormBinder;
 // Runtime state management
 pub const runtime_state = @import("runtime_state.zig");
 pub const VisibilityState = runtime_state.VisibilityState;
+pub const ValueState = runtime_state.ValueState;
 
 // Tests
 test {

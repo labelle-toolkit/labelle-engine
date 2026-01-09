@@ -1250,6 +1250,127 @@ pub fn GameWith(comptime Hooks: type) type {
             }
         }
 
+        /// Render GUI views with both visibility and value state overrides.
+        ///
+        /// Allows full runtime control over element visibility AND values (checkboxes, sliders).
+        pub fn renderSceneGuiWithState(
+            self: *Self,
+            scene: anytype,
+            comptime Views: type,
+            comptime Scripts: type,
+            visibility_state: *const gui_mod.VisibilityState,
+            value_state: *const gui_mod.ValueState,
+        ) void {
+            if (!self.gui_enabled) return;
+
+            const SceneType = @TypeOf(scene.*);
+            if (!@hasField(SceneType, "gui_view_names")) return;
+
+            const view_names = scene.gui_view_names;
+            if (view_names.len == 0) return;
+
+            self.gui.beginFrame();
+
+            for (view_names) |active_name| {
+                self.renderViewByNameWithState(Views, Scripts, active_name, visibility_state, value_state);
+            }
+
+            self.gui.endFrame();
+        }
+
+        /// Internal: Render view with full state overrides.
+        fn renderViewByNameWithState(
+            self: *Self,
+            comptime Views: type,
+            comptime Scripts: type,
+            name: []const u8,
+            visibility_state: *const gui_mod.VisibilityState,
+            value_state: *const gui_mod.ValueState,
+        ) void {
+            inline for (comptime Views.names()) |view_name| {
+                if (std.mem.eql(u8, view_name, name)) {
+                    const view_def = Views.get(view_name);
+                    self.renderGuiElementsWithState(view_def.elements, Scripts, visibility_state, value_state);
+                    return;
+                }
+            }
+        }
+
+        /// Internal: Render elements with full state overrides.
+        fn renderGuiElementsWithState(
+            self: *Self,
+            elements: []const gui_mod.GuiElement,
+            comptime Scripts: type,
+            visibility_state: *const gui_mod.VisibilityState,
+            value_state: *const gui_mod.ValueState,
+        ) void {
+            for (elements) |element| {
+                self.renderGuiElementWithState(element, Scripts, visibility_state, value_state);
+            }
+        }
+
+        /// Internal: Render single element with full state overrides.
+        fn renderGuiElementWithState(
+            self: *Self,
+            element: gui_mod.GuiElement,
+            comptime Scripts: type,
+            visibility_state: *const gui_mod.VisibilityState,
+            value_state: *const gui_mod.ValueState,
+        ) void {
+            const element_id = element.getId();
+            const is_visible = if (element_id.len > 0)
+                visibility_state.isVisible(element_id, element.isVisible())
+            else
+                element.isVisible();
+
+            if (!is_visible) return;
+
+            switch (element) {
+                .Label => |lbl| self.gui.label(lbl),
+                .Button => |btn| {
+                    if (self.gui.button(btn)) {
+                        if (btn.on_click) |callback_name| {
+                            self.invokeGuiCallback(Scripts, callback_name);
+                        }
+                    }
+                },
+                .ProgressBar => |bar| self.gui.progressBar(bar),
+                .Panel => |panel| {
+                    self.gui.beginPanel(panel);
+                    self.renderGuiElementsWithState(panel.children, Scripts, visibility_state, value_state);
+                    self.gui.endPanel();
+                },
+                .Image => |img| self.gui.image(img),
+                .Checkbox => |cb| {
+                    // Apply value state override
+                    var modified_cb = cb;
+                    if (element_id.len > 0) {
+                        modified_cb.checked = value_state.getCheckbox(element_id, cb.checked);
+                    }
+
+                    if (self.gui.checkbox(modified_cb)) {
+                        if (cb.on_change) |callback_name| {
+                            self.invokeGuiCallback(Scripts, callback_name);
+                        }
+                    }
+                },
+                .Slider => |sl| {
+                    // Apply value state override
+                    var modified_sl = sl;
+                    if (element_id.len > 0) {
+                        modified_sl.value = value_state.getSlider(element_id, sl.value);
+                    }
+
+                    const new_value = self.gui.slider(modified_sl);
+                    if (new_value != modified_sl.value) {
+                        if (sl.on_change) |callback_name| {
+                            self.invokeGuiCallback(Scripts, callback_name);
+                        }
+                    }
+                },
+            }
+        }
+
         // ==================== Screenshot ====================
 
         /// Request a screenshot of the current frame to be saved to a file.

@@ -1,7 +1,7 @@
 //! Runtime GUI State Management
 //!
-//! Provides runtime state tracking for GUI elements, including visibility overrides.
-//! This allows dynamic show/hide of elements without redefining comptime views.
+//! Provides runtime state tracking for GUI elements, including visibility and value overrides.
+//! This allows dynamic show/hide and value updates without redefining comptime views.
 
 const std = @import("std");
 
@@ -46,5 +46,49 @@ pub const VisibilityState = struct {
         while (it.next()) |entry| {
             try self.setVisible(entry.key_ptr.*, entry.value_ptr.*);
         }
+    }
+};
+
+/// Runtime value state for GUI elements (checkboxes, sliders, text inputs)
+pub const ValueState = struct {
+    checkbox_values: std.StringHashMap(bool),
+    slider_values: std.StringHashMap(f32),
+
+    pub fn init(allocator: std.mem.Allocator) ValueState {
+        return .{
+            .checkbox_values = std.StringHashMap(bool).init(allocator),
+            .slider_values = std.StringHashMap(f32).init(allocator),
+        };
+    }
+
+    pub fn deinit(self: *ValueState) void {
+        self.checkbox_values.deinit();
+        self.slider_values.deinit();
+    }
+
+    /// Set checkbox value
+    pub fn setCheckbox(self: *ValueState, element_id: []const u8, checked: bool) !void {
+        try self.checkbox_values.put(element_id, checked);
+    }
+
+    /// Get checkbox value (returns default if not found)
+    pub fn getCheckbox(self: *const ValueState, element_id: []const u8, default: bool) bool {
+        return self.checkbox_values.get(element_id) orelse default;
+    }
+
+    /// Set slider value
+    pub fn setSlider(self: *ValueState, element_id: []const u8, value: f32) !void {
+        try self.slider_values.put(element_id, value);
+    }
+
+    /// Get slider value (returns default if not found)
+    pub fn getSlider(self: *const ValueState, element_id: []const u8, default: f32) f32 {
+        return self.slider_values.get(element_id) orelse default;
+    }
+
+    /// Clear all value overrides
+    pub fn clear(self: *ValueState) void {
+        self.checkbox_values.clearRetainingCapacity();
+        self.slider_values.clearRetainingCapacity();
     }
 };
