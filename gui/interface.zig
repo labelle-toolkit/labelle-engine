@@ -43,6 +43,7 @@ fn selectNuklearAdapter() type {
         .sdl => @import("nuklear_sdl_adapter.zig"),
         .bgfx => @import("nuklear_bgfx_adapter.zig"),
         .zgpu => @import("nuklear_zgpu_adapter.zig"),
+        .wgpu_native => @import("nuklear_wgpu_native_adapter.zig"),
         else => @import("nuklear_adapter.zig"), // raylib (default)
     };
 }
@@ -54,6 +55,7 @@ fn selectImguiAdapter() type {
         .sdl => @import("imgui_sdl_adapter.zig"),
         .bgfx => @import("imgui_bgfx_adapter.zig"),
         .zgpu => @import("imgui_zgpu_adapter.zig"),
+        .wgpu_native => @import("imgui_wgpu_native_adapter.zig"),
         else => @import("imgui_adapter.zig"), // raylib (default)
     };
 }

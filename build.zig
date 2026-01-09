@@ -7,6 +7,7 @@ pub const Backend = enum {
     sdl,
     bgfx,
     zgpu,
+    wgpu_native,
 };
 
 /// ECS backend selection
@@ -93,7 +94,14 @@ pub fn build(b: *std.Build) void {
     });
     const zgpu = zgpu_dep.module("root");
 
-    // zglfw - GLFW bindings for zgpu
+    // wgpu_native - lower-level WebGPU bindings (alternative to zgpu)
+    const wgpu_native_dep = labelle_dep.builder.dependency("wgpu_native_zig", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const wgpu_native = wgpu_native_dep.module("wgpu");
+
+    // zglfw - GLFW bindings for zgpu/wgpu_native
     const zglfw_dep = labelle_dep.builder.dependency("zglfw", .{
         .target = target,
         .optimize = optimize,
@@ -170,6 +178,7 @@ pub fn build(b: *std.Build) void {
             .{ .name = "raylib", .module = raylib },
             .{ .name = "sokol", .module = sokol },
             .{ .name = "sdl2", .module = sdl },
+            .{ .name = "zglfw", .module = zglfw }, // For zgpu/wgpu_native input
         },
     });
 
@@ -245,6 +254,7 @@ pub fn build(b: *std.Build) void {
             .sdl => .sdl2_renderer, // SDL uses SDL2 renderer
             .bgfx => .glfw, // bgfx uses GLFW (rendering handled separately)
             .zgpu => .glfw_wgpu, // zgpu uses GLFW+WebGPU
+            .wgpu_native => .no_backend, // wgpu_native uses custom ImGui adapter
         };
 
         break :blk b.dependency("zgui", .{
@@ -276,7 +286,8 @@ pub fn build(b: *std.Build) void {
             .{ .name = "sdl2", .module = sdl },
             .{ .name = "zbgfx", .module = zbgfx },
             .{ .name = "zgpu", .module = zgpu },
-            .{ .name = "labelle", .module = labelle }, // For zgpu context access
+            .{ .name = "wgpu", .module = wgpu_native }, // For wgpu_native ImGui adapter
+            .{ .name = "labelle", .module = labelle }, // For zgpu/wgpu_native context access
             .{ .name = "zglfw", .module = zglfw }, // For GLFW window access
         },
     });

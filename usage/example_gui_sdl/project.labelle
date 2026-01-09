@@ -1,16 +1,16 @@
-// Nuklear GUI with SDL2 graphics backend
-// Uses SDL_Renderer for drawing primitives
+// ImGui GUI with SDL2 graphics backend
+// Uses zgui for ImGui integration with SDL2
 .{
     .version = 1,
     .name = "example_gui_sdl",
-    .description = "GUI demo with Nuklear and SDL2 backend",
+    .description = "GUI demo with ImGui and SDL2 backend",
     .initial_scene = "main",
     .backend = .sdl,
-    .gui_backend = .nuklear,
+    .gui_backend = .imgui,
     .window = .{
         .width = 800,
         .height = 600,
-        .title = "GUI Example (Nuklear + SDL)",
+        .title = "GUI Example (ImGui + SDL)",
         .target_fps = 60,
     },
     .resources = .{},
