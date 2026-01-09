@@ -230,6 +230,7 @@ pub fn generateBuildZig(allocator: std.mem.Allocator, config: ProjectConfig) ![]
         .raygui => "raygui",
         .microui => "microui",
         .nuklear => "nuklear",
+        .imgui => "imgui",
     };
 
     const physics_enabled = config.physics.enabled;
