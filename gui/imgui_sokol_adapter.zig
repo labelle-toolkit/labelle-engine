@@ -79,11 +79,15 @@ pub fn beginFrame(self: *Self) void {
 
     if (!self.backend_initialized) return;
 
+    // Update screen dimensions from sokol_app (handles window resize)
+    self.width = simgui.width();
+    self.height = simgui.height();
+
     // Start new ImGui frame via sokol_imgui
     simgui.newFrame(.{
         .width = self.width,
         .height = self.height,
-        .delta_time = 1.0 / 60.0, // TODO: get actual delta time from sokol_app
+        .delta_time = @floatCast(simgui.frameDuration()),
     });
 }
 
@@ -115,6 +119,10 @@ fn nextWindowName(self: *Self, buf: []u8) [*:0]const u8 {
 pub fn label(self: *Self, lbl: types.Label) void {
     if (!self.backend_initialized) return;
 
+    // Convert text to null-terminated for C interop
+    var text_buf: [256]u8 = undefined;
+    const text_z = std.fmt.bufPrintZ(&text_buf, "{s}", .{lbl.text}) catch return;
+
     const color = cimgui.ImVec4{
         .x = @as(f32, @floatFromInt(lbl.color.r)) / 255.0,
         .y = @as(f32, @floatFromInt(lbl.color.g)) / 255.0,
@@ -123,13 +131,17 @@ pub fn label(self: *Self, lbl: types.Label) void {
     };
 
     if (self.panel_depth > 0) {
-        cimgui.igTextColored(color, "%s", lbl.text.ptr);
+        cimgui.igTextColored(color, "%s", text_z.ptr);
     } else {
         var name_buf: [32]u8 = undefined;
         const name = self.nextWindowName(&name_buf);
 
+        // Calculate actual text width
+        var text_size: cimgui.ImVec2 = undefined;
+        cimgui.igCalcTextSize(&text_size, text_z.ptr, null, false, -1.0);
+
         cimgui.igSetNextWindowPos(.{ .x = lbl.position.x, .y = lbl.position.y }, 0);
-        cimgui.igSetNextWindowSize(.{ .x = @floatFromInt(lbl.text.len * 10), .y = lbl.font_size + 8 }, 0);
+        cimgui.igSetNextWindowSize(.{ .x = text_size.x + 16, .y = lbl.font_size + 8 }, 0);
 
         const flags = cimgui.ImGuiWindowFlags_NoTitleBar |
             cimgui.ImGuiWindowFlags_NoResize |
@@ -139,7 +151,7 @@ pub fn label(self: *Self, lbl: types.Label) void {
             cimgui.ImGuiWindowFlags_NoMouseInputs;
 
         if (cimgui.igBegin(name, null, flags)) {
-            cimgui.igTextColored(color, "%s", lbl.text.ptr);
+            cimgui.igTextColored(color, "%s", text_z.ptr);
         }
         cimgui.igEnd();
     }
@@ -248,9 +260,12 @@ pub fn checkbox(self: *Self, cb: types.Checkbox) bool {
         var name_buf: [32]u8 = undefined;
         const name = self.nextWindowName(&name_buf);
 
-        const text_len: usize = cb.text.len;
+        // Calculate actual text width for proper sizing
+        var text_size: cimgui.ImVec2 = undefined;
+        cimgui.igCalcTextSize(&text_size, text_z.ptr, null, false, -1.0);
+
         cimgui.igSetNextWindowPos(.{ .x = cb.position.x, .y = cb.position.y }, 0);
-        cimgui.igSetNextWindowSize(.{ .x = @as(f32, @floatFromInt(text_len * 8)) + 50, .y = 40 }, 0);
+        cimgui.igSetNextWindowSize(.{ .x = text_size.x + 50, .y = 40 }, 0);
 
         const flags = cimgui.ImGuiWindowFlags_NoTitleBar |
             cimgui.ImGuiWindowFlags_NoResize |

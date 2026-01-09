@@ -79,3 +79,16 @@ pub fn imtextureid(img: c.simgui_image_t) u64 {
 pub fn imageFromImtextureid(id: u64) c.simgui_image_t {
     return c.simgui_image_from_imtextureid(id);
 }
+
+// sokol_app window dimension accessors
+pub fn width() i32 {
+    return c.sapp_width();
+}
+
+pub fn height() i32 {
+    return c.sapp_height();
+}
+
+pub fn frameDuration() f64 {
+    return c.sapp_frame_duration();
+}

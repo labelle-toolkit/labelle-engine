@@ -137,6 +137,9 @@ pub fn beginFrame(self: *Self) void {
 pub fn endFrame(self: *Self) void {
     if (!self.backend_initialized) return;
 
+    // Finalize ImGui frame - prepares draw lists
+    zgui.render();
+
     // Signal that ImGui is ready for rendering
     // The actual rendering happens in guiRenderCallback when ZgpuBackend
     // calls it with an active render pass during endDrawing()
@@ -169,7 +172,8 @@ pub fn label(self: *Self, lbl: types.Label) void {
         const name = self.nextWindowName(&name_buf);
 
         zgui.setNextWindowPos(.{ .x = lbl.position.x, .y = lbl.position.y });
-        zgui.setNextWindowSize(.{ .w = @floatFromInt(lbl.text.len * 10), .h = lbl.font_size + 8 });
+        const text_size = zgui.calcTextSize(lbl.text, .{});
+        zgui.setNextWindowSize(.{ .w = text_size[0] + 16, .h = lbl.font_size + 8 });
 
         if (zgui.begin(name, .{
             .flags = .{
@@ -310,7 +314,8 @@ pub fn checkbox(self: *Self, cb: types.Checkbox) bool {
 
         const text_len: usize = cb.text.len;
         zgui.setNextWindowPos(.{ .x = cb.position.x, .y = cb.position.y });
-        zgui.setNextWindowSize(.{ .w = @as(f32, @floatFromInt(text_len * 8)) + 50, .h = 40 });
+        const text_size = zgui.calcTextSize(cb.text, .{});
+        zgui.setNextWindowSize(.{ .w = text_size[0] + 50, .h = 40 });
 
         if (zgui.begin(name, .{
             .flags = .{

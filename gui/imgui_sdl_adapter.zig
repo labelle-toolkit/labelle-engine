@@ -134,8 +134,10 @@ pub fn label(self: *Self, lbl: types.Label) void {
         var name_buf: [32]u8 = undefined;
         const name = self.nextWindowName(&name_buf);
 
+        // Calculate actual text width for proper sizing
+        const text_size = zgui.calcTextSize(lbl.text, .{});
         zgui.setNextWindowPos(.{ .x = lbl.position.x, .y = lbl.position.y });
-        zgui.setNextWindowSize(.{ .w = @floatFromInt(lbl.text.len * 10), .h = lbl.font_size + 8 });
+        zgui.setNextWindowSize(.{ .w = text_size[0] + 16, .h = lbl.font_size + 8 });
 
         if (zgui.begin(name, .{
             .flags = .{
@@ -275,9 +277,10 @@ pub fn checkbox(self: *Self, cb: types.Checkbox) bool {
         var name_buf: [32]u8 = undefined;
         const name = self.nextWindowName(&name_buf);
 
-        const text_len: usize = cb.text.len;
+        // Calculate actual text width for proper sizing (+ checkbox width)
+        const text_size = zgui.calcTextSize(cb.text, .{});
         zgui.setNextWindowPos(.{ .x = cb.position.x, .y = cb.position.y });
-        zgui.setNextWindowSize(.{ .w = @as(f32, @floatFromInt(text_len * 8)) + 50, .h = 40 });
+        zgui.setNextWindowSize(.{ .w = text_size[0] + 50, .h = 40 });
 
         if (zgui.begin(name, .{
             .flags = .{

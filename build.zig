@@ -303,7 +303,8 @@ pub fn build(b: *std.Build) void {
         gui_interface.linkLibrary(dep.artifact("imgui"));
 
         // Link OpenGL framework on macOS for glfw_opengl3 backend
-        if (target.result.os.tag == .macos and (backend == .raylib or backend == .sokol)) {
+        // Note: sokol uses cimgui_dep instead of zgui_dep, so only raylib is relevant here
+        if (target.result.os.tag == .macos and backend == .raylib) {
             gui_interface.linkFramework("OpenGL", .{});
         }
 
@@ -379,12 +380,14 @@ pub fn build(b: *std.Build) void {
         });
 
         // Determine sokol backend define based on target platform
+        // Supported: macOS/iOS (Metal), Windows (D3D11), Linux/BSD (OpenGL), Web (GLES3)
+        // Other platforms default to OpenGL Core which may not work
         const sokol_backend_define: []const u8 = switch (target.result.os.tag) {
             .macos, .ios => "-DSOKOL_METAL",
             .windows => "-DSOKOL_D3D11",
             .linux, .freebsd, .openbsd => "-DSOKOL_GLCORE",
             .emscripten => "-DSOKOL_GLES3",
-            else => "-DSOKOL_GLCORE",
+            else => "-DSOKOL_GLCORE", // Fallback, may not work on all platforms
         };
 
         // Add sokol_imgui.c source file
