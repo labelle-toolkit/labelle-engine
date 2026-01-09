@@ -234,13 +234,8 @@ pub fn FormBinder(comptime FormStateType: type, comptime form_id: []const u8) ty
 
         /// Capitalize first letter of string (comptime helper)
         fn capitalize(comptime str: []const u8) []const u8 {
-            if (str.len == 0) return str;
-
-            var result: [str.len]u8 = undefined;
-            result[0] = std.ascii.toUpper(str[0]);
-            @memcpy(result[1..], str[1..]);
-
-            return &result;
+            if (str.len == 0) return "";
+            return &[_]u8{std.ascii.toUpper(str[0])} ++ str[1..];
         }
 
         // ====================================================================
