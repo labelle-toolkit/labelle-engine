@@ -52,6 +52,18 @@ These forms require:
 - **Type safety**: Compile-time guarantees about field types and handlers
 - **Performance**: Zero runtime overhead for event dispatch
 
+## Backend Compatibility
+
+**Important**: All current GUI backends (raygui, microui, Clay) and potential future backends (Dear ImGui, Nuklear) use **immediate-mode patterns** where widgets return interaction state in the same frame.
+
+This RFC adopts a **hybrid approach**:
+- Widget methods continue to return values immediately (backward compatible)
+- Optionally queue hook events when element IDs are provided
+- Developers choose immediate-mode or hooks based on use case
+- Zero overhead for simple UIs, powerful hooks for complex forms
+
+See [Backend Compatibility Analysis](./0001-gui-interaction-hooks/backend-compatibility.md) for detailed discussion of immediate-mode vs. retained-mode GUIs and implementation strategies for all backends.
+
 ## Detailed Design
 
 ### 1. GUI Hook Type System
@@ -644,7 +656,14 @@ pub const GameMessage = union(enum) {
 - [Clay UI library](https://github.com/nicbarker/clay)
 - [Current GUI interface](../../gui/interface.zig)
 - [Issue #210](https://github.com/labelle-toolkit/labelle-engine/issues/210)
+- [Backend Compatibility Analysis](./0001-gui-interaction-hooks/backend-compatibility.md) - Immediate-mode vs. retained-mode GUIs
+- [Approach A: ECS Components](./0001-gui-interaction-hooks/approach-a-ecs-components.md)
+- [Approach B: FormManager](./0001-gui-interaction-hooks/approach-b-formmanager.md)
+- [Approach C: Form Context](./0001-gui-interaction-hooks/approach-c-form-context.md)
+- [Approach D: FormBinder (Recommended)](./0001-gui-interaction-hooks/approach-d-formbinder.md)
 
 ## Revision History
 
 - **2026-01-09**: Initial draft by @apotema
+- **2026-01-09**: Added backend compatibility analysis for Dear ImGui/Nuklear
+- **2026-01-09**: Added detailed approach documents (A, B, C, D)
