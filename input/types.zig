@@ -127,3 +127,34 @@ pub const MousePosition = struct {
     x: f32 = 0,
     y: f32 = 0,
 };
+
+// ============================================================================
+// Touch Input Types (for mobile/touch devices)
+// ============================================================================
+
+/// Maximum number of simultaneous touches to track
+pub const MAX_TOUCHES = 10;
+
+/// Touch phase (lifecycle of a touch event)
+pub const TouchPhase = enum {
+    /// Finger just touched the screen
+    began,
+    /// Finger moved on the screen
+    moved,
+    /// Finger lifted from the screen
+    ended,
+    /// Touch was cancelled (e.g., phone call, gesture recognizer)
+    cancelled,
+};
+
+/// A single touch point
+pub const Touch = struct {
+    /// Unique identifier for this touch (persists across move events)
+    id: u64 = 0,
+    /// X position in screen coordinates
+    x: f32 = 0,
+    /// Y position in screen coordinates
+    y: f32 = 0,
+    /// Current phase of this touch
+    phase: TouchPhase = .ended,
+};

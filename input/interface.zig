@@ -16,6 +16,9 @@ pub const types = @import("types.zig");
 pub const KeyboardKey = types.KeyboardKey;
 pub const MouseButton = types.MouseButton;
 pub const MousePosition = types.MousePosition;
+pub const TouchPhase = types.TouchPhase;
+pub const Touch = types.Touch;
+pub const MAX_TOUCHES = types.MAX_TOUCHES;
 
 /// Graphics backend selection (enum type)
 pub const Backend = build_options.@"build.Backend";
@@ -39,6 +42,9 @@ pub fn InputInterface(comptime Impl: type) type {
         if (!@hasDecl(Impl, "isMouseButtonReleased")) @compileError("Input backend must have isMouseButtonReleased method");
         if (!@hasDecl(Impl, "getMousePosition")) @compileError("Input backend must have getMousePosition method");
         if (!@hasDecl(Impl, "getMouseWheelMove")) @compileError("Input backend must have getMouseWheelMove method");
+        // Touch input methods (required for all backends, stubs return 0/null)
+        if (!@hasDecl(Impl, "getTouchCount")) @compileError("Input backend must have getTouchCount method");
+        if (!@hasDecl(Impl, "getTouch")) @compileError("Input backend must have getTouch method");
     }
 
     return struct {
@@ -102,6 +108,21 @@ pub fn InputInterface(comptime Impl: type) type {
         /// Get the mouse wheel movement (vertical)
         pub fn getMouseWheelMove(self: *const Self) f32 {
             return self.impl.getMouseWheelMove();
+        }
+
+        // =============================================
+        // Touch Input API
+        // =============================================
+
+        /// Get the number of active touches
+        pub fn getTouchCount(self: *const Self) u32 {
+            return self.impl.getTouchCount();
+        }
+
+        /// Get touch at index (0 to getTouchCount()-1)
+        /// Returns null if index is out of bounds
+        pub fn getTouch(self: *const Self, index: u32) ?Touch {
+            return self.impl.getTouch(index);
         }
 
         /// Process a backend-specific event (only available for sokol backend)

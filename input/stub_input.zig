@@ -11,6 +11,8 @@ const types = @import("types.zig");
 pub const KeyboardKey = types.KeyboardKey;
 pub const MouseButton = types.MouseButton;
 pub const MousePosition = types.MousePosition;
+pub const TouchPhase = types.TouchPhase;
+pub const Touch = types.Touch;
 
 const Self = @This();
 
@@ -81,4 +83,17 @@ pub fn getMousePosition(self: *const Self) MousePosition {
 pub fn getMouseWheelMove(self: *const Self) f32 {
     _ = self;
     return 0;
+}
+
+/// Get the number of active touches (always 0)
+pub fn getTouchCount(self: *const Self) u32 {
+    _ = self;
+    return 0;
+}
+
+/// Get touch at index (always null)
+pub fn getTouch(self: *const Self, index: u32) ?Touch {
+    _ = self;
+    _ = index;
+    return null;
 }

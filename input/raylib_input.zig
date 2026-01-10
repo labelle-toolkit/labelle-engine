@@ -9,6 +9,9 @@ const types = @import("types.zig");
 pub const KeyboardKey = types.KeyboardKey;
 pub const MouseButton = types.MouseButton;
 pub const MousePosition = types.MousePosition;
+pub const TouchPhase = types.TouchPhase;
+pub const Touch = types.Touch;
+pub const MAX_TOUCHES = types.MAX_TOUCHES;
 
 const Self = @This();
 
@@ -74,4 +77,31 @@ pub fn getMousePosition(self: *const Self) MousePosition {
 pub fn getMouseWheelMove(self: *const Self) f32 {
     _ = self;
     return rl.getMouseWheelMove();
+}
+
+/// Get the number of active touches
+pub fn getTouchCount(self: *const Self) u32 {
+    _ = self;
+    const count = rl.getTouchPointCount();
+    if (count < 0) return 0;
+    return @intCast(@min(@as(u32, @intCast(count)), MAX_TOUCHES));
+}
+
+/// Get touch at index
+/// Note: Raylib polling mode can't distinguish touch phases, so all touches
+/// are reported as .moved. For proper touch lifecycle, use sokol backend.
+pub fn getTouch(self: *const Self, index: u32) ?Touch {
+    _ = self;
+    const count = rl.getTouchPointCount();
+    if (count < 0 or index >= @as(u32, @intCast(count))) return null;
+
+    const pos = rl.getTouchPosition(@intCast(index));
+    const id = rl.getTouchPointId(@intCast(index));
+
+    return Touch{
+        .id = if (id >= 0) @intCast(id) else 0,
+        .x = pos.x,
+        .y = pos.y,
+        .phase = .moved, // Raylib polling can't distinguish phases
+    };
 }

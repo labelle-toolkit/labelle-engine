@@ -11,6 +11,9 @@ const types = @import("types.zig");
 pub const KeyboardKey = types.KeyboardKey;
 pub const MouseButton = types.MouseButton;
 pub const MousePosition = types.MousePosition;
+pub const TouchPhase = types.TouchPhase;
+pub const Touch = types.Touch;
+pub const MAX_TOUCHES = types.MAX_TOUCHES;
 
 const Self = @This();
 
@@ -31,6 +34,10 @@ mouse_states: [MAX_MOUSE_BUTTONS]KeyState = [_]KeyState{.{}} ** MAX_MOUSE_BUTTON
 mouse_x: f32 = 0,
 mouse_y: f32 = 0,
 mouse_wheel: f32 = 0,
+
+// Touch state tracking
+touches: [MAX_TOUCHES]Touch = [_]Touch{.{}} ** MAX_TOUCHES,
+touch_count: u32 = 0,
 
 /// Initialize the input system
 pub fn init() Self {
@@ -55,6 +62,21 @@ pub fn beginFrame(self: *Self) void {
     }
     // Clear mouse wheel (it's a per-frame value)
     self.mouse_wheel = 0;
+
+    // Remove ended/cancelled touches from previous frame
+    var i: u32 = 0;
+    while (i < self.touch_count) {
+        if (self.touches[i].phase == .ended or self.touches[i].phase == .cancelled) {
+            // Remove this touch by shifting remaining touches
+            var j = i;
+            while (j + 1 < self.touch_count) : (j += 1) {
+                self.touches[j] = self.touches[j + 1];
+            }
+            self.touch_count -= 1;
+        } else {
+            i += 1;
+        }
+    }
 }
 
 /// Process a sokol event. Call this from your sokol_app event callback.
@@ -100,7 +122,45 @@ pub fn processEvent(self: *Self, event: *const sapp.Event) void {
             // Accumulate scroll events within a frame
             self.mouse_wheel += event.scroll_y;
         },
+        // Touch events (iOS/Android/touch screens)
+        .TOUCHES_BEGAN => self.handleTouchEvent(event, .began),
+        .TOUCHES_MOVED => self.handleTouchEvent(event, .moved),
+        .TOUCHES_ENDED => self.handleTouchEvent(event, .ended),
+        .TOUCHES_CANCELLED => self.handleTouchEvent(event, .cancelled),
         else => {},
+    }
+}
+
+/// Handle touch events from sokol
+fn handleTouchEvent(self: *Self, event: *const sapp.Event, phase: TouchPhase) void {
+    // Process each touch point in the event
+    var i: u32 = 0;
+    while (i < event.num_touches) : (i += 1) {
+        const sokol_touch = event.touches[i];
+        if (!sokol_touch.changed) continue;
+
+        const touch = Touch{
+            .id = sokol_touch.identifier,
+            .x = sokol_touch.pos_x,
+            .y = sokol_touch.pos_y,
+            .phase = phase,
+        };
+
+        // Find existing touch with same ID and update it
+        var found = false;
+        for (self.touches[0..self.touch_count]) |*existing| {
+            if (existing.id == touch.id) {
+                existing.* = touch;
+                found = true;
+                break;
+            }
+        }
+
+        // Add new touch if not found and we have room
+        if (!found and self.touch_count < MAX_TOUCHES) {
+            self.touches[self.touch_count] = touch;
+            self.touch_count += 1;
+        }
     }
 }
 
@@ -163,6 +223,22 @@ pub fn getMousePosition(self: *const Self) MousePosition {
 /// Get the mouse wheel movement (vertical)
 pub fn getMouseWheelMove(self: *const Self) f32 {
     return self.mouse_wheel;
+}
+
+// ==================== Touch Input ====================
+
+/// Get the number of active touches
+pub fn getTouchCount(self: *const Self) u32 {
+    return self.touch_count;
+}
+
+/// Get touch at index (0 to getTouchCount()-1)
+/// Returns null if index is out of bounds
+pub fn getTouch(self: *const Self, index: u32) ?Touch {
+    if (index < self.touch_count) {
+        return self.touches[index];
+    }
+    return null;
 }
 
 // ==================== Internal Helpers ====================
