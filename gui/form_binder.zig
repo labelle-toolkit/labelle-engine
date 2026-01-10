@@ -157,22 +157,21 @@ pub fn FormBinder(comptime FormStateType: type, comptime form_id: []const u8) ty
             // Use comptime to check all fields and route to the matching one
             inline for (std.meta.fields(FormStateType)) |field| {
                 if (std.mem.eql(u8, field.name, field_name)) {
-                    // Check if field type is bool
-                    if (field.type != bool) {
-                        @compileError("Checkbox field '" ++ field.name ++ "' must be bool type");
+                    // Only handle bool fields for checkboxes
+                    if (field.type == bool) {
+                        // Check for custom setter: setFieldName(self: *T, value: bool) void
+                        const setter_name = "set" ++ snakeToPascalCase(field.name);
+                        if (@hasDecl(FormStateType, setter_name)) {
+                            const setter = @field(FormStateType, setter_name);
+                            setter(self.form_state, info.new_value);
+                        } else {
+                            // Direct field assignment
+                            @field(self.form_state, field.name) = info.new_value;
+                        }
+                        return true;
                     }
-
-                    // Check for custom setter: setFieldName(self: *T, value: bool) void
-                    const setter_name = "set" ++ snakeToPascalCase(field.name);
-                    if (@hasDecl(FormStateType, setter_name)) {
-                        const setter = @field(FormStateType, setter_name);
-                        setter(self.form_state, info.new_value);
-                    } else {
-                        // Direct field assignment
-                        @field(self.form_state, field.name) = info.new_value;
-                    }
-
-                    return true;
+                    // Field found but not bool type - skip (type mismatch)
+                    return false;
                 }
             }
 
@@ -194,26 +193,26 @@ pub fn FormBinder(comptime FormStateType: type, comptime form_id: []const u8) ty
                         else => false,
                     };
 
-                    if (!is_numeric) {
-                        @compileError("Slider field '" ++ field.name ++ "' must be numeric type (int or float)");
-                    }
-
-                    // Check for custom setter: setFieldName(self: *T, value: f32) void
-                    const setter_name = "set" ++ snakeToPascalCase(field.name);
-                    if (@hasDecl(FormStateType, setter_name)) {
-                        const setter = @field(FormStateType, setter_name);
-                        setter(self.form_state, info.new_value);
-                    } else {
-                        // Direct field assignment with type conversion
-                        // Use @intFromFloat for integer fields, @floatCast for float fields
-                        if (field_type_info == .int) {
-                            @field(self.form_state, field.name) = @intFromFloat(info.new_value);
+                    // Only handle numeric fields for sliders
+                    if (is_numeric) {
+                        // Check for custom setter: setFieldName(self: *T, value: f32) void
+                        const setter_name = "set" ++ snakeToPascalCase(field.name);
+                        if (@hasDecl(FormStateType, setter_name)) {
+                            const setter = @field(FormStateType, setter_name);
+                            setter(self.form_state, info.new_value);
                         } else {
-                            @field(self.form_state, field.name) = @floatCast(info.new_value);
+                            // Direct field assignment with type conversion
+                            // Use @intFromFloat for integer fields, @floatCast for float fields
+                            if (field_type_info == .int) {
+                                @field(self.form_state, field.name) = @intFromFloat(info.new_value);
+                            } else {
+                                @field(self.form_state, field.name) = @floatCast(info.new_value);
+                            }
                         }
+                        return true;
                     }
-
-                    return true;
+                    // Field found but not numeric type - skip (type mismatch)
+                    return false;
                 }
             }
 
@@ -355,9 +354,9 @@ pub fn FormBinder(comptime FormStateType: type, comptime form_id: []const u8) ty
             // If form doesn't have visibility rules, nothing to do
             if (!hasVisibilityRules()) return;
 
-            // Get the VisibilityRules declaration
+            // Get the VisibilityRules type
             const VisibilityRules = @field(FormStateType, "VisibilityRules");
-            const rules_type_info = @typeInfo(@TypeOf(VisibilityRules));
+            const rules_type_info = @typeInfo(VisibilityRules);
 
             // Iterate through visibility rules and call callback
             inline for (rules_type_info.@"struct".fields) |field| {
