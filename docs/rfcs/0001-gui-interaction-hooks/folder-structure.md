@@ -427,35 +427,36 @@ const labelle = @import("labelle-engine");
 const MonsterFormState = @import("forms/monster_form.zig").MonsterFormState;
 const gui_handlers = @import("gui_handlers/mod.zig");
 
+// Use compile-time generics for GUI hooks (zero runtime overhead)
+const Game = labelle.GameWith(gui_handlers.FormHandlers);
+
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
-    
-    // Initialize game
-    var game = try labelle.Game.init(allocator, .{
+
+    // Initialize game with hooks baked in at compile time
+    var game = try Game.init(allocator, .{
         .window = .{ .width = 800, .height = 600, .title = "Monster Creator" },
     });
     defer game.deinit();
-    
+
     // Create form state and binder
     var monster_form = MonsterFormState{};
     const MonsterBinder = labelle.FormBinder(MonsterFormState, "monster_form");
     const monster_binder = MonsterBinder.init(&monster_form);
-    
-    // Set up handlers
+
+    // Set up binder reference for handlers
     gui_handlers.setMonsterBinder(monster_binder);
-    game.setGuiHooks(gui_handlers.FormHandlers);
-    
+
     // Load scenes and GUI views
     const Views = labelle.ViewRegistry(.{
         .monster_form = @import("gui/monster_form.zon"),
     });
-    
-    // Game loop
+
+    // Game loop - hooks are called automatically via compile-time dispatch
     while (game.isRunning()) {
         game.renderGui(Views);
-        game.processGuiEvents();  // Process queued GUI events
     }
 }
 ```
