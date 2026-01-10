@@ -51,17 +51,27 @@ pub const VisibilityState = struct {
 
 /// Runtime value state for GUI elements (checkboxes, sliders, text inputs)
 pub const ValueState = struct {
+    allocator: std.mem.Allocator,
     checkbox_values: std.StringHashMap(bool),
     slider_values: std.StringHashMap(f32),
+    text_values: std.StringHashMap([]const u8),
 
     pub fn init(allocator: std.mem.Allocator) ValueState {
         return .{
+            .allocator = allocator,
             .checkbox_values = std.StringHashMap(bool).init(allocator),
             .slider_values = std.StringHashMap(f32).init(allocator),
+            .text_values = std.StringHashMap([]const u8).init(allocator),
         };
     }
 
     pub fn deinit(self: *ValueState) void {
+        // Free allocated text values
+        var it = self.text_values.iterator();
+        while (it.next()) |entry| {
+            self.allocator.free(entry.value_ptr.*);
+        }
+        self.text_values.deinit();
         self.checkbox_values.deinit();
         self.slider_values.deinit();
     }
@@ -86,8 +96,30 @@ pub const ValueState = struct {
         return self.slider_values.get(element_id) orelse default;
     }
 
+    /// Set text value (makes a copy)
+    pub fn setText(self: *ValueState, element_id: []const u8, text: []const u8) !void {
+        // Free old value if exists
+        if (self.text_values.get(element_id)) |old_value| {
+            self.allocator.free(old_value);
+        }
+        // Allocate and store new value
+        const owned = try self.allocator.dupe(u8, text);
+        try self.text_values.put(element_id, owned);
+    }
+
+    /// Get text value (returns default if not found)
+    pub fn getText(self: *const ValueState, element_id: []const u8, default: []const u8) []const u8 {
+        return self.text_values.get(element_id) orelse default;
+    }
+
     /// Clear all value overrides
     pub fn clear(self: *ValueState) void {
+        // Free allocated text values before clearing
+        var it = self.text_values.iterator();
+        while (it.next()) |entry| {
+            self.allocator.free(entry.value_ptr.*);
+        }
+        self.text_values.clearRetainingCapacity();
         self.checkbox_values.clearRetainingCapacity();
         self.slider_values.clearRetainingCapacity();
     }

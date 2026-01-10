@@ -122,6 +122,9 @@ pub const GuiBackend = gui.GuiBackend;
 pub const GuiElement = gui.GuiElement;
 pub const ViewRegistry = gui.ViewRegistry;
 pub const ViewDef = gui.ViewDef;
+pub const FormBinder = gui.FormBinder;
+pub const VisibilityState = gui.VisibilityState;
+pub const ValueState = gui.ValueState;
 
 /// Built-in component types for .zon prefab/scene files.
 pub const BuiltinComponents = struct {
