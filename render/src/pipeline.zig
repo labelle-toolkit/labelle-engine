@@ -86,6 +86,7 @@ const TrackedEntity = struct {
     position_dirty: bool = true,
     visual_dirty: bool = true,
     created: bool = false, // Has the visual been created in the engine?
+    is_gizmo: bool = false, // Cached: entity has Gizmo component (avoids repeated tryGet)
 };
 
 // ============================================
@@ -116,6 +117,32 @@ pub const RenderPipeline = struct {
         const EntityBits = std.meta.Int(.unsigned, @bitSizeOf(Entity));
         const bits: EntityBits = @bitCast(entity);
         return EntityId.from(@truncate(bits));
+    }
+
+    /// Resolve the graphics position for an entity.
+    /// For gizmo entities, this computes parent_position + gizmo_offset.
+    /// For regular entities, this returns the entity's own position.
+    fn resolveGfxPosition(registry: *Registry, entity: Entity) GfxPosition {
+        // Check if this is a gizmo with a parent entity
+        if (registry.tryGet(Gizmo, entity)) |gizmo| {
+            if (gizmo.parent_entity) |parent| {
+                // Resolve position from parent + offset
+                if (registry.tryGet(Position, parent)) |parent_pos| {
+                    return GfxPosition{
+                        .x = parent_pos.x + gizmo.offset_x,
+                        .y = parent_pos.y + gizmo.offset_y,
+                    };
+                }
+            }
+        }
+
+        // Regular entity - use its own position
+        if (registry.tryGet(Position, entity)) |pos| {
+            return pos.toGfx();
+        }
+
+        // No position found
+        return .{};
     }
 
     /// Start tracking an entity for rendering
@@ -179,7 +206,11 @@ pub const RenderPipeline = struct {
 
             // Handle new visuals (first time creation)
             if (!tracked.created) {
-                const pos: GfxPosition = if (registry.tryGet(Position, tracked.entity)) |p| p.toGfx() else .{};
+                // Cache whether this is a gizmo entity (avoids repeated tryGet on every frame)
+                tracked.is_gizmo = registry.tryGet(Gizmo, tracked.entity) != null;
+
+                // Resolve position - for gizmos, this uses parent position + offset
+                const pos = resolveGfxPosition(registry, tracked.entity);
 
                 var creation_succeeded = false;
                 switch (tracked.visual_type) {
@@ -250,17 +281,21 @@ pub const RenderPipeline = struct {
                 tracked.visual_dirty = false;
                 // Also update position if dirty
                 if (tracked.position_dirty) {
-                    if (registry.tryGet(Position, tracked.entity)) |pos| {
-                        self.engine.updatePosition(entity_id, pos.toGfx());
-                    }
+                    const pos = resolveGfxPosition(registry, tracked.entity);
+                    self.engine.updatePosition(entity_id, pos);
                     tracked.position_dirty = false;
                 }
             } else if (tracked.position_dirty and tracked.created) {
                 // Only position changed - but only update if visual was created
-                if (registry.tryGet(Position, tracked.entity)) |pos| {
-                    self.engine.updatePosition(entity_id, pos.toGfx());
-                }
+                // For gizmos, resolve position from parent + offset
+                const pos = resolveGfxPosition(registry, tracked.entity);
+                self.engine.updatePosition(entity_id, pos);
                 tracked.position_dirty = false;
+            } else if (tracked.created and tracked.is_gizmo) {
+                // Gizmo entities: always update position since they depend on parent
+                // This ensures gizmos follow their parent even when only the parent moves
+                const pos = resolveGfxPosition(registry, tracked.entity);
+                self.engine.updatePosition(entity_id, pos);
             }
         }
     }
