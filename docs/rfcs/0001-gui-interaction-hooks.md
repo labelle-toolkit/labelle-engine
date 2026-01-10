@@ -367,7 +367,6 @@ const WizardBinder = FormBinder(WizardFormState);
 
 pub fn text_input_changed(payload: GuiHookPayload) void {
     monster_binding.handleEvent(payload);
-    monster_binding.handleEvent(payload);
 }
 ```
 
@@ -522,11 +521,9 @@ const monster_binding = MonsterBinder.bind("monster_form", &monster_form_state);
 const MyGuiHandlers = struct {
     pub fn text_input_changed(payload: GuiHookPayload) void {
         monster_binding.handleEvent(payload);
-        monster_binding.handleEvent(payload);
     }
-    
+
     pub fn slider_changed(payload: GuiHookPayload) void {
-        monster_binding.handleEvent(payload);
         monster_binding.handleEvent(payload);
     }
     

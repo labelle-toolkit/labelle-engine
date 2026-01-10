@@ -392,8 +392,6 @@ pub fn button(self: *Self, btn: types.Button) bool {
   - Typical: 1-10 events/frame = ~1KB
   - Worst case: 100 events/frame = ~10KB
   - Mitigation: Use `clearRetainingCapacity()` to reuse allocations
-  - Worst case: 100 events/frame = ~10KB
-  - Mitigation: Use `clearRetainingCapacity()` to reuse allocations
 
 **Optimization tip**:
 ```zig

@@ -36,6 +36,7 @@ const WidgetCall = union(enum) {
 const InteractionResult = struct {
     clicked: bool = false,
     toggled: bool = false,
+    slider_changed: bool = false,
     new_value: f32 = 0,
 };
 
@@ -199,7 +200,7 @@ pub fn endFrame(self: *Self) void {
                         const relative_x = mouse_pos.x - sl.position.x;
                         const normalized = @max(0.0, @min(1.0, relative_x / sl.size.width));
                         const new_value = sl.min + normalized * (sl.max - sl.min);
-                        self.pending_interactions.put(id, .{ .new_value = new_value }) catch {};
+                        self.pending_interactions.put(id, .{ .slider_changed = true, .new_value = new_value }) catch {};
                     }
                 }
             },
@@ -276,7 +277,7 @@ pub fn slider(self: *Self, sl: types.Slider) f32 {
     // Otherwise return the input value unchanged
     if (sl.id) |id| {
         if (self.interaction_results.get(id)) |result| {
-            if (result.new_value != 0) {
+            if (result.slider_changed) {
                 return result.new_value;
             }
         }
