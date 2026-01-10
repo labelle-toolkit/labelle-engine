@@ -114,7 +114,8 @@ pub fn GuiHookDispatcher(comptime HookMap: type) type {
 /// Merge multiple GUI hook handler structs into a single dispatcher
 ///
 /// This function combines multiple GUI hook handler structs, allowing each handler
-/// function to be called when its event fires.
+/// function to be called when its event fires. Handler functions are auto-generated
+/// from the GuiHook enum fields at comptime.
 ///
 /// Example:
 /// ```zig
@@ -134,31 +135,27 @@ pub fn MergeGuiHooks(comptime handler_structs: anytype) type {
     }
 
     return struct {
-        pub fn button_clicked(payload: GuiHookPayload) void {
+        /// Internal helper that dispatches to all handlers for a given hook name
+        fn dispatchToHandlers(comptime hook_name: []const u8, payload: GuiHookPayload) void {
             inline for (handler_info.@"struct".fields) |field| {
                 const handler_struct = @field(handler_structs, field.name);
-                if (@hasDecl(@TypeOf(handler_struct), "button_clicked")) {
-                    @field(@TypeOf(handler_struct), "button_clicked")(payload);
+                if (@hasDecl(@TypeOf(handler_struct), hook_name)) {
+                    @field(@TypeOf(handler_struct), hook_name)(payload);
                 }
             }
+        }
+
+        // Auto-generate handler functions from GuiHook enum fields
+        pub fn button_clicked(payload: GuiHookPayload) void {
+            dispatchToHandlers("button_clicked", payload);
         }
 
         pub fn checkbox_changed(payload: GuiHookPayload) void {
-            inline for (handler_info.@"struct".fields) |field| {
-                const handler_struct = @field(handler_structs, field.name);
-                if (@hasDecl(@TypeOf(handler_struct), "checkbox_changed")) {
-                    @field(@TypeOf(handler_struct), "checkbox_changed")(payload);
-                }
-            }
+            dispatchToHandlers("checkbox_changed", payload);
         }
 
         pub fn slider_changed(payload: GuiHookPayload) void {
-            inline for (handler_info.@"struct".fields) |field| {
-                const handler_struct = @field(handler_structs, field.name);
-                if (@hasDecl(@TypeOf(handler_struct), "slider_changed")) {
-                    @field(@TypeOf(handler_struct), "slider_changed")(payload);
-                }
-            }
+            dispatchToHandlers("slider_changed", payload);
         }
     };
 }
@@ -167,3 +164,72 @@ pub fn MergeGuiHooks(comptime handler_structs: anytype) type {
 pub const EmptyGuiDispatcher = struct {
     pub fn emit(_: GuiHookPayload) void {}
 };
+
+// Unit tests
+test "MergeGuiHooks dispatches to all handlers" {
+    var handler1_called = false;
+    var handler2_called = false;
+
+    const Handler1 = struct {
+        var called: *bool = undefined;
+        pub fn slider_changed(_: GuiHookPayload) void {
+            called.* = true;
+        }
+    };
+    Handler1.called = &handler1_called;
+
+    const Handler2 = struct {
+        var called: *bool = undefined;
+        pub fn slider_changed(_: GuiHookPayload) void {
+            called.* = true;
+        }
+    };
+    Handler2.called = &handler2_called;
+
+    const Merged = MergeGuiHooks(.{ Handler1, Handler2 });
+    Merged.slider_changed(.{ .slider_changed = .{ .new_value = 0.5, .old_value = 0.0 } });
+
+    try std.testing.expect(handler1_called);
+    try std.testing.expect(handler2_called);
+}
+
+test "MergeGuiHooks skips handlers without matching decl" {
+    var handler1_called = false;
+
+    const Handler1 = struct {
+        var called: *bool = undefined;
+        pub fn button_clicked(_: GuiHookPayload) void {
+            called.* = true;
+        }
+    };
+    Handler1.called = &handler1_called;
+
+    // Handler2 has no button_clicked - should be skipped
+    const Handler2 = struct {
+        pub fn slider_changed(_: GuiHookPayload) void {}
+    };
+
+    const Merged = MergeGuiHooks(.{ Handler1, Handler2 });
+    Merged.button_clicked(.{ .button_clicked = .{} });
+
+    try std.testing.expect(handler1_called);
+}
+
+test "MergeGuiHooks works with GuiHookDispatcher" {
+    var handler_called = false;
+
+    const Handler = struct {
+        var called: *bool = undefined;
+        pub fn checkbox_changed(_: GuiHookPayload) void {
+            called.* = true;
+        }
+    };
+    Handler.called = &handler_called;
+
+    const Merged = MergeGuiHooks(.{Handler});
+    const Dispatcher = GuiHookDispatcher(Merged);
+
+    Dispatcher.emit(.{ .checkbox_changed = .{ .new_value = true, .old_value = false } });
+
+    try std.testing.expect(handler_called);
+}
