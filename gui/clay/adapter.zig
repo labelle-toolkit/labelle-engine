@@ -159,7 +159,7 @@ pub fn endFrame(self: *Self) void {
     for (self.widget_calls.items) |call| {
         switch (call) {
             .button => |btn| {
-                if (btn.id) |id| {
+                if (btn.id.len > 0) {
                     // Check if mouse is over this button's area and clicked
                     const rect = rl.Rectangle{
                         .x = btn.position.x,
@@ -168,12 +168,12 @@ pub fn endFrame(self: *Self) void {
                         .height = btn.size.height,
                     };
                     if (rl.checkCollisionPointRec(mouse_pos, rect) and mouse_pressed) {
-                        self.pending_interactions.put(id, .{ .clicked = true }) catch {};
+                        self.pending_interactions.put(btn.id, .{ .clicked = true }) catch {};
                     }
                 }
             },
             .checkbox => |cb| {
-                if (cb.id) |id| {
+                if (cb.id.len > 0) {
                     // Check if mouse is over this checkbox's area and clicked
                     const rect = rl.Rectangle{
                         .x = cb.position.x,
@@ -182,12 +182,12 @@ pub fn endFrame(self: *Self) void {
                         .height = 20,
                     };
                     if (rl.checkCollisionPointRec(mouse_pos, rect) and mouse_pressed) {
-                        self.pending_interactions.put(id, .{ .toggled = true }) catch {};
+                        self.pending_interactions.put(cb.id, .{ .toggled = true }) catch {};
                     }
                 }
             },
             .slider => |sl| {
-                if (sl.id) |id| {
+                if (sl.id.len > 0) {
                     // Check if mouse is dragging this slider
                     const rect = rl.Rectangle{
                         .x = sl.position.x,
@@ -200,7 +200,7 @@ pub fn endFrame(self: *Self) void {
                         const relative_x = mouse_pos.x - sl.position.x;
                         const normalized = @max(0.0, @min(1.0, relative_x / sl.size.width));
                         const new_value = sl.min + normalized * (sl.max - sl.min);
-                        self.pending_interactions.put(id, .{ .slider_changed = true, .new_value = new_value }) catch {};
+                        self.pending_interactions.put(sl.id, .{ .slider_changed = true, .new_value = new_value }) catch {};
                     }
                 }
             },
@@ -223,8 +223,8 @@ pub fn button(self: *Self, btn: types.Button) bool {
         std.debug.print("Failed to append button widget call\n", .{});
     };
     // Return click state from previous frame (one-frame delay due to collector pattern)
-    if (btn.id) |id| {
-        if (self.interaction_results.get(id)) |result| {
+    if (btn.id.len > 0) {
+        if (self.interaction_results.get(btn.id)) |result| {
             return result.clicked;
         }
     }
@@ -261,8 +261,8 @@ pub fn checkbox(self: *Self, cb: types.Checkbox) bool {
     };
     // Return toggled state from previous frame (one-frame delay due to collector pattern)
     // Returns true if checkbox was toggled this frame, false otherwise
-    if (cb.id) |id| {
-        if (self.interaction_results.get(id)) |result| {
+    if (cb.id.len > 0) {
+        if (self.interaction_results.get(cb.id)) |result| {
             return result.toggled;
         }
     }
@@ -275,8 +275,8 @@ pub fn slider(self: *Self, sl: types.Slider) f32 {
     };
     // Return new value from previous frame if slider was dragged (one-frame delay)
     // Otherwise return the input value unchanged
-    if (sl.id) |id| {
-        if (self.interaction_results.get(id)) |result| {
+    if (sl.id.len > 0) {
+        if (self.interaction_results.get(sl.id)) |result| {
             if (result.slider_changed) {
                 return result.new_value;
             }

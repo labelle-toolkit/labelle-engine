@@ -1,0 +1,24 @@
+// Wrapper build.zig.zon - delegates dependencies to .labelle/build.zig.zon
+// Run `zig build` from this directory to use the generated build configuration.
+.{
+    .fingerprint = 0xb45f19453a0355fb,
+    .name = .example_gui_sdl,
+    .version = "0.1.0",
+    .dependencies = .{
+        .@"labelle-engine" = .{
+            .path = "../..",
+        },
+        .sdl = .{
+            .url = "git+https://github.com/ikskuh/SDL.zig#a7e95b5fcc5b0d68921c148778609d2fe248c3d8",
+            .hash = "SDL2-0.0.0-yMCQivWqBABTfB8opAADsLCGxxu20vijLBW2hHdpTR-L",
+        },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "main.zig",
+        "project.labelle",
+        "scenes",
+        "gui",
+    },
+}
