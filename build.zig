@@ -31,6 +31,9 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
+    // Detect iOS target (raylib, SDL, etc. not supported on iOS)
+    const is_ios = target.result.os.tag == .ios;
+
     // Build options
     const backend = b.option(Backend, "backend", "Graphics backend to use (default: raylib)") orelse .raylib;
     const ecs_backend = b.option(EcsBackend, "ecs_backend", "ECS backend to use (default: zig_ecs)") orelse .zig_ecs;
@@ -50,6 +53,19 @@ pub fn build(b: *std.Build) void {
     });
     const zflecs_module = zflecs_dep.module("root");
 
+    // For iOS, add SDK paths to zflecs artifact (C library needs system headers)
+    if (is_ios) {
+        const ios_sdk_path = std.zig.system.darwin.getSdk(b.allocator, &target.result);
+        if (ios_sdk_path) |sdk| {
+            const zflecs_artifact = zflecs_dep.artifact("flecs");
+            const inc_path = b.pathJoin(&.{ sdk, "usr", "include" });
+            const lib_path = b.pathJoin(&.{ sdk, "usr", "lib" });
+
+            zflecs_artifact.root_module.addSystemIncludePath(.{ .cwd_relative = inc_path });
+            zflecs_artifact.root_module.addLibraryPath(.{ .cwd_relative = lib_path });
+        }
+    }
+
     // mr_ecs module - only loaded when explicitly selected (requires Zig 0.16+)
     const mr_ecs_module: ?*std.Build.Module = if (ecs_backend == .mr_ecs) blk: {
         const mr_ecs_dep = b.dependency("mr_ecs", .{
@@ -65,56 +81,86 @@ pub fn build(b: *std.Build) void {
     });
     const labelle = labelle_dep.module("labelle");
 
-    // raylib module - get from labelle-gfx's re-exported module
+    // raylib module - get from labelle-gfx's re-exported module (not available on iOS)
     // labelle-gfx uses the raylib-zig fork with getGLFWWindow() for ImGui integration
-    const raylib = labelle_dep.builder.modules.get("raylib").?;
+    const raylib: ?*std.Build.Module = if (!is_ios) labelle_dep.builder.modules.get("raylib") else null;
 
     // sokol dependency - DO NOT pass with_sokol_imgui here as it changes the
     // dependency hash and conflicts with labelle-gfx's sokol. For ImGui support,
     // we'll compile sokol_imgui separately (similar to rlImGui approach).
+    // For iOS, we need to pass dont_link_system_libs and handle SDK paths manually.
     const sokol_dep = b.dependency("sokol", .{
         .target = target,
         .optimize = optimize,
+        .dont_link_system_libs = is_ios,
     });
     const sokol = sokol_dep.module("sokol");
 
-    // SDL module - get from labelle-gfx's re-exported module
+    // For iOS, add SDK paths to sokol_clib artifact
+    // Workaround for Zig bug #22704 where sysroot doesn't affect framework search paths
+    if (is_ios) {
+        const ios_sdk_path = std.zig.system.darwin.getSdk(b.allocator, &target.result);
+        if (ios_sdk_path) |sdk| {
+            const sokol_clib = sokol_dep.artifact("sokol_clib");
+            const fw_path = b.pathJoin(&.{ sdk, "System", "Library", "Frameworks" });
+            const subfw_path = b.pathJoin(&.{ sdk, "System", "Library", "SubFrameworks" });
+            const inc_path = b.pathJoin(&.{ sdk, "usr", "include" });
+            const lib_path = b.pathJoin(&.{ sdk, "usr", "lib" });
+
+            sokol_clib.root_module.addSystemIncludePath(.{ .cwd_relative = inc_path });
+            sokol_clib.root_module.addSystemFrameworkPath(.{ .cwd_relative = fw_path });
+            sokol_clib.root_module.addSystemFrameworkPath(.{ .cwd_relative = subfw_path });
+            sokol_clib.root_module.addLibraryPath(.{ .cwd_relative = lib_path });
+        }
+    }
+
+    // SDL module - get from labelle-gfx's re-exported module (not available on iOS)
     // labelle-gfx v0.15.0+ re-exports SDL to avoid Zig module conflicts
-    const sdl = labelle_dep.builder.modules.get("sdl").?;
+    const sdl: ?*std.Build.Module = if (!is_ios) labelle_dep.builder.modules.get("sdl") else null;
 
-    // zbgfx and zgpu - get from labelle-gfx's transitive dependencies
-    const zbgfx_dep = labelle_dep.builder.dependency("zbgfx", .{
-        .target = target,
-        .optimize = optimize,
-    });
-    const zbgfx = zbgfx_dep.module("zbgfx");
+    // zbgfx, zgpu, wgpu_native, zglfw - not available on iOS
+    const zbgfx: ?*std.Build.Module = if (!is_ios) blk: {
+        const zbgfx_dep = labelle_dep.builder.dependency("zbgfx", .{
+            .target = target,
+            .optimize = optimize,
+        });
+        break :blk zbgfx_dep.module("zbgfx");
+    } else null;
 
-    const zgpu_dep = labelle_dep.builder.dependency("zgpu", .{
-        .target = target,
-        .optimize = optimize,
-    });
-    const zgpu = zgpu_dep.module("root");
+    const zgpu: ?*std.Build.Module = if (!is_ios) blk: {
+        const zgpu_dep = labelle_dep.builder.dependency("zgpu", .{
+            .target = target,
+            .optimize = optimize,
+        });
+        break :blk zgpu_dep.module("root");
+    } else null;
 
     // wgpu_native - lower-level WebGPU bindings (alternative to zgpu)
-    const wgpu_native_dep = labelle_dep.builder.dependency("wgpu_native_zig", .{
-        .target = target,
-        .optimize = optimize,
-    });
-    const wgpu_native = wgpu_native_dep.module("wgpu");
+    const wgpu_native: ?*std.Build.Module = if (!is_ios) blk: {
+        const wgpu_native_dep = labelle_dep.builder.dependency("wgpu_native_zig", .{
+            .target = target,
+            .optimize = optimize,
+        });
+        break :blk wgpu_native_dep.module("wgpu");
+    } else null;
 
-    // zglfw - GLFW bindings for zgpu/wgpu_native
-    const zglfw_dep = labelle_dep.builder.dependency("zglfw", .{
-        .target = target,
-        .optimize = optimize,
-    });
-    const zglfw = zglfw_dep.module("root");
+    // zglfw - GLFW bindings for zgpu/wgpu_native (not available on iOS)
+    const zglfw: ?*std.Build.Module = if (!is_ios) blk: {
+        const zglfw_dep = labelle_dep.builder.dependency("zglfw", .{
+            .target = target,
+            .optimize = optimize,
+        });
+        break :blk zglfw_dep.module("root");
+    } else null;
 
     // zaudio (miniaudio wrapper) for sokol/SDL audio backends
-    const zaudio_dep = b.dependency("zaudio", .{
+    // Note: zaudio is disabled on iOS because miniaudio requires Objective-C compilation
+    // for AVFoundation.h, but zaudio compiles it as C. Will need Sokol audio backend for iOS.
+    const zaudio_dep: ?*std.Build.Dependency = if (!is_ios) b.dependency("zaudio", .{
         .target = target,
         .optimize = optimize,
-    });
-    const zaudio = zaudio_dep.module("root");
+    }) else null;
+    const zaudio: ?*std.Build.Module = if (zaudio_dep) |dep| dep.module("root") else null;
 
     const zspec_dep = b.dependency("zspec", .{
         .target = target,
@@ -141,6 +187,7 @@ pub fn build(b: *std.Build) void {
     build_options.addOption(EcsBackend, "ecs_backend", ecs_backend);
     build_options.addOption(GuiBackend, "gui_backend", gui_backend);
     build_options.addOption(bool, "physics_enabled", physics_enabled);
+    build_options.addOption(bool, "is_ios", is_ios);
     const build_options_mod = build_options.createModule();
 
     // Physics module (optional, enabled with -Dphysics=true)
@@ -177,16 +224,20 @@ pub fn build(b: *std.Build) void {
     }
 
     // Create the Input interface module that wraps the selected backend
+    // Imports are conditional based on platform (iOS only has sokol)
     const input_interface = b.addModule("input", .{
         .root_source_file = b.path("input/interface.zig"),
         .target = target,
         .optimize = optimize,
-        .imports = &.{
+        .imports = if (!is_ios) &.{
             .{ .name = "build_options", .module = build_options_mod },
-            .{ .name = "raylib", .module = raylib },
+            .{ .name = "raylib", .module = raylib.? },
             .{ .name = "sokol", .module = sokol },
-            .{ .name = "sdl2", .module = sdl },
-            .{ .name = "zglfw", .module = zglfw }, // For zgpu/wgpu_native input
+            .{ .name = "sdl2", .module = sdl.? },
+            .{ .name = "zglfw", .module = zglfw.? }, // For zgpu/wgpu_native input
+        } else &.{
+            .{ .name = "build_options", .module = build_options_mod },
+            .{ .name = "sokol", .module = sokol },
         },
     });
 
@@ -203,20 +254,30 @@ pub fn build(b: *std.Build) void {
     });
 
     // Create the Audio interface module that wraps the selected backend
+    // On iOS, uses sokol_audio backend (no zaudio - miniaudio requires Objective-C for AVFoundation)
     const audio_interface = b.addModule("audio", .{
         .root_source_file = b.path("audio/interface.zig"),
         .target = target,
         .optimize = optimize,
-        .imports = &.{
+        .imports = if (!is_ios) &.{
             .{ .name = "build_options", .module = build_options_mod },
-            .{ .name = "raylib", .module = raylib },
-            .{ .name = "zaudio", .module = zaudio },
+            .{ .name = "raylib", .module = raylib.? },
+            .{ .name = "zaudio", .module = zaudio.? },
+        } else &.{
+            // iOS: uses sokol_audio backend
+            .{ .name = "build_options", .module = build_options_mod },
+            .{ .name = "sokol", .module = sokol },
         },
     });
 
-    // Link miniaudio library for audio module (only needed for sokol/SDL backends)
-    if (backend != .raylib) {
-        audio_interface.linkLibrary(zaudio_dep.artifact("miniaudio"));
+    // Link miniaudio library for audio module (only needed for sokol/SDL backends, not iOS)
+    if (backend != .raylib and zaudio_dep != null) {
+        audio_interface.linkLibrary(zaudio_dep.?.artifact("miniaudio"));
+    }
+
+    // Link sokol library for iOS audio (sokol_audio backend)
+    if (is_ios) {
+        audio_interface.linkLibrary(sokol_dep.artifact("sokol_clib"));
     }
 
     // Nuklear module (optional, loaded when gui_backend is nuklear)
@@ -287,20 +348,26 @@ pub fn build(b: *std.Build) void {
     } else null;
 
     // Create the GUI interface module that wraps the selected backend
+    // Imports are conditional based on platform (iOS only has sokol)
     const gui_interface = b.addModule("gui", .{
         .root_source_file = b.path("gui/mod.zig"),
         .target = target,
         .optimize = optimize,
-        .imports = &.{
+        .imports = if (!is_ios) &.{
             .{ .name = "build_options", .module = build_options_mod },
-            .{ .name = "raylib", .module = raylib },
+            .{ .name = "raylib", .module = raylib.? },
             .{ .name = "sokol", .module = sokol },
-            .{ .name = "sdl2", .module = sdl },
-            .{ .name = "zbgfx", .module = zbgfx },
-            .{ .name = "zgpu", .module = zgpu },
-            .{ .name = "wgpu", .module = wgpu_native }, // For wgpu_native ImGui adapter
+            .{ .name = "sdl2", .module = sdl.? },
+            .{ .name = "zbgfx", .module = zbgfx.? },
+            .{ .name = "zgpu", .module = zgpu.? },
+            .{ .name = "wgpu", .module = wgpu_native.? }, // For wgpu_native ImGui adapter
             .{ .name = "labelle", .module = labelle }, // For zgpu/wgpu_native context access
-            .{ .name = "zglfw", .module = zglfw }, // For GLFW window access
+            .{ .name = "zglfw", .module = zglfw.? }, // For GLFW window access
+            .{ .name = "zclay", .module = zclay },
+        } else &.{
+            .{ .name = "build_options", .module = build_options_mod },
+            .{ .name = "sokol", .module = sokol },
+            .{ .name = "labelle", .module = labelle },
             .{ .name = "zclay", .module = zclay },
         },
     });
@@ -438,8 +505,19 @@ pub fn build(b: *std.Build) void {
 
     // Compile imgui_impl_wgpu.cpp for wgpu_native backend
     // wgpu_native needs IMGUI_IMPL_WEBGPU_BACKEND_WGPU define (not Dawn)
+    // Not available on iOS
     if (zgui_dep) |dep| {
-        if (backend == .wgpu_native) {
+        if (backend == .wgpu_native and !is_ios) {
+            // Fetch wgpu_native and zglfw dependencies here since they're not available on iOS
+            const local_wgpu_native_dep = labelle_dep.builder.dependency("wgpu_native_zig", .{
+                .target = target,
+                .optimize = optimize,
+            });
+            const local_zglfw_dep = labelle_dep.builder.dependency("zglfw", .{
+                .target = target,
+                .optimize = optimize,
+            });
+
             // Get wgpu_native's include path from the target-specific dependency
             // wgpu_native_zig uses lazy dependencies like "wgpu_macos_aarch64_release"
             // We need to compute the same target name to get the headers
@@ -467,12 +545,12 @@ pub fn build(b: *std.Build) void {
             const wgpu_target_name = std.mem.concatWithSentinel(b.allocator, u8, &target_name_slices, 0) catch @panic("OOM");
 
             // Get the wgpu binary package through wgpu_native_zig's builder
-            const wgpu_binary_dep = wgpu_native_dep.builder.lazyDependency(wgpu_target_name, .{});
+            const wgpu_binary_dep = local_wgpu_native_dep.builder.lazyDependency(wgpu_target_name, .{});
             const wgpu_include_path = if (wgpu_binary_dep) |wdep|
                 wdep.path("include")
             else blk: {
                 std.log.warn("Could not find wgpu binary dependency '{s}' for ImGui backend", .{wgpu_target_name});
-                break :blk wgpu_native_dep.path("include"); // Fallback (will fail at compile time)
+                break :blk local_wgpu_native_dep.path("include"); // Fallback (will fail at compile time)
             };
 
             // Create a module for ImGui wgpu_native backend sources
@@ -504,7 +582,7 @@ pub fn build(b: *std.Build) void {
             // Add include paths
             imgui_wgpu_mod.addIncludePath(dep.path("libs/imgui")); // ImGui headers
             imgui_wgpu_mod.addIncludePath(wgpu_include_path); // wgpu_native WebGPU headers
-            imgui_wgpu_mod.addIncludePath(zglfw_dep.path("libs/glfw/include")); // GLFW headers
+            imgui_wgpu_mod.addIncludePath(local_zglfw_dep.path("libs/glfw/include")); // GLFW headers
 
             // Link against zgui's imgui library for core ImGui symbols
             imgui_wgpu_mod.linkLibrary(dep.artifact("imgui"));
@@ -522,7 +600,7 @@ pub fn build(b: *std.Build) void {
             gui_interface.addIncludePath(dep.path("libs/imgui"));
             gui_interface.addIncludePath(dep.path("libs/imgui/backends"));
             gui_interface.addIncludePath(wgpu_include_path);
-            gui_interface.addIncludePath(zglfw_dep.path("libs/glfw/include"));
+            gui_interface.addIncludePath(local_zglfw_dep.path("libs/glfw/include"));
         }
     }
 

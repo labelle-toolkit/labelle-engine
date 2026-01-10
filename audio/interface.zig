@@ -4,8 +4,9 @@
 //! The backend is chosen at build time based on the graphics backend.
 //!
 //! Note: All backends have audio support. Raylib uses its native audio
-//! system; sokol and SDL use the miniaudio backend via zaudio. The
-//! AudioNotSupported error is only returned if audio initialization fails.
+//! system; desktop sokol/SDL use the miniaudio backend via zaudio.
+//! iOS uses sokol_audio with a built-in WAV decoder (miniaudio requires
+//! Objective-C compilation for AVFoundation which is not supported).
 //!
 //! Usage:
 //!   const audio = @import("audio");
@@ -156,9 +157,15 @@ pub fn AudioInterface(comptime Impl: type) type {
     };
 }
 
+/// Whether targeting iOS
+pub const is_ios: bool = build_options.is_ios;
+
 // Select and validate audio backend based on graphics backend
 // Raylib has its own audio system; sokol, SDL, bgfx, zgpu, and wgpu_native use miniaudio via zaudio
-const BackendImpl = switch (backend) {
+// iOS: uses sokol_audio with built-in WAV decoder (miniaudio requires Objective-C for AVFoundation)
+const BackendImpl = if (is_ios)
+    @import("sokol_audio.zig")
+else switch (backend) {
     .raylib => @import("raylib_audio.zig"),
     .sokol => @import("miniaudio_audio.zig"),
     .sdl => @import("miniaudio_audio.zig"),
