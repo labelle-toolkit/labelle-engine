@@ -44,6 +44,8 @@ pub const Label = struct {
     font_size: f32 = 16,
     /// Text color
     color: Color = .{},
+    /// Visibility flag (for conditional rendering)
+    visible: bool = true,
 };
 
 /// Clickable button element
@@ -58,6 +60,8 @@ pub const Button = struct {
     size: Size = .{ .width = 100, .height = 30 },
     /// Script callback name (called on click)
     on_click: ?[]const u8 = null,
+    /// Visibility flag (for conditional rendering)
+    visible: bool = true,
 };
 
 /// Progress bar element
@@ -72,6 +76,8 @@ pub const ProgressBar = struct {
     value: f32 = 0,
     /// Fill color
     color: Color = .{ .r = 0, .g = 200, .b = 0 },
+    /// Visibility flag (for conditional rendering)
+    visible: bool = true,
 };
 
 /// Container panel element
@@ -86,6 +92,8 @@ pub const Panel = struct {
     background_color: Color = .{ .r = 50, .g = 50, .b = 50, .a = 200 },
     /// Child elements (rendered inside panel)
     children: []const GuiElement = &.{},
+    /// Visibility flag (for conditional rendering)
+    visible: bool = true,
 };
 
 /// Image element
@@ -100,6 +108,8 @@ pub const Image = struct {
     size: ?Size = null,
     /// Tint color
     tint: Color = .{},
+    /// Visibility flag (for conditional rendering)
+    visible: bool = true,
 };
 
 /// Checkbox element
@@ -114,6 +124,8 @@ pub const Checkbox = struct {
     checked: bool = false,
     /// Script callback name (called on toggle)
     on_change: ?[]const u8 = null,
+    /// Visibility flag (for conditional rendering)
+    visible: bool = true,
 };
 
 /// Slider element
@@ -132,6 +144,8 @@ pub const Slider = struct {
     max: f32 = 1,
     /// Script callback name (called on change)
     on_change: ?[]const u8 = null,
+    /// Visibility flag (for conditional rendering)
+    visible: bool = true,
 };
 
 /// Union of all GUI element types
@@ -168,5 +182,31 @@ pub const GuiElement = union(enum) {
             .Checkbox => |e| e.position,
             .Slider => |e| e.position,
         };
+    }
+
+    /// Get the visibility of this element
+    pub fn isVisible(self: GuiElement) bool {
+        return switch (self) {
+            .Label => |e| e.visible,
+            .Button => |e| e.visible,
+            .ProgressBar => |e| e.visible,
+            .Panel => |e| e.visible,
+            .Image => |e| e.visible,
+            .Checkbox => |e| e.visible,
+            .Slider => |e| e.visible,
+        };
+    }
+
+    /// Set the visibility of this element
+    pub fn setVisible(self: *GuiElement, visible: bool) void {
+        switch (self.*) {
+            .Label => |*e| e.visible = visible,
+            .Button => |*e| e.visible = visible,
+            .ProgressBar => |*e| e.visible = visible,
+            .Panel => |*e| e.visible = visible,
+            .Image => |*e| e.visible = visible,
+            .Checkbox => |*e| e.visible = visible,
+            .Slider => |*e| e.visible = visible,
+        }
     }
 };

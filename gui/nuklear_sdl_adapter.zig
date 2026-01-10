@@ -9,6 +9,9 @@ const std = @import("std");
 const types = @import("types.zig");
 const nk = @import("nuklear");
 const sdl = @import("sdl2");
+const labelle = @import("labelle");
+
+const SdlBackend = labelle.SdlBackend;
 
 const Self = @This();
 
@@ -103,7 +106,9 @@ fn createFontTexture(self: *Self) void {
 
     // Create SDL texture using wrapper API
     const tex = sdl.createTexture(renderer, .abgr8888, .static, width, height) catch return;
-    tex.update(pixels, width * 4, null) catch {};
+    // Cast [4]u8 array to byte slice for SDL texture update
+    const pixel_bytes: []const u8 = @as([*]const u8, @ptrCast(pixels.ptr))[0 .. pixels.len * 4];
+    tex.update(pixel_bytes, width * 4, null) catch {};
     tex.setBlendMode(.blend) catch {};
     self.font_texture = tex;
 
@@ -120,6 +125,14 @@ fn createFontTexture(self: *Self) void {
 
 pub fn beginFrame(self: *Self) void {
     self.window_counter = 0;
+
+    // Lazy init - get renderer from SdlBackend if not set
+    if (self.renderer == null) {
+        if (SdlBackend.getRenderer()) |sdl_renderer| {
+            self.renderer = sdl.Renderer{ .ptr = @ptrCast(sdl_renderer.ptr) };
+            self.createFontTexture();
+        }
+    }
 
     // Skip if context not initialized yet
     if (!self.nk_state.atlas_finalized) return;
@@ -282,6 +295,8 @@ fn nextWindowName(self: *Self, buf: []u8) [:0]const u8 {
 }
 
 pub fn label(self: *Self, lbl: types.Label) void {
+    if (!self.nk_state.atlas_finalized) return;
+
     if (self.panel_depth > 0) {
         nk.c.nk_layout_row_dynamic(&self.nk_state.ctx.c, lbl.font_size, 1);
         nk.c.nk_text_colored(
@@ -317,6 +332,8 @@ pub fn label(self: *Self, lbl: types.Label) void {
 }
 
 pub fn button(self: *Self, btn: types.Button) bool {
+    if (!self.nk_state.atlas_finalized) return false;
+
     if (self.panel_depth > 0) {
         nk.c.nk_layout_row_dynamic(&self.nk_state.ctx.c, btn.size.height - 8, 1);
         return nk.c.nk_button_text(&self.nk_state.ctx.c, btn.text.ptr, @intCast(btn.text.len));
@@ -343,6 +360,8 @@ pub fn button(self: *Self, btn: types.Button) bool {
 }
 
 pub fn progressBar(self: *Self, bar: types.ProgressBar) void {
+    if (!self.nk_state.atlas_finalized) return;
+
     if (self.panel_depth > 0) {
         nk.c.nk_layout_row_dynamic(&self.nk_state.ctx.c, bar.size.height - 8, 1);
         var value: nk.c.nk_size = @intFromFloat(bar.value * 100);
@@ -368,6 +387,8 @@ pub fn progressBar(self: *Self, bar: types.ProgressBar) void {
 }
 
 pub fn beginPanel(self: *Self, panel: types.Panel) void {
+    if (!self.nk_state.atlas_finalized) return;
+
     var name_buf: [32]u8 = undefined;
     const name = self.nextWindowName(&name_buf);
 
@@ -383,6 +404,8 @@ pub fn beginPanel(self: *Self, panel: types.Panel) void {
 }
 
 pub fn endPanel(self: *Self) void {
+    if (!self.nk_state.atlas_finalized) return;
+
     self.panel_depth -= 1;
     nk.c.nk_end(&self.nk_state.ctx.c);
 }
@@ -393,13 +416,15 @@ pub fn image(self: *Self, img: types.Image) void {
 }
 
 pub fn checkbox(self: *Self, cb: types.Checkbox) bool {
-    var checked = cb.checked;
+    if (!self.nk_state.atlas_finalized) return false;
+
+    var changed = false;
 
     if (self.panel_depth > 0) {
         nk.c.nk_layout_row_dynamic(&self.nk_state.ctx.c, 22, 1);
-        var active: bool = checked;
+        var active: bool = cb.checked;
         if (nk.c.nk_checkbox_label(&self.nk_state.ctx.c, cb.text.ptr, &active)) {
-            checked = active;
+            changed = true;
         }
     } else {
         var name_buf: [32]u8 = undefined;
@@ -415,18 +440,20 @@ pub fn checkbox(self: *Self, cb: types.Checkbox) bool {
 
         if (self.nk_state.ctx.begin(name, rect, .{ .no_scrollbar = true, .background = true })) |win| {
             win.layoutRowDynamic(22, 1);
-            var active: bool = checked;
+            var active: bool = cb.checked;
             if (nk.c.nk_checkbox_label(&self.nk_state.ctx.c, cb.text.ptr, &active)) {
-                checked = active;
+                changed = true;
             }
             win.end();
         }
     }
 
-    return checked;
+    return changed;
 }
 
 pub fn slider(self: *Self, sl: types.Slider) f32 {
+    if (!self.nk_state.atlas_finalized) return sl.value;
+
     var value = sl.value;
     const range = sl.max - sl.min;
     const step = range / 100.0;

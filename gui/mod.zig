@@ -23,6 +23,8 @@
 //! game.renderGui(Scripts);
 //! ```
 
+const root = @import("labelle-engine");
+
 // Backend interface
 pub const interface = @import("interface.zig");
 pub const Gui = interface.Gui;
@@ -48,8 +50,32 @@ pub const ViewRegistry = view.ViewRegistry;
 pub const ViewDef = view.ViewDef;
 pub const EmptyViewRegistry = view.EmptyViewRegistry;
 
+// Hook system for GUI interactions
+pub const hooks = root.gui_hooks;
+pub const GuiHook = hooks.GuiHook;
+pub const GuiHookPayload = hooks.GuiHookPayload;
+pub const GuiHookDispatcher = hooks.GuiHookDispatcher;
+pub const MergeGuiHooks = hooks.MergeGuiHooks;
+pub const EmptyGuiDispatcher = hooks.EmptyGuiDispatcher;
+pub const ButtonClickedInfo = hooks.ButtonClickedInfo;
+pub const CheckboxChangedInfo = hooks.CheckboxChangedInfo;
+pub const SliderChangedInfo = hooks.SliderChangedInfo;
+pub const MousePosition = hooks.MousePosition;
+
+// Form state management
+pub const form_binder = @import("form_binder.zig");
+pub const FormBinder = form_binder.FormBinder;
+
+// Runtime state management
+pub const runtime_state = @import("runtime_state.zig");
+pub const VisibilityState = runtime_state.VisibilityState;
+pub const ValueState = runtime_state.ValueState;
+
 // Tests
 test {
     _ = @import("view.zig");
     _ = @import("types.zig");
+    _ = root.gui_hooks;
+    _ = @import("form_binder.zig");
+    _ = @import("runtime_state.zig");
 }

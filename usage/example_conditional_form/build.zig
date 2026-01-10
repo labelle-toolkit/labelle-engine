@@ -4,7 +4,6 @@ const std = @import("std");
 pub const Backend = enum {
     raylib,
     sokol,
-    wgpu_native,
 };
 
 /// ECS backend selection
@@ -18,8 +17,6 @@ pub const GuiBackend = enum {
     none,
     raygui,
     microui,
-    nuklear,
-    imgui,
 };
 
 pub fn build(b: *std.Build) void {
@@ -32,76 +29,37 @@ pub fn build(b: *std.Build) void {
     const gui_backend = b.option(GuiBackend, "gui_backend", "GUI backend (default: raygui)") orelse .raygui;
 
     // Default run step with custom options
-    const default_exe = createExecutable(b, target, optimize, backend, ecs_backend, gui_backend, "example_gui");
+    const default_exe = createExecutable(b, target, optimize, backend, ecs_backend, gui_backend, "example_conditional_form");
     const run_step = b.step("run", "Run with selected backends (use -Dbackend=, -Dgui_backend=)");
     run_step.dependOn(&b.addRunArtifact(default_exe).step);
 
     // Convenience run steps for common backend combinations
     // Raylib + Raygui (default)
-    const raylib_raygui = createExecutable(b, target, optimize, .raylib, .zig_ecs, .raygui, "example_gui_raylib_raygui");
+    const raylib_raygui = createExecutable(b, target, optimize, .raylib, .zig_ecs, .raygui, "example_conditional_form_raylib_raygui");
     const run_raylib_raygui = b.step("run-raylib-raygui", "Run with raylib + raygui");
     run_raylib_raygui.dependOn(&b.addRunArtifact(raylib_raygui).step);
 
     // Raylib + Microui
-    const raylib_microui = createExecutable(b, target, optimize, .raylib, .zig_ecs, .microui, "example_gui_raylib_microui");
+    const raylib_microui = createExecutable(b, target, optimize, .raylib, .zig_ecs, .microui, "example_conditional_form_raylib_microui");
     const run_raylib_microui = b.step("run-raylib-microui", "Run with raylib + microui");
     run_raylib_microui.dependOn(&b.addRunArtifact(raylib_microui).step);
 
     // Sokol + Raygui
-    const sokol_raygui = createExecutable(b, target, optimize, .sokol, .zig_ecs, .raygui, "example_gui_sokol_raygui");
+    const sokol_raygui = createExecutable(b, target, optimize, .sokol, .zig_ecs, .raygui, "example_conditional_form_sokol_raygui");
     const run_sokol_raygui = b.step("run-sokol-raygui", "Run with sokol + raygui");
     run_sokol_raygui.dependOn(&b.addRunArtifact(sokol_raygui).step);
 
     // Sokol + Microui
-    const sokol_microui = createExecutable(b, target, optimize, .sokol, .zig_ecs, .microui, "example_gui_sokol_microui");
+    const sokol_microui = createExecutable(b, target, optimize, .sokol, .zig_ecs, .microui, "example_conditional_form_sokol_microui");
     const run_sokol_microui = b.step("run-sokol-microui", "Run with sokol + microui");
     run_sokol_microui.dependOn(&b.addRunArtifact(sokol_microui).step);
-
-    // Raylib + Nuklear
-    const raylib_nuklear = createExecutable(b, target, optimize, .raylib, .zig_ecs, .nuklear, "example_gui_raylib_nuklear");
-    const run_raylib_nuklear = b.step("run-raylib-nuklear", "Run with raylib + nuklear");
-    run_raylib_nuklear.dependOn(&b.addRunArtifact(raylib_nuklear).step);
-
-    // Sokol + Nuklear
-    const sokol_nuklear = createExecutable(b, target, optimize, .sokol, .zig_ecs, .nuklear, "example_gui_sokol_nuklear");
-    const run_sokol_nuklear = b.step("run-sokol-nuklear", "Run with sokol + nuklear");
-    run_sokol_nuklear.dependOn(&b.addRunArtifact(sokol_nuklear).step);
-
-    // Raylib + ImGui
-    const raylib_imgui = createExecutable(b, target, optimize, .raylib, .zig_ecs, .imgui, "example_gui_raylib_imgui");
-    const run_raylib_imgui = b.step("run-raylib-imgui", "Run with raylib + imgui");
-    run_raylib_imgui.dependOn(&b.addRunArtifact(raylib_imgui).step);
-
-    // Sokol + ImGui
-    const sokol_imgui = createExecutable(b, target, optimize, .sokol, .zig_ecs, .imgui, "example_gui_sokol_imgui");
-    const run_sokol_imgui = b.step("run-sokol-imgui", "Run with sokol + imgui");
-    run_sokol_imgui.dependOn(&b.addRunArtifact(sokol_imgui).step);
-
-    // WGPU Native + Nuklear
-    const wgpu_nuklear = createExecutable(b, target, optimize, .wgpu_native, .zig_ecs, .nuklear, "example_gui_wgpu_nuklear");
-    const run_wgpu_nuklear = b.step("run-wgpu-nuklear", "Run with wgpu_native + nuklear");
-    run_wgpu_nuklear.dependOn(&b.addRunArtifact(wgpu_nuklear).step);
-
-    // WGPU Native + ImGui
-    const wgpu_imgui = createExecutable(b, target, optimize, .wgpu_native, .zig_ecs, .imgui, "example_gui_wgpu_imgui");
-    const run_wgpu_imgui = b.step("run-wgpu-imgui", "Run with wgpu_native + imgui");
-    run_wgpu_imgui.dependOn(&b.addRunArtifact(wgpu_imgui).step);
 
     // Shortcut aliases
     const run_microui = b.step("run-microui", "Alias for run-raylib-microui");
     run_microui.dependOn(run_raylib_microui);
 
-    const run_nuklear = b.step("run-nuklear", "Alias for run-raylib-nuklear");
-    run_nuklear.dependOn(run_raylib_nuklear);
-
     const run_sokol = b.step("run-sokol", "Alias for run-sokol-raygui");
     run_sokol.dependOn(run_sokol_raygui);
-
-    const run_imgui = b.step("run-imgui", "Alias for run-raylib-imgui");
-    run_imgui.dependOn(run_raylib_imgui);
-
-    const run_wgpu = b.step("run-wgpu", "Alias for run-wgpu-nuklear");
-    run_wgpu.dependOn(run_wgpu_nuklear);
 }
 
 fn createExecutable(

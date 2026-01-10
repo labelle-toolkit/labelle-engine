@@ -14,8 +14,8 @@
             .hash = "zflecs-0.2.0-dev-1PN3ym9mOgCyE8w0DdK_Uf7FAob-nm0Dp_lZKR3QyJaC",
         },
         .@"labelle-gfx" = .{
-            .url = "git+https://github.com/labelle-toolkit/labelle-gfx#v0.27.0",
-            .hash = "labelle_gfx-0.27.0-WZ2XcOffCwCrt2lc77nldt1fAHznbxxqvBo_mbrhi4Ec",
+            .url = "git+https://github.com/labelle-toolkit/labelle-gfx#v0.27.1",
+            .hash = "labelle_gfx-0.27.1-WZ2XcFTqCwACXSxUsYj3D5T9RUsCtEMJ_lpcZkoGFM7P",
         },
         .zspec = .{
             .url = "git+https://github.com/apotema/zspec#71c901d6e74b2d5a8c556d4c74ced9b91446d8a4",
@@ -53,8 +53,8 @@
         // GUI - Dear ImGui (industry standard immediate-mode GUI)
         // Using labelle-toolkit fork with Dawn WebGPU backend fix
         .zgui = .{
-            .url = "git+https://github.com/labelle-toolkit/zgui#716efbd8631562daf8f86e094c6d47c4e5d86ce2",
-            .hash = "zgui-0.6.0-dev--L6sZHD4bQD-lWVOLJkhLeabyi4-FmgFoESvgnCQ4i6k",
+            .url = "git+https://github.com/labelle-toolkit/zgui#dfff0f2590a8bad28bbcf5ca6c9ff36c07c73304",
+            .hash = "zgui-0.6.0-dev--L6sZMT2bQDdl7CAIdoY15v4bF6MeIR5o3Jdn_hM06it",
         },
         // GUI - rlImGui (raylib + ImGui integration)
         // Bridges raylib input/rendering with ImGui - avoids GLFW symbol conflicts

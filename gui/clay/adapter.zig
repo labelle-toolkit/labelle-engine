@@ -32,6 +32,14 @@ const WidgetCall = union(enum) {
     slider: types.Slider,
 };
 
+/// Interaction result from previous frame (used for deferred return values)
+const InteractionResult = struct {
+    clicked: bool = false,
+    toggled: bool = false,
+    slider_changed: bool = false,
+    new_value: f32 = 0,
+};
+
 // Clay memory and context
 memory: []u8 = &.{},
 allocator: std.mem.Allocator = undefined,
@@ -40,6 +48,10 @@ initialized: bool = false,
 // Collector pattern storage
 widget_calls: std.ArrayList(WidgetCall) = undefined,
 gpa: std.heap.GeneralPurposeAllocator(.{}) = undefined,
+
+// Interaction tracking (deferred results from previous frame)
+interaction_results: std.StringHashMap(InteractionResult) = undefined,
+pending_interactions: std.StringHashMap(InteractionResult) = undefined,
 
 // Screen dimensions
 screen_width: f32 = 1920,
@@ -58,6 +70,8 @@ pub fn fixPointers(_: *Self) void {
 pub fn deinit(self: *Self) void {
     if (self.initialized) {
         self.widget_calls.deinit(self.allocator);
+        self.interaction_results.deinit();
+        self.pending_interactions.deinit();
         self.allocator.free(self.memory);
         _ = self.gpa.deinit();
         self.initialized = false;
@@ -70,6 +84,8 @@ pub fn beginFrame(self: *Self) void {
         self.gpa = std.heap.GeneralPurposeAllocator(.{}){};
         self.allocator = self.gpa.allocator();
         self.widget_calls = std.ArrayList(WidgetCall){};
+        self.interaction_results = std.StringHashMap(InteractionResult).init(self.allocator);
+        self.pending_interactions = std.StringHashMap(InteractionResult).init(self.allocator);
 
         // Initialize Clay
         const min_memory = clay.minMemorySize();
@@ -94,6 +110,15 @@ pub fn beginFrame(self: *Self) void {
 
         self.initialized = true;
     }
+
+    // Swap interaction results: pending becomes current, clear pending for new frame
+    // This implements one-frame-delayed interaction detection
+    self.interaction_results.clearRetainingCapacity();
+    var iter = self.pending_interactions.iterator();
+    while (iter.next()) |entry| {
+        self.interaction_results.put(entry.key_ptr.*, entry.value_ptr.*) catch {};
+    }
+    self.pending_interactions.clearRetainingCapacity();
 
     // Clear collected calls for new frame
     self.widget_calls.clearRetainingCapacity();
@@ -124,6 +149,65 @@ pub fn endFrame(self: *Self) void {
     // Finalize Clay layout and get render commands
     const render_commands = clay.endLayout();
 
+    // Detect interactions after layout is complete
+    // Check mouse state for click detection
+    const mouse_pressed = rl.isMouseButtonPressed(.left);
+    const mouse_down = rl.isMouseButtonDown(.left);
+    const mouse_pos = rl.getMousePosition();
+
+    // Process collected calls again to detect interactions
+    for (self.widget_calls.items) |call| {
+        switch (call) {
+            .button => |btn| {
+                if (btn.id) |id| {
+                    // Check if mouse is over this button's area and clicked
+                    const rect = rl.Rectangle{
+                        .x = btn.position.x,
+                        .y = btn.position.y,
+                        .width = btn.size.width,
+                        .height = btn.size.height,
+                    };
+                    if (rl.checkCollisionPointRec(mouse_pos, rect) and mouse_pressed) {
+                        self.pending_interactions.put(id, .{ .clicked = true }) catch {};
+                    }
+                }
+            },
+            .checkbox => |cb| {
+                if (cb.id) |id| {
+                    // Check if mouse is over this checkbox's area and clicked
+                    const rect = rl.Rectangle{
+                        .x = cb.position.x,
+                        .y = cb.position.y,
+                        .width = 20, // CHECKBOX_SIZE
+                        .height = 20,
+                    };
+                    if (rl.checkCollisionPointRec(mouse_pos, rect) and mouse_pressed) {
+                        self.pending_interactions.put(id, .{ .toggled = true }) catch {};
+                    }
+                }
+            },
+            .slider => |sl| {
+                if (sl.id) |id| {
+                    // Check if mouse is dragging this slider
+                    const rect = rl.Rectangle{
+                        .x = sl.position.x,
+                        .y = sl.position.y,
+                        .width = sl.size.width,
+                        .height = sl.size.height,
+                    };
+                    if (rl.checkCollisionPointRec(mouse_pos, rect) and mouse_down) {
+                        // Calculate new value based on mouse position
+                        const relative_x = mouse_pos.x - sl.position.x;
+                        const normalized = @max(0.0, @min(1.0, relative_x / sl.size.width));
+                        const new_value = sl.min + normalized * (sl.max - sl.min);
+                        self.pending_interactions.put(id, .{ .slider_changed = true, .new_value = new_value }) catch {};
+                    }
+                }
+            },
+            else => {},
+        }
+    }
+
     // Process render commands through renderer
     renderer.processRenderCommands(render_commands);
 }
@@ -138,7 +222,12 @@ pub fn button(self: *Self, btn: types.Button) bool {
     self.widget_calls.append(self.allocator, .{ .button = btn }) catch {
         std.debug.print("Failed to append button widget call\n", .{});
     };
-    // TODO: Return actual click state from Clay pointer state
+    // Return click state from previous frame (one-frame delay due to collector pattern)
+    if (btn.id) |id| {
+        if (self.interaction_results.get(id)) |result| {
+            return result.clicked;
+        }
+    }
     return false;
 }
 
@@ -170,15 +259,29 @@ pub fn checkbox(self: *Self, cb: types.Checkbox) bool {
     self.widget_calls.append(self.allocator, .{ .checkbox = cb }) catch {
         std.debug.print("Failed to append checkbox widget call\n", .{});
     };
-    // TODO: Return actual checked state from Clay pointer state
-    return cb.checked;
+    // Return toggled state from previous frame (one-frame delay due to collector pattern)
+    // Returns true if checkbox was toggled this frame, false otherwise
+    if (cb.id) |id| {
+        if (self.interaction_results.get(id)) |result| {
+            return result.toggled;
+        }
+    }
+    return false;
 }
 
 pub fn slider(self: *Self, sl: types.Slider) f32 {
     self.widget_calls.append(self.allocator, .{ .slider = sl }) catch {
         std.debug.print("Failed to append slider widget call\n", .{});
     };
-    // TODO: Return actual value from Clay pointer state
+    // Return new value from previous frame if slider was dragged (one-frame delay)
+    // Otherwise return the input value unchanged
+    if (sl.id) |id| {
+        if (self.interaction_results.get(id)) |result| {
+            if (result.slider_changed) {
+                return result.new_value;
+            }
+        }
+    }
     return sl.value;
 }
 

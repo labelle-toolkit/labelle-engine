@@ -14,6 +14,9 @@ const SdlBackend = labelle.SdlBackend;
 
 const Self = @This();
 
+// Module-level storage for callback (needed since callbacks can't capture state)
+var g_sdl_renderer: ?*anyopaque = null;
+
 // Window counter for unique IDs
 window_counter: u32,
 
@@ -25,6 +28,10 @@ allocator: std.mem.Allocator,
 
 // Track if backend is initialized
 backend_initialized: bool,
+
+// Store window size for newFrame
+window_width: u32,
+window_height: u32,
 
 pub fn init() Self {
     const allocator = std.heap.page_allocator;
@@ -39,6 +46,8 @@ pub fn init() Self {
         .panel_depth = 0,
         .allocator = allocator,
         .backend_initialized = false,
+        .window_width = 800,
+        .window_height = 600,
     };
 }
 
@@ -56,9 +65,16 @@ fn initBackend(self: *Self) void {
         return;
     };
 
+    // Store renderer globally for callback use
+    g_sdl_renderer = @ptrCast(sdl_renderer.ptr);
+
+    // Get window size
+    self.window_width = @intCast(SdlBackend.getScreenWidth());
+    self.window_height = @intCast(SdlBackend.getScreenHeight());
+
     // Initialize zgui's SDL2 backend for input and rendering
     // The backend needs the raw SDL pointers
-    zgui.backend.initSdl2(@ptrCast(sdl_window.ptr), @ptrCast(sdl_renderer.ptr));
+    zgui.backend.init(@ptrCast(sdl_window.ptr), @ptrCast(sdl_renderer.ptr));
 
     // Register render callback with the backend
     SdlBackend.registerGuiRenderCallback(guiRenderCallback);
@@ -70,7 +86,9 @@ fn initBackend(self: *Self) void {
 /// Render callback invoked by SdlBackend during endDrawing()
 fn guiRenderCallback() void {
     // Render ImGui draw data using zgui's SDL2 renderer backend
-    zgui.backend.drawSdl2();
+    if (g_sdl_renderer) |renderer| {
+        zgui.backend.draw(renderer);
+    }
 }
 
 pub fn fixPointers(self: *Self) void {
@@ -80,7 +98,7 @@ pub fn fixPointers(self: *Self) void {
 pub fn deinit(self: *Self) void {
     if (self.backend_initialized) {
         SdlBackend.unregisterGuiRenderCallback();
-        zgui.backend.deinitSdl2();
+        zgui.backend.deinit();
     }
 
     zgui.deinit();
@@ -96,17 +114,18 @@ pub fn beginFrame(self: *Self) void {
 
     if (!self.backend_initialized) return;
 
-    // Start new ImGui frame
-    zgui.backend.newFrameSdl2();
-    zgui.newFrame();
+    // Update window size in case of resize
+    self.window_width = @intCast(SdlBackend.getScreenWidth());
+    self.window_height = @intCast(SdlBackend.getScreenHeight());
+
+    // Start new ImGui frame - pass framebuffer dimensions
+    zgui.backend.newFrame(self.window_width, self.window_height);
 }
 
 pub fn endFrame(self: *const Self) void {
-    if (!self.backend_initialized) return;
-
-    // Finalize ImGui frame - prepares draw data
-    // Actual rendering happens in guiRenderCallback when SdlBackend calls it
-    zgui.render();
+    // Nothing to do here - rendering happens in guiRenderCallback
+    // when SdlBackend calls it. The backend's draw() calls gui.render() internally.
+    _ = self;
 }
 
 fn nextWindowName(self: *Self, buf: []u8) [:0]const u8 {
@@ -263,16 +282,17 @@ pub fn image(self: *Self, img: types.Image) void {
 }
 
 pub fn checkbox(self: *Self, cb: types.Checkbox) bool {
-    if (!self.backend_initialized) return cb.checked;
+    if (!self.backend_initialized) return false;
 
     var checked = cb.checked;
+    var changed = false;
 
     // Convert text to null-terminated
     var text_buf: [256]u8 = undefined;
-    const text_z = std.fmt.bufPrintZ(&text_buf, "{s}", .{cb.text}) catch return checked;
+    const text_z = std.fmt.bufPrintZ(&text_buf, "{s}", .{cb.text}) catch return false;
 
     if (self.panel_depth > 0) {
-        _ = zgui.checkbox(text_z, .{ .v = &checked });
+        changed = zgui.checkbox(text_z, .{ .v = &checked });
     } else {
         var name_buf: [32]u8 = undefined;
         const name = self.nextWindowName(&name_buf);
@@ -291,12 +311,12 @@ pub fn checkbox(self: *Self, cb: types.Checkbox) bool {
                 .no_background = true,
             },
         })) {
-            _ = zgui.checkbox(text_z, .{ .v = &checked });
+            changed = zgui.checkbox(text_z, .{ .v = &checked });
         }
         zgui.end();
     }
 
-    return checked;
+    return changed;
 }
 
 pub fn slider(self: *Self, sl: types.Slider) f32 {
