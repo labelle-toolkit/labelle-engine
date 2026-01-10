@@ -75,15 +75,16 @@ pub fn build(b: *std.Build) void {
         break :blk mr_ecs_dep.module("mr_ecs");
     } else null;
 
-    const labelle_dep = b.dependency("labelle-gfx", .{
+    // labelle-gfx dependency - not used for iOS (raylib doesn't support iOS)
+    const labelle_dep: ?*std.Build.Dependency = if (!is_ios) b.dependency("labelle-gfx", .{
         .target = target,
         .optimize = optimize,
-    });
-    const labelle = labelle_dep.module("labelle");
+    }) else null;
+    const labelle: ?*std.Build.Module = if (labelle_dep) |dep| dep.module("labelle") else null;
 
     // raylib module - get from labelle-gfx's re-exported module (not available on iOS)
     // labelle-gfx uses the raylib-zig fork with getGLFWWindow() for ImGui integration
-    const raylib: ?*std.Build.Module = if (!is_ios) labelle_dep.builder.modules.get("raylib") else null;
+    const raylib: ?*std.Build.Module = if (labelle_dep) |dep| dep.builder.modules.get("raylib") else null;
 
     // sokol dependency - DO NOT pass with_sokol_imgui here as it changes the
     // dependency hash and conflicts with labelle-gfx's sokol. For ImGui support,
@@ -116,19 +117,19 @@ pub fn build(b: *std.Build) void {
 
     // SDL module - get from labelle-gfx's re-exported module (not available on iOS)
     // labelle-gfx v0.15.0+ re-exports SDL to avoid Zig module conflicts
-    const sdl: ?*std.Build.Module = if (!is_ios) labelle_dep.builder.modules.get("sdl") else null;
+    const sdl: ?*std.Build.Module = if (labelle_dep) |dep| dep.builder.modules.get("sdl") else null;
 
     // zbgfx, zgpu, wgpu_native, zglfw - not available on iOS
-    const zbgfx: ?*std.Build.Module = if (!is_ios) blk: {
-        const zbgfx_dep = labelle_dep.builder.dependency("zbgfx", .{
+    const zbgfx: ?*std.Build.Module = if (labelle_dep) |dep| blk: {
+        const zbgfx_dep = dep.builder.dependency("zbgfx", .{
             .target = target,
             .optimize = optimize,
         });
         break :blk zbgfx_dep.module("zbgfx");
     } else null;
 
-    const zgpu: ?*std.Build.Module = if (!is_ios) blk: {
-        const zgpu_dep = labelle_dep.builder.dependency("zgpu", .{
+    const zgpu: ?*std.Build.Module = if (labelle_dep) |dep| blk: {
+        const zgpu_dep = dep.builder.dependency("zgpu", .{
             .target = target,
             .optimize = optimize,
         });
@@ -136,8 +137,8 @@ pub fn build(b: *std.Build) void {
     } else null;
 
     // wgpu_native - lower-level WebGPU bindings (alternative to zgpu)
-    const wgpu_native: ?*std.Build.Module = if (!is_ios) blk: {
-        const wgpu_native_dep = labelle_dep.builder.dependency("wgpu_native_zig", .{
+    const wgpu_native: ?*std.Build.Module = if (labelle_dep) |dep| blk: {
+        const wgpu_native_dep = dep.builder.dependency("wgpu_native_zig", .{
             .target = target,
             .optimize = optimize,
         });
@@ -145,8 +146,8 @@ pub fn build(b: *std.Build) void {
     } else null;
 
     // zglfw - GLFW bindings for zgpu/wgpu_native (not available on iOS)
-    const zglfw: ?*std.Build.Module = if (!is_ios) blk: {
-        const zglfw_dep = labelle_dep.builder.dependency("zglfw", .{
+    const zglfw: ?*std.Build.Module = if (labelle_dep) |dep| blk: {
+        const zglfw_dep = dep.builder.dependency("zglfw", .{
             .target = target,
             .optimize = optimize,
         });
@@ -247,9 +248,13 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("graphics/interface.zig"),
         .target = target,
         .optimize = optimize,
-        .imports = &.{
+        .imports = if (!is_ios) &.{
             .{ .name = "build_options", .module = build_options_mod },
-            .{ .name = "labelle", .module = labelle },
+            .{ .name = "labelle", .module = labelle.? },
+        } else &.{
+            // iOS uses sokol backend only - labelle-gfx not available
+            .{ .name = "build_options", .module = build_options_mod },
+            .{ .name = "sokol", .module = sokol },
         },
     });
 
@@ -361,13 +366,13 @@ pub fn build(b: *std.Build) void {
             .{ .name = "zbgfx", .module = zbgfx.? },
             .{ .name = "zgpu", .module = zgpu.? },
             .{ .name = "wgpu", .module = wgpu_native.? }, // For wgpu_native ImGui adapter
-            .{ .name = "labelle", .module = labelle }, // For zgpu/wgpu_native context access
+            .{ .name = "labelle", .module = labelle.? }, // For zgpu/wgpu_native context access
             .{ .name = "zglfw", .module = zglfw.? }, // For GLFW window access
             .{ .name = "zclay", .module = zclay },
         } else &.{
+            // iOS: reduced imports, no labelle-gfx modules
             .{ .name = "build_options", .module = build_options_mod },
             .{ .name = "sokol", .module = sokol },
-            .{ .name = "labelle", .module = labelle },
             .{ .name = "zclay", .module = zclay },
         },
     });
@@ -391,7 +396,7 @@ pub fn build(b: *std.Build) void {
         // For raylib backend, compile and link rlImGui (raylib + ImGui bridge)
         if (backend == .raylib) {
             const rlimgui_dep = b.dependency("rlimgui", .{});
-            const raylib_zig_dep = labelle_dep.builder.dependency("raylib_zig", .{
+            const raylib_zig_dep = labelle_dep.?.builder.dependency("raylib_zig", .{
                 .target = target,
                 .optimize = optimize,
             });
@@ -509,11 +514,11 @@ pub fn build(b: *std.Build) void {
     if (zgui_dep) |dep| {
         if (backend == .wgpu_native and !is_ios) {
             // Fetch wgpu_native and zglfw dependencies here since they're not available on iOS
-            const local_wgpu_native_dep = labelle_dep.builder.dependency("wgpu_native_zig", .{
+            const local_wgpu_native_dep = labelle_dep.?.builder.dependency("wgpu_native_zig", .{
                 .target = target,
                 .optimize = optimize,
             });
-            const local_zglfw_dep = labelle_dep.builder.dependency("zglfw", .{
+            const local_zglfw_dep = labelle_dep.?.builder.dependency("zglfw", .{
                 .target = target,
                 .optimize = optimize,
             });
@@ -639,8 +644,16 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("root.zig"),
         .target = target,
         .optimize = optimize,
-        .imports = &.{
-            .{ .name = "labelle", .module = labelle },
+        .imports = if (!is_ios) &.{
+            .{ .name = "labelle", .module = labelle.? },
+            .{ .name = "graphics", .module = graphics_interface },
+            .{ .name = "ecs", .module = ecs_interface },
+            .{ .name = "input", .module = input_interface },
+            .{ .name = "audio", .module = audio_interface },
+            .{ .name = "gui", .module = gui_interface },
+            .{ .name = "build_options", .module = build_options_mod },
+        } else &.{
+            // iOS: no labelle-gfx module
             .{ .name = "graphics", .module = graphics_interface },
             .{ .name = "ecs", .module = ecs_interface },
             .{ .name = "input", .module = input_interface },
@@ -655,14 +668,14 @@ pub fn build(b: *std.Build) void {
         engine_mod.addImport("physics", physics);
     }
 
-    // Unit tests (standard zig test)
-    const unit_tests = b.addTest(.{
+    // Unit tests (standard zig test) - not for iOS
+    const unit_tests = if (!is_ios) b.addTest(.{
         .root_module = b.createModule(.{
             .root_source_file = b.path("root.zig"),
             .target = target,
             .optimize = optimize,
             .imports = &.{
-                .{ .name = "labelle", .module = labelle },
+                .{ .name = "labelle", .module = labelle.? },
                 .{ .name = "graphics", .module = graphics_interface },
                 .{ .name = "ecs", .module = ecs_interface },
                 .{ .name = "input", .module = input_interface },
@@ -670,35 +683,39 @@ pub fn build(b: *std.Build) void {
                 .{ .name = "build_options", .module = build_options_mod },
             },
         }),
-    });
+    }) else null;
 
-    const run_unit_tests = b.addRunArtifact(unit_tests);
-    const unit_test_step = b.step("unit-test", "Run unit tests");
-    unit_test_step.dependOn(&run_unit_tests.step);
+    if (unit_tests) |tests| {
+        const run_unit_tests = b.addRunArtifact(tests);
+        const unit_test_step = b.step("unit-test", "Run unit tests");
+        unit_test_step.dependOn(&run_unit_tests.step);
+    }
 
-    // ZSpec tests
-    const zspec_tests = b.addTest(.{
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("test/tests.zig"),
-            .target = target,
-            .optimize = optimize,
-            .imports = &.{
-                .{ .name = "zspec", .module = zspec },
-                .{ .name = "labelle-engine", .module = engine_mod },
-                .{ .name = "labelle", .module = labelle },
-                .{ .name = "graphics", .module = graphics_interface },
-                .{ .name = "ecs", .module = ecs_interface },
-                .{ .name = "input", .module = input_interface },
-                .{ .name = "audio", .module = audio_interface },
-                .{ .name = "build_options", .module = build_options_mod },
-            },
-        }),
-        .test_runner = .{ .path = zspec_dep.path("src/runner.zig"), .mode = .simple },
-    });
+    // ZSpec tests - not for iOS
+    if (!is_ios) {
+        const zspec_tests = b.addTest(.{
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("test/tests.zig"),
+                .target = target,
+                .optimize = optimize,
+                .imports = &.{
+                    .{ .name = "zspec", .module = zspec },
+                    .{ .name = "labelle-engine", .module = engine_mod },
+                    .{ .name = "labelle", .module = labelle.? },
+                    .{ .name = "graphics", .module = graphics_interface },
+                    .{ .name = "ecs", .module = ecs_interface },
+                    .{ .name = "input", .module = input_interface },
+                    .{ .name = "audio", .module = audio_interface },
+                    .{ .name = "build_options", .module = build_options_mod },
+                },
+            }),
+            .test_runner = .{ .path = zspec_dep.path("src/runner.zig"), .mode = .simple },
+        });
 
-    const run_zspec_tests = b.addRunArtifact(zspec_tests);
-    const zspec_test_step = b.step("zspec", "Run zspec tests");
-    zspec_test_step.dependOn(&run_zspec_tests.step);
+        const run_zspec_tests = b.addRunArtifact(zspec_tests);
+        const zspec_test_step = b.step("zspec", "Run zspec tests");
+        zspec_test_step.dependOn(&run_zspec_tests.step);
+    }
 
     // Core module tests
     const core_tests = b.addTest(.{
@@ -718,10 +735,12 @@ pub fn build(b: *std.Build) void {
     const core_test_step = b.step("core-test", "Run core module tests");
     core_test_step.dependOn(&run_core_tests.step);
 
-    // Main test step runs all module tests
-    const test_step = b.step("test", "Run all tests");
-    test_step.dependOn(&run_zspec_tests.step);
-    test_step.dependOn(&run_core_tests.step);
+    // Main test step runs all module tests (not for iOS)
+    if (!is_ios) {
+        const test_step = b.step("test", "Run all tests");
+        test_step.dependOn(&run_core_tests.step);
+        // Note: zspec test dependency is added in the if block above
+    }
 
     // Note: Examples have their own build.zig and are built separately
     // To run example_1: cd usage/example_1 && zig build run
