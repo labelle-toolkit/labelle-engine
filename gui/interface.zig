@@ -8,7 +8,9 @@ const build_options = @import("build_options");
 const types = @import("types.zig");
 
 pub const GuiBackend = build_options.GuiBackend;
-const backend = build_options.gui_backend;
+pub const GraphicsBackend = build_options.Backend;
+const gui_backend = build_options.gui_backend;
+const gfx_backend = build_options.backend;
 
 /// Comptime interface validation for GUI backends.
 /// Ensures all required methods are implemented.
@@ -34,10 +36,36 @@ pub fn GuiInterface(comptime Impl: type) type {
     return Impl;
 }
 
+/// Select nuklear adapter based on graphics backend
+fn selectNuklearAdapter() type {
+    return switch (gfx_backend) {
+        .sokol => @import("nuklear_sokol_adapter.zig"),
+        .sdl => @import("nuklear_sdl_adapter.zig"),
+        .bgfx => @import("nuklear_bgfx_adapter.zig"),
+        .zgpu => @import("nuklear_zgpu_adapter.zig"),
+        .wgpu_native => @import("nuklear_wgpu_native_adapter.zig"),
+        else => @import("nuklear_adapter.zig"), // raylib (default)
+    };
+}
+
+/// Select imgui adapter based on graphics backend
+fn selectImguiAdapter() type {
+    return switch (gfx_backend) {
+        .sokol => @import("imgui_sokol_adapter.zig"),
+        .sdl => @import("imgui_sdl_adapter.zig"),
+        .bgfx => @import("imgui_bgfx_adapter.zig"),
+        .zgpu => @import("imgui_zgpu_adapter.zig"),
+        .wgpu_native => @import("imgui_wgpu_native_adapter.zig"),
+        else => @import("imgui_adapter.zig"), // raylib (default)
+    };
+}
+
 /// Backend implementation selected at build time
-const BackendImpl = switch (backend) {
+const BackendImpl = switch (gui_backend) {
     .raygui => @import("raygui_adapter.zig"),
     .microui => @import("microui_adapter.zig"),
+    .nuklear => selectNuklearAdapter(),
+    .imgui => selectImguiAdapter(),
     .clay => @import("clay/adapter.zig"),
     .none => @import("stub_adapter.zig"),
 };

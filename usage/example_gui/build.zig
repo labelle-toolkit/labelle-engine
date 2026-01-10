@@ -17,6 +17,8 @@ pub const GuiBackend = enum {
     none,
     raygui,
     microui,
+    nuklear,
+    imgui,
 };
 
 pub fn build(b: *std.Build) void {
@@ -54,12 +56,38 @@ pub fn build(b: *std.Build) void {
     const run_sokol_microui = b.step("run-sokol-microui", "Run with sokol + microui");
     run_sokol_microui.dependOn(&b.addRunArtifact(sokol_microui).step);
 
+    // Raylib + Nuklear
+    const raylib_nuklear = createExecutable(b, target, optimize, .raylib, .zig_ecs, .nuklear, "example_gui_raylib_nuklear");
+    const run_raylib_nuklear = b.step("run-raylib-nuklear", "Run with raylib + nuklear");
+    run_raylib_nuklear.dependOn(&b.addRunArtifact(raylib_nuklear).step);
+
+    // Sokol + Nuklear
+    const sokol_nuklear = createExecutable(b, target, optimize, .sokol, .zig_ecs, .nuklear, "example_gui_sokol_nuklear");
+    const run_sokol_nuklear = b.step("run-sokol-nuklear", "Run with sokol + nuklear");
+    run_sokol_nuklear.dependOn(&b.addRunArtifact(sokol_nuklear).step);
+
+    // Raylib + ImGui
+    const raylib_imgui = createExecutable(b, target, optimize, .raylib, .zig_ecs, .imgui, "example_gui_raylib_imgui");
+    const run_raylib_imgui = b.step("run-raylib-imgui", "Run with raylib + imgui");
+    run_raylib_imgui.dependOn(&b.addRunArtifact(raylib_imgui).step);
+
+    // Sokol + ImGui
+    const sokol_imgui = createExecutable(b, target, optimize, .sokol, .zig_ecs, .imgui, "example_gui_sokol_imgui");
+    const run_sokol_imgui = b.step("run-sokol-imgui", "Run with sokol + imgui");
+    run_sokol_imgui.dependOn(&b.addRunArtifact(sokol_imgui).step);
+
     // Shortcut aliases
     const run_microui = b.step("run-microui", "Alias for run-raylib-microui");
     run_microui.dependOn(run_raylib_microui);
 
+    const run_nuklear = b.step("run-nuklear", "Alias for run-raylib-nuklear");
+    run_nuklear.dependOn(run_raylib_nuklear);
+
     const run_sokol = b.step("run-sokol", "Alias for run-sokol-raygui");
     run_sokol.dependOn(run_sokol_raygui);
+
+    const run_imgui = b.step("run-imgui", "Alias for run-raylib-imgui");
+    run_imgui.dependOn(run_raylib_imgui);
 }
 
 fn createExecutable(

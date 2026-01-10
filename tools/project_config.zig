@@ -48,12 +48,22 @@ pub const Backend = enum {
     sdl,
     bgfx,
     zgpu,
+    wgpu_native,
 };
 
 /// ECS backend selection
 pub const EcsBackend = enum {
     zig_ecs,
     zflecs,
+};
+
+/// GUI backend selection
+pub const GuiBackend = enum {
+    none,
+    raygui,
+    microui,
+    nuklear,
+    imgui,
 };
 
 /// Game ID type selection (entity identifier type)
@@ -288,6 +298,7 @@ pub const ProjectConfig = struct {
     initial_scene: []const u8,
     backend: Backend = .raylib,
     ecs_backend: EcsBackend = .zig_ecs,
+    gui_backend: GuiBackend = .none,
     /// Game ID type (entity identifier type). Default: u64
     /// This affects plugin integrations like labelle-tasks that need to know the entity ID type.
     game_id: GameIdType = .u64,

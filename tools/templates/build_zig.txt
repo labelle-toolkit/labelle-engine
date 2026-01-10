@@ -18,6 +18,7 @@ pub const Backend = enum {{
     sdl,
     bgfx,
     zgpu,
+    wgpu_native,
 }};
 
 /// ECS backend selection (must match labelle-engine)
@@ -26,13 +27,23 @@ pub const EcsBackend = enum {{
     zflecs,
 }};
 
+/// GUI backend selection (must match labelle-engine)
+pub const GuiBackend = enum {{
+    none,
+    raygui,
+    microui,
+    nuklear,
+    imgui,
+}};
+
 pub fn build(b: *std.Build) void {{
     const target = b.standardTargetOptions(.{{}});
     const optimize = b.standardOptimizeOption(.{{}});
 
-    // Backend options - can be overridden via -Dbackend and -Decs_backend
+    // Backend options - can be overridden via -Dbackend, -Decs_backend, -Dgui_backend
     const backend = b.option(Backend, "backend", "Graphics backend to use (default: {s})") orelse .{s};
     const ecs_backend = b.option(EcsBackend, "ecs_backend", "ECS backend to use (default: {s})") orelse .{s};
+    const gui_backend = b.option(GuiBackend, "gui_backend", "GUI backend to use (default: {s})") orelse .{s};
     const physics_enabled = b.option(bool, "physics", "Enable physics module (default: {s})") orelse {s};
 
     const engine_dep = b.dependency("labelle-engine", .{{
@@ -40,6 +51,7 @@ pub fn build(b: *std.Build) void {{
         .optimize = optimize,
         .backend = backend,
         .ecs_backend = ecs_backend,
+        .gui_backend = gui_backend,
         .physics = physics_enabled,
     }});
     const engine_mod = engine_dep.module("labelle-engine");
@@ -50,6 +62,7 @@ pub fn build(b: *std.Build) void {{
         .optimize = optimize,
         .backend = backend,
         .ecs_backend = ecs_backend,
+        .gui_backend = gui_backend,
         .physics = physics_enabled,
     }});
     const {s}_mod = {s}_dep.module("{s}");
@@ -189,6 +202,47 @@ pub fn build(b: *std.Build) void {{
             }},
         }}),
     }});
+    exe.linkLibrary(zglfw_dep.artifact("glfw"));
+    exe.linkLibrary(zgpu_dep.artifact("zdawn"));
+
+    // Add Dawn library paths (required for zgpu to find prebuilt Dawn)
+    const zgpu_build = @import("zgpu");
+    zgpu_build.addLibraryPathsTo(exe);
+.wgpu_native_exe_start
+    // Get labelle-gfx dependency for wgpu_native bindings
+    const labelle_dep = engine_dep.builder.dependency("labelle-gfx", .{{
+        .target = target,
+        .optimize = optimize,
+    }});
+    const wgpu_native_dep = labelle_dep.builder.dependency("wgpu_native_zig", .{{
+        .target = target,
+        .optimize = optimize,
+    }});
+    const zglfw_dep = labelle_dep.builder.dependency("zglfw", .{{
+        .target = target,
+        .optimize = optimize,
+    }});
+    const wgpu_mod = wgpu_native_dep.module("wgpu");
+    const zglfw_mod = zglfw_dep.module("root");
+    const labelle_gfx_mod = labelle_dep.module("labelle");
+
+    const exe = b.addExecutable(.{{
+        .name = "{s}",
+        .root_module = b.createModule(.{{
+            .root_source_file = b.path("../main.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{{
+                .{{ .name = "labelle-engine", .module = engine_mod }},
+                .{{ .name = "wgpu", .module = wgpu_mod }},
+                .{{ .name = "zglfw", .module = zglfw_mod }},
+                .{{ .name = "labelle-gfx", .module = labelle_gfx_mod }},
+.wgpu_native_exe_end
+            }},
+        }}),
+    }});
+    exe.linkLibrary(zglfw_dep.artifact("glfw"));
+    exe.linkLibrary(wgpu_native_dep.artifact("wgpu_native"));
 .plugin_import
                 .{{ .name = "{s}", .module = {s}_mod }},
 .bgfx_link
