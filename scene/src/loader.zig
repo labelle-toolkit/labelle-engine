@@ -765,10 +765,10 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
                 const offset_x: f32 = if (@hasField(@TypeOf(gizmo_data), "x")) gizmo_data.x else 0;
                 const offset_y: f32 = if (@hasField(@TypeOf(gizmo_data), "y")) gizmo_data.y else 0;
 
-                // Add Position at parent position + offset
-                game.getRegistry().add(gizmo_entity, Position{ .x = parent_x + offset_x, .y = parent_y + offset_y });
+                // Note: Gizmos don't need their own Position component.
+                // The render pipeline resolves gizmo positions from parent_entity + offset at render time.
 
-                // Add Gizmo marker component with parent reference
+                // Add Gizmo marker component with parent reference and offset
                 game.getRegistry().add(gizmo_entity, render.Gizmo{
                     .parent_entity = parent_entity,
                     .offset_x = offset_x,

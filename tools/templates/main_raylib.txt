@@ -24,7 +24,7 @@ pub const {s} = {s}_enum.{s};
 .game_id_export
 pub const GameId = {s};
 .plugin_bind
-const {s}Bind{s} = {s}.{s}({s});
+pub const {s}Bind{s} = {s}.{s}({s});
 .plugin_bind_struct_start
 const {s}BindComponents = struct {{
 .plugin_bind_struct_item
@@ -211,6 +211,7 @@ pub fn main() !void {{
         const re = game.getRetainedEngine();
         re.beginFrame();
         re.render();
+        game.processPendingScreenshot();
         re.endFrame();
     }}
 }}

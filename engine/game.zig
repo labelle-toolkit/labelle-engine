@@ -1408,8 +1408,9 @@ pub fn GameWith(comptime Hooks: type) type {
             };
         }
 
-        /// Internal: Process pending screenshot request (called after render)
-        fn processPendingScreenshot(self: *Self) void {
+        /// Process pending screenshot request (called after render, before endFrame)
+        /// This should be called in custom game loops that don't use runFrame()
+        pub fn processPendingScreenshot(self: *Self) void {
             if (self.pending_screenshot_filename) |filename| {
                 self.retained_engine.takeScreenshot(filename.ptr);
                 self.allocator.free(filename);
