@@ -75,6 +75,7 @@ pub fn build(b: *std.Build) void {
         break :blk mr_ecs_dep.module("mr_ecs");
     } else null;
 
+    // labelle-gfx dependency - handles iOS internally (skips raylib for iOS)
     const labelle_dep = b.dependency("labelle-gfx", .{
         .target = target,
         .optimize = optimize,
@@ -243,6 +244,7 @@ pub fn build(b: *std.Build) void {
 
     // Create the Graphics interface module that wraps the selected backend
     // This allows plugins to use graphics types without pulling in specific backend modules
+    // Note: labelle-gfx handles iOS internally (only sokol backend available on iOS)
     const graphics_interface = b.addModule("graphics", .{
         .root_source_file = b.path("graphics/interface.zig"),
         .target = target,
@@ -365,9 +367,9 @@ pub fn build(b: *std.Build) void {
             .{ .name = "zglfw", .module = zglfw.? }, // For GLFW window access
             .{ .name = "zclay", .module = zclay },
         } else &.{
+            // iOS: reduced imports, no labelle-gfx modules
             .{ .name = "build_options", .module = build_options_mod },
             .{ .name = "sokol", .module = sokol },
-            .{ .name = "labelle", .module = labelle },
             .{ .name = "zclay", .module = zclay },
         },
     });
@@ -635,6 +637,7 @@ pub fn build(b: *std.Build) void {
     });
 
     // Main module (unified entry point with namespaced submodules)
+    // Note: labelle-gfx handles iOS internally (only sokol backend available on iOS)
     const engine_mod = b.addModule("labelle-engine", .{
         .root_source_file = b.path("root.zig"),
         .target = target,
@@ -655,8 +658,8 @@ pub fn build(b: *std.Build) void {
         engine_mod.addImport("physics", physics);
     }
 
-    // Unit tests (standard zig test)
-    const unit_tests = b.addTest(.{
+    // Unit tests (standard zig test) - not for iOS
+    const unit_tests = if (!is_ios) b.addTest(.{
         .root_module = b.createModule(.{
             .root_source_file = b.path("root.zig"),
             .target = target,
@@ -670,35 +673,13 @@ pub fn build(b: *std.Build) void {
                 .{ .name = "build_options", .module = build_options_mod },
             },
         }),
-    });
+    }) else null;
 
-    const run_unit_tests = b.addRunArtifact(unit_tests);
-    const unit_test_step = b.step("unit-test", "Run unit tests");
-    unit_test_step.dependOn(&run_unit_tests.step);
-
-    // ZSpec tests
-    const zspec_tests = b.addTest(.{
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("test/tests.zig"),
-            .target = target,
-            .optimize = optimize,
-            .imports = &.{
-                .{ .name = "zspec", .module = zspec },
-                .{ .name = "labelle-engine", .module = engine_mod },
-                .{ .name = "labelle", .module = labelle },
-                .{ .name = "graphics", .module = graphics_interface },
-                .{ .name = "ecs", .module = ecs_interface },
-                .{ .name = "input", .module = input_interface },
-                .{ .name = "audio", .module = audio_interface },
-                .{ .name = "build_options", .module = build_options_mod },
-            },
-        }),
-        .test_runner = .{ .path = zspec_dep.path("src/runner.zig"), .mode = .simple },
-    });
-
-    const run_zspec_tests = b.addRunArtifact(zspec_tests);
-    const zspec_test_step = b.step("zspec", "Run zspec tests");
-    zspec_test_step.dependOn(&run_zspec_tests.step);
+    if (unit_tests) |tests| {
+        const run_unit_tests = b.addRunArtifact(tests);
+        const unit_test_step = b.step("unit-test", "Run unit tests");
+        unit_test_step.dependOn(&run_unit_tests.step);
+    }
 
     // Core module tests
     const core_tests = b.addTest(.{
@@ -718,10 +699,36 @@ pub fn build(b: *std.Build) void {
     const core_test_step = b.step("core-test", "Run core module tests");
     core_test_step.dependOn(&run_core_tests.step);
 
-    // Main test step runs all module tests
-    const test_step = b.step("test", "Run all tests");
-    test_step.dependOn(&run_zspec_tests.step);
-    test_step.dependOn(&run_core_tests.step);
+    // ZSpec tests and main test step - not for iOS
+    if (!is_ios) {
+        const zspec_tests = b.addTest(.{
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("test/tests.zig"),
+                .target = target,
+                .optimize = optimize,
+                .imports = &.{
+                    .{ .name = "zspec", .module = zspec },
+                    .{ .name = "labelle-engine", .module = engine_mod },
+                    .{ .name = "labelle", .module = labelle },
+                    .{ .name = "graphics", .module = graphics_interface },
+                    .{ .name = "ecs", .module = ecs_interface },
+                    .{ .name = "input", .module = input_interface },
+                    .{ .name = "audio", .module = audio_interface },
+                    .{ .name = "build_options", .module = build_options_mod },
+                },
+            }),
+            .test_runner = .{ .path = zspec_dep.path("src/runner.zig"), .mode = .simple },
+        });
+
+        const run_zspec_tests = b.addRunArtifact(zspec_tests);
+        const zspec_test_step = b.step("zspec", "Run zspec tests");
+        zspec_test_step.dependOn(&run_zspec_tests.step);
+
+        // Main test step runs all module tests
+        const test_step = b.step("test", "Run all tests");
+        test_step.dependOn(&run_core_tests.step);
+        test_step.dependOn(&run_zspec_tests.step);
+    }
 
     // Note: Examples have their own build.zig and are built separately
     // To run example_1: cd usage/example_1 && zig build run
