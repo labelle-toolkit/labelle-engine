@@ -56,8 +56,8 @@ index_buffer: ?*wgpu.Buffer,
 uniform_buffer: ?*wgpu.Buffer,
 
 // Vertex/index data built each frame
-vertices: std.ArrayList(NkVertex),
-indices: std.ArrayList(u32),
+vertices: std.ArrayListUnmanaged(NkVertex),
+indices: std.ArrayListUnmanaged(u32),
 
 // Window counter for unique IDs
 window_counter: u32,
@@ -153,8 +153,8 @@ pub fn init() Self {
         .vertex_buffer = null,
         .index_buffer = null,
         .uniform_buffer = null,
-        .vertices = std.ArrayList(NkVertex).init(allocator),
-        .indices = std.ArrayList(u32).init(allocator),
+        .vertices = .{},
+        .indices = .{},
         .window_counter = 0,
         .panel_depth = 0,
         .screen_width = 800,
@@ -230,7 +230,10 @@ fn createFontTexture(self: *Self, device: *wgpu.Device) void {
     };
 
     // Upload pixels
-    const queue = WgpuNativeBackend.getQueue() orelse return;
+    const queue = device.getQueue() orelse {
+        std.log.err("nuklear_wgpu_native: failed to get queue", .{});
+        return;
+    };
     const pixel_bytes: []const u8 = @as([*]const u8, @ptrCast(pixels.ptr))[0 .. pixels.len * 4];
 
     queue.writeTexture(
@@ -297,8 +300,8 @@ fn createFontTexture(self: *Self, device: *wgpu.Device) void {
 fn createPipeline(self: *Self, device: *wgpu.Device, format: wgpu.TextureFormat) void {
     // Create shader modules
     const vs_module = device.createShaderModule(&wgpu.shaderModuleWGSLDescriptor(.{
-        .label = wgpu.StringView.fromSlice("Nuklear Vertex Shader"),
-        .code = wgpu.StringView.fromSlice(vertex_shader_wgsl),
+        .label = "Nuklear Vertex Shader",
+        .code = vertex_shader_wgsl,
     })) orelse {
         std.log.err("nuklear_wgpu_native: failed to create vertex shader", .{});
         return;
@@ -306,8 +309,8 @@ fn createPipeline(self: *Self, device: *wgpu.Device, format: wgpu.TextureFormat)
     defer vs_module.release();
 
     const fs_module = device.createShaderModule(&wgpu.shaderModuleWGSLDescriptor(.{
-        .label = wgpu.StringView.fromSlice("Nuklear Fragment Shader"),
-        .code = wgpu.StringView.fromSlice(fragment_shader_wgsl),
+        .label = "Nuklear Fragment Shader",
+        .code = fragment_shader_wgsl,
     })) orelse {
         std.log.err("nuklear_wgpu_native: failed to create fragment shader", .{});
         return;
@@ -324,32 +327,23 @@ fn createPipeline(self: *Self, device: *wgpu.Device, format: wgpu.TextureFormat)
                 .visibility = wgpu.ShaderStages.vertex,
                 .buffer = .{
                     .type = .uniform,
-                    .has_dynamic_offset = 0,
                     .min_binding_size = 64, // mat4x4<f32>
                 },
-                .sampler = .{ .type = .undefined },
-                .texture = .{ .sample_type = .undefined, .view_dimension = .undefined, .multisampled = 0 },
-                .storage_texture = .{ .access = .undefined, .format = .undefined, .view_dimension = .undefined },
             },
             .{
                 .binding = 1,
                 .visibility = wgpu.ShaderStages.fragment,
-                .buffer = .{ .type = .undefined, .has_dynamic_offset = 0, .min_binding_size = 0 },
-                .sampler = .{ .type = .undefined },
                 .texture = .{
                     .sample_type = .float,
                     .view_dimension = .@"2d",
-                    .multisampled = 0,
                 },
-                .storage_texture = .{ .access = .undefined, .format = .undefined, .view_dimension = .undefined },
             },
             .{
                 .binding = 2,
                 .visibility = wgpu.ShaderStages.fragment,
-                .buffer = .{ .type = .undefined, .has_dynamic_offset = 0, .min_binding_size = 0 },
-                .sampler = .{ .type = .filtering },
-                .texture = .{ .sample_type = .undefined, .view_dimension = .undefined, .multisampled = 0 },
-                .storage_texture = .{ .access = .undefined, .format = .undefined, .view_dimension = .undefined },
+                .sampler = .{
+                    .type = .filtering,
+                },
             },
         },
     }) orelse {
@@ -375,8 +369,6 @@ fn createPipeline(self: *Self, device: *wgpu.Device, format: wgpu.TextureFormat)
         .vertex = .{
             .module = vs_module,
             .entry_point = wgpu.StringView.fromSlice("main"),
-            .constant_count = 0,
-            .constants = null,
             .buffer_count = 1,
             .buffers = &[_]wgpu.VertexBufferLayout{
                 .{
@@ -394,8 +386,6 @@ fn createPipeline(self: *Self, device: *wgpu.Device, format: wgpu.TextureFormat)
         .fragment = &.{
             .module = fs_module,
             .entry_point = wgpu.StringView.fromSlice("main"),
-            .constant_count = 0,
-            .constants = null,
             .target_count = 1,
             .targets = &[_]wgpu.ColorTargetState{
                 .{
@@ -518,7 +508,7 @@ fn guiRenderCallback(render_pass: *wgpu.RenderPassEncoder) void {
     if (vertex_count == 0 or index_count == 0) return;
 
     const device = WgpuNativeBackend.getDevice() orelse return;
-    const queue = WgpuNativeBackend.getQueue() orelse return;
+    const queue = device.getQueue() orelse return;
 
     // Resize buffers if needed
     if (vertex_count > self.vertex_capacity) {
@@ -700,18 +690,18 @@ fn addQuad(self: *Self, x: f32, y: f32, w: f32, h: f32, color: u32) void {
     const base_idx: u32 = @intCast(self.vertices.items.len);
 
     // Add vertices (with UV at center of white pixel in font atlas)
-    self.vertices.append(.{ .position = .{ x, y }, .uv = .{ 0.5, 0.5 }, .color = color }) catch return;
-    self.vertices.append(.{ .position = .{ x + w, y }, .uv = .{ 0.5, 0.5 }, .color = color }) catch return;
-    self.vertices.append(.{ .position = .{ x + w, y + h }, .uv = .{ 0.5, 0.5 }, .color = color }) catch return;
-    self.vertices.append(.{ .position = .{ x, y + h }, .uv = .{ 0.5, 0.5 }, .color = color }) catch return;
+    self.vertices.append(self.allocator, .{ .position = .{ x, y }, .uv = .{ 0.5, 0.5 }, .color = color }) catch return;
+    self.vertices.append(self.allocator, .{ .position = .{ x + w, y }, .uv = .{ 0.5, 0.5 }, .color = color }) catch return;
+    self.vertices.append(self.allocator, .{ .position = .{ x + w, y + h }, .uv = .{ 0.5, 0.5 }, .color = color }) catch return;
+    self.vertices.append(self.allocator, .{ .position = .{ x, y + h }, .uv = .{ 0.5, 0.5 }, .color = color }) catch return;
 
     // Add indices (two triangles)
-    self.indices.append(base_idx + 0) catch return;
-    self.indices.append(base_idx + 1) catch return;
-    self.indices.append(base_idx + 2) catch return;
-    self.indices.append(base_idx + 0) catch return;
-    self.indices.append(base_idx + 2) catch return;
-    self.indices.append(base_idx + 3) catch return;
+    self.indices.append(self.allocator, base_idx + 0) catch return;
+    self.indices.append(self.allocator, base_idx + 1) catch return;
+    self.indices.append(self.allocator, base_idx + 2) catch return;
+    self.indices.append(self.allocator, base_idx + 0) catch return;
+    self.indices.append(self.allocator, base_idx + 2) catch return;
+    self.indices.append(self.allocator, base_idx + 3) catch return;
 }
 
 fn addLine(self: *Self, x1: f32, y1: f32, x2: f32, y2: f32, thickness: f32, color: u32) void {
@@ -726,17 +716,17 @@ fn addLine(self: *Self, x1: f32, y1: f32, x2: f32, y2: f32, thickness: f32, colo
 
     const base_idx: u32 = @intCast(self.vertices.items.len);
 
-    self.vertices.append(.{ .position = .{ x1 + nx, y1 + ny }, .uv = .{ 0.5, 0.5 }, .color = color }) catch return;
-    self.vertices.append(.{ .position = .{ x2 + nx, y2 + ny }, .uv = .{ 0.5, 0.5 }, .color = color }) catch return;
-    self.vertices.append(.{ .position = .{ x2 - nx, y2 - ny }, .uv = .{ 0.5, 0.5 }, .color = color }) catch return;
-    self.vertices.append(.{ .position = .{ x1 - nx, y1 - ny }, .uv = .{ 0.5, 0.5 }, .color = color }) catch return;
+    self.vertices.append(self.allocator, .{ .position = .{ x1 + nx, y1 + ny }, .uv = .{ 0.5, 0.5 }, .color = color }) catch return;
+    self.vertices.append(self.allocator, .{ .position = .{ x2 + nx, y2 + ny }, .uv = .{ 0.5, 0.5 }, .color = color }) catch return;
+    self.vertices.append(self.allocator, .{ .position = .{ x2 - nx, y2 - ny }, .uv = .{ 0.5, 0.5 }, .color = color }) catch return;
+    self.vertices.append(self.allocator, .{ .position = .{ x1 - nx, y1 - ny }, .uv = .{ 0.5, 0.5 }, .color = color }) catch return;
 
-    self.indices.append(base_idx + 0) catch return;
-    self.indices.append(base_idx + 1) catch return;
-    self.indices.append(base_idx + 2) catch return;
-    self.indices.append(base_idx + 0) catch return;
-    self.indices.append(base_idx + 2) catch return;
-    self.indices.append(base_idx + 3) catch return;
+    self.indices.append(self.allocator, base_idx + 0) catch return;
+    self.indices.append(self.allocator, base_idx + 1) catch return;
+    self.indices.append(self.allocator, base_idx + 2) catch return;
+    self.indices.append(self.allocator, base_idx + 0) catch return;
+    self.indices.append(self.allocator, base_idx + 2) catch return;
+    self.indices.append(self.allocator, base_idx + 3) catch return;
 }
 
 fn addRectOutline(self: *Self, x: f32, y: f32, w: f32, h: f32, thickness: f32, color: u32) void {
@@ -750,13 +740,13 @@ fn addRectOutline(self: *Self, x: f32, y: f32, w: f32, h: f32, thickness: f32, c
 fn addTriangle(self: *Self, x1: f32, y1: f32, x2: f32, y2: f32, x3: f32, y3: f32, color: u32) void {
     const base_idx: u32 = @intCast(self.vertices.items.len);
 
-    self.vertices.append(.{ .position = .{ x1, y1 }, .uv = .{ 0.5, 0.5 }, .color = color }) catch return;
-    self.vertices.append(.{ .position = .{ x2, y2 }, .uv = .{ 0.5, 0.5 }, .color = color }) catch return;
-    self.vertices.append(.{ .position = .{ x3, y3 }, .uv = .{ 0.5, 0.5 }, .color = color }) catch return;
+    self.vertices.append(self.allocator, .{ .position = .{ x1, y1 }, .uv = .{ 0.5, 0.5 }, .color = color }) catch return;
+    self.vertices.append(self.allocator, .{ .position = .{ x2, y2 }, .uv = .{ 0.5, 0.5 }, .color = color }) catch return;
+    self.vertices.append(self.allocator, .{ .position = .{ x3, y3 }, .uv = .{ 0.5, 0.5 }, .color = color }) catch return;
 
-    self.indices.append(base_idx + 0) catch return;
-    self.indices.append(base_idx + 1) catch return;
-    self.indices.append(base_idx + 2) catch return;
+    self.indices.append(self.allocator, base_idx + 0) catch return;
+    self.indices.append(self.allocator, base_idx + 1) catch return;
+    self.indices.append(self.allocator, base_idx + 2) catch return;
 }
 
 fn addTriangleOutline(self: *Self, x1: f32, y1: f32, x2: f32, y2: f32, x3: f32, y3: f32, thickness: f32, color: u32) void {
@@ -770,21 +760,21 @@ fn addCircleFilled(self: *Self, cx: f32, cy: f32, radius: f32, color: u32) void 
     const base_idx: u32 = @intCast(self.vertices.items.len);
 
     // Center vertex
-    self.vertices.append(.{ .position = .{ cx, cy }, .uv = .{ 0.5, 0.5 }, .color = color }) catch return;
+    self.vertices.append(self.allocator, .{ .position = .{ cx, cy }, .uv = .{ 0.5, 0.5 }, .color = color }) catch return;
 
     // Perimeter vertices
     for (0..segments) |i| {
         const angle = @as(f32, @floatFromInt(i)) * 2.0 * std.math.pi / @as(f32, @floatFromInt(segments));
         const px = cx + @cos(angle) * radius;
         const py = cy + @sin(angle) * radius;
-        self.vertices.append(.{ .position = .{ px, py }, .uv = .{ 0.5, 0.5 }, .color = color }) catch return;
+        self.vertices.append(self.allocator, .{ .position = .{ px, py }, .uv = .{ 0.5, 0.5 }, .color = color }) catch return;
     }
 
     // Triangle fan indices
     for (0..segments) |i| {
-        self.indices.append(base_idx) catch return; // center
-        self.indices.append(base_idx + 1 + @as(u32, @intCast(i))) catch return;
-        self.indices.append(base_idx + 1 + @as(u32, @intCast((i + 1) % segments))) catch return;
+        self.indices.append(self.allocator, base_idx) catch return; // center
+        self.indices.append(self.allocator, base_idx + 1 + @as(u32, @intCast(i))) catch return;
+        self.indices.append(self.allocator, base_idx + 1 + @as(u32, @intCast((i + 1) % segments))) catch return;
     }
 }
 
@@ -826,8 +816,8 @@ pub fn deinit(self: *Self) void {
     if (self.font_texture) |t| t.release();
 
     // Free vertex/index arrays
-    self.vertices.deinit();
-    self.indices.deinit();
+    self.vertices.deinit(self.allocator);
+    self.indices.deinit(self.allocator);
 
     // Free Nuklear state
     if (self.nk_state) |nk_state| {

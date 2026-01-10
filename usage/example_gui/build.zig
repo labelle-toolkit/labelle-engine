@@ -4,6 +4,7 @@ const std = @import("std");
 pub const Backend = enum {
     raylib,
     sokol,
+    wgpu_native,
 };
 
 /// ECS backend selection
@@ -76,6 +77,16 @@ pub fn build(b: *std.Build) void {
     const run_sokol_imgui = b.step("run-sokol-imgui", "Run with sokol + imgui");
     run_sokol_imgui.dependOn(&b.addRunArtifact(sokol_imgui).step);
 
+    // WGPU Native + Nuklear
+    const wgpu_nuklear = createExecutable(b, target, optimize, .wgpu_native, .zig_ecs, .nuklear, "example_gui_wgpu_nuklear");
+    const run_wgpu_nuklear = b.step("run-wgpu-nuklear", "Run with wgpu_native + nuklear");
+    run_wgpu_nuklear.dependOn(&b.addRunArtifact(wgpu_nuklear).step);
+
+    // WGPU Native + ImGui
+    const wgpu_imgui = createExecutable(b, target, optimize, .wgpu_native, .zig_ecs, .imgui, "example_gui_wgpu_imgui");
+    const run_wgpu_imgui = b.step("run-wgpu-imgui", "Run with wgpu_native + imgui");
+    run_wgpu_imgui.dependOn(&b.addRunArtifact(wgpu_imgui).step);
+
     // Shortcut aliases
     const run_microui = b.step("run-microui", "Alias for run-raylib-microui");
     run_microui.dependOn(run_raylib_microui);
@@ -88,6 +99,9 @@ pub fn build(b: *std.Build) void {
 
     const run_imgui = b.step("run-imgui", "Alias for run-raylib-imgui");
     run_imgui.dependOn(run_raylib_imgui);
+
+    const run_wgpu = b.step("run-wgpu", "Alias for run-wgpu-nuklear");
+    run_wgpu.dependOn(run_wgpu_nuklear);
 }
 
 fn createExecutable(
