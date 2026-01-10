@@ -1354,7 +1354,9 @@ pub fn GameWith(comptime Hooks: type) type {
                         // User toggled checkbox - update value state
                         if (element_id.len > 0) {
                             const new_value = !modified_cb.checked;
-                            value_state.setCheckbox(element_id, new_value) catch {};
+                            value_state.setCheckbox(element_id, new_value) catch |err| {
+                                std.log.warn("Failed to set checkbox state for '{s}': {}", .{ element_id, err });
+                            };
                         }
 
                         // Invoke callback if defined
@@ -1374,7 +1376,9 @@ pub fn GameWith(comptime Hooks: type) type {
                     if (new_value != modified_sl.value) {
                         // User changed slider - update value state
                         if (element_id.len > 0) {
-                            value_state.setSlider(element_id, new_value) catch {};
+                            value_state.setSlider(element_id, new_value) catch |err| {
+                                std.log.warn("Failed to set slider state for '{s}': {}", .{ element_id, err });
+                            };
                         }
 
                         // Invoke callback if defined

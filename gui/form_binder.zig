@@ -68,10 +68,12 @@
 //!
 //! ## Custom Setters
 //!
-//! Define `setFieldName(self: *T, value: ValueType) void` methods for custom logic:
-//! - `setName(self: *T, text: []const u8) void` - for text fields
-//! - `setHealth(self: *T, value: f32) void` - for sliders
-//! - `setIsBoss(self: *T, value: bool) void` - for checkboxes
+//! Define `setFieldName(self: *T, value: ValueType) void` methods for custom logic.
+//! Field names are converted from snake_case to PascalCase:
+//! - `name` → `setName(self: *T, text: []const u8) void`
+//! - `health` → `setHealth(self: *T, value: f32) void`
+//! - `is_boss` → `setIsBoss(self: *T, value: bool) void`
+//! - `boss_phase_count` → `setBossPhaseCount(self: *T, value: f32) void`
 //!
 //! Custom setters are called instead of direct field assignment when available.
 
@@ -161,7 +163,7 @@ pub fn FormBinder(comptime FormStateType: type, comptime form_id: []const u8) ty
                     }
 
                     // Check for custom setter: setFieldName(self: *T, value: bool) void
-                    const setter_name = "set" ++ capitalize(field.name);
+                    const setter_name = "set" ++ snakeToPascalCase(field.name);
                     if (@hasDecl(FormStateType, setter_name)) {
                         const setter = @field(FormStateType, setter_name);
                         setter(self.form_state, info.new_value);
@@ -197,13 +199,18 @@ pub fn FormBinder(comptime FormStateType: type, comptime form_id: []const u8) ty
                     }
 
                     // Check for custom setter: setFieldName(self: *T, value: f32) void
-                    const setter_name = "set" ++ capitalize(field.name);
+                    const setter_name = "set" ++ snakeToPascalCase(field.name);
                     if (@hasDecl(FormStateType, setter_name)) {
                         const setter = @field(FormStateType, setter_name);
                         setter(self.form_state, info.new_value);
                     } else {
                         // Direct field assignment with type conversion
-                        @field(self.form_state, field.name) = @as(field.type, @floatCast(info.new_value));
+                        // Use @intFromFloat for integer fields, @floatCast for float fields
+                        if (field_type_info == .int) {
+                            @field(self.form_state, field.name) = @intFromFloat(info.new_value);
+                        } else {
+                            @field(self.form_state, field.name) = @floatCast(info.new_value);
+                        }
                     }
 
                     return true;
@@ -232,10 +239,26 @@ pub fn FormBinder(comptime FormStateType: type, comptime form_id: []const u8) ty
             return field_name;
         }
 
-        /// Capitalize first letter of string (comptime helper)
-        fn capitalize(comptime str: []const u8) []const u8 {
+        /// Convert snake_case to PascalCase (comptime helper)
+        /// Examples: "name" -> "Name", "is_boss" -> "IsBoss", "boss_phase_count" -> "BossPhaseCount"
+        fn snakeToPascalCase(comptime str: []const u8) []const u8 {
             if (str.len == 0) return "";
-            return &[_]u8{std.ascii.toUpper(str[0])} ++ str[1..];
+
+            comptime var result: []const u8 = "";
+            comptime var capitalize_next = true;
+
+            for (str) |c| {
+                if (c == '_') {
+                    capitalize_next = true;
+                } else if (capitalize_next) {
+                    result = result ++ &[_]u8{std.ascii.toUpper(c)};
+                    capitalize_next = false;
+                } else {
+                    result = result ++ &[_]u8{c};
+                }
+            }
+
+            return result;
         }
 
         // ====================================================================

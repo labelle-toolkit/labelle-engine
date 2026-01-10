@@ -111,14 +111,56 @@ pub fn GuiHookDispatcher(comptime HookMap: type) type {
     };
 }
 
-/// Merge multiple GUI hook handler structs
+/// Merge multiple GUI hook handler structs into a single dispatcher
+///
+/// This function combines multiple GUI hook handler structs, allowing each handler
+/// function to be called when its event fires.
+///
+/// Example:
+/// ```zig
+/// const FormHandlers = struct {
+///     pub fn slider_changed(payload: GuiHookPayload) void { ... }
+/// };
+/// const LoggingHandlers = struct {
+///     pub fn slider_changed(payload: GuiHookPayload) void { ... }
+/// };
+/// const Combined = MergeGuiHooks(.{ FormHandlers, LoggingHandlers });
+/// // Both handlers are called on slider_changed events
+/// ```
 pub fn MergeGuiHooks(comptime handler_structs: anytype) type {
-    // Create a new struct that combines all handlers
-    _ = handler_structs;
+    const handler_info = @typeInfo(@TypeOf(handler_structs));
+    if (handler_info != .@"struct") {
+        @compileError("MergeGuiHooks expects a tuple of handler structs");
+    }
 
-    // Simplified POC version - just returns empty struct
-    // Full implementation would merge all handler functions
-    return struct {};
+    return struct {
+        pub fn button_clicked(payload: GuiHookPayload) void {
+            inline for (handler_info.@"struct".fields) |field| {
+                const handler_struct = @field(handler_structs, field.name);
+                if (@hasDecl(@TypeOf(handler_struct), "button_clicked")) {
+                    @field(@TypeOf(handler_struct), "button_clicked")(payload);
+                }
+            }
+        }
+
+        pub fn checkbox_changed(payload: GuiHookPayload) void {
+            inline for (handler_info.@"struct".fields) |field| {
+                const handler_struct = @field(handler_structs, field.name);
+                if (@hasDecl(@TypeOf(handler_struct), "checkbox_changed")) {
+                    @field(@TypeOf(handler_struct), "checkbox_changed")(payload);
+                }
+            }
+        }
+
+        pub fn slider_changed(payload: GuiHookPayload) void {
+            inline for (handler_info.@"struct".fields) |field| {
+                const handler_struct = @field(handler_structs, field.name);
+                if (@hasDecl(@TypeOf(handler_struct), "slider_changed")) {
+                    @field(@TypeOf(handler_struct), "slider_changed")(payload);
+                }
+            }
+        }
+    };
 }
 
 /// Empty GUI dispatcher (no-op)
