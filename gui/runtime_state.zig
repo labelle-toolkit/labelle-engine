@@ -66,14 +66,18 @@ pub const ValueState = struct {
     }
 
     pub fn deinit(self: *ValueState) void {
-        // Free allocated text values
+        self.freeAllTextValues();
+        self.text_values.deinit();
+        self.checkbox_values.deinit();
+        self.slider_values.deinit();
+    }
+
+    /// Helper to free all allocated text values
+    fn freeAllTextValues(self: *ValueState) void {
         var it = self.text_values.iterator();
         while (it.next()) |entry| {
             self.allocator.free(entry.value_ptr.*);
         }
-        self.text_values.deinit();
-        self.checkbox_values.deinit();
-        self.slider_values.deinit();
     }
 
     /// Set checkbox value
@@ -98,13 +102,15 @@ pub const ValueState = struct {
 
     /// Set text value (makes a copy)
     pub fn setText(self: *ValueState, element_id: []const u8, text: []const u8) !void {
-        // Free old value if exists
-        if (self.text_values.get(element_id)) |old_value| {
-            self.allocator.free(old_value);
-        }
-        // Allocate and store new value
+        // Allocate new value first
         const owned = try self.allocator.dupe(u8, text);
-        try self.text_values.put(element_id, owned);
+        // If put fails, free the newly allocated string to prevent a leak
+        errdefer self.allocator.free(owned);
+
+        // Use fetchPut to get old value (if any) and insert new one atomically
+        if (try self.text_values.fetchPut(element_id, owned)) |old_entry| {
+            self.allocator.free(old_entry.value);
+        }
     }
 
     /// Get text value (returns default if not found)
@@ -114,11 +120,7 @@ pub const ValueState = struct {
 
     /// Clear all value overrides
     pub fn clear(self: *ValueState) void {
-        // Free allocated text values before clearing
-        var it = self.text_values.iterator();
-        while (it.next()) |entry| {
-            self.allocator.free(entry.value_ptr.*);
-        }
+        self.freeAllTextValues();
         self.text_values.clearRetainingCapacity();
         self.checkbox_values.clearRetainingCapacity();
         self.slider_values.clearRetainingCapacity();

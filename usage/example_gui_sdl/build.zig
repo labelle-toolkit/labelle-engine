@@ -61,36 +61,51 @@ pub fn build(b: *std.Build) void {
         }),
     });
 
-    // Link SDL2 libraries for macOS
+    // Link SDL2 libraries
     exe.linkLibC();
-    exe.linkSystemLibrary("sdl2");
-    exe.linkSystemLibrary("sdl2_ttf");
-    exe.linkSystemLibrary("sdl2_image");
 
-    // SDL2 frameworks
-    exe.linkFramework("Cocoa");
-    exe.linkFramework("CoreAudio");
-    exe.linkFramework("Carbon");
-    exe.linkFramework("Metal");
-    exe.linkFramework("QuartzCore");
-    exe.linkFramework("AudioToolbox");
-    exe.linkFramework("ForceFeedback");
-    exe.linkFramework("GameController");
-    exe.linkFramework("CoreHaptics");
-    exe.linkSystemLibrary("iconv");
+    const target_os = target.result.os.tag;
+    if (target_os == .macos) {
+        // macOS: use Homebrew-installed SDL2
+        exe.linkSystemLibrary("sdl2");
+        exe.linkSystemLibrary("sdl2_ttf");
+        exe.linkSystemLibrary("sdl2_image");
 
-    // SDL2_ttf dependencies
-    exe.linkSystemLibrary("freetype");
-    exe.linkSystemLibrary("harfbuzz");
-    exe.linkSystemLibrary("bz2");
-    exe.linkSystemLibrary("zlib");
-    exe.linkSystemLibrary("graphite2");
+        // macOS frameworks required by SDL2
+        exe.linkFramework("Cocoa");
+        exe.linkFramework("CoreAudio");
+        exe.linkFramework("Carbon");
+        exe.linkFramework("Metal");
+        exe.linkFramework("QuartzCore");
+        exe.linkFramework("AudioToolbox");
+        exe.linkFramework("ForceFeedback");
+        exe.linkFramework("GameController");
+        exe.linkFramework("CoreHaptics");
+        exe.linkSystemLibrary("iconv");
 
-    // SDL2_image dependencies
-    exe.linkSystemLibrary("jpeg");
-    exe.linkSystemLibrary("libpng");
-    exe.linkSystemLibrary("tiff");
-    exe.linkSystemLibrary("webp");
+        // SDL2_ttf dependencies
+        exe.linkSystemLibrary("freetype");
+        exe.linkSystemLibrary("harfbuzz");
+        exe.linkSystemLibrary("bz2");
+        exe.linkSystemLibrary("zlib");
+        exe.linkSystemLibrary("graphite2");
+
+        // SDL2_image dependencies
+        exe.linkSystemLibrary("jpeg");
+        exe.linkSystemLibrary("libpng");
+        exe.linkSystemLibrary("tiff");
+        exe.linkSystemLibrary("webp");
+    } else if (target_os == .linux) {
+        // Linux: use system SDL2 packages
+        exe.linkSystemLibrary("SDL2");
+        exe.linkSystemLibrary("SDL2_ttf");
+        exe.linkSystemLibrary("SDL2_image");
+    } else if (target_os == .windows) {
+        // Windows: use SDL2 libraries
+        exe.linkSystemLibrary("SDL2");
+        exe.linkSystemLibrary("SDL2_ttf");
+        exe.linkSystemLibrary("SDL2_image");
+    }
 
     b.installArtifact(exe);
 
