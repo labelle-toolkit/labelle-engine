@@ -46,7 +46,7 @@ pub fn main() !void {
     const args = try std.process.argsAlloc(allocator);
     defer std.process.argsFree(allocator, args);
 
-    // No args = show help
+    // No args = default to 'generate' command
     if (args.len < 2) {
         try handleGenerate(allocator, &.{});
         return;
@@ -220,7 +220,10 @@ fn handleBuild(allocator: std.mem.Allocator, args: []const []const u8) !void {
     child.stdout_behavior = .Inherit;
     child.stderr_behavior = .Inherit;
 
-    _ = try child.spawnAndWait();
+    const term = try child.spawnAndWait();
+    if (term != .Exited or term.Exited != 0) {
+        std.process.exit(if (term == .Exited) term.Exited else 1);
+    }
 }
 
 fn handleRun(allocator: std.mem.Allocator, args: []const []const u8) !void {
@@ -270,7 +273,10 @@ fn handleRun(allocator: std.mem.Allocator, args: []const []const u8) !void {
     child.stdout_behavior = .Inherit;
     child.stderr_behavior = .Inherit;
 
-    _ = try child.spawnAndWait();
+    const term = try child.spawnAndWait();
+    if (term != .Exited or term.Exited != 0) {
+        std.process.exit(if (term == .Exited) term.Exited else 1);
+    }
 }
 
 fn handleUpdate(allocator: std.mem.Allocator, args: []const []const u8) !void {

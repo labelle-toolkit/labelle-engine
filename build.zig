@@ -681,7 +681,25 @@ pub fn build(b: *std.Build) void {
         unit_test_step.dependOn(&run_unit_tests.step);
     }
 
-    // ZSpec tests - not for iOS
+    // Core module tests
+    const core_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("core/test/tests.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "zspec", .module = zspec },
+                .{ .name = "labelle-core", .module = core_mod },
+            },
+        }),
+        .test_runner = .{ .path = zspec_dep.path("src/runner.zig"), .mode = .simple },
+    });
+
+    const run_core_tests = b.addRunArtifact(core_tests);
+    const core_test_step = b.step("core-test", "Run core module tests");
+    core_test_step.dependOn(&run_core_tests.step);
+
+    // ZSpec tests and main test step - not for iOS
     if (!is_ios) {
         const zspec_tests = b.addTest(.{
             .root_module = b.createModule(.{
@@ -705,31 +723,11 @@ pub fn build(b: *std.Build) void {
         const run_zspec_tests = b.addRunArtifact(zspec_tests);
         const zspec_test_step = b.step("zspec", "Run zspec tests");
         zspec_test_step.dependOn(&run_zspec_tests.step);
-    }
 
-    // Core module tests
-    const core_tests = b.addTest(.{
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("core/test/tests.zig"),
-            .target = target,
-            .optimize = optimize,
-            .imports = &.{
-                .{ .name = "zspec", .module = zspec },
-                .{ .name = "labelle-core", .module = core_mod },
-            },
-        }),
-        .test_runner = .{ .path = zspec_dep.path("src/runner.zig"), .mode = .simple },
-    });
-
-    const run_core_tests = b.addRunArtifact(core_tests);
-    const core_test_step = b.step("core-test", "Run core module tests");
-    core_test_step.dependOn(&run_core_tests.step);
-
-    // Main test step runs all module tests (not for iOS)
-    if (!is_ios) {
+        // Main test step runs all module tests
         const test_step = b.step("test", "Run all tests");
         test_step.dependOn(&run_core_tests.step);
-        // Note: zspec test dependency is added in the if block above
+        test_step.dependOn(&run_zspec_tests.step);
     }
 
     // Note: Examples have their own build.zig and are built separately

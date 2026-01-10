@@ -40,7 +40,8 @@ pub const IosConfig = struct {
             const proj_config_path = try std.fs.path.join(allocator, &.{ project_path, "project.labelle" });
             defer allocator.free(proj_config_path);
 
-            const proj_config = ProjectConfig.load(allocator, proj_config_path) catch {
+            const proj_config = ProjectConfig.load(allocator, proj_config_path) catch |err| {
+                std.debug.print("Warning: could not load project.labelle, using defaults. Error: {any}\n", .{err});
                 return IosConfig{}; // Return defaults
             };
 
@@ -57,7 +58,8 @@ pub const IosConfig = struct {
         defer allocator.free(content);
         _ = try file.readAll(content);
 
-        return std.zon.parse.fromSlice(IosConfig, allocator, content, null, .{}) catch {
+        return std.zon.parse.fromSlice(IosConfig, allocator, content, null, .{}) catch |err| {
+            std.debug.print("Warning: could not parse ios.labelle, using defaults. Error: {any}\n", .{err});
             return IosConfig{}; // Return defaults on parse error
         };
     }
@@ -241,10 +243,13 @@ fn handleIosXcode(allocator: std.mem.Allocator, args: []const []const u8) !void 
     std.debug.print("\nStep 2: Generating Xcode project...\n", .{});
     try generateXcodeProject(allocator, project_path, output_dir, ios_config);
 
+    const sanitized_name = try sanitizeName(allocator, ios_config.app_name);
+    defer allocator.free(sanitized_name);
+
     std.debug.print("\nXcode project generated!\n", .{});
-    std.debug.print("  Location: {s}/{s}.xcodeproj\n", .{ output_dir, sanitizeName(ios_config.app_name) });
+    std.debug.print("  Location: {s}/{s}.xcodeproj\n", .{ output_dir, sanitized_name });
     std.debug.print("\nNext steps:\n", .{});
-    std.debug.print("  1. Open: open \"{s}/{s}.xcodeproj\"\n", .{ output_dir, sanitizeName(ios_config.app_name) });
+    std.debug.print("  1. Open: open \"{s}/{s}.xcodeproj\"\n", .{ output_dir, sanitized_name });
     std.debug.print("  2. Select your development team in Signing & Capabilities\n", .{});
     std.debug.print("  3. Add app icons to Assets.xcassets\n", .{});
     std.debug.print("  4. Build and run on device\n", .{});
@@ -391,7 +396,8 @@ fn generateIosBuildFiles(allocator: std.mem.Allocator, project_path: []const u8,
 
 /// Generate the Xcode project structure
 fn generateXcodeProject(allocator: std.mem.Allocator, project_path: []const u8, output_dir: []const u8, ios_config: IosConfig) !void {
-    const app_name = sanitizeName(ios_config.app_name);
+    const app_name = try sanitizeName(allocator, ios_config.app_name);
+    defer allocator.free(app_name);
 
     // Create directory structure
     const xcodeproj_dir = try std.fmt.allocPrint(allocator, "{s}/{s}.xcodeproj", .{ output_dir, app_name });
@@ -462,7 +468,9 @@ fn generateXcodeProject(allocator: std.mem.Allocator, project_path: []const u8, 
     const resources_dst = try std.fmt.allocPrint(allocator, "{s}/resources", .{app_dir});
     defer allocator.free(resources_dst);
 
-    copyDirectory(allocator, resources_src, resources_dst) catch {};
+    copyDirectory(allocator, resources_src, resources_dst) catch |err| {
+        std.debug.print("Warning: could not copy resources directory: {any}\n", .{err});
+    };
 
     // Copy project.labelle
     const proj_src = try std.fs.path.join(allocator, &.{ project_path, "project.labelle" });
@@ -471,7 +479,9 @@ fn generateXcodeProject(allocator: std.mem.Allocator, project_path: []const u8, 
     const proj_dst = try std.fmt.allocPrint(allocator, "{s}/project.labelle", .{app_dir});
     defer allocator.free(proj_dst);
 
-    std.fs.cwd().copyFile(proj_src, std.fs.cwd(), proj_dst, .{}) catch {};
+    std.fs.cwd().copyFile(proj_src, std.fs.cwd(), proj_dst, .{}) catch |err| {
+        std.debug.print("Warning: could not copy project.labelle: {any}\n", .{err});
+    };
 
     // Generate Assets.xcassets Contents.json files
     const assets_contents = try std.fmt.allocPrint(allocator, "{s}/Assets.xcassets/Contents.json", .{app_dir});
@@ -521,10 +531,13 @@ fn generateXcodeProject(allocator: std.mem.Allocator, project_path: []const u8, 
     try pbxproj_file.writeAll(pbxproj_content);
 }
 
-/// Sanitize name for use in identifiers (remove spaces, special chars)
-fn sanitizeName(name: []const u8) []const u8 {
-    // For now, just return the name - in production would sanitize
-    return name;
+/// Sanitize name for use in identifiers (replace spaces and special chars with underscores)
+fn sanitizeName(allocator: std.mem.Allocator, name: []const u8) ![]const u8 {
+    var result = try allocator.alloc(u8, name.len);
+    for (name, 0..) |c, i| {
+        result[i] = if (std.ascii.isAlphanumeric(c) or c == '_') c else '_';
+    }
+    return result;
 }
 
 /// Copy directory recursively
@@ -544,7 +557,9 @@ fn copyDirectory(allocator: std.mem.Allocator, src: []const u8, dst: []const u8)
 
         switch (entry.kind) {
             .file => {
-                std.fs.cwd().copyFile(src_path, std.fs.cwd(), dst_path, .{}) catch {};
+                std.fs.cwd().copyFile(src_path, std.fs.cwd(), dst_path, .{}) catch |err| {
+                    std.debug.print("Warning: could not copy {s}: {any}\n", .{ src_path, err });
+                };
             },
             .directory => {
                 try copyDirectory(allocator, src_path, dst_path);
@@ -795,7 +810,8 @@ fn generateLaunchScreen(allocator: std.mem.Allocator, ios_config: IosConfig) ![]
 }
 
 fn generatePbxproj(allocator: std.mem.Allocator, ios_config: IosConfig) ![]const u8 {
-    const app_name = sanitizeName(ios_config.app_name);
+    const app_name = try sanitizeName(allocator, ios_config.app_name);
+    defer allocator.free(app_name);
     const team_setting = if (ios_config.team_id) |tid|
         try std.fmt.allocPrint(allocator, "DEVELOPMENT_TEAM = {s};", .{tid})
     else
