@@ -342,14 +342,14 @@ pub fn image(self: *Self, img: types.Image) void {
 }
 
 pub fn checkbox(self: *Self, cb: types.Checkbox) bool {
-    var checked = cb.checked;
+    var changed = false;
 
     if (self.panel_depth > 0) {
         // Inside a panel - just add the checkbox to current layout
         nk.c.nk_layout_row_dynamic(&self.nk_state.ctx.c, 22, 1);
-        var active: bool = checked;
+        var active: bool = cb.checked;
         if (nk.c.nk_checkbox_label(&self.nk_state.ctx.c, cb.text.ptr, &active)) {
-            checked = active;
+            changed = true;
         }
     } else {
         // Top-level checkbox - create a mini window
@@ -366,15 +366,15 @@ pub fn checkbox(self: *Self, cb: types.Checkbox) bool {
 
         if (self.nk_state.ctx.begin(name, rect, .{ .no_scrollbar = true, .background = true })) |win| {
             win.layoutRowDynamic(22, 1);
-            var active: bool = checked;
+            var active: bool = cb.checked;
             if (nk.c.nk_checkbox_label(&self.nk_state.ctx.c, cb.text.ptr, &active)) {
-                checked = active;
+                changed = true;
             }
             win.end();
         }
     }
 
-    return checked;
+    return changed;
 }
 
 pub fn slider(self: *Self, sl: types.Slider) f32 {

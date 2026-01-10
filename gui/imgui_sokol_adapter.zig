@@ -137,8 +137,7 @@ pub fn label(self: *Self, lbl: types.Label) void {
         const name = self.nextWindowName(&name_buf);
 
         // Calculate actual text width
-        var text_size: cimgui.ImVec2 = undefined;
-        cimgui.igCalcTextSize(&text_size, text_z.ptr, null, false, -1.0);
+        const text_size = cimgui.igCalcTextSize(text_z.ptr);
 
         cimgui.igSetNextWindowPos(.{ .x = lbl.position.x, .y = lbl.position.y }, 0);
         cimgui.igSetNextWindowSize(.{ .x = text_size.x + 16, .y = lbl.font_size + 8 }, 0);
@@ -246,23 +245,23 @@ pub fn image(self: *Self, img: types.Image) void {
 }
 
 pub fn checkbox(self: *Self, cb: types.Checkbox) bool {
-    if (!self.backend_initialized) return cb.checked;
+    if (!self.backend_initialized) return false;
 
     var checked = cb.checked;
+    var changed = false;
 
     // Convert text to null-terminated
     var text_buf: [256]u8 = undefined;
-    const text_z = std.fmt.bufPrintZ(&text_buf, "{s}", .{cb.text}) catch return checked;
+    const text_z = std.fmt.bufPrintZ(&text_buf, "{s}", .{cb.text}) catch return false;
 
     if (self.panel_depth > 0) {
-        _ = cimgui.igCheckbox(text_z.ptr, &checked);
+        changed = cimgui.igCheckbox(text_z.ptr, &checked);
     } else {
         var name_buf: [32]u8 = undefined;
         const name = self.nextWindowName(&name_buf);
 
         // Calculate actual text width for proper sizing
-        var text_size: cimgui.ImVec2 = undefined;
-        cimgui.igCalcTextSize(&text_size, text_z.ptr, null, false, -1.0);
+        const text_size = cimgui.igCalcTextSize(text_z.ptr);
 
         cimgui.igSetNextWindowPos(.{ .x = cb.position.x, .y = cb.position.y }, 0);
         cimgui.igSetNextWindowSize(.{ .x = text_size.x + 50, .y = 40 }, 0);
@@ -274,12 +273,12 @@ pub fn checkbox(self: *Self, cb: types.Checkbox) bool {
             cimgui.ImGuiWindowFlags_NoBackground;
 
         if (cimgui.igBegin(name, null, flags)) {
-            _ = cimgui.igCheckbox(text_z.ptr, &checked);
+            changed = cimgui.igCheckbox(text_z.ptr, &checked);
         }
         cimgui.igEnd();
     }
 
-    return checked;
+    return changed;
 }
 
 pub fn slider(self: *Self, sl: types.Slider) f32 {

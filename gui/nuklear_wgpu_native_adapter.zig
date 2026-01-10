@@ -59,7 +59,9 @@ pub fn image(self: *Self, img: types.Image) void {
 
 pub fn checkbox(self: *Self, cb: types.Checkbox) bool {
     _ = self;
-    return cb.checked;
+    _ = cb;
+    // TODO: Implement when wgpu_native nuklear rendering is complete
+    return false;
 }
 
 pub fn slider(self: *Self, sl: types.Slider) f32 {

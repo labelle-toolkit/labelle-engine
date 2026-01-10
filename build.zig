@@ -265,10 +265,14 @@ pub fn build(b: *std.Build) void {
             .wgpu_native => .no_backend, // wgpu_native uses custom ImGui adapter
         };
 
+        // SDL2 renderer backend needs obsolete functions (GetTexDataAsRGBA32, SetTexID)
+        const needs_obsolete = (zgui_backend == .sdl2_renderer);
+
         break :blk b.dependency("zgui", .{
             .target = target,
             .optimize = optimize,
             .backend = zgui_backend,
+            .disable_obsolete = !needs_obsolete,
         });
     } else null;
 
