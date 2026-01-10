@@ -15,7 +15,10 @@ A declarative 2D game engine for Zig with comptime scene definitions and pluggab
 - **Layer System** - Built-in background, world, and UI layers with automatic screen/world-space handling
 - **Sprite Sizing Modes** - CSS-like sizing (stretch, cover, contain, repeat) for backgrounds and UI
 - **Fullscreen Support** - Toggle fullscreen and detect screen resize events
-- **Multiple Graphics Backends** - raylib (default) and sokol support
+- **Multiple Graphics Backends** - raylib (default), sokol, SDL2, and wgpu_native support
+- **GUI System** - Multi-backend GUI with raygui, Nuklear, ImGui, and Clay support
+- **GUI Runtime State** - Dynamic visibility and value updates without redefining views
+- **FormBinder** - Auto-bind GUI form fields to data structs
 - **Project Generator** - Auto-generate build files from `project.labelle` configuration
 - **Dirty Tracking** - Efficient render pipeline that only syncs changed state
 
@@ -30,7 +33,7 @@ Add labelle-engine to your `build.zig.zon`:
 ```zig
 .dependencies = .{
     .@"labelle-engine" = .{
-        .url = "git+https://github.com/labelle-toolkit/labelle-engine#v0.32.0",
+        .url = "git+https://github.com/labelle-toolkit/labelle-engine#v0.35.1",
         .hash = "<hash>",
     },
 },
@@ -211,6 +214,10 @@ See the `usage/` directory for complete examples:
 - **example_hooks** - Two-way plugin hook binding pattern
 - **example_hooks_generator** - Hooks folder pattern with generator
 - **example_parent_refs** - Parent references and onReady callbacks
+- **example_gui** - Multi-backend GUI demonstration (raygui, Nuklear, ImGui)
+- **example_gui_sdl** - ImGui with SDL2 graphics backend
+- **example_conditional_form** - Dynamic form visibility with FormBinder
+- **example_clay_gui** - Clay declarative UI layout engine
 
 Run examples:
 ```bash

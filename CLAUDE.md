@@ -893,7 +893,61 @@ game.renderGui(Views, Scripts, &.{"hud", "minimap"});
 game.renderSceneGui(&scene, Views, Scripts);
 ```
 
-See `usage/example_gui/` for a complete demo.
+**GUI Runtime State:**
+
+For dynamic GUI updates without redefining comptime views, use `VisibilityState` and `ValueState`:
+
+```zig
+const labelle = @import("labelle-engine");
+
+// Visibility state for conditional rendering
+var visibility_state = labelle.VisibilityState.init(allocator);
+defer visibility_state.deinit();
+
+try visibility_state.setVisible("boss_panel", is_boss_mode);  // Show/hide elements
+const visible = visibility_state.isVisible("health_bar", true);  // Check with default
+
+// Value state for runtime text/checkbox/slider updates
+var value_state = labelle.ValueState.init(allocator);
+defer value_state.deinit();
+
+try value_state.setText("score_label", "Score: 1000");  // Update text
+try value_state.setCheckbox("sound_enabled", true);     // Update checkbox
+try value_state.setSlider("volume", 0.75);              // Update slider
+
+const text = value_state.getText("score_label", "Score: 0");  // Get with default
+const checked = value_state.getCheckbox("sound_enabled", false);
+const volume = value_state.getSlider("volume", 1.0);
+```
+
+**FormBinder:**
+
+Auto-bind form fields to a state struct:
+
+```zig
+const MonsterFormState = struct {
+    health: f32 = 100,
+    attack: f32 = 10,
+    is_boss: bool = false,
+
+    // Optional visibility rules
+    pub fn isVisible(self: @This(), element_id: []const u8) bool {
+        if (std.mem.eql(u8, element_id, "boss_options")) {
+            return self.is_boss;
+        }
+        return true;
+    }
+};
+
+const MonsterBinder = labelle.FormBinder(MonsterFormState, "monster_form");
+
+var form_state = MonsterFormState{};
+const binder = MonsterBinder.init(&form_state);
+
+// Use binder to sync GUI <-> state
+```
+
+See `usage/example_gui/` and `usage/example_conditional_form/` for complete demos.
 
 ### Important Patterns
 
