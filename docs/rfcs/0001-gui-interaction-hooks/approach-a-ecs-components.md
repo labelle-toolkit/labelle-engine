@@ -41,6 +41,15 @@ Store form state as ECS components attached to entities. Each form gets its own 
 const std = @import("std");
 const labelle = @import("labelle-engine");
 
+/// Data struct for creating a monster entity
+pub const MonsterData = struct {
+    name: []const u8,
+    health: i32,
+    attack: i32,
+    is_boss: bool,
+    element: MonsterFormState.MonsterElement,
+};
+
 /// Component holding state for MonsterForm
 pub const MonsterFormState = struct {
     // Form fields

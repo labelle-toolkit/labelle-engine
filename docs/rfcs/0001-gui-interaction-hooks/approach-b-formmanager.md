@@ -620,7 +620,6 @@ pub fn instantiateFormTemplate(
             .string => |s| try manager.setString(element_id, s),
             .float => |f| try manager.setFloat(element_id, f),
             .bool => |b| try manager.setBool(element_id, b),
-            .int => |i| try manager.setInt(element_id, i),
         }
     }
 }

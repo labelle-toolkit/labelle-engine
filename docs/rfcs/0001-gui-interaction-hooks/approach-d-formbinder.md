@@ -571,13 +571,17 @@ pub fn checkbox_toggled(payload: GuiHookPayload) void {
 ```zig
 // 1. Define form state with setter methods
 pub const MonsterFormState = struct {
-    name: [128:0]u8 = ...,
+    name: [128:0]u8 = std.mem.zeroes([128:0]u8),
     health: f32 = 100,
     attack: f32 = 10,
     is_boss: bool = false,
-    
-    pub fn setName(self: *MonsterFormState, name: []const u8) void { ... }
-    pub fn validate(self: *MonsterFormState) bool { ... }
+
+    pub fn setName(self: *MonsterFormState, value: []const u8) void {
+        @memcpy(self.name[0..@min(value.len, 127)], value[0..@min(value.len, 127)]);
+    }
+    pub fn validate(self: *MonsterFormState) bool {
+        return self.health > 0 and self.name[0] != 0;
+    }
 };
 
 // 2. Create binder (one line!)
@@ -640,8 +644,8 @@ For fields that need special handling, you can provide custom handlers:
 
 ```zig
 pub const MonsterFormState = struct {
-    name: [128:0]u8 = ...,
-    
+    name: [128:0]u8 = std.mem.zeroes([128:0]u8),
+
     // Custom setter with validation
     pub fn setName(self: *MonsterFormState, name: []const u8) void {
         // Strip whitespace

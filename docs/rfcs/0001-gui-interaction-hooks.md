@@ -163,6 +163,15 @@ pub const SliderInfo = struct {
     dragging: bool,
 };
 
+/// Payload for custom user-defined events
+pub const CustomEventInfo = struct {
+    element: ElementInfo,
+    /// Custom event name/type
+    event_name: []const u8,
+    /// Optional payload data
+    data: ?*const anyopaque = null,
+};
+
 /// Type-safe payload union for GUI hooks
 pub const GuiHookPayload = union(GuiHook) {
     button_clicked: ButtonClickInfo,
@@ -358,7 +367,7 @@ const WizardBinder = FormBinder(WizardFormState);
 
 pub fn text_input_changed(payload: GuiHookPayload) void {
     monster_binding.handleEvent(payload);
-    wizard_binding.handleEvent(payload);
+    monster_binding.handleEvent(payload);
 }
 ```
 
@@ -513,12 +522,12 @@ const monster_binding = MonsterBinder.bind("monster_form", &monster_form_state);
 const MyGuiHandlers = struct {
     pub fn text_input_changed(payload: GuiHookPayload) void {
         monster_binding.handleEvent(payload);
-        wizard_binding.handleEvent(payload);
+        monster_binding.handleEvent(payload);
     }
     
     pub fn slider_changed(payload: GuiHookPayload) void {
         monster_binding.handleEvent(payload);
-        wizard_binding.handleEvent(payload);
+        monster_binding.handleEvent(payload);
     }
     
     pub fn button_clicked(payload: GuiHookPayload) void {
