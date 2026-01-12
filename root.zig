@@ -113,6 +113,17 @@ pub const Touch = input.Touch;
 pub const TouchPhase = input.TouchPhase;
 pub const MAX_TOUCHES = input.MAX_TOUCHES;
 
+// Gesture types
+pub const Gestures = input.Gestures;
+pub const SwipeDirection = input.SwipeDirection;
+pub const Pinch = input.Pinch;
+pub const Pan = input.Pan;
+pub const Swipe = input.Swipe;
+pub const Tap = input.Tap;
+pub const DoubleTap = input.DoubleTap;
+pub const LongPress = input.LongPress;
+pub const Rotation = input.Rotation;
+
 // Audio types
 pub const Audio = audio.Audio;
 pub const SoundId = audio.SoundId;
