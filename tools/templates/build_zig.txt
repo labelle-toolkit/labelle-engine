@@ -266,14 +266,12 @@ pub fn build(b: *std.Build) void {{
 .ios_frameworks
     // Link iOS frameworks when targeting iOS
     if (is_ios) {{
-        // Determine iOS SDK path based on target ABI (device vs simulator)
-        const sdk_path = if (target.result.abi == .simulator)
-            "/Applications/Xcode.app/Contents/Developer/Platforms/iPhoneSimulator.platform/Developer/SDKs/iPhoneSimulator.sdk"
-        else
-            "/Applications/Xcode.app/Contents/Developer/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS.sdk";
-
-        // Add framework search path for linking
-        exe.addFrameworkPath(.{{ .cwd_relative = sdk_path ++ "/System/Library/Frameworks" }});
+        // Add framework search path for linking - select SDK based on target ABI
+        if (target.result.abi == .simulator) {{
+            exe.addFrameworkPath(.{{ .cwd_relative = "/Applications/Xcode.app/Contents/Developer/Platforms/iPhoneSimulator.platform/Developer/SDKs/iPhoneSimulator.sdk/System/Library/Frameworks" }});
+        }} else {{
+            exe.addFrameworkPath(.{{ .cwd_relative = "/Applications/Xcode.app/Contents/Developer/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS.sdk/System/Library/Frameworks" }});
+        }}
 
         exe.linkFramework("Metal");
         exe.linkFramework("MetalKit");
