@@ -192,22 +192,13 @@ pub fn build(b: *std.Build) void {
 
     // Clay UI dependency (Zig bindings)
     // Skip for WASM - Clay is a C library that requires libc
-    const zclay_dep: ?*std.Build.Dependency = if (!is_wasm) b.dependency("zclay", .{
+    // Skip for iOS simulator - Clay's SIMD code doesn't work on the simulator and
+    // zclay doesn't expose its clay artifact for us to add CLAY_DISABLE_SIMD
+    const zclay_dep: ?*std.Build.Dependency = if (!is_wasm and !is_ios_simulator) b.dependency("zclay", .{
         .target = target,
         .optimize = optimize,
     }) else null;
     const zclay: ?*std.Build.Module = if (zclay_dep) |dep| dep.module("zclay") else null;
-
-    // For iOS simulator, disable SIMD in Clay to avoid NEON intrinsic issues
-    // iOS devices have proper NEON support so they don't need this
-    // Note: We apply this regardless of gui_backend because zclay is always built as a dependency
-    // We need to add the macro to the clay artifact's root_module, not just the zig module
-    if (is_ios_simulator) {
-        if (zclay_dep) |dep| {
-            const clay_lib = dep.artifact("clay");
-            clay_lib.root_module.addCMacro("CLAY_DISABLE_SIMD", "1");
-        }
-    }
 
     // Build options module for compile-time configuration (create once, reuse everywhere)
     const build_options = b.addOptions();
