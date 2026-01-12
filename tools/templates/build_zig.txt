@@ -266,6 +266,11 @@ pub fn build(b: *std.Build) void {{
 .ios_frameworks
     // Link iOS frameworks when targeting iOS
     if (is_ios) {{
+        // Add iOS SDK framework search path
+        if (target.result.getSysroot()) |sysroot| {{
+            exe.addFrameworkPath(.{{ .cwd_relative = sysroot ++ "/System/Library/Frameworks" }});
+        }}
+        exe.linkSystemLibrary("objc");
         exe.linkFramework("Metal");
         exe.linkFramework("MetalKit");
         exe.linkFramework("UIKit");
