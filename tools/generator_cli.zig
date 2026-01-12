@@ -11,7 +11,6 @@
 //   build       Build the project
 //   run         Build and run the project
 //   update      Clear caches and regenerate for current CLI version
-//   ios         iOS-specific commands (build, xcode, run)
 //
 // Generate Options:
 //   --main-only           Only generate main.zig (not build.zig or build.zig.zon)
@@ -19,19 +18,13 @@
 //   --engine-path <path>  Use local path to labelle-engine (for development)
 //   --no-fetch            Skip fetching dependency hashes (faster, offline)
 //
-// iOS Commands:
-//   ios build             Build for iOS device (arm64-ios)
-//   ios build --simulator Build for iOS simulator
-//   ios build --release   Build release configuration
-//   ios xcode             Generate Xcode project for code signing
-//   ios run               Build and run on device/simulator
-//
 // If no command is provided, defaults to 'generate'.
 // If no path is provided, uses current directory.
+//
+// Note: iOS commands have been moved to labelle-cli.
 
 const std = @import("std");
 const generator = @import("generator.zig");
-const ios_commands = @import("ios_commands.zig");
 
 // Version from build.zig.zon (imported as module)
 const build_zon = @import("build_zon");
@@ -63,8 +56,6 @@ pub fn main() !void {
         try handleRun(allocator, args[2..]);
     } else if (std.mem.eql(u8, command, "update")) {
         try handleUpdate(allocator, args[2..]);
-    } else if (std.mem.eql(u8, command, "ios")) {
-        try ios_commands.handleIos(allocator, args[2..], version);
     } else if (std.mem.eql(u8, command, "--help") or std.mem.eql(u8, command, "-h")) {
         printHelp();
     } else if (std.mem.eql(u8, command, "--version") or std.mem.eql(u8, command, "-v")) {
@@ -89,7 +80,6 @@ fn printHelp() void {
         \\  build       Build the project
         \\  run         Build and run the project
         \\  update      Clear caches and regenerate for current CLI version
-        \\  ios         iOS-specific commands
         \\
         \\Generate Options:
         \\  --main-only           Only generate main.zig
@@ -97,20 +87,13 @@ fn printHelp() void {
         \\  --engine-path <path>  Use local labelle-engine path
         \\  --no-fetch            Skip fetching dependency hashes
         \\
-        \\iOS Commands:
-        \\  ios build             Build for iOS device
-        \\  ios build --simulator Build for iOS simulator
-        \\  ios build --release   Build release configuration
-        \\  ios xcode             Generate Xcode project
-        \\  ios run               Build and run on device/simulator
-        \\
         \\Examples:
         \\  labelle                      # Generate in current directory
         \\  labelle generate ./my-game   # Generate for specific project
         \\  labelle build                # Build the project
         \\  labelle run                  # Build and run
-        \\  labelle ios build            # Build for iOS
-        \\  labelle ios xcode            # Generate Xcode project
+        \\
+        \\Note: For iOS commands, use labelle-cli: labelle ios --help
         \\
     , .{});
 }

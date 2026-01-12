@@ -199,6 +199,19 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
         });
 
+        // For iOS, add SDK paths to box2d artifact (C library needs system headers)
+        if (is_ios) {
+            const ios_sdk_path = std.zig.system.darwin.getSdk(b.allocator, &target.result);
+            if (ios_sdk_path) |sdk| {
+                const box2d_artifact = box2d_dep.artifact("box2d");
+                const inc_path = b.pathJoin(&.{ sdk, "usr", "include" });
+                const lib_path = b.pathJoin(&.{ sdk, "usr", "lib" });
+
+                box2d_artifact.root_module.addSystemIncludePath(.{ .cwd_relative = inc_path });
+                box2d_artifact.root_module.addLibraryPath(.{ .cwd_relative = lib_path });
+            }
+        }
+
         physics_module = b.addModule("labelle-physics", .{
             .root_source_file = b.path("physics/mod.zig"),
             .target = target,
