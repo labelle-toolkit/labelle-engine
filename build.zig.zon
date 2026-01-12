@@ -16,7 +16,7 @@
         // TODO: Update to version tag once WASM support is merged
         .@"labelle-gfx" = .{
             .url = "git+https://github.com/labelle-toolkit/labelle-gfx#feature/wasm-support",
-            .hash = "labelle_gfx-0.28.0-WZ2XcKr-CwDxa2pxgKIbjpj2weICx4txZociHgmLf_QY",
+            .hash = "labelle_gfx-0.28.0-WZ2XcBb_CwARJxuXJq3HahlNtgvhErM_w0QQ5RgX9bcK",
         },
         .zspec = .{
             .url = "git+https://github.com/apotema/zspec#71c901d6e74b2d5a8c556d4c74ced9b91446d8a4",
