@@ -37,18 +37,21 @@ const main_wgpu_native_tmpl = @embedFile("templates/main_wgpu_native.txt");
 fn sanitizeZigIdentifier(allocator: std.mem.Allocator, name: []const u8) ![]const u8 {
     if (name.len == 0) return error.InvalidIdentifier;
 
-    // Count valid characters
+    // Count valid characters and check if result starts with digit
     var valid_count: usize = 0;
     var starts_with_digit = false;
-    for (name, 0..) |c, i| {
+    var seen_valid_char = false; // Track if we've seen any valid output character
+    for (name) |c| {
         if (isValidIdentifierChar(c)) {
-            if (i == 0 and std.ascii.isDigit(c)) {
+            // Check if first valid character is a digit
+            if (!seen_valid_char and std.ascii.isDigit(c)) {
                 starts_with_digit = true;
             }
+            seen_valid_char = true;
             valid_count += 1;
         } else if (c == '-') {
-            // Hyphens become underscores
-            if (i == 0) starts_with_digit = false; // underscore is valid start
+            // Hyphens become underscores - underscore is valid start
+            seen_valid_char = true;
             valid_count += 1;
         }
         // Other characters are silently dropped

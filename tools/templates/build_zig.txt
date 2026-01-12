@@ -78,7 +78,8 @@ pub fn build(b: *std.Build) void {{
 .physics_import
     if (physics_enabled) {{
         const physics_mod = engine_dep.module("labelle-physics");
-        exe_mod.addImport("physics", physics_mod);
+        exe_mod.addImport("labelle-physics", physics_mod);
+        exe_mod.addImport("physics", physics_mod); // convenient alias
     }}
 
 .raylib_exe_final
