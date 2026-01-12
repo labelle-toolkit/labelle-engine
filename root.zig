@@ -162,16 +162,16 @@ else
 /// have all engine components available without manual imports.
 pub const BuiltinComponentsWithPhysics = if (build_options.physics_enabled)
     struct {
-        // Render components
-        pub const Position = render.Position;
-        pub const Sprite = render.Sprite;
-        pub const Shape = render.Shape;
-        pub const Text = render.Text;
-        // Physics components (auto-included)
-        pub const RigidBody = physics.RigidBody;
-        pub const Collider = physics.Collider;
-        pub const Velocity = physics.Velocity;
-        pub const Touching = physics.Touching;
+        // Render components (from BuiltinComponents)
+        pub const Position = BuiltinComponents.Position;
+        pub const Sprite = BuiltinComponents.Sprite;
+        pub const Shape = BuiltinComponents.Shape;
+        pub const Text = BuiltinComponents.Text;
+        // Physics components (from PhysicsComponents)
+        pub const RigidBody = PhysicsComponents.RigidBody;
+        pub const Collider = PhysicsComponents.Collider;
+        pub const Velocity = PhysicsComponents.Velocity;
+        pub const Touching = PhysicsComponents.Touching;
     }
 else
     BuiltinComponents;
