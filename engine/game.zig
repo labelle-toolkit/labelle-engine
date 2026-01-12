@@ -636,11 +636,13 @@ pub fn GameWith(comptime Hooks: type) type {
         // ==================== Multi-Camera ====================
 
         /// Get a camera by index (0-3)
+        /// Returns the backend-aware camera type from RetainedEngine
         pub fn getCameraAt(self: *Self, index: u2) *RetainedEngine.CameraType {
             return self.retained_engine.getCameraAt(index);
         }
 
         /// Get the camera manager (for advanced multi-camera control)
+        /// Returns the backend-aware camera manager type from RetainedEngine
         pub fn getCameraManager(self: *Self) *RetainedEngine.CameraManagerType {
             return self.retained_engine.getCameraManager();
         }
