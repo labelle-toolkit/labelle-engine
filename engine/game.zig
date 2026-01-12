@@ -314,6 +314,9 @@ pub fn GameWith(comptime Hooks: type) type {
 
             // Clear standalone gizmos
             self.standalone_gizmos.clearRetainingCapacity();
+
+            // Reset gesture state to avoid carrying gestures across scenes
+            self.gestures.reset();
         }
 
         // ==================== Entity Management ====================

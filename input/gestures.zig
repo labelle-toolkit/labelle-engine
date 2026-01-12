@@ -167,6 +167,8 @@ pub const Gestures = struct {
         tap_max_movement: f32 = 20.0,
         /// Maximum tap duration in seconds
         tap_max_duration: f32 = 0.3,
+        /// Maximum distance between taps for double-tap recognition
+        double_tap_max_distance: f32 = 40.0,
         /// Minimum distance change for pinch to register
         pinch_threshold: f32 = 5.0,
         /// Minimum angle change in radians for rotation to register
@@ -283,25 +285,29 @@ pub const Gestures = struct {
     }
 
     fn processTouch(self: *Self, touch: Touch, index: usize) void {
-        if (index >= MAX_TOUCHES) return;
-
-        const state = &self.touch_states[index];
+        _ = index; // Index is unreliable; look up by touch.id instead
 
         switch (touch.phase) {
             .began => {
-                // New touch started
-                state.* = .{
-                    .id = touch.id,
-                    .start_x = touch.x,
-                    .start_y = touch.y,
-                    .start_time = self.total_time,
-                    .last_x = touch.x,
-                    .last_y = touch.y,
-                    .active = true,
-                };
+                // Find an available slot for new touch
+                for (&self.touch_states) |*state| {
+                    if (!state.active) {
+                        state.* = .{
+                            .id = touch.id,
+                            .start_x = touch.x,
+                            .start_y = touch.y,
+                            .start_time = self.total_time,
+                            .last_x = touch.x,
+                            .last_y = touch.y,
+                            .active = true,
+                        };
+                        break;
+                    }
+                }
             },
             .moved => {
-                if (state.active) {
+                // Find state by touch.id
+                if (self.findTouchState(touch.id)) |state| {
                     // Check for long press (touch held without much movement)
                     const dx = touch.x - state.start_x;
                     const dy = touch.y - state.start_y;
@@ -324,15 +330,27 @@ pub const Gestures = struct {
                 }
             },
             .ended => {
-                if (state.active) {
+                if (self.findTouchState(touch.id)) |state| {
                     self.processTouchEnd(touch, state);
                     state.active = false;
                 }
             },
             .cancelled => {
-                state.active = false;
+                if (self.findTouchState(touch.id)) |state| {
+                    state.active = false;
+                }
             },
         }
+    }
+
+    /// Find touch state by touch ID
+    fn findTouchState(self: *Self, touch_id: u64) ?*TouchState {
+        for (&self.touch_states) |*state| {
+            if (state.active and state.id == touch_id) {
+                return state;
+            }
+        }
+        return null;
     }
 
     fn processTouchEnd(self: *Self, touch: Touch, state: *const TouchState) void {
@@ -375,7 +393,7 @@ pub const Gestures = struct {
 
             if (self.pending_tap != null and
                 time_since_last_tap < self.config.double_tap_interval and
-                tap_distance < self.config.tap_max_movement * 2)
+                tap_distance < self.config.double_tap_max_distance)
             {
                 // Double tap detected
                 self.current_double_tap = .{
