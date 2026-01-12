@@ -29,14 +29,63 @@ const main_bgfx_tmpl = @embedFile("templates/main_bgfx.txt");
 const main_zgpu_tmpl = @embedFile("templates/main_zgpu.txt");
 const main_wgpu_native_tmpl = @embedFile("templates/main_wgpu_native.txt");
 
-/// Sanitize a project name to be a valid Zig identifier
-/// Replaces hyphens with underscores
+/// Sanitize a project name to be a valid Zig identifier.
+/// - Replaces hyphens with underscores
+/// - Removes any invalid characters (only a-z, A-Z, 0-9, _ allowed)
+/// - Prepends underscore if name starts with a digit
+/// - Returns error if name is empty or becomes empty after sanitization
 fn sanitizeZigIdentifier(allocator: std.mem.Allocator, name: []const u8) ![]const u8 {
-    var result = try allocator.alloc(u8, name.len);
-    for (name, 0..) |c, i| {
-        result[i] = if (c == '-') '_' else c;
+    if (name.len == 0) return error.InvalidIdentifier;
+
+    // Count valid characters and check if result starts with digit
+    var valid_count: usize = 0;
+    var starts_with_digit = false;
+    var seen_valid_char = false; // Track if we've seen any valid output character
+    for (name) |c| {
+        if (isValidIdentifierChar(c)) {
+            // Check if first valid character is a digit
+            if (!seen_valid_char and std.ascii.isDigit(c)) {
+                starts_with_digit = true;
+            }
+            seen_valid_char = true;
+            valid_count += 1;
+        } else if (c == '-') {
+            // Hyphens become underscores - underscore is valid start
+            seen_valid_char = true;
+            valid_count += 1;
+        }
+        // Other characters are silently dropped
     }
+
+    if (valid_count == 0) return error.InvalidIdentifier;
+
+    // Allocate result (add 1 if we need to prepend underscore)
+    const extra: usize = if (starts_with_digit) 1 else 0;
+    var result = try allocator.alloc(u8, valid_count + extra);
+
+    // Build result
+    var idx: usize = 0;
+    if (starts_with_digit) {
+        result[0] = '_';
+        idx = 1;
+    }
+
+    for (name) |c| {
+        if (isValidIdentifierChar(c)) {
+            result[idx] = c;
+            idx += 1;
+        } else if (c == '-') {
+            result[idx] = '_';
+            idx += 1;
+        }
+    }
+
     return result;
+}
+
+/// Check if character is valid in a Zig identifier (alphanumeric or underscore)
+fn isValidIdentifierChar(c: u8) bool {
+    return std.ascii.isAlphanumeric(c) or c == '_';
 }
 
 /// Fetch package hash using zig fetch command
@@ -242,11 +291,6 @@ pub fn generateBuildZig(allocator: std.mem.Allocator, config: ProjectConfig) ![]
     // Template args: graphics_backend (x2), ecs_backend (x2), gui_backend (x2), physics (x2)
     try zts.print(build_zig_tmpl, "header", .{ default_backend, default_backend, default_ecs_backend, default_ecs_backend, default_gui_backend, default_gui_backend, physics_str, physics_str }, writer);
 
-    // Write physics module getter if physics is enabled
-    if (physics_enabled) {
-        try zts.print(build_zig_tmpl, "physics_mod", .{}, writer);
-    }
-
     // Write plugin dependency declarations
     // Sanitize plugin names for use as Zig identifiers
     var plugin_zig_names = try allocator.alloc([]const u8, config.plugins.len);
@@ -280,36 +324,23 @@ pub fn generateBuildZig(allocator: std.mem.Allocator, config: ProjectConfig) ![]
         try zts.print(build_zig_tmpl, "plugin_dep", .{ plugin_zig_name, plugin.name, plugin_zig_name, plugin_zig_name, plugin_module_name }, writer);
     }
 
-    // Write backend-specific executable setup (start of imports)
-    // Template args: project_name
+    // Write backend-specific executable setup (creates exe_mod and adds backend imports)
     switch (config.backend) {
-        .raylib => try zts.print(build_zig_tmpl, "raylib_exe_start", .{zig_name}, writer),
-        .sokol => try zts.print(build_zig_tmpl, "sokol_exe_start", .{zig_name}, writer),
-        .sdl => try zts.print(build_zig_tmpl, "sdl_exe_start", .{zig_name}, writer),
-        .bgfx => try zts.print(build_zig_tmpl, "bgfx_exe_start", .{zig_name}, writer),
-        .zgpu => try zts.print(build_zig_tmpl, "zgpu_exe_start", .{zig_name}, writer),
-        .wgpu_native => try zts.print(build_zig_tmpl, "wgpu_native_exe_start", .{zig_name}, writer),
+        .raylib => try zts.print(build_zig_tmpl, "raylib_exe_start", .{}, writer),
+        .sokol => try zts.print(build_zig_tmpl, "sokol_exe_start", .{}, writer),
+        .sdl => try zts.print(build_zig_tmpl, "sdl_exe_start", .{}, writer),
+        .bgfx => try zts.print(build_zig_tmpl, "bgfx_exe_start", .{}, writer),
+        .zgpu => try zts.print(build_zig_tmpl, "zgpu_exe_start", .{}, writer),
+        .wgpu_native => try zts.print(build_zig_tmpl, "wgpu_native_exe_start", .{}, writer),
     }
 
-    // Write physics import if physics is enabled
-    if (physics_enabled) {
-        switch (config.backend) {
-            .raylib => try zts.print(build_zig_tmpl, "physics_import", .{}, writer),
-            .sokol => try zts.print(build_zig_tmpl, "sokol_physics_import", .{}, writer),
-            .sdl => try zts.print(build_zig_tmpl, "sdl_physics_import", .{}, writer),
-            .bgfx => try zts.print(build_zig_tmpl, "bgfx_physics_import", .{}, writer),
-            .zgpu => try zts.print(build_zig_tmpl, "zgpu_physics_import", .{}, writer),
-            .wgpu_native => try zts.print(build_zig_tmpl, "wgpu_native_physics_import", .{}, writer),
-        }
-    }
-
-    // Write plugin imports
+    // Write plugin imports (using exe_mod.addImport)
     for (config.plugins, 0..) |plugin, i| {
         // Template args: name, zig_name
         try zts.print(build_zig_tmpl, "plugin_import", .{ plugin.name, plugin_zig_names[i] }, writer);
     }
 
-    // Write backend-specific executable setup (end of imports)
+    // Write backend-specific executable setup end (empty section, just for ordering)
     switch (config.backend) {
         .raylib => try zts.print(build_zig_tmpl, "raylib_exe_end", .{}, writer),
         .sokol => try zts.print(build_zig_tmpl, "sokol_exe_end", .{}, writer),
@@ -317,6 +348,20 @@ pub fn generateBuildZig(allocator: std.mem.Allocator, config: ProjectConfig) ![]
         .bgfx => try zts.print(build_zig_tmpl, "bgfx_exe_end", .{}, writer),
         .zgpu => try zts.print(build_zig_tmpl, "zgpu_exe_end", .{}, writer),
         .wgpu_native => try zts.print(build_zig_tmpl, "wgpu_native_exe_end", .{}, writer),
+    }
+
+    // Write physics module import (conditional on physics_enabled)
+    try zts.print(build_zig_tmpl, "physics_import", .{}, writer);
+
+    // Write backend-specific executable creation (creates exe from exe_mod)
+    // Template args: project_name
+    switch (config.backend) {
+        .raylib => try zts.print(build_zig_tmpl, "raylib_exe_final", .{zig_name}, writer),
+        .sokol => try zts.print(build_zig_tmpl, "sokol_exe_final", .{zig_name}, writer),
+        .sdl => try zts.print(build_zig_tmpl, "sdl_exe_final", .{zig_name}, writer),
+        .bgfx => try zts.print(build_zig_tmpl, "bgfx_exe_final", .{zig_name}, writer),
+        .zgpu => try zts.print(build_zig_tmpl, "zgpu_exe_final", .{zig_name}, writer),
+        .wgpu_native => try zts.print(build_zig_tmpl, "wgpu_native_exe_final", .{zig_name}, writer),
     }
 
     // Write backend-specific library linking (bgfx/zgpu need native libs)
