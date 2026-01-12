@@ -200,7 +200,8 @@ pub fn build(b: *std.Build) void {
 
     // For iOS simulator, disable SIMD in Clay to avoid NEON intrinsic issues
     // iOS devices have proper NEON support so they don't need this
-    if (is_ios_simulator and gui_backend == .clay) {
+    // Note: We apply this regardless of gui_backend because zclay is always built as a dependency
+    if (is_ios_simulator) {
         if (zclay) |z| {
             z.addCMacro("CLAY_DISABLE_SIMD", "1");
         }
