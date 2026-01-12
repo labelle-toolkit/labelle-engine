@@ -68,17 +68,23 @@ pub fn build(b: *std.Build) void {{
     const {s}_mod = {s}_dep.module("{s}");
 
 .raylib_exe_start
+    const exe_mod = b.createModule(.{{
+        .root_source_file = b.path("../main.zig"),
+        .target = target,
+        .optimize = optimize,
+    }});
+    exe_mod.addImport("labelle-engine", engine_mod);
+.raylib_exe_end
+.physics_import
+    if (physics_enabled) {{
+        const physics_mod = engine_dep.module("labelle-physics");
+        exe_mod.addImport("physics", physics_mod);
+    }}
+
+.raylib_exe_final
     const exe = b.addExecutable(.{{
         .name = "{s}",
-        .root_module = b.createModule(.{{
-            .root_source_file = b.path("../main.zig"),
-            .target = target,
-            .optimize = optimize,
-            .imports = &.{{
-                .{{ .name = "labelle-engine", .module = engine_mod }},
-.raylib_exe_end
-            }},
-        }}),
+        .root_module = exe_mod,
     }});
 .sokol_exe_start
     // Get labelle-gfx dependency for sokol bindings
@@ -93,19 +99,19 @@ pub fn build(b: *std.Build) void {{
     const sokol_mod = sokol_dep.module("sokol");
     const labelle_gfx_mod = labelle_dep.module("labelle");
 
+    const exe_mod = b.createModule(.{{
+        .root_source_file = b.path("../main.zig"),
+        .target = target,
+        .optimize = optimize,
+    }});
+    exe_mod.addImport("labelle-engine", engine_mod);
+    exe_mod.addImport("sokol", sokol_mod);
+    exe_mod.addImport("labelle-gfx", labelle_gfx_mod);
+.sokol_exe_end
+.sokol_exe_final
     const exe = b.addExecutable(.{{
         .name = "{s}",
-        .root_module = b.createModule(.{{
-            .root_source_file = b.path("../main.zig"),
-            .target = target,
-            .optimize = optimize,
-            .imports = &.{{
-                .{{ .name = "labelle-engine", .module = engine_mod }},
-                .{{ .name = "sokol", .module = sokol_mod }},
-                .{{ .name = "labelle-gfx", .module = labelle_gfx_mod }},
-.sokol_exe_end
-            }},
-        }}),
+        .root_module = exe_mod,
     }});
 .sdl_exe_start
     // SDL SDK is declared as a direct dependency in build.zig.zon
@@ -113,18 +119,18 @@ pub fn build(b: *std.Build) void {{
     const sdl_sdk = SdlSdk.init(b, .{{ .dep_name = "sdl" }});
     const sdl_mod = sdl_sdk.getWrapperModule();
 
+    const exe_mod = b.createModule(.{{
+        .root_source_file = b.path("../main.zig"),
+        .target = target,
+        .optimize = optimize,
+    }});
+    exe_mod.addImport("labelle-engine", engine_mod);
+    exe_mod.addImport("sdl2", sdl_mod);
+.sdl_exe_end
+.sdl_exe_final
     const exe = b.addExecutable(.{{
         .name = "{s}",
-        .root_module = b.createModule(.{{
-            .root_source_file = b.path("../main.zig"),
-            .target = target,
-            .optimize = optimize,
-            .imports = &.{{
-                .{{ .name = "labelle-engine", .module = engine_mod }},
-                .{{ .name = "sdl2", .module = sdl_mod }},
-.sdl_exe_end
-            }},
-        }}),
+        .root_module = exe_mod,
     }});
     sdl_sdk.link(exe, .dynamic, .SDL2);
     sdl_sdk.link(exe, .dynamic, .SDL2_ttf);
@@ -151,20 +157,20 @@ pub fn build(b: *std.Build) void {{
     const bgfx_lib = zbgfx_dep.artifact("bgfx");
     const glfw_lib = zglfw_dep.artifact("glfw");
 
+    const exe_mod = b.createModule(.{{
+        .root_source_file = b.path("../main.zig"),
+        .target = target,
+        .optimize = optimize,
+    }});
+    exe_mod.addImport("labelle-engine", engine_mod);
+    exe_mod.addImport("zbgfx", zbgfx_mod);
+    exe_mod.addImport("zglfw", zglfw_mod);
+    exe_mod.addImport("labelle-gfx", labelle_gfx_mod);
+.bgfx_exe_end
+.bgfx_exe_final
     const exe = b.addExecutable(.{{
         .name = "{s}",
-        .root_module = b.createModule(.{{
-            .root_source_file = b.path("../main.zig"),
-            .target = target,
-            .optimize = optimize,
-            .imports = &.{{
-                .{{ .name = "labelle-engine", .module = engine_mod }},
-                .{{ .name = "zbgfx", .module = zbgfx_mod }},
-                .{{ .name = "zglfw", .module = zglfw_mod }},
-                .{{ .name = "labelle-gfx", .module = labelle_gfx_mod }},
-.bgfx_exe_end
-            }},
-        }}),
+        .root_module = exe_mod,
     }});
 .zgpu_exe_start
     // Get labelle-gfx dependency for zgpu bindings
@@ -187,20 +193,20 @@ pub fn build(b: *std.Build) void {{
     // Get native libraries for linking
     const glfw_lib = zglfw_dep.artifact("glfw");
 
+    const exe_mod = b.createModule(.{{
+        .root_source_file = b.path("../main.zig"),
+        .target = target,
+        .optimize = optimize,
+    }});
+    exe_mod.addImport("labelle-engine", engine_mod);
+    exe_mod.addImport("zgpu", zgpu_mod);
+    exe_mod.addImport("zglfw", zglfw_mod);
+    exe_mod.addImport("labelle-gfx", labelle_gfx_mod);
+.zgpu_exe_end
+.zgpu_exe_final
     const exe = b.addExecutable(.{{
         .name = "{s}",
-        .root_module = b.createModule(.{{
-            .root_source_file = b.path("../main.zig"),
-            .target = target,
-            .optimize = optimize,
-            .imports = &.{{
-                .{{ .name = "labelle-engine", .module = engine_mod }},
-                .{{ .name = "zgpu", .module = zgpu_mod }},
-                .{{ .name = "zglfw", .module = zglfw_mod }},
-                .{{ .name = "labelle-gfx", .module = labelle_gfx_mod }},
-.zgpu_exe_end
-            }},
-        }}),
+        .root_module = exe_mod,
     }});
     exe.linkLibrary(zglfw_dep.artifact("glfw"));
     exe.linkLibrary(zgpu_dep.artifact("zdawn"));
@@ -226,25 +232,25 @@ pub fn build(b: *std.Build) void {{
     const zglfw_mod = zglfw_dep.module("root");
     const labelle_gfx_mod = labelle_dep.module("labelle");
 
+    const exe_mod = b.createModule(.{{
+        .root_source_file = b.path("../main.zig"),
+        .target = target,
+        .optimize = optimize,
+    }});
+    exe_mod.addImport("labelle-engine", engine_mod);
+    exe_mod.addImport("wgpu", wgpu_mod);
+    exe_mod.addImport("zglfw", zglfw_mod);
+    exe_mod.addImport("labelle-gfx", labelle_gfx_mod);
+.wgpu_native_exe_end
+.wgpu_native_exe_final
     const exe = b.addExecutable(.{{
         .name = "{s}",
-        .root_module = b.createModule(.{{
-            .root_source_file = b.path("../main.zig"),
-            .target = target,
-            .optimize = optimize,
-            .imports = &.{{
-                .{{ .name = "labelle-engine", .module = engine_mod }},
-                .{{ .name = "wgpu", .module = wgpu_mod }},
-                .{{ .name = "zglfw", .module = zglfw_mod }},
-                .{{ .name = "labelle-gfx", .module = labelle_gfx_mod }},
-.wgpu_native_exe_end
-            }},
-        }}),
+        .root_module = exe_mod,
     }});
     exe.linkLibrary(zglfw_dep.artifact("glfw"));
     exe.linkLibrary(wgpu_native_dep.artifact("wgpu_native"));
 .plugin_import
-                .{{ .name = "{s}", .module = {s}_mod }},
+    exe_mod.addImport("{s}", {s}_mod);
 .bgfx_link
     // Link bgfx and glfw native libraries
     exe.linkLibrary(bgfx_lib);

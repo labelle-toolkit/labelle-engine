@@ -275,24 +275,23 @@ pub fn generateBuildZig(allocator: std.mem.Allocator, config: ProjectConfig) ![]
         try zts.print(build_zig_tmpl, "plugin_dep", .{ plugin_zig_name, plugin.name, plugin_zig_name, plugin_zig_name, plugin_module_name }, writer);
     }
 
-    // Write backend-specific executable setup (start of imports)
-    // Template args: project_name
+    // Write backend-specific executable setup (creates exe_mod and adds backend imports)
     switch (config.backend) {
-        .raylib => try zts.print(build_zig_tmpl, "raylib_exe_start", .{zig_name}, writer),
-        .sokol => try zts.print(build_zig_tmpl, "sokol_exe_start", .{zig_name}, writer),
-        .sdl => try zts.print(build_zig_tmpl, "sdl_exe_start", .{zig_name}, writer),
-        .bgfx => try zts.print(build_zig_tmpl, "bgfx_exe_start", .{zig_name}, writer),
-        .zgpu => try zts.print(build_zig_tmpl, "zgpu_exe_start", .{zig_name}, writer),
-        .wgpu_native => try zts.print(build_zig_tmpl, "wgpu_native_exe_start", .{zig_name}, writer),
+        .raylib => try zts.print(build_zig_tmpl, "raylib_exe_start", .{}, writer),
+        .sokol => try zts.print(build_zig_tmpl, "sokol_exe_start", .{}, writer),
+        .sdl => try zts.print(build_zig_tmpl, "sdl_exe_start", .{}, writer),
+        .bgfx => try zts.print(build_zig_tmpl, "bgfx_exe_start", .{}, writer),
+        .zgpu => try zts.print(build_zig_tmpl, "zgpu_exe_start", .{}, writer),
+        .wgpu_native => try zts.print(build_zig_tmpl, "wgpu_native_exe_start", .{}, writer),
     }
 
-    // Write plugin imports
+    // Write plugin imports (using exe_mod.addImport)
     for (config.plugins, 0..) |plugin, i| {
         // Template args: name, zig_name
         try zts.print(build_zig_tmpl, "plugin_import", .{ plugin.name, plugin_zig_names[i] }, writer);
     }
 
-    // Write backend-specific executable setup (end of imports)
+    // Write backend-specific executable setup end (empty section, just for ordering)
     switch (config.backend) {
         .raylib => try zts.print(build_zig_tmpl, "raylib_exe_end", .{}, writer),
         .sokol => try zts.print(build_zig_tmpl, "sokol_exe_end", .{}, writer),
@@ -300,6 +299,20 @@ pub fn generateBuildZig(allocator: std.mem.Allocator, config: ProjectConfig) ![]
         .bgfx => try zts.print(build_zig_tmpl, "bgfx_exe_end", .{}, writer),
         .zgpu => try zts.print(build_zig_tmpl, "zgpu_exe_end", .{}, writer),
         .wgpu_native => try zts.print(build_zig_tmpl, "wgpu_native_exe_end", .{}, writer),
+    }
+
+    // Write physics module import (conditional on physics_enabled)
+    try zts.print(build_zig_tmpl, "physics_import", .{}, writer);
+
+    // Write backend-specific executable creation (creates exe from exe_mod)
+    // Template args: project_name
+    switch (config.backend) {
+        .raylib => try zts.print(build_zig_tmpl, "raylib_exe_final", .{zig_name}, writer),
+        .sokol => try zts.print(build_zig_tmpl, "sokol_exe_final", .{zig_name}, writer),
+        .sdl => try zts.print(build_zig_tmpl, "sdl_exe_final", .{zig_name}, writer),
+        .bgfx => try zts.print(build_zig_tmpl, "bgfx_exe_final", .{zig_name}, writer),
+        .zgpu => try zts.print(build_zig_tmpl, "zgpu_exe_final", .{zig_name}, writer),
+        .wgpu_native => try zts.print(build_zig_tmpl, "wgpu_native_exe_final", .{zig_name}, writer),
     }
 
     // Write backend-specific library linking (bgfx/zgpu need native libs)
