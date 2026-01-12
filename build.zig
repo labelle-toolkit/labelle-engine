@@ -180,56 +180,50 @@ pub fn build(b: *std.Build) void {
     const zts = zts_dep.module("zts");
 
     // Clay UI dependency (Zig bindings)
-    // Note: Clay UI uses ARM NEON intrinsics that don't work on iOS simulator.
-    // For iOS simulator builds, Clay GUI backend is disabled.
-    const zclay: ?*std.Build.Module = if (!is_ios_simulator) blk: {
-        const zclay_dep = b.dependency("zclay", .{
-            .target = target,
-            .optimize = optimize,
-        });
-        break :blk zclay_dep.module("zclay");
-    } else null;
+    const zclay_dep = b.dependency("zclay", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const zclay = zclay_dep.module("zclay");
+
+    // For iOS simulator, disable SIMD in Clay to avoid NEON intrinsic issues
+    if (is_ios_simulator) {
+        for (zclay.link_objects.items) |link_object| {
+            switch (link_object) {
+                .other_step => |compile_step| {
+                    compile_step.root_module.addCMacro("CLAY_DISABLE_SIMD", "1");
+                },
+                else => {},
+            }
+        }
+    }
 
     // Build options module for compile-time configuration (create once, reuse everywhere)
     const build_options = b.addOptions();
-    // Physics is automatically disabled for iOS simulator builds due to Box2D NEON issues
-    const physics_available = physics_enabled and !is_ios_simulator;
-
-    // Warn if physics was requested but disabled on iOS simulator
-    if (physics_enabled and is_ios_simulator) {
-        std.log.warn("Physics disabled on iOS simulator (Box2D uses unsupported ARM NEON intrinsics)", .{});
-    }
-
     build_options.addOption(Backend, "backend", backend);
     build_options.addOption(EcsBackend, "ecs_backend", ecs_backend);
     build_options.addOption(GuiBackend, "gui_backend", gui_backend);
-    build_options.addOption(bool, "physics_enabled", physics_available); // Use actual availability
+    build_options.addOption(bool, "physics_enabled", physics_enabled);
     build_options.addOption(bool, "is_ios", is_ios);
     build_options.addOption(bool, "is_ios_simulator", is_ios_simulator);
     const build_options_mod = build_options.createModule();
 
     // Physics module (optional, enabled with -Dphysics=true)
-    // Note: Box2D uses ARM NEON intrinsics that don't work on iOS simulator.
     var physics_module: ?*std.Build.Module = null;
-    if (physics_available) {
+    if (physics_enabled) {
         const box2d_dep = b.dependency("box2d", .{
             .target = target,
             .optimize = optimize,
         });
 
-        // For iOS device, add SDK paths to box2d artifact (C library needs system headers)
-        if (is_ios) {
-            const ios_sdk_path = std.zig.system.darwin.getSdk(b.allocator, &target.result);
-            if (ios_sdk_path) |sdk| {
-                const box2d_artifact = box2d_dep.artifact("box2d");
-                const inc_path = b.pathJoin(&.{ sdk, "usr", "include" });
-                const lib_path = b.pathJoin(&.{ sdk, "usr", "lib" });
+        const box2d_artifact = box2d_dep.artifact("box2d");
 
-                box2d_artifact.root_module.addSystemIncludePath(.{ .cwd_relative = inc_path });
-                box2d_artifact.root_module.addLibraryPath(.{ .cwd_relative = lib_path });
-            }
+        // For iOS simulator, disable SIMD to avoid NEON intrinsic issues
+        if (is_ios_simulator) {
+            box2d_artifact.root_module.addCMacro("BOX2D_DISABLE_SIMD", "1");
         }
 
+        // Create physics module first (needed for iOS SDK path addition below)
         physics_module = b.addModule("labelle-physics", .{
             .root_source_file = b.path("physics/mod.zig"),
             .target = target,
@@ -237,6 +231,21 @@ pub fn build(b: *std.Build) void {
         });
         physics_module.?.addImport("box2d", box2d_dep.module("box2d"));
         physics_module.?.linkLibrary(box2d_dep.artifact("box2d"));
+
+        // For iOS (device or simulator), add SDK paths to box2d artifact (C library needs system headers)
+        if (is_ios) {
+            const ios_sdk_path = std.zig.system.darwin.getSdk(b.allocator, &target.result);
+            if (ios_sdk_path) |sdk| {
+                const inc_path = b.pathJoin(&.{ sdk, "usr", "include" });
+                const lib_path = b.pathJoin(&.{ sdk, "usr", "lib" });
+
+                box2d_artifact.root_module.addSystemIncludePath(.{ .cwd_relative = inc_path });
+                box2d_artifact.root_module.addLibraryPath(.{ .cwd_relative = lib_path });
+
+                // Also add to the physics module for @cImport
+                physics_module.?.addSystemIncludePath(.{ .cwd_relative = inc_path });
+            }
+        }
     }
 
     // Create the ECS interface module that wraps the selected backend
@@ -396,17 +405,14 @@ pub fn build(b: *std.Build) void {
             .{ .name = "wgpu", .module = wgpu_native.? }, // For wgpu_native ImGui adapter
             .{ .name = "labelle", .module = labelle }, // For zgpu/wgpu_native context access
             .{ .name = "zglfw", .module = zglfw.? }, // For GLFW window access
+            .{ .name = "zclay", .module = zclay },
         } else &.{
             // iOS: reduced imports, no labelle-gfx modules
             .{ .name = "build_options", .module = build_options_mod },
             .{ .name = "sokol", .module = sokol },
+            .{ .name = "zclay", .module = zclay },
         },
     });
-
-    // Add zclay module to GUI (not available on iOS simulator due to NEON issues)
-    if (zclay) |clay_mod| {
-        gui_interface.addImport("zclay", clay_mod);
-    }
 
     // Add nuklear module to GUI if using nuklear backend
     if (nuklear_module) |nk| {
