@@ -68,15 +68,17 @@ pub fn build(b: *std.Build) void {
     const zflecs_module: ?*std.Build.Module = if (zflecs_dep) |dep| dep.module("root") else null;
 
     // For iOS, add SDK paths to zflecs artifact (C library needs system headers)
+    // Note: getSdk() returns null for cross-compilation, so we use explicit paths
     if (is_ios and zflecs_dep != null) {
-        const ios_sdk_path = std.zig.system.darwin.getSdk(b.allocator, &target.result);
-        if (ios_sdk_path) |sdk| {
-            const zflecs_artifact = zflecs_dep.?.artifact("flecs");
-            const inc_path = b.pathJoin(&.{ sdk, "usr", "include" });
-            const lib_path = b.pathJoin(&.{ sdk, "usr", "lib" });
+        const zflecs_artifact = zflecs_dep.?.artifact("flecs");
 
-            zflecs_artifact.root_module.addSystemIncludePath(.{ .cwd_relative = inc_path });
-            zflecs_artifact.root_module.addLibraryPath(.{ .cwd_relative = lib_path });
+        // Select SDK based on target ABI (simulator vs device)
+        if (target.result.abi == .simulator) {
+            zflecs_artifact.root_module.addSystemIncludePath(.{ .cwd_relative = "/Applications/Xcode.app/Contents/Developer/Platforms/iPhoneSimulator.platform/Developer/SDKs/iPhoneSimulator.sdk/usr/include" });
+            zflecs_artifact.root_module.addLibraryPath(.{ .cwd_relative = "/Applications/Xcode.app/Contents/Developer/Platforms/iPhoneSimulator.platform/Developer/SDKs/iPhoneSimulator.sdk/usr/lib" });
+        } else {
+            zflecs_artifact.root_module.addSystemIncludePath(.{ .cwd_relative = "/Applications/Xcode.app/Contents/Developer/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS.sdk/usr/include" });
+            zflecs_artifact.root_module.addLibraryPath(.{ .cwd_relative = "/Applications/Xcode.app/Contents/Developer/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS.sdk/usr/lib" });
         }
     }
 
@@ -114,19 +116,21 @@ pub fn build(b: *std.Build) void {
 
     // For iOS, add SDK paths to sokol_clib artifact
     // Workaround for Zig bug #22704 where sysroot doesn't affect framework search paths
+    // Note: getSdk() returns null for cross-compilation, so we use explicit paths
     if (is_ios) {
-        const ios_sdk_path = std.zig.system.darwin.getSdk(b.allocator, &target.result);
-        if (ios_sdk_path) |sdk| {
-            const sokol_clib = sokol_dep.artifact("sokol_clib");
-            const fw_path = b.pathJoin(&.{ sdk, "System", "Library", "Frameworks" });
-            const subfw_path = b.pathJoin(&.{ sdk, "System", "Library", "SubFrameworks" });
-            const inc_path = b.pathJoin(&.{ sdk, "usr", "include" });
-            const lib_path = b.pathJoin(&.{ sdk, "usr", "lib" });
+        const sokol_clib = sokol_dep.artifact("sokol_clib");
 
-            sokol_clib.root_module.addSystemIncludePath(.{ .cwd_relative = inc_path });
-            sokol_clib.root_module.addSystemFrameworkPath(.{ .cwd_relative = fw_path });
-            sokol_clib.root_module.addSystemFrameworkPath(.{ .cwd_relative = subfw_path });
-            sokol_clib.root_module.addLibraryPath(.{ .cwd_relative = lib_path });
+        // Select SDK based on target ABI (simulator vs device)
+        if (target.result.abi == .simulator) {
+            sokol_clib.root_module.addSystemFrameworkPath(.{ .cwd_relative = "/Applications/Xcode.app/Contents/Developer/Platforms/iPhoneSimulator.platform/Developer/SDKs/iPhoneSimulator.sdk/System/Library/Frameworks" });
+            sokol_clib.root_module.addSystemFrameworkPath(.{ .cwd_relative = "/Applications/Xcode.app/Contents/Developer/Platforms/iPhoneSimulator.platform/Developer/SDKs/iPhoneSimulator.sdk/System/Library/SubFrameworks" });
+            sokol_clib.root_module.addSystemIncludePath(.{ .cwd_relative = "/Applications/Xcode.app/Contents/Developer/Platforms/iPhoneSimulator.platform/Developer/SDKs/iPhoneSimulator.sdk/usr/include" });
+            sokol_clib.root_module.addLibraryPath(.{ .cwd_relative = "/Applications/Xcode.app/Contents/Developer/Platforms/iPhoneSimulator.platform/Developer/SDKs/iPhoneSimulator.sdk/usr/lib" });
+        } else {
+            sokol_clib.root_module.addSystemFrameworkPath(.{ .cwd_relative = "/Applications/Xcode.app/Contents/Developer/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS.sdk/System/Library/Frameworks" });
+            sokol_clib.root_module.addSystemFrameworkPath(.{ .cwd_relative = "/Applications/Xcode.app/Contents/Developer/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS.sdk/System/Library/SubFrameworks" });
+            sokol_clib.root_module.addSystemIncludePath(.{ .cwd_relative = "/Applications/Xcode.app/Contents/Developer/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS.sdk/usr/include" });
+            sokol_clib.root_module.addLibraryPath(.{ .cwd_relative = "/Applications/Xcode.app/Contents/Developer/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS.sdk/usr/lib" });
         }
     }
 

@@ -43,6 +43,10 @@ pub const SplitScreenLayout = labelle_gfx.SplitScreenLayout;
 pub const SokolBackend = labelle_gfx.SokolBackend;
 pub const RaylibBackend = labelle_gfx.RaylibBackend;
 
+// Re-export sokol bindings for iOS callback architecture
+// This allows main.zig to use `engine.sokol` instead of direct import
+pub const sokol = labelle_gfx.sokol;
+
 // Convenience re-exports for common types
 pub const Game = engine.Game;
 pub const GameWith = engine.GameWith;

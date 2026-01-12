@@ -66,6 +66,17 @@ pub const GuiBackend = enum {
     imgui,
 };
 
+/// Target platform selection
+/// Used primarily for iOS which requires different main.zig architecture
+pub const TargetPlatform = enum {
+    /// Native platform (macOS, Linux, Windows) - default
+    native,
+    /// iOS (requires sokol callback architecture)
+    ios,
+    /// Web/WASM target
+    wasm,
+};
+
 /// Game ID type selection (entity identifier type)
 pub const GameIdType = enum {
     u32,
@@ -299,6 +310,8 @@ pub const ProjectConfig = struct {
     backend: Backend = .raylib,
     ecs_backend: EcsBackend = .zig_ecs,
     gui_backend: GuiBackend = .none,
+    /// Target platform. iOS requires sokol callback architecture.
+    target: TargetPlatform = .native,
     /// Game ID type (entity identifier type). Default: u64
     /// This affects plugin integrations like labelle-tasks that need to know the entity ID type.
     game_id: GameIdType = .u64,

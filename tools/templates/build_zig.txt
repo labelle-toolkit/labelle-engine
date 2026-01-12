@@ -111,6 +111,15 @@ pub fn build(b: *std.Build) void {{
     exe_mod.addImport("sokol", sokol_mod);
     exe_mod.addImport("labelle-gfx", labelle_gfx_mod);
 .sokol_exe_end
+.sokol_ios_exe_start
+    // iOS sokol: sokol bindings accessed through engine.sokol (no direct import)
+    const exe_mod = b.createModule(.{{
+        .root_source_file = b.path("../main.zig"),
+        .target = target,
+        .optimize = optimize,
+    }});
+    exe_mod.addImport("labelle-engine", engine_mod);
+.sokol_ios_exe_end
 .sokol_exe_final
     const exe = b.addExecutable(.{{
         .name = "{s}",
