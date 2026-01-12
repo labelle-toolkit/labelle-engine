@@ -113,6 +113,8 @@ const TouchState = struct {
     last_x: f32 = 0,
     last_y: f32 = 0,
     active: bool = false,
+    /// Set to true when this touch participates in a multi-touch gesture (pinch/rotation)
+    was_in_multitouch: bool = false,
 };
 
 /// Gesture recognizer that processes raw touch input
@@ -251,6 +253,13 @@ pub const Gestures = struct {
         // Detect multi-touch gestures
         if (touch_count == 2) {
             self.detectPinchAndRotation(touches[0], touches[1]);
+            // Mark both touches as participating in multi-touch gesture
+            // This prevents false taps when lifting fingers after a pinch
+            for (&self.touch_states) |*state| {
+                if (state.active and (state.id == touches[0].id or state.id == touches[1].id)) {
+                    state.was_in_multitouch = true;
+                }
+            }
         } else {
             // Reset pinch/rotation state when not two fingers
             self.last_pinch_distance = null;
@@ -359,8 +368,11 @@ pub const Gestures = struct {
         const distance = @sqrt(dx * dx + dy * dy);
         const duration = self.total_time - state.start_time;
 
-        // Only process single-touch end gestures
-        if (self.active_touch_count > 1) return;
+        // Skip tap/swipe detection if this touch was part of a multi-touch gesture
+        // (e.g., pinch or rotation). This prevents false taps when lifting fingers
+        // after a pinch gesture, while still allowing independent taps when another
+        // finger is merely held down.
+        if (state.was_in_multitouch) return;
 
         // Check for swipe
         if (distance >= self.config.swipe_threshold and
@@ -441,7 +453,11 @@ pub const Gestures = struct {
         if (self.last_pinch_distance) |last_dist| {
             const dist_change = @abs(distance - last_dist);
             if (dist_change > self.config.pinch_threshold) {
-                const scale = distance / last_dist;
+                // Guard against division by zero when fingers overlap
+                // Use a minimum denominator to prevent infinity
+                const min_distance = 1.0; // 1 pixel minimum
+                const safe_last_dist = @max(last_dist, min_distance);
+                const scale = distance / safe_last_dist;
                 self.current_pinch = .{
                     .scale = scale,
                     .center_x = center_x,
