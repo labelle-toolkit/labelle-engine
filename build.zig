@@ -794,31 +794,34 @@ pub fn build(b: *std.Build) void {
     generate_step.dependOn(&run_generator.step);
 
     // Benchmark executable - compares ECS backend performance
-    const bench_module = b.createModule(.{
-        .root_source_file = b.path("ecs/benchmark.zig"),
-        .target = target,
-        .optimize = .ReleaseFast, // Always use ReleaseFast for benchmarks
-        .imports = &.{
-            .{ .name = "ecs", .module = ecs_interface },
-            .{ .name = "build_options", .module = build_options_mod },
-            .{ .name = "zig_ecs", .module = zig_ecs_module },
-            .{ .name = "zflecs", .module = zflecs_module },
-        },
-    });
-    // Add mr_ecs if selected (requires Zig 0.16+)
-    if (mr_ecs_module) |m| {
-        bench_module.addImport("mr_ecs", m);
+    // Skip for WASM (benchmarks need native backends including zflecs which uses C code)
+    if (!is_wasm) {
+        const bench_module = b.createModule(.{
+            .root_source_file = b.path("ecs/benchmark.zig"),
+            .target = target,
+            .optimize = .ReleaseFast, // Always use ReleaseFast for benchmarks
+            .imports = &.{
+                .{ .name = "ecs", .module = ecs_interface },
+                .{ .name = "build_options", .module = build_options_mod },
+                .{ .name = "zig_ecs", .module = zig_ecs_module },
+                .{ .name = "zflecs", .module = zflecs_module.? },
+            },
+        });
+        // Add mr_ecs if selected (requires Zig 0.16+)
+        if (mr_ecs_module) |m| {
+            bench_module.addImport("mr_ecs", m);
+        }
+        const bench_exe = b.addExecutable(.{
+            .name = "ecs-benchmark",
+            .root_module = bench_module,
+        });
+
+        b.installArtifact(bench_exe);
+
+        const run_bench = b.addRunArtifact(bench_exe);
+        run_bench.step.dependOn(b.getInstallStep());
+
+        const bench_step = b.step("bench", "Run ECS benchmarks (use -Decs_backend=zig_ecs or -Decs_backend=zflecs)");
+        bench_step.dependOn(&run_bench.step);
     }
-    const bench_exe = b.addExecutable(.{
-        .name = "ecs-benchmark",
-        .root_module = bench_module,
-    });
-
-    b.installArtifact(bench_exe);
-
-    const run_bench = b.addRunArtifact(bench_exe);
-    run_bench.step.dependOn(b.getInstallStep());
-
-    const bench_step = b.step("bench", "Run ECS benchmarks (use -Decs_backend=zig_ecs or -Decs_backend=zflecs)");
-    bench_step.dependOn(&run_bench.step);
 }
