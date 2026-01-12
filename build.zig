@@ -47,23 +47,26 @@ pub fn build(b: *std.Build) void {
     const physics_enabled = b.option(bool, "physics", "Enable physics module (Box2D)") orelse false;
 
     // ECS dependencies
+    // zig_ecs is pure Zig - always available
     const ecs_dep = b.dependency("zig_ecs", .{
         .target = target,
         .optimize = optimize,
     });
     const zig_ecs_module = ecs_dep.module("zig-ecs");
 
-    const zflecs_dep = b.dependency("zflecs", .{
+    // zflecs contains C code (flecs.c) that requires libc
+    // Skip for WASM since Emscripten's libc handling is problematic with Zig
+    const zflecs_dep: ?*std.Build.Dependency = if (!is_wasm) b.dependency("zflecs", .{
         .target = target,
         .optimize = optimize,
-    });
-    const zflecs_module = zflecs_dep.module("root");
+    }) else null;
+    const zflecs_module: ?*std.Build.Module = if (zflecs_dep) |dep| dep.module("root") else null;
 
     // For iOS, add SDK paths to zflecs artifact (C library needs system headers)
-    if (is_ios) {
+    if (is_ios and zflecs_dep != null) {
         const ios_sdk_path = std.zig.system.darwin.getSdk(b.allocator, &target.result);
         if (ios_sdk_path) |sdk| {
-            const zflecs_artifact = zflecs_dep.artifact("flecs");
+            const zflecs_artifact = zflecs_dep.?.artifact("flecs");
             const inc_path = b.pathJoin(&.{ sdk, "usr", "include" });
             const lib_path = b.pathJoin(&.{ sdk, "usr", "lib" });
 
@@ -72,8 +75,9 @@ pub fn build(b: *std.Build) void {
         }
     }
 
-    // mr_ecs module - only loaded when explicitly selected (requires Zig 0.16+)
-    const mr_ecs_module: ?*std.Build.Module = if (ecs_backend == .mr_ecs) blk: {
+    // mr_ecs module - only loaded when explicitly selected and not on WASM (requires Zig 0.16+)
+    // Note: mr_ecs may have C dependencies, skip for WASM
+    const mr_ecs_module: ?*std.Build.Module = if (ecs_backend == .mr_ecs and !is_wasm) blk: {
         const mr_ecs_dep = b.dependency("mr_ecs", .{
             .target = target,
             .optimize = optimize,
@@ -229,6 +233,7 @@ pub fn build(b: *std.Build) void {
     }
 
     // Create the ECS interface module that wraps the selected backend
+    // For WASM, only zig_ecs is available (no C-based backends)
     const ecs_interface = b.addModule("ecs", .{
         .root_source_file = b.path("ecs/interface.zig"),
         .target = target,
@@ -236,10 +241,13 @@ pub fn build(b: *std.Build) void {
         .imports = &.{
             .{ .name = "build_options", .module = build_options_mod },
             .{ .name = "zig_ecs", .module = zig_ecs_module },
-            .{ .name = "zflecs", .module = zflecs_module },
         },
     });
-    // Add mr_ecs if selected (requires Zig 0.16+)
+    // Add zflecs if available (not on WASM - C code requires libc)
+    if (zflecs_module) |m| {
+        ecs_interface.addImport("zflecs", m);
+    }
+    // Add mr_ecs if selected (requires Zig 0.16+, not on WASM)
     if (mr_ecs_module) |m| {
         ecs_interface.addImport("mr_ecs", m);
     }
