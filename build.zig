@@ -34,6 +34,11 @@ pub fn build(b: *std.Build) void {
     // Detect iOS target (raylib, SDL, etc. not supported on iOS)
     const is_ios = target.result.os.tag == .ios;
 
+    // Detect iOS simulator on ARM - needs special handling for NEON intrinsics
+    // iOS simulator on Apple Silicon (aarch64) doesn't fully support all NEON intrinsics
+    // Note: Only apply ARM-specific workarounds on aarch64, not x86_64 simulators
+    const is_ios_simulator = is_ios and target.result.abi == .simulator and target.result.cpu.arch == .aarch64;
+
     // Detect WASM/Emscripten target (only sokol backend supported)
     const is_wasm = target.result.os.tag == .emscripten or target.result.cpu.arch == .wasm32;
 
@@ -193,13 +198,23 @@ pub fn build(b: *std.Build) void {
     }) else null;
     const zclay: ?*std.Build.Module = if (zclay_dep) |dep| dep.module("zclay") else null;
 
+    // For iOS simulator, disable SIMD in Clay to avoid NEON intrinsic issues
+    // iOS devices have proper NEON support so they don't need this
+    if (is_ios_simulator and gui_backend == .clay) {
+        if (zclay) |z| {
+            z.addCMacro("CLAY_DISABLE_SIMD", "1");
+        }
+    }
+
     // Build options module for compile-time configuration (create once, reuse everywhere)
     const build_options = b.addOptions();
+
     build_options.addOption(Backend, "backend", backend);
     build_options.addOption(EcsBackend, "ecs_backend", ecs_backend);
     build_options.addOption(GuiBackend, "gui_backend", gui_backend);
     build_options.addOption(bool, "physics_enabled", physics_enabled);
     build_options.addOption(bool, "is_ios", is_ios);
+    build_options.addOption(bool, "is_ios_simulator", is_ios_simulator);
     build_options.addOption(bool, "is_wasm", is_wasm);
     build_options.addOption(bool, "has_zclay", zclay != null);
     build_options.addOption(bool, "has_zflecs", zflecs_module != null);
@@ -213,19 +228,14 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
         });
 
-        // For iOS, add SDK paths to box2d artifact (C library needs system headers)
-        if (is_ios) {
-            const ios_sdk_path = std.zig.system.darwin.getSdk(b.allocator, &target.result);
-            if (ios_sdk_path) |sdk| {
-                const box2d_artifact = box2d_dep.artifact("box2d");
-                const inc_path = b.pathJoin(&.{ sdk, "usr", "include" });
-                const lib_path = b.pathJoin(&.{ sdk, "usr", "lib" });
+        const box2d_artifact = box2d_dep.artifact("box2d");
 
-                box2d_artifact.root_module.addSystemIncludePath(.{ .cwd_relative = inc_path });
-                box2d_artifact.root_module.addLibraryPath(.{ .cwd_relative = lib_path });
-            }
+        // For iOS simulator, disable SIMD to avoid NEON intrinsic issues
+        if (is_ios_simulator) {
+            box2d_artifact.root_module.addCMacro("BOX2D_DISABLE_SIMD", "1");
         }
 
+        // Create physics module first (needed for iOS SDK path addition below)
         physics_module = b.addModule("labelle-physics", .{
             .root_source_file = b.path("physics/mod.zig"),
             .target = target,
@@ -233,6 +243,21 @@ pub fn build(b: *std.Build) void {
         });
         physics_module.?.addImport("box2d", box2d_dep.module("box2d"));
         physics_module.?.linkLibrary(box2d_dep.artifact("box2d"));
+
+        // For iOS (device or simulator), add SDK paths to box2d artifact (C library needs system headers)
+        if (is_ios) {
+            const ios_sdk_path = std.zig.system.darwin.getSdk(b.allocator, &target.result);
+            if (ios_sdk_path) |sdk| {
+                const inc_path = b.pathJoin(&.{ sdk, "usr", "include" });
+                const lib_path = b.pathJoin(&.{ sdk, "usr", "lib" });
+
+                box2d_artifact.root_module.addSystemIncludePath(.{ .cwd_relative = inc_path });
+                box2d_artifact.root_module.addLibraryPath(.{ .cwd_relative = lib_path });
+
+                // Also add to the physics module for @cImport
+                physics_module.?.addSystemIncludePath(.{ .cwd_relative = inc_path });
+            }
+        }
     }
 
     // Create the ECS interface module that wraps the selected backend
