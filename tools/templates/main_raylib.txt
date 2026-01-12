@@ -58,6 +58,12 @@ pub const Components = engine.ComponentRegistry(struct {{
     pub const Sprite = engine.Sprite;
     pub const Shape = engine.Shape;
     pub const Text = engine.Text;
+.physics_components
+    // Physics components (auto-included when physics is enabled)
+    pub const RigidBody = engine.PhysicsComponents.RigidBody;
+    pub const Collider = engine.PhysicsComponents.Collider;
+    pub const Velocity = engine.PhysicsComponents.Velocity;
+.component_registry_empty_end
 }});
 .component_registry_start
 pub const Components = engine.ComponentRegistry(struct {{
@@ -71,6 +77,11 @@ pub const Components = engine.ComponentRegistry(struct {{
     pub const {s} = main_module.{s};
 .component_registry_bind_item
     pub const {s} = {s}Bind{s}.{s};
+.component_registry_physics
+    // Physics components (auto-included when physics is enabled)
+    pub const RigidBody = engine.PhysicsComponents.RigidBody;
+    pub const Collider = engine.PhysicsComponents.Collider;
+    pub const Velocity = engine.PhysicsComponents.Velocity;
 .component_registry_end
 }});
 .component_registry_multi_empty_start
@@ -81,6 +92,12 @@ pub const Components = engine.ComponentRegistryMulti(.{{
         pub const Sprite = engine.Sprite;
         pub const Shape = engine.Shape;
         pub const Text = engine.Text;
+.component_registry_multi_physics
+        // Physics components (auto-included when physics is enabled)
+        pub const RigidBody = engine.PhysicsComponents.RigidBody;
+        pub const Collider = engine.PhysicsComponents.Collider;
+        pub const Velocity = engine.PhysicsComponents.Velocity;
+.component_registry_multi_empty_base_end
     }},
 .component_registry_multi_start
 pub const Components = engine.ComponentRegistryMulti(.{{

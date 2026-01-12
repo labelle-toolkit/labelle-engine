@@ -543,6 +543,11 @@ fn generateMainZigRaylib(
         // Use ComponentRegistryMulti to merge base components with plugin Components
         if (components.len == 0 and !has_expanded_bind_components) {
             try zts.print(main_raylib_tmpl, "component_registry_multi_empty_start", .{}, writer);
+            // Add physics components if physics is enabled
+            if (config.physics.enabled) {
+                try zts.print(main_raylib_tmpl, "component_registry_multi_physics", .{}, writer);
+            }
+            try zts.print(main_raylib_tmpl, "component_registry_multi_empty_base_end", .{}, writer);
         } else {
             try zts.print(main_raylib_tmpl, "component_registry_multi_start", .{}, writer);
             for (component_pascal_names) |pascal| {
@@ -564,6 +569,10 @@ fn generateMainZigRaylib(
                 }
             }
 
+            // Add physics components if physics is enabled
+            if (config.physics.enabled) {
+                try zts.print(main_raylib_tmpl, "component_registry_multi_physics", .{}, writer);
+            }
             try zts.print(main_raylib_tmpl, "component_registry_multi_base_end", .{}, writer);
         }
 
@@ -602,15 +611,28 @@ fn generateMainZigRaylib(
                 }
             }
         }
+        // Add physics components if physics is enabled
+        if (config.physics.enabled) {
+            try zts.print(main_raylib_tmpl, "component_registry_physics", .{}, writer);
+        }
         try zts.print(main_raylib_tmpl, "component_registry_end", .{}, writer);
     } else {
         // No plugins - use simple ComponentRegistry
         if (components.len == 0) {
             try zts.print(main_raylib_tmpl, "component_registry_empty", .{}, writer);
+            // Add physics components if physics is enabled
+            if (config.physics.enabled) {
+                try zts.print(main_raylib_tmpl, "physics_components", .{}, writer);
+            }
+            try zts.print(main_raylib_tmpl, "component_registry_empty_end", .{}, writer);
         } else {
             try zts.print(main_raylib_tmpl, "component_registry_start", .{}, writer);
             for (component_pascal_names) |pascal| {
                 try zts.print(main_raylib_tmpl, "component_registry_item", .{ pascal.buf[0..pascal.len], pascal.buf[0..pascal.len] }, writer);
+            }
+            // Add physics components if physics is enabled
+            if (config.physics.enabled) {
+                try zts.print(main_raylib_tmpl, "component_registry_physics", .{}, writer);
             }
             try zts.print(main_raylib_tmpl, "component_registry_end", .{}, writer);
         }
