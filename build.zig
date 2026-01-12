@@ -186,11 +186,12 @@ pub fn build(b: *std.Build) void {
     const zts = zts_dep.module("zts");
 
     // Clay UI dependency (Zig bindings)
-    const zclay_dep = b.dependency("zclay", .{
+    // Skip for WASM - Clay is a C library that requires libc
+    const zclay_dep: ?*std.Build.Dependency = if (!is_wasm) b.dependency("zclay", .{
         .target = target,
         .optimize = optimize,
-    });
-    const zclay = zclay_dep.module("zclay");
+    }) else null;
+    const zclay: ?*std.Build.Module = if (zclay_dep) |dep| dep.module("zclay") else null;
 
     // Build options module for compile-time configuration (create once, reuse everywhere)
     const build_options = b.addOptions();
@@ -200,6 +201,8 @@ pub fn build(b: *std.Build) void {
     build_options.addOption(bool, "physics_enabled", physics_enabled);
     build_options.addOption(bool, "is_ios", is_ios);
     build_options.addOption(bool, "is_wasm", is_wasm);
+    build_options.addOption(bool, "has_zclay", zclay != null);
+    build_options.addOption(bool, "has_zflecs", zflecs_module != null);
     const build_options_mod = build_options.createModule();
 
     // Physics module (optional, enabled with -Dphysics=true)
@@ -379,6 +382,7 @@ pub fn build(b: *std.Build) void {
 
     // Create the GUI interface module that wraps the selected backend
     // Imports are conditional based on platform (iOS/WASM only have sokol)
+    // zclay is skipped for WASM (C library requires libc)
     const gui_interface = b.addModule("gui", .{
         .root_source_file = b.path("gui/mod.zig"),
         .target = target,
@@ -393,14 +397,16 @@ pub fn build(b: *std.Build) void {
             .{ .name = "wgpu", .module = wgpu_native.? }, // For wgpu_native ImGui adapter
             .{ .name = "labelle", .module = labelle }, // For zgpu/wgpu_native context access
             .{ .name = "zglfw", .module = zglfw.? }, // For GLFW window access
-            .{ .name = "zclay", .module = zclay },
         } else &.{
             // iOS/WASM: reduced imports, only sokol backend
             .{ .name = "build_options", .module = build_options_mod },
             .{ .name = "sokol", .module = sokol },
-            .{ .name = "zclay", .module = zclay },
         },
     });
+    // Add zclay if available (not on WASM - C code requires libc)
+    if (zclay) |m| {
+        gui_interface.addImport("zclay", m);
+    }
 
     // Add nuklear module to GUI if using nuklear backend
     if (nuklear_module) |nk| {
