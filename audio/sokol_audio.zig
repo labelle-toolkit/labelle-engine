@@ -52,7 +52,7 @@ const PlayingInstance = struct {
     is_sound: bool, // true = sound, false = music
     slot_index: u16,
     generation: u16,
-    position: u64, // Current sample frame position
+    position: usize, // Current sample frame position
     playing: bool,
     looping: bool,
     paused: bool,

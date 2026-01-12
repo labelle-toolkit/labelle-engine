@@ -39,6 +39,12 @@ pub fn build(b: *std.Build) void {
     // Note: Only apply ARM-specific workarounds on aarch64, not x86_64 simulators
     const is_ios_simulator = is_ios and target.result.abi == .simulator and target.result.cpu.arch == .aarch64;
 
+    // Detect WASM/Emscripten target (only sokol backend supported)
+    const is_wasm = target.result.os.tag == .emscripten or target.result.cpu.arch == .wasm32;
+
+    // Desktop-only flag (not iOS and not WASM)
+    const is_desktop = !is_ios and !is_wasm;
+
     // Build options
     const backend = b.option(Backend, "backend", "Graphics backend to use (default: raylib)") orelse .raylib;
     const ecs_backend = b.option(EcsBackend, "ecs_backend", "ECS backend to use (default: zig_ecs)") orelse .zig_ecs;
@@ -46,23 +52,26 @@ pub fn build(b: *std.Build) void {
     const physics_enabled = b.option(bool, "physics", "Enable physics module (Box2D)") orelse false;
 
     // ECS dependencies
+    // zig_ecs is pure Zig - always available
     const ecs_dep = b.dependency("zig_ecs", .{
         .target = target,
         .optimize = optimize,
     });
     const zig_ecs_module = ecs_dep.module("zig-ecs");
 
-    const zflecs_dep = b.dependency("zflecs", .{
+    // zflecs contains C code (flecs.c) that requires libc
+    // Skip for WASM since Emscripten's libc handling is problematic with Zig
+    const zflecs_dep: ?*std.Build.Dependency = if (!is_wasm) b.dependency("zflecs", .{
         .target = target,
         .optimize = optimize,
-    });
-    const zflecs_module = zflecs_dep.module("root");
+    }) else null;
+    const zflecs_module: ?*std.Build.Module = if (zflecs_dep) |dep| dep.module("root") else null;
 
     // For iOS, add SDK paths to zflecs artifact (C library needs system headers)
-    if (is_ios) {
+    if (is_ios and zflecs_dep != null) {
         const ios_sdk_path = std.zig.system.darwin.getSdk(b.allocator, &target.result);
         if (ios_sdk_path) |sdk| {
-            const zflecs_artifact = zflecs_dep.artifact("flecs");
+            const zflecs_artifact = zflecs_dep.?.artifact("flecs");
             const inc_path = b.pathJoin(&.{ sdk, "usr", "include" });
             const lib_path = b.pathJoin(&.{ sdk, "usr", "lib" });
 
@@ -71,8 +80,9 @@ pub fn build(b: *std.Build) void {
         }
     }
 
-    // mr_ecs module - only loaded when explicitly selected (requires Zig 0.16+)
-    const mr_ecs_module: ?*std.Build.Module = if (ecs_backend == .mr_ecs) blk: {
+    // mr_ecs module - only loaded when explicitly selected and not on WASM (requires Zig 0.16+)
+    // Note: mr_ecs may have C dependencies, skip for WASM
+    const mr_ecs_module: ?*std.Build.Module = if (ecs_backend == .mr_ecs and !is_wasm) blk: {
         const mr_ecs_dep = b.dependency("mr_ecs", .{
             .target = target,
             .optimize = optimize,
@@ -87,18 +97,18 @@ pub fn build(b: *std.Build) void {
     });
     const labelle = labelle_dep.module("labelle");
 
-    // raylib module - get from labelle-gfx's re-exported module (not available on iOS)
+    // raylib module - get from labelle-gfx's re-exported module (desktop only)
     // labelle-gfx uses the raylib-zig fork with getGLFWWindow() for ImGui integration
-    const raylib: ?*std.Build.Module = if (!is_ios) labelle_dep.builder.modules.get("raylib") else null;
+    const raylib: ?*std.Build.Module = if (is_desktop) labelle_dep.builder.modules.get("raylib") else null;
 
     // sokol dependency - DO NOT pass with_sokol_imgui here as it changes the
     // dependency hash and conflicts with labelle-gfx's sokol. For ImGui support,
     // we'll compile sokol_imgui separately (similar to rlImGui approach).
-    // For iOS, we need to pass dont_link_system_libs and handle SDK paths manually.
+    // For iOS/WASM, we need to pass dont_link_system_libs and handle SDK/sysroot manually.
     const sokol_dep = b.dependency("sokol", .{
         .target = target,
         .optimize = optimize,
-        .dont_link_system_libs = is_ios,
+        .dont_link_system_libs = is_ios or is_wasm,
     });
     const sokol = sokol_dep.module("sokol");
 
@@ -120,12 +130,12 @@ pub fn build(b: *std.Build) void {
         }
     }
 
-    // SDL module - get from labelle-gfx's re-exported module (not available on iOS)
+    // SDL module - get from labelle-gfx's re-exported module (desktop only)
     // labelle-gfx v0.15.0+ re-exports SDL to avoid Zig module conflicts
-    const sdl: ?*std.Build.Module = if (!is_ios) labelle_dep.builder.modules.get("sdl") else null;
+    const sdl: ?*std.Build.Module = if (is_desktop) labelle_dep.builder.modules.get("sdl") else null;
 
-    // zbgfx, zgpu, wgpu_native, zglfw - not available on iOS
-    const zbgfx: ?*std.Build.Module = if (!is_ios) blk: {
+    // zbgfx, zgpu, wgpu_native, zglfw - desktop only
+    const zbgfx: ?*std.Build.Module = if (is_desktop) blk: {
         const zbgfx_dep = labelle_dep.builder.dependency("zbgfx", .{
             .target = target,
             .optimize = optimize,
@@ -133,7 +143,7 @@ pub fn build(b: *std.Build) void {
         break :blk zbgfx_dep.module("zbgfx");
     } else null;
 
-    const zgpu: ?*std.Build.Module = if (!is_ios) blk: {
+    const zgpu: ?*std.Build.Module = if (is_desktop) blk: {
         const zgpu_dep = labelle_dep.builder.dependency("zgpu", .{
             .target = target,
             .optimize = optimize,
@@ -142,7 +152,7 @@ pub fn build(b: *std.Build) void {
     } else null;
 
     // wgpu_native - lower-level WebGPU bindings (alternative to zgpu)
-    const wgpu_native: ?*std.Build.Module = if (!is_ios) blk: {
+    const wgpu_native: ?*std.Build.Module = if (is_desktop) blk: {
         const wgpu_native_dep = labelle_dep.builder.dependency("wgpu_native_zig", .{
             .target = target,
             .optimize = optimize,
@@ -150,8 +160,8 @@ pub fn build(b: *std.Build) void {
         break :blk wgpu_native_dep.module("wgpu");
     } else null;
 
-    // zglfw - GLFW bindings for zgpu/wgpu_native (not available on iOS)
-    const zglfw: ?*std.Build.Module = if (!is_ios) blk: {
+    // zglfw - GLFW bindings for zgpu/wgpu_native (desktop only)
+    const zglfw: ?*std.Build.Module = if (is_desktop) blk: {
         const zglfw_dep = labelle_dep.builder.dependency("zglfw", .{
             .target = target,
             .optimize = optimize,
@@ -160,9 +170,9 @@ pub fn build(b: *std.Build) void {
     } else null;
 
     // zaudio (miniaudio wrapper) for sokol/SDL audio backends
-    // Note: zaudio is disabled on iOS because miniaudio requires Objective-C compilation
-    // for AVFoundation.h, but zaudio compiles it as C. Will need Sokol audio backend for iOS.
-    const zaudio_dep: ?*std.Build.Dependency = if (!is_ios) b.dependency("zaudio", .{
+    // Note: zaudio is disabled on iOS/WASM because miniaudio requires Objective-C compilation
+    // for AVFoundation.h, but zaudio compiles it as C. Will need Sokol audio backend for iOS/WASM.
+    const zaudio_dep: ?*std.Build.Dependency = if (is_desktop) b.dependency("zaudio", .{
         .target = target,
         .optimize = optimize,
     }) else null;
@@ -181,16 +191,19 @@ pub fn build(b: *std.Build) void {
     const zts = zts_dep.module("zts");
 
     // Clay UI dependency (Zig bindings)
-    const zclay_dep = b.dependency("zclay", .{
+    // Skip for WASM - Clay is a C library that requires libc
+    const zclay_dep: ?*std.Build.Dependency = if (!is_wasm) b.dependency("zclay", .{
         .target = target,
         .optimize = optimize,
-    });
-    const zclay = zclay_dep.module("zclay");
+    }) else null;
+    const zclay: ?*std.Build.Module = if (zclay_dep) |dep| dep.module("zclay") else null;
 
     // For iOS simulator, disable SIMD in Clay to avoid NEON intrinsic issues
     // iOS devices have proper NEON support so they don't need this
     if (is_ios_simulator and gui_backend == .clay) {
-        zclay.addCMacro("CLAY_DISABLE_SIMD", "1");
+        if (zclay) |z| {
+            z.addCMacro("CLAY_DISABLE_SIMD", "1");
+        }
     }
 
     // Build options module for compile-time configuration (create once, reuse everywhere)
@@ -202,6 +215,9 @@ pub fn build(b: *std.Build) void {
     build_options.addOption(bool, "physics_enabled", physics_enabled);
     build_options.addOption(bool, "is_ios", is_ios);
     build_options.addOption(bool, "is_ios_simulator", is_ios_simulator);
+    build_options.addOption(bool, "is_wasm", is_wasm);
+    build_options.addOption(bool, "has_zclay", zclay != null);
+    build_options.addOption(bool, "has_zflecs", zflecs_module != null);
     const build_options_mod = build_options.createModule();
 
     // Physics module (optional, enabled with -Dphysics=true)
@@ -245,6 +261,7 @@ pub fn build(b: *std.Build) void {
     }
 
     // Create the ECS interface module that wraps the selected backend
+    // For WASM, only zig_ecs is available (no C-based backends)
     const ecs_interface = b.addModule("ecs", .{
         .root_source_file = b.path("ecs/interface.zig"),
         .target = target,
@@ -252,21 +269,24 @@ pub fn build(b: *std.Build) void {
         .imports = &.{
             .{ .name = "build_options", .module = build_options_mod },
             .{ .name = "zig_ecs", .module = zig_ecs_module },
-            .{ .name = "zflecs", .module = zflecs_module },
         },
     });
-    // Add mr_ecs if selected (requires Zig 0.16+)
+    // Add zflecs if available (not on WASM - C code requires libc)
+    if (zflecs_module) |m| {
+        ecs_interface.addImport("zflecs", m);
+    }
+    // Add mr_ecs if selected (requires Zig 0.16+, not on WASM)
     if (mr_ecs_module) |m| {
         ecs_interface.addImport("mr_ecs", m);
     }
 
     // Create the Input interface module that wraps the selected backend
-    // Imports are conditional based on platform (iOS only has sokol)
+    // Imports are conditional based on platform (iOS/WASM only have sokol)
     const input_interface = b.addModule("input", .{
         .root_source_file = b.path("input/interface.zig"),
         .target = target,
         .optimize = optimize,
-        .imports = if (!is_ios) &.{
+        .imports = if (is_desktop) &.{
             .{ .name = "build_options", .module = build_options_mod },
             .{ .name = "raylib", .module = raylib.? },
             .{ .name = "sokol", .module = sokol },
@@ -292,29 +312,29 @@ pub fn build(b: *std.Build) void {
     });
 
     // Create the Audio interface module that wraps the selected backend
-    // On iOS, uses sokol_audio backend (no zaudio - miniaudio requires Objective-C for AVFoundation)
+    // On iOS/WASM, uses sokol_audio backend (no zaudio - miniaudio requires Objective-C/special build)
     const audio_interface = b.addModule("audio", .{
         .root_source_file = b.path("audio/interface.zig"),
         .target = target,
         .optimize = optimize,
-        .imports = if (!is_ios) &.{
+        .imports = if (is_desktop) &.{
             .{ .name = "build_options", .module = build_options_mod },
             .{ .name = "raylib", .module = raylib.? },
             .{ .name = "zaudio", .module = zaudio.? },
         } else &.{
-            // iOS: uses sokol_audio backend
+            // iOS/WASM: uses sokol_audio backend
             .{ .name = "build_options", .module = build_options_mod },
             .{ .name = "sokol", .module = sokol },
         },
     });
 
-    // Link miniaudio library for audio module (only needed for sokol/SDL backends, not iOS)
+    // Link miniaudio library for audio module (only needed for sokol/SDL backends on desktop)
     if (backend != .raylib and zaudio_dep != null) {
         audio_interface.linkLibrary(zaudio_dep.?.artifact("miniaudio"));
     }
 
-    // Link sokol library for iOS audio (sokol_audio backend)
-    if (is_ios) {
+    // Link sokol library for iOS/WASM audio (sokol_audio backend)
+    if (is_ios or is_wasm) {
         audio_interface.linkLibrary(sokol_dep.artifact("sokol_clib"));
     }
 
@@ -386,12 +406,13 @@ pub fn build(b: *std.Build) void {
     } else null;
 
     // Create the GUI interface module that wraps the selected backend
-    // Imports are conditional based on platform (iOS only has sokol)
+    // Imports are conditional based on platform (iOS/WASM only have sokol)
+    // zclay is skipped for WASM (C library requires libc)
     const gui_interface = b.addModule("gui", .{
         .root_source_file = b.path("gui/mod.zig"),
         .target = target,
         .optimize = optimize,
-        .imports = if (!is_ios) &.{
+        .imports = if (is_desktop) &.{
             .{ .name = "build_options", .module = build_options_mod },
             .{ .name = "raylib", .module = raylib.? },
             .{ .name = "sokol", .module = sokol },
@@ -401,14 +422,16 @@ pub fn build(b: *std.Build) void {
             .{ .name = "wgpu", .module = wgpu_native.? }, // For wgpu_native ImGui adapter
             .{ .name = "labelle", .module = labelle }, // For zgpu/wgpu_native context access
             .{ .name = "zglfw", .module = zglfw.? }, // For GLFW window access
-            .{ .name = "zclay", .module = zclay },
         } else &.{
-            // iOS: reduced imports, no labelle-gfx modules
+            // iOS/WASM: reduced imports, only sokol backend
             .{ .name = "build_options", .module = build_options_mod },
             .{ .name = "sokol", .module = sokol },
-            .{ .name = "zclay", .module = zclay },
         },
     });
+    // Add zclay if available (not on WASM - C code requires libc)
+    if (zclay) |m| {
+        gui_interface.addImport("zclay", m);
+    }
 
     // Add nuklear module to GUI if using nuklear backend
     if (nuklear_module) |nk| {
@@ -543,9 +566,9 @@ pub fn build(b: *std.Build) void {
 
     // Compile imgui_impl_wgpu.cpp for wgpu_native backend
     // wgpu_native needs IMGUI_IMPL_WEBGPU_BACKEND_WGPU define (not Dawn)
-    // Not available on iOS
+    // Desktop only (not iOS/WASM)
     if (zgui_dep) |dep| {
-        if (backend == .wgpu_native and !is_ios) {
+        if (backend == .wgpu_native and is_desktop) {
             // Fetch wgpu_native and zglfw dependencies here since they're not available on iOS
             const local_wgpu_native_dep = labelle_dep.builder.dependency("wgpu_native_zig", .{
                 .target = target,
@@ -694,8 +717,8 @@ pub fn build(b: *std.Build) void {
         engine_mod.addImport("physics", physics);
     }
 
-    // Unit tests (standard zig test) - not for iOS
-    const unit_tests = if (!is_ios) b.addTest(.{
+    // Unit tests (standard zig test) - desktop only
+    const unit_tests = if (is_desktop) b.addTest(.{
         .root_module = b.createModule(.{
             .root_source_file = b.path("root.zig"),
             .target = target,
@@ -735,8 +758,8 @@ pub fn build(b: *std.Build) void {
     const core_test_step = b.step("core-test", "Run core module tests");
     core_test_step.dependOn(&run_core_tests.step);
 
-    // ZSpec tests and main test step - not for iOS
-    if (!is_ios) {
+    // ZSpec tests and main test step - desktop only
+    if (is_desktop) {
         const zspec_tests = b.addTest(.{
             .root_module = b.createModule(.{
                 .root_source_file = b.path("test/tests.zig"),
@@ -802,31 +825,34 @@ pub fn build(b: *std.Build) void {
     generate_step.dependOn(&run_generator.step);
 
     // Benchmark executable - compares ECS backend performance
-    const bench_module = b.createModule(.{
-        .root_source_file = b.path("ecs/benchmark.zig"),
-        .target = target,
-        .optimize = .ReleaseFast, // Always use ReleaseFast for benchmarks
-        .imports = &.{
-            .{ .name = "ecs", .module = ecs_interface },
-            .{ .name = "build_options", .module = build_options_mod },
-            .{ .name = "zig_ecs", .module = zig_ecs_module },
-            .{ .name = "zflecs", .module = zflecs_module },
-        },
-    });
-    // Add mr_ecs if selected (requires Zig 0.16+)
-    if (mr_ecs_module) |m| {
-        bench_module.addImport("mr_ecs", m);
+    // Skip for WASM (benchmarks need native backends including zflecs which uses C code)
+    if (!is_wasm) {
+        const bench_module = b.createModule(.{
+            .root_source_file = b.path("ecs/benchmark.zig"),
+            .target = target,
+            .optimize = .ReleaseFast, // Always use ReleaseFast for benchmarks
+            .imports = &.{
+                .{ .name = "ecs", .module = ecs_interface },
+                .{ .name = "build_options", .module = build_options_mod },
+                .{ .name = "zig_ecs", .module = zig_ecs_module },
+                .{ .name = "zflecs", .module = zflecs_module.? },
+            },
+        });
+        // Add mr_ecs if selected (requires Zig 0.16+)
+        if (mr_ecs_module) |m| {
+            bench_module.addImport("mr_ecs", m);
+        }
+        const bench_exe = b.addExecutable(.{
+            .name = "ecs-benchmark",
+            .root_module = bench_module,
+        });
+
+        b.installArtifact(bench_exe);
+
+        const run_bench = b.addRunArtifact(bench_exe);
+        run_bench.step.dependOn(b.getInstallStep());
+
+        const bench_step = b.step("bench", "Run ECS benchmarks (use -Decs_backend=zig_ecs or -Decs_backend=zflecs)");
+        bench_step.dependOn(&run_bench.step);
     }
-    const bench_exe = b.addExecutable(.{
-        .name = "ecs-benchmark",
-        .root_module = bench_module,
-    });
-
-    b.installArtifact(bench_exe);
-
-    const run_bench = b.addRunArtifact(bench_exe);
-    run_bench.step.dependOn(b.getInstallStep());
-
-    const bench_step = b.step("bench", "Run ECS benchmarks (use -Decs_backend=zig_ecs or -Decs_backend=zflecs)");
-    bench_step.dependOn(&run_bench.step);
 }
