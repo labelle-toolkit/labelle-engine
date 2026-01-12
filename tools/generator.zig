@@ -242,6 +242,11 @@ pub fn generateBuildZig(allocator: std.mem.Allocator, config: ProjectConfig) ![]
     // Template args: graphics_backend (x2), ecs_backend (x2), gui_backend (x2), physics (x2)
     try zts.print(build_zig_tmpl, "header", .{ default_backend, default_backend, default_ecs_backend, default_ecs_backend, default_gui_backend, default_gui_backend, physics_str, physics_str }, writer);
 
+    // Write physics module getter if physics is enabled
+    if (physics_enabled) {
+        try zts.print(build_zig_tmpl, "physics_mod", .{}, writer);
+    }
+
     // Write plugin dependency declarations
     // Sanitize plugin names for use as Zig identifiers
     var plugin_zig_names = try allocator.alloc([]const u8, config.plugins.len);
@@ -284,6 +289,18 @@ pub fn generateBuildZig(allocator: std.mem.Allocator, config: ProjectConfig) ![]
         .bgfx => try zts.print(build_zig_tmpl, "bgfx_exe_start", .{zig_name}, writer),
         .zgpu => try zts.print(build_zig_tmpl, "zgpu_exe_start", .{zig_name}, writer),
         .wgpu_native => try zts.print(build_zig_tmpl, "wgpu_native_exe_start", .{zig_name}, writer),
+    }
+
+    // Write physics import if physics is enabled
+    if (physics_enabled) {
+        switch (config.backend) {
+            .raylib => try zts.print(build_zig_tmpl, "physics_import", .{}, writer),
+            .sokol => try zts.print(build_zig_tmpl, "sokol_physics_import", .{}, writer),
+            .sdl => try zts.print(build_zig_tmpl, "sdl_physics_import", .{}, writer),
+            .bgfx => try zts.print(build_zig_tmpl, "bgfx_physics_import", .{}, writer),
+            .zgpu => try zts.print(build_zig_tmpl, "zgpu_physics_import", .{}, writer),
+            .wgpu_native => try zts.print(build_zig_tmpl, "wgpu_native_physics_import", .{}, writer),
+        }
     }
 
     // Write plugin imports

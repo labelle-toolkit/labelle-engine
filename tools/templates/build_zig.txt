@@ -55,6 +55,8 @@ pub fn build(b: *std.Build) void {{
         .physics = physics_enabled,
     }});
     const engine_mod = engine_dep.module("labelle-engine");
+.physics_mod
+    const physics_mod = engine_dep.module("labelle-physics");
 
 .plugin_dep
     const {s}_dep = b.dependency("{s}", .{{
@@ -76,6 +78,8 @@ pub fn build(b: *std.Build) void {{
             .optimize = optimize,
             .imports = &.{{
                 .{{ .name = "labelle-engine", .module = engine_mod }},
+.physics_import
+                .{{ .name = "physics", .module = physics_mod }},
 .raylib_exe_end
             }},
         }}),
@@ -103,6 +107,8 @@ pub fn build(b: *std.Build) void {{
                 .{{ .name = "labelle-engine", .module = engine_mod }},
                 .{{ .name = "sokol", .module = sokol_mod }},
                 .{{ .name = "labelle-gfx", .module = labelle_gfx_mod }},
+.sokol_physics_import
+                .{{ .name = "physics", .module = physics_mod }},
 .sokol_exe_end
             }},
         }}),
@@ -122,6 +128,8 @@ pub fn build(b: *std.Build) void {{
             .imports = &.{{
                 .{{ .name = "labelle-engine", .module = engine_mod }},
                 .{{ .name = "sdl2", .module = sdl_mod }},
+.sdl_physics_import
+                .{{ .name = "physics", .module = physics_mod }},
 .sdl_exe_end
             }},
         }}),
@@ -162,6 +170,8 @@ pub fn build(b: *std.Build) void {{
                 .{{ .name = "zbgfx", .module = zbgfx_mod }},
                 .{{ .name = "zglfw", .module = zglfw_mod }},
                 .{{ .name = "labelle-gfx", .module = labelle_gfx_mod }},
+.bgfx_physics_import
+                .{{ .name = "physics", .module = physics_mod }},
 .bgfx_exe_end
             }},
         }}),
@@ -198,6 +208,8 @@ pub fn build(b: *std.Build) void {{
                 .{{ .name = "zgpu", .module = zgpu_mod }},
                 .{{ .name = "zglfw", .module = zglfw_mod }},
                 .{{ .name = "labelle-gfx", .module = labelle_gfx_mod }},
+.zgpu_physics_import
+                .{{ .name = "physics", .module = physics_mod }},
 .zgpu_exe_end
             }},
         }}),
@@ -237,6 +249,8 @@ pub fn build(b: *std.Build) void {{
                 .{{ .name = "wgpu", .module = wgpu_mod }},
                 .{{ .name = "zglfw", .module = zglfw_mod }},
                 .{{ .name = "labelle-gfx", .module = labelle_gfx_mod }},
+.wgpu_native_physics_import
+                .{{ .name = "physics", .module = physics_mod }},
 .wgpu_native_exe_end
             }},
         }}),
