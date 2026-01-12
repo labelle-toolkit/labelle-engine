@@ -268,10 +268,8 @@ pub const Gestures = struct {
             self.rotation_start_angle = null;
         }
 
-        // Detect single-touch gestures
-        if (touch_count == 1) {
-            self.detectPan(touches[0]);
-        }
+        // Note: Pan detection is handled in processTouch (.moved phase)
+        // where it calculates delta BEFORE updating state.last_x/last_y
     }
 
     fn updateInternal(
@@ -317,6 +315,21 @@ pub const Gestures = struct {
             .moved => {
                 // Find state by touch.id
                 if (self.findTouchState(touch.id)) |state| {
+                    // Calculate movement delta BEFORE updating last position
+                    // This is used for pan gesture detection
+                    const move_dx = touch.x - state.last_x;
+                    const move_dy = touch.y - state.last_y;
+
+                    // Store delta for pan detection (single touch only)
+                    if (self.active_touch_count == 1 and (@abs(move_dx) > 0.5 or @abs(move_dy) > 0.5)) {
+                        self.current_pan = .{
+                            .delta_x = move_dx,
+                            .delta_y = move_dy,
+                            .x = touch.x,
+                            .y = touch.y,
+                        };
+                    }
+
                     // Check for long press (touch held without much movement)
                     const dx = touch.x - state.start_x;
                     const dy = touch.y - state.start_y;
@@ -334,6 +347,7 @@ pub const Gestures = struct {
                         };
                     }
 
+                    // Update last position AFTER calculating deltas
                     state.last_x = touch.x;
                     state.last_y = touch.y;
                 }
@@ -376,10 +390,11 @@ pub const Gestures = struct {
 
         // Check for swipe
         if (distance >= self.config.swipe_threshold and
-            duration <= self.config.swipe_max_duration)
+            duration <= self.config.swipe_max_duration and
+            duration > 0)
         {
             const velocity = distance / duration;
-            if (velocity >= self.config.swipe_min_velocity) {
+            if (velocity >= self.config.swipe_min_velocity and std.math.isFinite(velocity)) {
                 const direction = self.getSwipeDirection(dx, dy);
                 self.current_swipe = .{
                     .direction = direction,
@@ -496,28 +511,6 @@ pub const Gestures = struct {
         self.last_pinch_angle = angle;
     }
 
-    fn detectPan(self: *Self, touch: Touch) void {
-        if (touch.phase != .moved) return;
-
-        // Find the touch state
-        for (&self.touch_states) |*state| {
-            if (state.active and state.id == touch.id) {
-                const dx = touch.x - state.last_x;
-                const dy = touch.y - state.last_y;
-
-                // Only emit pan if there's actual movement
-                if (@abs(dx) > 0.5 or @abs(dy) > 0.5) {
-                    self.current_pan = .{
-                        .delta_x = dx,
-                        .delta_y = dy,
-                        .x = touch.x,
-                        .y = touch.y,
-                    };
-                }
-                break;
-            }
-        }
-    }
 
     // =========================================================================
     // Public Gesture Getters
