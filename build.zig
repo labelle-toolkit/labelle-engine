@@ -187,23 +187,13 @@ pub fn build(b: *std.Build) void {
     });
     const zclay = zclay_dep.module("zclay");
 
-    // For iOS simulator, disable SIMD in Clay to avoid NEON intrinsic issues
-    if (is_ios_simulator) {
-        for (zclay.link_objects.items) |link_object| {
-            switch (link_object) {
-                .other_step => |compile_step| {
-                    compile_step.root_module.addCMacro("CLAY_DISABLE_SIMD", "1");
-                },
-                else => {},
-            }
-        }
-    }
-
     // Build options module for compile-time configuration (create once, reuse everywhere)
     const build_options = b.addOptions();
 
     // Clay GUI backend uses ARM NEON intrinsics that don't work on iOS simulator
     // Fall back to .none when clay is selected but unavailable
+    // Note: We disable the entire backend rather than trying CLAY_DISABLE_SIMD because
+    // Clay's SIMD-free fallback path isn't well-tested on this platform
     const effective_gui_backend: GuiBackend = if (gui_backend == .clay and is_ios_simulator) blk: {
         std.log.warn("Clay GUI backend disabled on iOS simulator (uses unsupported ARM NEON intrinsics)", .{});
         break :blk .none;
