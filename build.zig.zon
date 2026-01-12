@@ -13,9 +13,10 @@
             .url = "git+https://github.com/zig-gamedev/zflecs#main",
             .hash = "zflecs-0.2.0-dev-1PN3ym9mOgCyE8w0DdK_Uf7FAob-nm0Dp_lZKR3QyJaC",
         },
+        // TODO: Update to version tag once WASM support is merged
         .@"labelle-gfx" = .{
-            .url = "git+https://github.com/labelle-toolkit/labelle-gfx#v0.28.0",
-            .hash = "labelle_gfx-0.28.0-WZ2XcF79CwCUO0sesz_sT3um3ZByeWbSGwB5Zw88Rqyy",
+            .url = "git+https://github.com/labelle-toolkit/labelle-gfx#feature/wasm-support",
+            .hash = "labelle_gfx-0.28.0-WZ2XcEAIDAByczHb3P4UvT3zUdnRm44NHFBEbhY15eK7",
         },
         .zspec = .{
             .url = "git+https://github.com/apotema/zspec#71c901d6e74b2d5a8c556d4c74ced9b91446d8a4",
