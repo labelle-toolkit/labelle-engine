@@ -40,6 +40,9 @@ pub fn build(b: *std.Build) void {{
     const target = b.standardTargetOptions(.{{}});
     const optimize = b.standardOptimizeOption(.{{}});
 
+    // Detect iOS target for framework linking
+    const is_ios = target.result.os.tag == .ios;
+
     // Backend options - can be overridden via -Dbackend, -Decs_backend, -Dgui_backend
     const backend = b.option(Backend, "backend", "Graphics backend to use (default: {s})") orelse .{s};
     const ecs_backend = b.option(EcsBackend, "ecs_backend", "ECS backend to use (default: {s})") orelse .{s};
@@ -259,6 +262,18 @@ pub fn build(b: *std.Build) void {{
     // Add Dawn library paths (required for zgpu to find prebuilt Dawn)
     const zgpu_build = @import("zgpu");
     zgpu_build.addLibraryPathsTo(exe);
+
+.ios_frameworks
+    // Link iOS frameworks when targeting iOS
+    if (is_ios) {{
+        exe.linkFramework("Metal");
+        exe.linkFramework("MetalKit");
+        exe.linkFramework("UIKit");
+        exe.linkFramework("AudioToolbox");
+        exe.linkFramework("AVFoundation");
+        exe.linkFramework("Foundation");
+        exe.linkFramework("QuartzCore");
+    }}
 
 .footer
     b.installArtifact(exe);

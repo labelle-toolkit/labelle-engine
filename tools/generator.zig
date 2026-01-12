@@ -371,6 +371,9 @@ pub fn generateBuildZig(allocator: std.mem.Allocator, config: ProjectConfig) ![]
         else => {},
     }
 
+    // Write iOS framework linking (always included, conditional in template)
+    try zts.print(build_zig_tmpl, "ios_frameworks", .{}, writer);
+
     // Write common footer
     try zts.print(build_zig_tmpl, "footer", .{}, writer);
 
