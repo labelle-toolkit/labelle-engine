@@ -208,12 +208,7 @@ pub fn build(b: *std.Build) void {{
         .name = "{s}",
         .root_module = exe_mod,
     }});
-    exe.linkLibrary(zglfw_dep.artifact("glfw"));
-    exe.linkLibrary(zgpu_dep.artifact("zdawn"));
-
-    // Add Dawn library paths (required for zgpu to find prebuilt Dawn)
-    const zgpu_build = @import("zgpu");
-    zgpu_build.addLibraryPathsTo(exe);
+    // Note: library linking done in zgpu_link section to avoid duplication
 .wgpu_native_exe_start
     // Get labelle-gfx dependency for wgpu_native bindings
     const labelle_dep = engine_dep.builder.dependency("labelle-gfx", .{{
@@ -260,6 +255,10 @@ pub fn build(b: *std.Build) void {{
     // Link glfw and Dawn (WebGPU) native libraries
     exe.linkLibrary(glfw_lib);
     exe.linkLibrary(zgpu_dep.artifact("zdawn"));
+
+    // Add Dawn library paths (required for zgpu to find prebuilt Dawn)
+    const zgpu_build = @import("zgpu");
+    zgpu_build.addLibraryPathsTo(exe);
 
 .footer
     b.installArtifact(exe);

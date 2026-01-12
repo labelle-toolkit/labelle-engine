@@ -29,14 +29,60 @@ const main_bgfx_tmpl = @embedFile("templates/main_bgfx.txt");
 const main_zgpu_tmpl = @embedFile("templates/main_zgpu.txt");
 const main_wgpu_native_tmpl = @embedFile("templates/main_wgpu_native.txt");
 
-/// Sanitize a project name to be a valid Zig identifier
-/// Replaces hyphens with underscores
+/// Sanitize a project name to be a valid Zig identifier.
+/// - Replaces hyphens with underscores
+/// - Removes any invalid characters (only a-z, A-Z, 0-9, _ allowed)
+/// - Prepends underscore if name starts with a digit
+/// - Returns error if name is empty or becomes empty after sanitization
 fn sanitizeZigIdentifier(allocator: std.mem.Allocator, name: []const u8) ![]const u8 {
-    var result = try allocator.alloc(u8, name.len);
+    if (name.len == 0) return error.InvalidIdentifier;
+
+    // Count valid characters
+    var valid_count: usize = 0;
+    var starts_with_digit = false;
     for (name, 0..) |c, i| {
-        result[i] = if (c == '-') '_' else c;
+        if (isValidIdentifierChar(c)) {
+            if (i == 0 and std.ascii.isDigit(c)) {
+                starts_with_digit = true;
+            }
+            valid_count += 1;
+        } else if (c == '-') {
+            // Hyphens become underscores
+            if (i == 0) starts_with_digit = false; // underscore is valid start
+            valid_count += 1;
+        }
+        // Other characters are silently dropped
     }
+
+    if (valid_count == 0) return error.InvalidIdentifier;
+
+    // Allocate result (add 1 if we need to prepend underscore)
+    const extra: usize = if (starts_with_digit) 1 else 0;
+    var result = try allocator.alloc(u8, valid_count + extra);
+
+    // Build result
+    var idx: usize = 0;
+    if (starts_with_digit) {
+        result[0] = '_';
+        idx = 1;
+    }
+
+    for (name) |c| {
+        if (isValidIdentifierChar(c)) {
+            result[idx] = c;
+            idx += 1;
+        } else if (c == '-') {
+            result[idx] = '_';
+            idx += 1;
+        }
+    }
+
     return result;
+}
+
+/// Check if character is valid in a Zig identifier (alphanumeric or underscore)
+fn isValidIdentifierChar(c: u8) bool {
+    return std.ascii.isAlphanumeric(c) or c == '_';
 }
 
 /// Fetch package hash using zig fetch command
