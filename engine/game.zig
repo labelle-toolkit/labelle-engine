@@ -628,19 +628,22 @@ pub fn GameWith(comptime Hooks: type) type {
         }
 
         /// Get the primary camera (for advanced use)
-        pub fn getCamera(self: *Self) *labelle.Camera {
+        /// Returns the backend-aware camera type from RetainedEngine
+        pub fn getCamera(self: *Self) *RetainedEngine.CameraType {
             return self.retained_engine.getCamera();
         }
 
         // ==================== Multi-Camera ====================
 
         /// Get a camera by index (0-3)
-        pub fn getCameraAt(self: *Self, index: u2) *labelle.Camera {
+        /// Returns the backend-aware camera type from RetainedEngine
+        pub fn getCameraAt(self: *Self, index: u2) *RetainedEngine.CameraType {
             return self.retained_engine.getCameraAt(index);
         }
 
         /// Get the camera manager (for advanced multi-camera control)
-        pub fn getCameraManager(self: *Self) *labelle.CameraManager {
+        /// Returns the backend-aware camera manager type from RetainedEngine
+        pub fn getCameraManager(self: *Self) *RetainedEngine.CameraManagerType {
             return self.retained_engine.getCameraManager();
         }
 
@@ -684,6 +687,25 @@ pub fn GameWith(comptime Hooks: type) type {
         /// Get access to the input system
         pub fn getInput(self: *Self) *Input {
             return &self.input;
+        }
+
+        // ==================== Touch Input ====================
+
+        /// Get the number of active touch points.
+        /// Returns 0 on desktop platforms without touch support.
+        pub fn getTouchCount(self: *const Self) u32 {
+            return self.input.getTouchCount();
+        }
+
+        /// Get touch at index (0 to getTouchCount()-1).
+        /// Returns null if index is out of bounds.
+        pub fn getTouch(self: *const Self, index: u32) ?input_mod.Touch {
+            return self.input.getTouch(index);
+        }
+
+        /// Check if there are any active touches.
+        pub fn isTouching(self: *const Self) bool {
+            return self.input.getTouchCount() > 0;
         }
 
         /// Get access to the audio system

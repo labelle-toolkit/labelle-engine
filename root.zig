@@ -109,6 +109,9 @@ pub const Input = input.Input;
 pub const KeyboardKey = input.KeyboardKey;
 pub const MouseButton = input.MouseButton;
 pub const MousePosition = input.MousePosition;
+pub const Touch = input.Touch;
+pub const TouchPhase = input.TouchPhase;
+pub const MAX_TOUCHES = input.MAX_TOUCHES;
 
 // Audio types
 pub const Audio = audio.Audio;
@@ -133,3 +136,42 @@ pub const BuiltinComponents = struct {
     pub const Shape = render.Shape;
     pub const Text = render.Text;
 };
+
+// Physics types (conditionally exported when physics is enabled)
+pub const physics_enabled = build_options.physics_enabled;
+
+pub const physics = if (build_options.physics_enabled)
+    @import("physics")
+else
+    struct {};
+
+/// Physics component types, available when physics is enabled (-Dphysics=true).
+/// Use BuiltinComponentsWithPhysics to automatically include these in your ComponentRegistry.
+pub const PhysicsComponents = if (build_options.physics_enabled)
+    struct {
+        pub const RigidBody = physics.RigidBody;
+        pub const Collider = physics.Collider;
+        pub const Velocity = physics.Velocity;
+        pub const Touching = physics.Touching;
+    }
+else
+    struct {};
+
+/// Built-in components including physics types when physics is enabled.
+/// Use this with ComponentRegistry or ComponentRegistryMulti to automatically
+/// have all engine components available without manual imports.
+pub const BuiltinComponentsWithPhysics = if (build_options.physics_enabled)
+    struct {
+        // Render components (from BuiltinComponents)
+        pub const Position = BuiltinComponents.Position;
+        pub const Sprite = BuiltinComponents.Sprite;
+        pub const Shape = BuiltinComponents.Shape;
+        pub const Text = BuiltinComponents.Text;
+        // Physics components (from PhysicsComponents)
+        pub const RigidBody = PhysicsComponents.RigidBody;
+        pub const Collider = PhysicsComponents.Collider;
+        pub const Velocity = PhysicsComponents.Velocity;
+        pub const Touching = PhysicsComponents.Touching;
+    }
+else
+    BuiltinComponents;

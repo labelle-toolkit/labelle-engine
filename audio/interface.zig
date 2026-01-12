@@ -160,10 +160,13 @@ pub fn AudioInterface(comptime Impl: type) type {
 /// Whether targeting iOS
 pub const is_ios: bool = build_options.is_ios;
 
+/// Whether targeting WASM/Emscripten
+pub const is_wasm: bool = build_options.is_wasm;
+
 // Select and validate audio backend based on graphics backend
 // Raylib has its own audio system; sokol, SDL, bgfx, zgpu, and wgpu_native use miniaudio via zaudio
-// iOS: uses sokol_audio with built-in WAV decoder (miniaudio requires Objective-C for AVFoundation)
-const BackendImpl = if (is_ios)
+// iOS/WASM: uses sokol_audio with built-in WAV decoder (miniaudio requires Objective-C/special build)
+const BackendImpl = if (is_ios or is_wasm)
     @import("sokol_audio.zig")
 else switch (backend) {
     .raylib => @import("raylib_audio.zig"),
