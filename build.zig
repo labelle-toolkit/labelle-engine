@@ -34,9 +34,10 @@ pub fn build(b: *std.Build) void {
     // Detect iOS target (raylib, SDL, etc. not supported on iOS)
     const is_ios = target.result.os.tag == .ios;
 
-    // Detect iOS simulator - needs special handling for NEON intrinsics
-    // iOS simulator on Apple Silicon doesn't fully support all NEON intrinsics
-    const is_ios_simulator = is_ios and target.result.abi == .simulator;
+    // Detect iOS simulator on ARM - needs special handling for NEON intrinsics
+    // iOS simulator on Apple Silicon (aarch64) doesn't fully support all NEON intrinsics
+    // Note: Only apply ARM-specific workarounds on aarch64, not x86_64 simulators
+    const is_ios_simulator = is_ios and target.result.abi == .simulator and target.result.cpu.arch == .aarch64;
 
     // Build options
     const backend = b.option(Backend, "backend", "Graphics backend to use (default: raylib)") orelse .raylib;
@@ -200,9 +201,17 @@ pub fn build(b: *std.Build) void {
 
     // Build options module for compile-time configuration (create once, reuse everywhere)
     const build_options = b.addOptions();
+
+    // Clay GUI backend uses ARM NEON intrinsics that don't work on iOS simulator
+    // Fall back to .none when clay is selected but unavailable
+    const effective_gui_backend: GuiBackend = if (gui_backend == .clay and is_ios_simulator) blk: {
+        std.log.warn("Clay GUI backend disabled on iOS simulator (uses unsupported ARM NEON intrinsics)", .{});
+        break :blk .none;
+    } else gui_backend;
+
     build_options.addOption(Backend, "backend", backend);
     build_options.addOption(EcsBackend, "ecs_backend", ecs_backend);
-    build_options.addOption(GuiBackend, "gui_backend", gui_backend);
+    build_options.addOption(GuiBackend, "gui_backend", effective_gui_backend);
     build_options.addOption(bool, "physics_enabled", physics_enabled);
     build_options.addOption(bool, "is_ios", is_ios);
     build_options.addOption(bool, "is_ios_simulator", is_ios_simulator);
