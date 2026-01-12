@@ -147,6 +147,7 @@ pub fn GameWith(comptime Hooks: type) type {
         registry: Registry,
         pipeline: RenderPipeline,
         input: Input,
+        gestures: input_mod.Gestures,
         audio: Audio,
 
         // Scene management
@@ -205,6 +206,7 @@ pub fn GameWith(comptime Hooks: type) type {
             errdefer pipeline.deinit();
 
             const input = Input.init();
+            const gestures = input_mod.Gestures.init();
             const audio = Audio.init();
 
             // Initialize collections
@@ -221,6 +223,7 @@ pub fn GameWith(comptime Hooks: type) type {
                 .registry = registry,
                 .pipeline = pipeline,
                 .input = input,
+                .gestures = gestures,
                 .audio = audio,
                 .scenes = std.StringHashMap(SceneEntry).init(allocator),
                 .current_scene_name = null,
@@ -579,6 +582,9 @@ pub fn GameWith(comptime Hooks: type) type {
                 // Begin input frame (clears per-frame state)
                 self.input.beginFrame();
 
+                // Update gesture recognition with current touch state
+                self.updateGestures(dt);
+
                 // Call custom frame callback if provided
                 if (callback) |cb| {
                     cb(self, dt);
@@ -703,6 +709,68 @@ pub fn GameWith(comptime Hooks: type) type {
         /// Check if there are any active touches.
         pub fn isTouching(self: *const Self) bool {
             return self.input.getTouchCount() > 0;
+        }
+
+        // ==================== Gesture Recognition ====================
+
+        /// Update gesture recognition with current touch state.
+        /// Called automatically in the game loop; manual call needed for custom loops.
+        pub fn updateGestures(self: *Self, dt: f32) void {
+            // Build touch array from input
+            var touches: [input_mod.MAX_TOUCHES]input_mod.Touch = undefined;
+            var touch_count: usize = 0;
+            var i: u32 = 0;
+            while (i < self.input.getTouchCount() and touch_count < input_mod.MAX_TOUCHES) : (i += 1) {
+                if (self.input.getTouch(i)) |touch| {
+                    touches[touch_count] = touch;
+                    touch_count += 1;
+                }
+            }
+            self.gestures.updateWithTouches(touches[0..touch_count], dt);
+        }
+
+        /// Get access to the gesture recognizer.
+        pub fn getGestures(self: *Self) *input_mod.Gestures {
+            return &self.gestures;
+        }
+
+        /// Get pinch gesture if detected this frame.
+        /// Returns scale factor, center point, and distance between fingers.
+        pub fn getPinch(self: *const Self) ?input_mod.Pinch {
+            return self.gestures.getPinch();
+        }
+
+        /// Get pan gesture if detected this frame.
+        /// Returns delta movement and current position.
+        pub fn getPan(self: *const Self) ?input_mod.Pan {
+            return self.gestures.getPan();
+        }
+
+        /// Get swipe gesture if detected this frame.
+        /// Returns direction, velocity, and start/end positions.
+        pub fn getSwipe(self: *const Self) ?input_mod.Swipe {
+            return self.gestures.getSwipe();
+        }
+
+        /// Get tap gesture if detected this frame.
+        pub fn getTap(self: *const Self) ?input_mod.Tap {
+            return self.gestures.getTap();
+        }
+
+        /// Get double tap gesture if detected this frame.
+        pub fn getDoubleTap(self: *const Self) ?input_mod.DoubleTap {
+            return self.gestures.getDoubleTap();
+        }
+
+        /// Get long press gesture if detected this frame.
+        pub fn getLongPress(self: *const Self) ?input_mod.LongPress {
+            return self.gestures.getLongPress();
+        }
+
+        /// Get rotation gesture if detected this frame.
+        /// Returns angle delta, total angle, and center point.
+        pub fn getRotation(self: *const Self) ?input_mod.Rotation {
+            return self.gestures.getRotation();
         }
 
         /// Get access to the audio system

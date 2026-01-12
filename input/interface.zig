@@ -20,6 +20,18 @@ pub const TouchPhase = types.TouchPhase;
 pub const Touch = types.Touch;
 pub const MAX_TOUCHES = types.MAX_TOUCHES;
 
+// Gesture recognition
+pub const gestures = @import("gestures.zig");
+pub const Gestures = gestures.Gestures;
+pub const SwipeDirection = gestures.SwipeDirection;
+pub const Pinch = gestures.Pinch;
+pub const Pan = gestures.Pan;
+pub const Swipe = gestures.Swipe;
+pub const Tap = gestures.Tap;
+pub const DoubleTap = gestures.DoubleTap;
+pub const LongPress = gestures.LongPress;
+pub const Rotation = gestures.Rotation;
+
 /// Graphics backend selection (enum type)
 pub const Backend = build_options.@"build.Backend";
 

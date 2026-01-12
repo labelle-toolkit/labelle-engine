@@ -730,6 +730,71 @@ const count = input.getTouchCount();
 - **raylib**: Touch positions available, but phases always report as `.moved`
 - **SDL2**: Full touch support via finger events
 
+### Gesture Recognition
+
+High-level gesture detection built on top of raw touch input. Automatically updated each frame in the game loop.
+
+**Supported gestures:**
+
+| Gesture | Description | Data |
+|---------|-------------|------|
+| **Pinch** | Two-finger zoom | `scale`, `center_x`, `center_y`, `distance` |
+| **Pan** | Single-finger drag | `delta_x`, `delta_y`, `x`, `y` |
+| **Swipe** | Quick directional movement | `direction`, `velocity`, `start_x/y`, `end_x/y` |
+| **Tap** | Quick touch and release | `x`, `y` |
+| **Double Tap** | Two quick taps | `x`, `y` |
+| **Long Press** | Touch held for duration | `x`, `y`, `duration` |
+| **Rotation** | Two-finger twist | `angle_delta`, `angle`, `center_x`, `center_y` |
+
+**Usage:**
+```zig
+pub fn update(game: *Game, scene: *Scene, dt: f32) void {
+    // Pinch to zoom
+    if (game.getPinch()) |pinch| {
+        const current_zoom = game.getCamera().getZoom();
+        game.setCameraZoom(current_zoom * pinch.scale);
+    }
+
+    // Swipe to change scenes
+    if (game.getSwipe()) |swipe| {
+        if (swipe.direction == .left) {
+            game.queueSceneChange("next_level");
+        }
+    }
+
+    // Tap to interact
+    if (game.getTap()) |tap| {
+        spawnEntity(game, tap.x, tap.y);
+    }
+
+    // Pan to scroll
+    if (game.getPan()) |pan| {
+        const cam = game.getCamera();
+        cam.setPosition(cam.getX() - pan.delta_x, cam.getY() - pan.delta_y);
+    }
+
+    // Rotation gesture
+    if (game.getRotation()) |rotation| {
+        rotateSelection(rotation.angle_delta);
+    }
+}
+```
+
+**Configuration:**
+```zig
+const gestures = game.getGestures();
+gestures.setSwipeThreshold(50.0);       // min pixels for swipe
+gestures.setLongPressDuration(0.5);     // seconds
+gestures.setDoubleTapInterval(0.3);     // max seconds between taps
+gestures.setPinchThreshold(5.0);        // min distance change
+gestures.setRotationThreshold(0.05);    // min angle change (radians)
+```
+
+**Gesture types:**
+- `Gestures` - Gesture recognizer with state tracking
+- `SwipeDirection` - `.up`, `.down`, `.left`, `.right`
+- `Pinch`, `Pan`, `Swipe`, `Tap`, `DoubleTap`, `LongPress`, `Rotation` - Gesture data structs
+
 ### Layer System
 
 The engine provides three built-in layers for organizing rendering:
