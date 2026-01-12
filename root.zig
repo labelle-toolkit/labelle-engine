@@ -136,3 +136,42 @@ pub const BuiltinComponents = struct {
     pub const Shape = render.Shape;
     pub const Text = render.Text;
 };
+
+// Physics types (conditionally exported when physics is enabled)
+pub const physics_enabled = build_options.physics_enabled;
+
+pub const physics = if (build_options.physics_enabled)
+    @import("physics")
+else
+    struct {};
+
+/// Physics component types, available when physics is enabled (-Dphysics=true).
+/// Use BuiltinComponentsWithPhysics to automatically include these in your ComponentRegistry.
+pub const PhysicsComponents = if (build_options.physics_enabled)
+    struct {
+        pub const RigidBody = physics.RigidBody;
+        pub const Collider = physics.Collider;
+        pub const Velocity = physics.Velocity;
+        pub const Touching = physics.Touching;
+    }
+else
+    struct {};
+
+/// Built-in components including physics types when physics is enabled.
+/// Use this with ComponentRegistry or ComponentRegistryMulti to automatically
+/// have all engine components available without manual imports.
+pub const BuiltinComponentsWithPhysics = if (build_options.physics_enabled)
+    struct {
+        // Render components
+        pub const Position = render.Position;
+        pub const Sprite = render.Sprite;
+        pub const Shape = render.Shape;
+        pub const Text = render.Text;
+        // Physics components (auto-included)
+        pub const RigidBody = physics.RigidBody;
+        pub const Collider = physics.Collider;
+        pub const Velocity = physics.Velocity;
+        pub const Touching = physics.Touching;
+    }
+else
+    BuiltinComponents;
