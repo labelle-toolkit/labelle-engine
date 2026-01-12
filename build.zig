@@ -34,6 +34,12 @@ pub fn build(b: *std.Build) void {
     // Detect iOS target (raylib, SDL, etc. not supported on iOS)
     const is_ios = target.result.os.tag == .ios;
 
+    // Detect WASM/Emscripten target (only sokol backend supported)
+    const is_wasm = target.result.os.tag == .emscripten or target.result.cpu.arch == .wasm32;
+
+    // Desktop-only flag (not iOS and not WASM)
+    const is_desktop = !is_ios and !is_wasm;
+
     // Build options
     const backend = b.option(Backend, "backend", "Graphics backend to use (default: raylib)") orelse .raylib;
     const ecs_backend = b.option(EcsBackend, "ecs_backend", "ECS backend to use (default: zig_ecs)") orelse .zig_ecs;
@@ -82,9 +88,9 @@ pub fn build(b: *std.Build) void {
     });
     const labelle = labelle_dep.module("labelle");
 
-    // raylib module - get from labelle-gfx's re-exported module (not available on iOS)
+    // raylib module - get from labelle-gfx's re-exported module (desktop only)
     // labelle-gfx uses the raylib-zig fork with getGLFWWindow() for ImGui integration
-    const raylib: ?*std.Build.Module = if (!is_ios) labelle_dep.builder.modules.get("raylib") else null;
+    const raylib: ?*std.Build.Module = if (is_desktop) labelle_dep.builder.modules.get("raylib") else null;
 
     // sokol dependency - DO NOT pass with_sokol_imgui here as it changes the
     // dependency hash and conflicts with labelle-gfx's sokol. For ImGui support,
@@ -115,12 +121,12 @@ pub fn build(b: *std.Build) void {
         }
     }
 
-    // SDL module - get from labelle-gfx's re-exported module (not available on iOS)
+    // SDL module - get from labelle-gfx's re-exported module (desktop only)
     // labelle-gfx v0.15.0+ re-exports SDL to avoid Zig module conflicts
-    const sdl: ?*std.Build.Module = if (!is_ios) labelle_dep.builder.modules.get("sdl") else null;
+    const sdl: ?*std.Build.Module = if (is_desktop) labelle_dep.builder.modules.get("sdl") else null;
 
-    // zbgfx, zgpu, wgpu_native, zglfw - not available on iOS
-    const zbgfx: ?*std.Build.Module = if (!is_ios) blk: {
+    // zbgfx, zgpu, wgpu_native, zglfw - desktop only
+    const zbgfx: ?*std.Build.Module = if (is_desktop) blk: {
         const zbgfx_dep = labelle_dep.builder.dependency("zbgfx", .{
             .target = target,
             .optimize = optimize,
@@ -128,7 +134,7 @@ pub fn build(b: *std.Build) void {
         break :blk zbgfx_dep.module("zbgfx");
     } else null;
 
-    const zgpu: ?*std.Build.Module = if (!is_ios) blk: {
+    const zgpu: ?*std.Build.Module = if (is_desktop) blk: {
         const zgpu_dep = labelle_dep.builder.dependency("zgpu", .{
             .target = target,
             .optimize = optimize,
@@ -137,7 +143,7 @@ pub fn build(b: *std.Build) void {
     } else null;
 
     // wgpu_native - lower-level WebGPU bindings (alternative to zgpu)
-    const wgpu_native: ?*std.Build.Module = if (!is_ios) blk: {
+    const wgpu_native: ?*std.Build.Module = if (is_desktop) blk: {
         const wgpu_native_dep = labelle_dep.builder.dependency("wgpu_native_zig", .{
             .target = target,
             .optimize = optimize,
@@ -145,8 +151,8 @@ pub fn build(b: *std.Build) void {
         break :blk wgpu_native_dep.module("wgpu");
     } else null;
 
-    // zglfw - GLFW bindings for zgpu/wgpu_native (not available on iOS)
-    const zglfw: ?*std.Build.Module = if (!is_ios) blk: {
+    // zglfw - GLFW bindings for zgpu/wgpu_native (desktop only)
+    const zglfw: ?*std.Build.Module = if (is_desktop) blk: {
         const zglfw_dep = labelle_dep.builder.dependency("zglfw", .{
             .target = target,
             .optimize = optimize,
@@ -155,9 +161,9 @@ pub fn build(b: *std.Build) void {
     } else null;
 
     // zaudio (miniaudio wrapper) for sokol/SDL audio backends
-    // Note: zaudio is disabled on iOS because miniaudio requires Objective-C compilation
-    // for AVFoundation.h, but zaudio compiles it as C. Will need Sokol audio backend for iOS.
-    const zaudio_dep: ?*std.Build.Dependency = if (!is_ios) b.dependency("zaudio", .{
+    // Note: zaudio is disabled on iOS/WASM because miniaudio requires Objective-C compilation
+    // for AVFoundation.h, but zaudio compiles it as C. Will need Sokol audio backend for iOS/WASM.
+    const zaudio_dep: ?*std.Build.Dependency = if (is_desktop) b.dependency("zaudio", .{
         .target = target,
         .optimize = optimize,
     }) else null;
@@ -189,6 +195,7 @@ pub fn build(b: *std.Build) void {
     build_options.addOption(GuiBackend, "gui_backend", gui_backend);
     build_options.addOption(bool, "physics_enabled", physics_enabled);
     build_options.addOption(bool, "is_ios", is_ios);
+    build_options.addOption(bool, "is_wasm", is_wasm);
     const build_options_mod = build_options.createModule();
 
     // Physics module (optional, enabled with -Dphysics=true)
@@ -238,12 +245,12 @@ pub fn build(b: *std.Build) void {
     }
 
     // Create the Input interface module that wraps the selected backend
-    // Imports are conditional based on platform (iOS only has sokol)
+    // Imports are conditional based on platform (iOS/WASM only have sokol)
     const input_interface = b.addModule("input", .{
         .root_source_file = b.path("input/interface.zig"),
         .target = target,
         .optimize = optimize,
-        .imports = if (!is_ios) &.{
+        .imports = if (is_desktop) &.{
             .{ .name = "build_options", .module = build_options_mod },
             .{ .name = "raylib", .module = raylib.? },
             .{ .name = "sokol", .module = sokol },
@@ -269,29 +276,29 @@ pub fn build(b: *std.Build) void {
     });
 
     // Create the Audio interface module that wraps the selected backend
-    // On iOS, uses sokol_audio backend (no zaudio - miniaudio requires Objective-C for AVFoundation)
+    // On iOS/WASM, uses sokol_audio backend (no zaudio - miniaudio requires Objective-C/special build)
     const audio_interface = b.addModule("audio", .{
         .root_source_file = b.path("audio/interface.zig"),
         .target = target,
         .optimize = optimize,
-        .imports = if (!is_ios) &.{
+        .imports = if (is_desktop) &.{
             .{ .name = "build_options", .module = build_options_mod },
             .{ .name = "raylib", .module = raylib.? },
             .{ .name = "zaudio", .module = zaudio.? },
         } else &.{
-            // iOS: uses sokol_audio backend
+            // iOS/WASM: uses sokol_audio backend
             .{ .name = "build_options", .module = build_options_mod },
             .{ .name = "sokol", .module = sokol },
         },
     });
 
-    // Link miniaudio library for audio module (only needed for sokol/SDL backends, not iOS)
+    // Link miniaudio library for audio module (only needed for sokol/SDL backends on desktop)
     if (backend != .raylib and zaudio_dep != null) {
         audio_interface.linkLibrary(zaudio_dep.?.artifact("miniaudio"));
     }
 
-    // Link sokol library for iOS audio (sokol_audio backend)
-    if (is_ios) {
+    // Link sokol library for iOS/WASM audio (sokol_audio backend)
+    if (is_ios or is_wasm) {
         audio_interface.linkLibrary(sokol_dep.artifact("sokol_clib"));
     }
 
@@ -363,12 +370,12 @@ pub fn build(b: *std.Build) void {
     } else null;
 
     // Create the GUI interface module that wraps the selected backend
-    // Imports are conditional based on platform (iOS only has sokol)
+    // Imports are conditional based on platform (iOS/WASM only have sokol)
     const gui_interface = b.addModule("gui", .{
         .root_source_file = b.path("gui/mod.zig"),
         .target = target,
         .optimize = optimize,
-        .imports = if (!is_ios) &.{
+        .imports = if (is_desktop) &.{
             .{ .name = "build_options", .module = build_options_mod },
             .{ .name = "raylib", .module = raylib.? },
             .{ .name = "sokol", .module = sokol },
@@ -380,7 +387,7 @@ pub fn build(b: *std.Build) void {
             .{ .name = "zglfw", .module = zglfw.? }, // For GLFW window access
             .{ .name = "zclay", .module = zclay },
         } else &.{
-            // iOS: reduced imports, no labelle-gfx modules
+            // iOS/WASM: reduced imports, only sokol backend
             .{ .name = "build_options", .module = build_options_mod },
             .{ .name = "sokol", .module = sokol },
             .{ .name = "zclay", .module = zclay },
@@ -520,9 +527,9 @@ pub fn build(b: *std.Build) void {
 
     // Compile imgui_impl_wgpu.cpp for wgpu_native backend
     // wgpu_native needs IMGUI_IMPL_WEBGPU_BACKEND_WGPU define (not Dawn)
-    // Not available on iOS
+    // Desktop only (not iOS/WASM)
     if (zgui_dep) |dep| {
-        if (backend == .wgpu_native and !is_ios) {
+        if (backend == .wgpu_native and is_desktop) {
             // Fetch wgpu_native and zglfw dependencies here since they're not available on iOS
             const local_wgpu_native_dep = labelle_dep.builder.dependency("wgpu_native_zig", .{
                 .target = target,
@@ -671,8 +678,8 @@ pub fn build(b: *std.Build) void {
         engine_mod.addImport("physics", physics);
     }
 
-    // Unit tests (standard zig test) - not for iOS
-    const unit_tests = if (!is_ios) b.addTest(.{
+    // Unit tests (standard zig test) - desktop only
+    const unit_tests = if (is_desktop) b.addTest(.{
         .root_module = b.createModule(.{
             .root_source_file = b.path("root.zig"),
             .target = target,
@@ -712,8 +719,8 @@ pub fn build(b: *std.Build) void {
     const core_test_step = b.step("core-test", "Run core module tests");
     core_test_step.dependOn(&run_core_tests.step);
 
-    // ZSpec tests and main test step - not for iOS
-    if (!is_ios) {
+    // ZSpec tests and main test step - desktop only
+    if (is_desktop) {
         const zspec_tests = b.addTest(.{
             .root_module = b.createModule(.{
                 .root_source_file = b.path("test/tests.zig"),
