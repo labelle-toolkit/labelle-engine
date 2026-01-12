@@ -324,7 +324,8 @@ pub const ProjectConfig = struct {
 
         // Get file size
         const stat = try file.stat();
-        const file_size = stat.size;
+        // Cast to usize - safe for reasonable file sizes (project.labelle files are small)
+        const file_size: usize = @intCast(stat.size);
 
         // Allocate sentinel-terminated buffer and read file
         const content = try allocator.allocSentinel(u8, file_size, 0);
