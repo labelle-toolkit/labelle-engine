@@ -628,19 +628,20 @@ pub fn GameWith(comptime Hooks: type) type {
         }
 
         /// Get the primary camera (for advanced use)
-        pub fn getCamera(self: *Self) *labelle.Camera {
+        /// Returns the backend-aware camera type from RetainedEngine
+        pub fn getCamera(self: *Self) *RetainedEngine.CameraType {
             return self.retained_engine.getCamera();
         }
 
         // ==================== Multi-Camera ====================
 
         /// Get a camera by index (0-3)
-        pub fn getCameraAt(self: *Self, index: u2) *labelle.Camera {
+        pub fn getCameraAt(self: *Self, index: u2) *RetainedEngine.CameraType {
             return self.retained_engine.getCameraAt(index);
         }
 
         /// Get the camera manager (for advanced multi-camera control)
-        pub fn getCameraManager(self: *Self) *labelle.CameraManager {
+        pub fn getCameraManager(self: *Self) *RetainedEngine.CameraManagerType {
             return self.retained_engine.getCameraManager();
         }
 
