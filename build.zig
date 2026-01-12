@@ -99,11 +99,11 @@ pub fn build(b: *std.Build) void {
     // sokol dependency - DO NOT pass with_sokol_imgui here as it changes the
     // dependency hash and conflicts with labelle-gfx's sokol. For ImGui support,
     // we'll compile sokol_imgui separately (similar to rlImGui approach).
-    // For iOS, we need to pass dont_link_system_libs and handle SDK paths manually.
+    // For iOS/WASM, we need to pass dont_link_system_libs and handle SDK/sysroot manually.
     const sokol_dep = b.dependency("sokol", .{
         .target = target,
         .optimize = optimize,
-        .dont_link_system_libs = is_ios,
+        .dont_link_system_libs = is_ios or is_wasm,
     });
     const sokol = sokol_dep.module("sokol");
 
