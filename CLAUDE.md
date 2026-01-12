@@ -694,6 +694,42 @@ if (game.getInput().isKeyPressed(.f12)) {
 
 **Note:** Screenshots are captured at the end of the frame after all rendering is complete. You can call `game.takeScreenshot()` at any point in your game logic.
 
+### Touch Input (Mobile)
+
+The engine provides multi-touch support for iOS, Android, and touch-enabled devices:
+
+```zig
+// Check for any touch activity
+if (game.isTouching()) {
+    // Process all active touches
+    var i: u32 = 0;
+    while (i < game.getTouchCount()) : (i += 1) {
+        if (game.getTouch(i)) |touch| {
+            switch (touch.phase) {
+                .began => handleTouchBegan(touch.x, touch.y, touch.id),
+                .moved => handleTouchMoved(touch.x, touch.y, touch.id),
+                .ended => handleTouchEnded(touch.x, touch.y, touch.id),
+                .cancelled => handleTouchCancelled(touch.id),
+            }
+        }
+    }
+}
+
+// Or access via Input directly
+const input = game.getInput();
+const count = input.getTouchCount();
+```
+
+**Touch types:**
+- `Touch` - Touch point with `id`, `x`, `y`, `phase`
+- `TouchPhase` - Lifecycle: `.began`, `.moved`, `.ended`, `.cancelled`
+- `MAX_TOUCHES` - Maximum simultaneous touches (10)
+
+**Backend notes:**
+- **Sokol** (iOS/Android): Full touch lifecycle with proper phase tracking
+- **raylib**: Touch positions available, but phases always report as `.moved`
+- **SDL2**: Full touch support via finger events
+
 ### Layer System
 
 The engine provides three built-in layers for organizing rendering:

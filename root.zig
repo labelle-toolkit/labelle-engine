@@ -109,6 +109,9 @@ pub const Input = input.Input;
 pub const KeyboardKey = input.KeyboardKey;
 pub const MouseButton = input.MouseButton;
 pub const MousePosition = input.MousePosition;
+pub const Touch = input.Touch;
+pub const TouchPhase = input.TouchPhase;
+pub const MAX_TOUCHES = input.MAX_TOUCHES;
 
 // Audio types
 pub const Audio = audio.Audio;

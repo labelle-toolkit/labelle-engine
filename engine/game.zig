@@ -686,6 +686,25 @@ pub fn GameWith(comptime Hooks: type) type {
             return &self.input;
         }
 
+        // ==================== Touch Input ====================
+
+        /// Get the number of active touch points.
+        /// Returns 0 on desktop platforms without touch support.
+        pub fn getTouchCount(self: *const Self) u32 {
+            return self.input.getTouchCount();
+        }
+
+        /// Get touch at index (0 to getTouchCount()-1).
+        /// Returns null if index is out of bounds.
+        pub fn getTouch(self: *const Self, index: u32) ?input_mod.Touch {
+            return self.input.getTouch(index);
+        }
+
+        /// Check if there are any active touches.
+        pub fn isTouching(self: *const Self) bool {
+            return self.input.getTouchCount() > 0;
+        }
+
         /// Get access to the audio system
         pub fn getAudio(self: *Self) *Audio {
             return &self.audio;
