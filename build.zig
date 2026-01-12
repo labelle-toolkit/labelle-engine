@@ -34,6 +34,10 @@ pub fn build(b: *std.Build) void {
     // Detect iOS target (raylib, SDL, etc. not supported on iOS)
     const is_ios = target.result.os.tag == .ios;
 
+    // Detect iOS simulator - needs special handling for NEON intrinsics
+    // iOS simulator on Apple Silicon doesn't fully support all NEON intrinsics
+    const is_ios_simulator = is_ios and target.result.abi == .simulator;
+
     // Build options
     const backend = b.option(Backend, "backend", "Graphics backend to use (default: raylib)") orelse .raylib;
     const ecs_backend = b.option(EcsBackend, "ecs_backend", "ECS backend to use (default: zig_ecs)") orelse .zig_ecs;
@@ -176,30 +180,44 @@ pub fn build(b: *std.Build) void {
     const zts = zts_dep.module("zts");
 
     // Clay UI dependency (Zig bindings)
-    const zclay_dep = b.dependency("zclay", .{
-        .target = target,
-        .optimize = optimize,
-    });
-    const zclay = zclay_dep.module("zclay");
+    // Note: Clay UI uses ARM NEON intrinsics that don't work on iOS simulator.
+    // For iOS simulator builds, Clay GUI backend is disabled.
+    const zclay: ?*std.Build.Module = if (!is_ios_simulator) blk: {
+        const zclay_dep = b.dependency("zclay", .{
+            .target = target,
+            .optimize = optimize,
+        });
+        break :blk zclay_dep.module("zclay");
+    } else null;
 
     // Build options module for compile-time configuration (create once, reuse everywhere)
     const build_options = b.addOptions();
+    // Physics is automatically disabled for iOS simulator builds due to Box2D NEON issues
+    const physics_available = physics_enabled and !is_ios_simulator;
+
+    // Warn if physics was requested but disabled on iOS simulator
+    if (physics_enabled and is_ios_simulator) {
+        std.log.warn("Physics disabled on iOS simulator (Box2D uses unsupported ARM NEON intrinsics)", .{});
+    }
+
     build_options.addOption(Backend, "backend", backend);
     build_options.addOption(EcsBackend, "ecs_backend", ecs_backend);
     build_options.addOption(GuiBackend, "gui_backend", gui_backend);
-    build_options.addOption(bool, "physics_enabled", physics_enabled);
+    build_options.addOption(bool, "physics_enabled", physics_available); // Use actual availability
     build_options.addOption(bool, "is_ios", is_ios);
+    build_options.addOption(bool, "is_ios_simulator", is_ios_simulator);
     const build_options_mod = build_options.createModule();
 
     // Physics module (optional, enabled with -Dphysics=true)
+    // Note: Box2D uses ARM NEON intrinsics that don't work on iOS simulator.
     var physics_module: ?*std.Build.Module = null;
-    if (physics_enabled) {
+    if (physics_available) {
         const box2d_dep = b.dependency("box2d", .{
             .target = target,
             .optimize = optimize,
         });
 
-        // For iOS, add SDK paths to box2d artifact (C library needs system headers)
+        // For iOS device, add SDK paths to box2d artifact (C library needs system headers)
         if (is_ios) {
             const ios_sdk_path = std.zig.system.darwin.getSdk(b.allocator, &target.result);
             if (ios_sdk_path) |sdk| {
@@ -378,14 +396,17 @@ pub fn build(b: *std.Build) void {
             .{ .name = "wgpu", .module = wgpu_native.? }, // For wgpu_native ImGui adapter
             .{ .name = "labelle", .module = labelle }, // For zgpu/wgpu_native context access
             .{ .name = "zglfw", .module = zglfw.? }, // For GLFW window access
-            .{ .name = "zclay", .module = zclay },
         } else &.{
             // iOS: reduced imports, no labelle-gfx modules
             .{ .name = "build_options", .module = build_options_mod },
             .{ .name = "sokol", .module = sokol },
-            .{ .name = "zclay", .module = zclay },
         },
     });
+
+    // Add zclay module to GUI (not available on iOS simulator due to NEON issues)
+    if (zclay) |clay_mod| {
+        gui_interface.addImport("zclay", clay_mod);
+    }
 
     // Add nuklear module to GUI if using nuklear backend
     if (nuklear_module) |nk| {
