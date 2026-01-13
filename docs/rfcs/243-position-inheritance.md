@@ -397,10 +397,14 @@ for (entitiesInHierarchyOrder()) |entity| {
 }
 ```
 
-### Proposed (hierarchy with relative positions)
+### Authoring format (nested .children)
+
+For hand-authored scenes, nested `.children` syntax is intuitive:
+
 ```zig
 .entities = .{
     .{
+        .id = "tank_1",
         .prefab = "tank",
         .components = .{ .Position = .{ .x = 100, .y = 100 } },
         .children = .{
@@ -413,20 +417,55 @@ for (entitiesInHierarchyOrder()) |entity| {
 }
 ```
 
-The scene loader automatically adds `Parent` component to children, pointing to their parent entity.
+### Serialization format (flat with .parent)
+
+For saved scenes (editor output), flat structure with `.parent` reference:
+
+```zig
+.entities = .{
+    .{
+        .id = "tank_1",
+        .prefab = "tank",
+        .components = .{ .Position = .{ .x = 100, .y = 100 } },
+    },
+    .{
+        .id = "turret_1",
+        .prefab = "turret",
+        .parent = "tank_1",  // top-level field, NOT in components
+        .components = .{
+            .Position = .{ .x = 0, .y = -20 },  // LOCAL position
+        },
+    },
+}
+```
+
+**Design rationale (based on [Unity](https://blog.unity.com/engine-platform/understanding-unitys-serialization-language-yaml) and [Godot](https://docs.godotengine.org/en/4.4/contributing/development/file_formats/tscn.html)):**
+- **Flat structure** - simpler parsing, matches Unity YAML and Godot TSCN
+- **Local positions** - meaningful offsets preserved when reparenting
+- **`.parent` as top-level field** - relationship is not a user component
+- **Entity IDs required** - for parent references
+
+The scene loader:
+1. Accepts both formats (nested `.children` or flat `.parent`)
+2. Internally creates `Parent` component in ECS
+3. User never puts `Parent` in `.components` block
 
 ### Mirrored entities (with Scale)
 ```zig
 .entities = .{
     .{
+        .id = "enemy_1",
         .prefab = "enemy",
         .components = .{
             .Position = .{ .x = 200, .y = 100 },
             .Scale = .{ .x = -1 },  // mirrored horizontally, children mirror too
         },
-        .children = .{
-            .{ .prefab = "weapon", .components = .{ .Position = .{ .x = 10, .y = 0 } } },
-        },
+    },
+    .{
+        .id = "weapon_1",
+        .prefab = "weapon",
+        .parent = "enemy_1",
+        .components = .{ .Position = .{ .x = 10, .y = 0 } },
     },
 }
 ```
@@ -492,9 +531,7 @@ const world_pos = game.getWorldPosition(entity);
    - labelle-html-editor needs to visualize and edit hierarchies
    - Drag to reparent, show local vs world coordinates
 
-8. **Serialization?**
-   - Save local positions (natural for hierarchy)
-   - Or save world positions (lossy if hierarchy changes)?
+8. ~~**Serialization?**~~ **Resolved:** Flat structure with `.parent` as top-level field (not in components). Local positions. Matches Unity/Godot approach.
 
 ---
 
