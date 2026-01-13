@@ -85,6 +85,32 @@ pub fn computeWorldTransform(entity: Entity, registry: *Registry) WorldTransform
 
 This is the most complex aspect. Box2D (and most physics engines) operate in world coordinates and have their own transform hierarchy via joints.
 
+### Box2D's Recommended Patterns
+
+labelle-engine uses [Box2D](https://box2d.org/) for physics. Box2D provides two ways to compose physical objects:
+
+| Approach | Description | Use Case |
+|----------|-------------|----------|
+| **Compound Body** | Multiple fixtures (shapes) on a single body | Rigid assemblies with no relative motion |
+| **Joints** | Separate bodies connected by constraints | Articulated objects (hinges, pistons, ragdolls) |
+
+**Key insight from [Box2D documentation](https://box2d.org/documentation/md_simulation.html):**
+> "Shapes attached to the same body don't collide"
+
+This means:
+- **Compound bodies** are for parts that move as one rigid unit (e.g., a car chassis with multiple collision shapes)
+- **Joints** are for parts that need relative motion (e.g., wheels that rotate, turrets that aim)
+
+**Box2D does NOT have a parent-child hierarchy concept.** All bodies are equal within a world. This confirms that:
+
+1. **Visual hierarchy ≠ Physics hierarchy** - These serve different purposes
+2. **Entity children should not have RigidBody** - If a child needs physics, use Box2D joints instead
+3. **Compound shapes** - For complex collision geometry on a single entity, use multiple fixtures (already supported via `Collider.shapes` array)
+
+References:
+- [Box2D Simulation Documentation](https://box2d.org/documentation/md_simulation.html)
+- [Box2D Joints Overview (iforce2d)](https://www.iforce2d.net/b2dtut/joints-overview)
+
 ### Question 1: Can child entities have physics bodies?
 
 **Option A: No physics on children**
@@ -102,7 +128,7 @@ This is the most complex aspect. Box2D (and most physics engines) operate in wor
 - They follow parent but can still participate in collisions
 - Cannot be pushed by other objects
 
-**Recommendation:** Start with Option A (no physics on children), consider Option C later.
+**Recommendation:** Option A (no physics on children). This aligns with Box2D's design philosophy where hierarchy is expressed via joints, not parent-child relationships. Option C could be added later for specific use cases (e.g., trigger volumes on children).
 
 ### Question 2: How do compound visuals vs compound physics relate?
 
