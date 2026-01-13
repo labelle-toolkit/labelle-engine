@@ -77,8 +77,7 @@
     .paths = .{
         "build.zig",
         "build.zig.zon",
-        "build_utils.zig",
-        "build_helpers.zig",
+        "build_helpers",
         "root.zig",
         "audio",
         "core",
