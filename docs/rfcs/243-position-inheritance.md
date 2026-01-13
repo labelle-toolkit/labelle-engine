@@ -23,22 +23,59 @@ Position component stores LOCAL coordinates (offset from parent)
 World position is computed: parent.worldPosition + local.position
 ```
 
-### Position Component Changes
+### ECS Component Design
+
+Following ECS best practices, hierarchy is expressed through small, focused components:
 
 ```zig
+/// Position - local transform (required for all positioned entities)
 pub const Position = struct {
-    // Local coordinates (relative to parent, or world if no parent)
     x: f32 = 0,
     y: f32 = 0,
     rotation: f32 = 0,
-    scale_x: f32 = 1.0,
-    scale_y: f32 = 1.0,
-
-    // Inheritance flags
     inherit_rotation: bool = true,
-    inherit_scale: bool = true,
+};
+
+/// Scale - optional, only for entities that need scaling
+/// Most entities won't need this (default 1,1 assumed)
+pub const Scale = struct {
+    x: f32 = 1.0,
+    y: f32 = 1.0,
+    inherit: bool = true,
+};
+
+/// Parent - optional, marks entity as child of another
+/// Children derived by querying entities with Parent component
+pub const Parent = struct {
+    entity: Entity,
 };
 ```
+
+**Design rationale:**
+- **Separate components** follow ECS philosophy (small, focused data)
+- **Scale is optional** - most entities don't scale, saves memory
+- **Parent as component** - enables queries like "all root entities" via `Not(Parent)`
+- **Children derived** - no sync issues, query `Parent.entity == X` when needed
+
+### Visual Flip vs Transform Scale
+
+labelle-engine distinguishes between visual flip and hierarchy scale:
+
+```zig
+// Sprite.flip_x/flip_y - visual only, does NOT affect children
+pub const Sprite = struct {
+    flip_x: bool = false,  // mirrors sprite rendering only
+    flip_y: bool = false,
+};
+
+// Scale component - affects hierarchy (children mirror too)
+pub const Scale = struct {
+    x: f32 = 1.0,  // negative = mirror children positions
+    y: f32 = 1.0,
+};
+```
+
+This matches Unity/Godot behavior where `SpriteRenderer.flipX` vs `Transform.scale` are separate concepts.
 
 ### World Transform Computation
 
@@ -53,30 +90,31 @@ pub const WorldTransform = struct {
 
 pub fn computeWorldTransform(entity: Entity, registry: *Registry) WorldTransform {
     const pos = registry.get(entity, Position);
-    const parent = registry.getParent(entity);
+    const scale = registry.tryGet(entity, Scale) orelse Scale{};  // default 1,1
+    const parent_comp = registry.tryGet(entity, Parent);
 
-    if (parent == null) {
+    if (parent_comp == null) {
         // Root entity: local transform is world transform
         return .{
             .x = pos.x,
             .y = pos.y,
             .rotation = pos.rotation,
-            .scale_x = pos.scale_x,
-            .scale_y = pos.scale_y,
+            .scale_x = scale.x,
+            .scale_y = scale.y,
         };
     }
 
-    const parent_world = computeWorldTransform(parent.?, registry);
+    const parent_world = computeWorldTransform(parent_comp.?.entity, registry);
 
     var world: WorldTransform = undefined;
 
     // Inherit scale
-    if (pos.inherit_scale) {
-        world.scale_x = parent_world.scale_x * pos.scale_x;
-        world.scale_y = parent_world.scale_y * pos.scale_y;
+    if (scale.inherit) {
+        world.scale_x = parent_world.scale_x * scale.x;
+        world.scale_y = parent_world.scale_y * scale.y;
     } else {
-        world.scale_x = pos.scale_x;
-        world.scale_y = pos.scale_y;
+        world.scale_x = scale.x;
+        world.scale_y = scale.y;
     }
 
     // Apply parent scale and rotation to local position
@@ -101,6 +139,25 @@ pub fn computeWorldTransform(entity: Entity, registry: *Registry) WorldTransform
 ```
 
 **Note:** This simplified transform composition (separate scale + rotation) does not produce shear effects that would occur with full matrix transforms. This is intentional for 2D game simplicity.
+
+### Querying Hierarchy
+
+```zig
+// Get all root entities (no parent)
+var roots = registry.query(.{ Position, Not(Parent) });
+
+// Get children of a specific entity
+fn getChildren(registry: *Registry, parent_entity: Entity) []Entity {
+    var children = std.ArrayList(Entity).init(allocator);
+    var iter = registry.query(.{ Parent });
+    while (iter.next()) |entity, parent| {
+        if (parent.entity.eql(parent_entity)) {
+            children.append(entity);
+        }
+    }
+    return children.toOwnedSlice();
+}
+```
 
 ---
 
@@ -286,6 +343,24 @@ for (entitiesInHierarchyOrder()) |entity| {
 }
 ```
 
+The scene loader automatically adds `Parent` component to children, pointing to their parent entity.
+
+### Mirrored entities (with Scale)
+```zig
+.entities = .{
+    .{
+        .prefab = "enemy",
+        .components = .{
+            .Position = .{ .x = 200, .y = 100 },
+            .Scale = .{ .x = -1 },  // mirrored horizontally, children mirror too
+        },
+        .children = .{
+            .{ .prefab = "weapon", .components = .{ .Position = .{ .x = 10, .y = 0 } } },
+        },
+    },
+}
+```
+
 ---
 
 ## API Changes
@@ -335,17 +410,19 @@ const world_pos = game.getWorldPosition(entity);
    - Pro: Easy access, can query entities by world position
    - Con: Must keep in sync, memory overhead
 
-2. ~~**What about scale inheritance?**~~ **Resolved:** Scale fields added to Position, simplified composition (no shear).
+2. ~~**What about scale inheritance?**~~ **Resolved:** Separate `Scale` component, opt-in.
 
-3. **Maximum hierarchy depth?**
+3. ~~**How to express parent-child relationship?**~~ **Resolved:** `Parent` component, children derived via query.
+
+4. **Maximum hierarchy depth?**
    - Deep hierarchies = expensive world transform computation
    - Limit to 8? 16? Unlimited with warnings?
 
-4. **Editor implications?**
+5. **Editor implications?**
    - labelle-html-editor needs to visualize and edit hierarchies
    - Drag to reparent, show local vs world coordinates
 
-5. **Serialization?**
+6. **Serialization?**
    - Save local positions (natural for hierarchy)
    - Or save world positions (lossy if hierarchy changes)?
 
@@ -353,23 +430,30 @@ const world_pos = game.getWorldPosition(entity);
 
 ## Implementation Plan
 
-### Phase 1: Core hierarchy transform
-- [ ] Add `WorldTransform` computation
-- [ ] Update RenderPipeline to use world transforms
-- [ ] Scene loader supports `.children` syntax
+### Phase 1: New components
+- [ ] Add `Scale` component (optional, defaults to 1,1)
+- [ ] Add `Parent` component (marks entity as child)
+- [ ] Add `WorldTransform` computation function
 - [ ] Tests for transform math
 
-### Phase 2: Physics integration
-- [ ] Validate: no RigidBody on child entities (Option A)
-- [ ] Physics sync updates root entity Position
-- [ ] Children follow automatically
+### Phase 2: Scene loader & RenderPipeline
+- [ ] Scene loader supports `.children` syntax
+- [ ] Scene loader auto-adds `Parent` component to children
+- [ ] Update RenderPipeline to compute world transforms
+- [ ] Children follow parent automatically
 
-### Phase 3: API polish
+### Phase 3: Physics integration
+- [ ] Validate: no RigidBody on entities with `Parent` (Option A)
+- [ ] Physics sync updates root entity Position
+- [ ] Warning/error if RigidBody added to child
+
+### Phase 4: API polish
 - [ ] `game.getWorldPosition()` / `game.setWorldPosition()`
 - [ ] `game.setParent()` / `game.removeParent()`
+- [ ] `game.getChildren()` helper (query wrapper)
 - [ ] Dirty flag optimization if needed
 
-### Phase 4: Editor support
+### Phase 5: Editor support
 - [ ] labelle-html-editor hierarchy visualization
 - [ ] Reparenting via drag-drop
 - [ ] Toggle local/world coordinate display
@@ -395,3 +479,14 @@ Store full 3x3 or 4x4 matrix instead of x/y/rotation.
 - Powerful, handles all transforms
 - Overkill for 2D, complex API
 - Matrix math less intuitive for game devs
+
+### D: Combined Position+Scale+Parent component (Transform)
+Single component with all transform data including parent reference.
+- Matches Unity/Godot terminology
+- Simpler API (one component)
+- **Rejected:** Not idiomatic ECS, wastes memory for entities that don't need scale/parent
+
+### E: Parent + Children components (Bevy-style)
+Store both directions of hierarchy.
+- Fast access both ways
+- **Rejected for now:** Sync complexity, can add Children later if performance requires
