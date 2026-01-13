@@ -132,6 +132,37 @@ game.destroyEntity(parent);  // only destroys parent
 
 We follow Unity/Godot as the more intuitive default.
 
+### Cycle Detection
+
+The `setParent()` API must prevent circular parent references which would cause infinite recursion in transform computation:
+
+```zig
+pub fn setParent(child: Entity, new_parent: Entity, registry: *Registry) !void {
+    // Prevent self-parenting
+    if (child.eql(new_parent)) {
+        return error.CircularHierarchy;
+    }
+
+    // Walk up ancestor chain to detect cycles
+    var ancestor = registry.tryGet(new_parent, Parent);
+    var depth: u8 = 0;
+    while (ancestor) |p| : (depth += 1) {
+        if (p.entity.eql(child)) {
+            return error.CircularHierarchy;  // child is ancestor of new_parent
+        }
+        if (depth > 32) {
+            return error.HierarchyTooDeep;  // safety limit
+        }
+        ancestor = registry.tryGet(p.entity, Parent);
+    }
+
+    // Safe to set parent
+    registry.set(child, Parent{ .entity = new_parent });
+}
+```
+
+**Rationale:** Circular references (A→B→A) would cause `computeWorldTransform()`, `getEffectiveZIndex()`, and `markDescendantsDirty()` to recurse infinitely. Prevention at `setParent()` is more efficient than runtime detection in every recursive call.
+
 ### Hierarchy Depth Warning
 
 No hard limit on hierarchy depth, but warn in debug builds if depth exceeds 8:
@@ -476,40 +507,75 @@ The scene loader:
 
 ### Game facade
 ```zig
-// Set local position (relative to parent)
-game.setPosition(entity, x, y);
+// Explicit local position (relative to parent)
+game.setLocalPosition(entity, x, y);
+const local = game.getLocalPosition(entity);
 
-// Get world position (computed)
+// Explicit world position (computed)
+game.setWorldPosition(entity, x, y);  // computes and sets local offset
 const world = game.getWorldPosition(entity);
 
-// Reparent entity
-game.setParent(child, new_parent);
+// Reparent entity (returns error on cycle)
+try game.setParent(child, new_parent);
 game.removeParent(child);  // becomes root
+
+// Query hierarchy
+const children = game.getChildren(entity);
+const parent = game.getParent(entity);  // null if root
 ```
 
-### Breaking changes
-- `game.getPosition()` returns local position (was world position when no hierarchy)
-- Need `game.getWorldPosition()` for world coordinates
+### Gradual Migration Path
+
+To minimize disruption, we introduce explicit methods first and deprecate ambiguous ones:
+
+**Phase 1: Add explicit methods (non-breaking)**
+```zig
+// New methods - always explicit about coordinate space
+game.getLocalPosition(entity)   // returns Position component values
+game.setLocalPosition(entity, x, y)
+game.getWorldPosition(entity)   // computes world transform
+game.setWorldPosition(entity, x, y)  // reverse-computes local offset
+```
+
+**Phase 2: Deprecate ambiguous methods**
+```zig
+// Deprecated - logs warning in debug builds
+pub fn getPosition(entity: Entity) Position {
+    if (builtin.mode == .Debug) {
+        std.log.warn("getPosition() is deprecated, use getLocalPosition() or getWorldPosition()", .{});
+    }
+    return self.getLocalPosition(entity);
+}
+
+pub fn setPosition(entity: Entity, x: f32, y: f32) void {
+    if (builtin.mode == .Debug) {
+        std.log.warn("setPosition() is deprecated, use setLocalPosition() or setWorldPosition()", .{});
+    }
+    self.setLocalPosition(entity, x, y);
+}
+```
+
+**Phase 3: Remove deprecated methods (future major version)**
 
 ### Migration Guide
 
-For existing code that uses `game.getPosition()`:
-
 ```zig
-// Before (v0.x)
+// Before (current)
 const pos = game.getPosition(entity);
-// pos.x and pos.y were always world coordinates
+game.setPosition(entity, x, y);
 
-// After (v1.x) - for entities WITHOUT parents, behavior is unchanged
-const pos = game.getPosition(entity);
-// pos.x and pos.y are still world coordinates (local = world for root entities)
+// After - choose based on intent:
 
-// After (v1.x) - for entities WITH parents, use getWorldPosition()
-const world_pos = game.getWorldPosition(entity);
-// world_pos.x and world_pos.y are computed world coordinates
+// For local/relative positioning (e.g., child offset from parent)
+const local = game.getLocalPosition(entity);
+game.setLocalPosition(entity, x, y);
+
+// For world coordinates (e.g., collision checks, screen position)
+const world = game.getWorldPosition(entity);
+game.setWorldPosition(entity, x, y);
 ```
 
-**Key insight:** If your code doesn't use parent-child hierarchies, `getPosition()` behavior is unchanged since local = world for root entities.
+**Key insight:** For root entities (no parent), local and world positions are identical. The explicit API makes intent clear and prevents subtle bugs when hierarchies are introduced later.
 
 ---
 
@@ -556,6 +622,7 @@ const world_pos = game.getWorldPosition(entity);
 - [ ] Cascade destroy: destroying parent destroys children
 - [ ] `game.removeParent()` to unparent before destroy
 - [ ] Depth warning in debug builds (> 8 levels)
+- [ ] Cycle detection in `setParent()` (prevent circular references)
 
 ### Phase 4: Physics integration
 - [ ] Validate: no RigidBody on entities with `Parent` (Option A)
@@ -563,9 +630,11 @@ const world_pos = game.getWorldPosition(entity);
 - [ ] Warning/error if RigidBody added to child
 
 ### Phase 5: API polish
-- [ ] `game.getWorldPosition()` / `game.setWorldPosition()`
-- [ ] `game.setParent()` / `game.removeParent()`
-- [ ] `game.getChildren()` helper (query wrapper)
+- [ ] `game.getLocalPosition()` / `game.setLocalPosition()` (explicit local)
+- [ ] `game.getWorldPosition()` / `game.setWorldPosition()` (explicit world)
+- [ ] `game.setParent()` / `game.removeParent()` (with cycle detection)
+- [ ] `game.getChildren()` / `game.getParent()` helpers
+- [ ] Deprecate `game.getPosition()` / `game.setPosition()` with warnings
 - [ ] Dirty flag optimization if needed
 
 ### Phase 6: Editor support
