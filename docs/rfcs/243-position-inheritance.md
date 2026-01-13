@@ -77,6 +77,39 @@ pub const Scale = struct {
 
 This matches Unity/Godot behavior where `SpriteRenderer.flipX` vs `Transform.scale` are separate concepts.
 
+### Coordinate System Convention
+
+labelle-engine standardizes on **Y-down** coordinates (screen convention) everywhere:
+
+| System | Y Direction | Origin |
+|--------|-------------|--------|
+| Engine | Down (positive Y = down) | Top-left |
+| Editor | Down (positive Y = down) | Top-left |
+| Raylib | Down (positive Y = down) | Top-left |
+| Sokol | Down (positive Y = down) | Top-left |
+
+**Rationale:**
+- **WYSIWYG** - What you see in the editor matches what renders in-game
+- **No transforms** - No runtime Y-flip needed, simplifies `computeWorldTransform()`
+- **Matches raylib** - Native backend convention, no conversion layer
+- **Godot precedent** - Godot 2D uses Y-down, widely accepted for 2D games
+
+**Box2D consideration:** Box2D defaults to Y-up (physics convention). The physics integration layer handles the Y-flip when syncing positions between ECS and physics world:
+
+```zig
+// ECS → Physics (Y-down to Y-up)
+fn ecsToPhysics(pos: Position) b2.Vec2 {
+    return .{ .x = pos.x / pixels_per_meter, .y = -pos.y / pixels_per_meter };
+}
+
+// Physics → ECS (Y-up to Y-down)
+fn physicsToEcs(vec: b2.Vec2) Position {
+    return .{ .x = vec.x * pixels_per_meter, .y = -vec.y * pixels_per_meter };
+}
+```
+
+This keeps the coordinate flip isolated to the physics boundary rather than spread throughout the codebase.
+
 ### Z-Index Inheritance
 
 Following Godot's approach, z-index is relative to parent by default:
@@ -598,6 +631,8 @@ game.setWorldPosition(entity, x, y);
    - Drag to reparent, show local vs world coordinates
 
 8. ~~**Serialization?**~~ **Resolved:** Flat structure with `.parent` as top-level field (not in components). Local positions. Matches Unity/Godot approach.
+
+9. ~~**Coordinate system mismatch?**~~ **Resolved:** Standardize on Y-down everywhere (Option D). See [Coordinate System Convention](#coordinate-system-convention) section.
 
 ---
 
