@@ -494,11 +494,17 @@ Uses zts templates from `src/templates/`.
 
 The output directory can be customized via `output_dir` in `project.labelle` (default: `.labelle`).
 
-**CLI Commands:**
+**CLI Commands** (via [labelle-cli](https://github.com/labelle-toolkit/labelle-cli)):
+- `labelle init <name>` - Create a new project
 - `labelle generate` - Regenerate build files
 - `labelle build` - Build the project (runs from output directory)
 - `labelle run` - Build and run the project
-- `labelle update` - Clear caches and regenerate for current CLI version
+- `labelle update` - Clear caches and regenerate
+- `labelle upgrade` - Upgrade engine version in project
+- `labelle ios build` - Build for iOS device/simulator
+- `labelle ios xcode` - Generate Xcode project
+- `labelle wasm build` - Build for WebAssembly
+- `labelle self-update` - Update the CLI itself
 
 ### Entity Lifecycle
 

@@ -130,6 +130,31 @@ pub fn main() !void {
 }
 ```
 
+## Using labelle-cli (Recommended)
+
+For the easiest setup, use [labelle-cli](https://github.com/labelle-toolkit/labelle-cli):
+
+```bash
+# Install (macOS/Linux)
+curl -fsSL https://labelle-toolkit.github.io/labelle-cli/install.sh | sh
+
+# Create a new project
+labelle init my-game
+cd my-game
+
+# Build and run
+labelle run
+
+# iOS support
+labelle ios build --simulator
+labelle ios xcode
+
+# Update CLI
+labelle self-update
+```
+
+See the [labelle-cli README](https://github.com/labelle-toolkit/labelle-cli) for full documentation.
+
 ## Project Generator
 
 For larger projects, use the project generator to auto-generate build files:
@@ -255,6 +280,7 @@ MIT License - see LICENSE for details.
 
 labelle-engine is part of the [labelle-toolkit](https://github.com/labelle-toolkit) ecosystem:
 
+- [labelle-cli](https://github.com/labelle-toolkit/labelle-cli) - Command-line tool for project management
 - [labelle-gfx](https://github.com/labelle-toolkit/labelle-gfx) - Graphics library
 - [labelle-tasks](https://github.com/labelle-toolkit/labelle-tasks) - Task orchestration engine
 - [labelle-pathfinding](https://github.com/labelle-toolkit/labelle-pathfinding) - Pathfinding algorithms
