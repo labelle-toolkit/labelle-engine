@@ -77,6 +77,76 @@ pub const Scale = struct {
 
 This matches Unity/Godot behavior where `SpriteRenderer.flipX` vs `Transform.scale` are separate concepts.
 
+### Z-Index Inheritance
+
+Following Godot's approach, z-index is relative to parent by default:
+
+```zig
+pub const Sprite = struct {
+    z_index: i16 = 0,
+    z_relative: bool = true,  // if true, z_index is relative to parent
+    // ...
+};
+```
+
+**Effective z-index computation:**
+```zig
+fn getEffectiveZIndex(entity: Entity, registry: *Registry) i16 {
+    const sprite = registry.get(entity, Sprite);
+    if (!sprite.z_relative) return sprite.z_index;
+
+    const parent_comp = registry.tryGet(entity, Parent);
+    if (parent_comp == null) return sprite.z_index;
+
+    const parent_z = getEffectiveZIndex(parent_comp.?.entity, registry);
+    return parent_z + sprite.z_index;
+}
+```
+
+**Example:**
+```zig
+// Parent z_index = 10
+// Child z_index = 2, z_relative = true
+// Effective child z_index = 10 + 2 = 12
+```
+
+### Entity Destruction Behavior
+
+When a parent entity is destroyed, **all children are destroyed too** (cascade destroy). This matches Unity and Godot behavior.
+
+```zig
+// Destroying parent destroys entire subtree
+game.destroyEntity(parent);  // also destroys all children
+
+// To keep children alive, unparent first
+for (game.getChildren(parent)) |child| {
+    game.removeParent(child);  // child becomes root
+}
+game.destroyEntity(parent);  // only destroys parent
+```
+
+**Rationale:** Based on research:
+- [Unity](https://discussions.unity.com/t/does-destroying-a-parent-also-destroy-the-child/666891): Children destroyed with parent
+- [Godot](https://forum.godotengine.org/t/what-is-difference-queue-free-and-remove-child-what-is-queue/22333): `queue_free()` destroys subtree
+- Unreal: Does NOT cascade (requires manual iteration)
+
+We follow Unity/Godot as the more intuitive default.
+
+### Hierarchy Depth Warning
+
+No hard limit on hierarchy depth, but warn in debug builds if depth exceeds 8:
+
+```zig
+fn computeWorldTransform(entity: Entity, registry: *Registry, depth: u8) WorldTransform {
+    if (builtin.mode == .Debug and depth > 8) {
+        std.log.warn("Hierarchy depth > 8 for entity {}. Consider flattening.", .{entity});
+    }
+    // ...
+}
+```
+
+Based on [Unity performance guidelines](https://thegamedev.guru/unity-performance/scene-hierarchy-optimization/) recommending max 4 levels for dynamic objects.
+
 ### World Transform Computation
 
 ```zig
@@ -406,23 +476,23 @@ const world_pos = game.getWorldPosition(entity);
 
 ## Open Questions
 
-1. **Should we store WorldTransform as a component?**
-   - Pro: Easy access, can query entities by world position
-   - Con: Must keep in sync, memory overhead
+1. ~~**Should we store WorldTransform as a component?**~~ **Resolved:** Compute on demand (start simple, optimize later if needed).
 
 2. ~~**What about scale inheritance?**~~ **Resolved:** Separate `Scale` component, opt-in.
 
 3. ~~**How to express parent-child relationship?**~~ **Resolved:** `Parent` component, children derived via query.
 
-4. **Maximum hierarchy depth?**
-   - Deep hierarchies = expensive world transform computation
-   - Limit to 8? 16? Unlimited with warnings?
+4. ~~**Maximum hierarchy depth?**~~ **Resolved:** No hard limit, warn at depth > 8 in debug builds. Based on [Unity performance guidelines](https://thegamedev.guru/unity-performance/scene-hierarchy-optimization/).
 
-5. **Editor implications?**
+5. ~~**Parent destroyed → children?**~~ **Resolved:** Cascade destroy (children destroyed with parent). Matches Unity/Godot behavior.
+
+6. ~~**Z-index inheritance?**~~ **Resolved:** Relative by default (like Godot's `z_as_relative`). Child z-index = parent z-index + local z-index.
+
+7. **Editor implications?**
    - labelle-html-editor needs to visualize and edit hierarchies
    - Drag to reparent, show local vs world coordinates
 
-6. **Serialization?**
+8. **Serialization?**
    - Save local positions (natural for hierarchy)
    - Or save world positions (lossy if hierarchy changes)?
 
@@ -433,27 +503,35 @@ const world_pos = game.getWorldPosition(entity);
 ### Phase 1: New components
 - [ ] Add `Scale` component (optional, defaults to 1,1)
 - [ ] Add `Parent` component (marks entity as child)
+- [ ] Add `z_relative: bool` to Sprite component
 - [ ] Add `WorldTransform` computation function
+- [ ] Add `getEffectiveZIndex()` function
 - [ ] Tests for transform math
 
 ### Phase 2: Scene loader & RenderPipeline
 - [ ] Scene loader supports `.children` syntax
 - [ ] Scene loader auto-adds `Parent` component to children
 - [ ] Update RenderPipeline to compute world transforms
+- [ ] Update RenderPipeline to use effective z-index
 - [ ] Children follow parent automatically
 
-### Phase 3: Physics integration
+### Phase 3: Entity lifecycle
+- [ ] Cascade destroy: destroying parent destroys children
+- [ ] `game.removeParent()` to unparent before destroy
+- [ ] Depth warning in debug builds (> 8 levels)
+
+### Phase 4: Physics integration
 - [ ] Validate: no RigidBody on entities with `Parent` (Option A)
 - [ ] Physics sync updates root entity Position
 - [ ] Warning/error if RigidBody added to child
 
-### Phase 4: API polish
+### Phase 5: API polish
 - [ ] `game.getWorldPosition()` / `game.setWorldPosition()`
 - [ ] `game.setParent()` / `game.removeParent()`
 - [ ] `game.getChildren()` helper (query wrapper)
 - [ ] Dirty flag optimization if needed
 
-### Phase 5: Editor support
+### Phase 6: Editor support
 - [ ] labelle-html-editor hierarchy visualization
 - [ ] Reparenting via drag-drop
 - [ ] Toggle local/world coordinate display
