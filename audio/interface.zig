@@ -163,14 +163,14 @@ pub const is_ios: bool = build_options.is_ios;
 /// Whether targeting WASM/Emscripten
 pub const is_wasm: bool = build_options.is_wasm;
 
+/// Whether targeting Android
+pub const is_android: bool = build_options.is_android;
+
 // Select and validate audio backend based on graphics backend
-// Raylib has its own audio system; sokol, SDL, bgfx, zgpu, and wgpu_native use miniaudio via zaudio
-// iOS/WASM: uses sokol_audio with built-in WAV decoder (miniaudio requires Objective-C/special build)
-const BackendImpl = if (is_ios or is_wasm)
-    @import("sokol_audio.zig")
-else switch (backend) {
+// Raylib has its own audio system; sokol uses sokol_audio; SDL, bgfx, zgpu, wgpu_native use miniaudio via zaudio
+const BackendImpl = switch (backend) {
     .raylib => @import("raylib_audio.zig"),
-    .sokol => @import("miniaudio_audio.zig"),
+    .sokol => @import("sokol_audio.zig"), // sokol always uses sokol_audio
     .sdl => @import("miniaudio_audio.zig"),
     .bgfx => @import("miniaudio_audio.zig"),
     .zgpu => @import("miniaudio_audio.zig"),
