@@ -3,7 +3,7 @@ const engine = @import("labelle-engine");
 
 pub fn game_init(payload: engine.HookPayload) void {
     _ = payload;
-    std.log.info("WASM Ball Demo initialized!", .{});
+    std.log.info("Android Ball Demo initialized!", .{});
 }
 
 pub fn scene_load(payload: engine.HookPayload) void {

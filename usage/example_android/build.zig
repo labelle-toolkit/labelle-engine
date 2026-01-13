@@ -4,17 +4,15 @@ const builtin = @import("builtin");
 pub const Backend = enum { sokol };
 pub const EcsBackend = enum { zig_ecs, zflecs };
 
-// Android SDK configuration - adjust these to match your installation
-const ANDROID_API_VERSION = "34";
-const ANDROID_BUILD_TOOLS_VERSION = "34.0.0";
-const ANDROID_NDK_VERSION = "26.1.10909125";
-
 const APP_NAME = "BouncingBall";
 const BUNDLE_ID = "com.labelle.bouncingball";
 
 pub fn build(b: *std.Build) !void {
     const optimize = b.standardOptimizeOption(.{});
     const ecs_backend = b.option(EcsBackend, "ecs_backend", "ECS backend") orelse .zig_ecs;
+
+    // Android SDK configuration - can be overridden via build options
+    const android_api = b.option([]const u8, "android_api", "Android API level (default: 34)") orelse "34";
 
     // Android target: aarch64-linux-android
     const android_target = b.resolveTargetQuery(.{
@@ -34,7 +32,28 @@ pub fn build(b: *std.Build) !void {
         return;
     };
 
-    const ndk_path = try std.fs.path.join(b.allocator, &.{ android_home, "ndk", ANDROID_NDK_VERSION });
+    // Auto-detect NDK version (find highest version in ndk/ directory)
+    const ndk_dir = try std.fs.path.join(b.allocator, &.{ android_home, "ndk" });
+    var ndk_version: ?[]const u8 = null;
+    if (std.fs.openDirAbsolute(ndk_dir, .{ .iterate = true })) |dir| {
+        var d = dir;
+        var iter = d.iterate();
+        while (iter.next() catch null) |entry| {
+            if (entry.kind == .directory) {
+                // Keep highest version (simple string compare works for semver)
+                if (ndk_version == null or std.mem.order(u8, entry.name, ndk_version.?) == .gt) {
+                    ndk_version = b.allocator.dupe(u8, entry.name) catch null;
+                }
+            }
+        }
+    } else |_| {}
+
+    if (ndk_version == null) {
+        std.log.err("No NDK found in {s}/ndk/", .{android_home});
+        return;
+    }
+
+    const ndk_path = try std.fs.path.join(b.allocator, &.{ android_home, "ndk", ndk_version.? });
 
     // Detect host OS for NDK toolchain
     const host_tag: []const u8 = switch (builtin.os.tag) {
@@ -47,7 +66,7 @@ pub fn build(b: *std.Build) !void {
     const sysroot = try std.fs.path.join(b.allocator, &.{ ndk_path, "toolchains", "llvm", "prebuilt", host_tag, "sysroot" });
     const arch_inc_path = try std.fs.path.join(b.allocator, &.{ sysroot, "usr", "include", "aarch64-linux-android" });
     const inc_path = try std.fs.path.join(b.allocator, &.{ sysroot, "usr", "include" });
-    const lib_path = try std.fs.path.join(b.allocator, &.{ sysroot, "usr", "lib", "aarch64-linux-android", ANDROID_API_VERSION });
+    const lib_path = try std.fs.path.join(b.allocator, &.{ sysroot, "usr", "lib", "aarch64-linux-android", android_api });
 
     // =========================================================================
     // Get labelle-engine dependency
@@ -91,8 +110,22 @@ pub fn build(b: *std.Build) !void {
         }),
     });
 
+    // Generate android_libc.conf dynamically
+    const libc_conf = try std.fmt.allocPrint(b.allocator,
+        \\# Android NDK libc configuration (generated)
+        \\include_dir={s}
+        \\sys_include_dir={s}
+        \\crt_dir={s}
+        \\msvc_lib_dir=
+        \\kernel32_lib_dir=
+        \\gcc_dir=
+        \\
+    , .{ inc_path, arch_inc_path, lib_path });
+    const libc_conf_file = b.addWriteFiles();
+    const libc_path = libc_conf_file.add("android_libc.conf", libc_conf);
+
     // Set custom libc for Android NDK
-    android_lib.setLibCFile(b.path("android_libc.conf"));
+    android_lib.setLibCFile(libc_path);
 
     // Set sysroot for NDK toolchain
     android_lib.root_module.addSystemIncludePath(.{ .cwd_relative = arch_inc_path });

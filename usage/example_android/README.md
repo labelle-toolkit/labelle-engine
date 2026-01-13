@@ -5,9 +5,9 @@ A colorful bouncing ball demo for Android using labelle-engine with sokol GLES3 
 ## Prerequisites
 
 1. **Android SDK** with:
-   - SDK Platform 34
+   - SDK Platform 34 (or higher)
    - Build Tools 34.0.0
-   - NDK 26.1.10909125
+   - Any recent NDK (tested with 26.1.10909125, auto-detected at build time)
 
 2. **Environment Variables**:
    ```bash

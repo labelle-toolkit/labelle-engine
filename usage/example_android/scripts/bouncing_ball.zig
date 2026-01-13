@@ -5,9 +5,6 @@ const Game = engine.Game;
 const Scene = engine.Scene;
 const Position = engine.Position;
 
-// Screen bounds (matching window size from project.labelle)
-const SCREEN_WIDTH: f32 = 800;
-const SCREEN_HEIGHT: f32 = 600;
 const MARGIN: f32 = 40; // Account for ball radius
 
 pub fn update(
@@ -17,6 +14,11 @@ pub fn update(
 ) void {
     const registry = game.getRegistry();
     const pipeline = game.getPipeline();
+
+    // Get screen size dynamically (works on all screen sizes including mobile)
+    const screen_size = game.getScreenSize();
+    const screen_width: f32 = @floatFromInt(screen_size.width);
+    const screen_height: f32 = @floatFromInt(screen_size.height);
 
     // Update all entities with Position and Velocity
     for (scene.entities.items) |entity_instance| {
@@ -31,8 +33,8 @@ pub fn update(
         if (pos.x < MARGIN) {
             pos.x = MARGIN;
             vel.x = -vel.x;
-        } else if (pos.x > SCREEN_WIDTH - MARGIN) {
-            pos.x = SCREEN_WIDTH - MARGIN;
+        } else if (pos.x > screen_width - MARGIN) {
+            pos.x = screen_width - MARGIN;
             vel.x = -vel.x;
         }
 
@@ -40,8 +42,8 @@ pub fn update(
         if (pos.y < MARGIN) {
             pos.y = MARGIN;
             vel.y = -vel.y;
-        } else if (pos.y > SCREEN_HEIGHT - MARGIN) {
-            pos.y = SCREEN_HEIGHT - MARGIN;
+        } else if (pos.y > screen_height - MARGIN) {
+            pos.y = screen_height - MARGIN;
             vel.y = -vel.y;
         }
 
