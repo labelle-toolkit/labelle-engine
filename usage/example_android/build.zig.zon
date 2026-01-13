@@ -1,0 +1,19 @@
+.{
+    .fingerprint = 0xba1fc11edb5369a2,
+    .name = .example_android,
+    .version = "0.1.0",
+    .dependencies = .{
+        .@"labelle-engine" = .{
+            .path = "../..",
+        },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "main.zig",
+        "scenes",
+        "scripts",
+        "components",
+        "hooks",
+    },
+}

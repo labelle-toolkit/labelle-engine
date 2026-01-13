@@ -39,6 +39,7 @@ pub const GuiContext = struct {
     is_desktop: bool,
     is_ios: bool,
     is_wasm: bool,
+    is_android: bool,
 
     // Dependencies (may be null based on platform)
     labelle_dep: *std.Build.Dependency,
@@ -274,7 +275,8 @@ pub fn configureCimgui(
     const sokol_backend_define: []const u8 = switch (ctx.target.result.os.tag) {
         .macos, .ios => "-DSOKOL_METAL",
         .windows => "-DSOKOL_D3D11",
-        .linux, .freebsd, .openbsd => "-DSOKOL_GLCORE",
+        .linux => if (ctx.is_android) "-DSOKOL_GLES3" else "-DSOKOL_GLCORE",
+        .freebsd, .openbsd => "-DSOKOL_GLCORE",
         .emscripten => "-DSOKOL_GLES3",
         else => "-DSOKOL_GLCORE",
     };

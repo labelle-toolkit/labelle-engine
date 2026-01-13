@@ -38,7 +38,8 @@ pub fn build(b: *std.Build) void {
     const is_ios = target.result.os.tag == .ios;
     const is_ios_simulator = is_ios and target.result.abi == .simulator and target.result.cpu.arch == .aarch64;
     const is_wasm = target.result.os.tag == .emscripten or target.result.cpu.arch == .wasm32;
-    const is_desktop = !is_ios and !is_wasm;
+    const is_android = target.result.os.tag == .linux and target.result.abi == .android;
+    const is_desktop = !is_ios and !is_wasm and !is_android;
 
     // Build options
     const backend = b.option(Backend, "backend", "Graphics backend to use (default: raylib)") orelse .raylib;
@@ -54,7 +55,7 @@ pub fn build(b: *std.Build) void {
     const ecs_dep = b.dependency("zig_ecs", .{ .target = target, .optimize = optimize });
     const zig_ecs_module = ecs_dep.module("zig-ecs");
 
-    // zflecs - C code, skip on WASM
+    // zflecs - C code, skip on WASM (libc issues with emscripten)
     const zflecs_dep: ?*std.Build.Dependency = if (!is_wasm) b.dependency("zflecs", .{
         .target = target,
         .optimize = optimize,
@@ -92,16 +93,18 @@ pub fn build(b: *std.Build) void {
         const sokol_dep = b.dependency("sokol", .{
             .target = target,
             .optimize = optimize,
-            .dont_link_system_libs = is_ios or is_wasm,
+            .dont_link_system_libs = is_ios or is_wasm or is_android,
+            .gles3 = is_android,
         });
         break :blk sokol_dep.module("sokol");
     };
-    // Get sokol dependency for iOS configuration (may be null if reusing from labelle-gfx)
+    // Get sokol dependency for iOS/Android configuration (may be null if reusing from labelle-gfx)
     const sokol_dep: ?*std.Build.Dependency = if (labelle_dep.builder.modules.get("sokol") == null)
         b.dependency("sokol", .{
             .target = target,
             .optimize = optimize,
-            .dont_link_system_libs = is_ios or is_wasm,
+            .dont_link_system_libs = is_ios or is_wasm or is_android,
+            .gles3 = is_android,
         })
     else
         null;
@@ -110,6 +113,47 @@ pub fn build(b: *std.Build) void {
     if (is_ios) {
         if (sokol_dep) |dep| {
             platform_ios.configureSokol(dep, target.result);
+        }
+    }
+
+    // Configure sokol for Android - add NDK paths
+    if (is_android) {
+        if (sokol_dep) |dep| {
+            const builtin = @import("builtin");
+            const android_home = std.process.getEnvVarOwned(b.allocator, "ANDROID_HOME") catch null;
+            if (android_home) |home| {
+                const sokol_clib = dep.artifact("sokol_clib");
+                const host_tag: []const u8 = switch (builtin.os.tag) {
+                    .macos => "darwin-x86_64",
+                    .linux => "linux-x86_64",
+                    .windows => "windows-x86_64",
+                    else => "linux-x86_64",
+                };
+
+                // Find NDK version
+                const ndk_dir = b.pathJoin(&.{ home, "ndk" });
+                var ndk_version: ?[]const u8 = null;
+                if (std.fs.openDirAbsolute(ndk_dir, .{ .iterate = true })) |dir| {
+                    var d = dir;
+                    var iter = d.iterate();
+                    while (iter.next() catch null) |entry| {
+                        if (entry.kind == .directory) {
+                            ndk_version = b.allocator.dupe(u8, entry.name) catch null;
+                        }
+                    }
+                } else |_| {}
+
+                if (ndk_version) |ndk_ver| {
+                    const sysroot = b.pathJoin(&.{ home, "ndk", ndk_ver, "toolchains", "llvm", "prebuilt", host_tag, "sysroot" });
+                    const inc_path = b.pathJoin(&.{ sysroot, "usr", "include" });
+                    const arch_inc_path = b.pathJoin(&.{ sysroot, "usr", "include", "aarch64-linux-android" });
+                    const lib_path = b.pathJoin(&.{ sysroot, "usr", "lib", "aarch64-linux-android", "34" });
+
+                    sokol_clib.root_module.addSystemIncludePath(.{ .cwd_relative = arch_inc_path });
+                    sokol_clib.root_module.addSystemIncludePath(.{ .cwd_relative = inc_path });
+                    sokol_clib.root_module.addLibraryPath(.{ .cwd_relative = lib_path });
+                }
+            }
         }
     }
 
@@ -148,6 +192,7 @@ pub fn build(b: *std.Build) void {
     build_options.addOption(bool, "is_ios", is_ios);
     build_options.addOption(bool, "is_ios_simulator", is_ios_simulator);
     build_options.addOption(bool, "is_wasm", is_wasm);
+    build_options.addOption(bool, "is_android", is_android);
     build_options.addOption(bool, "has_zclay", zclay != null);
     build_options.addOption(bool, "has_zflecs", zflecs_module != null);
     const build_options_mod = build_options.createModule();
@@ -288,6 +333,7 @@ pub fn build(b: *std.Build) void {
         .is_desktop = is_desktop,
         .is_ios = is_ios,
         .is_wasm = is_wasm,
+        .is_android = is_android,
         .labelle_dep = labelle_dep,
         .sokol_dep = sokol_dep,
         .raylib = raylib,
