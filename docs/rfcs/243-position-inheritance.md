@@ -31,6 +31,8 @@ pub const Position = struct {
     x: f32 = 0,
     y: f32 = 0,
     rotation: f32 = 0,
+    scale_x: f32 = 1.0,
+    scale_y: f32 = 1.0,
 
     // Inheritance flags
     inherit_rotation: bool = true,
@@ -54,21 +56,40 @@ pub fn computeWorldTransform(entity: Entity, registry: *Registry) WorldTransform
     const parent = registry.getParent(entity);
 
     if (parent == null) {
-        // Root entity: local = world
-        return .{ .x = pos.x, .y = pos.y, .rotation = pos.rotation, ... };
+        // Root entity: local transform is world transform
+        return .{
+            .x = pos.x,
+            .y = pos.y,
+            .rotation = pos.rotation,
+            .scale_x = pos.scale_x,
+            .scale_y = pos.scale_y,
+        };
     }
 
     const parent_world = computeWorldTransform(parent.?, registry);
 
-    // Apply parent transform
-    var world = WorldTransform{};
+    var world: WorldTransform = undefined;
 
-    // Rotate local position by parent rotation
+    // Inherit scale
+    if (pos.inherit_scale) {
+        world.scale_x = parent_world.scale_x * pos.scale_x;
+        world.scale_y = parent_world.scale_y * pos.scale_y;
+    } else {
+        world.scale_x = pos.scale_x;
+        world.scale_y = pos.scale_y;
+    }
+
+    // Apply parent scale and rotation to local position
+    // Order: scale local position by parent scale, then rotate
+    const scaled_x = pos.x * parent_world.scale_x;
+    const scaled_y = pos.y * parent_world.scale_y;
+
     const cos_r = @cos(parent_world.rotation);
     const sin_r = @sin(parent_world.rotation);
-    world.x = parent_world.x + pos.x * cos_r - pos.y * sin_r;
-    world.y = parent_world.y + pos.x * sin_r + pos.y * cos_r;
+    world.x = parent_world.x + scaled_x * cos_r - scaled_y * sin_r;
+    world.y = parent_world.y + scaled_x * sin_r + scaled_y * cos_r;
 
+    // Inherit rotation
     if (pos.inherit_rotation) {
         world.rotation = parent_world.rotation + pos.rotation;
     } else {
@@ -78,6 +99,8 @@ pub fn computeWorldTransform(entity: Entity, registry: *Registry) WorldTransform
     return world;
 }
 ```
+
+**Note:** This simplified transform composition (separate scale + rotation) does not produce shear effects that would occur with full matrix transforms. This is intentional for 2D game simplicity.
 
 ---
 
@@ -197,17 +220,21 @@ pub const TransformDirty = struct {
 };
 
 // When parent moves, mark all descendants dirty
-fn markDescendantsDirty(entity: Entity) void {
-    for (entity.children) |child| {
-        registry.get(child, TransformDirty).world_dirty = true;
-        markDescendantsDirty(child);
+fn markDescendantsDirty(entity: Entity, registry: *Registry) void {
+    for (registry.getChildren(entity)) |child| {
+        if (registry.tryGet(child, TransformDirty)) |dirty| {
+            dirty.world_dirty = true;
+        }
+        markDescendantsDirty(child, registry);
     }
 }
 
 // Compute only when dirty
-fn getWorldTransform(entity: Entity) WorldTransform {
-    if (!registry.get(entity, TransformDirty).world_dirty) {
-        return cached_transforms.get(entity);
+fn getWorldTransform(entity: Entity, registry: *Registry) WorldTransform {
+    if (registry.tryGet(entity, TransformDirty)) |dirty| {
+        if (!dirty.world_dirty) {
+            return cached_transforms.get(entity);
+        }
     }
     // Compute and cache
 }
@@ -280,6 +307,26 @@ game.removeParent(child);  // becomes root
 - `game.getPosition()` returns local position (was world position when no hierarchy)
 - Need `game.getWorldPosition()` for world coordinates
 
+### Migration Guide
+
+For existing code that uses `game.getPosition()`:
+
+```zig
+// Before (v0.x)
+const pos = game.getPosition(entity);
+// pos.x and pos.y were always world coordinates
+
+// After (v1.x) - for entities WITHOUT parents, behavior is unchanged
+const pos = game.getPosition(entity);
+// pos.x and pos.y are still world coordinates (local = world for root entities)
+
+// After (v1.x) - for entities WITH parents, use getWorldPosition()
+const world_pos = game.getWorldPosition(entity);
+// world_pos.x and world_pos.y are computed world coordinates
+```
+
+**Key insight:** If your code doesn't use parent-child hierarchies, `getPosition()` behavior is unchanged since local = world for root entities.
+
 ---
 
 ## Open Questions
@@ -288,9 +335,7 @@ game.removeParent(child);  // becomes root
    - Pro: Easy access, can query entities by world position
    - Con: Must keep in sync, memory overhead
 
-2. **What about scale inheritance?**
-   - Full matrix transform vs just position+rotation?
-   - Scale adds complexity (non-uniform scale + rotation = shear)
+2. ~~**What about scale inheritance?**~~ **Resolved:** Scale fields added to Position, simplified composition (no shear).
 
 3. **Maximum hierarchy depth?**
    - Deep hierarchies = expensive world transform computation
