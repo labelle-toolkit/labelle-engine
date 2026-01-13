@@ -67,12 +67,14 @@ pub const GuiBackend = enum {
 };
 
 /// Target platform selection
-/// Used primarily for iOS which requires different main.zig architecture
+/// Used primarily for mobile/web which require different main.zig architecture
 pub const TargetPlatform = enum {
     /// Native platform (macOS, Linux, Windows) - default
     native,
     /// iOS (requires sokol callback architecture)
     ios,
+    /// Android (requires sokol callback architecture)
+    android,
     /// Web/WASM target
     wasm,
 };

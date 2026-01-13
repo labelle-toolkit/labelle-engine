@@ -42,7 +42,7 @@ pub const GuiContext = struct {
 
     // Dependencies (may be null based on platform)
     labelle_dep: *std.Build.Dependency,
-    sokol_dep: *std.Build.Dependency,
+    sokol_dep: ?*std.Build.Dependency,
 
     // Modules (may be null based on platform)
     raylib: ?*std.Build.Module,
@@ -279,8 +279,11 @@ pub fn configureCimgui(
         else => "-DSOKOL_GLCORE",
     };
 
+    // sokol_dep must be available for sokol backend with imgui
+    const sokol_dep = ctx.sokol_dep orelse return;
+
     sokol_imgui_mod.addCSourceFile(.{
-        .file = ctx.sokol_dep.path("src/sokol/c/sokol_imgui.c"),
+        .file = sokol_dep.path("src/sokol/c/sokol_imgui.c"),
         .flags = &.{
             "-DIMPL",
             sokol_backend_define,
@@ -289,12 +292,12 @@ pub fn configureCimgui(
     });
 
     // Include paths
-    sokol_imgui_mod.addIncludePath(ctx.sokol_dep.path("src/sokol/c"));
+    sokol_imgui_mod.addIncludePath(sokol_dep.path("src/sokol/c"));
     sokol_imgui_mod.addIncludePath(cimgui_dep.path("src"));
 
     // Link libraries
     sokol_imgui_mod.linkLibrary(cimgui_dep.artifact("cimgui_clib"));
-    sokol_imgui_mod.linkLibrary(ctx.sokol_dep.artifact("sokol_clib"));
+    sokol_imgui_mod.linkLibrary(sokol_dep.artifact("sokol_clib"));
 
     // Create static library
     const sokol_imgui_lib = ctx.b.addLibrary(.{
@@ -304,7 +307,7 @@ pub fn configureCimgui(
 
     // Link to GUI interface
     gui_interface.linkLibrary(sokol_imgui_lib);
-    gui_interface.addIncludePath(ctx.sokol_dep.path("src/sokol/c"));
+    gui_interface.addIncludePath(sokol_dep.path("src/sokol/c"));
 }
 
 /// Setup wgpu_native ImGui adapter

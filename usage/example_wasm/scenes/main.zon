@@ -1,0 +1,136 @@
+// WASM Physics Bouncing Ball Demo
+// Balls bouncing with Box2D physics
+.{
+    .name = "main",
+    .scripts = .{"physics_bouncing_ball"},
+    .camera = .{ .x = 400, .y = 300 },
+
+    .entities = .{
+        // ============== WALLS ==============
+        // Floor
+        .{
+            .components = .{
+                .Position = .{ .x = 400, .y = 590 },
+                .Shape = .{
+                    .shape = .{ .rectangle = .{ .width = 800, .height = 20 } },
+                    .color = .{ .r = 80, .g = 80, .b = 100 },
+                },
+                .RigidBody = .{ .body_type = .static },
+                .Collider = .{ .shape = .{ .box = .{ .width = 800, .height = 20 } } },
+            },
+        },
+        // Ceiling
+        .{
+            .components = .{
+                .Position = .{ .x = 400, .y = 10 },
+                .Shape = .{
+                    .shape = .{ .rectangle = .{ .width = 800, .height = 20 } },
+                    .color = .{ .r = 80, .g = 80, .b = 100 },
+                },
+                .RigidBody = .{ .body_type = .static },
+                .Collider = .{ .shape = .{ .box = .{ .width = 800, .height = 20 } } },
+            },
+        },
+        // Left wall
+        .{
+            .components = .{
+                .Position = .{ .x = 10, .y = 300 },
+                .Shape = .{
+                    .shape = .{ .rectangle = .{ .width = 20, .height = 600 } },
+                    .color = .{ .r = 80, .g = 80, .b = 100 },
+                },
+                .RigidBody = .{ .body_type = .static },
+                .Collider = .{ .shape = .{ .box = .{ .width = 20, .height = 600 } } },
+            },
+        },
+        // Right wall
+        .{
+            .components = .{
+                .Position = .{ .x = 790, .y = 300 },
+                .Shape = .{
+                    .shape = .{ .rectangle = .{ .width = 20, .height = 600 } },
+                    .color = .{ .r = 80, .g = 80, .b = 100 },
+                },
+                .RigidBody = .{ .body_type = .static },
+                .Collider = .{ .shape = .{ .box = .{ .width = 20, .height = 600 } } },
+            },
+        },
+
+        // ============== BALLS ==============
+        // Ball 1 - Red circle
+        .{
+            .components = .{
+                .Position = .{ .x = 200, .y = 150 },
+                .Shape = .{
+                    .shape = .{ .circle = .{ .radius = 30 } },
+                    .color = .{ .r = 230, .g = 60, .b = 60 },
+                },
+                .RigidBody = .{ .body_type = .dynamic },
+                .Collider = .{
+                    .shape = .{ .circle = .{ .radius = 30 } },
+                    .restitution = 0.9,
+                },
+            },
+        },
+        // Ball 2 - Green circle
+        .{
+            .components = .{
+                .Position = .{ .x = 500, .y = 100 },
+                .Shape = .{
+                    .shape = .{ .circle = .{ .radius = 25 } },
+                    .color = .{ .r = 60, .g = 200, .b = 80 },
+                },
+                .RigidBody = .{ .body_type = .dynamic },
+                .Collider = .{
+                    .shape = .{ .circle = .{ .radius = 25 } },
+                    .restitution = 0.85,
+                },
+            },
+        },
+        // Ball 3 - Blue circle
+        .{
+            .components = .{
+                .Position = .{ .x = 400, .y = 200 },
+                .Shape = .{
+                    .shape = .{ .circle = .{ .radius = 20 } },
+                    .color = .{ .r = 80, .g = 120, .b = 230 },
+                },
+                .RigidBody = .{ .body_type = .dynamic },
+                .Collider = .{
+                    .shape = .{ .circle = .{ .radius = 20 } },
+                    .restitution = 0.95,
+                },
+            },
+        },
+        // Ball 4 - Yellow circle
+        .{
+            .components = .{
+                .Position = .{ .x = 600, .y = 80 },
+                .Shape = .{
+                    .shape = .{ .circle = .{ .radius = 35 } },
+                    .color = .{ .r = 240, .g = 220, .b = 60 },
+                },
+                .RigidBody = .{ .body_type = .dynamic },
+                .Collider = .{
+                    .shape = .{ .circle = .{ .radius = 35 } },
+                    .restitution = 0.8,
+                },
+            },
+        },
+        // Box - Purple rectangle
+        .{
+            .components = .{
+                .Position = .{ .x = 300, .y = 120 },
+                .Shape = .{
+                    .shape = .{ .rectangle = .{ .width = 50, .height = 50 } },
+                    .color = .{ .r = 180, .g = 80, .b = 200 },
+                },
+                .RigidBody = .{ .body_type = .dynamic },
+                .Collider = .{
+                    .shape = .{ .box = .{ .width = 50, .height = 50 } },
+                    .restitution = 0.7,
+                },
+            },
+        },
+    },
+}

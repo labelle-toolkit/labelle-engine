@@ -1,0 +1,90 @@
+.prefab_registry_empty
+pub const Prefabs = engine.PrefabRegistry(.{{}});
+.prefab_registry_start
+pub const Prefabs = engine.PrefabRegistry(.{{
+.prefab_registry_item
+    .{s} = {s}_prefab,
+.prefab_registry_end
+}});
+.component_registry_empty
+pub const Components = engine.ComponentRegistry(struct {{
+    // Engine built-in components
+    pub const Position = engine.Position;
+    pub const Sprite = engine.Sprite;
+    pub const Shape = engine.Shape;
+    pub const Text = engine.Text;
+.physics_components
+    // Physics components (auto-included when physics is enabled)
+    pub const RigidBody = engine.PhysicsComponents.RigidBody;
+    pub const Collider = engine.PhysicsComponents.Collider;
+    pub const Velocity = engine.PhysicsComponents.Velocity;
+.component_registry_empty_end
+}});
+.component_registry_start
+pub const Components = engine.ComponentRegistry(struct {{
+    // Engine built-in components
+    pub const Position = engine.Position;
+    pub const Sprite = engine.Sprite;
+    pub const Shape = engine.Shape;
+    pub const Text = engine.Text;
+    // Project components
+.component_registry_item
+    pub const {s} = main_module.{s};
+.component_registry_bind_item
+    pub const {s} = {s}Bind{s}.{s};
+.component_registry_physics
+    // Physics components (auto-included when physics is enabled)
+    pub const RigidBody = engine.PhysicsComponents.RigidBody;
+    pub const Collider = engine.PhysicsComponents.Collider;
+    pub const Velocity = engine.PhysicsComponents.Velocity;
+.component_registry_end
+}});
+.component_registry_multi_empty_start
+pub const Components = engine.ComponentRegistryMulti(.{{
+    struct {{
+        // Engine built-in components
+        pub const Position = engine.Position;
+        pub const Sprite = engine.Sprite;
+        pub const Shape = engine.Shape;
+        pub const Text = engine.Text;
+.component_registry_multi_physics
+        // Physics components (auto-included when physics is enabled)
+        pub const RigidBody = engine.PhysicsComponents.RigidBody;
+        pub const Collider = engine.PhysicsComponents.Collider;
+        pub const Velocity = engine.PhysicsComponents.Velocity;
+.component_registry_multi_empty_base_end
+    }},
+.component_registry_multi_start
+pub const Components = engine.ComponentRegistryMulti(.{{
+    struct {{
+        // Engine built-in components
+        pub const Position = engine.Position;
+        pub const Sprite = engine.Sprite;
+        pub const Shape = engine.Shape;
+        pub const Text = engine.Text;
+        // Project components
+.component_registry_multi_item
+        pub const {s} = main_module.{s};
+.bind_component_item
+        pub const {s} = {s}Bind{s}.{s};
+.component_registry_multi_physics_start
+        // Physics components (auto-included when physics is enabled)
+        pub const RigidBody = engine.PhysicsComponents.RigidBody;
+        pub const Collider = engine.PhysicsComponents.Collider;
+        pub const Velocity = engine.PhysicsComponents.Velocity;
+.component_registry_multi_base_end
+    }},
+.component_registry_multi_plugin
+    {s}.{s},
+.component_registry_multi_bind
+    {s}Bind{s},
+.component_registry_multi_end
+}});
+.script_registry_empty
+pub const Scripts = engine.ScriptRegistry(struct {{}});
+.script_registry_start
+pub const Scripts = engine.ScriptRegistry(struct {{
+.script_registry_item
+    pub const {s} = {s}_script;
+.script_registry_end
+}});

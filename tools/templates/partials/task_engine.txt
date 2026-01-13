@@ -1,0 +1,11 @@
+.task_engine_empty
+
+.task_engine_start
+// Task engine with auto-wired hooks
+const TaskHooks = {s}.hooks.MergeTasksHooks({s}, {s}, .{{
+.task_engine_hook_item
+    {s}_hooks,
+.task_engine_end
+}});
+const TaskDispatcher = {s}.hooks.HookDispatcher({s}, {s}, TaskHooks);
+pub const TaskEngine = {s}.EngineWithHooks({s}, {s}, TaskDispatcher);

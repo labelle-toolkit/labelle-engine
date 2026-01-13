@@ -1,0 +1,3 @@
+.loader
+pub const Loader = engine.SceneLoader(Prefabs, Components, Scripts);
+pub const initial_scene = @import("scenes/{s}.zon");

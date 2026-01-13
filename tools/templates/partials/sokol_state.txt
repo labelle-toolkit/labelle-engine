@@ -1,0 +1,18 @@
+.state
+// Global state for sokol callback pattern
+// Sokol uses callbacks, so we need global state accessible from init/frame/cleanup
+const State = struct {{
+    allocator: std.mem.Allocator = undefined,
+    game: ?*Game = null,
+    scene: ?*engine.Scene = null,
+    initialized: bool = false,
+    should_quit: bool = false,
+    ci_test: bool = false,
+    frame_count: u32 = 0,
+}};
+
+var state: State = .{{}};
+
+// Allocated storage for game and scene (needed because sokol callbacks can't return errors)
+var game_storage: Game = undefined;
+var scene_storage: engine.Scene = undefined;

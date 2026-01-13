@@ -1,0 +1,28 @@
+.plugin_import
+const {s} = @import("{s}");
+.enum_import
+const {s}_enum = @import("enums/{s}.zig");
+.enum_export
+pub const {s} = {s}_enum.{s};
+.game_id_export
+pub const GameId = {s};
+.plugin_bind
+pub const {s}Bind{s} = {s}.{s}({s});
+.plugin_bind_struct_start
+const {s}BindComponents = struct {{
+.plugin_bind_struct_item
+    pub const {s} = {s}Bind{s}.{s};
+.plugin_bind_struct_end
+}};
+.prefab_import
+const {s}_prefab = @import("prefabs/{s}.zon");
+.component_import
+const {s}_comp = @import("components/{s}.zig");
+.component_export
+pub const {s} = {s}_comp.{s};
+.script_import
+const {s}_script = @import("scripts/{s}.zig");
+.hook_import
+const {s}_hooks = @import("hooks/{s}.zig");
+.main_module
+const main_module = @This();

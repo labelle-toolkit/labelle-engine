@@ -86,17 +86,31 @@ pub fn build(b: *std.Build) void {
     // SDL - from labelle-gfx (desktop only)
     const sdl: ?*std.Build.Module = if (is_desktop) labelle_dep.builder.modules.get("sdl") else null;
 
-    // sokol - for iOS/WASM, don't link system libs
-    const sokol_dep = b.dependency("sokol", .{
-        .target = target,
-        .optimize = optimize,
-        .dont_link_system_libs = is_ios or is_wasm,
-    });
-    const sokol = sokol_dep.module("sokol");
+    // sokol - reuse from labelle-gfx to avoid "file exists in multiple modules" error
+    // Only create our own dependency if labelle-gfx doesn't provide it
+    const sokol = labelle_dep.builder.modules.get("sokol") orelse blk: {
+        const sokol_dep = b.dependency("sokol", .{
+            .target = target,
+            .optimize = optimize,
+            .dont_link_system_libs = is_ios or is_wasm,
+        });
+        break :blk sokol_dep.module("sokol");
+    };
+    // Get sokol dependency for iOS configuration (may be null if reusing from labelle-gfx)
+    const sokol_dep: ?*std.Build.Dependency = if (labelle_dep.builder.modules.get("sokol") == null)
+        b.dependency("sokol", .{
+            .target = target,
+            .optimize = optimize,
+            .dont_link_system_libs = is_ios or is_wasm,
+        })
+    else
+        null;
 
     // Configure sokol for iOS
     if (is_ios) {
-        platform_ios.configureSokol(sokol_dep, target.result);
+        if (sokol_dep) |dep| {
+            platform_ios.configureSokol(dep, target.result);
+        }
     }
 
     // Desktop-only graphics deps (zbgfx, zgpu, wgpu_native, zglfw, zaudio)
@@ -149,9 +163,15 @@ pub fn build(b: *std.Build) void {
         // Configure Box2D for iOS
         if (is_ios) {
             platform_ios.configureBox2d(box2d_dep, target.result, is_ios_simulator);
-        } else if (is_ios_simulator) {
-            // Disable SIMD on iOS simulator
+        } else if (is_ios_simulator or is_wasm) {
+            // Disable SIMD on iOS simulator and WASM (limited SIMD support)
             box2d_dep.artifact("box2d").root_module.addCMacro("BOX2D_DISABLE_SIMD", "1");
+        }
+
+        // Configure emscripten sysroot for WASM builds
+        if (is_wasm) {
+            const emsdk_dep = b.dependency("emsdk", .{});
+            box2d_dep.artifact("box2d").root_module.addIncludePath(emsdk_dep.path("upstream/emscripten/cache/sysroot/include"));
         }
 
         physics_module = b.addModule("labelle-physics", .{
@@ -165,6 +185,12 @@ pub fn build(b: *std.Build) void {
         // Add iOS SDK include path for @cImport
         if (is_ios) {
             platform_ios.addModuleIncludePath(physics_module.?, target.result);
+        }
+
+        // Add emscripten sysroot for @cImport on WASM
+        if (is_wasm) {
+            const emsdk_dep = b.dependency("emsdk", .{});
+            physics_module.?.addIncludePath(emsdk_dep.path("upstream/emscripten/cache/sysroot/include"));
         }
     }
 
@@ -226,7 +252,10 @@ pub fn build(b: *std.Build) void {
 
     // Link sokol_audio for iOS/WASM
     if (is_ios or is_wasm) {
-        deps_graphics.configureAudioSokol(audio_interface, sokol_dep);
+        if (sokol_dep) |dep| {
+            deps_graphics.configureAudioSokol(audio_interface, dep);
+        }
+        // Note: when using sokol from labelle-gfx, audio is already configured
     }
 
     // ==========================================================================

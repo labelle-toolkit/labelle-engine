@@ -1,0 +1,28 @@
+.{
+    .fingerprint = 0x961c186cf0d820da,
+    .name = .example_wasm,
+    .version = "0.1.0",
+    .dependencies = .{
+        .@"labelle-engine" = .{
+            .path = "../..",
+        },
+        .raylib_zig = .{
+            .url = "https://github.com/Not-Nik/raylib-zig/archive/refs/tags/v5.6.0-dev.tar.gz",
+            .hash = "raylib_zig-5.6.0-dev-KE8REL5MBQAf3p497t52Xw9P7ojndIkVOWPXnLiLLw2P",
+        },
+        .emsdk = .{
+            .url = "git+https://github.com/emscripten-core/emsdk?ref=4.0.9#3bcf1dcd01f040f370e10fe673a092d9ed79ebb5",
+            .hash = "N-V-__8AAJl1DwBezhYo_VE6f53mPVm00R-Fk28NPW7P14EQ",
+        },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "main.zig",
+        "project.labelle",
+        "scenes",
+        "scripts",
+        "components",
+        "hooks",
+    },
+}

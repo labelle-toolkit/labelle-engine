@@ -112,6 +112,11 @@ pub const Components = engine.ComponentRegistryMulti(.{{
         pub const {s} = main_module.{s};
 .bind_component_item
         pub const {s} = {s}Bind{s}.{s};
+.component_registry_multi_physics_start
+        // Physics components (auto-included when physics is enabled)
+        pub const RigidBody = engine.PhysicsComponents.RigidBody;
+        pub const Collider = engine.PhysicsComponents.Collider;
+        pub const Velocity = engine.PhysicsComponents.Velocity;
 .component_registry_multi_base_end
     }},
 .component_registry_multi_plugin

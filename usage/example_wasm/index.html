@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>WASM Ball Demo</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        html, body {
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background: #1e2329;
+            touch-action: none;
+        }
+        #canvas {
+            width: 100%;
+            height: 100%;
+            display: block;
+        }
+        #loading {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: #888;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            font-size: 18px;
+            text-align: center;
+        }
+        #loading .spinner {
+            width: 40px;
+            height: 40px;
+            margin: 0 auto 16px;
+            border: 3px solid #333;
+            border-top-color: #888;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        #error {
+            display: none;
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: #ff6b6b;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            font-size: 16px;
+            text-align: center;
+            padding: 20px;
+            max-width: 80%;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="canvas"></canvas>
+    <div id="loading">
+        <div class="spinner"></div>
+        Loading WASM Ball Demo...
+    </div>
+    <div id="error">
+        <p>Failed to load the game.</p>
+        <p style="margin-top: 10px; font-size: 14px; color: #666;">
+            Please ensure WebGL2 is supported and enabled in your browser.
+        </p>
+    </div>
+
+    <script>
+        // Check WebGL2 support
+        (function() {
+            var canvas = document.createElement('canvas');
+            var gl = canvas.getContext('webgl2');
+            if (!gl) {
+                document.getElementById('loading').style.display = 'none';
+                document.getElementById('error').style.display = 'block';
+                return;
+            }
+        })();
+
+        // Hide loading indicator when WASM initializes
+        window.sappInitialized = function() {
+            document.getElementById('loading').style.display = 'none';
+        };
+
+        // Handle errors
+        window.onerror = function(msg, url, line) {
+            console.error('Error:', msg, 'at', url, ':', line);
+            document.getElementById('loading').style.display = 'none';
+            document.getElementById('error').style.display = 'block';
+        };
+    </script>
+    <script src="example_wasm.js"></script>
+</body>
+</html>
