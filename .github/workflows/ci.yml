@@ -34,7 +34,12 @@ jobs:
             libwayland-dev \
             libxkbcommon-dev \
             libasound2-dev \
-            xvfb
+            xvfb \
+            git-lfs
+
+      - name: Setup Git LFS
+        run: |
+          git lfs install
 
       - name: Build library
         run: zig build
