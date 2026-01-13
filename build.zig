@@ -87,75 +87,13 @@ pub fn build(b: *std.Build) void {
     // SDL - from labelle-gfx (desktop only)
     const sdl: ?*std.Build.Module = if (is_desktop) labelle_dep.builder.modules.get("sdl") else null;
 
-    // sokol - reuse from labelle-gfx to avoid "file exists in multiple modules" error
-    // Only create our own dependency if labelle-gfx doesn't provide it
-    const sokol = labelle_dep.builder.modules.get("sokol") orelse blk: {
-        const sokol_dep = b.dependency("sokol", .{
-            .target = target,
-            .optimize = optimize,
-            .dont_link_system_libs = is_ios or is_wasm or is_android,
-            .gles3 = is_android,
-        });
-        break :blk sokol_dep.module("sokol");
-    };
-    // Get sokol dependency for iOS/Android configuration (may be null if reusing from labelle-gfx)
-    const sokol_dep: ?*std.Build.Dependency = if (labelle_dep.builder.modules.get("sokol") == null)
-        b.dependency("sokol", .{
-            .target = target,
-            .optimize = optimize,
-            .dont_link_system_libs = is_ios or is_wasm or is_android,
-            .gles3 = is_android,
-        })
-    else
-        null;
+    // sokol - always get from labelle-gfx to avoid "file exists in multiple modules" error
+    // Note: sokol is NOT declared in our build.zig.zon to prevent duplicate dependencies
+    const sokol = labelle_dep.builder.modules.get("sokol") orelse @panic("sokol module not found in labelle-gfx - ensure labelle-gfx exports sokol via b.modules.put()");
 
-    // Configure sokol for iOS
-    if (is_ios) {
-        if (sokol_dep) |dep| {
-            platform_ios.configureSokol(dep, target.result);
-        }
-    }
-
-    // Configure sokol for Android - add NDK paths
-    if (is_android) {
-        if (sokol_dep) |dep| {
-            const builtin = @import("builtin");
-            const android_home = std.process.getEnvVarOwned(b.allocator, "ANDROID_HOME") catch null;
-            if (android_home) |home| {
-                const sokol_clib = dep.artifact("sokol_clib");
-                const host_tag: []const u8 = switch (builtin.os.tag) {
-                    .macos => "darwin-x86_64",
-                    .linux => "linux-x86_64",
-                    .windows => "windows-x86_64",
-                    else => "linux-x86_64",
-                };
-
-                // Find NDK version
-                const ndk_dir = b.pathJoin(&.{ home, "ndk" });
-                var ndk_version: ?[]const u8 = null;
-                if (std.fs.openDirAbsolute(ndk_dir, .{ .iterate = true })) |dir| {
-                    var d = dir;
-                    var iter = d.iterate();
-                    while (iter.next() catch null) |entry| {
-                        if (entry.kind == .directory) {
-                            ndk_version = b.allocator.dupe(u8, entry.name) catch null;
-                        }
-                    }
-                } else |_| {}
-
-                if (ndk_version) |ndk_ver| {
-                    const sysroot = b.pathJoin(&.{ home, "ndk", ndk_ver, "toolchains", "llvm", "prebuilt", host_tag, "sysroot" });
-                    const inc_path = b.pathJoin(&.{ sysroot, "usr", "include" });
-                    const arch_inc_path = b.pathJoin(&.{ sysroot, "usr", "include", "aarch64-linux-android" });
-                    const lib_path = b.pathJoin(&.{ sysroot, "usr", "lib", "aarch64-linux-android", "34" });
-
-                    sokol_clib.root_module.addSystemIncludePath(.{ .cwd_relative = arch_inc_path });
-                    sokol_clib.root_module.addSystemIncludePath(.{ .cwd_relative = inc_path });
-                    sokol_clib.root_module.addLibraryPath(.{ .cwd_relative = lib_path });
-                }
-            }
-        }
-    }
+    // Note: sokol_dep is null because sokol is provided by labelle-gfx.
+    // iOS/Android sokol configuration is handled by labelle-gfx.
+    const sokol_dep: ?*std.Build.Dependency = null;
 
     // Desktop-only graphics deps (zbgfx, zgpu, wgpu_native, zglfw, zaudio)
     const gfx_deps = if (is_desktop)
