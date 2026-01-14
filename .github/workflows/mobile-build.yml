@@ -88,12 +88,9 @@ jobs:
   # ============================================================================
   # iOS Build (Simulator) - Using labelle-cli
   # Uses labelle-cli to generate iOS build files and build for simulator
-  # NOTE: Compilation succeeds but linking fails - iOS frameworks (Metal,
-  #       AudioToolbox, AVFoundation) need Xcode/xcodebuild for proper linking.
   # ============================================================================
   ios-build:
     runs-on: macos-14  # macOS with Apple Silicon for iOS simulator
-    continue-on-error: true  # Known issue: iOS framework linking requires Xcode
 
     steps:
       - name: Checkout repository
@@ -133,20 +130,36 @@ jobs:
         run: |
           cd ci/mobile_physics_test
           echo "::group::Building for iOS Simulator"
-          # Build for iOS simulator using labelle-cli
-          # NOTE: Linking fails due to missing iOS frameworks - full iOS builds require Xcode
-          ~/.labelle/bin/labelle ios build --simulator || echo "::warning::iOS linking failed (expected - requires Xcode for framework linking)"
+          ~/.labelle/bin/labelle ios build --simulator
           echo "::endgroup::"
+
+      - name: Verify build artifacts
+        run: |
+          cd ci/mobile_physics_test/ios
+          # Check that binary was created (proves build succeeded)
+          echo "Checking for build artifacts..."
+          ls -la zig-out/bin/ 2>/dev/null || echo "zig-out/bin/ not found"
+
+          # Check for either sim or device binary
+          if [ -f "zig-out/bin/mobile_physics_test_sim" ] || [ -f "zig-out/bin/mobile_physics_test" ]; then
+            echo "Build verified: binary exists"
+            file zig-out/bin/mobile_physics_test* 2>/dev/null || true
+          else
+            echo "::error::Binary not found - build may have failed"
+            exit 1
+          fi
 
       - name: Create iOS build summary
         run: |
+          cd ci/mobile_physics_test/ios
           echo "## iOS Build (via labelle-cli)" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "iOS Simulator build using labelle-cli v0.3.9+." >> $GITHUB_STEP_SUMMARY
+          echo "✅ iOS Simulator build successful" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Target:** aarch64-ios-simulator" >> $GITHUB_STEP_SUMMARY
           echo "**SDK:** $(xcrun --sdk iphonesimulator --show-sdk-path)" >> $GITHUB_STEP_SUMMARY
           echo "**Engine:** Local path (../..)" >> $GITHUB_STEP_SUMMARY
+          echo "**Binary:** $(ls -lh zig-out/bin/mobile_physics_test* 2>/dev/null | head -1 | awk '{print $5, $9}')" >> $GITHUB_STEP_SUMMARY
 
   # ============================================================================
   # Native Build with Physics (CI Test)
