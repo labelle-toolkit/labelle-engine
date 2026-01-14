@@ -1,0 +1,18 @@
+// Bouncing Ball Prefab
+// A circle that bounces under gravity
+.{
+    .components = .{
+        .Position = .{ .x = 0, .y = 0 },
+        .Shape = .{
+            .shape = .{ .circle = .{ .radius = 25 } },
+            .color = .{ .r = 200, .g = 100, .b = 50, .a = 255 },
+        },
+        .RigidBody = .{
+            .body_type = .dynamic,
+        },
+        .Collider = .{
+            .shape = .{ .circle = .{ .radius = 25 } },
+            .restitution = 0.7,
+        },
+    },
+}
