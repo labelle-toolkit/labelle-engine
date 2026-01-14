@@ -52,10 +52,7 @@ jobs:
           zig build \
             -Dtarget=aarch64-linux-android \
             -Doptimize=ReleaseSafe \
-            --summary all 2>&1 || {
-              echo "Android cross-compilation check (expected to need NDK linking)"
-              echo "Verifying Zig compilation passes..."
-            }
+            --summary all
 
           echo "::endgroup::"
 
@@ -101,9 +98,7 @@ jobs:
           zig build \
             -Dtarget=aarch64-ios-simulator \
             -Doptimize=ReleaseSafe \
-            --summary all 2>&1 || {
-              echo "iOS Simulator build check"
-            }
+            --summary all
 
           echo "::endgroup::"
 

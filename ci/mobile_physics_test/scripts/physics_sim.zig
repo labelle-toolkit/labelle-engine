@@ -21,6 +21,11 @@ const PhysicsSystems = physics.Systems(Position);
 var physics_world: ?PhysicsWorld = null;
 var initialized: bool = false;
 
+/// Check if physics was initialized successfully (for CI testing)
+pub fn isInitialized() bool {
+    return initialized and physics_world != null;
+}
+
 pub fn init(game: *Game, scene: *Scene) void {
     _ = scene;
 
