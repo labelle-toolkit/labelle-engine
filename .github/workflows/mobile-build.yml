@@ -119,6 +119,11 @@ jobs:
           sudo cp zig-out/bin/labelle /usr/local/bin/
           labelle --version
 
+      - name: Generate project files
+        run: |
+          cd ci/mobile_physics_test
+          labelle generate --engine-path=../..
+
       - name: Build for iOS Simulator using CLI
         run: |
           cd ci/mobile_physics_test
