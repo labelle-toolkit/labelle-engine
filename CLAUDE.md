@@ -476,7 +476,8 @@ try physics_world.addCollider(entity.toU64(), Collider{
 physics_world.update(dt);
 for (physics_world.entities()) |entity_id| {
     if (physics_world.getPosition(entity_id)) |pos| {
-        game.setPosition(engine.Entity.fromU64(entity_id), pos[0], pos[1]) catch {};
+        // Physics operates in world space, so use setWorldPositionXY
+        game.setWorldPositionXY(engine.Entity.fromU64(entity_id), pos[0], pos[1]);
     }
 }
 ```

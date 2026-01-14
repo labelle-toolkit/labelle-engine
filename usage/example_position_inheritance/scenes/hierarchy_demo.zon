@@ -1,0 +1,5 @@
+.{
+    .name = "hierarchy_demo",
+    .scripts = .{"hierarchy_test"},
+    .entities = .{},
+}

@@ -1,6 +1,6 @@
 .{
     .components = .{
         .Position = .{ .x = 400, .y = 300 },
-        .Sprite = .{ .name = "idle_0001", .z_index = 128, .scale = 4.0 },
+        .Sprite = .{ .name = "idle_0001", .z_index = 0, .scale_x = 4.0, .scale_y = 4.0 },
     },
 }

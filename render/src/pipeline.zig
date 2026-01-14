@@ -23,6 +23,8 @@ const components = @import("components.zig");
 
 // Re-export component types
 pub const Position = components.Position;
+pub const Parent = components.Parent;
+pub const Children = components.Children;
 pub const Sprite = components.Sprite;
 pub const Shape = components.Shape;
 pub const Text = components.Text;
@@ -87,6 +89,7 @@ const TrackedEntity = struct {
     visual_dirty: bool = true,
     created: bool = false, // Has the visual been created in the engine?
     is_gizmo: bool = false, // Cached: entity has Gizmo component (avoids repeated tryGet)
+    has_parent: bool = false, // Cached: entity has Parent component (position inheritance)
 };
 
 // ============================================
@@ -119,30 +122,126 @@ pub const RenderPipeline = struct {
         return EntityId.from(@truncate(bits));
     }
 
-    /// Resolve the graphics position for an entity.
-    /// For gizmo entities, this computes parent_position + gizmo_offset.
-    /// For regular entities, this returns the entity's own position.
+    /// Resolve the graphics (world) position for an entity.
+    /// Handles:
+    /// 1. Parent component - computes world position from hierarchy
+    /// 2. Gizmo component - parent_position + gizmo_offset (legacy support)
+    /// 3. Regular entity - uses entity's own position as world position
     fn resolveGfxPosition(registry: *Registry, entity: Entity) GfxPosition {
-        // Check if this is a gizmo with a parent entity
-        if (registry.tryGet(Gizmo, entity)) |gizmo| {
-            if (gizmo.parent_entity) |parent| {
-                // Resolve position from parent + offset
-                if (registry.tryGet(Position, parent)) |parent_pos| {
-                    return GfxPosition{
-                        .x = parent_pos.x + gizmo.offset_x,
-                        .y = parent_pos.y + gizmo.offset_y,
-                    };
-                }
+        // Check if entity has a Parent component (position inheritance)
+        if (registry.tryGet(Parent, entity)) |parent_comp| {
+            // Get local position of this entity
+            const local_pos = if (registry.tryGet(Position, entity)) |p| p.* else Position{};
+
+            // Recursively get parent's world position and rotation
+            const parent_world = computeWorldTransform(registry, parent_comp.entity, 0);
+
+            // Apply rotation if inherit_rotation is set
+            if (parent_comp.inherit_rotation and parent_world.rotation != 0) {
+                // Rotate local offset around parent's rotation
+                const cos_r = @cos(parent_world.rotation);
+                const sin_r = @sin(parent_world.rotation);
+                const rotated_x = local_pos.x * cos_r - local_pos.y * sin_r;
+                const rotated_y = local_pos.x * sin_r + local_pos.y * cos_r;
+                return GfxPosition{
+                    .x = parent_world.x + rotated_x,
+                    .y = parent_world.y + rotated_y,
+                };
+            } else {
+                // No rotation inheritance - simple offset
+                return GfxPosition{
+                    .x = parent_world.x + local_pos.x,
+                    .y = parent_world.y + local_pos.y,
+                };
             }
         }
 
-        // Regular entity - use its own position
+        // Check if this is a gizmo with a parent entity (legacy gizmo support)
+        if (registry.tryGet(Gizmo, entity)) |gizmo| {
+            if (gizmo.parent_entity) |parent| {
+                // Resolve position from parent + offset
+                const parent_world = computeWorldTransform(registry, parent, 0);
+                return GfxPosition{
+                    .x = parent_world.x + gizmo.offset_x,
+                    .y = parent_world.y + gizmo.offset_y,
+                };
+            }
+        }
+
+        // Regular entity - use its own position as world position
         if (registry.tryGet(Position, entity)) |pos| {
             return pos.toGfx();
         }
 
         // No position found
         return .{};
+    }
+
+    /// World transform result from hierarchy computation
+    const WorldTransform = struct {
+        x: f32 = 0,
+        y: f32 = 0,
+        rotation: f32 = 0,
+        scale_x: f32 = 1,
+        scale_y: f32 = 1,
+    };
+
+    /// Recursively compute world transform for an entity
+    /// Traverses parent hierarchy to build cumulative transform
+    fn computeWorldTransform(registry: *Registry, entity: Entity, depth: u8) WorldTransform {
+        // Prevent infinite recursion from circular hierarchies
+        if (depth > 32) {
+            std.log.warn("Position hierarchy too deep (>32), possible cycle detected", .{});
+            return .{};
+        }
+
+        // Get this entity's local position
+        const local_pos = if (registry.tryGet(Position, entity)) |p| p.* else Position{};
+
+        // Check if this entity has a parent
+        if (registry.tryGet(Parent, entity)) |parent_comp| {
+            // Recursively get parent's world transform
+            const parent_world = computeWorldTransform(registry, parent_comp.entity, depth + 1);
+
+            // Compute this entity's world position
+            var world = WorldTransform{
+                .rotation = local_pos.rotation,
+                .scale_x = 1,
+                .scale_y = 1,
+            };
+
+            // Apply rotation inheritance if enabled
+            if (parent_comp.inherit_rotation) {
+                world.rotation += parent_world.rotation;
+
+                // Rotate local offset around parent's rotation
+                const cos_r = @cos(parent_world.rotation);
+                const sin_r = @sin(parent_world.rotation);
+                world.x = parent_world.x + local_pos.x * cos_r - local_pos.y * sin_r;
+                world.y = parent_world.y + local_pos.x * sin_r + local_pos.y * cos_r;
+            } else {
+                // No rotation - simple offset
+                world.x = parent_world.x + local_pos.x;
+                world.y = parent_world.y + local_pos.y;
+            }
+
+            // Apply scale inheritance if enabled
+            if (parent_comp.inherit_scale) {
+                world.scale_x = parent_world.scale_x;
+                world.scale_y = parent_world.scale_y;
+            }
+
+            return world;
+        }
+
+        // Root entity - local position is world position
+        return WorldTransform{
+            .x = local_pos.x,
+            .y = local_pos.y,
+            .rotation = local_pos.rotation,
+            .scale_x = 1,
+            .scale_y = 1,
+        };
     }
 
     /// Start tracking an entity for rendering
@@ -206,10 +305,11 @@ pub const RenderPipeline = struct {
 
             // Handle new visuals (first time creation)
             if (!tracked.created) {
-                // Cache whether this is a gizmo entity (avoids repeated tryGet on every frame)
+                // Cache hierarchy flags (avoids repeated tryGet on every frame)
                 tracked.is_gizmo = registry.tryGet(Gizmo, tracked.entity) != null;
+                tracked.has_parent = registry.tryGet(Parent, tracked.entity) != null;
 
-                // Resolve position - for gizmos, this uses parent position + offset
+                // Resolve position - handles parent hierarchy and gizmo offsets
                 const pos = resolveGfxPosition(registry, tracked.entity);
 
                 var creation_succeeded = false;
@@ -287,13 +387,12 @@ pub const RenderPipeline = struct {
                 }
             } else if (tracked.position_dirty and tracked.created) {
                 // Only position changed - but only update if visual was created
-                // For gizmos, resolve position from parent + offset
                 const pos = resolveGfxPosition(registry, tracked.entity);
                 self.engine.updatePosition(entity_id, pos);
                 tracked.position_dirty = false;
-            } else if (tracked.created and tracked.is_gizmo) {
-                // Gizmo entities: always update position since they depend on parent
-                // This ensures gizmos follow their parent even when only the parent moves
+            } else if (tracked.created and (tracked.is_gizmo or tracked.has_parent)) {
+                // Entities with parents (gizmos or parented): always update position
+                // This ensures they follow their parent even when only the parent moves
                 const pos = resolveGfxPosition(registry, tracked.entity);
                 self.engine.updatePosition(entity_id, pos);
             }

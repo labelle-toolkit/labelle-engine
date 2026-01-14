@@ -1,0 +1,9 @@
+.{
+    .name = .example_position_inheritance,
+    .version = "0.0.1",
+    .fingerprint = 0x29e7b66a0ae9f16d,
+    .paths = .{""},
+    .dependencies = .{
+        .@"labelle-engine" = .{ .path = "../.." },
+    },
+}
