@@ -1,0 +1,52 @@
+// Mobile Physics Test Scene
+// Simple bouncing ball to verify physics works on mobile platforms
+.{
+    .name = "main",
+    .scripts = .{"physics_sim"},
+    .camera = .{ .x = 400, .y = 300 },
+
+    .entities = .{
+        // Ground (static body)
+        .{
+            .components = .{
+                .Position = .{ .x = 400, .y = 550 },
+                .Shape = .{ .shape = .{ .rectangle = .{ .width = 700, .height = 20 } }, .color = .{ .r = 100, .g = 100, .b = 100 } },
+                .RigidBody = .{ .body_type = .static },
+                .Collider = .{ .shape = .{ .box = .{ .width = 700, .height = 20 } } },
+            },
+        },
+        // Left wall
+        .{
+            .components = .{
+                .Position = .{ .x = 50, .y = 300 },
+                .Shape = .{ .shape = .{ .rectangle = .{ .width = 20, .height = 500 } }, .color = .{ .r = 100, .g = 100, .b = 100 } },
+                .RigidBody = .{ .body_type = .static },
+                .Collider = .{ .shape = .{ .box = .{ .width = 20, .height = 500 } } },
+            },
+        },
+        // Right wall
+        .{
+            .components = .{
+                .Position = .{ .x = 750, .y = 300 },
+                .Shape = .{ .shape = .{ .rectangle = .{ .width = 20, .height = 500 } }, .color = .{ .r = 100, .g = 100, .b = 100 } },
+                .RigidBody = .{ .body_type = .static },
+                .Collider = .{ .shape = .{ .box = .{ .width = 20, .height = 500 } } },
+            },
+        },
+        // Bouncing ball (dynamic circle)
+        .{
+            .prefab = "bouncing_ball",
+            .components = .{
+                .Position = .{ .x = 400, .y = 100 },
+            },
+        },
+        // Second ball
+        .{
+            .prefab = "bouncing_ball",
+            .components = .{
+                .Position = .{ .x = 300, .y = 200 },
+                .Shape = .{ .color = .{ .r = 50, .g = 200, .b = 50 } },
+            },
+        },
+    },
+}

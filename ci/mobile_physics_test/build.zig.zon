@@ -1,0 +1,22 @@
+.{
+    .fingerprint = 0x43acc885fe2d4280,
+    .name = .mobile_physics_test,
+    .version = "0.1.0",
+    .dependencies = .{
+        .@"labelle-engine" = .{
+            .path = "../..",
+        },
+        .@"labelle-physics" = .{
+            .path = "../../physics",
+        },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "main.zig",
+        "project.labelle",
+        "scenes",
+        "prefabs",
+        "scripts",
+    },
+}
