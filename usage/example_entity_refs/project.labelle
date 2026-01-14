@@ -1,0 +1,21 @@
+// Entity References Example
+// Demonstrates .id and .name for entity identification,
+// and .ref syntax for entity-to-entity references.
+.{
+    .version = 1,
+    .name = "entity_refs_example",
+    .initial_scene = "main",
+    .backend = .raylib,
+    .ecs_backend = .zig_ecs,
+    .window = .{
+        .width = 800,
+        .height = 600,
+        .title = "Entity References Example",
+        .target_fps = 60,
+    },
+    .camera = .{
+        .x = 400,
+        .y = 300,
+        .zoom = 1.0,
+    },
+}

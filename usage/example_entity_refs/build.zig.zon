@@ -1,0 +1,19 @@
+// Example: Entity References (Issue #242)
+.{
+    .fingerprint = 0x1fb68506ceb71e1f,
+    .name = .example_entity_refs,
+    .version = "0.1.0",
+    .dependencies = .{
+        .@"labelle-engine" = .{
+            .path = "../..",
+        },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "main.zig",
+        "components",
+        "prefabs",
+        "scenes",
+    },
+}

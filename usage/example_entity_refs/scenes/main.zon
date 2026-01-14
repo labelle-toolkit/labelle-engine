@@ -1,0 +1,138 @@
+// Main scene demonstrating entity references (Issue #242)
+//
+// This scene shows three reference mechanisms:
+// 1. Reference by ID:   .{ .ref = .{ .id = "player_1" } }
+// 2. Reference by name: .{ .ref = .{ .entity = "player" } }
+// 3. Self-reference:    .{ .ref = .self }
+//
+// Entity identification:
+// - .id = unique identifier (auto-generated as _e0, _e1... if not set)
+// - .name = display name (can duplicate, like "enemy" for all enemies)
+.{
+    .name = "main",
+    .entities = .{
+        // =============================================
+        // Title
+        // =============================================
+        .{
+            .components = .{
+                .Position = .{ .x = 400, .y = 30 },
+                .Text = .{
+                    .text = "Entity References Example",
+                    .size = 24,
+                    .color = .{ .r = 255, .g = 255, .b = 255, .a = 255 },
+                },
+            },
+        },
+
+        // =============================================
+        // Player - has explicit ID and name
+        // =============================================
+        .{
+            .id = "player_1",
+            .name = "player",
+            .prefab = "player",
+            .components = .{
+                .Position = .{ .x = 400, .y = 300 },
+                // Self-reference: HealthBar reads health from this same entity
+                .HealthBar = .{
+                    .source = .{ .ref = .self },
+                    .offset_y = -40,
+                },
+            },
+        },
+
+        // =============================================
+        // Enemies - same name, different IDs
+        // All target the player
+        // =============================================
+
+        // Enemy 1: Reference by ID (recommended for editors)
+        .{
+            .id = "goblin_1",
+            .name = "enemy",
+            .prefab = "enemy",
+            .components = .{
+                .Position = .{ .x = 150, .y = 200 },
+                .AI = .{
+                    .state = .chasing,
+                    .target = .{ .ref = .{ .id = "player_1" } },
+                },
+            },
+        },
+
+        // Enemy 2: Reference by name (target name "player" is unique here)
+        .{
+            .id = "goblin_2",
+            .name = "enemy",
+            .prefab = "enemy",
+            .components = .{
+                .Position = .{ .x = 650, .y = 200 },
+                .AI = .{
+                    .state = .chasing,
+                    .target = .{ .ref = .{ .entity = "player" } },
+                },
+            },
+        },
+
+        // Enemy 3: Auto-generated ID (_e4), reference by ID
+        .{
+            .name = "enemy",
+            .prefab = "enemy",
+            .components = .{
+                .Position = .{ .x = 250, .y = 450 },
+                .AI = .{
+                    .state = .idle,
+                    .target = .{ .ref = .{ .id = "player_1" } },
+                },
+            },
+        },
+
+        // Enemy 4: Auto-generated ID (_e5), reference by ID
+        .{
+            .name = "enemy",
+            .prefab = "enemy",
+            .components = .{
+                .Position = .{ .x = 550, .y = 450 },
+                .AI = .{
+                    .state = .idle,
+                    .target = .{ .ref = .{ .id = "player_1" } },
+                },
+            },
+        },
+
+        // =============================================
+        // Labels
+        // =============================================
+        .{
+            .components = .{
+                .Position = .{ .x = 400, .y = 520 },
+                .Text = .{
+                    .text = "Blue = Player (id: player_1, name: player)",
+                    .size = 14,
+                    .color = .{ .r = 50, .g = 150, .b = 255, .a = 255 },
+                },
+            },
+        },
+        .{
+            .components = .{
+                .Position = .{ .x = 400, .y = 545 },
+                .Text = .{
+                    .text = "Red = Enemies (all named 'enemy', unique IDs)",
+                    .size = 14,
+                    .color = .{ .r = 255, .g = 80, .b = 80, .a = 255 },
+                },
+            },
+        },
+        .{
+            .components = .{
+                .Position = .{ .x = 400, .y = 570 },
+                .Text = .{
+                    .text = "All enemies target the player via entity references",
+                    .size = 12,
+                    .color = .{ .r = 180, .g = 180, .b = 180, .a = 255 },
+                },
+            },
+        },
+    },
+}

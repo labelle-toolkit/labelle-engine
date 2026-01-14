@@ -1,0 +1,15 @@
+// Player prefab - the target for enemy AI
+// Has Health and HealthBar components
+.{
+    .components = .{
+        .Position = .{ .x = 0, .y = 0 },
+        .Shape = .{
+            .shape = .{ .rectangle = .{ .width = 40, .height = 60 } },
+            .color = .{ .r = 50, .g = 150, .b = 255, .a = 255 },
+        },
+        .Health = .{
+            .current = 100,
+            .max = 100,
+        },
+    },
+}

@@ -1,0 +1,18 @@
+// Enemy prefab - has AI that can target another entity
+// The AI.target is set via .ref syntax in the scene
+.{
+    .components = .{
+        .Position = .{ .x = 0, .y = 0 },
+        .Shape = .{
+            .shape = .{ .rectangle = .{ .width = 30, .height = 45 } },
+            .color = .{ .r = 255, .g = 80, .b = 80, .a = 255 },
+        },
+        .Health = .{
+            .current = 50,
+            .max = 50,
+        },
+        .AI = .{
+            .state = .idle,
+        },
+    },
+}

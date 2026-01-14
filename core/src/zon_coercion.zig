@@ -381,3 +381,138 @@ fn MergedStructType(comptime BaseType: type, comptime OverridesType: type) type 
 pub fn hasFields(comptime T: type) bool {
     return std.meta.fields(T).len > 0;
 }
+
+// ============================================
+// ENTITY REFERENCES (Issue #242)
+// ============================================
+
+/// Reference info extracted from comptime ZON data
+pub const RefInfo = struct {
+    /// Key for the referenced entity (name or ID, null for self-reference)
+    ref_key: ?[]const u8,
+    /// Whether this is a self-reference (.ref = .self)
+    is_self: bool,
+    /// Whether this reference is by ID (true) or by name (false)
+    is_id_ref: bool,
+
+    /// Get the entity name for name-based references (null for ID-based)
+    pub fn entity_name(self: RefInfo) ?[]const u8 {
+        return if (self.is_id_ref) null else self.ref_key;
+    }
+};
+
+/// Check if a comptime value is a reference marker.
+/// References use the syntax:
+///   - By name: .{ .ref = .{ .entity = "name" } }
+///   - By ID:   .{ .ref = .{ .id = "unique_id" } }
+///   - Self:    .{ .ref = .self }
+pub fn isReference(comptime value: anytype) bool {
+    const T = @TypeOf(value);
+    if (@typeInfo(T) != .@"struct") return false;
+    return @hasField(T, "ref");
+}
+
+/// Extract reference info from a comptime value.
+/// Returns null if the value is not a reference.
+pub fn extractRefInfo(comptime value: anytype) ?RefInfo {
+    if (!isReference(value)) return null;
+
+    const ref_data = value.ref;
+    const RefType = @TypeOf(ref_data);
+
+    // Check for self-reference: .{ .ref = .self }
+    if (@typeInfo(RefType) == .enum_literal) {
+        const tag_name = @tagName(ref_data);
+        if (std.mem.eql(u8, tag_name, "self")) {
+            return RefInfo{
+                .ref_key = null,
+                .is_self = true,
+                .is_id_ref = false,
+            };
+        }
+        @compileError("Invalid reference: .ref = ." ++ tag_name ++ ". Use .ref = .self, .ref = .{ .entity = \"name\" }, or .ref = .{ .id = \"id\" }");
+    }
+
+    // Check for struct-based reference
+    if (@typeInfo(RefType) == .@"struct") {
+        // ID reference: .{ .ref = .{ .id = "unique_id" } }
+        if (@hasField(RefType, "id")) {
+            return RefInfo{
+                .ref_key = ref_data.id,
+                .is_self = false,
+                .is_id_ref = true,
+            };
+        }
+        // Name reference: .{ .ref = .{ .entity = "name" } }
+        if (@hasField(RefType, "entity")) {
+            return RefInfo{
+                .ref_key = ref_data.entity,
+                .is_self = false,
+                .is_id_ref = false,
+            };
+        }
+    }
+
+    @compileError("Invalid reference format. Use .ref = .self, .ref = .{ .entity = \"name\" }, or .ref = .{ .id = \"id\" }");
+}
+
+/// Generate an auto-ID for an entity at a given index.
+/// Format: "_e{index}" (e.g., "_e0", "_e1", "_e2")
+pub fn generateAutoId(comptime index: usize) []const u8 {
+    return std.fmt.comptimePrint("_e{d}", .{index});
+}
+
+/// Extract entity ID from entity definition, or generate one if not present.
+/// - If .id is present, use it
+/// - Otherwise, generate "_e{index}"
+pub fn getEntityId(comptime entity_def: anytype, comptime index: usize) []const u8 {
+    if (@hasField(@TypeOf(entity_def), "id")) {
+        return entity_def.id;
+    }
+    return generateAutoId(index);
+}
+
+/// Check if any field in a comptime struct contains a reference
+pub fn hasAnyReference(comptime value: anytype) bool {
+    const T = @TypeOf(value);
+    if (@typeInfo(T) != .@"struct") return false;
+
+    const fields = @typeInfo(T).@"struct".fields;
+    inline for (fields) |field| {
+        const field_value = @field(value, field.name);
+        if (isReference(field_value)) return true;
+    }
+    return false;
+}
+
+/// Get all reference field names from a comptime struct
+pub fn getReferenceFieldNames(comptime value: anytype) []const []const u8 {
+    const T = @TypeOf(value);
+    if (@typeInfo(T) != .@"struct") return &.{};
+
+    const fields = @typeInfo(T).@"struct".fields;
+    comptime var count: usize = 0;
+
+    // Count reference fields
+    inline for (fields) |field| {
+        const field_value = @field(value, field.name);
+        if (isReference(field_value)) count += 1;
+    }
+
+    if (count == 0) return &.{};
+
+    // Collect reference field names
+    comptime var names: [count][]const u8 = undefined;
+    comptime var i: usize = 0;
+
+    inline for (fields) |field| {
+        const field_value = @field(value, field.name);
+        if (isReference(field_value)) {
+            names[i] = field.name;
+            i += 1;
+        }
+    }
+
+    const final = names;
+    return &final;
+}
