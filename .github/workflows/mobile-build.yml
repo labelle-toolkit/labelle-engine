@@ -46,20 +46,29 @@ jobs:
         with:
           ndk-version: r26c
 
-      - name: Build for Android (cross-compile check)
+      - name: Configure Android headers for Zig
         env:
           ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
         run: |
+          # Create libc configuration with only include dirs (let Zig handle linking)
+          SYSROOT="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
+          echo "include_dir=$SYSROOT/usr/include" > $GITHUB_WORKSPACE/android-aarch64-libc.txt
+          echo "sys_include_dir=$SYSROOT/usr/include/aarch64-linux-android" >> $GITHUB_WORKSPACE/android-aarch64-libc.txt
+          echo "crt_dir=" >> $GITHUB_WORKSPACE/android-aarch64-libc.txt
+          echo "msvc_lib_dir=" >> $GITHUB_WORKSPACE/android-aarch64-libc.txt
+          echo "kernel32_lib_dir=" >> $GITHUB_WORKSPACE/android-aarch64-libc.txt
+          echo "gcc_dir=" >> $GITHUB_WORKSPACE/android-aarch64-libc.txt
+          cat $GITHUB_WORKSPACE/android-aarch64-libc.txt
+
+      - name: Build for Android (cross-compile check)
+        run: |
           cd ci/mobile_physics_test
           echo "::group::Building Android target"
-
-          # Use Zig's built-in Android support without custom libc
-          # Zig handles Android cross-compilation natively
           zig build \
             -Dtarget=aarch64-linux-android \
             -Doptimize=ReleaseSafe \
+            --libc $GITHUB_WORKSPACE/android-aarch64-libc.txt \
             --summary all
-
           echo "::endgroup::"
 
       - name: Create Android build summary
