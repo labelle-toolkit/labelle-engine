@@ -357,21 +357,28 @@ pub fn GameWith(comptime Hooks: type) type {
             self.registry.destroy(entity);
         }
 
-        /// Add Position component to an entity
+        /// Add Position component to an entity (local coordinates)
         pub fn addPosition(self: *Self, entity: Entity, pos: Position) void {
             self.registry.add(entity, pos);
         }
 
-        /// Set Position component (marks dirty for sync)
-        pub fn setPosition(self: *Self, entity: Entity, pos: Position) void {
+        // ==================== Local Position API ====================
+
+        /// Get local Position component (relative to parent, or world if no parent)
+        pub fn getLocalPosition(self: *Self, entity: Entity) ?*Position {
+            return self.registry.tryGet(Position, entity);
+        }
+
+        /// Set local Position component (marks dirty for sync)
+        pub fn setLocalPosition(self: *Self, entity: Entity, pos: Position) void {
             if (self.registry.tryGet(Position, entity)) |p| {
                 p.* = pos;
                 self.pipeline.markPositionDirty(entity);
             }
         }
 
-        /// Set Position using x, y coordinates directly (marks dirty for sync)
-        pub fn setPositionXY(self: *Self, entity: Entity, x: f32, y: f32) void {
+        /// Set local Position using x, y coordinates directly (marks dirty for sync)
+        pub fn setLocalPositionXY(self: *Self, entity: Entity, x: f32, y: f32) void {
             if (self.registry.tryGet(Position, entity)) |p| {
                 p.x = x;
                 p.y = y;
@@ -379,8 +386,8 @@ pub fn GameWith(comptime Hooks: type) type {
             }
         }
 
-        /// Move Position by delta values (marks dirty for sync)
-        pub fn movePosition(self: *Self, entity: Entity, dx: f32, dy: f32) void {
+        /// Move local Position by delta values (marks dirty for sync)
+        pub fn moveLocalPosition(self: *Self, entity: Entity, dx: f32, dy: f32) void {
             if (self.registry.tryGet(Position, entity)) |p| {
                 p.x += dx;
                 p.y += dy;
@@ -388,9 +395,60 @@ pub fn GameWith(comptime Hooks: type) type {
             }
         }
 
-        /// Get Position component
-        pub fn getPosition(self: *Self, entity: Entity) ?*Position {
-            return self.registry.tryGet(Position, entity);
+        // ==================== World Position API ====================
+
+        /// Get world position by computing transform through parent chain.
+        /// Returns null if entity has no Position component.
+        pub fn getWorldPosition(self: *Self, entity: Entity) ?struct { x: f32, y: f32 } {
+            const pos = self.registry.tryGet(Position, entity) orelse return null;
+
+            // If no parent, local position IS world position
+            const parent_comp = self.registry.tryGet(Parent, entity) orelse {
+                return .{ .x = pos.x, .y = pos.y };
+            };
+
+            // Recursively get parent's world position and add local offset
+            const parent_world = self.getWorldPosition(parent_comp.entity) orelse {
+                return .{ .x = pos.x, .y = pos.y };
+            };
+
+            return .{
+                .x = parent_world.x + pos.x,
+                .y = parent_world.y + pos.y,
+            };
+        }
+
+        /// Set world position by computing required local position.
+        /// Adjusts local position so that world position matches the given coordinates.
+        pub fn setWorldPosition(self: *Self, entity: Entity, world_x: f32, world_y: f32) void {
+            const pos = self.registry.tryGet(Position, entity) orelse return;
+
+            // If no parent, local position IS world position
+            const parent_comp = self.registry.tryGet(Parent, entity) orelse {
+                pos.x = world_x;
+                pos.y = world_y;
+                self.pipeline.markPositionDirty(entity);
+                return;
+            };
+
+            // Get parent's world position to compute required local offset
+            const parent_world = self.getWorldPosition(parent_comp.entity) orelse {
+                pos.x = world_x;
+                pos.y = world_y;
+                self.pipeline.markPositionDirty(entity);
+                return;
+            };
+
+            // Local = World - ParentWorld
+            pos.x = world_x - parent_world.x;
+            pos.y = world_y - parent_world.y;
+            self.pipeline.markPositionDirty(entity);
+        }
+
+        /// Set world position using x, y coordinates directly.
+        /// Alias for setWorldPosition.
+        pub fn setWorldPositionXY(self: *Self, entity: Entity, x: f32, y: f32) void {
+            self.setWorldPosition(entity, x, y);
         }
 
         /// Set z_index on entity's visual component (Sprite, Shape, or Text)
@@ -488,6 +546,12 @@ pub fn GameWith(comptime Hooks: type) type {
         /// Set the parent of an entity, establishing a parent-child relationship.
         /// The child's Position becomes relative to the parent.
         /// Returns error if this would create a cycle or exceed depth limit.
+        ///
+        /// **Physics Warning**: Entities with RigidBody components should NOT be parented
+        /// to other entities. Physics bodies operate in world space and don't support
+        /// hierarchical transforms. If you need grouped physics objects, use physics
+        /// joints/constraints instead. The physics module may log warnings or behave
+        /// unexpectedly if RigidBody entities are placed in a hierarchy.
         pub fn setParent(self: *Self, child: Entity, new_parent: Entity) HierarchyError!void {
             // Prevent self-parenting
             if (child.eql(new_parent)) {
