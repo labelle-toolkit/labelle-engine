@@ -46,46 +46,18 @@ jobs:
         with:
           ndk-version: r26c
 
-      - name: Configure Android libc for Zig
+      - name: Build for Android (cross-compile check)
         env:
           ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
-        run: |
-          # Create libc configuration file for Android ARM64
-          SYSROOT="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
-          NDK_LIB_DIR="$SYSROOT/usr/lib/aarch64-linux-android/24"
-
-          # Copy libs to writable location and add libm symlink (Android has libm in libc)
-          CUSTOM_LIB_DIR="$GITHUB_WORKSPACE/android-libs"
-          mkdir -p "$CUSTOM_LIB_DIR"
-          cp -a "$NDK_LIB_DIR"/* "$CUSTOM_LIB_DIR/"
-
-          # Android bionic includes libm in libc - create symlink if libm.so doesn't exist
-          if [ ! -f "$CUSTOM_LIB_DIR/libm.so" ]; then
-            echo "Creating libm.so -> libc.so symlink (Android has libm in libc)"
-            ln -sf libc.so "$CUSTOM_LIB_DIR/libm.so"
-          fi
-
-          echo "Custom lib dir contents:"
-          ls -la "$CUSTOM_LIB_DIR" | grep -E "^-|^l" | head -15
-
-          echo "include_dir=$SYSROOT/usr/include" > $GITHUB_WORKSPACE/android-aarch64-libc.txt
-          echo "sys_include_dir=$SYSROOT/usr/include/aarch64-linux-android" >> $GITHUB_WORKSPACE/android-aarch64-libc.txt
-          echo "crt_dir=$CUSTOM_LIB_DIR" >> $GITHUB_WORKSPACE/android-aarch64-libc.txt
-          echo "msvc_lib_dir=" >> $GITHUB_WORKSPACE/android-aarch64-libc.txt
-          echo "kernel32_lib_dir=" >> $GITHUB_WORKSPACE/android-aarch64-libc.txt
-          echo "gcc_dir=" >> $GITHUB_WORKSPACE/android-aarch64-libc.txt
-          echo "Created libc.txt:" && cat $GITHUB_WORKSPACE/android-aarch64-libc.txt
-
-      - name: Build for Android (cross-compile check)
         run: |
           cd ci/mobile_physics_test
           echo "::group::Building Android target"
 
-          # Build targeting Android ARM64 with NDK libc (absolute path)
+          # Use Zig's built-in Android support without custom libc
+          # Zig handles Android cross-compilation natively
           zig build \
             -Dtarget=aarch64-linux-android \
             -Doptimize=ReleaseSafe \
-            --libc $GITHUB_WORKSPACE/android-aarch64-libc.txt \
             --summary all
 
           echo "::endgroup::"
