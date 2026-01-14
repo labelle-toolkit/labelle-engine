@@ -1,7 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
-pub const Backend = enum { sokol };
 pub const EcsBackend = enum { zig_ecs, zflecs };
 
 pub fn build(b: *std.Build) !void {
