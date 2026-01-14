@@ -29,86 +29,96 @@ Following ECS best practices, hierarchy is expressed through small, focused comp
 
 ```zig
 /// Position - local transform (required for all positioned entities)
+/// Stores LOCAL coordinates (offset from parent if parented)
 pub const Position = struct {
     x: f32 = 0,
     y: f32 = 0,
     rotation: f32 = 0,
-    inherit_rotation: bool = true,
-};
-
-/// Scale - optional, only for entities that need scaling
-/// Most entities won't need this (default 1,1 assumed)
-pub const Scale = struct {
-    x: f32 = 1.0,
-    y: f32 = 1.0,
-    inherit: bool = true,
 };
 
 /// Parent - optional, marks entity as child of another
-/// Children derived by querying entities with Parent component
+/// Inheritance flags control how parent transforms affect child
 pub const Parent = struct {
     entity: Entity,
+    inherit_rotation: bool = false,  // default: don't inherit rotation
+    inherit_scale: bool = false,     // default: don't inherit scale
+};
+
+/// Children - tracks child entities (auto-managed)
+pub const Children = struct {
+    entities: []const Entity = &.{},
 };
 ```
 
 **Design rationale:**
-- **Separate components** follow ECS philosophy (small, focused data)
-- **Scale is optional** - most entities don't scale, saves memory
+- **Position is pure data** - just x, y, rotation; no inheritance flags
+- **Parent has inheritance flags** - controls rotation/scale inheritance per-relationship
+- **Scale on visuals** - scale_x/scale_y are on Sprite/Shape components, not Position
 - **Parent as component** - enables queries like "all root entities" via `Not(Parent)`
-- **Children derived** - no sync issues, query `Parent.entity == X` when needed
+- **Children component** - tracks children for hierarchy traversal and cascade destroy
 
-### Visual Flip vs Transform Scale
+### Visual Scale
 
-labelle-engine distinguishes between visual flip and hierarchy scale:
+Scale is stored on visual components (Sprite, Shape), not Position:
 
 ```zig
-// Sprite.flip_x/flip_y - visual only, does NOT affect children
 pub const Sprite = struct {
-    flip_x: bool = false,  // mirrors sprite rendering only
+    scale_x: f32 = 1.0,   // horizontal scale
+    scale_y: f32 = 1.0,   // vertical scale
+    flip_x: bool = false, // mirrors sprite rendering only
     flip_y: bool = false,
+    // ...
 };
 
-// Scale component - affects hierarchy (children mirror too)
-pub const Scale = struct {
-    x: f32 = 1.0,  // negative = mirror children positions
-    y: f32 = 1.0,
+pub const Shape = struct {
+    scale_x: f32 = 1.0,
+    scale_y: f32 = 1.0,
+    // ...
 };
 ```
 
-This matches Unity/Godot behavior where `SpriteRenderer.flipX` vs `Transform.scale` are separate concepts.
+**Design rationale:**
+- **Scale is per-visual** - different visuals on same entity can have different scales
+- **Flip is visual-only** - doesn't affect children positions
+- **Parent.inherit_scale** - when true, child inherits parent's computed scale
 
 ### Coordinate System Convention
 
-labelle-engine standardizes on **Y-down** coordinates (screen convention) everywhere:
+labelle-engine standardizes on **Y-up** coordinates (mathematical convention):
 
-| System | Y Direction | Origin |
-|--------|-------------|--------|
-| Engine | Down (positive Y = down) | Top-left |
-| Editor | Down (positive Y = down) | Top-left |
-| Raylib | Down (positive Y = down) | Top-left |
-| Sokol | Down (positive Y = down) | Top-left |
+| Property | Value |
+|----------|-------|
+| Origin | Bottom-left corner (0, 0) |
+| X axis | Positive → right |
+| Y axis | Positive → up |
+| Rotation | Counter-clockwise (positive radians) |
 
 **Rationale:**
-- **WYSIWYG** - What you see in the editor matches what renders in-game
-- **No transforms** - No runtime Y-flip needed, simplifies `computeWorldTransform()`
-- **Matches raylib** - Native backend convention, no conversion layer
-- **Godot precedent** - Godot 2D uses Y-down, widely accepted for 2D games
+- **Mathematical convention** - Matches standard math/physics conventions
+- **Intuitive** - "Higher Y = higher on screen" is natural
+- **Box2D compatible** - Physics engine uses Y-up natively
 
-**Box2D consideration:** Box2D defaults to Y-up (physics convention). The physics integration layer handles the Y-flip when syncing positions between ECS and physics world:
+**Coordinate transformation at boundaries:**
+
+The engine transforms coordinates at the render and input boundaries:
 
 ```zig
-// ECS → Physics (Y-down to Y-up)
-fn ecsToPhysics(pos: Position) b2.Vec2 {
-    return .{ .x = pos.x / pixels_per_meter, .y = -pos.y / pixels_per_meter };
+// Game space (Y-up) → Screen space (Y-down) at render time
+fn toScreenY(game_y: f32, screen_height: f32) f32 {
+    return screen_height - game_y;
 }
 
-// Physics → ECS (Y-up to Y-down)
-fn physicsToEcs(vec: b2.Vec2) Position {
-    return .{ .x = vec.x * pixels_per_meter, .y = -vec.y * pixels_per_meter };
+// Screen space (Y-down) → Game space (Y-up) at input time
+fn toGameY(screen_y: f32, screen_height: f32) f32 {
+    return screen_height - screen_y;
 }
 ```
 
-This keeps the coordinate flip isolated to the physics boundary rather than spread throughout the codebase.
+**API:**
+- `game.getMousePosition()` - Returns Y-up game coordinates
+- `game.getTouch(index)` - Returns Y-up game coordinates
+- `game.getInput().getMousePosition()` - Returns raw Y-down screen coordinates
+- Position components use Y-up game coordinates
 
 ### Z-Index Inheritance
 
@@ -214,63 +224,78 @@ Based on [Unity performance guidelines](https://thegamedev.guru/unity-performanc
 ### World Transform Computation
 
 ```zig
-pub const WorldTransform = struct {
-    x: f32,
-    y: f32,
-    rotation: f32,
-    scale_x: f32,
-    scale_y: f32,
+const WorldTransform = struct {
+    x: f32 = 0,
+    y: f32 = 0,
+    rotation: f32 = 0,
+    scale_x: f32 = 1,
+    scale_y: f32 = 1,
 };
 
-pub fn computeWorldTransform(entity: Entity, registry: *Registry) WorldTransform {
-    const pos = registry.get(entity, Position);
-    const scale = registry.tryGet(entity, Scale) orelse Scale{};  // default 1,1
-    const parent_comp = registry.tryGet(entity, Parent);
+/// Recursively compute world transform for an entity
+/// Traverses parent hierarchy to build cumulative transform
+fn computeWorldTransform(registry: *Registry, entity: Entity, depth: u8) WorldTransform {
+    // Prevent infinite recursion from circular hierarchies
+    if (depth > 32) {
+        std.log.warn("Position hierarchy too deep (>32), possible cycle detected", .{});
+        return .{};
+    }
 
-    if (parent_comp == null) {
-        // Root entity: local transform is world transform
-        return .{
-            .x = pos.x,
-            .y = pos.y,
-            .rotation = pos.rotation,
-            .scale_x = scale.x,
-            .scale_y = scale.y,
+    // Get this entity's local position
+    const local_pos = if (registry.tryGet(Position, entity)) |p| p.* else Position{};
+
+    // Check if this entity has a parent
+    if (registry.tryGet(Parent, entity)) |parent_comp| {
+        // Recursively get parent's world transform
+        const parent_world = computeWorldTransform(registry, parent_comp.entity, depth + 1);
+
+        // Compute this entity's world position
+        var world = WorldTransform{
+            .rotation = local_pos.rotation,
+            .scale_x = 1,
+            .scale_y = 1,
         };
+
+        // Apply rotation inheritance if enabled
+        if (parent_comp.inherit_rotation) {
+            world.rotation += parent_world.rotation;
+
+            // Rotate local offset around parent's rotation
+            const cos_r = @cos(parent_world.rotation);
+            const sin_r = @sin(parent_world.rotation);
+            world.x = parent_world.x + local_pos.x * cos_r - local_pos.y * sin_r;
+            world.y = parent_world.y + local_pos.x * sin_r + local_pos.y * cos_r;
+        } else {
+            // No rotation - simple offset
+            world.x = parent_world.x + local_pos.x;
+            world.y = parent_world.y + local_pos.y;
+        }
+
+        // Apply scale inheritance if enabled
+        if (parent_comp.inherit_scale) {
+            world.scale_x = parent_world.scale_x;
+            world.scale_y = parent_world.scale_y;
+        }
+
+        return world;
     }
 
-    const parent_world = computeWorldTransform(parent_comp.?.entity, registry);
-
-    var world: WorldTransform = undefined;
-
-    // Inherit scale
-    if (scale.inherit) {
-        world.scale_x = parent_world.scale_x * scale.x;
-        world.scale_y = parent_world.scale_y * scale.y;
-    } else {
-        world.scale_x = scale.x;
-        world.scale_y = scale.y;
-    }
-
-    // Apply parent scale and rotation to local position
-    // Order: scale local position by parent scale, then rotate
-    const scaled_x = pos.x * parent_world.scale_x;
-    const scaled_y = pos.y * parent_world.scale_y;
-
-    const cos_r = @cos(parent_world.rotation);
-    const sin_r = @sin(parent_world.rotation);
-    world.x = parent_world.x + scaled_x * cos_r - scaled_y * sin_r;
-    world.y = parent_world.y + scaled_x * sin_r + scaled_y * cos_r;
-
-    // Inherit rotation
-    if (pos.inherit_rotation) {
-        world.rotation = parent_world.rotation + pos.rotation;
-    } else {
-        world.rotation = pos.rotation;
-    }
-
-    return world;
+    // Root entity - local position is world position
+    return WorldTransform{
+        .x = local_pos.x,
+        .y = local_pos.y,
+        .rotation = local_pos.rotation,
+        .scale_x = 1,
+        .scale_y = 1,
+    };
 }
 ```
+
+**Key design decisions:**
+- **Depth limit (32)** - Prevents infinite recursion from circular hierarchies
+- **Default values** - WorldTransform fields have defaults, avoiding undefined values
+- **Inheritance flags on Parent** - Not on Position, giving per-relationship control
+- **Safe component access** - Uses `tryGet` to handle missing components gracefully
 
 **Note:** This simplified transform composition (separate scale + rotation) does not produce shear effects that would occur with full matrix transforms. This is intentional for 2D game simplicity.
 
@@ -412,17 +437,20 @@ pub const TransformDirty = struct {
 
 // When parent moves, mark all descendants dirty
 fn markDescendantsDirty(entity: Entity, registry: *Registry) void {
-    for (registry.getChildren(entity)) |child| {
-        if (registry.tryGet(child, TransformDirty)) |dirty| {
-            dirty.world_dirty = true;
+    // Use Children component to get child entities
+    if (registry.tryGet(Children, entity)) |children_comp| {
+        for (children_comp.entities) |child| {
+            if (registry.tryGet(TransformDirty, child)) |dirty| {
+                dirty.world_dirty = true;
+            }
+            markDescendantsDirty(child, registry);
         }
-        markDescendantsDirty(child, registry);
     }
 }
 
 // Compute only when dirty
 fn getWorldTransform(entity: Entity, registry: *Registry) WorldTransform {
-    if (registry.tryGet(entity, TransformDirty)) |dirty| {
+    if (registry.tryGet(TransformDirty, entity)) |dirty| {
         if (!dirty.world_dirty) {
             return cached_transforms.get(entity);
         }
@@ -632,47 +660,48 @@ game.setWorldPosition(entity, x, y);
 
 8. ~~**Serialization?**~~ **Resolved:** Flat structure with `.parent` as top-level field (not in components). Local positions. Matches Unity/Godot approach.
 
-9. ~~**Coordinate system mismatch?**~~ **Resolved:** Standardize on Y-down everywhere (Option D). See [Coordinate System Convention](#coordinate-system-convention) section.
+9. ~~**Coordinate system mismatch?**~~ **Resolved:** Standardize on Y-up with coordinate transformation at boundaries. See [Coordinate System Convention](#coordinate-system-convention) section.
 
 ---
 
 ## Implementation Plan
 
-### Phase 1: New components
-- [ ] Add `Scale` component (optional, defaults to 1,1)
-- [ ] Add `Parent` component (marks entity as child)
-- [ ] Add `z_relative: bool` to Sprite component
-- [ ] Add `WorldTransform` computation function
-- [ ] Add `getEffectiveZIndex()` function
-- [ ] Tests for transform math
+### Phase 1: Core components ✅
+- [x] Add `Parent` component with `inherit_rotation` and `inherit_scale` flags
+- [x] Add `Children` component for tracking child entities
+- [x] Add `WorldTransform` computation function with depth limit
+- [x] Position component stores local coordinates
+- [x] Tests for transform math
 
-### Phase 2: Scene loader & RenderPipeline
-- [ ] Scene loader supports `.children` syntax
-- [ ] Scene loader auto-adds `Parent` component to children
-- [ ] Update RenderPipeline to compute world transforms
-- [ ] Update RenderPipeline to use effective z-index
-- [ ] Children follow parent automatically
+### Phase 2: RenderPipeline integration ✅
+- [x] RenderPipeline resolves world position from hierarchy
+- [x] Children follow parent automatically (computed on sync)
+- [x] Y-up to Y-down coordinate transform at render boundary
+- [x] Support for legacy Gizmo parent_entity
 
-### Phase 3: Entity lifecycle
+### Phase 3: Input integration ✅
+- [x] `game.getMousePosition()` returns Y-up game coordinates
+- [x] `game.getTouch()` returns Y-up game coordinates
+- [x] Gesture recognition uses transformed coordinates
+
+### Phase 4: Entity lifecycle (partial)
 - [ ] Cascade destroy: destroying parent destroys children
 - [ ] `game.removeParent()` to unparent before destroy
-- [ ] Depth warning in debug builds (> 8 levels)
-- [ ] Cycle detection in `setParent()` (prevent circular references)
+- [x] Depth limit (32) prevents infinite recursion
 
-### Phase 4: Physics integration
+### Phase 5: Physics integration
 - [ ] Validate: no RigidBody on entities with `Parent` (Option A)
 - [ ] Physics sync updates root entity Position
 - [ ] Warning/error if RigidBody added to child
 
-### Phase 5: API polish
+### Phase 6: API polish
 - [ ] `game.getLocalPosition()` / `game.setLocalPosition()` (explicit local)
 - [ ] `game.getWorldPosition()` / `game.setWorldPosition()` (explicit world)
 - [ ] `game.setParent()` / `game.removeParent()` (with cycle detection)
 - [ ] `game.getChildren()` / `game.getParent()` helpers
 - [ ] Deprecate `game.getPosition()` / `game.setPosition()` with warnings
-- [ ] Dirty flag optimization if needed
 
-### Phase 6: Editor support
+### Phase 7: Editor support
 - [ ] labelle-html-editor hierarchy visualization
 - [ ] Reparenting via drag-drop
 - [ ] Toggle local/world coordinate display
