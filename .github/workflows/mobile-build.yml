@@ -48,7 +48,7 @@ jobs:
         run: |
           # Create libc configuration file for Android ARM64
           SYSROOT="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
-          cat > android-aarch64-libc.txt << EOF
+          cat > $GITHUB_WORKSPACE/android-aarch64-libc.txt << EOF
           include_dir=$SYSROOT/usr/include
           sys_include_dir=$SYSROOT/usr/include/aarch64-linux-android
           crt_dir=$SYSROOT/usr/lib/aarch64-linux-android/24
@@ -56,19 +56,19 @@ jobs:
           kernel32_lib_dir=
           gcc_dir=
           EOF
-          echo "Created android-aarch64-libc.txt:"
-          cat android-aarch64-libc.txt
+          echo "Created $GITHUB_WORKSPACE/android-aarch64-libc.txt:"
+          cat $GITHUB_WORKSPACE/android-aarch64-libc.txt
 
       - name: Build for Android (cross-compile check)
         run: |
           cd ci/mobile_physics_test
           echo "::group::Building Android target"
 
-          # Build targeting Android ARM64 with NDK libc
+          # Build targeting Android ARM64 with NDK libc (absolute path)
           zig build \
             -Dtarget=aarch64-linux-android \
             -Doptimize=ReleaseSafe \
-            --libc ../android-aarch64-libc.txt \
+            --libc $GITHUB_WORKSPACE/android-aarch64-libc.txt \
             --summary all
 
           echo "::endgroup::"
@@ -111,7 +111,7 @@ jobs:
         run: |
           # Create libc configuration file for iOS Simulator ARM64
           SYSROOT=$(xcrun --sdk iphonesimulator --show-sdk-path)
-          cat > ios-arm64-simulator-libc.txt << EOF
+          cat > $GITHUB_WORKSPACE/ios-arm64-simulator-libc.txt << EOF
           include_dir=$SYSROOT/usr/include
           sys_include_dir=$SYSROOT/usr/include
           crt_dir=$SYSROOT/usr/lib
@@ -119,19 +119,19 @@ jobs:
           kernel32_lib_dir=
           gcc_dir=
           EOF
-          echo "Created ios-arm64-simulator-libc.txt:"
-          cat ios-arm64-simulator-libc.txt
+          echo "Created $GITHUB_WORKSPACE/ios-arm64-simulator-libc.txt:"
+          cat $GITHUB_WORKSPACE/ios-arm64-simulator-libc.txt
 
       - name: Build for iOS Simulator
         run: |
           cd ci/mobile_physics_test
           echo "::group::Building for iOS Simulator"
 
-          # Build targeting iOS Simulator (ARM64) with SDK libc
+          # Build targeting iOS Simulator (ARM64) with SDK libc (absolute path)
           zig build \
             -Dtarget=aarch64-ios-simulator \
             -Doptimize=ReleaseSafe \
-            --libc ../ios-arm64-simulator-libc.txt \
+            --libc $GITHUB_WORKSPACE/ios-arm64-simulator-libc.txt \
             --summary all
 
           echo "::endgroup::"
