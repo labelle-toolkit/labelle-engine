@@ -111,26 +111,19 @@ jobs:
           xcodebuild -version
           xcrun --sdk iphonesimulator --show-sdk-path
 
-      - name: Build and install labelle-cli
+      - name: Install labelle-cli
         run: |
-          git clone --depth 1 https://github.com/labelle-toolkit/labelle-cli.git /tmp/labelle-cli
-          cd /tmp/labelle-cli
-          zig build -Doptimize=ReleaseFast
-          sudo cp zig-out/bin/labelle /usr/local/bin/
-          labelle --version
+          curl -fsSL https://labelle.games/install.sh | bash
+          echo "$HOME/.labelle/bin" >> $GITHUB_PATH
 
-      - name: Generate project files
-        run: |
-          cd ci/mobile_physics_test
-          labelle generate --engine-path=../..
-
-      - name: Build for iOS Simulator using CLI
+      - name: Generate and build for iOS Simulator
         run: |
           cd ci/mobile_physics_test
           echo "::group::Building for iOS Simulator"
-          # Use labelle CLI with local engine path
-          # The CLI generates ios/build.zig with proper sokol framework linking
-          labelle ios build --simulator --engine-path=../..
+          # Generate project files first
+          ~/.labelle/bin/labelle generate
+          # Build for iOS simulator using the CLI
+          ~/.labelle/bin/labelle ios build --simulator
           echo "::endgroup::"
 
       - name: Verify iOS build output
