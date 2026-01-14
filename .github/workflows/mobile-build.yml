@@ -18,12 +18,10 @@ on:
 jobs:
   # ============================================================================
   # Android Build
-  # NOTE: Currently fails due to box2d cross-compilation issues.
-  # This is a known issue to be addressed separately.
+  # Uses NDK sysroot for C library headers required by box2d/sokol
   # ============================================================================
   android-build:
     runs-on: ubuntu-latest
-    continue-on-error: true  # Known issue: box2d cross-compilation
 
     steps:
       - name: Checkout repository
@@ -38,23 +36,39 @@ jobs:
         with:
           version: 0.15.2
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+      - name: Setup Android NDK
+        uses: nttld/setup-ndk@v1
+        id: setup-ndk
         with:
-          api-level: 34
-          build-tools-version: 34.0.0
-          ndk-version: 26.1.10909125
+          ndk-version: r26c
+
+      - name: Configure Android libc for Zig
+        env:
+          ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
+        run: |
+          # Create libc configuration file for Android ARM64
+          SYSROOT="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
+          cat > android-aarch64-libc.txt << EOF
+          include_dir=$SYSROOT/usr/include
+          sys_include_dir=$SYSROOT/usr/include/aarch64-linux-android
+          crt_dir=$SYSROOT/usr/lib/aarch64-linux-android/24
+          msvc_lib_dir=
+          kernel32_lib_dir=
+          gcc_dir=
+          EOF
+          echo "Created android-aarch64-libc.txt:"
+          cat android-aarch64-libc.txt
 
       - name: Build for Android (cross-compile check)
         run: |
           cd ci/mobile_physics_test
           echo "::group::Building Android target"
 
-          # Build targeting Android ARM64
-          # Note: This verifies the code compiles for Android target
+          # Build targeting Android ARM64 with NDK libc
           zig build \
             -Dtarget=aarch64-linux-android \
             -Doptimize=ReleaseSafe \
+            --libc ../android-aarch64-libc.txt \
             --summary all
 
           echo "::endgroup::"
@@ -70,12 +84,10 @@ jobs:
 
   # ============================================================================
   # iOS Build (Simulator)
-  # NOTE: Currently fails due to box2d cross-compilation issues.
-  # This is a known issue to be addressed separately.
+  # Uses Xcode SDK sysroot for C library headers required by box2d/sokol
   # ============================================================================
   ios-build:
     runs-on: macos-14  # macOS with Apple Silicon for iOS simulator
-    continue-on-error: true  # Known issue: box2d cross-compilation
 
     steps:
       - name: Checkout repository
@@ -95,15 +107,31 @@ jobs:
           xcodebuild -version
           xcrun --sdk iphonesimulator --show-sdk-path
 
+      - name: Configure iOS libc for Zig
+        run: |
+          # Create libc configuration file for iOS Simulator ARM64
+          SYSROOT=$(xcrun --sdk iphonesimulator --show-sdk-path)
+          cat > ios-arm64-simulator-libc.txt << EOF
+          include_dir=$SYSROOT/usr/include
+          sys_include_dir=$SYSROOT/usr/include
+          crt_dir=$SYSROOT/usr/lib
+          msvc_lib_dir=
+          kernel32_lib_dir=
+          gcc_dir=
+          EOF
+          echo "Created ios-arm64-simulator-libc.txt:"
+          cat ios-arm64-simulator-libc.txt
+
       - name: Build for iOS Simulator
         run: |
           cd ci/mobile_physics_test
           echo "::group::Building for iOS Simulator"
 
-          # Build targeting iOS Simulator (ARM64)
+          # Build targeting iOS Simulator (ARM64) with SDK libc
           zig build \
             -Dtarget=aarch64-ios-simulator \
             -Doptimize=ReleaseSafe \
+            --libc ../ios-arm64-simulator-libc.txt \
             --summary all
 
           echo "::endgroup::"
