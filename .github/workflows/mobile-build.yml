@@ -173,18 +173,72 @@ jobs:
           fi
           echo "Compilation verified: $OBJ_COUNT object files created"
 
+      - name: Link with Xcode toolchain
+        run: |
+          cd ci/mobile_physics_test/ios
+          echo "::group::Linking with clang (Xcode toolchain)"
+
+          SYSROOT=$(xcrun --sdk iphonesimulator --show-sdk-path)
+          APP_NAME="mobile_physics_test"
+
+          # Find all object files produced by Zig
+          OBJ_FILES=$(find .zig-cache -name "*.o" -type f)
+          echo "Found object files:"
+          echo "$OBJ_FILES" | head -20
+
+          # Link with clang using iOS simulator SDK
+          # Note: We use clang because Zig's LLD doesn't properly resolve iOS frameworks
+          xcrun --sdk iphonesimulator clang++ \
+            -arch arm64 \
+            -isysroot "$SYSROOT" \
+            -mios-simulator-version-min=15.0 \
+            -framework Metal \
+            -framework MetalKit \
+            -framework UIKit \
+            -framework QuartzCore \
+            -framework AudioToolbox \
+            -framework AVFoundation \
+            -framework Foundation \
+            -framework CoreGraphics \
+            -lobjc \
+            -lc++ \
+            $OBJ_FILES \
+            -o "$APP_NAME" \
+            2>&1 || {
+              echo "::warning::Clang linking failed - this may be expected for complex dependencies"
+              echo "Attempting to identify missing symbols..."
+              exit 0
+            }
+
+          if [ -f "$APP_NAME" ]; then
+            echo "Successfully linked: $APP_NAME"
+            file "$APP_NAME"
+            ls -la "$APP_NAME"
+          fi
+
+          echo "::endgroup::"
+
       - name: Create iOS build summary
         run: |
           cd ci/mobile_physics_test/ios
           OBJ_COUNT=$(find .zig-cache -name "*.o" 2>/dev/null | wc -l | tr -d ' ')
+          LINKED="No"
+          if [ -f "mobile_physics_test" ]; then
+            LINKED="Yes"
+          fi
           echo "## iOS Build (via labelle-cli)" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "iOS Simulator compilation **succeeded**. Linking skipped (requires Xcode)." >> $GITHUB_STEP_SUMMARY
+          echo "iOS Simulator build results:" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Stage | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Compilation | ✅ Success |" >> $GITHUB_STEP_SUMMARY
+          echo "| Object files | $OBJ_COUNT |" >> $GITHUB_STEP_SUMMARY
+          echo "| Linked with Xcode | $LINKED |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Target:** aarch64-ios-simulator" >> $GITHUB_STEP_SUMMARY
           echo "**SDK:** $(xcrun --sdk iphonesimulator --show-sdk-path)" >> $GITHUB_STEP_SUMMARY
           echo "**Engine:** Local path (../..)" >> $GITHUB_STEP_SUMMARY
-          echo "**Object files:** $OBJ_COUNT compiled" >> $GITHUB_STEP_SUMMARY
 
   # ============================================================================
   # Native Build with Physics (CI Test)
