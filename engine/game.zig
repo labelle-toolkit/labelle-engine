@@ -636,7 +636,7 @@ pub fn GameWith(comptime Hooks: type) type {
         /// unexpectedly if RigidBody entities are placed in a hierarchy.
         pub fn setParent(self: *Self, child: Entity, new_parent: Entity) HierarchyError!void {
             // Prevent self-parenting
-            if (child.eql(new_parent)) {
+            if (child == new_parent) {
                 return HierarchyError.SelfParenting;
             }
 
@@ -644,7 +644,7 @@ pub fn GameWith(comptime Hooks: type) type {
             var current = new_parent;
             var depth: u8 = 0;
             while (self.registry.tryGet(Parent, current)) |parent_comp| {
-                if (parent_comp.entity.eql(child)) {
+                if (parent_comp.entity == child) {
                     return HierarchyError.CircularHierarchy;
                 }
                 if (depth > 32) {
@@ -657,10 +657,14 @@ pub fn GameWith(comptime Hooks: type) type {
             // Remove from old parent's children list if re-parenting
             if (self.registry.tryGet(Parent, child)) |old_parent_comp| {
                 self.removeFromChildrenList(old_parent_comp.entity, child);
+                // Update existing Parent component
+                old_parent_comp.entity = new_parent;
+                old_parent_comp.inherit_rotation = false;
+                old_parent_comp.inherit_scale = false;
+            } else {
+                // Add new Parent component
+                self.registry.add(child, Parent{ .entity = new_parent });
             }
-
-            // Set the Parent component
-            self.registry.add(child, Parent{ .entity = new_parent });
 
             // Add to new parent's children list
             self.addToChildrenList(new_parent, child);
@@ -752,7 +756,7 @@ pub fn GameWith(comptime Hooks: type) type {
                 // Find and remove child
                 var found_idx: ?usize = null;
                 for (old_entities, 0..) |e, i| {
-                    if (e.eql(child)) {
+                    if (e == child) {
                         found_idx = i;
                         break;
                     }
