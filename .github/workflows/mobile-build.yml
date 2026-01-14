@@ -88,12 +88,10 @@ jobs:
   # ============================================================================
   # iOS Build (Simulator)
   # Uses Xcode SDK sysroot for C library headers required by box2d/sokol
-  # NOTE: Fails due to box2d NEON intrinsics requiring ARM features not
-  #       enabled for iOS simulator target. Needs Zig target config fix.
+  # Uses -Dcpu=apple_a14 to enable NEON features required by box2d SIMD code
   # ============================================================================
   ios-build:
     runs-on: macos-14  # macOS with Apple Silicon for iOS simulator
-    continue-on-error: true  # Known issue: box2d SIMD requires ARM features
 
     steps:
       - name: Checkout repository
@@ -131,9 +129,11 @@ jobs:
           cd ci/mobile_physics_test
           echo "::group::Building for iOS Simulator"
 
-          # Build targeting iOS Simulator (ARM64) with SDK libc (absolute path)
+          # Build targeting iOS Simulator (ARM64) with SDK libc
+          # -Dcpu=apple_a14 enables NEON features required by box2d SIMD code
           zig build \
             -Dtarget=aarch64-ios-simulator \
+            -Dcpu=apple_a14 \
             -Doptimize=ReleaseSafe \
             --libc $GITHUB_WORKSPACE/ios-arm64-simulator-libc.txt \
             --summary all
