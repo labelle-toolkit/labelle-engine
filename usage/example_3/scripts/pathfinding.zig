@@ -135,7 +135,7 @@ pub fn update(game: *Game, scene: *Scene, dt: f32) void {
 
     // Update player visual position from pathfinding
     if (pf.getPosition(PLAYER_ID)) |pos| {
-        game.setPosition(pe, Position{ .x = pos.x, .y = pos.y });
+        game.setLocalPosition(pe, Position{ .x = pos.x, .y = pos.y });
     }
 
     // Check if we reached the target

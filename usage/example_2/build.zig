@@ -38,16 +38,13 @@ pub fn build(b: *std.Build) void {
     });
     const engine_mod = engine_dep.module("labelle-engine");
 
-    // Get labelle-gfx dependency for sokol bindings
+    // Get sokol module from labelle-gfx (avoid duplicate module conflict)
     const labelle_dep = engine_dep.builder.dependency("labelle-gfx", .{
         .target = target,
         .optimize = optimize,
     });
-    const sokol_dep = labelle_dep.builder.dependency("sokol", .{
-        .target = target,
-        .optimize = optimize,
-    });
-    const sokol_mod = sokol_dep.module("sokol");
+    const sokol_mod = labelle_dep.builder.modules.get("sokol") orelse
+        @panic("sokol module not found in labelle-gfx");
 
     const exe = b.addExecutable(.{
         .name = "example_2",

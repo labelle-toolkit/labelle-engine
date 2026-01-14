@@ -1,5 +1,5 @@
 .{
     .components = .{
-        .Sprite = .{ .name = "walk_0001", .z_index = 128, .scale = 3.0 },
+        .Sprite = .{ .name = "walk_0001", .z_index = 0, .scale_x = 3.0, .scale_y = 3.0 },
     },
 }

@@ -65,6 +65,8 @@ pub const GfxPosition = render_pipeline_mod.GfxPosition;
 pub const Icon = render_pipeline_mod.Icon;
 pub const GizmoVisibility = render_pipeline_mod.GizmoVisibility;
 pub const BoundingBox = render_pipeline_mod.BoundingBox;
+pub const Parent = render_pipeline_mod.Parent;
+pub const Children = render_pipeline_mod.Children;
 
 /// Configuration for window creation
 pub const WindowConfig = struct {
@@ -329,29 +331,54 @@ pub fn GameWith(comptime Hooks: type) type {
             return entity;
         }
 
-        /// Destroy an entity and its visual representation
+        /// Destroy an entity, its visual representation, and all children (cascade destroy).
+        /// Children are destroyed recursively before the parent.
         pub fn destroyEntity(self: *Self, entity: Entity) void {
+            // First, recursively destroy all children (cascade destroy)
+            if (self.registry.tryGet(Children, entity)) |children_comp| {
+                // Copy children list since we're modifying during iteration
+                for (children_comp.entities) |child| {
+                    self.destroyEntity(child);
+                }
+            }
+
             // Emit entity_destroyed hook before destruction
             emitHook(.{ .entity_destroyed = .{ .entity_id = entityToU64(entity), .prefab_name = null } });
             self.pipeline.untrackEntity(entity);
             self.registry.destroy(entity);
         }
 
-        /// Add Position component to an entity
+        /// Destroy an entity without destroying its children.
+        /// Children become orphaned (their Parent component still references the destroyed entity).
+        /// Use removeParent() on children first if you want them to become root entities.
+        pub fn destroyEntityOnly(self: *Self, entity: Entity) void {
+            emitHook(.{ .entity_destroyed = .{ .entity_id = entityToU64(entity), .prefab_name = null } });
+            self.pipeline.untrackEntity(entity);
+            self.registry.destroy(entity);
+        }
+
+        /// Add Position component to an entity (local coordinates)
         pub fn addPosition(self: *Self, entity: Entity, pos: Position) void {
             self.registry.add(entity, pos);
         }
 
-        /// Set Position component (marks dirty for sync)
-        pub fn setPosition(self: *Self, entity: Entity, pos: Position) void {
+        // ==================== Local Position API ====================
+
+        /// Get local Position component (relative to parent, or world if no parent)
+        pub fn getLocalPosition(self: *Self, entity: Entity) ?*Position {
+            return self.registry.tryGet(Position, entity);
+        }
+
+        /// Set local Position component (marks dirty for sync)
+        pub fn setLocalPosition(self: *Self, entity: Entity, pos: Position) void {
             if (self.registry.tryGet(Position, entity)) |p| {
                 p.* = pos;
                 self.pipeline.markPositionDirty(entity);
             }
         }
 
-        /// Set Position using x, y coordinates directly (marks dirty for sync)
-        pub fn setPositionXY(self: *Self, entity: Entity, x: f32, y: f32) void {
+        /// Set local Position using x, y coordinates directly (marks dirty for sync)
+        pub fn setLocalPositionXY(self: *Self, entity: Entity, x: f32, y: f32) void {
             if (self.registry.tryGet(Position, entity)) |p| {
                 p.x = x;
                 p.y = y;
@@ -359,8 +386,8 @@ pub fn GameWith(comptime Hooks: type) type {
             }
         }
 
-        /// Move Position by delta values (marks dirty for sync)
-        pub fn movePosition(self: *Self, entity: Entity, dx: f32, dy: f32) void {
+        /// Move local Position by delta values (marks dirty for sync)
+        pub fn moveLocalPosition(self: *Self, entity: Entity, dx: f32, dy: f32) void {
             if (self.registry.tryGet(Position, entity)) |p| {
                 p.x += dx;
                 p.y += dy;
@@ -368,9 +395,142 @@ pub fn GameWith(comptime Hooks: type) type {
             }
         }
 
-        /// Get Position component
-        pub fn getPosition(self: *Self, entity: Entity) ?*Position {
-            return self.registry.tryGet(Position, entity);
+        // ==================== World Position API ====================
+
+        /// World transform result from hierarchy computation
+        pub const WorldTransform = struct {
+            x: f32 = 0,
+            y: f32 = 0,
+            rotation: f32 = 0,
+            scale_x: f32 = 1,
+            scale_y: f32 = 1,
+        };
+
+        /// Get full world transform by computing through parent chain.
+        /// Handles rotation and scale inheritance according to Parent component flags.
+        /// Returns null if entity has no Position component.
+        pub fn getWorldTransform(self: *Self, entity: Entity) ?WorldTransform {
+            return self.computeWorldTransformInternal(entity, 0);
+        }
+
+        /// Internal recursive world transform computation
+        fn computeWorldTransformInternal(self: *Self, entity: Entity, depth: u8) ?WorldTransform {
+            // Prevent infinite recursion from circular hierarchies
+            if (depth > 32) {
+                std.log.warn("Position hierarchy too deep (>32), possible cycle detected", .{});
+                return null;
+            }
+
+            // Get this entity's local position
+            const local_pos = self.registry.tryGet(Position, entity) orelse return null;
+
+            // Check if this entity has a parent
+            const parent_comp = self.registry.tryGet(Parent, entity) orelse {
+                // No parent - local position IS world position
+                return WorldTransform{
+                    .x = local_pos.x,
+                    .y = local_pos.y,
+                    .rotation = local_pos.rotation,
+                    .scale_x = 1,
+                    .scale_y = 1,
+                };
+            };
+
+            // Recursively get parent's world transform
+            const parent_world = self.computeWorldTransformInternal(parent_comp.entity, depth + 1) orelse {
+                return WorldTransform{
+                    .x = local_pos.x,
+                    .y = local_pos.y,
+                    .rotation = local_pos.rotation,
+                    .scale_x = 1,
+                    .scale_y = 1,
+                };
+            };
+
+            // Compute this entity's world transform
+            var world = WorldTransform{
+                .rotation = local_pos.rotation,
+                .scale_x = 1,
+                .scale_y = 1,
+            };
+
+            // Apply rotation inheritance if enabled
+            if (parent_comp.inherit_rotation) {
+                world.rotation += parent_world.rotation;
+
+                // Rotate local offset around parent's rotation
+                const cos_r = @cos(parent_world.rotation);
+                const sin_r = @sin(parent_world.rotation);
+                world.x = parent_world.x + local_pos.x * cos_r - local_pos.y * sin_r;
+                world.y = parent_world.y + local_pos.x * sin_r + local_pos.y * cos_r;
+            } else {
+                // No rotation - simple offset
+                world.x = parent_world.x + local_pos.x;
+                world.y = parent_world.y + local_pos.y;
+            }
+
+            // Apply scale inheritance if enabled
+            if (parent_comp.inherit_scale) {
+                world.scale_x = parent_world.scale_x;
+                world.scale_y = parent_world.scale_y;
+            }
+
+            return world;
+        }
+
+        /// Get world position by computing transform through parent chain.
+        /// Handles rotation inheritance (rotates local offset around parent rotation).
+        /// Returns null if entity has no Position component.
+        pub fn getWorldPosition(self: *Self, entity: Entity) ?struct { x: f32, y: f32 } {
+            const transform = self.getWorldTransform(entity) orelse return null;
+            return .{ .x = transform.x, .y = transform.y };
+        }
+
+        /// Set world position by computing required local position.
+        /// Adjusts local position so that world position matches the given coordinates.
+        /// Handles rotation inheritance (inverse rotation to compute local offset).
+        pub fn setWorldPosition(self: *Self, entity: Entity, world_x: f32, world_y: f32) void {
+            const pos = self.registry.tryGet(Position, entity) orelse return;
+
+            // If no parent, local position IS world position
+            const parent_comp = self.registry.tryGet(Parent, entity) orelse {
+                pos.x = world_x;
+                pos.y = world_y;
+                self.pipeline.markPositionDirty(entity);
+                return;
+            };
+
+            // Get parent's world transform to compute required local offset
+            const parent_world = self.computeWorldTransformInternal(parent_comp.entity, 0) orelse {
+                pos.x = world_x;
+                pos.y = world_y;
+                self.pipeline.markPositionDirty(entity);
+                return;
+            };
+
+            // Compute offset from parent in world space
+            const offset_x = world_x - parent_world.x;
+            const offset_y = world_y - parent_world.y;
+
+            // If inheriting rotation, apply inverse rotation to get local offset
+            if (parent_comp.inherit_rotation and parent_world.rotation != 0) {
+                const cos_r = @cos(-parent_world.rotation);
+                const sin_r = @sin(-parent_world.rotation);
+                pos.x = offset_x * cos_r - offset_y * sin_r;
+                pos.y = offset_x * sin_r + offset_y * cos_r;
+            } else {
+                // No rotation - simple offset
+                pos.x = offset_x;
+                pos.y = offset_y;
+            }
+
+            self.pipeline.markPositionDirty(entity);
+        }
+
+        /// Set world position using x, y coordinates directly.
+        /// Alias for setWorldPosition.
+        pub fn setWorldPositionXY(self: *Self, entity: Entity, x: f32, y: f32) void {
+            self.setWorldPosition(entity, x, y);
         }
 
         /// Set z_index on entity's visual component (Sprite, Shape, or Text)
@@ -451,6 +611,168 @@ pub fn GameWith(comptime Hooks: type) type {
         /// Get a component from an entity
         pub fn getComponent(self: *Self, comptime T: type, entity: Entity) ?*T {
             return self.registry.tryGet(T, entity);
+        }
+
+        // ==================== Entity Hierarchy ====================
+
+        /// Hierarchy error types
+        pub const HierarchyError = error{
+            /// Cannot set an entity as its own parent
+            SelfParenting,
+            /// Setting this parent would create a cycle (child is ancestor of parent)
+            CircularHierarchy,
+            /// Hierarchy depth exceeds safety limit (32)
+            HierarchyTooDeep,
+        };
+
+        /// Set the parent of an entity, establishing a parent-child relationship.
+        /// The child's Position becomes relative to the parent.
+        /// Returns error if this would create a cycle or exceed depth limit.
+        ///
+        /// **Physics Warning**: Entities with RigidBody components should NOT be parented
+        /// to other entities. Physics bodies operate in world space and don't support
+        /// hierarchical transforms. If you need grouped physics objects, use physics
+        /// joints/constraints instead. The physics module may log warnings or behave
+        /// unexpectedly if RigidBody entities are placed in a hierarchy.
+        pub fn setParent(self: *Self, child: Entity, new_parent: Entity) HierarchyError!void {
+            // Prevent self-parenting
+            if (child.eql(new_parent)) {
+                return HierarchyError.SelfParenting;
+            }
+
+            // Walk up ancestor chain to detect cycles
+            var current = new_parent;
+            var depth: u8 = 0;
+            while (self.registry.tryGet(Parent, current)) |parent_comp| {
+                if (parent_comp.entity.eql(child)) {
+                    return HierarchyError.CircularHierarchy;
+                }
+                if (depth > 32) {
+                    return HierarchyError.HierarchyTooDeep;
+                }
+                current = parent_comp.entity;
+                depth += 1;
+            }
+
+            // Remove from old parent's children list if re-parenting
+            if (self.registry.tryGet(Parent, child)) |old_parent_comp| {
+                self.removeFromChildrenList(old_parent_comp.entity, child);
+            }
+
+            // Set the Parent component
+            self.registry.add(child, Parent{ .entity = new_parent });
+
+            // Add to new parent's children list
+            self.addToChildrenList(new_parent, child);
+        }
+
+        /// Set parent with inheritance options
+        pub fn setParentWithOptions(
+            self: *Self,
+            child: Entity,
+            new_parent: Entity,
+            inherit_rotation: bool,
+            inherit_scale: bool,
+        ) HierarchyError!void {
+            try self.setParent(child, new_parent);
+            // Update the Parent component with options
+            if (self.registry.tryGet(Parent, child)) |parent_comp| {
+                parent_comp.inherit_rotation = inherit_rotation;
+                parent_comp.inherit_scale = inherit_scale;
+            }
+        }
+
+        /// Remove the parent from an entity, making it a root entity.
+        /// The entity's Position becomes its world position.
+        pub fn removeParent(self: *Self, child: Entity) void {
+            if (self.registry.tryGet(Parent, child)) |parent_comp| {
+                // Remove from parent's children list
+                self.removeFromChildrenList(parent_comp.entity, child);
+                // Remove the Parent component
+                self.registry.remove(Parent, child);
+            }
+        }
+
+        /// Get the parent entity, or null if this is a root entity
+        pub fn getParent(self: *Self, entity: Entity) ?Entity {
+            if (self.registry.tryGet(Parent, entity)) |parent_comp| {
+                return parent_comp.entity;
+            }
+            return null;
+        }
+
+        /// Get the children of an entity
+        pub fn getChildren(self: *Self, entity: Entity) []const Entity {
+            if (self.registry.tryGet(Children, entity)) |children_comp| {
+                return children_comp.entities;
+            }
+            return &.{};
+        }
+
+        /// Check if an entity has children
+        pub fn hasChildren(self: *Self, entity: Entity) bool {
+            if (self.registry.tryGet(Children, entity)) |children_comp| {
+                return children_comp.entities.len > 0;
+            }
+            return false;
+        }
+
+        /// Check if an entity is a root (has no parent)
+        pub fn isRoot(self: *Self, entity: Entity) bool {
+            return self.registry.tryGet(Parent, entity) == null;
+        }
+
+        // Internal: Add child to parent's Children component
+        fn addToChildrenList(self: *Self, parent_entity: Entity, child: Entity) void {
+            if (self.registry.tryGet(Children, parent_entity)) |children_comp| {
+                // Allocate new slice with child added
+                const old_entities = children_comp.entities;
+                const new_entities = self.allocator.alloc(Entity, old_entities.len + 1) catch return;
+                @memcpy(new_entities[0..old_entities.len], old_entities);
+                new_entities[old_entities.len] = child;
+                // Free old slice if it was allocated
+                if (old_entities.len > 0) {
+                    self.allocator.free(@constCast(old_entities));
+                }
+                children_comp.entities = new_entities;
+            } else {
+                // Create new Children component
+                const new_entities = self.allocator.alloc(Entity, 1) catch return;
+                new_entities[0] = child;
+                self.registry.add(parent_entity, Children{ .entities = new_entities });
+            }
+        }
+
+        // Internal: Remove child from parent's Children component
+        fn removeFromChildrenList(self: *Self, parent_entity: Entity, child: Entity) void {
+            if (self.registry.tryGet(Children, parent_entity)) |children_comp| {
+                const old_entities = children_comp.entities;
+                if (old_entities.len == 0) return;
+
+                // Find and remove child
+                var found_idx: ?usize = null;
+                for (old_entities, 0..) |e, i| {
+                    if (e.eql(child)) {
+                        found_idx = i;
+                        break;
+                    }
+                }
+
+                if (found_idx) |idx| {
+                    if (old_entities.len == 1) {
+                        // Last child, remove Children component
+                        self.allocator.free(@constCast(old_entities));
+                        self.registry.remove(Children, parent_entity);
+                    } else {
+                        // Allocate new slice without child
+                        const new_entities = self.allocator.alloc(Entity, old_entities.len - 1) catch return;
+                        @memcpy(new_entities[0..idx], old_entities[0..idx]);
+                        @memcpy(new_entities[idx..], old_entities[idx + 1 ..]);
+                        self.allocator.free(@constCast(old_entities));
+                        children_comp.entities = new_entities;
+                    }
+                }
+            }
         }
 
         // ==================== Asset Loading ====================
@@ -1073,8 +1395,8 @@ pub fn GameWith(comptime Hooks: type) type {
                 const width: f32 = @floatFromInt(result.sprite.getWidth());
                 const height: f32 = @floatFromInt(result.sprite.getHeight());
                 return .{
-                    .width = width * sprite.scale,
-                    .height = height * sprite.scale,
+                    .width = width * sprite.scale_x,
+                    .height = height * sprite.scale_y,
                 };
             }
             return null;

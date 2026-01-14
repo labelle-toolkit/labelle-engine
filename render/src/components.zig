@@ -47,7 +47,10 @@ pub const ComponentPayload = @import("../../hooks/types.zig").ComponentPayload;
 // Position Component
 // ============================================
 
-/// Position component - source of truth for entity location and rotation
+/// Position component - stores LOCAL coordinates (offset from parent if parented)
+///
+/// When entity has a Parent component, Position is relative to parent.
+/// World position = parent world position + rotated(local position)
 ///
 /// Example in .zon:
 /// ```
@@ -66,6 +69,49 @@ pub const Position = struct {
 };
 
 // ============================================
+// Parent Component (Position Inheritance)
+// ============================================
+
+/// Parent component - establishes parent-child hierarchy for position inheritance
+///
+/// When a Parent component is attached to an entity:
+/// - The entity's Position becomes a local offset from the parent
+/// - World position = parent world position + rotated(local position)
+/// - Optionally inherits rotation from parent
+///
+/// Example in .zon:
+/// ```
+/// .Parent = .{ .entity = parent_entity_id },
+/// .Parent = .{ .entity = parent_entity_id, .inherit_rotation = true },
+/// ```
+pub const Parent = struct {
+    /// Reference to parent entity
+    entity: Entity,
+    /// Whether to inherit rotation from parent (default: false)
+    inherit_rotation: bool = false,
+    /// Whether to inherit scale from parent (default: false)
+    inherit_scale: bool = false,
+};
+
+// ============================================
+// Children Component (Position Inheritance)
+// ============================================
+
+/// Children component - tracks child entities for hierarchical operations
+///
+/// Automatically managed by the system when Parent components are added/removed.
+/// Used for:
+/// - Iterating over children
+/// - Destroying children when parent is destroyed
+/// - Propagating transform changes
+///
+/// Note: This is typically auto-populated, not set manually in .zon files.
+pub const Children = struct {
+    /// List of child entity IDs
+    entities: []const Entity = &.{},
+};
+
+// ============================================
 // Sprite Component
 // ============================================
 
@@ -79,12 +125,16 @@ pub const Sprite = struct {
     texture: TextureId = .invalid,
     /// Sprite name - matches texture/atlas sprite name for lookup
     name: []const u8 = "",
-    scale: f32 = 1,
+    /// Horizontal scale factor (1.0 = original size)
+    scale_x: f32 = 1,
+    /// Vertical scale factor (1.0 = original size)
+    scale_y: f32 = 1,
     rotation: f32 = 0,
     flip_x: bool = false,
     flip_y: bool = false,
     tint: Color = Color.white,
-    z_index: u8 = 128,
+    /// Z-index for depth ordering (-128 to 127, default 0)
+    z_index: i16 = 0,
     visible: bool = true,
     /// Pivot point for positioning and rotation (defaults to center)
     pivot: Pivot = .center,
@@ -103,7 +153,8 @@ pub const Sprite = struct {
         return .{
             .texture = self.texture,
             .sprite_name = self.name,
-            .scale = self.scale,
+            .scale_x = self.scale_x,
+            .scale_y = self.scale_y,
             .rotation = self.rotation,
             .flip_x = self.flip_x,
             .flip_y = self.flip_y,
@@ -158,9 +209,14 @@ pub const Sprite = struct {
 /// ```
 pub const Shape = struct {
     shape: ShapeType,
+    /// Horizontal scale factor (1.0 = original size)
+    scale_x: f32 = 1,
+    /// Vertical scale factor (1.0 = original size)
+    scale_y: f32 = 1,
     color: Color = Color.white,
     rotation: f32 = 0,
-    z_index: u8 = 128,
+    /// Z-index for depth ordering (-128 to 127, default 0)
+    z_index: i16 = 0,
     visible: bool = true,
     /// Rendering layer (background, world, or ui)
     layer: Layer = .world,
@@ -168,6 +224,8 @@ pub const Shape = struct {
     pub fn toVisual(self: Shape) ShapeVisual {
         return .{
             .shape = self.shape,
+            .scale_x = self.scale_x,
+            .scale_y = self.scale_y,
             .color = self.color,
             .rotation = self.rotation,
             .z_index = self.z_index,
@@ -227,7 +285,8 @@ pub const Text = struct {
     text: [:0]const u8 = "",
     size: f32 = 16,
     color: Color = Color.white,
-    z_index: u8 = 128,
+    /// Z-index for depth ordering (-128 to 127, default 0)
+    z_index: i16 = 0,
     visible: bool = true,
     /// Rendering layer (background, world, or ui)
     layer: Layer = .world,
@@ -355,10 +414,12 @@ pub const Icon = struct {
     texture: TextureId = .invalid,
     /// Sprite/texture name for lookup
     name: []const u8 = "",
+    /// Uniform scale factor (1.0 = original size)
     scale: f32 = 1.0,
     tint: Color = Color.white,
     visible: bool = true,
-    z_index: u8 = 128,
+    /// Z-index for depth ordering (-128 to 127, default 0)
+    z_index: i16 = 0,
     /// Rendering layer (defaults to ui so it draws on top)
     layer: Layer = .ui,
 
@@ -367,7 +428,8 @@ pub const Icon = struct {
         return .{
             .texture = self.texture,
             .name = self.name,
-            .scale = self.scale,
+            .scale_x = self.scale,
+            .scale_y = self.scale,
             .tint = self.tint,
             .visible = self.visible,
             .z_index = self.z_index,
@@ -429,8 +491,8 @@ pub const BoundingBox = struct {
     thickness: f32 = 1,
     /// Whether to show the bounding box
     visible: bool = true,
-    /// Z-index for rendering order
-    z_index: u8 = 255, // Draw on top by default
+    /// Z-index for rendering order (-128 to 127, default 127 to draw on top)
+    z_index: i16 = 127, // Draw on top by default
     /// Rendering layer (defaults to ui so it draws on top)
     layer: Layer = .ui,
 
@@ -453,6 +515,8 @@ pub const BoundingBox = struct {
 
 pub const Components = struct {
     pub const Position = Self.Position;
+    pub const Parent = Self.Parent;
+    pub const Children = Self.Children;
     pub const Sprite = Self.Sprite;
     pub const Shape = Self.Shape;
     pub const Text = Self.Text;
@@ -474,8 +538,10 @@ test "Position defaults" {
 
 test "Sprite defaults" {
     const sprite = Sprite{};
-    try std.testing.expectEqual(@as(f32, 1), sprite.scale);
+    try std.testing.expectEqual(@as(f32, 1), sprite.scale_x);
+    try std.testing.expectEqual(@as(f32, 1), sprite.scale_y);
     try std.testing.expectEqual(@as(f32, 0), sprite.rotation);
+    try std.testing.expectEqual(@as(i16, 0), sprite.z_index);
     try std.testing.expect(!sprite.flip_x);
     try std.testing.expect(!sprite.flip_y);
     try std.testing.expect(sprite.visible);
