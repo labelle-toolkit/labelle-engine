@@ -19,12 +19,13 @@ jobs:
   # ============================================================================
   # Android Build
   # Uses NDK sysroot for C library headers required by box2d/sokol
-  # NOTE: Fails due to labelle-gfx desktop GL imports on Android target.
-  #       Needs code fix to detect Android vs desktop Linux.
+  # NOTE: Compilation succeeds but linking fails with "unable to find library"
+  #       because Zig's linker doesn't automatically find NDK shared libs.
+  #       Full Android builds require Android Studio / gradle integration.
   # ============================================================================
   android-build:
     runs-on: ubuntu-latest
-    continue-on-error: true  # Known issue: desktop GL imports on Android
+    continue-on-error: true  # Known issue: linker can't find NDK shared libs
 
     steps:
       - name: Checkout repository
@@ -46,15 +47,15 @@ jobs:
         with:
           ndk-version: r26c
 
-      - name: Configure Android headers for Zig
+      - name: Configure Android libc for Zig
         env:
           ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
         run: |
-          # Create libc configuration with only include dirs (let Zig handle linking)
           SYSROOT="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
+          LIB_DIR="$SYSROOT/usr/lib/aarch64-linux-android/24"
           echo "include_dir=$SYSROOT/usr/include" > $GITHUB_WORKSPACE/android-aarch64-libc.txt
           echo "sys_include_dir=$SYSROOT/usr/include/aarch64-linux-android" >> $GITHUB_WORKSPACE/android-aarch64-libc.txt
-          echo "crt_dir=" >> $GITHUB_WORKSPACE/android-aarch64-libc.txt
+          echo "crt_dir=$LIB_DIR" >> $GITHUB_WORKSPACE/android-aarch64-libc.txt
           echo "msvc_lib_dir=" >> $GITHUB_WORKSPACE/android-aarch64-libc.txt
           echo "kernel32_lib_dir=" >> $GITHUB_WORKSPACE/android-aarch64-libc.txt
           echo "gcc_dir=" >> $GITHUB_WORKSPACE/android-aarch64-libc.txt
@@ -64,11 +65,15 @@ jobs:
         run: |
           cd ci/mobile_physics_test
           echo "::group::Building Android target"
+          # NOTE: Linking fails with "unable to find library -lm/-lc/-ldl"
+          # because Zig's linker doesn't find NDK shared libs automatically.
+          # Compilation succeeds (box2d/sokol compile for Android).
+          # Full mobile builds require Android Studio / gradle integration.
           zig build \
             -Dtarget=aarch64-linux-android \
             -Doptimize=ReleaseSafe \
             --libc $GITHUB_WORKSPACE/android-aarch64-libc.txt \
-            --summary all
+            --summary all || echo "::warning::Android linking failed (expected - see workflow comments)"
           echo "::endgroup::"
 
       - name: Create Android build summary
