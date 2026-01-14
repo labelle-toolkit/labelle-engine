@@ -131,7 +131,7 @@ pub const RenderPipeline = struct {
         // Check if entity has a Parent component (position inheritance)
         if (registry.tryGet(Parent, entity)) |parent_comp| {
             // Get local position of this entity
-            const local_pos = registry.tryGet(Position, entity) orelse Position{};
+            const local_pos = if (registry.tryGet(Position, entity)) |p| p.* else Position{};
 
             // Recursively get parent's world position and rotation
             const parent_world = computeWorldTransform(registry, parent_comp.entity, 0);
@@ -196,7 +196,7 @@ pub const RenderPipeline = struct {
         }
 
         // Get this entity's local position
-        const local_pos = registry.tryGet(Position, entity) orelse Position{};
+        const local_pos = if (registry.tryGet(Position, entity)) |p| p.* else Position{};
 
         // Check if this entity has a parent
         if (registry.tryGet(Parent, entity)) |parent_comp| {

@@ -29,7 +29,7 @@
         .{
             .components = .{
                 .Position = .{ .x = 400, .y = 50 },
-                .Sprite = .{ .name = "idle_0002", .scale = 2.0 },
+                .Sprite = .{ .name = "idle_0002", .scale_x = 2.0, .scale_y = 2.0 },
                 .Velocity = .{ .x = 0, .y = 0 },
                 .Gravity = .{ .strength = 400.0, .enabled = true },
             },
@@ -82,7 +82,7 @@
         .{
             .components = .{
                 .Position = .{ .x = 200, .y = 150 },
-                .Sprite = .{ .name = "idle_0003", .scale = 1.5 },
+                .Sprite = .{ .name = "idle_0003", .scale_x = 1.5, .scale_y = 1.5 },
                 .Health = .{ .current = 75, .max = 75 },
             },
         },
