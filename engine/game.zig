@@ -1395,8 +1395,8 @@ pub fn GameWith(comptime Hooks: type) type {
                 const width: f32 = @floatFromInt(result.sprite.getWidth());
                 const height: f32 = @floatFromInt(result.sprite.getHeight());
                 return .{
-                    .width = width * sprite.scale,
-                    .height = height * sprite.scale,
+                    .width = width * sprite.scale_x,
+                    .height = height * sprite.scale_y,
                 };
             }
             return null;
