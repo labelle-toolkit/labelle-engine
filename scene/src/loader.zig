@@ -91,6 +91,12 @@ pub const SceneCameraConfig = loader_types.SceneCameraConfig;
 pub const CameraSlot = loader_types.CameraSlot;
 pub const toLowercase = loader_types.toLowercase;
 
+// Entity reference types (Issue #242)
+pub const EntityRef = loader_types.EntityRef;
+pub const ReferenceContext = loader_types.ReferenceContext;
+pub const NamedEntityMap = loader_types.NamedEntityMap;
+pub const PendingReference = loader_types.PendingReference;
+
 // Internal types from loader/types.zig
 const ReadyCallbackEntry = loader_types.ReadyCallbackEntry;
 const ParentContext = loader_types.ParentContext;
@@ -220,6 +226,7 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
             game.getRegistry().add(entity, Position{ .x = pos_x, .y = pos_y });
 
             // Add components from prefab, merging with entity_def overrides where present
+            // Note: Child entities don't support entity references (no ref_ctx)
             if (comptime Prefabs.hasComponents(prefab_name)) {
                 const prefab_components = Prefabs.getComponents(prefab_name);
                 const scene_components = if (@hasField(@TypeOf(entity_def), "components"))
@@ -227,16 +234,16 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
                 else
                     .{};
 
-                try addMergedPrefabComponents(game, scene, entity, prefab_components, scene_components, pos_x, pos_y, parent_ctx, ready_queue);
+                try addMergedPrefabComponents(game, scene, entity, prefab_components, scene_components, pos_x, pos_y, parent_ctx, ready_queue, null);
             }
 
             // Add entity_def-only components (components in entity_def that don't exist in prefab)
             if (@hasField(@TypeOf(entity_def), "components")) {
                 if (comptime Prefabs.hasComponents(prefab_name)) {
                     const prefab_components = Prefabs.getComponents(prefab_name);
-                    try addSceneOnlyComponents(game, scene, entity, prefab_components, entity_def.components, pos_x, pos_y, parent_ctx, ready_queue);
+                    try addSceneOnlyComponents(game, scene, entity, prefab_components, entity_def.components, pos_x, pos_y, parent_ctx, ready_queue, null);
                 } else {
-                    try addComponentsExcluding(game, scene, entity, entity_def.components, pos_x, pos_y, .{"Position"}, parent_ctx, ready_queue);
+                    try addComponentsExcluding(game, scene, entity, entity_def.components, pos_x, pos_y, .{"Position"}, parent_ctx, ready_queue, null);
                 }
             }
 
@@ -261,6 +268,7 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
         /// Create a child entity from inline component definitions.
         /// Handles all component types uniformly - visual components (Sprite, Shape, Text)
         /// are registered with the render pipeline via their onAdd callbacks.
+        /// Note: Child entities don't support entity references (no ref_ctx).
         fn createChildComponentEntity(
             game: *Game,
             scene: ?*Scene,
@@ -280,7 +288,8 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
 
             // Add all components (Sprite/Shape/Text handled via fromZonData, others generically)
             // Position is excluded since we already added it above
-            try addComponentsExcluding(game, scene, entity, entity_def.components, child_x, child_y, .{"Position"}, parent_ctx, ready_queue);
+            // Note: Child entities don't support entity references (no ref_ctx)
+            try addComponentsExcluding(game, scene, entity, entity_def.components, child_x, child_y, .{"Position"}, parent_ctx, ready_queue, null);
 
             return .{
                 .entity = entity,
@@ -295,6 +304,8 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
         /// If scene is provided, child entities are tracked for cleanup.
         /// Supports parent reference convention: if parent_ctx is provided and this component
         /// has a field matching the parent component name (lowercased), it will be set to the parent entity.
+        /// Supports entity references (Issue #242): if ref_ctx is provided and a field value is
+        /// a reference (.ref = .{ .entity = "name" } or .ref = .self), it's deferred to Phase 2.
         fn addComponentWithNestedEntities(
             game: *Game,
             scene: ?*Scene,
@@ -305,6 +316,7 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
             parent_y: f32,
             parent_ctx: ?ParentContext,
             ready_queue: *std.ArrayList(ReadyCallbackEntry),
+            ref_ctx: ?*loader_types.ReferenceContext,
         ) !void {
             // Generic component handling
             const ComponentType = Components.getType(comp_name);
@@ -322,6 +334,7 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
                 const field_name = comp_field.name;
 
                 // Handle Entity fields specially for parent reference auto-population (RFC #169)
+                // and entity references (Issue #242)
                 if (comptime comp_field.type == Entity) {
                     // Check at runtime if this is a parent reference field
                     // Convention: field name matches parent component name (lowercased)
@@ -340,10 +353,31 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
                         // Auto-populate parent reference field
                         @field(component, field_name) = parent_ctx.?.entity;
                     } else if (@hasField(@TypeOf(comp_data), field_name)) {
-                        // Single Entity field - create child entity from definition
                         const entity_def = @field(comp_data, field_name);
-                        const instance = try createAndTrackChildEntity(game, scene, entity_def, parent_x, parent_y, child_parent_ctx, ready_queue);
-                        @field(component, field_name) = instance.entity;
+
+                        // Check if this is a reference (Issue #242)
+                        if (comptime zon.isReference(entity_def)) {
+                            // Defer reference resolution to Phase 2
+                            const ref_info = comptime zon.extractRefInfo(entity_def).?;
+
+                            // Set placeholder value (will be resolved in Phase 2)
+                            @field(component, field_name) = @bitCast(@as(ecs.EntityBits, 0));
+
+                            // Queue for Phase 2 resolution
+                            if (ref_ctx) |ctx| {
+                                try ctx.pending_refs.append(.{
+                                    .target_entity = parent_entity,
+                                    .component_name = comp_name,
+                                    .field_name = field_name,
+                                    .ref_entity_name = ref_info.entity_name orelse "",
+                                    .is_self_ref = ref_info.is_self,
+                                });
+                            }
+                        } else {
+                            // Single Entity field - create child entity from definition
+                            const instance = try createAndTrackChildEntity(game, scene, entity_def, parent_x, parent_y, child_parent_ctx, ready_queue);
+                            @field(component, field_name) = instance.entity;
+                        }
                     } else if (comp_field.default_value_ptr) |ptr| {
                         const default_ptr: *const comp_field.type = @ptrCast(@alignCast(ptr));
                         @field(component, field_name) = default_ptr.*;
@@ -393,11 +427,12 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
             parent_y: f32,
             parent_ctx: ?ParentContext,
             ready_queue: *std.ArrayList(ReadyCallbackEntry),
+            ref_ctx: ?*loader_types.ReferenceContext,
         ) !void {
             const data_fields = comptime std.meta.fieldNames(@TypeOf(components_data));
             inline for (data_fields) |field_name| {
                 const field_data = @field(components_data, field_name);
-                try addComponentWithNestedEntities(game, scene, entity, field_name, field_data, parent_x, parent_y, parent_ctx, ready_queue);
+                try addComponentWithNestedEntities(game, scene, entity, field_name, field_data, parent_x, parent_y, parent_ctx, ready_queue, ref_ctx);
             }
         }
 
@@ -413,6 +448,7 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
             comptime excluded_names: anytype,
             parent_ctx: ?ParentContext,
             ready_queue: *std.ArrayList(ReadyCallbackEntry),
+            ref_ctx: ?*loader_types.ReferenceContext,
         ) !void {
             const data_fields = comptime std.meta.fieldNames(@TypeOf(components_data));
 
@@ -424,11 +460,15 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
                     }
                 }
                 const field_data = @field(components_data, field_name);
-                try addComponentWithNestedEntities(game, scene, entity, field_name, field_data, parent_x, parent_y, parent_ctx, ready_queue);
+                try addComponentWithNestedEntities(game, scene, entity, field_name, field_data, parent_x, parent_y, parent_ctx, ready_queue, ref_ctx);
             }
         }
 
         /// Load a scene from comptime .zon data
+        ///
+        /// Uses two-phase loading for entity references (Issue #242):
+        /// - Phase 1: Create all entities, track named entities
+        /// - Phase 2: Resolve entity references (.ref = .{ .entity = "name" })
         pub fn load(
             comptime scene_data: anytype,
             ctx: SceneContext,
@@ -475,10 +515,47 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
             var ready_queue: std.ArrayListUnmanaged(ReadyCallbackEntry) = .{};
             defer ready_queue.deinit(game.allocator);
 
-            // Process each entity definition
+            // Reference context for two-phase loading (Issue #242)
+            var ref_ctx = loader_types.ReferenceContext.init(game.allocator);
+            defer ref_ctx.deinit();
+
+            // ============================================
+            // PHASE 1: Create all entities, track named entities
+            // ============================================
             inline for (scene_data.entities) |entity_def| {
-                const instance = try loadEntity(entity_def, ctx, &scene, &ready_queue);
+                const instance = try loadEntity(entity_def, ctx, &scene, &ready_queue, &ref_ctx);
                 try scene.addEntity(instance);
+
+                // Track named entities for reference resolution
+                if (@hasField(@TypeOf(entity_def), "name")) {
+                    try ref_ctx.registerNamed(entity_def.name, instance.entity);
+                }
+            }
+
+            // ============================================
+            // PHASE 2: Resolve entity references
+            // ============================================
+            for (ref_ctx.pending_refs.items) |pending| {
+                const resolved_entity = if (pending.is_self_ref)
+                    pending.target_entity
+                else
+                    ref_ctx.resolve(pending.ref_entity_name) orelse {
+                        std.log.err("Entity reference not found: '{s}' in component '{s}.{s}'", .{
+                            pending.ref_entity_name,
+                            pending.component_name,
+                            pending.field_name,
+                        });
+                        continue;
+                    };
+
+                // Update the Entity field in the component
+                try updateEntityReference(
+                    game,
+                    pending.target_entity,
+                    pending.component_name,
+                    pending.field_name,
+                    resolved_entity,
+                );
             }
 
             // Fire all onReady callbacks after hierarchy is complete (RFC #169)
@@ -495,6 +572,20 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
             }
 
             return scene;
+        }
+
+        /// Update an Entity field in a component after reference resolution
+        fn updateEntityReference(
+            game: *Game,
+            target_entity: Entity,
+            comptime comp_name: []const u8,
+            comptime field_name: []const u8,
+            resolved_entity: Entity,
+        ) !void {
+            const ComponentType = Components.getType(comp_name);
+            if (game.getRegistry().tryGet(ComponentType, target_entity)) |component| {
+                @field(component, field_name) = resolved_entity;
+            }
         }
 
         /// Instantiate a prefab at runtime with a specific world position.
@@ -531,8 +622,9 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
 
             // Add all components from prefab (excluding Position which we already handled)
             // Visual components (Sprite, Shape, Text) are registered with pipeline via onAdd callbacks
+            // Note: Runtime instantiation doesn't support entity references (no ref_ctx)
             if (comptime Prefabs.hasComponents(prefab_name)) {
-                try addComponentsExcluding(game, scene, entity, Prefabs.getComponents(prefab_name), x, y, .{"Position"}, no_parent, &ready_queue);
+                try addComponentsExcluding(game, scene, entity, Prefabs.getComponents(prefab_name), x, y, .{"Position"}, no_parent, &ready_queue, null);
             }
 
             // Add entity to scene
@@ -565,15 +657,16 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
             ctx: SceneContext,
             scene: *Scene,
             ready_queue: *std.ArrayList(ReadyCallbackEntry),
+            ref_ctx: *loader_types.ReferenceContext,
         ) !EntityInstance {
             // Check if this references a prefab
             if (@hasField(@TypeOf(entity_def), "prefab")) {
-                return try loadPrefabEntity(entity_def, ctx, scene, ready_queue);
+                return try loadPrefabEntity(entity_def, ctx, scene, ready_queue, ref_ctx);
             }
 
             // Inline entity with components
             if (@hasField(@TypeOf(entity_def), "components")) {
-                return try loadComponentEntity(entity_def, ctx, scene, ready_queue);
+                return try loadComponentEntity(entity_def, ctx, scene, ready_queue, ref_ctx);
             }
 
             @compileError("Entity must have .prefab or .components field");
@@ -614,6 +707,7 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
             ctx: SceneContext,
             scene: *Scene,
             ready_queue: *std.ArrayList(ReadyCallbackEntry),
+            ref_ctx: *loader_types.ReferenceContext,
         ) !EntityInstance {
             const prefab_name = entity_def.prefab;
 
@@ -635,6 +729,9 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
             // Add Position component
             game.getRegistry().add(entity, Position{ .x = pos.x, .y = pos.y });
 
+            // Set current entity for self-references
+            ref_ctx.current_entity = entity;
+
             // Add components from prefab, merging with scene overrides where present
             if (comptime Prefabs.hasComponents(prefab_name)) {
                 const prefab_components = Prefabs.getComponents(prefab_name);
@@ -643,17 +740,17 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
                 else
                     .{};
 
-                try addMergedPrefabComponents(game, scene, entity, prefab_components, scene_components, pos.x, pos.y, no_parent, ready_queue);
+                try addMergedPrefabComponents(game, scene, entity, prefab_components, scene_components, pos.x, pos.y, no_parent, ready_queue, ref_ctx);
             }
 
             // Add scene-only components (components in scene that don't exist in prefab)
             if (@hasField(@TypeOf(entity_def), "components")) {
                 if (comptime Prefabs.hasComponents(prefab_name)) {
                     const prefab_components = Prefabs.getComponents(prefab_name);
-                    try addSceneOnlyComponents(game, scene, entity, prefab_components, entity_def.components, pos.x, pos.y, no_parent, ready_queue);
+                    try addSceneOnlyComponents(game, scene, entity, prefab_components, entity_def.components, pos.x, pos.y, no_parent, ready_queue, ref_ctx);
                 } else {
                     // No prefab components, add all scene components
-                    try addComponentsExcluding(game, scene, entity, entity_def.components, pos.x, pos.y, .{"Position"}, no_parent, ready_queue);
+                    try addComponentsExcluding(game, scene, entity, entity_def.components, pos.x, pos.y, .{"Position"}, no_parent, ready_queue, ref_ctx);
                 }
             }
 
@@ -689,6 +786,7 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
             parent_y: f32,
             parent_ctx: ?ParentContext,
             ready_queue: *std.ArrayList(ReadyCallbackEntry),
+            ref_ctx: ?*loader_types.ReferenceContext,
         ) !void {
             const prefab_fields = comptime std.meta.fieldNames(@TypeOf(prefab_components));
 
@@ -702,10 +800,10 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
                     // Merge prefab + scene override
                     const scene_data = @field(scene_components, field_name);
                     const merged_data = zon.mergeStructs(prefab_data, scene_data);
-                    try addComponentWithNestedEntities(game, scene, entity, field_name, merged_data, parent_x, parent_y, parent_ctx, ready_queue);
+                    try addComponentWithNestedEntities(game, scene, entity, field_name, merged_data, parent_x, parent_y, parent_ctx, ready_queue, ref_ctx);
                 } else {
                     // Use prefab data as-is
-                    try addComponentWithNestedEntities(game, scene, entity, field_name, prefab_data, parent_x, parent_y, parent_ctx, ready_queue);
+                    try addComponentWithNestedEntities(game, scene, entity, field_name, prefab_data, parent_x, parent_y, parent_ctx, ready_queue, ref_ctx);
                 }
             }
         }
@@ -721,6 +819,7 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
             parent_y: f32,
             parent_ctx: ?ParentContext,
             ready_queue: *std.ArrayList(ReadyCallbackEntry),
+            ref_ctx: ?*loader_types.ReferenceContext,
         ) !void {
             const scene_fields = comptime std.meta.fieldNames(@TypeOf(scene_components));
 
@@ -732,7 +831,7 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
                 if (@hasField(@TypeOf(prefab_components), field_name)) continue;
 
                 const scene_data = @field(scene_components, field_name);
-                try addComponentWithNestedEntities(game, scene, entity, field_name, scene_data, parent_x, parent_y, parent_ctx, ready_queue);
+                try addComponentWithNestedEntities(game, scene, entity, field_name, scene_data, parent_x, parent_y, parent_ctx, ready_queue, ref_ctx);
             }
         }
 
@@ -829,6 +928,7 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
             ctx: SceneContext,
             scene: *Scene,
             ready_queue: *std.ArrayList(ReadyCallbackEntry),
+            ref_ctx: *loader_types.ReferenceContext,
         ) !EntityInstance {
             const game = ctx.game();
 
@@ -841,9 +941,12 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
             // Add Position component
             game.getRegistry().add(entity, Position{ .x = pos.x, .y = pos.y });
 
+            // Set current entity for self-references (Issue #242)
+            ref_ctx.current_entity = entity;
+
             // Add all components (Sprite/Shape/Text handled via fromZonData, others generically)
             // Position is excluded since we already added it above
-            try addComponentsExcluding(game, scene, entity, entity_def.components, pos.x, pos.y, .{"Position"}, no_parent, ready_queue);
+            try addComponentsExcluding(game, scene, entity, entity_def.components, pos.x, pos.y, .{"Position"}, no_parent, ready_queue, ref_ctx);
 
             // Create gizmo entities if present (debug builds only)
             if (@hasField(@TypeOf(entity_def), "gizmos")) {

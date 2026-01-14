@@ -56,6 +56,83 @@ pub const CameraSlot = enum(u2) {
 /// Simple position struct for loader internal use
 pub const Pos = struct { x: f32, y: f32 };
 
+// ============================================
+// ENTITY REFERENCES (Issue #242)
+// ============================================
+
+/// Reference to another entity by name.
+/// Used in .zon files with syntax: .{ .ref = .{ .entity = "player" } }
+/// For self-references: .{ .ref = .self }
+pub const EntityRef = struct {
+    /// The referenced entity (resolved at load time)
+    entity: Entity = @bitCast(@as(ecs.EntityBits, 0)),
+
+    /// Check if this reference is valid (entity exists)
+    pub fn isValid(self: EntityRef, registry: *ecs.Registry) bool {
+        return registry.isValid(self.entity);
+    }
+
+    /// Get a component from the referenced entity
+    pub fn getComponent(self: EntityRef, comptime T: type, registry: *ecs.Registry) ?*T {
+        if (!registry.isValid(self.entity)) return null;
+        return registry.tryGet(T, self.entity);
+    }
+
+    /// Create an invalid/empty reference
+    pub fn invalid() EntityRef {
+        return .{ .entity = @bitCast(@as(ecs.EntityBits, 0)) };
+    }
+};
+
+/// Entry for deferred reference resolution (Phase 2 of loading)
+pub const PendingReference = struct {
+    /// The entity that has the reference field
+    target_entity: Entity,
+    /// Component type name containing the reference
+    component_name: []const u8,
+    /// Field name within the component
+    field_name: []const u8,
+    /// Name of the referenced entity (from .ref.entity)
+    ref_entity_name: []const u8,
+    /// Whether this is a self-reference (.ref = .self)
+    is_self_ref: bool,
+};
+
+/// Named entity registry for reference resolution
+pub const NamedEntityMap = std.StringHashMap(Entity);
+
+/// Context for reference resolution during scene loading
+pub const ReferenceContext = struct {
+    /// Map of entity names to entity IDs
+    named_entities: NamedEntityMap,
+    /// Current entity being created (for self-references)
+    current_entity: ?Entity = null,
+    /// Pending references to resolve in Phase 2
+    pending_refs: std.ArrayList(PendingReference),
+
+    pub fn init(allocator: std.mem.Allocator) ReferenceContext {
+        return .{
+            .named_entities = NamedEntityMap.init(allocator),
+            .pending_refs = std.ArrayList(PendingReference).init(allocator),
+        };
+    }
+
+    pub fn deinit(self: *ReferenceContext) void {
+        self.named_entities.deinit();
+        self.pending_refs.deinit();
+    }
+
+    /// Register a named entity for later reference resolution
+    pub fn registerNamed(self: *ReferenceContext, name: []const u8, entity: Entity) !void {
+        try self.named_entities.put(name, entity);
+    }
+
+    /// Resolve an entity reference by name
+    pub fn resolve(self: *const ReferenceContext, name: []const u8) ?Entity {
+        return self.named_entities.get(name);
+    }
+};
+
 /// Get a field from comptime data or return a default value if not present
 pub fn getFieldOrDefault(comptime data: anytype, comptime field_name: []const u8, comptime default: anytype) @TypeOf(default) {
     if (@hasField(@TypeOf(data), field_name)) {

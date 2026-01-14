@@ -280,6 +280,61 @@ In scenes/prefabs, nested entities get parent references auto-populated:
 }
 ```
 
+**Entity references** (Issue #242):
+
+Components with `Entity` fields can reference other named entities in the scene using the `.ref` syntax. References are resolved after all entities are created (two-phase loading).
+
+```zig
+// Component with entity reference field
+const AI = struct {
+    state: enum { idle, chasing } = .idle,
+    target: Entity = Entity.invalid,  // Will be populated from reference
+};
+
+const HealthBar = struct {
+    source: Entity = Entity.invalid,  // Can reference self or another entity
+};
+```
+
+**Reference syntax in .zon files:**
+```zig
+.{
+    .name = "battle_scene",
+    .entities = .{
+        // Named entity (can be referenced by other entities)
+        .{ .name = "player", .prefab = "player", .components = .{ .Position = .{ .x = 100, .y = 100 } } },
+
+        // Entity referencing another entity by name
+        .{ .prefab = "enemy", .components = .{
+            .Position = .{ .x = 200, .y = 100 },
+            .AI = .{
+                .state = .chasing,
+                .target = .{ .ref = .{ .entity = "player" } },  // Reference by name
+            },
+        }},
+
+        // Self-reference (reference the current entity)
+        .{ .prefab = "character", .components = .{
+            .Health = .{ .current = 100 },
+            .HealthBar = .{
+                .source = .{ .ref = .self },  // Reference to same entity
+            },
+        }},
+    },
+}
+```
+
+**Reference types:**
+- `.{ .ref = .{ .entity = "name" } }` - Reference another entity by name
+- `.{ .ref = .self }` - Reference the current entity being defined
+
+**Important notes:**
+- Named entities use the `.name` field: `.{ .name = "player", .prefab = "player" }`
+- References are resolved after all entities exist (forward references work)
+- If a referenced entity doesn't exist, an error is logged
+- Entity validity should be checked at runtime: `registry.isValid(ai.target)`
+- Child entities (nested in component fields) don't support references
+
 **Script definition** (scripts/*.zig):
 ```zig
 pub fn init(game: *Game, scene: *Scene) void { ... }  // optional
