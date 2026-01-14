@@ -282,7 +282,7 @@ In scenes/prefabs, nested entities get parent references auto-populated:
 
 **Entity references** (Issue #242):
 
-Components with `Entity` fields can reference other named entities in the scene using the `.ref` syntax. References are resolved after all entities are created (two-phase loading).
+Components with `Entity` fields can reference other entities in the scene using the `.ref` syntax. References are resolved after all entities are created (two-phase loading).
 
 ```zig
 // Component with entity reference field
@@ -301,14 +301,21 @@ const HealthBar = struct {
 .{
     .name = "battle_scene",
     .entities = .{
-        // Named entity (can be referenced by other entities)
-        .{ .name = "player", .prefab = "player", .components = .{ .Position = .{ .x = 100, .y = 100 } } },
+        // Entity with explicit ID and display name
+        .{ .id = "player_1", .name = "player", .prefab = "player", .components = .{ .Position = .{ .x = 100, .y = 100 } } },
 
-        // Entity referencing another entity by name
-        .{ .prefab = "enemy", .components = .{
+        // Entity referencing by ID (unique, recommended for editor use)
+        .{ .id = "enemy_1", .prefab = "enemy", .components = .{
             .Position = .{ .x = 200, .y = 100 },
             .AI = .{
                 .state = .chasing,
+                .target = .{ .ref = .{ .id = "player_1" } },  // Reference by ID
+            },
+        }},
+
+        // Entity referencing by name (for quick prototyping)
+        .{ .prefab = "enemy", .components = .{
+            .AI = .{
                 .target = .{ .ref = .{ .entity = "player" } },  // Reference by name
             },
         }},
@@ -325,15 +332,26 @@ const HealthBar = struct {
 ```
 
 **Reference types:**
-- `.{ .ref = .{ .entity = "name" } }` - Reference another entity by name
+- `.{ .ref = .{ .id = "unique_id" } }` - Reference by unique ID (recommended for editors)
+- `.{ .ref = .{ .entity = "name" } }` - Reference by display name (can have duplicates)
 - `.{ .ref = .self }` - Reference the current entity being defined
 
+**Entity identification:**
+
+| Field | Purpose | Auto-generated |
+|-------|---------|----------------|
+| `.id` | Unique identifier for references | Yes (`_e0`, `_e1`, ...) |
+| `.name` | Display name (can duplicate) | No |
+
+- **`.id`**: Unique per scene. If not specified, auto-generated as `_e0`, `_e1`, etc. Use explicit IDs when entities need to be referenced by tools or editors.
+- **`.name`**: Display/lookup name. Multiple entities can share the same name (e.g., "enemy" for all enemies). Use for quick prototyping or `Find()`-style lookups.
+
 **Important notes:**
-- Named entities use the `.name` field: `.{ .name = "player", .prefab = "player" }`
 - References are resolved after all entities exist (forward references work)
 - If a referenced entity doesn't exist, an error is logged
 - Entity validity should be checked at runtime: `registry.isValid(ai.target)`
 - Child entities (nested in component fields) don't support references
+- For editor/UI tools, use ID-based references to ensure uniqueness
 
 **Script definition** (scripts/*.zig):
 ```zig

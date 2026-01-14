@@ -388,14 +388,24 @@ pub fn hasFields(comptime T: type) bool {
 
 /// Reference info extracted from comptime ZON data
 pub const RefInfo = struct {
-    /// Name of the referenced entity (null for self-reference)
-    entity_name: ?[]const u8,
+    /// Key for the referenced entity (name or ID, null for self-reference)
+    ref_key: ?[]const u8,
     /// Whether this is a self-reference (.ref = .self)
     is_self: bool,
+    /// Whether this reference is by ID (true) or by name (false)
+    is_id_ref: bool,
+
+    // Legacy alias for backward compatibility
+    pub fn entity_name(self: RefInfo) ?[]const u8 {
+        return if (self.is_id_ref) null else self.ref_key;
+    }
 };
 
 /// Check if a comptime value is a reference marker.
-/// References use the syntax: .{ .ref = .{ .entity = "name" } } or .{ .ref = .self }
+/// References use the syntax:
+///   - By name: .{ .ref = .{ .entity = "name" } }
+///   - By ID:   .{ .ref = .{ .id = "unique_id" } }
+///   - Self:    .{ .ref = .self }
 pub fn isReference(comptime value: anytype) bool {
     const T = @TypeOf(value);
     if (@typeInfo(T) != .@"struct") return false;
@@ -415,24 +425,51 @@ pub fn extractRefInfo(comptime value: anytype) ?RefInfo {
         const tag_name = @tagName(ref_data);
         if (std.mem.eql(u8, tag_name, "self")) {
             return RefInfo{
-                .entity_name = null,
+                .ref_key = null,
                 .is_self = true,
+                .is_id_ref = false,
             };
         }
-        @compileError("Invalid reference: .ref = ." ++ tag_name ++ ". Use .ref = .self or .ref = .{ .entity = \"name\" }");
+        @compileError("Invalid reference: .ref = ." ++ tag_name ++ ". Use .ref = .self, .ref = .{ .entity = \"name\" }, or .ref = .{ .id = \"id\" }");
     }
 
-    // Check for entity reference: .{ .ref = .{ .entity = "name" } }
+    // Check for struct-based reference
     if (@typeInfo(RefType) == .@"struct") {
+        // ID reference: .{ .ref = .{ .id = "unique_id" } }
+        if (@hasField(RefType, "id")) {
+            return RefInfo{
+                .ref_key = ref_data.id,
+                .is_self = false,
+                .is_id_ref = true,
+            };
+        }
+        // Name reference: .{ .ref = .{ .entity = "name" } }
         if (@hasField(RefType, "entity")) {
             return RefInfo{
-                .entity_name = ref_data.entity,
+                .ref_key = ref_data.entity,
                 .is_self = false,
+                .is_id_ref = false,
             };
         }
     }
 
-    @compileError("Invalid reference format. Use .ref = .self or .ref = .{ .entity = \"name\" }");
+    @compileError("Invalid reference format. Use .ref = .self, .ref = .{ .entity = \"name\" }, or .ref = .{ .id = \"id\" }");
+}
+
+/// Generate an auto-ID for an entity at a given index.
+/// Format: "_e{index}" (e.g., "_e0", "_e1", "_e2")
+pub fn generateAutoId(comptime index: usize) []const u8 {
+    return std.fmt.comptimePrint("_e{d}", .{index});
+}
+
+/// Extract entity ID from entity definition, or generate one if not present.
+/// - If .id is present, use it
+/// - Otherwise, generate "_e{index}"
+pub fn getEntityId(comptime entity_def: anytype, comptime index: usize) []const u8 {
+    if (@hasField(@TypeOf(entity_def), "id")) {
+        return entity_def.id;
+    }
+    return generateAutoId(index);
 }
 
 /// Check if any field in a comptime struct contains a reference

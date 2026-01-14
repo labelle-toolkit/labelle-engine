@@ -94,7 +94,7 @@ pub const toLowercase = loader_types.toLowercase;
 // Entity reference types (Issue #242)
 pub const EntityRef = loader_types.EntityRef;
 pub const ReferenceContext = loader_types.ReferenceContext;
-pub const NamedEntityMap = loader_types.NamedEntityMap;
+pub const EntityMap = loader_types.EntityMap;
 pub const PendingReference = loader_types.PendingReference;
 
 // Internal types from loader/types.zig
@@ -369,8 +369,9 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
                                     .target_entity = parent_entity,
                                     .component_name = comp_name,
                                     .field_name = field_name,
-                                    .ref_entity_name = ref_info.entity_name orelse "",
+                                    .ref_key = ref_info.ref_key orelse "",
                                     .is_self_ref = ref_info.is_self,
+                                    .is_id_ref = ref_info.is_id_ref,
                                 });
                             }
                         } else {
@@ -520,16 +521,23 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
             defer ref_ctx.deinit();
 
             // ============================================
-            // PHASE 1: Create all entities, track named entities
+            // PHASE 1: Create all entities, track by ID and name
             // ============================================
+            comptime var entity_index: usize = 0;
             inline for (scene_data.entities) |entity_def| {
                 const instance = try loadEntity(entity_def, ctx, &scene, &ready_queue, &ref_ctx);
                 try scene.addEntity(instance);
 
-                // Track named entities for reference resolution
+                // Register entity by ID (auto-generated if not specified)
+                const entity_id = comptime zon.getEntityId(entity_def, entity_index);
+                try ref_ctx.registerId(entity_id, instance.entity);
+
+                // Also track named entities for name-based reference resolution
                 if (@hasField(@TypeOf(entity_def), "name")) {
                     try ref_ctx.registerNamed(entity_def.name, instance.entity);
                 }
+
+                entity_index += 1;
             }
 
             // ============================================
@@ -539,9 +547,11 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
                 const resolved_entity = if (pending.is_self_ref)
                     pending.target_entity
                 else
-                    ref_ctx.resolve(pending.ref_entity_name) orelse {
-                        std.log.err("Entity reference not found: '{s}' in component '{s}.{s}'", .{
-                            pending.ref_entity_name,
+                    ref_ctx.resolve(pending.ref_key, pending.is_id_ref) orelse {
+                        const ref_type = if (pending.is_id_ref) "id" else "name";
+                        std.log.err("Entity reference not found: {s}='{s}' in component '{s}.{s}'", .{
+                            ref_type,
+                            pending.ref_key,
                             pending.component_name,
                             pending.field_name,
                         });

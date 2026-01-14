@@ -34,6 +34,8 @@ pub const isReference = zon_coercion.isReference;
 pub const extractRefInfo = zon_coercion.extractRefInfo;
 pub const hasAnyReference = zon_coercion.hasAnyReference;
 pub const getReferenceFieldNames = zon_coercion.getReferenceFieldNames;
+pub const generateAutoId = zon_coercion.generateAutoId;
+pub const getEntityId = zon_coercion.getEntityId;
 
 // Re-export SparseSet
 pub const SparseSet = sparse_set.SparseSet;

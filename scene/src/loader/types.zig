@@ -60,9 +60,11 @@ pub const Pos = struct { x: f32, y: f32 };
 // ENTITY REFERENCES (Issue #242)
 // ============================================
 
-/// Reference to another entity by name.
-/// Used in .zon files with syntax: .{ .ref = .{ .entity = "player" } }
-/// For self-references: .{ .ref = .self }
+/// Reference to another entity by name or ID.
+/// Used in .zon files with syntax:
+///   - By name: .{ .ref = .{ .entity = "player" } }
+///   - By ID:   .{ .ref = .{ .id = "player_1" } }
+///   - Self:    .{ .ref = .self }
 pub const EntityRef = struct {
     /// The referenced entity (resolved at load time)
     entity: Entity = @bitCast(@as(ecs.EntityBits, 0)),
@@ -92,19 +94,23 @@ pub const PendingReference = struct {
     component_name: []const u8,
     /// Field name within the component
     field_name: []const u8,
-    /// Name of the referenced entity (from .ref.entity)
-    ref_entity_name: []const u8,
+    /// Name or ID of the referenced entity
+    ref_key: []const u8,
     /// Whether this is a self-reference (.ref = .self)
     is_self_ref: bool,
+    /// Whether this reference is by ID (true) or by name (false)
+    is_id_ref: bool,
 };
 
-/// Named entity registry for reference resolution
-pub const NamedEntityMap = std.StringHashMap(Entity);
+/// Entity map for reference resolution (used for both names and IDs)
+pub const EntityMap = std.StringHashMap(Entity);
 
 /// Context for reference resolution during scene loading
 pub const ReferenceContext = struct {
-    /// Map of entity names to entity IDs
-    named_entities: NamedEntityMap,
+    /// Map of entity display names to entity IDs (for .ref.entity lookups)
+    named_entities: EntityMap,
+    /// Map of entity unique IDs to entity IDs (for .ref.id lookups)
+    entity_ids: EntityMap,
     /// Current entity being created (for self-references)
     current_entity: ?Entity = null,
     /// Pending references to resolve in Phase 2
@@ -112,24 +118,41 @@ pub const ReferenceContext = struct {
 
     pub fn init(allocator: std.mem.Allocator) ReferenceContext {
         return .{
-            .named_entities = NamedEntityMap.init(allocator),
+            .named_entities = EntityMap.init(allocator),
+            .entity_ids = EntityMap.init(allocator),
             .pending_refs = std.ArrayList(PendingReference).init(allocator),
         };
     }
 
     pub fn deinit(self: *ReferenceContext) void {
         self.named_entities.deinit();
+        self.entity_ids.deinit();
         self.pending_refs.deinit();
     }
 
-    /// Register a named entity for later reference resolution
+    /// Register a named entity for later reference resolution (display name)
     pub fn registerNamed(self: *ReferenceContext, name: []const u8, entity: Entity) !void {
         try self.named_entities.put(name, entity);
     }
 
-    /// Resolve an entity reference by name
-    pub fn resolve(self: *const ReferenceContext, name: []const u8) ?Entity {
+    /// Register an entity ID for later reference resolution (unique ID)
+    pub fn registerId(self: *ReferenceContext, id: []const u8, entity: Entity) !void {
+        try self.entity_ids.put(id, entity);
+    }
+
+    /// Resolve an entity reference by display name
+    pub fn resolveByName(self: *const ReferenceContext, name: []const u8) ?Entity {
         return self.named_entities.get(name);
+    }
+
+    /// Resolve an entity reference by unique ID
+    pub fn resolveById(self: *const ReferenceContext, id: []const u8) ?Entity {
+        return self.entity_ids.get(id);
+    }
+
+    /// Resolve an entity reference (by ID or name based on is_id_ref flag)
+    pub fn resolve(self: *const ReferenceContext, key: []const u8, is_id_ref: bool) ?Entity {
+        return if (is_id_ref) self.resolveById(key) else self.resolveByName(key);
     }
 };
 
