@@ -88,8 +88,6 @@ jobs:
   # ============================================================================
   # iOS Build (Simulator) - Using labelle-cli
   # Uses labelle-cli to generate iOS build files and build for simulator
-  # NOTE: Compilation succeeds but linking fails - iOS frameworks (Metal,
-  #       AudioToolbox, AVFoundation) need Xcode/xcodebuild for proper linking.
   # ============================================================================
   ios-build:
     runs-on: macos-14  # macOS with Apple Silicon for iOS simulator
@@ -132,113 +130,36 @@ jobs:
         run: |
           cd ci/mobile_physics_test
           echo "::group::Building for iOS Simulator"
-
-          # Build and capture output to distinguish compilation vs linking errors
-          set +e
-          BUILD_OUTPUT=$(~/.labelle/bin/labelle ios build --simulator 2>&1)
-          BUILD_EXIT=$?
-          set -e
-
-          echo "$BUILD_OUTPUT"
-
-          # Check for Zig compilation errors (file.zig:line:col: error:)
-          if echo "$BUILD_OUTPUT" | grep -qE '\.zig:[0-9]+:[0-9]+: error:'; then
-            echo "::error::Zig compilation failed"
-            exit 1
-          fi
-
-          # Check for C compilation errors (file.c:line:col: error: or file.h:line:col: error:)
-          if echo "$BUILD_OUTPUT" | grep -qE '\.[ch]:[0-9]+:[0-9]+: error:'; then
-            echo "::error::C compilation failed"
-            exit 1
-          fi
-
-          # If build failed but no compilation errors, it's a linker error (expected)
-          if [ $BUILD_EXIT -ne 0 ]; then
-            echo "::warning::iOS linking failed (expected - requires Xcode for framework linking)"
-            echo "Compilation succeeded. Linking requires Xcode project for iOS frameworks."
-          fi
-
+          ~/.labelle/bin/labelle ios build --simulator
           echo "::endgroup::"
 
-      - name: Verify compilation artifacts
+      - name: Verify build artifacts
         run: |
           cd ci/mobile_physics_test/ios
-          # Check that object files were created (proves compilation succeeded)
-          OBJ_COUNT=$(find .zig-cache -name "*.o" 2>/dev/null | wc -l | tr -d ' ')
-          echo "Found $OBJ_COUNT object files in .zig-cache"
-          if [ "$OBJ_COUNT" -eq 0 ]; then
-            echo "::error::No object files found - compilation may have failed"
+          # Check that binary was created (proves build succeeded)
+          echo "Checking for build artifacts..."
+          ls -la zig-out/bin/ 2>/dev/null || echo "zig-out/bin/ not found"
+
+          # Check for either sim or device binary
+          if [ -f "zig-out/bin/mobile_physics_test_sim" ] || [ -f "zig-out/bin/mobile_physics_test" ]; then
+            echo "Build verified: binary exists"
+            file zig-out/bin/mobile_physics_test* 2>/dev/null || true
+          else
+            echo "::error::Binary not found - build may have failed"
             exit 1
           fi
-          echo "Compilation verified: $OBJ_COUNT object files created"
-
-      - name: Link with Xcode toolchain
-        run: |
-          cd ci/mobile_physics_test/ios
-          echo "::group::Linking with clang (Xcode toolchain)"
-
-          SYSROOT=$(xcrun --sdk iphonesimulator --show-sdk-path)
-          APP_NAME="mobile_physics_test"
-
-          # Find all object files produced by Zig
-          OBJ_FILES=$(find .zig-cache -name "*.o" -type f)
-          echo "Found object files:"
-          echo "$OBJ_FILES" | head -20
-
-          # Link with clang using iOS simulator SDK
-          # Note: We use clang because Zig's LLD doesn't properly resolve iOS frameworks
-          xcrun --sdk iphonesimulator clang++ \
-            -arch arm64 \
-            -isysroot "$SYSROOT" \
-            -mios-simulator-version-min=15.0 \
-            -framework Metal \
-            -framework MetalKit \
-            -framework UIKit \
-            -framework QuartzCore \
-            -framework AudioToolbox \
-            -framework AVFoundation \
-            -framework Foundation \
-            -framework CoreGraphics \
-            -lobjc \
-            -lc++ \
-            $OBJ_FILES \
-            -o "$APP_NAME" \
-            2>&1 || {
-              echo "::warning::Clang linking failed - this may be expected for complex dependencies"
-              echo "Attempting to identify missing symbols..."
-              exit 0
-            }
-
-          if [ -f "$APP_NAME" ]; then
-            echo "Successfully linked: $APP_NAME"
-            file "$APP_NAME"
-            ls -la "$APP_NAME"
-          fi
-
-          echo "::endgroup::"
 
       - name: Create iOS build summary
         run: |
           cd ci/mobile_physics_test/ios
-          OBJ_COUNT=$(find .zig-cache -name "*.o" 2>/dev/null | wc -l | tr -d ' ')
-          LINKED="No"
-          if [ -f "mobile_physics_test" ]; then
-            LINKED="Yes"
-          fi
           echo "## iOS Build (via labelle-cli)" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "iOS Simulator build results:" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| Stage | Status |" >> $GITHUB_STEP_SUMMARY
-          echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
-          echo "| Compilation | ✅ Success |" >> $GITHUB_STEP_SUMMARY
-          echo "| Object files | $OBJ_COUNT |" >> $GITHUB_STEP_SUMMARY
-          echo "| Linked with Xcode | $LINKED |" >> $GITHUB_STEP_SUMMARY
+          echo "✅ iOS Simulator build successful" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Target:** aarch64-ios-simulator" >> $GITHUB_STEP_SUMMARY
           echo "**SDK:** $(xcrun --sdk iphonesimulator --show-sdk-path)" >> $GITHUB_STEP_SUMMARY
           echo "**Engine:** Local path (../..)" >> $GITHUB_STEP_SUMMARY
+          echo "**Binary:** $(ls -lh zig-out/bin/mobile_physics_test* 2>/dev/null | head -1 | awk '{print $5, $9}')" >> $GITHUB_STEP_SUMMARY
 
   # ============================================================================
   # Native Build with Physics (CI Test)
