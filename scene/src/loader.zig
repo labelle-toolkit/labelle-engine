@@ -584,20 +584,6 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
             return scene;
         }
 
-        /// Update an Entity field in a component after reference resolution
-        fn updateEntityReference(
-            game: *Game,
-            target_entity: Entity,
-            comptime comp_name: []const u8,
-            comptime field_name: []const u8,
-            resolved_entity: Entity,
-        ) !void {
-            const ComponentType = Components.getType(comp_name);
-            if (game.getRegistry().tryGet(ComponentType, target_entity)) |component| {
-                @field(component, field_name) = resolved_entity;
-            }
-        }
-
         /// Instantiate a prefab at runtime with a specific world position.
         /// Returns the created entity and adds it to the scene.
         /// Uses uniform component handling - visual components are registered via onAdd callbacks.
@@ -904,7 +890,7 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
                     }
                 } else {
                     // Add the visual component (Shape, Text, Sprite, Icon)
-                    try addComponentWithNestedEntities(game, scene, gizmo_entity, field_name, gizmo_data, parent_x + offset_x, parent_y + offset_y, no_parent, ready_queue);
+                    try addComponentWithNestedEntities(game, scene, gizmo_entity, field_name, gizmo_data, parent_x + offset_x, parent_y + offset_y, no_parent, ready_queue, null);
                 }
 
                 // Track in scene for cleanup
