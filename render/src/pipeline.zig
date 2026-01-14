@@ -100,13 +100,32 @@ pub const RenderPipeline = struct {
     allocator: std.mem.Allocator,
     engine: *RetainedEngine,
     tracked: std.AutoArrayHashMap(Entity, TrackedEntity),
+    /// Screen height for Y-up to Y-down coordinate transform
+    screen_height: f32 = 600,
 
     pub fn init(allocator: std.mem.Allocator, engine: *RetainedEngine) RenderPipeline {
         return .{
             .allocator = allocator,
             .engine = engine,
             .tracked = std.AutoArrayHashMap(Entity, TrackedEntity).init(allocator),
+            .screen_height = 600,
         };
+    }
+
+    /// Set screen height for coordinate transformation (Y-up to Y-down)
+    /// Call this when screen size changes (e.g., window resize, fullscreen toggle)
+    pub fn setScreenHeight(self: *RenderPipeline, height: f32) void {
+        self.screen_height = height;
+    }
+
+    /// Transform Y coordinate from game space (Y-up) to screen space (Y-down)
+    fn toScreenY(self: *const RenderPipeline, y: f32) f32 {
+        return self.screen_height - y;
+    }
+
+    /// Transform a GfxPosition from game space (Y-up) to screen space (Y-down)
+    fn toScreenPos(self: *const RenderPipeline, pos: GfxPosition) GfxPosition {
+        return .{ .x = pos.x, .y = self.screen_height - pos.y };
     }
 
     pub fn deinit(self: *RenderPipeline) void {
@@ -299,6 +318,7 @@ pub const RenderPipeline = struct {
     }
 
     /// Sync all dirty entities to the RetainedEngine
+    /// Transforms positions from game space (Y-up) to screen space (Y-down)
     pub fn sync(self: *RenderPipeline, registry: *Registry) void {
         for (self.tracked.values()) |*tracked| {
             const entity_id = toEntityId(tracked.entity);
@@ -310,7 +330,8 @@ pub const RenderPipeline = struct {
                 tracked.has_parent = registry.tryGet(Parent, tracked.entity) != null;
 
                 // Resolve position - handles parent hierarchy and gizmo offsets
-                const pos = resolveGfxPosition(registry, tracked.entity);
+                // Transform from Y-up (game) to Y-down (screen)
+                const pos = self.toScreenPos(resolveGfxPosition(registry, tracked.entity));
 
                 var creation_succeeded = false;
                 switch (tracked.visual_type) {
@@ -381,19 +402,19 @@ pub const RenderPipeline = struct {
                 tracked.visual_dirty = false;
                 // Also update position if dirty
                 if (tracked.position_dirty) {
-                    const pos = resolveGfxPosition(registry, tracked.entity);
+                    const pos = self.toScreenPos(resolveGfxPosition(registry, tracked.entity));
                     self.engine.updatePosition(entity_id, pos);
                     tracked.position_dirty = false;
                 }
             } else if (tracked.position_dirty and tracked.created) {
                 // Only position changed - but only update if visual was created
-                const pos = resolveGfxPosition(registry, tracked.entity);
+                const pos = self.toScreenPos(resolveGfxPosition(registry, tracked.entity));
                 self.engine.updatePosition(entity_id, pos);
                 tracked.position_dirty = false;
             } else if (tracked.created and (tracked.is_gizmo or tracked.has_parent)) {
                 // Entities with parents (gizmos or parented): always update position
                 // This ensures they follow their parent even when only the parent moves
-                const pos = resolveGfxPosition(registry, tracked.entity);
+                const pos = self.toScreenPos(resolveGfxPosition(registry, tracked.entity));
                 self.engine.updatePosition(entity_id, pos);
             }
         }

@@ -10,7 +10,7 @@
 // .{
 //     .components = .{
 //         .Position = .{ .x = 0, .y = 0 },  // default position, can be overridden in scene
-//         .Sprite = .{ .name = "player.png", .scale = 2.0 },
+//         .Sprite = .{ .name = "player.png", .scale_x = 2.0, .scale_y = 2.0 },
 //         .Health = .{ .current = 100, .max = 100 },
 //         .Speed = .{ .value = 5.0 },
 //     },

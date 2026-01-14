@@ -34,6 +34,29 @@ zig build -Decs_backend=zflecs      # Use zflecs ECS backend
 
 labelle-engine is a 2D game engine for Zig built on top of labelle-gfx (graphics) and pluggable ECS backends (zig_ecs or zflecs). It provides a declarative scene system using comptime .zon files.
 
+### Coordinate System
+
+The engine uses a **Y-up coordinate system** (mathematical convention):
+
+| Property | Value |
+|----------|-------|
+| Origin | Bottom-left corner (0, 0) |
+| X axis | Positive → right |
+| Y axis | Positive → up |
+| Rotation | Counter-clockwise (positive radians) |
+
+This matches standard math/physics conventions and is easier to reason about for game logic. The engine handles coordinate transformation at boundaries:
+
+- **Render boundary**: Y-up game coordinates → Y-down screen coordinates (in `RenderPipeline.sync()`)
+- **Input boundary**: Y-down screen coordinates → Y-up game coordinates (via `Game.getMousePosition()`, `Game.getTouch()`)
+
+**API Summary:**
+- `game.getMousePosition()` - Returns mouse position in game coordinates (Y-up)
+- `game.getTouch(index)` - Returns touch in game coordinates (Y-up)
+- `game.getInput().getMousePosition()` - Returns raw screen coordinates (Y-down) if needed
+- Position components use game coordinates (Y-up)
+- Scene/prefab .zon files use game coordinates (Y-up)
+
 ### Core Modules (src/)
 
 - **scene.zig** - Main module, re-exports all public types. Entry point for `@import("labelle-engine")`

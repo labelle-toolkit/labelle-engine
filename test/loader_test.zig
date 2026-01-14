@@ -244,7 +244,7 @@ pub const SCENE_DATA_FORMAT = struct {
             // Sprite inside components with position in Sprite
             .{
                 .components = .{
-                    .Sprite = .{ .name = "enemy.png", .x = 300, .y = 400, .scale = 2.0 },
+                    .Sprite = .{ .name = "enemy.png", .x = 300, .y = 400, .scale_x = 2.0, .scale_y = 2.0 },
                     .Velocity = .{ .x = 5, .y = 0 },
                 },
             },
@@ -288,7 +288,8 @@ pub const SCENE_DATA_FORMAT = struct {
 
         test "Sprite in components can have scale" {
             const entity = scene_with_sprite_in_components.entities[1];
-            try expect.equal(entity.components.Sprite.scale, 2.0);
+            try expect.equal(entity.components.Sprite.scale_x, 2.0);
+            try expect.equal(entity.components.Sprite.scale_y, 2.0);
         }
 
         test "can have other components alongside Sprite" {

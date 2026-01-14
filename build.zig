@@ -91,6 +91,9 @@ pub fn build(b: *std.Build) void {
     // Note: sokol is NOT declared in our build.zig.zon to prevent duplicate dependencies
     const sokol = labelle_dep.builder.modules.get("sokol") orelse @panic("sokol module not found in labelle-gfx - ensure labelle-gfx exports sokol via b.modules.put()");
 
+    // Export sokol for consumers (e.g., example projects that need direct sokol access)
+    b.modules.put("sokol", sokol) catch @panic("Failed to export sokol module");
+
     // Note: sokol_dep is null because sokol is provided by labelle-gfx.
     // iOS/Android sokol configuration is handled by labelle-gfx.
     const sokol_dep: ?*std.Build.Dependency = null;
