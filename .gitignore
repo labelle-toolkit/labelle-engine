@@ -10,5 +10,12 @@ usage/*/zig-out/
 usage/*/main.zig
 usage/*/.labelle/
 
+# CI test generated files
+ci/*/.labelle/
+ci/*/.labelle-bootstrap/
+ci/*/.zig-cache/
+ci/*/zig-out/
+ci/*/ios/
+
 # Screenshots from CI tests
 screenshot_*.png

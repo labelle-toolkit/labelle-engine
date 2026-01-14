@@ -1,6 +1,7 @@
 .{
     .version = 1,
     .name = "mobile_physics_test",
+    .engine_version = "latest",  // Overridden by --engine-path in CI
     .description = "CI test project for mobile builds with physics",
     .initial_scene = "main",
     .window = .{

@@ -86,15 +86,11 @@ jobs:
           echo "**NDK:** $ANDROID_NDK_HOME" >> $GITHUB_STEP_SUMMARY
 
   # ============================================================================
-  # iOS Build (Simulator)
-  # Uses Xcode SDK sysroot for C library headers required by box2d/sokol
-  # Uses -Dcpu=apple_a14 to enable NEON features required by box2d SIMD code
-  # NOTE: Compilation succeeds but linking fails - iOS frameworks (Metal,
-  #       AudioToolbox, AVFoundation) need Xcode/xcodebuild for proper linking.
+  # iOS Build (Simulator) - Using labelle-cli
+  # The CLI generates proper build.zig with sokol framework linking
   # ============================================================================
   ios-build:
     runs-on: macos-14  # macOS with Apple Silicon for iOS simulator
-    continue-on-error: true  # Known issue: iOS framework linking requires Xcode
 
     steps:
       - name: Checkout repository
@@ -115,40 +111,36 @@ jobs:
           xcodebuild -version
           xcrun --sdk iphonesimulator --show-sdk-path
 
-      - name: Configure iOS libc for Zig
+      - name: Build and install labelle-cli
         run: |
-          # Create libc configuration file for iOS Simulator ARM64
-          SYSROOT=$(xcrun --sdk iphonesimulator --show-sdk-path)
-          echo "include_dir=$SYSROOT/usr/include" > $GITHUB_WORKSPACE/ios-arm64-simulator-libc.txt
-          echo "sys_include_dir=$SYSROOT/usr/include" >> $GITHUB_WORKSPACE/ios-arm64-simulator-libc.txt
-          echo "crt_dir=$SYSROOT/usr/lib" >> $GITHUB_WORKSPACE/ios-arm64-simulator-libc.txt
-          echo "msvc_lib_dir=" >> $GITHUB_WORKSPACE/ios-arm64-simulator-libc.txt
-          echo "kernel32_lib_dir=" >> $GITHUB_WORKSPACE/ios-arm64-simulator-libc.txt
-          echo "gcc_dir=" >> $GITHUB_WORKSPACE/ios-arm64-simulator-libc.txt
-          echo "Created libc.txt:" && cat $GITHUB_WORKSPACE/ios-arm64-simulator-libc.txt
+          git clone --depth 1 https://github.com/labelle-toolkit/labelle-cli.git /tmp/labelle-cli
+          cd /tmp/labelle-cli
+          zig build -Doptimize=ReleaseFast
+          sudo cp zig-out/bin/labelle /usr/local/bin/
+          labelle --version
 
-      - name: Build for iOS Simulator
+      - name: Build for iOS Simulator using CLI
         run: |
           cd ci/mobile_physics_test
           echo "::group::Building for iOS Simulator"
-          # Build targeting iOS Simulator (ARM64) with SDK libc
-          # -Dcpu=apple_a14 enables NEON features required by box2d SIMD code
-          # NOTE: Linking fails due to missing iOS frameworks - full iOS builds require Xcode
-          zig build \
-            -Dtarget=aarch64-ios-simulator \
-            -Dcpu=apple_a14 \
-            -Doptimize=ReleaseSafe \
-            --libc $GITHUB_WORKSPACE/ios-arm64-simulator-libc.txt \
-            --summary all || echo "::warning::iOS linking failed (expected - requires Xcode for framework linking)"
+          # Use labelle CLI with local engine path
+          # The CLI generates ios/build.zig with proper sokol framework linking
+          labelle ios build --simulator --engine-path=../..
           echo "::endgroup::"
+
+      - name: Verify iOS build output
+        run: |
+          cd ci/mobile_physics_test
+          ls -la ios/zig-out/bin/ || echo "Build output not found"
 
       - name: Create iOS build summary
         run: |
-          echo "## iOS Build" >> $GITHUB_STEP_SUMMARY
+          echo "## iOS Build (CLI)" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "iOS Simulator build target verified." >> $GITHUB_STEP_SUMMARY
+          echo "iOS Simulator build completed using labelle-cli." >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Target:** aarch64-ios-simulator" >> $GITHUB_STEP_SUMMARY
+          echo "**Method:** labelle ios build --simulator" >> $GITHUB_STEP_SUMMARY
           echo "**SDK:** $(xcrun --sdk iphonesimulator --show-sdk-path)" >> $GITHUB_STEP_SUMMARY
 
   # ============================================================================
