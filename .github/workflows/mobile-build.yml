@@ -110,13 +110,8 @@ jobs:
 
       - name: Install labelle-cli
         run: |
-          # Install from GitHub releases directly (bypass CDN for latest version)
-          mkdir -p "$HOME/.labelle/bin"
-          curl -fsSL -o "$HOME/.labelle/bin/labelle" \
-            "https://github.com/labelle-toolkit/labelle-cli/releases/download/v0.3.11/labelle-darwin-arm64"
-          chmod +x "$HOME/.labelle/bin/labelle"
+          curl -fsSL https://labelle.games/install.sh | bash
           echo "$HOME/.labelle/bin" >> $GITHUB_PATH
-          echo "Installed labelle-cli v0.3.11"
 
       - name: Show Xcode version
         run: |
