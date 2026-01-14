@@ -4,7 +4,7 @@
 
 const std = @import("std");
 const engine = @import("labelle-engine");
-const physics = engine.physics;
+const physics = @import("labelle-physics");
 
 const Game = engine.Game;
 const Scene = engine.Scene;
