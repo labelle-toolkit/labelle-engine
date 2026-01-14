@@ -61,7 +61,7 @@
             },
         },
 
-        // Enemy 2: Reference by name (simpler, but name must be unique)
+        // Enemy 2: Reference by name (target name "player" is unique here)
         .{
             .id = "goblin_2",
             .name = "enemy",
@@ -75,7 +75,7 @@
             },
         },
 
-        // Enemy 3: Auto-generated ID (_e5), reference by ID
+        // Enemy 3: Auto-generated ID (_e4), reference by ID
         .{
             .name = "enemy",
             .prefab = "enemy",
@@ -88,7 +88,7 @@
             },
         },
 
-        // Enemy 4: Auto-generated ID (_e6), reference by ID
+        // Enemy 4: Auto-generated ID (_e5), reference by ID
         .{
             .name = "enemy",
             .prefab = "enemy",

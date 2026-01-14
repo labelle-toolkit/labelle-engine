@@ -135,12 +135,17 @@ pub const ReferenceContext = struct {
     }
 
     /// Register a named entity for later reference resolution (display name)
+    /// Note: Names can duplicate - last entity with a given name wins for reference resolution
     pub fn registerNamed(self: *ReferenceContext, name: []const u8, entity: Entity) !void {
         try self.named_entities.put(name, entity);
     }
 
     /// Register an entity ID for later reference resolution (unique ID)
+    /// Warns if duplicate ID is registered (IDs should be unique)
     pub fn registerId(self: *ReferenceContext, id: []const u8, entity: Entity) !void {
+        if (self.entity_ids.contains(id)) {
+            std.log.warn("[SceneLoader] Duplicate entity ID '{s}' - previous entity will be unreachable by ID reference", .{id});
+        }
         try self.entity_ids.put(id, entity);
     }
 

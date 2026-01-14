@@ -395,7 +395,7 @@ pub const RefInfo = struct {
     /// Whether this reference is by ID (true) or by name (false)
     is_id_ref: bool,
 
-    // Legacy alias for backward compatibility
+    /// Get the entity name for name-based references (null for ID-based)
     pub fn entity_name(self: RefInfo) ?[]const u8 {
         return if (self.is_id_ref) null else self.ref_key;
     }
