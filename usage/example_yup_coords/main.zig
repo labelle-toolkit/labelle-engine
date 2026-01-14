@@ -76,6 +76,18 @@ pub fn main() !void {
 
     while (game.isRunning()) {
         const dt = game.getDeltaTime();
+
+        // Handle per-frame updates for input and audio
+        game.getInput().beginFrame();
+        game.updateGestures(dt);
+        game.getAudio().update();
+
+        // Handle screen size changes (e.g., fullscreen toggle)
+        if (game.screenSizeChanged()) {
+            const screen_size = game.getScreenSize();
+            game.getPipeline().setScreenHeight(@floatFromInt(screen_size.height));
+        }
+
         scene.update(dt);
         game.getPipeline().sync(game.getRegistry());
 

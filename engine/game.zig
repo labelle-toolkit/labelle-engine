@@ -205,6 +205,7 @@ pub fn GameWith(comptime Hooks: type) type {
             errdefer registry.deinit();
 
             var pipeline = RenderPipeline.init(allocator, &retained_engine);
+            pipeline.setScreenHeight(@floatFromInt(config.window.height));
             errdefer pipeline.deinit();
 
             const input = Input.init();
@@ -919,9 +920,11 @@ pub fn GameWith(comptime Hooks: type) type {
                     cb(self, dt);
                 }
 
-                // Update screen height for Y coordinate transform (Y-up to Y-down)
-                const screen_size = self.getScreenSize();
-                self.pipeline.setScreenHeight(@floatFromInt(screen_size.height));
+                // Update screen height on resize for Y coordinate transform (Y-up to Y-down)
+                if (self.screenSizeChanged()) {
+                    const screen_size = self.getScreenSize();
+                    self.pipeline.setScreenHeight(@floatFromInt(screen_size.height));
+                }
 
                 // Sync ECS state to RetainedEngine
                 self.pipeline.sync(&self.registry);
@@ -1078,19 +1081,13 @@ pub fn GameWith(comptime Hooks: type) type {
         /// Called automatically in the game loop; manual call needed for custom loops.
         /// Touch coordinates are transformed to game space (Y-up) before gesture processing.
         pub fn updateGestures(self: *Self, dt: f32) void {
-            // Build touch array from input with Y-coordinate transformation
+            // Build touch array from input, using getTouch() for Y-coordinate transformation
             var touches: [input_mod.MAX_TOUCHES]input_mod.Touch = undefined;
             var touch_count: usize = 0;
             var i: u32 = 0;
             while (i < self.input.getTouchCount() and touch_count < input_mod.MAX_TOUCHES) : (i += 1) {
-                if (self.input.getTouch(i)) |raw| {
-                    // Transform from screen space (Y-down) to game space (Y-up)
-                    touches[touch_count] = .{
-                        .id = raw.id,
-                        .x = raw.x,
-                        .y = self.toGameY(raw.y),
-                        .phase = raw.phase,
-                    };
+                if (self.getTouch(i)) |touch| {
+                    touches[touch_count] = touch;
                     touch_count += 1;
                 }
             }

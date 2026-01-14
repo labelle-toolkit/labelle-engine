@@ -143,38 +143,10 @@ pub const RenderPipeline = struct {
 
     /// Resolve the graphics (world) position for an entity.
     /// Handles:
-    /// 1. Parent component - computes world position from hierarchy
-    /// 2. Gizmo component - parent_position + gizmo_offset (legacy support)
+    /// 1. Gizmo component - parent_position + gizmo_offset (legacy gizmo support)
+    /// 2. Parent component - computes world position from hierarchy
     /// 3. Regular entity - uses entity's own position as world position
     fn resolveGfxPosition(registry: *Registry, entity: Entity) GfxPosition {
-        // Check if entity has a Parent component (position inheritance)
-        if (registry.tryGet(Parent, entity)) |parent_comp| {
-            // Get local position of this entity
-            const local_pos = if (registry.tryGet(Position, entity)) |p| p.* else Position{};
-
-            // Recursively get parent's world position and rotation
-            const parent_world = computeWorldTransform(registry, parent_comp.entity, 0);
-
-            // Apply rotation if inherit_rotation is set
-            if (parent_comp.inherit_rotation and parent_world.rotation != 0) {
-                // Rotate local offset around parent's rotation
-                const cos_r = @cos(parent_world.rotation);
-                const sin_r = @sin(parent_world.rotation);
-                const rotated_x = local_pos.x * cos_r - local_pos.y * sin_r;
-                const rotated_y = local_pos.x * sin_r + local_pos.y * cos_r;
-                return GfxPosition{
-                    .x = parent_world.x + rotated_x,
-                    .y = parent_world.y + rotated_y,
-                };
-            } else {
-                // No rotation inheritance - simple offset
-                return GfxPosition{
-                    .x = parent_world.x + local_pos.x,
-                    .y = parent_world.y + local_pos.y,
-                };
-            }
-        }
-
         // Check if this is a gizmo with a parent entity (legacy gizmo support)
         if (registry.tryGet(Gizmo, entity)) |gizmo| {
             if (gizmo.parent_entity) |parent| {
@@ -187,13 +159,10 @@ pub const RenderPipeline = struct {
             }
         }
 
-        // Regular entity - use its own position as world position
-        if (registry.tryGet(Position, entity)) |pos| {
-            return pos.toGfx();
-        }
-
-        // No position found
-        return .{};
+        // For all other entities, compute world transform and return position.
+        // This correctly handles both parented and non-parented entities.
+        const world = computeWorldTransform(registry, entity, 0);
+        return GfxPosition{ .x = world.x, .y = world.y };
     }
 
     /// World transform result from hierarchy computation
