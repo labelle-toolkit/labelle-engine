@@ -53,21 +53,14 @@ jobs:
           # Create libc configuration file for Android ARM64
           SYSROOT="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
           LIB_DIR="$SYSROOT/usr/lib/aarch64-linux-android/24"
-
-          # Debug: show what's in the lib directory
-          echo "Contents of $LIB_DIR:"
-          ls -la "$LIB_DIR" | head -20
-
-          cat > $GITHUB_WORKSPACE/android-aarch64-libc.txt << EOF
-include_dir=$SYSROOT/usr/include
-sys_include_dir=$SYSROOT/usr/include/aarch64-linux-android
-crt_dir=$LIB_DIR
-msvc_lib_dir=
-kernel32_lib_dir=
-gcc_dir=
-EOF
-          echo "Created $GITHUB_WORKSPACE/android-aarch64-libc.txt:"
-          cat $GITHUB_WORKSPACE/android-aarch64-libc.txt
+          echo "Contents of $LIB_DIR:" && ls -la "$LIB_DIR" | head -20
+          echo "include_dir=$SYSROOT/usr/include" > $GITHUB_WORKSPACE/android-aarch64-libc.txt
+          echo "sys_include_dir=$SYSROOT/usr/include/aarch64-linux-android" >> $GITHUB_WORKSPACE/android-aarch64-libc.txt
+          echo "crt_dir=$LIB_DIR" >> $GITHUB_WORKSPACE/android-aarch64-libc.txt
+          echo "msvc_lib_dir=" >> $GITHUB_WORKSPACE/android-aarch64-libc.txt
+          echo "kernel32_lib_dir=" >> $GITHUB_WORKSPACE/android-aarch64-libc.txt
+          echo "gcc_dir=" >> $GITHUB_WORKSPACE/android-aarch64-libc.txt
+          echo "Created libc.txt:" && cat $GITHUB_WORKSPACE/android-aarch64-libc.txt
 
       - name: Build for Android (cross-compile check)
         run: |
@@ -125,16 +118,13 @@ EOF
         run: |
           # Create libc configuration file for iOS Simulator ARM64
           SYSROOT=$(xcrun --sdk iphonesimulator --show-sdk-path)
-          cat > $GITHUB_WORKSPACE/ios-arm64-simulator-libc.txt << EOF
-include_dir=$SYSROOT/usr/include
-sys_include_dir=$SYSROOT/usr/include
-crt_dir=$SYSROOT/usr/lib
-msvc_lib_dir=
-kernel32_lib_dir=
-gcc_dir=
-EOF
-          echo "Created $GITHUB_WORKSPACE/ios-arm64-simulator-libc.txt:"
-          cat $GITHUB_WORKSPACE/ios-arm64-simulator-libc.txt
+          echo "include_dir=$SYSROOT/usr/include" > $GITHUB_WORKSPACE/ios-arm64-simulator-libc.txt
+          echo "sys_include_dir=$SYSROOT/usr/include" >> $GITHUB_WORKSPACE/ios-arm64-simulator-libc.txt
+          echo "crt_dir=$SYSROOT/usr/lib" >> $GITHUB_WORKSPACE/ios-arm64-simulator-libc.txt
+          echo "msvc_lib_dir=" >> $GITHUB_WORKSPACE/ios-arm64-simulator-libc.txt
+          echo "kernel32_lib_dir=" >> $GITHUB_WORKSPACE/ios-arm64-simulator-libc.txt
+          echo "gcc_dir=" >> $GITHUB_WORKSPACE/ios-arm64-simulator-libc.txt
+          echo "Created libc.txt:" && cat $GITHUB_WORKSPACE/ios-arm64-simulator-libc.txt
 
       - name: Build for iOS Simulator
         run: |
