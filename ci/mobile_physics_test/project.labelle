@@ -1,6 +1,7 @@
 .{
     .version = 1,
     .name = "mobile_physics_test",
+    .engine_version = "latest",  // Ignored when using --engine-path
     .description = "CI test project for mobile builds with physics",
     .initial_scene = "main",
     .window = .{
