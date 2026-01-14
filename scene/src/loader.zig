@@ -363,12 +363,20 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
                             // Set placeholder value (will be resolved in Phase 2)
                             @field(component, field_name) = @bitCast(@as(ecs.EntityBits, 0));
 
+                            // Generate callback that captures comptime component/field
+                            const ResolveHelper = struct {
+                                fn resolve(registry: *ecs.Registry, target: Entity, resolved: Entity) void {
+                                    if (registry.tryGet(ComponentType, target)) |comp| {
+                                        @field(comp, field_name) = resolved;
+                                    }
+                                }
+                            };
+
                             // Queue for Phase 2 resolution
                             if (ref_ctx) |ctx| {
-                                try ctx.pending_refs.append(.{
+                                try ctx.addPendingRef(.{
                                     .target_entity = parent_entity,
-                                    .component_name = comp_name,
-                                    .field_name = field_name,
+                                    .resolve_callback = ResolveHelper.resolve,
                                     .ref_key = ref_info.ref_key orelse "",
                                     .is_self_ref = ref_info.is_self,
                                     .is_id_ref = ref_info.is_id_ref,
@@ -549,23 +557,15 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
                 else
                     ref_ctx.resolve(pending.ref_key, pending.is_id_ref) orelse {
                         const ref_type = if (pending.is_id_ref) "id" else "name";
-                        std.log.err("Entity reference not found: {s}='{s}' in component '{s}.{s}'", .{
+                        std.log.err("Entity reference not found: {s}='{s}'", .{
                             ref_type,
                             pending.ref_key,
-                            pending.component_name,
-                            pending.field_name,
                         });
                         continue;
                     };
 
-                // Update the Entity field in the component
-                try updateEntityReference(
-                    game,
-                    pending.target_entity,
-                    pending.component_name,
-                    pending.field_name,
-                    resolved_entity,
-                );
+                // Call the resolve callback to update the Entity field
+                pending.resolve_callback(game.getRegistry(), pending.target_entity, resolved_entity);
             }
 
             // Fire all onReady callbacks after hierarchy is complete (RFC #169)

@@ -86,14 +86,15 @@ pub const EntityRef = struct {
     }
 };
 
+/// Callback type for resolving entity references
+pub const RefResolveCallback = *const fn (registry: *ecs.Registry, target: Entity, resolved: Entity) void;
+
 /// Entry for deferred reference resolution (Phase 2 of loading)
 pub const PendingReference = struct {
     /// The entity that has the reference field
     target_entity: Entity,
-    /// Component type name containing the reference
-    component_name: []const u8,
-    /// Field name within the component
-    field_name: []const u8,
+    /// Callback to set the resolved entity (captures comptime component/field)
+    resolve_callback: RefResolveCallback,
     /// Name or ID of the referenced entity
     ref_key: []const u8,
     /// Whether this is a self-reference (.ref = .self)
@@ -114,20 +115,23 @@ pub const ReferenceContext = struct {
     /// Current entity being created (for self-references)
     current_entity: ?Entity = null,
     /// Pending references to resolve in Phase 2
-    pending_refs: std.ArrayList(PendingReference),
+    pending_refs: std.ArrayListUnmanaged(PendingReference),
+    /// Allocator for pending refs
+    allocator: std.mem.Allocator,
 
     pub fn init(allocator: std.mem.Allocator) ReferenceContext {
         return .{
             .named_entities = EntityMap.init(allocator),
             .entity_ids = EntityMap.init(allocator),
-            .pending_refs = std.ArrayList(PendingReference).init(allocator),
+            .pending_refs = .{},
+            .allocator = allocator,
         };
     }
 
     pub fn deinit(self: *ReferenceContext) void {
         self.named_entities.deinit();
         self.entity_ids.deinit();
-        self.pending_refs.deinit();
+        self.pending_refs.deinit(self.allocator);
     }
 
     /// Register a named entity for later reference resolution (display name)
@@ -138,6 +142,11 @@ pub const ReferenceContext = struct {
     /// Register an entity ID for later reference resolution (unique ID)
     pub fn registerId(self: *ReferenceContext, id: []const u8, entity: Entity) !void {
         try self.entity_ids.put(id, entity);
+    }
+
+    /// Add a pending reference to resolve in Phase 2
+    pub fn addPendingRef(self: *ReferenceContext, pending: PendingReference) !void {
+        try self.pending_refs.append(self.allocator, pending);
     }
 
     /// Resolve an entity reference by display name
