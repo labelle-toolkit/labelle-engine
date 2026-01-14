@@ -2,7 +2,9 @@ const std = @import("std");
 const engine = @import("labelle-engine");
 const ecs = @import("ecs");
 
+const main = @import("../main.zig");
 const Entity = engine.Entity;
+const Game = engine.Game;
 
 /// AI component demonstrates entity references.
 /// The `target` field references another entity (e.g., the player).
@@ -19,14 +21,38 @@ pub const AI = struct {
         attacking,
     };
 
-    pub fn onAdd(payload: engine.ComponentPayload) void {
-        _ = payload;
-        std.log.info("[AI.onAdd] AI component added", .{});
-    }
-
-    /// Called after all entity references are resolved
+    /// Called after all entity references are resolved - validates target is set
     pub fn onReady(payload: engine.ComponentPayload) void {
-        _ = payload;
-        std.log.info("[AI.onReady] AI target reference resolved!", .{});
+        const game = payload.getGame(Game);
+        const entity = engine.entityFromU64(payload.entity_id);
+        const registry = game.getRegistry();
+
+        const ai = registry.tryGet(AI, entity) orelse {
+            std.log.err("[AI] FAIL: Could not get AI component", .{});
+            return;
+        };
+
+        // Validate target is set (not zero)
+        if (engine.entityToU64(ai.target) == 0) {
+            std.log.err("[AI] FAIL: target is zero (not resolved)", .{});
+            return;
+        }
+
+        // Validate target entity exists
+        if (!registry.isValid(ai.target)) {
+            std.log.err("[AI] FAIL: target entity {} is invalid", .{engine.entityToU64(ai.target)});
+            return;
+        }
+
+        // Validate target has Health component (it's the player)
+        if (registry.tryGet(main.Health, ai.target)) |health| {
+            std.log.info("[AI] OK: target resolved to entity {} with {}/{} health", .{
+                engine.entityToU64(ai.target),
+                health.current,
+                health.max,
+            });
+        } else {
+            std.log.err("[AI] FAIL: target {} has no Health component", .{engine.entityToU64(ai.target)});
+        }
     }
 };
