@@ -1,0 +1,17 @@
+.{
+    .fingerprint = 0x4a0c46d4d00f5a4b,
+    .name = .example_yup_coords,
+    .version = "0.1.0",
+    .dependencies = .{
+        .@"labelle-engine" = .{
+            .path = "../..",
+        },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "main.zig",
+        "scenes",
+        "scripts",
+    },
+}

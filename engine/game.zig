@@ -205,6 +205,7 @@ pub fn GameWith(comptime Hooks: type) type {
             errdefer registry.deinit();
 
             var pipeline = RenderPipeline.init(allocator, &retained_engine);
+            pipeline.setScreenHeight(@floatFromInt(config.window.height));
             errdefer pipeline.deinit();
 
             const input = Input.init();
@@ -919,6 +920,12 @@ pub fn GameWith(comptime Hooks: type) type {
                     cb(self, dt);
                 }
 
+                // Update screen height on resize for Y coordinate transform (Y-up to Y-down)
+                if (self.screenSizeChanged()) {
+                    const screen_size = self.getScreenSize();
+                    self.pipeline.setScreenHeight(@floatFromInt(screen_size.height));
+                }
+
                 // Sync ECS state to RetainedEngine
                 self.pipeline.sync(&self.registry);
 
@@ -1019,9 +1026,26 @@ pub fn GameWith(comptime Hooks: type) type {
             return &self.pipeline;
         }
 
-        /// Get access to the input system
+        /// Get access to the input system (raw, no coordinate transformation)
         pub fn getInput(self: *Self) *Input {
             return &self.input;
+        }
+
+        // ==================== Input Coordinate Transform ====================
+
+        /// Transform Y coordinate from screen space (Y-down) to game space (Y-up)
+        fn toGameY(self: *const Self, screen_y: f32) f32 {
+            const screen_size = self.getScreenSize();
+            return @as(f32, @floatFromInt(screen_size.height)) - screen_y;
+        }
+
+        // ==================== Mouse Input ====================
+
+        /// Get the current mouse position in game coordinates (Y-up).
+        /// Use getInput().getMousePosition() for raw screen coordinates.
+        pub fn getMousePosition(self: *const Self) input_mod.MousePosition {
+            const raw = self.input.getMousePosition();
+            return .{ .x = raw.x, .y = self.toGameY(raw.y) };
         }
 
         // ==================== Touch Input ====================
@@ -1032,10 +1056,18 @@ pub fn GameWith(comptime Hooks: type) type {
             return self.input.getTouchCount();
         }
 
-        /// Get touch at index (0 to getTouchCount()-1).
+        /// Get touch at index (0 to getTouchCount()-1) in game coordinates (Y-up).
         /// Returns null if index is out of bounds.
         pub fn getTouch(self: *const Self, index: u32) ?input_mod.Touch {
-            return self.input.getTouch(index);
+            if (self.input.getTouch(index)) |raw| {
+                return .{
+                    .id = raw.id,
+                    .x = raw.x,
+                    .y = self.toGameY(raw.y),
+                    .phase = raw.phase,
+                };
+            }
+            return null;
         }
 
         /// Check if there are any active touches.
@@ -1047,13 +1079,14 @@ pub fn GameWith(comptime Hooks: type) type {
 
         /// Update gesture recognition with current touch state.
         /// Called automatically in the game loop; manual call needed for custom loops.
+        /// Touch coordinates are transformed to game space (Y-up) before gesture processing.
         pub fn updateGestures(self: *Self, dt: f32) void {
-            // Build touch array from input
+            // Build touch array from input, using getTouch() for Y-coordinate transformation
             var touches: [input_mod.MAX_TOUCHES]input_mod.Touch = undefined;
             var touch_count: usize = 0;
             var i: u32 = 0;
             while (i < self.input.getTouchCount() and touch_count < input_mod.MAX_TOUCHES) : (i += 1) {
-                if (self.input.getTouch(i)) |touch| {
+                if (self.getTouch(i)) |touch| {
                     touches[touch_count] = touch;
                     touch_count += 1;
                 }

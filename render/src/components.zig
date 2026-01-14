@@ -119,7 +119,7 @@ pub const Children = struct {
 ///
 /// Example in .zon:
 /// ```
-/// .Sprite = .{ .name = "player.png", .scale = 2.0, .pivot = .bottom_center },
+/// .Sprite = .{ .name = "player.png", .scale_x = 2.0, .scale_y = 2.0, .pivot = .bottom_center },
 /// ```
 pub const Sprite = struct {
     texture: TextureId = .invalid,

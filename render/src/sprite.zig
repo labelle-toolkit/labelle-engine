@@ -18,17 +18,18 @@ pub const Container = labelle.Container;
 
 // Z-index constants
 pub const ZIndex = struct {
-    pub const background: u8 = 0;
-    pub const characters: u8 = 128;
-    pub const foreground: u8 = 255;
+    pub const background: i16 = 0;
+    pub const characters: i16 = 128;
+    pub const foreground: i16 = 255;
 };
 
 /// Sprite configuration for prefabs (visual properties only, position is in Position component)
 /// This is used for comptime prefab merging - the actual runtime component is Sprite in components.zig
 pub const SpriteConfig = struct {
     name: []const u8 = "",
-    z_index: u8 = ZIndex.characters,
-    scale: f32 = 1.0,
+    z_index: i16 = ZIndex.characters,
+    scale_x: f32 = 1.0,
+    scale_y: f32 = 1.0,
     rotation: f32 = 0,
     flip_x: bool = false,
     flip_y: bool = false,
@@ -93,7 +94,7 @@ pub const SpriteConfig = struct {
     ///
     /// Example .zon data:
     /// ```
-    /// .{ .name = "player.png", .scale = 2.0, .pivot = .bottom_center }
+    /// .{ .name = "player.png", .scale_x = 2.0, .scale_y = 2.0, .pivot = .bottom_center }
     /// ```
     pub fn fromZonData(comptime sprite_data: anytype) SpriteConfig {
         // Handle .name field
@@ -104,7 +105,8 @@ pub const SpriteConfig = struct {
 
         return .{
             .name = name,
-            .scale = getFieldOrDefault(sprite_data, "scale", @as(f32, 1.0)),
+            .scale_x = getFieldOrDefault(sprite_data, "scale_x", @as(f32, 1.0)),
+            .scale_y = getFieldOrDefault(sprite_data, "scale_y", @as(f32, 1.0)),
             .rotation = getFieldOrDefault(sprite_data, "rotation", @as(f32, 0)),
             .flip_x = getFieldOrDefault(sprite_data, "flip_x", false),
             .flip_y = getFieldOrDefault(sprite_data, "flip_y", false),

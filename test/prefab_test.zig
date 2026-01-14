@@ -28,7 +28,8 @@ pub const SPRITE_CONFIG = struct {
         test "fields have sensible defaults" {
             const config = SpriteConfigFactory.build(.{});
             try expect.equal(config.name.len, 0);
-            try expect.equal(config.scale, 1.0);
+            try expect.equal(config.scale_x, 1.0);
+            try expect.equal(config.scale_y, 1.0);
             try expect.equal(config.rotation, 0);
             try expect.toBeFalse(config.flip_x);
             try expect.toBeFalse(config.flip_y);
@@ -50,8 +51,9 @@ pub const SPRITE_CONFIG = struct {
         }
 
         test "can set scale" {
-            const config = SpriteConfigFactory.build(.{ .scale = 2.5 });
-            try expect.equal(config.scale, 2.5);
+            const config = SpriteConfigFactory.build(.{ .scale_x = 2.5, .scale_y = 2.5 });
+            try expect.equal(config.scale_x, 2.5);
+            try expect.equal(config.scale_y, 2.5);
         }
 
         test "can set rotation" {
@@ -85,7 +87,8 @@ pub const SPRITE_CONFIG = struct {
             const config = FullSpriteFactory.build(.{});
             try expect.toBeTrue(std.mem.eql(u8, config.name, "test.png"));
             try expect.equal(config.z_index, 5);
-            try expect.equal(config.scale, 1.5);
+            try expect.equal(config.scale_x, 1.5);
+            try expect.equal(config.scale_y, 1.5);
             try expect.equal(config.rotation, 90);
             try expect.toBeTrue(config.flip_x);
             try expect.toBeFalse(config.flip_y);
@@ -107,14 +110,16 @@ pub const SPRITE_CONFIG_MERGE = struct {
     pub const SCALE_OVERRIDES = struct {
         test "uses override scale when specified" {
             const base = ScaledSpriteFactory.build(.{});
-            const merged = base.merge(.{ .scale = 3.0 });
-            try expect.equal(merged.scale, 3.0);
+            const merged = base.merge(.{ .scale_x = 3.0, .scale_y = 3.0 });
+            try expect.equal(merged.scale_x, 3.0);
+            try expect.equal(merged.scale_y, 3.0);
         }
 
         test "uses base scale when not overridden" {
             const base = ScaledSpriteFactory.build(.{});
             const merged = base.merge(.{});
-            try expect.equal(merged.scale, 2.0);
+            try expect.equal(merged.scale_x, 2.0);
+            try expect.equal(merged.scale_y, 2.0);
         }
     };
 
@@ -196,7 +201,8 @@ pub const SPRITE_CONFIG_MERGE = struct {
         test "merges multiple fields correctly" {
             const base = SpriteConfigFactory.build(.{
                 .name = "base.png",
-                .scale = 2.0,
+                .scale_x = 2.0,
+                .scale_y = 2.0,
                 .rotation = 45,
                 .flip_x = true,
                 .flip_y = false,
@@ -208,7 +214,8 @@ pub const SPRITE_CONFIG_MERGE = struct {
             });
 
             try expect.toBeTrue(std.mem.eql(u8, merged.name, "base.png")); // preserved
-            try expect.equal(merged.scale, 2.0); // preserved
+            try expect.equal(merged.scale_x, 2.0); // preserved
+            try expect.equal(merged.scale_y, 2.0); // preserved
             try expect.equal(merged.rotation, 90); // overridden
             try expect.toBeFalse(merged.flip_x); // overridden
             try expect.toBeTrue(merged.flip_y); // overridden
@@ -220,7 +227,8 @@ pub const SPRITE_CONFIG_MERGE = struct {
 
             try expect.toBeTrue(std.mem.eql(u8, merged.name, "base.png"));
             try expect.equal(merged.z_index, 10);
-            try expect.equal(merged.scale, 1.5);
+            try expect.equal(merged.scale_x, 1.5);
+            try expect.equal(merged.scale_y, 1.5);
             try expect.equal(merged.rotation, 30);
             try expect.toBeTrue(merged.flip_x);
             try expect.toBeTrue(merged.flip_y);
@@ -277,14 +285,14 @@ pub const PREFAB_REGISTRY = struct {
 
 pub const ZINDEX = struct {
     test "background is lowest" {
-        try expect.equal(render.ZIndex.background, 0);
+        try expect.equal(render.ZIndex.background, @as(i16, 0));
     }
 
     test "characters is middle" {
-        try expect.equal(render.ZIndex.characters, 128);
+        try expect.equal(render.ZIndex.characters, @as(i16, 128));
     }
 
     test "foreground is highest" {
-        try expect.equal(render.ZIndex.foreground, 255);
+        try expect.equal(render.ZIndex.foreground, @as(i16, 255));
     }
 };

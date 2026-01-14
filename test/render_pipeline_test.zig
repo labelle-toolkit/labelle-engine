@@ -58,10 +58,11 @@ const sprite_spec = describe("Sprite component", .{
 
     it("converts to visual", struct {
         pub fn t(_: void) !void {
-            const sprite = Sprite{ .scale = 2.0, .z_index = 50 };
+            const sprite = Sprite{ .scale_x = 2.0, .scale_y = 2.0, .z_index = 50 };
             const visual = sprite.toVisual();
-            try std.testing.expectEqual(@as(f32, 2.0), visual.scale);
-            try std.testing.expectEqual(@as(u8, 50), visual.z_index);
+            try std.testing.expectEqual(@as(f32, 2.0), visual.scale_x);
+            try std.testing.expectEqual(@as(f32, 2.0), visual.scale_y);
+            try std.testing.expectEqual(@as(i16, 50), visual.z_index);
         }
     }.t),
 

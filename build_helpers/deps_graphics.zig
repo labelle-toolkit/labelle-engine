@@ -162,6 +162,7 @@ pub fn createAudioModule(
             .{ .name = "raylib", .module = raylib.? },
             .{ .name = "sokol", .module = sokol },
             .{ .name = "zaudio", .module = zaudio.? },
+            .{ .name = "sokol", .module = sokol },
         } else &.{
             .{ .name = "build_options", .module = build_options_mod },
             .{ .name = "sokol", .module = sokol },
