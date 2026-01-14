@@ -32,7 +32,8 @@ jobs:
 
       - name: Checkout labelle-gfx (sibling dependency)
         run: |
-          git clone --depth 1 https://github.com/labelle-toolkit/labelle-gfx.git ../labelle-gfx
+          # TODO: Change to main after labelle-gfx#202 is merged
+          git clone --depth 1 --branch fix/android-gl-detection-201 https://github.com/labelle-toolkit/labelle-gfx.git ../labelle-gfx
 
       - name: Install Zig
         uses: mlugg/setup-zig@v2
@@ -101,7 +102,8 @@ jobs:
 
       - name: Checkout labelle-gfx (sibling dependency)
         run: |
-          git clone --depth 1 https://github.com/labelle-toolkit/labelle-gfx.git ../labelle-gfx
+          # TODO: Change to main after labelle-gfx#202 is merged
+          git clone --depth 1 --branch fix/android-gl-detection-201 https://github.com/labelle-toolkit/labelle-gfx.git ../labelle-gfx
 
       - name: Install Zig
         uses: mlugg/setup-zig@v2
@@ -163,7 +165,8 @@ jobs:
 
       - name: Checkout labelle-gfx (sibling dependency)
         run: |
-          git clone --depth 1 https://github.com/labelle-toolkit/labelle-gfx.git ../labelle-gfx
+          # TODO: Change to main after labelle-gfx#202 is merged
+          git clone --depth 1 --branch fix/android-gl-detection-201 https://github.com/labelle-toolkit/labelle-gfx.git ../labelle-gfx
 
       - name: Install Zig
         uses: mlugg/setup-zig@v2
