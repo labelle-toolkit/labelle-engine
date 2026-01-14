@@ -1,7 +1,6 @@
 .{
     .version = 1,
     .name = "mobile_physics_test",
-    .engine_version = "latest",
     .description = "CI test project for mobile builds with physics",
     .initial_scene = "main",
     .window = .{
