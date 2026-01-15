@@ -32,6 +32,148 @@ const main_sdl_tmpl = @embedFile("templates/main_sdl.txt");
 const main_bgfx_tmpl = @embedFile("templates/main_bgfx.txt");
 const main_wgpu_native_tmpl = @embedFile("templates/main_wgpu_native.txt");
 
+// =============================================================================
+// Version Management
+// =============================================================================
+
+/// Semantic version with major.minor.patch
+const Version = struct {
+    major: u32,
+    minor: u32,
+    patch: u32,
+
+    pub fn parse(str: []const u8) !Version {
+        // Strip 'v' prefix if present
+        const version_str = if (std.mem.startsWith(u8, str, "v")) str[1..] else str;
+
+        var iter = std.mem.splitScalar(u8, version_str, '.');
+        const major_str = iter.next() orelse return error.InvalidVersion;
+        const minor_str = iter.next() orelse return error.InvalidVersion;
+        const patch_str = iter.next() orelse return error.InvalidVersion;
+
+        return Version{
+            .major = try std.fmt.parseInt(u32, major_str, 10),
+            .minor = try std.fmt.parseInt(u32, minor_str, 10),
+            .patch = try std.fmt.parseInt(u32, patch_str, 10),
+        };
+    }
+
+    pub fn format(self: Version, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+        try writer.print("{d}.{d}.{d}", .{ self.major, self.minor, self.patch });
+    }
+
+    pub fn lt(self: Version, other: Version) bool {
+        if (self.major != other.major) return self.major < other.major;
+        if (self.minor != other.minor) return self.minor < other.minor;
+        return self.patch < other.patch;
+    }
+
+    pub fn gte(self: Version, other: Version) bool {
+        return !self.lt(other);
+    }
+};
+
+/// Plugin compatibility metadata
+const PluginCompatibility = struct {
+    name: []const u8,
+    min_version: Version,
+    max_version: Version,
+    reason: []const u8,
+
+    pub fn checkCompatibility(self: PluginCompatibility, engine_version: Version) CompatibilityResult {
+        // Below minimum = incompatible
+        if (engine_version.lt(self.min_version)) {
+            return .incompatible;
+        }
+
+        // Within range = compatible
+        if (engine_version.lt(self.max_version)) {
+            return .compatible;
+        }
+
+        // Above maximum = untested (warning)
+        return .untested;
+    }
+};
+
+const CompatibilityResult = enum {
+    compatible,
+    incompatible,
+    untested,
+};
+
+/// Read plugin compatibility metadata from .labelle-plugin file
+fn readPluginCompatibility(allocator: std.mem.Allocator, plugin_path: []const u8) !?PluginCompatibility {
+    const metadata_path = try std.fs.path.join(allocator, &.{ plugin_path, ".labelle-plugin" });
+    defer allocator.free(metadata_path);
+
+    // Read the file
+    const file = std.fs.cwd().openFile(metadata_path, .{}) catch {
+        // No metadata file = no version checking
+        return null;
+    };
+    defer file.close();
+
+    const content = try file.readToEndAlloc(allocator, 1024 * 1024);
+    defer allocator.free(content);
+
+    // Parse the metadata (simple key = "value" format)
+    var name: ?[]const u8 = null;
+    var min_version: ?[]const u8 = null;
+    var max_version: ?[]const u8 = null;
+    var reason: []const u8 = "No reason specified";
+
+    var lines = std.mem.splitScalar(u8, content, '\n');
+    while (lines.next()) |line| {
+        const trimmed = std.mem.trim(u8, line, " \t\r");
+
+        // Skip comments and empty lines
+        if (trimmed.len == 0 or std.mem.startsWith(u8, trimmed, "#")) continue;
+
+        // Parse key = "value" format
+        if (std.mem.indexOf(u8, trimmed, "=")) |eq_pos| {
+            const key = std.mem.trim(u8, trimmed[0..eq_pos], " \t");
+            const value_part = std.mem.trim(u8, trimmed[eq_pos + 1 ..], " \t");
+
+            // Extract value from quotes
+            const value = if (std.mem.startsWith(u8, value_part, "\"")) blk: {
+                if (std.mem.lastIndexOf(u8, value_part, "\"")) |end| {
+                    if (end > 0) {
+                        break :blk value_part[1..end];
+                    }
+                }
+                break :blk value_part;
+            } else value_part;
+
+            if (std.mem.eql(u8, key, "name")) {
+                name = try allocator.dupe(u8, value);
+            } else if (std.mem.eql(u8, key, "min_version")) {
+                min_version = try allocator.dupe(u8, value);
+            } else if (std.mem.eql(u8, key, "max_version")) {
+                max_version = try allocator.dupe(u8, value);
+            } else if (std.mem.eql(u8, key, "reason")) {
+                reason = try allocator.dupe(u8, value);
+            }
+        }
+    }
+
+    // Require name and version info
+    const plugin_name = name orelse return null;
+    const min_ver_str = min_version orelse return null;
+    const max_ver_str = max_version orelse return null;
+
+    return PluginCompatibility{
+        .name = plugin_name,
+        .min_version = try Version.parse(min_ver_str),
+        .max_version = try Version.parse(max_ver_str),
+        .reason = reason,
+    };
+}
+
+// =============================================================================
+// Name Sanitization
+// =============================================================================
+
 /// Sanitize a project name to be a valid Zig identifier.
 /// - Replaces hyphens with underscores
 /// - Removes any invalid characters (only a-z, A-Z, 0-9, _ allowed)
@@ -2342,6 +2484,67 @@ pub fn generateProject(allocator: std.mem.Allocator, project_path: []const u8, o
 
     // Use engine_version from project.labelle if specified, otherwise use CLI's version
     const effective_engine_version = config.engine_version orelse options.engine_version;
+
+    // Check plugin compatibility with engine version
+    std.debug.print("Checking plugin compatibility...\n", .{});
+    const engine_ver = Version.parse(effective_engine_version orelse "0.0.0") catch |err| blk: {
+        std.debug.print("Warning: Could not parse engine version '{s}': {any}\n", .{ effective_engine_version orelse "unknown", err });
+        break :blk Version{ .major = 0, .minor = 0, .patch = 0 };
+    };
+
+    for (config.plugins) |plugin| {
+        // Only check path-based plugins (URL plugins are assumed compatible via their own version constraints)
+        if (!plugin.isPathBased()) continue;
+
+        const plugin_path = plugin.path.?;
+
+        // Try to read compatibility metadata
+        const compat = readPluginCompatibility(allocator, plugin_path) catch |err| {
+            std.debug.print("Warning: Could not read plugin compatibility for '{s}': {any}\n", .{ plugin.name, err });
+            continue;
+        };
+
+        if (compat) |comp| {
+            defer {
+                allocator.free(comp.name);
+                allocator.free(comp.reason);
+            }
+
+            const result = comp.checkCompatibility(engine_ver);
+
+            switch (result) {
+                .compatible => {
+                    std.debug.print("  ✓ Plugin '{s}' compatible with engine {any}\n", .{ plugin.name, engine_ver });
+                },
+                .incompatible => {
+                    std.debug.print("\n", .{});
+                    std.debug.print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n", .{});
+                    std.debug.print("ERROR: Incompatible Plugin Version\n", .{});
+                    std.debug.print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n", .{});
+                    std.debug.print("\n", .{});
+                    std.debug.print("Plugin:  {s}\n", .{plugin.name});
+                    std.debug.print("Requires: engine >= {any} and < {any}\n", .{ comp.min_version, comp.max_version });
+                    std.debug.print("Project:  using engine {any}\n", .{engine_ver});
+                    std.debug.print("\n", .{});
+                    std.debug.print("Reason: {s}\n", .{comp.reason});
+                    std.debug.print("\n", .{});
+                    std.debug.print("Solutions:\n", .{});
+                    std.debug.print("  1. Update engine version in project.labelle to >= {any}\n", .{comp.min_version});
+                    std.debug.print("  2. Update plugin '{s}' to a version compatible with engine {any}\n", .{ plugin.name, engine_ver });
+                    std.debug.print("\n", .{});
+                    std.debug.print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n", .{});
+                    return error.IncompatiblePluginVersion;
+                },
+                .untested => {
+                    std.debug.print("  ⚠ Warning: Plugin '{s}' untested with engine {any}\n", .{ plugin.name, engine_ver });
+                    std.debug.print("    (tested up to {any}, may have issues)\n", .{comp.max_version});
+                },
+            }
+        } else {
+            // No metadata file = assume compatible (for now)
+            std.debug.print("  - Plugin '{s}' has no compatibility metadata\n", .{plugin.name});
+        }
+    }
 
     // Scan folders
     const prefabs_path = try std.fs.path.join(allocator, &.{ project_path, "prefabs" });
