@@ -141,6 +141,10 @@ pub fn createAudioModule(
     is_desktop: bool,
 ) *std.Build.Module {
     // Desktop needs sokol for sokol_audio backend, raylib for raylib_audio, zaudio for miniaudio
+    // WASM with raylib backend also needs raylib for raylib_audio
+    const use_raylib = raylib != null;
+    const use_zaudio = zaudio != null;
+
     return b.addModule("audio", .{
         .root_source_file = b.path("audio/interface.zig"),
         .target = target,
@@ -150,6 +154,11 @@ pub fn createAudioModule(
             .{ .name = "raylib", .module = raylib.? },
             .{ .name = "sokol", .module = sokol },
             .{ .name = "zaudio", .module = zaudio.? },
+            .{ .name = "sokol", .module = sokol },
+        } else if (use_raylib and !use_zaudio) &.{
+            // WASM with raylib backend: raylib + sokol, no zaudio
+            .{ .name = "build_options", .module = build_options_mod },
+            .{ .name = "raylib", .module = raylib.? },
             .{ .name = "sokol", .module = sokol },
         } else &.{
             .{ .name = "build_options", .module = build_options_mod },
