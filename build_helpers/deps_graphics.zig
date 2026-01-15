@@ -2,7 +2,6 @@
 //!
 //! Handles graphics backend dependencies:
 //! - zbgfx (bgfx wrapper)
-//! - zgpu (WebGPU via Dawn)
 //! - wgpu_native (WebGPU via wgpu-native)
 //! - zglfw (GLFW bindings)
 //! - zaudio (miniaudio wrapper)
@@ -15,14 +14,12 @@ pub const Backend = enum {
     sokol,
     sdl,
     bgfx,
-    zgpu,
     wgpu_native,
 };
 
 /// Graphics dependencies loaded from labelle-gfx
 pub const GraphicsDeps = struct {
     zbgfx: ?*std.Build.Module,
-    zgpu: ?*std.Build.Module,
     wgpu_native: ?*std.Build.Module,
     zglfw: ?*std.Build.Module,
     zaudio: ?*std.Build.Module,
@@ -42,13 +39,6 @@ pub fn loadDesktopDeps(
         .optimize = optimize,
     });
     const zbgfx = zbgfx_dep.module("zbgfx");
-
-    // zgpu
-    const zgpu_dep = labelle_dep.builder.dependency("zgpu", .{
-        .target = target,
-        .optimize = optimize,
-    });
-    const zgpu = zgpu_dep.module("root");
 
     // wgpu_native
     const wgpu_native_dep = labelle_dep.builder.dependency("wgpu_native_zig", .{
@@ -73,7 +63,6 @@ pub fn loadDesktopDeps(
 
     return .{
         .zbgfx = zbgfx,
-        .zgpu = zgpu,
         .wgpu_native = wgpu_native,
         .zglfw = zglfw,
         .zaudio = zaudio,
@@ -85,7 +74,6 @@ pub fn loadDesktopDeps(
 pub fn emptyDeps() GraphicsDeps {
     return .{
         .zbgfx = null,
-        .zgpu = null,
         .wgpu_native = null,
         .zglfw = null,
         .zaudio = null,

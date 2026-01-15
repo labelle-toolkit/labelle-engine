@@ -67,7 +67,6 @@ fn processAllTemplates(allocator: std.mem.Allocator) !void {
         "main_sokol_android.txt",
         "main_wasm.txt",
         "main_bgfx.txt",
-        "main_zgpu.txt",
         "main_wgpu_native.txt",
     };
 

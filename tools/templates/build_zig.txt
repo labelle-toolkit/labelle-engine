@@ -17,7 +17,6 @@ pub const Backend = enum {{
     sokol,
     sdl,
     bgfx,
-    zgpu,
     wgpu_native,
 }};
 
@@ -184,43 +183,6 @@ pub fn build(b: *std.Build) void {{
         .name = "{s}",
         .root_module = exe_mod,
     }});
-.zgpu_exe_start
-    // Get labelle-gfx dependency for zgpu bindings
-    const labelle_dep = engine_dep.builder.dependency("labelle-gfx", .{{
-        .target = target,
-        .optimize = optimize,
-    }});
-    const zgpu_dep = labelle_dep.builder.dependency("zgpu", .{{
-        .target = target,
-        .optimize = optimize,
-    }});
-    const zglfw_dep = labelle_dep.builder.dependency("zglfw", .{{
-        .target = target,
-        .optimize = optimize,
-    }});
-    const zgpu_mod = zgpu_dep.module("root");
-    const zglfw_mod = zglfw_dep.module("root");
-    const labelle_gfx_mod = labelle_dep.module("labelle");
-
-    // Get native libraries for linking
-    const glfw_lib = zglfw_dep.artifact("glfw");
-
-    const exe_mod = b.createModule(.{{
-        .root_source_file = b.path("../main.zig"),
-        .target = target,
-        .optimize = optimize,
-    }});
-    exe_mod.addImport("labelle-engine", engine_mod);
-    exe_mod.addImport("zgpu", zgpu_mod);
-    exe_mod.addImport("zglfw", zglfw_mod);
-    exe_mod.addImport("labelle-gfx", labelle_gfx_mod);
-.zgpu_exe_end
-.zgpu_exe_final
-    const exe = b.addExecutable(.{{
-        .name = "{s}",
-        .root_module = exe_mod,
-    }});
-    // Note: library linking done in zgpu_link section to avoid duplication
 .wgpu_native_exe_start
     // Get labelle-gfx dependency for wgpu_native bindings
     const labelle_dep = engine_dep.builder.dependency("labelle-gfx", .{{
@@ -262,15 +224,6 @@ pub fn build(b: *std.Build) void {{
     // Link bgfx and glfw native libraries
     exe.linkLibrary(bgfx_lib);
     exe.linkLibrary(glfw_lib);
-
-.zgpu_link
-    // Link glfw and Dawn (WebGPU) native libraries
-    exe.linkLibrary(glfw_lib);
-    exe.linkLibrary(zgpu_dep.artifact("zdawn"));
-
-    // Add Dawn library paths (required for zgpu to find prebuilt Dawn)
-    const zgpu_build = @import("zgpu");
-    zgpu_build.addLibraryPathsTo(exe);
 
 .ios_frameworks
     // Link iOS frameworks when targeting iOS
