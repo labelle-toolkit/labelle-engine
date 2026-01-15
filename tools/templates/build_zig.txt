@@ -299,10 +299,13 @@ pub fn build(b: *std.Build) !void {{
         }});
 .wasm_build_raylib
         // Step 2: Configure emcc to link raylib + game code
-        const emcc_flags = emsdk.emccDefaultFlags(b.allocator, .{{
+        var emcc_flags = emsdk.emccDefaultFlags(b.allocator, .{{
             .optimize = optimize,
             .asyncify = true,
         }});
+        
+        // Increase stack size to prevent stack overflow (default is 64KB)
+        try emcc_flags.put("-sSTACK_SIZE=524288", {{}}); // 512KB stack
         
         const emcc_settings = emsdk.emccDefaultSettings(b.allocator, .{{
             .optimize = optimize,
