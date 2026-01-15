@@ -271,7 +271,7 @@ pub fn generateBuildZon(allocator: std.mem.Allocator, config: ProjectConfig, opt
 }
 
 /// Generate build.zig content
-pub fn generateBuildZig(allocator: std.mem.Allocator, config: ProjectConfig) ![]const u8 {
+pub fn generateBuildZig(allocator: std.mem.Allocator, config: ProjectConfig, target_config: project_config.Target) ![]const u8 {
     var buf: std.ArrayListUnmanaged(u8) = .{};
     const writer = buf.writer(allocator);
 
@@ -279,11 +279,10 @@ pub fn generateBuildZig(allocator: std.mem.Allocator, config: ProjectConfig) ![]
     const zig_name = try sanitizeZigIdentifier(allocator, config.name);
     defer allocator.free(zig_name);
 
-    // For now, use the first target to determine defaults
-    // TODO: Generate separate build.zig per target
-    const first_target = config.targets[0];
-    const backend = first_target.getBackend();
-    const target = first_target.getPlatform();
+    // Use the provided target to determine backend and platform
+    const backend = target_config.getBackend();
+    const target = target_config.getPlatform();
+    _ = target_config.getName(); // target_name not needed for now
 
     // Get the default backends from project config
     const default_backend = switch (backend) {
@@ -2350,7 +2349,7 @@ pub fn generateProject(allocator: std.mem.Allocator, project_path: []const u8, o
         defer allocator.free(main_zig);
 
         // Generate build.zig for this target
-        const build_zig = try generateBuildZig(allocator, config);
+        const build_zig = try generateBuildZig(allocator, config, target);
         defer allocator.free(build_zig);
 
         // File paths with target prefix in output directory
