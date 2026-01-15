@@ -123,11 +123,20 @@ jobs:
           # Use --engine-path to point to local engine (skips GitHub fetch)
           ~/.labelle/bin/labelle generate --engine-path=../..
           echo "::endgroup::"
-          # Multi-target generates raylib_desktop_build.zig.zon (not build.zig.zon)
+
+          # Multi-target generates raylib_desktop_build.zig* files
+          # Create symlinks for CLI compatibility (expects build.zig.zon)
+          cd .labelle
+          if [ -f "raylib_desktop_build.zig" ] && [ ! -f "build.zig" ]; then
+            ln -s raylib_desktop_build.zig build.zig
+          fi
+          if [ -f "raylib_desktop_build.zig.zon" ] && [ ! -f "build.zig.zon" ]; then
+            ln -s raylib_desktop_build.zig.zon build.zig.zon
+          fi
+          cd ..
+
           echo "Generated files in .labelle/:"
           ls -la .labelle/
-          echo "Contents of raylib_desktop_build.zig.zon:"
-          cat .labelle/raylib_desktop_build.zig.zon
 
       - name: Build for iOS Simulator
         run: |
