@@ -337,7 +337,7 @@ pub fn generateBuildZon(allocator: std.mem.Allocator, config: ProjectConfig, opt
     var seen = std.AutoHashMap(project_config.Backend, void).init(allocator);
     defer seen.deinit();
 
-    for (config.targets) |target| {
+    for (config.getTargets()) |target| {
         const backend = target.getBackend();
         if (!seen.contains(backend)) {
             try seen.put(backend, {});
@@ -446,7 +446,7 @@ pub fn generateBuildZon(allocator: std.mem.Allocator, config: ProjectConfig, opt
         }
         if (backend == .raylib) {
             // Check if any target with raylib is WASM
-            for (config.targets) |target| {
+            for (config.getTargets()) |target| {
                 if (target.getBackend() == .raylib and target.getPlatform() == .wasm) {
                     needs_raylib_zig = true;
                     break;
@@ -2348,7 +2348,7 @@ pub fn generateMainZig(
 ) ![]const u8 {
     // For now, use the first target
     // TODO: This function will be replaced by per-target generation
-    const first_target = config.targets[0];
+    const first_target = config.getTargets()[0];
     return generateMainZigForTarget(allocator, first_target, config, prefabs, enums, components, scripts, hooks, task_hooks);
 }
 
@@ -2639,7 +2639,7 @@ pub fn generateProject(allocator: std.mem.Allocator, project_path: []const u8, o
     };
 
     // Generate files for each target
-    for (config.targets) |target| {
+    for (config.getTargets()) |target| {
         const target_name = target.getName();
 
         std.debug.print("Generating for target '{s}':\n", .{target_name});

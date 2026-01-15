@@ -358,8 +358,8 @@ pub const ProjectConfig = struct {
     initial_scene: []const u8,
     /// Multi-target build support. Declares all platforms this game supports.
     /// Example: .targets = .{ .raylib_desktop, .raylib_wasm, .sokol_ios }
-    /// Default: raylib_desktop only (backwards compatible)
-    targets: []const Target = &.{.raylib_desktop},
+    /// Default: null (implies raylib_desktop only for backwards compatibility)
+    targets: ?[]const Target = null,
     ecs_backend: EcsBackend = .zig_ecs,
     gui_backend: GuiBackend = .none,
     /// Game ID type (entity identifier type). Default: u64
@@ -378,6 +378,14 @@ pub const ProjectConfig = struct {
     /// Get the output directory (uses default ".labelle" if not specified)
     pub fn getOutputDir(self: ProjectConfig) []const u8 {
         return self.output_dir orelse ".labelle";
+    }
+
+    /// Default targets when none specified (backwards compatibility)
+    const default_targets: []const Target = &.{.raylib_desktop};
+
+    /// Get targets (uses default raylib_desktop if not specified)
+    pub fn getTargets(self: ProjectConfig) []const Target {
+        return self.targets orelse default_targets;
     }
 
     /// Load project configuration from a .labelle file
