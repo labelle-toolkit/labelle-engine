@@ -678,17 +678,17 @@ fn generateMainZigRaylib(
             // Mark this hook file as used by a plugin (won't be included directly in MergeEngineHooks)
             hook_files_used_by_plugins.put(hook_file, {}) catch {};
 
-            // Get item type: use explicit item_arg if specified, otherwise first bind arg
-            const item_type = eh.item_arg orelse (if (plugin.bind.len > 0) plugin.bind[0].arg else "void");
+            // Get bind enum type: use explicit item_arg if specified, otherwise first bind arg
+            const bind_enum_type = eh.item_arg orelse (if (plugin.bind.len > 0) plugin.bind[0].arg else "void");
 
-            // Generate: const plugin_engine_hooks = plugin.createEngineHooks(GameId, ItemType, hook_file.GameHooks);
-            // Template args: plugin_zig_name, plugin_zig_name, create_fn, item_type, hook_file, struct_name
+            // Generate: const plugin_engine_hooks = plugin.createEngineHooks(GameId, BindEnumType, hook_file.GameHooks);
+            // Template args: plugin_zig_name, plugin_zig_name, create_fn, bind_enum_type, hook_file, struct_name
             //                plugin_zig_name (for Context export prefix), plugin_zig_name
             try zts.print(main_raylib_tmpl, "plugin_engine_hooks", .{
                 plugin_zig_names[i], // for const name
                 plugin_zig_names[i], // for plugin module
                 eh.create, // createEngineHooks
-                item_type, // Items
+                bind_enum_type, // Enum type (e.g., Items)
                 hook_file, // task_hooks
                 struct_name, // GameHooks
                 plugin_zig_names[i], // Context prefix
@@ -741,18 +741,18 @@ fn generateMainZigRaylib(
 
         // Get type parameters (required for TaskEngine)
         const id_type = game_id_str;
-        const item_type =
+        const bind_enum_type =
             (if (plugin.bind.len > 0) plugin.bind[0].arg else null) orelse
             @panic("labelle-tasks plugin requires bind declaration when task hooks are detected");
 
         // Generate TaskEngine type
-        try zts.print(main_raylib_tmpl, "task_engine_start", .{ plugin_zig_name, id_type, item_type }, writer);
+        try zts.print(main_raylib_tmpl, "task_engine_start", .{ plugin_zig_name, id_type, bind_enum_type }, writer);
 
         for (task_hooks.hook_files_with_tasks) |name| {
             try zts.print(main_raylib_tmpl, "task_engine_hook_item", .{name}, writer);
         }
 
-        try zts.print(main_raylib_tmpl, "task_engine_end", .{ plugin_zig_name, id_type, item_type, plugin_zig_name, id_type, item_type }, writer);
+        try zts.print(main_raylib_tmpl, "task_engine_end", .{ plugin_zig_name, id_type, bind_enum_type, plugin_zig_name, id_type, bind_enum_type }, writer);
     } else {
         try zts.print(main_raylib_tmpl, "task_engine_empty", .{}, writer);
     }
@@ -945,19 +945,19 @@ fn generateMainZigSokol(
 
         // Get type parameters (required for TaskEngine)
         const id_type = sokol_game_id_str;
-        const item_type =
+        const bind_enum_type =
             (if (plugin.bind.len > 0) plugin.bind[0].arg else null) orelse
             @panic("labelle-tasks plugin requires bind declaration when task hooks are detected");
 
         // Generate TaskEngine type
-        try zts.print(main_sokol_tmpl, "task_engine_start", .{ plugin_zig_name, id_type, item_type }, writer);
+        try zts.print(main_sokol_tmpl, "task_engine_start", .{ plugin_zig_name, id_type, bind_enum_type }, writer);
 
         // Add hook files that contain task hooks
         for (task_hooks.hook_files_with_tasks) |name| {
             try zts.print(main_sokol_tmpl, "task_engine_hook_item", .{name}, writer);
         }
 
-        try zts.print(main_sokol_tmpl, "task_engine_end", .{ plugin_zig_name, id_type, item_type, plugin_zig_name, id_type, item_type }, writer);
+        try zts.print(main_sokol_tmpl, "task_engine_end", .{ plugin_zig_name, id_type, bind_enum_type, plugin_zig_name, id_type, bind_enum_type }, writer);
     } else {
         try zts.print(main_sokol_tmpl, "task_engine_empty", .{}, writer);
     }
@@ -1156,15 +1156,15 @@ fn generateMainZigSokolIos(
         const plugin_zig_name = try sanitizeZigIdentifier(allocator, plugin.name);
         defer allocator.free(plugin_zig_name);
         const id_type = ios_game_id_str;
-        const item_type =
+        const bind_enum_type =
             (if (plugin.bind.len > 0) plugin.bind[0].arg else null) orelse
             @panic("labelle-tasks plugin requires bind declaration when task hooks are detected");
 
-        try zts.print(main_sokol_ios_tmpl, "task_engine_start", .{ plugin_zig_name, id_type, item_type }, writer);
+        try zts.print(main_sokol_ios_tmpl, "task_engine_start", .{ plugin_zig_name, id_type, bind_enum_type }, writer);
         for (task_hooks.hook_files_with_tasks) |name| {
             try zts.print(main_sokol_ios_tmpl, "task_engine_hook_item", .{name}, writer);
         }
-        try zts.print(main_sokol_ios_tmpl, "task_engine_end", .{ plugin_zig_name, id_type, item_type, plugin_zig_name, id_type, item_type }, writer);
+        try zts.print(main_sokol_ios_tmpl, "task_engine_end", .{ plugin_zig_name, id_type, bind_enum_type, plugin_zig_name, id_type, bind_enum_type }, writer);
     } else {
         try zts.print(main_sokol_ios_tmpl, "task_engine_empty", .{}, writer);
     }
@@ -1399,15 +1399,15 @@ fn generateMainZigMobile(
         const plugin = task_hooks.tasks_plugin.?;
         const plugin_zig_name = try sanitizeZigIdentifier(allocator, plugin.name);
         defer allocator.free(plugin_zig_name);
-        const item_type =
+        const bind_enum_type =
             (if (plugin.bind.len > 0) plugin.bind[0].arg else null) orelse
             @panic("labelle-tasks plugin requires bind declaration when task hooks are detected");
 
-        try zts.print(template, "task_engine_start", .{ plugin_zig_name, game_id_str, item_type }, writer);
+        try zts.print(template, "task_engine_start", .{ plugin_zig_name, game_id_str, bind_enum_type }, writer);
         for (task_hooks.hook_files_with_tasks) |name| {
             try zts.print(template, "task_engine_hook_item", .{name}, writer);
         }
-        try zts.print(template, "task_engine_end", .{ plugin_zig_name, game_id_str, item_type, plugin_zig_name, game_id_str, item_type }, writer);
+        try zts.print(template, "task_engine_end", .{ plugin_zig_name, game_id_str, bind_enum_type, plugin_zig_name, game_id_str, bind_enum_type }, writer);
     } else {
         try zts.print(template, "task_engine_empty", .{}, writer);
     }
@@ -1599,17 +1599,17 @@ fn generateMainZigSdl(
         defer allocator.free(plugin_zig_name);
 
         const id_type = sdl_game_id_str;
-        const item_type =
+        const bind_enum_type =
             (if (plugin.bind.len > 0) plugin.bind[0].arg else null) orelse
             @panic("labelle-tasks plugin requires bind declaration when task hooks are detected");
 
-        try zts.print(main_sdl_tmpl, "task_engine_start", .{ plugin_zig_name, id_type, item_type }, writer);
+        try zts.print(main_sdl_tmpl, "task_engine_start", .{ plugin_zig_name, id_type, bind_enum_type }, writer);
 
         for (task_hooks.hook_files_with_tasks) |name| {
             try zts.print(main_sdl_tmpl, "task_engine_hook_item", .{name}, writer);
         }
 
-        try zts.print(main_sdl_tmpl, "task_engine_end", .{ plugin_zig_name, id_type, item_type, plugin_zig_name, id_type, item_type }, writer);
+        try zts.print(main_sdl_tmpl, "task_engine_end", .{ plugin_zig_name, id_type, bind_enum_type, plugin_zig_name, id_type, bind_enum_type }, writer);
     } else {
         try zts.print(main_sdl_tmpl, "task_engine_empty", .{}, writer);
     }
@@ -1848,15 +1848,15 @@ fn generateMainZigGlfw(
         const plugin_zig_name = try sanitizeZigIdentifier(allocator, plugin.name);
         defer allocator.free(plugin_zig_name);
         const id_type = glfw_game_id_str;
-        const item_type =
+        const bind_enum_type =
             (if (plugin.bind.len > 0) plugin.bind[0].arg else null) orelse
             @panic("labelle-tasks plugin requires bind declaration when task hooks are detected");
 
-        try zts.print(template, "task_engine_start", .{ plugin_zig_name, id_type, item_type }, writer);
+        try zts.print(template, "task_engine_start", .{ plugin_zig_name, id_type, bind_enum_type }, writer);
         for (task_hooks.hook_files_with_tasks) |name| {
             try zts.print(template, "task_engine_hook_item", .{name}, writer);
         }
-        try zts.print(template, "task_engine_end", .{ plugin_zig_name, id_type, item_type, plugin_zig_name, id_type, item_type }, writer);
+        try zts.print(template, "task_engine_end", .{ plugin_zig_name, id_type, bind_enum_type, plugin_zig_name, id_type, bind_enum_type }, writer);
     } else {
         try zts.print(template, "task_engine_empty", .{}, writer);
     }
