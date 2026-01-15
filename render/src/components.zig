@@ -150,18 +150,16 @@ pub const Sprite = struct {
     container: ?Container = null,
 
     pub fn toVisual(self: Sprite) SpriteVisual {
-        // Use average of scale_x and scale_y if they differ, otherwise use scale_x
-        // Note: SpriteVisual now uses uniform scale
-        const scale = if (self.scale_x == self.scale_y) self.scale_x else (self.scale_x + self.scale_y) / 2.0;
         return .{
             .texture = self.texture,
             .sprite_name = self.name,
-            .scale = scale,
+            .scale_x = self.scale_x,
+            .scale_y = self.scale_y,
             .rotation = self.rotation,
             .flip_x = self.flip_x,
             .flip_y = self.flip_y,
             .tint = self.tint,
-            .z_index = @intCast(@max(0, @min(255, self.z_index + 128))), // Map i16 [-128,127] to u8 [0,255]
+            .z_index = self.z_index,
             .visible = self.visible,
             .pivot = self.pivot,
             .pivot_x = self.pivot_x,
@@ -224,13 +222,13 @@ pub const Shape = struct {
     layer: Layer = .world,
 
     pub fn toVisual(self: Shape) ShapeVisual {
-        // Note: ShapeVisual no longer has scale_x/scale_y - scale must be baked into shape dimensions
-        // For now we ignore scale in toVisual. Consider removing scale fields or applying them to shape dimensions.
         return .{
             .shape = self.shape,
             .color = self.color,
             .rotation = self.rotation,
-            .z_index = @intCast(@max(0, @min(255, self.z_index + 128))), // Map i16 [-128,127] to u8 [0,255]
+            .scale_x = self.scale_x,
+            .scale_y = self.scale_y,
+            .z_index = self.z_index,
             .visible = self.visible,
             .layer = self.layer,
         };
@@ -299,7 +297,7 @@ pub const Text = struct {
             .text = self.text,
             .size = self.size,
             .color = self.color,
-            .z_index = @intCast(@max(0, @min(255, self.z_index + 128))), // Map i16 [-128,127] to u8 [0,255]
+            .z_index = self.z_index,
             .visible = self.visible,
             .layer = self.layer,
         };
