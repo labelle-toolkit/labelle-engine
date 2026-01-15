@@ -57,6 +57,15 @@
             .url = "git+https://github.com/ikskuh/SDL.zig#a7e95b5fcc5b0d68921c148778609d2fe248c3d8",
             .hash = "SDL2-0.0.0-yMCQivWqBABTfB8opAADsLCGxxu20vijLBW2hHdpTR-L",
         }},
+.raylib_zig_dep
+        .@"raylib_zig" = .{{
+            .url = "git+https://github.com/ryupold/raylib.zig#5.6.0-dev-KE8REL5MBQAf3p497t52Xw9P7ojndIkVOWPXnLiLLw2P",
+            .hash = "raylib_zig-5.6.0-dev-KE8REL5MBQAf3p497t52Xw9P7ojndIkVOWPXnLiLLw2P",
+        }},
+        .emsdk = .{{
+            .url = "git+https://github.com/emscripten-core/emsdk?ref=4.0.9#3bcf1dcd01f040f370e10fe673a092d9ed79ebb5",
+            .hash = "N-V-__8AAJl1DwBezhYo_VE6f53mPVm00R-Fk28NPW7P14EQ",
+        }},
 .deps_end
     }},
     .paths = .{{

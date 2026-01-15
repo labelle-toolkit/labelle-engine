@@ -258,10 +258,25 @@ pub fn generateBuildZon(allocator: std.mem.Allocator, config: ProjectConfig, opt
     }
 
     // Write backend-specific dependencies (needed for @import in build.zig)
+    var needs_raylib_zig = false;
     for (backends.items) |backend| {
         if (backend == .sdl) {
             try zts.print(build_zig_zon_tmpl, "sdl_dep", .{}, writer);
         }
+        if (backend == .raylib) {
+            // Check if any target with raylib is WASM
+            for (config.targets) |target| {
+                if (target.getBackend() == .raylib and target.getPlatform() == .wasm) {
+                    needs_raylib_zig = true;
+                    break;
+                }
+            }
+        }
+    }
+
+    // Add raylib_zig if needed for WASM builds
+    if (needs_raylib_zig) {
+        try zts.print(build_zig_zon_tmpl, "raylib_zig_dep", .{}, writer);
     }
 
     // Write closing
@@ -271,7 +286,7 @@ pub fn generateBuildZon(allocator: std.mem.Allocator, config: ProjectConfig, opt
 }
 
 /// Generate build.zig content
-pub fn generateBuildZig(allocator: std.mem.Allocator, config: ProjectConfig, target_config: project_config.Target) ![]const u8 {
+pub fn generateBuildZig(allocator: std.mem.Allocator, config: ProjectConfig, target_config: project_config.Target, main_filename: []const u8) ![]const u8 {
     var buf: std.ArrayListUnmanaged(u8) = .{};
     const writer = buf.writer(allocator);
 
@@ -308,6 +323,11 @@ pub fn generateBuildZig(allocator: std.mem.Allocator, config: ProjectConfig, tar
 
     const physics_enabled = config.physics.enabled;
     const physics_str = if (physics_enabled) "true" else "false";
+
+    // Construct relative path from output dir (.labelle/) to project root (../)
+    // Since main file is in project root and build.zig is in output dir
+    const main_file_rel_path = try std.fmt.allocPrint(allocator, "../{s}", .{main_filename});
+    defer allocator.free(main_file_rel_path);
 
     // Write common header (includes backend options)
     // Template args: graphics_backend (x2), ecs_backend (x2), gui_backend (x2), physics (x2)
@@ -348,18 +368,18 @@ pub fn generateBuildZig(allocator: std.mem.Allocator, config: ProjectConfig, tar
 
     // Write backend-specific executable setup (creates exe_mod and adds backend imports)
     switch (backend) {
-        .raylib => try zts.print(build_zig_tmpl, "raylib_exe_start", .{}, writer),
+        .raylib => try zts.print(build_zig_tmpl, "raylib_exe_start", .{main_file_rel_path}, writer),
         .sokol => {
             // iOS uses sokol through engine.sokol (no direct import to avoid module conflict)
             if (target == .ios) {
-                try zts.print(build_zig_tmpl, "sokol_ios_exe_start", .{}, writer);
+                try zts.print(build_zig_tmpl, "sokol_ios_exe_start", .{main_file_rel_path}, writer);
             } else {
-                try zts.print(build_zig_tmpl, "sokol_exe_start", .{}, writer);
+                try zts.print(build_zig_tmpl, "sokol_exe_start", .{main_file_rel_path}, writer);
             }
         },
-        .sdl => try zts.print(build_zig_tmpl, "sdl_exe_start", .{}, writer),
-        .bgfx => try zts.print(build_zig_tmpl, "bgfx_exe_start", .{}, writer),
-        .wgpu_native => try zts.print(build_zig_tmpl, "wgpu_native_exe_start", .{}, writer),
+        .sdl => try zts.print(build_zig_tmpl, "sdl_exe_start", .{main_file_rel_path}, writer),
+        .bgfx => try zts.print(build_zig_tmpl, "bgfx_exe_start", .{main_file_rel_path}, writer),
+        .wgpu_native => try zts.print(build_zig_tmpl, "wgpu_native_exe_start", .{main_file_rel_path}, writer),
     }
 
     // Write plugin imports (using exe_mod.addImport)
@@ -402,11 +422,30 @@ pub fn generateBuildZig(allocator: std.mem.Allocator, config: ProjectConfig, tar
         else => {},
     }
 
-    // Write iOS framework linking (always included, conditional in template)
-    try zts.print(build_zig_tmpl, "ios_frameworks", .{}, writer);
+    // Detect if this is a WASM target
+    const is_wasm = target_config.getPlatform() == .wasm;
 
-    // Write common footer
-    try zts.print(build_zig_tmpl, "footer", .{}, writer);
+    if (is_wasm) {
+        // WASM build path - use emsdk instead of native executable
+        try zts.print(build_zig_tmpl, "wasm_build_start", .{zig_name}, writer);
+
+        // Add backend-specific WASM linking
+        switch (backend) {
+            .raylib => try zts.print(build_zig_tmpl, "wasm_build_raylib", .{zig_name}, writer),
+            // TODO: Add sokol WASM support when needed
+            else => {},
+        }
+
+        // Close WASM block
+        try zts.print(build_zig_tmpl, "wasm_build_end", .{}, writer);
+    } else {
+        // Native build path - iOS framework linking and standard footer
+        try zts.print(build_zig_tmpl, "ios_frameworks", .{}, writer);
+        try zts.print(build_zig_tmpl, "footer", .{}, writer);
+
+        // Close native block
+        try zts.print(build_zig_tmpl, "native_build_end", .{}, writer);
+    }
 
     return buf.toOwnedSlice(allocator);
 }
@@ -2348,14 +2387,16 @@ pub fn generateProject(allocator: std.mem.Allocator, project_path: []const u8, o
         const main_zig = try generateMainZigForTarget(allocator, target, config, prefabs, enums, components, scripts, hooks, task_hooks);
         defer allocator.free(main_zig);
 
-        // Generate build.zig for this target
-        const build_zig = try generateBuildZig(allocator, config, target);
-        defer allocator.free(build_zig);
-
         // File paths with target prefix in output directory
         const main_zig_filename = try std.fmt.allocPrint(allocator, "{s}_main.zig", .{target_name});
         defer allocator.free(main_zig_filename);
-        const main_zig_path = try std.fs.path.join(allocator, &.{ output_dir_path, main_zig_filename });
+
+        // Generate build.zig for this target (pass main filename so it can reference the correct file)
+        const build_zig = try generateBuildZig(allocator, config, target, main_zig_filename);
+        defer allocator.free(build_zig);
+
+        // File paths: main.zig in project root, build files in output directory
+        const main_zig_path = try std.fs.path.join(allocator, &.{ project_path, main_zig_filename });
         defer allocator.free(main_zig_path);
 
         const build_zig_filename = try std.fmt.allocPrint(allocator, "{s}_build.zig", .{target_name});
