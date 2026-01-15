@@ -12,7 +12,7 @@ pub const Backend = enum {
     sokol,
     sdl,
     bgfx,
-    zgpu,
+    wgpu_native,
 };
 
 /// ECS backend selection (must match labelle-engine)

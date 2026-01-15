@@ -2,7 +2,7 @@
 //!
 //! Handles GUI backend dependencies and module setup for:
 //! - Nuklear (immediate mode GUI)
-//! - ImGui via zgui (raylib, SDL, bgfx, zgpu)
+//! - ImGui via zgui (raylib, SDL, bgfx)
 //! - ImGui via dcimgui + sokol_imgui (sokol backend)
 //! - rlImGui bridge (raylib + ImGui integration)
 //! - wgpu_native ImGui adapter
@@ -25,7 +25,6 @@ pub const Backend = enum {
     sokol,
     sdl,
     bgfx,
-    zgpu,
     wgpu_native,
 };
 
@@ -49,7 +48,6 @@ pub const GuiContext = struct {
     raylib: ?*std.Build.Module,
     sdl: ?*std.Build.Module,
     zbgfx: ?*std.Build.Module,
-    zgpu: ?*std.Build.Module,
     wgpu_native: ?*std.Build.Module,
     zglfw: ?*std.Build.Module,
     labelle: *std.Build.Module,
@@ -102,7 +100,6 @@ fn getZguiBackend(graphics_backend: Backend) ZguiBackend {
         .sokol => unreachable, // sokol uses dcimgui
         .sdl => .sdl2_renderer,
         .bgfx => .glfw,
-        .zgpu => .glfw_wgpu,
         .wgpu_native => .no_backend, // uses custom adapter
     };
 }
@@ -151,7 +148,6 @@ pub fn createGuiModule(ctx: GuiContext) *std.Build.Module {
             .{ .name = "sokol", .module = ctx.sokol },
             .{ .name = "sdl2", .module = ctx.sdl.? },
             .{ .name = "zbgfx", .module = ctx.zbgfx.? },
-            .{ .name = "zgpu", .module = ctx.zgpu.? },
             .{ .name = "wgpu", .module = ctx.wgpu_native.? },
             .{ .name = "labelle", .module = ctx.labelle },
             .{ .name = "zglfw", .module = ctx.zglfw.? },

@@ -9,7 +9,6 @@ pub const Backend = enum {
     sokol,
     sdl,
     bgfx,
-    zgpu,
     wgpu_native,
 };
 
@@ -98,7 +97,7 @@ pub fn build(b: *std.Build) void {
     // iOS/Android sokol configuration is handled by labelle-gfx.
     const sokol_dep: ?*std.Build.Dependency = null;
 
-    // Desktop-only graphics deps (zbgfx, zgpu, wgpu_native, zglfw, zaudio)
+    // Desktop-only graphics deps (zbgfx, wgpu_native, zglfw, zaudio)
     const gfx_deps = if (is_desktop)
         deps_graphics.loadDesktopDeps(labelle_dep, b, target, optimize)
     else
@@ -280,7 +279,6 @@ pub fn build(b: *std.Build) void {
         .raylib = raylib,
         .sdl = sdl,
         .zbgfx = gfx_deps.zbgfx,
-        .zgpu = gfx_deps.zgpu,
         .wgpu_native = gfx_deps.wgpu_native,
         .zglfw = gfx_deps.zglfw,
         .labelle = labelle,

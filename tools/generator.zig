@@ -29,7 +29,6 @@ const main_sokol_android_tmpl = @embedFile("templates/main_sokol_android.txt");
 const main_wasm_tmpl = @embedFile("templates/main_wasm.txt");
 const main_sdl_tmpl = @embedFile("templates/main_sdl.txt");
 const main_bgfx_tmpl = @embedFile("templates/main_bgfx.txt");
-const main_zgpu_tmpl = @embedFile("templates/main_zgpu.txt");
 const main_wgpu_native_tmpl = @embedFile("templates/main_wgpu_native.txt");
 
 /// Sanitize a project name to be a valid Zig identifier.
@@ -245,9 +244,6 @@ pub fn generateBuildZon(allocator: std.mem.Allocator, config: ProjectConfig, opt
     if (config.backend == .sdl) {
         try zts.print(build_zig_zon_tmpl, "sdl_dep", .{}, writer);
     }
-    if (config.backend == .zgpu) {
-        try zts.print(build_zig_zon_tmpl, "zgpu_dep", .{}, writer);
-    }
 
     // Write closing
     try zts.print(build_zig_zon_tmpl, "deps_end", .{}, writer);
@@ -270,7 +266,6 @@ pub fn generateBuildZig(allocator: std.mem.Allocator, config: ProjectConfig) ![]
         .sokol => "sokol",
         .sdl => "sdl",
         .bgfx => "bgfx",
-        .zgpu => "zgpu",
         .wgpu_native => "wgpu_native",
     };
 
@@ -340,7 +335,6 @@ pub fn generateBuildZig(allocator: std.mem.Allocator, config: ProjectConfig) ![]
         },
         .sdl => try zts.print(build_zig_tmpl, "sdl_exe_start", .{}, writer),
         .bgfx => try zts.print(build_zig_tmpl, "bgfx_exe_start", .{}, writer),
-        .zgpu => try zts.print(build_zig_tmpl, "zgpu_exe_start", .{}, writer),
         .wgpu_native => try zts.print(build_zig_tmpl, "wgpu_native_exe_start", .{}, writer),
     }
 
@@ -362,7 +356,6 @@ pub fn generateBuildZig(allocator: std.mem.Allocator, config: ProjectConfig) ![]
         },
         .sdl => try zts.print(build_zig_tmpl, "sdl_exe_end", .{}, writer),
         .bgfx => try zts.print(build_zig_tmpl, "bgfx_exe_end", .{}, writer),
-        .zgpu => try zts.print(build_zig_tmpl, "zgpu_exe_end", .{}, writer),
         .wgpu_native => try zts.print(build_zig_tmpl, "wgpu_native_exe_end", .{}, writer),
     }
 
@@ -376,14 +369,12 @@ pub fn generateBuildZig(allocator: std.mem.Allocator, config: ProjectConfig) ![]
         .sokol => try zts.print(build_zig_tmpl, "sokol_exe_final", .{zig_name}, writer),
         .sdl => try zts.print(build_zig_tmpl, "sdl_exe_final", .{zig_name}, writer),
         .bgfx => try zts.print(build_zig_tmpl, "bgfx_exe_final", .{zig_name}, writer),
-        .zgpu => try zts.print(build_zig_tmpl, "zgpu_exe_final", .{zig_name}, writer),
         .wgpu_native => try zts.print(build_zig_tmpl, "wgpu_native_exe_final", .{zig_name}, writer),
     }
 
-    // Write backend-specific library linking (bgfx/zgpu need native libs)
+    // Write backend-specific library linking (bgfx needs native libs)
     switch (config.backend) {
         .bgfx => try zts.print(build_zig_tmpl, "bgfx_link", .{}, writer),
-        .zgpu => try zts.print(build_zig_tmpl, "zgpu_link", .{}, writer),
         else => {},
     }
 
@@ -1614,7 +1605,7 @@ fn generateMainZigSdl(
     return buf.toOwnedSlice(allocator);
 }
 
-/// Generic main.zig generator for GLFW-based backends (bgfx, zgpu)
+/// Generic main.zig generator for GLFW-based backends (bgfx, wgpu_native)
 /// Reduces code duplication by parameterizing the template and optional sections.
 fn generateMainZigGlfw(
     comptime template: []const u8,
@@ -1880,20 +1871,6 @@ fn generateMainZigBgfx(
     return generateMainZigGlfw(main_bgfx_tmpl, true, allocator, config, prefabs, enums, components, scripts, hooks, task_hooks);
 }
 
-/// Generate main.zig content for zgpu backend
-fn generateMainZigZgpu(
-    allocator: std.mem.Allocator,
-    config: ProjectConfig,
-    prefabs: []const []const u8,
-    enums: []const []const u8,
-    components: []const []const u8,
-    scripts: []const []const u8,
-    hooks: []const []const u8,
-    task_hooks: TaskHookScanResult,
-) ![]const u8 {
-    return generateMainZigGlfw(main_zgpu_tmpl, false, allocator, config, prefabs, enums, components, scripts, hooks, task_hooks);
-}
-
 /// Generate main.zig content for wgpu_native backend
 fn generateMainZigWgpuNative(
     allocator: std.mem.Allocator,
@@ -1939,7 +1916,6 @@ pub fn generateMainZig(
         .sokol => generateMainZigSokol(allocator, config, prefabs, enums, components, scripts, hooks, task_hooks),
         .sdl => generateMainZigSdl(allocator, config, prefabs, enums, components, scripts, hooks, task_hooks),
         .bgfx => generateMainZigBgfx(allocator, config, prefabs, enums, components, scripts, hooks, task_hooks),
-        .zgpu => generateMainZigZgpu(allocator, config, prefabs, enums, components, scripts, hooks, task_hooks),
         .wgpu_native => generateMainZigWgpuNative(allocator, config, prefabs, enums, components, scripts, hooks, task_hooks),
     };
 }
