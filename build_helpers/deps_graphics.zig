@@ -91,26 +91,30 @@ pub fn createInputModule(
     sokol: *std.Build.Module,
     sdl: ?*std.Build.Module,
     zglfw: ?*std.Build.Module,
-    is_desktop: bool,
+    backend: anytype, // Backend enum
 ) *std.Build.Module {
-    // WASM with raylib backend also needs raylib for raylib_input
-    const use_raylib = raylib != null;
+    // Different backends need different modules
+    const needs_raylib = backend == .raylib;
+    const needs_sdl = backend == .sdl;
+    const needs_zglfw = backend == .bgfx or backend == .zgpu or backend == .wgpu_native;
 
     return b.addModule("input", .{
         .root_source_file = b.path("input/interface.zig"),
         .target = target,
         .optimize = optimize,
-        .imports = if (is_desktop) &.{
+        .imports = if (needs_raylib and raylib != null) &.{
             .{ .name = "build_options", .module = build_options_mod },
             .{ .name = "raylib", .module = raylib.? },
+            .{ .name = "sokol", .module = sokol },
+        } else if (needs_sdl and sdl != null and zglfw != null) &.{
+            .{ .name = "build_options", .module = build_options_mod },
             .{ .name = "sokol", .module = sokol },
             .{ .name = "sdl2", .module = sdl.? },
             .{ .name = "zglfw", .module = zglfw.? },
-        } else if (use_raylib) &.{
-            // WASM with raylib backend: raylib + sokol
+        } else if (needs_zglfw and zglfw != null) &.{
             .{ .name = "build_options", .module = build_options_mod },
-            .{ .name = "raylib", .module = raylib.? },
             .{ .name = "sokol", .module = sokol },
+            .{ .name = "zglfw", .module = zglfw.? },
         } else &.{
             .{ .name = "build_options", .module = build_options_mod },
             .{ .name = "sokol", .module = sokol },
@@ -146,28 +150,27 @@ pub fn createAudioModule(
     raylib: ?*std.Build.Module,
     sokol: *std.Build.Module,
     zaudio: ?*std.Build.Module,
-    is_desktop: bool,
+    backend: anytype, // Backend enum
 ) *std.Build.Module {
-    // Desktop needs sokol for sokol_audio backend, raylib for raylib_audio, zaudio for miniaudio
-    // WASM with raylib backend also needs raylib for raylib_audio
-    const use_raylib = raylib != null;
-    const use_zaudio = zaudio != null;
+    // Raylib backend needs raylib module
+    // Desktop non-raylib backends need sokol for sokol_audio, zaudio for miniaudio
+    // Mobile/WASM raylib needs raylib module
+    // Mobile/WASM sokol needs only sokol module
+    const needs_raylib = backend == .raylib;
+    const needs_zaudio = backend != .raylib and backend != .sokol and zaudio != null;
 
     return b.addModule("audio", .{
         .root_source_file = b.path("audio/interface.zig"),
         .target = target,
         .optimize = optimize,
-        .imports = if (is_desktop) &.{
+        .imports = if (needs_raylib and raylib != null) &.{
             .{ .name = "build_options", .module = build_options_mod },
             .{ .name = "raylib", .module = raylib.? },
+            .{ .name = "sokol", .module = sokol },
+        } else if (needs_zaudio) &.{
+            .{ .name = "build_options", .module = build_options_mod },
             .{ .name = "sokol", .module = sokol },
             .{ .name = "zaudio", .module = zaudio.? },
-            .{ .name = "sokol", .module = sokol },
-        } else if (use_raylib and !use_zaudio) &.{
-            // WASM with raylib backend: raylib + sokol, no zaudio
-            .{ .name = "build_options", .module = build_options_mod },
-            .{ .name = "raylib", .module = raylib.? },
-            .{ .name = "sokol", .module = sokol },
         } else &.{
             .{ .name = "build_options", .module = build_options_mod },
             .{ .name = "sokol", .module = sokol },

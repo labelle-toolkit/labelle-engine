@@ -80,12 +80,8 @@ pub fn build(b: *std.Build) void {
     const labelle_dep = b.dependency("labelle-gfx", .{ .target = target, .optimize = optimize });
     const labelle = labelle_dep.module("labelle");
 
-    // raylib - from labelle-gfx (desktop and WASM with raylib backend)
-    // WASM needs raylib for the audio module when using raylib backend
-    const raylib: ?*std.Build.Module = if (is_desktop or (is_wasm and backend == .raylib))
-        labelle_dep.builder.modules.get("raylib")
-    else
-        null;
+    // raylib - from labelle-gfx (needed for raylib backend on any platform)
+    const raylib: ?*std.Build.Module = if (backend == .raylib) labelle_dep.builder.modules.get("raylib") else null;
 
     // SDL - from labelle-gfx (desktop only)
     const sdl: ?*std.Build.Module = if (is_desktop) labelle_dep.builder.modules.get("sdl") else null;
@@ -210,7 +206,7 @@ pub fn build(b: *std.Build) void {
         sokol,
         sdl,
         gfx_deps.zglfw,
-        is_desktop,
+        backend,
     );
 
     // Graphics interface
@@ -231,7 +227,7 @@ pub fn build(b: *std.Build) void {
         raylib,
         sokol,
         gfx_deps.zaudio,
-        is_desktop,
+        backend,
     );
 
     // Link miniaudio for sokol/SDL backends on desktop
