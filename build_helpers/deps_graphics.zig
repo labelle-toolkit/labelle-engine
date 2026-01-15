@@ -93,6 +93,9 @@ pub fn createInputModule(
     zglfw: ?*std.Build.Module,
     is_desktop: bool,
 ) *std.Build.Module {
+    // WASM with raylib backend also needs raylib for raylib_input
+    const use_raylib = raylib != null;
+
     return b.addModule("input", .{
         .root_source_file = b.path("input/interface.zig"),
         .target = target,
@@ -103,6 +106,11 @@ pub fn createInputModule(
             .{ .name = "sokol", .module = sokol },
             .{ .name = "sdl2", .module = sdl.? },
             .{ .name = "zglfw", .module = zglfw.? },
+        } else if (use_raylib) &.{
+            // WASM with raylib backend: raylib + sokol
+            .{ .name = "build_options", .module = build_options_mod },
+            .{ .name = "raylib", .module = raylib.? },
+            .{ .name = "sokol", .module = sokol },
         } else &.{
             .{ .name = "build_options", .module = build_options_mod },
             .{ .name = "sokol", .module = sokol },
