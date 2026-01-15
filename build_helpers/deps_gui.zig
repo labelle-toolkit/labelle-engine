@@ -138,29 +138,25 @@ pub fn loadCimgui(
 
 /// Create the GUI interface module with all necessary imports
 pub fn createGuiModule(ctx: GuiContext) *std.Build.Module {
+    // Start with minimal imports, add optional ones after
     const gui_interface = ctx.b.addModule("gui", .{
         .root_source_file = ctx.b.path("gui/mod.zig"),
         .target = ctx.target,
         .optimize = ctx.optimize,
-        .imports = if (ctx.is_desktop) &.{
+        .imports = &.{
             .{ .name = "build_options", .module = ctx.build_options_mod },
-            .{ .name = "raylib", .module = ctx.raylib.? },
             .{ .name = "sokol", .module = ctx.sokol },
-            .{ .name = "sdl2", .module = ctx.sdl.? },
-            .{ .name = "zbgfx", .module = ctx.zbgfx.? },
-            .{ .name = "wgpu", .module = ctx.wgpu_native.? },
             .{ .name = "labelle", .module = ctx.labelle },
-            .{ .name = "zglfw", .module = ctx.zglfw.? },
-        } else &.{
-            .{ .name = "build_options", .module = ctx.build_options_mod },
-            .{ .name = "sokol", .module = ctx.sokol },
         },
     });
 
-    // Add zclay if available
-    if (ctx.zclay) |m| {
-        gui_interface.addImport("zclay", m);
-    }
+    // Add optional modules based on what's available (backend-dependent)
+    if (ctx.raylib) |m| gui_interface.addImport("raylib", m);
+    if (ctx.sdl) |m| gui_interface.addImport("sdl2", m);
+    if (ctx.zbgfx) |m| gui_interface.addImport("zbgfx", m);
+    if (ctx.wgpu_native) |m| gui_interface.addImport("wgpu", m);
+    if (ctx.zglfw) |m| gui_interface.addImport("zglfw", m);
+    if (ctx.zclay) |m| gui_interface.addImport("zclay", m);
 
     return gui_interface;
 }
