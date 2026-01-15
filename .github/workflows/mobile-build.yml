@@ -124,14 +124,14 @@ jobs:
           ~/.labelle/bin/labelle generate --engine-path=../..
           echo "::endgroup::"
 
-          # Multi-target generates raylib_desktop_build.zig* files
-          # Create symlinks for CLI compatibility (expects build.zig.zon)
+          # Multi-target generates target-specific files (sokol_ios_build.zig, raylib_desktop_build.zig)
+          # Create symlinks for iOS build (CLI expects build.zig.zon)
           cd .labelle
-          if [ -f "raylib_desktop_build.zig" ] && [ ! -f "build.zig" ]; then
-            ln -s raylib_desktop_build.zig build.zig
+          if [ -f "sokol_ios_build.zig" ] && [ ! -f "build.zig" ]; then
+            ln -s sokol_ios_build.zig build.zig
           fi
-          if [ -f "raylib_desktop_build.zig.zon" ] && [ ! -f "build.zig.zon" ]; then
-            ln -s raylib_desktop_build.zig.zon build.zig.zon
+          if [ -f "sokol_ios_build.zig.zon" ] && [ ! -f "build.zig.zon" ]; then
+            ln -s sokol_ios_build.zig.zon build.zig.zon
           fi
           cd ..
 

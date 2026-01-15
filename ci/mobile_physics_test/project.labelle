@@ -3,6 +3,8 @@
     .name = "mobile_physics_test",
     .description = "CI test project for mobile builds with physics",
     .initial_scene = "main",
+    // Multi-target: desktop (for native tests) and iOS (for mobile builds)
+    .targets = .{ .raylib_desktop, .sokol_ios },
     .window = .{
         .width = 800,
         .height = 600,
