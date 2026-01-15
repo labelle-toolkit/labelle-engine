@@ -41,7 +41,7 @@
 
 const std = @import("std");
 
-/// Graphics backend selection
+/// Graphics backend selection (deprecated - use Target enum)
 pub const Backend = enum {
     raylib,
     sokol,
@@ -65,8 +65,7 @@ pub const GuiBackend = enum {
     imgui,
 };
 
-/// Target platform selection
-/// Used primarily for mobile/web which require different main.zig architecture
+/// Target platform selection (deprecated - use Target enum instead)
 pub const TargetPlatform = enum {
     /// Native platform (macOS, Linux, Windows) - default
     native,
@@ -76,6 +75,55 @@ pub const TargetPlatform = enum {
     android,
     /// Web/WASM target
     wasm,
+};
+
+/// Combined backend + platform target
+/// This replaces the separate .backend and .target fields
+pub const Target = enum {
+    // Raylib targets
+    raylib_desktop,
+    raylib_wasm,
+
+    // Sokol targets
+    sokol_desktop,
+    sokol_wasm,
+    sokol_ios,
+    sokol_android,
+
+    // SDL targets
+    sdl_desktop,
+
+    // BGFX targets
+    bgfx_desktop,
+
+    // WGPU targets
+    wgpu_native_desktop,
+
+    /// Extract the backend from this target
+    pub fn getBackend(self: Target) Backend {
+        return switch (self) {
+            .raylib_desktop, .raylib_wasm => .raylib,
+            .sokol_desktop, .sokol_wasm, .sokol_ios, .sokol_android => .sokol,
+            .sdl_desktop => .sdl,
+            .bgfx_desktop => .bgfx,
+            .wgpu_native_desktop => .wgpu_native,
+        };
+    }
+
+    /// Extract the platform from this target
+    pub fn getPlatform(self: Target) TargetPlatform {
+        return switch (self) {
+            .raylib_desktop, .sokol_desktop, .sdl_desktop, .bgfx_desktop, .wgpu_native_desktop => .native,
+            .raylib_wasm, .sokol_wasm => .wasm,
+            .sokol_ios => .ios,
+            .sokol_android => .android,
+        };
+    }
+
+    /// Get the string name for file prefixing
+    pub fn getName(self: Target) []const u8 {
+        return @tagName(self);
+    }
 };
 
 /// Game ID type selection (entity identifier type)
@@ -308,11 +356,11 @@ pub const ProjectConfig = struct {
     /// labelle-engine version to use for generation. Used by the CLI.
     engine_version: ?[]const u8 = null,
     initial_scene: []const u8,
-    backend: Backend = .raylib,
+    /// Multi-target build support. Declares all platforms this game supports.
+    /// Example: .targets = .{ .raylib_desktop, .raylib_wasm, .sokol_ios }
+    targets: []const Target,
     ecs_backend: EcsBackend = .zig_ecs,
     gui_backend: GuiBackend = .none,
-    /// Target platform. iOS requires sokol callback architecture.
-    target: TargetPlatform = .native,
     /// Game ID type (entity identifier type). Default: u64
     /// This affects plugin integrations like labelle-tasks that need to know the entity ID type.
     game_id: GameIdType = .u64,

@@ -35,12 +35,13 @@ pub const GuiBackend = enum {{
     imgui,
 }};
 
-pub fn build(b: *std.Build) void {{
+pub fn build(b: *std.Build) !void {{
     const target = b.standardTargetOptions(.{{}});
     const optimize = b.standardOptimizeOption(.{{}});
 
-    // Detect iOS target for framework linking
+    // Detect platform-specific targets
     const is_ios = target.result.os.tag == .ios;
+    const is_wasm = target.result.os.tag == .emscripten;
 
     // Backend options - can be overridden via -Dbackend, -Decs_backend, -Dgui_backend
     const backend = b.option(Backend, "backend", "Graphics backend to use (default: {s})") orelse .{s};
@@ -59,19 +60,20 @@ pub fn build(b: *std.Build) void {{
     const engine_mod = engine_dep.module("labelle-engine");
 
 .plugin_dep
-    const {s}_dep = b.dependency("{s}", .{{
+    // Note: For path-based plugin dependencies that also depend on labelle-engine,
+    // we create the module manually to avoid duplicate labelle-engine dependencies
+    const {s}_mod = b.createModule(.{{
+        .root_source_file = b.path("../../{s}/src/root.zig"),
         .target = target,
         .optimize = optimize,
-        .backend = backend,
-        .ecs_backend = ecs_backend,
-        .gui_backend = gui_backend,
-        .physics = physics_enabled,
     }});
-    const {s}_mod = {s}_dep.module("{s}");
+    {s}_mod.addImport("labelle-engine", engine_mod);
+    {s}_mod.addImport("ecs", engine_dep.module("ecs"));
+    _ = "{s}"; // unused: module_name
 
 .raylib_exe_start
     const exe_mod = b.createModule(.{{
-        .root_source_file = b.path("../main.zig"),
+        .root_source_file = b.path("{s}"),
         .target = target,
         .optimize = optimize,
     }});
@@ -84,10 +86,12 @@ pub fn build(b: *std.Build) void {{
     }}
 
 .raylib_exe_final
-    const exe = b.addExecutable(.{{
-        .name = "{s}",
-        .root_module = exe_mod,
-    }});
+    // ===== CONDITIONAL BUILD PATH =====
+    if (!is_wasm) {{
+        const exe = b.addExecutable(.{{
+            .name = "{s}",
+            .root_module = exe_mod,
+        }});
 .sokol_exe_start
     // Get labelle-gfx dependency for sokol bindings
     const labelle_dep = engine_dep.builder.dependency("labelle-gfx", .{{
@@ -102,7 +106,7 @@ pub fn build(b: *std.Build) void {{
     const labelle_gfx_mod = labelle_dep.module("labelle");
 
     const exe_mod = b.createModule(.{{
-        .root_source_file = b.path("../main.zig"),
+        .root_source_file = b.path("{s}"),
         .target = target,
         .optimize = optimize,
     }});
@@ -113,17 +117,19 @@ pub fn build(b: *std.Build) void {{
 .sokol_ios_exe_start
     // iOS sokol: sokol bindings accessed through engine.sokol (no direct import)
     const exe_mod = b.createModule(.{{
-        .root_source_file = b.path("../main.zig"),
+        .root_source_file = b.path("{s}"),
         .target = target,
         .optimize = optimize,
     }});
     exe_mod.addImport("labelle-engine", engine_mod);
 .sokol_ios_exe_end
 .sokol_exe_final
-    const exe = b.addExecutable(.{{
-        .name = "{s}",
-        .root_module = exe_mod,
-    }});
+    // ===== CONDITIONAL BUILD PATH =====
+    if (!is_wasm) {{
+        const exe = b.addExecutable(.{{
+            .name = "{s}",
+            .root_module = exe_mod,
+        }});
 .sdl_exe_start
     // SDL SDK is declared as a direct dependency in build.zig.zon
     const SdlSdk = @import("sdl");
@@ -131,7 +137,7 @@ pub fn build(b: *std.Build) void {{
     const sdl_mod = sdl_sdk.getWrapperModule();
 
     const exe_mod = b.createModule(.{{
-        .root_source_file = b.path("../main.zig"),
+        .root_source_file = b.path("{s}"),
         .target = target,
         .optimize = optimize,
     }});
@@ -139,13 +145,15 @@ pub fn build(b: *std.Build) void {{
     exe_mod.addImport("sdl2", sdl_mod);
 .sdl_exe_end
 .sdl_exe_final
-    const exe = b.addExecutable(.{{
-        .name = "{s}",
-        .root_module = exe_mod,
-    }});
-    sdl_sdk.link(exe, .dynamic, .SDL2);
-    sdl_sdk.link(exe, .dynamic, .SDL2_ttf);
-    exe.linkSystemLibrary("SDL2_image");
+    // ===== CONDITIONAL BUILD PATH =====
+    if (!is_wasm) {{
+        const exe = b.addExecutable(.{{
+            .name = "{s}",
+            .root_module = exe_mod,
+        }});
+        sdl_sdk.link(exe, .dynamic, .SDL2);
+        sdl_sdk.link(exe, .dynamic, .SDL2_ttf);
+        exe.linkSystemLibrary("SDL2_image");
 .bgfx_exe_start
     // Get labelle-gfx dependency for bgfx bindings
     const labelle_dep = engine_dep.builder.dependency("labelle-gfx", .{{
@@ -169,7 +177,7 @@ pub fn build(b: *std.Build) void {{
     const glfw_lib = zglfw_dep.artifact("glfw");
 
     const exe_mod = b.createModule(.{{
-        .root_source_file = b.path("../main.zig"),
+        .root_source_file = b.path("{s}"),
         .target = target,
         .optimize = optimize,
     }});
@@ -179,10 +187,12 @@ pub fn build(b: *std.Build) void {{
     exe_mod.addImport("labelle-gfx", labelle_gfx_mod);
 .bgfx_exe_end
 .bgfx_exe_final
-    const exe = b.addExecutable(.{{
-        .name = "{s}",
-        .root_module = exe_mod,
-    }});
+    // ===== CONDITIONAL BUILD PATH =====
+    if (!is_wasm) {{
+        const exe = b.addExecutable(.{{
+            .name = "{s}",
+            .root_module = exe_mod,
+        }});
 .wgpu_native_exe_start
     // Get labelle-gfx dependency for wgpu_native bindings
     const labelle_dep = engine_dep.builder.dependency("labelle-gfx", .{{
@@ -202,7 +212,7 @@ pub fn build(b: *std.Build) void {{
     const labelle_gfx_mod = labelle_dep.module("labelle");
 
     const exe_mod = b.createModule(.{{
-        .root_source_file = b.path("../main.zig"),
+        .root_source_file = b.path("{s}"),
         .target = target,
         .optimize = optimize,
     }});
@@ -212,12 +222,14 @@ pub fn build(b: *std.Build) void {{
     exe_mod.addImport("labelle-gfx", labelle_gfx_mod);
 .wgpu_native_exe_end
 .wgpu_native_exe_final
-    const exe = b.addExecutable(.{{
-        .name = "{s}",
-        .root_module = exe_mod,
-    }});
-    exe.linkLibrary(zglfw_dep.artifact("glfw"));
-    exe.linkLibrary(wgpu_native_dep.artifact("wgpu_native"));
+    // ===== CONDITIONAL BUILD PATH =====
+    if (!is_wasm) {{
+        const exe = b.addExecutable(.{{
+            .name = "{s}",
+            .root_module = exe_mod,
+        }});
+        exe.linkLibrary(zglfw_dep.artifact("glfw"));
+        exe.linkLibrary(wgpu_native_dep.artifact("wgpu_native"));
 .plugin_import
     exe_mod.addImport("{s}", {s}_mod);
 .bgfx_link
@@ -226,33 +238,104 @@ pub fn build(b: *std.Build) void {{
     exe.linkLibrary(glfw_lib);
 
 .ios_frameworks
-    // Link iOS frameworks when targeting iOS
-    if (is_ios) {{
-        // Add framework search path for linking - select SDK based on target ABI
-        if (target.result.abi == .simulator) {{
-            exe.addFrameworkPath(.{{ .cwd_relative = "/Applications/Xcode.app/Contents/Developer/Platforms/iPhoneSimulator.platform/Developer/SDKs/iPhoneSimulator.sdk/System/Library/Frameworks" }});
-        }} else {{
-            exe.addFrameworkPath(.{{ .cwd_relative = "/Applications/Xcode.app/Contents/Developer/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS.sdk/System/Library/Frameworks" }});
+        // Link iOS frameworks when targeting iOS
+        if (is_ios) {{
+            // Add framework search path for linking - select SDK based on target ABI
+            if (target.result.abi == .simulator) {{
+                exe.addFrameworkPath(.{{ .cwd_relative = "/Applications/Xcode.app/Contents/Developer/Platforms/iPhoneSimulator.platform/Developer/SDKs/iPhoneSimulator.sdk/System/Library/Frameworks" }});
+            }} else {{
+                exe.addFrameworkPath(.{{ .cwd_relative = "/Applications/Xcode.app/Contents/Developer/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS.sdk/System/Library/Frameworks" }});
+            }}
+
+            exe.linkFramework("Metal");
+            exe.linkFramework("MetalKit");
+            exe.linkFramework("UIKit");
+            exe.linkFramework("AudioToolbox");
+            exe.linkFramework("AVFoundation");
+            exe.linkFramework("Foundation");
+            exe.linkFramework("QuartzCore");
+            exe.linkSystemLibrary("objc");
         }}
 
-        exe.linkFramework("Metal");
-        exe.linkFramework("MetalKit");
-        exe.linkFramework("UIKit");
-        exe.linkFramework("AudioToolbox");
-        exe.linkFramework("AVFoundation");
-        exe.linkFramework("Foundation");
-        exe.linkFramework("QuartzCore");
-        exe.linkSystemLibrary("objc");
-    }}
-
 .footer
-    b.installArtifact(exe);
+        b.installArtifact(exe);
 
-    const run_cmd = b.addRunArtifact(exe);
-    run_cmd.step.dependOn(b.getInstallStep());
-    // Set working directory to project root (parent of output directory)
-    run_cmd.setCwd(b.path(".."));
+        const run_cmd = b.addRunArtifact(exe);
+        run_cmd.step.dependOn(b.getInstallStep());
+        // Set working directory to project root (parent of output directory)
+        run_cmd.setCwd(b.path(".."));
 
-    const run_step = b.step("run", "Run the game");
-    run_step.dependOn(&run_cmd.step);
+        const run_step = b.step("run", "Run the game");
+        run_step.dependOn(&run_cmd.step);
+.native_build_end
+    }} // End !is_wasm check
+}}
+.native_build_close_if
+    }} // End !is_wasm check
+.wasm_build_start
+    else {{
+        // ===== WASM BUILD PATH =====
+        // Get raylib_zig for emsdk access
+        const labelle_gfx_dep = engine_dep.builder.dependency("labelle-gfx", .{{
+            .target = target,
+            .optimize = optimize,
+        }});
+        const raylib_zig_dep = labelle_gfx_dep.builder.dependency("raylib_zig", .{{
+            .target = target,
+            .optimize = optimize,
+        }});
+        
+        // Import raylib_zig build script to access emsdk
+        const raylib_zig = @import("raylib_zig");
+        const emsdk = raylib_zig.emsdk;
+        
+        // Get raylib artifact and dependency for shell.html
+        const raylib_artifact = raylib_zig_dep.artifact("raylib");
+        const raylib_dep = raylib_zig_dep.builder.dependency("raylib", .{{}});
+        
+        // Step 1: Create library (not executable) for WASM
+        const lib = b.addLibrary(.{{
+            .name = "{s}",
+            .root_module = exe_mod,
+        }});
+.wasm_build_raylib
+        // Step 2: Configure emcc to link raylib + game code
+        var emcc_flags = emsdk.emccDefaultFlags(b.allocator, .{{
+            .optimize = optimize,
+            .asyncify = true,
+        }});
+        
+        // Increase stack size to prevent stack overflow (default is 64KB)
+        try emcc_flags.put("-sSTACK_SIZE=524288", {{}}); // 512KB stack
+        
+        const emcc_settings = emsdk.emccDefaultSettings(b.allocator, .{{
+            .optimize = optimize,
+        }});
+        
+        // Get shell.html from raylib dependency
+        const shell_path = raylib_dep.path("src/shell.html");
+        
+        // Step 3: Run emcc to create .html/.js/.wasm
+        const emcc_step = emsdk.emccStep(b, raylib_artifact, lib, .{{
+            .optimize = optimize,
+            .flags = emcc_flags,
+            .settings = emcc_settings,
+            .shell_file_path = shell_path,
+            .install_dir = .{{ .custom = "web" }},
+        }});
+        
+        b.getInstallStep().dependOn(emcc_step);
+        
+        // Add emrun step for browser testing
+        const html_filename = try std.fmt.allocPrint(b.allocator, "{{s}}.html", .{{"{s}"}});
+        const run_step = b.step("run", "Run the game in browser");
+        const emrun_step = emsdk.emrunStep(
+            b,
+            b.getInstallPath(.{{ .custom = "web" }}, html_filename),
+            &.{{}},
+        );
+        emrun_step.dependOn(emcc_step);
+        run_step.dependOn(emrun_step);
+.wasm_build_end
+    }} // End is_wasm check
 }}
