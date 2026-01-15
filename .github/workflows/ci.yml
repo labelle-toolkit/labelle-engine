@@ -151,9 +151,22 @@ jobs:
           # zig build generate -- --engine-path ../../.. usage/example_2
           zig build generate -- --engine-path ../../.. usage/example_4
 
+          # Multi-target generates target-specific files (raylib_desktop_build.zig, etc.)
+          # Create symlinks for backwards compatibility with zig build
+          for example in usage/example_1 usage/example_4; do
+            cd $example/.labelle
+            # Create build.zig symlink pointing to raylib_desktop_build.zig
+            if [ -f "raylib_desktop_build.zig" ] && [ ! -f "build.zig" ]; then
+              ln -s raylib_desktop_build.zig build.zig
+            fi
+            if [ -f "raylib_desktop_build.zig.zon" ] && [ ! -f "build.zig.zon" ]; then
+              ln -s raylib_desktop_build.zig.zon build.zig.zon
+            fi
+            cd ../../..
+          done
+
           # Fix fingerprints - Zig requires exact fingerprints that we can't predict
           # Run build once to get suggested values, then update
-          # Build files are now in .labelle/ subdirectory
           for example in usage/example_1 usage/example_4; do
             cd $example/.labelle
             # Try to build, capture error with suggested fingerprint
@@ -162,13 +175,13 @@ jobs:
             PATHS_MISSING=$(echo "$BUILD_OUTPUT" | grep -c "missing top-level 'paths' field" || true)
 
             if [ -n "$FINGERPRINT" ]; then
-              # Replace existing fingerprint with the correct one
-              sed -i "s/\.fingerprint = 0x[a-f0-9]*,/.fingerprint = $FINGERPRINT,/" build.zig.zon
+              # Replace existing fingerprint with the correct one (in actual file, not symlink)
+              sed -i "s/\.fingerprint = 0x[a-f0-9]*,/.fingerprint = $FINGERPRINT,/" raylib_desktop_build.zig.zon
             fi
 
             if [ "$PATHS_MISSING" -gt 0 ]; then
               # Add paths before closing brace
-              sed -i 's/^}$/    .paths = .{ "build.zig", "build.zig.zon", "main.zig", "project.labelle", "scenes", "prefabs", "components", "scripts", "resources" },\n}/' build.zig.zon
+              sed -i 's/^}$/    .paths = .{ "build.zig", "build.zig.zon", "main.zig", "project.labelle", "scenes", "prefabs", "components", "scripts", "resources" },\n}/' raylib_desktop_build.zig.zon
             fi
             cd ../../..
           done
