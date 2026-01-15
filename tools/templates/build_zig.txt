@@ -60,16 +60,14 @@ pub fn build(b: *std.Build) !void {{
     const engine_mod = engine_dep.module("labelle-engine");
 
 .plugin_dep
-    // Note: For path-based plugin dependencies that also depend on labelle-engine,
-    // we create the module manually to avoid duplicate labelle-engine dependencies
-    const {s}_mod = b.createModule(.{{
-        .root_source_file = b.path("../../{s}/src/root.zig"),
+    const {s}_dep = b.dependency("{s}", .{{
         .target = target,
         .optimize = optimize,
+        .backend = backend,
+        .ecs_backend = ecs_backend,
+        .physics = physics_enabled,
     }});
-    {s}_mod.addImport("labelle-engine", engine_mod);
-    {s}_mod.addImport("ecs", engine_dep.module("ecs"));
-    _ = "{s}"; // unused: module_name
+    const {s}_mod = {s}_dep.module("{s}");
 
 .raylib_exe_start
     const exe_mod = b.createModule(.{{
