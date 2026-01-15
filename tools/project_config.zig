@@ -358,7 +358,8 @@ pub const ProjectConfig = struct {
     initial_scene: []const u8,
     /// Multi-target build support. Declares all platforms this game supports.
     /// Example: .targets = .{ .raylib_desktop, .raylib_wasm, .sokol_ios }
-    targets: []const Target,
+    /// Default: raylib_desktop only (backwards compatible)
+    targets: []const Target = &.{.raylib_desktop},
     ecs_backend: EcsBackend = .zig_ecs,
     gui_backend: GuiBackend = .none,
     /// Game ID type (entity identifier type). Default: u64
