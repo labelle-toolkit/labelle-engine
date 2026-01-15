@@ -23,6 +23,7 @@ const ProjectConfig = project_config.ProjectConfig;
 const build_zig_zon_tmpl = @embedFile("templates/build_zig_zon.txt");
 const build_zig_tmpl = @embedFile("templates/build_zig.txt");
 const main_raylib_tmpl = @embedFile("templates/main_raylib.txt");
+const main_raylib_wasm_tmpl = @embedFile("templates/main_raylib_wasm.txt");
 const main_sokol_tmpl = @embedFile("templates/main_sokol.txt");
 const main_sokol_ios_tmpl = @embedFile("templates/main_sokol_ios.txt");
 const main_sokol_android_tmpl = @embedFile("templates/main_sokol_android.txt");
@@ -760,26 +761,193 @@ fn generateMainZigRaylib(
     // Loader and initial scene
     try zts.print(main_raylib_tmpl, "loader", .{config.initial_scene}, writer);
 
-    // Main function with WASM fallback values
-    // Format: width, height, title, fps, camera_x, camera_y
+    // Main function (desktop reads config from project.labelle at runtime)
+    try zts.print(main_raylib_tmpl, "main_fn", .{}, writer);
+
+    return buf.toOwnedSlice(allocator);
+}
+
+/// Generate main.zig content for raylib backend targeting WASM
+fn generateMainZigRaylibWasm(
+    allocator: std.mem.Allocator,
+    config: ProjectConfig,
+    prefabs: []const []const u8,
+    enums: []const []const u8,
+    components: []const []const u8,
+    scripts: []const []const u8,
+    hooks: []const []const u8,
+    task_hooks: TaskHookScanResult,
+) ![]const u8 {
+    // Use the same logic as desktop raylib but with WASM template (simpler, no conditionals)
+    // This is almost identical to generateMainZigRaylib, but uses main_raylib_wasm_tmpl
+    _ = enums; // Not used yet in WASM template
+    _ = task_hooks; // TODO: Add task engine support to WASM template if needed
+
+    var buf: std.ArrayListUnmanaged(u8) = .{};
+    const writer = buf.writer(allocator);
+
+    // Check if any plugin contributes Components or has bindings
+    var has_plugin_components = false;
+    for (config.plugins) |plugin| {
+        if (plugin.components != null) {
+            has_plugin_components = true;
+        }
+    }
+
+    // Pre-compute sanitized plugin names
+    var plugin_zig_names = try allocator.alloc([]const u8, config.plugins.len);
+    defer {
+        for (plugin_zig_names) |name| allocator.free(name);
+        allocator.free(plugin_zig_names);
+    }
+    for (config.plugins, 0..) |plugin, i| {
+        plugin_zig_names[i] = try sanitizeZigIdentifier(allocator, plugin.name);
+    }
+
+    // Pre-compute PascalCase names for components
+    var component_pascal_names = try allocator.alloc(PascalCaseResult, components.len);
+    defer allocator.free(component_pascal_names);
+    for (components, 0..) |name, i| {
+        component_pascal_names[i] = toPascalCase(name);
+    }
+
+    // Header
+    try zts.print(main_raylib_wasm_tmpl, "header", .{config.name}, writer);
+
+    // Plugin imports
+    for (config.plugins, 0..) |plugin, i| {
+        try zts.print(main_raylib_wasm_tmpl, "plugin_import", .{ plugin_zig_names[i], plugin.name }, writer);
+    }
+
+    // GameId type export
+    const game_id_str = switch (config.game_id) {
+        .u32 => "u32",
+        .u64 => "u64",
+    };
+    try zts.print(main_raylib_wasm_tmpl, "game_id_export", .{game_id_str}, writer);
+
+    // Plugin bind declarations
+    for (config.plugins, 0..) |plugin, i| {
+        for (plugin.bind) |bind_decl| {
+            try zts.print(main_raylib_wasm_tmpl, "plugin_bind", .{ plugin_zig_names[i], bind_decl.arg, plugin_zig_names[i], bind_decl.func, bind_decl.arg }, writer);
+        }
+    }
+
+    // Prefab imports
+    for (prefabs) |name| {
+        try zts.print(main_raylib_wasm_tmpl, "prefab_import", .{ name, name }, writer);
+    }
+
+    // Component imports
+    for (components) |name| {
+        try zts.print(main_raylib_wasm_tmpl, "component_import", .{ name, name }, writer);
+    }
+
+    // Component exports
+    for (components, 0..) |name, i| {
+        const pascal = component_pascal_names[i];
+        try zts.print(main_raylib_wasm_tmpl, "component_export", .{ pascal.buf[0..pascal.len], name, pascal.buf[0..pascal.len] }, writer);
+    }
+
+    // Script imports
+    for (scripts) |name| {
+        try zts.print(main_raylib_wasm_tmpl, "script_import", .{ name, name }, writer);
+    }
+
+    // Hook imports
+    for (hooks) |name| {
+        try zts.print(main_raylib_wasm_tmpl, "hook_import", .{ name, name }, writer);
+    }
+
+    // Main module reference
+    try zts.print(main_raylib_wasm_tmpl, "main_module", .{}, writer);
+
+    // Prefab registry
+    if (prefabs.len == 0) {
+        try zts.print(main_raylib_wasm_tmpl, "prefab_registry_empty", .{}, writer);
+    } else {
+        try zts.print(main_raylib_wasm_tmpl, "prefab_registry_start", .{}, writer);
+        for (prefabs) |name| {
+            try zts.print(main_raylib_wasm_tmpl, "prefab_registry_item", .{ name, name }, writer);
+        }
+        try zts.print(main_raylib_wasm_tmpl, "prefab_registry_end", .{}, writer);
+    }
+
+    // Component registry (simplified - using single ComponentRegistry)
+    if (components.len == 0) {
+        try zts.print(main_raylib_wasm_tmpl, "component_registry_empty", .{}, writer);
+        if (config.physics.enabled) {
+            try zts.print(main_raylib_wasm_tmpl, "physics_components", .{}, writer);
+        }
+        try zts.print(main_raylib_wasm_tmpl, "component_registry_empty_end", .{}, writer);
+    } else {
+        try zts.print(main_raylib_wasm_tmpl, "component_registry_start", .{}, writer);
+        for (component_pascal_names) |pascal| {
+            try zts.print(main_raylib_wasm_tmpl, "component_registry_item", .{ pascal.buf[0..pascal.len], pascal.buf[0..pascal.len] }, writer);
+        }
+        // Add bind components
+        for (config.plugins, 0..) |plugin, i| {
+            for (plugin.bind) |bind_decl| {
+                const components_list = bind_decl.components;
+                var iter = std.mem.splitScalar(u8, components_list, ',');
+                while (iter.next()) |comp_name| {
+                    const trimmed = std.mem.trim(u8, comp_name, &std.ascii.whitespace);
+                    if (trimmed.len > 0) {
+                        try zts.print(main_raylib_wasm_tmpl, "component_registry_bind_item", .{ trimmed, plugin_zig_names[i], bind_decl.arg, trimmed }, writer);
+                    }
+                }
+            }
+        }
+        if (config.physics.enabled) {
+            try zts.print(main_raylib_wasm_tmpl, "component_registry_physics", .{}, writer);
+        }
+        try zts.print(main_raylib_wasm_tmpl, "component_registry_end", .{}, writer);
+    }
+
+    // Script registry
+    if (scripts.len == 0) {
+        try zts.print(main_raylib_wasm_tmpl, "script_registry_empty", .{}, writer);
+    } else {
+        try zts.print(main_raylib_wasm_tmpl, "script_registry_start", .{}, writer);
+        for (scripts) |name| {
+            try zts.print(main_raylib_wasm_tmpl, "script_registry_item", .{ name, name }, writer);
+        }
+        try zts.print(main_raylib_wasm_tmpl, "script_registry_end", .{}, writer);
+    }
+
+    // Hooks (simplified for now - no task engine support yet)
+    if (hooks.len == 0 and config.plugins.len == 0) {
+        try zts.print(main_raylib_wasm_tmpl, "hooks_empty", .{}, writer);
+    } else {
+        try zts.print(main_raylib_wasm_tmpl, "hooks_start", .{}, writer);
+        for (hooks) |name| {
+            try zts.print(main_raylib_wasm_tmpl, "hooks_item", .{name}, writer);
+        }
+        try zts.print(main_raylib_wasm_tmpl, "hooks_end", .{}, writer);
+    }
+
+    // Loader and initial scene
+    try zts.print(main_raylib_wasm_tmpl, "loader", .{config.initial_scene}, writer);
+
+    // Main function with embedded config values
     const camera_x = config.camera.x orelse 0;
     const camera_y = config.camera.y orelse 0;
     const camera_zoom = config.camera.zoom;
 
-    try zts.print(main_raylib_tmpl, "main_fn", .{
+    try zts.print(main_raylib_wasm_tmpl, "main_fn", .{
+        config.window.title,
         config.window.width,
         config.window.height,
-        config.window.title,
         config.window.target_fps,
         camera_x,
         camera_y,
     }, writer);
 
-    // Camera zoom (optional - only print if not default 1.0)
+    // Camera zoom (optional)
     if (camera_zoom != 1.0) {
-        try zts.print(main_raylib_tmpl, "camera_zoom", .{camera_zoom}, writer);
+        try zts.print(main_raylib_wasm_tmpl, "camera_zoom", .{camera_zoom}, writer);
     }
-    try zts.print(main_raylib_tmpl, "camera_zoom_end", .{}, writer);
+    try zts.print(main_raylib_wasm_tmpl, "camera_zoom_end", .{}, writer);
 
     return buf.toOwnedSlice(allocator);
 }
@@ -1924,9 +2092,13 @@ pub fn generateMainZig(
         return generateMainZigSokolAndroid(allocator, config, prefabs, enums, components, scripts, hooks, task_hooks);
     }
 
-    // WASM target uses special callback architecture
+    // WASM target - choose template based on backend
     if (config.target == .wasm) {
-        return generateMainZigWasm(allocator, config, prefabs, enums, components, scripts, hooks, task_hooks);
+        return switch (config.backend) {
+            .raylib => generateMainZigRaylibWasm(allocator, config, prefabs, enums, components, scripts, hooks, task_hooks),
+            .sokol => generateMainZigWasm(allocator, config, prefabs, enums, components, scripts, hooks, task_hooks),
+            else => error.UnsupportedWasmBackend,
+        };
     }
 
     return switch (config.backend) {
