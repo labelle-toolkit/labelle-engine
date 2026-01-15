@@ -687,10 +687,10 @@ fn generateMainZigRaylib(
             try zts.print(main_raylib_tmpl, "plugin_engine_hooks", .{
                 plugin_zig_names[i], // for const name
                 plugin_zig_names[i], // for plugin module
-                eh.create,           // createEngineHooks
-                item_type,           // Items
-                hook_file,           // task_hooks
-                struct_name,         // GameHooks
+                eh.create, // createEngineHooks
+                item_type, // Items
+                hook_file, // task_hooks
+                struct_name, // GameHooks
                 plugin_zig_names[i], // Context prefix
                 plugin_zig_names[i], // Context value
             }, writer);
@@ -760,8 +760,26 @@ fn generateMainZigRaylib(
     // Loader and initial scene
     try zts.print(main_raylib_tmpl, "loader", .{config.initial_scene}, writer);
 
-    // Main function
-    try zts.print(main_raylib_tmpl, "main_fn", .{}, writer);
+    // Main function with WASM fallback values
+    // Format: width, height, title, fps, camera_x, camera_y
+    const camera_x = config.camera.x orelse 0;
+    const camera_y = config.camera.y orelse 0;
+    const camera_zoom = config.camera.zoom;
+
+    try zts.print(main_raylib_tmpl, "main_fn", .{
+        config.window.width,
+        config.window.height,
+        config.window.title,
+        config.window.target_fps,
+        camera_x,
+        camera_y,
+    }, writer);
+
+    // Camera zoom (optional - only print if not default 1.0)
+    if (camera_zoom != 1.0) {
+        try zts.print(main_raylib_tmpl, "camera_zoom", .{camera_zoom}, writer);
+    }
+    try zts.print(main_raylib_tmpl, "camera_zoom_end", .{}, writer);
 
     return buf.toOwnedSlice(allocator);
 }
