@@ -60,15 +60,16 @@ pub fn build(b: *std.Build) !void {{
     const engine_mod = engine_dep.module("labelle-engine");
 
 .plugin_dep
-    const {s}_dep = b.dependency("{s}", .{{
+    // Note: For path-based plugin dependencies that also depend on labelle-engine,
+    // we create the module manually to avoid duplicate labelle-engine dependencies
+    const {s}_mod = b.createModule(.{{
+        .root_source_file = b.path("../../{s}/src/root.zig"),
         .target = target,
         .optimize = optimize,
-        .backend = backend,
-        .ecs_backend = ecs_backend,
-        .gui_backend = gui_backend,
-        .physics = physics_enabled,
     }});
-    const {s}_mod = {s}_dep.module("{s}");
+    {s}_mod.addImport("labelle-engine", engine_mod);
+    {s}_mod.addImport("ecs", engine_dep.module("ecs"));
+    _ = "{s}"; // unused: module_name
 
 .raylib_exe_start
     const exe_mod = b.createModule(.{{
@@ -91,8 +92,6 @@ pub fn build(b: *std.Build) !void {{
             .name = "{s}",
             .root_module = exe_mod,
         }});
-        _ = exe; // May be unused if only generating WASM target
-        _ = is_ios; //May be unused if no iOS-specific code
 .sokol_exe_start
     // Get labelle-gfx dependency for sokol bindings
     const labelle_dep = engine_dep.builder.dependency("labelle-gfx", .{{
@@ -270,9 +269,11 @@ pub fn build(b: *std.Build) !void {{
         run_step.dependOn(&run_cmd.step);
 .native_build_end
     }} // End !is_wasm check
+}}
+.native_build_close_if
+    }} // End !is_wasm check
 .wasm_build_start
-    }} else {{
-        _ = is_ios; // Unused in WASM builds
+    else {{
         // ===== WASM BUILD PATH =====
         // Get raylib_zig for emsdk access
         const labelle_gfx_dep = engine_dep.builder.dependency("labelle-gfx", .{{

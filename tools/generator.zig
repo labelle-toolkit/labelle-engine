@@ -425,8 +425,16 @@ pub fn generateBuildZig(allocator: std.mem.Allocator, config: ProjectConfig, tar
     // Detect if this is a WASM target
     const is_wasm = target_config.getPlatform() == .wasm;
 
+    // Always generate native path first (inside if (!is_wasm) runtime check)
+    // iOS framework linking and standard footer
+    try zts.print(build_zig_tmpl, "ios_frameworks", .{}, writer);
+    try zts.print(build_zig_tmpl, "footer", .{}, writer);
+
     if (is_wasm) {
-        // WASM build path - use emsdk instead of native executable
+        // Close just the if block (not the build function) since we'll add else
+        try zts.print(build_zig_tmpl, "native_build_close_if", .{}, writer);
+
+        // WASM build path - use emsdk instead of native executable (inside else block)
         try zts.print(build_zig_tmpl, "wasm_build_start", .{zig_name}, writer);
 
         // Add backend-specific WASM linking
@@ -436,14 +444,10 @@ pub fn generateBuildZig(allocator: std.mem.Allocator, config: ProjectConfig, tar
             else => {},
         }
 
-        // Close WASM block
+        // Close WASM block and build function
         try zts.print(build_zig_tmpl, "wasm_build_end", .{}, writer);
     } else {
-        // Native build path - iOS framework linking and standard footer
-        try zts.print(build_zig_tmpl, "ios_frameworks", .{}, writer);
-        try zts.print(build_zig_tmpl, "footer", .{}, writer);
-
-        // Close native block
+        // Close native block and build function (no WASM path needed)
         try zts.print(build_zig_tmpl, "native_build_end", .{}, writer);
     }
 
