@@ -846,7 +846,6 @@ fn generateMainZigRaylibWasm(
 ) ![]const u8 {
     // Use the same logic as desktop raylib but with WASM template (simpler, no conditionals)
     // This is almost identical to generateMainZigRaylib, but uses main_raylib_wasm_tmpl
-    _ = enums; // Not used yet in WASM template
     _ = task_hooks; // TODO: Add task engine support to WASM template if needed
 
     var buf: std.ArrayListUnmanaged(u8) = .{};
@@ -870,6 +869,13 @@ fn generateMainZigRaylibWasm(
         plugin_zig_names[i] = try sanitizeZigIdentifier(allocator, plugin.name);
     }
 
+    // Pre-compute PascalCase names for enums
+    var enum_pascal_names = try allocator.alloc(PascalCaseResult, enums.len);
+    defer allocator.free(enum_pascal_names);
+    for (enums, 0..) |name, i| {
+        enum_pascal_names[i] = toPascalCase(name);
+    }
+
     // Pre-compute PascalCase names for components
     var component_pascal_names = try allocator.alloc(PascalCaseResult, components.len);
     defer allocator.free(component_pascal_names);
@@ -883,6 +889,17 @@ fn generateMainZigRaylibWasm(
     // Plugin imports
     for (config.plugins, 0..) |plugin, i| {
         try zts.print(main_raylib_wasm_tmpl, "plugin_import", .{ plugin_zig_names[i], plugin.name }, writer);
+    }
+
+    // Enum imports
+    for (enums) |name| {
+        try zts.print(main_raylib_wasm_tmpl, "enum_import", .{ name, name }, writer);
+    }
+
+    // Enum exports (with PascalCase type names)
+    for (enums, 0..) |name, i| {
+        const pascal = enum_pascal_names[i];
+        try zts.print(main_raylib_wasm_tmpl, "enum_export", .{ pascal.buf[0..pascal.len], name, pascal.buf[0..pascal.len] }, writer);
     }
 
     // GameId type export
