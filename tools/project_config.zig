@@ -41,7 +41,7 @@
 
 const std = @import("std");
 
-/// Graphics backend selection
+/// Graphics backend selection (deprecated - use Target enum)
 pub const Backend = enum {
     raylib,
     sokol,
@@ -356,15 +356,11 @@ pub const ProjectConfig = struct {
     /// labelle-engine version to use for generation. Used by the CLI.
     engine_version: ?[]const u8 = null,
     initial_scene: []const u8,
-    /// Multi-target build support (new). Replaces .backend and .target fields.
+    /// Multi-target build support. Declares all platforms this game supports.
     /// Example: .targets = .{ .raylib_desktop, .raylib_wasm, .sokol_ios }
-    targets: ?[]const Target = null,
-    /// Graphics backend (deprecated - use .targets instead)
-    backend: ?Backend = null,
+    targets: []const Target,
     ecs_backend: EcsBackend = .zig_ecs,
     gui_backend: GuiBackend = .none,
-    /// Target platform (deprecated - use .targets instead). iOS requires sokol callback architecture.
-    target: ?TargetPlatform = null,
     /// Game ID type (entity identifier type). Default: u64
     /// This affects plugin integrations like labelle-tasks that need to know the entity ID type.
     game_id: GameIdType = .u64,
@@ -381,51 +377,6 @@ pub const ProjectConfig = struct {
     /// Get the output directory (uses default ".labelle" if not specified)
     pub fn getOutputDir(self: ProjectConfig) []const u8 {
         return self.output_dir orelse ".labelle";
-    }
-
-    /// Get the list of targets to generate
-    /// If .targets is specified, use it. Otherwise, fall back to .backend + .target for backward compatibility.
-    pub fn getTargets(self: ProjectConfig, allocator: std.mem.Allocator) ![]const Target {
-        // If .targets is specified, use it
-        if (self.targets) |targets| {
-            return targets;
-        }
-
-        // Backward compatibility: derive target from .backend and .target
-        const backend = self.backend orelse .raylib;
-        const platform = self.target orelse .native;
-
-        // Map old backend+platform to new Target enum
-        const target: Target = switch (backend) {
-            .raylib => switch (platform) {
-                .native => .raylib_desktop,
-                .wasm => .raylib_wasm,
-                else => return error.UnsupportedRaylibPlatform,
-            },
-            .sokol => switch (platform) {
-                .native => .sokol_desktop,
-                .wasm => .sokol_wasm,
-                .ios => .sokol_ios,
-                .android => .sokol_android,
-            },
-            .sdl => switch (platform) {
-                .native => .sdl_desktop,
-                else => return error.UnsupportedSdlPlatform,
-            },
-            .bgfx => switch (platform) {
-                .native => .bgfx_desktop,
-                else => return error.UnsupportedBgfxPlatform,
-            },
-            .wgpu_native => switch (platform) {
-                .native => .wgpu_native_desktop,
-                else => return error.UnsupportedWgpuPlatform,
-            },
-        };
-
-        // Return a single-item array
-        const targets = try allocator.alloc(Target, 1);
-        targets[0] = target;
-        return targets;
     }
 
     /// Load project configuration from a .labelle file

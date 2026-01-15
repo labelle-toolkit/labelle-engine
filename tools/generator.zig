@@ -148,6 +148,22 @@ pub const BuildZonOptions = struct {
 
 /// Generate build.zig.zon content
 pub fn generateBuildZon(allocator: std.mem.Allocator, config: ProjectConfig, options: BuildZonOptions) ![]const u8 {
+    // For multi-target projects, we need to include dependencies for all backends used
+    // Extract all unique backends from targets
+    var backends: std.ArrayListUnmanaged(project_config.Backend) = .{};
+    defer backends.deinit(allocator);
+
+    var seen = std.AutoHashMap(project_config.Backend, void).init(allocator);
+    defer seen.deinit();
+
+    for (config.targets) |target| {
+        const backend = target.getBackend();
+        if (!seen.contains(backend)) {
+            try seen.put(backend, {});
+            try backends.append(allocator, backend);
+        }
+    }
+
     var buf: std.ArrayListUnmanaged(u8) = .{};
     const writer = buf.writer(allocator);
 
@@ -242,9 +258,10 @@ pub fn generateBuildZon(allocator: std.mem.Allocator, config: ProjectConfig, opt
     }
 
     // Write backend-specific dependencies (needed for @import in build.zig)
-    const backend = config.backend orelse .raylib;
-    if (backend == .sdl) {
-        try zts.print(build_zig_zon_tmpl, "sdl_dep", .{}, writer);
+    for (backends.items) |backend| {
+        if (backend == .sdl) {
+            try zts.print(build_zig_zon_tmpl, "sdl_dep", .{}, writer);
+        }
     }
 
     // Write closing
@@ -262,9 +279,11 @@ pub fn generateBuildZig(allocator: std.mem.Allocator, config: ProjectConfig) ![]
     const zig_name = try sanitizeZigIdentifier(allocator, config.name);
     defer allocator.free(zig_name);
 
-    // Backward compatibility: handle optional backend/target
-    const backend = config.backend orelse .raylib;
-    const target = config.target orelse .native;
+    // For now, use the first target to determine defaults
+    // TODO: Generate separate build.zig per target
+    const first_target = config.targets[0];
+    const backend = first_target.getBackend();
+    const target = first_target.getPlatform();
 
     // Get the default backends from project config
     const default_backend = switch (backend) {
@@ -2087,42 +2106,16 @@ pub fn generateMainZig(
     hooks: []const []const u8,
     task_hooks: TaskHookScanResult,
 ) ![]const u8 {
-    // Backward compatibility: if using old .backend/.target fields
-    const backend = config.backend orelse .raylib;
-    const target = config.target orelse .native;
-
-    // iOS with sokol backend requires special callback architecture
-    if (target == .ios and backend == .sokol) {
-        return generateMainZigSokolIos(allocator, config, prefabs, enums, components, scripts, hooks, task_hooks);
-    }
-
-    // Android with sokol backend requires special callback architecture
-    if (target == .android and backend == .sokol) {
-        return generateMainZigSokolAndroid(allocator, config, prefabs, enums, components, scripts, hooks, task_hooks);
-    }
-
-    // WASM target - choose template based on backend
-    if (target == .wasm) {
-        return switch (backend) {
-            .raylib => generateMainZigRaylibWasm(allocator, config, prefabs, enums, components, scripts, hooks, task_hooks),
-            .sokol => generateMainZigWasm(allocator, config, prefabs, enums, components, scripts, hooks, task_hooks),
-            else => error.UnsupportedWasmBackend,
-        };
-    }
-
-    return switch (backend) {
-        .raylib => generateMainZigRaylib(allocator, config, prefabs, enums, components, scripts, hooks, task_hooks),
-        .sokol => generateMainZigSokol(allocator, config, prefabs, enums, components, scripts, hooks, task_hooks),
-        .sdl => generateMainZigSdl(allocator, config, prefabs, enums, components, scripts, hooks, task_hooks),
-        .bgfx => generateMainZigBgfx(allocator, config, prefabs, enums, components, scripts, hooks, task_hooks),
-        .wgpu_native => generateMainZigWgpuNative(allocator, config, prefabs, enums, components, scripts, hooks, task_hooks),
-    };
+    // For now, use the first target
+    // TODO: This function will be replaced by per-target generation
+    const first_target = config.targets[0];
+    return generateMainZigForTarget(allocator, first_target, config, prefabs, enums, components, scripts, hooks, task_hooks);
 }
 
 /// Generate main.zig for a specific target (new multi-target approach)
 fn generateMainZigForTarget(
     allocator: std.mem.Allocator,
-    target: ProjectConfig.Target,
+    target: project_config.Target,
     config: ProjectConfig,
     prefabs: []const []const u8,
     enums: []const []const u8,
