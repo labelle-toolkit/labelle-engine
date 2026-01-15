@@ -242,7 +242,8 @@ pub fn generateBuildZon(allocator: std.mem.Allocator, config: ProjectConfig, opt
     }
 
     // Write backend-specific dependencies (needed for @import in build.zig)
-    if (config.backend == .sdl) {
+    const backend = config.backend orelse .raylib;
+    if (backend == .sdl) {
         try zts.print(build_zig_zon_tmpl, "sdl_dep", .{}, writer);
     }
 
@@ -261,8 +262,12 @@ pub fn generateBuildZig(allocator: std.mem.Allocator, config: ProjectConfig) ![]
     const zig_name = try sanitizeZigIdentifier(allocator, config.name);
     defer allocator.free(zig_name);
 
+    // Backward compatibility: handle optional backend/target
+    const backend = config.backend orelse .raylib;
+    const target = config.target orelse .native;
+
     // Get the default backends from project config
-    const default_backend = switch (config.backend) {
+    const default_backend = switch (backend) {
         .raylib => "raylib",
         .sokol => "sokol",
         .sdl => "sdl",
@@ -324,11 +329,11 @@ pub fn generateBuildZig(allocator: std.mem.Allocator, config: ProjectConfig) ![]
     }
 
     // Write backend-specific executable setup (creates exe_mod and adds backend imports)
-    switch (config.backend) {
+    switch (backend) {
         .raylib => try zts.print(build_zig_tmpl, "raylib_exe_start", .{}, writer),
         .sokol => {
             // iOS uses sokol through engine.sokol (no direct import to avoid module conflict)
-            if (config.target == .ios) {
+            if (target == .ios) {
                 try zts.print(build_zig_tmpl, "sokol_ios_exe_start", .{}, writer);
             } else {
                 try zts.print(build_zig_tmpl, "sokol_exe_start", .{}, writer);
@@ -346,10 +351,10 @@ pub fn generateBuildZig(allocator: std.mem.Allocator, config: ProjectConfig) ![]
     }
 
     // Write backend-specific executable setup end (empty section, just for ordering)
-    switch (config.backend) {
+    switch (backend) {
         .raylib => try zts.print(build_zig_tmpl, "raylib_exe_end", .{}, writer),
         .sokol => {
-            if (config.target == .ios) {
+            if (target == .ios) {
                 try zts.print(build_zig_tmpl, "sokol_ios_exe_end", .{}, writer);
             } else {
                 try zts.print(build_zig_tmpl, "sokol_exe_end", .{}, writer);
@@ -365,7 +370,7 @@ pub fn generateBuildZig(allocator: std.mem.Allocator, config: ProjectConfig) ![]
 
     // Write backend-specific executable creation (creates exe from exe_mod)
     // Template args: project_name
-    switch (config.backend) {
+    switch (backend) {
         .raylib => try zts.print(build_zig_tmpl, "raylib_exe_final", .{zig_name}, writer),
         .sokol => try zts.print(build_zig_tmpl, "sokol_exe_final", .{zig_name}, writer),
         .sdl => try zts.print(build_zig_tmpl, "sdl_exe_final", .{zig_name}, writer),
@@ -374,7 +379,7 @@ pub fn generateBuildZig(allocator: std.mem.Allocator, config: ProjectConfig) ![]
     }
 
     // Write backend-specific library linking (bgfx needs native libs)
-    switch (config.backend) {
+    switch (backend) {
         .bgfx => try zts.print(build_zig_tmpl, "bgfx_link", .{}, writer),
         else => {},
     }
@@ -2082,31 +2087,60 @@ pub fn generateMainZig(
     hooks: []const []const u8,
     task_hooks: TaskHookScanResult,
 ) ![]const u8 {
+    // Backward compatibility: if using old .backend/.target fields
+    const backend = config.backend orelse .raylib;
+    const target = config.target orelse .native;
+
     // iOS with sokol backend requires special callback architecture
-    if (config.target == .ios and config.backend == .sokol) {
+    if (target == .ios and backend == .sokol) {
         return generateMainZigSokolIos(allocator, config, prefabs, enums, components, scripts, hooks, task_hooks);
     }
 
     // Android with sokol backend requires special callback architecture
-    if (config.target == .android and config.backend == .sokol) {
+    if (target == .android and backend == .sokol) {
         return generateMainZigSokolAndroid(allocator, config, prefabs, enums, components, scripts, hooks, task_hooks);
     }
 
     // WASM target - choose template based on backend
-    if (config.target == .wasm) {
-        return switch (config.backend) {
+    if (target == .wasm) {
+        return switch (backend) {
             .raylib => generateMainZigRaylibWasm(allocator, config, prefabs, enums, components, scripts, hooks, task_hooks),
             .sokol => generateMainZigWasm(allocator, config, prefabs, enums, components, scripts, hooks, task_hooks),
             else => error.UnsupportedWasmBackend,
         };
     }
 
-    return switch (config.backend) {
+    return switch (backend) {
         .raylib => generateMainZigRaylib(allocator, config, prefabs, enums, components, scripts, hooks, task_hooks),
         .sokol => generateMainZigSokol(allocator, config, prefabs, enums, components, scripts, hooks, task_hooks),
         .sdl => generateMainZigSdl(allocator, config, prefabs, enums, components, scripts, hooks, task_hooks),
         .bgfx => generateMainZigBgfx(allocator, config, prefabs, enums, components, scripts, hooks, task_hooks),
         .wgpu_native => generateMainZigWgpuNative(allocator, config, prefabs, enums, components, scripts, hooks, task_hooks),
+    };
+}
+
+/// Generate main.zig for a specific target (new multi-target approach)
+fn generateMainZigForTarget(
+    allocator: std.mem.Allocator,
+    target: ProjectConfig.Target,
+    config: ProjectConfig,
+    prefabs: []const []const u8,
+    enums: []const []const u8,
+    components: []const []const u8,
+    scripts: []const []const u8,
+    hooks: []const []const u8,
+    task_hooks: TaskHookScanResult,
+) ![]const u8 {
+    return switch (target) {
+        .raylib_desktop => generateMainZigRaylib(allocator, config, prefabs, enums, components, scripts, hooks, task_hooks),
+        .raylib_wasm => generateMainZigRaylibWasm(allocator, config, prefabs, enums, components, scripts, hooks, task_hooks),
+        .sokol_desktop => generateMainZigSokol(allocator, config, prefabs, enums, components, scripts, hooks, task_hooks),
+        .sokol_wasm => generateMainZigWasm(allocator, config, prefabs, enums, components, scripts, hooks, task_hooks),
+        .sokol_ios => generateMainZigSokolIos(allocator, config, prefabs, enums, components, scripts, hooks, task_hooks),
+        .sokol_android => generateMainZigSokolAndroid(allocator, config, prefabs, enums, components, scripts, hooks, task_hooks),
+        .sdl_desktop => generateMainZigSdl(allocator, config, prefabs, enums, components, scripts, hooks, task_hooks),
+        .bgfx_desktop => generateMainZigBgfx(allocator, config, prefabs, enums, components, scripts, hooks, task_hooks),
+        .wgpu_native_desktop => generateMainZigWgpuNative(allocator, config, prefabs, enums, components, scripts, hooks, task_hooks),
     };
 }
 

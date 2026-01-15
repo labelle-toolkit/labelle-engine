@@ -65,8 +65,7 @@ pub const GuiBackend = enum {
     imgui,
 };
 
-/// Target platform selection
-/// Used primarily for mobile/web which require different main.zig architecture
+/// Target platform selection (deprecated - use Target enum instead)
 pub const TargetPlatform = enum {
     /// Native platform (macOS, Linux, Windows) - default
     native,
@@ -76,6 +75,55 @@ pub const TargetPlatform = enum {
     android,
     /// Web/WASM target
     wasm,
+};
+
+/// Combined backend + platform target
+/// This replaces the separate .backend and .target fields
+pub const Target = enum {
+    // Raylib targets
+    raylib_desktop,
+    raylib_wasm,
+
+    // Sokol targets
+    sokol_desktop,
+    sokol_wasm,
+    sokol_ios,
+    sokol_android,
+
+    // SDL targets
+    sdl_desktop,
+
+    // BGFX targets
+    bgfx_desktop,
+
+    // WGPU targets
+    wgpu_native_desktop,
+
+    /// Extract the backend from this target
+    pub fn getBackend(self: Target) Backend {
+        return switch (self) {
+            .raylib_desktop, .raylib_wasm => .raylib,
+            .sokol_desktop, .sokol_wasm, .sokol_ios, .sokol_android => .sokol,
+            .sdl_desktop => .sdl,
+            .bgfx_desktop => .bgfx,
+            .wgpu_native_desktop => .wgpu_native,
+        };
+    }
+
+    /// Extract the platform from this target
+    pub fn getPlatform(self: Target) TargetPlatform {
+        return switch (self) {
+            .raylib_desktop, .sokol_desktop, .sdl_desktop, .bgfx_desktop, .wgpu_native_desktop => .native,
+            .raylib_wasm, .sokol_wasm => .wasm,
+            .sokol_ios => .ios,
+            .sokol_android => .android,
+        };
+    }
+
+    /// Get the string name for file prefixing
+    pub fn getName(self: Target) []const u8 {
+        return @tagName(self);
+    }
 };
 
 /// Game ID type selection (entity identifier type)
@@ -308,11 +356,15 @@ pub const ProjectConfig = struct {
     /// labelle-engine version to use for generation. Used by the CLI.
     engine_version: ?[]const u8 = null,
     initial_scene: []const u8,
-    backend: Backend = .raylib,
+    /// Multi-target build support (new). Replaces .backend and .target fields.
+    /// Example: .targets = .{ .raylib_desktop, .raylib_wasm, .sokol_ios }
+    targets: ?[]const Target = null,
+    /// Graphics backend (deprecated - use .targets instead)
+    backend: ?Backend = null,
     ecs_backend: EcsBackend = .zig_ecs,
     gui_backend: GuiBackend = .none,
-    /// Target platform. iOS requires sokol callback architecture.
-    target: TargetPlatform = .native,
+    /// Target platform (deprecated - use .targets instead). iOS requires sokol callback architecture.
+    target: ?TargetPlatform = null,
     /// Game ID type (entity identifier type). Default: u64
     /// This affects plugin integrations like labelle-tasks that need to know the entity ID type.
     game_id: GameIdType = .u64,
@@ -329,6 +381,51 @@ pub const ProjectConfig = struct {
     /// Get the output directory (uses default ".labelle" if not specified)
     pub fn getOutputDir(self: ProjectConfig) []const u8 {
         return self.output_dir orelse ".labelle";
+    }
+
+    /// Get the list of targets to generate
+    /// If .targets is specified, use it. Otherwise, fall back to .backend + .target for backward compatibility.
+    pub fn getTargets(self: ProjectConfig, allocator: std.mem.Allocator) ![]const Target {
+        // If .targets is specified, use it
+        if (self.targets) |targets| {
+            return targets;
+        }
+
+        // Backward compatibility: derive target from .backend and .target
+        const backend = self.backend orelse .raylib;
+        const platform = self.target orelse .native;
+
+        // Map old backend+platform to new Target enum
+        const target: Target = switch (backend) {
+            .raylib => switch (platform) {
+                .native => .raylib_desktop,
+                .wasm => .raylib_wasm,
+                else => return error.UnsupportedRaylibPlatform,
+            },
+            .sokol => switch (platform) {
+                .native => .sokol_desktop,
+                .wasm => .sokol_wasm,
+                .ios => .sokol_ios,
+                .android => .sokol_android,
+            },
+            .sdl => switch (platform) {
+                .native => .sdl_desktop,
+                else => return error.UnsupportedSdlPlatform,
+            },
+            .bgfx => switch (platform) {
+                .native => .bgfx_desktop,
+                else => return error.UnsupportedBgfxPlatform,
+            },
+            .wgpu_native => switch (platform) {
+                .native => .wgpu_native_desktop,
+                else => return error.UnsupportedWgpuPlatform,
+            },
+        };
+
+        // Return a single-item array
+        const targets = try allocator.alloc(Target, 1);
+        targets[0] = target;
+        return targets;
     }
 
     /// Load project configuration from a .labelle file
