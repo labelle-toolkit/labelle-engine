@@ -96,7 +96,7 @@ pub fn createInputModule(
     // Different backends need different modules
     const needs_raylib = backend == .raylib;
     const needs_sdl = backend == .sdl;
-    const needs_zglfw = backend == .bgfx or backend == .zgpu or backend == .wgpu_native;
+    const needs_zglfw = backend == .bgfx or backend == .wgpu_native;
 
     return b.addModule("input", .{
         .root_source_file = b.path("input/interface.zig"),
