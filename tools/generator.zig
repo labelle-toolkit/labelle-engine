@@ -2329,13 +2329,6 @@ pub fn generateProject(allocator: std.mem.Allocator, project_path: []const u8, o
     var task_hooks = try scanForTaskHooks(allocator, hooks_path, hooks, config);
     defer task_hooks.deinit(allocator);
 
-    // Generate build.zig and main.zig first
-    const build_zig = try generateBuildZig(allocator, config);
-    defer allocator.free(build_zig);
-
-    const main_zig = try generateMainZig(allocator, config, prefabs, enums, components, scripts, hooks, task_hooks);
-    defer allocator.free(main_zig);
-
     // Create output directory path
     const output_dir_path = try std.fs.path.join(allocator, &.{ project_path, config.getOutputDir() });
     defer allocator.free(output_dir_path);
@@ -2346,48 +2339,82 @@ pub fn generateProject(allocator: std.mem.Allocator, project_path: []const u8, o
         if (err != error.PathAlreadyExists) return err;
     };
 
-    // File paths
-    // build.zig and build.zig.zon go in output directory
-    const build_zig_zon_path = try std.fs.path.join(allocator, &.{ output_dir_path, "build.zig.zon" });
-    defer allocator.free(build_zig_zon_path);
-    const build_zig_path = try std.fs.path.join(allocator, &.{ output_dir_path, "build.zig" });
-    defer allocator.free(build_zig_path);
-    // main.zig stays in project root (needs project-relative imports for prefabs, components, scripts, scenes)
-    const main_zig_path = try std.fs.path.join(allocator, &.{ project_path, "main.zig" });
-    defer allocator.free(main_zig_path);
+    // Generate files for each target
+    for (config.targets) |target| {
+        const target_name = target.getName();
 
-    // Generate build.zig.zon with placeholder fingerprint first (skip hash fetching on first pass)
-    const initial_build_zig_zon = try generateBuildZon(allocator, config, .{
-        .engine_path = options.engine_path,
-        .engine_version = effective_engine_version,
-        .fingerprint = null, // placeholder 0x0
-        .fetch_hashes = false, // Skip hashes on first pass to detect fingerprint quickly
-    });
-    defer allocator.free(initial_build_zig_zon);
+        std.debug.print("Generating for target '{s}':\n", .{target_name});
 
-    // Write all files
-    try cwd.writeFile(.{ .sub_path = build_zig_zon_path, .data = initial_build_zig_zon });
-    try cwd.writeFile(.{ .sub_path = build_zig_path, .data = build_zig });
-    try cwd.writeFile(.{ .sub_path = main_zig_path, .data = main_zig });
+        // Generate main.zig for this target
+        const main_zig = try generateMainZigForTarget(allocator, target, config, prefabs, enums, components, scripts, hooks, task_hooks);
+        defer allocator.free(main_zig);
 
-    // Run zig build to get the correct fingerprint from the error message
-    const fingerprint = try detectFingerprint(allocator, output_dir_path);
+        // Generate build.zig for this target
+        const build_zig = try generateBuildZig(allocator, config);
+        defer allocator.free(build_zig);
 
-    // Regenerate build.zig.zon with correct fingerprint and fetch hashes if enabled
-    const final_build_zig_zon = try generateBuildZon(allocator, config, .{
-        .engine_path = options.engine_path,
-        .engine_version = effective_engine_version,
-        .fingerprint = fingerprint,
-        .fetch_hashes = options.fetch_hashes,
-    });
-    defer allocator.free(final_build_zig_zon);
+        // File paths with target prefix in output directory
+        const main_zig_filename = try std.fmt.allocPrint(allocator, "{s}_main.zig", .{target_name});
+        defer allocator.free(main_zig_filename);
+        const main_zig_path = try std.fs.path.join(allocator, &.{ output_dir_path, main_zig_filename });
+        defer allocator.free(main_zig_path);
 
-    try cwd.writeFile(.{ .sub_path = build_zig_zon_path, .data = final_build_zig_zon });
+        const build_zig_filename = try std.fmt.allocPrint(allocator, "{s}_build.zig", .{target_name});
+        defer allocator.free(build_zig_filename);
+        const build_zig_path = try std.fs.path.join(allocator, &.{ output_dir_path, build_zig_filename });
+        defer allocator.free(build_zig_path);
+
+        const build_zig_zon_filename = try std.fmt.allocPrint(allocator, "{s}_build.zig.zon", .{target_name});
+        defer allocator.free(build_zig_zon_filename);
+        const build_zig_zon_path = try std.fs.path.join(allocator, &.{ output_dir_path, build_zig_zon_filename });
+        defer allocator.free(build_zig_zon_path);
+
+        // Generate build.zig.zon with placeholder fingerprint first
+        const initial_build_zig_zon = try generateBuildZon(allocator, config, .{
+            .engine_path = options.engine_path,
+            .engine_version = effective_engine_version,
+            .fingerprint = null,
+            .fetch_hashes = false,
+        });
+        defer allocator.free(initial_build_zig_zon);
+
+        // Write all files for this target
+        try cwd.writeFile(.{ .sub_path = main_zig_path, .data = main_zig });
+        try cwd.writeFile(.{ .sub_path = build_zig_path, .data = build_zig });
+
+        // Generate build.zig.zon with null fingerprint (will use 0x0)
+        // TODO: Implement proper fingerprint detection per target
+        const final_build_zig_zon = try generateBuildZon(allocator, config, .{
+            .engine_path = options.engine_path,
+            .engine_version = effective_engine_version,
+            .fingerprint = null,
+            .fetch_hashes = options.fetch_hashes,
+        });
+        defer allocator.free(final_build_zig_zon);
+
+        try cwd.writeFile(.{ .sub_path = build_zig_zon_path, .data = final_build_zig_zon });
+
+        std.debug.print("  - {s}\n", .{main_zig_filename});
+        std.debug.print("  - {s}\n", .{build_zig_filename});
+        std.debug.print("  - {s}\n", .{build_zig_zon_filename});
+    }
 }
 
 /// Run zig build and parse the suggested fingerprint from the error output
-fn detectFingerprint(allocator: std.mem.Allocator, project_path: []const u8) !u64 {
+fn detectFingerprint(allocator: std.mem.Allocator, project_path: []const u8, build_file: []const u8) !u64 {
     // Run zig build in the project directory
+    // Create a temporary symlink or rename to build.zig so zig build finds it
+    const cwd = std.fs.cwd();
+    const build_file_path = try std.fs.path.join(allocator, &.{ project_path, build_file });
+    defer allocator.free(build_file_path);
+
+    const temp_build_path = try std.fs.path.join(allocator, &.{ project_path, "build.zig" });
+    defer allocator.free(temp_build_path);
+
+    // Copy build file to build.zig temporarily
+    try cwd.copyFile(build_file_path, cwd, temp_build_path, .{});
+    defer cwd.deleteFile(temp_build_path) catch {};
+
     var child = std.process.Child.init(&.{ "zig", "build" }, allocator);
     child.cwd = project_path;
     child.stderr_behavior = .Pipe;
@@ -2411,6 +2438,7 @@ fn detectFingerprint(allocator: std.mem.Allocator, project_path: []const u8) !u6
     // or "invalid fingerprint: 0x0; if this is a new or forked package, use this value: 0xbc20e1ab89c1b519"
     const fingerprint = parseFingerprint(stderr_output) orelse {
         // If we can't parse it, return a default (this shouldn't happen)
+        std.debug.print("Failed to parse fingerprint from output:\n{s}\n", .{stderr_output});
         return error.FingerprintNotFound;
     };
 

@@ -148,10 +148,6 @@ fn handleGenerate(allocator: std.mem.Allocator, args: []const []const u8) !void 
             std.debug.print("Error generating project: {}\n", .{err});
             return err;
         };
-        std.debug.print("Generated:\n", .{});
-        std.debug.print("  - build.zig.zon\n", .{});
-        std.debug.print("  - build.zig\n", .{});
-        std.debug.print("  - main.zig\n", .{});
     }
 }
 
