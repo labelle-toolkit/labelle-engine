@@ -74,17 +74,30 @@ pub fn build(b: *std.Build) !void {
     const android_engine_mod = android_engine_dep.module("labelle-engine");
     const android_physics_mod = android_engine_dep.module("labelle-physics");
 
+    // Create main module first (contains registries and scenes)
+    // This matches iOS pattern where main.zig is an intermediate module
+    const android_main_mod = b.createModule(.{
+        .root_source_file = b.path("main.zig"),
+        .target = android_target,
+        .optimize = android_optimize,
+        .imports = &.{
+            .{ .name = "labelle-engine", .module = android_engine_mod },
+            .{ .name = "labelle-physics", .module = android_physics_mod },
+        },
+    });
+
     // Create shared library for Android (NativeActivity loads .so files)
+    // Only import labelle-engine directly; physics comes through main module
     const android_lib = b.addLibrary(.{
         .name = "mobile_physics_test",
         .linkage = .dynamic,
         .root_module = b.createModule(.{
-            .root_source_file = b.path("main.zig"),
+            .root_source_file = b.path("android_main.zig"),
             .target = android_target,
             .optimize = android_optimize,
             .imports = &.{
                 .{ .name = "labelle-engine", .module = android_engine_mod },
-                .{ .name = "labelle-physics", .module = android_physics_mod },
+                .{ .name = "main", .module = android_main_mod },
             },
         }),
     });
