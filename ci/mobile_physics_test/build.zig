@@ -50,4 +50,55 @@ pub fn build(b: *std.Build) !void {
     // Test step (just builds to verify compilation)
     const test_step = b.step("test", "Build and verify compilation");
     test_step.dependOn(&exe.step);
+
+    // =========================================================================
+    // Android Build - Creates a shared library for Android NativeActivity
+    // =========================================================================
+    const android_target = b.resolveTargetQuery(.{
+        .cpu_arch = .aarch64,
+        .os_tag = .linux,
+        .abi = .android,
+    });
+
+    const android_optimize = b.option(std.builtin.OptimizeMode, "optimize", "Optimization mode") orelse .ReleaseSafe;
+
+    // Get engine for Android target
+    const android_engine_dep = b.dependency("labelle-engine", .{
+        .target = android_target,
+        .optimize = android_optimize,
+        .backend = .sokol,
+        .ecs_backend = ecs_backend,
+    });
+    const android_engine_mod = android_engine_dep.module("labelle-engine");
+
+    // Get physics for Android target
+    const android_physics_dep = b.dependency("labelle-physics", .{
+        .target = android_target,
+        .optimize = android_optimize,
+    });
+    const android_physics_mod = android_physics_dep.module("labelle-physics");
+
+    // Create shared library for Android (NativeActivity loads .so files)
+    const android_lib = b.addSharedLibrary(.{
+        .name = "mobile_physics_test",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("main.zig"),
+            .target = android_target,
+            .optimize = android_optimize,
+            .imports = &.{
+                .{ .name = "labelle-engine", .module = android_engine_mod },
+                .{ .name = "labelle-physics", .module = android_physics_mod },
+            },
+        }),
+    });
+
+    // Link Android system libraries
+    android_lib.linkSystemLibrary("android");
+    android_lib.linkSystemLibrary("log");
+    android_lib.linkSystemLibrary("EGL");
+    android_lib.linkSystemLibrary("GLESv3");
+    android_lib.linkLibC();
+
+    const android_step = b.step("android", "Build shared library for Android");
+    android_step.dependOn(&b.addInstallArtifact(android_lib, .{}).step);
 }

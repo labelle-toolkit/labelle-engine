@@ -18,14 +18,11 @@ on:
 jobs:
   # ============================================================================
   # Android Build
-  # Uses NDK sysroot for C library headers required by box2d/sokol
-  # NOTE: Compilation succeeds but linking fails with "unable to find library"
-  #       because Zig's linker doesn't automatically find NDK shared libs.
-  #       Full Android builds require Android Studio / gradle integration.
+  # Builds a shared library (.so) for Android using NDK sysroot
+  # The .so can be loaded by an Android app via NativeActivity
   # ============================================================================
   android-build:
     runs-on: ubuntu-latest
-    continue-on-error: true  # Known issue: linker can't find NDK shared libs
 
     steps:
       - name: Checkout repository
@@ -61,29 +58,50 @@ jobs:
           echo "gcc_dir=" >> $GITHUB_WORKSPACE/android-aarch64-libc.txt
           cat $GITHUB_WORKSPACE/android-aarch64-libc.txt
 
-      - name: Build for Android (cross-compile check)
+          # Export library path for Android linking
+          echo "ANDROID_LIB_DIR=$LIB_DIR" >> $GITHUB_ENV
+
+      - name: Build for Android
+        env:
+          ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
         run: |
           cd ci/mobile_physics_test
           echo "::group::Building Android target"
-          # NOTE: Linking fails with "unable to find library -lm/-lc/-ldl"
-          # because Zig's linker doesn't find NDK shared libs automatically.
-          # Compilation succeeds (box2d/sokol compile for Android).
-          # Full mobile builds require Android Studio / gradle integration.
-          zig build \
-            -Dtarget=aarch64-linux-android \
-            -Doptimize=ReleaseSafe \
+
+          # Build using the android build step which creates a shared library
+          # Android apps load native code as .so files via NativeActivity
+          zig build android \
+            --search-prefix $ANDROID_LIB_DIR \
             --libc $GITHUB_WORKSPACE/android-aarch64-libc.txt \
-            --summary all || echo "::warning::Android linking failed (expected - see workflow comments)"
+            --summary all
+
           echo "::endgroup::"
+
+      - name: Verify Android build artifacts
+        run: |
+          cd ci/mobile_physics_test
+          echo "Checking for Android build artifacts..."
+          ls -la zig-out/lib/ 2>/dev/null || echo "zig-out/lib/ not found"
+
+          if [ -f "zig-out/lib/libmobile_physics_test.so" ]; then
+            echo "Build verified: Android shared library exists"
+            file zig-out/lib/libmobile_physics_test.so
+          else
+            echo "::error::Android .so not found - build may have failed"
+            find zig-out -name "*.so" 2>/dev/null || true
+            exit 1
+          fi
 
       - name: Create Android build summary
         run: |
+          cd ci/mobile_physics_test
           echo "## Android Build" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "Android cross-compilation target verified." >> $GITHUB_STEP_SUMMARY
+          echo "Android native library build successful" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Target:** aarch64-linux-android" >> $GITHUB_STEP_SUMMARY
-          echo "**NDK:** $ANDROID_NDK_HOME" >> $GITHUB_STEP_SUMMARY
+          echo "**Output:** $(ls -lh zig-out/lib/libmobile_physics_test.so 2>/dev/null | awk '{print $5}')" >> $GITHUB_STEP_SUMMARY
+          echo "**NDK:** r26c (API 24)" >> $GITHUB_STEP_SUMMARY
 
   # ============================================================================
   # iOS Build (Simulator) - Using labelle-cli
