@@ -79,8 +79,9 @@ pub fn build(b: *std.Build) !void {
     const android_physics_mod = android_physics_dep.module("labelle-physics");
 
     // Create shared library for Android (NativeActivity loads .so files)
-    const android_lib = b.addSharedLibrary(.{
+    const android_lib = b.addLibrary(.{
         .name = "mobile_physics_test",
+        .linkage = .dynamic,
         .root_module = b.createModule(.{
             .root_source_file = b.path("main.zig"),
             .target = android_target,
