@@ -71,7 +71,7 @@ jobs:
           # Build using the android build step which creates a shared library
           # Android apps load native code as .so files via NativeActivity
           zig build android \
-            --search-prefix $ANDROID_LIB_DIR \
+            -Dandroid-lib-dir=$ANDROID_LIB_DIR \
             --libc $GITHUB_WORKSPACE/android-aarch64-libc.txt \
             --summary all
 

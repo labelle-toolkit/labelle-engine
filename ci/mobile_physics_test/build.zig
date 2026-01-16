@@ -63,6 +63,9 @@ pub fn build(b: *std.Build) !void {
     // Use ReleaseSafe for Android builds (better performance than Debug)
     const android_optimize: std.builtin.OptimizeMode = .ReleaseSafe;
 
+    // Android library directory (passed from CI via -Dandroid-lib-dir=...)
+    const android_lib_dir = b.option([]const u8, "android-lib-dir", "Path to Android NDK libraries");
+
     // Get engine for Android target
     const android_engine_dep = b.dependency("labelle-engine", .{
         .target = android_target,
@@ -93,6 +96,11 @@ pub fn build(b: *std.Build) !void {
             },
         }),
     });
+
+    // Add Android NDK library path if provided
+    if (android_lib_dir) |lib_dir| {
+        android_lib.root_module.addLibraryPath(.{ .cwd_relative = lib_dir });
+    }
 
     // Link Android system libraries
     android_lib.linkSystemLibrary("android");
