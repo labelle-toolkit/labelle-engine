@@ -161,6 +161,53 @@ jobs:
             exit 1
           fi
 
+      - name: Run on iOS Simulator (install + launch)
+        run: |
+          set -euo pipefail
+
+          cd ci/mobile_physics_test/ios
+
+          # Build the .app bundle (needed for simctl install/launch)
+          zig build ios-sim-app
+
+          APP_PATH="zig-out/app/mobile_physics_test.app"
+          if [ ! -d "$APP_PATH" ]; then
+            echo "::error::.app bundle not found at $APP_PATH"
+            find zig-out -maxdepth 4 -type d -name "*.app" || true
+            exit 1
+          fi
+
+          # Must match bundle id in ci/mobile_physics_test/ios/build.zig
+          BUNDLE_ID="games.labelle.mobile-physics-test"
+
+          # Boot an available simulator (prefer a recent iPhone)
+          UDID=$(xcrun simctl list devices available | awk -F '[()]' '/iPhone/ {print $2; exit}')
+          if [ -z "$UDID" ]; then
+            echo "::error::No available iPhone simulator device found"
+            xcrun simctl list devices available
+            exit 1
+          fi
+
+          echo "Using simulator UDID: $UDID"
+          xcrun simctl boot "$UDID" || true
+          xcrun simctl bootstatus "$UDID" -b
+
+          echo "Installing $APP_PATH"
+          xcrun simctl install "$UDID" "$APP_PATH"
+
+          # Launch app and then terminate after a short delay.
+          # `--console-pty` blocks on app output and may not exit cleanly in CI,
+          # so we use a terminate-based smoke test instead.
+          echo "Launching $BUNDLE_ID"
+          xcrun simctl launch --terminate-running-process "$UDID" "$BUNDLE_ID" --args --ci-test
+
+          # Give it a moment to initialize, then terminate.
+          sleep 5
+          echo "Terminating $BUNDLE_ID"
+          xcrun simctl terminate "$UDID" "$BUNDLE_ID" || true
+
+          echo "Simulator install+launch smoke-test completed"
+
       - name: Create iOS build summary
         run: |
           cd ci/mobile_physics_test/ios

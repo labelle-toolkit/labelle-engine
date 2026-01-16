@@ -1,0 +1,17 @@
+.{
+    .fingerprint = 0x7619059700e34402,
+    .name = .mobile_physics_test_ios,
+    .version = "0.1.0",
+    .dependencies = .{
+        // sokol for linking sokol_clib (C library)
+        // Zig module accessed via engine.sokol to avoid conflicts
+        .sokol = .{
+            .url = "git+https://github.com/floooh/sokol-zig.git#bb1a4e95b243e655e788076c545ca6a1f6bf1558",
+            .hash = "sokol-0.1.0-pb1HK_0CLwBZEK_EZfeR-l9Mtt-BBIuucIZ-c5tLDZxc",
+        },
+        .@"labelle-engine" = .{
+            .path = "../../..",
+        },
+    },
+    .paths = .{ "build.zig", "build.zig.zon" },
+}
