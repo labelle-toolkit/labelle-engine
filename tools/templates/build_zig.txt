@@ -289,8 +289,16 @@ pub fn build(b: *std.Build) !void {{
         const raylib_zig = @import("raylib_zig");
         const emsdk = raylib_zig.emsdk;
         
+        // Get emsdk dependency and add include paths early
+        // This must happen BEFORE we get the raylib artifact to ensure
+        // the C compiler can find system headers when compiling raylib
+        const emsdk_dep = raylib_zig_dep.builder.dependency("emsdk", .{{}});
+        const emsdk_include_path = emsdk_dep.path("upstream/emscripten/cache/sysroot/include");
+        
         // Get raylib artifact and dependency for shell.html
         const raylib_artifact = raylib_zig_dep.artifact("raylib");
+        raylib_artifact.root_module.addIncludePath(emsdk_include_path);
+        
         const raylib_dep = raylib_zig_dep.builder.dependency("raylib", .{{}});
         
         // Step 1: Create library (not executable) for WASM
@@ -298,6 +306,7 @@ pub fn build(b: *std.Build) !void {{
             .name = "{s}",
             .root_module = exe_mod,
         }});
+        lib.root_module.addIncludePath(emsdk_include_path);
 .wasm_build_raylib
         // Step 2: Configure emcc to link raylib + game code
         var emcc_flags = emsdk.emccDefaultFlags(b.allocator, .{{
