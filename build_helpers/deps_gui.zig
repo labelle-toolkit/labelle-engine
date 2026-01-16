@@ -51,7 +51,7 @@ pub const GuiContext = struct {
     wgpu_native: ?*std.Build.Module,
     zglfw: ?*std.Build.Module,
     labelle: *std.Build.Module,
-    sokol: *std.Build.Module,
+    sokol: ?*std.Build.Module,
     zclay: ?*std.Build.Module,
     build_options_mod: *std.Build.Module,
 };
@@ -145,12 +145,12 @@ pub fn createGuiModule(ctx: GuiContext) *std.Build.Module {
         .optimize = ctx.optimize,
         .imports = &.{
             .{ .name = "build_options", .module = ctx.build_options_mod },
-            .{ .name = "sokol", .module = ctx.sokol },
             .{ .name = "labelle", .module = ctx.labelle },
         },
     });
 
     // Add optional modules based on what's available (backend-dependent)
+    if (ctx.sokol) |m| gui_interface.addImport("sokol", m);
     if (ctx.raylib) |m| gui_interface.addImport("raylib", m);
     if (ctx.sdl) |m| gui_interface.addImport("sdl2", m);
     if (ctx.zbgfx) |m| gui_interface.addImport("zbgfx", m);

@@ -151,46 +151,32 @@ jobs:
           # zig build generate -- --engine-path ../../.. usage/example_2
           zig build generate -- --engine-path ../../.. usage/example_4
 
-          # Multi-target generates target-specific files (raylib_desktop_build.zig, etc.)
-          # Create symlinks for backwards compatibility with zig build
-          for example in usage/example_1 usage/example_4; do
-            cd $example/.labelle
-            # Create build.zig symlink pointing to raylib_desktop_build.zig
-            if [ -f "raylib_desktop_build.zig" ] && [ ! -f "build.zig" ]; then
-              ln -s raylib_desktop_build.zig build.zig
-            fi
-            if [ -f "raylib_desktop_build.zig.zon" ] && [ ! -f "build.zig.zon" ]; then
-              ln -s raylib_desktop_build.zig.zon build.zig.zon
-            fi
-            cd ../../..
-          done
-
           # Fix fingerprints - Zig requires exact fingerprints that we can't predict
           # Run build once to get suggested values, then update
           for example in usage/example_1 usage/example_4; do
-            cd $example/.labelle
+            cd $example/.labelle/raylib_desktop
             # Try to build, capture error with suggested fingerprint
             BUILD_OUTPUT=$(zig build 2>&1 || true)
             FINGERPRINT=$(echo "$BUILD_OUTPUT" | grep -oP 'use this value: \K0x[a-f0-9]+' | head -1 || true)
             PATHS_MISSING=$(echo "$BUILD_OUTPUT" | grep -c "missing top-level 'paths' field" || true)
 
             if [ -n "$FINGERPRINT" ]; then
-              # Replace existing fingerprint with the correct one (in actual file, not symlink)
-              sed -i "s/\.fingerprint = 0x[a-f0-9]*,/.fingerprint = $FINGERPRINT,/" raylib_desktop_build.zig.zon
+              # Replace existing fingerprint with the correct one
+              sed -i "s/\.fingerprint = 0x[a-f0-9]*,/.fingerprint = $FINGERPRINT,/" build.zig.zon
             fi
 
             if [ "$PATHS_MISSING" -gt 0 ]; then
               # Add paths before closing brace
-              sed -i 's/^}$/    .paths = .{ "build.zig", "build.zig.zon", "main.zig", "project.labelle", "scenes", "prefabs", "components", "scripts", "resources" },\n}/' raylib_desktop_build.zig.zon
+              sed -i 's/^}$/    .paths = .{ "build.zig", "build.zig.zon", "main.zig", "project.labelle", "scenes", "prefabs", "components", "scripts", "resources" },\n}/' build.zig.zon
             fi
-            cd ../../..
+            cd ../../../..
           done
 
       - name: Build and run example_1 (raylib)
         env:
           CI_TEST: "1"
         run: |
-          cd usage/example_1/.labelle
+          cd usage/example_1/.labelle/raylib_desktop
           xvfb-run -a zig build run
 
       # SKIPPED: Sokol backend has sgl.setup() issue - see labelle-gfx#146
@@ -205,12 +191,12 @@ jobs:
         env:
           CI_TEST: "1"
         run: |
-          cd usage/example_4/.labelle
+          cd usage/example_4/.labelle/raylib_desktop
           xvfb-run -a zig build run -Decs_backend=zig_ecs
 
       - name: Build and run example_4 with zflecs backend
         env:
           CI_TEST: "1"
         run: |
-          cd usage/example_4/.labelle
+          cd usage/example_4/.labelle/raylib_desktop
           xvfb-run -a zig build run -Decs_backend=zflecs

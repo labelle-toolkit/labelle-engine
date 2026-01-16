@@ -22,6 +22,7 @@ const ProjectConfig = project_config.ProjectConfig;
 // Embed templates at compile time
 const build_zig_zon_tmpl = @embedFile("templates/build_zig_zon.txt");
 const build_zig_tmpl = @embedFile("templates/build_zig.txt");
+const build_raylib_wasm_tmpl = @embedFile("templates/build/raylib_wasm_build.txt");
 const main_raylib_tmpl = @embedFile("templates/main_raylib.txt");
 const main_raylib_wasm_tmpl = @embedFile("templates/main_raylib_wasm.txt");
 const main_sokol_tmpl = @embedFile("templates/main_sokol.txt");
@@ -466,8 +467,101 @@ pub fn generateBuildZon(allocator: std.mem.Allocator, config: ProjectConfig, opt
     return buf.toOwnedSlice(allocator);
 }
 
+/// Generate build.zig specifically for raylib WASM builds (uses specialized template)
+fn generateBuildZigRaylibWasm(allocator: std.mem.Allocator, config: ProjectConfig, _: project_config.Target, main_filename: []const u8) ![]const u8 {
+    var buf: std.ArrayListUnmanaged(u8) = .{};
+    const writer = buf.writer(allocator);
+
+    // Sanitize project name for Zig identifier (replace - with _)
+    const zig_name = try sanitizeZigIdentifier(allocator, config.name);
+    defer allocator.free(zig_name);
+
+    // Get the default backends from project config
+    const default_backend = "raylib";
+    const default_ecs_backend = switch (config.ecs_backend) {
+        .zig_ecs => "zig_ecs",
+        .zflecs => "zflecs",
+    };
+    const default_gui_backend = switch (config.gui_backend) {
+        .none => "none",
+        .raygui => "raygui",
+        .microui => "microui",
+        .nuklear => "nuklear",
+        .imgui => "imgui",
+    };
+    const physics_enabled = config.physics.enabled;
+    const physics_str = if (physics_enabled) "true" else "false";
+
+    // With the new subfolder structure, main.zig is in the same directory as build.zig
+    // So we can use the filename directly without any path prefix
+    const main_file_rel_path = main_filename;
+
+    // Write header
+    try zts.print(build_raylib_wasm_tmpl, "header", .{ default_backend, default_backend, default_ecs_backend, default_ecs_backend, default_gui_backend, default_gui_backend, physics_str, physics_str }, writer);
+
+    // Write plugin dependency declarations
+    var plugin_zig_names = try allocator.alloc([]const u8, config.plugins.len);
+    defer {
+        for (plugin_zig_names) |name| allocator.free(name);
+        allocator.free(plugin_zig_names);
+    }
+
+    var plugin_module_names = try allocator.alloc([]const u8, config.plugins.len);
+    defer {
+        for (config.plugins, 0..) |plugin, i| {
+            if (plugin.module == null) allocator.free(plugin_module_names[i]);
+        }
+        allocator.free(plugin_module_names);
+    }
+
+    for (config.plugins, 0..) |plugin, i| {
+        const plugin_zig_name = try sanitizeZigIdentifier(allocator, plugin.name);
+        plugin_zig_names[i] = plugin_zig_name;
+
+        const plugin_module_name = plugin.module orelse blk: {
+            const default_module = try sanitizeZigIdentifier(allocator, plugin.name);
+            break :blk default_module;
+        };
+        plugin_module_names[i] = plugin_module_name;
+
+        try zts.print(build_raylib_wasm_tmpl, "plugin_dep", .{ plugin_zig_name, plugin.name, plugin_zig_name, plugin_zig_name, plugin_module_name }, writer);
+    }
+
+    // Write exe_mod setup
+    try zts.print(build_raylib_wasm_tmpl, "exe_mod_start", .{main_file_rel_path}, writer);
+
+    // Write plugin imports
+    for (config.plugins, 0..) |plugin, i| {
+        try zts.print(build_raylib_wasm_tmpl, "plugin_import", .{ plugin.name, plugin_zig_names[i] }, writer);
+    }
+
+    // Write physics module import
+    try zts.print(build_raylib_wasm_tmpl, "physics_import", .{}, writer);
+
+    // Write native build start
+    try zts.print(build_raylib_wasm_tmpl, "native_build_start", .{zig_name}, writer);
+
+    // Close native block and start WASM block
+    try zts.print(build_raylib_wasm_tmpl, "native_build_close_if", .{}, writer);
+
+    // Write WASM build section
+    try zts.print(build_raylib_wasm_tmpl, "wasm_build_start", .{zig_name}, writer);
+    try zts.print(build_raylib_wasm_tmpl, "wasm_build_raylib", .{zig_name}, writer);
+    try zts.print(build_raylib_wasm_tmpl, "wasm_build_end", .{}, writer);
+
+    return buf.toOwnedSlice(allocator);
+}
+
 /// Generate build.zig content
 pub fn generateBuildZig(allocator: std.mem.Allocator, config: ProjectConfig, target_config: project_config.Target, main_filename: []const u8) ![]const u8 {
+    // Use specialized template for raylib WASM builds
+    const backend = target_config.getBackend();
+    const platform = target_config.getPlatform();
+
+    if (backend == .raylib and platform == .wasm) {
+        return generateBuildZigRaylibWasm(allocator, config, target_config, main_filename);
+    }
+
     var buf: std.ArrayListUnmanaged(u8) = .{};
     const writer = buf.writer(allocator);
 
@@ -476,7 +570,6 @@ pub fn generateBuildZig(allocator: std.mem.Allocator, config: ProjectConfig, tar
     defer allocator.free(zig_name);
 
     // Use the provided target to determine backend and platform
-    const backend = target_config.getBackend();
     const target = target_config.getPlatform();
     _ = target_config.getName(); // target_name not needed for now
 
@@ -505,10 +598,9 @@ pub fn generateBuildZig(allocator: std.mem.Allocator, config: ProjectConfig, tar
     const physics_enabled = config.physics.enabled;
     const physics_str = if (physics_enabled) "true" else "false";
 
-    // Construct relative path from output dir (.labelle/) to project root (../)
-    // Since main file is in project root and build.zig is in output dir
-    const main_file_rel_path = try std.fmt.allocPrint(allocator, "../{s}", .{main_filename});
-    defer allocator.free(main_file_rel_path);
+    // With the new subfolder structure, main.zig is in the same directory as build.zig
+    // So we can use the filename directly without any path prefix
+    const main_file_rel_path = main_filename;
 
     // Write common header (includes backend options)
     // Template args: graphics_backend (x2), ecs_backend (x2), gui_backend (x2), physics (x2)
@@ -2512,6 +2604,44 @@ pub const GenerateOptions = struct {
     fetch_hashes: bool = true,
 };
 
+/// Recursively copy a directory and all its contents
+fn copyDirRecursive(allocator: std.mem.Allocator, src_path: []const u8, dest_path: []const u8) !void {
+    const cwd = std.fs.cwd();
+
+    // Open source directory
+    var src_dir = try cwd.openDir(src_path, .{ .iterate = true });
+    defer src_dir.close();
+
+    // Create destination directory
+    try cwd.makePath(dest_path);
+    var dest_dir = try cwd.openDir(dest_path, .{});
+    defer dest_dir.close();
+
+    // Iterate through source directory
+    var iter = src_dir.iterate();
+    while (try iter.next()) |entry| {
+        const src_entry_path = try std.fs.path.join(allocator, &.{ src_path, entry.name });
+        defer allocator.free(src_entry_path);
+
+        const dest_entry_path = try std.fs.path.join(allocator, &.{ dest_path, entry.name });
+        defer allocator.free(dest_entry_path);
+
+        switch (entry.kind) {
+            .file => {
+                // Copy file
+                try cwd.copyFile(src_entry_path, cwd, dest_entry_path, .{});
+            },
+            .directory => {
+                // Recursively copy subdirectory
+                try copyDirRecursive(allocator, src_entry_path, dest_entry_path);
+            },
+            else => {
+                // Skip symlinks and other special files
+            },
+        }
+    }
+}
+
 /// Generate all project files (build.zig, build.zig.zon, main.zig)
 pub fn generateProject(allocator: std.mem.Allocator, project_path: []const u8, options: GenerateOptions) !void {
     // Load project config
@@ -2648,31 +2778,43 @@ pub fn generateProject(allocator: std.mem.Allocator, project_path: []const u8, o
         const main_zig = try generateMainZigForTarget(allocator, target, config, prefabs, enums, components, scripts, hooks, task_hooks);
         defer allocator.free(main_zig);
 
-        // File paths with target prefix in output directory
-        const main_zig_filename = try std.fmt.allocPrint(allocator, "{s}_main.zig", .{target_name});
-        defer allocator.free(main_zig_filename);
+        // Create subfolder for this target: .labelle/{target_name}/
+        const target_dir_path = try std.fs.path.join(allocator, &.{ output_dir_path, target_name });
+        defer allocator.free(target_dir_path);
+
+        // Create target directory
+        try cwd.makePath(target_dir_path);
+
+        // File paths: build.zig, build.zig.zon, and main.zig all in target subfolder
+        const main_zig_filename = "main.zig";
+        const main_zig_path = try std.fs.path.join(allocator, &.{ target_dir_path, main_zig_filename });
+        defer allocator.free(main_zig_path);
 
         // Generate build.zig for this target (pass main filename so it can reference the correct file)
         const build_zig = try generateBuildZig(allocator, config, target, main_zig_filename);
         defer allocator.free(build_zig);
 
-        // File paths: main.zig in project root, build files in output directory
-        const main_zig_path = try std.fs.path.join(allocator, &.{ project_path, main_zig_filename });
-        defer allocator.free(main_zig_path);
-
-        const build_zig_filename = try std.fmt.allocPrint(allocator, "{s}_build.zig", .{target_name});
-        defer allocator.free(build_zig_filename);
-        const build_zig_path = try std.fs.path.join(allocator, &.{ output_dir_path, build_zig_filename });
+        const build_zig_filename = "build.zig";
+        const build_zig_path = try std.fs.path.join(allocator, &.{ target_dir_path, build_zig_filename });
         defer allocator.free(build_zig_path);
 
-        const build_zig_zon_filename = try std.fmt.allocPrint(allocator, "{s}_build.zig.zon", .{target_name});
-        defer allocator.free(build_zig_zon_filename);
-        const build_zig_zon_path = try std.fs.path.join(allocator, &.{ output_dir_path, build_zig_zon_filename });
+        const build_zig_zon_filename = "build.zig.zon";
+        const build_zig_zon_path = try std.fs.path.join(allocator, &.{ target_dir_path, build_zig_zon_filename });
         defer allocator.free(build_zig_zon_path);
+
+        // Adjust engine_path for subfolder structure (two extra levels up)
+        // Before: project_root/ -> ../engine (user-provided path)
+        // Old structure: .labelle/ -> ../../engine (one extra ../)
+        // New structure: .labelle/target/ -> ../../../engine (two extra ../)
+        var adjusted_engine_path: ?[]const u8 = null;
+        if (options.engine_path) |path| {
+            adjusted_engine_path = try std.fmt.allocPrint(allocator, "../../{s}", .{path});
+        }
+        defer if (adjusted_engine_path) |p| allocator.free(p);
 
         // Generate build.zig.zon with placeholder fingerprint first
         const initial_build_zig_zon = try generateBuildZon(allocator, config, .{
-            .engine_path = options.engine_path,
+            .engine_path = adjusted_engine_path,
             .engine_version = effective_engine_version,
             .fingerprint = null,
             .fetch_hashes = false,
@@ -2684,9 +2826,38 @@ pub fn generateProject(allocator: std.mem.Allocator, project_path: []const u8, o
         try cwd.writeFile(.{ .sub_path = build_zig_path, .data = build_zig });
         try cwd.writeFile(.{ .sub_path = build_zig_zon_path, .data = initial_build_zig_zon });
 
-        // Detect fingerprint by running zig build
+        // Copy project directories into target directory for self-contained builds
+        // This allows imports without violating Zig's module path restrictions
+        const dirs_to_copy = [_][]const u8{ "components", "scripts", "prefabs", "scenes", "resources", "hooks" };
+        for (dirs_to_copy) |dir_name| {
+            const src_dir_path = try std.fs.path.join(allocator, &.{ project_path, dir_name });
+            defer allocator.free(src_dir_path);
+
+            const dest_dir_path = try std.fs.path.join(allocator, &.{ target_dir_path, dir_name });
+            defer allocator.free(dest_dir_path);
+
+            // Copy directory if it exists (some might not exist in all projects)
+            copyDirRecursive(allocator, src_dir_path, dest_dir_path) catch |err| {
+                if (err != error.FileNotFound) {
+                    std.debug.print("Warning: Failed to copy {s}: {}\n", .{ dir_name, err });
+                }
+            };
+        }
+
+        // Copy project.labelle into target directory as well
+        const src_labelle_path = try std.fs.path.join(allocator, &.{ project_path, "project.labelle" });
+        defer allocator.free(src_labelle_path);
+
+        const dest_labelle_path = try std.fs.path.join(allocator, &.{ target_dir_path, "project.labelle" });
+        defer allocator.free(dest_labelle_path);
+
+        cwd.copyFile(src_labelle_path, cwd, dest_labelle_path, .{}) catch |err| {
+            std.debug.print("Warning: Failed to copy project.labelle: {}\n", .{err});
+        };
+
+        // Detect fingerprint by running zig build in the target directory
         std.debug.print("Fetching {s} fingerprint...\n", .{target_name});
-        const detected_fingerprint = detectFingerprint(allocator, output_dir_path, build_zig_filename) catch |err| blk: {
+        const detected_fingerprint = detectFingerprint(allocator, target_dir_path, build_zig_filename) catch |err| blk: {
             std.debug.print("Warning: Failed to detect fingerprint for {s}: {}\n", .{ target_name, err });
             std.debug.print("Using placeholder 0x0 (you may need to update manually)\n", .{});
             break :blk null;
@@ -2694,7 +2865,7 @@ pub fn generateProject(allocator: std.mem.Allocator, project_path: []const u8, o
 
         // Generate final build.zig.zon with detected fingerprint
         const final_build_zig_zon = try generateBuildZon(allocator, config, .{
-            .engine_path = options.engine_path,
+            .engine_path = adjusted_engine_path,
             .engine_version = effective_engine_version,
             .fingerprint = detected_fingerprint,
             .fetch_hashes = options.fetch_hashes,
@@ -2703,39 +2874,17 @@ pub fn generateProject(allocator: std.mem.Allocator, project_path: []const u8, o
 
         try cwd.writeFile(.{ .sub_path = build_zig_zon_path, .data = final_build_zig_zon });
 
-        std.debug.print("  - {s}\n", .{main_zig_filename});
-        std.debug.print("  - {s}\n", .{build_zig_filename});
-        std.debug.print("  - {s}\n", .{build_zig_zon_filename});
+        std.debug.print("  - {s}/{s}\n", .{ target_name, main_zig_filename });
+        std.debug.print("  - {s}/{s}\n", .{ target_name, build_zig_filename });
+        std.debug.print("  - {s}/{s}\n", .{ target_name, build_zig_zon_filename });
     }
 }
 
 /// Run zig build and parse the suggested fingerprint from the error output
 fn detectFingerprint(allocator: std.mem.Allocator, project_path: []const u8, build_file: []const u8) !u64 {
-    // Run zig build in the project directory
-    // Create temporary build.zig and build.zig.zon so zig build finds them
-    const cwd = std.fs.cwd();
-    const build_file_path = try std.fs.path.join(allocator, &.{ project_path, build_file });
-    defer allocator.free(build_file_path);
+    _ = build_file; // No longer needed - always "build.zig"
 
-    // Derive .zon filename from build file (e.g., "foo_build.zig" -> "foo_build.zig.zon")
-    const zon_file = try std.fmt.allocPrint(allocator, "{s}.zon", .{build_file});
-    defer allocator.free(zon_file);
-    const zon_file_path = try std.fs.path.join(allocator, &.{ project_path, zon_file });
-    defer allocator.free(zon_file_path);
-
-    const temp_build_path = try std.fs.path.join(allocator, &.{ project_path, "build.zig" });
-    defer allocator.free(temp_build_path);
-
-    const temp_zon_path = try std.fs.path.join(allocator, &.{ project_path, "build.zig.zon" });
-    defer allocator.free(temp_zon_path);
-
-    // Copy both files temporarily
-    try cwd.copyFile(build_file_path, cwd, temp_build_path, .{});
-    defer cwd.deleteFile(temp_build_path) catch {};
-
-    try cwd.copyFile(zon_file_path, cwd, temp_zon_path, .{});
-    defer cwd.deleteFile(temp_zon_path) catch {};
-
+    // Run zig build in the target directory
     var child = std.process.Child.init(&.{ "zig", "build" }, allocator);
     child.cwd = project_path;
     child.stderr_behavior = .Pipe;

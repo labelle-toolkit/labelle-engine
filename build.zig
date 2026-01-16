@@ -77,7 +77,11 @@ pub fn build(b: *std.Build) void {
     // ==========================================================================
 
     // labelle-gfx - handles iOS internally
-    const labelle_dep = b.dependency("labelle-gfx", .{ .target = target, .optimize = optimize });
+    const labelle_dep = b.dependency("labelle-gfx", .{
+        .target = target,
+        .optimize = optimize,
+        .@"enable-sokol" = backend == .sokol or is_ios or is_android,
+    });
     const labelle = labelle_dep.module("labelle");
 
     // raylib - from labelle-gfx (needed for raylib backend on any platform)
@@ -86,12 +90,17 @@ pub fn build(b: *std.Build) void {
     // SDL - from labelle-gfx (desktop only)
     const sdl: ?*std.Build.Module = if (is_desktop) labelle_dep.builder.modules.get("sdl") else null;
 
-    // sokol - always get from labelle-gfx to avoid "file exists in multiple modules" error
+    // sokol - only available when enabled in labelle-gfx
     // Note: sokol is NOT declared in our build.zig.zon to prevent duplicate dependencies
-    const sokol = labelle_dep.builder.modules.get("sokol") orelse @panic("sokol module not found in labelle-gfx - ensure labelle-gfx exports sokol via b.modules.put()");
+    const sokol: ?*std.Build.Module = labelle_dep.builder.modules.get("sokol");
+    if (backend == .sokol and sokol == null) {
+        @panic("sokol backend selected but sokol module not exported by labelle-gfx");
+    }
 
-    // Export sokol for consumers (e.g., example projects that need direct sokol access)
-    b.modules.put("sokol", sokol) catch @panic("Failed to export sokol module");
+    // Export sokol for consumers when present
+    if (sokol) |sk| {
+        b.modules.put("sokol", sk) catch @panic("Failed to export sokol module");
+    }
 
     // Note: sokol_dep is null because sokol is provided by labelle-gfx.
     // iOS/Android sokol configuration is handled by labelle-gfx.

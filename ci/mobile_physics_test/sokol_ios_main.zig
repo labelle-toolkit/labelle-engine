@@ -69,11 +69,7 @@ var scene_storage: engine.Scene = undefined;
 
 // Sokol app callbacks for iOS
 export fn init() void {
-    if (state.initialized) return;
-
-    // For CI we intentionally always run in short-lived mode.
-    // simctl does not reliably propagate env vars across all macOS/Xcode versions.
-    state.ci_test = true;
+    state.ci_test = std.posix.getenv("CI_TEST") != null;
 
     // Initialize sokol_gfx with sokol_app's rendering context
     sg.setup(.{
@@ -82,8 +78,9 @@ export fn init() void {
     });
 
     // Initialize sokol_gl for 2D drawing (must be after sg.setup)
-    // Disabled here: it registers a commit listener and can fail/flake on Simulator.
-    // If needed for projects, this should be initialized by the graphics backend.
+    sgl.setup(.{
+        .logger = .{ .func = sokol.log.func },
+    });
 
     // Use page allocator for simplicity in callback context
     state.allocator = std.heap.page_allocator;
@@ -135,8 +132,7 @@ export fn init() void {
 export fn frame() void {
     if (!state.initialized or state.game == null or state.scene == null) return;
 
-    // CI test mode: exit after a few frames.
-    // Also skip rendering setup (sgl) to keep CI deterministic.
+    // CI test mode: exit after 10 frames
     state.frame_count += 1;
     if (state.ci_test) {
         if (state.frame_count > 10) {
@@ -144,8 +140,6 @@ export fn frame() void {
             sapp.quit();
             return;
         }
-        // No rendering in CI mode.
-        return;
     }
 
     // Get delta time from sokol
@@ -235,7 +229,7 @@ pub fn main() void {
         .width = 800,
         .height = 600,
         .window_title = "Mobile Physics Test",
-        .high_dpi = true, // Enable Retina display support
+        .high_dpi = true,  // Enable Retina display support
         .icon = .{ .sokol_default = true },
         .logger = .{ .func = sokol.log.func },
     });

@@ -34,15 +34,16 @@ pub const GuiBackend = enum {
     imgui,
 };
 
-pub fn build(b: *std.Build) void {
+pub fn build(b: *std.Build) !void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    // Detect iOS target for framework linking
+    // Detect platform-specific targets
     const is_ios = target.result.os.tag == .ios;
+    const is_wasm = target.result.os.tag == .emscripten;
 
     // Backend options - can be overridden via -Dbackend, -Decs_backend, -Dgui_backend
-    const backend = b.option(Backend, "backend", "Graphics backend to use (default: raylib)") orelse .raylib;
+    const backend = b.option(Backend, "backend", "Graphics backend to use (default: sokol)") orelse .sokol;
     const ecs_backend = b.option(EcsBackend, "ecs_backend", "ECS backend to use (default: zig_ecs)") orelse .zig_ecs;
     const gui_backend = b.option(GuiBackend, "gui_backend", "GUI backend to use (default: none)") orelse .none;
     const physics_enabled = b.option(bool, "physics", "Enable physics module (default: true)") orelse true;
@@ -57,8 +58,9 @@ pub fn build(b: *std.Build) void {
     });
     const engine_mod = engine_dep.module("labelle-engine");
 
+    // iOS sokol: sokol bindings accessed through engine.sokol (no direct import)
     const exe_mod = b.createModule(.{
-        .root_source_file = b.path("../main.zig"),
+        .root_source_file = b.path("../sokol_ios_main.zig"),
         .target = target,
         .optimize = optimize,
     });
@@ -68,36 +70,39 @@ pub fn build(b: *std.Build) void {
         exe_mod.addImport("labelle-physics", physics_mod);
     }
 
-    const exe = b.addExecutable(.{
-        .name = "mobile_physics_test",
-        .root_module = exe_mod,
-    });
-    // Link iOS frameworks when targeting iOS
-    if (is_ios) {
-        // Add framework search path for linking - select SDK based on target ABI
-        if (target.result.abi == .simulator) {
-            exe.addFrameworkPath(.{ .cwd_relative = "/Applications/Xcode.app/Contents/Developer/Platforms/iPhoneSimulator.platform/Developer/SDKs/iPhoneSimulator.sdk/System/Library/Frameworks" });
-        } else {
-            exe.addFrameworkPath(.{ .cwd_relative = "/Applications/Xcode.app/Contents/Developer/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS.sdk/System/Library/Frameworks" });
+    // ===== CONDITIONAL BUILD PATH =====
+    if (!is_wasm) {
+        const exe = b.addExecutable(.{
+            .name = "mobile_physics_test",
+            .root_module = exe_mod,
+        });
+        // Link iOS frameworks when targeting iOS
+        if (is_ios) {
+            // Add framework search path for linking - select SDK based on target ABI
+            if (target.result.abi == .simulator) {
+                exe.addFrameworkPath(.{ .cwd_relative = "/Applications/Xcode.app/Contents/Developer/Platforms/iPhoneSimulator.platform/Developer/SDKs/iPhoneSimulator.sdk/System/Library/Frameworks" });
+            } else {
+                exe.addFrameworkPath(.{ .cwd_relative = "/Applications/Xcode.app/Contents/Developer/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS.sdk/System/Library/Frameworks" });
+            }
+
+            exe.linkFramework("Metal");
+            exe.linkFramework("MetalKit");
+            exe.linkFramework("UIKit");
+            exe.linkFramework("AudioToolbox");
+            exe.linkFramework("AVFoundation");
+            exe.linkFramework("Foundation");
+            exe.linkFramework("QuartzCore");
+            exe.linkSystemLibrary("objc");
         }
 
-        exe.linkFramework("Metal");
-        exe.linkFramework("MetalKit");
-        exe.linkFramework("UIKit");
-        exe.linkFramework("AudioToolbox");
-        exe.linkFramework("AVFoundation");
-        exe.linkFramework("Foundation");
-        exe.linkFramework("QuartzCore");
-        exe.linkSystemLibrary("objc");
-    }
+        b.installArtifact(exe);
 
-    b.installArtifact(exe);
+        const run_cmd = b.addRunArtifact(exe);
+        run_cmd.step.dependOn(b.getInstallStep());
+        // Set working directory to project root (parent of output directory)
+        run_cmd.setCwd(b.path(".."));
 
-    const run_cmd = b.addRunArtifact(exe);
-    run_cmd.step.dependOn(b.getInstallStep());
-    // Set working directory to project root (parent of output directory)
-    run_cmd.setCwd(b.path(".."));
-
-    const run_step = b.step("run", "Run the game");
-    run_step.dependOn(&run_cmd.step);
+        const run_step = b.step("run", "Run the game");
+        run_step.dependOn(&run_cmd.step);
+    } // End !is_wasm check
 }

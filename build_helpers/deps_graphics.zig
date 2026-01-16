@@ -88,7 +88,7 @@ pub fn createInputModule(
     optimize: std.builtin.OptimizeMode,
     build_options_mod: *std.Build.Module,
     raylib: ?*std.Build.Module,
-    sokol: *std.Build.Module,
+    sokol: ?*std.Build.Module,
     sdl: ?*std.Build.Module,
     zglfw: ?*std.Build.Module,
     backend: anytype, // Backend enum
@@ -98,6 +98,8 @@ pub fn createInputModule(
     const needs_sdl = backend == .sdl;
     const needs_zglfw = backend == .bgfx or backend == .wgpu_native;
 
+    const needs_sokol = backend != .raylib;
+
     return b.addModule("input", .{
         .root_source_file = b.path("input/interface.zig"),
         .target = target,
@@ -105,19 +107,20 @@ pub fn createInputModule(
         .imports = if (needs_raylib and raylib != null) &.{
             .{ .name = "build_options", .module = build_options_mod },
             .{ .name = "raylib", .module = raylib.? },
-            .{ .name = "sokol", .module = sokol },
-        } else if (needs_sdl and sdl != null and zglfw != null) &.{
+        } else if (needs_sdl and sdl != null and zglfw != null and sokol != null) &.{
             .{ .name = "build_options", .module = build_options_mod },
-            .{ .name = "sokol", .module = sokol },
+            .{ .name = "sokol", .module = sokol.? },
             .{ .name = "sdl2", .module = sdl.? },
             .{ .name = "zglfw", .module = zglfw.? },
-        } else if (needs_zglfw and zglfw != null) &.{
+        } else if (needs_zglfw and zglfw != null and sokol != null) &.{
             .{ .name = "build_options", .module = build_options_mod },
-            .{ .name = "sokol", .module = sokol },
+            .{ .name = "sokol", .module = sokol.? },
             .{ .name = "zglfw", .module = zglfw.? },
+        } else if (needs_sokol and sokol != null) &.{
+            .{ .name = "build_options", .module = build_options_mod },
+            .{ .name = "sokol", .module = sokol.? },
         } else &.{
             .{ .name = "build_options", .module = build_options_mod },
-            .{ .name = "sokol", .module = sokol },
         },
     });
 }
@@ -148,7 +151,7 @@ pub fn createAudioModule(
     optimize: std.builtin.OptimizeMode,
     build_options_mod: *std.Build.Module,
     raylib: ?*std.Build.Module,
-    sokol: *std.Build.Module,
+    sokol: ?*std.Build.Module,
     zaudio: ?*std.Build.Module,
     backend: anytype, // Backend enum
 ) *std.Build.Module {
@@ -157,6 +160,7 @@ pub fn createAudioModule(
     // Mobile/WASM raylib needs raylib module
     // Mobile/WASM sokol needs only sokol module
     const needs_raylib = backend == .raylib;
+    const needs_sokol = backend != .raylib;
     const needs_zaudio = backend != .raylib and backend != .sokol and zaudio != null;
 
     return b.addModule("audio", .{
@@ -166,14 +170,15 @@ pub fn createAudioModule(
         .imports = if (needs_raylib and raylib != null) &.{
             .{ .name = "build_options", .module = build_options_mod },
             .{ .name = "raylib", .module = raylib.? },
-            .{ .name = "sokol", .module = sokol },
-        } else if (needs_zaudio) &.{
+        } else if (needs_zaudio and sokol != null) &.{
             .{ .name = "build_options", .module = build_options_mod },
-            .{ .name = "sokol", .module = sokol },
+            .{ .name = "sokol", .module = sokol.? },
             .{ .name = "zaudio", .module = zaudio.? },
+        } else if (needs_sokol and sokol != null) &.{
+            .{ .name = "build_options", .module = build_options_mod },
+            .{ .name = "sokol", .module = sokol.? },
         } else &.{
             .{ .name = "build_options", .module = build_options_mod },
-            .{ .name = "sokol", .module = sokol },
         },
     });
 }
