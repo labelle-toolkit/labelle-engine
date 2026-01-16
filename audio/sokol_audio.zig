@@ -81,7 +81,11 @@ var g_instance: ?*Self = null;
 
 /// Initialize the audio system
 pub fn init() Self {
-    const allocator = std.heap.page_allocator;
+    // Use c_allocator for WASM (emscripten), page_allocator for native
+    const allocator = if (@import("builtin").os.tag == .emscripten)
+        std.heap.c_allocator
+    else
+        std.heap.page_allocator;
 
     var self = Self{
         .allocator = allocator,

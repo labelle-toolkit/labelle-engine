@@ -49,8 +49,8 @@ export fn init() void {{
         .logger = .{{ .func = sokol.log.func }},
     }});
 
-    // Use page allocator (simple, works in WASM)
-    const allocator = std.heap.page_allocator;
+    // Use c_allocator for WASM (page_allocator doesn't work in Emscripten)
+    const allocator = std.heap.c_allocator;
 
     // Initialize game with compile-time embedded config
     game_storage = Game.init(allocator, .{{

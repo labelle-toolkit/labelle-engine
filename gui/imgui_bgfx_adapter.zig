@@ -35,7 +35,11 @@ fb_width: u32,
 fb_height: u32,
 
 pub fn init() Self {
-    const allocator = std.heap.page_allocator;
+    // Use c_allocator for WASM (emscripten), page_allocator for native
+    const allocator = if (@import("builtin").os.tag == .emscripten)
+        std.heap.c_allocator
+    else
+        std.heap.page_allocator;
 
     // Initialize zgui core (backend initialized lazily when window is available)
     zgui.init(allocator);

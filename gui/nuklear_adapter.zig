@@ -34,7 +34,11 @@ window_counter: u32,
 // Panel nesting level - when > 0, widgets are inside a panel and should not create their own windows
 panel_depth: u32,
 
-const allocator = std.heap.page_allocator;
+// Use c_allocator for WASM (emscripten), page_allocator for native
+const allocator = if (@import("builtin").os.tag == .emscripten)
+    std.heap.c_allocator
+else
+    std.heap.page_allocator;
 
 pub fn init() Self {
     // Allocate nuklear state on the heap so it won't move
