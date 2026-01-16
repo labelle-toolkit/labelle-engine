@@ -60,7 +60,8 @@ pub fn build(b: *std.Build) !void {
         .abi = .android,
     });
 
-    const android_optimize = b.option(std.builtin.OptimizeMode, "optimize", "Optimization mode") orelse .ReleaseSafe;
+    // Use ReleaseSafe for Android builds (better performance than Debug)
+    const android_optimize: std.builtin.OptimizeMode = .ReleaseSafe;
 
     // Get engine for Android target
     const android_engine_dep = b.dependency("labelle-engine", .{
