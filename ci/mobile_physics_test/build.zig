@@ -66,21 +66,17 @@ pub fn build(b: *std.Build) !void {
     // Android library directory (passed from CI via -Dandroid-lib-dir=...)
     const android_lib_dir = b.option([]const u8, "android-lib-dir", "Path to Android NDK libraries");
 
-    // Get engine for Android target
+    // Get engine for Android target (with physics enabled)
     const android_engine_dep = b.dependency("labelle-engine", .{
         .target = android_target,
         .optimize = android_optimize,
         .backend = .sokol,
         .ecs_backend = ecs_backend,
+        .physics = true,
     });
     const android_engine_mod = android_engine_dep.module("labelle-engine");
-
-    // Get physics for Android target
-    const android_physics_dep = b.dependency("labelle-physics", .{
-        .target = android_target,
-        .optimize = android_optimize,
-    });
-    const android_physics_mod = android_physics_dep.module("labelle-physics");
+    // Get physics module from engine to avoid duplicate Box2D symbols
+    const android_physics_mod = android_engine_dep.module("labelle-physics");
 
     // Create shared library for Android (NativeActivity loads .so files)
     const android_lib = b.addLibrary(.{
