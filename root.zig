@@ -25,10 +25,6 @@ pub const render = @import("render/mod.zig");
 pub const scene = @import("scene/src/root.zig");
 pub const engine = @import("engine/mod.zig");
 
-// Platform utilities
-pub const platform = @import("platform.zig");
-pub const getDefaultAllocator = platform.getDefaultAllocator;
-
 // Build configuration
 pub const build_helpers = @import("build_helpers.zig");
 pub const project_config = @import("tools/project_config.zig");

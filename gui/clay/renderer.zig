@@ -71,8 +71,12 @@ fn drawRectangle(config: clay.RectangleRenderData, bounds: clay.BoundingBox) voi
 
 fn drawText(config: clay.TextRenderData, bounds: clay.BoundingBox) void {
     // Use a temporary arena allocator to avoid large stack allocation
-    const platform = @import("../../platform.zig");
-    var arena = std.heap.ArenaAllocator.init(platform.getDefaultAllocator());
+    // Use c_allocator for WASM (emscripten), page_allocator for native
+    const backing_allocator = if (@import("builtin").os.tag == .emscripten)
+        std.heap.c_allocator
+    else
+        std.heap.page_allocator;
+    var arena = std.heap.ArenaAllocator.init(backing_allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
 

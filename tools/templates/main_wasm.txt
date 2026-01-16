@@ -207,8 +207,8 @@ export fn init() void {{
         .logger = .{{ .func = sokol.log.func }},
     }});
 
-    // Use platform-aware allocator (c_allocator for WASM, page_allocator for native)
-    const allocator = engine.getDefaultAllocator();
+    // Use c_allocator for WASM (page_allocator doesn't work in Emscripten)
+    const allocator = std.heap.c_allocator;
 
     // Initialize game with compile-time embedded config
     game_storage = Game.init(allocator, .{{
