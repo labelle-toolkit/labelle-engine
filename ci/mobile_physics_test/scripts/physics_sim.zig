@@ -4,7 +4,8 @@
 
 const std = @import("std");
 const engine = @import("labelle-engine");
-const physics = @import("labelle-physics");
+// Access physics through engine to avoid duplicate Box2D linking
+const physics = engine.physics;
 
 const Game = engine.Game;
 const Scene = engine.Scene;

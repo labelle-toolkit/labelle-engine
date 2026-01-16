@@ -7,7 +7,8 @@
 
 const std = @import("std");
 pub const engine = @import("labelle-engine");
-const physics = @import("labelle-physics");
+// Physics types accessed through engine to avoid duplicate Box2D linking
+// Use engine.PhysicsComponents instead of importing labelle-physics directly
 const ProjectConfig = engine.ProjectConfig;
 
 pub const GameId = u64;
@@ -23,10 +24,10 @@ pub const Components = engine.ComponentRegistry(struct {
     pub const Sprite = engine.Sprite;
     pub const Shape = engine.Shape;
     pub const Text = engine.Text;
-    // Physics components (from labelle-physics)
-    pub const RigidBody = physics.RigidBody;
-    pub const Collider = physics.Collider;
-    pub const Velocity = physics.Velocity;
+    // Physics components (accessed through engine.PhysicsComponents)
+    pub const RigidBody = engine.PhysicsComponents.RigidBody;
+    pub const Collider = engine.PhysicsComponents.Collider;
+    pub const Velocity = engine.PhysicsComponents.Velocity;
 });
 pub const Scripts = engine.ScriptRegistry(struct {
     pub const physics_sim = physics_sim_script;

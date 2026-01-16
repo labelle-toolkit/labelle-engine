@@ -9,7 +9,7 @@ pub fn build(b: *std.Build) !void {
     const ecs_backend = b.option(EcsBackend, "ecs_backend", "ECS backend") orelse .zig_ecs;
 
     // Get labelle-engine dependency with physics enabled
-    // Physics is accessed through engine to avoid duplicate Box2D symbols
+    // Physics types accessed through engine.PhysicsComponents to avoid duplicate linking
     const engine_dep = b.dependency("labelle-engine", .{
         .target = target,
         .optimize = optimize,
@@ -18,7 +18,6 @@ pub fn build(b: *std.Build) !void {
         .physics = true,
     });
     const engine_mod = engine_dep.module("labelle-engine");
-    const physics_mod = engine_dep.module("labelle-physics");
 
     // Create executable
     const exe = b.addExecutable(.{
@@ -29,7 +28,6 @@ pub fn build(b: *std.Build) !void {
             .optimize = optimize,
             .imports = &.{
                 .{ .name = "labelle-engine", .module = engine_mod },
-                .{ .name = "labelle-physics", .module = physics_mod },
             },
         }),
     });
@@ -63,7 +61,7 @@ pub fn build(b: *std.Build) !void {
     const android_lib_dir = b.option([]const u8, "android-lib-dir", "Path to Android NDK libraries");
 
     // Get engine for Android target (with physics enabled)
-    // Physics is accessed through engine to avoid duplicate Box2D symbols
+    // Physics types accessed through engine.PhysicsComponents to avoid duplicate linking
     const android_engine_dep = b.dependency("labelle-engine", .{
         .target = android_target,
         .optimize = android_optimize,
@@ -72,17 +70,15 @@ pub fn build(b: *std.Build) !void {
         .physics = true,
     });
     const android_engine_mod = android_engine_dep.module("labelle-engine");
-    const android_physics_mod = android_engine_dep.module("labelle-physics");
 
-    // Create main module first (contains registries and scenes)
-    // This matches iOS pattern where main.zig is an intermediate module
+    // Create main module (contains registries and scenes)
+    // Physics types accessed through engine.PhysicsComponents, not separate import
     const android_main_mod = b.createModule(.{
         .root_source_file = b.path("main.zig"),
         .target = android_target,
         .optimize = android_optimize,
         .imports = &.{
             .{ .name = "labelle-engine", .module = android_engine_mod },
-            .{ .name = "labelle-physics", .module = android_physics_mod },
         },
     });
 
