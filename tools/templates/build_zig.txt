@@ -289,17 +289,18 @@ pub fn build(b: *std.Build) !void {{
         const raylib_zig = @import("raylib_zig");
         const emsdk = raylib_zig.emsdk;
         
+        // Get raylib dependency first (needed to access emsdk)
+        const raylib_dep = raylib_zig_dep.builder.dependency("raylib", .{{}});
+        
         // Get emsdk dependency and add include paths early
         // This must happen BEFORE we get the raylib artifact to ensure
         // the C compiler can find system headers when compiling raylib
-        const emsdk_dep = raylib_zig_dep.builder.dependency("emsdk", .{{}});
+        const emsdk_dep = raylib_dep.builder.dependency("emsdk", .{{}});
         const emsdk_include_path = emsdk_dep.path("upstream/emscripten/cache/sysroot/include");
         
-        // Get raylib artifact and dependency for shell.html
+        // Get raylib artifact and add emscripten include path to it
         const raylib_artifact = raylib_zig_dep.artifact("raylib");
         raylib_artifact.root_module.addIncludePath(emsdk_include_path);
-        
-        const raylib_dep = raylib_zig_dep.builder.dependency("raylib", .{{}});
         
         // Step 1: Create library (not executable) for WASM
         const lib = b.addLibrary(.{{
