@@ -60,39 +60,27 @@ pub fn build(b: *std.Build) !void {
     // Android library directory (passed from CI via -Dandroid-lib-dir=...)
     const android_lib_dir = b.option([]const u8, "android-lib-dir", "Path to Android NDK libraries");
 
-    // Get engine for Android target (with physics enabled)
-    // Physics types accessed through engine.PhysicsComponents to avoid duplicate linking
+    // Get engine for Android target (without physics for now)
+    // TODO: Fix Box2D duplicate symbol issue for Android shared libraries
     const android_engine_dep = b.dependency("labelle-engine", .{
         .target = android_target,
         .optimize = android_optimize,
         .backend = .sokol,
         .ecs_backend = ecs_backend,
-        .physics = true,
+        .physics = false, // Disabled due to duplicate Box2D symbols in shared lib
     });
     const android_engine_mod = android_engine_dep.module("labelle-engine");
 
-    // Create main module (contains registries and scenes)
-    // Physics types accessed through engine.PhysicsComponents, not separate import
-    const android_main_mod = b.createModule(.{
-        .root_source_file = b.path("main.zig"),
-        .target = android_target,
-        .optimize = android_optimize,
-        .imports = &.{
-            .{ .name = "labelle-engine", .module = android_engine_mod },
-        },
-    });
-
     // Create shared library for Android (NativeActivity loads .so files)
-    // android_main.zig gets engine through the main module to avoid duplicate linking
     const android_lib = b.addLibrary(.{
         .name = "mobile_physics_test",
         .linkage = .dynamic,
         .root_module = b.createModule(.{
-            .root_source_file = b.path("android_main.zig"),
+            .root_source_file = b.path("android_main_nophysics.zig"),
             .target = android_target,
             .optimize = android_optimize,
             .imports = &.{
-                .{ .name = "main", .module = android_main_mod },
+                .{ .name = "labelle-engine", .module = android_engine_mod },
             },
         }),
     });
