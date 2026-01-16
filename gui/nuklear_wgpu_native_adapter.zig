@@ -122,7 +122,7 @@ const fragment_shader_wgsl =
 ;
 
 pub fn init() Self {
-    // Use c_allocator for WASM (emscripten), page_allocator for native
+    // Emscripten requires c_allocator (page_allocator fails silently in WASM)
     const allocator = if (@import("builtin").os.tag == .emscripten)
         std.heap.c_allocator
     else

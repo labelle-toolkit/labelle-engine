@@ -34,7 +34,7 @@ window_counter: u32,
 // Panel nesting level - when > 0, widgets are inside a panel and should not create their own windows
 panel_depth: u32,
 
-// Use c_allocator for WASM (emscripten), page_allocator for native
+// Emscripten requires c_allocator (page_allocator fails silently in WASM)
 const allocator = if (@import("builtin").os.tag == .emscripten)
     std.heap.c_allocator
 else

@@ -41,7 +41,7 @@ panel_depth: u32,
 screen_width: f32,
 screen_height: f32,
 
-// Use c_allocator for WASM (emscripten), page_allocator for native
+// Emscripten requires c_allocator (page_allocator fails silently in WASM)
 const allocator = if (@import("builtin").os.tag == .emscripten)
     std.heap.c_allocator
 else
