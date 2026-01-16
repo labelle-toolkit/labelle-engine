@@ -50,8 +50,11 @@ initialized: bool,
 
 /// Initialize the audio system
 pub fn init() Self {
-    // Use page allocator for zaudio
-    const allocator = std.heap.page_allocator;
+    // Emscripten requires c_allocator (page_allocator fails silently in WASM)
+    const allocator = if (@import("builtin").os.tag == .emscripten)
+        std.heap.c_allocator
+    else
+        std.heap.page_allocator;
 
     var self = Self{
         .engine = null,

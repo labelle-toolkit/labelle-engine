@@ -32,7 +32,11 @@ pub fn init() Self {
     return Self{
         .window_counter = 0,
         .panel_depth = 0,
-        .allocator = std.heap.page_allocator,
+        // Emscripten requires c_allocator (page_allocator fails silently in WASM)
+        .allocator = if (@import("builtin").os.tag == .emscripten)
+            std.heap.c_allocator
+        else
+            std.heap.page_allocator,
         .backend_initialized = false,
     };
 }
