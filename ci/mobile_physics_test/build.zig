@@ -8,21 +8,17 @@ pub fn build(b: *std.Build) !void {
     const optimize = b.standardOptimizeOption(.{});
     const ecs_backend = b.option(EcsBackend, "ecs_backend", "ECS backend") orelse .zig_ecs;
 
-    // Get labelle-engine dependency
+    // Get labelle-engine dependency with physics enabled
+    // Physics is accessed through engine to avoid duplicate Box2D symbols
     const engine_dep = b.dependency("labelle-engine", .{
         .target = target,
         .optimize = optimize,
         .backend = .sokol,
         .ecs_backend = ecs_backend,
+        .physics = true,
     });
     const engine_mod = engine_dep.module("labelle-engine");
-
-    // Get labelle-physics dependency
-    const physics_dep = b.dependency("labelle-physics", .{
-        .target = target,
-        .optimize = optimize,
-    });
-    const physics_mod = physics_dep.module("labelle-physics");
+    const physics_mod = engine_dep.module("labelle-physics");
 
     // Create executable
     const exe = b.addExecutable(.{
@@ -66,21 +62,17 @@ pub fn build(b: *std.Build) !void {
     // Android library directory (passed from CI via -Dandroid-lib-dir=...)
     const android_lib_dir = b.option([]const u8, "android-lib-dir", "Path to Android NDK libraries");
 
-    // Get engine for Android target (follow native pattern - no .physics flag)
+    // Get engine for Android target (with physics enabled)
+    // Physics is accessed through engine to avoid duplicate Box2D symbols
     const android_engine_dep = b.dependency("labelle-engine", .{
         .target = android_target,
         .optimize = android_optimize,
         .backend = .sokol,
         .ecs_backend = ecs_backend,
+        .physics = true,
     });
     const android_engine_mod = android_engine_dep.module("labelle-engine");
-
-    // Get physics for Android target (separate dependency like native build)
-    const android_physics_dep = b.dependency("labelle-physics", .{
-        .target = android_target,
-        .optimize = android_optimize,
-    });
-    const android_physics_mod = android_physics_dep.module("labelle-physics");
+    const android_physics_mod = android_engine_dep.module("labelle-physics");
 
     // Create shared library for Android (NativeActivity loads .so files)
     const android_lib = b.addLibrary(.{

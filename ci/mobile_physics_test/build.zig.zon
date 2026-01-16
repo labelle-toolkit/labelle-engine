@@ -6,9 +6,8 @@
         .@"labelle-engine" = .{
             .path = "../..",
         },
-        .@"labelle-physics" = .{
-            .path = "../../physics",
-        },
+        // Note: labelle-physics is accessed through labelle-engine with .physics = true
+        // to avoid duplicate Box2D symbols
     },
     .paths = .{
         "build.zig",
