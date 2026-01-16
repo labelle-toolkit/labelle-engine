@@ -41,11 +41,8 @@ panel_depth: u32,
 screen_width: f32,
 screen_height: f32,
 
-// Use c_allocator for WASM (emscripten), page_allocator for native
-const allocator = if (@import("builtin").os.tag == .emscripten)
-    std.heap.c_allocator
-else
-    std.heap.page_allocator;
+const platform = @import("../platform.zig");
+const allocator = platform.getDefaultAllocator();
 
 pub fn init() Self {
     // Allocate nuklear state on the heap

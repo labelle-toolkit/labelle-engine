@@ -40,11 +40,8 @@ view_id: bgfx.ViewId,
 // Debug draw encoder
 encoder: ?*debugdraw.Encoder,
 
-// Use c_allocator for WASM (emscripten), page_allocator for native
-const allocator = if (@import("builtin").os.tag == .emscripten)
-    std.heap.c_allocator
-else
-    std.heap.page_allocator;
+const platform = @import("../platform.zig");
+const allocator = platform.getDefaultAllocator();
 
 pub fn init() Self {
     // Initialize bgfx debugdraw
