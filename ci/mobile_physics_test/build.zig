@@ -87,7 +87,7 @@ pub fn build(b: *std.Build) !void {
     });
 
     // Create shared library for Android (NativeActivity loads .so files)
-    // Only import labelle-engine directly; physics comes through main module
+    // android_main.zig gets engine through the main module to avoid duplicate linking
     const android_lib = b.addLibrary(.{
         .name = "mobile_physics_test",
         .linkage = .dynamic,
@@ -96,7 +96,6 @@ pub fn build(b: *std.Build) !void {
             .target = android_target,
             .optimize = android_optimize,
             .imports = &.{
-                .{ .name = "labelle-engine", .module = android_engine_mod },
                 .{ .name = "main", .module = android_main_mod },
             },
         }),

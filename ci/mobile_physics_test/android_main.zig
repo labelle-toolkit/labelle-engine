@@ -5,10 +5,11 @@
 //! and sets up the sokol-based game loop.
 
 const std = @import("std");
-const engine = @import("labelle-engine");
 
 // Import project's main module for registries and scenes
+// Engine is accessed through main to avoid duplicate Box2D linking
 const project = @import("main");
+const engine = project.engine;
 
 // Sokol bindings - re-exported from engine for Android callback architecture
 const sokol = engine.sokol;

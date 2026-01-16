@@ -6,7 +6,7 @@
 // ============================================================================
 
 const std = @import("std");
-const engine = @import("labelle-engine");
+pub const engine = @import("labelle-engine");
 const physics = @import("labelle-physics");
 const ProjectConfig = engine.ProjectConfig;
 
