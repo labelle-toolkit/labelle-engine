@@ -83,10 +83,10 @@ jobs:
 
       - name: Test CLI workflow - Build raylib project with generated files
         run: |
-          cd test-projects/test_raylib_game/raylib_desktop
           echo "::group::Building project directly from generated files"
           
           # Build using the generated build.zig directly (uses local engine via path dependency)
+          cd test-projects/test_raylib_game/raylib_desktop
           zig build
           
           echo "::endgroup::"
@@ -95,10 +95,10 @@ jobs:
         env:
           CI_TEST: "1"
         run: |
-          cd test-projects/test_raylib_game/raylib_desktop
           echo "::group::Running project"
           
           # Run with xvfb for headless testing
+          cd test-projects/test_raylib_game/raylib_desktop
           xvfb-run -a zig build run
           
           echo "::endgroup::"
@@ -116,9 +116,9 @@ jobs:
 
       - name: Test CLI workflow - Multiple targets
         run: |
-          cd test-projects
           echo "::group::Creating project with multiple targets"
           
+          cd test-projects
           # Create a project
           labelle init test_multi_target --backend=raylib --ecs=zig_ecs
           cd test_multi_target
