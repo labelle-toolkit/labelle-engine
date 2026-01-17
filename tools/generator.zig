@@ -529,6 +529,9 @@ fn generateBuildZigRaylibWasm(allocator: std.mem.Allocator, config: ProjectConfi
         };
         plugin_module_names[i] = plugin_module_name;
 
+        // Use appropriate template based on plugin type:
+        // - Path-based: use b.createModule() to avoid duplicate engine dependencies
+        // - URL-based: use b.dependency() with only target/optimize (fixes #256)
         if (plugin.isPathBased()) {
             // Path-based plugin: create module manually
             // Adjust path for subfolder structure (.labelle/target/)
@@ -538,7 +541,7 @@ fn generateBuildZigRaylibWasm(allocator: std.mem.Allocator, config: ProjectConfi
             defer allocator.free(adjusted_plugin_path);
 
             // Template args: zig_name, adjusted_path, zig_name, zig_name, module_name
-            try zts.print(build_raylib_wasm_tmpl, "plugin_dep", .{ plugin_zig_name, adjusted_plugin_path, plugin_zig_name, plugin_zig_name, plugin_module_name }, writer);
+            try zts.print(build_raylib_wasm_tmpl, "plugin_dep_path", .{ plugin_zig_name, adjusted_plugin_path, plugin_zig_name, plugin_zig_name, plugin_module_name }, writer);
         } else {
             // Remote plugin: get module from dependency
             // Template args: zig_name, plugin_name, zig_name, zig_name, module_name
@@ -654,6 +657,9 @@ pub fn generateBuildZig(allocator: std.mem.Allocator, config: ProjectConfig, tar
         };
         plugin_module_names[i] = plugin_module_name;
 
+        // Use appropriate template based on plugin type:
+        // - Path-based: use b.createModule() to avoid duplicate engine dependencies
+        // - URL-based: use b.dependency() with only target/optimize (fixes #256)
         if (plugin.isPathBased()) {
             // Path-based plugin: create module manually
             // Adjust path for subfolder structure (.labelle/target/)
@@ -663,7 +669,7 @@ pub fn generateBuildZig(allocator: std.mem.Allocator, config: ProjectConfig, tar
             defer allocator.free(adjusted_plugin_path);
 
             // Template args: zig_name, adjusted_path, zig_name, zig_name, module_name
-            try zts.print(build_zig_tmpl, "plugin_dep", .{ plugin_zig_name, adjusted_plugin_path, plugin_zig_name, plugin_zig_name, plugin_module_name }, writer);
+            try zts.print(build_zig_tmpl, "plugin_dep_path", .{ plugin_zig_name, adjusted_plugin_path, plugin_zig_name, plugin_zig_name, plugin_module_name }, writer);
         } else {
             // Remote plugin: get module from dependency
             // Template args: zig_name, plugin_name, zig_name, zig_name, module_name

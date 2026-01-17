@@ -77,10 +77,10 @@ pub fn build(b: *std.Build) void {
     // ==========================================================================
 
     // labelle-gfx - handles iOS internally
+    // Note: sokol is always available in labelle-gfx (no enable-sokol option needed)
     const labelle_dep = b.dependency("labelle-gfx", .{
         .target = target,
         .optimize = optimize,
-        .@"enable-sokol" = backend == .sokol or is_ios or is_android,
     });
     const labelle = labelle_dep.module("labelle");
 

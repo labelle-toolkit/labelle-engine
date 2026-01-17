@@ -59,7 +59,7 @@ pub fn build(b: *std.Build) !void {{
     }});
     const engine_mod = engine_dep.module("labelle-engine");
 
-.plugin_dep
+.plugin_dep_path
     // Note: For path-based plugin dependencies that also depend on labelle-engine,
     // we create the module manually to avoid duplicate labelle-engine dependencies
     const {s}_mod = b.createModule(.{{
@@ -72,7 +72,8 @@ pub fn build(b: *std.Build) !void {{
     _ = "{s}"; // unused: module_name
 
 .plugin_remote
-    // Get module from remote plugin dependency
+    // URL-based plugin: use b.dependency() with only target and optimize
+    // (plugins don't need engine-specific options like backend, ecs_backend, etc.)
     const {s}_dep = b.dependency("{s}", .{{
         .target = target,
         .optimize = optimize,
