@@ -385,7 +385,12 @@ pub fn generateBuildZon(allocator: std.mem.Allocator, config: ProjectConfig, opt
     for (config.plugins) |plugin| {
         // Check if this is a local path plugin
         if (plugin.isPathBased()) {
-            try zts.print(build_zig_zon_tmpl, "plugin_path", .{ plugin.name, plugin.path.? }, writer);
+            // Adjust path for subfolder structure (.labelle/target/)
+            // Plugin paths in project.labelle are relative to project root,
+            // but generated files are in .labelle/target/, so add ../../
+            const adjusted_plugin_path = try std.fmt.allocPrint(allocator, "../../{s}", .{plugin.path.?});
+            defer allocator.free(adjusted_plugin_path);
+            try zts.print(build_zig_zon_tmpl, "plugin_path", .{ plugin.name, adjusted_plugin_path }, writer);
             continue;
         }
 
@@ -524,7 +529,21 @@ fn generateBuildZigRaylibWasm(allocator: std.mem.Allocator, config: ProjectConfi
         };
         plugin_module_names[i] = plugin_module_name;
 
-        try zts.print(build_raylib_wasm_tmpl, "plugin_dep", .{ plugin_zig_name, plugin.name, plugin_zig_name, plugin_zig_name, plugin_module_name }, writer);
+        if (plugin.isPathBased()) {
+            // Path-based plugin: create module manually
+            // Adjust path for subfolder structure (.labelle/target/)
+            // Plugin paths in project.labelle are relative to project root,
+            // but generated files are in .labelle/target/, so add ../../
+            const adjusted_plugin_path = try std.fmt.allocPrint(allocator, "../../{s}", .{plugin.path.?});
+            defer allocator.free(adjusted_plugin_path);
+
+            // Template args: zig_name, adjusted_path, zig_name, zig_name, module_name
+            try zts.print(build_raylib_wasm_tmpl, "plugin_dep", .{ plugin_zig_name, adjusted_plugin_path, plugin_zig_name, plugin_zig_name, plugin_module_name }, writer);
+        } else {
+            // Remote plugin: get module from dependency
+            // Template args: zig_name, plugin_name, zig_name, zig_name, module_name
+            try zts.print(build_raylib_wasm_tmpl, "plugin_remote", .{ plugin_zig_name, plugin.name, plugin_zig_name, plugin_zig_name, plugin_module_name }, writer);
+        }
     }
 
     // Write exe_mod setup
@@ -635,8 +654,21 @@ pub fn generateBuildZig(allocator: std.mem.Allocator, config: ProjectConfig, tar
         };
         plugin_module_names[i] = plugin_module_name;
 
-        // Template args: zig_name, name, zig_name, zig_name, module_name
-        try zts.print(build_zig_tmpl, "plugin_dep", .{ plugin_zig_name, plugin.name, plugin_zig_name, plugin_zig_name, plugin_module_name }, writer);
+        if (plugin.isPathBased()) {
+            // Path-based plugin: create module manually
+            // Adjust path for subfolder structure (.labelle/target/)
+            // Plugin paths in project.labelle are relative to project root,
+            // but generated files are in .labelle/target/, so add ../../
+            const adjusted_plugin_path = try std.fmt.allocPrint(allocator, "../../{s}", .{plugin.path.?});
+            defer allocator.free(adjusted_plugin_path);
+
+            // Template args: zig_name, adjusted_path, zig_name, zig_name, module_name
+            try zts.print(build_zig_tmpl, "plugin_dep", .{ plugin_zig_name, adjusted_plugin_path, plugin_zig_name, plugin_zig_name, plugin_module_name }, writer);
+        } else {
+            // Remote plugin: get module from dependency
+            // Template args: zig_name, plugin_name, zig_name, zig_name, module_name
+            try zts.print(build_zig_tmpl, "plugin_remote", .{ plugin_zig_name, plugin.name, plugin_zig_name, plugin_zig_name, plugin_module_name }, writer);
+        }
     }
 
     // Write backend-specific executable setup (creates exe_mod and adds backend imports)
