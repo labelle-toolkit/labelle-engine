@@ -85,6 +85,9 @@ jobs:
         run: |
           echo "::group::Building project directly from generated files"
           
+          # Debug: check what was generated
+          ls -la test-projects/test_raylib_game/
+          
           # Build using the generated build.zig directly (uses local engine via path dependency)
           cd test-projects/test_raylib_game/raylib_desktop
           zig build
