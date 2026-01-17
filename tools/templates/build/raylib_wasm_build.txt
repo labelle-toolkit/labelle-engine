@@ -148,10 +148,7 @@ pub fn build(b: *std.Build) !void {{
         // Import raylib_zig build script to access emsdk
         const raylib_zig = @import("raylib_zig");
         const emsdk = raylib_zig.emsdk;
-        
-        // Get raylib dependency for shell.html
-        const raylib_dep = raylib_zig_dep.builder.dependency("raylib", .{{}});
-        
+
         // Get emsdk dependency from OUR dependencies (not raylib's)
         // This must match what emccStep will use later
         const emsdk_dep = b.dependency("emsdk", .{{}});
@@ -183,7 +180,8 @@ pub fn build(b: *std.Build) !void {{
         }});
         
 .shell_raylib
-        // Get shell.html from raylib dependency (default)
+        // Get raylib dependency for default shell.html
+        const raylib_dep = raylib_zig_dep.builder.dependency("raylib", .{{}});
         const shell_path = raylib_dep.path("src/shell.html");
 .shell_minimal
         // Use minimal shell (bundled with labelle-engine)
