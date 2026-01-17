@@ -85,11 +85,8 @@ jobs:
         run: |
           echo "::group::Building project directly from generated files"
           
-          # Debug: check what was generated
-          ls -la test-projects/test_raylib_game/
-          
           # Build using the generated build.zig directly (uses local engine via path dependency)
-          cd test-projects/test_raylib_game/raylib_desktop
+          cd test-projects/test_raylib_game/.labelle/raylib_desktop
           zig build
           
           echo "::endgroup::"
@@ -101,7 +98,7 @@ jobs:
           echo "::group::Running project"
           
           # Run with xvfb for headless testing
-          cd test-projects/test_raylib_game/raylib_desktop
+          cd test-projects/test_raylib_game/.labelle/raylib_desktop
           xvfb-run -a zig build run
           
           echo "::endgroup::"
@@ -130,7 +127,7 @@ jobs:
           labelle generate --engine-path=../../labelle-engine
           
           # Build directly from generated files
-          cd raylib_desktop
+          cd .labelle/raylib_desktop
           zig build
           
           echo "::endgroup::"
