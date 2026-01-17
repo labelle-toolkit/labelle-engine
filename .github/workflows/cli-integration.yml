@@ -18,12 +18,16 @@ jobs:
           path: labelle-engine
 
       - name: Checkout labelle-gfx (sibling dependency)
-        run: |
-          git clone --depth 1 https://github.com/labelle-toolkit/labelle-gfx.git labelle-gfx
+        uses: actions/checkout@v4
+        with:
+          repository: labelle-toolkit/labelle-gfx
+          path: labelle-gfx
 
       - name: Checkout labelle-cli
-        run: |
-          git clone --depth 1 https://github.com/labelle-toolkit/labelle-cli.git labelle-cli
+        uses: actions/checkout@v4
+        with:
+          repository: labelle-toolkit/labelle-cli
+          path: labelle-cli
 
       - name: Install Zig
         uses: mlugg/setup-zig@v2
