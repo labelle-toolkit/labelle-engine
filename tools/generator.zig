@@ -32,6 +32,7 @@ const main_wasm_tmpl = @embedFile("templates/main_wasm.txt");
 const main_sdl_tmpl = @embedFile("templates/main_sdl.txt");
 const main_bgfx_tmpl = @embedFile("templates/main_bgfx.txt");
 const main_wgpu_native_tmpl = @embedFile("templates/main_wgpu_native.txt");
+const wasm_shell_minimal_html = @embedFile("templates/wasm_shell.html");
 
 // =============================================================================
 // Version Management
@@ -568,7 +569,24 @@ fn generateBuildZigRaylibWasm(allocator: std.mem.Allocator, config: ProjectConfi
 
     // Write WASM build section
     try zts.print(build_raylib_wasm_tmpl, "wasm_build_start", .{zig_name}, writer);
-    try zts.print(build_raylib_wasm_tmpl, "wasm_build_raylib", .{zig_name}, writer);
+
+    // Write shell configuration based on wasm.shell setting
+    if (config.wasm.shell) |shell| {
+        if (std.mem.eql(u8, shell, "minimal")) {
+            // Use built-in minimal shell
+            try zts.print(build_raylib_wasm_tmpl, "shell_minimal", .{}, writer);
+        } else {
+            // Use custom shell from project (path relative to project root)
+            // Adjust path to be relative to the target directory
+            try zts.print(build_raylib_wasm_tmpl, "shell_custom", .{shell}, writer);
+        }
+    } else {
+        // Default: use raylib's shell
+        try zts.print(build_raylib_wasm_tmpl, "shell_raylib", .{}, writer);
+    }
+
+    try zts.print(build_raylib_wasm_tmpl, "wasm_build_raylib", .{}, writer);
+    try zts.print(build_raylib_wasm_tmpl, "wasm_emcc", .{zig_name}, writer);
     try zts.print(build_raylib_wasm_tmpl, "wasm_build_end", .{}, writer);
 
     return buf.toOwnedSlice(allocator);
@@ -2972,6 +2990,26 @@ pub fn generateProject(allocator: std.mem.Allocator, project_path: []const u8, o
         cwd.copyFile(src_labelle_path, cwd, dest_labelle_path, .{}) catch |err| {
             std.debug.print("Warning: Failed to copy project.labelle: {}\n", .{err});
         };
+
+        // For WASM targets with minimal shell, copy the bundled shell.html
+        if (target.getPlatform() == .wasm) {
+            if (config.wasm.shell) |shell| {
+                if (std.mem.eql(u8, shell, "minimal")) {
+                    // Write the bundled minimal shell.html to the target directory
+                    const shell_path = try std.fs.path.join(allocator, &.{ target_dir_path, "shell.html" });
+                    defer allocator.free(shell_path);
+
+                    // Replace {PROJECT_NAME} placeholder with actual project name
+                    const zig_name = try sanitizeZigIdentifier(allocator, config.name);
+                    defer allocator.free(zig_name);
+
+                    const final_content = try std.mem.replaceOwned(u8, allocator, wasm_shell_minimal_html, "{PROJECT_NAME}", zig_name);
+                    defer allocator.free(final_content);
+
+                    try cwd.writeFile(.{ .sub_path = shell_path, .data = final_content });
+                }
+            }
+        }
 
         // Detect fingerprint by running zig build in the target directory
         std.debug.print("Fetching {s} fingerprint...\n", .{target_name});

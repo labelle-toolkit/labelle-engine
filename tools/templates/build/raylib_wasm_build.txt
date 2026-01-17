@@ -182,9 +182,16 @@ pub fn build(b: *std.Build) !void {{
             .optimize = optimize,
         }});
         
-        // Get shell.html from raylib dependency
+.shell_raylib
+        // Get shell.html from raylib dependency (default)
         const shell_path = raylib_dep.path("src/shell.html");
-        
+.shell_minimal
+        // Use minimal shell (bundled with labelle-engine)
+        const shell_path = b.path("shell.html");
+.shell_custom
+        // Use custom shell from project
+        const shell_path = b.path("{s}");
+.wasm_emcc
         // Step 3: Run emcc to create .html/.js/.wasm
         const emcc_step = emsdk.emccStep(b, raylib_artifact, lib, .{{
             .optimize = optimize,
@@ -193,9 +200,9 @@ pub fn build(b: *std.Build) !void {{
             .shell_file_path = shell_path,
             .install_dir = .{{ .custom = "web" }},
         }});
-        
+
         b.getInstallStep().dependOn(emcc_step);
-        
+
         // Add emrun step for browser testing
         const html_filename = try std.fmt.allocPrint(b.allocator, "{{s}}.html", .{{"{s}"}});
         const run_step = b.step("run", "Run the game in browser");

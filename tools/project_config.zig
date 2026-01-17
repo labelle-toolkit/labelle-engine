@@ -348,6 +348,16 @@ pub const PhysicsConfig = struct {
     position_iterations: i32 = 3,
 };
 
+/// WASM build configuration
+pub const WasmConfig = struct {
+    /// Custom HTML shell file path relative to project root.
+    /// Special values:
+    ///   - null: use raylib's default shell.html (with raylib branding)
+    ///   - "minimal": use built-in minimal shell (just the game canvas)
+    ///   - "path/to/shell.html": use custom shell file
+    shell: ?[]const u8 = null,
+};
+
 /// Project configuration loaded from .labelle file
 pub const ProjectConfig = struct {
     version: u32,
@@ -370,6 +380,8 @@ pub const ProjectConfig = struct {
     resources: Resources = .{},
     plugins: []const Plugin = &.{},
     physics: PhysicsConfig = .{},
+    /// WASM-specific build configuration
+    wasm: WasmConfig = .{},
     /// Output directory for generated build files (build.zig, build.zig.zon)
     /// Relative to the project root. Default: ".labelle"
     /// Note: main.zig stays in the project root for module import compatibility.
