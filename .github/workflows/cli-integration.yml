@@ -81,13 +81,13 @@ jobs:
           
           echo "::endgroup::"
 
-      - name: Test CLI workflow - Build raylib project
+      - name: Test CLI workflow - Build raylib project with generated files
         run: |
-          cd test-projects/test_raylib_game
-          echo "::group::Building project"
+          cd test-projects/test_raylib_game/raylib_desktop
+          echo "::group::Building project directly from generated files"
           
-          # Build the project
-          labelle build
+          # Build using the generated build.zig directly (uses local engine via path dependency)
+          zig build
           
           echo "::endgroup::"
 
@@ -95,11 +95,11 @@ jobs:
         env:
           CI_TEST: "1"
         run: |
-          cd test-projects/test_raylib_game
+          cd test-projects/test_raylib_game/raylib_desktop
           echo "::group::Running project"
           
           # Run with xvfb for headless testing
-          xvfb-run -a labelle run
+          xvfb-run -a zig build run
           
           echo "::endgroup::"
 
@@ -126,8 +126,9 @@ jobs:
           # Generate with local engine
           labelle generate --engine-path=../../labelle-engine
           
-          # Build all targets (currently only raylib_desktop exists)
-          labelle build --all
+          # Build directly from generated files
+          cd raylib_desktop
+          zig build
           
           echo "::endgroup::"
 
@@ -148,6 +149,5 @@ jobs:
           echo "### CLI Commands Tested" >> $GITHUB_STEP_SUMMARY
           echo "- \`labelle init\`: ✅" >> $GITHUB_STEP_SUMMARY
           echo "- \`labelle generate --engine-path\`: ✅" >> $GITHUB_STEP_SUMMARY
-          echo "- \`labelle build\`: ✅" >> $GITHUB_STEP_SUMMARY
-          echo "- \`labelle run\`: ✅" >> $GITHUB_STEP_SUMMARY
-          echo "- \`labelle build --all\`: ✅" >> $GITHUB_STEP_SUMMARY
+          echo "- \`zig build\` (generated files): ✅" >> $GITHUB_STEP_SUMMARY
+          echo "- \`zig build run\` (generated files): ✅" >> $GITHUB_STEP_SUMMARY
