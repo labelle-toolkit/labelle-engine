@@ -145,11 +145,12 @@ jobs:
       - name: Generate example build files
         run: |
           # Generate build.zig and build.zig.zon for examples with local engine path
-          # Note: --engine-path is relative to .labelle/ output directory, so ../../.. goes up to repo root
-          zig build generate -- --engine-path ../../.. usage/example_1
+          # Note: --engine-path is relative to the project directory (where project.labelle is)
+          # Generator will adjust the path for the target subfolder structure (.labelle/target/)
+          zig build generate -- --engine-path ../.. usage/example_1
           # SKIPPED: example_2 (sokol) has sgl.setup() issue - see labelle-gfx#146
-          # zig build generate -- --engine-path ../../.. usage/example_2
-          zig build generate -- --engine-path ../../.. usage/example_4
+          # zig build generate -- --engine-path ../.. usage/example_2
+          zig build generate -- --engine-path ../.. usage/example_4
 
           # Fix fingerprints - Zig requires exact fingerprints that we can't predict
           # Run build once to get suggested values, then update
