@@ -75,26 +75,45 @@
     <script>
         // Check WebGL2 support
         (function() {
-            var canvas = document.createElement('canvas');
-            var gl = canvas.getContext('webgl2');
+            var testCanvas = document.createElement('canvas');
+            var gl = testCanvas.getContext('webgl2');
             if (!gl) {
                 document.getElementById('loading').style.display = 'none';
                 document.getElementById('error').style.display = 'block';
-                return;
             }
         })();
 
-        // Hide loading indicator when WASM initializes
-        // The sokol init callback will be called after this script loads
-        window.sappInitialized = function() {
-            document.getElementById('loading').style.display = 'none';
+        // Emscripten Module configuration (required for raylib)
+        var Module = {
+            print: function(text) { console.log(text); },
+            printErr: function(text) { console.error(text); },
+            canvas: (function() {
+                var canvas = document.getElementById('canvas');
+                canvas.addEventListener("webglcontextlost", function(e) {
+                    alert('WebGL context lost. You will need to reload the page.');
+                    e.preventDefault();
+                }, false);
+                return canvas;
+            })(),
+            setStatus: function(text) {
+                if (text) console.log(text);
+                if (!text || text === 'Running...') {
+                    document.getElementById('loading').style.display = 'none';
+                }
+            },
+            totalDependencies: 0,
+            monitorRunDependencies: function(left) {
+                this.totalDependencies = Math.max(this.totalDependencies, left);
+            }
         };
 
-        // Handle errors
+        Module.setStatus('Downloading...');
+
         window.onerror = function(msg, url, line) {
             console.error('Error:', msg, 'at', url, ':', line);
             document.getElementById('loading').style.display = 'none';
             document.getElementById('error').style.display = 'block';
+            Module.setStatus = function(text) { if (text) console.error('[post-exception] ' + text); };
         };
     </script>
     {{{ SCRIPT }}}
