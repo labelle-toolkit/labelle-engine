@@ -71,6 +71,14 @@ pub fn build(b: *std.Build) !void {{
     {s}_mod.addImport("ecs", engine_dep.module("ecs"));
     _ = "{s}"; // unused: module_name
 
+.plugin_remote
+    // Get module from remote plugin dependency
+    const {s}_dep = b.dependency("{s}", .{{
+        .target = target,
+        .optimize = optimize,
+    }});
+    const {s}_mod = {s}_dep.module("{s}");
+
 .exe_mod_start
     const exe_mod = b.createModule(.{{
         .root_source_file = b.path("{s}"),
