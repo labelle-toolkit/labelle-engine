@@ -1,7 +1,7 @@
 .{
     .fingerprint = 0x246cb614beb913ae,
     .name = .labelle_engine,
-    .version = "0.52.7",
+    .version = "0.52.9",
     .minimum_zig_version = "0.15.2",
     .releases_url = "https://api.github.com/repos/labelle-toolkit/labelle-engine/releases/latest",
     .dependencies = .{
