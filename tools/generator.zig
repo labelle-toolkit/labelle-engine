@@ -1157,7 +1157,7 @@ fn generateMainZigRaylibWasm(
 ) ![]const u8 {
     // Use the same logic as desktop raylib but with WASM template (simpler, no conditionals)
     // This is almost identical to generateMainZigRaylib, but uses main_raylib_wasm_tmpl
-    _ = task_hooks; // TODO: Add task engine support to WASM template if needed
+    _ = task_hooks; // Legacy task hooks are not used - use engine_hooks config on plugins instead
 
     var buf: std.ArrayListUnmanaged(u8) = .{};
     const writer = buf.writer(allocator);
@@ -1227,6 +1227,26 @@ fn generateMainZigRaylibWasm(
         }
     }
 
+    // Plugin engine hooks - first pass: count and track which hook files are used by plugins
+    // This must happen BEFORE hook imports so we can filter them
+    // The actual output happens AFTER hook imports (see below)
+    var plugin_engine_hooks_count: usize = 0;
+    var hook_files_used_by_plugins = std.StringHashMap(void).init(allocator);
+    defer hook_files_used_by_plugins.deinit();
+
+    for (config.plugins) |plugin| {
+        if (plugin.engine_hooks) |eh| {
+            plugin_engine_hooks_count += 1;
+
+            // Parse the task_hooks reference to get hook file and struct name
+            var it = std.mem.splitScalar(u8, eh.task_hooks, '.');
+            const hook_file = it.next() orelse continue;
+
+            // Mark this hook file as used by a plugin
+            hook_files_used_by_plugins.put(hook_file, {}) catch {};
+        }
+    }
+
     // Prefab imports
     for (prefabs) |name| {
         try zts.print(main_raylib_wasm_tmpl, "prefab_import", .{ name, name }, writer);
@@ -1251,6 +1271,32 @@ fn generateMainZigRaylibWasm(
     // Hook imports
     for (hooks) |name| {
         try zts.print(main_raylib_wasm_tmpl, "hook_import", .{ name, name }, writer);
+    }
+
+    // Plugin engine hooks - second pass: output the createEngineHooks calls
+    // This must happen AFTER hook imports since we reference the hook file
+    for (config.plugins, 0..) |plugin, i| {
+        if (plugin.engine_hooks) |eh| {
+            // Parse the task_hooks reference to get hook file and struct name
+            var it = std.mem.splitScalar(u8, eh.task_hooks, '.');
+            const hook_file = it.next() orelse continue;
+            const struct_name = it.next() orelse "GameHooks";
+
+            // Get bind enum type
+            const bind_enum_type = eh.item_arg orelse (if (plugin.bind.len > 0) plugin.bind[0].arg else "void");
+
+            // Generate: const plugin_engine_hooks = plugin.createEngineHooks(GameId, BindEnumType, hook_file.GameHooks);
+            try zts.print(main_raylib_wasm_tmpl, "plugin_engine_hooks", .{
+                plugin_zig_names[i], // for const name
+                plugin_zig_names[i], // for plugin module
+                eh.create, // createEngineHooks
+                bind_enum_type, // Enum type (e.g., Items)
+                hook_file, // task_hooks
+                struct_name, // GameHooks
+                plugin_zig_names[i], // Context prefix
+                plugin_zig_names[i], // Context value
+            }, writer);
+        }
     }
 
     // Main module reference
@@ -1309,14 +1355,36 @@ fn generateMainZigRaylibWasm(
         try zts.print(main_raylib_wasm_tmpl, "script_registry_end", .{}, writer);
     }
 
-    // Hooks (simplified for now - no task engine support yet)
-    if (hooks.len == 0 and config.plugins.len == 0) {
+    // Hooks (merged engine hooks and Game type)
+    // Filter out hook files that are only used by plugins (they only have GameHooks, not engine hooks)
+    var filtered_hooks: std.ArrayListUnmanaged([]const u8) = .{};
+    defer filtered_hooks.deinit(allocator);
+
+    for (hooks) |name| {
+        if (!hook_files_used_by_plugins.contains(name)) {
+            try filtered_hooks.append(allocator, name);
+        }
+    }
+
+    const has_any_hooks = filtered_hooks.items.len > 0 or plugin_engine_hooks_count > 0;
+
+    if (!has_any_hooks) {
         try zts.print(main_raylib_wasm_tmpl, "hooks_empty", .{}, writer);
     } else {
         try zts.print(main_raylib_wasm_tmpl, "hooks_start", .{}, writer);
-        for (hooks) |name| {
+
+        // Include hook files that have engine hooks
+        for (filtered_hooks.items) |name| {
             try zts.print(main_raylib_wasm_tmpl, "hooks_item", .{name}, writer);
         }
+
+        // Include plugin engine hooks
+        for (config.plugins, 0..) |plugin, i| {
+            if (plugin.hasEngineHooks()) {
+                try zts.print(main_raylib_wasm_tmpl, "hooks_plugin_item", .{plugin_zig_names[i]}, writer);
+            }
+        }
+
         try zts.print(main_raylib_wasm_tmpl, "hooks_end", .{}, writer);
     }
 
@@ -2840,13 +2908,25 @@ pub fn generateProject(allocator: std.mem.Allocator, project_path: []const u8, o
         const build_zig_zon_path = try std.fs.path.join(allocator, &.{ target_dir_path, build_zig_zon_filename });
         defer allocator.free(build_zig_zon_path);
 
-        // Adjust engine_path for subfolder structure (two extra levels up)
-        // Before: project_root/ -> ../engine (user-provided path)
-        // Old structure: .labelle/ -> ../../engine (one extra ../)
-        // New structure: .labelle/target/ -> ../../../engine (two extra ../)
+        // Adjust engine_path for subfolder structure
+        // Zig build.zig.zon requires relative paths, so we compute the relative path
+        // from the target directory to the engine path
         var adjusted_engine_path: ?[]const u8 = null;
         if (options.engine_path) |path| {
-            adjusted_engine_path = try std.fmt.allocPrint(allocator, "../../{s}", .{path});
+            if (std.fs.path.isAbsolute(path)) {
+                // For absolute paths, compute relative path from target directory
+                // Target dir is at: <project>/.labelle/<target>/
+                // We need to get the absolute path of the target directory first
+                const project_real_path = try std.fs.cwd().realpathAlloc(allocator, ".");
+                defer allocator.free(project_real_path);
+                const target_abs_path = try std.fs.path.join(allocator, &.{ project_real_path, target_dir_path });
+                defer allocator.free(target_abs_path);
+                // Compute relative path from target directory to engine path
+                adjusted_engine_path = try std.fs.path.relative(allocator, target_abs_path, path);
+            } else {
+                // Relative paths need to be adjusted for the subfolder structure
+                adjusted_engine_path = try std.fmt.allocPrint(allocator, "../../{s}", .{path});
+            }
         }
         defer if (adjusted_engine_path) |p| allocator.free(p);
 
@@ -2866,7 +2946,7 @@ pub fn generateProject(allocator: std.mem.Allocator, project_path: []const u8, o
 
         // Copy project directories into target directory for self-contained builds
         // This allows imports without violating Zig's module path restrictions
-        const dirs_to_copy = [_][]const u8{ "components", "scripts", "prefabs", "scenes", "resources", "hooks" };
+        const dirs_to_copy = [_][]const u8{ "components", "scripts", "prefabs", "scenes", "resources", "hooks", "enums" };
         for (dirs_to_copy) |dir_name| {
             const src_dir_path = try std.fs.path.join(allocator, &.{ project_path, dir_name });
             defer allocator.free(src_dir_path);

@@ -139,8 +139,6 @@ pub fn build(b: *std.Build) !void {{
         const labelle_gfx_dep = engine_dep.builder.dependency("labelle-gfx", .{{
             .target = target,
             .optimize = optimize,
-            // Explicitly disable sokol for raylib WASM builds
-            .@"enable-sokol" = false,
         }});
         const raylib_zig_dep = labelle_gfx_dep.builder.dependency("raylib_zig", .{{
             .target = target,
