@@ -1261,7 +1261,7 @@ pub fn GameWith(comptime Hooks: type) type {
                     var updated = comp.*;
                     if (updated.visible != visible) {
                         updated.visible = visible;
-                        self.registry.add(entity, updated);
+                        self.registry.set(entity, updated);
                         changed = true;
                     }
                 }
@@ -1366,7 +1366,7 @@ pub fn GameWith(comptime Hooks: type) type {
             if (!self.gizmos_enabled) return;
 
             for (self.standalone_gizmos.items) |gizmo| {
-                self.retained_engine.drawShape(gizmo.shape, .{ .x = gizmo.x, .y = gizmo.y }, gizmo.color);
+                self.retained_engine.drawShapeWorld(gizmo.shape, .{ .x = gizmo.x, .y = gizmo.y }, gizmo.color);
             }
         }
 
