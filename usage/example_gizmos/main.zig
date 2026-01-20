@@ -63,6 +63,7 @@ pub fn main() !void {
     std.log.info("  - Standalone gizmos (drawArrow, drawRay)", .{});
     std.log.info("", .{});
     std.log.info("Press G to toggle gizmos", .{});
+    std.log.info("Arrow keys to pan camera (gizmos move with world)", .{});
     std.log.info("Press ESC to quit", .{});
     std.log.info("", .{});
 

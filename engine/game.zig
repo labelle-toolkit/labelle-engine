@@ -1258,10 +1258,10 @@ pub fn GameWith(comptime Hooks: type) type {
             const visual_components = .{ Sprite, Shape, Text, Icon };
             inline for (visual_components) |ComponentType| {
                 if (self.registry.tryGet(ComponentType, entity)) |comp| {
-                    var updated = comp.*;
-                    if (updated.visible != visible) {
+                    if (comp.visible != visible) {
+                        var updated = comp.*;
                         updated.visible = visible;
-                        self.registry.add(entity, updated);
+                        self.registry.set(entity, updated);
                         changed = true;
                     }
                 }
@@ -1366,7 +1366,7 @@ pub fn GameWith(comptime Hooks: type) type {
             if (!self.gizmos_enabled) return;
 
             for (self.standalone_gizmos.items) |gizmo| {
-                self.retained_engine.drawShape(gizmo.shape, .{ .x = gizmo.x, .y = gizmo.y }, gizmo.color);
+                self.retained_engine.drawShapeWorld(gizmo.shape, .{ .x = gizmo.x, .y = gizmo.y }, gizmo.color);
             }
         }
 
