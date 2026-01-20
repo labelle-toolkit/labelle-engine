@@ -3,6 +3,7 @@
 // - Press G to toggle gizmo visibility
 // - Press A to toggle velocity arrow gizmos
 // - Press R to toggle ray gizmos
+// - Arrow keys to pan camera (demonstrates world-space gizmos)
 // - Press ESC to quit
 
 const std = @import("std");
@@ -15,11 +16,15 @@ const Color = engine.Color;
 var show_arrows: bool = true;
 var show_rays: bool = true;
 var time: f32 = 0;
+var camera_x: f32 = -400;
+var camera_y: f32 = -300;
 
 pub fn init(game: *Game, scene: *Scene) void {
     _ = game;
     _ = scene;
-    std.log.info("[GizmoToggle] Press G to toggle gizmos, A for arrows, R for rays, ESC to quit", .{});
+    std.log.info("[GizmoToggle] Press G to toggle gizmos, A for arrows, R for rays", .{});
+    std.log.info("[GizmoToggle] Arrow keys to pan camera (gizmos move with world)", .{});
+    std.log.info("[GizmoToggle] ESC to quit", .{});
 }
 
 pub fn update(game: *Game, scene: *Scene, dt: f32) void {
@@ -51,6 +56,22 @@ pub fn update(game: *Game, scene: *Scene, dt: f32) void {
     if (input.isKeyPressed(.escape)) {
         game.quit();
     }
+
+    // Arrow keys - Pan camera (demonstrates world-space gizmos moving with camera)
+    const camera_speed: f32 = 200;
+    if (input.isKeyDown(.left)) {
+        camera_x -= camera_speed * dt;
+    }
+    if (input.isKeyDown(.right)) {
+        camera_x += camera_speed * dt;
+    }
+    if (input.isKeyDown(.up)) {
+        camera_y += camera_speed * dt;
+    }
+    if (input.isKeyDown(.down)) {
+        camera_y -= camera_speed * dt;
+    }
+    game.setCameraPosition(camera_x, camera_y);
 
     // Clear previous frame's standalone gizmos
     game.clearGizmos();
