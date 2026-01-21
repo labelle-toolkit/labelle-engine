@@ -1,7 +1,7 @@
 .{
     .fingerprint = 0x246cb614beb913ae,
     .name = .labelle_engine,
-    .version = "0.52.13",
+    .version = "0.52.18",
     .minimum_zig_version = "0.15.2",
     .releases_url = "https://api.github.com/repos/labelle-toolkit/labelle-engine/releases/latest",
     .dependencies = .{
@@ -14,8 +14,8 @@
             .hash = "zflecs-0.2.0-dev-1PN3ym9mOgCyE8w0DdK_Uf7FAob-nm0Dp_lZKR3QyJaC",
         },
         .@"labelle-gfx" = .{
-            .url = "git+https://github.com/labelle-toolkit/labelle-gfx#12ba14b678b80f92d73fe931b436c1cfd8ddf17e",
-            .hash = "labelle_gfx-0.32.1-WZ2XcF0TDABxUx-1TMoIitK5se3qkp9ytqukTOoi5luc",
+            .url = "git+https://github.com/labelle-toolkit/labelle-gfx#v0.32.2",
+            .hash = "labelle_gfx-0.32.2-WZ2XcMwUDADoCwS5Bw1AnSIuoArfQSvXaxaeMF9eNQsB",
         },
         .zspec = .{
             .url = "git+https://github.com/apotema/zspec#71c901d6e74b2d5a8c556d4c74ced9b91446d8a4",
