@@ -172,6 +172,20 @@ pub const PhysicsComponents = if (build_options.physics_enabled)
 else
     struct {};
 
+/// Type bundle for plugin integration (e.g., labelle-tasks).
+/// Plugins can accept this struct to avoid importing labelle-engine directly,
+/// which prevents module collision in WASM builds.
+pub const EngineTypes = struct {
+    pub const HookPayload = hooks.HookPayload;
+    pub const ComponentPayload = hooks.ComponentPayload;
+    pub const Registry = @import("ecs").Registry;
+    pub const Game = engine.Game;
+    pub const Position = render.Position;
+    pub const Entity = core.Entity;
+    pub const entityFromU64 = core.entityFromU64;
+    pub const entityToU64 = core.entityToU64;
+};
+
 /// Built-in components including physics types when physics is enabled.
 /// Use this with ComponentRegistry or ComponentRegistryMulti to automatically
 /// have all engine components available without manual imports.

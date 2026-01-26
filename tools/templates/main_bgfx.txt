@@ -35,7 +35,7 @@ pub const {s} = {s}_enum.{s};
 .game_id_export
 pub const GameId = {s};
 .plugin_bind
-pub const {s}Bind{s} = {s}.{s}({s});
+pub const {s}Bind{s} = {s}.{s}({s}, engine.EngineTypes);
 .plugin_bind_struct_start
 const {s}BindComponents = struct {{
 .plugin_bind_struct_item
