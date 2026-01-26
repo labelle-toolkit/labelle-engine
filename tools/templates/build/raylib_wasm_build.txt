@@ -72,11 +72,14 @@ pub fn build(b: *std.Build) !void {{
     _ = "{s}"; // unused: module_name
 
 .plugin_remote
-    // URL-based plugin: use b.dependency() with only target and optimize
-    // (plugins don't need engine-specific options like backend, ecs_backend, etc.)
+    // URL-based plugin: pass backend options to ensure module deduplication
+    // when the plugin also depends on labelle-engine
     const {s}_dep = b.dependency("{s}", .{{
         .target = target,
         .optimize = optimize,
+        .backend = backend,
+        .ecs_backend = ecs_backend,
+        .physics = physics_enabled,
     }});
     const {s}_mod = {s}_dep.module("{s}");
 
