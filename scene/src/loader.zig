@@ -100,7 +100,6 @@ pub const PendingReference = loader_types.PendingReference;
 // Internal types from loader/types.zig
 const ReadyCallbackEntry = loader_types.ReadyCallbackEntry;
 const ParentContext = loader_types.ParentContext;
-const PendingParentRef = loader_types.PendingParentRef;
 const no_parent = loader_types.no_parent;
 const Pos = loader_types.Pos;
 const getFieldOrDefault = loader_types.getFieldOrDefault;
@@ -799,22 +798,12 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
 
             // Queue parent-child relationship if .parent field is present (RFC #243)
             if (@hasField(@TypeOf(entity_def), "parent")) {
-                const parent_ref = entity_def.parent;
-                const inherit_rotation = if (@hasField(@TypeOf(entity_def), "inherit_rotation"))
-                    entity_def.inherit_rotation
-                else
-                    false;
-                const inherit_scale = if (@hasField(@TypeOf(entity_def), "inherit_scale"))
-                    entity_def.inherit_scale
-                else
-                    false;
-
                 try ref_ctx.addPendingParent(.{
                     .child_entity = entity,
-                    .parent_key = parent_ref,
+                    .parent_key = entity_def.parent,
                     .is_id_ref = false, // Treat .parent as name reference by default
-                    .inherit_rotation = inherit_rotation,
-                    .inherit_scale = inherit_scale,
+                    .inherit_rotation = getFieldOrDefault(entity_def, "inherit_rotation", false),
+                    .inherit_scale = getFieldOrDefault(entity_def, "inherit_scale", false),
                 });
             }
 
@@ -1010,22 +999,12 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
 
             // Queue parent-child relationship if .parent field is present (RFC #243)
             if (@hasField(@TypeOf(entity_def), "parent")) {
-                const parent_ref = entity_def.parent;
-                const inherit_rotation = if (@hasField(@TypeOf(entity_def), "inherit_rotation"))
-                    entity_def.inherit_rotation
-                else
-                    false;
-                const inherit_scale = if (@hasField(@TypeOf(entity_def), "inherit_scale"))
-                    entity_def.inherit_scale
-                else
-                    false;
-
                 try ref_ctx.addPendingParent(.{
                     .child_entity = entity,
-                    .parent_key = parent_ref,
+                    .parent_key = entity_def.parent,
                     .is_id_ref = false, // Treat .parent as name reference by default
-                    .inherit_rotation = inherit_rotation,
-                    .inherit_scale = inherit_scale,
+                    .inherit_rotation = getFieldOrDefault(entity_def, "inherit_rotation", false),
+                    .inherit_scale = getFieldOrDefault(entity_def, "inherit_scale", false),
                 });
             }
 
