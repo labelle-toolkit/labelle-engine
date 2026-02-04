@@ -1,5 +1,34 @@
 .{
     .name = "hierarchy_demo",
     .scripts = .{"hierarchy_test"},
-    .entities = .{},
+    .entities = .{
+        // Parent entity (red circle) at center
+        .{
+            .name = "parent",
+            .prefab = "parent_circle",
+            .components = .{
+                .Position = .{ .x = 400, .y = 300 },
+            },
+        },
+        // Child entity (green circle) - parented declaratively with rotation inheritance
+        .{
+            .name = "child",
+            .prefab = "child_circle",
+            .parent = "parent",
+            .inherit_rotation = true,
+            .components = .{
+                .Position = .{ .x = 120, .y = 0 }, // Local offset from parent
+            },
+        },
+        // Grandchild entity (blue circle) - parented declaratively with rotation inheritance
+        .{
+            .name = "grandchild",
+            .prefab = "grandchild_circle",
+            .parent = "child",
+            .inherit_rotation = true,
+            .components = .{
+                .Position = .{ .x = 70, .y = 0 }, // Local offset from child
+            },
+        },
+    },
 }

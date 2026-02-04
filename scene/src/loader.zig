@@ -100,6 +100,7 @@ pub const PendingReference = loader_types.PendingReference;
 // Internal types from loader/types.zig
 const ReadyCallbackEntry = loader_types.ReadyCallbackEntry;
 const ParentContext = loader_types.ParentContext;
+const PendingParentRef = loader_types.PendingParentRef;
 const no_parent = loader_types.no_parent;
 const Pos = loader_types.Pos;
 const getFieldOrDefault = loader_types.getFieldOrDefault;
@@ -581,6 +582,30 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
                 pending.resolve_callback(game.getRegistry(), pending.target_entity, resolved_entity);
             }
 
+            // ============================================
+            // PHASE 2b: Resolve parent-child relationships (RFC #243)
+            // ============================================
+            for (ref_ctx.pending_parents.items) |pending| {
+                const parent_entity = ref_ctx.resolve(pending.parent_key, pending.is_id_ref) orelse {
+                    const ref_type = if (pending.is_id_ref) "id" else "name";
+                    std.log.err("Parent entity not found: {s}='{s}'", .{
+                        ref_type,
+                        pending.parent_key,
+                    });
+                    continue;
+                };
+
+                // Set up parent-child relationship with inheritance flags
+                game.setParentWithOptions(
+                    pending.child_entity,
+                    parent_entity,
+                    pending.inherit_rotation,
+                    pending.inherit_scale,
+                ) catch |err| {
+                    std.log.err("Failed to set parent for entity: {}", .{err});
+                };
+            }
+
             // Fire all onReady callbacks after hierarchy is complete (RFC #169)
             const game_ptr = ecs.getGamePtr() orelse {
                 // Game pointer not set - skip onReady callbacks
@@ -772,6 +797,27 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
                 try createGizmoEntities(game, scene, entity, Prefabs.getGizmos(prefab_name), pos.x, pos.y, ready_queue);
             }
 
+            // Queue parent-child relationship if .parent field is present (RFC #243)
+            if (@hasField(@TypeOf(entity_def), "parent")) {
+                const parent_ref = entity_def.parent;
+                const inherit_rotation = if (@hasField(@TypeOf(entity_def), "inherit_rotation"))
+                    entity_def.inherit_rotation
+                else
+                    false;
+                const inherit_scale = if (@hasField(@TypeOf(entity_def), "inherit_scale"))
+                    entity_def.inherit_scale
+                else
+                    false;
+
+                try ref_ctx.addPendingParent(.{
+                    .child_entity = entity,
+                    .parent_key = parent_ref,
+                    .is_id_ref = false, // Treat .parent as name reference by default
+                    .inherit_rotation = inherit_rotation,
+                    .inherit_scale = inherit_scale,
+                });
+            }
+
             return .{
                 .entity = entity,
                 .visual_type = comptime getVisualTypeFromPrefab(prefab_name),
@@ -960,6 +1006,27 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
             // Create gizmo entities if present (debug builds only)
             if (@hasField(@TypeOf(entity_def), "gizmos")) {
                 try createGizmoEntities(game, scene, entity, entity_def.gizmos, pos.x, pos.y, ready_queue);
+            }
+
+            // Queue parent-child relationship if .parent field is present (RFC #243)
+            if (@hasField(@TypeOf(entity_def), "parent")) {
+                const parent_ref = entity_def.parent;
+                const inherit_rotation = if (@hasField(@TypeOf(entity_def), "inherit_rotation"))
+                    entity_def.inherit_rotation
+                else
+                    false;
+                const inherit_scale = if (@hasField(@TypeOf(entity_def), "inherit_scale"))
+                    entity_def.inherit_scale
+                else
+                    false;
+
+                try ref_ctx.addPendingParent(.{
+                    .child_entity = entity,
+                    .parent_key = parent_ref,
+                    .is_id_ref = false, // Treat .parent as name reference by default
+                    .inherit_rotation = inherit_rotation,
+                    .inherit_scale = inherit_scale,
+                });
             }
 
             return .{

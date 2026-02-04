@@ -13,7 +13,11 @@ const engine = @import("labelle-engine");
 
 const hierarchy_test_script = @import("scripts/hierarchy_test.zig");
 
-const Prefabs = engine.PrefabRegistry(.{});
+const Prefabs = engine.PrefabRegistry(.{
+    .parent_circle = @import("prefabs/parent_circle.zon"),
+    .child_circle = @import("prefabs/child_circle.zon"),
+    .grandchild_circle = @import("prefabs/grandchild_circle.zon"),
+});
 const Components = engine.ComponentRegistry(struct {
     pub const Position = engine.Position;
     pub const Shape = engine.Shape;
@@ -44,6 +48,7 @@ pub fn main() !void {
 
     while (game.isRunning()) {
         scene.update(game.getDeltaTime());
+        game.getPipeline().sync(game.getRegistry());
 
         re.beginFrame();
         re.render();
