@@ -96,12 +96,8 @@ pub fn update(game: *Game, scene: *Scene, dt: f32) void {
             rotated = true;
         }
         if (rotated) {
-            // Mark parent and children dirty so render pipeline picks up changes
+            // Mark parent dirty - pipeline auto-updates children with parents
             game.getPipeline().markPositionDirty(parent);
-            game.getPipeline().markPositionDirty(child);
-            if (grandchild_entity) |gc| {
-                game.getPipeline().markPositionDirty(gc);
-            }
         }
     }
 
@@ -155,10 +151,8 @@ fn resetPositions(game: *Game) void {
     // Reset grandchild local offset (from scene definition)
     game.setLocalPositionXY(grandchild, 70, 0);
 
-    // Mark all dirty
+    // Mark parent dirty - setLocalPositionXY already marks child/grandchild
     game.getPipeline().markPositionDirty(parent);
-    game.getPipeline().markPositionDirty(child);
-    game.getPipeline().markPositionDirty(grandchild);
 }
 
 pub fn deinit(game: *Game, scene: *Scene) void {
