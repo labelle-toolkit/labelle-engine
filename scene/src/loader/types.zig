@@ -108,10 +108,8 @@ pub const PendingReference = struct {
 pub const PendingParentRef = struct {
     /// The child entity that will be parented
     child_entity: Entity,
-    /// Name or ID of the parent entity
+    /// Name or ID of the parent entity (resolved by trying ID first, then name)
     parent_key: []const u8,
-    /// Whether this reference is by ID (true) or by name (false)
-    is_id_ref: bool,
     /// Whether to inherit rotation from parent
     inherit_rotation: bool = false,
     /// Whether to inherit scale from parent

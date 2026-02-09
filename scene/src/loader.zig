@@ -741,13 +741,9 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
             ref_ctx: *loader_types.ReferenceContext,
         ) !void {
             if (@hasField(@TypeOf(entity_def), "parent")) {
-                const parent_key = entity_def.parent;
-                // Try ID resolution first, fall back to name resolution
-                const is_id_ref = ref_ctx.resolveById(parent_key) != null;
                 try ref_ctx.addPendingParent(.{
                     .child_entity = entity,
-                    .parent_key = parent_key,
-                    .is_id_ref = is_id_ref,
+                    .parent_key = entity_def.parent,
                     .inherit_rotation = getFieldOrDefault(entity_def, "inherit_rotation", false),
                     .inherit_scale = getFieldOrDefault(entity_def, "inherit_scale", false),
                 });

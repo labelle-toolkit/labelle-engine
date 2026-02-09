@@ -212,7 +212,6 @@ pub const DECLARATIVE_PARENT = struct {
             try ctx.addPendingParent(.{
                 .child_entity = child,
                 .parent_key = "my_parent",
-                .is_id_ref = false,
                 .inherit_rotation = true,
                 .inherit_scale = false,
             });

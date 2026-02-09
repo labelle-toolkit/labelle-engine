@@ -277,6 +277,14 @@ pub const RenderPipeline = struct {
     /// Mark an entity's position as dirty (needs sync to gfx).
     /// Recursively propagates to all children so their world positions are recomputed.
     pub fn markPositionDirty(self: *RenderPipeline, entity: Entity) void {
+        self.markPositionDirtyRecursive(entity, 0);
+    }
+
+    fn markPositionDirtyRecursive(self: *RenderPipeline, entity: Entity, depth: u8) void {
+        if (depth > 32) {
+            std.log.warn("markPositionDirty: hierarchy too deep (>32), possible cycle", .{});
+            return;
+        }
         if (self.tracked.getPtr(entity)) |tracked| {
             tracked.position_dirty = true;
         }
@@ -285,7 +293,7 @@ pub const RenderPipeline = struct {
         if (self.registry) |reg| {
             if (reg.tryGet(Children, entity)) |children_comp| {
                 for (children_comp.entities) |child| {
-                    self.markPositionDirty(child);
+                    self.markPositionDirtyRecursive(child, depth + 1);
                 }
             }
         }

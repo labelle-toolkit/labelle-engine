@@ -706,16 +706,33 @@ pub fn GameWith(comptime Hooks: type) type {
 
             try self.setParentWithOptions(child, new_parent, inherit_rotation, inherit_scale);
 
-            // Restore world position by computing the required local offset
+            // Restore world transform by computing the required local offset
             if (saved_transform) |wt| {
-                self.setWorldPosition(child, wt.x, wt.y);
-                // Restore rotation if inheriting from parent
-                if (inherit_rotation) {
-                    if (self.registry.tryGet(Position, child)) |pos| {
-                        const parent_world = self.computeWorldTransformInternal(new_parent, 0);
-                        pos.rotation = wt.rotation - (if (parent_world) |pw| pw.rotation else 0);
-                    }
+                const pos = self.registry.tryGet(Position, child) orelse return;
+                const parent_world = self.computeWorldTransformInternal(new_parent, 0);
+                const pw_x = if (parent_world) |pw| pw.x else 0;
+                const pw_y = if (parent_world) |pw| pw.y else 0;
+                const pw_rot = if (parent_world) |pw| pw.rotation else 0;
+
+                // Compute local position offset from parent
+                const offset_x = wt.x - pw_x;
+                const offset_y = wt.y - pw_y;
+
+                if (inherit_rotation and pw_rot != 0) {
+                    const cos_r = @cos(-pw_rot);
+                    const sin_r = @sin(-pw_rot);
+                    pos.x = offset_x * cos_r - offset_y * sin_r;
+                    pos.y = offset_x * sin_r + offset_y * cos_r;
+                } else {
+                    pos.x = offset_x;
+                    pos.y = offset_y;
                 }
+
+                // Always restore rotation: when inheriting, subtract parent's rotation
+                // to get local; when not inheriting, local rotation IS world rotation
+                pos.rotation = if (inherit_rotation) wt.rotation - pw_rot else wt.rotation;
+
+                self.pipeline.markPositionDirty(child);
             }
         }
 
@@ -752,9 +769,12 @@ pub fn GameWith(comptime Hooks: type) type {
                         pos.x = wt.x;
                         pos.y = wt.y;
                         pos.rotation = wt.rotation;
-                        self.pipeline.markPositionDirty(child);
                     }
                 }
+
+                // Always mark dirty: the entity's world position changes when
+                // detached (local becomes world) or when transform is restored
+                self.pipeline.markPositionDirty(child);
             }
         }
 
