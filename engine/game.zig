@@ -671,30 +671,54 @@ pub fn GameWith(comptime Hooks: type) type {
             self.addToChildrenList(new_parent, child);
         }
 
-        /// Set parent with inheritance options
+        /// Set parent with inheritance options.
+        /// If `keep_world_position` is true, the child's visual world position is preserved
+        /// by recalculating its local offset from the new parent.
         pub fn setParentWithOptions(
             self: *Self,
             child: Entity,
             new_parent: Entity,
             inherit_rotation: bool,
             inherit_scale: bool,
+            keep_world_position: bool,
         ) HierarchyError!void {
+            // Save world position before reparenting
+            const saved_world_pos = if (keep_world_position) self.getWorldPosition(child) else null;
+
             try self.setParent(child, new_parent);
             // Update the Parent component with options
             if (self.registry.tryGet(Parent, child)) |parent_comp| {
                 parent_comp.inherit_rotation = inherit_rotation;
                 parent_comp.inherit_scale = inherit_scale;
             }
+
+            // Restore world position by computing the required local offset
+            if (saved_world_pos) |wp| {
+                self.setWorldPosition(child, wp.x, wp.y);
+            }
         }
 
         /// Remove the parent from an entity, making it a root entity.
-        /// The entity's Position becomes its world position.
-        pub fn removeParent(self: *Self, child: Entity) void {
+        /// If `keep_world_position` is true, the entity's local position is set to its
+        /// current world position so it stays visually in place.
+        pub fn removeParent(self: *Self, child: Entity, keep_world_position: bool) void {
             if (self.registry.tryGet(Parent, child)) |parent_comp| {
+                // Save world position before removing parent
+                const saved_world_pos = if (keep_world_position) self.getWorldPosition(child) else null;
+
                 // Remove from parent's children list
                 self.removeFromChildrenList(parent_comp.entity, child);
                 // Remove the Parent component
                 self.registry.remove(Parent, child);
+
+                // Restore: for a root entity, local position IS world position
+                if (saved_world_pos) |wp| {
+                    if (self.registry.tryGet(Position, child)) |pos| {
+                        pos.x = wp.x;
+                        pos.y = wp.y;
+                        self.pipeline.markPositionDirty(child);
+                    }
+                }
             }
         }
 

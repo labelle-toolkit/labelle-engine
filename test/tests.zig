@@ -23,5 +23,6 @@ test {
     _ = @import("parent_ref_test.zig");
     _ = @import("entity_ref_test.zig");
     _ = @import("gizmo_test.zig");
+    _ = @import("hierarchy_test.zig");
     // Note: zon_coercion_test.zig moved to core/test/
 }

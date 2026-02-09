@@ -600,6 +600,7 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
                     parent_entity,
                     pending.inherit_rotation,
                     pending.inherit_scale,
+                    false, // scene entities define position as local offsets
                 ) catch |err| {
                     std.log.err("Failed to set parent for entity: {}", .{err});
                 };
