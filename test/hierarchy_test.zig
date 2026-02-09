@@ -28,7 +28,16 @@ fn createTestGame() Game {
     // Pipeline with undefined engine pointer — safe because markPositionDirty
     // only does a hashmap lookup on `tracked` and never dereferences `engine`.
     game.pipeline = RenderPipeline.init(alloc, undefined);
+    // Note: pipeline.registry is set to null here. Callers must call
+    // fixTestGamePointers() after createTestGame() to set it, because the
+    // Game struct is returned by value and internal pointers would be stale.
     return game;
+}
+
+/// Fix internal pointers after the Game struct is in its final stack location.
+/// Must be called after `createTestGame()` returns.
+fn fixTestGamePointers(game: *Game) void {
+    game.pipeline.registry = &game.registry;
 }
 
 /// Clean up all parent-child relationships to free Children component slices,
@@ -38,7 +47,7 @@ fn deinitTestGame(game: *Game) void {
     var view = game.registry.view(.{Parent});
     var iter = view.entityIterator();
     while (iter.next()) |child| {
-        game.removeParent(child, false);
+        game.removeParent(child);
     }
     game.pipeline.deinit();
     game.registry.deinit();
@@ -52,13 +61,14 @@ fn createEntityAt(game: *Game, x: f32, y: f32) Entity {
 }
 
 // ============================================
-// REMOVE PARENT — keep_world_position
+// REMOVE PARENT
 // ============================================
 
 pub const REMOVE_PARENT = struct {
-    pub const KEEP_WORLD_POSITION_FALSE = struct {
-        test "removeParent(false) leaves local position unchanged" {
+    pub const DEFAULT = struct {
+        test "removeParent leaves local position unchanged" {
             var game = createTestGame();
+            fixTestGamePointers(&game);
             defer deinitTestGame(&game);
 
             const parent = createEntityAt(&game, 100, 200);
@@ -66,7 +76,7 @@ pub const REMOVE_PARENT = struct {
             try game.setParent(child, parent);
 
             // Local position is still (30, 40), world would be (130, 240)
-            game.removeParent(child, false);
+            game.removeParent(child);
 
             // Local position kept as-is — now it becomes the world position
             const pos = game.getLocalPosition(child).?;
@@ -75,9 +85,10 @@ pub const REMOVE_PARENT = struct {
         }
     };
 
-    pub const KEEP_WORLD_POSITION_TRUE = struct {
-        test "removeParent(true) preserves world position" {
+    pub const KEEP_TRANSFORM = struct {
+        test "removeParentKeepTransform preserves world position" {
             var game = createTestGame();
+            fixTestGamePointers(&game);
             defer deinitTestGame(&game);
 
             const parent = createEntityAt(&game, 100, 200);
@@ -89,7 +100,7 @@ pub const REMOVE_PARENT = struct {
             try expect.equal(world_before.x, 130);
             try expect.equal(world_before.y, 240);
 
-            game.removeParent(child, true);
+            game.removeParentKeepTransform(child);
 
             // After removeParent(true), local pos should equal the old world pos
             const pos = game.getLocalPosition(child).?;
@@ -102,22 +113,24 @@ pub const REMOVE_PARENT = struct {
             try expect.equal(world_after.y, 240);
         }
 
-        test "removeParent(true) works for root entity (no-op)" {
+        test "removeParentKeepTransform works for root entity (no-op)" {
             var game = createTestGame();
+            fixTestGamePointers(&game);
             defer deinitTestGame(&game);
 
             const e = createEntityAt(&game, 50, 60);
 
             // No parent — should not crash
-            game.removeParent(e, true);
+            game.removeParentKeepTransform(e);
 
             const pos = game.getLocalPosition(e).?;
             try expect.equal(pos.x, 50);
             try expect.equal(pos.y, 60);
         }
 
-        test "removeParent(true) preserves world position in deep hierarchy" {
+        test "removeParentKeepTransform preserves world position in deep hierarchy" {
             var game = createTestGame();
+            fixTestGamePointers(&game);
             defer deinitTestGame(&game);
 
             const grandparent = createEntityAt(&game, 10, 20);
@@ -133,7 +146,7 @@ pub const REMOVE_PARENT = struct {
             try expect.equal(world_before.y, 120);
 
             // Remove child from parent, keeping world position
-            game.removeParent(child, true);
+            game.removeParentKeepTransform(child);
 
             const pos = game.getLocalPosition(child).?;
             try expect.equal(pos.x, 90);
@@ -143,19 +156,20 @@ pub const REMOVE_PARENT = struct {
 };
 
 // ============================================
-// SET PARENT WITH OPTIONS — keep_world_position
+// SET PARENT WITH OPTIONS
 // ============================================
 
 pub const SET_PARENT_WITH_OPTIONS = struct {
-    pub const KEEP_WORLD_POSITION_FALSE = struct {
-        test "setParentWithOptions(false) leaves local position unchanged" {
+    pub const DEFAULT = struct {
+        test "setParentWithOptions leaves local position unchanged" {
             var game = createTestGame();
+            fixTestGamePointers(&game);
             defer deinitTestGame(&game);
 
             const parent = createEntityAt(&game, 100, 200);
             const child = createEntityAt(&game, 50, 60);
 
-            try game.setParentWithOptions(child, parent, false, false, false);
+            try game.setParentWithOptions(child, parent, false, false);
 
             // Local position unchanged
             const pos = game.getLocalPosition(child).?;
@@ -169,16 +183,17 @@ pub const SET_PARENT_WITH_OPTIONS = struct {
         }
     };
 
-    pub const KEEP_WORLD_POSITION_TRUE = struct {
-        test "setParentWithOptions(true) preserves world position" {
+    pub const KEEP_TRANSFORM = struct {
+        test "setParentKeepTransform preserves world position" {
             var game = createTestGame();
+            fixTestGamePointers(&game);
             defer deinitTestGame(&game);
 
             const parent = createEntityAt(&game, 100, 200);
             const child = createEntityAt(&game, 50, 60);
 
             // Before parenting, world pos = local pos = (50, 60)
-            try game.setParentWithOptions(child, parent, false, false, true);
+            try game.setParentKeepTransform(child, parent, false, false);
 
             // World position should still be (50, 60)
             const world = game.getWorldPosition(child).?;
@@ -191,8 +206,9 @@ pub const SET_PARENT_WITH_OPTIONS = struct {
             try expect.equal(pos.y, -140);
         }
 
-        test "setParentWithOptions(true) preserves world position with deep parent" {
+        test "setParentKeepTransform preserves world position with deep parent" {
             var game = createTestGame();
+            fixTestGamePointers(&game);
             defer deinitTestGame(&game);
 
             const grandparent = createEntityAt(&game, 10, 20);
@@ -202,7 +218,7 @@ pub const SET_PARENT_WITH_OPTIONS = struct {
 
             const child = createEntityAt(&game, 100, 100);
 
-            try game.setParentWithOptions(child, parent, false, false, true);
+            try game.setParentKeepTransform(child, parent, false, false);
 
             // World position should still be (100, 100)
             const world = game.getWorldPosition(child).?;
@@ -219,12 +235,13 @@ pub const SET_PARENT_WITH_OPTIONS = struct {
     pub const INHERITANCE_FLAGS = struct {
         test "setParentWithOptions sets inherit_rotation flag" {
             var game = createTestGame();
+            fixTestGamePointers(&game);
             defer deinitTestGame(&game);
 
             const parent = createEntityAt(&game, 0, 0);
             const child = createEntityAt(&game, 10, 10);
 
-            try game.setParentWithOptions(child, parent, true, false, false);
+            try game.setParentWithOptions(child, parent, true, false);
 
             const parent_comp = game.registry.tryGet(Parent, child).?;
             try expect.toBeTrue(parent_comp.inherit_rotation);
@@ -233,12 +250,13 @@ pub const SET_PARENT_WITH_OPTIONS = struct {
 
         test "setParentWithOptions sets inherit_scale flag" {
             var game = createTestGame();
+            fixTestGamePointers(&game);
             defer deinitTestGame(&game);
 
             const parent = createEntityAt(&game, 0, 0);
             const child = createEntityAt(&game, 10, 10);
 
-            try game.setParentWithOptions(child, parent, false, true, false);
+            try game.setParentWithOptions(child, parent, false, true);
 
             const parent_comp = game.registry.tryGet(Parent, child).?;
             try expect.toBeFalse(parent_comp.inherit_rotation);
@@ -254,6 +272,7 @@ pub const SET_PARENT_WITH_OPTIONS = struct {
 pub const ROUND_TRIP = struct {
     test "detach and re-attach preserves world position" {
         var game = createTestGame();
+        fixTestGamePointers(&game);
         defer deinitTestGame(&game);
 
         const parent = createEntityAt(&game, 200, 100);
@@ -264,13 +283,13 @@ pub const ROUND_TRIP = struct {
         const world_before = game.getWorldPosition(child).?;
 
         // Detach keeping world position
-        game.removeParent(child, true);
+        game.removeParentKeepTransform(child);
         const world_detached = game.getWorldPosition(child).?;
         try expect.equal(world_detached.x, world_before.x);
         try expect.equal(world_detached.y, world_before.y);
 
         // Re-attach keeping world position
-        try game.setParentWithOptions(child, parent, false, false, true);
+        try game.setParentKeepTransform(child, parent, false, false);
         const world_reattached = game.getWorldPosition(child).?;
         try expect.equal(world_reattached.x, world_before.x);
         try expect.equal(world_reattached.y, world_before.y);
@@ -283,6 +302,7 @@ pub const ROUND_TRIP = struct {
 
     test "reparent between two parents preserves world position" {
         var game = createTestGame();
+        fixTestGamePointers(&game);
         defer deinitTestGame(&game);
 
         const parent_a = createEntityAt(&game, 100, 0);
@@ -296,8 +316,8 @@ pub const ROUND_TRIP = struct {
         try expect.equal(world_before.y, 30);
 
         // Detach with keep, re-attach to parent_b with keep
-        game.removeParent(child, true);
-        try game.setParentWithOptions(child, parent_b, false, false, true);
+        game.removeParentKeepTransform(child);
+        try game.setParentKeepTransform(child, parent_b, false, false);
 
         const world_after = game.getWorldPosition(child).?;
         try expect.equal(world_after.x, 120);
@@ -307,5 +327,148 @@ pub const ROUND_TRIP = struct {
         const pos = game.getLocalPosition(child).?;
         try expect.equal(pos.x, 120);
         try expect.equal(pos.y, -70);
+    }
+};
+
+// ============================================
+// DIRTY PROPAGATION — marking parent dirty propagates to children
+// ============================================
+
+pub const DIRTY_PROPAGATION = struct {
+    test "markPositionDirty on parent marks tracked child dirty" {
+        var game = createTestGame();
+        fixTestGamePointers(&game);
+        defer deinitTestGame(&game);
+
+        const parent = createEntityAt(&game, 0, 0);
+        const child = createEntityAt(&game, 10, 10);
+        try game.setParent(child, parent);
+
+        // Track both entities so they appear in the pipeline
+        try game.pipeline.trackEntity(parent, .none);
+        try game.pipeline.trackEntity(child, .none);
+
+        // Clear dirty flags manually
+        game.pipeline.tracked.getPtr(parent).?.position_dirty = false;
+        game.pipeline.tracked.getPtr(child).?.position_dirty = false;
+
+        // Mark parent dirty — child should also become dirty
+        game.pipeline.markPositionDirty(parent);
+
+        try expect.toBeTrue(game.pipeline.tracked.getPtr(parent).?.position_dirty);
+        try expect.toBeTrue(game.pipeline.tracked.getPtr(child).?.position_dirty);
+    }
+
+    test "markPositionDirty propagates through deep hierarchy" {
+        var game = createTestGame();
+        fixTestGamePointers(&game);
+        defer deinitTestGame(&game);
+
+        const grandparent = createEntityAt(&game, 0, 0);
+        const parent = createEntityAt(&game, 0, 0);
+        const child = createEntityAt(&game, 0, 0);
+        try game.setParent(parent, grandparent);
+        try game.setParent(child, parent);
+
+        try game.pipeline.trackEntity(grandparent, .none);
+        try game.pipeline.trackEntity(parent, .none);
+        try game.pipeline.trackEntity(child, .none);
+
+        // Clear dirty flags
+        game.pipeline.tracked.getPtr(grandparent).?.position_dirty = false;
+        game.pipeline.tracked.getPtr(parent).?.position_dirty = false;
+        game.pipeline.tracked.getPtr(child).?.position_dirty = false;
+
+        // Mark grandparent dirty — both parent and child should become dirty
+        game.pipeline.markPositionDirty(grandparent);
+
+        try expect.toBeTrue(game.pipeline.tracked.getPtr(grandparent).?.position_dirty);
+        try expect.toBeTrue(game.pipeline.tracked.getPtr(parent).?.position_dirty);
+        try expect.toBeTrue(game.pipeline.tracked.getPtr(child).?.position_dirty);
+    }
+
+    test "markPositionDirty skips untracked children but marks tracked grandchildren" {
+        var game = createTestGame();
+        fixTestGamePointers(&game);
+        defer deinitTestGame(&game);
+
+        const parent = createEntityAt(&game, 0, 0);
+        const middle = createEntityAt(&game, 0, 0); // not tracked
+        const grandchild = createEntityAt(&game, 0, 0);
+        try game.setParent(middle, parent);
+        try game.setParent(grandchild, middle);
+
+        // Only track parent and grandchild (middle is untracked)
+        try game.pipeline.trackEntity(parent, .none);
+        try game.pipeline.trackEntity(grandchild, .none);
+
+        game.pipeline.tracked.getPtr(parent).?.position_dirty = false;
+        game.pipeline.tracked.getPtr(grandchild).?.position_dirty = false;
+
+        game.pipeline.markPositionDirty(parent);
+
+        try expect.toBeTrue(game.pipeline.tracked.getPtr(parent).?.position_dirty);
+        try expect.toBeTrue(game.pipeline.tracked.getPtr(grandchild).?.position_dirty);
+    }
+
+    test "markPositionDirty does not affect siblings" {
+        var game = createTestGame();
+        fixTestGamePointers(&game);
+        defer deinitTestGame(&game);
+
+        const parent = createEntityAt(&game, 0, 0);
+        const child_a = createEntityAt(&game, 0, 0);
+        const child_b = createEntityAt(&game, 0, 0);
+        try game.setParent(child_a, parent);
+        try game.setParent(child_b, parent);
+
+        try game.pipeline.trackEntity(child_a, .none);
+        try game.pipeline.trackEntity(child_b, .none);
+
+        game.pipeline.tracked.getPtr(child_a).?.position_dirty = false;
+        game.pipeline.tracked.getPtr(child_b).?.position_dirty = false;
+
+        // Mark only child_a dirty — child_b should NOT be affected
+        game.pipeline.markPositionDirty(child_a);
+
+        try expect.toBeTrue(game.pipeline.tracked.getPtr(child_a).?.position_dirty);
+        try expect.toBeFalse(game.pipeline.tracked.getPtr(child_b).?.position_dirty);
+    }
+};
+
+// ============================================
+// HIERARCHY FLAG UPDATE — setParent/removeParent update cached has_parent
+// ============================================
+
+pub const HIERARCHY_FLAG = struct {
+    test "setParent updates has_parent flag on tracked entity" {
+        var game = createTestGame();
+        fixTestGamePointers(&game);
+        defer deinitTestGame(&game);
+
+        const parent = createEntityAt(&game, 0, 0);
+        const child = createEntityAt(&game, 0, 0);
+
+        try game.pipeline.trackEntity(child, .none);
+        try expect.toBeFalse(game.pipeline.tracked.getPtr(child).?.has_parent);
+
+        try game.setParent(child, parent);
+        try expect.toBeTrue(game.pipeline.tracked.getPtr(child).?.has_parent);
+    }
+
+    test "removeParent clears has_parent flag on tracked entity" {
+        var game = createTestGame();
+        fixTestGamePointers(&game);
+        defer deinitTestGame(&game);
+
+        const parent = createEntityAt(&game, 0, 0);
+        const child = createEntityAt(&game, 0, 0);
+
+        try game.pipeline.trackEntity(child, .none);
+        try game.setParent(child, parent);
+        try expect.toBeTrue(game.pipeline.tracked.getPtr(child).?.has_parent);
+
+        game.removeParent(child);
+        try expect.toBeFalse(game.pipeline.tracked.getPtr(child).?.has_parent);
     }
 };

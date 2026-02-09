@@ -585,22 +585,22 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
             // PHASE 2b: Resolve parent-child relationships (RFC #243)
             // ============================================
             for (ref_ctx.pending_parents.items) |pending| {
-                const parent_entity = ref_ctx.resolve(pending.parent_key, pending.is_id_ref) orelse {
-                    const ref_type = if (pending.is_id_ref) "id" else "name";
-                    std.log.err("Parent entity not found: {s}='{s}'", .{
-                        ref_type,
+                // Try ID first, then fall back to name for maximum flexibility
+                const parent_entity = ref_ctx.resolveById(pending.parent_key) orelse
+                    ref_ctx.resolveByName(pending.parent_key) orelse {
+                    std.log.err("Parent entity not found: '{s}' (referenced by child entity)", .{
                         pending.parent_key,
                     });
                     continue;
                 };
 
                 // Set up parent-child relationship with inheritance flags
+                // Scene entities define position as local offsets, so no transform preservation needed
                 game.setParentWithOptions(
                     pending.child_entity,
                     parent_entity,
                     pending.inherit_rotation,
                     pending.inherit_scale,
-                    false, // scene entities define position as local offsets
                 ) catch |err| {
                     std.log.err("Failed to set parent for entity: {}", .{err});
                 };
@@ -733,6 +733,27 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
             return getVisualTypeFromComponents(components);
         }
 
+        /// Queue a parent-child relationship if .parent field is present on the entity definition.
+        /// Tries ID resolution first, then falls back to name resolution.
+        fn queueParentIfPresent(
+            comptime entity_def: anytype,
+            entity: Entity,
+            ref_ctx: *loader_types.ReferenceContext,
+        ) !void {
+            if (@hasField(@TypeOf(entity_def), "parent")) {
+                const parent_key = entity_def.parent;
+                // Try ID resolution first, fall back to name resolution
+                const is_id_ref = ref_ctx.resolveById(parent_key) != null;
+                try ref_ctx.addPendingParent(.{
+                    .child_entity = entity,
+                    .parent_key = parent_key,
+                    .is_id_ref = is_id_ref,
+                    .inherit_rotation = getFieldOrDefault(entity_def, "inherit_rotation", false),
+                    .inherit_scale = getFieldOrDefault(entity_def, "inherit_scale", false),
+                });
+            }
+        }
+
         /// Load an entity that references a prefab (comptime lookup).
         /// Uses uniform component handling with proper merging - prefab components
         /// are merged with scene overrides, allowing partial overrides of any field.
@@ -798,15 +819,7 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
             }
 
             // Queue parent-child relationship if .parent field is present (RFC #243)
-            if (@hasField(@TypeOf(entity_def), "parent")) {
-                try ref_ctx.addPendingParent(.{
-                    .child_entity = entity,
-                    .parent_key = entity_def.parent,
-                    .is_id_ref = false, // Treat .parent as name reference by default
-                    .inherit_rotation = getFieldOrDefault(entity_def, "inherit_rotation", false),
-                    .inherit_scale = getFieldOrDefault(entity_def, "inherit_scale", false),
-                });
-            }
+            try queueParentIfPresent(entity_def, entity, ref_ctx);
 
             return .{
                 .entity = entity,
@@ -999,15 +1012,7 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
             }
 
             // Queue parent-child relationship if .parent field is present (RFC #243)
-            if (@hasField(@TypeOf(entity_def), "parent")) {
-                try ref_ctx.addPendingParent(.{
-                    .child_entity = entity,
-                    .parent_key = entity_def.parent,
-                    .is_id_ref = false, // Treat .parent as name reference by default
-                    .inherit_rotation = getFieldOrDefault(entity_def, "inherit_rotation", false),
-                    .inherit_scale = getFieldOrDefault(entity_def, "inherit_scale", false),
-                });
-            }
+            try queueParentIfPresent(entity_def, entity, ref_ctx);
 
             return .{
                 .entity = entity,

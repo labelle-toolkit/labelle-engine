@@ -42,10 +42,10 @@ pub fn update(game: *Game, scene: *Scene, dt: f32) void {
     // Toggle parent binding with space (preserves world position)
     if (input.isKeyPressed(.space)) {
         if (attached) {
-            game.removeParent(square, true);
+            game.removeParentKeepTransform(square);
             attached = false;
         } else {
-            game.setParentWithOptions(square, ball, false, false, true) catch {};
+            game.setParentKeepTransform(square, ball, false, false) catch {};
             attached = true;
         }
     }

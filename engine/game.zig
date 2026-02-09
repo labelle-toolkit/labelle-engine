@@ -250,6 +250,7 @@ pub fn GameWith(comptime Hooks: type) type {
         ///   game.fixPointers();
         pub fn fixPointers(self: *Self) void {
             self.pipeline.engine = &self.retained_engine;
+            self.pipeline.registry = &self.registry;
 
             // Set the game pointer for component callbacks to access
             ecs.setGamePtr(self);
@@ -667,55 +668,90 @@ pub fn GameWith(comptime Hooks: type) type {
                 self.registry.add(child, Parent{ .entity = new_parent });
             }
 
+            // Update cached hierarchy flag for the render pipeline
+            self.pipeline.updateHierarchyFlag(child, true);
+
             // Add to new parent's children list
             self.addToChildrenList(new_parent, child);
         }
 
         /// Set parent with inheritance options.
-        /// If `keep_world_position` is true, the child's visual world position is preserved
-        /// by recalculating its local offset from the new parent.
+        /// The child's local position is NOT adjusted.
         pub fn setParentWithOptions(
             self: *Self,
             child: Entity,
             new_parent: Entity,
             inherit_rotation: bool,
             inherit_scale: bool,
-            keep_world_position: bool,
         ) HierarchyError!void {
-            // Save world position before reparenting
-            const saved_world_pos = if (keep_world_position) self.getWorldPosition(child) else null;
-
             try self.setParent(child, new_parent);
             // Update the Parent component with options
             if (self.registry.tryGet(Parent, child)) |parent_comp| {
                 parent_comp.inherit_rotation = inherit_rotation;
                 parent_comp.inherit_scale = inherit_scale;
             }
+        }
+
+        /// Set parent with inheritance options, preserving the child's visual world
+        /// transform by recalculating its local offset (and rotation) from the new parent.
+        pub fn setParentKeepTransform(
+            self: *Self,
+            child: Entity,
+            new_parent: Entity,
+            inherit_rotation: bool,
+            inherit_scale: bool,
+        ) HierarchyError!void {
+            // Save world transform before reparenting
+            const saved_transform = self.getWorldTransform(child);
+
+            try self.setParentWithOptions(child, new_parent, inherit_rotation, inherit_scale);
 
             // Restore world position by computing the required local offset
-            if (saved_world_pos) |wp| {
-                self.setWorldPosition(child, wp.x, wp.y);
+            if (saved_transform) |wt| {
+                self.setWorldPosition(child, wt.x, wt.y);
+                // Restore rotation if inheriting from parent
+                if (inherit_rotation) {
+                    if (self.registry.tryGet(Position, child)) |pos| {
+                        const parent_world = self.computeWorldTransformInternal(new_parent, 0);
+                        pos.rotation = wt.rotation - (if (parent_world) |pw| pw.rotation else 0);
+                    }
+                }
             }
         }
 
         /// Remove the parent from an entity, making it a root entity.
-        /// If `keep_world_position` is true, the entity's local position is set to its
-        /// current world position so it stays visually in place.
-        pub fn removeParent(self: *Self, child: Entity, keep_world_position: bool) void {
+        /// The entity's local position is NOT adjusted — it becomes the new world position.
+        pub fn removeParent(self: *Self, child: Entity) void {
+            self.removeParentInternal(child, false);
+        }
+
+        /// Remove the parent from an entity, preserving its visual world transform.
+        /// The entity's local position (and rotation) are set to their world-space
+        /// values so it stays visually in place after detaching.
+        pub fn removeParentKeepTransform(self: *Self, child: Entity) void {
+            self.removeParentInternal(child, true);
+        }
+
+        /// Internal: remove parent with optional world transform preservation.
+        fn removeParentInternal(self: *Self, child: Entity, keep_world_transform: bool) void {
             if (self.registry.tryGet(Parent, child)) |parent_comp| {
-                // Save world position before removing parent
-                const saved_world_pos = if (keep_world_position) self.getWorldPosition(child) else null;
+                // Save world transform before removing parent
+                const saved_transform = if (keep_world_transform) self.getWorldTransform(child) else null;
 
                 // Remove from parent's children list
                 self.removeFromChildrenList(parent_comp.entity, child);
                 // Remove the Parent component
                 self.registry.remove(Parent, child);
 
-                // Restore: for a root entity, local position IS world position
-                if (saved_world_pos) |wp| {
+                // Update cached hierarchy flag for the render pipeline
+                self.pipeline.updateHierarchyFlag(child, false);
+
+                // Restore: for a root entity, local transform IS world transform
+                if (saved_transform) |wt| {
                     if (self.registry.tryGet(Position, child)) |pos| {
-                        pos.x = wp.x;
-                        pos.y = wp.y;
+                        pos.x = wt.x;
+                        pos.y = wt.y;
+                        pos.rotation = wt.rotation;
                         self.pipeline.markPositionDirty(child);
                     }
                 }
@@ -864,6 +900,7 @@ pub fn GameWith(comptime Hooks: type) type {
             // Reset pipeline
             self.pipeline.deinit();
             self.pipeline = RenderPipeline.init(self.allocator, &self.retained_engine);
+            self.pipeline.registry = &self.registry;
 
             // Look up scene entry
             const entry = self.scenes.get(name) orelse return error.SceneNotFound;
