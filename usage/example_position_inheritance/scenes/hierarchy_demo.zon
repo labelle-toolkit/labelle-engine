@@ -1,5 +1,24 @@
 .{
     .name = "hierarchy_demo",
     .scripts = .{"hierarchy_test"},
-    .entities = .{},
+    .camera = .{ .x = 400, .y = 300 },
+    .entities = .{
+        // Ball that bounces left-right
+        .{
+            .name = "ball",
+            .prefab = "parent_circle",
+            .components = .{
+                .Position = .{ .x = 400, .y = 300 },
+            },
+        },
+        // Square parented to ball
+        .{
+            .name = "square",
+            .prefab = "square",
+            .parent = "ball",
+            .components = .{
+                .Position = .{ .x = 0, .y = 80 },
+            },
+        },
+    },
 }

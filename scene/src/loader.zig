@@ -581,6 +581,36 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
                 pending.resolve_callback(game.getRegistry(), pending.target_entity, resolved_entity);
             }
 
+            // ============================================
+            // PHASE 2b: Resolve parent-child relationships (RFC #243)
+            // ============================================
+            for (ref_ctx.pending_parents.items) |pending| {
+                // Try ID first, then fall back to name for maximum flexibility
+                const parent_entity = ref_ctx.resolveById(pending.parent_key) orelse
+                    ref_ctx.resolveByName(pending.parent_key) orelse {
+                    std.log.err("Parent '{s}' not found for child '{s}'", .{
+                        pending.parent_key,
+                        pending.child_name,
+                    });
+                    continue;
+                };
+
+                // Set up parent-child relationship with inheritance flags
+                // Scene entities define position as local offsets, so no transform preservation needed
+                game.setParentWithOptions(
+                    pending.child_entity,
+                    parent_entity,
+                    pending.inherit_rotation,
+                    pending.inherit_scale,
+                ) catch |err| {
+                    std.log.err("Failed to set parent '{s}' for child '{s}': {}", .{
+                        pending.parent_key,
+                        pending.child_name,
+                        err,
+                    });
+                };
+            }
+
             // Fire all onReady callbacks after hierarchy is complete (RFC #169)
             const game_ptr = ecs.getGamePtr() orelse {
                 // Game pointer not set - skip onReady callbacks
@@ -708,6 +738,30 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
             return getVisualTypeFromComponents(components);
         }
 
+        /// Queue a parent-child relationship if .parent field is present on the entity definition.
+        /// Tries ID resolution first, then falls back to name resolution.
+        fn queueParentIfPresent(
+            comptime entity_def: anytype,
+            entity: Entity,
+            ref_ctx: *loader_types.ReferenceContext,
+        ) !void {
+            if (@hasField(@TypeOf(entity_def), "parent")) {
+                const child_name = if (@hasField(@TypeOf(entity_def), "name"))
+                    entity_def.name
+                else if (@hasField(@TypeOf(entity_def), "id"))
+                    entity_def.id
+                else
+                    "";
+                try ref_ctx.addPendingParent(.{
+                    .child_entity = entity,
+                    .parent_key = entity_def.parent,
+                    .child_name = child_name,
+                    .inherit_rotation = getFieldOrDefault(entity_def, "inherit_rotation", false),
+                    .inherit_scale = getFieldOrDefault(entity_def, "inherit_scale", false),
+                });
+            }
+        }
+
         /// Load an entity that references a prefab (comptime lookup).
         /// Uses uniform component handling with proper merging - prefab components
         /// are merged with scene overrides, allowing partial overrides of any field.
@@ -771,6 +825,9 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
                 // Fall back to prefab gizmos if no scene-level override
                 try createGizmoEntities(game, scene, entity, Prefabs.getGizmos(prefab_name), pos.x, pos.y, ready_queue);
             }
+
+            // Queue parent-child relationship if .parent field is present (RFC #243)
+            try queueParentIfPresent(entity_def, entity, ref_ctx);
 
             return .{
                 .entity = entity,
@@ -961,6 +1018,9 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
             if (@hasField(@TypeOf(entity_def), "gizmos")) {
                 try createGizmoEntities(game, scene, entity, entity_def.gizmos, pos.x, pos.y, ready_queue);
             }
+
+            // Queue parent-child relationship if .parent field is present (RFC #243)
+            try queueParentIfPresent(entity_def, entity, ref_ctx);
 
             return .{
                 .entity = entity,

@@ -100,6 +100,8 @@ pub const RenderPipeline = struct {
     allocator: std.mem.Allocator,
     engine: *RetainedEngine,
     tracked: std.AutoArrayHashMap(Entity, TrackedEntity),
+    /// ECS registry for hierarchy traversal (dirty propagation to children)
+    registry: ?*Registry = null,
     /// Screen height for Y-up to Y-down coordinate transform
     screen_height: f32 = 600,
 
@@ -272,10 +274,36 @@ pub const RenderPipeline = struct {
         self.tracked.clearRetainingCapacity();
     }
 
-    /// Mark an entity's position as dirty (needs sync to gfx)
+    /// Mark an entity's position as dirty (needs sync to gfx).
+    /// Recursively propagates to all children so their world positions are recomputed.
     pub fn markPositionDirty(self: *RenderPipeline, entity: Entity) void {
+        self.markPositionDirtyRecursive(entity, 0);
+    }
+
+    fn markPositionDirtyRecursive(self: *RenderPipeline, entity: Entity, depth: u8) void {
+        if (depth > 32) {
+            std.log.warn("markPositionDirty: hierarchy too deep (>32), possible cycle", .{});
+            return;
+        }
         if (self.tracked.getPtr(entity)) |tracked| {
             tracked.position_dirty = true;
+        }
+        // Propagate to children (untracked children are skipped above but their
+        // subtrees are still walked so tracked grandchildren get marked)
+        if (self.registry) |reg| {
+            if (reg.tryGet(Children, entity)) |children_comp| {
+                for (children_comp.entities) |child| {
+                    self.markPositionDirtyRecursive(child, depth + 1);
+                }
+            }
+        }
+    }
+
+    /// Update the cached hierarchy flag for an entity.
+    /// Called when parent relationships change at runtime (setParent/removeParent).
+    pub fn updateHierarchyFlag(self: *RenderPipeline, entity: Entity, has_parent: bool) void {
+        if (self.tracked.getPtr(entity)) |tracked| {
+            tracked.has_parent = has_parent;
         }
     }
 

@@ -1,19 +1,12 @@
-// Position Inheritance Example
-//
-// Validates all position inheritance features from RFC #243:
-// - Parent-child hierarchy (setParent/removeParent/getParent/getChildren)
-// - Local vs World position (getLocalPosition, getWorldPosition, setWorldPosition)
-// - Rotation inheritance (inherit_rotation flag)
-// - Scale inheritance (inherit_scale flag)
-// - Cascade destroy (destroying parent destroys children)
-// - Cycle detection (prevents circular hierarchies)
-
 const std = @import("std");
 const engine = @import("labelle-engine");
 
 const hierarchy_test_script = @import("scripts/hierarchy_test.zig");
 
-const Prefabs = engine.PrefabRegistry(.{});
+const Prefabs = engine.PrefabRegistry(.{
+    .parent_circle = @import("prefabs/parent_circle.zon"),
+    .square = @import("prefabs/square.zon"),
+});
 const Components = engine.ComponentRegistry(struct {
     pub const Position = engine.Position;
     pub const Shape = engine.Shape;
@@ -26,7 +19,7 @@ const Loader = engine.SceneLoader(Prefabs, Components, Scripts);
 pub fn main() !void {
     var game = try engine.Game.init(std.heap.page_allocator, .{
         .window = .{
-            .title = "Position Inheritance Validation",
+            .title = "Parent-Child Binding Demo",
             .width = 800,
             .height = 600,
         },
@@ -44,6 +37,7 @@ pub fn main() !void {
 
     while (game.isRunning()) {
         scene.update(game.getDeltaTime());
+        game.getPipeline().sync(game.getRegistry());
 
         re.beginFrame();
         re.render();

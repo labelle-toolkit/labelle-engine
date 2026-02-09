@@ -103,6 +103,21 @@ pub const PendingReference = struct {
     is_id_ref: bool,
 };
 
+/// Entry for deferred parent-child relationship (Phase 2 of loading)
+/// Used when .parent field is specified on an entity definition
+pub const PendingParentRef = struct {
+    /// The child entity that will be parented
+    child_entity: Entity,
+    /// Name or ID of the parent entity (resolved by trying ID first, then name)
+    parent_key: []const u8,
+    /// Display name of the child entity (for diagnostics)
+    child_name: []const u8 = "",
+    /// Whether to inherit rotation from parent
+    inherit_rotation: bool = false,
+    /// Whether to inherit scale from parent
+    inherit_scale: bool = false,
+};
+
 /// Entity map for reference resolution (used for both names and IDs)
 pub const EntityMap = std.StringHashMap(Entity);
 
@@ -116,6 +131,8 @@ pub const ReferenceContext = struct {
     current_entity: ?Entity = null,
     /// Pending references to resolve in Phase 2
     pending_refs: std.ArrayListUnmanaged(PendingReference),
+    /// Pending parent-child relationships to resolve in Phase 2
+    pending_parents: std.ArrayListUnmanaged(PendingParentRef),
     /// Allocator for pending refs
     allocator: std.mem.Allocator,
 
@@ -124,6 +141,7 @@ pub const ReferenceContext = struct {
             .named_entities = EntityMap.init(allocator),
             .entity_ids = EntityMap.init(allocator),
             .pending_refs = .{},
+            .pending_parents = .{},
             .allocator = allocator,
         };
     }
@@ -132,6 +150,7 @@ pub const ReferenceContext = struct {
         self.named_entities.deinit();
         self.entity_ids.deinit();
         self.pending_refs.deinit(self.allocator);
+        self.pending_parents.deinit(self.allocator);
     }
 
     /// Register a named entity for later reference resolution (display name)
@@ -152,6 +171,11 @@ pub const ReferenceContext = struct {
     /// Add a pending reference to resolve in Phase 2
     pub fn addPendingRef(self: *ReferenceContext, pending: PendingReference) !void {
         try self.pending_refs.append(self.allocator, pending);
+    }
+
+    /// Add a pending parent-child relationship to resolve in Phase 2
+    pub fn addPendingParent(self: *ReferenceContext, pending: PendingParentRef) !void {
+        try self.pending_parents.append(self.allocator, pending);
     }
 
     /// Resolve an entity reference by display name
