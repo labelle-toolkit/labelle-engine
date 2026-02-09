@@ -588,8 +588,9 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
                 // Try ID first, then fall back to name for maximum flexibility
                 const parent_entity = ref_ctx.resolveById(pending.parent_key) orelse
                     ref_ctx.resolveByName(pending.parent_key) orelse {
-                    std.log.err("Parent entity not found: '{s}' (referenced by child entity)", .{
+                    std.log.err("Parent '{s}' not found for child '{s}'", .{
                         pending.parent_key,
+                        pending.child_name,
                     });
                     continue;
                 };
@@ -602,7 +603,11 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
                     pending.inherit_rotation,
                     pending.inherit_scale,
                 ) catch |err| {
-                    std.log.err("Failed to set parent for entity: {}", .{err});
+                    std.log.err("Failed to set parent '{s}' for child '{s}': {}", .{
+                        pending.parent_key,
+                        pending.child_name,
+                        err,
+                    });
                 };
             }
 
@@ -741,9 +746,16 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
             ref_ctx: *loader_types.ReferenceContext,
         ) !void {
             if (@hasField(@TypeOf(entity_def), "parent")) {
+                const child_name = if (@hasField(@TypeOf(entity_def), "name"))
+                    entity_def.name
+                else if (@hasField(@TypeOf(entity_def), "id"))
+                    entity_def.id
+                else
+                    "";
                 try ref_ctx.addPendingParent(.{
                     .child_entity = entity,
                     .parent_key = entity_def.parent,
+                    .child_name = child_name,
                     .inherit_rotation = getFieldOrDefault(entity_def, "inherit_rotation", false),
                     .inherit_scale = getFieldOrDefault(entity_def, "inherit_scale", false),
                 });

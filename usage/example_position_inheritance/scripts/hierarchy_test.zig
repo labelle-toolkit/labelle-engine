@@ -45,7 +45,10 @@ pub fn update(game: *Game, scene: *Scene, dt: f32) void {
             game.removeParentKeepTransform(square);
             attached = false;
         } else {
-            game.setParentKeepTransform(square, ball, false, false) catch {};
+            game.setParentKeepTransform(square, ball, false, false) catch |err| {
+                std.log.err("Failed to set parent: {}", .{err});
+                return;
+            };
             attached = true;
         }
     }

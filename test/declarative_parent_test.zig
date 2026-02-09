@@ -6,6 +6,51 @@ const engine = @import("labelle-engine");
 const ecs = @import("ecs");
 const loader = engine.scene.loader;
 
+const Game = engine.Game;
+const Position = engine.Position;
+const RenderPipeline = engine.RenderPipeline;
+const Parent = engine.render.components.Parent;
+const Children = engine.render.components.Children;
+
+const prefab = engine.scene.prefab;
+const component = engine.scene.component;
+const script = engine.scene.script;
+
+// Empty registries for loader tests (scenes use only built-in components)
+const TestPrefabs = prefab.PrefabRegistry(.{});
+const TestComponents = component.ComponentRegistry(struct {
+    pub const Position = engine.Position;
+});
+const TestScripts = script.ScriptRegistry(struct {});
+const TestLoader = loader.SceneLoader(TestPrefabs, TestComponents, TestScripts);
+
+fn createTestGame() Game {
+    const alloc = std.testing.allocator;
+    var game: Game = undefined;
+    game.allocator = alloc;
+    game.registry = ecs.Registry.init(alloc);
+    game.pipeline = RenderPipeline.init(alloc, undefined);
+    return game;
+}
+
+fn fixTestGamePointers(game: *Game) void {
+    game.pipeline.registry = &game.registry;
+}
+
+fn removeAllParents(game: *Game) void {
+    var view = game.registry.view(.{Parent});
+    var iter = view.entityIterator();
+    while (iter.next()) |child| {
+        game.removeParent(child);
+    }
+}
+
+fn deinitTestGame(game: *Game) void {
+    removeAllParents(game);
+    game.pipeline.deinit();
+    game.registry.deinit();
+}
+
 test {
     zspec.runAll(@This());
 }
@@ -219,6 +264,178 @@ pub const DECLARATIVE_PARENT = struct {
             try expect.equal(ctx.pending_parents.items.len, 1);
             try expect.toBeTrue(ctx.pending_parents.items[0].inherit_rotation);
             try expect.toBeFalse(ctx.pending_parents.items[0].inherit_scale);
+        }
+    };
+
+    pub const RUNTIME_LOAD = struct {
+        // Minimal scene for runtime load tests (Position-only, no visual components)
+        const load_scene = .{
+            .name = "load_test",
+            .entities = .{
+                .{
+                    .name = "the_parent",
+                    .components = .{
+                        .Position = .{ .x = 100, .y = 200 },
+                    },
+                },
+                .{
+                    .name = "the_child",
+                    .parent = "the_parent",
+                    .components = .{
+                        .Position = .{ .x = 10, .y = 20 },
+                    },
+                },
+            },
+        };
+
+        const load_scene_inheritance = .{
+            .name = "inherit_test",
+            .entities = .{
+                .{
+                    .name = "rot_parent",
+                    .components = .{
+                        .Position = .{ .x = 0, .y = 0 },
+                    },
+                },
+                .{
+                    .name = "rot_child",
+                    .parent = "rot_parent",
+                    .inherit_rotation = true,
+                    .inherit_scale = true,
+                    .components = .{
+                        .Position = .{ .x = 50, .y = 0 },
+                    },
+                },
+            },
+        };
+
+        const load_scene_forward_ref = .{
+            .name = "fwd_ref_test",
+            .entities = .{
+                .{
+                    .name = "child_before",
+                    .parent = "parent_after",
+                    .components = .{
+                        .Position = .{ .x = 5, .y = 5 },
+                    },
+                },
+                .{
+                    .name = "parent_after",
+                    .components = .{
+                        .Position = .{ .x = 0, .y = 0 },
+                    },
+                },
+            },
+        };
+
+        test "load sets Parent component on child" {
+            var game = createTestGame();
+            fixTestGamePointers(&game);
+            defer deinitTestGame(&game);
+
+            const ctx = engine.SceneContext.init(&game);
+            var scene = try TestLoader.load(load_scene, ctx);
+            defer {
+                removeAllParents(&game);
+                scene.deinit();
+            }
+
+            const child_entity = scene.entities.items[1].entity;
+            const parent_comp = game.registry.tryGet(Parent, child_entity);
+            try expect.toBeTrue(parent_comp != null);
+        }
+
+        test "load sets correct parent entity" {
+            var game = createTestGame();
+            fixTestGamePointers(&game);
+            defer deinitTestGame(&game);
+
+            const ctx = engine.SceneContext.init(&game);
+            var scene = try TestLoader.load(load_scene, ctx);
+            defer {
+                removeAllParents(&game);
+                scene.deinit();
+            }
+
+            const parent_entity = scene.entities.items[0].entity;
+            const child_entity = scene.entities.items[1].entity;
+
+            const parent_comp = game.registry.tryGet(Parent, child_entity).?;
+            try expect.equal(parent_comp.entity, parent_entity);
+        }
+
+        test "load adds child to parent's Children list" {
+            var game = createTestGame();
+            fixTestGamePointers(&game);
+            defer deinitTestGame(&game);
+
+            const ctx = engine.SceneContext.init(&game);
+            var scene = try TestLoader.load(load_scene, ctx);
+            defer {
+                removeAllParents(&game);
+                scene.deinit();
+            }
+
+            const parent_entity = scene.entities.items[0].entity;
+            const child_entity = scene.entities.items[1].entity;
+
+            const children_comp = game.registry.tryGet(Children, parent_entity);
+            try expect.toBeTrue(children_comp != null);
+            try expect.equal(children_comp.?.entities.len, 1);
+            try expect.equal(children_comp.?.entities[0], child_entity);
+        }
+
+        test "load sets inheritance flags from scene" {
+            var game = createTestGame();
+            fixTestGamePointers(&game);
+            defer deinitTestGame(&game);
+
+            const ctx = engine.SceneContext.init(&game);
+            var scene = try TestLoader.load(load_scene_inheritance, ctx);
+            defer {
+                removeAllParents(&game);
+                scene.deinit();
+            }
+
+            const child_entity = scene.entities.items[1].entity;
+            const parent_comp = game.registry.tryGet(Parent, child_entity).?;
+            try expect.toBeTrue(parent_comp.inherit_rotation);
+            try expect.toBeTrue(parent_comp.inherit_scale);
+        }
+
+        test "load resolves forward references (child before parent)" {
+            var game = createTestGame();
+            fixTestGamePointers(&game);
+            defer deinitTestGame(&game);
+
+            const ctx = engine.SceneContext.init(&game);
+            var scene = try TestLoader.load(load_scene_forward_ref, ctx);
+            defer {
+                removeAllParents(&game);
+                scene.deinit();
+            }
+
+            const child_entity = scene.entities.items[0].entity;
+            const parent_entity = scene.entities.items[1].entity;
+
+            const parent_comp = game.registry.tryGet(Parent, child_entity).?;
+            try expect.equal(parent_comp.entity, parent_entity);
+        }
+
+        test "parent entity has no Parent component" {
+            var game = createTestGame();
+            fixTestGamePointers(&game);
+            defer deinitTestGame(&game);
+
+            const ctx = engine.SceneContext.init(&game);
+            var scene = try TestLoader.load(load_scene, ctx);
+            defer {
+                removeAllParents(&game);
+                scene.deinit();
+            }
+
+            const parent_entity = scene.entities.items[0].entity;
+            try expect.toBeTrue(game.registry.tryGet(Parent, parent_entity) == null);
         }
     };
 };
