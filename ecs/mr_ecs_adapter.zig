@@ -132,6 +132,11 @@ pub const Registry = struct {
         return Entity.fromMrEcs(entity);
     }
 
+    /// Check if an entity is valid (exists in the registry)
+    pub fn isValid(self: *Registry, entity: Entity) bool {
+        return entity.toMrEcs().exists(&self.inner);
+    }
+
     /// Destroy an entity
     pub fn destroy(self: *Registry, entity: Entity) void {
         _ = entity.toMrEcs().destroyImmediate(&self.inner);

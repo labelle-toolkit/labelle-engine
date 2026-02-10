@@ -11,6 +11,7 @@
 .{
     .name = "main",
     .scripts = .{"scene_test"},
+    .camera = .{ .x = 400, .y = 200, .zoom = 1.0 },
     .entities = .{
         // Player - has Health and Spawned components (2 callbacks fire)
         .{
