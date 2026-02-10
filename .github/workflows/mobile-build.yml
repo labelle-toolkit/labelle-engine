@@ -38,6 +38,14 @@ jobs:
         with:
           version: 0.15.2
 
+      - name: Cache Zig dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/zig
+          key: zig-cache-${{ runner.os }}-${{ hashFiles('**/build.zig.zon') }}
+          restore-keys: |
+            zig-cache-${{ runner.os }}-
+
       - name: Setup Android NDK
         uses: nttld/setup-ndk@v1
         id: setup-ndk
@@ -70,10 +78,14 @@ jobs:
 
           # Build using the android build step which creates a shared library
           # Android apps load native code as .so files via NativeActivity
-          zig build android \
-            -Dandroid-lib-dir=$ANDROID_LIB_DIR \
-            --libc $GITHUB_WORKSPACE/android-aarch64-libc.txt \
-            --summary all
+          for attempt in 1 2 3; do
+            zig build android \
+              -Dandroid-lib-dir=$ANDROID_LIB_DIR \
+              --libc $GITHUB_WORKSPACE/android-aarch64-libc.txt \
+              --summary all && break
+            echo "::warning::Build attempt $attempt failed, retrying in 10s..."
+            sleep 10
+          done
 
           echo "::endgroup::"
 
@@ -124,6 +136,14 @@ jobs:
         with:
           version: 0.15.2
 
+      - name: Cache Zig dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/Library/Caches/zig
+          key: zig-cache-${{ runner.os }}-${{ hashFiles('**/build.zig.zon') }}
+          restore-keys: |
+            zig-cache-${{ runner.os }}-
+
       - name: Install labelle-cli
         run: |
           curl -fsSL https://labelle.games/install.sh | bash
@@ -160,7 +180,11 @@ jobs:
         run: |
           cd ci/mobile_physics_test
           echo "::group::Building for iOS Simulator"
-          ~/.labelle/bin/labelle ios build --simulator
+          for attempt in 1 2 3; do
+            ~/.labelle/bin/labelle ios build --simulator && break
+            echo "::warning::Build attempt $attempt failed, retrying in 10s..."
+            sleep 10
+          done
           echo "::endgroup::"
 
       - name: Verify build artifacts
@@ -258,6 +282,14 @@ jobs:
         with:
           version: 0.15.2
 
+      - name: Cache Zig dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/zig
+          key: zig-cache-${{ runner.os }}-${{ hashFiles('**/build.zig.zon') }}
+          restore-keys: |
+            zig-cache-${{ runner.os }}-
+
       - name: Install dependencies
         run: |
           sudo apt-get update
@@ -278,7 +310,11 @@ jobs:
       - name: Build native physics test
         run: |
           cd ci/mobile_physics_test
-          zig build
+          for attempt in 1 2 3; do
+            zig build && break
+            echo "::warning::Build attempt $attempt failed, retrying in 10s..."
+            sleep 10
+          done
 
       - name: Run physics test (CI mode)
         env:

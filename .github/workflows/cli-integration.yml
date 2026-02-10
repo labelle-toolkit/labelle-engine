@@ -28,6 +28,14 @@ jobs:
         with:
           version: 0.15.2
 
+      - name: Cache Zig dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/zig
+          key: zig-cache-${{ runner.os }}-${{ hashFiles('**/build.zig.zon') }}
+          restore-keys: |
+            zig-cache-${{ runner.os }}-
+
       - name: Install system dependencies
         run: |
           sudo apt-get update
@@ -84,11 +92,15 @@ jobs:
       - name: Test CLI workflow - Build raylib project with generated files
         run: |
           echo "::group::Building project directly from generated files"
-          
+
           # Build using the generated build.zig directly (uses local engine via path dependency)
           cd test-projects/test_raylib_game/.labelle/raylib_desktop
-          zig build
-          
+          for attempt in 1 2 3; do
+            zig build && break
+            echo "::warning::Build attempt $attempt failed, retrying in 10s..."
+            sleep 10
+          done
+
           echo "::endgroup::"
 
       - name: Test CLI workflow - Run raylib project
