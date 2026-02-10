@@ -15,14 +15,13 @@ const Text = render_pipeline_mod.Text;
 const Icon = render_pipeline_mod.Icon;
 const Color = render_pipeline_mod.Color;
 
-/// Max selectable entities for SparseSet allocation (must match game.zig).
-const max_selectable_entities: usize = 10_000;
-
-// Entity -> u64 conversion (matches game.zig helper)
 const EntityBits = std.meta.Int(.unsigned, @bitSizeOf(Entity));
 fn entityToU64(entity: Entity) u64 {
     return @as(u64, @intCast(@as(EntityBits, @bitCast(entity))));
 }
+
+const game_mod = @import("game.zig");
+const max_selectable_entities = game_mod.max_selectable_entities;
 
 pub fn GizmosMixin(comptime GameType: type) type {
     return struct {
@@ -115,8 +114,7 @@ pub fn GizmosMixin(comptime GameType: type) type {
         }
 
         /// Set visibility of a gizmo entity's visual components.
-        fn setGizmoEntityVisible(self: *Self, g: *GameType, entity: Entity, visible: bool) void {
-            _ = self;
+        fn setGizmoEntityVisible(_: *Self, g: *GameType, entity: Entity, visible: bool) void {
             var changed = false;
             const visual_components = .{ Sprite, Shape, Text, Icon };
             inline for (visual_components) |ComponentType| {

@@ -254,15 +254,7 @@ pub fn HierarchyMixin(comptime GameType: type) type {
                 if (old_entities.len == 0) return;
 
                 // Find and remove child
-                var found_idx: ?usize = null;
-                for (old_entities, 0..) |e, i| {
-                    if (e == child) {
-                        found_idx = i;
-                        break;
-                    }
-                }
-
-                if (found_idx) |idx| {
+                if (std.mem.indexOfScalar(Entity, old_entities, child)) |idx| {
                     if (old_entities.len == 1) {
                         // Last child, remove Children component
                         g.allocator.free(@constCast(old_entities));

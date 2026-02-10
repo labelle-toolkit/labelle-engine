@@ -97,7 +97,7 @@ pub const ScreenSize = struct {
 
 /// Max selectable entities for SparseSet allocation.
 /// 10k entities uses ~40KB memory and covers most game scenarios.
-const max_selectable_entities: usize = 10_000;
+pub const max_selectable_entities: usize = 10_000;
 
 /// Game facade - main entry point for GUI-generated projects.
 /// Use `GameWith(MyHooks)` to enable lifecycle hooks, or just `Game` for no hooks.
