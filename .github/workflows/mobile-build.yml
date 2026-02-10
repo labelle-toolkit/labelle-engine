@@ -40,7 +40,7 @@ jobs:
       - name: Cache Zig dependencies
         uses: actions/cache@v4
         with:
-          path: .zig-cache
+          path: ~/.cache/zig
           key: zig-cache-${{ runner.os }}-${{ hashFiles('**/build.zig.zon') }}
           restore-keys: |
             zig-cache-${{ runner.os }}-
@@ -150,7 +150,7 @@ jobs:
       - name: Cache Zig dependencies
         uses: actions/cache@v4
         with:
-          path: .zig-cache
+          path: ~/Library/Caches/zig
           key: zig-cache-${{ runner.os }}-${{ hashFiles('**/build.zig.zon') }}
           restore-keys: |
             zig-cache-${{ runner.os }}-
@@ -308,7 +308,7 @@ jobs:
       - name: Cache Zig dependencies
         uses: actions/cache@v4
         with:
-          path: .zig-cache
+          path: ~/.cache/zig
           key: zig-cache-${{ runner.os }}-${{ hashFiles('**/build.zig.zon') }}
           restore-keys: |
             zig-cache-${{ runner.os }}-
