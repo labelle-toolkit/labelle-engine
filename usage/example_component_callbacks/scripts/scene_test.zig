@@ -3,8 +3,9 @@
 // Press D to destroy an entity (simulates consuming an item)
 // Press Escape or Q to quit
 //
-// Before the fix, this would panic when scene.deinit() tried to destroy
-// an already-destroyed entity.
+// The engine registers an entity destroy cleanup callback so that destroyed
+// entities are removed from the scene's list at destroy time (zero per-frame cost).
+// This means scene.deinit() never encounters already-destroyed entities.
 
 const std = @import("std");
 const engine = @import("labelle-engine");

@@ -134,6 +134,13 @@ pub fn GameWith(comptime Hooks: type) type {
         /// Frame callback type for custom game loop logic
         pub const FrameCallback = *const fn (*Self, f32) void;
 
+        /// Callback for cleaning up external references when an entity is destroyed.
+        /// Used by Scene to remove destroyed entities from its list at destroy time.
+        pub const EntityDestroyCleanup = struct {
+            context: *anyopaque,
+            callback: *const fn (*anyopaque, Entity) void,
+        };
+
         /// Standalone gizmo that persists until cleared.
         /// Used for runtime gizmo drawing without creating entities.
         pub const StandaloneGizmo = struct {
@@ -175,6 +182,9 @@ pub fn GameWith(comptime Hooks: type) type {
         // Entity selection tracking (for selected-only gizmos)
         // Uses DynamicBitSet for O(1) bit operations - minimal memory (~1.25KB for 10k entities)
         selected_entities: std.DynamicBitSet,
+
+        // Entity destroy cleanup callback (used by Scene)
+        on_entity_destroy_cleanup: ?EntityDestroyCleanup = null,
 
         // GUI state
         gui_enabled: bool = true,
@@ -344,6 +354,11 @@ pub fn GameWith(comptime Hooks: type) type {
                 }
             }
 
+            // Notify cleanup callback (e.g., Scene removes entity from its list)
+            if (self.on_entity_destroy_cleanup) |cleanup| {
+                cleanup.callback(cleanup.context, entity);
+            }
+
             // Emit entity_destroyed hook before destruction
             emitHook(.{ .entity_destroyed = .{ .entity_id = entityToU64(entity), .prefab_name = null } });
             self.pipeline.untrackEntity(entity);
@@ -354,6 +369,11 @@ pub fn GameWith(comptime Hooks: type) type {
         /// Children become orphaned (their Parent component still references the destroyed entity).
         /// Use removeParent() on children first if you want them to become root entities.
         pub fn destroyEntityOnly(self: *Self, entity: Entity) void {
+            // Notify cleanup callback (e.g., Scene removes entity from its list)
+            if (self.on_entity_destroy_cleanup) |cleanup| {
+                cleanup.callback(cleanup.context, entity);
+            }
+
             emitHook(.{ .entity_destroyed = .{ .entity_id = entityToU64(entity), .prefab_name = null } });
             self.pipeline.untrackEntity(entity);
             self.registry.destroy(entity);
