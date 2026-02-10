@@ -42,10 +42,10 @@ pub fn update(game: *Game, scene: *Scene, dt: f32) void {
     // Toggle parent binding with space (preserves world position)
     if (input.isKeyPressed(.space)) {
         if (attached) {
-            game.removeParentKeepTransform(square);
+            game.hierarchy.removeParentKeepTransform(square);
             attached = false;
         } else {
-            game.setParentKeepTransform(square, ball, false, false) catch |err| {
+            game.hierarchy.setParentKeepTransform(square, ball, false, false) catch |err| {
                 std.log.err("Failed to set parent: {}", .{err});
                 return;
             };
@@ -54,7 +54,7 @@ pub fn update(game: *Game, scene: *Scene, dt: f32) void {
     }
 
     // Bounce ball left-right
-    if (game.getLocalPosition(ball)) |pos| {
+    if (game.pos.getLocalPosition(ball)) |pos| {
         pos.x += SPEED * direction * dt;
         if (pos.x >= MAX_X) {
             pos.x = MAX_X;

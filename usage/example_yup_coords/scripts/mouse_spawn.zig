@@ -28,7 +28,7 @@ pub fn update(
     if (input.isMouseButtonPressed(.left)) {
         // Get mouse position in Y-UP game coordinates
         // This uses game.getMousePosition() which transforms screen coords to game coords
-        const mouse_pos = game.getMousePosition();
+        const mouse_pos = game.input_mixin.getMousePosition();
 
         // Log the coordinates to verify Y-up behavior
         std.log.info("Mouse click at game coords: ({d:.0}, {d:.0})", .{ mouse_pos.x, mouse_pos.y });

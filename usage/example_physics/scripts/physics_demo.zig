@@ -134,7 +134,7 @@ fn spawnBox(game: *Game, pw: *PhysicsWorld) void {
     const registry = game.getRegistry();
 
     // Add Position
-    game.addPosition(entity, .{ .x = mouse_pos.x, .y = mouse_pos.y });
+    game.pos.addPosition(entity, .{ .x = mouse_pos.x, .y = mouse_pos.y });
 
     // Add Shape for rendering
     var shape = engine.Shape.rectangle(size, size);
@@ -163,7 +163,7 @@ fn spawnCircle(game: *Game, pw: *PhysicsWorld) void {
     const entity = game.createEntity();
     const registry = game.getRegistry();
 
-    game.addPosition(entity, .{ .x = mouse_pos.x, .y = mouse_pos.y });
+    game.pos.addPosition(entity, .{ .x = mouse_pos.x, .y = mouse_pos.y });
 
     var shape = engine.Shape.circle(radius);
     shape.color = .{ .r = r, .g = g, .b = b, .a = 255 };

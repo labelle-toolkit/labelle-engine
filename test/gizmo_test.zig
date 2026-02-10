@@ -5,6 +5,7 @@ const expect = zspec.expect;
 const engine = @import("labelle-engine");
 const ecs = @import("ecs");
 const Game = engine.Game;
+const GizmosMixin = @TypeOf(@as(Game, undefined).gizmos);
 const Shape = engine.Shape;
 const Sprite = engine.Sprite;
 
@@ -153,50 +154,50 @@ pub const SET_VS_ADD_BEHAVIOR = struct {
 // These tests verify the Game API exports the correct methods.
 
 pub const STANDALONE_GIZMO_API = struct {
-    test "Game has renderStandaloneGizmos method" {
-        try expect.toBeTrue(@hasDecl(Game, "renderStandaloneGizmos"));
+    test "gizmos mixin has renderStandaloneGizmos method" {
+        try expect.toBeTrue(@hasDecl(GizmosMixin, "renderStandaloneGizmos"));
     }
 
-    test "Game has drawGizmo method" {
-        try expect.toBeTrue(@hasDecl(Game, "drawGizmo"));
+    test "gizmos mixin has drawGizmo method" {
+        try expect.toBeTrue(@hasDecl(GizmosMixin, "drawGizmo"));
     }
 
-    test "Game has drawLine method" {
-        try expect.toBeTrue(@hasDecl(Game, "drawLine"));
+    test "gizmos mixin has drawLine method" {
+        try expect.toBeTrue(@hasDecl(GizmosMixin, "drawLine"));
     }
 
-    test "Game has drawArrow method" {
-        try expect.toBeTrue(@hasDecl(Game, "drawArrow"));
+    test "gizmos mixin has drawArrow method" {
+        try expect.toBeTrue(@hasDecl(GizmosMixin, "drawArrow"));
     }
 
-    test "Game has drawRay method" {
-        try expect.toBeTrue(@hasDecl(Game, "drawRay"));
+    test "gizmos mixin has drawRay method" {
+        try expect.toBeTrue(@hasDecl(GizmosMixin, "drawRay"));
     }
 
-    test "Game has drawCircle method" {
-        try expect.toBeTrue(@hasDecl(Game, "drawCircle"));
+    test "gizmos mixin has drawCircle method" {
+        try expect.toBeTrue(@hasDecl(GizmosMixin, "drawCircle"));
     }
 
-    test "Game has drawRect method" {
-        try expect.toBeTrue(@hasDecl(Game, "drawRect"));
+    test "gizmos mixin has drawRect method" {
+        try expect.toBeTrue(@hasDecl(GizmosMixin, "drawRect"));
     }
 
-    test "Game has clearGizmos method" {
-        try expect.toBeTrue(@hasDecl(Game, "clearGizmos"));
+    test "gizmos mixin has clearGizmos method" {
+        try expect.toBeTrue(@hasDecl(GizmosMixin, "clearGizmos"));
     }
 
-    test "Game has GizmoShape type for standalone gizmos" {
-        try expect.toBeTrue(@hasDecl(Game, "GizmoShape"));
+    test "gizmos mixin has GizmoShape type for standalone gizmos" {
+        try expect.toBeTrue(@hasDecl(GizmosMixin, "GizmoShape"));
     }
 };
 
 pub const GIZMO_VISIBILITY_API = struct {
-    test "Game has setGizmosEnabled method" {
-        try expect.toBeTrue(@hasDecl(Game, "setGizmosEnabled"));
+    test "gizmos mixin has setEnabled method" {
+        try expect.toBeTrue(@hasDecl(GizmosMixin, "setEnabled"));
     }
 
-    test "Game has areGizmosEnabled method" {
-        try expect.toBeTrue(@hasDecl(Game, "areGizmosEnabled"));
+    test "gizmos mixin has areEnabled method" {
+        try expect.toBeTrue(@hasDecl(GizmosMixin, "areEnabled"));
     }
 };
 

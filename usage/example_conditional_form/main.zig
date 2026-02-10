@@ -130,7 +130,7 @@ pub fn main() !void {
         value_state.setText("enrage_value", enrage_str) catch {};
 
         // Render GUI with visibility and value state
-        game.renderSceneGuiWithState(&scene, Views, Scripts, &visibility_state, &value_state);
+        game.gui_rendering.renderSceneGuiWithState(&scene, Views, Scripts, &visibility_state, &value_state);
 
         re.endFrame();
     }

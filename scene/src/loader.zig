@@ -597,7 +597,7 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
 
                 // Set up parent-child relationship with inheritance flags
                 // Scene entities define position as local offsets, so no transform preservation needed
-                game.setParentWithOptions(
+                game.hierarchy.setParentWithOptions(
                     pending.child_entity,
                     parent_entity,
                     pending.inherit_rotation,

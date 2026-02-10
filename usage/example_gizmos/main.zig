@@ -94,7 +94,7 @@ pub fn main() !void {
         const re = game.getRetainedEngine();
         re.beginFrame();
         re.render();
-        game.renderStandaloneGizmos(); // Draw standalone gizmos on top
+        game.gizmos.renderStandaloneGizmos(); // Draw standalone gizmos on top
         re.endFrame();
     }
 }

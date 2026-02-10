@@ -64,7 +64,7 @@ pub fn main() !void {
 
         // Render GUI views associated with the scene
         // (loads views from scene's .gui_views field)
-        game.renderSceneGui(&scene, Views, Scripts);
+        game.gui_rendering.renderSceneGui(&scene, Views, Scripts);
 
         re.endFrame();
     }
