@@ -467,6 +467,17 @@ pub const ON_REMOVE_CALLBACK = struct {
 
             try expect.toBeTrue(test_on_remove_called);
         }
+
+        test "isValid returns false after entity is destroyed" {
+            var registry = ecs.Registry.init(std.testing.allocator);
+            defer registry.deinit();
+
+            const entity = registry.create();
+            try expect.toBeTrue(registry.isValid(entity));
+
+            registry.destroy(entity);
+            try expect.toBeFalse(registry.isValid(entity));
+        }
     };
 };
 
