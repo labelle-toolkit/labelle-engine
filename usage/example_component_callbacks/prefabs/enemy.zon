@@ -4,5 +4,10 @@
         // Enemy also has Health and Spawned - callbacks will fire
         .Health = .{ .current = 50, .max = 50 },
         .Spawned = .{ .frame = 0 },
+        // Visual representation - red rectangle for enemy
+        .Shape = .{
+            .shape = .{ .rectangle = .{ .width = 40, .height = 40 } },
+            .color = .{ .r = 255, .g = 100, .b = 100, .a = 255 },
+        },
     },
 }

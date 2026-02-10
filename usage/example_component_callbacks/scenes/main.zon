@@ -39,8 +39,12 @@
         // Inline entity with only Health (1 callback fires)
         .{
             .components = .{
-                .Position = .{ .x = 400, .y = 500 },
+                .Position = .{ .x = 400, .y = 100 },
                 .Health = .{ .current = 75, .max = 75 },
+                .Shape = .{
+                    .shape = .{ .circle = .{ .radius = 20 } },
+                    .color = .{ .r = 100, .g = 255, .b = 100, .a = 255 },
+                },
             },
         },
     },
