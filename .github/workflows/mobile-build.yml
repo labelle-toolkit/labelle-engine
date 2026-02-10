@@ -30,8 +30,7 @@ jobs:
 
       - name: Checkout labelle-gfx (sibling dependency)
         run: |
-          # TODO: Change to main after labelle-gfx#202 is merged
-          git clone --depth 1 --branch fix/android-gl-detection-201 https://github.com/labelle-toolkit/labelle-gfx.git ../labelle-gfx
+          git clone --depth 1 https://github.com/labelle-toolkit/labelle-gfx.git ../labelle-gfx
 
       - name: Install Zig
         uses: mlugg/setup-zig@v2
@@ -41,7 +40,7 @@ jobs:
       - name: Cache Zig dependencies
         uses: actions/cache@v4
         with:
-          path: ~/.cache/zig
+          path: .zig-cache
           key: zig-cache-${{ runner.os }}-${{ hashFiles('**/build.zig.zon') }}
           restore-keys: |
             zig-cache-${{ runner.os }}-
@@ -70,6 +69,7 @@ jobs:
           echo "ANDROID_LIB_DIR=$LIB_DIR" >> $GITHUB_ENV
 
       - name: Build for Android
+        shell: bash
         env:
           ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
         run: |
@@ -78,14 +78,26 @@ jobs:
 
           # Build using the android build step which creates a shared library
           # Android apps load native code as .so files via NativeActivity
+          set -euo pipefail
+          success=0
           for attempt in 1 2 3; do
-            zig build android \
+            if zig build android \
               -Dandroid-lib-dir=$ANDROID_LIB_DIR \
               --libc $GITHUB_WORKSPACE/android-aarch64-libc.txt \
-              --summary all && break
-            echo "::warning::Build attempt $attempt failed, retrying in 10s..."
-            sleep 10
+              --summary all; then
+              success=1
+              break
+            fi
+            if [ "$attempt" -lt 3 ]; then
+              echo "::warning::Build attempt $attempt failed, retrying in 10s..."
+              sleep 10
+            fi
           done
+
+          if [ "$success" -ne 1 ]; then
+            echo "::error::Build failed after 3 attempts."
+            exit 1
+          fi
 
           echo "::endgroup::"
 
@@ -128,8 +140,7 @@ jobs:
 
       - name: Checkout labelle-gfx (sibling dependency)
         run: |
-          # TODO: Change to main after labelle-gfx#202 is merged
-          git clone --depth 1 --branch fix/android-gl-detection-201 https://github.com/labelle-toolkit/labelle-gfx.git ../labelle-gfx
+          git clone --depth 1 https://github.com/labelle-toolkit/labelle-gfx.git ../labelle-gfx
 
       - name: Install Zig
         uses: mlugg/setup-zig@v2
@@ -139,7 +150,7 @@ jobs:
       - name: Cache Zig dependencies
         uses: actions/cache@v4
         with:
-          path: ~/Library/Caches/zig
+          path: .zig-cache
           key: zig-cache-${{ runner.os }}-${{ hashFiles('**/build.zig.zon') }}
           restore-keys: |
             zig-cache-${{ runner.os }}-
@@ -177,14 +188,27 @@ jobs:
           ls -la .labelle/
 
       - name: Build for iOS Simulator
+        shell: bash
         run: |
           cd ci/mobile_physics_test
           echo "::group::Building for iOS Simulator"
+          set -euo pipefail
+          success=0
           for attempt in 1 2 3; do
-            ~/.labelle/bin/labelle ios build --simulator && break
-            echo "::warning::Build attempt $attempt failed, retrying in 10s..."
-            sleep 10
+            if ~/.labelle/bin/labelle ios build --simulator; then
+              success=1
+              break
+            fi
+            if [ "$attempt" -lt 3 ]; then
+              echo "::warning::Build attempt $attempt failed, retrying in 10s..."
+              sleep 10
+            fi
           done
+
+          if [ "$success" -ne 1 ]; then
+            echo "::error::Build failed after 3 attempts."
+            exit 1
+          fi
           echo "::endgroup::"
 
       - name: Verify build artifacts
@@ -274,8 +298,7 @@ jobs:
 
       - name: Checkout labelle-gfx (sibling dependency)
         run: |
-          # TODO: Change to main after labelle-gfx#202 is merged
-          git clone --depth 1 --branch fix/android-gl-detection-201 https://github.com/labelle-toolkit/labelle-gfx.git ../labelle-gfx
+          git clone --depth 1 https://github.com/labelle-toolkit/labelle-gfx.git ../labelle-gfx
 
       - name: Install Zig
         uses: mlugg/setup-zig@v2
@@ -285,7 +308,7 @@ jobs:
       - name: Cache Zig dependencies
         uses: actions/cache@v4
         with:
-          path: ~/.cache/zig
+          path: .zig-cache
           key: zig-cache-${{ runner.os }}-${{ hashFiles('**/build.zig.zon') }}
           restore-keys: |
             zig-cache-${{ runner.os }}-
@@ -308,13 +331,26 @@ jobs:
             xvfb
 
       - name: Build native physics test
+        shell: bash
         run: |
           cd ci/mobile_physics_test
+          set -euo pipefail
+          success=0
           for attempt in 1 2 3; do
-            zig build && break
-            echo "::warning::Build attempt $attempt failed, retrying in 10s..."
-            sleep 10
+            if zig build; then
+              success=1
+              break
+            fi
+            if [ "$attempt" -lt 3 ]; then
+              echo "::warning::Build attempt $attempt failed, retrying in 10s..."
+              sleep 10
+            fi
           done
+
+          if [ "$success" -ne 1 ]; then
+            echo "::error::Build failed after 3 attempts."
+            exit 1
+          fi
 
       - name: Run physics test (CI mode)
         env:

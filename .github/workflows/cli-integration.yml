@@ -31,7 +31,7 @@ jobs:
       - name: Cache Zig dependencies
         uses: actions/cache@v4
         with:
-          path: ~/.cache/zig
+          path: .zig-cache
           key: zig-cache-${{ runner.os }}-${{ hashFiles('**/build.zig.zon') }}
           restore-keys: |
             zig-cache-${{ runner.os }}-
@@ -80,26 +80,57 @@ jobs:
           echo "::endgroup::"
 
       - name: Test CLI workflow - Generate with local engine
+        shell: bash
         run: |
           cd test-projects/test_raylib_game
           echo "::group::Generating build files with local engine"
-          
+
           # Generate using the checked-out engine (relative path from project dir)
-          labelle generate --engine-path=../../labelle-engine
-          
+          # Retry to handle transient dependency fetch failures (sokol-tools-bin via Git LFS)
+          set -euo pipefail
+          success=0
+          for attempt in 1 2 3; do
+            if labelle generate --engine-path=../../labelle-engine; then
+              success=1
+              break
+            fi
+            if [ "$attempt" -lt 3 ]; then
+              echo "::warning::Generate attempt $attempt failed, retrying in 10s..."
+              sleep 10
+            fi
+          done
+
+          if [ "$success" -ne 1 ]; then
+            echo "::error::Generate failed after 3 attempts."
+            exit 1
+          fi
+
           echo "::endgroup::"
 
       - name: Test CLI workflow - Build raylib project with generated files
+        shell: bash
         run: |
           echo "::group::Building project directly from generated files"
 
           # Build using the generated build.zig directly (uses local engine via path dependency)
           cd test-projects/test_raylib_game/.labelle/raylib_desktop
+          set -euo pipefail
+          success=0
           for attempt in 1 2 3; do
-            zig build && break
-            echo "::warning::Build attempt $attempt failed, retrying in 10s..."
-            sleep 10
+            if zig build; then
+              success=1
+              break
+            fi
+            if [ "$attempt" -lt 3 ]; then
+              echo "::warning::Build attempt $attempt failed, retrying in 10s..."
+              sleep 10
+            fi
           done
+
+          if [ "$success" -ne 1 ]; then
+            echo "::error::Build failed after 3 attempts."
+            exit 1
+          fi
 
           echo "::endgroup::"
 
@@ -127,6 +158,7 @@ jobs:
           echo "::endgroup::"
 
       - name: Test CLI workflow - Multiple targets
+        shell: bash
         run: |
           echo "::group::Creating project with multiple targets"
           
@@ -135,12 +167,42 @@ jobs:
           labelle init test_multi_target --backend=raylib --ecs=zig_ecs
           cd test_multi_target
           
-          # Generate with local engine
-          labelle generate --engine-path=../../labelle-engine
-          
+          # Generate with local engine (retry for transient fetch failures)
+          success=0
+          for attempt in 1 2 3; do
+            if labelle generate --engine-path=../../labelle-engine; then
+              success=1
+              break
+            fi
+            if [ "$attempt" -lt 3 ]; then
+              echo "::warning::Generate attempt $attempt failed, retrying in 10s..."
+              sleep 10
+            fi
+          done
+          if [ "$success" -ne 1 ]; then
+            echo "::error::Generate failed after 3 attempts."
+            exit 1
+          fi
+
           # Build directly from generated files
           cd .labelle/raylib_desktop
-          zig build
+          set -euo pipefail
+          success=0
+          for attempt in 1 2 3; do
+            if zig build; then
+              success=1
+              break
+            fi
+            if [ "$attempt" -lt 3 ]; then
+              echo "::warning::Build attempt $attempt failed, retrying in 10s..."
+              sleep 10
+            fi
+          done
+
+          if [ "$success" -ne 1 ]; then
+            echo "::error::Build failed after 3 attempts."
+            exit 1
+          fi
           
           echo "::endgroup::"
 
