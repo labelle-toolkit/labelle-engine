@@ -153,6 +153,11 @@ pub const Registry = struct {
         return Entity.fromFlecs(e);
     }
 
+    /// Check if an entity is valid (exists in the registry)
+    pub fn isValid(self: *Registry, entity: Entity) bool {
+        return flecs.is_alive(self.world, entity.toFlecs());
+    }
+
     /// Destroy an entity
     pub fn destroy(self: *Registry, entity: Entity) void {
         flecs.delete(self.world, entity.toFlecs());
