@@ -47,7 +47,7 @@ fn deinitTestGame(game: *Game) void {
     var view = game.registry.view(.{Parent});
     var iter = view.entityIterator();
     while (iter.next()) |child| {
-        game.removeParent(child);
+        game.hierarchy.removeParent(child);
     }
     game.pipeline.deinit();
     game.registry.deinit();
@@ -73,13 +73,13 @@ pub const REMOVE_PARENT = struct {
 
             const parent = createEntityAt(&game, 100, 200);
             const child = createEntityAt(&game, 30, 40);
-            try game.setParent(child, parent);
+            try game.hierarchy.setParent(child, parent);
 
             // Local position is still (30, 40), world would be (130, 240)
-            game.removeParent(child);
+            game.hierarchy.removeParent(child);
 
             // Local position kept as-is — now it becomes the world position
-            const pos = game.getLocalPosition(child).?;
+            const pos = game.pos.getLocalPosition(child).?;
             try expect.equal(pos.x, 30);
             try expect.equal(pos.y, 40);
         }
@@ -93,22 +93,22 @@ pub const REMOVE_PARENT = struct {
 
             const parent = createEntityAt(&game, 100, 200);
             const child = createEntityAt(&game, 30, 40);
-            try game.setParent(child, parent);
+            try game.hierarchy.setParent(child, parent);
 
             // World position should be (130, 240)
-            const world_before = game.getWorldPosition(child).?;
+            const world_before = game.pos.getWorldPosition(child).?;
             try expect.equal(world_before.x, 130);
             try expect.equal(world_before.y, 240);
 
-            game.removeParentKeepTransform(child);
+            game.hierarchy.removeParentKeepTransform(child);
 
             // After removeParent(true), local pos should equal the old world pos
-            const pos = game.getLocalPosition(child).?;
+            const pos = game.pos.getLocalPosition(child).?;
             try expect.equal(pos.x, 130);
             try expect.equal(pos.y, 240);
 
             // And world pos (now = local since root) should match
-            const world_after = game.getWorldPosition(child).?;
+            const world_after = game.pos.getWorldPosition(child).?;
             try expect.equal(world_after.x, 130);
             try expect.equal(world_after.y, 240);
         }
@@ -121,9 +121,9 @@ pub const REMOVE_PARENT = struct {
             const e = createEntityAt(&game, 50, 60);
 
             // No parent — should not crash
-            game.removeParentKeepTransform(e);
+            game.hierarchy.removeParentKeepTransform(e);
 
-            const pos = game.getLocalPosition(e).?;
+            const pos = game.pos.getLocalPosition(e).?;
             try expect.equal(pos.x, 50);
             try expect.equal(pos.y, 60);
         }
@@ -137,18 +137,18 @@ pub const REMOVE_PARENT = struct {
             const parent = createEntityAt(&game, 30, 40);
             const child = createEntityAt(&game, 50, 60);
 
-            try game.setParent(parent, grandparent);
-            try game.setParent(child, parent);
+            try game.hierarchy.setParent(parent, grandparent);
+            try game.hierarchy.setParent(child, parent);
 
             // World position: (10+30+50, 20+40+60) = (90, 120)
-            const world_before = game.getWorldPosition(child).?;
+            const world_before = game.pos.getWorldPosition(child).?;
             try expect.equal(world_before.x, 90);
             try expect.equal(world_before.y, 120);
 
             // Remove child from parent, keeping world position
-            game.removeParentKeepTransform(child);
+            game.hierarchy.removeParentKeepTransform(child);
 
-            const pos = game.getLocalPosition(child).?;
+            const pos = game.pos.getLocalPosition(child).?;
             try expect.equal(pos.x, 90);
             try expect.equal(pos.y, 120);
         }
@@ -169,15 +169,15 @@ pub const SET_PARENT_WITH_OPTIONS = struct {
             const parent = createEntityAt(&game, 100, 200);
             const child = createEntityAt(&game, 50, 60);
 
-            try game.setParentWithOptions(child, parent, false, false);
+            try game.hierarchy.setParentWithOptions(child, parent, false, false);
 
             // Local position unchanged
-            const pos = game.getLocalPosition(child).?;
+            const pos = game.pos.getLocalPosition(child).?;
             try expect.equal(pos.x, 50);
             try expect.equal(pos.y, 60);
 
             // World position is parent + local = (150, 260)
-            const world = game.getWorldPosition(child).?;
+            const world = game.pos.getWorldPosition(child).?;
             try expect.equal(world.x, 150);
             try expect.equal(world.y, 260);
         }
@@ -193,15 +193,15 @@ pub const SET_PARENT_WITH_OPTIONS = struct {
             const child = createEntityAt(&game, 50, 60);
 
             // Before parenting, world pos = local pos = (50, 60)
-            try game.setParentKeepTransform(child, parent, false, false);
+            try game.hierarchy.setParentKeepTransform(child, parent, false, false);
 
             // World position should still be (50, 60)
-            const world = game.getWorldPosition(child).?;
+            const world = game.pos.getWorldPosition(child).?;
             try expect.equal(world.x, 50);
             try expect.equal(world.y, 60);
 
             // Local position should be adjusted: (50 - 100, 60 - 200) = (-50, -140)
-            const pos = game.getLocalPosition(child).?;
+            const pos = game.pos.getLocalPosition(child).?;
             try expect.equal(pos.x, -50);
             try expect.equal(pos.y, -140);
         }
@@ -213,20 +213,20 @@ pub const SET_PARENT_WITH_OPTIONS = struct {
 
             const grandparent = createEntityAt(&game, 10, 20);
             const parent = createEntityAt(&game, 30, 40);
-            try game.setParent(parent, grandparent);
+            try game.hierarchy.setParent(parent, grandparent);
             // Parent world pos = (10+30, 20+40) = (40, 60)
 
             const child = createEntityAt(&game, 100, 100);
 
-            try game.setParentKeepTransform(child, parent, false, false);
+            try game.hierarchy.setParentKeepTransform(child, parent, false, false);
 
             // World position should still be (100, 100)
-            const world = game.getWorldPosition(child).?;
+            const world = game.pos.getWorldPosition(child).?;
             try expect.equal(world.x, 100);
             try expect.equal(world.y, 100);
 
             // Local offset = (100 - 40, 100 - 60) = (60, 40)
-            const pos = game.getLocalPosition(child).?;
+            const pos = game.pos.getLocalPosition(child).?;
             try expect.equal(pos.x, 60);
             try expect.equal(pos.y, 40);
         }
@@ -241,7 +241,7 @@ pub const SET_PARENT_WITH_OPTIONS = struct {
             const parent = createEntityAt(&game, 0, 0);
             const child = createEntityAt(&game, 10, 10);
 
-            try game.setParentWithOptions(child, parent, true, false);
+            try game.hierarchy.setParentWithOptions(child, parent, true, false);
 
             const parent_comp = game.registry.tryGet(Parent, child).?;
             try expect.toBeTrue(parent_comp.inherit_rotation);
@@ -256,7 +256,7 @@ pub const SET_PARENT_WITH_OPTIONS = struct {
             const parent = createEntityAt(&game, 0, 0);
             const child = createEntityAt(&game, 10, 10);
 
-            try game.setParentWithOptions(child, parent, false, true);
+            try game.hierarchy.setParentWithOptions(child, parent, false, true);
 
             const parent_comp = game.registry.tryGet(Parent, child).?;
             try expect.toBeFalse(parent_comp.inherit_rotation);
@@ -277,25 +277,25 @@ pub const ROUND_TRIP = struct {
 
         const parent = createEntityAt(&game, 200, 100);
         const child = createEntityAt(&game, 50, 30);
-        try game.setParent(child, parent);
+        try game.hierarchy.setParent(child, parent);
 
         // World = (250, 130)
-        const world_before = game.getWorldPosition(child).?;
+        const world_before = game.pos.getWorldPosition(child).?;
 
         // Detach keeping world position
-        game.removeParentKeepTransform(child);
-        const world_detached = game.getWorldPosition(child).?;
+        game.hierarchy.removeParentKeepTransform(child);
+        const world_detached = game.pos.getWorldPosition(child).?;
         try expect.equal(world_detached.x, world_before.x);
         try expect.equal(world_detached.y, world_before.y);
 
         // Re-attach keeping world position
-        try game.setParentKeepTransform(child, parent, false, false);
-        const world_reattached = game.getWorldPosition(child).?;
+        try game.hierarchy.setParentKeepTransform(child, parent, false, false);
+        const world_reattached = game.pos.getWorldPosition(child).?;
         try expect.equal(world_reattached.x, world_before.x);
         try expect.equal(world_reattached.y, world_before.y);
 
         // Local offset should be back to original
-        const pos = game.getLocalPosition(child).?;
+        const pos = game.pos.getLocalPosition(child).?;
         try expect.equal(pos.x, 50);
         try expect.equal(pos.y, 30);
     }
@@ -308,23 +308,23 @@ pub const ROUND_TRIP = struct {
         const parent_a = createEntityAt(&game, 100, 0);
         const parent_b = createEntityAt(&game, 0, 100);
         const child = createEntityAt(&game, 20, 30);
-        try game.setParent(child, parent_a);
+        try game.hierarchy.setParent(child, parent_a);
 
         // World = (120, 30)
-        const world_before = game.getWorldPosition(child).?;
+        const world_before = game.pos.getWorldPosition(child).?;
         try expect.equal(world_before.x, 120);
         try expect.equal(world_before.y, 30);
 
         // Detach with keep, re-attach to parent_b with keep
-        game.removeParentKeepTransform(child);
-        try game.setParentKeepTransform(child, parent_b, false, false);
+        game.hierarchy.removeParentKeepTransform(child);
+        try game.hierarchy.setParentKeepTransform(child, parent_b, false, false);
 
-        const world_after = game.getWorldPosition(child).?;
+        const world_after = game.pos.getWorldPosition(child).?;
         try expect.equal(world_after.x, 120);
         try expect.equal(world_after.y, 30);
 
         // Local offset from parent_b: (120 - 0, 30 - 100) = (120, -70)
-        const pos = game.getLocalPosition(child).?;
+        const pos = game.pos.getLocalPosition(child).?;
         try expect.equal(pos.x, 120);
         try expect.equal(pos.y, -70);
     }
@@ -342,7 +342,7 @@ pub const DIRTY_PROPAGATION = struct {
 
         const parent = createEntityAt(&game, 0, 0);
         const child = createEntityAt(&game, 10, 10);
-        try game.setParent(child, parent);
+        try game.hierarchy.setParent(child, parent);
 
         // Track both entities so they appear in the pipeline
         try game.pipeline.trackEntity(parent, .none);
@@ -367,8 +367,8 @@ pub const DIRTY_PROPAGATION = struct {
         const grandparent = createEntityAt(&game, 0, 0);
         const parent = createEntityAt(&game, 0, 0);
         const child = createEntityAt(&game, 0, 0);
-        try game.setParent(parent, grandparent);
-        try game.setParent(child, parent);
+        try game.hierarchy.setParent(parent, grandparent);
+        try game.hierarchy.setParent(child, parent);
 
         try game.pipeline.trackEntity(grandparent, .none);
         try game.pipeline.trackEntity(parent, .none);
@@ -395,8 +395,8 @@ pub const DIRTY_PROPAGATION = struct {
         const parent = createEntityAt(&game, 0, 0);
         const middle = createEntityAt(&game, 0, 0); // not tracked
         const grandchild = createEntityAt(&game, 0, 0);
-        try game.setParent(middle, parent);
-        try game.setParent(grandchild, middle);
+        try game.hierarchy.setParent(middle, parent);
+        try game.hierarchy.setParent(grandchild, middle);
 
         // Only track parent and grandchild (middle is untracked)
         try game.pipeline.trackEntity(parent, .none);
@@ -419,8 +419,8 @@ pub const DIRTY_PROPAGATION = struct {
         const parent = createEntityAt(&game, 0, 0);
         const child_a = createEntityAt(&game, 0, 0);
         const child_b = createEntityAt(&game, 0, 0);
-        try game.setParent(child_a, parent);
-        try game.setParent(child_b, parent);
+        try game.hierarchy.setParent(child_a, parent);
+        try game.hierarchy.setParent(child_b, parent);
 
         try game.pipeline.trackEntity(child_a, .none);
         try game.pipeline.trackEntity(child_b, .none);
@@ -452,7 +452,7 @@ pub const HIERARCHY_FLAG = struct {
         try game.pipeline.trackEntity(child, .none);
         try expect.toBeFalse(game.pipeline.tracked.getPtr(child).?.has_parent);
 
-        try game.setParent(child, parent);
+        try game.hierarchy.setParent(child, parent);
         try expect.toBeTrue(game.pipeline.tracked.getPtr(child).?.has_parent);
     }
 
@@ -465,10 +465,156 @@ pub const HIERARCHY_FLAG = struct {
         const child = createEntityAt(&game, 0, 0);
 
         try game.pipeline.trackEntity(child, .none);
-        try game.setParent(child, parent);
+        try game.hierarchy.setParent(child, parent);
         try expect.toBeTrue(game.pipeline.tracked.getPtr(child).?.has_parent);
 
-        game.removeParent(child);
+        game.hierarchy.removeParent(child);
         try expect.toBeFalse(game.pipeline.tracked.getPtr(child).?.has_parent);
+    }
+};
+
+// ============================================
+// ERROR CASES
+// ============================================
+
+pub const ERROR_CASES = struct {
+    test "setParent(e, e) returns SelfParenting" {
+        var game = createTestGame();
+        fixTestGamePointers(&game);
+        defer deinitTestGame(&game);
+
+        const e = createEntityAt(&game, 0, 0);
+        try std.testing.expectError(error.SelfParenting, game.hierarchy.setParent(e, e));
+    }
+
+    test "setParent creating cycle returns CircularHierarchy" {
+        var game = createTestGame();
+        fixTestGamePointers(&game);
+        defer deinitTestGame(&game);
+
+        const a = createEntityAt(&game, 0, 0);
+        const b = createEntityAt(&game, 0, 0);
+        try game.hierarchy.setParent(b, a);
+
+        // Trying to make a a child of b creates a cycle: a→b→a
+        try std.testing.expectError(error.CircularHierarchy, game.hierarchy.setParent(a, b));
+    }
+
+    test "setParent creating chain deeper than 32 returns HierarchyTooDeep" {
+        var game = createTestGame();
+        fixTestGamePointers(&game);
+        defer deinitTestGame(&game);
+
+        // Build a chain of 35 entities (indices 0..34).
+        // Entity 0 is root; each subsequent entity parents to the previous one.
+        // This creates 34 ancestor links from entities[34] to entities[0].
+        var entities: [35]Entity = undefined;
+        for (&entities, 0..) |*e, i| {
+            e.* = createEntityAt(&game, 0, 0);
+            if (i > 0) {
+                try game.hierarchy.setParent(e.*, entities[i - 1]);
+            }
+        }
+
+        // Trying to add a child to entities[34] walks 34 parent links,
+        // hitting depth 33 which exceeds the limit of 32.
+        const child = createEntityAt(&game, 0, 0);
+        try std.testing.expectError(error.HierarchyTooDeep, game.hierarchy.setParent(child, entities[34]));
+    }
+};
+
+// ============================================
+// QUERY METHODS
+// ============================================
+
+pub const QUERY_METHODS = struct {
+    test "getParent returns parent entity" {
+        var game = createTestGame();
+        fixTestGamePointers(&game);
+        defer deinitTestGame(&game);
+
+        const parent = createEntityAt(&game, 0, 0);
+        const child = createEntityAt(&game, 0, 0);
+        try game.hierarchy.setParent(child, parent);
+
+        const got = game.hierarchy.getParent(child);
+        try expect.toBeTrue(got != null);
+        try expect.toBeTrue(got.? == parent);
+    }
+
+    test "getParent returns null for root" {
+        var game = createTestGame();
+        fixTestGamePointers(&game);
+        defer deinitTestGame(&game);
+
+        const e = createEntityAt(&game, 0, 0);
+        try expect.toBeTrue(game.hierarchy.getParent(e) == null);
+    }
+
+    test "getChildren returns children slice" {
+        var game = createTestGame();
+        fixTestGamePointers(&game);
+        defer deinitTestGame(&game);
+
+        const parent = createEntityAt(&game, 0, 0);
+        const child1 = createEntityAt(&game, 0, 0);
+        const child2 = createEntityAt(&game, 0, 0);
+        try game.hierarchy.setParent(child1, parent);
+        try game.hierarchy.setParent(child2, parent);
+
+        const children = game.hierarchy.getChildren(parent);
+        try expect.equal(children.len, 2);
+    }
+
+    test "getChildren returns empty for childless entity" {
+        var game = createTestGame();
+        fixTestGamePointers(&game);
+        defer deinitTestGame(&game);
+
+        const e = createEntityAt(&game, 0, 0);
+        const children = game.hierarchy.getChildren(e);
+        try expect.equal(children.len, 0);
+    }
+
+    test "hasChildren returns true when entity has children" {
+        var game = createTestGame();
+        fixTestGamePointers(&game);
+        defer deinitTestGame(&game);
+
+        const parent = createEntityAt(&game, 0, 0);
+        const child = createEntityAt(&game, 0, 0);
+        try game.hierarchy.setParent(child, parent);
+
+        try expect.toBeTrue(game.hierarchy.hasChildren(parent));
+    }
+
+    test "hasChildren returns false for childless entity" {
+        var game = createTestGame();
+        fixTestGamePointers(&game);
+        defer deinitTestGame(&game);
+
+        const e = createEntityAt(&game, 0, 0);
+        try expect.toBeFalse(game.hierarchy.hasChildren(e));
+    }
+
+    test "isRoot returns true for unparented entity" {
+        var game = createTestGame();
+        fixTestGamePointers(&game);
+        defer deinitTestGame(&game);
+
+        const e = createEntityAt(&game, 0, 0);
+        try expect.toBeTrue(game.hierarchy.isRoot(e));
+    }
+
+    test "isRoot returns false for parented entity" {
+        var game = createTestGame();
+        fixTestGamePointers(&game);
+        defer deinitTestGame(&game);
+
+        const parent = createEntityAt(&game, 0, 0);
+        const child = createEntityAt(&game, 0, 0);
+        try game.hierarchy.setParent(child, parent);
+
+        try expect.toBeFalse(game.hierarchy.isRoot(child));
     }
 };

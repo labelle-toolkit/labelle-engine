@@ -77,7 +77,7 @@ pub fn init(game: *Game, scene: *Scene) void {
 
             // Create visual node (small gray circle)
             const ecs_entity = game.createEntity();
-            game.addPosition(ecs_entity, Position{ .x = pos.x, .y = pos.y });
+            game.pos.addPosition(ecs_entity, Position{ .x = pos.x, .y = pos.y });
             game.addShape(ecs_entity, Shape.circle(10.0)) catch continue;
             if (game.getComponent(Shape, ecs_entity)) |shape| {
                 shape.color = Color{ .r = 80, .g = 80, .b = 80, .a = 255 };
@@ -101,7 +101,7 @@ pub fn init(game: *Game, scene: *Scene) void {
 
     // Create visual player (larger blue circle)
     player_entity = game.createEntity();
-    game.addPosition(player_entity.?, Position{ .x = start_pos.x, .y = start_pos.y });
+    game.pos.addPosition(player_entity.?, Position{ .x = start_pos.x, .y = start_pos.y });
     game.addShape(player_entity.?, Shape.circle(22.0)) catch return;
     if (game.getComponent(Shape, player_entity.?)) |shape| {
         shape.color = Color{ .r = 50, .g = 150, .b = 255, .a = 255 };
@@ -135,7 +135,7 @@ pub fn update(game: *Game, scene: *Scene, dt: f32) void {
 
     // Update player visual position from pathfinding
     if (pf.getPosition(PLAYER_ID)) |pos| {
-        game.setLocalPosition(pe, Position{ .x = pos.x, .y = pos.y });
+        game.pos.setLocalPosition(pe, Position{ .x = pos.x, .y = pos.y });
     }
 
     // Check if we reached the target

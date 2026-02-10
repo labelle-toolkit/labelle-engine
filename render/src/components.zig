@@ -364,7 +364,7 @@ pub const GizmoVisibility = enum {
 ///
 /// Gizmos are debug-only visualizations that:
 /// - Are only created in debug builds (stripped in release)
-/// - Can be toggled on/off at runtime via game.setGizmosEnabled()
+/// - Can be toggled on/off at runtime via game.gizmos.setEnabled()
 /// - Inherit position from their parent entity
 ///
 /// Example in .zon:

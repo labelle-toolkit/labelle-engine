@@ -41,7 +41,7 @@ fn removeAllParents(game: *Game) void {
     var view = game.registry.view(.{Parent});
     var iter = view.entityIterator();
     while (iter.next()) |child| {
-        game.removeParent(child);
+        game.hierarchy.removeParent(child);
     }
 }
 
