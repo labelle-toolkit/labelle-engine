@@ -111,6 +111,9 @@ pub const Scene = struct {
 
         // Call onDestroy for all entities and destroy ECS entities
         for (self.entities.items) |*instance| {
+            // Skip entities that were already destroyed during gameplay
+            if (!g.getRegistry().isValid(instance.entity)) continue;
+
             if (instance.onDestroy) |destroy_fn| {
                 destroy_fn(entityToU64(instance.entity), @ptrCast(g));
             }
