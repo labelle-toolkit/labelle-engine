@@ -355,7 +355,7 @@ pub fn EntityComponentOps(comptime Prefabs: type, comptime Components: type) typ
 
         /// Add all components, handling nested entity definitions where present.
         /// If scene is provided, child entities are tracked for cleanup.
-        pub fn addComponentsWithNestedEntities(
+        fn addComponentsWithNestedEntities(
             game: *Game,
             scene: ?*Scene,
             entity: Entity,
