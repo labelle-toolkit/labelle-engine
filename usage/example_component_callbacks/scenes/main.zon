@@ -1,11 +1,17 @@
-// Main scene demonstrating component onAdd callbacks
+// Main scene demonstrating component onAdd callbacks and issue #268 fix
 //
 // When this scene loads, each entity with Health or Spawned components
 // will trigger their onAdd callbacks. Check the console output to see
 // the log messages from each component's onAdd function.
+//
+// Press D to destroy an entity, then Q to quit.
+// This validates the fix for issue #268 (scene deinit should check
+// entity validity before destroying).
 
 .{
     .name = "main",
+    .scripts = .{"scene_test"},
+    .camera = .{ .x = 400, .y = 200, .zoom = 1.0 },
     .entities = .{
         // Player - has Health and Spawned components (2 callbacks fire)
         .{
@@ -34,8 +40,12 @@
         // Inline entity with only Health (1 callback fires)
         .{
             .components = .{
-                .Position = .{ .x = 400, .y = 500 },
+                .Position = .{ .x = 400, .y = 100 },
                 .Health = .{ .current = 75, .max = 75 },
+                .Shape = .{
+                    .shape = .{ .circle = .{ .radius = 20 } },
+                    .color = .{ .r = 100, .g = 255, .b = 100, .a = 255 },
+                },
             },
         },
     },

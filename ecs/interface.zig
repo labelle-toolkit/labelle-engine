@@ -50,6 +50,7 @@ pub fn EcsInterface(comptime Impl: type) type {
         if (!@hasDecl(R, "setComponent")) @compileError("Registry must have setComponent method");
         if (!@hasDecl(R, "remove")) @compileError("Registry must have remove method");
         if (!@hasDecl(R, "query")) @compileError("Registry must have query method");
+        if (!@hasDecl(R, "isValid")) @compileError("Registry must have isValid method");
     }
 
     return struct {

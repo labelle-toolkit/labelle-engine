@@ -87,6 +87,14 @@ pub const Scene = struct {
         if (self.initialized) return;
         self.initialized = true;
 
+        // Register entity destroy cleanup callback so destroyed entities
+        // are removed from the scene's list at destroy time (zero per-frame cost)
+        const g = self.ctx.game();
+        g.on_entity_destroy_cleanup = .{
+            .context = @ptrCast(self),
+            .callback = removeEntityCallback,
+        };
+
         for (self.scripts) |script_fns| {
             if (script_fns.init) |init_fn| {
                 init_fn(self.ctx.game_ptr, @ptrCast(self));
@@ -94,11 +102,27 @@ pub const Scene = struct {
         }
     }
 
+    /// Remove an entity from the scene's entity list (called via destroy cleanup callback).
+    pub fn removeEntity(self: *Scene, entity: Entity) void {
+        for (self.entities.items, 0..) |instance, i| {
+            if (instance.entity == entity) {
+                _ = self.entities.swapRemove(i);
+                return;
+            }
+        }
+    }
+
+    /// Static callback for Game.EntityDestroyCleanup — casts context to *Scene and calls removeEntity.
+    fn removeEntityCallback(ctx: *anyopaque, entity: Entity) void {
+        const scene: *Scene = @ptrCast(@alignCast(ctx));
+        scene.removeEntity(entity);
+    }
+
     pub fn deinit(self: *Scene) void {
         const alloc = self.ctx.allocator();
         const g = self.ctx.game();
 
-        // Call script deinit functions (in reverse order for proper cleanup)
+        // 1. Script deinit (may destroy entities → callback → removeEntity)
         if (self.initialized) {
             var i = self.scripts.len;
             while (i > 0) {
@@ -109,7 +133,12 @@ pub const Scene = struct {
             }
         }
 
-        // Call onDestroy for all entities and destroy ECS entities
+        // 2. Deregister callback (so bulk destroy below doesn't trigger swapRemove)
+        if (self.initialized) {
+            g.on_entity_destroy_cleanup = null;
+        }
+
+        // 3. Destroy remaining entities (no callback fires, no swapRemove)
         for (self.entities.items) |*instance| {
             if (instance.onDestroy) |destroy_fn| {
                 destroy_fn(entityToU64(instance.entity), @ptrCast(g));
@@ -117,9 +146,10 @@ pub const Scene = struct {
             g.getPipeline().untrackEntity(instance.entity);
             g.getRegistry().destroy(instance.entity);
         }
+
+        // 4. Free entity list and allocated slices
         self.entities.deinit(alloc);
 
-        // Free allocated entity slices (from nested entity composition)
         for (self.allocated_entity_slices.items) |slice| {
             alloc.free(slice);
         }
@@ -132,10 +162,17 @@ pub const Scene = struct {
             self.initScripts();
         }
 
-        // Call prefab onUpdate hooks
-        for (self.entities.items) |*entity_instance| {
+        // Call prefab onUpdate hooks (reverse iteration: safe with swapRemove during callbacks).
+        // Note: if a callback destroys a different entity at a lower index, the swapped-in
+        // element (already processed) may be visited again — benign double-processing at worst.
+        const g = self.ctx.game();
+        var i: usize = self.entities.items.len;
+        while (i > 0) {
+            i -= 1;
+            if (i >= self.entities.items.len) continue;
+            const entity_instance = self.entities.items[i];
             if (entity_instance.onUpdate) |update_fn| {
-                update_fn(entityToU64(entity_instance.entity), @ptrCast(self.ctx.game()), dt);
+                update_fn(entityToU64(entity_instance.entity), @ptrCast(g), dt);
             }
         }
 
