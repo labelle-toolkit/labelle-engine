@@ -136,9 +136,11 @@ pub const Scene = struct {
         }
 
         // Call prefab onUpdate hooks
+        const g = self.ctx.game();
         for (self.entities.items) |*entity_instance| {
+            if (!g.getRegistry().isValid(entity_instance.entity)) continue;
             if (entity_instance.onUpdate) |update_fn| {
-                update_fn(entityToU64(entity_instance.entity), @ptrCast(self.ctx.game()), dt);
+                update_fn(entityToU64(entity_instance.entity), @ptrCast(g), dt);
             }
         }
 
