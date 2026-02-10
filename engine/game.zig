@@ -37,6 +37,8 @@ const game_gizmos = @import("game/gizmos.zig");
 const game_position = @import("game/position.zig");
 const game_input = @import("game/input.zig");
 
+const core_mod = @import("../core/mod.zig");
+
 const Allocator = std.mem.Allocator;
 // Use the backend-aware RetainedEngine from render_pipeline
 const RetainedEngine = render_pipeline_mod.RetainedEngine;
@@ -45,17 +47,7 @@ const Entity = ecs.Entity;
 const Input = input_mod.Input;
 const Audio = audio_mod.Audio;
 
-// Entity <-> u64 conversion for hook payloads (matches src/scene.zig helpers)
-// We keep this local to avoid importing scene.zig (and risking cycles).
-const EntityBits = std.meta.Int(.unsigned, @bitSizeOf(Entity));
-comptime {
-    if (@sizeOf(Entity) > @sizeOf(u64)) {
-        @compileError("Entity must fit in u64 for hook payloads");
-    }
-}
-fn entityToU64(entity: Entity) u64 {
-    return @as(u64, @intCast(@as(EntityBits, @bitCast(entity))));
-}
+const entityToU64 = core_mod.entityToU64;
 
 // Re-export render pipeline types
 pub const RenderPipeline = render_pipeline_mod.RenderPipeline;

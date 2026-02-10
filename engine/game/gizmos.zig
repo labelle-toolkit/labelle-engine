@@ -18,9 +18,6 @@ const Color = render_pipeline_mod.Color;
 
 const entityToU64 = core_mod.entityToU64;
 
-const game_mod = @import("../game.zig");
-const max_selectable_entities = game_mod.max_selectable_entities;
-
 pub fn GizmosMixin(comptime GameType: type) type {
     return struct {
         const Self = @This();
@@ -60,7 +57,7 @@ pub fn GizmosMixin(comptime GameType: type) type {
         pub fn selectEntity(self: *Self, entity: Entity) void {
             const g = self.game();
             const idx = entityToU64(entity);
-            if (idx < max_selectable_entities) {
+            if (idx < g.selected_entities.capacity()) {
                 g.selected_entities.set(@intCast(idx));
                 self.updateGizmoVisibility();
             }
@@ -70,7 +67,7 @@ pub fn GizmosMixin(comptime GameType: type) type {
         pub fn deselectEntity(self: *Self, entity: Entity) void {
             const g = self.game();
             const idx = entityToU64(entity);
-            if (idx < max_selectable_entities) {
+            if (idx < g.selected_entities.capacity()) {
                 g.selected_entities.unset(@intCast(idx));
                 self.updateGizmoVisibility();
             }
@@ -87,7 +84,7 @@ pub fn GizmosMixin(comptime GameType: type) type {
         pub fn isEntitySelected(self: *const Self, entity: Entity) bool {
             const g = self.gameConst();
             const idx = entityToU64(entity);
-            if (idx >= max_selectable_entities) return false;
+            if (idx >= g.selected_entities.capacity()) return false;
             return g.selected_entities.isSet(@intCast(idx));
         }
 
