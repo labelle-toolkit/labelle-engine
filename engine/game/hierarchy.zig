@@ -15,6 +15,9 @@ const Position = render_pipeline_mod.Position;
 const Parent = render_pipeline_mod.Parent;
 const Children = render_pipeline_mod.Children;
 
+/// Maximum supported hierarchy depth. Prevents infinite recursion from cycles.
+pub const max_hierarchy_depth: u8 = 32;
+
 pub fn HierarchyMixin(comptime GameType: type) type {
     return struct {
         const Self = @This();
@@ -57,7 +60,7 @@ pub fn HierarchyMixin(comptime GameType: type) type {
                 if (parent_comp.entity == child) {
                     return HierarchyError.CircularHierarchy;
                 }
-                if (depth > 32) {
+                if (depth > max_hierarchy_depth) {
                     return HierarchyError.HierarchyTooDeep;
                 }
                 current = parent_comp.entity;
@@ -120,7 +123,7 @@ pub fn HierarchyMixin(comptime GameType: type) type {
             // Restore world transform by computing the required local offset
             if (saved_transform) |wt| {
                 const pos = g.registry.tryGet(Position, child) orelse return;
-                const parent_world = g.pos.computeWorldTransformInternal(new_parent, 0);
+                const parent_world = g.pos.getWorldTransform(new_parent);
                 const pw_x = if (parent_world) |pw| pw.x else 0;
                 const pw_y = if (parent_world) |pw| pw.y else 0;
                 const pw_rot = if (parent_world) |pw| pw.rotation else 0;

@@ -7,9 +7,12 @@ const std = @import("std");
 const ecs = @import("ecs");
 const render_pipeline_mod = @import("../../render/src/pipeline.zig");
 
+const game_hierarchy = @import("hierarchy.zig");
+
 const Entity = ecs.Entity;
 const Position = render_pipeline_mod.Position;
 const Parent = render_pipeline_mod.Parent;
+const max_hierarchy_depth = game_hierarchy.max_hierarchy_depth;
 
 pub fn PositionMixin(comptime GameType: type) type {
     return struct {
@@ -82,12 +85,12 @@ pub fn PositionMixin(comptime GameType: type) type {
             return self.computeWorldTransformInternal(entity, 0);
         }
 
-        /// Recursive world transform computation (pub for cross-mixin access)
-        pub fn computeWorldTransformInternal(self: *Self, entity: Entity, depth: u8) ?WorldTransform {
+        /// Recursive world transform computation with depth tracking.
+        fn computeWorldTransformInternal(self: *Self, entity: Entity, depth: u8) ?WorldTransform {
             const g = self.game();
 
             // Prevent infinite recursion from circular hierarchies
-            if (depth > 32) {
+            if (depth > max_hierarchy_depth) {
                 std.log.warn("Position hierarchy too deep (>32), possible cycle detected", .{});
                 return null;
             }

@@ -79,7 +79,7 @@ pub fn main() !void {
 
         // Handle per-frame updates for input and audio
         game.getInput().beginFrame();
-        game.updateGestures(dt);
+        game.input_mixin.updateGestures(dt);
         game.getAudio().update();
 
         // Handle screen size changes (e.g., fullscreen toggle)

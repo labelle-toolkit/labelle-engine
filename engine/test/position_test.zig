@@ -263,14 +263,22 @@ pub const WORLD_POSITION = struct {
         try expect.equal(wt.y, 0);
     }
 
-    test "computeWorldTransformInternal returns null beyond depth 32" {
+    test "getWorldTransform truncates at depth limit without crashing" {
         var game = createTestGame();
         fixTestGamePointers(&game);
         defer deinitTestGame(&game);
 
-        const e = createEntityAt(&game, 5, 5);
-        const result = game.pos.computeWorldTransformInternal(e, 33);
-        try expect.toBeTrue(result == null);
+        // Build a chain of 34 entities (exceeds max_hierarchy_depth of 32)
+        // The depth guard truncates the transform computation but still returns a result
+        var prev = createEntityAt(&game, 0, 0);
+        for (0..33) |_| {
+            const child = createEntityAt(&game, 1, 1);
+            game.hierarchy.setParent(child, prev) catch unreachable;
+            prev = child;
+        }
+        // Should return a (truncated) transform, not crash from infinite recursion
+        const result = game.pos.getWorldTransform(prev);
+        try expect.toBeTrue(result != null);
     }
 };
 

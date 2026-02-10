@@ -35,7 +35,7 @@ pub fn GuiMixin(comptime GameType: type) type {
         /// ```zig
         /// re.beginFrame();
         /// re.render();
-        /// game.gui_rendering.renderGui(Views, Scripts);
+        /// game.gui_rendering.renderGui(Views, Scripts, view_names);
         /// re.endFrame();
         /// ```
         pub fn renderGui(self: *Self, comptime Views: type, comptime Scripts: type, comptime view_names: []const []const u8) void {
