@@ -21,6 +21,7 @@ const player_prefab = @import("prefabs/player.zon");
 const enemy_prefab = @import("prefabs/enemy.zon");
 const health_comp = @import("components/health.zig");
 const spawned_comp = @import("components/spawned.zig");
+const scene_test_script = @import("scripts/scene_test.zig");
 pub const Health = health_comp.Health;
 pub const Spawned = spawned_comp.Spawned;
 const main_module = @This();
@@ -38,7 +39,9 @@ pub const Components = engine.ComponentRegistry(struct {
     pub const Health = main_module.Health;
     pub const Spawned = main_module.Spawned;
 });
-pub const Scripts = engine.ScriptRegistry(struct {});
+pub const Scripts = engine.ScriptRegistry(struct {
+    pub const scene_test = scene_test_script;
+});
 pub const Loader = engine.SceneLoader(Prefabs, Components, Scripts);
 pub const initial_scene = @import("scenes/main.zon");
 
@@ -84,7 +87,7 @@ pub fn main() !void {
 
     const ctx = engine.SceneContext.init(&game);
     var scene = try Loader.load(initial_scene, ctx);
-    defer scene.deinit();
+    defer scene.deinit(); // This is where the fix is tested - destroyed entities won't cause panic
 
     if (ci_test) return;
 
