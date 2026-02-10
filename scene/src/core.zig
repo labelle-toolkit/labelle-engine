@@ -160,7 +160,9 @@ pub const Scene = struct {
             self.initScripts();
         }
 
-        // Call prefab onUpdate hooks (reverse iteration: safe with swapRemove during callbacks)
+        // Call prefab onUpdate hooks (reverse iteration: safe with swapRemove during callbacks).
+        // Note: if a callback destroys a different entity at a lower index, the swapped-in
+        // element (already processed) may be visited again — benign double-processing at worst.
         const g = self.ctx.game();
         var i: usize = self.entities.items.len;
         while (i > 0) {
