@@ -23,6 +23,14 @@ jobs:
         with:
           version: 0.15.2
 
+      - name: Cache Zig dependencies
+        uses: actions/cache@v4
+        with:
+          path: .zig-cache
+          key: zig-cache-${{ runner.os }}-${{ hashFiles('**/build.zig.zon') }}
+          restore-keys: |
+            zig-cache-${{ runner.os }}-
+
       - name: Install dependencies for raylib and sokol
         run: |
           sudo apt-get update
@@ -46,7 +54,25 @@ jobs:
           git lfs install
 
       - name: Build library
-        run: zig build
+        shell: bash
+        run: |
+          set -euo pipefail
+          success=0
+          for attempt in 1 2 3; do
+            if zig build; then
+              success=1
+              break
+            fi
+            if [ "$attempt" -lt 3 ]; then
+              echo "::warning::Build attempt $attempt failed, retrying in 10s..."
+              sleep 10
+            fi
+          done
+
+          if [ "$success" -ne 1 ]; then
+            echo "::error::Build failed after 3 attempts."
+            exit 1
+          fi
 
       - name: Run zspec tests
         id: tests
