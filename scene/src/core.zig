@@ -134,7 +134,9 @@ pub const Scene = struct {
         }
 
         // 2. Deregister callback (so bulk destroy below doesn't trigger swapRemove)
-        g.on_entity_destroy_cleanup = null;
+        if (self.initialized) {
+            g.on_entity_destroy_cleanup = null;
+        }
 
         // 3. Destroy remaining entities (no callback fires, no swapRemove)
         for (self.entities.items) |*instance| {
