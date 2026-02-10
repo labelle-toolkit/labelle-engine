@@ -29,6 +29,8 @@ const audio_mod = @import("audio");
 const gui_mod = @import("gui");
 const render_pipeline_mod = @import("../render/src/pipeline.zig");
 const hooks_mod = @import("../hooks/mod.zig");
+
+// Mixin modules — zero-bit field mixins for domain-specific functionality
 const game_hierarchy = @import("game_hierarchy.zig");
 const game_gui_mod = @import("game_gui.zig");
 const game_gizmos = @import("game_gizmos.zig");

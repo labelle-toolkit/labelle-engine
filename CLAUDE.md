@@ -30,7 +30,7 @@ labelle-engine is a 2D game engine for Zig built on top of labelle-gfx (graphics
 The engine uses a **Y-up coordinate system** (origin at bottom-left, positive Y = up, CCW rotation). The engine transforms coordinates at boundaries:
 
 - **Render boundary**: Y-up game coords → Y-down screen coords (in `RenderPipeline.sync()`)
-- **Input boundary**: Y-down screen coords → Y-up game coords. Use `game.getMousePosition()` and `game.getTouch()` to get coordinates in the game's Y-up system.
+- **Input boundary**: Y-down screen coords → Y-up game coords. Use `game.input_mixin.getMousePosition()` and `game.input_mixin.getTouch()` to get coordinates in the game's Y-up system.
 - For raw screen coordinates (Y-down), use `game.getInput().getMousePosition()`.
 - All Position components and .zon files use Y-up game coordinates.
 
@@ -117,7 +117,7 @@ References are resolved in a second pass after all entities are created (forward
 
 ### Gizmos
 
-Debug-only visualizations (stripped in release builds). Types: Text, Shape, BoundingBox. Features: visibility modes (`.always`, `.selected_only`, `.never`), runtime toggle via `game.setGizmosEnabled()`, standalone drawing via `game.drawArrow()`/`drawRay()`/`drawLine()`/`drawCircle()`/`drawRect()`.
+Debug-only visualizations (stripped in release builds). Types: Text, Shape, BoundingBox. Features: visibility modes (`.always`, `.selected_only`, `.never`), runtime toggle via `game.gizmos.setEnabled()`, standalone drawing via `game.gizmos.drawArrow()`/`drawRay()`/`drawLine()`/`drawCircle()`/`drawRect()`.
 
 ### Layers
 
