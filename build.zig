@@ -428,6 +428,30 @@ pub fn build(b: *std.Build) void {
     const engine_test_step = b.step("engine-test", "Run engine module tests");
     engine_test_step.dependOn(&run_engine_tests.step);
 
+    // Scene module tests
+    const scene_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("scene/test/tests.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "zspec", .module = zspec },
+                .{ .name = "labelle-engine", .module = engine_mod },
+                .{ .name = "labelle", .module = labelle },
+                .{ .name = "graphics", .module = graphics_interface },
+                .{ .name = "ecs", .module = ecs_interface },
+                .{ .name = "input", .module = input_interface },
+                .{ .name = "audio", .module = audio_interface },
+                .{ .name = "build_options", .module = build_options_mod },
+            },
+        }),
+        .test_runner = .{ .path = zspec_dep.path("src/runner.zig"), .mode = .simple },
+    });
+
+    const run_scene_tests = b.addRunArtifact(scene_tests);
+    const scene_test_step = b.step("scene-test", "Run scene module tests");
+    scene_test_step.dependOn(&run_scene_tests.step);
+
     // ZSpec tests (desktop only)
     if (is_desktop) {
         const zspec_tests = b.addTest(.{
@@ -456,6 +480,7 @@ pub fn build(b: *std.Build) void {
         const test_step = b.step("test", "Run all tests");
         test_step.dependOn(&run_core_tests.step);
         test_step.dependOn(&run_engine_tests.step);
+        test_step.dependOn(&run_scene_tests.step);
         test_step.dependOn(&run_zspec_tests.step);
     }
 
