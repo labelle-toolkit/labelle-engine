@@ -472,3 +472,149 @@ pub const HIERARCHY_FLAG = struct {
         try expect.toBeFalse(game.pipeline.tracked.getPtr(child).?.has_parent);
     }
 };
+
+// ============================================
+// ERROR CASES
+// ============================================
+
+pub const ERROR_CASES = struct {
+    test "setParent(e, e) returns SelfParenting" {
+        var game = createTestGame();
+        fixTestGamePointers(&game);
+        defer deinitTestGame(&game);
+
+        const e = createEntityAt(&game, 0, 0);
+        try std.testing.expectError(error.SelfParenting, game.hierarchy.setParent(e, e));
+    }
+
+    test "setParent creating cycle returns CircularHierarchy" {
+        var game = createTestGame();
+        fixTestGamePointers(&game);
+        defer deinitTestGame(&game);
+
+        const a = createEntityAt(&game, 0, 0);
+        const b = createEntityAt(&game, 0, 0);
+        try game.hierarchy.setParent(b, a);
+
+        // Trying to make a a child of b creates a cycle: a→b→a
+        try std.testing.expectError(error.CircularHierarchy, game.hierarchy.setParent(a, b));
+    }
+
+    test "setParent creating chain deeper than 32 returns HierarchyTooDeep" {
+        var game = createTestGame();
+        fixTestGamePointers(&game);
+        defer deinitTestGame(&game);
+
+        // Build a chain of 35 entities (indices 0..34).
+        // Entity 0 is root; each subsequent entity parents to the previous one.
+        // This creates 34 ancestor links from entities[34] to entities[0].
+        var entities: [35]Entity = undefined;
+        for (&entities, 0..) |*e, i| {
+            e.* = createEntityAt(&game, 0, 0);
+            if (i > 0) {
+                try game.hierarchy.setParent(e.*, entities[i - 1]);
+            }
+        }
+
+        // Trying to add a child to entities[34] walks 34 parent links,
+        // hitting depth 33 which exceeds the limit of 32.
+        const child = createEntityAt(&game, 0, 0);
+        try std.testing.expectError(error.HierarchyTooDeep, game.hierarchy.setParent(child, entities[34]));
+    }
+};
+
+// ============================================
+// QUERY METHODS
+// ============================================
+
+pub const QUERY_METHODS = struct {
+    test "getParent returns parent entity" {
+        var game = createTestGame();
+        fixTestGamePointers(&game);
+        defer deinitTestGame(&game);
+
+        const parent = createEntityAt(&game, 0, 0);
+        const child = createEntityAt(&game, 0, 0);
+        try game.hierarchy.setParent(child, parent);
+
+        const got = game.hierarchy.getParent(child);
+        try expect.toBeTrue(got != null);
+        try expect.toBeTrue(got.? == parent);
+    }
+
+    test "getParent returns null for root" {
+        var game = createTestGame();
+        fixTestGamePointers(&game);
+        defer deinitTestGame(&game);
+
+        const e = createEntityAt(&game, 0, 0);
+        try expect.toBeTrue(game.hierarchy.getParent(e) == null);
+    }
+
+    test "getChildren returns children slice" {
+        var game = createTestGame();
+        fixTestGamePointers(&game);
+        defer deinitTestGame(&game);
+
+        const parent = createEntityAt(&game, 0, 0);
+        const child1 = createEntityAt(&game, 0, 0);
+        const child2 = createEntityAt(&game, 0, 0);
+        try game.hierarchy.setParent(child1, parent);
+        try game.hierarchy.setParent(child2, parent);
+
+        const children = game.hierarchy.getChildren(parent);
+        try expect.equal(children.len, 2);
+    }
+
+    test "getChildren returns empty for childless entity" {
+        var game = createTestGame();
+        fixTestGamePointers(&game);
+        defer deinitTestGame(&game);
+
+        const e = createEntityAt(&game, 0, 0);
+        const children = game.hierarchy.getChildren(e);
+        try expect.equal(children.len, 0);
+    }
+
+    test "hasChildren returns true when entity has children" {
+        var game = createTestGame();
+        fixTestGamePointers(&game);
+        defer deinitTestGame(&game);
+
+        const parent = createEntityAt(&game, 0, 0);
+        const child = createEntityAt(&game, 0, 0);
+        try game.hierarchy.setParent(child, parent);
+
+        try expect.toBeTrue(game.hierarchy.hasChildren(parent));
+    }
+
+    test "hasChildren returns false for childless entity" {
+        var game = createTestGame();
+        fixTestGamePointers(&game);
+        defer deinitTestGame(&game);
+
+        const e = createEntityAt(&game, 0, 0);
+        try expect.toBeFalse(game.hierarchy.hasChildren(e));
+    }
+
+    test "isRoot returns true for unparented entity" {
+        var game = createTestGame();
+        fixTestGamePointers(&game);
+        defer deinitTestGame(&game);
+
+        const e = createEntityAt(&game, 0, 0);
+        try expect.toBeTrue(game.hierarchy.isRoot(e));
+    }
+
+    test "isRoot returns false for parented entity" {
+        var game = createTestGame();
+        fixTestGamePointers(&game);
+        defer deinitTestGame(&game);
+
+        const parent = createEntityAt(&game, 0, 0);
+        const child = createEntityAt(&game, 0, 0);
+        try game.hierarchy.setParent(child, parent);
+
+        try expect.toBeFalse(game.hierarchy.isRoot(child));
+    }
+};

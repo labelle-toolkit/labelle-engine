@@ -5,7 +5,7 @@
 
 const std = @import("std");
 const ecs = @import("ecs");
-const render_pipeline_mod = @import("../render/src/pipeline.zig");
+const render_pipeline_mod = @import("../../render/src/pipeline.zig");
 
 const Entity = ecs.Entity;
 const Registry = ecs.Registry;

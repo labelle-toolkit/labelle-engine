@@ -6,7 +6,8 @@
 const std = @import("std");
 const labelle = @import("labelle");
 const ecs = @import("ecs");
-const render_pipeline_mod = @import("../render/src/pipeline.zig");
+const render_pipeline_mod = @import("../../render/src/pipeline.zig");
+const core_mod = @import("../../core/mod.zig");
 
 const Entity = ecs.Entity;
 const Sprite = render_pipeline_mod.Sprite;
@@ -15,12 +16,9 @@ const Text = render_pipeline_mod.Text;
 const Icon = render_pipeline_mod.Icon;
 const Color = render_pipeline_mod.Color;
 
-const EntityBits = std.meta.Int(.unsigned, @bitSizeOf(Entity));
-fn entityToU64(entity: Entity) u64 {
-    return @as(u64, @intCast(@as(EntityBits, @bitCast(entity))));
-}
+const entityToU64 = core_mod.entityToU64;
 
-const game_mod = @import("game.zig");
+const game_mod = @import("../game.zig");
 const max_selectable_entities = game_mod.max_selectable_entities;
 
 pub fn GizmosMixin(comptime GameType: type) type {

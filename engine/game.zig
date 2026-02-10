@@ -31,11 +31,11 @@ const render_pipeline_mod = @import("../render/src/pipeline.zig");
 const hooks_mod = @import("../hooks/mod.zig");
 
 // Mixin modules — zero-bit field mixins for domain-specific functionality
-const game_hierarchy = @import("game_hierarchy.zig");
-const game_gui_mod = @import("game_gui.zig");
-const game_gizmos = @import("game_gizmos.zig");
-const game_position = @import("game_position.zig");
-const game_input = @import("game_input.zig");
+const game_hierarchy = @import("game/hierarchy.zig");
+const game_gui_mod = @import("game/gui.zig");
+const game_gizmos = @import("game/gizmos.zig");
+const game_position = @import("game/position.zig");
+const game_input = @import("game/input.zig");
 
 const Allocator = std.mem.Allocator;
 // Use the backend-aware RetainedEngine from render_pipeline
