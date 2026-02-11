@@ -4,6 +4,7 @@ const version = @import("../generator/version.zig");
 
 const Version = version.Version;
 const PluginCompatibility = version.PluginCompatibility;
+const readPluginCompatibility = version.readPluginCompatibility;
 
 test {
     zspec.runAll(@This());
@@ -179,5 +180,74 @@ pub const PLUGIN_COMPATIBILITY = struct {
         };
         const result = compat.checkCompatibility(Version{ .major = 3, .minor = 0, .patch = 0 });
         try std.testing.expectEqual(.untested, result);
+    }
+};
+
+pub const READ_PLUGIN_COMPATIBILITY = struct {
+    test "uses default reason when .labelle-plugin has no reason key" {
+        // Create temp dir structure: project/plugin/.labelle-plugin
+        var tmp = std.testing.tmpDir(.{});
+        defer tmp.cleanup();
+
+        try tmp.dir.makeDir("plugin");
+        var plugin_dir = try tmp.dir.openDir("plugin", .{});
+        defer plugin_dir.close();
+
+        const metadata =
+            \\name = "test-plugin"
+            \\min_version = "1.0.0"
+            \\max_version = "2.0.0"
+        ;
+        const file = try plugin_dir.createFile(".labelle-plugin", .{});
+        defer file.close();
+        try file.writeAll(metadata);
+
+        var buf: [std.fs.max_path_bytes]u8 = undefined;
+        const project_path = try tmp.dir.realpath(".", &buf);
+
+        var compat = (try readPluginCompatibility(std.testing.allocator, project_path, "plugin")).?;
+        defer compat.deinit();
+
+        try std.testing.expectEqualStrings("test-plugin", compat.name);
+        try std.testing.expectEqualStrings("No reason specified", compat.reason);
+        try std.testing.expectEqual(.compatible, compat.checkCompatibility(Version{ .major = 1, .minor = 5, .patch = 0 }));
+    }
+
+    test "parses explicit reason from .labelle-plugin" {
+        var tmp = std.testing.tmpDir(.{});
+        defer tmp.cleanup();
+
+        try tmp.dir.makeDir("plugin");
+        var plugin_dir = try tmp.dir.openDir("plugin", .{});
+        defer plugin_dir.close();
+
+        const metadata =
+            \\name = "test-plugin"
+            \\min_version = "1.0.0"
+            \\max_version = "2.0.0"
+            \\reason = "API changed in v2"
+        ;
+        const file = try plugin_dir.createFile(".labelle-plugin", .{});
+        defer file.close();
+        try file.writeAll(metadata);
+
+        var buf: [std.fs.max_path_bytes]u8 = undefined;
+        const project_path = try tmp.dir.realpath(".", &buf);
+
+        var compat = (try readPluginCompatibility(std.testing.allocator, project_path, "plugin")).?;
+        defer compat.deinit();
+
+        try std.testing.expectEqualStrings("API changed in v2", compat.reason);
+    }
+
+    test "returns null for non-existent plugin path" {
+        var tmp = std.testing.tmpDir(.{});
+        defer tmp.cleanup();
+
+        var buf: [std.fs.max_path_bytes]u8 = undefined;
+        const project_path = try tmp.dir.realpath(".", &buf);
+
+        const result = try readPluginCompatibility(std.testing.allocator, project_path, "nonexistent");
+        try std.testing.expect(result == null);
     }
 };

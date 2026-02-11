@@ -111,7 +111,7 @@ pub fn readPluginCompatibility(allocator: std.mem.Allocator, project_path: []con
     var name: ?[]const u8 = null;
     var min_version_str: ?[]const u8 = null;
     var max_version_str: ?[]const u8 = null;
-    var reason: []const u8 = "No reason specified";
+    var reason: ?[]const u8 = null;
 
     var lines = std.mem.splitScalar(u8, content, '\n');
     while (lines.next()) |line| {
@@ -147,16 +147,22 @@ pub fn readPluginCompatibility(allocator: std.mem.Allocator, project_path: []con
         }
     }
 
+    // Always dupe the reason so deinit() can unconditionally free it
+    const owned_reason = reason orelse try allocator.dupe(u8, "No reason specified");
+
     // Require name and version info
-    const plugin_name = name orelse return null;
+    const plugin_name = name orelse {
+        allocator.free(owned_reason);
+        return null;
+    };
     const min_ver_str = min_version_str orelse {
         allocator.free(plugin_name);
-        if (!std.mem.eql(u8, reason, "No reason specified")) allocator.free(reason);
+        allocator.free(owned_reason);
         return null;
     };
     const max_ver_str = max_version_str orelse {
         allocator.free(plugin_name);
-        if (!std.mem.eql(u8, reason, "No reason specified")) allocator.free(reason);
+        allocator.free(owned_reason);
         return null;
     };
 
@@ -164,15 +170,15 @@ pub fn readPluginCompatibility(allocator: std.mem.Allocator, project_path: []con
         .name = plugin_name,
         .min_version = Version.parse(min_ver_str) catch {
             allocator.free(plugin_name);
-            if (!std.mem.eql(u8, reason, "No reason specified")) allocator.free(reason);
+            allocator.free(owned_reason);
             return null;
         },
         .max_version = Version.parse(max_ver_str) catch {
             allocator.free(plugin_name);
-            if (!std.mem.eql(u8, reason, "No reason specified")) allocator.free(reason);
+            allocator.free(owned_reason);
             return null;
         },
-        .reason = reason,
+        .reason = owned_reason,
         .allocator = allocator,
     };
 }

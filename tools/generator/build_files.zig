@@ -212,23 +212,17 @@ fn generateBuildZigRaylibWasm(allocator: std.mem.Allocator, config: ProjectConfi
         allocator.free(plugin_zig_names);
     }
 
-    var plugin_module_names = try allocator.alloc([]const u8, config.plugins.len);
-    defer {
-        for (config.plugins, 0..) |plugin, i| {
-            if (plugin.module == null) allocator.free(plugin_module_names[i]);
-        }
-        allocator.free(plugin_module_names);
-    }
-
     for (config.plugins, 0..) |plugin, i| {
         const plugin_zig_name = try sanitizeZigIdentifier(allocator, plugin.name);
         plugin_zig_names[i] = plugin_zig_name;
 
+        // Get module name - use explicit module if provided, otherwise default to sanitized name
+        var allocated_module = false;
         const plugin_module_name = plugin.module orelse blk: {
-            const default_module = try sanitizeZigIdentifier(allocator, plugin.name);
-            break :blk default_module;
+            allocated_module = true;
+            break :blk try sanitizeZigIdentifier(allocator, plugin.name);
         };
-        plugin_module_names[i] = plugin_module_name;
+        defer if (allocated_module) allocator.free(plugin_module_name);
 
         // Use appropriate template based on plugin type:
         // - Path-based: use b.createModule() to avoid duplicate engine dependencies
@@ -354,26 +348,17 @@ pub fn generateBuildZig(allocator: std.mem.Allocator, config: ProjectConfig, tar
         allocator.free(plugin_zig_names);
     }
 
-    // Also track module names for imports
-    var plugin_module_names = try allocator.alloc([]const u8, config.plugins.len);
-    defer {
-        for (config.plugins, 0..) |plugin, i| {
-            // Only free if we allocated (when plugin.module was null)
-            if (plugin.module == null) allocator.free(plugin_module_names[i]);
-        }
-        allocator.free(plugin_module_names);
-    }
-
     for (config.plugins, 0..) |plugin, i| {
         const plugin_zig_name = try sanitizeZigIdentifier(allocator, plugin.name);
         plugin_zig_names[i] = plugin_zig_name;
 
         // Get module name - use explicit module if provided, otherwise default to sanitized name
+        var allocated_module = false;
         const plugin_module_name = plugin.module orelse blk: {
-            const default_module = try sanitizeZigIdentifier(allocator, plugin.name);
-            break :blk default_module;
+            allocated_module = true;
+            break :blk try sanitizeZigIdentifier(allocator, plugin.name);
         };
-        plugin_module_names[i] = plugin_module_name;
+        defer if (allocated_module) allocator.free(plugin_module_name);
 
         // Use appropriate template based on plugin type:
         // - Path-based: use b.createModule() to avoid duplicate engine dependencies
