@@ -454,6 +454,23 @@ pub fn build(b: *std.Build) void {
 
     // ZSpec tests (desktop only)
     if (is_desktop) {
+        // Generator module tests (host-only: uses filesystem/tmpdir)
+        const generator_tests = b.addTest(.{
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("tools/generator_tests.zig"),
+                .target = target,
+                .optimize = optimize,
+                .imports = &.{
+                    .{ .name = "zspec", .module = zspec },
+                },
+            }),
+            .test_runner = .{ .path = zspec_dep.path("src/runner.zig"), .mode = .simple },
+        });
+
+        const run_generator_tests = b.addRunArtifact(generator_tests);
+        const generator_test_step = b.step("generator-test", "Run generator module tests");
+        generator_test_step.dependOn(&run_generator_tests.step);
+
         const zspec_tests = b.addTest(.{
             .root_module = b.createModule(.{
                 .root_source_file = b.path("test/tests.zig"),
@@ -481,6 +498,7 @@ pub fn build(b: *std.Build) void {
         test_step.dependOn(&run_core_tests.step);
         test_step.dependOn(&run_engine_tests.step);
         test_step.dependOn(&run_scene_tests.step);
+        test_step.dependOn(&run_generator_tests.step);
         test_step.dependOn(&run_zspec_tests.step);
     }
 
