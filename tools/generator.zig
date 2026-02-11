@@ -323,9 +323,9 @@ pub fn generateProject(allocator: std.mem.Allocator, project_path: []const u8, o
 
             // Copy directory if it exists (some might not exist in all projects)
             copyDirRecursive(allocator, src_dir_path, dest_dir_path) catch |err| {
-                if (err != error.FileNotFound) {
-                    std.debug.print("Warning: Failed to copy {s}: {}\n", .{ dir_name, err });
-                }
+                if (err == error.FileNotFound) continue;
+                std.debug.print("Error: Failed to copy {s}: {}\n", .{ dir_name, err });
+                return err;
             };
         }
 
@@ -336,9 +336,7 @@ pub fn generateProject(allocator: std.mem.Allocator, project_path: []const u8, o
         const dest_labelle_path = try std.fs.path.join(allocator, &.{ target_dir_path, "project.labelle" });
         defer allocator.free(dest_labelle_path);
 
-        cwd.copyFile(src_labelle_path, cwd, dest_labelle_path, .{}) catch |err| {
-            std.debug.print("Warning: Failed to copy project.labelle: {}\n", .{err});
-        };
+        try cwd.copyFile(src_labelle_path, cwd, dest_labelle_path, .{});
 
         // For WASM targets with minimal shell, copy the bundled shell.html
         if (target.getPlatform() == .wasm) {
@@ -382,6 +380,18 @@ pub fn generateProject(allocator: std.mem.Allocator, project_path: []const u8, o
         std.debug.print("  - {s}/{s}\n", .{ target_name, main_zig_filename });
         std.debug.print("  - {s}/{s}\n", .{ target_name, build_zig_filename });
         std.debug.print("  - {s}/{s}\n", .{ target_name, build_zig_zon_filename });
+
+        // Verify the generated directory contains the expected files
+        const expected_files = [_][]const u8{ main_zig_filename, build_zig_filename, build_zig_zon_filename };
+        for (expected_files) |filename| {
+            const file_path = try std.fs.path.join(allocator, &.{ target_dir_path, filename });
+            defer allocator.free(file_path);
+
+            cwd.access(file_path, .{}) catch {
+                std.debug.print("Error: Post-generation verification failed — missing {s}/{s}\n", .{ target_name, filename });
+                return error.GenerationVerificationFailed;
+            };
+        }
     }
 }
 

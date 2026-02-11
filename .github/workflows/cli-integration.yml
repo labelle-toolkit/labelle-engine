@@ -107,6 +107,18 @@ jobs:
 
           echo "::endgroup::"
 
+      - name: Test CLI workflow - Verify generated directory
+        run: |
+          BUILD_DIR="test-projects/test_raylib_game/.labelle/raylib_desktop"
+          if [ ! -d "$BUILD_DIR" ]; then
+            echo "::error::Generated directory '$BUILD_DIR' does not exist."
+            echo "Listing .labelle/ contents for diagnostics:"
+            ls -la test-projects/test_raylib_game/.labelle/ 2>/dev/null || echo "  .labelle/ directory not found"
+            exit 1
+          fi
+          echo "Generated files:"
+          ls -la "$BUILD_DIR"
+
       - name: Test CLI workflow - Build raylib project with generated files
         shell: bash
         run: |
@@ -139,11 +151,11 @@ jobs:
           CI_TEST: "1"
         run: |
           echo "::group::Running project"
-          
+
           # Run with xvfb for headless testing
           cd test-projects/test_raylib_game/.labelle/raylib_desktop
           xvfb-run -a zig build run
-          
+
           echo "::endgroup::"
 
       - name: Test CLI workflow - Create sokol project
@@ -157,16 +169,16 @@ jobs:
           echo "Sokol test skipped due to labelle-gfx#146"
           echo "::endgroup::"
 
-      - name: Test CLI workflow - Multiple targets
+      - name: Test CLI workflow - Multiple targets (generate)
         shell: bash
         run: |
           echo "::group::Creating project with multiple targets"
-          
+
           cd test-projects
           # Create a project
           labelle init test_multi_target --backend=raylib --ecs=zig_ecs
           cd test_multi_target
-          
+
           # Generate with local engine (retry for transient fetch failures)
           success=0
           for attempt in 1 2 3; do
@@ -184,8 +196,27 @@ jobs:
             exit 1
           fi
 
+          echo "::endgroup::"
+
+      - name: Test CLI workflow - Multiple targets (verify)
+        run: |
+          BUILD_DIR="test-projects/test_multi_target/.labelle/raylib_desktop"
+          if [ ! -d "$BUILD_DIR" ]; then
+            echo "::error::Generated directory '$BUILD_DIR' does not exist."
+            echo "Listing .labelle/ contents for diagnostics:"
+            ls -la test-projects/test_multi_target/.labelle/ 2>/dev/null || echo "  .labelle/ directory not found"
+            exit 1
+          fi
+          echo "Generated files:"
+          ls -la "$BUILD_DIR"
+
+      - name: Test CLI workflow - Multiple targets (build)
+        shell: bash
+        run: |
+          echo "::group::Building multi-target project"
+
           # Build directly from generated files
-          cd .labelle/raylib_desktop
+          cd test-projects/test_multi_target/.labelle/raylib_desktop
           set -euo pipefail
           success=0
           for attempt in 1 2 3; do
@@ -203,7 +234,7 @@ jobs:
             echo "::error::Build failed after 3 attempts."
             exit 1
           fi
-          
+
           echo "::endgroup::"
 
       - name: Create test summary
