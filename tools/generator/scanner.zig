@@ -121,9 +121,9 @@ fn fileContainsTaskHooks(allocator: std.mem.Allocator, file_path: []const u8) !b
 
     // Look for task hook function declarations
     // Pattern: "pub fn <hook_name>("
+    var pattern_buf: [128]u8 = undefined;
     for (task_hook_names) |hook_name| {
-        const pattern = try std.fmt.allocPrint(allocator, "pub fn {s}(", .{hook_name});
-        defer allocator.free(pattern);
+        const pattern = std.fmt.bufPrint(&pattern_buf, "pub fn {s}(", .{hook_name}) catch continue;
 
         if (std.mem.indexOf(u8, content[0..bytes_read], pattern) != null) {
             return true;

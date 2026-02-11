@@ -4,7 +4,6 @@
 //! Root placed at tools/ level so relative imports from scanner.zig
 //! to project_config.zig resolve within the module path.
 
-const std = @import("std");
 const zspec = @import("zspec");
 
 test {

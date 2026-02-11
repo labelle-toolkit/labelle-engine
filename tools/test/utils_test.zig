@@ -50,22 +50,22 @@ pub const SANITIZE_ZIG_IDENTIFIER = struct {
 
 pub const TO_PASCAL_CASE = struct {
     test "converts snake_case" {
-        const result = utils.toPascalCase("task_workstation");
+        const result = try utils.toPascalCase("task_workstation");
         try std.testing.expectEqualStrings("TaskWorkstation", result.buf[0..result.len]);
     }
 
     test "capitalizes single word" {
-        const result = utils.toPascalCase("hello");
+        const result = try utils.toPascalCase("hello");
         try std.testing.expectEqualStrings("Hello", result.buf[0..result.len]);
     }
 
     test "handles multiple underscores" {
-        const result = utils.toPascalCase("a_b_c_d");
+        const result = try utils.toPascalCase("a_b_c_d");
         try std.testing.expectEqualStrings("ABCD", result.buf[0..result.len]);
     }
 
     test "handles already capitalized" {
-        const result = utils.toPascalCase("Hello");
+        const result = try utils.toPascalCase("Hello");
         try std.testing.expectEqualStrings("Hello", result.buf[0..result.len]);
     }
 };

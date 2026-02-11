@@ -52,14 +52,14 @@ pub fn generateMainZigRaylibWasm(
     var enum_pascal_names = try allocator.alloc(PascalCaseResult, enums.len);
     defer allocator.free(enum_pascal_names);
     for (enums, 0..) |name, i| {
-        enum_pascal_names[i] = toPascalCase(name);
+        enum_pascal_names[i] = try toPascalCase(name);
     }
 
     // Pre-compute PascalCase names for components
     var component_pascal_names = try allocator.alloc(PascalCaseResult, components.len);
     defer allocator.free(component_pascal_names);
     for (components, 0..) |name, i| {
-        component_pascal_names[i] = toPascalCase(name);
+        component_pascal_names[i] = try toPascalCase(name);
     }
 
     // Header
@@ -197,7 +197,7 @@ pub fn generateMainZigRaylibWasm(
         for (config.plugins, 0..) |plugin, i| {
             for (plugin.bind) |bind_decl| {
                 const components_list = bind_decl.components;
-                var iter = std.mem.splitScalar(u8, components_list, ',');
+                var iter = std.mem.splitSequence(u8, components_list, ",");
                 while (iter.next()) |comp_name| {
                     const trimmed = std.mem.trim(u8, comp_name, &std.ascii.whitespace);
                     if (trimmed.len > 0) {

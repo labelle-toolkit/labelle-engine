@@ -136,12 +136,14 @@ pub fn readPluginCompatibility(allocator: std.mem.Allocator, project_path: []con
             } else value_part;
 
             if (std.mem.eql(u8, key, "name")) {
+                if (name) |old| allocator.free(old);
                 name = try allocator.dupe(u8, value);
             } else if (std.mem.eql(u8, key, "min_version")) {
                 min_version_str = value;
             } else if (std.mem.eql(u8, key, "max_version")) {
                 max_version_str = value;
             } else if (std.mem.eql(u8, key, "reason")) {
+                if (reason) |old| allocator.free(old);
                 reason = try allocator.dupe(u8, value);
             }
         }

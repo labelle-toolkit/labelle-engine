@@ -110,8 +110,8 @@ pub const PascalCaseResult = struct { buf: [64]u8, len: usize };
 
 /// Convert snake_case to PascalCase (returns stack-allocated buffer and length)
 /// e.g., "task_workstation" -> "TaskWorkstation"
-pub fn toPascalCase(name: []const u8) PascalCaseResult {
-    if (name.len > 64) @panic("name is too long for toPascalCase buffer (max 64 chars)");
+pub fn toPascalCase(name: []const u8) error{NameTooLong}!PascalCaseResult {
+    if (name.len > 64) return error.NameTooLong;
     var result: [64]u8 = undefined;
     var result_len: usize = 0;
     var capitalize_next = true;

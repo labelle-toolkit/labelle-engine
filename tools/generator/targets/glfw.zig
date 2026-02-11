@@ -84,14 +84,14 @@ fn generateMainZigGlfw(
     var enum_pascal_names = try allocator.alloc(PascalCaseResult, enums.len);
     defer allocator.free(enum_pascal_names);
     for (enums, 0..) |name, i| {
-        enum_pascal_names[i] = toPascalCase(name);
+        enum_pascal_names[i] = try toPascalCase(name);
     }
 
     // Pre-compute PascalCase names for components
     var component_pascal_names = try allocator.alloc(PascalCaseResult, components.len);
     defer allocator.free(component_pascal_names);
     for (components, 0..) |name, i| {
-        component_pascal_names[i] = toPascalCase(name);
+        component_pascal_names[i] = try toPascalCase(name);
     }
 
     // Header with project name

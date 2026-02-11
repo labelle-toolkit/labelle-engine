@@ -25,6 +25,7 @@ pub fn detectFingerprint(allocator: std.mem.Allocator, project_path: []const u8,
 
     // Run and collect output (allocator, stdout_buf, stderr_buf, max_output_bytes)
     _ = child.collectOutput(allocator, &stdout_buf, &stderr_buf, 64 * 1024) catch {};
+    _ = child.wait() catch {};
     const stderr_output = stderr_buf.items;
 
     // Parse fingerprint from error message like:
