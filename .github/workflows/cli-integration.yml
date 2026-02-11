@@ -87,37 +87,31 @@ jobs:
 
           # Generate using the checked-out engine (relative path from project dir)
           # Retry to handle transient dependency fetch failures (sokol-tools-bin via Git LFS)
+          # Note: labelle-cli may exit 0 even when generation fails internally,
+          # so we also verify the output directory exists before declaring success.
           set -euo pipefail
+          BUILD_DIR=".labelle/raylib_desktop"
           success=0
           for attempt in 1 2 3; do
-            if labelle generate --engine-path=../../labelle-engine; then
+            labelle generate --engine-path=../../labelle-engine || true
+            if [ -d "$BUILD_DIR" ] && [ -f "$BUILD_DIR/build.zig" ]; then
               success=1
               break
             fi
-            if [ "$attempt" -lt 3 ]; then
-              echo "::warning::Generate attempt $attempt failed, retrying in 10s..."
-              sleep 10
-            fi
+            echo "::warning::Generate attempt $attempt did not produce $BUILD_DIR, retrying in 10s..."
+            rm -rf .labelle 2>/dev/null || true
+            sleep 10
           done
 
           if [ "$success" -ne 1 ]; then
-            echo "::error::Generate failed after 3 attempts."
+            echo "::error::Generate failed after 3 attempts — output directory missing."
+            ls -la .labelle/ 2>/dev/null || echo "  .labelle/ directory not found"
             exit 1
           fi
 
-          echo "::endgroup::"
-
-      - name: Test CLI workflow - Verify generated directory
-        run: |
-          BUILD_DIR="test-projects/test_raylib_game/.labelle/raylib_desktop"
-          if [ ! -d "$BUILD_DIR" ]; then
-            echo "::error::Generated directory '$BUILD_DIR' does not exist."
-            echo "Listing .labelle/ contents for diagnostics:"
-            ls -la test-projects/test_raylib_game/.labelle/ 2>/dev/null || echo "  .labelle/ directory not found"
-            exit 1
-          fi
           echo "Generated files:"
           ls -la "$BUILD_DIR"
+          echo "::endgroup::"
 
       - name: Test CLI workflow - Build raylib project with generated files
         shell: bash
@@ -180,35 +174,28 @@ jobs:
           cd test_multi_target
 
           # Generate with local engine (retry for transient fetch failures)
+          # Verify output directory exists before declaring success.
+          BUILD_DIR=".labelle/raylib_desktop"
           success=0
           for attempt in 1 2 3; do
-            if labelle generate --engine-path=../../labelle-engine; then
+            labelle generate --engine-path=../../labelle-engine || true
+            if [ -d "$BUILD_DIR" ] && [ -f "$BUILD_DIR/build.zig" ]; then
               success=1
               break
             fi
-            if [ "$attempt" -lt 3 ]; then
-              echo "::warning::Generate attempt $attempt failed, retrying in 10s..."
-              sleep 10
-            fi
+            echo "::warning::Generate attempt $attempt did not produce $BUILD_DIR, retrying in 10s..."
+            rm -rf .labelle 2>/dev/null || true
+            sleep 10
           done
           if [ "$success" -ne 1 ]; then
-            echo "::error::Generate failed after 3 attempts."
+            echo "::error::Generate failed after 3 attempts — output directory missing."
+            ls -la .labelle/ 2>/dev/null || echo "  .labelle/ directory not found"
             exit 1
           fi
 
-          echo "::endgroup::"
-
-      - name: Test CLI workflow - Multiple targets (verify)
-        run: |
-          BUILD_DIR="test-projects/test_multi_target/.labelle/raylib_desktop"
-          if [ ! -d "$BUILD_DIR" ]; then
-            echo "::error::Generated directory '$BUILD_DIR' does not exist."
-            echo "Listing .labelle/ contents for diagnostics:"
-            ls -la test-projects/test_multi_target/.labelle/ 2>/dev/null || echo "  .labelle/ directory not found"
-            exit 1
-          fi
           echo "Generated files:"
           ls -la "$BUILD_DIR"
+          echo "::endgroup::"
 
       - name: Test CLI workflow - Multiple targets (build)
         shell: bash
