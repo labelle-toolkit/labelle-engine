@@ -387,8 +387,8 @@ pub fn generateProject(allocator: std.mem.Allocator, project_path: []const u8, o
             const file_path = try std.fs.path.join(allocator, &.{ target_dir_path, filename });
             defer allocator.free(file_path);
 
-            cwd.access(file_path, .{}) catch {
-                std.debug.print("Error: Post-generation verification failed — missing {s}/{s}\n", .{ target_name, filename });
+            cwd.access(file_path, .{}) catch |err| {
+                std.debug.print("Error: Post-generation verification failed for {s}/{s}: {any}\n", .{ target_name, filename, err });
                 return error.GenerationVerificationFailed;
             };
         }
