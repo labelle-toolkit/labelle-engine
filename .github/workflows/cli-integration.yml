@@ -87,24 +87,30 @@ jobs:
 
           # Generate using the checked-out engine (relative path from project dir)
           # Retry to handle transient dependency fetch failures (sokol-tools-bin via Git LFS)
+          # Note: labelle-cli may exit 0 even when generation fails internally,
+          # so we also verify the output directory exists before declaring success.
           set -euo pipefail
+          BUILD_DIR=".labelle/raylib_desktop"
           success=0
           for attempt in 1 2 3; do
-            if labelle generate --engine-path=../../labelle-engine; then
+            labelle generate --engine-path=../../labelle-engine || true
+            if [ -d "$BUILD_DIR" ] && [ -f "$BUILD_DIR/build.zig" ]; then
               success=1
               break
             fi
-            if [ "$attempt" -lt 3 ]; then
-              echo "::warning::Generate attempt $attempt failed, retrying in 10s..."
-              sleep 10
-            fi
+            echo "::warning::Generate attempt $attempt did not produce $BUILD_DIR, retrying in 10s..."
+            rm -rf .labelle 2>/dev/null || true
+            sleep 10
           done
 
           if [ "$success" -ne 1 ]; then
-            echo "::error::Generate failed after 3 attempts."
+            echo "::error::Generate failed after 3 attempts — output directory missing."
+            ls -la .labelle/ 2>/dev/null || echo "  .labelle/ directory not found"
             exit 1
           fi
 
+          echo "Generated files:"
+          ls -la "$BUILD_DIR"
           echo "::endgroup::"
 
       - name: Test CLI workflow - Build raylib project with generated files
@@ -139,11 +145,11 @@ jobs:
           CI_TEST: "1"
         run: |
           echo "::group::Running project"
-          
+
           # Run with xvfb for headless testing
           cd test-projects/test_raylib_game/.labelle/raylib_desktop
           xvfb-run -a zig build run
-          
+
           echo "::endgroup::"
 
       - name: Test CLI workflow - Create sokol project
@@ -157,35 +163,47 @@ jobs:
           echo "Sokol test skipped due to labelle-gfx#146"
           echo "::endgroup::"
 
-      - name: Test CLI workflow - Multiple targets
+      - name: Test CLI workflow - Multiple targets (generate)
         shell: bash
         run: |
           echo "::group::Creating project with multiple targets"
-          
+
           cd test-projects
           # Create a project
           labelle init test_multi_target --backend=raylib --ecs=zig_ecs
           cd test_multi_target
-          
+
           # Generate with local engine (retry for transient fetch failures)
+          # Verify output directory exists before declaring success.
+          BUILD_DIR=".labelle/raylib_desktop"
           success=0
           for attempt in 1 2 3; do
-            if labelle generate --engine-path=../../labelle-engine; then
+            labelle generate --engine-path=../../labelle-engine || true
+            if [ -d "$BUILD_DIR" ] && [ -f "$BUILD_DIR/build.zig" ]; then
               success=1
               break
             fi
-            if [ "$attempt" -lt 3 ]; then
-              echo "::warning::Generate attempt $attempt failed, retrying in 10s..."
-              sleep 10
-            fi
+            echo "::warning::Generate attempt $attempt did not produce $BUILD_DIR, retrying in 10s..."
+            rm -rf .labelle 2>/dev/null || true
+            sleep 10
           done
           if [ "$success" -ne 1 ]; then
-            echo "::error::Generate failed after 3 attempts."
+            echo "::error::Generate failed after 3 attempts — output directory missing."
+            ls -la .labelle/ 2>/dev/null || echo "  .labelle/ directory not found"
             exit 1
           fi
 
+          echo "Generated files:"
+          ls -la "$BUILD_DIR"
+          echo "::endgroup::"
+
+      - name: Test CLI workflow - Multiple targets (build)
+        shell: bash
+        run: |
+          echo "::group::Building multi-target project"
+
           # Build directly from generated files
-          cd .labelle/raylib_desktop
+          cd test-projects/test_multi_target/.labelle/raylib_desktop
           set -euo pipefail
           success=0
           for attempt in 1 2 3; do
@@ -203,7 +221,7 @@ jobs:
             echo "::error::Build failed after 3 attempts."
             exit 1
           fi
-          
+
           echo "::endgroup::"
 
       - name: Create test summary
