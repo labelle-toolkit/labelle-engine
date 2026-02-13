@@ -34,6 +34,9 @@ pub fn loadDesktopDeps(
     optimize: std.builtin.OptimizeMode,
     backend: anytype, // accepts build.Backend (cannot use deps_graphics.Backend — Zig treats them as distinct types)
 ) GraphicsDeps {
+    comptime {
+        _ = @field(@TypeOf(backend), "wgpu_native");
+    }
     // zbgfx
     const zbgfx_dep = labelle_dep.builder.dependency("zbgfx", .{
         .target = target,
