@@ -32,7 +32,7 @@ pub fn loadDesktopDeps(
     b: *std.Build,
     target: std.Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
-    backend: Backend,
+    backend: anytype,
 ) GraphicsDeps {
     // zbgfx
     const zbgfx_dep = labelle_dep.builder.dependency("zbgfx", .{
