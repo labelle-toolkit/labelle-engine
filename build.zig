@@ -108,7 +108,7 @@ pub fn build(b: *std.Build) void {
 
     // Desktop-only graphics deps (zbgfx, wgpu_native, zglfw, zaudio)
     const gfx_deps = if (is_desktop)
-        deps_graphics.loadDesktopDeps(labelle_dep, b, target, optimize)
+        deps_graphics.loadDesktopDeps(labelle_dep, b, target, optimize, backend)
     else
         deps_graphics.emptyDeps();
 

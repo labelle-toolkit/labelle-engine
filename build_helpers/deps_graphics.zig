@@ -32,6 +32,7 @@ pub fn loadDesktopDeps(
     b: *std.Build,
     target: std.Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
+    backend: anytype, // accepts build.Backend (cannot use deps_graphics.Backend — Zig treats them as distinct types)
 ) GraphicsDeps {
     // zbgfx
     const zbgfx_dep = labelle_dep.builder.dependency("zbgfx", .{
@@ -40,12 +41,14 @@ pub fn loadDesktopDeps(
     });
     const zbgfx = zbgfx_dep.module("zbgfx");
 
-    // wgpu_native
-    const wgpu_native_dep = labelle_dep.builder.dependency("wgpu_native_zig", .{
-        .target = target,
-        .optimize = optimize,
-    });
-    const wgpu_native = wgpu_native_dep.module("wgpu");
+    // wgpu_native — only fetch when needed
+    const wgpu_native: ?*std.Build.Module = if (backend == .wgpu_native)
+        labelle_dep.builder.dependency("wgpu_native_zig", .{
+            .target = target,
+            .optimize = optimize,
+        }).module("wgpu")
+    else
+        null;
 
     // zglfw
     const zglfw_dep = labelle_dep.builder.dependency("zglfw", .{
