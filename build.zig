@@ -494,12 +494,37 @@ pub fn build(b: *std.Build) void {
         const zspec_test_step = b.step("zspec", "Run zspec tests");
         zspec_test_step.dependOn(&run_zspec_tests.step);
 
+        // Tasks integration tests (tests labelle-tasks + labelle-engine integration)
+        const tasks_dep = b.dependency("labelle-tasks", .{
+            .target = target,
+            .optimize = optimize,
+        });
+        const tasks_mod = tasks_dep.module("labelle_tasks");
+
+        const tasks_integration_tests = b.addTest(.{
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("test/tasks_integration_test.zig"),
+                .target = target,
+                .optimize = optimize,
+                .imports = &.{
+                    .{ .name = "zspec", .module = zspec },
+                    .{ .name = "labelle_tasks", .module = tasks_mod },
+                },
+            }),
+            .test_runner = .{ .path = zspec_dep.path("src/runner.zig"), .mode = .simple },
+        });
+
+        const run_tasks_integration_tests = b.addRunArtifact(tasks_integration_tests);
+        const tasks_integration_test_step = b.step("tasks-test", "Run tasks integration tests");
+        tasks_integration_test_step.dependOn(&run_tasks_integration_tests.step);
+
         const test_step = b.step("test", "Run all tests");
         test_step.dependOn(&run_core_tests.step);
         test_step.dependOn(&run_engine_tests.step);
         test_step.dependOn(&run_scene_tests.step);
         test_step.dependOn(&run_generator_tests.step);
         test_step.dependOn(&run_zspec_tests.step);
+        test_step.dependOn(&run_tasks_integration_tests.step);
     }
 
     // ==========================================================================

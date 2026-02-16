@@ -1,0 +1,451 @@
+//! Integration tests for labelle-tasks + labelle-engine
+//! Tests the task engine with recording hooks to verify full workflow cycles,
+//! concurrent workers, and hook dispatch ordering.
+
+const std = @import("std");
+const zspec = @import("zspec");
+const tasks = @import("labelle_tasks");
+
+const Item = enum { Flour, Water, Dough, Bread, Sugar };
+
+const Recorder = tasks.RecordingHooks(u32, Item);
+const TestEngine = tasks.Engine(u32, Item, Recorder);
+
+// Shared IDs for readability
+const PANTRY_EIS: u32 = 1;
+const MIXER_IIS: u32 = 2;
+const MIXER_IOS: u32 = 3;
+const TABLE_EOS: u32 = 4;
+const MIXER_WS: u32 = 100;
+const BAKER_1: u32 = 10;
+const BAKER_2: u32 = 20;
+
+fn createEngine() TestEngine {
+    var hooks: Recorder = .{};
+    hooks.init(std.testing.allocator);
+    return TestEngine.init(std.testing.allocator, hooks, null);
+}
+
+fn setupBasicWorkstation(engine: *TestEngine) !void {
+    try engine.addStorage(PANTRY_EIS, .{ .role = .eis, .initial_item = .Flour });
+    try engine.addStorage(MIXER_IIS, .{ .role = .iis });
+    try engine.addStorage(MIXER_IOS, .{ .role = .ios });
+    try engine.addStorage(TABLE_EOS, .{ .role = .eos });
+    try engine.addWorkstation(MIXER_WS, .{
+        .eis = &.{PANTRY_EIS},
+        .iis = &.{MIXER_IIS},
+        .ios = &.{MIXER_IOS},
+        .eos = &.{TABLE_EOS},
+    });
+}
+
+test {
+    zspec.runAll(@This());
+}
+
+pub const TasksIntegration = zspec.describe("Tasks Integration", struct {
+    pub const full_workflow = zspec.describe("full workflow cycle", struct {
+        pub fn @"complete cycle emits correct hook sequence"() !void {
+            var engine = createEngine();
+            defer engine.deinit();
+            defer engine.dispatcher.hooks.deinit();
+
+            try setupBasicWorkstation(&engine);
+            try engine.addWorker(BAKER_1);
+
+            engine.dispatcher.hooks.clear();
+
+            // Worker becomes available → should be assigned
+            _ = engine.workerAvailable(BAKER_1);
+
+            _ = try engine.dispatcher.hooks.expectNext(.worker_assigned);
+            _ = try engine.dispatcher.hooks.expectNext(.workstation_activated);
+            const pickup = try engine.dispatcher.hooks.expectNext(.pickup_started);
+            try std.testing.expectEqual(BAKER_1, pickup.worker_id);
+            try std.testing.expectEqual(PANTRY_EIS, pickup.storage_id);
+            try std.testing.expectEqual(Item.Flour, pickup.item);
+
+            // Pickup completed → process should start
+            engine.dispatcher.hooks.clear();
+            _ = engine.pickupCompleted(BAKER_1);
+
+            const process = try engine.dispatcher.hooks.expectNext(.process_started);
+            try std.testing.expectEqual(MIXER_WS, process.workstation_id);
+            try std.testing.expectEqual(BAKER_1, process.worker_id);
+
+            // Work completed → store should start
+            engine.dispatcher.hooks.clear();
+            _ = engine.workCompleted(MIXER_WS);
+
+            _ = try engine.dispatcher.hooks.expectNext(.input_consumed);
+            _ = try engine.dispatcher.hooks.expectNext(.process_completed);
+            const store = try engine.dispatcher.hooks.expectNext(.store_started);
+            try std.testing.expectEqual(BAKER_1, store.worker_id);
+            try std.testing.expectEqual(TABLE_EOS, store.storage_id);
+
+            // Store completed → cycle complete, worker released
+            engine.dispatcher.hooks.clear();
+            _ = engine.storeCompleted(BAKER_1);
+
+            _ = try engine.dispatcher.hooks.expectNext(.cycle_completed);
+            _ = try engine.dispatcher.hooks.expectNext(.worker_released);
+            try engine.dispatcher.hooks.expectEmpty();
+
+            // Final state verification
+            try std.testing.expect(engine.getWorkerState(BAKER_1).? == .Idle);
+            try std.testing.expect(engine.getStorageHasItem(PANTRY_EIS).? == false);
+            try std.testing.expect(engine.getStorageHasItem(TABLE_EOS).? == true);
+        }
+
+        pub fn @"two consecutive cycles with refill"() !void {
+            var engine = createEngine();
+            defer engine.deinit();
+            defer engine.dispatcher.hooks.deinit();
+
+            // Setup with 2 EOS so second cycle has space
+            try engine.addStorage(PANTRY_EIS, .{ .role = .eis, .initial_item = .Flour });
+            try engine.addStorage(MIXER_IIS, .{ .role = .iis });
+            try engine.addStorage(MIXER_IOS, .{ .role = .ios });
+            try engine.addStorage(TABLE_EOS, .{ .role = .eos });
+            try engine.addStorage(5, .{ .role = .eos }); // second EOS
+            try engine.addWorkstation(MIXER_WS, .{
+                .eis = &.{PANTRY_EIS},
+                .iis = &.{MIXER_IIS},
+                .ios = &.{MIXER_IOS},
+                .eos = &.{ TABLE_EOS, 5 },
+            });
+            try engine.addWorker(BAKER_1);
+
+            // First cycle
+            _ = engine.workerAvailable(BAKER_1);
+            _ = engine.pickupCompleted(BAKER_1);
+            _ = engine.workCompleted(MIXER_WS);
+            _ = engine.storeCompleted(BAKER_1);
+
+            // Refill EIS for second cycle
+            _ = engine.itemAdded(PANTRY_EIS, .Flour);
+
+            engine.dispatcher.hooks.clear();
+
+            // Worker should be idle, make available again
+            _ = engine.workerAvailable(BAKER_1);
+
+            // Should start second cycle
+            try std.testing.expect(engine.getWorkerState(BAKER_1).? == .Working);
+            _ = try engine.dispatcher.hooks.expectNext(.worker_assigned);
+
+            // Complete second cycle
+            _ = try engine.dispatcher.hooks.expectNext(.workstation_activated);
+            _ = try engine.dispatcher.hooks.expectNext(.pickup_started);
+
+            _ = engine.pickupCompleted(BAKER_1);
+            _ = engine.workCompleted(MIXER_WS);
+            _ = engine.storeCompleted(BAKER_1);
+
+            // Both EOS should be full
+            try std.testing.expect(engine.isStorageFull(TABLE_EOS));
+            try std.testing.expect(engine.isStorageFull(5));
+        }
+    });
+
+    pub const concurrent_workers = zspec.describe("concurrent workers", struct {
+        pub fn @"two workers operate two workstations independently"() !void {
+            var engine = createEngine();
+            defer engine.deinit();
+            defer engine.dispatcher.hooks.deinit();
+
+            // Workstation A
+            try engine.addStorage(1, .{ .role = .eis, .initial_item = .Flour });
+            try engine.addStorage(2, .{ .role = .iis });
+            try engine.addStorage(3, .{ .role = .ios });
+            try engine.addStorage(4, .{ .role = .eos });
+            try engine.addWorkstation(100, .{
+                .eis = &.{1},
+                .iis = &.{2},
+                .ios = &.{3},
+                .eos = &.{4},
+            });
+
+            // Workstation B
+            try engine.addStorage(11, .{ .role = .eis, .initial_item = .Water });
+            try engine.addStorage(12, .{ .role = .iis });
+            try engine.addStorage(13, .{ .role = .ios });
+            try engine.addStorage(14, .{ .role = .eos });
+            try engine.addWorkstation(200, .{
+                .eis = &.{11},
+                .iis = &.{12},
+                .ios = &.{13},
+                .eos = &.{14},
+            });
+
+            try engine.addWorker(BAKER_1);
+            try engine.addWorker(BAKER_2);
+
+            // Both workers become available
+            _ = engine.workerAvailable(BAKER_1);
+            _ = engine.workerAvailable(BAKER_2);
+
+            // Both should be working at different workstations
+            try std.testing.expect(engine.getWorkerState(BAKER_1).? == .Working);
+            try std.testing.expect(engine.getWorkerState(BAKER_2).? == .Working);
+
+            const w1_ws = engine.getWorkerAssignment(BAKER_1).?;
+            const w2_ws = engine.getWorkerAssignment(BAKER_2).?;
+            try std.testing.expect(w1_ws != w2_ws);
+
+            // Complete both cycles independently
+            _ = engine.pickupCompleted(BAKER_1);
+            _ = engine.pickupCompleted(BAKER_2);
+            _ = engine.workCompleted(w1_ws);
+            _ = engine.workCompleted(w2_ws);
+            _ = engine.storeCompleted(BAKER_1);
+            _ = engine.storeCompleted(BAKER_2);
+
+            // Both should be idle now
+            try std.testing.expect(engine.getWorkerState(BAKER_1).? == .Idle);
+            try std.testing.expect(engine.getWorkerState(BAKER_2).? == .Idle);
+
+            // Both EOS should have items
+            try std.testing.expect(engine.isStorageFull(4));
+            try std.testing.expect(engine.isStorageFull(14));
+        }
+
+        pub fn @"worker released from one workstation gets reassigned to another"() !void {
+            var engine = createEngine();
+            defer engine.deinit();
+            defer engine.dispatcher.hooks.deinit();
+
+            // Two workstations, one worker
+            try engine.addStorage(1, .{ .role = .eis, .initial_item = .Flour });
+            try engine.addStorage(2, .{ .role = .iis });
+            try engine.addStorage(3, .{ .role = .ios });
+            try engine.addStorage(4, .{ .role = .eos });
+            try engine.addWorkstation(100, .{
+                .eis = &.{1},
+                .iis = &.{2},
+                .ios = &.{3},
+                .eos = &.{4},
+            });
+
+            try engine.addStorage(11, .{ .role = .eis, .initial_item = .Water });
+            try engine.addStorage(12, .{ .role = .iis });
+            try engine.addStorage(13, .{ .role = .ios });
+            try engine.addStorage(14, .{ .role = .eos });
+            try engine.addWorkstation(200, .{
+                .eis = &.{11},
+                .iis = &.{12},
+                .ios = &.{13},
+                .eos = &.{14},
+            });
+
+            try engine.addWorker(BAKER_1);
+            _ = engine.workerAvailable(BAKER_1);
+
+            // Complete first workstation cycle
+            const first_ws = engine.getWorkerAssignment(BAKER_1).?;
+            _ = engine.pickupCompleted(BAKER_1);
+            _ = engine.workCompleted(first_ws);
+            _ = engine.storeCompleted(BAKER_1);
+
+            // Worker should auto-assign to second workstation (still queued)
+            try std.testing.expect(engine.getWorkerState(BAKER_1).? == .Working);
+            const second_ws = engine.getWorkerAssignment(BAKER_1).?;
+            try std.testing.expect(first_ws != second_ws);
+        }
+    });
+
+    pub const dangling_items = zspec.describe("dangling item integration", struct {
+        pub fn @"dangling item delivered to EIS triggers workstation"() !void {
+            var engine = createEngine();
+            defer engine.deinit();
+            defer engine.dispatcher.hooks.deinit();
+
+            // Empty EIS — workstation is blocked
+            try engine.addStorage(PANTRY_EIS, .{ .role = .eis, .accepts = .Flour });
+            try engine.addStorage(MIXER_IIS, .{ .role = .iis });
+            try engine.addStorage(MIXER_IOS, .{ .role = .ios });
+            try engine.addStorage(TABLE_EOS, .{ .role = .eos });
+            try engine.addWorkstation(MIXER_WS, .{
+                .eis = &.{PANTRY_EIS},
+                .iis = &.{MIXER_IIS},
+                .ios = &.{MIXER_IOS},
+                .eos = &.{TABLE_EOS},
+            });
+
+            try std.testing.expect(engine.getWorkstationStatus(MIXER_WS).? == .Blocked);
+
+            // Two workers
+            try engine.addWorker(BAKER_1);
+            try engine.addWorker(BAKER_2);
+            _ = engine.workerAvailable(BAKER_1);
+            _ = engine.workerAvailable(BAKER_2);
+
+            // Both idle (nothing to do)
+            try std.testing.expect(engine.getWorkerState(BAKER_1).? == .Idle);
+            try std.testing.expect(engine.getWorkerState(BAKER_2).? == .Idle);
+
+            engine.dispatcher.hooks.clear();
+
+            // Dangling item appears — one worker picks it up
+            try engine.addDanglingItem(50, .Flour);
+
+            const dangling_pickup = try engine.dispatcher.hooks.expectNext(.pickup_dangling_started);
+            try std.testing.expectEqual(Item.Flour, dangling_pickup.item_type);
+            try std.testing.expectEqual(PANTRY_EIS, dangling_pickup.target_eis_id);
+
+            // One worker is working (dangling), one idle
+            const delivery_worker = dangling_pickup.worker_id;
+
+            // Complete dangling delivery
+            _ = engine.pickupCompleted(delivery_worker);
+            _ = engine.storeCompleted(delivery_worker);
+
+            // EIS should now have the item
+            try std.testing.expect(engine.isStorageFull(PANTRY_EIS));
+            try std.testing.expect(engine.getStorageItemType(PANTRY_EIS).? == .Flour);
+
+            // Workstation should now be queued (has input)
+            try std.testing.expect(engine.getWorkstationStatus(MIXER_WS).? == .Queued or
+                engine.getWorkstationStatus(MIXER_WS).? == .Active);
+        }
+    });
+
+    pub const producer_workflow = zspec.describe("producer workstation", struct {
+        pub fn @"producer generates output without input"() !void {
+            var engine = createEngine();
+            defer engine.deinit();
+            defer engine.dispatcher.hooks.deinit();
+
+            // Producer: no EIS/IIS, just IOS→EOS
+            try engine.addStorage(MIXER_IOS, .{ .role = .ios });
+            try engine.addStorage(TABLE_EOS, .{ .role = .eos });
+            try engine.addWorkstation(MIXER_WS, .{
+                .eis = &.{},
+                .iis = &.{},
+                .ios = &.{MIXER_IOS},
+                .eos = &.{TABLE_EOS},
+            });
+
+            try engine.addWorker(BAKER_1);
+
+            engine.dispatcher.hooks.clear();
+            _ = engine.workerAvailable(BAKER_1);
+
+            // Should go straight to process (no pickup)
+            _ = try engine.dispatcher.hooks.expectNext(.worker_assigned);
+            _ = try engine.dispatcher.hooks.expectNext(.workstation_activated);
+            const process = try engine.dispatcher.hooks.expectNext(.process_started);
+            try std.testing.expectEqual(MIXER_WS, process.workstation_id);
+
+            // Complete cycle
+            _ = engine.workCompleted(MIXER_WS);
+            _ = engine.storeCompleted(BAKER_1);
+
+            try std.testing.expect(engine.isStorageFull(TABLE_EOS));
+            try std.testing.expect(engine.getWorkerState(BAKER_1).? == .Idle);
+        }
+    });
+
+    pub const state_consistency = zspec.describe("state consistency", struct {
+        pub fn @"engine counts remain consistent through full lifecycle"() !void {
+            var engine = createEngine();
+            defer engine.deinit();
+            defer engine.dispatcher.hooks.deinit();
+
+            var counts = engine.getCounts();
+            try std.testing.expectEqual(@as(u32, 0), counts.storages);
+
+            try setupBasicWorkstation(&engine);
+            try engine.addWorker(BAKER_1);
+
+            counts = engine.getCounts();
+            try std.testing.expectEqual(@as(u32, 4), counts.storages);
+            try std.testing.expectEqual(@as(u32, 1), counts.workers);
+            try std.testing.expectEqual(@as(u32, 1), counts.workstations);
+            try std.testing.expectEqual(@as(u32, 1), counts.idle_workers);
+            try std.testing.expectEqual(@as(u32, 1), counts.queued_workstations);
+
+            // Assign worker
+            _ = engine.workerAvailable(BAKER_1);
+
+            counts = engine.getCounts();
+            try std.testing.expectEqual(@as(u32, 0), counts.idle_workers);
+            try std.testing.expectEqual(@as(u32, 0), counts.queued_workstations);
+
+            // Complete cycle
+            _ = engine.pickupCompleted(BAKER_1);
+            _ = engine.workCompleted(MIXER_WS);
+            _ = engine.storeCompleted(BAKER_1);
+
+            counts = engine.getCounts();
+            try std.testing.expectEqual(@as(u32, 1), counts.idle_workers);
+            // Workstation blocked (EOS full, EIS empty)
+            try std.testing.expectEqual(@as(u32, 0), counts.queued_workstations);
+        }
+
+        pub fn @"dumpState produces valid output"() !void {
+            var engine = createEngine();
+            defer engine.deinit();
+            defer engine.dispatcher.hooks.deinit();
+
+            try setupBasicWorkstation(&engine);
+            try engine.addWorker(BAKER_1);
+            _ = engine.workerAvailable(BAKER_1);
+
+            var buf: [8192]u8 = undefined;
+            var stream = std.io.fixedBufferStream(&buf);
+            try engine.dumpState(stream.writer());
+
+            const output = stream.getWritten();
+            try std.testing.expect(output.len > 0);
+            try std.testing.expect(std.mem.indexOf(u8, output, "Task Engine State") != null);
+            try std.testing.expect(std.mem.indexOf(u8, output, "Storages: 4") != null);
+        }
+    });
+
+    pub const multi_ingredient = zspec.describe("multi-ingredient workflow", struct {
+        pub fn @"workstation with two EIS requires both ingredients"() !void {
+            var engine = createEngine();
+            defer engine.deinit();
+            defer engine.dispatcher.hooks.deinit();
+
+            // Two EIS (Flour + Water), two IIS
+            try engine.addStorage(1, .{ .role = .eis, .initial_item = .Flour });
+            try engine.addStorage(5, .{ .role = .eis, .initial_item = .Water });
+            try engine.addStorage(2, .{ .role = .iis });
+            try engine.addStorage(6, .{ .role = .iis });
+            try engine.addStorage(3, .{ .role = .ios });
+            try engine.addStorage(4, .{ .role = .eos });
+
+            try engine.addWorkstation(100, .{
+                .eis = &.{ 1, 5 },
+                .iis = &.{ 2, 6 },
+                .ios = &.{3},
+                .eos = &.{4},
+            });
+
+            try engine.addWorker(BAKER_1);
+
+            engine.dispatcher.hooks.clear();
+            _ = engine.workerAvailable(BAKER_1);
+
+            // First pickup
+            _ = try engine.dispatcher.hooks.expectNext(.worker_assigned);
+            _ = try engine.dispatcher.hooks.expectNext(.workstation_activated);
+            _ = try engine.dispatcher.hooks.expectNext(.pickup_started);
+
+            engine.dispatcher.hooks.clear();
+            _ = engine.pickupCompleted(BAKER_1);
+
+            // Should get second pickup (not process yet — need both ingredients)
+            const second_pickup = try engine.dispatcher.hooks.expectNext(.pickup_started);
+            try std.testing.expect(second_pickup.storage_id != 0);
+
+            engine.dispatcher.hooks.clear();
+            _ = engine.pickupCompleted(BAKER_1);
+
+            // Now both IIS filled — process should start
+            _ = try engine.dispatcher.hooks.expectNext(.process_started);
+        }
+    });
+});
