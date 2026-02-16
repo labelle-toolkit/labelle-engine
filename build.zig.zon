@@ -31,6 +31,9 @@
             .hash = "zaudio-0.11.0-dev-_M-91kHvPwAlW8MCRI4XiTbTeihqB8Zspgiuw-6Gqgdz",
         },
         // Tasks - labelle-tasks plugin (for integration testing)
+        // Uses relative path; requires labelle-tasks checked out as sibling:
+        //   labelle-toolkit/labelle-engine/  (this repo)
+        //   labelle-toolkit/labelle-tasks/   (sibling)
         .@"labelle-tasks" = .{
             .path = "../labelle-tasks",
         },

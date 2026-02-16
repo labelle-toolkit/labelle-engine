@@ -154,28 +154,40 @@ pub const TasksIntegration = zspec.describe("Tasks Integration", struct {
             defer engine.deinit();
             defer engine.dispatcher.hooks.deinit();
 
-            // Workstation A
-            try engine.addStorage(1, .{ .role = .eis, .initial_item = .Flour });
-            try engine.addStorage(2, .{ .role = .iis });
-            try engine.addStorage(3, .{ .role = .ios });
-            try engine.addStorage(4, .{ .role = .eos });
-            try engine.addWorkstation(100, .{
-                .eis = &.{1},
-                .iis = &.{2},
-                .ios = &.{3},
-                .eos = &.{4},
+            // Workstation A IDs
+            const WS_A_EIS: u32 = 1;
+            const WS_A_IIS: u32 = 2;
+            const WS_A_IOS: u32 = 3;
+            const WS_A_EOS: u32 = 4;
+            const WS_A_ID: u32 = 100;
+
+            try engine.addStorage(WS_A_EIS, .{ .role = .eis, .initial_item = .Flour });
+            try engine.addStorage(WS_A_IIS, .{ .role = .iis });
+            try engine.addStorage(WS_A_IOS, .{ .role = .ios });
+            try engine.addStorage(WS_A_EOS, .{ .role = .eos });
+            try engine.addWorkstation(WS_A_ID, .{
+                .eis = &.{WS_A_EIS},
+                .iis = &.{WS_A_IIS},
+                .ios = &.{WS_A_IOS},
+                .eos = &.{WS_A_EOS},
             });
 
-            // Workstation B
-            try engine.addStorage(11, .{ .role = .eis, .initial_item = .Water });
-            try engine.addStorage(12, .{ .role = .iis });
-            try engine.addStorage(13, .{ .role = .ios });
-            try engine.addStorage(14, .{ .role = .eos });
-            try engine.addWorkstation(200, .{
-                .eis = &.{11},
-                .iis = &.{12},
-                .ios = &.{13},
-                .eos = &.{14},
+            // Workstation B IDs
+            const WS_B_EIS: u32 = 11;
+            const WS_B_IIS: u32 = 12;
+            const WS_B_IOS: u32 = 13;
+            const WS_B_EOS: u32 = 14;
+            const WS_B_ID: u32 = 200;
+
+            try engine.addStorage(WS_B_EIS, .{ .role = .eis, .initial_item = .Water });
+            try engine.addStorage(WS_B_IIS, .{ .role = .iis });
+            try engine.addStorage(WS_B_IOS, .{ .role = .ios });
+            try engine.addStorage(WS_B_EOS, .{ .role = .eos });
+            try engine.addWorkstation(WS_B_ID, .{
+                .eis = &.{WS_B_EIS},
+                .iis = &.{WS_B_IIS},
+                .ios = &.{WS_B_IOS},
+                .eos = &.{WS_B_EOS},
             });
 
             try engine.addWorker(BAKER_1);
@@ -206,8 +218,8 @@ pub const TasksIntegration = zspec.describe("Tasks Integration", struct {
             try std.testing.expect(engine.getWorkerState(BAKER_2).? == .Idle);
 
             // Both EOS should have items
-            try std.testing.expect(engine.isStorageFull(4));
-            try std.testing.expect(engine.isStorageFull(14));
+            try std.testing.expect(engine.isStorageFull(WS_A_EOS));
+            try std.testing.expect(engine.isStorageFull(WS_B_EOS));
         }
 
         pub fn @"worker released from one workstation gets reassigned to another"() !void {
@@ -216,26 +228,38 @@ pub const TasksIntegration = zspec.describe("Tasks Integration", struct {
             defer engine.dispatcher.hooks.deinit();
 
             // Two workstations, one worker
-            try engine.addStorage(1, .{ .role = .eis, .initial_item = .Flour });
-            try engine.addStorage(2, .{ .role = .iis });
-            try engine.addStorage(3, .{ .role = .ios });
-            try engine.addStorage(4, .{ .role = .eos });
-            try engine.addWorkstation(100, .{
-                .eis = &.{1},
-                .iis = &.{2},
-                .ios = &.{3},
-                .eos = &.{4},
+            const WS_A_EIS: u32 = 1;
+            const WS_A_IIS: u32 = 2;
+            const WS_A_IOS: u32 = 3;
+            const WS_A_EOS: u32 = 4;
+            const WS_A_ID: u32 = 100;
+
+            try engine.addStorage(WS_A_EIS, .{ .role = .eis, .initial_item = .Flour });
+            try engine.addStorage(WS_A_IIS, .{ .role = .iis });
+            try engine.addStorage(WS_A_IOS, .{ .role = .ios });
+            try engine.addStorage(WS_A_EOS, .{ .role = .eos });
+            try engine.addWorkstation(WS_A_ID, .{
+                .eis = &.{WS_A_EIS},
+                .iis = &.{WS_A_IIS},
+                .ios = &.{WS_A_IOS},
+                .eos = &.{WS_A_EOS},
             });
 
-            try engine.addStorage(11, .{ .role = .eis, .initial_item = .Water });
-            try engine.addStorage(12, .{ .role = .iis });
-            try engine.addStorage(13, .{ .role = .ios });
-            try engine.addStorage(14, .{ .role = .eos });
-            try engine.addWorkstation(200, .{
-                .eis = &.{11},
-                .iis = &.{12},
-                .ios = &.{13},
-                .eos = &.{14},
+            const WS_B_EIS: u32 = 11;
+            const WS_B_IIS: u32 = 12;
+            const WS_B_IOS: u32 = 13;
+            const WS_B_EOS: u32 = 14;
+            const WS_B_ID: u32 = 200;
+
+            try engine.addStorage(WS_B_EIS, .{ .role = .eis, .initial_item = .Water });
+            try engine.addStorage(WS_B_IIS, .{ .role = .iis });
+            try engine.addStorage(WS_B_IOS, .{ .role = .ios });
+            try engine.addStorage(WS_B_EOS, .{ .role = .eos });
+            try engine.addWorkstation(WS_B_ID, .{
+                .eis = &.{WS_B_EIS},
+                .iis = &.{WS_B_IIS},
+                .ios = &.{WS_B_IOS},
+                .eos = &.{WS_B_EOS},
             });
 
             try engine.addWorker(BAKER_1);
@@ -392,14 +416,14 @@ pub const TasksIntegration = zspec.describe("Tasks Integration", struct {
             try engine.addWorker(BAKER_1);
             _ = engine.workerAvailable(BAKER_1);
 
-            var buf: [8192]u8 = undefined;
-            var stream = std.io.fixedBufferStream(&buf);
-            try engine.dumpState(stream.writer());
+            var list: std.ArrayListUnmanaged(u8) = .{};
+            defer list.deinit(std.testing.allocator);
+            try engine.dumpState(list.writer(std.testing.allocator));
 
-            const output = stream.getWritten();
+            const output = list.items;
             try std.testing.expect(output.len > 0);
-            try std.testing.expect(std.mem.indexOf(u8, output, "Task Engine State") != null);
-            try std.testing.expect(std.mem.indexOf(u8, output, "Storages: 4") != null);
+            try std.testing.expect(std.mem.containsAtLeast(u8, output, 1, "Task Engine State"));
+            try std.testing.expect(std.mem.containsAtLeast(u8, output, 1, "Storages: 4"));
         }
     });
 
@@ -410,18 +434,26 @@ pub const TasksIntegration = zspec.describe("Tasks Integration", struct {
             defer engine.dispatcher.hooks.deinit();
 
             // Two EIS (Flour + Water), two IIS
-            try engine.addStorage(1, .{ .role = .eis, .initial_item = .Flour });
-            try engine.addStorage(5, .{ .role = .eis, .initial_item = .Water });
-            try engine.addStorage(2, .{ .role = .iis });
-            try engine.addStorage(6, .{ .role = .iis });
-            try engine.addStorage(3, .{ .role = .ios });
-            try engine.addStorage(4, .{ .role = .eos });
+            const FLOUR_EIS: u32 = 1;
+            const WATER_EIS: u32 = 5;
+            const IIS_1: u32 = 2;
+            const IIS_2: u32 = 6;
+            const IOS: u32 = 3;
+            const EOS: u32 = 4;
+            const WS_ID: u32 = 100;
 
-            try engine.addWorkstation(100, .{
-                .eis = &.{ 1, 5 },
-                .iis = &.{ 2, 6 },
-                .ios = &.{3},
-                .eos = &.{4},
+            try engine.addStorage(FLOUR_EIS, .{ .role = .eis, .initial_item = .Flour });
+            try engine.addStorage(WATER_EIS, .{ .role = .eis, .initial_item = .Water });
+            try engine.addStorage(IIS_1, .{ .role = .iis });
+            try engine.addStorage(IIS_2, .{ .role = .iis });
+            try engine.addStorage(IOS, .{ .role = .ios });
+            try engine.addStorage(EOS, .{ .role = .eos });
+
+            try engine.addWorkstation(WS_ID, .{
+                .eis = &.{ FLOUR_EIS, WATER_EIS },
+                .iis = &.{ IIS_1, IIS_2 },
+                .ios = &.{IOS},
+                .eos = &.{EOS},
             });
 
             try engine.addWorker(BAKER_1);
