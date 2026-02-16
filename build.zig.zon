@@ -34,8 +34,10 @@
         // Uses relative path; requires labelle-tasks checked out as sibling:
         //   labelle-toolkit/labelle-engine/  (this repo)
         //   labelle-toolkit/labelle-tasks/   (sibling)
+        // Lazy: only resolved when `zig build tasks-test` is invoked.
         .@"labelle-tasks" = .{
             .path = "../labelle-tasks",
+            .lazy = true,
         },
         // Physics - Box2D via allyourcodebase (pinned to specific commit)
         .box2d = .{
