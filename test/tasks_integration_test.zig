@@ -16,14 +16,23 @@ const PANTRY_EIS: u32 = 1;
 const MIXER_IIS: u32 = 2;
 const MIXER_IOS: u32 = 3;
 const TABLE_EOS: u32 = 4;
+const SECOND_EOS: u32 = 5;
 const MIXER_WS: u32 = 100;
 const BAKER_1: u32 = 10;
 const BAKER_2: u32 = 20;
+const DANGLING_FLOUR_ID: u32 = 50;
 
 fn createEngine() TestEngine {
     var hooks: Recorder = .{};
     hooks.init(std.testing.allocator);
     return TestEngine.init(std.testing.allocator, hooks, null);
+}
+
+/// Cleanup helper: engine.deinit() does NOT free recorder hooks,
+/// so we must deinit hooks separately to avoid leaking the event list.
+fn deinitEngine(engine: *TestEngine) void {
+    engine.dispatcher.hooks.deinit();
+    engine.deinit();
 }
 
 fn setupBasicWorkstation(engine: *TestEngine) !void {
@@ -39,6 +48,49 @@ fn setupBasicWorkstation(engine: *TestEngine) !void {
     });
 }
 
+const TwoWorkstationIds = struct {
+    ws_a: u32,
+    ws_b: u32,
+};
+
+fn setupTwoWorkstations(engine: *TestEngine) !TwoWorkstationIds {
+    const WS_A_EIS: u32 = 1;
+    const WS_A_IIS: u32 = 2;
+    const WS_A_IOS: u32 = 3;
+    const WS_A_EOS: u32 = 4;
+    const WS_A_ID: u32 = 100;
+
+    try engine.addStorage(WS_A_EIS, .{ .role = .eis, .initial_item = .Flour });
+    try engine.addStorage(WS_A_IIS, .{ .role = .iis });
+    try engine.addStorage(WS_A_IOS, .{ .role = .ios });
+    try engine.addStorage(WS_A_EOS, .{ .role = .eos });
+    try engine.addWorkstation(WS_A_ID, .{
+        .eis = &.{WS_A_EIS},
+        .iis = &.{WS_A_IIS},
+        .ios = &.{WS_A_IOS},
+        .eos = &.{WS_A_EOS},
+    });
+
+    const WS_B_EIS: u32 = 11;
+    const WS_B_IIS: u32 = 12;
+    const WS_B_IOS: u32 = 13;
+    const WS_B_EOS: u32 = 14;
+    const WS_B_ID: u32 = 200;
+
+    try engine.addStorage(WS_B_EIS, .{ .role = .eis, .initial_item = .Water });
+    try engine.addStorage(WS_B_IIS, .{ .role = .iis });
+    try engine.addStorage(WS_B_IOS, .{ .role = .ios });
+    try engine.addStorage(WS_B_EOS, .{ .role = .eos });
+    try engine.addWorkstation(WS_B_ID, .{
+        .eis = &.{WS_B_EIS},
+        .iis = &.{WS_B_IIS},
+        .ios = &.{WS_B_IOS},
+        .eos = &.{WS_B_EOS},
+    });
+
+    return .{ .ws_a = WS_A_ID, .ws_b = WS_B_ID };
+}
+
 test {
     zspec.runAll(@This());
 }
@@ -47,8 +99,7 @@ pub const TasksIntegration = zspec.describe("Tasks Integration", struct {
     pub const full_workflow = zspec.describe("full workflow cycle", struct {
         pub fn @"complete cycle emits correct hook sequence"() !void {
             var engine = createEngine();
-            defer engine.deinit();
-            defer engine.dispatcher.hooks.deinit();
+            defer deinitEngine(&engine);
 
             try setupBasicWorkstation(&engine);
             try engine.addWorker(BAKER_1);
@@ -99,20 +150,19 @@ pub const TasksIntegration = zspec.describe("Tasks Integration", struct {
 
         pub fn @"two consecutive cycles with refill"() !void {
             var engine = createEngine();
-            defer engine.deinit();
-            defer engine.dispatcher.hooks.deinit();
+            defer deinitEngine(&engine);
 
             // Setup with 2 EOS so second cycle has space
             try engine.addStorage(PANTRY_EIS, .{ .role = .eis, .initial_item = .Flour });
             try engine.addStorage(MIXER_IIS, .{ .role = .iis });
             try engine.addStorage(MIXER_IOS, .{ .role = .ios });
             try engine.addStorage(TABLE_EOS, .{ .role = .eos });
-            try engine.addStorage(5, .{ .role = .eos }); // second EOS
+            try engine.addStorage(SECOND_EOS, .{ .role = .eos });
             try engine.addWorkstation(MIXER_WS, .{
                 .eis = &.{PANTRY_EIS},
                 .iis = &.{MIXER_IIS},
                 .ios = &.{MIXER_IOS},
-                .eos = &.{ TABLE_EOS, 5 },
+                .eos = &.{ TABLE_EOS, SECOND_EOS },
             });
             try engine.addWorker(BAKER_1);
 
@@ -144,51 +194,16 @@ pub const TasksIntegration = zspec.describe("Tasks Integration", struct {
 
             // Both EOS should be full
             try std.testing.expect(engine.isStorageFull(TABLE_EOS));
-            try std.testing.expect(engine.isStorageFull(5));
+            try std.testing.expect(engine.isStorageFull(SECOND_EOS));
         }
     });
 
     pub const concurrent_workers = zspec.describe("concurrent workers", struct {
         pub fn @"two workers operate two workstations independently"() !void {
             var engine = createEngine();
-            defer engine.deinit();
-            defer engine.dispatcher.hooks.deinit();
+            defer deinitEngine(&engine);
 
-            // Workstation A IDs
-            const WS_A_EIS: u32 = 1;
-            const WS_A_IIS: u32 = 2;
-            const WS_A_IOS: u32 = 3;
-            const WS_A_EOS: u32 = 4;
-            const WS_A_ID: u32 = 100;
-
-            try engine.addStorage(WS_A_EIS, .{ .role = .eis, .initial_item = .Flour });
-            try engine.addStorage(WS_A_IIS, .{ .role = .iis });
-            try engine.addStorage(WS_A_IOS, .{ .role = .ios });
-            try engine.addStorage(WS_A_EOS, .{ .role = .eos });
-            try engine.addWorkstation(WS_A_ID, .{
-                .eis = &.{WS_A_EIS},
-                .iis = &.{WS_A_IIS},
-                .ios = &.{WS_A_IOS},
-                .eos = &.{WS_A_EOS},
-            });
-
-            // Workstation B IDs
-            const WS_B_EIS: u32 = 11;
-            const WS_B_IIS: u32 = 12;
-            const WS_B_IOS: u32 = 13;
-            const WS_B_EOS: u32 = 14;
-            const WS_B_ID: u32 = 200;
-
-            try engine.addStorage(WS_B_EIS, .{ .role = .eis, .initial_item = .Water });
-            try engine.addStorage(WS_B_IIS, .{ .role = .iis });
-            try engine.addStorage(WS_B_IOS, .{ .role = .ios });
-            try engine.addStorage(WS_B_EOS, .{ .role = .eos });
-            try engine.addWorkstation(WS_B_ID, .{
-                .eis = &.{WS_B_EIS},
-                .iis = &.{WS_B_IIS},
-                .ios = &.{WS_B_IOS},
-                .eos = &.{WS_B_EOS},
-            });
+            const ws_ids = try setupTwoWorkstations(&engine);
 
             try engine.addWorker(BAKER_1);
             try engine.addWorker(BAKER_2);
@@ -217,50 +232,17 @@ pub const TasksIntegration = zspec.describe("Tasks Integration", struct {
             try std.testing.expect(engine.getWorkerState(BAKER_1).? == .Idle);
             try std.testing.expect(engine.getWorkerState(BAKER_2).? == .Idle);
 
-            // Both EOS should have items
-            try std.testing.expect(engine.isStorageFull(WS_A_EOS));
-            try std.testing.expect(engine.isStorageFull(WS_B_EOS));
+            // Both EOS should have items — check via workstation assignment
+            try std.testing.expect(engine.isStorageFull(4)); // WS_A_EOS
+            try std.testing.expect(engine.isStorageFull(14)); // WS_B_EOS
+            _ = ws_ids;
         }
 
         pub fn @"worker released from one workstation gets reassigned to another"() !void {
             var engine = createEngine();
-            defer engine.deinit();
-            defer engine.dispatcher.hooks.deinit();
+            defer deinitEngine(&engine);
 
-            // Two workstations, one worker
-            const WS_A_EIS: u32 = 1;
-            const WS_A_IIS: u32 = 2;
-            const WS_A_IOS: u32 = 3;
-            const WS_A_EOS: u32 = 4;
-            const WS_A_ID: u32 = 100;
-
-            try engine.addStorage(WS_A_EIS, .{ .role = .eis, .initial_item = .Flour });
-            try engine.addStorage(WS_A_IIS, .{ .role = .iis });
-            try engine.addStorage(WS_A_IOS, .{ .role = .ios });
-            try engine.addStorage(WS_A_EOS, .{ .role = .eos });
-            try engine.addWorkstation(WS_A_ID, .{
-                .eis = &.{WS_A_EIS},
-                .iis = &.{WS_A_IIS},
-                .ios = &.{WS_A_IOS},
-                .eos = &.{WS_A_EOS},
-            });
-
-            const WS_B_EIS: u32 = 11;
-            const WS_B_IIS: u32 = 12;
-            const WS_B_IOS: u32 = 13;
-            const WS_B_EOS: u32 = 14;
-            const WS_B_ID: u32 = 200;
-
-            try engine.addStorage(WS_B_EIS, .{ .role = .eis, .initial_item = .Water });
-            try engine.addStorage(WS_B_IIS, .{ .role = .iis });
-            try engine.addStorage(WS_B_IOS, .{ .role = .ios });
-            try engine.addStorage(WS_B_EOS, .{ .role = .eos });
-            try engine.addWorkstation(WS_B_ID, .{
-                .eis = &.{WS_B_EIS},
-                .iis = &.{WS_B_IIS},
-                .ios = &.{WS_B_IOS},
-                .eos = &.{WS_B_EOS},
-            });
+            _ = try setupTwoWorkstations(&engine);
 
             try engine.addWorker(BAKER_1);
             _ = engine.workerAvailable(BAKER_1);
@@ -281,8 +263,7 @@ pub const TasksIntegration = zspec.describe("Tasks Integration", struct {
     pub const dangling_items = zspec.describe("dangling item integration", struct {
         pub fn @"dangling item delivered to EIS triggers workstation"() !void {
             var engine = createEngine();
-            defer engine.deinit();
-            defer engine.dispatcher.hooks.deinit();
+            defer deinitEngine(&engine);
 
             // Empty EIS — workstation is blocked
             try engine.addStorage(PANTRY_EIS, .{ .role = .eis, .accepts = .Flour });
@@ -311,7 +292,7 @@ pub const TasksIntegration = zspec.describe("Tasks Integration", struct {
             engine.dispatcher.hooks.clear();
 
             // Dangling item appears — one worker picks it up
-            try engine.addDanglingItem(50, .Flour);
+            try engine.addDanglingItem(DANGLING_FLOUR_ID, .Flour);
 
             const dangling_pickup = try engine.dispatcher.hooks.expectNext(.pickup_dangling_started);
             try std.testing.expectEqual(Item.Flour, dangling_pickup.item_type);
@@ -337,8 +318,7 @@ pub const TasksIntegration = zspec.describe("Tasks Integration", struct {
     pub const producer_workflow = zspec.describe("producer workstation", struct {
         pub fn @"producer generates output without input"() !void {
             var engine = createEngine();
-            defer engine.deinit();
-            defer engine.dispatcher.hooks.deinit();
+            defer deinitEngine(&engine);
 
             // Producer: no EIS/IIS, just IOS→EOS
             try engine.addStorage(MIXER_IOS, .{ .role = .ios });
@@ -373,8 +353,7 @@ pub const TasksIntegration = zspec.describe("Tasks Integration", struct {
     pub const state_consistency = zspec.describe("state consistency", struct {
         pub fn @"engine counts remain consistent through full lifecycle"() !void {
             var engine = createEngine();
-            defer engine.deinit();
-            defer engine.dispatcher.hooks.deinit();
+            defer deinitEngine(&engine);
 
             var counts = engine.getCounts();
             try std.testing.expectEqual(@as(u32, 0), counts.storages);
@@ -409,8 +388,7 @@ pub const TasksIntegration = zspec.describe("Tasks Integration", struct {
 
         pub fn @"dumpState produces valid output"() !void {
             var engine = createEngine();
-            defer engine.deinit();
-            defer engine.dispatcher.hooks.deinit();
+            defer deinitEngine(&engine);
 
             try setupBasicWorkstation(&engine);
             try engine.addWorker(BAKER_1);
@@ -430,8 +408,7 @@ pub const TasksIntegration = zspec.describe("Tasks Integration", struct {
     pub const multi_ingredient = zspec.describe("multi-ingredient workflow", struct {
         pub fn @"workstation with two EIS requires both ingredients"() !void {
             var engine = createEngine();
-            defer engine.deinit();
-            defer engine.dispatcher.hooks.deinit();
+            defer deinitEngine(&engine);
 
             // Two EIS (Flour + Water), two IIS
             const FLOUR_EIS: u32 = 1;
@@ -471,7 +448,7 @@ pub const TasksIntegration = zspec.describe("Tasks Integration", struct {
 
             // Should get second pickup (not process yet — need both ingredients)
             const second_pickup = try engine.dispatcher.hooks.expectNext(.pickup_started);
-            try std.testing.expect(second_pickup.storage_id != 0);
+            try std.testing.expect(second_pickup.storage_id == FLOUR_EIS or second_pickup.storage_id == WATER_EIS);
 
             engine.dispatcher.hooks.clear();
             _ = engine.pickupCompleted(BAKER_1);
