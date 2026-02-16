@@ -18,6 +18,10 @@ jobs:
         run: |
           git clone --depth 1 https://github.com/labelle-toolkit/labelle-gfx.git ../labelle-gfx
 
+      - name: Checkout labelle-tasks (sibling dependency for integration tests)
+        run: |
+          git clone --depth 1 https://github.com/labelle-toolkit/labelle-tasks.git ../labelle-tasks
+
       - name: Install Zig
         uses: mlugg/setup-zig@v2
         with:
