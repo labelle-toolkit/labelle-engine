@@ -1,0 +1,16 @@
+.{
+    .fingerprint = 0x8708c77345dd05e6,
+    .name = .micro_engine,
+    .version = "0.0.1",
+    .minimum_zig_version = "0.15.2",
+    .dependencies = .{
+        .micro_core = .{
+            .path = "../micro_core",
+        },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "root.zig",
+    },
+}

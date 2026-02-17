@@ -1,0 +1,15 @@
+.{
+    .fingerprint = 0x1be809d57bbe1314,
+    .name = .micro_core,
+    .version = "0.0.1",
+    .minimum_zig_version = "0.15.2",
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "root.zig",
+        "dispatcher.zig",
+        "ecs.zig",
+        "component.zig",
+        "context.zig",
+    },
+}
