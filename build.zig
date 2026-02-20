@@ -192,6 +192,10 @@ pub fn build(b: *std.Build) void {
     // Interface Modules
     // ==========================================================================
 
+    // labelle-core plugin SDK (RFC #289) — needed by ecs_interface for core.Ecs(Backend) trait
+    const labelle_core_dep = b.dependency("labelle-core", .{ .target = target, .optimize = optimize });
+    const labelle_core_mod = labelle_core_dep.module("labelle-core");
+
     // ECS interface
     const ecs_interface = b.addModule("ecs", .{
         .root_source_file = b.path("ecs/interface.zig"),
@@ -202,6 +206,7 @@ pub fn build(b: *std.Build) void {
             .{ .name = "zig_ecs", .module = zig_ecs_module },
         },
     });
+    ecs_interface.addImport("labelle-core", labelle_core_mod);
     if (zflecs_module) |m| ecs_interface.addImport("zflecs", m);
     if (mr_ecs_module) |m| ecs_interface.addImport("mr_ecs", m);
 
@@ -321,10 +326,6 @@ pub fn build(b: *std.Build) void {
             .{ .name = "ecs", .module = ecs_interface },
         },
     });
-
-    // labelle-core plugin SDK (RFC #289)
-    const labelle_core_dep = b.dependency("labelle-core", .{ .target = target, .optimize = optimize });
-    const labelle_core_mod = labelle_core_dep.module("labelle-core");
 
     _ = b.addModule("labelle-hooks", .{
         .root_source_file = b.path("hooks/mod.zig"),

@@ -20,6 +20,7 @@
 
 const std = @import("std");
 const build_options = @import("build_options");
+const labelle_core = @import("labelle-core");
 
 /// ECS backend selection
 pub const EcsBackend = build_options.@"build.EcsBackend";
@@ -168,6 +169,53 @@ pub fn entityFromU64(value: u64) Entity {
     return @bitCast(@as(EntityBits, @truncate(value)));
 }
 
+/// Backend adapter that wraps Registry to satisfy the core.Ecs(Backend) trait.
+/// Maps engine naming conventions (create/destroy/isValid/tryGet) to core's
+/// expected names (createEntity/destroyEntity/entityExists/getComponent).
+///
+/// This lives in interface.zig so it works for all backends (zig_ecs/zflecs/mr_ecs)
+/// without modifying the adapter files — avoiding Zig's name-shadowing issues
+/// with file-level Entity types.
+pub const PluginBackend = struct {
+    pub const Entity = Interface.Entity;
+
+    const Self = @This();
+
+    registry: *Registry,
+
+    pub fn createEntity(self: *Self) Self.Entity {
+        return self.registry.create();
+    }
+
+    pub fn destroyEntity(self: *Self, entity: Self.Entity) void {
+        self.registry.destroy(entity);
+    }
+
+    pub fn entityExists(self: *Self, entity: Self.Entity) bool {
+        return self.registry.isValid(entity);
+    }
+
+    pub fn addComponent(self: *Self, entity: Self.Entity, component: anytype) void {
+        self.registry.add(entity, component);
+    }
+
+    pub fn getComponent(self: *Self, entity: Self.Entity, comptime T: type) ?*T {
+        return self.registry.tryGet(T, entity);
+    }
+
+    pub fn hasComponent(self: *Self, entity: Self.Entity, comptime T: type) bool {
+        return self.registry.tryGet(T, entity) != null;
+    }
+
+    pub fn removeComponent(self: *Self, entity: Self.Entity, comptime T: type) void {
+        self.registry.remove(T, entity);
+    }
+};
+
+/// Plugin-facing ECS type — wraps the engine's Registry to satisfy core.Ecs(Backend).
+/// Plugins use: `const Ctx = core.PluginContext(.{ .EcsType = engine.ecs.PluginEcs });`
+pub const PluginEcs = labelle_core.Ecs(PluginBackend);
+
 // Compile-time verification that Entity fits in u64
 comptime {
     if (@sizeOf(Entity) > @sizeOf(u64)) {
@@ -179,4 +227,13 @@ test "Entity interface availability" {
     // Just verify the comptime flags compile correctly
     _ = has_invalid_entity;
     _ = has_entity_eql;
+}
+
+test "Registry satisfies core.Ecs(Backend) trait" {
+    // Verify the engine's Registry can be wrapped by core.Ecs
+    const EcsType = PluginEcs;
+    // PluginContext validates the full interface at comptime
+    const Ctx = labelle_core.PluginContext(.{ .EcsType = EcsType });
+    // Verify types are consistent
+    try std.testing.expect(Ctx.Entity == Entity);
 }
