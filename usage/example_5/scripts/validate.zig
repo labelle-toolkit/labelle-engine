@@ -29,7 +29,7 @@ pub fn init(game: *Game, scene: *Scene) void {
         const entity = entity_instance.entity;
 
         // Check Parent_data component
-        if (registry.tryGet(Parent_data, entity)) |parent_data| {
+        if (registry.getComponent(entity, Parent_data)) |parent_data| {
             std.debug.assert(parent_data.value == 42);
             std.debug.print("Parent_data.value = {} (expected 42)\n", .{parent_data.value});
         } else {
@@ -37,13 +37,13 @@ pub fn init(game: *Game, scene: *Scene) void {
         }
 
         // Check Children component with child entities
-        if (registry.tryGet(Children, entity)) |children| {
+        if (registry.getComponent(entity, Children)) |children| {
             std.debug.assert(children.items.len == 1);
             std.debug.print("Children.items.len = {} (expected 1)\n", .{children.items.len});
 
             // Verify the child entity has Child_data component
             const child_entity = children.items[0];
-            if (registry.tryGet(Child_data, child_entity)) |child_data| {
+            if (registry.getComponent(child_entity, Child_data)) |child_data| {
                 std.debug.assert(child_data.val == 7);
                 std.debug.print("Child_data.val = {} (expected 7)\n", .{child_data.val});
             } else {
@@ -51,7 +51,7 @@ pub fn init(game: *Game, scene: *Scene) void {
             }
 
             // Verify child entity has Sprite component (from prefab reference)
-            if (registry.tryGet(Sprite, child_entity)) |sprite| {
+            if (registry.getComponent(child_entity, Sprite)) |sprite| {
                 std.debug.assert(std.mem.eql(u8, sprite.name, "child_node"));
                 std.debug.print("Child Sprite = {s} (expected child_node)\n", .{sprite.name});
             } else {
@@ -59,7 +59,7 @@ pub fn init(game: *Game, scene: *Scene) void {
             }
 
             // Verify child entity position (parent at 100,200 + local position offset 20,30 = 120,230)
-            if (registry.tryGet(Position, child_entity)) |child_pos| {
+            if (registry.getComponent(child_entity, Position)) |child_pos| {
                 std.debug.assert(child_pos.x == 120);
                 std.debug.assert(child_pos.y == 230);
                 std.debug.print("Child position = ({}, {}) (expected 120, 230)\n", .{ child_pos.x, child_pos.y });
@@ -71,7 +71,7 @@ pub fn init(game: *Game, scene: *Scene) void {
         }
 
         // Check entity position
-        if (registry.tryGet(Position, entity)) |pos| {
+        if (registry.getComponent(entity, Position)) |pos| {
             std.debug.assert(pos.x == 100);
             std.debug.assert(pos.y == 200);
             std.debug.print("Entity position = ({}, {}) (expected 100, 200)\n", .{ pos.x, pos.y });

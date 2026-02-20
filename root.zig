@@ -14,6 +14,7 @@ const build_options = @import("build_options");
 
 // Core submodules
 pub const core = @import("core/mod.zig");
+pub const plugin = @import("labelle-core");
 pub const ecs = @import("ecs");
 pub const input = @import("input");
 pub const audio = @import("audio");
@@ -97,6 +98,7 @@ pub const Pivot = scene.Pivot;
 pub const HookDispatcher = hooks.HookDispatcher;
 pub const MergeEngineHooks = hooks.MergeEngineHooks;
 pub const MergeHooks = hooks.MergeHooks;
+pub const UnwrapReceiver = hooks.UnwrapReceiver;
 pub const HookPayload = hooks.HookPayload;
 pub const EngineHook = hooks.EngineHook;
 pub const EngineHookDispatcher = hooks.EngineHookDispatcher;

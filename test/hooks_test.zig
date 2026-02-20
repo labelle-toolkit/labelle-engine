@@ -11,7 +11,7 @@ const FrameInfo = hooks.FrameInfo;
 const SceneInfo = hooks.SceneInfo;
 const EntityInfo = hooks.EntityInfo;
 const HookDispatcher = hooks.HookDispatcher;
-const EmptyDispatcher = hooks.EmptyDispatcher;
+const MergeHooks = hooks.MergeHooks;
 const GameInitInfo = hooks.GameInitInfo;
 
 // Import factory definitions from .zon file
@@ -234,17 +234,11 @@ pub const HOOK_PAYLOAD = struct {
 };
 
 // ============================================
-// Test Hook Dispatcher
+// Test Hook Dispatcher (receiver-based)
 // ============================================
 
-// Test hook enum and payload for dispatcher tests
-const TestHook = enum {
-    on_start,
-    on_update,
-    on_end,
-};
-
-const TestPayload = union(TestHook) {
+// Test payload union for dispatcher tests
+const TestPayload = union(enum) {
     on_start: void,
     on_update: f32,
     on_end: void,
@@ -255,12 +249,12 @@ var test_start_called: bool = false;
 var test_update_value: f32 = 0;
 
 const TestHandlers = struct {
-    pub fn on_start(_: TestPayload) void {
+    pub fn on_start(_: @This(), _: void) void {
         test_start_called = true;
     }
 
-    pub fn on_update(payload: TestPayload) void {
-        test_update_value = payload.on_update;
+    pub fn on_update(_: @This(), dt: f32) void {
+        test_update_value = dt;
     }
     // Note: on_end has no handler
 };
@@ -268,67 +262,69 @@ const TestHandlers = struct {
 pub const HOOK_DISPATCHER = struct {
     pub const EMIT = struct {
         test "emits to registered handlers" {
-            const Dispatcher = HookDispatcher(TestHook, TestPayload, TestHandlers);
+            const Dispatcher = HookDispatcher(TestPayload, TestHandlers, .{});
+            const d = Dispatcher{ .receiver = .{} };
 
             test_start_called = false;
-            Dispatcher.emit(.{ .on_start = {} });
+            d.emit(.{ .on_start = {} });
             try expect.toBeTrue(test_start_called);
         }
 
-        test "passes payload to handler" {
-            const Dispatcher = HookDispatcher(TestHook, TestPayload, TestHandlers);
+        test "passes payload data to handler" {
+            const Dispatcher = HookDispatcher(TestPayload, TestHandlers, .{});
+            const d = Dispatcher{ .receiver = .{} };
 
             test_update_value = 0;
-            Dispatcher.emit(.{ .on_update = 0.016 });
+            d.emit(.{ .on_update = 0.016 });
             // Use std.testing for approximate equality since zspec doesn't have it
             try std.testing.expectApproxEqAbs(@as(f32, 0.016), test_update_value, 0.0001);
         }
 
         test "is no-op for unregistered hooks" {
-            const Dispatcher = HookDispatcher(TestHook, TestPayload, TestHandlers);
+            const Dispatcher = HookDispatcher(TestPayload, TestHandlers, .{});
+            const d = Dispatcher{ .receiver = .{} };
             // on_end has no handler, should not crash
-            Dispatcher.emit(.{ .on_end = {} });
+            d.emit(.{ .on_end = {} });
         }
     };
 
     pub const HAS_HANDLER = struct {
         test "returns true for registered hook" {
-            const Dispatcher = HookDispatcher(TestHook, TestPayload, TestHandlers);
-            try expect.toBeTrue(Dispatcher.hasHandler(.on_start));
-            try expect.toBeTrue(Dispatcher.hasHandler(.on_update));
+            const Dispatcher = HookDispatcher(TestPayload, TestHandlers, .{});
+            try expect.toBeTrue(Dispatcher.hasHandler("on_start"));
+            try expect.toBeTrue(Dispatcher.hasHandler("on_update"));
         }
 
         test "returns false for unregistered hook" {
-            const Dispatcher = HookDispatcher(TestHook, TestPayload, TestHandlers);
-            try expect.toBeFalse(Dispatcher.hasHandler(.on_end));
+            const Dispatcher = HookDispatcher(TestPayload, TestHandlers, .{});
+            try expect.toBeFalse(Dispatcher.hasHandler("on_end"));
         }
     };
 
-    pub const HANDLER_COUNT = struct {
-        test "returns correct count" {
-            const Dispatcher = HookDispatcher(TestHook, TestPayload, TestHandlers);
-            try expect.equal(Dispatcher.handlerCount(), 2);
+    pub const ZERO_SIZE = struct {
+        test "stateless dispatcher is zero-size" {
+            const Dispatcher = HookDispatcher(TestPayload, TestHandlers, .{});
+            try expect.equal(@sizeOf(Dispatcher), 0);
         }
     };
 };
 
 pub const EMPTY_DISPATCHER = struct {
-    test "has no handlers" {
-        const Dispatcher = EmptyDispatcher(TestHook, TestPayload);
-
-        try expect.toBeFalse(Dispatcher.hasHandler(.on_start));
-        try expect.toBeFalse(Dispatcher.hasHandler(.on_update));
-        try expect.toBeFalse(Dispatcher.hasHandler(.on_end));
-        try expect.equal(Dispatcher.handlerCount(), 0);
+    test "empty receiver has no handlers" {
+        const Dispatcher = HookDispatcher(TestPayload, struct {}, .{});
+        try expect.toBeFalse(Dispatcher.hasHandler("on_start"));
+        try expect.toBeFalse(Dispatcher.hasHandler("on_update"));
+        try expect.toBeFalse(Dispatcher.hasHandler("on_end"));
     }
 
-    test "emit does not crash" {
-        const Dispatcher = EmptyDispatcher(TestHook, TestPayload);
+    test "emit does not crash with empty receiver" {
+        const Dispatcher = HookDispatcher(TestPayload, struct {}, .{});
+        const d = Dispatcher{ .receiver = .{} };
 
         // Should not crash
-        Dispatcher.emit(.{ .on_start = {} });
-        Dispatcher.emit(.{ .on_update = 0.016 });
-        Dispatcher.emit(.{ .on_end = {} });
+        d.emit(.{ .on_start = {} });
+        d.emit(.{ .on_update = 0.016 });
+        d.emit(.{ .on_end = {} });
     }
 };
 
@@ -338,19 +334,23 @@ pub const EMPTY_DISPATCHER = struct {
 
 pub const ENGINE_HOOK_DISPATCHER = struct {
     const TestEngineHandlers = struct {
-        pub fn game_init(_: HookPayload) void {}
+        pub fn game_init(_: @This(), _: GameInitInfo) void {}
     };
 
     test "creates valid dispatcher" {
         const Dispatcher = engine.EngineHookDispatcher(TestEngineHandlers);
-        try expect.toBeTrue(Dispatcher.hasHandler(.game_init));
-        try expect.toBeFalse(Dispatcher.hasHandler(.game_deinit));
+        try expect.toBeTrue(Dispatcher.hasHandler("game_init"));
+        try expect.toBeFalse(Dispatcher.hasHandler("game_deinit"));
     }
 };
 
 pub const EMPTY_ENGINE_DISPATCHER = struct {
     test "has no handlers" {
-        try expect.equal(engine.EmptyEngineDispatcher.handlerCount(), 0);
+        try expect.toBeFalse(engine.EmptyEngineDispatcher.hasHandler("game_init"));
+    }
+
+    test "is zero-size" {
+        try expect.equal(@sizeOf(engine.EmptyEngineDispatcher), 0);
     }
 };
 
@@ -358,33 +358,31 @@ pub const EMPTY_ENGINE_DISPATCHER = struct {
 // Test MergeHooks
 // ============================================
 
-const MergeHooks = hooks.MergeHooks;
-
 // State for tracking merged handler calls
 var merge_handler_a_called: bool = false;
 var merge_handler_b_called: bool = false;
 var merge_update_count: u32 = 0;
 
 const MergeHandlersA = struct {
-    pub fn on_start(_: TestPayload) void {
+    pub fn on_start(_: @This(), _: void) void {
         merge_handler_a_called = true;
     }
 
-    pub fn on_update(_: TestPayload) void {
+    pub fn on_update(_: @This(), _: f32) void {
         merge_update_count += 1;
     }
 };
 
 const MergeHandlersB = struct {
-    pub fn on_start(_: TestPayload) void {
+    pub fn on_start(_: @This(), _: void) void {
         merge_handler_b_called = true;
     }
 
-    pub fn on_update(_: TestPayload) void {
+    pub fn on_update(_: @This(), _: f32) void {
         merge_update_count += 1;
     }
 
-    pub fn on_end(_: TestPayload) void {
+    pub fn on_end(_: @This(), _: void) void {
         // Handler B has on_end, Handler A doesn't
     }
 };
@@ -393,134 +391,76 @@ const MergeHandlersEmpty = struct {};
 
 pub const MERGE_HOOKS = struct {
     pub const EMIT = struct {
-        test "calls handlers from both structs" {
-            const Merged = MergeHooks(TestHook, TestPayload, .{ MergeHandlersA, MergeHandlersB });
+        test "calls handlers from both receiver types" {
+            const Merged = MergeHooks(TestPayload, .{ MergeHandlersA, MergeHandlersB });
+            const m = Merged{ .receivers = .{ .{}, .{} } };
 
             merge_handler_a_called = false;
             merge_handler_b_called = false;
-            Merged.emit(.{ .on_start = {} });
+            m.emit(.{ .on_start = {} });
 
             try expect.toBeTrue(merge_handler_a_called);
             try expect.toBeTrue(merge_handler_b_called);
         }
 
         test "calls overlapping hooks in order" {
-            const Merged = MergeHooks(TestHook, TestPayload, .{ MergeHandlersA, MergeHandlersB });
+            const Merged = MergeHooks(TestPayload, .{ MergeHandlersA, MergeHandlersB });
+            const m = Merged{ .receivers = .{ .{}, .{} } };
 
             merge_update_count = 0;
-            Merged.emit(.{ .on_update = 0.016 });
+            m.emit(.{ .on_update = 0.016 });
 
             // Both handlers should be called
             try expect.equal(merge_update_count, 2);
         }
 
-        test "calls hook that only exists in one struct" {
-            const Merged = MergeHooks(TestHook, TestPayload, .{ MergeHandlersA, MergeHandlersB });
+        test "calls hook that only exists in one receiver" {
+            const Merged = MergeHooks(TestPayload, .{ MergeHandlersA, MergeHandlersB });
+            const m = Merged{ .receivers = .{ .{}, .{} } };
 
             // on_end only exists in MergeHandlersB - should not crash
-            Merged.emit(.{ .on_end = {} });
+            m.emit(.{ .on_end = {} });
         }
 
-        test "is no-op when no struct has handler" {
-            const Merged = MergeHooks(TestHook, TestPayload, .{ MergeHandlersEmpty, MergeHandlersEmpty });
+        test "is no-op when no receiver has handler" {
+            const Merged = MergeHooks(TestPayload, .{ MergeHandlersEmpty, MergeHandlersEmpty });
+            const m = Merged{ .receivers = .{ .{}, .{} } };
 
             // Should not crash
-            Merged.emit(.{ .on_start = {} });
-            Merged.emit(.{ .on_update = 0.016 });
-            Merged.emit(.{ .on_end = {} });
+            m.emit(.{ .on_start = {} });
+            m.emit(.{ .on_update = 0.016 });
+            m.emit(.{ .on_end = {} });
         }
     };
 
-    pub const HAS_HANDLER = struct {
-        test "returns true if any struct has handler" {
-            const Merged = MergeHooks(TestHook, TestPayload, .{ MergeHandlersA, MergeHandlersB });
-
-            try expect.toBeTrue(Merged.hasHandler(.on_start));
-            try expect.toBeTrue(Merged.hasHandler(.on_update));
-            try expect.toBeTrue(Merged.hasHandler(.on_end));
-        }
-
-        test "returns false if no struct has handler" {
-            // MergeHandlersA has on_start and on_update but not on_end
-            const Merged = MergeHooks(TestHook, TestPayload, .{MergeHandlersA});
-
-            try expect.toBeTrue(Merged.hasHandler(.on_start));
-            try expect.toBeTrue(Merged.hasHandler(.on_update));
-            try expect.toBeFalse(Merged.hasHandler(.on_end));
-        }
-    };
-
-    pub const HANDLER_COUNT = struct {
-        test "counts unique hooks with handlers" {
-            const Merged = MergeHooks(TestHook, TestPayload, .{ MergeHandlersA, MergeHandlersB });
-
-            // All 3 hooks have at least one handler
-            try expect.equal(Merged.handlerCount(), 3);
-        }
-
-        test "does not double-count overlapping handlers" {
-            // Both structs have on_start and on_update, but handlerCount counts unique hooks
-            const Merged = MergeHooks(TestHook, TestPayload, .{ MergeHandlersA, MergeHandlersB });
-
-            try expect.equal(Merged.handlerCount(), 3);
-        }
-    };
-
-    pub const TOTAL_HANDLER_COUNT = struct {
-        test "counts all handlers including duplicates" {
-            const Merged = MergeHooks(TestHook, TestPayload, .{ MergeHandlersA, MergeHandlersB });
-
-            // A has: on_start, on_update (2)
-            // B has: on_start, on_update, on_end (3)
-            // Total: 5
-            try expect.equal(Merged.totalHandlerCount(), 5);
-        }
-    };
-
-    pub const EMPTY_MERGE = struct {
-        test "empty tuple has no handlers" {
-            const Merged = MergeHooks(TestHook, TestPayload, .{});
-
-            try expect.toBeFalse(Merged.hasHandler(.on_start));
-            try expect.toBeFalse(Merged.hasHandler(.on_update));
-            try expect.toBeFalse(Merged.hasHandler(.on_end));
-            try expect.equal(Merged.handlerCount(), 0);
-            try expect.equal(Merged.totalHandlerCount(), 0);
-        }
-
-        test "single empty struct has no handlers" {
-            const Merged = MergeHooks(TestHook, TestPayload, .{MergeHandlersEmpty});
-
-            try expect.equal(Merged.handlerCount(), 0);
+    pub const ZERO_SIZE = struct {
+        test "merged stateless receivers are zero-size" {
+            const Merged = MergeHooks(TestPayload, .{ MergeHandlersA, MergeHandlersB });
+            try expect.equal(@sizeOf(Merged), 0);
         }
     };
 };
 
 pub const MERGE_ENGINE_HOOKS = struct {
     const GameHooks = struct {
-        pub fn game_init(_: HookPayload) void {}
+        pub fn game_init(_: @This(), _: GameInitInfo) void {}
     };
 
     const PluginHooks = struct {
-        pub fn game_init(_: HookPayload) void {}
-        pub fn frame_start(_: HookPayload) void {}
+        pub fn game_init(_: @This(), _: GameInitInfo) void {}
+        pub fn frame_start(_: @This(), _: FrameInfo) void {}
     };
 
     test "creates valid merged dispatcher" {
         const Merged = engine.MergeEngineHooks(.{ GameHooks, PluginHooks });
-
-        try expect.toBeTrue(Merged.hasHandler(.game_init));
-        try expect.toBeTrue(Merged.hasHandler(.frame_start));
-        try expect.toBeFalse(Merged.hasHandler(.game_deinit));
+        const m = Merged{ .receivers = .{ .{}, .{} } };
+        // Verify emit doesn't crash
+        m.emit(.{ .game_init = .{ .allocator = std.testing.allocator } });
     }
 
-    test "counts handlers correctly" {
+    test "merged engine dispatcher is zero-size" {
         const Merged = engine.MergeEngineHooks(.{ GameHooks, PluginHooks });
-
-        // 2 unique hooks have handlers: game_init, frame_start
-        try expect.equal(Merged.handlerCount(), 2);
-        // 3 total handlers: game_init (2), frame_start (1)
-        try expect.equal(Merged.totalHandlerCount(), 3);
+        try expect.equal(@sizeOf(Merged), 0);
     }
 };
 
@@ -578,5 +518,9 @@ pub const MODULE_EXPORTS = struct {
 
     test "hooks module exports MergeEngineHooks" {
         _ = engine.MergeEngineHooks;
+    }
+
+    test "hooks module exports UnwrapReceiver" {
+        _ = engine.UnwrapReceiver;
     }
 };

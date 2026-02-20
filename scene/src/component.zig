@@ -65,7 +65,7 @@ pub fn ComponentRegistryMulti(comptime ComponentMaps: anytype) type {
         ) void {
             const ComponentType = getType(name);
             const component_value = createComponentFromData(ComponentType, data);
-            registry.add(entity, component_value);
+            registry.addComponent(entity, component_value);
         }
 
         /// Create a component value from .zon data by direct field initialization
@@ -148,7 +148,7 @@ pub fn ComponentRegistry(comptime ComponentMap: type) type {
         ) void {
             const ComponentType = getType(name);
             const component_value = createComponentFromData(ComponentType, data);
-            registry.add(entity, component_value);
+            registry.addComponent(entity, component_value);
         }
 
         /// Create a component value from .zon data by direct field initialization

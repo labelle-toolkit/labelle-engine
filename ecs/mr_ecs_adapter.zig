@@ -1,4 +1,4 @@
-// mr_ecs adapter - wraps Games-by-Mason/mr_ecs to conform to the ECS interface
+// mr_ecs adapter - wraps Games-by-Mason/mr_ecs to conform to the core.Ecs(Backend) trait
 //
 // IMPORTANT: This adapter requires Zig 0.16.0+ (mr_ecs uses @Tuple builtin)
 // Build with: zig build -Decs_backend=mr_ecs
@@ -72,23 +72,26 @@ pub fn registerComponentCallbacks(registry: *Registry, comptime T: type) void {
 }
 
 /// Entity handle - wraps mr_ecs Entity
-pub const Entity = packed struct {
+const AdapterEntity = packed struct {
     inner: mr_ecs.Entity,
 
-    pub const invalid: Entity = .{ .inner = .{ .key = .{ .index = 0, .generation = .invalid } } };
+    pub const invalid: AdapterEntity = .{ .inner = .{ .key = .{ .index = 0, .generation = .invalid } } };
 
-    pub fn eql(self: Entity, other: Entity) bool {
+    pub fn eql(self: AdapterEntity, other: AdapterEntity) bool {
         return self.inner.eql(other.inner);
     }
 
-    fn toMrEcs(self: Entity) mr_ecs.Entity {
+    fn toMrEcs(self: AdapterEntity) mr_ecs.Entity {
         return self.inner;
     }
 
-    fn fromMrEcs(e: mr_ecs.Entity) Entity {
+    fn fromMrEcs(e: mr_ecs.Entity) AdapterEntity {
         return .{ .inner = e };
     }
 };
+
+/// Public Entity type alias
+pub const Entity = AdapterEntity;
 
 /// The underlying integer type that stores Entity bits (for callback wrappers)
 /// This ensures consistent entity ID handling across all backends
@@ -98,6 +101,11 @@ const EntityBits = std.meta.Int(.unsigned, @bitSizeOf(Entity));
 pub const Registry = struct {
     inner: mr_ecs.Entities,
     allocator: std.mem.Allocator,
+
+    const Self = @This();
+
+    /// Entity type for core.Ecs(Backend) trait conformance.
+    pub const Entity = AdapterEntity;
 
     /// Initialize a new registry
     pub fn init(allocator: std.mem.Allocator) Registry {
@@ -118,33 +126,33 @@ pub const Registry = struct {
     }
 
     /// Clean up the registry
-    pub fn deinit(self: *Registry) void {
+    pub fn deinit(self: *Self) void {
         self.inner.deinit(self.allocator);
     }
 
     /// Create a new entity
-    pub fn create(self: *Registry) Entity {
+    pub fn createEntity(self: *Self) Self.Entity {
         // Reserve a new entity handle and commit it immediately
         const entity = mr_ecs.Entity.reserveImmediate(&self.inner);
         // Commit the empty entity so it shows up in iteration
         _ = entity.changeArchImmediate(&self.inner, struct {}, .{}) catch
             @panic("Failed to commit entity");
-        return Entity.fromMrEcs(entity);
+        return Self.Entity.fromMrEcs(entity);
     }
 
-    /// Check if an entity is valid (exists in the registry)
-    pub fn isValid(self: *Registry, entity: Entity) bool {
+    /// Check if an entity exists in the registry
+    pub fn entityExists(self: *Self, entity: Self.Entity) bool {
         return entity.toMrEcs().exists(&self.inner);
     }
 
     /// Destroy an entity
-    pub fn destroy(self: *Registry, entity: Entity) void {
+    pub fn destroyEntity(self: *Self, entity: Self.Entity) void {
         _ = entity.toMrEcs().destroyImmediate(&self.inner);
     }
 
     /// Add a component to an entity
     /// Note: Triggers onAdd callback if the component type defines it.
-    pub fn add(self: *Registry, entity: Entity, component: anytype) void {
+    pub fn addComponent(self: *Self, entity: Self.Entity, component: anytype) void {
         const T = @TypeOf(component);
         const mr_entity = entity.toMrEcs();
 
@@ -165,24 +173,29 @@ pub const Registry = struct {
         }
     }
 
-    /// Try to get a component from an entity, returns null if not present
+    /// Get a component from an entity, returns null if not present
     /// Note: Direct mutation via the returned pointer will NOT trigger onSet callbacks.
     /// Use setComponent() to update a component and trigger onSet.
-    pub fn tryGet(self: *Registry, comptime T: type, entity: Entity) ?*T {
+    pub fn getComponent(self: *Self, entity: Self.Entity, comptime T: type) ?*T {
         return entity.toMrEcs().get(&self.inner, T);
+    }
+
+    /// Check if an entity has a component
+    pub fn hasComponent(self: *Self, entity: Self.Entity, comptime T: type) bool {
+        return entity.toMrEcs().get(&self.inner, T) != null;
     }
 
     /// Set/update a component on an entity, triggering onSet callback if defined.
     /// If the entity doesn't have the component, it will be added (triggering onAdd).
     /// If the entity already has the component, it will be replaced (triggering onSet).
-    pub fn setComponent(self: *Registry, entity: Entity, component: anytype) void {
+    pub fn setComponent(self: *Self, entity: Self.Entity, component: anytype) void {
         const T = @TypeOf(component);
         const mr_entity = entity.toMrEcs();
 
         // Check if component exists
-        const has_component = mr_entity.get(&self.inner, T) != null;
+        const has_comp = mr_entity.get(&self.inner, T) != null;
 
-        if (has_component) {
+        if (has_comp) {
             // Update existing component
             const ptr = mr_entity.get(&self.inner, T).?;
             ptr.* = component;
@@ -198,13 +211,13 @@ pub const Registry = struct {
             }
         } else {
             // Add the component (onAdd will be triggered)
-            self.add(entity, component);
+            self.addComponent(entity, component);
         }
     }
 
     /// Remove a component from an entity
     /// Note: Triggers onRemove callback if the component type defines it.
-    pub fn remove(self: *Registry, comptime T: type, entity: Entity) void {
+    pub fn removeComponent(self: *Self, entity: Self.Entity, comptime T: type) void {
         const mr_entity = entity.toMrEcs();
 
         // Check if component exists before removing
@@ -234,7 +247,7 @@ pub const Registry = struct {
 
     /// Create a query for the given component types
     /// Zero-sized components are used as filters only
-    pub fn query(self: *Registry, comptime components: anytype) Query(components) {
+    pub fn query(self: *Self, comptime components: anytype) Query(components) {
         return Query(components).init(self);
     }
 };

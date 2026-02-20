@@ -1,11 +1,12 @@
-// zig_ecs adapter - wraps prime31/zig-ecs to conform to the ECS interface
+// zig_ecs adapter - wraps prime31/zig-ecs to conform to the core.Ecs(Backend) trait
 //
 // This adapter provides a thin wrapper around zig-ecs, exposing only the
 // methods used by labelle-engine:
 // - init/deinit: Registry lifecycle
-// - create/destroy: Entity lifecycle
-// - add/tryGet/remove: Component operations
-// - view: Query-based iteration
+// - createEntity/destroyEntity/entityExists: Entity lifecycle
+// - addComponent/getComponent/hasComponent/removeComponent: Component operations
+// - setComponent: Component update with onSet callback
+// - view/query: Query-based iteration
 
 const std = @import("std");
 const zig_ecs = @import("zig_ecs");
@@ -148,8 +149,10 @@ pub fn registerComponentCallbacks(registry: *Registry, comptime T: type) void {
 pub const Registry = struct {
     inner: zig_ecs.Registry,
 
-    /// Entity type exposed for external code to access via @TypeOf(registry).Entity
-    pub const EntityType = Entity;
+    const Self = @This();
+
+    /// Entity type for core.Ecs(Backend) trait conformance.
+    pub const Entity = zig_ecs.Entity;
 
     /// Initialize a new registry
     pub fn init(allocator: std.mem.Allocator) Registry {
@@ -162,31 +165,36 @@ pub const Registry = struct {
     }
 
     /// Create a new entity
-    pub fn create(self: *Registry) Entity {
+    pub fn createEntity(self: *Self) Self.Entity {
         return self.inner.create();
     }
 
     /// Destroy an entity
-    pub fn destroy(self: *Registry, entity: Entity) void {
+    pub fn destroyEntity(self: *Self, entity: Self.Entity) void {
         self.inner.destroy(entity);
     }
 
     /// Add a component to an entity
-    pub fn add(self: *Registry, entity: Entity, component: anytype) void {
+    pub fn addComponent(self: *Self, entity: Self.Entity, component: anytype) void {
         self.inner.add(entity, component);
     }
 
-    /// Try to get a component from an entity, returns null if not present
+    /// Get a component from an entity, returns null if not present
     /// Note: Direct mutation via the returned pointer will NOT trigger onSet callbacks.
     /// Use setComponent() to update a component and trigger onSet.
-    pub fn tryGet(self: *Registry, comptime T: type, entity: Entity) ?*T {
+    pub fn getComponent(self: *Self, entity: Self.Entity, comptime T: type) ?*T {
         return self.inner.tryGet(T, entity);
+    }
+
+    /// Check if an entity has a component
+    pub fn hasComponent(self: *Self, entity: Self.Entity, comptime T: type) bool {
+        return self.inner.tryGet(T, entity) != null;
     }
 
     /// Set/update a component on an entity, triggering onSet callback if defined.
     /// If the entity doesn't have the component, it will be added (triggering onAdd).
     /// If the entity already has the component, it will be replaced (triggering onSet).
-    pub fn setComponent(self: *Registry, entity: Entity, component: anytype) void {
+    pub fn setComponent(self: *Self, entity: Self.Entity, component: anytype) void {
         const T = @TypeOf(component);
         if (self.inner.tryGet(T, entity)) |ptr| {
             // Component exists - update it and manually trigger onSet
@@ -207,29 +215,28 @@ pub const Registry = struct {
     }
 
     /// Alias for setComponent - for compatibility with physics systems
-    pub fn set(self: *Registry, entity: Entity, component: anytype) void {
+    pub fn set(self: *Self, entity: Self.Entity, component: anytype) void {
         self.setComponent(entity, component);
     }
 
     /// Remove a component from an entity
-    pub fn remove(self: *Registry, comptime T: type, entity: Entity) void {
+    pub fn removeComponent(self: *Self, entity: Self.Entity, comptime T: type) void {
         self.inner.remove(T, entity);
     }
 
-    /// Try to get a mutable pointer to a component (alias for tryGet)
-    /// For compatibility with systems that use tryGetPtr naming
-    pub fn tryGetPtr(self: *Registry, comptime T: type, entity: Entity) ?*T {
-        return self.tryGet(T, entity);
+    /// Get a mutable pointer to a component (alias for getComponent)
+    pub fn getComponentPtr(self: *Self, entity: Self.Entity, comptime T: type) ?*T {
+        return self.getComponent(entity, T);
     }
 
-    /// Check if an entity is valid (exists in the registry)
-    pub fn isValid(self: *Registry, entity: Entity) bool {
+    /// Check if an entity exists in the registry
+    pub fn entityExists(self: *Self, entity: Self.Entity) bool {
         return self.inner.valid(entity);
     }
 
     /// Mark a component as dirty (for render pipeline sync)
     /// Currently a no-op - the render pipeline handles its own dirty tracking
-    pub fn markDirty(self: *Registry, entity: Entity, comptime T: type) void {
+    pub fn markDirty(self: *Self, entity: Self.Entity, comptime T: type) void {
         _ = self;
         _ = entity;
         _ = T;
@@ -258,19 +265,19 @@ pub const Registry = struct {
     /// Create a view for iterating entities with specific components
     /// Usage: var view = registry.view(.{ Position, Velocity });
     /// Note: Single-component views return BasicView for better performance
-    pub fn view(self: *Registry, comptime includes: anytype) ViewType(includes) {
+    pub fn view(self: *Self, comptime includes: anytype) ViewType(includes) {
         return self.inner.view(includes, .{});
     }
 
     /// Create a basic view for a single component (faster than MultiView)
-    pub fn basicView(self: *Registry, comptime T: type) zig_ecs.BasicView(T) {
+    pub fn basicView(self: *Self, comptime T: type) zig_ecs.BasicView(T) {
         return self.inner.basicView(T);
     }
 
     /// Create a query for the given component types
     /// Zero-sized components are used as filters only
     /// WARNING: zig_ecs cannot filter by tags - they are added but not checked
-    pub fn query(self: *Registry, comptime components: anytype) Query(components) {
+    pub fn query(self: *Self, comptime components: anytype) Query(components) {
         return Query(components).init(self);
     }
 };

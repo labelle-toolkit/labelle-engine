@@ -149,9 +149,9 @@ pub const ENTITY_DESTROY_CLEANUP = struct {
             var scene = Scene.init("test", &.{}, &.{}, ctx);
             defer scene.entities.deinit(std.testing.allocator);
 
-            const e1 = game.registry.create();
-            const e2 = game.registry.create();
-            const e3 = game.registry.create();
+            const e1 = game.registry.createEntity();
+            const e2 = game.registry.createEntity();
+            const e3 = game.registry.createEntity();
 
             try scene.addEntity(.{ .entity = e1 });
             try scene.addEntity(.{ .entity = e2 });
@@ -173,8 +173,8 @@ pub const ENTITY_DESTROY_CLEANUP = struct {
             var scene = Scene.init("test", &.{}, &.{}, ctx);
             defer scene.entities.deinit(std.testing.allocator);
 
-            const e1 = game.registry.create();
-            const e2 = game.registry.create();
+            const e1 = game.registry.createEntity();
+            const e2 = game.registry.createEntity();
 
             try scene.addEntity(.{ .entity = e1 });
 
@@ -192,7 +192,7 @@ pub const ENTITY_DESTROY_CLEANUP = struct {
             var scene = Scene.init("test", &.{}, &.{}, ctx);
             defer scene.entities.deinit(std.testing.allocator);
 
-            const e1 = game.registry.create();
+            const e1 = game.registry.createEntity();
 
             scene.removeEntity(e1);
 
@@ -210,8 +210,8 @@ pub const ENTITY_DESTROY_CLEANUP = struct {
             var scene = Scene.init("test", &.{}, &.{}, ctx);
             defer scene.entities.deinit(std.testing.allocator);
 
-            const e1 = game.registry.create();
-            const e2 = game.registry.create();
+            const e1 = game.registry.createEntity();
+            const e2 = game.registry.createEntity();
 
             try scene.addEntity(.{ .entity = e1 });
             try scene.addEntity(.{ .entity = e2 });
@@ -239,9 +239,9 @@ pub const ENTITY_DESTROY_CLEANUP = struct {
             const ctx = SceneContext.init(&game);
             var scene = Scene.init("test", &.{}, &.{}, ctx);
 
-            const e1 = game.registry.create();
-            const e2 = game.registry.create();
-            const e3 = game.registry.create();
+            const e1 = game.registry.createEntity();
+            const e2 = game.registry.createEntity();
+            const e3 = game.registry.createEntity();
 
             try scene.addEntity(.{ .entity = e1 });
             try scene.addEntity(.{ .entity = e2 });

@@ -64,9 +64,9 @@ pub fn init(game: *Game, scene: *Scene) void {
         const entity = entity_instance.entity;
 
         // Check for required components
-        const pos = registry.tryGet(Position, entity) orelse continue;
-        const shape = registry.tryGet(Shape, entity) orelse continue;
-        const gravity_body = registry.tryGet(GravityBody, entity) orelse continue;
+        const pos = registry.getComponent(entity, Position) orelse continue;
+        const shape = registry.getComponent(entity, Shape) orelse continue;
+        const gravity_body = registry.getComponent(entity, GravityBody) orelse continue;
 
         const is_dynamic = gravity_body.body_type == .dynamic;
 
@@ -142,7 +142,7 @@ pub fn update(game: *Game, scene: *Scene, dt: f32) void {
     for (pw.entities()) |entity_id| {
         if (pw.getPosition(entity_id)) |phys_pos| {
             const entity = engine.entityFromU64(entity_id);
-            if (registry.tryGet(Position, entity)) |pos| {
+            if (registry.getComponent(entity, Position)) |pos| {
                 pos.x = phys_pos[0];
                 pos.y = phys_pos[1];
                 pipeline.markPositionDirty(entity);
@@ -178,7 +178,7 @@ fn performValidation(game: *Game) void {
         }
 
         // Get current position
-        const current_pos = registry.tryGet(Position, tracked.entity) orelse {
+        const current_pos = registry.getComponent(tracked.entity, Position) orelse {
             std.log.warn("Entity no longer has position", .{});
             failed += 1;
             continue;

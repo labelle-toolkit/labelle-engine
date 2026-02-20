@@ -25,7 +25,7 @@ pub const HealthBar = struct {
         const entity = engine.entityFromU64(payload.entity_id);
         const registry = game.getRegistry();
 
-        const health_bar = registry.tryGet(HealthBar, entity) orelse {
+        const health_bar = registry.getComponent(entity, HealthBar) orelse {
             std.log.err("[HealthBar] FAIL: Could not get HealthBar component", .{});
             return;
         };
@@ -47,7 +47,7 @@ pub const HealthBar = struct {
         }
 
         // Validate we can read Health from source (self)
-        if (registry.tryGet(main.Health, health_bar.source)) |health| {
+        if (registry.getComponent(health_bar.source, main.Health)) |health| {
             std.log.info("[HealthBar] OK: self-reference resolved, health={}/{}", .{
                 health.current,
                 health.max,

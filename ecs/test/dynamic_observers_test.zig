@@ -98,8 +98,8 @@ test "observer is called when component is added" {
     var dummy_ctx: u8 = 0;
     try registry.observeAdd(TestComponent, &dummy_ctx, onAddCallback);
 
-    const entity = registry.create();
-    registry.add(entity, TestComponent{ .value = 42 });
+    const entity = registry.createEntity();
+    registry.addComponent(entity, TestComponent{ .value = 42 });
 
     try std.testing.expect(add_called);
     try std.testing.expectEqual(@as(u32, 1), add_call_count);
@@ -119,14 +119,14 @@ test "observer is called for each entity" {
     var dummy_ctx: u8 = 0;
     try registry.observeAdd(TestComponent, &dummy_ctx, onAddCallback);
 
-    _ = registry.create();
-    const e1 = registry.create();
-    const e2 = registry.create();
-    const e3 = registry.create();
+    _ = registry.createEntity();
+    const e1 = registry.createEntity();
+    const e2 = registry.createEntity();
+    const e3 = registry.createEntity();
 
-    registry.add(e1, TestComponent{});
-    registry.add(e2, TestComponent{});
-    registry.add(e3, TestComponent{});
+    registry.addComponent(e1, TestComponent{});
+    registry.addComponent(e2, TestComponent{});
+    registry.addComponent(e3, TestComponent{});
 
     try std.testing.expectEqual(@as(u32, 3), add_call_count);
 }
@@ -145,12 +145,12 @@ test "remove observer is called when component is removed" {
     var dummy_ctx: u8 = 0;
     try registry.observeRemove(TestComponent, &dummy_ctx, onRemoveCallback);
 
-    const entity = registry.create();
-    registry.add(entity, TestComponent{ .value = 10 });
+    const entity = registry.createEntity();
+    registry.addComponent(entity, TestComponent{ .value = 10 });
 
     try std.testing.expect(!remove_called);
 
-    registry.remove(TestComponent, entity);
+    registry.removeComponent(entity, TestComponent);
 
     try std.testing.expect(remove_called);
     try std.testing.expectEqual(@as(u32, 1), remove_call_count);
@@ -170,10 +170,10 @@ test "remove observer is called when entity is destroyed" {
     var dummy_ctx: u8 = 0;
     try registry.observeRemove(TestComponent, &dummy_ctx, onRemoveCallback);
 
-    const entity = registry.create();
-    registry.add(entity, TestComponent{});
+    const entity = registry.createEntity();
+    registry.addComponent(entity, TestComponent{});
 
-    registry.destroy(entity);
+    registry.destroyEntity(entity);
 
     try std.testing.expect(remove_called);
 }
@@ -192,8 +192,8 @@ test "observer receives context pointer correctly" {
     var ctx = ObserverContext{};
     try registry.observeAdd(TestComponent, &ctx, contextAddCallback);
 
-    const entity = registry.create();
-    registry.add(entity, TestComponent{ .value = 99 });
+    const entity = registry.createEntity();
+    registry.addComponent(entity, TestComponent{ .value = 99 });
 
     try std.testing.expectEqual(@as(u32, 1), ctx.add_count);
 }
@@ -215,8 +215,8 @@ test "multiple observers can be registered for same component" {
     try registry.observeAdd(TestComponent, &ctx1, contextAddCallback);
     try registry.observeAdd(TestComponent, &ctx2, contextAddCallback);
 
-    const entity = registry.create();
-    registry.add(entity, TestComponent{});
+    const entity = registry.createEntity();
+    registry.addComponent(entity, TestComponent{});
 
     // Both observers should be called
     try std.testing.expectEqual(@as(u32, 1), ctx1.add_count);
@@ -238,16 +238,16 @@ test "unobserveAdd removes observer" {
     try registry.observeAdd(TestComponent, &ctx, contextAddCallback);
 
     // Verify observer works
-    const entity1 = registry.create();
-    registry.add(entity1, TestComponent{});
+    const entity1 = registry.createEntity();
+    registry.addComponent(entity1, TestComponent{});
     try std.testing.expectEqual(@as(u32, 1), ctx.add_count);
 
     // Unregister
     registry.unobserveAdd(TestComponent, &ctx);
 
     // Verify observer no longer called
-    const entity2 = registry.create();
-    registry.add(entity2, TestComponent{});
+    const entity2 = registry.createEntity();
+    registry.addComponent(entity2, TestComponent{});
     try std.testing.expectEqual(@as(u32, 1), ctx.add_count); // Still 1, not 2
 }
 
@@ -266,18 +266,18 @@ test "unobserveRemove removes observer" {
     try registry.observeRemove(TestComponent, &ctx, contextRemoveCallback);
 
     // Verify observer works
-    const entity1 = registry.create();
-    registry.add(entity1, TestComponent{});
-    registry.remove(TestComponent, entity1);
+    const entity1 = registry.createEntity();
+    registry.addComponent(entity1, TestComponent{});
+    registry.removeComponent(entity1, TestComponent);
     try std.testing.expectEqual(@as(u32, 1), ctx.remove_count);
 
     // Unregister
     registry.unobserveRemove(TestComponent, &ctx);
 
     // Verify observer no longer called
-    const entity2 = registry.create();
-    registry.add(entity2, TestComponent{});
-    registry.remove(TestComponent, entity2);
+    const entity2 = registry.createEntity();
+    registry.addComponent(entity2, TestComponent{});
+    registry.removeComponent(entity2, TestComponent);
     try std.testing.expectEqual(@as(u32, 1), ctx.remove_count); // Still 1, not 2
 }
 
@@ -299,14 +299,14 @@ test "different component types have independent observers" {
     try registry.observeAdd(TestComponent, &ctx1, contextAddCallback);
     try registry.observeAdd(AnotherComponent, &ctx2, contextAddCallback);
 
-    const entity = registry.create();
-    registry.add(entity, TestComponent{});
+    const entity = registry.createEntity();
+    registry.addComponent(entity, TestComponent{});
 
     // Only TestComponent observer should be called
     try std.testing.expectEqual(@as(u32, 1), ctx1.add_count);
     try std.testing.expectEqual(@as(u32, 0), ctx2.add_count);
 
-    registry.add(entity, AnotherComponent{});
+    registry.addComponent(entity, AnotherComponent{});
 
     // Now both should have been called once
     try std.testing.expectEqual(@as(u32, 1), ctx1.add_count);
@@ -350,7 +350,7 @@ fn destroyDuringIterationCallback(entity: ecs.Entity, _: *TestComponent) void {
         if (destroy_registry_ptr) |reg| {
             if (entity_to_destroy) |to_destroy| {
                 if (!std.meta.eql(entity, to_destroy)) {
-                    reg.destroy(to_destroy);
+                    reg.destroyEntity(to_destroy);
                 }
             }
         }
@@ -380,8 +380,8 @@ test "WARNING: destroying entity during query iteration is unsafe" {
     // Create 5 entities with TestComponent
     var entities: [5]ecs.Entity = undefined;
     for (&entities) |*e| {
-        e.* = registry.create();
-        registry.add(e.*, TestComponent{ .value = 1 });
+        e.* = registry.createEntity();
+        registry.addComponent(e.*, TestComponent{ .value = 1 });
     }
 
     // We'll try to destroy entity[3] while iterating

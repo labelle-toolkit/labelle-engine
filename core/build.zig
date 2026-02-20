@@ -30,7 +30,7 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
             .imports = &.{
                 .{ .name = "zspec", .module = zspec_dep.module("zspec") },
-                .{ .name = "labelle-core", .module = core_mod },
+                .{ .name = "engine-utils", .module = core_mod },
             },
         }),
         .test_runner = .{ .path = zspec_dep.path("src/runner.zig"), .mode = .simple },
@@ -64,7 +64,7 @@ fn createCoreModule(
     ecs_module: *std.Build.Module,
     root_source_path: []const u8,
 ) *std.Build.Module {
-    const core_mod = b.addModule("labelle-core", .{
+    const core_mod = b.addModule("engine-utils", .{
         .root_source_file = b.path(root_source_path),
         .target = target,
         .optimize = optimize,

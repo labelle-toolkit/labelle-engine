@@ -151,8 +151,8 @@ pub const ON_ADD_CALLBACK = struct {
             // Register callbacks for the component type
             ecs.registerComponentCallbacks(&registry, TestHealth);
 
-            const entity = registry.create();
-            registry.add(entity, TestHealth{ .amount = 50 });
+            const entity = registry.createEntity();
+            registry.addComponent(entity, TestHealth{ .amount = 50 });
 
             try expect.toBeTrue(test_on_add_called);
         }
@@ -165,8 +165,8 @@ pub const ON_ADD_CALLBACK = struct {
 
             ecs.registerComponentCallbacks(&registry, TestHealth);
 
-            const entity = registry.create();
-            registry.add(entity, TestHealth{});
+            const entity = registry.createEntity();
+            registry.addComponent(entity, TestHealth{});
 
             // Convert entity to u64 for comparison
             const expected_id = engine.entityToU64(entity);
@@ -181,13 +181,13 @@ pub const ON_ADD_CALLBACK = struct {
 
             ecs.registerComponentCallbacks(&registry, TestHealth);
 
-            const entity1 = registry.create();
-            const entity2 = registry.create();
-            const entity3 = registry.create();
+            const entity1 = registry.createEntity();
+            const entity2 = registry.createEntity();
+            const entity3 = registry.createEntity();
 
-            registry.add(entity1, TestHealth{});
-            registry.add(entity2, TestHealth{});
-            registry.add(entity3, TestHealth{});
+            registry.addComponent(entity1, TestHealth{});
+            registry.addComponent(entity2, TestHealth{});
+            registry.addComponent(entity3, TestHealth{});
 
             try expect.equal(test_on_add_call_count, 3);
         }
@@ -204,15 +204,15 @@ pub const ON_ADD_CALLBACK = struct {
             ecs.registerComponentCallbacks(&registry, TestHealth);
             ecs.registerComponentCallbacks(&registry, SecondaryComponent);
 
-            const entity = registry.create();
+            const entity = registry.createEntity();
 
             // Add only TestHealth
-            registry.add(entity, TestHealth{});
+            registry.addComponent(entity, TestHealth{});
             try expect.toBeTrue(test_on_add_called);
             try expect.toBeFalse(secondary_callback_called);
 
             // Add SecondaryComponent
-            registry.add(entity, SecondaryComponent{});
+            registry.addComponent(entity, SecondaryComponent{});
             try expect.toBeTrue(secondary_callback_called);
         }
     };
@@ -228,8 +228,8 @@ pub const ON_SET_CALLBACK = struct {
 
             ecs.registerComponentCallbacks(&registry, TestMana);
 
-            const entity = registry.create();
-            registry.add(entity, TestMana{ .current = 50 });
+            const entity = registry.createEntity();
+            registry.addComponent(entity, TestMana{ .current = 50 });
 
             // Reset to track only the set operation
             test_on_set_called = false;
@@ -250,8 +250,8 @@ pub const ON_SET_CALLBACK = struct {
 
             ecs.registerComponentCallbacks(&registry, TestMana);
 
-            const entity = registry.create();
-            registry.add(entity, TestMana{ .current = 50 });
+            const entity = registry.createEntity();
+            registry.addComponent(entity, TestMana{ .current = 50 });
 
             // Reset state after add
             test_on_set_called = false;
@@ -273,8 +273,8 @@ pub const ON_SET_CALLBACK = struct {
 
             ecs.registerComponentCallbacks(&registry, TestMana);
 
-            const entity = registry.create();
-            registry.add(entity, TestMana{ .current = 50 });
+            const entity = registry.createEntity();
+            registry.addComponent(entity, TestMana{ .current = 50 });
 
             // Reset after initial add
             test_on_set_call_count = 0;
@@ -295,15 +295,15 @@ pub const ON_SET_CALLBACK = struct {
 
             ecs.registerComponentCallbacks(&registry, TestMana);
 
-            const entity = registry.create();
-            registry.add(entity, TestMana{ .current = 50 });
+            const entity = registry.createEntity();
+            registry.addComponent(entity, TestMana{ .current = 50 });
 
             // Reset after add
             test_on_set_called = false;
             test_on_set_call_count = 0;
 
             // Direct mutation via pointer - should NOT trigger onSet
-            if (registry.tryGet(TestMana, entity)) |mana| {
+            if (registry.getComponent(entity, TestMana)) |mana| {
                 mana.current = 100;
             }
 
@@ -321,7 +321,7 @@ pub const ON_SET_CALLBACK = struct {
 
             ecs.registerComponentCallbacks(&registry, TestFullLifecycle);
 
-            const entity = registry.create();
+            const entity = registry.createEntity();
             // Entity has no TestFullLifecycle component yet
 
             // setComponent should add it and trigger onAdd
@@ -333,7 +333,7 @@ pub const ON_SET_CALLBACK = struct {
             try expect.toBeFalse(test_on_set_called);
 
             // Verify component was added correctly
-            const comp = registry.tryGet(TestFullLifecycle, entity);
+            const comp = registry.getComponent(entity, TestFullLifecycle);
             try std.testing.expect(comp != null);
             try expect.equal(comp.?.value, 50);
         }
@@ -348,10 +348,10 @@ pub const ON_SET_CALLBACK = struct {
 
             ecs.registerComponentCallbacks(&registry, TestFullLifecycle);
 
-            const entity = registry.create();
+            const entity = registry.createEntity();
 
             // Initial add - should trigger onAdd but NOT onSet
-            registry.add(entity, TestFullLifecycle{ .value = 42 });
+            registry.addComponent(entity, TestFullLifecycle{ .value = 42 });
 
             try expect.toBeTrue(test_on_add_called);
             try expect.equal(test_on_add_call_count, 1);
@@ -367,7 +367,7 @@ pub const ON_SET_CALLBACK = struct {
 
             ecs.registerComponentCallbacks(&registry, TestFullLifecycle);
 
-            const entity = registry.create();
+            const entity = registry.createEntity();
             // Entity has no component yet
 
             // setComponent on new entity - should trigger onAdd but NOT onSet
@@ -399,13 +399,13 @@ pub const ON_REMOVE_CALLBACK = struct {
 
             ecs.registerComponentCallbacks(&registry, TestBuff);
 
-            const entity = registry.create();
-            registry.add(entity, TestBuff{ .duration = 5.0 });
+            const entity = registry.createEntity();
+            registry.addComponent(entity, TestBuff{ .duration = 5.0 });
 
             try expect.toBeFalse(test_on_remove_called);
 
             // Remove the component
-            registry.remove(TestBuff, entity);
+            registry.removeComponent(entity, TestBuff);
 
             try expect.toBeTrue(test_on_remove_called);
         }
@@ -418,10 +418,10 @@ pub const ON_REMOVE_CALLBACK = struct {
 
             ecs.registerComponentCallbacks(&registry, TestBuff);
 
-            const entity = registry.create();
-            registry.add(entity, TestBuff{});
+            const entity = registry.createEntity();
+            registry.addComponent(entity, TestBuff{});
 
-            registry.remove(TestBuff, entity);
+            registry.removeComponent(entity, TestBuff);
 
             const expected_id = engine.entityToU64(entity);
             try expect.equal(test_on_remove_entity_id, expected_id);
@@ -435,14 +435,14 @@ pub const ON_REMOVE_CALLBACK = struct {
 
             ecs.registerComponentCallbacks(&registry, TestBuff);
 
-            const entity1 = registry.create();
-            const entity2 = registry.create();
+            const entity1 = registry.createEntity();
+            const entity2 = registry.createEntity();
 
-            registry.add(entity1, TestBuff{});
-            registry.add(entity2, TestBuff{});
+            registry.addComponent(entity1, TestBuff{});
+            registry.addComponent(entity2, TestBuff{});
 
-            registry.remove(TestBuff, entity1);
-            registry.remove(TestBuff, entity2);
+            registry.removeComponent(entity1, TestBuff);
+            registry.removeComponent(entity2, TestBuff);
 
             try expect.equal(test_on_remove_call_count, 2);
         }
@@ -457,13 +457,13 @@ pub const ON_REMOVE_CALLBACK = struct {
 
             ecs.registerComponentCallbacks(&registry, TestBuff);
 
-            const entity = registry.create();
-            registry.add(entity, TestBuff{});
+            const entity = registry.createEntity();
+            registry.addComponent(entity, TestBuff{});
 
             try expect.toBeFalse(test_on_remove_called);
 
             // Destroying entity should trigger onRemove for all components
-            registry.destroy(entity);
+            registry.destroyEntity(entity);
 
             try expect.toBeTrue(test_on_remove_called);
         }
@@ -472,11 +472,11 @@ pub const ON_REMOVE_CALLBACK = struct {
             var registry = ecs.Registry.init(std.testing.allocator);
             defer registry.deinit();
 
-            const entity = registry.create();
-            try expect.toBeTrue(registry.isValid(entity));
+            const entity = registry.createEntity();
+            try expect.toBeTrue(registry.entityExists(entity));
 
-            registry.destroy(entity);
-            try expect.toBeFalse(registry.isValid(entity));
+            registry.destroyEntity(entity);
+            try expect.toBeFalse(registry.entityExists(entity));
         }
     };
 };
@@ -490,10 +490,10 @@ pub const FULL_LIFECYCLE = struct {
 
         ecs.registerComponentCallbacks(&registry, TestFullLifecycle);
 
-        const entity = registry.create();
+        const entity = registry.createEntity();
 
         // 1. Add triggers onAdd
-        registry.add(entity, TestFullLifecycle{ .value = 1 });
+        registry.addComponent(entity, TestFullLifecycle{ .value = 1 });
         try expect.toBeTrue(test_on_add_called);
         try expect.equal(test_on_add_call_count, 1);
         try expect.toBeFalse(test_on_set_called);
@@ -506,7 +506,7 @@ pub const FULL_LIFECYCLE = struct {
         try expect.equal(test_on_add_call_count, 1); // onAdd not called again
 
         // 3. Remove triggers onRemove
-        registry.remove(TestFullLifecycle, entity);
+        registry.removeComponent(entity, TestFullLifecycle);
         try expect.toBeTrue(test_on_remove_called);
         try expect.equal(test_on_remove_call_count, 1);
     }
@@ -518,10 +518,10 @@ pub const FULL_LIFECYCLE = struct {
         // Should not crash when registering component with all three callbacks
         ecs.registerComponentCallbacks(&registry, TestFullLifecycle);
 
-        const entity = registry.create();
-        registry.add(entity, TestFullLifecycle{ .value = 42 });
+        const entity = registry.createEntity();
+        registry.addComponent(entity, TestFullLifecycle{ .value = 42 });
 
-        const comp = registry.tryGet(TestFullLifecycle, entity);
+        const comp = registry.getComponent(entity, TestFullLifecycle);
         try std.testing.expect(comp != null);
         try expect.equal(comp.?.value, 42);
     }
@@ -532,10 +532,10 @@ pub const COMPONENTS_WITHOUT_CALLBACKS = struct {
         var registry = ecs.Registry.init(std.testing.allocator);
         defer registry.deinit();
 
-        const entity = registry.create();
-        registry.add(entity, PlainComponent{ .value = 42 });
+        const entity = registry.createEntity();
+        registry.addComponent(entity, PlainComponent{ .value = 42 });
 
-        const comp = registry.tryGet(PlainComponent, entity);
+        const comp = registry.getComponent(entity, PlainComponent);
         try std.testing.expect(comp != null);
         try expect.equal(comp.?.value, 42);
     }
@@ -547,10 +547,10 @@ pub const COMPONENTS_WITHOUT_CALLBACKS = struct {
         // This should not crash or error
         ecs.registerComponentCallbacks(&registry, PlainComponent);
 
-        const entity = registry.create();
-        registry.add(entity, PlainComponent{ .value = 100 });
+        const entity = registry.createEntity();
+        registry.addComponent(entity, PlainComponent{ .value = 100 });
 
-        const comp = registry.tryGet(PlainComponent, entity);
+        const comp = registry.getComponent(entity, PlainComponent);
         try std.testing.expect(comp != null);
         try expect.equal(comp.?.value, 100);
     }
@@ -587,10 +587,10 @@ pub const VIEW_WITH_CALLBACKS = struct {
         ecs.registerComponentCallbacks(&registry, TestHealth);
 
         // Create entities with the component
-        const entity1 = registry.create();
-        const entity2 = registry.create();
-        registry.add(entity1, TestHealth{ .amount = 100 });
-        registry.add(entity2, TestHealth{ .amount = 50 });
+        const entity1 = registry.createEntity();
+        const entity2 = registry.createEntity();
+        registry.addComponent(entity1, TestHealth{ .amount = 100 });
+        registry.addComponent(entity2, TestHealth{ .amount = 50 });
 
         // Query using single-component view - this was causing the type mismatch
         var view = registry.view(.{TestHealth});
@@ -599,7 +599,7 @@ pub const VIEW_WITH_CALLBACKS = struct {
         var found_50: bool = false;
         var iter = view.entityIterator();
         while (iter.next()) |entity| {
-            const health = registry.tryGet(TestHealth, entity);
+            const health = registry.getComponent(entity, TestHealth);
             try std.testing.expect(health != null);
             // Verify we can access the actual component values
             if (health.?.amount == 100) found_100 = true;
@@ -624,9 +624,9 @@ pub const VIEW_WITH_CALLBACKS = struct {
         ecs.registerComponentCallbacks(&registry, TestMana);
 
         // Create entity with both components
-        const entity = registry.create();
-        registry.add(entity, TestHealth{ .amount = 100 });
-        registry.add(entity, TestMana{ .current = 50 });
+        const entity = registry.createEntity();
+        registry.addComponent(entity, TestHealth{ .amount = 100 });
+        registry.addComponent(entity, TestMana{ .current = 50 });
 
         // Query using multi-component view
         var view = registry.view(.{ TestHealth, TestMana });
@@ -634,8 +634,8 @@ pub const VIEW_WITH_CALLBACKS = struct {
         var iter = view.entityIterator();
         while (iter.next()) |e| {
             // Verify we can access both component values correctly
-            const health = registry.tryGet(TestHealth, e);
-            const mana = registry.tryGet(TestMana, e);
+            const health = registry.getComponent(e, TestHealth);
+            const mana = registry.getComponent(e, TestMana);
             try std.testing.expect(health != null);
             try std.testing.expect(mana != null);
             try expect.equal(health.?.amount, 100);

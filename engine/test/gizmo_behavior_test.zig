@@ -84,7 +84,7 @@ pub const ENTITY_SELECTION = struct {
         fixTestGamePointers(&game);
         defer deinitTestGame(&game);
 
-        const e = game.registry.create();
+        const e = game.registry.createEntity();
         game.gizmos.selectEntity(e);
         try expect.toBeTrue(game.gizmos.isEntitySelected(e));
     }
@@ -94,7 +94,7 @@ pub const ENTITY_SELECTION = struct {
         fixTestGamePointers(&game);
         defer deinitTestGame(&game);
 
-        const e = game.registry.create();
+        const e = game.registry.createEntity();
         game.gizmos.selectEntity(e);
         game.gizmos.deselectEntity(e);
         try expect.toBeFalse(game.gizmos.isEntitySelected(e));
@@ -105,7 +105,7 @@ pub const ENTITY_SELECTION = struct {
         fixTestGamePointers(&game);
         defer deinitTestGame(&game);
 
-        const e = game.registry.create();
+        const e = game.registry.createEntity();
         try expect.toBeFalse(game.gizmos.isEntitySelected(e));
     }
 
@@ -114,8 +114,8 @@ pub const ENTITY_SELECTION = struct {
         fixTestGamePointers(&game);
         defer deinitTestGame(&game);
 
-        const e1 = game.registry.create();
-        const e2 = game.registry.create();
+        const e1 = game.registry.createEntity();
+        const e2 = game.registry.createEntity();
         game.gizmos.selectEntity(e1);
         game.gizmos.selectEntity(e2);
 

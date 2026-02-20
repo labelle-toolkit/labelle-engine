@@ -96,27 +96,27 @@ pub const max_selectable_entities: usize = 10_000;
 /// Game facade - main entry point for GUI-generated projects.
 /// Use `GameWith(MyHooks)` to enable lifecycle hooks, or just `Game` for no hooks.
 pub fn GameWith(comptime Hooks: type) type {
-    // Determine if hooks are enabled (Hooks is not void and not empty struct)
-    const hooks_enabled = comptime blk: {
-        if (Hooks == void) break :blk false;
+    // Determine the dispatcher type from Hooks:
+    // - void / empty struct → EmptyEngineDispatcher (zero-size, no-op)
+    // - Already a dispatcher (has .emit + .receiver field) → use directly
+    // - Raw receiver struct → wrap with EngineHookDispatcher
+    const HookDispatcherType = comptime blk: {
+        if (Hooks == void) break :blk hooks_mod.EmptyEngineDispatcher;
         const info = @typeInfo(Hooks);
-        if (info == .@"struct" and info.@"struct".decls.len == 0) break :blk false;
-        break :blk true;
+        if (info == .@"struct" and info.@"struct".decls.len == 0 and info.@"struct".fields.len == 0)
+            break :blk hooks_mod.EmptyEngineDispatcher;
+        if (@hasDecl(Hooks, "emit") and @hasField(Hooks, "receivers"))
+            break :blk Hooks; // MergeHooks result — already a dispatcher
+        if (@hasDecl(Hooks, "emit") and @hasField(Hooks, "receiver"))
+            break :blk Hooks; // HookDispatcher result — already a dispatcher
+        break :blk hooks_mod.EngineHookDispatcher(Hooks);
     };
 
     return struct {
         const Self = @This();
 
         /// The hook dispatcher type for this game instance.
-        /// If Hooks already has an 'emit' method (e.g., from MergeHooks), use it directly.
-        /// Otherwise, wrap it with EngineHookDispatcher.
-        pub const HookDispatcher = if (hooks_enabled)
-            if (@hasDecl(Hooks, "emit"))
-                Hooks // Already a dispatcher (e.g., from MergeHooks)
-            else
-                hooks_mod.EngineHookDispatcher(Hooks)
-        else
-            hooks_mod.EmptyEngineDispatcher;
+        pub const HookDispatcher = HookDispatcherType;
 
         /// Scene lifecycle hooks
         pub const SceneHooks = struct {
@@ -189,6 +189,9 @@ pub fn GameWith(comptime Hooks: type) type {
         gui_enabled: bool = true,
         gui: gui_mod.Gui,
 
+        // Hook dispatcher instance (zero-size for stateless receivers)
+        hook_dispatcher: HookDispatcher,
+
         // Zero-bit mixin fields (no runtime cost)
         hierarchy: game_hierarchy.HierarchyMixin(Self) = .{},
         gui_rendering: game_gui_mod.GuiMixin(Self) = .{},
@@ -196,11 +199,9 @@ pub fn GameWith(comptime Hooks: type) type {
         pos: game_position.PositionMixin(Self) = .{},
         input_mixin: game_input.InputMixin(Self) = .{},
 
-        /// Emit a hook event. No-op if hooks are disabled.
-        inline fn emitHook(payload: hooks_mod.HookPayload) void {
-            if (hooks_enabled) {
-                HookDispatcher.emit(payload);
-            }
+        /// Emit a hook event via the instance dispatcher.
+        inline fn emitHook(self: *const Self, payload: hooks_mod.HookPayload) void {
+            self.hook_dispatcher.emit(payload);
         }
 
         /// Initialize a new game instance
@@ -236,6 +237,13 @@ pub fn GameWith(comptime Hooks: type) type {
             // Build the struct. Note: pipeline.engine currently points to the
             // local `retained_engine` variable above, which will become invalid after
             // the struct is moved to the caller's stack.
+            // Default-init dispatcher (zero-size for stateless receivers)
+            comptime {
+                if (@sizeOf(HookDispatcher) != 0)
+                    @compileError("Stateful hook receivers are not yet supported by Game.init(). " ++
+                        "All receiver types must be zero-size structs.");
+            }
+
             const game = Self{
                 .allocator = allocator,
                 .retained_engine = retained_engine,
@@ -251,10 +259,11 @@ pub fn GameWith(comptime Hooks: type) type {
                 .standalone_gizmos = standalone_gizmos_list,
                 .selected_entities = selected_entities_bitset,
                 .gui = gui_mod.Gui.init(),
+                .hook_dispatcher = @as(HookDispatcher, undefined),
             };
 
             // Emit game_init hook with allocator for early subsystem initialization
-            emitHook(.{ .game_init = .{ .allocator = allocator } });
+            game.emitHook(.{ .game_init = .{ .allocator = allocator } });
 
             return game;
         }
@@ -281,7 +290,7 @@ pub fn GameWith(comptime Hooks: type) type {
         /// Clean up all resources
         pub fn deinit(self: *Self) void {
             // Emit game_deinit hook before cleanup
-            emitHook(.{ .game_deinit = {} });
+            self.emitHook(.{ .game_deinit = {} });
 
             // Clear game pointer to prevent use-after-free in component callbacks
             ecs.setGamePtr(null);
@@ -317,7 +326,7 @@ pub fn GameWith(comptime Hooks: type) type {
         fn unloadCurrentScene(self: *Self) void {
             if (self.current_scene_name) |name| {
                 // Emit scene_unload hook
-                emitHook(.{ .scene_unload = .{ .name = name } });
+                self.emitHook(.{ .scene_unload = .{ .name = name } });
 
                 if (self.scenes.get(name)) |entry| {
                     if (entry.hooks.onUnload) |onUnload| {
@@ -343,9 +352,9 @@ pub fn GameWith(comptime Hooks: type) type {
 
         /// Create a new entity
         pub fn createEntity(self: *Self) Entity {
-            const entity = self.registry.create();
+            const entity = self.registry.createEntity();
             // Emit entity_created hook (prefab_name is unknown at this layer)
-            emitHook(.{ .entity_created = .{ .entity_id = entityToU64(entity), .prefab_name = null } });
+            self.emitHook(.{ .entity_created = .{ .entity_id = entityToU64(entity), .prefab_name = null } });
             return entity;
         }
 
@@ -353,7 +362,7 @@ pub fn GameWith(comptime Hooks: type) type {
         /// Children are destroyed recursively before the parent.
         pub fn destroyEntity(self: *Self, entity: Entity) void {
             // First, recursively destroy all children (cascade destroy)
-            if (self.registry.tryGet(Children, entity)) |children_comp| {
+            if (self.registry.getComponent(entity, Children)) |children_comp| {
                 // Copy children list since we're modifying during iteration
                 for (children_comp.entities) |child| {
                     self.destroyEntity(child);
@@ -366,9 +375,9 @@ pub fn GameWith(comptime Hooks: type) type {
             }
 
             // Emit entity_destroyed hook before destruction
-            emitHook(.{ .entity_destroyed = .{ .entity_id = entityToU64(entity), .prefab_name = null } });
+            self.emitHook(.{ .entity_destroyed = .{ .entity_id = entityToU64(entity), .prefab_name = null } });
             self.pipeline.untrackEntity(entity);
-            self.registry.destroy(entity);
+            self.registry.destroyEntity(entity);
         }
 
         /// Destroy an entity without destroying its children.
@@ -380,9 +389,9 @@ pub fn GameWith(comptime Hooks: type) type {
                 cleanup.callback(cleanup.context, entity);
             }
 
-            emitHook(.{ .entity_destroyed = .{ .entity_id = entityToU64(entity), .prefab_name = null } });
+            self.emitHook(.{ .entity_destroyed = .{ .entity_id = entityToU64(entity), .prefab_name = null } });
             self.pipeline.untrackEntity(entity);
-            self.registry.destroy(entity);
+            self.registry.destroyEntity(entity);
         }
 
         /// Set z_index on entity's visual component (Sprite, Shape, or Text)
@@ -391,19 +400,19 @@ pub fn GameWith(comptime Hooks: type) type {
             var updated = false;
 
             // Try Sprite
-            if (self.registry.tryGet(Sprite, entity)) |sprite| {
+            if (self.registry.getComponent(entity, Sprite)) |sprite| {
                 sprite.z_index = z_index;
                 updated = true;
             }
 
             // Try Shape
-            if (self.registry.tryGet(Shape, entity)) |shape| {
+            if (self.registry.getComponent(entity, Shape)) |shape| {
                 shape.z_index = z_index;
                 updated = true;
             }
 
             // Try Text
-            if (self.registry.tryGet(Text, entity)) |text| {
+            if (self.registry.getComponent(entity, Text)) |text| {
                 text.z_index = z_index;
                 updated = true;
             }
@@ -415,43 +424,43 @@ pub fn GameWith(comptime Hooks: type) type {
 
         /// Add Sprite component and track for rendering
         pub fn addSprite(self: *Self, entity: Entity, sprite: Sprite) !void {
-            self.registry.add(entity, sprite);
+            self.registry.addComponent(entity, sprite);
             try self.pipeline.trackEntity(entity, .sprite);
         }
 
         /// Add Shape component and track for rendering
         pub fn addShape(self: *Self, entity: Entity, shape: Shape) !void {
-            self.registry.add(entity, shape);
+            self.registry.addComponent(entity, shape);
             try self.pipeline.trackEntity(entity, .shape);
         }
 
         /// Add Text component and track for rendering
         pub fn addText(self: *Self, entity: Entity, text: Text) !void {
-            self.registry.add(entity, text);
+            self.registry.addComponent(entity, text);
             try self.pipeline.trackEntity(entity, .text);
         }
 
         /// Remove Sprite component and stop tracking for rendering
         pub fn removeSprite(self: *Self, entity: Entity) void {
             self.pipeline.untrackEntity(entity);
-            self.registry.remove(Sprite, entity);
+            self.registry.removeComponent(entity, Sprite);
         }
 
         /// Remove Shape component and stop tracking for rendering
         pub fn removeShape(self: *Self, entity: Entity) void {
             self.pipeline.untrackEntity(entity);
-            self.registry.remove(Shape, entity);
+            self.registry.removeComponent(entity, Shape);
         }
 
         /// Remove Text component and stop tracking for rendering
         pub fn removeText(self: *Self, entity: Entity) void {
             self.pipeline.untrackEntity(entity);
-            self.registry.remove(Text, entity);
+            self.registry.removeComponent(entity, Text);
         }
 
         /// Add a custom component to an entity
         pub fn addComponent(self: *Self, comptime T: type, entity: Entity, component: T) void {
-            self.registry.add(entity, component);
+            self.registry.addComponent(entity, component);
         }
 
         /// Set/update a custom component on an entity (triggers component `onSet` if defined).
@@ -462,7 +471,7 @@ pub fn GameWith(comptime Hooks: type) type {
 
         /// Get a component from an entity
         pub fn getComponent(self: *Self, comptime T: type, entity: Entity) ?*T {
-            return self.registry.tryGet(T, entity);
+            return self.registry.getComponent(entity, T);
         }
 
         // ==================== Asset Loading ====================
@@ -531,7 +540,7 @@ pub fn GameWith(comptime Hooks: type) type {
             const entry = self.scenes.get(name) orelse return error.SceneNotFound;
 
             // Emit scene_before_load hook before entities are created
-            emitHook(.{ .scene_before_load = .{ .name = name, .allocator = self.allocator } });
+            self.emitHook(.{ .scene_before_load = .{ .name = name, .allocator = self.allocator } });
 
             // Load new scene (creates entities, triggers component callbacks)
             try entry.loader_fn(self);
@@ -545,7 +554,7 @@ pub fn GameWith(comptime Hooks: type) type {
             }
 
             // Emit scene_load hook
-            emitHook(.{ .scene_load = .{ .name = name } });
+            self.emitHook(.{ .scene_load = .{ .name = name } });
 
             // Apply current gizmo visibility state to newly created gizmos
             self.gizmos.updateGizmoVisibility();
@@ -593,7 +602,7 @@ pub fn GameWith(comptime Hooks: type) type {
                 const dt = self.retained_engine.getDeltaTime();
 
                 // Emit frame_start hook
-                emitHook(.{ .frame_start = .{ .frame_number = self.frame_number, .dt = dt } });
+                self.emitHook(.{ .frame_start = .{ .frame_number = self.frame_number, .dt = dt } });
 
                 // Begin input frame (clears per-frame state)
                 self.input.beginFrame();
@@ -637,7 +646,7 @@ pub fn GameWith(comptime Hooks: type) type {
                 }
 
                 // Emit frame_end hook
-                emitHook(.{ .frame_end = .{ .frame_number = self.frame_number, .dt = dt } });
+                self.emitHook(.{ .frame_end = .{ .frame_number = self.frame_number, .dt = dt } });
 
                 self.frame_number += 1;
             }
@@ -777,12 +786,12 @@ pub fn GameWith(comptime Hooks: type) type {
         /// For Sprite components: looks up sprite dimensions from texture manager.
         pub fn getEntityVisualBounds(self: *Self, entity: Entity) ?VisualBounds {
             // Try Shape first (dimensions are directly available)
-            if (self.registry.tryGet(Shape, entity)) |shape| {
+            if (self.registry.getComponent(entity, Shape)) |shape| {
                 return getShapeBounds(shape.shape);
             }
 
             // Try Sprite (need to look up from texture manager)
-            if (self.registry.tryGet(Sprite, entity)) |sprite| {
+            if (self.registry.getComponent(entity, Sprite)) |sprite| {
                 return self.getSpriteBounds(sprite);
             }
 

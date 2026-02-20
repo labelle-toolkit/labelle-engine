@@ -341,7 +341,7 @@ pub const DECLARATIVE_PARENT = struct {
             }
 
             const child_entity = scene.entities.items[1].entity;
-            const parent_comp = game.registry.tryGet(Parent, child_entity);
+            const parent_comp = game.registry.getComponent(child_entity, Parent);
             try expect.toBeTrue(parent_comp != null);
         }
 
@@ -360,7 +360,7 @@ pub const DECLARATIVE_PARENT = struct {
             const parent_entity = scene.entities.items[0].entity;
             const child_entity = scene.entities.items[1].entity;
 
-            const parent_comp = game.registry.tryGet(Parent, child_entity).?;
+            const parent_comp = game.registry.getComponent(child_entity, Parent).?;
             try expect.equal(parent_comp.entity, parent_entity);
         }
 
@@ -379,7 +379,7 @@ pub const DECLARATIVE_PARENT = struct {
             const parent_entity = scene.entities.items[0].entity;
             const child_entity = scene.entities.items[1].entity;
 
-            const children_comp = game.registry.tryGet(Children, parent_entity);
+            const children_comp = game.registry.getComponent(parent_entity, Children);
             try expect.toBeTrue(children_comp != null);
             try expect.equal(children_comp.?.entities.len, 1);
             try expect.equal(children_comp.?.entities[0], child_entity);
@@ -398,7 +398,7 @@ pub const DECLARATIVE_PARENT = struct {
             }
 
             const child_entity = scene.entities.items[1].entity;
-            const parent_comp = game.registry.tryGet(Parent, child_entity).?;
+            const parent_comp = game.registry.getComponent(child_entity, Parent).?;
             try expect.toBeTrue(parent_comp.inherit_rotation);
             try expect.toBeTrue(parent_comp.inherit_scale);
         }
@@ -418,7 +418,7 @@ pub const DECLARATIVE_PARENT = struct {
             const child_entity = scene.entities.items[0].entity;
             const parent_entity = scene.entities.items[1].entity;
 
-            const parent_comp = game.registry.tryGet(Parent, child_entity).?;
+            const parent_comp = game.registry.getComponent(child_entity, Parent).?;
             try expect.equal(parent_comp.entity, parent_entity);
         }
 
@@ -435,7 +435,7 @@ pub const DECLARATIVE_PARENT = struct {
             }
 
             const parent_entity = scene.entities.items[0].entity;
-            try expect.toBeTrue(game.registry.tryGet(Parent, parent_entity) == null);
+            try expect.toBeTrue(game.registry.getComponent(parent_entity, Parent) == null);
         }
     };
 };

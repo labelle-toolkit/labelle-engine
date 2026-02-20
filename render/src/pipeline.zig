@@ -8,9 +8,9 @@
 //!   defer pipeline.deinit();
 //!
 //!   // Create entity with position and sprite
-//!   const entity = registry.create();
-//!   registry.add(entity, Position{ .x = 100, .y = 200 });
-//!   registry.add(entity, Sprite{ .texture = tex_id });
+//!   const entity = registry.createEntity();
+//!   registry.addComponent(entity, Position{ .x = 100, .y = 200 });
+//!   registry.addComponent(entity, Sprite{ .texture = tex_id });
 //!   // Sprite.onAdd callback automatically tracks the entity
 //!
 //!   // In game loop - sync dirty positions to gfx
@@ -150,7 +150,7 @@ pub const RenderPipeline = struct {
     /// 3. Regular entity - uses entity's own position as world position
     fn resolveGfxPosition(registry: *Registry, entity: Entity) GfxPosition {
         // Check if this is a gizmo with a parent entity (legacy gizmo support)
-        if (registry.tryGet(Gizmo, entity)) |gizmo| {
+        if (registry.getComponent(entity, Gizmo)) |gizmo| {
             if (gizmo.parent_entity) |parent| {
                 // Resolve position from parent + offset
                 const parent_world = computeWorldTransform(registry, parent, 0);
@@ -186,10 +186,10 @@ pub const RenderPipeline = struct {
         }
 
         // Get this entity's local position
-        const local_pos = if (registry.tryGet(Position, entity)) |p| p.* else Position{};
+        const local_pos = if (registry.getComponent(entity, Position)) |p| p.* else Position{};
 
         // Check if this entity has a parent
-        if (registry.tryGet(Parent, entity)) |parent_comp| {
+        if (registry.getComponent(entity, Parent)) |parent_comp| {
             // Recursively get parent's world transform
             const parent_world = computeWorldTransform(registry, parent_comp.entity, depth + 1);
 
@@ -291,7 +291,7 @@ pub const RenderPipeline = struct {
         // Propagate to children (untracked children are skipped above but their
         // subtrees are still walked so tracked grandchildren get marked)
         if (self.registry) |reg| {
-            if (reg.tryGet(Children, entity)) |children_comp| {
+            if (reg.getComponent(entity, Children)) |children_comp| {
                 for (children_comp.entities) |child| {
                     self.markPositionDirtyRecursive(child, depth + 1);
                 }
@@ -323,8 +323,8 @@ pub const RenderPipeline = struct {
             // Handle new visuals (first time creation)
             if (!tracked.created) {
                 // Cache hierarchy flags (avoids repeated tryGet on every frame)
-                tracked.is_gizmo = registry.tryGet(Gizmo, tracked.entity) != null;
-                tracked.has_parent = registry.tryGet(Parent, tracked.entity) != null;
+                tracked.is_gizmo = registry.getComponent(tracked.entity, Gizmo) != null;
+                tracked.has_parent = registry.getComponent(tracked.entity, Parent) != null;
 
                 // Resolve position - handles parent hierarchy and gizmo offsets
                 // Transform from Y-up (game) to Y-down (screen)
@@ -335,10 +335,10 @@ pub const RenderPipeline = struct {
                     .none => {}, // No visual to create for data-only entities
                     .sprite => {
                         // Check for Sprite first, then Icon (which renders as sprite)
-                        if (registry.tryGet(Sprite, tracked.entity)) |sprite| {
+                        if (registry.getComponent(tracked.entity, Sprite)) |sprite| {
                             self.engine.createSprite(entity_id, sprite.toVisual(), pos);
                             creation_succeeded = true;
-                        } else if (registry.tryGet(Icon, tracked.entity)) |icon| {
+                        } else if (registry.getComponent(tracked.entity, Icon)) |icon| {
                             self.engine.createSprite(entity_id, icon.toVisual(), pos);
                             creation_succeeded = true;
                         } else {
@@ -346,7 +346,7 @@ pub const RenderPipeline = struct {
                         }
                     },
                     .shape => {
-                        if (registry.tryGet(Shape, tracked.entity)) |shape| {
+                        if (registry.getComponent(tracked.entity, Shape)) |shape| {
                             self.engine.createShape(entity_id, shape.toVisual(), pos);
                             creation_succeeded = true;
                         } else {
@@ -354,7 +354,7 @@ pub const RenderPipeline = struct {
                         }
                     },
                     .text => {
-                        if (registry.tryGet(Text, tracked.entity)) |text| {
+                        if (registry.getComponent(tracked.entity, Text)) |text| {
                             self.engine.createText(entity_id, text.toVisual(), pos);
                             creation_succeeded = true;
                         } else {
@@ -373,23 +373,23 @@ pub const RenderPipeline = struct {
                     .none => {}, // No visual to update for data-only entities
                     .sprite => {
                         // Check for Sprite first, then Icon (which renders as sprite)
-                        if (registry.tryGet(Sprite, tracked.entity)) |sprite| {
+                        if (registry.getComponent(tracked.entity, Sprite)) |sprite| {
                             self.engine.updateSprite(entity_id, sprite.toVisual());
-                        } else if (registry.tryGet(Icon, tracked.entity)) |icon| {
+                        } else if (registry.getComponent(tracked.entity, Icon)) |icon| {
                             self.engine.updateSprite(entity_id, icon.toVisual());
                         } else {
                             std.log.warn("Entity tracked as sprite but missing Sprite/Icon component during update", .{});
                         }
                     },
                     .shape => {
-                        if (registry.tryGet(Shape, tracked.entity)) |shape| {
+                        if (registry.getComponent(tracked.entity, Shape)) |shape| {
                             self.engine.updateShape(entity_id, shape.toVisual());
                         } else {
                             std.log.warn("Entity tracked as shape but missing Shape component during update", .{});
                         }
                     },
                     .text => {
-                        if (registry.tryGet(Text, tracked.entity)) |text| {
+                        if (registry.getComponent(tracked.entity, Text)) |text| {
                             self.engine.updateText(entity_id, text.toVisual());
                         } else {
                             std.log.warn("Entity tracked as text but missing Text component during update", .{});

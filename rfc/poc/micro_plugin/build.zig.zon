@@ -1,0 +1,16 @@
+.{
+    .fingerprint = 0x86cefa6a8339b3b3,
+    .name = .micro_plugin,
+    .version = "0.0.1",
+    .minimum_zig_version = "0.15.2",
+    .dependencies = .{
+        .micro_core = .{
+            .path = "../micro_core",
+        },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "root.zig",
+    },
+}

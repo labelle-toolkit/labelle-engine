@@ -1,200 +1,186 @@
-//! Hook Dispatcher
+//! Hook Dispatcher — receiver-based, comptime-validated.
 //!
-//! Provides a comptime-based hook dispatcher for zero-overhead event handling.
-//! Hooks are resolved entirely at compile time, with no runtime overhead.
+//! Adapted from labelle-core's dispatcher pattern. Provides zero-overhead
+//! event handling with comptime typo detection and optional exhaustive mode.
 
 const std = @import("std");
 
-/// Creates a hook dispatcher from a comptime hook map.
+/// Unwrap pointer types to get the underlying struct for comptime inspection.
+/// *T -> T, **T -> T, T -> T
+pub fn UnwrapReceiver(comptime T: type) type {
+    var Current = T;
+    while (@typeInfo(Current) == .pointer) {
+        Current = @typeInfo(Current).pointer.child;
+    }
+    return Current;
+}
+
+/// Core hook dispatcher — receiver-based, comptime-validated.
 ///
-/// The HookMap should be a struct type where each public declaration is either:
-/// - A function matching the signature for that hook
-/// - A function name matching a hook name (e.g., `game_init`, `scene_load`)
+/// PayloadUnion: tagged union of event payloads (field names = event names)
+/// Receiver: struct (or pointer to struct) with handler methods matching union field names
+/// Options: .exhaustive = true to require handlers for all events
 ///
 /// Example:
 /// ```zig
 /// const MyHooks = struct {
-///     pub fn game_init(payload: HookPayload) void {
+///     pub fn game_init(_: @This(), info: GameInitInfo) void {
 ///         // Handle game init
-///     }
-///
-///     pub fn scene_load(payload: HookPayload) void {
-///         const info = payload.scene_load;
-///         std.log.info("Scene loaded: {s}", .{info.name});
 ///     }
 /// };
 ///
-/// const Dispatcher = HookDispatcher(EngineHook, HookPayload, MyHooks);
-/// Dispatcher.emit(.{ .scene_load = .{ .name = "main" } });
+/// const D = HookDispatcher(HookPayload, MyHooks, .{});
+/// const d = D{ .receiver = .{} };
+/// d.emit(.{ .game_init = .{ .allocator = allocator } });
 /// ```
 pub fn HookDispatcher(
-    comptime HookEnum: type,
     comptime PayloadUnion: type,
-    comptime HookMap: type,
+    comptime Receiver: type,
+    comptime options: struct { exhaustive: bool = false },
 ) type {
-    // Validate that PayloadUnion is a union tagged by HookEnum
-    const payload_info = @typeInfo(PayloadUnion);
-    if (payload_info != .@"union") {
-        @compileError("PayloadUnion must be a union type");
-    }
-    if (payload_info.@"union".tag_type != HookEnum) {
-        @compileError("PayloadUnion must be tagged by HookEnum");
+    const Base = UnwrapReceiver(Receiver);
+
+    comptime {
+        for (std.meta.declarations(Base)) |decl| {
+            if (fieldIndex(PayloadUnion, decl.name) == null) {
+                if (@hasDecl(Base, decl.name)) {
+                    const DeclType = @TypeOf(@field(Base, decl.name));
+                    const info = @typeInfo(DeclType);
+                    if (info == .@"fn" and info.@"fn".params.len == 2) {
+                        @compileError(
+                            "Handler '" ++ decl.name ++ "' in " ++ @typeName(Base) ++
+                                " doesn't match any event in " ++ @typeName(PayloadUnion) ++
+                                ". Did you mean one of: " ++ fieldNames(PayloadUnion) ++ "?",
+                        );
+                    }
+                }
+            }
+        }
+
+        if (options.exhaustive) {
+            for (std.meta.fields(PayloadUnion)) |field| {
+                if (!@hasDecl(Base, field.name)) {
+                    @compileError(
+                        "Exhaustive mode: event '" ++ field.name ++ "' in " ++
+                            @typeName(PayloadUnion) ++ " has no handler in " ++
+                            @typeName(Base),
+                    );
+                }
+            }
+        }
     }
 
     return struct {
+        receiver: Receiver,
+
         const Self = @This();
 
-        /// The hook enum type this dispatcher handles.
-        pub const Hook = HookEnum;
-
-        /// The payload union type this dispatcher handles.
-        pub const Payload = PayloadUnion;
-
-        /// The hook handler map type.
-        pub const Handlers = HookMap;
-
-        /// Emit a hook event. Resolved entirely at comptime - no runtime overhead.
-        ///
-        /// If no handler is registered for the hook, this is a no-op.
-        pub inline fn emit(payload: PayloadUnion) void {
-            // Use inline switch to resolve hook name at comptime
+        pub fn emit(self: Self, payload: PayloadUnion) void {
             switch (payload) {
-                inline else => |_, tag| {
-                    const hook_name = @tagName(tag);
-                    if (@hasDecl(HookMap, hook_name)) {
-                        const handler = @field(HookMap, hook_name);
-                        handler(payload);
+                inline else => |data, tag| {
+                    const name = @tagName(tag);
+                    if (@hasDecl(Base, name)) {
+                        @field(Base, name)(self.receiver, data);
                     }
-                    // No handler registered - that's fine, just a no-op
                 },
             }
         }
 
-        /// Check at comptime if a hook has a handler registered.
-        pub fn hasHandler(comptime hook: HookEnum) bool {
-            return @hasDecl(HookMap, @tagName(hook));
-        }
-
-        /// Get the number of hooks that have handlers registered.
-        pub fn handlerCount() comptime_int {
-            var count: comptime_int = 0;
-            for (std.enums.values(HookEnum)) |hook| {
-                if (@hasDecl(HookMap, @tagName(hook))) {
-                    count += 1;
-                }
-            }
-            return count;
+        pub fn hasHandler(comptime event_name: []const u8) bool {
+            return @hasDecl(Base, event_name);
         }
     };
 }
 
-/// Creates an empty hook dispatcher with no handlers.
-/// Useful as a default when no hooks are needed.
-pub fn EmptyDispatcher(comptime HookEnum: type, comptime PayloadUnion: type) type {
-    return HookDispatcher(HookEnum, PayloadUnion, struct {});
-}
-
-/// Merges multiple hook handler structs into one composite dispatcher.
-/// When a hook is emitted, all matching handlers from all structs are called in order.
-///
-/// This enables two-way plugin binding:
-/// - Plugins can provide engine hook handlers that get merged with game hooks
-/// - Each handler struct can implement any subset of hooks
+/// Compose N receiver types into one merged dispatcher.
+/// When a hook is emitted, all matching handlers from all receiver types
+/// are called in order.
 ///
 /// Example:
 /// ```zig
-/// const GameHooks = struct {
-///     pub fn game_init(_: HookPayload) void {
-///         std.log.info("Game started!", .{});
-///     }
-/// };
-///
-/// const PluginHooks = struct {
-///     pub fn game_init(_: HookPayload) void {
-///         std.log.info("Plugin initialized!", .{});
-///     }
-///     pub fn frame_start(payload: HookPayload) void {
-///         // Plugin frame logic
-///     }
-/// };
-///
-/// // Merge game + plugin hooks - both game_init handlers will be called
-/// const AllHooks = MergeHooks(EngineHook, HookPayload, .{ GameHooks, PluginHooks });
-/// const Game = engine.GameWith(AllHooks);
+/// const AllHooks = MergeHooks(HookPayload, .{ GameHooks, PluginHooks });
+/// const hooks = AllHooks{ .receivers = .{ GameHooks{}, PluginHooks{} } };
+/// hooks.emit(.{ .game_init = .{ .allocator = allocator } });
 /// ```
 pub fn MergeHooks(
-    comptime HookEnum: type,
     comptime PayloadUnion: type,
-    comptime handler_structs: anytype,
+    comptime ReceiverTypes: anytype,
 ) type {
-    // Validate that PayloadUnion is a union tagged by HookEnum
-    const payload_info = @typeInfo(PayloadUnion);
-    if (payload_info != .@"union") {
-        @compileError("PayloadUnion must be a union type");
-    }
-    if (payload_info.@"union".tag_type != HookEnum) {
-        @compileError("PayloadUnion must be tagged by HookEnum");
+    comptime {
+        for (ReceiverTypes) |RT| {
+            const Base = UnwrapReceiver(RT);
+            for (std.meta.declarations(Base)) |decl| {
+                if (@hasDecl(Base, decl.name)) {
+                    const DeclType = @TypeOf(@field(Base, decl.name));
+                    const info = @typeInfo(DeclType);
+                    if (info == .@"fn" and info.@"fn".params.len == 2) {
+                        if (fieldIndex(PayloadUnion, decl.name) == null) {
+                            @compileError(
+                                "Handler '" ++ decl.name ++ "' in " ++ @typeName(Base) ++
+                                    " doesn't match any event in " ++ @typeName(PayloadUnion),
+                            );
+                        }
+                    }
+                }
+            }
+        }
     }
 
     return struct {
+        receivers: ReceiverInstances(ReceiverTypes),
+
         const Self = @This();
 
-        /// The hook enum type this dispatcher handles.
-        pub const Hook = HookEnum;
-
-        /// The payload union type this dispatcher handles.
-        pub const Payload = PayloadUnion;
-
-        /// Emit a hook event to all registered handlers.
-        /// Handlers are called in the order the structs appear in handler_structs.
-        /// If no handler is registered for the hook in any struct, this is a no-op.
-        pub inline fn emit(payload: PayloadUnion) void {
+        pub fn emit(self: Self, payload: PayloadUnion) void {
             switch (payload) {
-                inline else => |_, tag| {
-                    const hook_name = @tagName(tag);
-                    inline for (handler_structs) |H| {
-                        if (@hasDecl(H, hook_name)) {
-                            const handler = @field(H, hook_name);
-                            handler(payload);
+                inline else => |data, tag| {
+                    const name = @tagName(tag);
+                    inline for (0..ReceiverTypes.len) |i| {
+                        const Base = UnwrapReceiver(ReceiverTypes[i]);
+                        if (@hasDecl(Base, name)) {
+                            @field(Base, name)(self.receivers[i], data);
                         }
                     }
                 },
             }
         }
-
-        /// Check at comptime if any handler struct has a handler for this hook.
-        pub fn hasHandler(comptime hook: HookEnum) bool {
-            inline for (handler_structs) |H| {
-                if (@hasDecl(H, @tagName(hook))) {
-                    return true;
-                }
-            }
-            return false;
-        }
-
-        /// Get the number of unique hooks that have at least one handler registered.
-        pub fn handlerCount() comptime_int {
-            var count: comptime_int = 0;
-            for (std.enums.values(HookEnum)) |hook| {
-                if (hasHandler(hook)) {
-                    count += 1;
-                }
-            }
-            return count;
-        }
-
-        /// Get the total number of handlers across all structs (including duplicates).
-        pub fn totalHandlerCount() comptime_int {
-            var count: comptime_int = 0;
-            for (std.enums.values(HookEnum)) |hook| {
-                const hook_name = @tagName(hook);
-                inline for (handler_structs) |H| {
-                    if (@hasDecl(H, hook_name)) {
-                        count += 1;
-                    }
-                }
-            }
-            return count;
-        }
     };
+}
+
+fn ReceiverInstances(comptime Types: anytype) type {
+    var fields: [Types.len]std.builtin.Type.StructField = undefined;
+    for (0..Types.len) |i| {
+        const name = std.fmt.comptimePrint("{d}", .{i});
+        fields[i] = .{
+            .name = name,
+            .type = Types[i],
+            .default_value_ptr = null,
+            .is_comptime = false,
+            .alignment = @alignOf(Types[i]),
+        };
+    }
+    return @Type(.{ .@"struct" = .{
+        .layout = .auto,
+        .fields = &fields,
+        .decls = &.{},
+        .is_tuple = true,
+    } });
+}
+
+fn fieldIndex(comptime T: type, comptime name: []const u8) ?usize {
+    for (std.meta.fields(T), 0..) |field, i| {
+        if (std.mem.eql(u8, field.name, name)) return i;
+    }
+    return null;
+}
+
+fn fieldNames(comptime T: type) []const u8 {
+    comptime {
+        var result: []const u8 = "";
+        for (std.meta.fields(T), 0..) |field, i| {
+            if (i > 0) result = result ++ ", ";
+            result = result ++ field.name;
+        }
+        return result;
+    }
 }

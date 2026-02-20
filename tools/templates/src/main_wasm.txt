@@ -79,7 +79,7 @@ export fn init() void {{
     const ctx = engine.SceneContext.init(state.game.?);
 
     // Emit scene_before_load hook
-    Game.HookDispatcher.emit(.{{ .scene_before_load = .{{ .name = initial_scene.name, .allocator = allocator }} }});
+    state.game.?.hook_dispatcher.emit(.{{ .scene_before_load = .{{ .name = initial_scene.name, .allocator = allocator }} }});
 
     // Load initial scene (embedded at compile time)
     scene_storage = Loader.load(initial_scene, ctx) catch |err| {{
@@ -90,7 +90,7 @@ export fn init() void {{
     state.scene = &scene_storage;
 
     // Emit scene_load hook
-    Game.HookDispatcher.emit(.{{ .scene_load = .{{ .name = initial_scene.name }} }});
+    state.game.?.hook_dispatcher.emit(.{{ .scene_load = .{{ .name = initial_scene.name }} }});
 
     state.initialized = true;
     std.log.info("WASM game initialized! Canvas: {{}}x{{}}", .{{ sapp.width(), sapp.height() }});
@@ -146,7 +146,7 @@ export fn frame() void {{
 .cleanup_cb
 export fn cleanup() void {{
     if (state.initialized and state.game != null) {{
-        Game.HookDispatcher.emit(.{{ .scene_unload = .{{ .name = initial_scene.name }} }});
+        state.game.?.hook_dispatcher.emit(.{{ .scene_unload = .{{ .name = initial_scene.name }} }});
     }}
 
     if (state.scene) |scene| {{
@@ -155,7 +155,7 @@ export fn cleanup() void {{
     }}
 
     if (state.game) |game| {{
-        Game.HookDispatcher.emit(.{{ .game_deinit = .{{}} }});
+        state.game.?.hook_dispatcher.emit(.{{ .game_deinit = .{{}} }});
         game.deinit();
         state.game = null;
     }}

@@ -65,20 +65,20 @@ pub fn main() !void {{
     const ctx = engine.SceneContext.init(&game);
 
     // Emit scene_before_load hook for initial scene (mirrors Game.setScene behavior)
-    Game.HookDispatcher.emit(.{{ .scene_before_load = .{{ .name = initial_scene.name, .allocator = allocator }} }});
+    game.hook_dispatcher.emit(.{{ .scene_before_load = .{{ .name = initial_scene.name, .allocator = allocator }} }});
 
     var scene = try Loader.load(initial_scene, ctx);
     defer scene.deinit();
 
     // Emit scene_load hook for initial scene (mirrors Game.setScene behavior)
-    Game.HookDispatcher.emit(.{{ .scene_load = .{{ .name = initial_scene.name }} }});
+    game.hook_dispatcher.emit(.{{ .scene_load = .{{ .name = initial_scene.name }} }});
 
     defer {{
         // Only emit scene_unload for initial scene if no scene change occurred.
         // If game.setScene() was called, Game.deinit() handles the unload hook
         // for the current scene, so we shouldn't double-emit for initial_scene.
         if (game.getCurrentSceneName() == null) {{
-            Game.HookDispatcher.emit(.{{ .scene_unload = .{{ .name = initial_scene.name }} }});
+            game.hook_dispatcher.emit(.{{ .scene_unload = .{{ .name = initial_scene.name }} }});
         }}
     }}
 

@@ -1,0 +1,23 @@
+.{
+    .fingerprint = 0xdf2232b0e87a2da1,
+    .name = .labelle_core_poc,
+    .version = "0.0.1",
+    .minimum_zig_version = "0.15.2",
+    .dependencies = .{
+        .micro_core = .{
+            .path = "micro_core",
+        },
+        .micro_engine = .{
+            .path = "micro_engine",
+        },
+        .micro_plugin = .{
+            .path = "micro_plugin",
+        },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "main.zig",
+        "tests.zig",
+    },
+}

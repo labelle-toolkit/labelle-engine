@@ -56,7 +56,7 @@ pub fn HierarchyMixin(comptime GameType: type) type {
             // Walk up ancestor chain to detect cycles
             var current = new_parent;
             var depth: u8 = 0;
-            while (g.registry.tryGet(Parent, current)) |parent_comp| {
+            while (g.registry.getComponent(current, Parent)) |parent_comp| {
                 if (parent_comp.entity == child) {
                     return HierarchyError.CircularHierarchy;
                 }
@@ -68,7 +68,7 @@ pub fn HierarchyMixin(comptime GameType: type) type {
             }
 
             // Remove from old parent's children list if re-parenting
-            if (g.registry.tryGet(Parent, child)) |old_parent_comp| {
+            if (g.registry.getComponent(child, Parent)) |old_parent_comp| {
                 self.removeFromChildrenList(old_parent_comp.entity, child);
                 // Update existing Parent component
                 old_parent_comp.entity = new_parent;
@@ -76,7 +76,7 @@ pub fn HierarchyMixin(comptime GameType: type) type {
                 old_parent_comp.inherit_scale = false;
             } else {
                 // Add new Parent component
-                g.registry.add(child, Parent{ .entity = new_parent });
+                g.registry.addComponent(child, Parent{ .entity = new_parent });
             }
 
             // Update cached hierarchy flag for the render pipeline
@@ -98,7 +98,7 @@ pub fn HierarchyMixin(comptime GameType: type) type {
             try self.setParent(child, new_parent);
             const g = self.game();
             // Update the Parent component with options
-            if (g.registry.tryGet(Parent, child)) |parent_comp| {
+            if (g.registry.getComponent(child, Parent)) |parent_comp| {
                 parent_comp.inherit_rotation = inherit_rotation;
                 parent_comp.inherit_scale = inherit_scale;
             }
@@ -122,7 +122,7 @@ pub fn HierarchyMixin(comptime GameType: type) type {
 
             // Restore world transform by computing the required local offset
             if (saved_transform) |wt| {
-                const pos = g.registry.tryGet(Position, child) orelse return;
+                const pos = g.registry.getComponent(child, Position) orelse return;
                 const parent_world = g.pos.getWorldTransform(new_parent);
                 const pw_x = if (parent_world) |pw| pw.x else 0;
                 const pw_y = if (parent_world) |pw| pw.y else 0;
@@ -167,21 +167,21 @@ pub fn HierarchyMixin(comptime GameType: type) type {
         fn removeParentInternal(self: *Self, child: Entity, keep_world_transform: bool) void {
             const g = self.game();
 
-            if (g.registry.tryGet(Parent, child)) |parent_comp| {
+            if (g.registry.getComponent(child, Parent)) |parent_comp| {
                 // Save world transform before removing parent
                 const saved_transform = if (keep_world_transform) g.pos.getWorldTransform(child) else null;
 
                 // Remove from parent's children list
                 self.removeFromChildrenList(parent_comp.entity, child);
                 // Remove the Parent component
-                g.registry.remove(Parent, child);
+                g.registry.removeComponent(child, Parent);
 
                 // Update cached hierarchy flag for the render pipeline
                 g.pipeline.updateHierarchyFlag(child, false);
 
                 // Restore: for a root entity, local transform IS world transform
                 if (saved_transform) |wt| {
-                    if (g.registry.tryGet(Position, child)) |pos| {
+                    if (g.registry.getComponent(child, Position)) |pos| {
                         pos.x = wt.x;
                         pos.y = wt.y;
                         pos.rotation = wt.rotation;
@@ -197,7 +197,7 @@ pub fn HierarchyMixin(comptime GameType: type) type {
         /// Get the parent entity, or null if this is a root entity
         pub fn getParent(self: *Self, entity: Entity) ?Entity {
             const g = self.game();
-            if (g.registry.tryGet(Parent, entity)) |parent_comp| {
+            if (g.registry.getComponent(entity, Parent)) |parent_comp| {
                 return parent_comp.entity;
             }
             return null;
@@ -206,7 +206,7 @@ pub fn HierarchyMixin(comptime GameType: type) type {
         /// Get the children of an entity
         pub fn getChildren(self: *Self, entity: Entity) []const Entity {
             const g = self.game();
-            if (g.registry.tryGet(Children, entity)) |children_comp| {
+            if (g.registry.getComponent(entity, Children)) |children_comp| {
                 return children_comp.entities;
             }
             return &.{};
@@ -215,7 +215,7 @@ pub fn HierarchyMixin(comptime GameType: type) type {
         /// Check if an entity has children
         pub fn hasChildren(self: *Self, entity: Entity) bool {
             const g = self.game();
-            if (g.registry.tryGet(Children, entity)) |children_comp| {
+            if (g.registry.getComponent(entity, Children)) |children_comp| {
                 return children_comp.entities.len > 0;
             }
             return false;
@@ -224,13 +224,13 @@ pub fn HierarchyMixin(comptime GameType: type) type {
         /// Check if an entity is a root (has no parent)
         pub fn isRoot(self: *Self, entity: Entity) bool {
             const g = self.game();
-            return g.registry.tryGet(Parent, entity) == null;
+            return g.registry.getComponent(entity, Parent) == null;
         }
 
         // Internal: Add child to parent's Children component
         fn addToChildrenList(self: *Self, parent_entity: Entity, child: Entity) void {
             const g = self.game();
-            if (g.registry.tryGet(Children, parent_entity)) |children_comp| {
+            if (g.registry.getComponent(parent_entity, Children)) |children_comp| {
                 // Allocate new slice with child added
                 const old_entities = children_comp.entities;
                 const new_entities = g.allocator.alloc(Entity, old_entities.len + 1) catch return;
@@ -245,14 +245,14 @@ pub fn HierarchyMixin(comptime GameType: type) type {
                 // Create new Children component
                 const new_entities = g.allocator.alloc(Entity, 1) catch return;
                 new_entities[0] = child;
-                g.registry.add(parent_entity, Children{ .entities = new_entities });
+                g.registry.addComponent(parent_entity, Children{ .entities = new_entities });
             }
         }
 
         // Internal: Remove child from parent's Children component
         fn removeFromChildrenList(self: *Self, parent_entity: Entity, child: Entity) void {
             const g = self.game();
-            if (g.registry.tryGet(Children, parent_entity)) |children_comp| {
+            if (g.registry.getComponent(parent_entity, Children)) |children_comp| {
                 const old_entities = children_comp.entities;
                 if (old_entities.len == 0) return;
 
@@ -261,7 +261,7 @@ pub fn HierarchyMixin(comptime GameType: type) type {
                     if (old_entities.len == 1) {
                         // Last child, remove Children component
                         g.allocator.free(@constCast(old_entities));
-                        g.registry.remove(Children, parent_entity);
+                        g.registry.removeComponent(parent_entity, Children);
                     } else {
                         // Allocate new slice without child
                         const new_entities = g.allocator.alloc(Entity, old_entities.len - 1) catch return;

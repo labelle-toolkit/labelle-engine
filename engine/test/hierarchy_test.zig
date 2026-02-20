@@ -55,8 +55,8 @@ fn deinitTestGame(game: *Game) void {
 
 /// Helper: create an entity with a Position component
 fn createEntityAt(game: *Game, x: f32, y: f32) Entity {
-    const e = game.registry.create();
-    game.registry.add(e, Position{ .x = x, .y = y });
+    const e = game.registry.createEntity();
+    game.registry.addComponent(e, Position{ .x = x, .y = y });
     return e;
 }
 
@@ -243,7 +243,7 @@ pub const SET_PARENT_WITH_OPTIONS = struct {
 
             try game.hierarchy.setParentWithOptions(child, parent, true, false);
 
-            const parent_comp = game.registry.tryGet(Parent, child).?;
+            const parent_comp = game.registry.getComponent(child, Parent).?;
             try expect.toBeTrue(parent_comp.inherit_rotation);
             try expect.toBeFalse(parent_comp.inherit_scale);
         }
@@ -258,7 +258,7 @@ pub const SET_PARENT_WITH_OPTIONS = struct {
 
             try game.hierarchy.setParentWithOptions(child, parent, false, true);
 
-            const parent_comp = game.registry.tryGet(Parent, child).?;
+            const parent_comp = game.registry.getComponent(child, Parent).?;
             try expect.toBeFalse(parent_comp.inherit_rotation);
             try expect.toBeTrue(parent_comp.inherit_scale);
         }

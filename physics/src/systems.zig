@@ -78,7 +78,7 @@ pub fn Systems(comptime Position: type) type {
                 };
 
                 // Add collider if present
-                if (registry.tryGet(Collider, item.entity)) |collider| {
+                if (registry.getComponent(item.entity, Collider)) |collider| {
                     world.addCollider(entity, collider.*) catch |err| {
                         std.log.err("Failed to add collider for entity {}: {}", .{ entity, err });
                     };
@@ -94,7 +94,7 @@ pub fn Systems(comptime Position: type) type {
             world: *PhysicsWorld,
             registry: anytype,
         ) void {
-            const EntityType = std.meta.Child(@TypeOf(registry)).EntityType;
+            const EntityType = std.meta.Child(@TypeOf(registry)).Entity;
 
             // Iterate over all physics bodies and check if entity still exists
             var entities_to_remove = std.ArrayList(u64).init(world.allocator);
@@ -104,7 +104,7 @@ pub fn Systems(comptime Position: type) type {
             while (iter.next()) |entity| {
                 // Check if entity exists in registry
                 const ecs_entity = entityFromU64(entity.*, EntityType);
-                if (!registry.isValid(ecs_entity)) {
+                if (!registry.entityExists(ecs_entity)) {
                     entities_to_remove.append(entity.*) catch continue;
                 }
             }
@@ -264,32 +264,32 @@ pub fn Systems(comptime Position: type) type {
             world: *PhysicsWorld,
             registry: anytype,
         ) void {
-            const EntityType = std.meta.Child(@TypeOf(registry)).EntityType;
+            const EntityType = std.meta.Child(@TypeOf(registry)).Entity;
 
             // Process collision begin events - add to Touching
             for (world.getCollisionBeginEvents()) |event| {
                 // Update entity A's Touching to include B
                 const entity_a = entityFromU64(event.entity_a, EntityType);
-                if (registry.tryGetPtr(Touching, entity_a)) |touching_a| {
+                if (registry.getComponentPtr(entity_a, Touching)) |touching_a| {
                     touching_a.add(event.entity_b);
-                } else if (registry.isValid(entity_a)) {
+                } else if (registry.entityExists(entity_a)) {
                     // Auto-add Touching component if entity has RigidBody
-                    if (registry.tryGet(RigidBody, entity_a)) |_| {
+                    if (registry.getComponent(entity_a, RigidBody)) |_| {
                         var touching = Touching{};
                         touching.add(event.entity_b);
-                        registry.add(entity_a, touching);
+                        registry.addComponent(entity_a, touching);
                     }
                 }
 
                 // Update entity B's Touching to include A
                 const entity_b = entityFromU64(event.entity_b, EntityType);
-                if (registry.tryGetPtr(Touching, entity_b)) |touching_b| {
+                if (registry.getComponentPtr(entity_b, Touching)) |touching_b| {
                     touching_b.add(event.entity_a);
-                } else if (registry.isValid(entity_b)) {
-                    if (registry.tryGet(RigidBody, entity_b)) |_| {
+                } else if (registry.entityExists(entity_b)) {
+                    if (registry.getComponent(entity_b, RigidBody)) |_| {
                         var touching = Touching{};
                         touching.add(event.entity_a);
-                        registry.add(entity_b, touching);
+                        registry.addComponent(entity_b, touching);
                     }
                 }
             }
@@ -297,12 +297,12 @@ pub fn Systems(comptime Position: type) type {
             // Process collision end events - remove from Touching
             for (world.getCollisionEndEvents()) |event| {
                 const entity_a = entityFromU64(event.entity_a, EntityType);
-                if (registry.tryGetPtr(Touching, entity_a)) |touching_a| {
+                if (registry.getComponentPtr(entity_a, Touching)) |touching_a| {
                     touching_a.remove(event.entity_b);
                 }
 
                 const entity_b = entityFromU64(event.entity_b, EntityType);
-                if (registry.tryGetPtr(Touching, entity_b)) |touching_b| {
+                if (registry.getComponentPtr(entity_b, Touching)) |touching_b| {
                     touching_b.remove(event.entity_a);
                 }
             }
@@ -310,20 +310,20 @@ pub fn Systems(comptime Position: type) type {
             // Process sensor events similarly
             for (world.getSensorEnterEvents()) |event| {
                 const sensor_entity = entityFromU64(event.sensor_entity, EntityType);
-                if (registry.tryGetPtr(Touching, sensor_entity)) |touching| {
+                if (registry.getComponentPtr(sensor_entity, Touching)) |touching| {
                     touching.add(event.other_entity);
-                } else if (registry.isValid(sensor_entity)) {
-                    if (registry.tryGet(RigidBody, sensor_entity)) |_| {
+                } else if (registry.entityExists(sensor_entity)) {
+                    if (registry.getComponent(sensor_entity, RigidBody)) |_| {
                         var touching = Touching{};
                         touching.add(event.other_entity);
-                        registry.add(sensor_entity, touching);
+                        registry.addComponent(sensor_entity, touching);
                     }
                 }
             }
 
             for (world.getSensorExitEvents()) |event| {
                 const sensor_entity = entityFromU64(event.sensor_entity, EntityType);
-                if (registry.tryGetPtr(Touching, sensor_entity)) |touching| {
+                if (registry.getComponentPtr(sensor_entity, Touching)) |touching| {
                     touching.remove(event.other_entity);
                 }
             }

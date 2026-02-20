@@ -192,6 +192,10 @@ pub fn build(b: *std.Build) void {
     // Interface Modules
     // ==========================================================================
 
+    // labelle-core plugin SDK (RFC #289) — needed by ecs_interface for core.Ecs(Backend) trait
+    const labelle_core_dep = b.dependency("labelle-core", .{ .target = target, .optimize = optimize });
+    const labelle_core_mod = labelle_core_dep.module("labelle-core");
+
     // ECS interface
     const ecs_interface = b.addModule("ecs", .{
         .root_source_file = b.path("ecs/interface.zig"),
@@ -202,6 +206,7 @@ pub fn build(b: *std.Build) void {
             .{ .name = "zig_ecs", .module = zig_ecs_module },
         },
     });
+    ecs_interface.addImport("labelle-core", labelle_core_mod);
     if (zflecs_module) |m| ecs_interface.addImport("zflecs", m);
     if (mr_ecs_module) |m| ecs_interface.addImport("mr_ecs", m);
 
@@ -313,7 +318,7 @@ pub fn build(b: *std.Build) void {
     // Core Modules
     // ==========================================================================
 
-    const core_mod = b.addModule("labelle-core", .{
+    const core_mod = b.addModule("engine-utils", .{
         .root_source_file = b.path("core/mod.zig"),
         .target = target,
         .optimize = optimize,
@@ -352,6 +357,7 @@ pub fn build(b: *std.Build) void {
             .{ .name = "audio", .module = audio_interface },
             .{ .name = "gui", .module = gui_interface },
             .{ .name = "build_options", .module = build_options_mod },
+            .{ .name = "labelle-core", .module = labelle_core_mod },
         },
     });
 
@@ -377,6 +383,7 @@ pub fn build(b: *std.Build) void {
                     .{ .name = "input", .module = input_interface },
                     .{ .name = "audio", .module = audio_interface },
                     .{ .name = "build_options", .module = build_options_mod },
+                    .{ .name = "labelle-core", .module = labelle_core_mod },
                 },
             }),
         });
@@ -394,7 +401,7 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
             .imports = &.{
                 .{ .name = "zspec", .module = zspec },
-                .{ .name = "labelle-core", .module = core_mod },
+                .{ .name = "engine-utils", .module = core_mod },
             },
         }),
         .test_runner = .{ .path = zspec_dep.path("src/runner.zig"), .mode = .simple },

@@ -144,7 +144,7 @@ pub const Scene = struct {
                 destroy_fn(entityToU64(instance.entity), @ptrCast(g));
             }
             g.getPipeline().untrackEntity(instance.entity);
-            g.getRegistry().destroy(instance.entity);
+            g.getRegistry().destroyEntity(instance.entity);
         }
 
         // 4. Free entity list and allocated slices

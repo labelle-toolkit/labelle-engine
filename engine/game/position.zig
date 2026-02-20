@@ -37,20 +37,20 @@ pub fn PositionMixin(comptime GameType: type) type {
 
         /// Add Position component to an entity (local coordinates)
         pub fn addPosition(self: *Self, entity: Entity, position: Position) void {
-            self.game().registry.add(entity, position);
+            self.game().registry.addComponent(entity, position);
         }
 
         // ── Local Position API ────────────────────────────────────
 
         /// Get local Position component (relative to parent, or world if no parent)
         pub fn getLocalPosition(self: *Self, entity: Entity) ?*Position {
-            return self.game().registry.tryGet(Position, entity);
+            return self.game().registry.getComponent(entity, Position);
         }
 
         /// Set local Position component (marks dirty for sync)
         pub fn setLocalPosition(self: *Self, entity: Entity, position: Position) void {
             const g = self.game();
-            if (g.registry.tryGet(Position, entity)) |p| {
+            if (g.registry.getComponent(entity, Position)) |p| {
                 p.* = position;
                 g.pipeline.markPositionDirty(entity);
             }
@@ -59,7 +59,7 @@ pub fn PositionMixin(comptime GameType: type) type {
         /// Set local Position using x, y coordinates directly (marks dirty for sync)
         pub fn setLocalPositionXY(self: *Self, entity: Entity, x: f32, y: f32) void {
             const g = self.game();
-            if (g.registry.tryGet(Position, entity)) |p| {
+            if (g.registry.getComponent(entity, Position)) |p| {
                 p.x = x;
                 p.y = y;
                 g.pipeline.markPositionDirty(entity);
@@ -69,7 +69,7 @@ pub fn PositionMixin(comptime GameType: type) type {
         /// Move local Position by delta values (marks dirty for sync)
         pub fn moveLocalPosition(self: *Self, entity: Entity, dx: f32, dy: f32) void {
             const g = self.game();
-            if (g.registry.tryGet(Position, entity)) |p| {
+            if (g.registry.getComponent(entity, Position)) |p| {
                 p.x += dx;
                 p.y += dy;
                 g.pipeline.markPositionDirty(entity);
@@ -96,10 +96,10 @@ pub fn PositionMixin(comptime GameType: type) type {
             }
 
             // Get this entity's local position
-            const local_pos = g.registry.tryGet(Position, entity) orelse return null;
+            const local_pos = g.registry.getComponent(entity, Position) orelse return null;
 
             // Check if this entity has a parent
-            const parent_comp = g.registry.tryGet(Parent, entity) orelse {
+            const parent_comp = g.registry.getComponent(entity, Parent) orelse {
                 // No parent - local position IS world position
                 return WorldTransform{
                     .x = local_pos.x,
@@ -163,10 +163,10 @@ pub fn PositionMixin(comptime GameType: type) type {
         /// Adjusts local position so that world position matches the given coordinates.
         pub fn setWorldPosition(self: *Self, entity: Entity, world_x: f32, world_y: f32) void {
             const g = self.game();
-            const pos = g.registry.tryGet(Position, entity) orelse return;
+            const pos = g.registry.getComponent(entity, Position) orelse return;
 
             // If no parent, local position IS world position
-            const parent_comp = g.registry.tryGet(Parent, entity) orelse {
+            const parent_comp = g.registry.getComponent(entity, Parent) orelse {
                 pos.x = world_x;
                 pos.y = world_y;
                 g.pipeline.markPositionDirty(entity);
