@@ -37,12 +37,14 @@ pub fn loadDesktopDeps(
     comptime {
         _ = @field(@TypeOf(backend), "wgpu_native");
     }
-    // zbgfx
-    const zbgfx_dep = labelle_dep.builder.dependency("zbgfx", .{
-        .target = target,
-        .optimize = optimize,
-    });
-    const zbgfx = zbgfx_dep.module("zbgfx");
+    // zbgfx — only fetch when bgfx backend is selected
+    const zbgfx: ?*std.Build.Module = if (backend == .bgfx)
+        labelle_dep.builder.dependency("zbgfx", .{
+            .target = target,
+            .optimize = optimize,
+        }).module("zbgfx")
+    else
+        null;
 
     // wgpu_native — only fetch when needed
     const wgpu_native: ?*std.Build.Module = if (backend == .wgpu_native)
@@ -53,12 +55,14 @@ pub fn loadDesktopDeps(
     else
         null;
 
-    // zglfw
-    const zglfw_dep = labelle_dep.builder.dependency("zglfw", .{
-        .target = target,
-        .optimize = optimize,
-    });
-    const zglfw = zglfw_dep.module("root");
+    // zglfw — only fetch when bgfx or wgpu_native backends are selected
+    const zglfw: ?*std.Build.Module = if (backend == .bgfx or backend == .wgpu_native)
+        labelle_dep.builder.dependency("zglfw", .{
+            .target = target,
+            .optimize = optimize,
+        }).module("root")
+    else
+        null;
 
     // zaudio
     const zaudio_dep = b.dependency("zaudio", .{
