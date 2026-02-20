@@ -313,7 +313,7 @@ pub fn build(b: *std.Build) void {
     // Core Modules
     // ==========================================================================
 
-    const core_mod = b.addModule("labelle-core", .{
+    const core_mod = b.addModule("engine-utils", .{
         .root_source_file = b.path("core/mod.zig"),
         .target = target,
         .optimize = optimize,
@@ -321,6 +321,10 @@ pub fn build(b: *std.Build) void {
             .{ .name = "ecs", .module = ecs_interface },
         },
     });
+
+    // labelle-core plugin SDK (RFC #289)
+    const labelle_core_dep = b.dependency("labelle-core", .{ .target = target, .optimize = optimize });
+    const labelle_core_mod = labelle_core_dep.module("labelle-core");
 
     _ = b.addModule("labelle-hooks", .{
         .root_source_file = b.path("hooks/mod.zig"),
@@ -352,6 +356,7 @@ pub fn build(b: *std.Build) void {
             .{ .name = "audio", .module = audio_interface },
             .{ .name = "gui", .module = gui_interface },
             .{ .name = "build_options", .module = build_options_mod },
+            .{ .name = "labelle-core", .module = labelle_core_mod },
         },
     });
 
@@ -394,7 +399,7 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
             .imports = &.{
                 .{ .name = "zspec", .module = zspec },
-                .{ .name = "labelle-core", .module = core_mod },
+                .{ .name = "engine-utils", .module = core_mod },
             },
         }),
         .test_runner = .{ .path = zspec_dep.path("src/runner.zig"), .mode = .simple },

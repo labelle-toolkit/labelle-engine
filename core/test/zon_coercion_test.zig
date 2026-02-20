@@ -4,7 +4,7 @@
 //! including tagged union coercion.
 
 const std = @import("std");
-const zon = @import("labelle-core").zon;
+const zon = @import("engine-utils").zon;
 
 // ============================================================================
 // Test Types

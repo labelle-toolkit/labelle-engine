@@ -21,6 +21,11 @@
             .url = "git+https://github.com/apotema/zspec#71c901d6e74b2d5a8c556d4c74ced9b91446d8a4",
             .hash = "zspec-0.6.0-jaKLbU5DAwAYa0jR0cnFGuIbSrxD6ojh-oyXj9ooyb3V",
         },
+        // labelle-core plugin SDK (RFC #289)
+        .@"labelle-core" = .{
+            .url = "https://github.com/labelle-toolkit/labelle-core/archive/refs/tags/v0.1.0.tar.gz",
+            .hash = "labelle_core-0.1.0-CcnR4NVoAADWy52xiNOCyyevZ-2b1gsl52TKQk4lWRiT",
+        },
         .zts = .{
             .url = "git+https://github.com/zigster64/zts#ca98e23fcf1a4fa331c80f5cd2e72f6838daf7ee",
             .hash = "zts-0.14.1-_M80Of22AgBwArz6uCXR49IoEjlzNt5yhu7KV8cWl5jr",
