@@ -149,6 +149,7 @@ pub fn GizmosMixin(comptime GameType: type) type {
         pub fn drawArrow(self: *Self, x1: f32, y1: f32, x2: f32, y2: f32, color: Color) void {
             self.drawGizmo(.{ .arrow = .{
                 .delta = .{ .x = x2 - x1, .y = y2 - y1 },
+                .thickness = 2,
             } }, x1, y1, color);
         }
 
@@ -157,6 +158,7 @@ pub fn GizmosMixin(comptime GameType: type) type {
             self.drawGizmo(.{ .ray = .{
                 .direction = .{ .x = dir_x, .y = dir_y },
                 .length = length,
+                .thickness = 2,
             } }, x, y, color);
         }
 
@@ -164,6 +166,7 @@ pub fn GizmosMixin(comptime GameType: type) type {
         pub fn drawLine(self: *Self, x1: f32, y1: f32, x2: f32, y2: f32, color: Color) void {
             self.drawGizmo(.{ .line = .{
                 .end = .{ .x = x2 - x1, .y = y2 - y1 },
+                .thickness = 2,
             } }, x1, y1, color);
         }
 
@@ -205,9 +208,62 @@ pub fn GizmosMixin(comptime GameType: type) type {
             const g = self.game();
             if (!g.gizmos_enabled) return;
 
+            const camera = g.retained_engine.cameras.getCamera();
+            const screen_height = g.pipeline.screen_height;
+            const zoom = camera.zoom;
+
             for (g.standalone_gizmos.items) |gizmo| {
-                g.retained_engine.drawShapeWorld(gizmo.shape, .{ .x = gizmo.x, .y = gizmo.y }, gizmo.color);
+                // Convert game Y-up to retained engine Y-down
+                const world_x = gizmo.x;
+                const world_y = screen_height - gizmo.y;
+
+                // Convert world coords to screen pixels via camera
+                const screen_pos = camera.worldToScreen(world_x, world_y);
+
+                // Flip shape vectors for Y-up to Y-down, and scale by zoom
+                const screen_shape = transformShapeForScreen(gizmo.shape, zoom);
+
+                g.retained_engine.drawShapeScreen(screen_shape, .{ .x = screen_pos.x, .y = screen_pos.y }, gizmo.color);
             }
+        }
+
+        /// Transform shape vectors from game Y-up to screen Y-down,
+        /// scaling relative vectors by camera zoom for correct screen-space rendering.
+        fn transformShapeForScreen(shape: GizmoShape, zoom: f32) GizmoShape {
+            return switch (shape) {
+                .circle => |c| .{ .circle = .{
+                    .radius = c.radius * zoom,
+                    .fill = c.fill,
+                    .thickness = c.thickness,
+                } },
+                .rectangle => |r| .{ .rectangle = .{
+                    .width = r.width * zoom,
+                    .height = r.height * zoom,
+                    .fill = r.fill,
+                    .thickness = r.thickness,
+                } },
+                .polygon => shape,
+                .line => |l| .{ .line = .{
+                    .end = .{ .x = l.end.x * zoom, .y = -l.end.y * zoom },
+                    .thickness = l.thickness,
+                } },
+                .triangle => |t| .{ .triangle = .{
+                    .p2 = .{ .x = t.p2.x * zoom, .y = -t.p2.y * zoom },
+                    .p3 = .{ .x = t.p3.x * zoom, .y = -t.p3.y * zoom },
+                    .fill = t.fill,
+                } },
+                .arrow => |a| .{ .arrow = .{
+                    .delta = .{ .x = a.delta.x * zoom, .y = -a.delta.y * zoom },
+                    .head_size = a.head_size * zoom,
+                    .thickness = a.thickness,
+                    .fill = a.fill,
+                } },
+                .ray => |r| .{ .ray = .{
+                    .direction = .{ .x = r.direction.x, .y = -r.direction.y },
+                    .length = r.length * zoom,
+                    .thickness = r.thickness,
+                } },
+            };
         }
     };
 }
