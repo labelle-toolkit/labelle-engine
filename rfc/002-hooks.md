@@ -4,7 +4,7 @@
 **Issue**: [#289](https://github.com/labelle-toolkit/labelle-engine/issues/289)
 **Date**: 2026-02-16
 **Parent**: [RFC 001 — labelle-core](001-labelle-core.md)
-**POC**: `rfc/poc/micro_core/dispatcher.zig`, `rfc/poc/micro_core/plugin.zig`
+**POC**: `rfc/poc/micro_core/dispatcher.zig`, `rfc/poc/micro_core/context.zig`
 
 ## Problem
 

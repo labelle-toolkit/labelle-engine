@@ -522,7 +522,7 @@ All 6 core components are validated by the POC (`rfc/poc/`):
 | PluginContext | `micro_core/context.zig` | type validation, works with TestContext |
 | TestContext | `micro_core/context.zig` | ECS without boilerplate, plugin integration |
 | RecordingHooks | `micro_core/context.zig` | event sequence, reset, engine integration |
-| PluginHooks | `micro_core/plugin.zig` | bidirectional emit/handle |
+| PluginHooks | `micro_plugin/root.zig` | bidirectional emit/handle via BoundReceiver |
 | Full plugin pattern | `micro_plugin/root.zig` | inventory: add/remove/clear/stack/lifecycle/hooks |
 
 22 tests total, all passing.

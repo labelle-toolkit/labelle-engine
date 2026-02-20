@@ -40,7 +40,7 @@ pub fn InventoryPlugin(comptime EcsType: type, comptime Item: type) type {
             const max_slots = 16;
 
             pub fn init(capacity: u32) Inventory {
-                return .{ .capacity = capacity };
+                return .{ .capacity = @min(capacity, max_slots) };
             }
 
             pub fn itemCount(self: *const Inventory) u32 {
