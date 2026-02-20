@@ -105,11 +105,13 @@ pub fn RecordingHooks(comptime PayloadUnion: type) type {
             self.tags.deinit(self.allocator);
         }
 
-        /// Record an event. Compatible with HookSystem emit interface.
+        /// Record an event tag for later assertion.
+        /// Panics on OOM — acceptable for test utilities using std.testing.allocator.
         pub fn emit(self: *Self, payload: PayloadUnion) void {
             switch (payload) {
                 inline else => |_, tag| {
-                    self.tags.append(self.allocator, tag) catch @panic("OOM in RecordingHooks");
+                    self.tags.append(self.allocator, tag) catch |err|
+                        std.debug.panic("RecordingHooks.emit: failed to record {s}: {s}", .{ @tagName(tag), @errorName(err) });
                 },
             }
         }

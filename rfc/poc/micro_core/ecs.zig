@@ -60,6 +60,7 @@ pub fn MockEcsBackend(comptime EntityType: type) type {
         pub const Entity = EntityType;
 
         const CleanupFn = *const fn (*Self) void;
+        const RemoveEntityFn = *const fn (*Self, EntityType) void;
 
         next_id: EntityType = 1,
         alive: std.AutoHashMap(EntityType, void),
@@ -67,6 +68,8 @@ pub fn MockEcsBackend(comptime EntityType: type) type {
         storages: std.AutoHashMap(usize, *anyopaque),
         // Cleanup functions for each storage
         cleanups: std.ArrayListUnmanaged(CleanupFn) = .{},
+        // Per-storage entity removal functions (for destroyEntity cleanup)
+        remove_fns: std.ArrayListUnmanaged(RemoveEntityFn) = .{},
         allocator: std.mem.Allocator,
 
         const Self = @This();
@@ -84,6 +87,7 @@ pub fn MockEcsBackend(comptime EntityType: type) type {
                 cleanup(self);
             }
             self.cleanups.deinit(self.allocator);
+            self.remove_fns.deinit(self.allocator);
             self.storages.deinit();
             self.alive.deinit();
         }
@@ -97,6 +101,10 @@ pub fn MockEcsBackend(comptime EntityType: type) type {
 
         pub fn destroyEntity(self: *Self, entity: EntityType) void {
             _ = self.alive.remove(entity);
+            // Clean up components from all storages
+            for (self.remove_fns.items) |remove_fn| {
+                remove_fn(self, entity);
+            }
         }
 
         pub fn entityExists(self: *Self, entity: EntityType) bool {
@@ -145,6 +153,17 @@ pub fn MockEcsBackend(comptime EntityType: type) type {
                     }
                 }
             }.cleanup) catch @panic("OOM");
+
+            // Register per-entity removal function for destroyEntity cleanup
+            self.remove_fns.append(self.allocator, &struct {
+                fn remove(s: *Self, entity: EntityType) void {
+                    const id = typeId(T);
+                    if (s.storages.get(id)) |raw| {
+                        const typed: *std.AutoHashMap(EntityType, T) = @ptrCast(@alignCast(raw));
+                        _ = typed.remove(entity);
+                    }
+                }
+            }.remove) catch @panic("OOM");
 
             return storage;
         }
