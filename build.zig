@@ -382,6 +382,7 @@ pub fn build(b: *std.Build) void {
                     .{ .name = "input", .module = input_interface },
                     .{ .name = "audio", .module = audio_interface },
                     .{ .name = "build_options", .module = build_options_mod },
+                    .{ .name = "labelle-core", .module = labelle_core_mod },
                 },
             }),
         });
