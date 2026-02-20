@@ -293,14 +293,14 @@ pub fn main() !void {{
     const ctx = engine.SceneContext.init(&game);
 
     // Emit scene_before_load hook
-    Game.HookDispatcher.emit(.{{ .scene_before_load = .{{ .name = initial_scene.name, .allocator = allocator }} }});
+    game.hook_dispatcher.emit(.{{ .scene_before_load = .{{ .name = initial_scene.name, .allocator = allocator }} }});
 
     // Load initial scene
     var scene = try Loader.load(initial_scene, ctx);
     defer scene.deinit();
 
     // Emit scene_load hook
-    Game.HookDispatcher.emit(.{{ .scene_load = .{{ .name = initial_scene.name }} }});
+    game.hook_dispatcher.emit(.{{ .scene_load = .{{ .name = initial_scene.name }} }});
 
     std.log.info("bgfx backend initialized successfully!", .{{}});
 
@@ -350,7 +350,7 @@ pub fn main() !void {{
     }}
 
     // Emit scene_unload hook
-    Game.HookDispatcher.emit(.{{ .scene_unload = .{{ .name = initial_scene.name }} }});
+    game.hook_dispatcher.emit(.{{ .scene_unload = .{{ .name = initial_scene.name }} }});
 
     std.log.info("bgfx backend shutdown complete.", .{{}});
 }}

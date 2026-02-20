@@ -98,6 +98,7 @@ pub const Pivot = scene.Pivot;
 pub const HookDispatcher = hooks.HookDispatcher;
 pub const MergeEngineHooks = hooks.MergeEngineHooks;
 pub const MergeHooks = hooks.MergeHooks;
+pub const UnwrapReceiver = hooks.UnwrapReceiver;
 pub const HookPayload = hooks.HookPayload;
 pub const EngineHook = hooks.EngineHook;
 pub const EngineHookDispatcher = hooks.EngineHookDispatcher;

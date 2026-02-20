@@ -237,7 +237,7 @@ export fn init() void {{
     const ctx = engine.SceneContext.init(state.game.?);
 
     // Emit scene_before_load hook for initial scene
-    Game.HookDispatcher.emit(.{{ .scene_before_load = .{{ .name = initial_scene.name, .allocator = state.allocator }} }});
+    state.game.?.hook_dispatcher.emit(.{{ .scene_before_load = .{{ .name = initial_scene.name, .allocator = state.allocator }} }});
 
     // Load initial scene
     scene_storage = Loader.load(initial_scene, ctx) catch |err| {{
@@ -248,7 +248,7 @@ export fn init() void {{
     state.scene = &scene_storage;
 
     // Emit scene_load hook for initial scene
-    Game.HookDispatcher.emit(.{{ .scene_load = .{{ .name = initial_scene.name }} }});
+    state.game.?.hook_dispatcher.emit(.{{ .scene_load = .{{ .name = initial_scene.name }} }});
 
     state.initialized = true;
     std.debug.print("Sokol iOS backend initialized successfully!\n", .{{}});
@@ -307,7 +307,7 @@ export fn cleanup() void {{
     // Emit scene_unload hook if we still have the initial scene
     if (state.initialized and state.game != null) {{
         if (state.game.?.getCurrentSceneName() == null) {{
-            Game.HookDispatcher.emit(.{{ .scene_unload = .{{ .name = initial_scene.name }} }});
+            state.game.?.hook_dispatcher.emit(.{{ .scene_unload = .{{ .name = initial_scene.name }} }});
         }}
     }}
 
