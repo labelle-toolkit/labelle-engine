@@ -19,8 +19,8 @@
 //! const render = @import("labelle-engine").render;
 //!
 //! // Add components - tracking happens automatically via onAdd callback
-//! registry.add(entity, render.Position{ .x = 100, .y = 200 });
-//! registry.add(entity, render.Sprite{ .name = "player.png" });
+//! registry.addComponent(entity, render.Position{ .x = 100, .y = 200 });
+//! registry.addComponent(entity, render.Sprite{ .name = "player.png" });
 //!
 //! // In game loop - sync dirty state to graphics
 //! pipeline.sync(&registry);

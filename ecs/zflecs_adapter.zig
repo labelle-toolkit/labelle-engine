@@ -1,4 +1,4 @@
-// zflecs adapter - wraps zig-gamedev/zflecs (flecs bindings) to conform to the ECS interface
+// zflecs adapter - wraps zig-gamedev/zflecs (flecs bindings) to conform to the core.Ecs(Backend) trait
 //
 // zflecs provides Zig bindings for the flecs ECS library (C-based).
 // Flecs is a high-performance ECS with features like:
@@ -110,28 +110,36 @@ pub fn registerComponentCallbacks(registry: *Registry, comptime T: type) void {
 
 /// Entity handle - wraps flecs entity_t as a full 64-bit ID
 /// This preserves the generation counter in the upper 32 bits for proper entity lifecycle tracking
-pub const Entity = packed struct {
+const AdapterEntity = packed struct {
     id: u64,
 
-    pub const invalid: Entity = .{ .id = 0 };
+    pub const invalid: AdapterEntity = .{ .id = 0 };
 
-    pub fn eql(self: Entity, other: Entity) bool {
+    pub fn eql(self: AdapterEntity, other: AdapterEntity) bool {
         return self.id == other.id;
     }
 
-    fn toFlecs(self: Entity) flecs.entity_t {
+    fn toFlecs(self: AdapterEntity) flecs.entity_t {
         return self.id;
     }
 
-    fn fromFlecs(e: flecs.entity_t) Entity {
+    fn fromFlecs(e: flecs.entity_t) AdapterEntity {
         return .{ .id = e };
     }
 };
+
+/// Public Entity type alias
+pub const Entity = AdapterEntity;
 
 /// Registry wrapper that delegates to flecs World
 pub const Registry = struct {
     world: *flecs.world_t,
     allocator: std.mem.Allocator,
+
+    const Self = @This();
+
+    /// Entity type for core.Ecs(Backend) trait conformance.
+    pub const Entity = AdapterEntity;
 
     /// Initialize a new registry
     pub fn init(allocator: std.mem.Allocator) Registry {
@@ -143,30 +151,30 @@ pub const Registry = struct {
     }
 
     /// Clean up the registry
-    pub fn deinit(self: *Registry) void {
+    pub fn deinit(self: *Self) void {
         _ = flecs.fini(self.world);
     }
 
     /// Create a new entity
-    pub fn create(self: *Registry) Entity {
+    pub fn createEntity(self: *Self) Self.Entity {
         const e = flecs.new_id(self.world);
-        return Entity.fromFlecs(e);
+        return Self.Entity.fromFlecs(e);
     }
 
-    /// Check if an entity is valid (exists in the registry)
-    pub fn isValid(self: *Registry, entity: Entity) bool {
+    /// Check if an entity exists in the registry
+    pub fn entityExists(self: *Self, entity: Self.Entity) bool {
         return flecs.is_alive(self.world, entity.toFlecs());
     }
 
     /// Destroy an entity
-    pub fn destroy(self: *Registry, entity: Entity) void {
+    pub fn destroyEntity(self: *Self, entity: Self.Entity) void {
         flecs.delete(self.world, entity.toFlecs());
     }
 
     /// Add a component to an entity
     /// Note: flecs requires components to be registered before use.
     /// This adapter auto-registers components on each call to handle world recreation.
-    pub fn add(self: *Registry, entity: Entity, component: anytype) void {
+    pub fn addComponent(self: *Self, entity: Self.Entity, component: anytype) void {
         const T = @TypeOf(component);
         // Always register - COMPONENT is idempotent per-world, and we need to handle
         // world recreation (scene changes). Don't use flecs.id(T) == 0 as it may be stale.
@@ -174,31 +182,37 @@ pub const Registry = struct {
         _ = flecs.set(self.world, entity.toFlecs(), T, component);
     }
 
-    /// Try to get a component from an entity, returns null if not present
+    /// Get a component from an entity, returns null if not present
     /// Note: Direct mutation via the returned pointer will NOT trigger onSet callbacks.
     /// Use setComponent() to update a component and trigger onSet.
-    pub fn tryGet(self: *Registry, comptime T: type, entity: Entity) ?*T {
+    pub fn getComponent(self: *Self, entity: Self.Entity, comptime T: type) ?*T {
         // Always register - handles world recreation after scene changes
         flecs.COMPONENT(self.world, T);
         return flecs.get_mut(self.world, entity.toFlecs(), T);
     }
 
+    /// Check if an entity has a component
+    pub fn hasComponent(self: *Self, entity: Self.Entity, comptime T: type) bool {
+        flecs.COMPONENT(self.world, T);
+        return flecs.get_mut(self.world, entity.toFlecs(), T) != null;
+    }
+
     /// Set/update a component on an entity, triggering onSet callback if defined.
     /// If the entity doesn't have the component, it will be added (triggering onAdd).
     /// If the entity already has the component, it will be replaced (triggering onSet).
-    pub fn setComponent(self: *Registry, entity: Entity, component: anytype) void {
+    pub fn setComponent(self: *Self, entity: Self.Entity, component: anytype) void {
         const T = @TypeOf(component);
         // Always register - handles world recreation after scene changes
         flecs.COMPONENT(self.world, T);
 
-        const has_component = flecs.get_mut(self.world, entity.toFlecs(), T) != null;
+        const has_comp = flecs.get_mut(self.world, entity.toFlecs(), T) != null;
 
         // Use flecs.set to update the component
         _ = flecs.set(self.world, entity.toFlecs(), T, component);
 
         // Manually trigger onSet only if component already existed
         // (onAdd is handled by flecs hook, onSet is NOT registered as flecs hook)
-        if (has_component) {
+        if (has_comp) {
             if (@hasDecl(T, "onSet")) {
                 if (game_ptr) |gp| {
                     T.onSet(.{ .entity_id = entity.id, .game_ptr = gp });
@@ -211,7 +225,7 @@ pub const Registry = struct {
     }
 
     /// Remove a component from an entity
-    pub fn remove(self: *Registry, comptime T: type, entity: Entity) void {
+    pub fn removeComponent(self: *Self, entity: Self.Entity, comptime T: type) void {
         // Always register - handles world recreation after scene changes
         flecs.COMPONENT(self.world, T);
         flecs.remove(self.world, entity.toFlecs(), T);
@@ -219,20 +233,20 @@ pub const Registry = struct {
 
     /// Create an iterator for entities with a single component
     /// This is where flecs really shines - archetype iteration
-    pub fn each(self: *Registry, comptime T: type) flecs.iter_t {
+    pub fn each(self: *Self, comptime T: type) flecs.iter_t {
         // Always register - handles world recreation after scene changes
         flecs.COMPONENT(self.world, T);
         return flecs.each(self.world, T);
     }
 
     /// Get the world pointer for advanced flecs operations
-    pub fn getWorld(self: *Registry) *flecs.world_t {
+    pub fn getWorld(self: *Self) *flecs.world_t {
         return self.world;
     }
 
     /// Create a query for the given component types
     /// Zero-sized components are used as filters only
-    pub fn query(self: *Registry, comptime components: anytype) Query(components) {
+    pub fn query(self: *Self, comptime components: anytype) Query(components) {
         return Query(components).init(self);
     }
 };

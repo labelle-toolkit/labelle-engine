@@ -20,8 +20,8 @@ pub fn update(
 
     // Update all entities with Position and Velocity
     for (scene.entities.items) |entity_instance| {
-        const vel = registry.tryGet(Velocity, entity_instance.entity) orelse continue;
-        const pos = registry.tryGet(Position, entity_instance.entity) orelse continue;
+        const vel = registry.getComponent(entity_instance.entity, Velocity) orelse continue;
+        const pos = registry.getComponent(entity_instance.entity, Position) orelse continue;
 
         // Update position based on velocity
         pos.x += vel.x * dt;

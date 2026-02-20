@@ -3,11 +3,11 @@
 // This example shows how the ECS interface abstracts away the underlying
 // implementation. Whether you use zig_ecs or zflecs, the API is identical:
 //
-//   - registry.create()      -> Create a new entity
-//   - registry.add(e, comp)  -> Add a component to an entity
-//   - registry.tryGet(T, e)  -> Get a component (returns ?*T)
-//   - registry.remove(T, e)  -> Remove a component
-//   - registry.destroy(e)    -> Destroy an entity
+//   - registry.createEntity()        -> Create a new entity
+//   - registry.addComponent(e, comp) -> Add a component to an entity
+//   - registry.getComponent(e, T)    -> Get a component (returns ?*T)
+//   - registry.removeComponent(e, T) -> Remove a component
+//   - registry.destroyEntity(e)      -> Destroy an entity
 //
 // Build with different backends:
 //   zig build run                         # Uses zig_ecs (default)
@@ -32,10 +32,10 @@ pub fn update(game: *Game, scene: *Scene, dt: f32) void {
     const pipeline = game.getPipeline();
 
     // Update all entities with Bouncer component
-    // This demonstrates registry.tryGet() which works identically on all backends
+    // This demonstrates registry.getComponent() which works identically on all backends
     for (scene.entities.items) |entity_instance| {
-        const bouncer = registry.tryGet(Bouncer, entity_instance.entity) orelse continue;
-        const pos = registry.tryGet(Position, entity_instance.entity) orelse continue;
+        const bouncer = registry.getComponent(entity_instance.entity, Bouncer) orelse continue;
+        const pos = registry.getComponent(entity_instance.entity, Position) orelse continue;
 
         // Move the entity
         pos.x += bouncer.speed_x * dt;

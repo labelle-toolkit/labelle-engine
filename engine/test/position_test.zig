@@ -42,8 +42,8 @@ fn deinitTestGame(game: *Game) void {
 }
 
 fn createEntityAt(game: *Game, x: f32, y: f32) Entity {
-    const e = game.registry.create();
-    game.registry.add(e, Position{ .x = x, .y = y });
+    const e = game.registry.createEntity();
+    game.registry.addComponent(e, Position{ .x = x, .y = y });
     return e;
 }
 
@@ -57,10 +57,10 @@ pub const LOCAL_POSITION = struct {
         fixTestGamePointers(&game);
         defer deinitTestGame(&game);
 
-        const e = game.registry.create();
+        const e = game.registry.createEntity();
         game.pos.addPosition(e, Position{ .x = 10, .y = 20 });
 
-        const pos = game.registry.tryGet(Position, e);
+        const pos = game.registry.getComponent(e, Position);
         try expect.toBeTrue(pos != null);
         try expect.equal(pos.?.x, 10);
         try expect.equal(pos.?.y, 20);
@@ -83,7 +83,7 @@ pub const LOCAL_POSITION = struct {
         fixTestGamePointers(&game);
         defer deinitTestGame(&game);
 
-        const e = game.registry.create();
+        const e = game.registry.createEntity();
         try expect.toBeTrue(game.pos.getLocalPosition(e) == null);
     }
 
@@ -143,7 +143,7 @@ pub const LOCAL_POSITION = struct {
         fixTestGamePointers(&game);
         defer deinitTestGame(&game);
 
-        const e = game.registry.create();
+        const e = game.registry.createEntity();
         game.pos.moveLocalPosition(e, 5, 5);
         try expect.toBeTrue(game.pos.getLocalPosition(e) == null);
     }
@@ -187,7 +187,7 @@ pub const WORLD_POSITION = struct {
         fixTestGamePointers(&game);
         defer deinitTestGame(&game);
 
-        const e = game.registry.create();
+        const e = game.registry.createEntity();
         try expect.toBeTrue(game.pos.getWorldPosition(e) == null);
     }
 
@@ -196,8 +196,8 @@ pub const WORLD_POSITION = struct {
         fixTestGamePointers(&game);
         defer deinitTestGame(&game);
 
-        const e = game.registry.create();
-        game.registry.add(e, Position{ .x = 10, .y = 20, .rotation = 1.5 });
+        const e = game.registry.createEntity();
+        game.registry.addComponent(e, Position{ .x = 10, .y = 20, .rotation = 1.5 });
 
         const wt = game.pos.getWorldTransform(e).?;
         try expect.equal(wt.x, 10);
@@ -210,11 +210,11 @@ pub const WORLD_POSITION = struct {
         fixTestGamePointers(&game);
         defer deinitTestGame(&game);
 
-        const parent = game.registry.create();
-        game.registry.add(parent, Position{ .x = 0, .y = 0, .rotation = 1.0 });
+        const parent = game.registry.createEntity();
+        game.registry.addComponent(parent, Position{ .x = 0, .y = 0, .rotation = 1.0 });
 
-        const child = game.registry.create();
-        game.registry.add(child, Position{ .x = 0, .y = 0, .rotation = 0.5 });
+        const child = game.registry.createEntity();
+        game.registry.addComponent(child, Position{ .x = 0, .y = 0, .rotation = 0.5 });
 
         try game.hierarchy.setParentWithOptions(child, parent, true, false);
 
@@ -228,11 +228,11 @@ pub const WORLD_POSITION = struct {
         defer deinitTestGame(&game);
 
         const half_pi = std.math.pi / 2.0;
-        const parent = game.registry.create();
-        game.registry.add(parent, Position{ .x = 100, .y = 0, .rotation = half_pi });
+        const parent = game.registry.createEntity();
+        game.registry.addComponent(parent, Position{ .x = 100, .y = 0, .rotation = half_pi });
 
-        const child = game.registry.create();
-        game.registry.add(child, Position{ .x = 10, .y = 0 });
+        const child = game.registry.createEntity();
+        game.registry.addComponent(child, Position{ .x = 10, .y = 0 });
 
         try game.hierarchy.setParentWithOptions(child, parent, true, false);
 
@@ -249,11 +249,11 @@ pub const WORLD_POSITION = struct {
         fixTestGamePointers(&game);
         defer deinitTestGame(&game);
 
-        const parent = game.registry.create();
-        game.registry.add(parent, Position{ .x = 100, .y = 0, .rotation = 1.0 });
+        const parent = game.registry.createEntity();
+        game.registry.addComponent(parent, Position{ .x = 100, .y = 0, .rotation = 1.0 });
 
-        const child = game.registry.create();
-        game.registry.add(child, Position{ .x = 10, .y = 0, .rotation = 0.5 });
+        const child = game.registry.createEntity();
+        game.registry.addComponent(child, Position{ .x = 10, .y = 0, .rotation = 0.5 });
 
         try game.hierarchy.setParent(child, parent);
 
@@ -322,11 +322,11 @@ pub const SET_WORLD_POSITION = struct {
         defer deinitTestGame(&game);
 
         const half_pi = std.math.pi / 2.0;
-        const parent = game.registry.create();
-        game.registry.add(parent, Position{ .x = 100, .y = 0, .rotation = half_pi });
+        const parent = game.registry.createEntity();
+        game.registry.addComponent(parent, Position{ .x = 100, .y = 0, .rotation = half_pi });
 
-        const child = game.registry.create();
-        game.registry.add(child, Position{ .x = 0, .y = 0 });
+        const child = game.registry.createEntity();
+        game.registry.addComponent(child, Position{ .x = 0, .y = 0 });
         try game.hierarchy.setParentWithOptions(child, parent, true, false);
 
         // Set world position to (100, 10) — with parent at (100,0) rotated π/2

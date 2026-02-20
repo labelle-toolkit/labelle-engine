@@ -1,10 +1,10 @@
-// ECS Interface - comptime struct abstraction for pluggable ECS backends
+// ECS Interface - pluggable ECS backends validated by core.Ecs(Backend) trait
 //
-// This module defines a compile-time interface that abstracts the common operations
-// needed from an ECS library. Users can configure which ECS backend to use via build options.
-//
-// The interface uses a comptime struct pattern to enforce that all backends implement
-// the required methods with correct signatures at compile time.
+// This module selects the appropriate ECS backend based on build options and
+// re-exports the common types. All backends implement the core.Ecs(Backend)
+// trait (createEntity/destroyEntity/entityExists/addComponent/getComponent/
+// hasComponent/removeComponent) plus engine-specific methods (setComponent,
+// query, view).
 //
 // Supported backends:
 // - zig_ecs (default): prime31/zig-ecs - A Zig port of EnTT
@@ -14,9 +14,9 @@
 // Usage:
 //   const ecs = @import("ecs");
 //   var registry = ecs.Registry.init(allocator);
-//   const entity = registry.create();
-//   registry.add(entity, MyComponent{ .value = 42 });
-//   if (registry.tryGet(MyComponent, entity)) |comp| { ... }
+//   const entity = registry.createEntity();
+//   registry.addComponent(entity, MyComponent{ .value = 42 });
+//   if (registry.getComponent(entity, MyComponent)) |comp| { ... }
 
 const std = @import("std");
 const build_options = @import("build_options");
@@ -27,44 +27,6 @@ pub const EcsBackend = build_options.@"build.EcsBackend";
 
 /// The current ECS backend
 pub const backend: EcsBackend = build_options.ecs_backend;
-
-/// Comptime interface that all ECS backends must implement.
-/// This provides compile-time verification of the backend contract.
-pub fn EcsInterface(comptime Impl: type) type {
-    // Compile-time verification of required types and methods
-    comptime {
-        if (!@hasDecl(Impl, "Entity")) {
-            @compileError("ECS backend must declare Entity type");
-        }
-        if (!@hasDecl(Impl, "Registry")) {
-            @compileError("ECS backend must declare Registry type");
-        }
-
-        // Verify Registry has required methods
-        const R = Impl.Registry;
-        if (!@hasDecl(R, "init")) @compileError("Registry must have init method");
-        if (!@hasDecl(R, "deinit")) @compileError("Registry must have deinit method");
-        if (!@hasDecl(R, "create")) @compileError("Registry must have create method");
-        if (!@hasDecl(R, "destroy")) @compileError("Registry must have destroy method");
-        if (!@hasDecl(R, "add")) @compileError("Registry must have add method");
-        if (!@hasDecl(R, "tryGet")) @compileError("Registry must have tryGet method");
-        if (!@hasDecl(R, "setComponent")) @compileError("Registry must have setComponent method");
-        if (!@hasDecl(R, "remove")) @compileError("Registry must have remove method");
-        if (!@hasDecl(R, "query")) @compileError("Registry must have query method");
-        if (!@hasDecl(R, "isValid")) @compileError("Registry must have isValid method");
-    }
-
-    return struct {
-        pub const Entity = Impl.Entity;
-        pub const Registry = Impl.Registry;
-
-        /// Check if Entity type has an 'invalid' sentinel value
-        pub const has_invalid = @hasDecl(Impl.Entity, "invalid");
-
-        /// Check if Entity type has an 'eql' method
-        pub const has_eql = @hasDecl(Impl.Entity, "eql");
-    };
-}
 
 // Import the appropriate backend adapter
 // Note: mr_ecs requires Zig 0.16+ and is only imported when explicitly selected
@@ -80,15 +42,13 @@ const BackendImpl = switch (backend) {
 // Import query facade utilities
 const query_facade = @import("query.zig");
 
-// Apply the interface to verify the backend at compile time
-const Interface = EcsInterface(BackendImpl);
-
 /// Entity handle type - represents a unique entity in the ECS
 /// Size varies by backend: zig_ecs uses 32-bit, zflecs uses 64-bit
-pub const Entity = Interface.Entity;
+pub const Entity = BackendImpl.Entity;
 
 /// Registry type - the main ECS container that manages entities and components
-pub const Registry = Interface.Registry;
+/// Satisfies the core.Ecs(Backend) trait directly.
+pub const Registry = BackendImpl.Registry;
 
 /// Query type for backend-agnostic iteration
 /// Usage: var q = registry.query(.{ Position, Velocity });
@@ -101,10 +61,10 @@ pub const separateComponents = query_facade.separateComponents;
 pub const entity_size = @sizeOf(Entity);
 
 /// Whether the Entity type has an 'invalid' sentinel value
-pub const has_invalid_entity = Interface.has_invalid;
+pub const has_invalid_entity = @hasDecl(Entity, "invalid");
 
 /// Whether the Entity type has an 'eql' method for comparison
-pub const has_entity_eql = Interface.has_eql;
+pub const has_entity_eql = @hasDecl(Entity, "eql");
 
 /// Get invalid entity if supported, otherwise returns error.NotImplemented
 pub fn getInvalidEntity() error{NotImplemented}!Entity {
@@ -129,7 +89,7 @@ pub fn entityEql(a: Entity, b: Entity) error{NotImplemented}!bool {
 /// - `pub fn onRemove(payload: ComponentPayload) void` - called when component is removed
 ///
 /// Note: Use registry.setComponent() to update components and trigger onSet.
-/// Direct mutation via tryGet() pointers will NOT trigger onSet.
+/// Direct mutation via getComponent() pointers will NOT trigger onSet.
 pub fn registerComponentCallbacks(registry: *Registry, comptime T: type) void {
     BackendImpl.registerComponentCallbacks(registry, T);
 }
@@ -138,7 +98,7 @@ pub fn registerComponentCallbacks(registry: *Registry, comptime T: type) void {
 /// Pass null to clear the game pointer during cleanup.
 ///
 /// If this is not called before a callback runs, the callback will log a warning
-/// and its body will be skipped (no game pointer–dependent logic will execute).
+/// and its body will be skipped (no game pointer-dependent logic will execute).
 ///
 /// In normal usage this is set automatically by `Game.fixPointers()`, so you
 /// usually do not need to call this directly unless you are wiring a custom
@@ -169,52 +129,9 @@ pub fn entityFromU64(value: u64) Entity {
     return @bitCast(@as(EntityBits, @truncate(value)));
 }
 
-/// Backend adapter that wraps Registry to satisfy the core.Ecs(Backend) trait.
-/// Maps engine naming conventions (create/destroy/isValid/tryGet) to core's
-/// expected names (createEntity/destroyEntity/entityExists/getComponent).
-///
-/// This lives in interface.zig so it works for all backends (zig_ecs/zflecs/mr_ecs)
-/// without modifying the adapter files — avoiding Zig's name-shadowing issues
-/// with file-level Entity types.
-pub const PluginBackend = struct {
-    pub const Entity = Interface.Entity;
-
-    const Self = @This();
-
-    registry: *Registry,
-
-    pub fn createEntity(self: *Self) Self.Entity {
-        return self.registry.create();
-    }
-
-    pub fn destroyEntity(self: *Self, entity: Self.Entity) void {
-        self.registry.destroy(entity);
-    }
-
-    pub fn entityExists(self: *Self, entity: Self.Entity) bool {
-        return self.registry.isValid(entity);
-    }
-
-    pub fn addComponent(self: *Self, entity: Self.Entity, component: anytype) void {
-        self.registry.add(entity, component);
-    }
-
-    pub fn getComponent(self: *Self, entity: Self.Entity, comptime T: type) ?*T {
-        return self.registry.tryGet(T, entity);
-    }
-
-    pub fn hasComponent(self: *Self, entity: Self.Entity, comptime T: type) bool {
-        return self.registry.tryGet(T, entity) != null;
-    }
-
-    pub fn removeComponent(self: *Self, entity: Self.Entity, comptime T: type) void {
-        self.registry.remove(T, entity);
-    }
-};
-
-/// Plugin-facing ECS type — wraps the engine's Registry to satisfy core.Ecs(Backend).
+/// Plugin-facing ECS type — Registry directly satisfies core.Ecs(Backend).
 /// Plugins use: `const Ctx = core.PluginContext(.{ .EcsType = engine.ecs.PluginEcs });`
-pub const PluginEcs = labelle_core.Ecs(PluginBackend);
+pub const PluginEcs = labelle_core.Ecs(Registry);
 
 // Compile-time verification that Entity fits in u64
 comptime {
@@ -230,7 +147,7 @@ test "Entity interface availability" {
 }
 
 test "Registry satisfies core.Ecs(Backend) trait" {
-    // Verify the engine's Registry can be wrapped by core.Ecs
+    // Verify the engine's Registry directly satisfies core.Ecs
     const EcsType = PluginEcs;
     // PluginContext validates the full interface at comptime
     const Ctx = labelle_core.PluginContext(.{ .EcsType = EcsType });

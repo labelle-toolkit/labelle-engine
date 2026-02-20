@@ -71,13 +71,13 @@ pub const EntityRef = struct {
 
     /// Check if this reference is valid (entity exists)
     pub fn isValid(self: EntityRef, registry: *ecs.Registry) bool {
-        return registry.isValid(self.entity);
+        return registry.entityExists(self.entity);
     }
 
     /// Get a component from the referenced entity
     pub fn getComponent(self: EntityRef, comptime T: type, registry: *ecs.Registry) ?*T {
-        if (!registry.isValid(self.entity)) return null;
-        return registry.tryGet(T, self.entity);
+        if (!registry.entityExists(self.entity)) return null;
+        return registry.getComponent(self.entity, T);
     }
 
     /// Create an invalid/empty reference

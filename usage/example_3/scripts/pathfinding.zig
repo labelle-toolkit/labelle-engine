@@ -187,11 +187,11 @@ pub fn deinit(game: *Game, scene: *Scene) void {
         const registry = game.getRegistry();
 
         // Destroy player entity
-        registry.destroy(player_entity.?);
+        registry.destroyEntity(player_entity.?);
 
         // Destroy grid node entities
         for (node_entities) |node_ent| {
-            registry.destroy(node_ent);
+            registry.destroyEntity(node_ent);
         }
     }
 

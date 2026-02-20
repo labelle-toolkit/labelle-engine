@@ -16,17 +16,17 @@ pub fn update(
 
     // Apply physics updates for entities with Velocity
     for (scene.entities.items) |entity_instance| {
-        const vel = registry.tryGet(Velocity, entity_instance.entity) orelse continue;
+        const vel = registry.getComponent(entity_instance.entity, Velocity) orelse continue;
 
         // Apply gravity if the entity has a Gravity component
-        if (registry.tryGet(Gravity, entity_instance.entity)) |grav| {
+        if (registry.getComponent(entity_instance.entity, Gravity)) |grav| {
             if (grav.enabled) {
                 vel.y += grav.strength * dt;
             }
         }
 
         // Update position based on velocity
-        if (registry.tryGet(Position, entity_instance.entity)) |pos| {
+        if (registry.getComponent(entity_instance.entity, Position)) |pos| {
             pos.x += vel.x * dt;
             pos.y += vel.y * dt;
             // Mark position as dirty so RenderPipeline syncs it

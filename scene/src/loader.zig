@@ -280,7 +280,7 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
             const entity = game.createEntity();
 
             // Add Position component
-            game.getRegistry().add(entity, Position{ .x = x, .y = y });
+            game.getRegistry().addComponent(entity, Position{ .x = x, .y = y });
 
             // Queue for onReady callbacks
             var ready_queue: std.ArrayListUnmanaged(ReadyCallbackEntry) = .{};
@@ -390,7 +390,7 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
             const pos = Ops.getPrefabPosition(prefab_name, entity_def);
 
             // Add Position component
-            game.getRegistry().add(entity, Position{ .x = pos.x, .y = pos.y });
+            game.getRegistry().addComponent(entity, Position{ .x = pos.x, .y = pos.y });
 
             // Set current entity for self-references
             ref_ctx.current_entity = entity;
@@ -457,7 +457,7 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
             const pos = getPositionFromComponents(entity_def) orelse Pos{ .x = 0, .y = 0 };
 
             // Add Position component
-            game.getRegistry().add(entity, Position{ .x = pos.x, .y = pos.y });
+            game.getRegistry().addComponent(entity, Position{ .x = pos.x, .y = pos.y });
 
             // Set current entity for self-references (Issue #242)
             ref_ctx.current_entity = entity;

@@ -143,7 +143,7 @@ pub fn EntityComponentOps(comptime Prefabs: type, comptime Components: type) typ
             const pos_x = parent_x + local_pos.x;
             const pos_y = parent_y + local_pos.y;
 
-            game.getRegistry().add(entity, Position{ .x = pos_x, .y = pos_y });
+            game.getRegistry().addComponent(entity, Position{ .x = pos_x, .y = pos_y });
 
             // Add components from prefab, merging with entity_def overrides where present
             // Note: Child entities don't support entity references (no ref_ctx)
@@ -203,7 +203,7 @@ pub fn EntityComponentOps(comptime Prefabs: type, comptime Components: type) typ
             const local_pos = getPositionFromComponents(entity_def) orelse Pos{ .x = 0, .y = 0 };
             const child_x = parent_x + local_pos.x;
             const child_y = parent_y + local_pos.y;
-            game.getRegistry().add(entity, Position{ .x = child_x, .y = child_y });
+            game.getRegistry().addComponent(entity, Position{ .x = child_x, .y = child_y });
 
             // Add all components (Sprite/Shape/Text handled via fromZonData, others generically)
             // Position is excluded since we already added it above
@@ -294,7 +294,7 @@ pub fn EntityComponentOps(comptime Prefabs: type, comptime Components: type) typ
                             // Generate callback that captures comptime component/field
                             const ResolveHelper = struct {
                                 fn resolve(registry: *ecs.Registry, target: Entity, resolved: Entity) void {
-                                    if (registry.tryGet(ComponentType, target)) |comp| {
+                                    if (registry.getComponent(target, ComponentType)) |comp| {
                                         @field(comp, field_name) = resolved;
                                     }
                                 }
@@ -342,7 +342,7 @@ pub fn EntityComponentOps(comptime Prefabs: type, comptime Components: type) typ
                 }
             }
 
-            game.getRegistry().add(parent_entity, component);
+            game.getRegistry().addComponent(parent_entity, component);
 
             // Queue onReady callback if component defines one
             if (@hasDecl(ComponentType, "onReady")) {
@@ -501,7 +501,7 @@ pub fn EntityComponentOps(comptime Prefabs: type, comptime Components: type) typ
                 // The render pipeline resolves gizmo positions from parent_entity + offset at render time.
 
                 // Add Gizmo marker component with parent reference and offset
-                game.getRegistry().add(gizmo_entity, render.Gizmo{
+                game.getRegistry().addComponent(gizmo_entity, render.Gizmo{
                     .parent_entity = parent_entity,
                     .offset_x = offset_x,
                     .offset_y = offset_y,
@@ -513,16 +513,16 @@ pub fn EntityComponentOps(comptime Prefabs: type, comptime Components: type) typ
                     const bbox = zon.buildStruct(render.BoundingBox, gizmo_data);
 
                     // Store BoundingBox component for reference
-                    game.getRegistry().add(gizmo_entity, bbox);
+                    game.getRegistry().addComponent(gizmo_entity, bbox);
 
                     // Get parent entity's visual bounds and create Shape
                     if (game.getEntityVisualBounds(parent_entity)) |bounds| {
                         const shape = bbox.toShape(bounds.width, bounds.height);
-                        game.getRegistry().add(gizmo_entity, shape);
+                        game.getRegistry().addComponent(gizmo_entity, shape);
                     } else {
                         // Fallback to a small default shape if bounds unavailable
                         const shape = bbox.toShape(32, 32);
-                        game.getRegistry().add(gizmo_entity, shape);
+                        game.getRegistry().addComponent(gizmo_entity, shape);
                         std.log.warn("BoundingBox gizmo: could not get parent visual bounds, using default 32x32", .{});
                     }
                 } else {

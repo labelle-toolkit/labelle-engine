@@ -27,7 +27,7 @@ pub const AI = struct {
         const entity = engine.entityFromU64(payload.entity_id);
         const registry = game.getRegistry();
 
-        const ai = registry.tryGet(AI, entity) orelse {
+        const ai = registry.getComponent(entity, AI) orelse {
             std.log.err("[AI] FAIL: Could not get AI component", .{});
             return;
         };
@@ -39,13 +39,13 @@ pub const AI = struct {
         }
 
         // Validate target entity exists
-        if (!registry.isValid(ai.target)) {
+        if (!registry.entityExists(ai.target)) {
             std.log.err("[AI] FAIL: target entity {} is invalid", .{engine.entityToU64(ai.target)});
             return;
         }
 
         // Validate target has Health component (it's the player)
-        if (registry.tryGet(main.Health, ai.target)) |health| {
+        if (registry.getComponent(ai.target, main.Health)) |health| {
             std.log.info("[AI] OK: target resolved to entity {} with {}/{} health", .{
                 engine.entityToU64(ai.target),
                 health.current,

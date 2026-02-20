@@ -37,13 +37,13 @@ pub const SET_VS_ADD_BEHAVIOR = struct {
         var registry = ecs.Registry.init(std.testing.allocator);
         defer registry.deinit();
 
-        const entity = registry.create();
+        const entity = registry.createEntity();
 
         // Add initial component
-        registry.add(entity, TestVisual{ .visible = true, .value = 1 });
+        registry.addComponent(entity, TestVisual{ .visible = true, .value = 1 });
 
         // Verify it was added
-        const initial = registry.tryGet(TestVisual, entity);
+        const initial = registry.getComponent(entity, TestVisual);
         try expect.toBeTrue(initial != null);
         try expect.toBeTrue(initial.?.visible);
         try expect.equal(initial.?.value, 1);
@@ -52,7 +52,7 @@ pub const SET_VS_ADD_BEHAVIOR = struct {
         registry.set(entity, TestVisual{ .visible = false, .value = 2 });
 
         // Verify it was updated
-        const updated = registry.tryGet(TestVisual, entity);
+        const updated = registry.getComponent(entity, TestVisual);
         try expect.toBeTrue(updated != null);
         try expect.toBeFalse(updated.?.visible);
         try expect.equal(updated.?.value, 2);
@@ -62,44 +62,44 @@ pub const SET_VS_ADD_BEHAVIOR = struct {
         var registry = ecs.Registry.init(std.testing.allocator);
         defer registry.deinit();
 
-        const entity = registry.create();
+        const entity = registry.createEntity();
 
         // Add initial component with visible = true
-        registry.add(entity, TestVisual{ .visible = true });
+        registry.addComponent(entity, TestVisual{ .visible = true });
 
         // Toggle to false
-        var comp = registry.tryGet(TestVisual, entity).?.*;
+        var comp = registry.getComponent(entity, TestVisual).?.*;
         comp.visible = false;
         registry.set(entity, comp);
-        try expect.toBeFalse(registry.tryGet(TestVisual, entity).?.visible);
+        try expect.toBeFalse(registry.getComponent(entity, TestVisual).?.visible);
 
         // Toggle back to true
-        comp = registry.tryGet(TestVisual, entity).?.*;
+        comp = registry.getComponent(entity, TestVisual).?.*;
         comp.visible = true;
         registry.set(entity, comp);
-        try expect.toBeTrue(registry.tryGet(TestVisual, entity).?.visible);
+        try expect.toBeTrue(registry.getComponent(entity, TestVisual).?.visible);
 
         // Toggle to false again
-        comp = registry.tryGet(TestVisual, entity).?.*;
+        comp = registry.getComponent(entity, TestVisual).?.*;
         comp.visible = false;
         registry.set(entity, comp);
-        try expect.toBeFalse(registry.tryGet(TestVisual, entity).?.visible);
+        try expect.toBeFalse(registry.getComponent(entity, TestVisual).?.visible);
     }
 
     test "set() works on entity that does not have component (adds it)" {
         var registry = ecs.Registry.init(std.testing.allocator);
         defer registry.deinit();
 
-        const entity = registry.create();
+        const entity = registry.createEntity();
 
         // Entity has no TestVisual yet
-        try expect.toBeTrue(registry.tryGet(TestVisual, entity) == null);
+        try expect.toBeTrue(registry.getComponent(entity, TestVisual) == null);
 
         // set() should add it
         registry.set(entity, TestVisual{ .visible = false, .value = 42 });
 
         // Verify it was added
-        const comp = registry.tryGet(TestVisual, entity);
+        const comp = registry.getComponent(entity, TestVisual);
         try expect.toBeTrue(comp != null);
         try expect.toBeFalse(comp.?.visible);
         try expect.equal(comp.?.value, 42);
@@ -110,13 +110,13 @@ pub const SET_VS_ADD_BEHAVIOR = struct {
         var registry = ecs.Registry.init(std.testing.allocator);
         defer registry.deinit();
 
-        const entity = registry.create();
+        const entity = registry.createEntity();
 
         // Simulate initial gizmo creation with visible component
-        registry.add(entity, Shape.circle(10));
+        registry.addComponent(entity, Shape.circle(10));
 
         // Simulate toggling visibility (the fixed code path)
-        if (registry.tryGet(Shape, entity)) |comp| {
+        if (registry.getComponent(entity, Shape)) |comp| {
             var updated = comp.*;
             const new_visibility = !updated.visible; // toggle
             if (updated.visible != new_visibility) {
@@ -127,16 +127,16 @@ pub const SET_VS_ADD_BEHAVIOR = struct {
         }
 
         // Verify the toggle worked
-        try expect.toBeFalse(registry.tryGet(Shape, entity).?.visible);
+        try expect.toBeFalse(registry.getComponent(entity, Shape).?.visible);
 
         // Toggle again
-        if (registry.tryGet(Shape, entity)) |comp| {
+        if (registry.getComponent(entity, Shape)) |comp| {
             var updated = comp.*;
             updated.visible = true;
             registry.set(entity, updated);
         }
 
-        try expect.toBeTrue(registry.tryGet(Shape, entity).?.visible);
+        try expect.toBeTrue(registry.getComponent(entity, Shape).?.visible);
     }
 };
 

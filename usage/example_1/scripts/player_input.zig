@@ -19,7 +19,7 @@ pub fn update(
 
     // Find player entity (first entity with Velocity component)
     for (scene.entities.items) |entity_instance| {
-        const vel = registry.tryGet(Velocity, entity_instance.entity) orelse continue;
+        const vel = registry.getComponent(entity_instance.entity, Velocity) orelse continue;
 
         // Horizontal movement with arrow keys or WASD
         if (input.isKeyDown(.left) or input.isKeyDown(.a)) {
@@ -36,7 +36,7 @@ pub fn update(
         }
 
         // Update position based on velocity
-        if (registry.tryGet(Position, entity_instance.entity)) |pos| {
+        if (registry.getComponent(entity_instance.entity, Position)) |pos| {
             pos.x += vel.x * dt;
             pos.y += vel.y * dt;
 

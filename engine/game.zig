@@ -343,7 +343,7 @@ pub fn GameWith(comptime Hooks: type) type {
 
         /// Create a new entity
         pub fn createEntity(self: *Self) Entity {
-            const entity = self.registry.create();
+            const entity = self.registry.createEntity();
             // Emit entity_created hook (prefab_name is unknown at this layer)
             emitHook(.{ .entity_created = .{ .entity_id = entityToU64(entity), .prefab_name = null } });
             return entity;
@@ -353,7 +353,7 @@ pub fn GameWith(comptime Hooks: type) type {
         /// Children are destroyed recursively before the parent.
         pub fn destroyEntity(self: *Self, entity: Entity) void {
             // First, recursively destroy all children (cascade destroy)
-            if (self.registry.tryGet(Children, entity)) |children_comp| {
+            if (self.registry.getComponent(entity, Children)) |children_comp| {
                 // Copy children list since we're modifying during iteration
                 for (children_comp.entities) |child| {
                     self.destroyEntity(child);
@@ -368,7 +368,7 @@ pub fn GameWith(comptime Hooks: type) type {
             // Emit entity_destroyed hook before destruction
             emitHook(.{ .entity_destroyed = .{ .entity_id = entityToU64(entity), .prefab_name = null } });
             self.pipeline.untrackEntity(entity);
-            self.registry.destroy(entity);
+            self.registry.destroyEntity(entity);
         }
 
         /// Destroy an entity without destroying its children.
@@ -382,7 +382,7 @@ pub fn GameWith(comptime Hooks: type) type {
 
             emitHook(.{ .entity_destroyed = .{ .entity_id = entityToU64(entity), .prefab_name = null } });
             self.pipeline.untrackEntity(entity);
-            self.registry.destroy(entity);
+            self.registry.destroyEntity(entity);
         }
 
         /// Set z_index on entity's visual component (Sprite, Shape, or Text)
@@ -391,19 +391,19 @@ pub fn GameWith(comptime Hooks: type) type {
             var updated = false;
 
             // Try Sprite
-            if (self.registry.tryGet(Sprite, entity)) |sprite| {
+            if (self.registry.getComponent(entity, Sprite)) |sprite| {
                 sprite.z_index = z_index;
                 updated = true;
             }
 
             // Try Shape
-            if (self.registry.tryGet(Shape, entity)) |shape| {
+            if (self.registry.getComponent(entity, Shape)) |shape| {
                 shape.z_index = z_index;
                 updated = true;
             }
 
             // Try Text
-            if (self.registry.tryGet(Text, entity)) |text| {
+            if (self.registry.getComponent(entity, Text)) |text| {
                 text.z_index = z_index;
                 updated = true;
             }
@@ -415,43 +415,43 @@ pub fn GameWith(comptime Hooks: type) type {
 
         /// Add Sprite component and track for rendering
         pub fn addSprite(self: *Self, entity: Entity, sprite: Sprite) !void {
-            self.registry.add(entity, sprite);
+            self.registry.addComponent(entity, sprite);
             try self.pipeline.trackEntity(entity, .sprite);
         }
 
         /// Add Shape component and track for rendering
         pub fn addShape(self: *Self, entity: Entity, shape: Shape) !void {
-            self.registry.add(entity, shape);
+            self.registry.addComponent(entity, shape);
             try self.pipeline.trackEntity(entity, .shape);
         }
 
         /// Add Text component and track for rendering
         pub fn addText(self: *Self, entity: Entity, text: Text) !void {
-            self.registry.add(entity, text);
+            self.registry.addComponent(entity, text);
             try self.pipeline.trackEntity(entity, .text);
         }
 
         /// Remove Sprite component and stop tracking for rendering
         pub fn removeSprite(self: *Self, entity: Entity) void {
             self.pipeline.untrackEntity(entity);
-            self.registry.remove(Sprite, entity);
+            self.registry.removeComponent(entity, Sprite);
         }
 
         /// Remove Shape component and stop tracking for rendering
         pub fn removeShape(self: *Self, entity: Entity) void {
             self.pipeline.untrackEntity(entity);
-            self.registry.remove(Shape, entity);
+            self.registry.removeComponent(entity, Shape);
         }
 
         /// Remove Text component and stop tracking for rendering
         pub fn removeText(self: *Self, entity: Entity) void {
             self.pipeline.untrackEntity(entity);
-            self.registry.remove(Text, entity);
+            self.registry.removeComponent(entity, Text);
         }
 
         /// Add a custom component to an entity
         pub fn addComponent(self: *Self, comptime T: type, entity: Entity, component: T) void {
-            self.registry.add(entity, component);
+            self.registry.addComponent(entity, component);
         }
 
         /// Set/update a custom component on an entity (triggers component `onSet` if defined).
@@ -462,7 +462,7 @@ pub fn GameWith(comptime Hooks: type) type {
 
         /// Get a component from an entity
         pub fn getComponent(self: *Self, comptime T: type, entity: Entity) ?*T {
-            return self.registry.tryGet(T, entity);
+            return self.registry.getComponent(entity, T);
         }
 
         // ==================== Asset Loading ====================
@@ -777,12 +777,12 @@ pub fn GameWith(comptime Hooks: type) type {
         /// For Sprite components: looks up sprite dimensions from texture manager.
         pub fn getEntityVisualBounds(self: *Self, entity: Entity) ?VisualBounds {
             // Try Shape first (dimensions are directly available)
-            if (self.registry.tryGet(Shape, entity)) |shape| {
+            if (self.registry.getComponent(entity, Shape)) |shape| {
                 return getShapeBounds(shape.shape);
             }
 
             // Try Sprite (need to look up from texture manager)
-            if (self.registry.tryGet(Sprite, entity)) |sprite| {
+            if (self.registry.getComponent(entity, Sprite)) |sprite| {
                 return self.getSpriteBounds(sprite);
             }
 

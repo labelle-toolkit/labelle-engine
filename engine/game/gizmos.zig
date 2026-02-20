@@ -96,7 +96,7 @@ pub fn GizmosMixin(comptime GameType: type) type {
             var view = g.registry.view(.{Gizmo});
             var iter = view.entityIterator();
             while (iter.next()) |entity| {
-                if (g.registry.tryGet(Gizmo, entity)) |gizmo| {
+                if (g.registry.getComponent(entity, Gizmo)) |gizmo| {
                     const should_show = switch (gizmo.visibility) {
                         .always => g.gizmos_enabled,
                         .selected_only => g.gizmos_enabled and
@@ -113,7 +113,7 @@ pub fn GizmosMixin(comptime GameType: type) type {
             var changed = false;
             const visual_components = .{ Sprite, Shape, Text, Icon };
             inline for (visual_components) |ComponentType| {
-                if (g.registry.tryGet(ComponentType, entity)) |comp| {
+                if (g.registry.getComponent(entity, ComponentType)) |comp| {
                     if (comp.visible != visible) {
                         var updated = comp.*;
                         updated.visible = visible;

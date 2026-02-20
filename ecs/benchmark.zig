@@ -6,7 +6,7 @@
 // Benchmarks:
 // - Entity creation/destruction (within single world)
 // - Component add/remove
-// - Component lookup (tryGet)
+// - Component lookup (getComponent)
 // - View/Query iteration
 //
 // Run with: zig build bench -Decs_backend=zig_ecs
@@ -97,41 +97,41 @@ fn printResult(result: BenchResult) void {
 // Benchmark: Entity creation only
 fn benchEntityCreation(registry: *Registry, count: usize, entities: []Entity) void {
     for (0..count) |i| {
-        entities[i] = registry.create();
+        entities[i] = registry.createEntity();
     }
 }
 
 // Benchmark: Entity destruction only
 fn benchEntityDestruction(registry: *Registry, entities: []const Entity) void {
     for (entities) |entity| {
-        registry.destroy(entity);
+        registry.destroyEntity(entity);
     }
 }
 
 // Benchmark: Add single component
 fn benchAddComponent(registry: *Registry, entities: []const Entity) void {
     for (entities) |entity| {
-        registry.add(entity, Position{ .x = 1.0, .y = 2.0 });
+        registry.addComponent(entity, Position{ .x = 1.0, .y = 2.0 });
     }
 }
 
 // Benchmark: Add multiple components (3)
 fn benchAddMultipleComponents(registry: *Registry, entities: []const Entity) void {
     for (entities) |entity| {
-        registry.add(entity, Position{ .x = 1.0, .y = 2.0 });
-        registry.add(entity, Velocity{ .dx = 0.5, .dy = -0.5 });
-        registry.add(entity, Health{ .current = 100, .max = 100 });
+        registry.addComponent(entity, Position{ .x = 1.0, .y = 2.0 });
+        registry.addComponent(entity, Velocity{ .dx = 0.5, .dy = -0.5 });
+        registry.addComponent(entity, Health{ .current = 100, .max = 100 });
     }
 }
 
 // Benchmark: Add complex components (5)
 fn benchAddComplexComponents(registry: *Registry, entities: []const Entity) void {
     for (entities) |entity| {
-        registry.add(entity, Position{ .x = 1.0, .y = 2.0 });
-        registry.add(entity, Velocity{ .dx = 0.5, .dy = -0.5 });
-        registry.add(entity, Health{ .current = 100, .max = 100 });
-        registry.add(entity, Transform{ .x = 0, .y = 0, .rotation = 0, .scale_x = 1, .scale_y = 1 });
-        registry.add(entity, Sprite{ .texture_id = 1, .width = 32, .height = 32, .layer = 0 });
+        registry.addComponent(entity, Position{ .x = 1.0, .y = 2.0 });
+        registry.addComponent(entity, Velocity{ .dx = 0.5, .dy = -0.5 });
+        registry.addComponent(entity, Health{ .current = 100, .max = 100 });
+        registry.addComponent(entity, Transform{ .x = 0, .y = 0, .rotation = 0, .scale_x = 1, .scale_y = 1 });
+        registry.addComponent(entity, Sprite{ .texture_id = 1, .width = 32, .height = 32, .layer = 0 });
     }
 }
 
@@ -139,7 +139,7 @@ fn benchAddComplexComponents(registry: *Registry, entities: []const Entity) void
 fn benchComponentLookup(registry: *Registry, entities: []const Entity) void {
     var sum: f32 = 0;
     for (entities) |entity| {
-        if (registry.tryGet(Position, entity)) |pos| {
+        if (registry.getComponent(entity, Position)) |pos| {
             sum += pos.x + pos.y;
         }
     }
@@ -150,8 +150,8 @@ fn benchComponentLookup(registry: *Registry, entities: []const Entity) void {
 fn benchMultipleComponentLookup(registry: *Registry, entities: []const Entity) void {
     var sum: f32 = 0;
     for (entities) |entity| {
-        if (registry.tryGet(Position, entity)) |pos| {
-            if (registry.tryGet(Velocity, entity)) |vel| {
+        if (registry.getComponent(entity, Position)) |pos| {
+            if (registry.getComponent(entity, Velocity)) |vel| {
                 sum += pos.x + pos.y + vel.dx + vel.dy;
             }
         }
@@ -162,15 +162,15 @@ fn benchMultipleComponentLookup(registry: *Registry, entities: []const Entity) v
 // Benchmark: Component removal
 fn benchRemoveComponent(registry: *Registry, entities: []const Entity) void {
     for (entities) |entity| {
-        registry.remove(Position, entity);
+        registry.removeComponent(entity, Position);
     }
 }
 
 // Benchmark: Game loop iteration (per-entity lookup pattern)
 fn benchGameLoopIteration(registry: *Registry, entities: []const Entity) void {
     for (entities) |entity| {
-        if (registry.tryGet(Position, entity)) |pos| {
-            if (registry.tryGet(Velocity, entity)) |vel| {
+        if (registry.getComponent(entity, Position)) |pos| {
+            if (registry.getComponent(entity, Velocity)) |vel| {
                 pos.x += vel.dx;
                 pos.y += vel.dy;
             }
@@ -398,8 +398,8 @@ pub fn main() !void {
         {
             // Add components
             for (entities) |entity| {
-                registry.add(entity, Position{ .x = 1.0, .y = 2.0 });
-                registry.add(entity, Velocity{ .dx = 0.5, .dy = -0.5 });
+                registry.addComponent(entity, Position{ .x = 1.0, .y = 2.0 });
+                registry.addComponent(entity, Velocity{ .dx = 0.5, .dy = -0.5 });
             }
 
             var min: u64 = std.math.maxInt(u64);
@@ -419,8 +419,8 @@ pub fn main() !void {
 
             // Clean up components (keep entities)
             for (entities) |entity| {
-                registry.remove(Position, entity);
-                registry.remove(Velocity, entity);
+                registry.removeComponent(entity, Position);
+                registry.removeComponent(entity, Velocity);
             }
 
             const avg = total / BENCH_ITERATIONS;
@@ -438,8 +438,8 @@ pub fn main() !void {
         {
             // Add components
             for (entities) |entity| {
-                registry.add(entity, Position{ .x = 0, .y = 0 });
-                registry.add(entity, Velocity{ .dx = 1.0, .dy = 1.0 });
+                registry.addComponent(entity, Position{ .x = 0, .y = 0 });
+                registry.addComponent(entity, Velocity{ .dx = 1.0, .dy = 1.0 });
             }
 
             var min: u64 = std.math.maxInt(u64);
@@ -459,8 +459,8 @@ pub fn main() !void {
 
             // Clean up components (keep entities)
             for (entities) |entity| {
-                registry.remove(Position, entity);
-                registry.remove(Velocity, entity);
+                registry.removeComponent(entity, Position);
+                registry.removeComponent(entity, Velocity);
             }
 
             const avg = total / BENCH_ITERATIONS;
@@ -478,8 +478,8 @@ pub fn main() !void {
         {
             // Add components
             for (entities) |entity| {
-                registry.add(entity, Position{ .x = 0, .y = 0 });
-                registry.add(entity, Velocity{ .dx = 1.0, .dy = 1.0 });
+                registry.addComponent(entity, Position{ .x = 0, .y = 0 });
+                registry.addComponent(entity, Velocity{ .dx = 1.0, .dy = 1.0 });
             }
 
             var min: u64 = std.math.maxInt(u64);
@@ -499,8 +499,8 @@ pub fn main() !void {
 
             // Clean up components (keep entities)
             for (entities) |entity| {
-                registry.remove(Position, entity);
-                registry.remove(Velocity, entity);
+                registry.removeComponent(entity, Position);
+                registry.removeComponent(entity, Velocity);
             }
 
             const avg = total / BENCH_ITERATIONS;
@@ -518,7 +518,7 @@ pub fn main() !void {
         if (build_options.ecs_backend == .zig_ecs) {
             // Add components
             for (entities) |entity| {
-                registry.add(entity, Position{ .x = 0, .y = 0 });
+                registry.addComponent(entity, Position{ .x = 0, .y = 0 });
             }
 
             var min: u64 = std.math.maxInt(u64);
@@ -538,7 +538,7 @@ pub fn main() !void {
 
             // Clean up components (keep entities)
             for (entities) |entity| {
-                registry.remove(Position, entity);
+                registry.removeComponent(entity, Position);
             }
 
             const avg = total / BENCH_ITERATIONS;
