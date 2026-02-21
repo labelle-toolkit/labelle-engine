@@ -321,10 +321,12 @@ pub const RenderPipeline = struct {
     /// Update the cached screen position and push to the retained engine.
     /// Returns true if the position was actually sent (changed from last sync).
     fn syncPosition(self: *RenderPipeline, tracked: *TrackedEntity, entity_id: EntityId, pos: GfxPosition) bool {
-        // Skip redundant updatePosition calls — avoids unnecessary spatial grid
-        // churn in the retained engine (remove-from-old-cell + insert-into-new-cell)
-        // which can cause visual glitches on cell boundaries.
-        if (pos.x == tracked.last_screen_x and pos.y == tracked.last_screen_y) {
+        // Skip redundant updatePosition calls when position hasn't meaningfully changed.
+        // Uses epsilon comparison to handle floating-point precision from hierarchy transforms.
+        const eps = 1e-2; // sub-pixel threshold
+        if (std.math.approxEqAbs(f32, pos.x, tracked.last_screen_x, eps) and
+            std.math.approxEqAbs(f32, pos.y, tracked.last_screen_y, eps))
+        {
             return false;
         }
         tracked.last_screen_x = pos.x;
