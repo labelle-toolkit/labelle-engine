@@ -179,6 +179,11 @@ pub const Registry = struct {
         self.inner.add(entity, component);
     }
 
+    /// Alias for addComponent - for compatibility with plugins
+    pub fn add(self: *Self, entity: Self.Entity, component: anytype) void {
+        self.addComponent(entity, component);
+    }
+
     /// Get a component from an entity, returns null if not present
     /// Note: Direct mutation via the returned pointer will NOT trigger onSet callbacks.
     /// Use setComponent() to update a component and trigger onSet.
