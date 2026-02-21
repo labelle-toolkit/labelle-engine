@@ -310,11 +310,11 @@ fn setupWgpuNativeImgui(
     gui_interface: *std.Build.Module,
     zgui_dep: *std.Build.Dependency,
 ) void {
-    // Get wgpu_native dependency
-    const wgpu_native_dep = ctx.labelle_dep.builder.dependency("wgpu_native_zig", .{
+    // Get wgpu_native dependency (lazy in labelle-gfx build.zig.zon)
+    const wgpu_native_dep = ctx.labelle_dep.builder.lazyDependency("wgpu_native_zig", .{
         .target = ctx.target,
         .optimize = ctx.optimize,
-    });
+    }) orelse return;
     const zglfw_dep = ctx.labelle_dep.builder.dependency("zglfw", .{
         .target = ctx.target,
         .optimize = ctx.optimize,
