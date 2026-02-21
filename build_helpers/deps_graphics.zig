@@ -44,12 +44,12 @@ pub fn loadDesktopDeps(
     });
     const zbgfx = zbgfx_dep.module("zbgfx");
 
-    // wgpu_native — only fetch when needed
+    // wgpu_native — lazy dependency (marked .lazy in labelle-gfx build.zig.zon)
     const wgpu_native: ?*std.Build.Module = if (backend == .wgpu_native)
-        labelle_dep.builder.dependency("wgpu_native_zig", .{
+        if (labelle_dep.builder.lazyDependency("wgpu_native_zig", .{
             .target = target,
             .optimize = optimize,
-        }).module("wgpu")
+        })) |dep| dep.module("wgpu") else null
     else
         null;
 

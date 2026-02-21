@@ -211,10 +211,10 @@ pub fn build(b: *std.Build) !void {{
         .target = target,
         .optimize = optimize,
     }});
-    const wgpu_native_dep = labelle_dep.builder.dependency("wgpu_native_zig", .{{
+    const wgpu_native_dep = labelle_dep.builder.lazyDependency("wgpu_native_zig", .{{
         .target = target,
         .optimize = optimize,
-    }});
+    }}) orelse @panic("wgpu_native_zig dependency not available");
     const zglfw_dep = labelle_dep.builder.dependency("zglfw", .{{
         .target = target,
         .optimize = optimize,
