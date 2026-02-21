@@ -55,8 +55,8 @@ pub fn loadDesktopDeps(
     else
         null;
 
-    // zglfw — only fetch when bgfx or wgpu_native backends are selected
-    const zglfw: ?*std.Build.Module = if (backend == .bgfx or backend == .wgpu_native)
+    // zglfw — only fetch when bgfx, wgpu_native, or sdl backends are selected
+    const zglfw: ?*std.Build.Module = if (backend == .bgfx or backend == .wgpu_native or backend == .sdl)
         labelle_dep.builder.dependency("zglfw", .{
             .target = target,
             .optimize = optimize,
