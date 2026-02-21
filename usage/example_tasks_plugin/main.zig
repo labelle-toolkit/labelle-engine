@@ -36,7 +36,7 @@ const task_hooks = @import("hooks/task_hooks.zig");
 const TaskDispatcher = tasks.hooks.HookDispatcher(u32, ItemType, task_hooks);
 
 // The TaskEngine type with auto-wired hooks
-pub const TaskEngine = tasks.EngineWithHooks(u32, ItemType, TaskDispatcher);
+pub const TaskEngine = tasks.Engine(u32, ItemType, TaskDispatcher);
 
 // ============================================================================
 // End of auto-generated code
