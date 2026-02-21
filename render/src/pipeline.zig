@@ -90,6 +90,10 @@ const TrackedEntity = struct {
     created: bool = false, // Has the visual been created in the engine?
     is_gizmo: bool = false, // Cached: entity has Gizmo component (avoids repeated tryGet)
     has_parent: bool = false, // Cached: entity has Parent component (position inheritance)
+    // Last synced screen position — avoids redundant updatePosition calls for
+    // parented/gizmo entities whose world position hasn't actually changed.
+    last_screen_x: f32 = std.math.nan(f32),
+    last_screen_y: f32 = std.math.nan(f32),
 };
 
 // ============================================
@@ -314,6 +318,21 @@ pub const RenderPipeline = struct {
         }
     }
 
+    /// Update the cached screen position and push to the retained engine.
+    /// Returns true if the position was actually sent (changed from last sync).
+    fn syncPosition(self: *RenderPipeline, tracked: *TrackedEntity, entity_id: EntityId, pos: GfxPosition) bool {
+        // Skip redundant updatePosition calls — avoids unnecessary spatial grid
+        // churn in the retained engine (remove-from-old-cell + insert-into-new-cell)
+        // which can cause visual glitches on cell boundaries.
+        if (pos.x == tracked.last_screen_x and pos.y == tracked.last_screen_y) {
+            return false;
+        }
+        tracked.last_screen_x = pos.x;
+        tracked.last_screen_y = pos.y;
+        self.engine.updatePosition(entity_id, pos);
+        return true;
+    }
+
     /// Sync all dirty entities to the RetainedEngine
     /// Transforms positions from game space (Y-up) to screen space (Y-down)
     pub fn sync(self: *RenderPipeline, registry: *Registry) void {
@@ -367,6 +386,9 @@ pub const RenderPipeline = struct {
                 tracked.created = creation_succeeded;
                 tracked.visual_dirty = false;
                 tracked.position_dirty = false; // Position was set during create (or skipped if failed)
+                // Cache the initial screen position
+                tracked.last_screen_x = pos.x;
+                tracked.last_screen_y = pos.y;
             } else if (tracked.visual_dirty) {
                 // Visual changed - use update methods (v0.12.0+)
                 switch (tracked.visual_type) {
@@ -400,19 +422,20 @@ pub const RenderPipeline = struct {
                 // Also update position if dirty
                 if (tracked.position_dirty) {
                     const pos = self.toScreenPos(resolveGfxPosition(registry, tracked.entity));
-                    self.engine.updatePosition(entity_id, pos);
+                    _ = self.syncPosition(tracked, entity_id, pos);
                     tracked.position_dirty = false;
                 }
             } else if (tracked.position_dirty and tracked.created) {
                 // Only position changed - but only update if visual was created
                 const pos = self.toScreenPos(resolveGfxPosition(registry, tracked.entity));
-                self.engine.updatePosition(entity_id, pos);
+                _ = self.syncPosition(tracked, entity_id, pos);
                 tracked.position_dirty = false;
             } else if (tracked.created and (tracked.is_gizmo or tracked.has_parent)) {
-                // Entities with parents (gizmos or parented): always update position
-                // This ensures they follow their parent even when only the parent moves
+                // Entities with parents (gizmos or parented): recompute world position
+                // since the parent may have moved. Skip if position hasn't changed
+                // to avoid redundant spatial grid operations in the retained engine.
                 const pos = self.toScreenPos(resolveGfxPosition(registry, tracked.entity));
-                self.engine.updatePosition(entity_id, pos);
+                _ = self.syncPosition(tracked, entity_id, pos);
             }
         }
     }
