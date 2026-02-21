@@ -83,7 +83,13 @@ pub fn HookDispatcher(
                         const handler = @field(Base, name);
                         const params = @typeInfo(@TypeOf(handler)).@"fn".params;
                         if (params.len == 1) {
-                            handler(data);
+                            // 1-arg handler: check if it expects the full union or inner data
+                            const param_type = params[0].type.?;
+                            if (param_type == PayloadUnion) {
+                                handler(payload);
+                            } else {
+                                handler(data);
+                            }
                         } else {
                             handler(self.receiver, data);
                         }
@@ -147,7 +153,12 @@ pub fn MergeHooks(
                             const handler = @field(Base, name);
                             const params = @typeInfo(@TypeOf(handler)).@"fn".params;
                             if (params.len == 1) {
-                                handler(data);
+                                const param_type = params[0].type.?;
+                                if (param_type == PayloadUnion) {
+                                    handler(payload);
+                                } else {
+                                    handler(data);
+                                }
                             } else {
                                 handler(self.receivers[i], data);
                             }
