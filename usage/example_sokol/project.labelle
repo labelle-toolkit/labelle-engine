@@ -3,7 +3,7 @@
     .name = "example_sokol",
     .description = "Demonstrates Sokol backend with full hook support and shape rendering",
     .initial_scene = "main",
-    .backend = .sokol,
+    .targets = .{.sokol_desktop},
     .window = .{
         .width = 800,
         .height = 600,

@@ -3,7 +3,7 @@
     .name = "example_2",
     .description = "labelle-engine example using Sokol graphics backend",
     .initial_scene = "main_scene",
-    .backend = .sokol,
+    .targets = .{.sokol_desktop},
     .window = .{
         .width = 800,
         .height = 600,
