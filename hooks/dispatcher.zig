@@ -46,7 +46,7 @@ pub fn HookDispatcher(
                 if (@hasDecl(Base, decl.name)) {
                     const DeclType = @TypeOf(@field(Base, decl.name));
                     const info = @typeInfo(DeclType);
-                    if (info == .@"fn" and info.@"fn".params.len == 2) {
+                    if (info == .@"fn" and (info.@"fn".params.len == 1 or info.@"fn".params.len == 2)) {
                         @compileError(
                             "Handler '" ++ decl.name ++ "' in " ++ @typeName(Base) ++
                                 " doesn't match any event in " ++ @typeName(PayloadUnion) ++
@@ -80,7 +80,13 @@ pub fn HookDispatcher(
                 inline else => |data, tag| {
                     const name = @tagName(tag);
                     if (@hasDecl(Base, name)) {
-                        @field(Base, name)(self.receiver, data);
+                        const handler = @field(Base, name);
+                        const params = @typeInfo(@TypeOf(handler)).@"fn".params;
+                        if (params.len == 1) {
+                            handler(data);
+                        } else {
+                            handler(self.receiver, data);
+                        }
                     }
                 },
             }
@@ -113,7 +119,7 @@ pub fn MergeHooks(
                 if (@hasDecl(Base, decl.name)) {
                     const DeclType = @TypeOf(@field(Base, decl.name));
                     const info = @typeInfo(DeclType);
-                    if (info == .@"fn" and info.@"fn".params.len == 2) {
+                    if (info == .@"fn" and (info.@"fn".params.len == 1 or info.@"fn".params.len == 2)) {
                         if (fieldIndex(PayloadUnion, decl.name) == null) {
                             @compileError(
                                 "Handler '" ++ decl.name ++ "' in " ++ @typeName(Base) ++
@@ -138,7 +144,13 @@ pub fn MergeHooks(
                     inline for (0..ReceiverTypes.len) |i| {
                         const Base = UnwrapReceiver(ReceiverTypes[i]);
                         if (@hasDecl(Base, name)) {
-                            @field(Base, name)(self.receivers[i], data);
+                            const handler = @field(Base, name);
+                            const params = @typeInfo(@TypeOf(handler)).@"fn".params;
+                            if (params.len == 1) {
+                                handler(data);
+                            } else {
+                                handler(self.receivers[i], data);
+                            }
                         }
                     }
                 },

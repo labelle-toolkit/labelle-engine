@@ -224,6 +224,16 @@ pub const Registry = struct {
         self.inner.remove(T, entity);
     }
 
+    /// Alias for removeComponent - for compatibility with plugins
+    pub fn remove(self: *Self, comptime T: type, entity: Self.Entity) void {
+        self.removeComponent(entity, T);
+    }
+
+    /// Alias for getComponent - for compatibility with plugins
+    pub fn tryGet(self: *Self, comptime T: type, entity: Self.Entity) ?*T {
+        return self.getComponent(entity, T);
+    }
+
     /// Get a mutable pointer to a component (alias for getComponent)
     pub fn getComponentPtr(self: *Self, entity: Self.Entity, comptime T: type) ?*T {
         return self.getComponent(entity, T);
