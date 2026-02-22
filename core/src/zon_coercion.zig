@@ -459,6 +459,7 @@ pub fn extractRefInfo(comptime value: anytype) ?RefInfo {
 /// Generate an auto-ID for an entity at a given index.
 /// Format: "_e{index}" (e.g., "_e0", "_e1", "_e2")
 pub fn generateAutoId(comptime index: usize) []const u8 {
+    @setEvalBranchQuota(50000);
     return std.fmt.comptimePrint("_e{d}", .{index});
 }
 
