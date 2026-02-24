@@ -13,4 +13,5 @@ test {
     _ = @import("test/utils_test.zig");
     _ = @import("test/fingerprint_test.zig");
     _ = @import("test/scanner_test.zig");
+    _ = @import("test/template_test.zig");
 }
