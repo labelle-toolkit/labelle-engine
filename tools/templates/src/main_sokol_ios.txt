@@ -116,6 +116,9 @@ export fn frame() void {{
     // Get delta time from sokol
     const dt: f32 = @floatCast(sapp.frameDuration());
 
+    // Clear gizmos from previous frame
+    state.game.?.gizmos.clearGizmos();
+
     // Update scene (runs scripts, etc.)
     state.scene.?.update(dt);
 
@@ -137,6 +140,7 @@ export fn frame() void {{
     const re = state.game.?.getRetainedEngine();
     re.beginFrame();
     re.render();
+    state.game.?.gizmos.renderStandaloneGizmos();
     re.endFrame();
 
     // End sokol render pass and commit
