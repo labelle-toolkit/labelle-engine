@@ -86,12 +86,14 @@ pub fn main() !void {{
 
     while (game.isRunning()) {{
         const dt = game.getDeltaTime();
+        game.gizmos.clearGizmos();
         scene.update(dt);
         game.getPipeline().sync(game.getRegistry());
 
         const re = game.getRetainedEngine();
         re.beginFrame();
         re.render();
+        game.gizmos.renderStandaloneGizmos();
         game.processPendingScreenshot();
         re.endFrame();
     }}
