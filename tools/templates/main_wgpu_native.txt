@@ -296,6 +296,7 @@ pub fn main() !void {{
         last_time = current_time;
 
         // Update scene
+        game.gizmos.clearGizmos();
         scene.update(dt);
 
         // Sync ECS to graphics
@@ -308,6 +309,7 @@ pub fn main() !void {{
         const re = game.getRetainedEngine();
         re.beginFrame();
         re.render();
+        game.gizmos.renderStandaloneGizmos();
         re.endFrame();
 
         WgpuNativeBackend.endDrawing();
