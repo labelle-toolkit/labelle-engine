@@ -106,8 +106,8 @@ pub fn generateMainZigRaylibWasm(
         if (plugin.engine_hooks) |eh| {
             plugin_engine_hooks_count += 1;
 
-            // Parse the task_hooks reference to get hook file and struct name
-            var it = std.mem.splitScalar(u8, eh.task_hooks, '.');
+            // Parse the hooks reference to get hook file and struct name
+            var it = std.mem.splitScalar(u8, eh.hooks, '.');
             const hook_file = it.next() orelse continue;
 
             // Mark this hook file as used by a plugin
@@ -145,25 +145,38 @@ pub fn generateMainZigRaylibWasm(
     // This must happen AFTER hook imports since we reference the hook file
     for (config.plugins, 0..) |plugin, i| {
         if (plugin.engine_hooks) |eh| {
-            // Parse the task_hooks reference to get hook file and struct name
-            var it = std.mem.splitScalar(u8, eh.task_hooks, '.');
+            // Parse the hooks reference to get hook file and struct name
+            var it = std.mem.splitScalar(u8, eh.hooks, '.');
             const hook_file = it.next() orelse continue;
             const struct_name = it.next() orelse "GameHooks";
 
-            // Get bind enum type
-            const bind_enum_type = eh.item_arg orelse (if (plugin.bind.len > 0) plugin.bind[0].arg else "void");
+            if (eh.args.len > 0) {
+                // New path: explicit args list (e.g., labelle-needs with .args = .{"Needs", "Items"})
+                try writer.print("const {s}_engine_hooks = {s}.{s}(GameId", .{
+                    plugin_zig_names[i], plugin_zig_names[i], eh.create,
+                });
+                for (eh.args) |arg| {
+                    try writer.print(", {s}", .{arg});
+                }
+                try writer.print(", {s}_hooks.{s}, engine.EngineTypes);\n", .{ hook_file, struct_name });
+                try writer.print("pub const {s}Context = {s}_engine_hooks.Context;\n", .{
+                    plugin_zig_names[i], plugin_zig_names[i],
+                });
+            } else {
+                // Legacy path: use item_arg or first bind arg as single type arg
+                const bind_enum_type = eh.item_arg orelse (if (plugin.bind.len > 0) plugin.bind[0].arg else "void");
 
-            // Generate: const plugin_engine_hooks = plugin.createEngineHooks(GameId, BindEnumType, hook_file.GameHooks);
-            try zts.print(main_raylib_wasm_tmpl, "plugin_engine_hooks", .{
-                plugin_zig_names[i], // for const name
-                plugin_zig_names[i], // for plugin module
-                eh.create, // createEngineHooks
-                bind_enum_type, // Enum type (e.g., Items)
-                hook_file, // task_hooks
-                struct_name, // GameHooks
-                plugin_zig_names[i], // Context prefix
-                plugin_zig_names[i], // Context value
-            }, writer);
+                try zts.print(main_raylib_wasm_tmpl, "plugin_engine_hooks", .{
+                    plugin_zig_names[i], // for const name
+                    plugin_zig_names[i], // for plugin module
+                    eh.create, // createEngineHooks
+                    bind_enum_type, // Enum type (e.g., Items)
+                    hook_file, // task_hooks
+                    struct_name, // GameHooks
+                    plugin_zig_names[i], // Context prefix
+                    plugin_zig_names[i], // Context value
+                }, writer);
+            }
         }
     }
 
