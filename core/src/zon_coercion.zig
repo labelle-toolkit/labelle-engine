@@ -84,37 +84,33 @@ pub fn coerceValue(comptime FieldType: type, comptime data_value: anytype) Field
         // This handles types like std.EnumSet where the internal representation
         // (a single `bits` field) differs from the ZON-facing API (.{ .Water = true }).
         const data_fields = @typeInfo(DataType).@"struct".fields;
-        const target_fields = field_info.@"struct".fields;
 
-        comptime var any_match = false;
-        inline for (data_fields) |df| {
-            inline for (target_fields) |tf| {
-                if (comptime std.mem.eql(u8, df.name, tf.name)) {
-                    any_match = true;
+        const any_match = comptime blk: {
+            for (data_fields) |df| {
+                if (@hasField(FieldType, df.name)) {
+                    break :blk true;
                 }
             }
-        }
+            break :blk false;
+        };
 
-        if (any_match or data_fields.len == 0) {
-            return buildStruct(FieldType, data_value);
-        }
-
-        // No fields match — try init() method (e.g., std.EnumSet.init)
-        if (@hasDecl(FieldType, "init")) {
-            const InitFn = @TypeOf(@field(FieldType, "init"));
-            const init_info = @typeInfo(InitFn);
-            if (init_info == .@"fn") {
-                const params = init_info.@"fn".params;
-                if (params.len == 1 and params[0].type != null) {
-                    const ParamType = params[0].type.?;
-                    if (@typeInfo(ParamType) == .@"struct") {
-                        return @field(FieldType, "init")(buildStruct(ParamType, data_value));
+        if (!any_match and data_fields.len > 0) {
+            // No fields match — try init() method (e.g., std.EnumSet.init)
+            if (@hasDecl(FieldType, "init")) {
+                const InitFn = @TypeOf(@field(FieldType, "init"));
+                const init_info = @typeInfo(InitFn);
+                if (init_info == .@"fn") {
+                    const params = init_info.@"fn".params;
+                    if (params.len == 1 and params[0].type != null) {
+                        const ParamType = params[0].type.?;
+                        if (@typeInfo(ParamType) == .@"struct") {
+                            return @field(FieldType, "init")(buildStruct(ParamType, data_value));
+                        }
                     }
                 }
             }
         }
 
-        // Fallback to buildStruct (will use defaults for all fields)
         return buildStruct(FieldType, data_value);
     }
 
