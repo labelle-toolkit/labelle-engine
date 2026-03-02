@@ -14,17 +14,16 @@ const engine = @import("labelle-engine");
 
 var frame_count: u64 = 0;
 
-pub fn game_init(_: engine.HookPayload) void {
+pub fn game_init(_: @This(), _: engine.GameInitInfo) void {
     std.log.info("[Sokol] Game initialized!", .{});
     frame_count = 0;
 }
 
-pub fn game_deinit(_: engine.HookPayload) void {
+pub fn game_deinit(_: @This(), _: void) void {
     std.log.info("[Sokol] Game shutting down after {d} frames", .{frame_count});
 }
 
-pub fn frame_start(payload: engine.HookPayload) void {
-    const info = payload.frame_start;
+pub fn frame_start(_: @This(), info: engine.FrameInfo) void {
     frame_count = info.frame_number;
 
     // Log every 60 frames
@@ -36,23 +35,19 @@ pub fn frame_start(payload: engine.HookPayload) void {
     }
 }
 
-pub fn scene_before_load(payload: engine.HookPayload) void {
-    const info = payload.scene_before_load;
+pub fn scene_before_load(_: @This(), info: engine.SceneBeforeLoadInfo) void {
     std.log.info("[Sokol] Scene '{s}' is about to load", .{info.name});
 }
 
-pub fn scene_load(payload: engine.HookPayload) void {
-    const info = payload.scene_load;
+pub fn scene_load(_: @This(), info: engine.SceneInfo) void {
     std.log.info("[Sokol] Scene loaded: {s}", .{info.name});
 }
 
-pub fn scene_unload(payload: engine.HookPayload) void {
-    const info = payload.scene_unload;
+pub fn scene_unload(_: @This(), info: engine.SceneInfo) void {
     std.log.info("[Sokol] Scene unloading: {s}", .{info.name});
 }
 
-pub fn entity_created(payload: engine.HookPayload) void {
-    const info = payload.entity_created;
+pub fn entity_created(_: @This(), info: engine.EntityInfo) void {
     if (info.prefab_name) |name| {
         std.log.info("[Sokol] Entity created from prefab: {s}", .{name});
     }

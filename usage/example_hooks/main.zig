@@ -76,7 +76,7 @@ const TasksPlugin = struct {
 
     pub const EngineHooks = struct {
         /// Called when game initializes - plugin sets up its state
-        pub fn game_init(_: engine.HookPayload) void {
+        pub fn game_init(_: @This(), _: engine.GameInitInfo) void {
             std.log.info("[tasks] Plugin initializing...", .{});
 
             initialized = true;
@@ -88,10 +88,9 @@ const TasksPlugin = struct {
         }
 
         /// Called each frame - plugin processes scheduled tasks
-        pub fn frame_start(payload: engine.HookPayload) void {
+        pub fn frame_start(_: @This(), info: engine.FrameInfo) void {
             if (!initialized) return;
 
-            const info = payload.frame_start;
             current_time += info.dt;
 
             // Check for tasks that should execute
@@ -111,8 +110,8 @@ const TasksPlugin = struct {
                     });
 
                     // Emit event for game to react to
-                    const dispatcher = Dispatcher(GameTasksHandlers);
-                    dispatcher.emit(.{ .task_completed = .{
+                    const d: Dispatcher(GameTasksHandlers) = .{ .receiver = .{} };
+                    d.emit(.{ .task_completed = .{
                         .id = task.id,
                         .name = task.name,
                     } });
@@ -121,51 +120,43 @@ const TasksPlugin = struct {
         }
 
         /// Called when game shuts down - plugin cleans up
-        pub fn game_deinit(_: engine.HookPayload) void {
+        pub fn game_deinit(_: @This(), _: void) void {
             std.log.info("[tasks] Plugin shutting down. Completed {d} tasks total.", .{tasks_completed});
             initialized = false;
         }
 
         /// Called before scene loads - plugin could prepare for new scene
-        pub fn scene_before_load(payload: engine.HookPayload) void {
-            const info = payload.scene_before_load;
+        pub fn scene_before_load(_: @This(), info: engine.SceneBeforeLoadInfo) void {
             std.log.info("[tasks] Scene '{s}' about to load - preparing task queue", .{info.name});
             // Could use info.allocator to initialize scene-scoped resources
         }
 
         /// Called when scene loads - plugin could load scene-specific tasks
-        pub fn scene_load(payload: engine.HookPayload) void {
-            const info = payload.scene_load;
+        pub fn scene_load(_: @This(), info: engine.SceneInfo) void {
             std.log.info("[tasks] Scene '{s}' loaded - plugin could load scene-specific tasks here", .{info.name});
         }
 
         /// Called when scene unloads - plugin cleans up scene-specific state
-        pub fn scene_unload(payload: engine.HookPayload) void {
-            const info = payload.scene_unload;
+        pub fn scene_unload(_: @This(), info: engine.SceneInfo) void {
             std.log.info("[tasks] Scene '{s}' unloading - cleaning up pending tasks", .{info.name});
         }
     };
 
     // ---- Plugin Hooks (game listens to plugin) ----
 
-    pub const Hook = enum {
-        task_completed,
-        task_started,
-    };
-
     pub const TaskInfo = struct {
         id: u32,
         name: []const u8,
     };
 
-    pub const Payload = union(Hook) {
+    pub const Payload = union(enum) {
         task_completed: TaskInfo,
         task_started: TaskInfo,
     };
 
     /// Create a dispatcher for game to listen to plugin hooks
     pub fn Dispatcher(comptime GameHandlers: type) type {
-        return engine.HookDispatcher(Hook, Payload, GameHandlers);
+        return engine.HookDispatcher(Payload, GameHandlers, .{});
     }
 };
 
@@ -175,7 +166,7 @@ const TasksPlugin = struct {
 
 // Game's own engine hook handlers
 const GameHooks = struct {
-    pub fn game_init(_: engine.HookPayload) void {
+    pub fn game_init(_: @This(), _: engine.GameInitInfo) void {
         std.log.info("[game] Game initialized", .{});
     }
 
@@ -188,12 +179,11 @@ const GameHooks = struct {
         _ = TasksPlugin.scheduleTask("Start background music", 1.5);
     }
 
-    pub fn game_deinit(_: engine.HookPayload) void {
+    pub fn game_deinit(_: @This(), _: void) void {
         std.log.info("[game] Game shutting down", .{});
     }
 
-    pub fn frame_start(payload: engine.HookPayload) void {
-        const info = payload.frame_start;
+    pub fn frame_start(_: @This(), info: engine.FrameInfo) void {
         // Log every 60 frames
         if (info.frame_number % 60 == 0 and info.frame_number > 0) {
             std.log.info("[game] Frame {d}, plugin completed {d} tasks so far", .{
@@ -203,34 +193,29 @@ const GameHooks = struct {
         }
     }
 
-    pub fn scene_before_load(payload: engine.HookPayload) void {
-        const info = payload.scene_before_load;
+    pub fn scene_before_load(_: @This(), info: engine.SceneBeforeLoadInfo) void {
         std.log.info("[game] Scene about to load: {s}", .{info.name});
     }
 
-    pub fn scene_load(payload: engine.HookPayload) void {
-        const info = payload.scene_load;
+    pub fn scene_load(_: @This(), info: engine.SceneInfo) void {
         std.log.info("[game] Scene loaded: {s}", .{info.name});
     }
 
-    pub fn scene_unload(payload: engine.HookPayload) void {
-        const info = payload.scene_unload;
+    pub fn scene_unload(_: @This(), info: engine.SceneInfo) void {
         std.log.info("[game] Scene unloading: {s}", .{info.name});
     }
 };
 
 // Game's handlers for plugin hooks (game subscribes to plugin events)
 const GameTasksHandlers = struct {
-    pub fn task_completed(payload: TasksPlugin.Payload) void {
-        const info = payload.task_completed;
+    pub fn task_completed(_: @This(), info: TasksPlugin.TaskInfo) void {
         std.log.info("[game] Received task_completed event: #{d} '{s}'", .{ info.id, info.name });
 
         // Game can react to plugin events
         // e.g., update UI, trigger animations, unlock features, etc.
     }
 
-    pub fn task_started(payload: TasksPlugin.Payload) void {
-        const info = payload.task_started;
+    pub fn task_started(_: @This(), info: TasksPlugin.TaskInfo) void {
         std.log.info("[game] Received task_started event: #{d} '{s}'", .{ info.id, info.name });
     }
 };

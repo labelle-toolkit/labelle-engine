@@ -5,8 +5,7 @@
     .version = 1,
     .name = "entity_refs_example",
     .initial_scene = "main",
-    .backend = .raylib,
-    .ecs_backend = .zig_ecs,
+    .targets = .{.raylib_desktop},
     .window = .{
         .width = 800,
         .height = 600,

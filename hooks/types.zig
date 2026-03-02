@@ -5,23 +5,32 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
-/// Built-in hooks for engine lifecycle events.
-/// Games can register handlers for any of these hooks.
-pub const EngineHook = enum {
+/// Type-safe payload union for engine hooks.
+/// Each hook type has its corresponding payload type.
+pub const HookPayload = union(enum) {
     // Game lifecycle
-    game_init,
-    game_deinit,
-    frame_start,
-    frame_end,
+    game_init: GameInitInfo,
+    game_deinit: void,
+    frame_start: FrameInfo,
+    frame_end: FrameInfo,
 
     // Scene lifecycle
-    scene_before_load,
-    scene_load,
-    scene_unload,
+    scene_before_load: SceneBeforeLoadInfo,
+    scene_load: SceneInfo,
+    scene_unload: SceneInfo,
 
     // Entity lifecycle
-    entity_created,
-    entity_destroyed,
+    entity_created: EntityInfo,
+    entity_destroyed: EntityInfo,
+};
+
+/// Built-in hooks for engine lifecycle events — derived from HookPayload.
+pub const EngineHook = std.meta.Tag(HookPayload);
+
+/// Game initialization info passed to game_init hook.
+pub const GameInitInfo = struct {
+    /// The allocator used by the game, available for initializing subsystems.
+    allocator: Allocator,
 };
 
 /// Frame timing information.
@@ -32,12 +41,6 @@ pub const FrameInfo = struct {
     dt: f32 = 0,
 };
 
-/// Scene information for scene lifecycle hooks.
-pub const SceneInfo = struct {
-    /// Name of the scene.
-    name: []const u8,
-};
-
 /// Scene before load information.
 /// Passed to scene_before_load hook before entities are created.
 pub const SceneBeforeLoadInfo = struct {
@@ -45,6 +48,12 @@ pub const SceneBeforeLoadInfo = struct {
     name: []const u8,
     /// The allocator used by the game, available for initializing scene-scoped subsystems.
     allocator: Allocator,
+};
+
+/// Scene information for scene lifecycle hooks.
+pub const SceneInfo = struct {
+    /// Name of the scene.
+    name: []const u8,
 };
 
 /// Entity information for entity lifecycle hooks.
@@ -73,26 +82,4 @@ pub const ComponentPayload = struct {
     pub fn getGame(self: ComponentPayload, comptime GameType: type) *GameType {
         return @ptrCast(@alignCast(self.game_ptr));
     }
-};
-
-/// Game initialization info passed to game_init hook.
-pub const GameInitInfo = struct {
-    /// The allocator used by the game, available for initializing subsystems.
-    allocator: Allocator,
-};
-
-/// Type-safe payload union for engine hooks.
-/// Each hook type has its corresponding payload type.
-pub const HookPayload = union(EngineHook) {
-    game_init: GameInitInfo,
-    game_deinit: void,
-    frame_start: FrameInfo,
-    frame_end: FrameInfo,
-
-    scene_before_load: SceneBeforeLoadInfo,
-    scene_load: SceneInfo,
-    scene_unload: SceneInfo,
-
-    entity_created: EntityInfo,
-    entity_destroyed: EntityInfo,
 };

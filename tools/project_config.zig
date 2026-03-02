@@ -149,10 +149,17 @@ pub const BindDeclaration = struct {
 pub const EngineHooksDeclaration = struct {
     /// Function name to call on the plugin (e.g., "createEngineHooks")
     create: []const u8,
-    /// Reference to the game's task hooks struct (e.g., "task_hooks.GameHooks")
-    /// This is a struct in the hooks/ folder that defines game-specific task handlers
-    task_hooks: []const u8,
-    /// Optional: explicit item type arg (e.g., "Items"). If not specified, uses first bind arg.
+    /// Reference to the game's hooks struct (e.g., "task_hooks.GameHooks" or "needs_hooks.NeedsGameHooks")
+    /// Format: "hook_file.StructName" — the hook_file part is used for import resolution.
+    hooks: []const u8,
+    /// Extra type arguments between GameId and hooks struct in the createEngineHooks call.
+    /// Each string is a type name (e.g., enum exported from enums/ folder).
+    /// Example for labelle-needs: .args = .{ "Needs", "Items" } generates:
+    ///   createEngineHooks(GameId, Needs, Items, NeedsGameHooks, EngineTypes)
+    /// If empty, uses item_arg or first bind arg as a single arg (backwards compat with labelle-tasks).
+    args: []const []const u8 = &.{},
+    /// Legacy: explicit item type arg (e.g., "Items"). If not specified, uses first bind arg.
+    /// Only used when args is empty.
     item_arg: ?[]const u8 = null,
 };
 
@@ -195,12 +202,18 @@ pub const Plugin = struct {
     bind: []const BindDeclaration = &.{},
     /// Engine hooks declaration for plugin-provided engine lifecycle hooks.
     /// When specified, the generator creates engine hooks from the plugin and merges them.
-    /// Example:
+    /// Example (labelle-tasks):
     ///   .engine_hooks = .{
     ///       .create = "createEngineHooks",
-    ///       .task_hooks = "task_hooks.GameHooks",
+    ///       .hooks = "task_hooks.GameHooks",
     ///   },
-    /// Generates: const plugin_engine_hooks = plugin.createEngineHooks(GameId, Items, task_hooks.GameHooks);
+    /// Example (labelle-needs, with extra type args):
+    ///   .engine_hooks = .{
+    ///       .create = "createEngineHooks",
+    ///       .hooks = "needs_hooks.NeedsGameHooks",
+    ///       .args = .{ "Needs", "Items" },
+    ///   },
+    /// Generates: const plugin_engine_hooks = plugin.createEngineHooks(GameId, ..., HooksStruct, EngineTypes);
     /// Then includes plugin_engine_hooks in MergeEngineHooks.
     engine_hooks: ?EngineHooksDeclaration = null,
 
