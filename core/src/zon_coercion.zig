@@ -96,6 +96,8 @@ pub fn coerceValue(comptime FieldType: type, comptime data_value: anytype) Field
 
         if (!any_match and data_fields.len > 0) {
             // No fields match — try init() method (e.g., std.EnumSet.init)
+            // Guard with structFieldsCompatible to avoid silently accepting
+            // typos or mismatched input via init() on unrelated types.
             if (@hasDecl(FieldType, "init")) {
                 const InitFn = @TypeOf(@field(FieldType, "init"));
                 const init_info = @typeInfo(InitFn);
@@ -103,7 +105,9 @@ pub fn coerceValue(comptime FieldType: type, comptime data_value: anytype) Field
                     const params = init_info.@"fn".params;
                     if (params.len == 1 and params[0].type != null) {
                         const ParamType = params[0].type.?;
-                        if (@typeInfo(ParamType) == .@"struct") {
+                        if (@typeInfo(ParamType) == .@"struct" and
+                            comptime structFieldsCompatible(DataType, ParamType))
+                        {
                             return @field(FieldType, "init")(buildStruct(ParamType, data_value));
                         }
                     }
