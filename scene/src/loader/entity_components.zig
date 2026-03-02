@@ -253,6 +253,13 @@ pub fn EntityComponentOps(comptime Prefabs: type, comptime Components: type) typ
             if (@typeInfo(ComponentType) != .@"struct") {
                 const component = zon.coerceValue(ComponentType, comp_data);
                 game.getRegistry().addComponent(parent_entity, component);
+
+                if (@hasDecl(ComponentType, "onReady")) {
+                    try ready_queue.append(game.allocator, .{
+                        .entity = parent_entity,
+                        .callback = ComponentType.onReady,
+                    });
+                }
                 return;
             }
 
