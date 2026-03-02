@@ -61,7 +61,7 @@ pub fn generateMainZigRaylibWasm(
         try zts.print(main_raylib_wasm_tmpl, "enum_import", .{ name, name }, writer);
     }
 
-    // Enum exports (with PascalCase type names)
+    // Enum exports (with extracted type names)
     for (enums, 0..) |name, i| {
         try zts.print(main_raylib_wasm_tmpl, "enum_export", .{ enum_type_names[i], name, enum_type_names[i] }, writer);
     }

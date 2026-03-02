@@ -103,7 +103,7 @@ fn generateMainZigMobile(
         try zts.print(template, "component_import", .{ name, name }, writer);
     }
 
-    // Component exports (with PascalCase type names)
+    // Component exports (with extracted type names)
     for (components, 0..) |name, i| {
         try zts.print(template, "component_export", .{ component_type_names[i], name, component_type_names[i] }, writer);
     }

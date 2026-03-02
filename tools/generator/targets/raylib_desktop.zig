@@ -61,7 +61,7 @@ pub fn generateMainZigRaylib(
         try zts.print(main_raylib_tmpl, "enum_import", .{ name, name }, writer);
     }
 
-    // Enum exports (with PascalCase type names)
+    // Enum exports (with extracted type names)
     for (enums, 0..) |name, i| {
         try zts.print(main_raylib_tmpl, "enum_export", .{ enum_type_names[i], name, enum_type_names[i] }, writer);
     }
@@ -90,7 +90,7 @@ pub fn generateMainZigRaylib(
         try zts.print(main_raylib_tmpl, "component_import", .{ name, name }, writer);
     }
 
-    // Component exports (with PascalCase type names)
+    // Component exports (with extracted type names)
     for (components, 0..) |name, i| {
         try zts.print(main_raylib_tmpl, "component_export", .{ component_type_names[i], name, component_type_names[i] }, writer);
     }

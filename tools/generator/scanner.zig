@@ -90,13 +90,12 @@ fn extractFirstPubConst(allocator: std.mem.Allocator, dir_path: []const u8, file
                 var after_eq = eq_pos + 1;
                 while (after_eq < source.len and source[after_eq] == ' ') after_eq += 1;
 
-                // Check if it's a type definition (struct, union, enum) or import
+                // Check if it's a type definition (struct, union, enum)
                 if (after_eq < source.len) {
                     const rest = source[after_eq..];
                     if (std.mem.startsWith(u8, rest, "struct") or
                         std.mem.startsWith(u8, rest, "union") or
-                        std.mem.startsWith(u8, rest, "enum") or
-                        std.mem.startsWith(u8, rest, "@import"))
+                        std.mem.startsWith(u8, rest, "enum"))
                     {
                         return try allocator.dupe(u8, name);
                     }
