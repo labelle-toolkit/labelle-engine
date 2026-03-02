@@ -47,7 +47,7 @@ fn scanFolderWithExtension(allocator: std.mem.Allocator, path: []const u8, exten
 /// Extract the first `pub const` type name from a .zig source file.
 /// Looks for patterns like `pub const Foo = struct {`, `pub const Bar = union(enum) {`, etc.
 /// Returns the extracted name, or falls back to PascalCase of the filename.
-pub fn extractFirstPubConst(allocator: std.mem.Allocator, dir_path: []const u8, filename: []const u8) ![]const u8 {
+fn extractFirstPubConst(allocator: std.mem.Allocator, dir_path: []const u8, filename: []const u8) ![]const u8 {
     const file_path = try std.fmt.allocPrint(allocator, "{s}/{s}.zig", .{ dir_path, filename });
     defer allocator.free(file_path);
 
@@ -121,15 +121,17 @@ fn fallbackPascalCase(allocator: std.mem.Allocator, filename: []const u8) ![]con
 /// Returns a parallel array where result[i] is the type name for filenames[i].
 pub fn extractTypeNames(allocator: std.mem.Allocator, dir_path: []const u8, filenames: []const []const u8) ![]const []const u8 {
     var type_names = try allocator.alloc([]const u8, filenames.len);
+    var initialized: usize = 0;
     errdefer {
-        for (type_names, 0..) |name, i| {
-            if (i < filenames.len) allocator.free(name);
+        for (type_names[0..initialized]) |name| {
+            allocator.free(name);
         }
         allocator.free(type_names);
     }
 
-    for (filenames, 0..) |filename, i| {
-        type_names[i] = try extractFirstPubConst(allocator, dir_path, filename);
+    for (filenames) |filename| {
+        type_names[initialized] = try extractFirstPubConst(allocator, dir_path, filename);
+        initialized += 1;
     }
 
     return type_names;
