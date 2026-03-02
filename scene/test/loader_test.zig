@@ -324,4 +324,102 @@ pub const SCENE_DATA_FORMAT = struct {
     };
 };
 
+// ============================================================================
+// Union-type Component Tests (Issue #313)
+// ============================================================================
+
+/// Union-type component for testing non-struct component scene data
+const CurrentTask = union(enum) {
+    idle,
+    working: struct {
+        workstation_id: u64,
+        progress: f32 = 0,
+    },
+    delivering: struct {
+        item_id: u64,
+    },
+};
+
+pub const UNION_COMPONENT = struct {
+    // These tests validate the comptime scene data format for union-type components:
+    // they verify that anonymous .zon structs with union fields have the expected shape
+    // and that field access works on the comptime data. The actual zon.coerceValue
+    // code path (used by addComponentWithNestedEntities at runtime) is exercised in
+    // the ZON_COERCION section below and in core/test/zon_coercion_test.zig.
+
+    // Scene definitions with union-type components
+    const scene_with_union = .{
+        .name = "union_test",
+        .entities = .{
+            .{ .components = .{
+                .Health = .{ .current = 100 },
+                .CurrentTask = .idle,
+            } },
+            .{ .components = .{
+                .CurrentTask = .{ .working = .{ .workstation_id = 7 } },
+            } },
+            .{ .components = .{
+                .CurrentTask = .{ .delivering = .{ .item_id = 42 } },
+            } },
+        },
+    };
+
+    test "scene with union components has correct entity count" {
+        try expect.equal(scene_with_union.entities.len, 3);
+    }
+
+    test "entity can have union component field alongside struct component" {
+        const e0 = scene_with_union.entities[0];
+        try expect.toBeTrue(@hasField(@TypeOf(e0.components), "CurrentTask"));
+        try expect.toBeTrue(@hasField(@TypeOf(e0.components), "Health"));
+    }
+
+    test "union component with void variant is accessible" {
+        // .idle is an enum literal — the ZON loader would coerce this via coerceToUnion
+        const e0 = scene_with_union.entities[0];
+        const tag_name = @tagName(e0.components.CurrentTask);
+        try expect.toBeTrue(std.mem.eql(u8, tag_name, "idle"));
+    }
+
+    test "union component with payload variant has correct data" {
+        const e1 = scene_with_union.entities[1];
+        try expect.equal(e1.components.CurrentTask.working.workstation_id, 7);
+    }
+
+    test "union component with another payload variant" {
+        const e2 = scene_with_union.entities[2];
+        try expect.equal(e2.components.CurrentTask.delivering.item_id, 42);
+    }
+};
+
+// ============================================================================
+// ZON Coercion Tests for Union Components (Issue #313)
+//
+// These tests exercise the actual zon.coerceValue code path that
+// addComponentWithNestedEntities uses for non-struct component types.
+// They verify that anonymous .zon data coerces correctly into typed unions.
+// ============================================================================
+
+const zon = engine.core.zon;
+
+pub const ZON_COERCION = struct {
+    test "coerceValue: union void variant from enum literal" {
+        const result = zon.coerceValue(CurrentTask, .idle);
+        try expect.toBeTrue(std.mem.eql(u8, @tagName(result), "idle"));
+    }
+
+    test "coerceValue: union payload variant from anonymous struct" {
+        const result = zon.coerceValue(CurrentTask, .{ .working = .{ .workstation_id = 7 } });
+        try expect.toBeTrue(std.mem.eql(u8, @tagName(result), "working"));
+        try expect.equal(result.working.workstation_id, 7);
+        try expect.equal(result.working.progress, 0); // default value
+    }
+
+    test "coerceValue: union another payload variant" {
+        const result = zon.coerceValue(CurrentTask, .{ .delivering = .{ .item_id = 42 } });
+        try expect.toBeTrue(std.mem.eql(u8, @tagName(result), "delivering"));
+        try expect.equal(result.delivering.item_id, 42);
+    }
+};
+
 const loader_test = @This();
