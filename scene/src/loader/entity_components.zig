@@ -249,8 +249,8 @@ pub fn EntityComponentOps(comptime Prefabs: type, comptime Components: type) typ
             // Generic component handling
             const ComponentType = Components.getType(comp_name);
 
-            // Compute the component value: non-struct types use direct coercion,
-            // struct types require per-field processing for nested entities, refs, etc.
+            // Non-struct component types (e.g. unions/enums) use direct coercion.
+            // Struct types require per-field processing for nested entities, refs, etc.
             const component = if (@typeInfo(ComponentType) != .@"struct")
                 zon.coerceValue(ComponentType, comp_data)
             else blk: {
