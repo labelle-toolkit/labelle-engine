@@ -114,6 +114,10 @@ pub fn coerceValue(comptime FieldType: type, comptime data_value: anytype) Field
             if (compatible_init_param) |ParamType| {
                 return @field(FieldType, "init")(buildStruct(ParamType, data_value));
             }
+
+            // No fields match and init() fallback wasn't applicable — this is likely a typo
+            @compileError("No fields from ZON data match target type '" ++ @typeName(FieldType) ++
+                "' and no compatible init() method found. Check for field name typos.");
         }
 
         return buildStruct(FieldType, data_value);
