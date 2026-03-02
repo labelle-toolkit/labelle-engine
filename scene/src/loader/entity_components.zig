@@ -249,113 +249,107 @@ pub fn EntityComponentOps(comptime Prefabs: type, comptime Components: type) typ
             // Generic component handling
             const ComponentType = Components.getType(comp_name);
 
-            // Non-struct types (unions, enums) use direct coercion
-            if (@typeInfo(ComponentType) != .@"struct") {
-                const component = zon.coerceValue(ComponentType, comp_data);
-                game.getRegistry().addComponent(parent_entity, component);
+            // Compute the component value: non-struct types use direct coercion,
+            // struct types require per-field processing for nested entities, refs, etc.
+            const component = if (@typeInfo(ComponentType) != .@"struct")
+                zon.coerceValue(ComponentType, comp_data)
+            else blk: {
+                const comp_fields = @typeInfo(ComponentType).@"struct".fields;
+                var comp: ComponentType = undefined;
 
-                if (@hasDecl(ComponentType, "onReady")) {
-                    try ready_queue.append(game.allocator, .{
-                        .entity = parent_entity,
-                        .callback = ComponentType.onReady,
-                    });
-                }
-                return;
-            }
+                // Create a new parent context for child entities of this component
+                const child_parent_ctx = ParentContext{
+                    .entity = parent_entity,
+                    .component_name = comp_name,
+                };
 
-            const comp_fields = @typeInfo(ComponentType).@"struct".fields;
-            var component: ComponentType = undefined;
+                // Process each field in the component type
+                inline for (comp_fields) |comp_field| {
+                    const field_name = comp_field.name;
 
-            // Create a new parent context for child entities of this component
-            const child_parent_ctx = ParentContext{
-                .entity = parent_entity,
-                .component_name = comp_name,
-            };
-
-            // Process each field in the component type
-            inline for (comp_fields) |comp_field| {
-                const field_name = comp_field.name;
-
-                // Handle Entity fields specially for parent reference auto-population (RFC #169)
-                // and entity references (Issue #242)
-                if (comptime comp_field.type == Entity) {
-                    // Check at runtime if this is a parent reference field
-                    // Convention: field name matches parent component name (lowercased)
-                    const is_parent_ref = is_parent_ref: {
-                        const ctx = parent_ctx orelse break :is_parent_ref false;
-                        if (field_name.len != ctx.component_name.len) break :is_parent_ref false;
-                        inline for (field_name, 0..) |f, i| {
-                            const p = ctx.component_name[i];
-                            const lower_p = if (p >= 'A' and p <= 'Z') p + 32 else p;
-                            if (f != lower_p) break :is_parent_ref false;
-                        }
-                        break :is_parent_ref true;
-                    };
-
-                    if (is_parent_ref) {
-                        // Auto-populate parent reference field
-                        @field(component, field_name) = parent_ctx.?.entity;
-                    } else if (@hasField(@TypeOf(comp_data), field_name)) {
-                        const entity_def = @field(comp_data, field_name);
-
-                        // Check if this is a reference (Issue #242)
-                        if (comptime zon.isReference(entity_def)) {
-                            // Defer reference resolution to Phase 2
-                            const ref_info = comptime zon.extractRefInfo(entity_def).?;
-
-                            // Set placeholder value (will be resolved in Phase 2)
-                            @field(component, field_name) = @bitCast(@as(ecs.EntityBits, 0));
-
-                            // Generate callback that captures comptime component/field
-                            const ResolveHelper = struct {
-                                fn resolve(registry: *ecs.Registry, target: Entity, resolved: Entity) void {
-                                    if (registry.getComponent(target, ComponentType)) |comp| {
-                                        @field(comp, field_name) = resolved;
-                                    }
-                                }
-                            };
-
-                            // Queue for Phase 2 resolution
-                            if (ref_ctx) |ctx| {
-                                try ctx.addPendingRef(.{
-                                    .target_entity = parent_entity,
-                                    .resolve_callback = ResolveHelper.resolve,
-                                    .ref_key = ref_info.ref_key orelse "",
-                                    .is_self_ref = ref_info.is_self,
-                                    .is_id_ref = ref_info.is_id_ref,
-                                });
+                    // Handle Entity fields specially for parent reference auto-population (RFC #169)
+                    // and entity references (Issue #242)
+                    if (comptime comp_field.type == Entity) {
+                        // Check at runtime if this is a parent reference field
+                        // Convention: field name matches parent component name (lowercased)
+                        const is_parent_ref = is_parent_ref: {
+                            const ctx = parent_ctx orelse break :is_parent_ref false;
+                            if (field_name.len != ctx.component_name.len) break :is_parent_ref false;
+                            inline for (field_name, 0..) |f, i| {
+                                const p = ctx.component_name[i];
+                                const lower_p = if (p >= 'A' and p <= 'Z') p + 32 else p;
+                                if (f != lower_p) break :is_parent_ref false;
                             }
+                            break :is_parent_ref true;
+                        };
+
+                        if (is_parent_ref) {
+                            // Auto-populate parent reference field
+                            @field(comp, field_name) = parent_ctx.?.entity;
+                        } else if (@hasField(@TypeOf(comp_data), field_name)) {
+                            const entity_def = @field(comp_data, field_name);
+
+                            // Check if this is a reference (Issue #242)
+                            if (comptime zon.isReference(entity_def)) {
+                                // Defer reference resolution to Phase 2
+                                const ref_info = comptime zon.extractRefInfo(entity_def).?;
+
+                                // Set placeholder value (will be resolved in Phase 2)
+                                @field(comp, field_name) = @bitCast(@as(ecs.EntityBits, 0));
+
+                                // Generate callback that captures comptime component/field
+                                const ResolveHelper = struct {
+                                    fn resolve(registry: *ecs.Registry, target: Entity, resolved: Entity) void {
+                                        if (registry.getComponent(target, ComponentType)) |c| {
+                                            @field(c, field_name) = resolved;
+                                        }
+                                    }
+                                };
+
+                                // Queue for Phase 2 resolution
+                                if (ref_ctx) |ctx| {
+                                    try ctx.addPendingRef(.{
+                                        .target_entity = parent_entity,
+                                        .resolve_callback = ResolveHelper.resolve,
+                                        .ref_key = ref_info.ref_key orelse "",
+                                        .is_self_ref = ref_info.is_self,
+                                        .is_id_ref = ref_info.is_id_ref,
+                                    });
+                                }
+                            } else {
+                                // Single Entity field - create child entity from definition
+                                const instance = try createAndTrackChildEntity(game, scene, entity_def, parent_x, parent_y, child_parent_ctx, ready_queue);
+                                @field(comp, field_name) = instance.entity;
+                            }
+                        } else if (comp_field.default_value_ptr) |ptr| {
+                            const default_ptr: *const comp_field.type = @ptrCast(@alignCast(ptr));
+                            @field(comp, field_name) = default_ptr.*;
                         } else {
-                            // Single Entity field - create child entity from definition
-                            const instance = try createAndTrackChildEntity(game, scene, entity_def, parent_x, parent_y, child_parent_ctx, ready_queue);
-                            @field(component, field_name) = instance.entity;
+                            @compileError("Missing required field '" ++ field_name ++ "' for component '" ++ comp_name ++ "'");
+                        }
+                    } else if (@hasField(@TypeOf(comp_data), field_name)) {
+                        // Data provides this field
+                        if (comptime zon.isEntitySlice(comp_field.type)) {
+                            // This field is []const Entity - create child entities from the tuple
+                            const entity_defs = @field(comp_data, field_name);
+                            @field(comp, field_name) = try createChildEntities(game, scene, entity_defs, parent_x, parent_y, child_parent_ctx, ready_queue);
+                        } else {
+                            // Regular field - coerce to handle nested structs and tuples
+                            const data_value = @field(comp_data, field_name);
+                            @field(comp, field_name) = zon.coerceValue(comp_field.type, data_value);
                         }
                     } else if (comp_field.default_value_ptr) |ptr| {
+                        // Field not provided but has a default value
                         const default_ptr: *const comp_field.type = @ptrCast(@alignCast(ptr));
-                        @field(component, field_name) = default_ptr.*;
+                        @field(comp, field_name) = default_ptr.*;
                     } else {
+                        // Required field not provided - compile-time error
                         @compileError("Missing required field '" ++ field_name ++ "' for component '" ++ comp_name ++ "'");
                     }
-                } else if (@hasField(@TypeOf(comp_data), field_name)) {
-                    // Data provides this field
-                    if (comptime zon.isEntitySlice(comp_field.type)) {
-                        // This field is []const Entity - create child entities from the tuple
-                        const entity_defs = @field(comp_data, field_name);
-                        @field(component, field_name) = try createChildEntities(game, scene, entity_defs, parent_x, parent_y, child_parent_ctx, ready_queue);
-                    } else {
-                        // Regular field - coerce to handle nested structs and tuples
-                        const data_value = @field(comp_data, field_name);
-                        @field(component, field_name) = zon.coerceValue(comp_field.type, data_value);
-                    }
-                } else if (comp_field.default_value_ptr) |ptr| {
-                    // Field not provided but has a default value
-                    const default_ptr: *const comp_field.type = @ptrCast(@alignCast(ptr));
-                    @field(component, field_name) = default_ptr.*;
-                } else {
-                    // Required field not provided - compile-time error
-                    @compileError("Missing required field '" ++ field_name ++ "' for component '" ++ comp_name ++ "'");
                 }
-            }
+
+                break :blk comp;
+            };
 
             game.getRegistry().addComponent(parent_entity, component);
 
