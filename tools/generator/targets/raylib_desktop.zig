@@ -6,8 +6,6 @@ const scanner = @import("../scanner.zig");
 
 const ProjectConfig = project_config.ProjectConfig;
 const sanitizeZigIdentifier = utils.sanitizeZigIdentifier;
-const PascalCaseResult = utils.PascalCaseResult;
-const toPascalCase = utils.toPascalCase;
 const TaskHookScanResult = scanner.TaskHookScanResult;
 
 const main_raylib_tmpl = @embedFile("../../templates/main_raylib.txt");
@@ -21,6 +19,8 @@ pub fn generateMainZigRaylib(
     components: []const []const u8,
     scripts: []const []const u8,
     hooks: []const []const u8,
+    enum_type_names: []const []const u8,
+    component_type_names: []const []const u8,
     task_hooks: TaskHookScanResult,
 ) ![]const u8 {
     var buf: std.ArrayListUnmanaged(u8) = .{};
@@ -48,20 +48,6 @@ pub fn generateMainZigRaylib(
         plugin_zig_names[i] = try sanitizeZigIdentifier(allocator, plugin.name);
     }
 
-    // Pre-compute PascalCase names for enums
-    var enum_pascal_names = try allocator.alloc(PascalCaseResult, enums.len);
-    defer allocator.free(enum_pascal_names);
-    for (enums, 0..) |name, i| {
-        enum_pascal_names[i] = try toPascalCase(name);
-    }
-
-    // Pre-compute PascalCase names for components
-    var component_pascal_names = try allocator.alloc(PascalCaseResult, components.len);
-    defer allocator.free(component_pascal_names);
-    for (components, 0..) |name, i| {
-        component_pascal_names[i] = try toPascalCase(name);
-    }
-
     // Header with project name
     try zts.print(main_raylib_tmpl, "header", .{config.name}, writer);
 
@@ -77,8 +63,7 @@ pub fn generateMainZigRaylib(
 
     // Enum exports (with PascalCase type names)
     for (enums, 0..) |name, i| {
-        const pascal = enum_pascal_names[i];
-        try zts.print(main_raylib_tmpl, "enum_export", .{ pascal.buf[0..pascal.len], name, pascal.buf[0..pascal.len] }, writer);
+        try zts.print(main_raylib_tmpl, "enum_export", .{ enum_type_names[i], name, enum_type_names[i] }, writer);
     }
 
     // GameId type export (based on project.game_id)
@@ -107,8 +92,7 @@ pub fn generateMainZigRaylib(
 
     // Component exports (with PascalCase type names)
     for (components, 0..) |name, i| {
-        const pascal = component_pascal_names[i];
-        try zts.print(main_raylib_tmpl, "component_export", .{ pascal.buf[0..pascal.len], name, pascal.buf[0..pascal.len] }, writer);
+        try zts.print(main_raylib_tmpl, "component_export", .{ component_type_names[i], name, component_type_names[i] }, writer);
     }
 
     // Script imports
@@ -161,8 +145,8 @@ pub fn generateMainZigRaylib(
             try zts.print(main_raylib_tmpl, "component_registry_multi_empty_base_end", .{}, writer);
         } else {
             try zts.print(main_raylib_tmpl, "component_registry_multi_start", .{}, writer);
-            for (component_pascal_names) |pascal| {
-                try zts.print(main_raylib_tmpl, "component_registry_multi_item", .{ pascal.buf[0..pascal.len], pascal.buf[0..pascal.len] }, writer);
+            for (component_type_names) |type_name| {
+                try zts.print(main_raylib_tmpl, "component_registry_multi_item", .{ type_name, type_name }, writer);
             }
 
             // Add bind component declarations INSIDE the struct
@@ -205,8 +189,8 @@ pub fn generateMainZigRaylib(
     } else if (has_expanded_bind_components) {
         // Only bind components - use simple ComponentRegistry (avoids comptime issues)
         try zts.print(main_raylib_tmpl, "component_registry_start", .{}, writer);
-        for (component_pascal_names) |pascal| {
-            try zts.print(main_raylib_tmpl, "component_registry_item", .{ pascal.buf[0..pascal.len], pascal.buf[0..pascal.len] }, writer);
+        for (component_type_names) |type_name| {
+            try zts.print(main_raylib_tmpl, "component_registry_item", .{ type_name, type_name }, writer);
         }
         // Add bind component declarations
         for (config.plugins, 0..) |plugin, i| {
@@ -238,8 +222,8 @@ pub fn generateMainZigRaylib(
             try zts.print(main_raylib_tmpl, "component_registry_empty_end", .{}, writer);
         } else {
             try zts.print(main_raylib_tmpl, "component_registry_start", .{}, writer);
-            for (component_pascal_names) |pascal| {
-                try zts.print(main_raylib_tmpl, "component_registry_item", .{ pascal.buf[0..pascal.len], pascal.buf[0..pascal.len] }, writer);
+            for (component_type_names) |type_name| {
+                try zts.print(main_raylib_tmpl, "component_registry_item", .{ type_name, type_name }, writer);
             }
             // Add physics components if physics is enabled
             if (config.physics.enabled) {

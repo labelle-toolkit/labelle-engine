@@ -41,6 +41,101 @@ fn scanFolderWithExtension(allocator: std.mem.Allocator, path: []const u8, exten
 }
 
 // =============================================================================
+// Type Name Extraction
+// =============================================================================
+
+/// Extract the first `pub const` type name from a .zig source file.
+/// Looks for patterns like `pub const Foo = struct {`, `pub const Bar = union(enum) {`, etc.
+/// Returns the extracted name, or falls back to PascalCase of the filename.
+pub fn extractFirstPubConst(allocator: std.mem.Allocator, dir_path: []const u8, filename: []const u8) ![]const u8 {
+    const file_path = try std.fmt.allocPrint(allocator, "{s}/{s}.zig", .{ dir_path, filename });
+    defer allocator.free(file_path);
+
+    const file = std.fs.cwd().openFile(file_path, .{}) catch |err| {
+        if (err == error.FileNotFound) return fallbackPascalCase(allocator, filename);
+        return err;
+    };
+    defer file.close();
+
+    const stat = try file.stat();
+    if (stat.size > 1024 * 1024) return fallbackPascalCase(allocator, filename); // Skip files > 1MB
+
+    const content = try allocator.alloc(u8, stat.size);
+    defer allocator.free(content);
+    const bytes_read = try file.readAll(content);
+    const source = content[0..bytes_read];
+
+    // Search for `pub const <Name> =` pattern
+    const prefix = "pub const ";
+    var offset: usize = 0;
+    while (std.mem.indexOfPos(u8, source, offset, prefix)) |pos| {
+        const name_start = pos + prefix.len;
+        if (name_start >= source.len) break;
+
+        // Find the end of the identifier
+        var name_end = name_start;
+        while (name_end < source.len and (std.ascii.isAlphanumeric(source[name_end]) or source[name_end] == '_')) {
+            name_end += 1;
+        }
+
+        if (name_end > name_start) {
+            const name = source[name_start..name_end];
+
+            // Skip to '=' after whitespace
+            var eq_pos = name_end;
+            while (eq_pos < source.len and source[eq_pos] == ' ') eq_pos += 1;
+
+            if (eq_pos < source.len and source[eq_pos] == '=') {
+                // Skip whitespace after '='
+                var after_eq = eq_pos + 1;
+                while (after_eq < source.len and source[after_eq] == ' ') after_eq += 1;
+
+                // Check if it's a type definition (struct, union, enum) or import
+                if (after_eq < source.len) {
+                    const rest = source[after_eq..];
+                    if (std.mem.startsWith(u8, rest, "struct") or
+                        std.mem.startsWith(u8, rest, "union") or
+                        std.mem.startsWith(u8, rest, "enum") or
+                        std.mem.startsWith(u8, rest, "@import"))
+                    {
+                        return try allocator.dupe(u8, name);
+                    }
+                }
+            }
+        }
+
+        offset = name_start + 1;
+    }
+
+    return fallbackPascalCase(allocator, filename);
+}
+
+/// Fallback: convert filename to PascalCase
+fn fallbackPascalCase(allocator: std.mem.Allocator, filename: []const u8) ![]const u8 {
+    const utils = @import("utils.zig");
+    const pascal = try utils.toPascalCase(filename);
+    return try allocator.dupe(u8, pascal.buf[0..pascal.len]);
+}
+
+/// Extract type names for a list of filenames in a directory.
+/// Returns a parallel array where result[i] is the type name for filenames[i].
+pub fn extractTypeNames(allocator: std.mem.Allocator, dir_path: []const u8, filenames: []const []const u8) ![]const []const u8 {
+    var type_names = try allocator.alloc([]const u8, filenames.len);
+    errdefer {
+        for (type_names, 0..) |name, i| {
+            if (i < filenames.len) allocator.free(name);
+        }
+        allocator.free(type_names);
+    }
+
+    for (filenames, 0..) |filename, i| {
+        type_names[i] = try extractFirstPubConst(allocator, dir_path, filename);
+    }
+
+    return type_names;
+}
+
+// =============================================================================
 // Task Hook Scanning
 // =============================================================================
 

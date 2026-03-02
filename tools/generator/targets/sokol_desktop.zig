@@ -6,8 +6,6 @@ const scanner = @import("../scanner.zig");
 
 const ProjectConfig = project_config.ProjectConfig;
 const sanitizeZigIdentifier = utils.sanitizeZigIdentifier;
-const PascalCaseResult = utils.PascalCaseResult;
-const toPascalCase = utils.toPascalCase;
 const TaskHookScanResult = scanner.TaskHookScanResult;
 
 const main_sokol_tmpl = @embedFile("../../templates/main_sokol.txt");
@@ -21,11 +19,14 @@ pub fn generateMainZigSokol(
     components: []const []const u8,
     scripts: []const []const u8,
     hooks: []const []const u8,
+    enum_type_names: []const []const u8,
+    component_type_names: []const []const u8,
     task_hooks: TaskHookScanResult,
 ) ![]const u8 {
     // Sokol backend uses same logic as raylib - delegate to avoid duplication
     // For now, sokol templates don't have enum/bind sections, so skip them
     _ = enums;
+    _ = enum_type_names;
 
     var buf: std.ArrayListUnmanaged(u8) = .{};
     const writer = buf.writer(allocator);
@@ -49,13 +50,6 @@ pub fn generateMainZigSokol(
         plugin_zig_names[i] = try sanitizeZigIdentifier(allocator, plugin.name);
     }
 
-    // Pre-compute PascalCase names for components
-    var component_pascal_names = try allocator.alloc(PascalCaseResult, components.len);
-    defer allocator.free(component_pascal_names);
-    for (components, 0..) |name, i| {
-        component_pascal_names[i] = try toPascalCase(name);
-    }
-
     // Header with project name
     try zts.print(main_sokol_tmpl, "header", .{config.name}, writer);
 
@@ -76,8 +70,7 @@ pub fn generateMainZigSokol(
 
     // Component exports (with PascalCase type names)
     for (components, 0..) |name, i| {
-        const pascal = component_pascal_names[i];
-        try zts.print(main_sokol_tmpl, "component_export", .{ pascal.buf[0..pascal.len], name, pascal.buf[0..pascal.len] }, writer);
+        try zts.print(main_sokol_tmpl, "component_export", .{ component_type_names[i], name, component_type_names[i] }, writer);
     }
 
     // Script imports
@@ -111,8 +104,8 @@ pub fn generateMainZigSokol(
             try zts.print(main_sokol_tmpl, "component_registry_multi_empty_start", .{}, writer);
         } else {
             try zts.print(main_sokol_tmpl, "component_registry_multi_start", .{}, writer);
-            for (component_pascal_names) |pascal| {
-                try zts.print(main_sokol_tmpl, "component_registry_multi_item", .{ pascal.buf[0..pascal.len], pascal.buf[0..pascal.len] }, writer);
+            for (component_type_names) |type_name| {
+                try zts.print(main_sokol_tmpl, "component_registry_multi_item", .{ type_name, type_name }, writer);
             }
             try zts.print(main_sokol_tmpl, "component_registry_multi_base_end", .{}, writer);
         }
@@ -129,8 +122,8 @@ pub fn generateMainZigSokol(
             try zts.print(main_sokol_tmpl, "component_registry_empty", .{}, writer);
         } else {
             try zts.print(main_sokol_tmpl, "component_registry_start", .{}, writer);
-            for (component_pascal_names) |pascal| {
-                try zts.print(main_sokol_tmpl, "component_registry_item", .{ pascal.buf[0..pascal.len], pascal.buf[0..pascal.len] }, writer);
+            for (component_type_names) |type_name| {
+                try zts.print(main_sokol_tmpl, "component_registry_item", .{ type_name, type_name }, writer);
             }
             try zts.print(main_sokol_tmpl, "component_registry_end", .{}, writer);
         }
