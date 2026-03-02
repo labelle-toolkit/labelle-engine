@@ -307,6 +307,69 @@ test "buildStruct: basic struct building" {
     try std.testing.expectEqualStrings("built", result.name);
 }
 
+// ============================================================================
+// EnumSet Coercion Tests (Issue #315)
+// ============================================================================
+
+const Items = enum {
+    Flour,
+    Water,
+    Bread,
+    Sugar,
+};
+
+const StorageWithEnumSet = struct {
+    accepted_items: std.EnumSet(Items) = std.EnumSet(Items).initEmpty(),
+    capacity: u32 = 10,
+};
+
+test "coerceValue: EnumSet from named boolean fields" {
+    const data = .{ .Water = true, .Flour = true };
+    const result = zon.coerceValue(std.EnumSet(Items), data);
+
+    try std.testing.expect(result.contains(.Water));
+    try std.testing.expect(result.contains(.Flour));
+    try std.testing.expect(!result.contains(.Bread));
+    try std.testing.expect(!result.contains(.Sugar));
+}
+
+test "coerceValue: EnumSet with single item" {
+    const data = .{ .Bread = true };
+    const result = zon.coerceValue(std.EnumSet(Items), data);
+
+    try std.testing.expect(result.contains(.Bread));
+    try std.testing.expect(!result.contains(.Water));
+    try std.testing.expect(!result.contains(.Flour));
+}
+
+test "coerceValue: struct containing EnumSet field" {
+    const data = .{
+        .accepted_items = .{ .Water = true },
+        .capacity = 5,
+    };
+    const result = zon.coerceValue(StorageWithEnumSet, data);
+
+    try std.testing.expect(result.accepted_items.contains(.Water));
+    try std.testing.expect(!result.accepted_items.contains(.Flour));
+    try std.testing.expectEqual(@as(u32, 5), result.capacity);
+}
+
+test "coerceValue: struct with EnumSet using default" {
+    const data = .{
+        .capacity = 20,
+    };
+    const result = zon.coerceValue(StorageWithEnumSet, data);
+
+    // Default EnumSet should be empty
+    try std.testing.expect(!result.accepted_items.contains(.Water));
+    try std.testing.expect(!result.accepted_items.contains(.Flour));
+    try std.testing.expectEqual(@as(u32, 20), result.capacity);
+}
+
+// ============================================================================
+// Build Helpers (continued)
+// ============================================================================
+
 test "tupleToSlice: converts tuple to slice" {
     const tuple = .{ 10.0, 20.0, 30.0 };
     const slice = zon.tupleToSlice(f32, tuple);

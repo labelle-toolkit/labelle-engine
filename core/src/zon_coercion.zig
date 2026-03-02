@@ -79,6 +79,47 @@ pub fn coerceValue(comptime FieldType: type, comptime data_value: anytype) Field
 
     // Handle nested struct coercion
     if (field_info == .@"struct" and @typeInfo(DataType) == .@"struct") {
+        // Check if any data fields match target struct fields.
+        // If none match, try using the target type's init() method instead.
+        // This handles types like std.EnumSet where the internal representation
+        // (a single `bits` field) differs from the ZON-facing API (.{ .Water = true }).
+        const data_fields = @typeInfo(DataType).@"struct".fields;
+
+        const any_match = comptime blk: {
+            for (data_fields) |df| {
+                if (@hasField(FieldType, df.name)) {
+                    break :blk true;
+                }
+            }
+            break :blk false;
+        };
+
+        if (!any_match and data_fields.len > 0) {
+            // No fields match — try init() method (e.g., std.EnumSet.init)
+            // Guard with structFieldsCompatible to avoid silently accepting
+            // typos or mismatched input via init() on unrelated types.
+            const compatible_init_param: ?type = comptime blk: {
+                if (!@hasDecl(FieldType, "init")) break :blk null;
+                const InitFn = @TypeOf(@field(FieldType, "init"));
+                const init_info = @typeInfo(InitFn);
+                if (init_info != .@"fn") break :blk null;
+                const params = init_info.@"fn".params;
+                if (params.len != 1 or params[0].type == null) break :blk null;
+                const ParamType = params[0].type.?;
+                if (@typeInfo(ParamType) != .@"struct") break :blk null;
+                if (!structFieldsCompatible(DataType, ParamType)) break :blk null;
+                break :blk ParamType;
+            };
+
+            if (compatible_init_param) |ParamType| {
+                return @field(FieldType, "init")(buildStruct(ParamType, data_value));
+            }
+
+            // No fields match and init() fallback wasn't applicable — this is likely a typo
+            @compileError("No fields from ZON data match target type '" ++ @typeName(FieldType) ++
+                "' and no compatible init() method found. Check for field name typos.");
+        }
+
         return buildStruct(FieldType, data_value);
     }
 
