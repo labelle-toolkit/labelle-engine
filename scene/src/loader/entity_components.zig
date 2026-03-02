@@ -248,6 +248,14 @@ pub fn EntityComponentOps(comptime Prefabs: type, comptime Components: type) typ
         ) !void {
             // Generic component handling
             const ComponentType = Components.getType(comp_name);
+
+            // Non-struct types (unions, enums) use direct coercion
+            if (@typeInfo(ComponentType) != .@"struct") {
+                const component = zon.coerceValue(ComponentType, comp_data);
+                game.getRegistry().addComponent(parent_entity, component);
+                return;
+            }
+
             const comp_fields = @typeInfo(ComponentType).@"struct".fields;
             var component: ComponentType = undefined;
 
