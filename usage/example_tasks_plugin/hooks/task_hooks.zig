@@ -12,7 +12,7 @@
 // - store_started: Worker starts moving to EOS for storage
 // - worker_released: Worker is released from workstation
 //
-// Additional hooks available in EngineWithHooks:
+// Additional hooks available in Engine:
 // - process_completed, worker_assigned, workstation_blocked/queued/activated
 // - transport_started/completed, cycle_completed
 

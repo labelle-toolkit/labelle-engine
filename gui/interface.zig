@@ -58,13 +58,21 @@ fn selectImguiAdapter() type {
     };
 }
 
+/// Select clay adapter based on graphics backend
+fn selectClayAdapter() type {
+    return switch (gfx_backend) {
+        .raylib => @import("clay/adapter.zig"),
+        else => @import("clay/adapter_stub.zig"),
+    };
+}
+
 /// Backend implementation selected at build time
 const BackendImpl = switch (gui_backend) {
     .raygui => @import("raygui_adapter.zig"),
     .microui => @import("microui_adapter.zig"),
     .nuklear => selectNuklearAdapter(),
     .imgui => selectImguiAdapter(),
-    .clay => @import("clay/adapter.zig"),
+    .clay => selectClayAdapter(),
     .none => @import("stub_adapter.zig"),
 };
 

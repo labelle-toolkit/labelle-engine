@@ -1,7 +1,7 @@
 .{
     .name = "main",
     .scripts = .{"gizmo_toggle"},
-    .camera = .{ .x = -400, .y = -300 },
+    .camera = .{ .x = 400, .y = 300 },
     .entities = .{
         // Player at center
         .{ .prefab = "player", .components = .{ .Position = .{ .x = 400, .y = 300 } } },
