@@ -228,6 +228,76 @@ pub const EXTRACT_TYPE_NAMES = struct {
         try std.testing.expectEqualStrings("Iis", type_names[1]);
     }
 
+    test "extracts all-caps type name like EIS" {
+        var tmp = std.testing.tmpDir(.{});
+        defer tmp.cleanup();
+
+        try writeFile(tmp.dir, "eis.zig",
+            \\const std = @import("std");
+            \\
+            \\pub const EIS = struct {
+            \\    workstation: u64 = 0,
+            \\    item: u32 = 0,
+            \\};
+        );
+
+        var buf: [std.fs.max_path_bytes]u8 = undefined;
+        const path = try tmpDirPath(&tmp, &buf);
+
+        const filenames = &[_][]const u8{"eis"};
+        const type_names = try scanner.extractTypeNames(std.testing.allocator, path, filenames);
+        defer freeNames(std.testing.allocator, type_names);
+
+        // Should be "EIS" (from source), NOT "Eis" (from PascalCase fallback)
+        try std.testing.expectEqualStrings("EIS", type_names[0]);
+    }
+
+    test "skips commented-out pub const" {
+        var tmp = std.testing.tmpDir(.{});
+        defer tmp.cleanup();
+
+        try writeFile(tmp.dir, "widget.zig",
+            \\// pub const OldWidget = struct {};
+            \\pub const Widget = struct {
+            \\    x: u32 = 0,
+            \\};
+        );
+
+        var buf: [std.fs.max_path_bytes]u8 = undefined;
+        const path = try tmpDirPath(&tmp, &buf);
+
+        const filenames = &[_][]const u8{"widget"};
+        const type_names = try scanner.extractTypeNames(std.testing.allocator, path, filenames);
+        defer freeNames(std.testing.allocator, type_names);
+
+        // Should skip the commented-out OldWidget and find Widget
+        try std.testing.expectEqualStrings("Widget", type_names[0]);
+    }
+
+    test "does not match enum prefix in longer word like enumerate" {
+        var tmp = std.testing.tmpDir(.{});
+        defer tmp.cleanup();
+
+        // "enumerate" starts with "enum" but is not the keyword "enum"
+        try writeFile(tmp.dir, "values.zig",
+            \\pub const BadMatch = enumerate(.{ .a, .b });
+            \\pub const Values = enum {
+            \\    a,
+            \\    b,
+            \\};
+        );
+
+        var buf: [std.fs.max_path_bytes]u8 = undefined;
+        const path = try tmpDirPath(&tmp, &buf);
+
+        const filenames = &[_][]const u8{"values"};
+        const type_names = try scanner.extractTypeNames(std.testing.allocator, path, filenames);
+        defer freeNames(std.testing.allocator, type_names);
+
+        // Should skip BadMatch (enumerate is not the keyword "enum") and find Values
+        try std.testing.expectEqualStrings("Values", type_names[0]);
+    }
+
     test "skips non-type pub const (e.g. pub const x = 42)" {
         var tmp = std.testing.tmpDir(.{});
         defer tmp.cleanup();

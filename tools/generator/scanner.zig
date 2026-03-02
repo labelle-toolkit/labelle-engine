@@ -44,6 +44,37 @@ fn scanFolderWithExtension(allocator: std.mem.Allocator, path: []const u8, exten
 // Type Name Extraction
 // =============================================================================
 
+/// Check if `rest` starts with `keyword` followed by a non-identifier character.
+/// This prevents matching prefixes like "enum" in "enumerate_values".
+fn startsWithKeyword(rest: []const u8, keyword: []const u8) bool {
+    if (!std.mem.startsWith(u8, rest, keyword)) return false;
+    if (rest.len > keyword.len) {
+        const next = rest[keyword.len];
+        if (std.ascii.isAlphanumeric(next) or next == '_') return false;
+    }
+    return true;
+}
+
+/// Check if the `pub const` at `pos` is inside a line comment.
+/// Scans backwards to the start of the line and checks for `//`.
+fn isInsideLineComment(source: []const u8, pos: usize) bool {
+    // Find start of line
+    var line_start = pos;
+    while (line_start > 0 and source[line_start - 1] != '\n') {
+        line_start -= 1;
+    }
+    // Skip leading whitespace
+    var i = line_start;
+    while (i < pos and std.ascii.isWhitespace(source[i])) {
+        i += 1;
+    }
+    // Check if line starts with "//"
+    if (i + 1 < source.len and source[i] == '/' and source[i + 1] == '/') {
+        return true;
+    }
+    return false;
+}
+
 /// Extract the first `pub const` type name from a .zig source file.
 /// Looks for patterns like `pub const Foo = struct {`, `pub const Bar = union(enum) {`, etc.
 /// Returns the extracted name, or falls back to PascalCase of the filename.
@@ -72,6 +103,12 @@ fn extractFirstPubConst(allocator: std.mem.Allocator, dir_path: []const u8, file
         const name_start = pos + prefix.len;
         if (name_start >= source.len) break;
 
+        // Skip commented-out lines
+        if (isInsideLineComment(source, pos)) {
+            offset = name_start + 1;
+            continue;
+        }
+
         // Find the end of the identifier
         var name_end = name_start;
         while (name_end < source.len and (std.ascii.isAlphanumeric(source[name_end]) or source[name_end] == '_')) {
@@ -83,19 +120,19 @@ fn extractFirstPubConst(allocator: std.mem.Allocator, dir_path: []const u8, file
 
             // Skip to '=' after whitespace
             var eq_pos = name_end;
-            while (eq_pos < source.len and source[eq_pos] == ' ') eq_pos += 1;
+            while (eq_pos < source.len and std.ascii.isWhitespace(source[eq_pos])) eq_pos += 1;
 
             if (eq_pos < source.len and source[eq_pos] == '=') {
                 // Skip whitespace after '='
                 var after_eq = eq_pos + 1;
-                while (after_eq < source.len and source[after_eq] == ' ') after_eq += 1;
+                while (after_eq < source.len and std.ascii.isWhitespace(source[after_eq])) after_eq += 1;
 
                 // Check if it's a type definition (struct, union, enum)
                 if (after_eq < source.len) {
                     const rest = source[after_eq..];
-                    if (std.mem.startsWith(u8, rest, "struct") or
-                        std.mem.startsWith(u8, rest, "union") or
-                        std.mem.startsWith(u8, rest, "enum"))
+                    if (startsWithKeyword(rest, "struct") or
+                        startsWithKeyword(rest, "union") or
+                        startsWithKeyword(rest, "enum"))
                     {
                         return try allocator.dupe(u8, name);
                     }
