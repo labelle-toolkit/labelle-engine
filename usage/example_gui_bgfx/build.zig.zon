@@ -1,0 +1,18 @@
+.{
+    .fingerprint = 0x9ad29aac3e3fbb46,
+    .name = .example_gui_bgfx,
+    .version = "0.1.0",
+    .dependencies = .{
+        .@"labelle-engine" = .{
+            .path = "../..",
+        },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "main.zig",
+        "project.labelle",
+        "scenes",
+        "gui",
+    },
+}

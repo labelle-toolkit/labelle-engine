@@ -179,6 +179,11 @@ pub const Registry = struct {
         self.inner.add(entity, component);
     }
 
+    /// Alias for addComponent - for compatibility with plugins
+    pub fn add(self: *Self, entity: Self.Entity, component: anytype) void {
+        self.addComponent(entity, component);
+    }
+
     /// Get a component from an entity, returns null if not present
     /// Note: Direct mutation via the returned pointer will NOT trigger onSet callbacks.
     /// Use setComponent() to update a component and trigger onSet.
@@ -222,6 +227,16 @@ pub const Registry = struct {
     /// Remove a component from an entity
     pub fn removeComponent(self: *Self, entity: Self.Entity, comptime T: type) void {
         self.inner.remove(T, entity);
+    }
+
+    /// Alias for removeComponent - for compatibility with plugins
+    pub fn remove(self: *Self, comptime T: type, entity: Self.Entity) void {
+        self.removeComponent(entity, T);
+    }
+
+    /// Alias for getComponent - for compatibility with plugins
+    pub fn tryGet(self: *Self, comptime T: type, entity: Self.Entity) ?*T {
+        return self.getComponent(entity, T);
     }
 
     /// Get a mutable pointer to a component (alias for getComponent)

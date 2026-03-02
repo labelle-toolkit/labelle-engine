@@ -94,7 +94,7 @@ pub fn Systems(comptime Position: type) type {
             world: *PhysicsWorld,
             registry: anytype,
         ) void {
-            const EntityType = std.meta.Child(@TypeOf(registry)).EntityType;
+            const EntityType = std.meta.Child(@TypeOf(registry)).Entity;
 
             // Iterate over all physics bodies and check if entity still exists
             var entities_to_remove = std.ArrayList(u64).init(world.allocator);
@@ -264,7 +264,7 @@ pub fn Systems(comptime Position: type) type {
             world: *PhysicsWorld,
             registry: anytype,
         ) void {
-            const EntityType = std.meta.Child(@TypeOf(registry)).EntityType;
+            const EntityType = std.meta.Child(@TypeOf(registry)).Entity;
 
             // Process collision begin events - add to Touching
             for (world.getCollisionBeginEvents()) |event| {

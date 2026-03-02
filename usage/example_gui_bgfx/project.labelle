@@ -3,7 +3,7 @@
     .name = "example_gui_bgfx",
     .description = "GUI demo with ImGui and bgfx backend",
     .initial_scene = "main",
-    .backend = .bgfx,
+    .targets = .{.bgfx_desktop},
     .gui_backend = .imgui,
     .window = .{
         .width = 800,

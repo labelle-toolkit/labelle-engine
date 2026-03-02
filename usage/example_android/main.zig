@@ -102,7 +102,7 @@ export fn init() callconv(.c) void {
     const ctx = engine.SceneContext.init(state.game.?);
 
     // Emit scene_before_load hook
-    Game.HookDispatcher.emit(.{ .scene_before_load = .{ .name = initial_scene.name, .allocator = state.allocator } });
+    state.game.?.hook_dispatcher.emit(.{ .scene_before_load = .{ .name = initial_scene.name, .allocator = state.allocator } });
 
     // Load initial scene
     scene_storage = Loader.load(initial_scene, ctx) catch |err| {
@@ -113,7 +113,7 @@ export fn init() callconv(.c) void {
     state.scene = &scene_storage;
 
     // Emit scene_load hook
-    Game.HookDispatcher.emit(.{ .scene_load = .{ .name = initial_scene.name } });
+    state.game.?.hook_dispatcher.emit(.{ .scene_load = .{ .name = initial_scene.name } });
 
     state.initialized = true;
     std.log.info("Android sokol backend initialized!", .{});
@@ -160,7 +160,7 @@ export fn cleanup() callconv(.c) void {
     // Emit scene_unload hook
     if (state.initialized and state.game != null) {
         if (state.game.?.getCurrentSceneName() == null) {
-            Game.HookDispatcher.emit(.{ .scene_unload = .{ .name = initial_scene.name } });
+            state.game.?.hook_dispatcher.emit(.{ .scene_unload = .{ .name = initial_scene.name } });
         }
     }
 

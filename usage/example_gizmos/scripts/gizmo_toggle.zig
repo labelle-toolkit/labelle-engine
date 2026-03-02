@@ -16,8 +16,8 @@ const Color = engine.Color;
 var show_arrows: bool = true;
 var show_rays: bool = true;
 var time: f32 = 0;
-var camera_x: f32 = -400;
-var camera_y: f32 = -300;
+var camera_x: f32 = 400;
+var camera_y: f32 = 300;
 
 pub fn init(game: *Game, scene: *Scene) void {
     _ = game;

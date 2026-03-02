@@ -5,7 +5,7 @@
     .name = "example_gui_sokol",
     .description = "GUI demo with ImGui and Sokol backend",
     .initial_scene = "main",
-    .backend = .sokol,
+    .targets = .{.sokol_desktop},
     .gui_backend = .imgui,
     .window = .{
         .width = 800,
