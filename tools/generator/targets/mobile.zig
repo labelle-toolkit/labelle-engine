@@ -6,8 +6,6 @@ const scanner = @import("../scanner.zig");
 
 const ProjectConfig = project_config.ProjectConfig;
 const sanitizeZigIdentifier = utils.sanitizeZigIdentifier;
-const PascalCaseResult = utils.PascalCaseResult;
-const toPascalCase = utils.toPascalCase;
 const TaskHookScanResult = scanner.TaskHookScanResult;
 
 const main_sokol_android_tmpl = @embedFile("../../templates/main_sokol_android.txt");
@@ -22,10 +20,12 @@ pub fn generateMainZigSokolAndroid(
     components: []const []const u8,
     scripts: []const []const u8,
     hooks: []const []const u8,
+    enum_type_names: []const []const u8,
+    component_type_names: []const []const u8,
     task_hooks: TaskHookScanResult,
 ) ![]const u8 {
     // Use the same logic as iOS but with Android template
-    return generateMainZigMobile(main_sokol_android_tmpl, allocator, config, prefabs, enums, components, scripts, hooks, task_hooks);
+    return generateMainZigMobile(main_sokol_android_tmpl, allocator, config, prefabs, enums, components, scripts, hooks, enum_type_names, component_type_names, task_hooks);
 }
 
 /// Generate main.zig content for WASM target
@@ -37,10 +37,12 @@ pub fn generateMainZigWasm(
     components: []const []const u8,
     scripts: []const []const u8,
     hooks: []const []const u8,
+    enum_type_names: []const []const u8,
+    component_type_names: []const []const u8,
     task_hooks: TaskHookScanResult,
 ) ![]const u8 {
     // Use the same logic as iOS but with WASM template
-    return generateMainZigMobile(main_wasm_tmpl, allocator, config, prefabs, enums, components, scripts, hooks, task_hooks);
+    return generateMainZigMobile(main_wasm_tmpl, allocator, config, prefabs, enums, components, scripts, hooks, enum_type_names, component_type_names, task_hooks);
 }
 
 /// Generic generator for mobile/callback-based templates (iOS, Android, WASM)
@@ -53,10 +55,13 @@ fn generateMainZigMobile(
     components: []const []const u8,
     scripts: []const []const u8,
     hooks: []const []const u8,
+    enum_type_names: []const []const u8,
+    component_type_names: []const []const u8,
     task_hooks: TaskHookScanResult,
 ) ![]const u8 {
     // Mobile/callback templates don't have enum/bind sections yet
     _ = enums;
+    _ = enum_type_names;
 
     var buf: std.ArrayListUnmanaged(u8) = .{};
     const writer = buf.writer(allocator);
@@ -80,13 +85,6 @@ fn generateMainZigMobile(
         plugin_zig_names[i] = try sanitizeZigIdentifier(allocator, plugin.name);
     }
 
-    // Pre-compute PascalCase names for components
-    var component_pascal_names = try allocator.alloc(PascalCaseResult, components.len);
-    defer allocator.free(component_pascal_names);
-    for (components, 0..) |name, i| {
-        component_pascal_names[i] = try toPascalCase(name);
-    }
-
     // Header with project name
     try zts.print(template, "header", .{config.name}, writer);
 
@@ -105,10 +103,9 @@ fn generateMainZigMobile(
         try zts.print(template, "component_import", .{ name, name }, writer);
     }
 
-    // Component exports (with PascalCase type names)
+    // Component exports (with extracted type names)
     for (components, 0..) |name, i| {
-        const pascal = component_pascal_names[i];
-        try zts.print(template, "component_export", .{ pascal.buf[0..pascal.len], name, pascal.buf[0..pascal.len] }, writer);
+        try zts.print(template, "component_export", .{ component_type_names[i], name, component_type_names[i] }, writer);
     }
 
     // Script imports
@@ -145,9 +142,8 @@ fn generateMainZigMobile(
             try zts.print(template, "component_registry_multi_empty_base_end", .{}, writer);
         } else {
             try zts.print(template, "component_registry_multi_start", .{}, writer);
-            for (components, 0..) |_, i| {
-                const pascal = component_pascal_names[i];
-                try zts.print(template, "component_registry_multi_item", .{ pascal.buf[0..pascal.len], pascal.buf[0..pascal.len] }, writer);
+            for (component_type_names) |type_name| {
+                try zts.print(template, "component_registry_multi_item", .{ type_name, type_name }, writer);
             }
             if (config.physics.enabled) {
                 try zts.print(template, "component_registry_multi_physics_start", .{}, writer);
@@ -169,9 +165,8 @@ fn generateMainZigMobile(
             try zts.print(template, "component_registry_empty_end", .{}, writer);
         } else {
             try zts.print(template, "component_registry_start", .{}, writer);
-            for (components, 0..) |_, i| {
-                const pascal = component_pascal_names[i];
-                try zts.print(template, "component_registry_item", .{ pascal.buf[0..pascal.len], pascal.buf[0..pascal.len] }, writer);
+            for (component_type_names) |type_name| {
+                try zts.print(template, "component_registry_item", .{ type_name, type_name }, writer);
             }
             if (config.physics.enabled) {
                 try zts.print(template, "component_registry_physics", .{}, writer);

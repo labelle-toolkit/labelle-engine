@@ -6,8 +6,6 @@ const scanner = @import("../scanner.zig");
 
 const ProjectConfig = project_config.ProjectConfig;
 const sanitizeZigIdentifier = utils.sanitizeZigIdentifier;
-const PascalCaseResult = utils.PascalCaseResult;
-const toPascalCase = utils.toPascalCase;
 const TaskHookScanResult = scanner.TaskHookScanResult;
 
 const main_bgfx_tmpl = @embedFile("../../templates/main_bgfx.txt");
@@ -22,9 +20,11 @@ pub fn generateMainZigBgfx(
     components: []const []const u8,
     scripts: []const []const u8,
     hooks: []const []const u8,
+    enum_type_names: []const []const u8,
+    component_type_names: []const []const u8,
     task_hooks: TaskHookScanResult,
 ) ![]const u8 {
-    return generateMainZigGlfw(main_bgfx_tmpl, true, allocator, config, prefabs, enums, components, scripts, hooks, task_hooks);
+    return generateMainZigGlfw(main_bgfx_tmpl, true, allocator, config, prefabs, enums, components, scripts, hooks, enum_type_names, component_type_names, task_hooks);
 }
 
 /// Generate main.zig content for wgpu_native backend
@@ -36,9 +36,11 @@ pub fn generateMainZigWgpuNative(
     components: []const []const u8,
     scripts: []const []const u8,
     hooks: []const []const u8,
+    enum_type_names: []const []const u8,
+    component_type_names: []const []const u8,
     task_hooks: TaskHookScanResult,
 ) ![]const u8 {
-    return generateMainZigGlfw(main_wgpu_native_tmpl, false, allocator, config, prefabs, enums, components, scripts, hooks, task_hooks);
+    return generateMainZigGlfw(main_wgpu_native_tmpl, false, allocator, config, prefabs, enums, components, scripts, hooks, enum_type_names, component_type_names, task_hooks);
 }
 
 /// Generic main.zig generator for GLFW-based backends (bgfx, wgpu_native)
@@ -53,6 +55,8 @@ fn generateMainZigGlfw(
     components: []const []const u8,
     scripts: []const []const u8,
     hooks: []const []const u8,
+    enum_type_names: []const []const u8,
+    component_type_names: []const []const u8,
     task_hooks: TaskHookScanResult,
 ) ![]const u8 {
     var buf: std.ArrayListUnmanaged(u8) = .{};
@@ -80,20 +84,6 @@ fn generateMainZigGlfw(
         plugin_zig_names[i] = try sanitizeZigIdentifier(allocator, plugin.name);
     }
 
-    // Pre-compute PascalCase names for enums
-    var enum_pascal_names = try allocator.alloc(PascalCaseResult, enums.len);
-    defer allocator.free(enum_pascal_names);
-    for (enums, 0..) |name, i| {
-        enum_pascal_names[i] = try toPascalCase(name);
-    }
-
-    // Pre-compute PascalCase names for components
-    var component_pascal_names = try allocator.alloc(PascalCaseResult, components.len);
-    defer allocator.free(component_pascal_names);
-    for (components, 0..) |name, i| {
-        component_pascal_names[i] = try toPascalCase(name);
-    }
-
     // Header with project name
     try zts.print(template, "header", .{config.name}, writer);
 
@@ -107,10 +97,9 @@ fn generateMainZigGlfw(
         try zts.print(template, "enum_import", .{ name, name }, writer);
     }
 
-    // Enum exports (with PascalCase type names)
+    // Enum exports (with extracted type names)
     for (enums, 0..) |name, i| {
-        const pascal = enum_pascal_names[i];
-        try zts.print(template, "enum_export", .{ pascal.buf[0..pascal.len], name, pascal.buf[0..pascal.len] }, writer);
+        try zts.print(template, "enum_export", .{ enum_type_names[i], name, enum_type_names[i] }, writer);
     }
 
     // Plugin bind declarations (generates consts like: const labelle_tasksBindItems = labelle_tasks.bind(Items);)
@@ -132,8 +121,7 @@ fn generateMainZigGlfw(
 
     // Component exports
     for (components, 0..) |name, i| {
-        const pascal = component_pascal_names[i];
-        try zts.print(template, "component_export", .{ pascal.buf[0..pascal.len], name, pascal.buf[0..pascal.len] }, writer);
+        try zts.print(template, "component_export", .{ component_type_names[i], name, component_type_names[i] }, writer);
     }
 
     // Script imports
@@ -180,8 +168,8 @@ fn generateMainZigGlfw(
             try zts.print(template, "component_registry_multi_empty_start", .{}, writer);
         } else {
             try zts.print(template, "component_registry_multi_start", .{}, writer);
-            for (component_pascal_names) |pascal| {
-                try zts.print(template, "component_registry_multi_item", .{ pascal.buf[0..pascal.len], pascal.buf[0..pascal.len] }, writer);
+            for (component_type_names) |type_name| {
+                try zts.print(template, "component_registry_multi_item", .{ type_name, type_name }, writer);
             }
 
             // Add bind component declarations INSIDE the struct (if components are specified)
@@ -226,8 +214,8 @@ fn generateMainZigGlfw(
             try zts.print(template, "component_registry_empty", .{}, writer);
         } else {
             try zts.print(template, "component_registry_start", .{}, writer);
-            for (component_pascal_names) |pascal| {
-                try zts.print(template, "component_registry_item", .{ pascal.buf[0..pascal.len], pascal.buf[0..pascal.len] }, writer);
+            for (component_type_names) |type_name| {
+                try zts.print(template, "component_registry_item", .{ type_name, type_name }, writer);
             }
             try zts.print(template, "component_registry_end", .{}, writer);
         }
