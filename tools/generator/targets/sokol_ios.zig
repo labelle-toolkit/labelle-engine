@@ -208,7 +208,7 @@ pub fn generateMainZigSokolIos(
     }
 
     // Loader and scene
-    try zts.print(main_sokol_ios_tmpl, "loader_with_gizmos", .{config.initial_scene}, writer);
+    try zts.print(main_sokol_ios_tmpl, "loader", .{config.initial_scene}, writer);
 
     // State
     try zts.print(main_sokol_ios_tmpl, "state", .{}, writer);

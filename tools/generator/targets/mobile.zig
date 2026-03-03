@@ -237,7 +237,7 @@ fn generateMainZigMobile(
     }
 
     // Loader and scene
-    try zts.print(template, "loader_with_gizmos", .{config.initial_scene}, writer);
+    try zts.print(template, "loader", .{config.initial_scene}, writer);
 
     // State (no arguments - consistent across mobile templates)
     try zts.print(template, "state", .{}, writer);

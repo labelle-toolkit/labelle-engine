@@ -285,7 +285,7 @@ fn generateMainZigGlfw(
     }
 
     // Loader and initial scene
-    try zts.print(template, "loader_with_gizmos", .{config.initial_scene}, writer);
+    try zts.print(template, "loader", .{config.initial_scene}, writer);
 
     // Native helpers (only for bgfx backend)
     if (include_native_helpers) {

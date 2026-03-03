@@ -191,7 +191,7 @@ pub fn generateMainZigSdl(
     }
 
     // Loader and initial scene
-    try zts.print(main_sdl_tmpl, "loader_with_gizmos", .{config.initial_scene}, writer);
+    try zts.print(main_sdl_tmpl, "loader", .{config.initial_scene}, writer);
 
     // Main function
     try zts.print(main_sdl_tmpl, "main_fn", .{}, writer);

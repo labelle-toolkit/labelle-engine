@@ -371,7 +371,7 @@ pub fn generateMainZigRaylib(
     }
 
     // Loader and initial scene
-    try zts.print(main_raylib_tmpl, "loader_with_gizmos", .{config.initial_scene}, writer);
+    try zts.print(main_raylib_tmpl, "loader", .{config.initial_scene}, writer);
 
     // Main function (desktop reads config from project.labelle at runtime)
     try zts.print(main_raylib_tmpl, "main_fn", .{}, writer);

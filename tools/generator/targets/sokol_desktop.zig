@@ -199,7 +199,7 @@ pub fn generateMainZigSokol(
     }
 
     // Loader and initial scene
-    try zts.print(main_sokol_tmpl, "loader_with_gizmos", .{config.initial_scene}, writer);
+    try zts.print(main_sokol_tmpl, "loader", .{config.initial_scene}, writer);
 
     // State struct
     try zts.print(main_sokol_tmpl, "state", .{}, writer);

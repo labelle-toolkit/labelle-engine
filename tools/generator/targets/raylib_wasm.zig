@@ -269,7 +269,7 @@ pub fn generateMainZigRaylibWasm(
     }
 
     // Loader and initial scene
-    try zts.print(main_raylib_wasm_tmpl, "loader_with_gizmos", .{config.initial_scene}, writer);
+    try zts.print(main_raylib_wasm_tmpl, "loader", .{config.initial_scene}, writer);
 
     // Main function with embedded config values
     const camera_x = config.camera.x orelse 0;
