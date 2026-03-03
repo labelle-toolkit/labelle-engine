@@ -39,22 +39,13 @@ pub fn build(b: *std.Build) void {
     });
     const engine_mod = engine_dep.module("labelle-engine");
 
-    // Get labelle-gfx dependency for bgfx bindings
-    const labelle_dep = engine_dep.builder.dependency("labelle-gfx", .{
-        .target = target,
-        .optimize = optimize,
-    });
-    const zbgfx_dep = labelle_dep.builder.dependency("zbgfx", .{
-        .target = target,
-        .optimize = optimize,
-    });
-    const zglfw_dep = labelle_dep.builder.dependency("zglfw", .{
-        .target = target,
-        .optimize = optimize,
-    });
-    const zbgfx_mod = zbgfx_dep.module("zbgfx");
-    const zglfw_mod = zglfw_dep.module("root");
-    const labelle_gfx_mod = labelle_dep.module("labelle");
+    // Get bgfx, glfw, and labelle-gfx modules (re-exported by engine)
+    const zbgfx_mod = engine_dep.builder.modules.get("zbgfx") orelse
+        @panic("zbgfx module not found - ensure backend=bgfx is set");
+    const zglfw_mod = engine_dep.builder.modules.get("zglfw") orelse
+        @panic("zglfw module not found");
+    const labelle_gfx_mod = engine_dep.builder.modules.get("labelle-gfx") orelse
+        @panic("labelle-gfx module not found");
 
     const exe = b.addExecutable(.{
         .name = "example_bgfx",
@@ -70,8 +61,7 @@ pub fn build(b: *std.Build) void {
             },
         }),
     });
-    exe.linkLibrary(zbgfx_dep.artifact("bgfx"));
-    exe.linkLibrary(zglfw_dep.artifact("glfw"));
+    // bgfx and glfw C libraries are linked transitively through the engine module
     b.installArtifact(exe);
 
     const run_cmd = b.addRunArtifact(exe);
