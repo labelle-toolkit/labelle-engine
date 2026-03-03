@@ -28,10 +28,10 @@ pub const PositionTests = struct {
         try std.testing.expectEqual(@as(f32, 200), pos.y);
     }
 
-    test "toGfx converts to graphics position" {
-        const Position = @import("../src/components.zig").Position;
-        const pos = Position{ .x = 50, .y = 75 };
-        const gfx_pos = pos.toGfx();
+    test "positionToGfx converts to graphics position" {
+        const components = @import("../src/components.zig");
+        const pos = components.Position{ .x = 50, .y = 75 };
+        const gfx_pos = components.positionToGfx(pos);
         try std.testing.expectEqual(@as(f32, 50), gfx_pos.x);
         try std.testing.expectEqual(@as(f32, 75), gfx_pos.y);
     }

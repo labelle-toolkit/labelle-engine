@@ -37,6 +37,7 @@ pub const getMergedSpriteConfig = sprite.getMergedSpriteConfig;
 // Components
 pub const components = @import("src/components.zig");
 pub const Position = components.Position;
+pub const positionToGfx = components.positionToGfx;
 pub const Sprite = components.Sprite;
 pub const Shape = components.Shape;
 pub const Text = components.Text;
