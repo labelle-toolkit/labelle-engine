@@ -161,17 +161,12 @@ pub fn main() !void {{
         // Sync ECS to graphics
         game.getPipeline().sync(game.getRegistry());
 
-        // Render
-        WgpuNativeBackend.beginDrawing();
-        WgpuNativeBackend.clearBackground(WgpuNativeBackend.color(30, 35, 45, 255));
-
+        // Render (beginFrame/endFrame handle beginDrawing/clearBackground/endDrawing)
         const re = game.getRetainedEngine();
         re.beginFrame();
         re.render();
         game.gizmos.renderStandaloneGizmos();
         re.endFrame();
-
-        WgpuNativeBackend.endDrawing();
 
         frame_count += 1;
     }}

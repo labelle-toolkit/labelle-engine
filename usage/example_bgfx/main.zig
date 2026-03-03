@@ -122,6 +122,11 @@ pub fn main() !void {
     // Set screen size before init
     BgfxBackend.setScreenSize(@intCast(width), @intCast(height));
 
+    // Prevent bgfx from creating a separate render thread. On macOS with Metal,
+    // the render thread deadlocks during SwapChainMtl::init (it dispatches to the
+    // main thread which is blocked waiting for the render thread).
+    _ = bgfx.renderFrame(-1);
+
     // Initialize bgfx
     BgfxBackend.initBgfx(native_window_handle, native_display_handle) catch |err| {
         std.log.err("Failed to initialize bgfx: {}", .{err});
@@ -204,16 +209,11 @@ pub fn main() !void {
         // Sync ECS to graphics
         game.getPipeline().sync(game.getRegistry());
 
-        // Render
-        BgfxBackend.beginDrawing();
-        BgfxBackend.clearBackground(BgfxBackend.color(30, 35, 45, 255));
-
+        // Render (beginFrame/endFrame handle beginDrawing/clearBackground/endDrawing)
         const re = game.getRetainedEngine();
         re.beginFrame();
         re.render();
         re.endFrame();
-
-        BgfxBackend.endDrawing();
 
         frame_count += 1;
     }
