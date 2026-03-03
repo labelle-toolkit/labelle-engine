@@ -5,7 +5,7 @@
     .name = "example_gui_sdl",
     .description = "GUI demo with ImGui and SDL2 backend",
     .initial_scene = "main",
-    .backend = .sdl,
+    .targets = .{.sdl_desktop},
     .gui_backend = .imgui,
     .window = .{
         .width = 800,

@@ -141,11 +141,11 @@ fn processEvent(self: *Self, event: sdl.Event) void {
 }
 
 /// Handle SDL finger/touch events
-fn handleFingerEvent(self: *Self, finger: sdl.TouchFingerEvent, phase: TouchPhase) void {
+fn handleFingerEvent(self: *Self, finger: sdl.Event.TouchFingerEvent, phase: TouchPhase) void {
     // SDL finger coordinates are normalized (0-1), convert to screen coords
     // Note: SDL requires window dimensions for proper conversion, for now use raw coords
     const touch = Touch{
-        .id = finger.finger_id,
+        .id = finger.fingerId,
         .x = finger.x,
         .y = finger.y,
         .phase = phase,
