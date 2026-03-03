@@ -181,7 +181,7 @@ if (@hasField(@TypeOf(entity_def), "gizmos")) {
 }
 
 // After:
-if (comptime GizmoReg != void and GizmoReg.has(prefab_name)) {
+if (comptime GizmoReg.has(prefab_name)) {
     if (comptime GizmoReg.getEntityGizmos(prefab_name)) |gizmos| {
         try Ops.createGizmoEntities(..., gizmos, ...);
     }
@@ -197,7 +197,7 @@ if (@hasField(@TypeOf(entity_def), "gizmos")) {
 }
 
 // After:
-if (comptime GizmoReg != void and GizmoReg.has(prefab_name)) {
+if (comptime GizmoReg.has(prefab_name)) {
     if (comptime GizmoReg.getChildrenGizmos(prefab_name)) |children| {
         if (@hasField(@TypeOf(children), field_name)) {
             const array = @field(children, field_name);
@@ -213,7 +213,7 @@ if (comptime GizmoReg != void and GizmoReg.has(prefab_name)) {
 
 ```zig
 // After component creation:
-if (comptime GizmoReg != void and GizmoReg.has(prefab_name)) {
+if (comptime GizmoReg.has(prefab_name)) {
     if (comptime GizmoReg.getEntityGizmos(prefab_name)) |gizmos| {
         try Ops.createGizmoEntities(game, scene, entity, gizmos, x, y, &ready_queue);
     }
@@ -232,7 +232,7 @@ pub fn createGizmosForEntity(
     scene: *Scene,
     entity: Entity,
 ) !void {
-    if (comptime GizmoReg == void or !GizmoReg.has(prefab_name)) return;
+    if (comptime !GizmoReg.has(prefab_name)) return;
     if (builtin.mode != .Debug) return;
 
     const pos = game.getRegistry().tryGet(Position, entity) orelse return;
@@ -258,24 +258,16 @@ try Loader.createGizmosForEntity("flour", game, scene, item_entity);
 try Loader.createGizmosForEntity("flour", game, scene, restored_entity);
 ```
 
-### Backwards Compatibility
+### Breaking Change
 
-When `GizmoReg` is `void` (4th param not provided), the loader falls back to the
-current behavior — reading `.gizmos` from prefab/scene inline definitions. This
-means existing projects continue working without changes.
+This is a breaking change. Inline `.gizmos` blocks in prefab and scene `.zon`
+files are no longer supported. All gizmo definitions must move to the `gizmos/`
+directory. The `SceneLoader` signature changes from 3 to 4 comptime parameters.
 
-```zig
-pub fn SceneLoader(
-    comptime Prefabs: type,
-    comptime Components: type,
-    comptime Scripts: type,
-    comptime GizmoReg: type,  // pass void to use legacy inline gizmos
-) type
-```
-
-The legacy path (`Prefabs.hasGizmos()` / inline `.gizmos`) remains active when
-`GizmoReg == void`. When `GizmoReg != void`, inline `.gizmos` in prefabs are
-ignored and the registry is authoritative.
+All existing projects must:
+1. Create a `gizmos/` directory with per-prefab `.zon` files
+2. Remove `.gizmos` blocks from all prefab and scene `.zon` files
+3. Regenerate with `zig build generate`
 
 ### Project Generator Changes
 
@@ -286,15 +278,15 @@ ignored and the registry is authoritative.
 3. **Copy `gizmos/` to target dirs** — add `"gizmos"` to `dirs_to_copy` array.
 4. **Pass `Gizmos` to `SceneLoader`** — change the `Loader` line in generated
    `main.zig` to include the 4th parameter.
-5. **When no `gizmos/` directory exists** — generate `SceneLoader(Prefabs,
-   Components, Scripts, void)` for backwards compatibility.
+5. **When no `gizmos/` directory exists** — generate an empty `GizmoRegistry(.{})`.
 
 ### Cleanup
 
-- Remove `PrefabRegistry.hasGizmos()` and `getGizmos()` (dead code once all
-  projects migrate).
-- Remove `.gizmos` handling from `loadPrefabEntity()`,
-  `loadComponentEntity()`, and `createChildEntity()` (legacy path only).
+- Remove `PrefabRegistry.hasGizmos()` and `getGizmos()`.
+- Remove all `.gizmos` handling from `loadPrefabEntity()`,
+  `loadComponentEntity()`, and `createChildEntity()`.
+- Remove `.gizmos` blocks from all prefab and scene `.zon` files in example
+  projects.
 
 ## Engine Files to Modify
 
