@@ -557,7 +557,7 @@ pub fn EntityComponentOps(comptime Prefabs: type, comptime Components: type, com
         /// children_gizmos maps component field names to per-child gizmo definitions.
         /// E.g., .{ .storages = .{ .{.Text = ...}, .{.Text = ...} } } creates gizmos
         /// for each child entity in the "storages" field of the parent's component.
-        fn createChildrenGizmoEntities(
+        pub fn createChildrenGizmoEntities(
             game: *Game,
             scene: ?*Scene,
             parent_entity: Entity,

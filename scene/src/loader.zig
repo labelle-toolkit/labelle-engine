@@ -298,6 +298,9 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
                 if (comptime GizmoReg.getEntityGizmos(prefab_name)) |gizmos| {
                     try Ops.createGizmoEntities(game, scene, entity, gizmos, x, y, &ready_queue);
                 }
+                if (comptime GizmoReg.getChildrenGizmos(prefab_name)) |children_gizmos| {
+                    try Ops.createChildrenGizmoEntities(game, scene, entity, prefab_name, children_gizmos, x, y, &ready_queue);
+                }
             }
 
             // Add entity to scene
@@ -429,6 +432,9 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
                 if (comptime GizmoReg.getEntityGizmos(prefab_name)) |gizmos| {
                     try Ops.createGizmoEntities(game, scene, entity, gizmos, pos.x, pos.y, ready_queue);
                 }
+                if (comptime GizmoReg.getChildrenGizmos(prefab_name)) |children_gizmos| {
+                    try Ops.createChildrenGizmoEntities(game, scene, entity, prefab_name, children_gizmos, pos.x, pos.y, ready_queue);
+                }
             }
 
             // Queue parent-child relationship if .parent field is present (RFC #243)
@@ -466,6 +472,9 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
 
             if (comptime GizmoReg.getEntityGizmos(prefab_name)) |gizmos| {
                 try Ops.createGizmoEntities(game, scene, entity, gizmos, pos.x, pos.y, &ready_queue);
+            }
+            if (comptime GizmoReg.getChildrenGizmos(prefab_name)) |children_gizmos| {
+                try Ops.createChildrenGizmoEntities(game, scene, entity, prefab_name, children_gizmos, pos.x, pos.y, &ready_queue);
             }
 
             // Fire onReady callbacks for gizmo entities
