@@ -116,6 +116,7 @@ pub fn generateMainZigSdl(
     } else {
         if (components.len == 0) {
             try zts.print(main_sdl_tmpl, "component_registry_empty", .{}, writer);
+            try zts.print(main_sdl_tmpl, "component_registry_empty_end", .{}, writer);
         } else {
             try zts.print(main_sdl_tmpl, "component_registry_start", .{}, writer);
             for (component_type_names) |type_name| {

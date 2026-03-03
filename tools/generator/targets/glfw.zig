@@ -212,6 +212,7 @@ fn generateMainZigGlfw(
     } else {
         if (components.len == 0) {
             try zts.print(template, "component_registry_empty", .{}, writer);
+            try zts.print(template, "component_registry_empty_end", .{}, writer);
         } else {
             try zts.print(template, "component_registry_start", .{}, writer);
             for (component_type_names) |type_name| {
