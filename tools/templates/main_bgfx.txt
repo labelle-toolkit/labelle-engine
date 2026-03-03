@@ -172,6 +172,9 @@ pub const TaskEngine = {s}.EngineWithHooks({s}, {s}, TaskDispatcher);
 .loader
 pub const Loader = engine.SceneLoader(Prefabs, Components, Scripts);
 pub const initial_scene = @import("scenes/{s}.zon");
+.loader_with_gizmos
+pub const Loader = engine.SceneLoader(Prefabs, Components, Scripts, Gizmos);
+pub const initial_scene = @import("scenes/{s}.zon");
 
 .native_helpers
 // Platform-specific native window handle helpers

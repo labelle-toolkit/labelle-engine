@@ -56,6 +56,7 @@ pub const WindowConfig = engine.WindowConfig;
 pub const ScreenSize = engine.ScreenSize;
 pub const SceneLoader = scene.SceneLoader;
 pub const PrefabRegistry = scene.PrefabRegistry;
+pub const GizmoRegistry = scene.GizmoRegistry;
 pub const ComponentRegistry = scene.ComponentRegistry;
 pub const ComponentRegistryMulti = scene.ComponentRegistryMulti;
 pub const ScriptRegistry = scene.ScriptRegistry;

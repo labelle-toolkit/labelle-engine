@@ -20,7 +20,8 @@ const Components = labelle.ComponentRegistry(struct {
 
 const Prefabs = labelle.PrefabRegistry(.{});
 
-const Loader = labelle.SceneLoader(Prefabs, Components, Scripts);
+const Gizmos = labelle.GizmoRegistry(.{});
+const Loader = labelle.SceneLoader(Prefabs, Components, Scripts, Gizmos);
 
 pub fn main() !void {
     const ci_test = std.posix.getenv("CI_TEST") != null;

@@ -10,7 +10,7 @@
         .{ .prefab = "enemy", .components = .{ .Position = .{ .x = 600, .y = 200 } } },
         .{ .prefab = "enemy", .components = .{ .Position = .{ .x = 200, .y = 400 } } },
         .{ .prefab = "enemy", .components = .{ .Position = .{ .x = 600, .y = 400 } } },
-        // Inline entity with gizmos (no prefab)
+        // Inline entity (no prefab)
         .{
             .components = .{
                 .Position = .{ .x = 400, .y = 500 },
@@ -18,11 +18,6 @@
                     .shape = .{ .circle = .{ .radius = 15 } },
                     .color = .{ .r = 100, .g = 255, .b = 100, .a = 255 },
                 },
-            },
-            .gizmos = .{
-                .Text = .{ .text = "Item", .size = 12, .y = -25, .color = .{ .r = 100, .g = 255, .b = 100, .a = 255 } },
-                // Yellow bounding box for item
-                .BoundingBox = .{ .color = .{ .r = 255, .g = 255, .b = 0, .a = 200 }, .padding = 5 },
             },
         },
     },

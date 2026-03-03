@@ -14,7 +14,8 @@ const Components = engine.ComponentRegistry(struct {
 const Scripts = engine.ScriptRegistry(struct {
     pub const hierarchy_test = hierarchy_test_script;
 });
-const Loader = engine.SceneLoader(Prefabs, Components, Scripts);
+const Gizmos = engine.GizmoRegistry(.{});
+const Loader = engine.SceneLoader(Prefabs, Components, Scripts, Gizmos);
 
 pub fn main() !void {
     var game = try engine.Game.init(std.heap.page_allocator, .{

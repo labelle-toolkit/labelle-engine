@@ -20,11 +20,12 @@ pub fn generateMainZigBgfx(
     components: []const []const u8,
     scripts: []const []const u8,
     hooks: []const []const u8,
+    gizmos: []const []const u8,
     enum_type_names: []const []const u8,
     component_type_names: []const []const u8,
     task_hooks: TaskHookScanResult,
 ) ![]const u8 {
-    return generateMainZigGlfw(main_bgfx_tmpl, true, allocator, config, prefabs, enums, components, scripts, hooks, enum_type_names, component_type_names, task_hooks);
+    return generateMainZigGlfw(main_bgfx_tmpl, true, allocator, config, prefabs, enums, components, scripts, hooks, gizmos, enum_type_names, component_type_names, task_hooks);
 }
 
 /// Generate main.zig content for wgpu_native backend
@@ -36,11 +37,12 @@ pub fn generateMainZigWgpuNative(
     components: []const []const u8,
     scripts: []const []const u8,
     hooks: []const []const u8,
+    gizmos: []const []const u8,
     enum_type_names: []const []const u8,
     component_type_names: []const []const u8,
     task_hooks: TaskHookScanResult,
 ) ![]const u8 {
-    return generateMainZigGlfw(main_wgpu_native_tmpl, false, allocator, config, prefabs, enums, components, scripts, hooks, enum_type_names, component_type_names, task_hooks);
+    return generateMainZigGlfw(main_wgpu_native_tmpl, false, allocator, config, prefabs, enums, components, scripts, hooks, gizmos, enum_type_names, component_type_names, task_hooks);
 }
 
 /// Generic main.zig generator for GLFW-based backends (bgfx, wgpu_native)
@@ -55,6 +57,7 @@ fn generateMainZigGlfw(
     components: []const []const u8,
     scripts: []const []const u8,
     hooks: []const []const u8,
+    gizmos: []const []const u8,
     enum_type_names: []const []const u8,
     component_type_names: []const []const u8,
     task_hooks: TaskHookScanResult,
@@ -267,8 +270,22 @@ fn generateMainZigGlfw(
         try zts.print(template, "task_engine_empty", .{}, writer);
     }
 
+    // Gizmo imports and registry
+    for (gizmos) |name| {
+        try writer.print("const {s}_gizmo = @import(\"gizmos/{s}.zon\");\n", .{ name, name });
+    }
+    if (gizmos.len == 0) {
+        try writer.print("pub const Gizmos = engine.GizmoRegistry(.{{}});\n", .{});
+    } else {
+        try writer.print("pub const Gizmos = engine.GizmoRegistry(.{{\n", .{});
+        for (gizmos) |name| {
+            try writer.print("    .{s} = {s}_gizmo,\n", .{ name, name });
+        }
+        try writer.print("}});\n", .{});
+    }
+
     // Loader and initial scene
-    try zts.print(template, "loader", .{config.initial_scene}, writer);
+    try zts.print(template, "loader_with_gizmos", .{config.initial_scene}, writer);
 
     // Native helpers (only for bgfx backend)
     if (include_native_helpers) {

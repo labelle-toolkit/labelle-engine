@@ -58,7 +58,8 @@ const Components = engine.ComponentRegistry(struct {
 const Scripts = engine.ScriptRegistry(struct {
     pub const gravity = gravity_script;
 });
-const Loader = engine.SceneLoader(Prefabs, Components, Scripts);
+const Gizmos = engine.GizmoRegistry(.{});  // or import gizmos/*.zon files
+const Loader = engine.SceneLoader(Prefabs, Components, Scripts, Gizmos);
 ```
 
 **Scene .zon format** (scenes/*.zon):
@@ -86,7 +87,13 @@ Scene-level `.Position` overrides prefab Position.
         .Sprite = .{ .name = "idle", .pivot = .bottom_center },
         .Health = .{ .current = 100, .max = 100 },
     },
-    .gizmos = .{  // debug-only, stripped in release builds
+}
+```
+
+**Gizmo definition** (gizmos/*.zon — one per prefab, debug-only):
+```zig
+.{
+    .entity = .{
         .Text = .{ .text = "Player", .size = 12, .y = -20 },
         .Shape = .{ .shape = .{ .circle = .{ .radius = 5 } }, .color = .{ .r = 255 } },
     },
@@ -117,7 +124,7 @@ References are resolved in a second pass after all entities are created (forward
 
 ### Gizmos
 
-Debug-only visualizations (stripped in release builds). Types: Text, Shape, BoundingBox. Features: visibility modes (`.always`, `.selected_only`, `.never`), runtime toggle via `game.gizmos.setEnabled()`, standalone drawing via `game.gizmos.drawArrow()`/`drawRay()`/`drawLine()`/`drawCircle()`/`drawRect()`.
+Debug-only visualizations defined in a separate `gizmos/` directory (one `.zon` file per prefab, RFC #319). Stripped in release builds. Types: Text, Shape, BoundingBox. Features: visibility modes (`.always`, `.selected_only`, `.never`), runtime toggle via `game.gizmos.setEnabled()`, standalone drawing via `game.gizmos.drawArrow()`/`drawRay()`/`drawLine()`/`drawCircle()`/`drawRect()`. Use `Loader.createGizmosForEntity("name", game, &scene, entity)` to add gizmos to manually-created or restored entities.
 
 ### Layers
 

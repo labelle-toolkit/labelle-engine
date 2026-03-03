@@ -34,7 +34,8 @@ pub const Scripts = engine.ScriptRegistry(struct {
 });
 const Game = engine.Game;
 
-pub const Loader = engine.SceneLoader(Prefabs, Components, Scripts);
+pub const Gizmos = engine.GizmoRegistry(.{});
+pub const Loader = engine.SceneLoader(Prefabs, Components, Scripts, Gizmos);
 pub const initial_scene = @import("scenes/main.zon");
 
 pub fn main() !void {

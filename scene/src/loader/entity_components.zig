@@ -167,14 +167,6 @@ pub fn EntityComponentOps(comptime Prefabs: type, comptime Components: type) typ
                 }
             }
 
-            // Create gizmo entities (debug builds only)
-            // Scene-level gizmos override prefab gizmos
-            if (@hasField(@TypeOf(entity_def), "gizmos")) {
-                try createGizmoEntities(game, scene, entity, entity_def.gizmos, pos_x, pos_y, ready_queue);
-            } else if (comptime Prefabs.hasGizmos(prefab_name)) {
-                try createGizmoEntities(game, scene, entity, Prefabs.getGizmos(prefab_name), pos_x, pos_y, ready_queue);
-            }
-
             return .{
                 .entity = entity,
                 .visual_type = comptime getVisualTypeFromPrefab(prefab_name),
@@ -209,11 +201,6 @@ pub fn EntityComponentOps(comptime Prefabs: type, comptime Components: type) typ
             // Position is excluded since we already added it above
             // Note: Child entities don't support entity references (no ref_ctx)
             try addComponentsExcluding(game, scene, entity, entity_def.components, child_x, child_y, .{"Position"}, parent_ctx, ready_queue, null);
-
-            // Create gizmo entities if present (debug builds only)
-            if (@hasField(@TypeOf(entity_def), "gizmos")) {
-                try createGizmoEntities(game, scene, entity, entity_def.gizmos, child_x, child_y, ready_queue);
-            }
 
             return .{
                 .entity = entity,
