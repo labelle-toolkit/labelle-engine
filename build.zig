@@ -97,9 +97,15 @@ pub fn build(b: *std.Build) void {
         @panic("sokol backend selected but sokol module not exported by labelle-gfx");
     }
 
-    // Export sokol for consumers when present
+    // Re-export all backend modules for consumer projects.
+    // This allows consumers to use engine_dep.builder.modules.get("sokol") etc.
+    // without reaching into engine internals via transitive dependency chains.
     if (sokol) |sk| {
         b.modules.put("sokol", sk) catch @panic("Failed to export sokol module");
+    }
+    b.modules.put("labelle-gfx", labelle) catch @panic("Failed to export labelle-gfx module");
+    if (raylib) |rl| {
+        b.modules.put("raylib", rl) catch @panic("Failed to export raylib module");
     }
 
     // Note: sokol_dep is null because sokol is provided by labelle-gfx.
@@ -111,6 +117,17 @@ pub fn build(b: *std.Build) void {
         deps_graphics.loadDesktopDeps(labelle_dep, b, target, optimize, backend)
     else
         deps_graphics.emptyDeps();
+
+    // Re-export desktop graphics modules for consumers
+    if (gfx_deps.zbgfx) |zb| {
+        b.modules.put("zbgfx", zb) catch @panic("Failed to export zbgfx module");
+    }
+    if (gfx_deps.zglfw) |zg| {
+        b.modules.put("zglfw", zg) catch @panic("Failed to export zglfw module");
+    }
+    if (gfx_deps.wgpu_native) |wn| {
+        b.modules.put("wgpu_native", wn) catch @panic("Failed to export wgpu_native module");
+    }
 
     // ==========================================================================
     // Other Dependencies
@@ -364,6 +381,15 @@ pub fn build(b: *std.Build) void {
 
     if (physics_module) |physics| {
         engine_mod.addImport("physics", physics);
+    }
+
+    // Link C library artifacts to the engine module for transitive linking.
+    // Consumer executables importing labelle-engine get these linked automatically.
+    if (gfx_deps.zbgfx_dep) |dep| {
+        engine_mod.linkLibrary(dep.artifact("bgfx"));
+    }
+    if (gfx_deps.zglfw_dep) |dep| {
+        engine_mod.linkLibrary(dep.artifact("glfw"));
     }
 
     // ==========================================================================

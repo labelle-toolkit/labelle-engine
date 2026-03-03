@@ -105,17 +105,11 @@ pub fn build(b: *std.Build) !void {{
             .root_module = exe_mod,
         }});
 .sokol_exe_start
-    // Get labelle-gfx dependency for sokol bindings
-    const labelle_dep = engine_dep.builder.dependency("labelle-gfx", .{{
-        .target = target,
-        .optimize = optimize,
-    }});
-    const sokol_dep = labelle_dep.builder.dependency("sokol", .{{
-        .target = target,
-        .optimize = optimize,
-    }});
-    const sokol_mod = sokol_dep.module("sokol");
-    const labelle_gfx_mod = labelle_dep.module("labelle");
+    // Get sokol and labelle-gfx modules (re-exported by engine)
+    const sokol_mod = engine_dep.builder.modules.get("sokol") orelse
+        @panic("sokol module not found - ensure backend=sokol is set");
+    const labelle_gfx_mod = engine_dep.builder.modules.get("labelle-gfx") orelse
+        @panic("labelle-gfx module not found");
 
     const exe_mod = b.createModule(.{{
         .root_source_file = b.path("{s}"),
@@ -167,26 +161,13 @@ pub fn build(b: *std.Build) !void {{
         sdl_sdk.link(exe, .dynamic, .SDL2_ttf);
         exe.linkSystemLibrary("SDL2_image");
 .bgfx_exe_start
-    // Get labelle-gfx dependency for bgfx bindings
-    const labelle_dep = engine_dep.builder.dependency("labelle-gfx", .{{
-        .target = target,
-        .optimize = optimize,
-    }});
-    const zbgfx_dep = labelle_dep.builder.dependency("zbgfx", .{{
-        .target = target,
-        .optimize = optimize,
-    }});
-    const zglfw_dep = labelle_dep.builder.dependency("zglfw", .{{
-        .target = target,
-        .optimize = optimize,
-    }});
-    const zbgfx_mod = zbgfx_dep.module("zbgfx");
-    const zglfw_mod = zglfw_dep.module("root");
-    const labelle_gfx_mod = labelle_dep.module("labelle");
-
-    // Get native libraries for linking
-    const bgfx_lib = zbgfx_dep.artifact("bgfx");
-    const glfw_lib = zglfw_dep.artifact("glfw");
+    // Get bgfx, glfw, and labelle-gfx modules (re-exported by engine)
+    const zbgfx_mod = engine_dep.builder.modules.get("zbgfx") orelse
+        @panic("zbgfx module not found - ensure backend=bgfx is set");
+    const zglfw_mod = engine_dep.builder.modules.get("zglfw") orelse
+        @panic("zglfw module not found");
+    const labelle_gfx_mod = engine_dep.builder.modules.get("labelle-gfx") orelse
+        @panic("labelle-gfx module not found");
 
     const exe_mod = b.createModule(.{{
         .root_source_file = b.path("{s}"),
@@ -206,22 +187,13 @@ pub fn build(b: *std.Build) !void {{
             .root_module = exe_mod,
         }});
 .wgpu_native_exe_start
-    // Get labelle-gfx dependency for wgpu_native bindings
-    const labelle_dep = engine_dep.builder.dependency("labelle-gfx", .{{
-        .target = target,
-        .optimize = optimize,
-    }});
-    const wgpu_native_dep = labelle_dep.builder.lazyDependency("wgpu_native_zig", .{{
-        .target = target,
-        .optimize = optimize,
-    }}) orelse @panic("wgpu_native_zig dependency not available");
-    const zglfw_dep = labelle_dep.builder.dependency("zglfw", .{{
-        .target = target,
-        .optimize = optimize,
-    }});
-    const wgpu_mod = wgpu_native_dep.module("wgpu");
-    const zglfw_mod = zglfw_dep.module("root");
-    const labelle_gfx_mod = labelle_dep.module("labelle");
+    // Get wgpu, glfw, and labelle-gfx modules (re-exported by engine)
+    const wgpu_mod = engine_dep.builder.modules.get("wgpu_native") orelse
+        @panic("wgpu_native module not found - ensure backend=wgpu_native is set");
+    const zglfw_mod = engine_dep.builder.modules.get("zglfw") orelse
+        @panic("zglfw module not found");
+    const labelle_gfx_mod = engine_dep.builder.modules.get("labelle-gfx") orelse
+        @panic("labelle-gfx module not found");
 
     const exe_mod = b.createModule(.{{
         .root_source_file = b.path("{s}"),
@@ -240,15 +212,9 @@ pub fn build(b: *std.Build) !void {{
             .name = "{s}",
             .root_module = exe_mod,
         }});
-        exe.linkLibrary(zglfw_dep.artifact("glfw"));
-        exe.linkLibrary(wgpu_native_dep.artifact("wgpu_native"));
 .plugin_import
     exe_mod.addImport("{s}", {s}_mod);
 .bgfx_link
-    // Link bgfx and glfw native libraries
-    exe.linkLibrary(bgfx_lib);
-    exe.linkLibrary(glfw_lib);
-
 .ios_frameworks
         // Link iOS frameworks when targeting iOS
         if (is_ios) {{
