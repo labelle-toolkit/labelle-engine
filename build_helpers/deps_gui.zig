@@ -185,6 +185,11 @@ pub fn configureZgui(
         setupRlImGui(ctx, gui_interface, zgui_dep);
     }
 
+    // For bgfx backend, setup ImGui adapter
+    if (ctx.graphics_backend == .bgfx and ctx.is_desktop) {
+        setupBgfxImgui(ctx, gui_interface, zgui_dep);
+    }
+
     // For wgpu_native backend, setup ImGui adapter
     if (ctx.graphics_backend == .wgpu_native and ctx.is_desktop) {
         setupWgpuNativeImgui(ctx, gui_interface, zgui_dep);
@@ -302,6 +307,87 @@ pub fn configureCimgui(
     // Link to GUI interface
     gui_interface.linkLibrary(sokol_imgui_lib);
     gui_interface.addIncludePath(sokol_dep.path("src/sokol/c"));
+}
+
+/// Setup bgfx ImGui adapter
+/// Compiles bgfx's built-in ImGui rendering backend (imgui.cpp) which provides
+/// ImGui_ImplBgfx_Init/Shutdown/NewFrame/RenderDrawData C functions.
+fn setupBgfxImgui(
+    ctx: GuiContext,
+    gui_interface: *std.Build.Module,
+    zgui_dep: *std.Build.Dependency,
+) void {
+    // Get zbgfx dependency for include paths and source files
+    const zbgfx_dep = ctx.labelle_dep.builder.dependency("zbgfx", .{
+        .target = ctx.target,
+        .optimize = ctx.optimize,
+    });
+
+    // Create C++ module for bgfx imgui backend
+    const imgui_bgfx_mod = ctx.b.createModule(.{
+        .target = ctx.target,
+        .optimize = ctx.optimize,
+        .link_libcpp = true,
+    });
+
+    // Compile bgfx's imgui.cpp (the ImGui rendering backend for bgfx)
+    imgui_bgfx_mod.addCSourceFile(.{
+        .file = zbgfx_dep.path("libs/bgfx/examples/common/imgui/imgui.cpp"),
+        .flags = &.{
+            "-std=c++20",
+            "-fno-sanitize=undefined",
+            "-fno-strict-aliasing",
+            "-fno-exceptions",
+            "-fno-rtti",
+            "-ffast-math",
+        },
+    });
+
+    // bx macros (mirrors zbgfx bxInclude)
+    imgui_bgfx_mod.addCMacro("__STDC_LIMIT_MACROS", "1");
+    imgui_bgfx_mod.addCMacro("__STDC_FORMAT_MACROS", "1");
+    imgui_bgfx_mod.addCMacro("__STDC_CONSTANT_MACROS", "1");
+    imgui_bgfx_mod.addCMacro("BX_CONFIG_DEBUG", if (ctx.optimize == .Debug) "1" else "0");
+
+    // Platform-specific bx compat headers
+    switch (ctx.target.result.os.tag) {
+        .freebsd => imgui_bgfx_mod.addIncludePath(zbgfx_dep.path("libs/bx/include/compat/freebsd")),
+        .linux => imgui_bgfx_mod.addIncludePath(zbgfx_dep.path("libs/bx/include/compat/linux")),
+        .ios => imgui_bgfx_mod.addIncludePath(zbgfx_dep.path("libs/bx/include/compat/ios")),
+        .macos => imgui_bgfx_mod.addIncludePath(zbgfx_dep.path("libs/bx/include/compat/osx")),
+        .windows => switch (ctx.target.result.abi) {
+            .gnu => imgui_bgfx_mod.addIncludePath(zbgfx_dep.path("libs/bx/include/compat/mingw")),
+            .msvc => imgui_bgfx_mod.addIncludePath(zbgfx_dep.path("libs/bx/include/compat/msvc")),
+            else => {},
+        },
+        else => {},
+    }
+
+    // bx headers (bx/allocator.h, bx/math.h, bx/timer.h, tinystl)
+    imgui_bgfx_mod.addIncludePath(zbgfx_dep.path("libs/bx/include"));
+    imgui_bgfx_mod.addIncludePath(zbgfx_dep.path("libs/bx/3rdparty"));
+    // bimg headers
+    imgui_bgfx_mod.addIncludePath(zbgfx_dep.path("libs/bimg/include"));
+    // bgfx headers (bgfx/bgfx.h, bgfx/embedded_shader.h)
+    imgui_bgfx_mod.addIncludePath(zbgfx_dep.path("libs/bgfx/include"));
+    imgui_bgfx_mod.addIncludePath(zbgfx_dep.path("libs/bgfx/3rdparty"));
+    // bgfx examples common (bgfx_utils.h, args.h)
+    imgui_bgfx_mod.addIncludePath(zbgfx_dep.path("libs/bgfx/examples/common"));
+    // imgui headers as <imgui/imgui.h> (zgui stores at libs/imgui/)
+    imgui_bgfx_mod.addIncludePath(zgui_dep.path("libs"));
+
+    // Link imgui and bgfx libraries
+    imgui_bgfx_mod.linkLibrary(zgui_dep.artifact("imgui"));
+    imgui_bgfx_mod.linkLibrary(zbgfx_dep.artifact("bgfx"));
+
+    // Create static library
+    const imgui_bgfx_lib = ctx.b.addLibrary(.{
+        .name = "imgui_bgfx",
+        .root_module = imgui_bgfx_mod,
+    });
+
+    // Link to GUI interface
+    gui_interface.linkLibrary(imgui_bgfx_lib);
 }
 
 /// Setup wgpu_native ImGui adapter

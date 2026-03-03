@@ -1,22 +1,28 @@
 //! ImGui bgfx Adapter
 //!
 //! GUI backend using Dear ImGui with bgfx rendering.
-//! Uses zgui for Zig bindings to ImGui and zbgfx's imgui_backend for rendering.
+//! Uses zgui for Zig bindings to ImGui and bgfx's built-in ImGui rendering backend.
+//! Input handling via zgui's GLFW backend.
 //!
 //! Build with: zig build -Dbackend=bgfx -Dgui_backend=imgui
 
 const std = @import("std");
 const types = @import("types.zig");
 const zgui = @import("zgui");
-const zbgfx = @import("zbgfx");
 const labelle = @import("labelle");
 
 const BgfxBackend = labelle.BgfxBackend;
 
+// C functions from bgfx's ImGui rendering backend (compiled from bgfx/examples/common/imgui/imgui.cpp)
+extern fn ImGui_ImplBgfx_Init() void;
+extern fn ImGui_ImplBgfx_Shutdown() void;
+extern fn ImGui_ImplBgfx_NewFrame(view_id: u16) void;
+extern fn ImGui_ImplBgfx_RenderDrawData() void;
+
 const Self = @This();
 
 // View ID for ImGui rendering (use a dedicated view to not conflict with main rendering)
-const IMGUI_VIEW_ID: zbgfx.bgfx.ViewId = 255;
+const IMGUI_VIEW_ID: u16 = 255;
 
 // Window counter for unique IDs
 window_counter: u32,
@@ -68,8 +74,8 @@ fn initBackend(self: *Self) void {
     // Initialize zgui's GLFW backend for input handling
     zgui.backend.init(@ptrCast(window));
 
-    // Initialize zbgfx's ImGui rendering backend
-    zbgfx.imgui_backend.init();
+    // Initialize bgfx's ImGui rendering backend
+    ImGui_ImplBgfx_Init();
 
     // Register render callback with the backend
     BgfxBackend.registerGuiRenderCallback(guiRenderCallback);
@@ -80,8 +86,8 @@ fn initBackend(self: *Self) void {
 
 /// Render callback invoked by BgfxBackend during endDrawing()
 fn guiRenderCallback() void {
-    // Render ImGui draw data using zbgfx's backend
-    zbgfx.imgui_backend.draw();
+    // Render ImGui draw data using bgfx's backend
+    ImGui_ImplBgfx_RenderDrawData();
 }
 
 pub fn fixPointers(self: *Self) void {
@@ -91,7 +97,7 @@ pub fn fixPointers(self: *Self) void {
 pub fn deinit(self: *Self) void {
     if (self.backend_initialized) {
         BgfxBackend.unregisterGuiRenderCallback();
-        zbgfx.imgui_backend.deinit();
+        ImGui_ImplBgfx_Shutdown();
         zgui.backend.deinit();
     }
 
@@ -109,7 +115,7 @@ pub fn beginFrame(self: *Self) void {
     if (!self.backend_initialized) return;
 
     // Start new ImGui frame
-    zbgfx.imgui_backend.newFrame(IMGUI_VIEW_ID);
+    ImGui_ImplBgfx_NewFrame(IMGUI_VIEW_ID);
     zgui.backend.newFrame();
     zgui.newFrame();
 }
