@@ -6,14 +6,14 @@ pub const EcsBackend = enum { zig_ecs, zflecs };
 
 const APP_NAME = "BouncingBall";
 const BUNDLE_ID = "com.labelle.bouncingball";
-const ANDROID_API_VERSION = "34";
+const DEFAULT_ANDROID_API = "34";
 
 pub fn build(b: *std.Build) !void {
     const optimize = b.standardOptimizeOption(.{});
     const ecs_backend = b.option(EcsBackend, "ecs_backend", "ECS backend") orelse .zig_ecs;
 
     // Android SDK configuration - can be overridden via build options
-    const android_api = b.option([]const u8, "android_api", "Android API level (default: 34)") orelse "34";
+    const android_api = b.option([]const u8, "android_api", "Android API level (default: 34)") orelse DEFAULT_ANDROID_API;
 
     // Android target: aarch64-linux-android
     const android_target = b.resolveTargetQuery(.{
@@ -203,10 +203,10 @@ fn generateManifest() []const u8 {
         \\
         \\    <uses-sdk
         \\        android:minSdkVersion="
-    ++ ANDROID_API_VERSION ++
+    ++ DEFAULT_ANDROID_API ++
         \\"
         \\        android:targetSdkVersion="
-    ++ ANDROID_API_VERSION ++
+    ++ DEFAULT_ANDROID_API ++
         \\" />
         \\
         \\    <uses-feature android:glEsVersion="0x00030000" android:required="true" />

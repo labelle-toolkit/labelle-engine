@@ -218,8 +218,10 @@ pub fn main() !void {
         frame_count += 1;
     }
 
-    // Emit scene_unload hook
-    game.hook_dispatcher.emit(.{ .scene_unload = .{ .name = initial_scene.name } });
+    // Emit scene_unload hook (guard against double-emit if scene was changed during the loop)
+    if (game.getCurrentSceneName() == null) {
+        game.hook_dispatcher.emit(.{ .scene_unload = .{ .name = initial_scene.name } });
+    }
 
     std.log.info("bgfx backend shutdown complete.", .{});
 }
