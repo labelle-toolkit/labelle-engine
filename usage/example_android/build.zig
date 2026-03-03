@@ -6,6 +6,7 @@ pub const EcsBackend = enum { zig_ecs, zflecs };
 
 const APP_NAME = "BouncingBall";
 const BUNDLE_ID = "com.labelle.bouncingball";
+const ANDROID_API_VERSION = "34";
 
 pub fn build(b: *std.Build) !void {
     const optimize = b.standardOptimizeOption(.{});
@@ -20,9 +21,6 @@ pub fn build(b: *std.Build) !void {
         .os_tag = .linux,
         .abi = .android,
     });
-
-    // Native target for tools
-    const native_target = b.standardTargetOptions(.{});
 
     // =========================================================================
     // Configure NDK paths first (needed for sokol configuration)
@@ -79,8 +77,8 @@ pub fn build(b: *std.Build) !void {
     });
     const engine_mod = engine_dep.module("labelle-engine");
 
-    // Get sokol dependency for Android support
-    const sokol_dep = engine_dep.builder.dependency("sokol", .{
+    // Get sokol dependency for Android support (declared in build.zig.zon)
+    const sokol_dep = b.dependency("sokol", .{
         .target = android_target,
         .optimize = optimize,
         .gles3 = true, // Force GLES3 for Android
@@ -186,31 +184,11 @@ pub fn build(b: *std.Build) !void {
     const android_step = b.step("android", "Build for Android");
     android_step.dependOn(&install_lib.step);
 
-    // Also support native build for testing
-    const native_exe = b.addExecutable(.{
-        .name = "example_android_native",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("main.zig"),
-            .target = native_target,
-            .optimize = optimize,
-            .imports = &.{
-                .{ .name = "labelle-engine", .module = b.dependency("labelle-engine", .{
-                    .target = native_target,
-                    .optimize = optimize,
-                    .backend = .sokol,
-                    .ecs_backend = ecs_backend,
-                }).module("labelle-engine") },
-            },
-        }),
-    });
-
-    b.installArtifact(native_exe);
-
-    const run_cmd = b.addRunArtifact(native_exe);
-    run_cmd.step.dependOn(b.getInstallStep());
-
-    const run_step = b.step("run", "Run native version for testing");
-    run_step.dependOn(&run_cmd.step);
+    // Note: This example uses sokol's callback architecture (sokol_main)
+    // and cannot run as a native desktop executable. Use `zig build android`
+    // to build the Android shared library, or `zig build apk` for full APK.
+    const run_step = b.step("run", "Android-only example (use 'zig build android' instead)");
+    run_step.dependOn(&install_lib.step);
 }
 
 fn generateManifest() []const u8 {
