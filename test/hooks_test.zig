@@ -465,6 +465,104 @@ pub const MERGE_ENGINE_HOOKS = struct {
 };
 
 // ============================================
+// Test scene_unload double-emit guard
+// ============================================
+
+// State for tracking scene_unload emissions
+var scene_unload_count: u32 = 0;
+var scene_unload_last_name: ?[]const u8 = null;
+
+const SceneUnloadTracker = struct {
+    pub fn scene_unload(_: @This(), info: SceneInfo) void {
+        scene_unload_count += 1;
+        scene_unload_last_name = info.name;
+    }
+};
+
+pub const SCENE_UNLOAD_GUARD = struct {
+    // Reproduces the template pattern:
+    //   if (game.getCurrentSceneName() == null) {
+    //       game.hook_dispatcher.emit(.{ .scene_unload = .{ .name = initial_scene.name } });
+    //   }
+
+    test "emits scene_unload at shutdown when no scene transition occurred" {
+        const Dispatcher = engine.EngineHookDispatcher(SceneUnloadTracker);
+        const d = Dispatcher{ .receiver = .{} };
+
+        scene_unload_count = 0;
+        scene_unload_last_name = null;
+
+        // Simulate: initial scene loaded manually, game loop runs, no setScene called.
+        // At shutdown, getCurrentSceneName() returns null → should emit.
+        const current_scene_name: ?[]const u8 = null;
+
+        if (current_scene_name == null) {
+            d.emit(.{ .scene_unload = .{ .name = "main" } });
+        }
+
+        try expect.equal(scene_unload_count, 1);
+        try expect.toBeTrue(std.mem.eql(u8, scene_unload_last_name.?, "main"));
+    }
+
+    test "does NOT emit scene_unload at shutdown after scene transition" {
+        const Dispatcher = engine.EngineHookDispatcher(SceneUnloadTracker);
+        const d = Dispatcher{ .receiver = .{} };
+
+        scene_unload_count = 0;
+        scene_unload_last_name = null;
+
+        // Simulate: setScene("level2") was called during the game loop.
+        // game.setScene() calls unloadCurrentScene() internally and sets current_scene_name.
+        // At shutdown, getCurrentSceneName() returns "level2" → guard should prevent emit.
+        const current_scene_name: ?[]const u8 = "level2";
+
+        if (current_scene_name == null) {
+            d.emit(.{ .scene_unload = .{ .name = "main" } });
+        }
+
+        try expect.equal(scene_unload_count, 0);
+        try expect.toBeNull(scene_unload_last_name);
+    }
+
+    test "without guard, scene_unload fires incorrectly after scene transition" {
+        // This test documents the bug that the guard prevents:
+        // Without the null check, scene_unload would fire for the initial scene
+        // even though a different scene is active.
+        const Dispatcher = engine.EngineHookDispatcher(SceneUnloadTracker);
+        const d = Dispatcher{ .receiver = .{} };
+
+        scene_unload_count = 0;
+
+        // Simulate full lifecycle with scene transition:
+        // 1. game.setScene("level2") emits scene_unload for current scene (handled by Game)
+        d.emit(.{ .scene_unload = .{ .name = "level2" } });
+
+        // 2. At shutdown WITHOUT guard, template would unconditionally emit for initial scene
+        d.emit(.{ .scene_unload = .{ .name = "main" } });
+
+        // Bug: scene_unload fired twice — once for level2 (correct) and once for main (wrong)
+        try expect.equal(scene_unload_count, 2);
+
+        // 3. With the guard, only the level2 unload fires at shutdown.
+        // Reset and simulate the correct behavior:
+        scene_unload_count = 0;
+        const current_scene_name: ?[]const u8 = "level2";
+
+        // Game.deinit() unloads current scene
+        d.emit(.{ .scene_unload = .{ .name = current_scene_name.? } });
+
+        // Guarded emit — should NOT fire since current_scene_name != null
+        if (current_scene_name == null) {
+            d.emit(.{ .scene_unload = .{ .name = "main" } });
+        }
+
+        // Correct: only one scene_unload (for level2)
+        try expect.equal(scene_unload_count, 1);
+        try expect.toBeTrue(std.mem.eql(u8, scene_unload_last_name.?, "level2"));
+    }
+};
+
+// ============================================
 // Test Module Exports
 // ============================================
 
