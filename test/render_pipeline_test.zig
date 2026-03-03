@@ -30,7 +30,7 @@ const position_spec = describe("Position component", .{
     it("converts to gfx position", struct {
         pub fn t(_: void) !void {
             const pos = Position{ .x = 100, .y = 200 };
-            const gfx_pos = pos.toGfx();
+            const gfx_pos = engine.positionToGfx(pos);
             try std.testing.expectEqual(@as(f32, 100), gfx_pos.x);
             try std.testing.expectEqual(@as(f32, 200), gfx_pos.y);
         }

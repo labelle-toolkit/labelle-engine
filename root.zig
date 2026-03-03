@@ -67,6 +67,7 @@ pub const entityFromU64 = core.entityFromU64;
 
 // Render types
 pub const Position = render.Position;
+pub const positionToGfx = render.positionToGfx;
 pub const Sprite = render.Sprite;
 pub const Shape = render.Shape;
 pub const Text = render.Text;

@@ -47,26 +47,13 @@ pub const ComponentPayload = @import("../../hooks/types.zig").ComponentPayload;
 // Position Component
 // ============================================
 
-/// Position component - stores LOCAL coordinates (offset from parent if parented)
-///
-/// When entity has a Parent component, Position is relative to parent.
-/// World position = parent world position + rotated(local position)
-///
-/// Example in .zon:
-/// ```
-/// .Position = .{ .x = 100, .y = 200 },
-/// .Position = .{ .x = 100, .y = 200, .rotation = 0.785 },  // 45 degrees
-/// ```
-pub const Position = struct {
-    x: f32 = 0,
-    y: f32 = 0,
-    /// Rotation in radians (used by physics and rendering)
-    rotation: f32 = 0,
+/// Position component — defined in labelle-core, re-exported here for render layer access.
+pub const Position = @import("labelle-core").Position;
 
-    pub fn toGfx(self: Position) GfxPosition {
-        return .{ .x = self.x, .y = self.y };
-    }
-};
+/// Convert a Position to the graphics-layer position type.
+pub fn positionToGfx(pos: Position) GfxPosition {
+    return .{ .x = pos.x, .y = pos.y };
+}
 
 // ============================================
 // Parent Component (Position Inheritance)

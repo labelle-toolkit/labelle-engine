@@ -23,7 +23,7 @@
         },
         // labelle-core plugin SDK (RFC #289)
         .@"labelle-core" = .{
-            .url = "https://github.com/labelle-toolkit/labelle-core/archive/refs/tags/v0.1.0.tar.gz",
+            .url = "git+https://github.com/labelle-toolkit/labelle-core#df40049",
             .hash = "labelle_core-0.1.0-CcnR4NVoAADWy52xiNOCyyevZ-2b1gsl52TKQk4lWRiT",
         },
         .zts = .{
