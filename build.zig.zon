@@ -23,8 +23,8 @@
         },
         // labelle-core plugin SDK (RFC #289)
         .@"labelle-core" = .{
-            .url = "git+https://github.com/labelle-toolkit/labelle-core#df40049",
-            .hash = "labelle_core-0.1.0-CcnR4NVoAADWy52xiNOCyyevZ-2b1gsl52TKQk4lWRiT",
+            .url = "https://github.com/labelle-toolkit/labelle-core/archive/refs/tags/v0.2.0.tar.gz",
+            .hash = "labelle_core-0.2.0-CcnR4HNtAACCCNxF1p5Jg1Ia1Q2aGmEKkB1k2ztrIv8S",
         },
         .zts = .{
             .url = "git+https://github.com/zigster64/zts#ca98e23fcf1a4fa331c80f5cd2e72f6838daf7ee",
