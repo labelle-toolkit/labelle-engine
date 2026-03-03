@@ -49,6 +49,10 @@ pub fn build(b: *std.Build) void {
     });
     const engine_mod = engine_dep.module("labelle-engine");
 
+    // Get sokol module (re-exported by engine)
+    const sokol_mod = engine_dep.builder.modules.get("sokol") orelse
+        @panic("sokol module not found - ensure backend=sokol is set");
+
     const exe = b.addExecutable(.{
         .name = "example_gui_sokol",
         .root_module = b.createModule(.{
@@ -57,6 +61,7 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
             .imports = &.{
                 .{ .name = "labelle-engine", .module = engine_mod },
+                .{ .name = "sokol", .module = sokol_mod },
             },
         }),
     });
