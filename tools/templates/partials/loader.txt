@@ -1,5 +1,5 @@
 .loader
-pub const Loader = engine.SceneLoader(Prefabs, Components, Scripts);
+pub const Loader = engine.SceneLoader(Prefabs, Components, Scripts, Gizmos);
 pub const initial_scene = @import("scenes/{s}.zon");
 .loader_with_gizmos
 pub const Loader = engine.SceneLoader(Prefabs, Components, Scripts, Gizmos);

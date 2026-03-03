@@ -27,8 +27,8 @@ const getFieldOrDefault = loader_types.getFieldOrDefault;
 const getPositionFromComponents = loader_types.getPositionFromComponents;
 
 /// Recursive core operations for entity creation and component resolution.
-/// Parameterized by Prefabs and Components registries (Scripts not needed here).
-pub fn EntityComponentOps(comptime Prefabs: type, comptime Components: type) type {
+/// Parameterized by Prefabs, Components, and GizmoReg registries (Scripts not needed here).
+pub fn EntityComponentOps(comptime Prefabs: type, comptime Components: type, comptime GizmoReg: type) type {
     const Position = Components.getType("Position");
 
     return struct {
@@ -164,6 +164,13 @@ pub fn EntityComponentOps(comptime Prefabs: type, comptime Components: type) typ
                     try addSceneOnlyComponents(game, scene, entity, prefab_components, entity_def.components, pos_x, pos_y, parent_ctx, ready_queue, null);
                 } else {
                     try addComponentsExcluding(game, scene, entity, entity_def.components, pos_x, pos_y, .{"Position"}, parent_ctx, ready_queue, null);
+                }
+            }
+
+            // Create gizmo entities from GizmoRegistry (debug builds only)
+            if (comptime GizmoReg.has(prefab_name)) {
+                if (comptime GizmoReg.getEntityGizmos(prefab_name)) |gizmos| {
+                    try createGizmoEntities(game, scene, entity, gizmos, pos_x, pos_y, ready_queue);
                 }
             }
 

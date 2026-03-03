@@ -110,7 +110,7 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
     const Position = Components.getType("Position");
 
     // Entity creation and component resolution core (extracted to loader/entity_components.zig)
-    const Ops = entity_components_mod.EntityComponentOps(Prefabs, Components);
+    const Ops = entity_components_mod.EntityComponentOps(Prefabs, Components, GizmoReg);
 
     return struct {
         /// Load a scene from comptime .zon data
@@ -466,6 +466,16 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
 
             if (comptime GizmoReg.getEntityGizmos(prefab_name)) |gizmos| {
                 try Ops.createGizmoEntities(game, scene, entity, gizmos, pos.x, pos.y, &ready_queue);
+            }
+
+            // Fire onReady callbacks for gizmo entities
+            if (ecs.getGamePtr()) |game_ptr| {
+                for (ready_queue.items) |entry| {
+                    entry.callback(.{
+                        .entity_id = ecs.entityToU64(entry.entity),
+                        .game_ptr = game_ptr,
+                    });
+                }
             }
         }
 

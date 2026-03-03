@@ -48,7 +48,7 @@ pub fn GizmoRegistry(comptime gizmo_map: anytype) type {
 
         /// Get the .entity gizmos for a prefab (top-level entity gizmos).
         /// Returns the gizmo struct if present, or null.
-        pub fn getEntityGizmos(comptime name: []const u8) ?@TypeOf(getEntityGizmosType(name)) {
+        pub fn getEntityGizmos(comptime name: []const u8) ?EntityGizmosType(name) {
             const data = get(name);
             if (@hasField(@TypeOf(data), "entity")) {
                 return data.entity;
@@ -58,7 +58,7 @@ pub fn GizmoRegistry(comptime gizmo_map: anytype) type {
 
         /// Get the .children gizmos for a prefab (nested child entity gizmos).
         /// Returns the children struct if present, or null.
-        pub fn getChildrenGizmos(comptime name: []const u8) ?@TypeOf(getChildrenGizmosType(name)) {
+        pub fn getChildrenGizmos(comptime name: []const u8) ?ChildrenGizmosType(name) {
             const data = get(name);
             if (@hasField(@TypeOf(data), "children")) {
                 return data.children;
@@ -66,13 +66,21 @@ pub fn GizmoRegistry(comptime gizmo_map: anytype) type {
             return null;
         }
 
-        // Type helpers for return type resolution
-        fn getEntityGizmosType(comptime name: []const u8) @TypeOf(@field(gizmo_map, name).entity) {
-            return get(name).entity;
+        // Type helpers for return type resolution — check @hasField before accessing
+        fn EntityGizmosType(comptime name: []const u8) type {
+            const T = @TypeOf(@field(gizmo_map, name));
+            if (@hasField(T, "entity")) {
+                return @TypeOf(@field(gizmo_map, name).entity);
+            }
+            return void;
         }
 
-        fn getChildrenGizmosType(comptime name: []const u8) @TypeOf(@field(gizmo_map, name).children) {
-            return get(name).children;
+        fn ChildrenGizmosType(comptime name: []const u8) type {
+            const T = @TypeOf(@field(gizmo_map, name));
+            if (@hasField(T, "children")) {
+                return @TypeOf(@field(gizmo_map, name).children);
+            }
+            return void;
         }
     };
 }
