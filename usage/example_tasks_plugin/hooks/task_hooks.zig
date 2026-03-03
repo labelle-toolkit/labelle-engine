@@ -23,7 +23,7 @@ const tasks = @import("labelle_tasks");
 const items = @import("../components/items.zig");
 
 // Type alias for our hook payload
-const HookPayload = tasks.hooks.HookPayload(u32, items.ItemType);
+const HookPayload = tasks.TaskHookPayload(u32, items.ItemType);
 
 /// Called when a worker starts the pickup step.
 /// Game should start worker movement animation toward the EIS.

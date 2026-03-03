@@ -33,7 +33,7 @@ const task_hooks = @import("hooks/task_hooks.zig");
 // ============================================================================
 
 // Hook dispatcher for the task engine (uses task_hooks directly since we have one hook file)
-const TaskDispatcher = tasks.hooks.HookDispatcher(u32, ItemType, task_hooks);
+const TaskDispatcher = tasks.HookDispatcher(u32, ItemType, task_hooks);
 
 // The TaskEngine type with auto-wired hooks
 pub const TaskEngine = tasks.Engine(u32, ItemType, TaskDispatcher);
@@ -86,7 +86,7 @@ pub fn main() !void {
 
     // Create the task engine (uses auto-generated type with wired hooks)
     // task_hooks is a comptime struct type with static methods, so we instantiate it as {}
-    var task_engine = TaskEngine.init(allocator, TaskDispatcher.init(task_hooks{}));
+    var task_engine = TaskEngine.init(allocator, TaskDispatcher.init(task_hooks{}), null);
     defer task_engine.deinit();
 
     // Define storage entity IDs (in a real game these would be from the ECS)
@@ -97,11 +97,11 @@ pub fn main() !void {
     const BAKERY_ID: u32 = 200;
     const BAKER_ID: u32 = 300;
 
-    // Create storages (new simplified API - each storage holds one item type)
-    try task_engine.addStorage(PANTRY_ID, .Flour); // Pantry has flour
-    try task_engine.addStorage(BAKERY_IIS_ID, null); // Empty internal input
-    try task_engine.addStorage(BAKERY_IOS_ID, null); // Empty internal output
-    try task_engine.addStorage(BREAD_SHELF_ID, null); // Empty bread shelf
+    // Create storages (each storage has a role, optional initial item, and item filter)
+    try task_engine.addStorage(PANTRY_ID, .{ .role = .eis, .initial_item = .Flour, .accepts = .Flour });
+    try task_engine.addStorage(BAKERY_IIS_ID, .{ .role = .iis });
+    try task_engine.addStorage(BAKERY_IOS_ID, .{ .role = .ios });
+    try task_engine.addStorage(BREAD_SHELF_ID, .{ .role = .eos });
 
     // Create workstation
     try task_engine.addWorkstation(BAKERY_ID, .{
