@@ -20,6 +20,7 @@ A declarative 2D game engine for Zig with comptime scene definitions and pluggab
 - **GUI Runtime State** - Dynamic visibility and value updates without redefining views
 - **FormBinder** - Auto-bind GUI form fields to data structs
 - **Project Generator** - Auto-generate build files from `project.labelle` configuration
+- **Debug Gizmos** - Per-prefab debug visualizations in separate `gizmos/*.zon` files, stripped in release builds
 - **Dirty Tracking** - Efficient render pipeline that only syncs changed state
 
 ## Requirements
@@ -84,7 +85,26 @@ pub fn onCreate(entity: u64, game_ptr: *anyopaque) void {
 }
 ```
 
-### 3. Define a Script
+### 3. Add Debug Gizmos (Optional)
+
+```zig
+// gizmos/player.zon — debug-only, stripped in release builds
+.{
+    .entity = .{
+        .Text = .{ .text = "Player", .size = 12, .y = -20 },
+        .Shape = .{ .shape = .{ .circle = .{ .radius = 5 } }, .color = .{ .r = 255 } },
+    },
+}
+```
+
+```zig
+// In main.zig, import gizmo files into the registry:
+const Gizmos = engine.GizmoRegistry(.{
+    .player = @import("gizmos/player.zon"),
+});
+```
+
+### 4. Define a Script
 
 ```zig
 // scripts/movement.zig
@@ -95,7 +115,7 @@ pub fn update(game: *engine.Game, scene: *engine.Scene, dt: f32) void {
 }
 ```
 
-### 4. Wire Up the Game
+### 5. Wire Up the Game
 
 ```zig
 // main.zig
@@ -266,6 +286,7 @@ labelle-engine
 ├── PrefabRegistry  - Comptime map of prefab definitions
 ├── ComponentRegistry - Comptime map of custom component types
 ├── ScriptRegistry  - Comptime map of scene scripts
+├── GizmoRegistry   - Comptime map of per-prefab debug visualizations
 └── Generator       - Project file generator from .labelle config
 ```
 
