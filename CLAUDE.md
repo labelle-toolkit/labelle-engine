@@ -4,6 +4,18 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Build Commands
 
+For consumer projects, prefer **labelle-cli** over raw `zig build`:
+
+```bash
+# Using labelle-cli (recommended for projects)
+labelle run                          # Build and run the project
+labelle run --backend sokol          # Run with specific backend
+labelle ios build --simulator        # iOS build
+labelle init my-game                 # Scaffold a new project
+```
+
+For engine development and tests:
+
 ```bash
 zig build test          # Run all tests (zspec BDD tests)
 zig build unit-test     # Run unit tests only
