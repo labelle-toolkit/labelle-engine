@@ -24,9 +24,6 @@ pub const GraphicsDeps = struct {
     zglfw: ?*std.Build.Module,
     zaudio: ?*std.Build.Module,
     zaudio_dep: ?*std.Build.Dependency,
-    // Dependency objects for C artifact linking (re-exported to consumers)
-    zbgfx_dep: ?*std.Build.Dependency,
-    zglfw_dep: ?*std.Build.Dependency,
 };
 
 /// Load desktop-only graphics dependencies from labelle-gfx
@@ -40,34 +37,23 @@ pub fn loadDesktopDeps(
     comptime {
         _ = @field(@TypeOf(backend), "wgpu_native");
     }
-    // zbgfx — only fetch when bgfx backend is selected
-    const zbgfx_dep: ?*std.Build.Dependency = if (backend == .bgfx)
-        labelle_dep.builder.dependency("zbgfx", .{
-            .target = target,
-            .optimize = optimize,
-        })
+    // zbgfx — exported by labelle-gfx via b.modules.put()
+    const zbgfx: ?*std.Build.Module = if (backend == .bgfx)
+        labelle_dep.builder.modules.get("zbgfx")
     else
         null;
-    const zbgfx: ?*std.Build.Module = if (zbgfx_dep) |dep| dep.module("zbgfx") else null;
 
-    // wgpu_native — lazy dependency (marked .lazy in labelle-gfx build.zig.zon)
+    // wgpu_native — exported by labelle-gfx via b.modules.put()
     const wgpu_native: ?*std.Build.Module = if (backend == .wgpu_native)
-        if (labelle_dep.builder.lazyDependency("wgpu_native_zig", .{
-            .target = target,
-            .optimize = optimize,
-        })) |dep| dep.module("wgpu") else null
+        labelle_dep.builder.modules.get("wgpu_native")
     else
         null;
 
-    // zglfw — only fetch when bgfx, wgpu_native, or sdl backends are selected
-    const zglfw_dep: ?*std.Build.Dependency = if (backend == .bgfx or backend == .wgpu_native or backend == .sdl)
-        labelle_dep.builder.dependency("zglfw", .{
-            .target = target,
-            .optimize = optimize,
-        })
+    // zglfw — exported by labelle-gfx via b.modules.put()
+    const zglfw: ?*std.Build.Module = if (backend == .bgfx or backend == .wgpu_native or backend == .sdl)
+        labelle_dep.builder.modules.get("zglfw")
     else
         null;
-    const zglfw: ?*std.Build.Module = if (zglfw_dep) |dep| dep.module("root") else null;
 
     // zaudio
     const zaudio_dep = b.dependency("zaudio", .{
@@ -82,8 +68,6 @@ pub fn loadDesktopDeps(
         .zglfw = zglfw,
         .zaudio = zaudio,
         .zaudio_dep = zaudio_dep,
-        .zbgfx_dep = zbgfx_dep,
-        .zglfw_dep = zglfw_dep,
     };
 }
 
@@ -95,8 +79,6 @@ pub fn emptyDeps() GraphicsDeps {
         .zglfw = null,
         .zaudio = null,
         .zaudio_dep = null,
-        .zbgfx_dep = null,
-        .zglfw_dep = null,
     };
 }
 

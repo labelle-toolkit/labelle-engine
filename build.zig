@@ -383,14 +383,8 @@ pub fn build(b: *std.Build) void {
         engine_mod.addImport("physics", physics);
     }
 
-    // Link C library artifacts to the engine module for transitive linking.
-    // Consumer executables importing labelle-engine get these linked automatically.
-    if (gfx_deps.zbgfx_dep) |dep| {
-        engine_mod.linkLibrary(dep.artifact("bgfx"));
-    }
-    if (gfx_deps.zglfw_dep) |dep| {
-        engine_mod.linkLibrary(dep.artifact("glfw"));
-    }
+    // Note: bgfx and glfw C artifacts are linked transitively via labelle-gfx's
+    // lib_mod.linkLibrary(). No manual linking needed here.
 
     // ==========================================================================
     // Tests
