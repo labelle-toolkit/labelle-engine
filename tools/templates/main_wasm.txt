@@ -308,7 +308,9 @@ export fn frame() void {{
 .cleanup_cb
 export fn cleanup() void {{
     if (state.initialized and state.game != null) {{
-        state.game.?.hook_dispatcher.emit(.{{ .scene_unload = .{{ .name = initial_scene.name }} }});
+        if (state.game.?.getCurrentSceneName() == null) {{
+            state.game.?.hook_dispatcher.emit(.{{ .scene_unload = .{{ .name = initial_scene.name }} }});
+        }}
     }}
 
     if (state.scene) |scene| {{

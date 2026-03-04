@@ -62,12 +62,15 @@ pub fn main() !void {
         std.posix.getenv("CI_TEST") != null;
 
     // Use c_allocator for WASM compatibility, GPA for native
+    // Note: GPA must outlive the allocator, so declare it in the outer scope
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer if (builtin.os.tag != .emscripten) {
+        _ = gpa.deinit();
+    };
     const allocator = if (builtin.os.tag == .emscripten)
         std.heap.c_allocator
-    else blk: {
-        var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-        break :blk gpa.allocator();
-    };
+    else
+        gpa.allocator();
 
     var game = try Game.init(allocator, .{
         .window = .{
@@ -80,7 +83,9 @@ pub fn main() !void {
         .clear_color = .{ .r = 30, .g = 35, .b = 45 },
     });
     game.fixPointers();
-    defer game.deinit();
+    // On WASM, main() returns immediately while the browser event loop runs.
+    // Only deinit on native where main() blocks until the game loop ends.
+    defer if (builtin.os.tag != .emscripten) game.deinit();
 
     // Apply camera (center of screen)
     game.setCameraPosition(400, 300);
@@ -91,16 +96,16 @@ pub fn main() !void {
     game.hook_dispatcher.emit(.{ .scene_before_load = .{ .name = initial_scene.name, .allocator = allocator } });
 
     var scene = try Loader.load(initial_scene, ctx);
-    defer scene.deinit();
+    defer if (builtin.os.tag != .emscripten) scene.deinit();
 
     // Emit scene_load hook
     game.hook_dispatcher.emit(.{ .scene_load = .{ .name = initial_scene.name } });
 
-    defer {
+    defer if (builtin.os.tag != .emscripten) {
         if (game.getCurrentSceneName() == null) {
             game.hook_dispatcher.emit(.{ .scene_unload = .{ .name = initial_scene.name } });
         }
-    }
+    };
 
     if (ci_test) return;
 
