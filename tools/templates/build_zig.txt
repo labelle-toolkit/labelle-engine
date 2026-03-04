@@ -71,6 +71,12 @@ pub fn build(b: *std.Build) !void {{
     {s}_mod.addImport("ecs", engine_dep.module("ecs"));
     _ = "{s}"; // unused: module_name
 
+.plugin_dep_path_standalone
+    // Standalone path-based plugin: manages its own dependencies (does not depend on labelle-engine).
+    // Uses b.dependency() so the plugin's own build.zig handles dependency wiring.
+    const {s}_dep = b.dependency("{s}", .{{ .target = target, .optimize = optimize }});
+    const {s}_mod = {s}_dep.module("{s}");
+
 .plugin_remote
     // URL-based plugin: pass backend options to ensure module deduplication
     // when the plugin also depends on labelle-engine

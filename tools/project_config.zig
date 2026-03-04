@@ -182,6 +182,11 @@ pub const Plugin = struct {
     /// Must be host/path format without scheme (no "https://")
     /// Ignored when path is set.
     url: ?[]const u8 = null,
+    /// If true, the plugin manages its own dependencies and does NOT depend on labelle-engine.
+    /// Path-based standalone plugins use b.dependency() instead of b.createModule(),
+    /// letting the plugin's own build.zig handle dependency wiring.
+    /// Example: a pathfinder library that depends on labelle-core + zig-utils, not labelle-engine.
+    standalone: bool = false,
     /// Module name exported by the package (e.g., "pathfinding" for labelle-pathfinding)
     /// If not provided, defaults to the plugin name with hyphens replaced by underscores
     module: ?[]const u8 = null,
