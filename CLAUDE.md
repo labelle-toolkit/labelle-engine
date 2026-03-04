@@ -97,6 +97,13 @@ Scene-level `.Position` overrides prefab Position.
         .Text = .{ .text = "Player", .size = 12, .y = -20 },
         .Shape = .{ .shape = .{ .circle = .{ .radius = 5 } }, .color = .{ .r = 255 } },
     },
+    // Optional: gizmos for child entities (keyed by []const Entity field name)
+    .children = .{
+        .storages = .{
+            .{ .Text = .{ .text = "Slot 1", .size = 10, .y = -15 } },
+            .{ .Text = .{ .text = "Slot 2", .size = 10, .y = -15 } },
+        },
+    },
 }
 ```
 
