@@ -27,8 +27,8 @@ const getFieldOrDefault = loader_types.getFieldOrDefault;
 const getPositionFromComponents = loader_types.getPositionFromComponents;
 
 /// Recursive core operations for entity creation and component resolution.
-/// Parameterized by Prefabs and Components registries (Scripts not needed here).
-pub fn EntityComponentOps(comptime Prefabs: type, comptime Components: type) type {
+/// Parameterized by Prefabs, Components, and GizmoReg registries (Scripts not needed here).
+pub fn EntityComponentOps(comptime Prefabs: type, comptime Components: type, comptime GizmoReg: type) type {
     const Position = Components.getType("Position");
 
     return struct {
@@ -167,12 +167,18 @@ pub fn EntityComponentOps(comptime Prefabs: type, comptime Components: type) typ
                 }
             }
 
-            // Create gizmo entities (debug builds only)
-            // Scene-level gizmos override prefab gizmos
-            if (@hasField(@TypeOf(entity_def), "gizmos")) {
-                try createGizmoEntities(game, scene, entity, entity_def.gizmos, pos_x, pos_y, ready_queue);
-            } else if (comptime Prefabs.hasGizmos(prefab_name)) {
-                try createGizmoEntities(game, scene, entity, Prefabs.getGizmos(prefab_name), pos_x, pos_y, ready_queue);
+            // Create gizmo entities from GizmoRegistry (debug builds only)
+            if (comptime GizmoReg.has(prefab_name)) {
+                if (comptime GizmoReg.getEntityGizmos(prefab_name)) |gizmos| {
+                    try createGizmoEntities(game, scene, entity, gizmos, pos_x, pos_y, ready_queue);
+                }
+            }
+
+            // Create children gizmo entities (for nested child entities)
+            if (comptime GizmoReg.has(prefab_name)) {
+                if (comptime GizmoReg.getChildrenGizmos(prefab_name)) |children_gizmos| {
+                    try createChildrenGizmoEntities(game, scene, entity, prefab_name, children_gizmos, pos_x, pos_y, ready_queue);
+                }
             }
 
             return .{
@@ -209,11 +215,6 @@ pub fn EntityComponentOps(comptime Prefabs: type, comptime Components: type) typ
             // Position is excluded since we already added it above
             // Note: Child entities don't support entity references (no ref_ctx)
             try addComponentsExcluding(game, scene, entity, entity_def.components, child_x, child_y, .{"Position"}, parent_ctx, ready_queue, null);
-
-            // Create gizmo entities if present (debug builds only)
-            if (@hasField(@TypeOf(entity_def), "gizmos")) {
-                try createGizmoEntities(game, scene, entity, entity_def.gizmos, child_x, child_y, ready_queue);
-            }
 
             return .{
                 .entity = entity,
@@ -550,6 +551,75 @@ pub fn EntityComponentOps(comptime Prefabs: type, comptime Components: type) typ
                     });
                 }
             }
+        }
+
+        /// Create gizmo entities for child entities of a prefab.
+        /// children_gizmos maps component field names to per-child gizmo definitions.
+        /// E.g., .{ .storages = .{ .{.Text = ...}, .{.Text = ...} } } creates gizmos
+        /// for each child entity in the "storages" field of the parent's component.
+        pub fn createChildrenGizmoEntities(
+            game: *Game,
+            scene: ?*Scene,
+            parent_entity: Entity,
+            comptime prefab_name: []const u8,
+            comptime children_gizmos: anytype,
+            parent_x: f32,
+            parent_y: f32,
+            ready_queue: *std.ArrayList(ReadyCallbackEntry),
+        ) !void {
+            if (builtin.mode != .Debug) return;
+
+            const children_fields = @typeInfo(@TypeOf(children_gizmos)).@"struct".fields;
+
+            inline for (children_fields) |child_field| {
+                const field_name = child_field.name;
+                const gizmo_entries = @field(children_gizmos, field_name);
+                const entry_count = @typeInfo(@TypeOf(gizmo_entries)).@"struct".fields.len;
+
+                // Resolve which component type has a []const Entity field with this name
+                const CompType = comptime ComponentTypeForChildField(prefab_name, field_name) orelse
+                    @compileError("Children gizmo field '" ++ field_name ++ "' does not match any []const Entity field in prefab '" ++ prefab_name ++ "'");
+
+                // Read child entities from the component at runtime
+                if (game.getRegistry().getComponent(parent_entity, CompType)) |comp| {
+                    const child_entities: []const Entity = @field(comp, field_name);
+
+                    inline for (0..entry_count) |i| {
+                        if (i < child_entities.len) {
+                            const child_entity = child_entities[i];
+                            const gizmo_def = gizmo_entries[i];
+
+                            // Get child entity position for gizmo placement
+                            const child_pos = if (game.getRegistry().getComponent(child_entity, Position)) |pos|
+                                Pos{ .x = pos.x, .y = pos.y }
+                            else
+                                Pos{ .x = parent_x, .y = parent_y };
+
+                            try createGizmoEntities(game, scene, child_entity, gizmo_def, child_pos.x, child_pos.y, ready_queue);
+                        }
+                    }
+                }
+            }
+        }
+
+        /// Find the component type that has a []const Entity field with the given name.
+        /// Used to resolve children gizmo field references back to their component types.
+        fn ComponentTypeForChildField(comptime prefab_name: []const u8, comptime field_name: []const u8) ?type {
+            if (!Prefabs.hasComponents(prefab_name)) return null;
+            const prefab_components = Prefabs.getComponents(prefab_name);
+            const comp_type_fields = @typeInfo(@TypeOf(prefab_components)).@"struct".fields;
+            for (comp_type_fields) |comp_f| {
+                if (std.mem.eql(u8, comp_f.name, "Position")) continue;
+                const CompType = Components.getType(comp_f.name);
+                if (@typeInfo(CompType) == .@"struct") {
+                    for (@typeInfo(CompType).@"struct".fields) |f| {
+                        if (std.mem.eql(u8, f.name, field_name) and zon.isEntitySlice(f.type)) {
+                            return CompType;
+                        }
+                    }
+                }
+            }
+            return null;
         }
 
         // =====================================================================

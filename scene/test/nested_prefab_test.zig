@@ -89,7 +89,8 @@ pub const SCENE_LOADER_API = struct {
             pub const Position = SCENE_LOADER_API.Position;
         });
         const TestScripts = engine.scene.script.ScriptRegistry(struct {});
-        const TestLoader = loader.SceneLoader(TestPrefabs, TestComponents, TestScripts);
+        const TestGizmos = engine.scene.gizmo.GizmoRegistry(.{});
+        const TestLoader = loader.SceneLoader(TestPrefabs, TestComponents, TestScripts, TestGizmos);
 
         try expect.toBeTrue(@hasDecl(TestLoader, "instantiatePrefab"));
     }
@@ -313,8 +314,9 @@ pub const PREFAB_IN_ENTITY_FIELDS = struct {
     });
 
     const TestScripts = script.ScriptRegistry(struct {});
+    const TestGizmos = engine.scene.gizmo.GizmoRegistry(.{});
 
-    const TestLoader = loader.SceneLoader(TestPrefabs, TestComponents, TestScripts);
+    const TestLoader = loader.SceneLoader(TestPrefabs, TestComponents, TestScripts, TestGizmos);
 
     // ----------------------------------------
     // Entity List with Prefab References

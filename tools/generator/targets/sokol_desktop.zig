@@ -19,6 +19,7 @@ pub fn generateMainZigSokol(
     components: []const []const u8,
     scripts: []const []const u8,
     hooks: []const []const u8,
+    gizmos: []const []const u8,
     enum_type_names: []const []const u8,
     component_type_names: []const []const u8,
     task_hooks: TaskHookScanResult,
@@ -182,6 +183,20 @@ pub fn generateMainZigSokol(
         try zts.print(main_sokol_tmpl, "task_engine_end", .{ plugin_zig_name, id_type, bind_enum_type, plugin_zig_name, id_type, bind_enum_type }, writer);
     } else {
         try zts.print(main_sokol_tmpl, "task_engine_empty", .{}, writer);
+    }
+
+    // Gizmo imports and registry
+    for (gizmos) |name| {
+        try writer.print("const {s}_gizmo = @import(\"gizmos/{s}.zon\");\n", .{ name, name });
+    }
+    if (gizmos.len == 0) {
+        try writer.print("pub const Gizmos = engine.GizmoRegistry(.{{}});\n", .{});
+    } else {
+        try writer.print("pub const Gizmos = engine.GizmoRegistry(.{{\n", .{});
+        for (gizmos) |name| {
+            try writer.print("    .{s} = {s}_gizmo,\n", .{ name, name });
+        }
+        try writer.print("}});\n", .{});
     }
 
     // Loader and initial scene

@@ -22,7 +22,8 @@ const TestComponents = component.ComponentRegistry(struct {
     pub const Position = engine.Position;
 });
 const TestScripts = script.ScriptRegistry(struct {});
-const TestLoader = loader.SceneLoader(TestPrefabs, TestComponents, TestScripts);
+const TestGizmos = engine.scene.gizmo.GizmoRegistry(.{});
+const TestLoader = loader.SceneLoader(TestPrefabs, TestComponents, TestScripts, TestGizmos);
 
 fn createTestGame() Game {
     const alloc = std.testing.allocator;

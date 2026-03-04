@@ -41,7 +41,8 @@ pub const Scripts = engine.ScriptRegistry(struct {
     pub const gravity_validator = gravity_validator_script;
 });
 
-pub const Loader = engine.SceneLoader(Prefabs, Components, Scripts);
+pub const Gizmos = engine.GizmoRegistry(.{});
+pub const Loader = engine.SceneLoader(Prefabs, Components, Scripts, Gizmos);
 
 pub const initial_scene = @import("scenes/main.zon");
 

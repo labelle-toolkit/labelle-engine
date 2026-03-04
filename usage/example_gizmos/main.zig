@@ -1,7 +1,7 @@
 // Example: Gizmos (Debug Visualizations)
 //
 // Demonstrates the labelle-engine gizmos system:
-// - Prefabs with .gizmos field for debug-only visualizations
+// - Gizmo definitions in separate gizmos/ directory (per-prefab .zon files)
 // - Runtime toggle with game.setGizmosEnabled()
 // - Standalone gizmos (drawArrow, drawRay, drawCircle, etc.)
 // - Gizmos are automatically stripped in release builds
@@ -20,6 +20,10 @@ const Game = engine.Game;
 // Import prefabs
 const player_prefab = @import("prefabs/player.zon");
 const enemy_prefab = @import("prefabs/enemy.zon");
+
+// Import gizmos (debug-only, per-prefab .zon files)
+const player_gizmo = @import("gizmos/player.zon");
+const enemy_gizmo = @import("gizmos/enemy.zon");
 
 // Import scripts
 const gizmo_toggle_script = @import("scripts/gizmo_toggle.zig");
@@ -41,7 +45,12 @@ pub const Scripts = engine.ScriptRegistry(struct {
     pub const gizmo_toggle = gizmo_toggle_script;
 });
 
-pub const Loader = engine.SceneLoader(Prefabs, Components, Scripts);
+pub const Gizmos = engine.GizmoRegistry(.{
+    .player = player_gizmo,
+    .enemy = enemy_gizmo,
+});
+
+pub const Loader = engine.SceneLoader(Prefabs, Components, Scripts, Gizmos);
 
 // Import scene
 const main_scene = @import("scenes/main.zon");

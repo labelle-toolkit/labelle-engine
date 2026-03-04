@@ -167,7 +167,7 @@ const TaskHooks = {s}.hooks.MergeTasksHooks({s}, {s}, .{{
 const TaskDispatcher = {s}.hooks.HookDispatcher({s}, {s}, TaskHooks);
 pub const TaskEngine = {s}.EngineWithHooks({s}, {s}, TaskDispatcher);
 .loader
-pub const Loader = engine.SceneLoader(Prefabs, Components, Scripts);
+pub const Loader = engine.SceneLoader(Prefabs, Components, Scripts, Gizmos);
 pub const initial_scene = @import("scenes/{s}.zon");
 
 .game_id

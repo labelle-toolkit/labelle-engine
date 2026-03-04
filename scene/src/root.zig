@@ -9,6 +9,7 @@
 
 pub const loader = @import("loader.zig");
 pub const prefab = @import("prefab.zig");
+pub const gizmo = @import("gizmo_registry.zig");
 pub const component = @import("component.zig");
 pub const script = @import("script.zig");
 pub const core = @import("core.zig");
@@ -20,6 +21,9 @@ pub const CameraSlot = loader.CameraSlot;
 
 // Prefab exports
 pub const PrefabRegistry = prefab.PrefabRegistry;
+
+// Gizmo exports
+pub const GizmoRegistry = gizmo.GizmoRegistry;
 
 // Component exports
 pub const ComponentRegistry = component.ComponentRegistry;

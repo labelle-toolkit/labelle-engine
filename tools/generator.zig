@@ -242,6 +242,14 @@ pub fn generateProject(allocator: std.mem.Allocator, project_path: []const u8, o
         allocator.free(hooks);
     }
 
+    const gizmos_path = try std.fs.path.join(allocator, &.{ project_path, "gizmos" });
+    defer allocator.free(gizmos_path);
+    const gizmos = try scanZonFolder(allocator, gizmos_path);
+    defer {
+        for (gizmos) |g| allocator.free(g);
+        allocator.free(gizmos);
+    }
+
     // Scan for task hooks in hook files
     var task_hooks = try scanForTaskHooks(allocator, hooks_path, hooks, config);
     defer task_hooks.deinit(allocator);
@@ -263,7 +271,7 @@ pub fn generateProject(allocator: std.mem.Allocator, project_path: []const u8, o
         std.debug.print("Generating for target '{s}':\n", .{target_name});
 
         // Generate main.zig for this target
-        const main_zig = try generateMainZigForTarget(allocator, target, config, prefabs, enums, components, scripts, hooks, enum_type_names, component_type_names, task_hooks);
+        const main_zig = try generateMainZigForTarget(allocator, target, config, prefabs, enums, components, scripts, hooks, gizmos, enum_type_names, component_type_names, task_hooks);
         defer allocator.free(main_zig);
 
         // Create subfolder for this target: .labelle/{target_name}/
@@ -328,7 +336,7 @@ pub fn generateProject(allocator: std.mem.Allocator, project_path: []const u8, o
 
         // Copy project directories into target directory for self-contained builds
         // This allows imports without violating Zig's module path restrictions
-        const dirs_to_copy = [_][]const u8{ "components", "scripts", "prefabs", "scenes", "resources", "hooks", "enums" };
+        const dirs_to_copy = [_][]const u8{ "components", "scripts", "prefabs", "scenes", "resources", "hooks", "enums", "gizmos" };
         for (dirs_to_copy) |dir_name| {
             const src_dir_path = try std.fs.path.join(allocator, &.{ project_path, dir_name });
             defer allocator.free(src_dir_path);
@@ -419,6 +427,7 @@ pub fn generateMainZig(
     components: []const []const u8,
     scripts: []const []const u8,
     hooks: []const []const u8,
+    gizmos: []const []const u8,
     enum_type_names: []const []const u8,
     component_type_names: []const []const u8,
     task_hooks: TaskHookScanResult,
@@ -426,7 +435,7 @@ pub fn generateMainZig(
     // For now, use the first target
     // TODO: This function will be replaced by per-target generation
     const first_target = config.getTargets()[0];
-    return generateMainZigForTarget(allocator, first_target, config, prefabs, enums, components, scripts, hooks, enum_type_names, component_type_names, task_hooks);
+    return generateMainZigForTarget(allocator, first_target, config, prefabs, enums, components, scripts, hooks, gizmos, enum_type_names, component_type_names, task_hooks);
 }
 
 /// Generate main.zig for a specific target (new multi-target approach)
@@ -439,20 +448,21 @@ fn generateMainZigForTarget(
     components: []const []const u8,
     scripts: []const []const u8,
     hooks: []const []const u8,
+    gizmos: []const []const u8,
     enum_type_names: []const []const u8,
     component_type_names: []const []const u8,
     task_hooks: TaskHookScanResult,
 ) ![]const u8 {
     return switch (target) {
-        .raylib_desktop => raylib_desktop.generateMainZigRaylib(allocator, config, prefabs, enums, components, scripts, hooks, enum_type_names, component_type_names, task_hooks),
-        .raylib_wasm => raylib_wasm.generateMainZigRaylibWasm(allocator, config, prefabs, enums, components, scripts, hooks, enum_type_names, component_type_names, task_hooks),
-        .sokol_desktop => sokol_desktop.generateMainZigSokol(allocator, config, prefabs, enums, components, scripts, hooks, enum_type_names, component_type_names, task_hooks),
-        .sokol_wasm => mobile.generateMainZigWasm(allocator, config, prefabs, enums, components, scripts, hooks, enum_type_names, component_type_names, task_hooks),
-        .sokol_ios => sokol_ios.generateMainZigSokolIos(allocator, config, prefabs, enums, components, scripts, hooks, enum_type_names, component_type_names, task_hooks),
-        .sokol_android => mobile.generateMainZigSokolAndroid(allocator, config, prefabs, enums, components, scripts, hooks, enum_type_names, component_type_names, task_hooks),
-        .sdl_desktop => sdl.generateMainZigSdl(allocator, config, prefabs, enums, components, scripts, hooks, enum_type_names, component_type_names, task_hooks),
-        .bgfx_desktop => glfw.generateMainZigBgfx(allocator, config, prefabs, enums, components, scripts, hooks, enum_type_names, component_type_names, task_hooks),
-        .wgpu_native_desktop => glfw.generateMainZigWgpuNative(allocator, config, prefabs, enums, components, scripts, hooks, enum_type_names, component_type_names, task_hooks),
+        .raylib_desktop => raylib_desktop.generateMainZigRaylib(allocator, config, prefabs, enums, components, scripts, hooks, gizmos, enum_type_names, component_type_names, task_hooks),
+        .raylib_wasm => raylib_wasm.generateMainZigRaylibWasm(allocator, config, prefabs, enums, components, scripts, hooks, gizmos, enum_type_names, component_type_names, task_hooks),
+        .sokol_desktop => sokol_desktop.generateMainZigSokol(allocator, config, prefabs, enums, components, scripts, hooks, gizmos, enum_type_names, component_type_names, task_hooks),
+        .sokol_wasm => mobile.generateMainZigWasm(allocator, config, prefabs, enums, components, scripts, hooks, gizmos, enum_type_names, component_type_names, task_hooks),
+        .sokol_ios => sokol_ios.generateMainZigSokolIos(allocator, config, prefabs, enums, components, scripts, hooks, gizmos, enum_type_names, component_type_names, task_hooks),
+        .sokol_android => mobile.generateMainZigSokolAndroid(allocator, config, prefabs, enums, components, scripts, hooks, gizmos, enum_type_names, component_type_names, task_hooks),
+        .sdl_desktop => sdl.generateMainZigSdl(allocator, config, prefabs, enums, components, scripts, hooks, gizmos, enum_type_names, component_type_names, task_hooks),
+        .bgfx_desktop => glfw.generateMainZigBgfx(allocator, config, prefabs, enums, components, scripts, hooks, gizmos, enum_type_names, component_type_names, task_hooks),
+        .wgpu_native_desktop => glfw.generateMainZigWgpuNative(allocator, config, prefabs, enums, components, scripts, hooks, gizmos, enum_type_names, component_type_names, task_hooks),
     };
 }
 
@@ -518,12 +528,20 @@ pub fn generateMainOnly(allocator: std.mem.Allocator, project_path: []const u8) 
         allocator.free(hooks);
     }
 
+    const gizmos_path = try std.fs.path.join(allocator, &.{ project_path, "gizmos" });
+    defer allocator.free(gizmos_path);
+    const gizmos = try scanZonFolder(allocator, gizmos_path);
+    defer {
+        for (gizmos) |g| allocator.free(g);
+        allocator.free(gizmos);
+    }
+
     // Scan for task hooks in hook files
     var task_hooks = try scanForTaskHooks(allocator, hooks_path, hooks, config);
     defer task_hooks.deinit(allocator);
 
     // Generate main.zig
-    const main_zig = try generateMainZig(allocator, config, prefabs, enums, components, scripts, hooks, enum_type_names, component_type_names, task_hooks);
+    const main_zig = try generateMainZig(allocator, config, prefabs, enums, components, scripts, hooks, gizmos, enum_type_names, component_type_names, task_hooks);
     defer allocator.free(main_zig);
 
     // Write main.zig to project root (needs project-relative imports)

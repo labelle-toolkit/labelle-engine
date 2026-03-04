@@ -56,7 +56,8 @@ pub const Components = engine.ComponentRegistry(struct {
 });
 
 pub const Scripts = engine.ScriptRegistry(struct {});
-pub const Loader = engine.SceneLoader(Prefabs, Components, Scripts);
+pub const Gizmos = engine.GizmoRegistry(.{});
+pub const Loader = engine.SceneLoader(Prefabs, Components, Scripts, Gizmos);
 pub const initial_scene = @import("scenes/main.zon");
 
 pub fn main() !void {

@@ -20,12 +20,13 @@ pub fn generateMainZigSokolAndroid(
     components: []const []const u8,
     scripts: []const []const u8,
     hooks: []const []const u8,
+    gizmos: []const []const u8,
     enum_type_names: []const []const u8,
     component_type_names: []const []const u8,
     task_hooks: TaskHookScanResult,
 ) ![]const u8 {
     // Use the same logic as iOS but with Android template
-    return generateMainZigMobile(main_sokol_android_tmpl, allocator, config, prefabs, enums, components, scripts, hooks, enum_type_names, component_type_names, task_hooks);
+    return generateMainZigMobile(main_sokol_android_tmpl, allocator, config, prefabs, enums, components, scripts, hooks, gizmos, enum_type_names, component_type_names, task_hooks);
 }
 
 /// Generate main.zig content for WASM target
@@ -37,12 +38,13 @@ pub fn generateMainZigWasm(
     components: []const []const u8,
     scripts: []const []const u8,
     hooks: []const []const u8,
+    gizmos: []const []const u8,
     enum_type_names: []const []const u8,
     component_type_names: []const []const u8,
     task_hooks: TaskHookScanResult,
 ) ![]const u8 {
     // Use the same logic as iOS but with WASM template
-    return generateMainZigMobile(main_wasm_tmpl, allocator, config, prefabs, enums, components, scripts, hooks, enum_type_names, component_type_names, task_hooks);
+    return generateMainZigMobile(main_wasm_tmpl, allocator, config, prefabs, enums, components, scripts, hooks, gizmos, enum_type_names, component_type_names, task_hooks);
 }
 
 /// Generic generator for mobile/callback-based templates (iOS, Android, WASM)
@@ -55,6 +57,7 @@ fn generateMainZigMobile(
     components: []const []const u8,
     scripts: []const []const u8,
     hooks: []const []const u8,
+    gizmos: []const []const u8,
     enum_type_names: []const []const u8,
     component_type_names: []const []const u8,
     task_hooks: TaskHookScanResult,
@@ -217,6 +220,20 @@ fn generateMainZigMobile(
         try zts.print(template, "task_engine_end", .{ plugin_zig_name, game_id_str, bind_enum_type, plugin_zig_name, game_id_str, bind_enum_type }, writer);
     } else {
         try zts.print(template, "task_engine_empty", .{}, writer);
+    }
+
+    // Gizmo imports and registry
+    for (gizmos) |name| {
+        try writer.print("const {s}_gizmo = @import(\"gizmos/{s}.zon\");\n", .{ name, name });
+    }
+    if (gizmos.len == 0) {
+        try writer.print("pub const Gizmos = engine.GizmoRegistry(.{{}});\n", .{});
+    } else {
+        try writer.print("pub const Gizmos = engine.GizmoRegistry(.{{\n", .{});
+        for (gizmos) |name| {
+            try writer.print("    .{s} = {s}_gizmo,\n", .{ name, name });
+        }
+        try writer.print("}});\n", .{});
     }
 
     // Loader and scene

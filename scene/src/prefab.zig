@@ -4,7 +4,8 @@
 // - components.Position: Entity position (can be overridden in scene)
 // - components.Sprite: Visual configuration for the entity
 // - components.*: Other typed component data
-// - gizmos: Debug visualizations (only created in debug builds)
+//
+// Gizmos are defined separately in the gizmos/ directory (see GizmoRegistry).
 //
 // Example prefab file (prefabs/player.zon):
 // .{
@@ -13,10 +14,6 @@
 //         .Sprite = .{ .name = "player.png", .scale_x = 2.0, .scale_y = 2.0 },
 //         .Health = .{ .current = 100, .max = 100 },
 //         .Speed = .{ .value = 5.0 },
-//     },
-//     .gizmos = .{  // debug-only visualizations
-//         .Text = .{ .text = "Player", .size = 12, .y = -20 },
-//         .Shape = .{ .shape = .{ .circle = .{ .radius = 5 } }, .color = .{ .r = 255 } },
 //     },
 // }
 
@@ -53,17 +50,6 @@ pub fn PrefabRegistry(comptime prefab_map: anytype) type {
         /// Get prefab components data (for use with ComponentRegistry.addComponents)
         pub fn getComponents(comptime name: []const u8) @TypeOf(@field(get(name), "components")) {
             return get(name).components;
-        }
-
-        /// Check if prefab has gizmos (debug visualizations)
-        pub fn hasGizmos(comptime name: []const u8) bool {
-            const prefab_data = get(name);
-            return @hasField(@TypeOf(prefab_data), "gizmos");
-        }
-
-        /// Get prefab gizmos data
-        pub fn getGizmos(comptime name: []const u8) @TypeOf(@field(get(name), "gizmos")) {
-            return get(name).gizmos;
         }
     };
 }

@@ -108,7 +108,8 @@ const Prefabs = engine.PrefabRegistry(.{player_prefab});
 const Scripts = engine.ScriptRegistry(struct {
     pub const movement = movement_script;
 });
-const Loader = engine.SceneLoader(Prefabs, engine.ComponentRegistry(struct {}), Scripts);
+const Gizmos = engine.GizmoRegistry(.{});
+const Loader = engine.SceneLoader(Prefabs, engine.ComponentRegistry(struct {}), Scripts, Gizmos);
 
 pub fn main() !void {
     var game = try engine.Game.init(std.heap.page_allocator, .{

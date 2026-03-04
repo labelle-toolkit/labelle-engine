@@ -104,13 +104,13 @@ const getFieldOrDefault = loader_types.getFieldOrDefault;
 const getPositionFromComponents = loader_types.getPositionFromComponents;
 const applyCameraConfig = loader_types.applyCameraConfig;
 
-/// Scene loader that combines .zon scene data with comptime prefab and component/script registries
-pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime Scripts: type) type {
+/// Scene loader that combines .zon scene data with comptime prefab, component/script, and gizmo registries
+pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime Scripts: type, comptime GizmoReg: type) type {
     // Get Position type from Components registry (must be registered)
     const Position = Components.getType("Position");
 
     // Entity creation and component resolution core (extracted to loader/entity_components.zig)
-    const Ops = entity_components_mod.EntityComponentOps(Prefabs, Components);
+    const Ops = entity_components_mod.EntityComponentOps(Prefabs, Components, GizmoReg);
 
     return struct {
         /// Load a scene from comptime .zon data
@@ -258,7 +258,7 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
         /// Returns the created entity and adds it to the scene.
         /// Uses uniform component handling - visual components are registered via onAdd callbacks.
         ///
-        /// Usage (where Loader = SceneLoader(Prefabs, Components, Scripts)):
+        /// Usage (where Loader = SceneLoader(Prefabs, Components, Scripts, Gizmos)):
         ///   const entity = try Loader.instantiatePrefab("player", &scene, ctx, 100, 200);
         pub fn instantiatePrefab(
             comptime prefab_name: []const u8,
@@ -291,6 +291,16 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
             // Note: Runtime instantiation doesn't support entity references (no ref_ctx)
             if (comptime Prefabs.hasComponents(prefab_name)) {
                 try Ops.addComponentsExcluding(game, scene, entity, Prefabs.getComponents(prefab_name), x, y, .{"Position"}, no_parent, &ready_queue, null);
+            }
+
+            // Create gizmo entities from GizmoRegistry (debug builds only)
+            if (comptime GizmoReg.has(prefab_name)) {
+                if (comptime GizmoReg.getEntityGizmos(prefab_name)) |gizmos| {
+                    try Ops.createGizmoEntities(game, scene, entity, gizmos, x, y, &ready_queue);
+                }
+                if (comptime GizmoReg.getChildrenGizmos(prefab_name)) |children_gizmos| {
+                    try Ops.createChildrenGizmoEntities(game, scene, entity, prefab_name, children_gizmos, x, y, &ready_queue);
+                }
             }
 
             // Add entity to scene
@@ -417,13 +427,14 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
                 }
             }
 
-            // Create gizmo entities (debug builds only)
-            // First check scene-level gizmos (can override prefab gizmos)
-            if (@hasField(@TypeOf(entity_def), "gizmos")) {
-                try Ops.createGizmoEntities(game, scene, entity, entity_def.gizmos, pos.x, pos.y, ready_queue);
-            } else if (comptime Prefabs.hasGizmos(prefab_name)) {
-                // Fall back to prefab gizmos if no scene-level override
-                try Ops.createGizmoEntities(game, scene, entity, Prefabs.getGizmos(prefab_name), pos.x, pos.y, ready_queue);
+            // Create gizmo entities from GizmoRegistry (debug builds only)
+            if (comptime GizmoReg.has(prefab_name)) {
+                if (comptime GizmoReg.getEntityGizmos(prefab_name)) |gizmos| {
+                    try Ops.createGizmoEntities(game, scene, entity, gizmos, pos.x, pos.y, ready_queue);
+                }
+                if (comptime GizmoReg.getChildrenGizmos(prefab_name)) |children_gizmos| {
+                    try Ops.createChildrenGizmoEntities(game, scene, entity, prefab_name, children_gizmos, pos.x, pos.y, ready_queue);
+                }
             }
 
             // Queue parent-child relationship if .parent field is present (RFC #243)
@@ -436,6 +447,45 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
                 .onUpdate = null,
                 .onDestroy = null,
             };
+        }
+
+        /// Create gizmo entities for an entity based on its prefab name.
+        /// This is the public API for game scripts that create entities manually
+        /// (not via instantiatePrefab) and need gizmos attached.
+        ///
+        /// Usage:
+        ///   try Loader.createGizmosForEntity("flour", game, &scene, item_entity);
+        pub fn createGizmosForEntity(
+            comptime prefab_name: []const u8,
+            game: *Game,
+            scene: *Scene,
+            entity: Entity,
+        ) !void {
+            if (comptime !GizmoReg.has(prefab_name)) return;
+            if (@import("builtin").mode != .Debug) return;
+
+            const registry = game.getRegistry();
+            const pos = registry.tryGet(Position, entity) orelse return;
+
+            var ready_queue: std.ArrayListUnmanaged(ReadyCallbackEntry) = .{};
+            defer ready_queue.deinit(game.allocator);
+
+            if (comptime GizmoReg.getEntityGizmos(prefab_name)) |gizmos| {
+                try Ops.createGizmoEntities(game, scene, entity, gizmos, pos.x, pos.y, &ready_queue);
+            }
+            if (comptime GizmoReg.getChildrenGizmos(prefab_name)) |children_gizmos| {
+                try Ops.createChildrenGizmoEntities(game, scene, entity, prefab_name, children_gizmos, pos.x, pos.y, &ready_queue);
+            }
+
+            // Fire onReady callbacks for gizmo entities
+            if (ecs.getGamePtr()) |game_ptr| {
+                for (ready_queue.items) |entry| {
+                    entry.callback(.{
+                        .entity_id = ecs.entityToU64(entry.entity),
+                        .game_ptr = game_ptr,
+                    });
+                }
+            }
         }
 
         /// Load an inline entity with components.
@@ -465,11 +515,6 @@ pub fn SceneLoader(comptime Prefabs: type, comptime Components: type, comptime S
             // Add all components (Sprite/Shape/Text handled via fromZonData, others generically)
             // Position is excluded since we already added it above
             try Ops.addComponentsExcluding(game, scene, entity, entity_def.components, pos.x, pos.y, .{"Position"}, no_parent, ready_queue, ref_ctx);
-
-            // Create gizmo entities if present (debug builds only)
-            if (@hasField(@TypeOf(entity_def), "gizmos")) {
-                try Ops.createGizmoEntities(game, scene, entity, entity_def.gizmos, pos.x, pos.y, ready_queue);
-            }
 
             // Queue parent-child relationship if .parent field is present (RFC #243)
             try queueParentIfPresent(entity_def, entity, ref_ctx);
