@@ -41,7 +41,8 @@ const Hooks = engine.MergeEngineHooks(.{
 });
 const Game = engine.GameWith(Hooks);
 
-pub const Loader = engine.SceneLoader(Prefabs, Components, Scripts);
+const Gizmos = engine.GizmoRegistry(.{});
+pub const Loader = engine.SceneLoader(Prefabs, Components, Scripts, Gizmos);
 pub const initial_scene = @import("scenes/main.zon");
 
 // Platform-specific native window handle helpers
