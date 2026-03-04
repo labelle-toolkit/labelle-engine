@@ -38,22 +38,25 @@ pub fn loadDesktopDeps(
         _ = @field(@TypeOf(backend), "wgpu_native");
     }
     // zbgfx — exported by labelle-gfx via b.modules.put()
-    const zbgfx: ?*std.Build.Module = if (backend == .bgfx)
-        labelle_dep.builder.modules.get("zbgfx")
-    else
-        null;
+    const zbgfx: ?*std.Build.Module = switch (backend) {
+        .bgfx => labelle_dep.builder.modules.get("zbgfx") orelse
+            @panic("bgfx backend selected but labelle-gfx did not export 'zbgfx' module"),
+        else => null,
+    };
 
     // wgpu_native — exported by labelle-gfx via b.modules.put()
-    const wgpu_native: ?*std.Build.Module = if (backend == .wgpu_native)
-        labelle_dep.builder.modules.get("wgpu_native")
-    else
-        null;
+    const wgpu_native: ?*std.Build.Module = switch (backend) {
+        .wgpu_native => labelle_dep.builder.modules.get("wgpu_native") orelse
+            @panic("wgpu_native backend selected but labelle-gfx did not export 'wgpu_native' module"),
+        else => null,
+    };
 
     // zglfw — exported by labelle-gfx via b.modules.put()
-    const zglfw: ?*std.Build.Module = if (backend == .bgfx or backend == .wgpu_native or backend == .sdl)
-        labelle_dep.builder.modules.get("zglfw")
-    else
-        null;
+    const zglfw: ?*std.Build.Module = switch (backend) {
+        .bgfx, .wgpu_native, .sdl => labelle_dep.builder.modules.get("zglfw") orelse
+            @panic("selected backend requires zglfw but labelle-gfx did not export 'zglfw' module"),
+        else => null,
+    };
 
     // zaudio
     const zaudio_dep = b.dependency("zaudio", .{

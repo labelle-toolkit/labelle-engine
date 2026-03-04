@@ -41,7 +41,7 @@ const Hooks = engine.MergeEngineHooks(.{
 });
 const Game = engine.GameWith(Hooks);
 
-const Gizmos = engine.GizmoRegistry(.{});
+pub const Gizmos = engine.GizmoRegistry(.{});
 pub const Loader = engine.SceneLoader(Prefabs, Components, Scripts, Gizmos);
 pub const initial_scene = @import("scenes/main.zon");
 
