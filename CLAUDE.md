@@ -43,6 +43,7 @@ The engine uses a **Y-up coordinate system** (origin at bottom-left, positive Y 
 - **prefab.zig** - `Prefab` templates with sprite config and optional lifecycle hooks (onCreate/onUpdate/onDestroy)
 - **component.zig** - `ComponentRegistry` maps component names to types for .zon scene loading
 - **script.zig** - `ScriptRegistry` maps script names to update/init/deinit functions
+- **gizmo_registry.zig** - `GizmoRegistry` maps prefab names to debug gizmo `.zon` configs
 - **generator.zig** - Generates build.zig, build.zig.zon, main.zig from project.labelle config using zts templates
 - **project_config.zig** - Parses .labelle project files (ZON format)
 - **ecs/** - ECS abstraction layer supporting multiple backends (zig_ecs, zflecs)
@@ -185,7 +186,7 @@ Plugin reference types (mutually exclusive): `.version`, `.branch`, `.commit`. O
 
 ### Project Generator
 
-`zig build generate` reads `project.labelle` and scans prefabs/, components/, scripts/, hooks/ folders to generate `.labelle/build.zig.zon`, `.labelle/build.zig`, and `main.zig`. Templates in `src/templates/`.
+`zig build generate` reads `project.labelle` and scans prefabs/, components/, scripts/, hooks/, gizmos/ folders to generate `.labelle/build.zig.zon`, `.labelle/build.zig`, and `main.zig`. Templates in `src/templates/`.
 
 ### Entity Lifecycle
 
