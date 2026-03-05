@@ -77,15 +77,23 @@ pub fn build(b: *std.Build) void {
     const run_sokol_imgui = b.step("run-sokol-imgui", "Run with sokol + imgui");
     run_sokol_imgui.dependOn(&b.addRunArtifact(sokol_imgui).step);
 
-    // WGPU Native + Nuklear
-    const wgpu_nuklear = createExecutable(b, target, optimize, .wgpu_native, .zig_ecs, .nuklear, "example_gui_wgpu_nuklear");
-    const run_wgpu_nuklear = b.step("run-wgpu-nuklear", "Run with wgpu_native + nuklear");
-    run_wgpu_nuklear.dependOn(&b.addRunArtifact(wgpu_nuklear).step);
+    // WGPU Native steps — only created when wgpu_native backend is explicitly selected,
+    // since b.dependency() eagerly resolves and panics if the module isn't available.
+    // See: https://github.com/labelle-toolkit/labelle-gfx/issues/227
+    if (backend == .wgpu_native) {
+        // WGPU Native + Nuklear
+        const wgpu_nuklear = createExecutable(b, target, optimize, .wgpu_native, .zig_ecs, .nuklear, "example_gui_wgpu_nuklear");
+        const run_wgpu_nuklear = b.step("run-wgpu-nuklear", "Run with wgpu_native + nuklear");
+        run_wgpu_nuklear.dependOn(&b.addRunArtifact(wgpu_nuklear).step);
 
-    // WGPU Native + ImGui
-    const wgpu_imgui = createExecutable(b, target, optimize, .wgpu_native, .zig_ecs, .imgui, "example_gui_wgpu_imgui");
-    const run_wgpu_imgui = b.step("run-wgpu-imgui", "Run with wgpu_native + imgui");
-    run_wgpu_imgui.dependOn(&b.addRunArtifact(wgpu_imgui).step);
+        // WGPU Native + ImGui
+        const wgpu_imgui = createExecutable(b, target, optimize, .wgpu_native, .zig_ecs, .imgui, "example_gui_wgpu_imgui");
+        const run_wgpu_imgui = b.step("run-wgpu-imgui", "Run with wgpu_native + imgui");
+        run_wgpu_imgui.dependOn(&b.addRunArtifact(wgpu_imgui).step);
+
+        const run_wgpu = b.step("run-wgpu", "Alias for run-wgpu-nuklear");
+        run_wgpu.dependOn(run_wgpu_nuklear);
+    }
 
     // Shortcut aliases
     const run_microui = b.step("run-microui", "Alias for run-raylib-microui");
@@ -99,9 +107,6 @@ pub fn build(b: *std.Build) void {
 
     const run_imgui = b.step("run-imgui", "Alias for run-raylib-imgui");
     run_imgui.dependOn(run_raylib_imgui);
-
-    const run_wgpu = b.step("run-wgpu", "Alias for run-wgpu-nuklear");
-    run_wgpu.dependOn(run_wgpu_nuklear);
 }
 
 fn createExecutable(
