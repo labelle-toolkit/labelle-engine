@@ -77,15 +77,8 @@ pub fn build(b: *std.Build) void {
     const run_sokol_imgui = b.step("run-sokol-imgui", "Run with sokol + imgui");
     run_sokol_imgui.dependOn(&b.addRunArtifact(sokol_imgui).step);
 
-    // WGPU Native + Nuklear
-    const wgpu_nuklear = createExecutable(b, target, optimize, .wgpu_native, .zig_ecs, .nuklear, "example_gui_wgpu_nuklear");
-    const run_wgpu_nuklear = b.step("run-wgpu-nuklear", "Run with wgpu_native + nuklear");
-    run_wgpu_nuklear.dependOn(&b.addRunArtifact(wgpu_nuklear).step);
-
-    // WGPU Native + ImGui
-    const wgpu_imgui = createExecutable(b, target, optimize, .wgpu_native, .zig_ecs, .imgui, "example_gui_wgpu_imgui");
-    const run_wgpu_imgui = b.step("run-wgpu-imgui", "Run with wgpu_native + imgui");
-    run_wgpu_imgui.dependOn(&b.addRunArtifact(wgpu_imgui).step);
+    // WGPU Native steps are disabled until labelle-gfx exports the wgpu_native module.
+    // See: https://github.com/labelle-toolkit/labelle-engine/issues/348
 
     // Shortcut aliases
     const run_microui = b.step("run-microui", "Alias for run-raylib-microui");
@@ -100,8 +93,7 @@ pub fn build(b: *std.Build) void {
     const run_imgui = b.step("run-imgui", "Alias for run-raylib-imgui");
     run_imgui.dependOn(run_raylib_imgui);
 
-    const run_wgpu = b.step("run-wgpu", "Alias for run-wgpu-nuklear");
-    run_wgpu.dependOn(run_wgpu_nuklear);
+    // run-wgpu disabled until labelle-gfx exports wgpu_native module (issue #348)
 }
 
 fn createExecutable(
