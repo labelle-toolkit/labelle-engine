@@ -108,9 +108,15 @@ pub fn build(b: *std.Build) void {
         b.modules.put("raylib", rl) catch @panic("Failed to export raylib module");
     }
 
-    // Note: sokol_dep is null because sokol is provided by labelle-gfx.
-    // iOS/Android sokol configuration is handled by labelle-gfx.
-    const sokol_dep: ?*std.Build.Dependency = null;
+    // sokol_dep is resolved from labelle-gfx's transitive dependencies.
+    // Needed by GUI (sokol_imgui) for include paths and library linking.
+    const sokol_dep: ?*std.Build.Dependency = if (backend == .sokol)
+        labelle_dep.builder.dependency("sokol", .{
+            .target = target,
+            .optimize = optimize,
+        })
+    else
+        null;
 
     // Desktop-only graphics deps (zbgfx, wgpu_native, zglfw, zaudio)
     const gfx_deps = if (is_desktop)
