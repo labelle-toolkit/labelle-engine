@@ -23,6 +23,7 @@ pub fn generateMainZigRaylib(
     enum_type_names: []const []const u8,
     component_type_names: []const []const u8,
     task_hooks: TaskHookScanResult,
+    scenes: []const []const u8,
 ) ![]const u8 {
     var buf: std.ArrayListUnmanaged(u8) = .{};
     const writer = buf.writer(allocator);
@@ -371,10 +372,63 @@ pub fn generateMainZigRaylib(
     }
 
     // Loader and initial scene
-    try zts.print(main_raylib_tmpl, "loader", .{config.initial_scene}, writer);
+    const multi_scene = scenes.len > 1;
+    if (multi_scene) {
+        // Multi-scene: only emit Loader (no initial_scene import)
+        try writer.print("pub const Loader = engine.SceneLoader(Prefabs, Components, Scripts, Gizmos);\n\n", .{});
 
-    // Main function (desktop reads config from project.labelle at runtime)
-    try zts.print(main_raylib_tmpl, "main_fn", .{}, writer);
+        // Scene loader functions and active_scene variable
+        try writer.print("// --- Scene management ---\n", .{});
+        try writer.print("var active_scene: ?engine.Scene = null;\n\n", .{});
+
+        for (scenes) |scene_name| {
+            const func_name = try sanitizeZigIdentifier(allocator, scene_name);
+            defer allocator.free(func_name);
+            try writer.print("fn load_{s}(game: *Game) anyerror!void {{\n", .{func_name});
+            try writer.print("    active_scene = try Loader.load(@import(\"scenes/{s}.zon\"), engine.SceneContext.init(game));\n", .{scene_name});
+            try writer.print("}}\n\n", .{});
+        }
+
+        // Frame callback
+        try writer.print(
+            \\fn frameCallback(game: *Game, dt: f32) void {{
+            \\    game.gizmos.clearGizmos();
+            \\    if (active_scene) |*scene| {{
+            \\        scene.update(dt);
+            \\    }}
+            \\    game.gizmos.renderStandaloneGizmos();
+            \\}}
+            \\
+            \\
+        , .{});
+
+        // Main function with scene registration
+        try zts.print(main_raylib_tmpl, "main_fn_start", .{}, writer);
+
+        // Register scenes
+        for (scenes) |scene_name| {
+            const func_name = try sanitizeZigIdentifier(allocator, scene_name);
+            defer allocator.free(func_name);
+            try writer.print("    try game.registerSceneSimple(\"{s}\", load_{s});\n", .{ scene_name, func_name });
+        }
+
+        // Set initial scene and run with callback
+        try writer.print(
+            \\
+            \\    // Set initial scene
+            \\    try game.setScene("{s}");
+            \\
+            \\    if (ci_test) return;
+            \\
+            \\    try game.runWithCallback(frameCallback);
+            \\}}
+            \\
+        , .{config.initial_scene});
+    } else {
+        // Single scene: use original behavior
+        try zts.print(main_raylib_tmpl, "loader", .{config.initial_scene}, writer);
+        try zts.print(main_raylib_tmpl, "main_fn", .{}, writer);
+    }
 
     return buf.toOwnedSlice(allocator);
 }
