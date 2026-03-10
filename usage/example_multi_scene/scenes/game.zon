@@ -1,0 +1,26 @@
+.{
+    .name = "game",
+    .scripts = .{ "scene_menu" },
+    .entities = .{
+        // A red square
+        .{
+            .components = .{
+                .Position = .{ .x = 350, .y = 250 },
+                .Shape = .{
+                    .shape = .{ .rectangle = .{ .width = 100, .height = 100 } },
+                    .color = .{ .r = 220, .g = 50, .b = 50, .a = 255 },
+                },
+            },
+        },
+        // A blue circle
+        .{
+            .components = .{
+                .Position = .{ .x = 550, .y = 350 },
+                .Shape = .{
+                    .shape = .{ .circle = .{ .radius = 40 } },
+                    .color = .{ .r = 50, .g = 100, .b = 220, .a = 255 },
+                },
+            },
+        },
+    },
+}

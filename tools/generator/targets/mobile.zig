@@ -24,9 +24,10 @@ pub fn generateMainZigSokolAndroid(
     enum_type_names: []const []const u8,
     component_type_names: []const []const u8,
     task_hooks: TaskHookScanResult,
+    scenes: []const []const u8,
 ) ![]const u8 {
     // Use the same logic as iOS but with Android template
-    return generateMainZigMobile(main_sokol_android_tmpl, allocator, config, prefabs, enums, components, scripts, hooks, gizmos, enum_type_names, component_type_names, task_hooks);
+    return generateMainZigMobile(main_sokol_android_tmpl, allocator, config, prefabs, enums, components, scripts, hooks, gizmos, enum_type_names, component_type_names, task_hooks, scenes);
 }
 
 /// Generate main.zig content for WASM target
@@ -42,9 +43,10 @@ pub fn generateMainZigWasm(
     enum_type_names: []const []const u8,
     component_type_names: []const []const u8,
     task_hooks: TaskHookScanResult,
+    scenes: []const []const u8,
 ) ![]const u8 {
     // Use the same logic as iOS but with WASM template
-    return generateMainZigMobile(main_wasm_tmpl, allocator, config, prefabs, enums, components, scripts, hooks, gizmos, enum_type_names, component_type_names, task_hooks);
+    return generateMainZigMobile(main_wasm_tmpl, allocator, config, prefabs, enums, components, scripts, hooks, gizmos, enum_type_names, component_type_names, task_hooks, scenes);
 }
 
 /// Generic generator for mobile/callback-based templates (iOS, Android, WASM)
@@ -61,7 +63,9 @@ fn generateMainZigMobile(
     enum_type_names: []const []const u8,
     component_type_names: []const []const u8,
     task_hooks: TaskHookScanResult,
+    scenes: []const []const u8,
 ) ![]const u8 {
+    _ = scenes;
     // Mobile/callback templates don't have enum/bind sections yet
     _ = enums;
     _ = enum_type_names;

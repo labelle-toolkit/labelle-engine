@@ -23,7 +23,9 @@ pub fn generateMainZigRaylibWasm(
     enum_type_names: []const []const u8,
     component_type_names: []const []const u8,
     task_hooks: TaskHookScanResult,
+    scenes: []const []const u8,
 ) ![]const u8 {
+    _ = scenes;
     // Use the same logic as desktop raylib but with WASM template (simpler, no conditionals)
     // This is almost identical to generateMainZigRaylib, but uses main_raylib_wasm_tmpl
     _ = task_hooks; // Legacy task hooks are not used - use engine_hooks config on plugins instead
