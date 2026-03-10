@@ -327,29 +327,33 @@ fn FlecsView(comptime _includes: anytype, comptime _excludes: anytype) type {
             return flecs.get_mut(self.registry.world, entity.toFlecs(), T).?;
         }
 
-        /// Entity iterator that yields entities matching include/exclude filters
+        /// Entity iterator that yields entities matching include/exclude filters.
+        /// Uses a stack buffer to collect matching entities upfront so the flecs
+        /// query is fully consumed and freed during init — no leak on early break.
         pub fn entityIterator(self: *Self) EntityIterator {
             return EntityIterator.init(self);
         }
 
+        const MAX_VIEW_ENTITIES = 4096;
+
         pub const EntityIterator = struct {
-            view: *Self,
-            flecs_query: *flecs.query_t,
-            iter: flecs.iter_t,
-            /// Current chunk's entity slice
-            entities: []const flecs.entity_t,
-            /// Current index within the chunk
+            entities: [MAX_VIEW_ENTITIES]flecs.entity_t,
+            count: usize,
             index: usize,
 
             fn init(v: *Self) EntityIterator {
+                var result: EntityIterator = .{
+                    .entities = undefined,
+                    .count = 0,
+                    .index = 0,
+                };
+
                 var terms: [32]flecs.term_t = @splat(.{});
 
-                // Add include terms
                 inline for (_includes, 0..) |T, i| {
                     terms[i] = .{ .id = flecs.id(T) };
                 }
 
-                // Add exclude terms with Not operator
                 inline for (_excludes, 0..) |T, i| {
                     terms[_includes.len + i] = .{
                         .id = flecs.id(T),
@@ -360,42 +364,28 @@ fn FlecsView(comptime _includes: anytype, comptime _excludes: anytype) type {
                 const q = flecs.query_init(v.registry.world, &.{
                     .terms = terms,
                 }) catch @panic("Failed to create flecs query for view");
+                defer flecs.query_fini(q);
 
                 var it = flecs.query_iter(v.registry.world, q);
-
-                // Pre-fetch the first chunk
-                var entities: []const flecs.entity_t = &.{};
-                if (flecs.query_next(&it)) {
-                    entities = it.entities()[0..it.count()];
+                while (flecs.query_next(&it)) {
+                    const chunk_entities = it.entities()[0..it.count()];
+                    for (chunk_entities) |e| {
+                        if (result.count >= MAX_VIEW_ENTITIES) {
+                            @panic("FlecsView: exceeded MAX_VIEW_ENTITIES (4096)");
+                        }
+                        result.entities[result.count] = e;
+                        result.count += 1;
+                    }
                 }
 
-                return .{
-                    .view = v,
-                    .flecs_query = q,
-                    .iter = it,
-                    .entities = entities,
-                    .index = 0,
-                };
+                return result;
             }
 
             pub fn next(self: *EntityIterator) ?Entity {
-                while (true) {
-                    if (self.index < self.entities.len) {
-                        const entity = Entity.fromFlecs(self.entities[self.index]);
-                        self.index += 1;
-                        return entity;
-                    }
-
-                    // Try next chunk
-                    if (flecs.query_next(&self.iter)) {
-                        self.entities = self.iter.entities()[0..self.iter.count()];
-                        self.index = 0;
-                    } else {
-                        // Iteration complete, clean up
-                        flecs.query_fini(self.flecs_query);
-                        return null;
-                    }
-                }
+                if (self.index >= self.count) return null;
+                const entity = Entity.fromFlecs(self.entities[self.index]);
+                self.index += 1;
+                return entity;
             }
         };
     };
