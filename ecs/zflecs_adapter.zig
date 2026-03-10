@@ -244,12 +244,183 @@ pub const Registry = struct {
         return self.world;
     }
 
+    /// Determine the view type based on includes and excludes
+    fn ViewType(comptime includes: anytype, comptime excludes: anytype) type {
+        comptime {
+            const IncT = @TypeOf(includes);
+            const inc_ti = @typeInfo(IncT);
+            if (inc_ti != .@"struct" or !inc_ti.@"struct".is_tuple) {
+                @compileError("view()/viewExcluding() expects a tuple of types for includes, e.g. '.{MyComponent}'");
+            }
+            if (includes.len == 0) {
+                @compileError("view()/viewExcluding() requires at least one include component type; empty tuples are not supported");
+            }
+            const ExcT = @TypeOf(excludes);
+            const exc_ti = @typeInfo(ExcT);
+            if (exc_ti != .@"struct" or !exc_ti.@"struct".is_tuple) {
+                @compileError("viewExcluding() expects a tuple of types for excludes, e.g. '.{Locked}'");
+            }
+            if (includes.len + excludes.len > 32) {
+                @compileError("view()/viewExcluding() supports a maximum of 32 total terms (includes + excludes)");
+            }
+        }
+        return FlecsView(includes, excludes);
+    }
+
+    /// Create a view for iterating entities with specific components
+    /// Usage: var view = registry.view(.{ Position, Velocity });
+    pub fn view(self: *Self, comptime includes: anytype) ViewType(includes, .{}) {
+        return ViewType(includes, .{}).init(self);
+    }
+
+    /// Create a view with exclude filters
+    /// Usage: var view = registry.viewExcluding(.{ Worker, Position }, .{ Locked });
+    /// Entities with any excluded component are skipped during iteration.
+    pub fn viewExcluding(self: *Self, comptime includes: anytype, comptime excludes: anytype) ViewType(includes, excludes) {
+        return ViewType(includes, excludes).init(self);
+    }
+
     /// Create a query for the given component types
     /// Zero-sized components are used as filters only
     pub fn query(self: *Self, comptime components: anytype) Query(components) {
         return Query(components).init(self);
     }
 };
+
+/// View type for zflecs backend
+/// Wraps a flecs query to provide the same API as zig_ecs views:
+/// entityIterator(), get(T, entity), get(entity) for single-component views
+fn FlecsView(comptime _includes: anytype, comptime _excludes: anytype) type {
+    return struct {
+        registry: *Registry,
+
+        const Self = @This();
+
+        pub fn init(registry: *Registry) Self {
+            // Ensure all component types are registered with this world
+            inline for (_includes ++ _excludes) |T| {
+                if (@sizeOf(T) == 0) {
+                    flecs.TAG(registry.world, T);
+                } else {
+                    flecs.COMPONENT(registry.world, T);
+                }
+            }
+            return .{ .registry = registry };
+        }
+
+        /// Get a component from an entity
+        /// Single-component view (1 include, 0 excludes): get(entity) -> *T
+        /// Multi-component view (or any excludes): get(T, entity) -> *T
+        /// Matches zig_ecs BasicView/MultiView API respectively
+        pub const get = if (_includes.len == 1 and _excludes.len == 0)
+            getSingle
+        else
+            getMulti;
+
+        fn getSingle(self: Self, entity: Entity) *_includes[0] {
+            return flecs.get_mut(self.registry.world, entity.toFlecs(), _includes[0]).?;
+        }
+
+        fn getMulti(self: Self, comptime T: type, entity: Entity) *T {
+            return flecs.get_mut(self.registry.world, entity.toFlecs(), T).?;
+        }
+
+        /// Entity iterator that streams entities from a flecs query chunk by chunk.
+        /// The iterator owns a flecs query that must be freed. Always use with defer:
+        ///
+        ///   var iter = view.entityIterator();
+        ///   defer iter.deinit();
+        ///   while (iter.next()) |entity| { ... }
+        ///
+        /// `deinit()` is safe to call after exhaustion (next() returned null).
+        pub fn entityIterator(self: *Self) EntityIterator {
+            return EntityIterator.init(self);
+        }
+
+        pub const EntityIterator = struct {
+            flecs_query: *flecs.query_t,
+            iter: flecs.iter_t,
+            /// Current chunk's entity slice
+            entities: []const flecs.entity_t,
+            /// Current index within the chunk
+            index: usize,
+            done: bool,
+
+            fn init(v: *Self) EntityIterator {
+                var terms: [32]flecs.term_t = @splat(.{});
+
+                inline for (_includes, 0..) |T, i| {
+                    terms[i] = .{ .id = flecs.id(T) };
+                }
+
+                inline for (_excludes, 0..) |T, i| {
+                    terms[_includes.len + i] = .{
+                        .id = flecs.id(T),
+                        .oper = .Not,
+                    };
+                }
+
+                const q = flecs.query_init(v.registry.world, &.{
+                    .terms = terms,
+                }) catch @panic("Failed to create flecs query for view");
+
+                var it = flecs.query_iter(v.registry.world, q);
+
+                // Pre-fetch the first chunk
+                var entities: []const flecs.entity_t = &.{};
+                var done = false;
+                if (flecs.query_next(&it)) {
+                    entities = it.entities()[0..it.count()];
+                } else {
+                    flecs.query_fini(q);
+                    done = true;
+                }
+
+                return .{
+                    .flecs_query = q,
+                    .iter = it,
+                    .entities = entities,
+                    .index = 0,
+                    .done = done,
+                };
+            }
+
+            /// Free the underlying flecs query. Safe to call multiple times.
+            /// Called automatically when next() returns null.
+            /// Must be called manually if breaking out of the loop early.
+            pub fn deinit(self: *EntityIterator) void {
+                if (!self.done) {
+                    // Drain remaining chunks so flecs iterator is finalized
+                    while (flecs.query_next(&self.iter)) {}
+                    flecs.query_fini(self.flecs_query);
+                    self.done = true;
+                }
+            }
+
+            pub fn next(self: *EntityIterator) ?Entity {
+                if (self.done) return null;
+                while (true) {
+                    if (self.index < self.entities.len) {
+                        const entity = Entity.fromFlecs(self.entities[self.index]);
+                        self.index += 1;
+                        return entity;
+                    }
+
+                    // Try next chunk
+                    if (flecs.query_next(&self.iter)) {
+                        self.entities = self.iter.entities()[0..self.iter.count()];
+                        self.index = 0;
+                    } else {
+                        // Iteration complete, clean up
+                        flecs.query_fini(self.flecs_query);
+                        self.done = true;
+                        return null;
+                    }
+                }
+            }
+        };
+    };
+}
 
 /// Query type for zflecs backend
 /// Handles both data components and tag filters

@@ -260,21 +260,30 @@ pub const Registry = struct {
         // via position component mutation detection.
     }
 
-    /// Determine the view type based on the number of components
-    /// Single component -> BasicView (optimized), multiple -> MultiView
+    /// Determine the view type based on the number of components and excludes
+    /// Single include + no excludes -> BasicView (optimized), otherwise -> MultiView
     fn ViewType(comptime includes: anytype) type {
+        return ViewTypeExcluding(includes, .{});
+    }
+
+    fn ViewTypeExcluding(comptime includes: anytype, comptime excludes: anytype) type {
         comptime {
-            const T = @TypeOf(includes);
-            const ti = @typeInfo(T);
-            if (ti != .@"struct" or !ti.@"struct".is_tuple) {
-                @compileError("view() expects a tuple of types, e.g. '.{MyComponent}'");
+            const IncT = @TypeOf(includes);
+            const inc_ti = @typeInfo(IncT);
+            if (inc_ti != .@"struct" or !inc_ti.@"struct".is_tuple) {
+                @compileError("view()/viewExcluding() expects a tuple of types for includes, e.g. '.{MyComponent}'");
             }
             if (includes.len == 0) {
-                @compileError("view() requires at least one component type; empty tuples are not supported");
+                @compileError("view()/viewExcluding() requires at least one include component type; empty tuples are not supported");
+            }
+            const ExcT = @TypeOf(excludes);
+            const exc_ti = @typeInfo(ExcT);
+            if (exc_ti != .@"struct" or !exc_ti.@"struct".is_tuple) {
+                @compileError("viewExcluding() expects a tuple of types for excludes, e.g. '.{Locked}'");
             }
         }
-        if (includes.len == 1) return zig_ecs.BasicView(includes[0]);
-        return zig_ecs.MultiView(includes, .{});
+        if (includes.len == 1 and excludes.len == 0) return zig_ecs.BasicView(includes[0]);
+        return zig_ecs.MultiView(includes, excludes);
     }
 
     /// Create a view for iterating entities with specific components
@@ -282,6 +291,13 @@ pub const Registry = struct {
     /// Note: Single-component views return BasicView for better performance
     pub fn view(self: *Self, comptime includes: anytype) ViewType(includes) {
         return self.inner.view(includes, .{});
+    }
+
+    /// Create a view with exclude filters
+    /// Usage: var view = registry.viewExcluding(.{ Worker, Position }, .{ Locked });
+    /// Entities with any excluded component are skipped during iteration.
+    pub fn viewExcluding(self: *Self, comptime includes: anytype, comptime excludes: anytype) ViewTypeExcluding(includes, excludes) {
+        return self.inner.view(includes, excludes);
     }
 
     /// Create a basic view for a single component (faster than MultiView)
@@ -431,4 +447,80 @@ pub fn Query(comptime components: anytype) type {
             }
         }
     };
+}
+
+// ============================================================================
+// Tests
+// ============================================================================
+
+test "view excludes entities with excluded component" {
+    const Position = struct { x: f32, y: f32 };
+    const Velocity = struct { dx: f32, dy: f32 };
+    const Locked = struct { by: u64 };
+
+    var registry = Registry.init(std.testing.allocator);
+    defer registry.deinit();
+
+    // Entity with Position + Velocity (should match)
+    const e1 = registry.createEntity();
+    registry.add(e1, Position{ .x = 1, .y = 2 });
+    registry.add(e1, Velocity{ .dx = 0, .dy = 0 });
+
+    // Entity with Position + Velocity + Locked (should be excluded)
+    const e2 = registry.createEntity();
+    registry.add(e2, Position{ .x = 3, .y = 4 });
+    registry.add(e2, Velocity{ .dx = 1, .dy = 1 });
+    registry.add(e2, Locked{ .by = 99 });
+
+    // Entity with Position + Velocity (should match)
+    const e3 = registry.createEntity();
+    registry.add(e3, Position{ .x = 5, .y = 6 });
+    registry.add(e3, Velocity{ .dx = 2, .dy = 2 });
+
+    var v = registry.viewExcluding(.{ Position, Velocity }, .{Locked});
+    var iter = v.entityIterator();
+
+    var count: usize = 0;
+    while (iter.next()) |entity| {
+        // e2 should never appear
+        try std.testing.expect(entity != e2);
+        count += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 2), count);
+}
+
+test "view with single include and no excludes uses get(entity)" {
+    const Position = struct { x: f32, y: f32 };
+
+    var registry = Registry.init(std.testing.allocator);
+    defer registry.deinit();
+
+    const e1 = registry.createEntity();
+    registry.add(e1, Position{ .x = 10, .y = 20 });
+
+    var v = registry.view(.{Position});
+    var iter = v.entityIterator();
+
+    const entity = iter.next().?;
+    const pos = v.get(entity);
+    try std.testing.expectEqual(@as(f32, 10), pos.x);
+    try std.testing.expectEqual(@as(f32, 20), pos.y);
+}
+
+test "viewExcluding with single include still uses get(T, entity)" {
+    const Position = struct { x: f32, y: f32 };
+    const Locked = struct { by: u64 };
+
+    var registry = Registry.init(std.testing.allocator);
+    defer registry.deinit();
+
+    const e1 = registry.createEntity();
+    registry.add(e1, Position{ .x = 42, .y = 0 });
+
+    var v = registry.viewExcluding(.{Position}, .{Locked});
+    var iter = v.entityIterator();
+
+    const entity = iter.next().?;
+    const pos = v.get(Position, entity);
+    try std.testing.expectEqual(@as(f32, 42), pos.x);
 }
