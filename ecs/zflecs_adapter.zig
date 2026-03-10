@@ -247,16 +247,21 @@ pub const Registry = struct {
     /// Determine the view type based on includes and excludes
     fn ViewType(comptime includes: anytype, comptime excludes: anytype) type {
         comptime {
-            const T = @TypeOf(includes);
-            const ti = @typeInfo(T);
-            if (ti != .@"struct" or !ti.@"struct".is_tuple) {
-                @compileError("view() expects a tuple of types, e.g. '.{MyComponent}'");
+            const IncT = @TypeOf(includes);
+            const inc_ti = @typeInfo(IncT);
+            if (inc_ti != .@"struct" or !inc_ti.@"struct".is_tuple) {
+                @compileError("view()/viewExcluding() expects a tuple of types for includes, e.g. '.{MyComponent}'");
             }
             if (includes.len == 0) {
-                @compileError("view() requires at least one component type; empty tuples are not supported");
+                @compileError("view()/viewExcluding() requires at least one include component type; empty tuples are not supported");
+            }
+            const ExcT = @TypeOf(excludes);
+            const exc_ti = @typeInfo(ExcT);
+            if (exc_ti != .@"struct" or !exc_ti.@"struct".is_tuple) {
+                @compileError("viewExcluding() expects a tuple of types for excludes, e.g. '.{Locked}'");
             }
             if (includes.len + excludes.len > 32) {
-                @compileError("view() supports a maximum of 32 total terms (includes + excludes)");
+                @compileError("view()/viewExcluding() supports a maximum of 32 total terms (includes + excludes)");
             }
         }
         return FlecsView(includes, excludes);
@@ -320,27 +325,23 @@ fn FlecsView(comptime _includes: anytype, comptime _excludes: anytype) type {
             return flecs.get_mut(self.registry.world, entity.toFlecs(), T).?;
         }
 
-        /// Entity iterator that yields entities matching include/exclude filters.
-        /// Uses a stack buffer to collect matching entities upfront so the flecs
-        /// query is fully consumed and freed during init — no leak on early break.
+        /// Entity iterator that streams entities from a flecs query chunk by chunk.
+        /// Call `deinit()` if you break out of the loop early to free the query.
+        /// If you exhaust the iterator (next() returns null), cleanup is automatic.
         pub fn entityIterator(self: *Self) EntityIterator {
             return EntityIterator.init(self);
         }
 
-        const MAX_VIEW_ENTITIES = 4096;
-
         pub const EntityIterator = struct {
-            entities: [MAX_VIEW_ENTITIES]flecs.entity_t,
-            count: usize,
+            flecs_query: *flecs.query_t,
+            iter: flecs.iter_t,
+            /// Current chunk's entity slice
+            entities: []const flecs.entity_t,
+            /// Current index within the chunk
             index: usize,
+            done: bool,
 
             fn init(v: *Self) EntityIterator {
-                var result: EntityIterator = .{
-                    .entities = undefined,
-                    .count = 0,
-                    .index = 0,
-                };
-
                 var terms: [32]flecs.term_t = @splat(.{});
 
                 inline for (_includes, 0..) |T, i| {
@@ -357,28 +358,59 @@ fn FlecsView(comptime _includes: anytype, comptime _excludes: anytype) type {
                 const q = flecs.query_init(v.registry.world, &.{
                     .terms = terms,
                 }) catch @panic("Failed to create flecs query for view");
-                defer flecs.query_fini(q);
 
                 var it = flecs.query_iter(v.registry.world, q);
-                while (flecs.query_next(&it)) {
-                    const chunk_entities = it.entities()[0..it.count()];
-                    for (chunk_entities) |e| {
-                        if (result.count >= MAX_VIEW_ENTITIES) {
-                            @panic("FlecsView: exceeded MAX_VIEW_ENTITIES (4096)");
-                        }
-                        result.entities[result.count] = e;
-                        result.count += 1;
-                    }
+
+                // Pre-fetch the first chunk
+                var entities: []const flecs.entity_t = &.{};
+                var done = false;
+                if (flecs.query_next(&it)) {
+                    entities = it.entities()[0..it.count()];
+                } else {
+                    flecs.query_fini(q);
+                    done = true;
                 }
 
-                return result;
+                return .{
+                    .flecs_query = q,
+                    .iter = it,
+                    .entities = entities,
+                    .index = 0,
+                    .done = done,
+                };
+            }
+
+            /// Free the underlying flecs query. Safe to call multiple times.
+            /// Called automatically when next() returns null.
+            /// Must be called manually if breaking out of the loop early.
+            pub fn deinit(self: *EntityIterator) void {
+                if (!self.done) {
+                    // Drain remaining chunks so flecs iterator is finalized
+                    while (flecs.query_next(&self.iter)) {}
+                    flecs.query_fini(self.flecs_query);
+                    self.done = true;
+                }
             }
 
             pub fn next(self: *EntityIterator) ?Entity {
-                if (self.index >= self.count) return null;
-                const entity = Entity.fromFlecs(self.entities[self.index]);
-                self.index += 1;
-                return entity;
+                while (true) {
+                    if (self.index < self.entities.len) {
+                        const entity = Entity.fromFlecs(self.entities[self.index]);
+                        self.index += 1;
+                        return entity;
+                    }
+
+                    // Try next chunk
+                    if (flecs.query_next(&self.iter)) {
+                        self.entities = self.iter.entities()[0..self.iter.count()];
+                        self.index = 0;
+                    } else {
+                        // Iteration complete, clean up
+                        flecs.query_fini(self.flecs_query);
+                        self.done = true;
+                        return null;
+                    }
+                }
             }
         };
     };
