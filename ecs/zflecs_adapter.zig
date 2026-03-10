@@ -393,6 +393,7 @@ fn FlecsView(comptime _includes: anytype, comptime _excludes: anytype) type {
             }
 
             pub fn next(self: *EntityIterator) ?Entity {
+                if (self.done) return null;
                 while (true) {
                     if (self.index < self.entities.len) {
                         const entity = Entity.fromFlecs(self.entities[self.index]);
