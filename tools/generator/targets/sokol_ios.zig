@@ -24,7 +24,9 @@ pub fn generateMainZigSokolIos(
     enum_type_names: []const []const u8,
     component_type_names: []const []const u8,
     task_hooks: TaskHookScanResult,
+    scenes: []const []const u8,
 ) ![]const u8 {
+    _ = scenes;
     // iOS sokol templates don't have enum/bind sections yet
     _ = enums;
     _ = enum_type_names;

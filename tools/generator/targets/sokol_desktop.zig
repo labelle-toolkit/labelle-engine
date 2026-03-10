@@ -23,7 +23,9 @@ pub fn generateMainZigSokol(
     enum_type_names: []const []const u8,
     component_type_names: []const []const u8,
     task_hooks: TaskHookScanResult,
+    scenes: []const []const u8,
 ) ![]const u8 {
+    _ = scenes;
     // Sokol backend uses same logic as raylib - delegate to avoid duplication
     // For now, sokol templates don't have enum/bind sections, so skip them
     _ = enums;

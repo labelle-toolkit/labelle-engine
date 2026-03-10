@@ -466,14 +466,14 @@ fn generateMainZigForTarget(
 ) ![]const u8 {
     return switch (target) {
         .raylib_desktop => raylib_desktop.generateMainZigRaylib(allocator, config, prefabs, enums, components, scripts, hooks, gizmos, enum_type_names, component_type_names, task_hooks, scenes),
-        .raylib_wasm => raylib_wasm.generateMainZigRaylibWasm(allocator, config, prefabs, enums, components, scripts, hooks, gizmos, enum_type_names, component_type_names, task_hooks),
-        .sokol_desktop => sokol_desktop.generateMainZigSokol(allocator, config, prefabs, enums, components, scripts, hooks, gizmos, enum_type_names, component_type_names, task_hooks),
-        .sokol_wasm => mobile.generateMainZigWasm(allocator, config, prefabs, enums, components, scripts, hooks, gizmos, enum_type_names, component_type_names, task_hooks),
-        .sokol_ios => sokol_ios.generateMainZigSokolIos(allocator, config, prefabs, enums, components, scripts, hooks, gizmos, enum_type_names, component_type_names, task_hooks),
-        .sokol_android => mobile.generateMainZigSokolAndroid(allocator, config, prefabs, enums, components, scripts, hooks, gizmos, enum_type_names, component_type_names, task_hooks),
-        .sdl_desktop => sdl.generateMainZigSdl(allocator, config, prefabs, enums, components, scripts, hooks, gizmos, enum_type_names, component_type_names, task_hooks),
-        .bgfx_desktop => glfw.generateMainZigBgfx(allocator, config, prefabs, enums, components, scripts, hooks, gizmos, enum_type_names, component_type_names, task_hooks),
-        .wgpu_native_desktop => glfw.generateMainZigWgpuNative(allocator, config, prefabs, enums, components, scripts, hooks, gizmos, enum_type_names, component_type_names, task_hooks),
+        .raylib_wasm => raylib_wasm.generateMainZigRaylibWasm(allocator, config, prefabs, enums, components, scripts, hooks, gizmos, enum_type_names, component_type_names, task_hooks, scenes),
+        .sokol_desktop => sokol_desktop.generateMainZigSokol(allocator, config, prefabs, enums, components, scripts, hooks, gizmos, enum_type_names, component_type_names, task_hooks, scenes),
+        .sokol_wasm => mobile.generateMainZigWasm(allocator, config, prefabs, enums, components, scripts, hooks, gizmos, enum_type_names, component_type_names, task_hooks, scenes),
+        .sokol_ios => sokol_ios.generateMainZigSokolIos(allocator, config, prefabs, enums, components, scripts, hooks, gizmos, enum_type_names, component_type_names, task_hooks, scenes),
+        .sokol_android => mobile.generateMainZigSokolAndroid(allocator, config, prefabs, enums, components, scripts, hooks, gizmos, enum_type_names, component_type_names, task_hooks, scenes),
+        .sdl_desktop => sdl.generateMainZigSdl(allocator, config, prefabs, enums, components, scripts, hooks, gizmos, enum_type_names, component_type_names, task_hooks, scenes),
+        .bgfx_desktop => glfw.generateMainZigBgfx(allocator, config, prefabs, enums, components, scripts, hooks, gizmos, enum_type_names, component_type_names, task_hooks, scenes),
+        .wgpu_native_desktop => glfw.generateMainZigWgpuNative(allocator, config, prefabs, enums, components, scripts, hooks, gizmos, enum_type_names, component_type_names, task_hooks, scenes),
     };
 }
 
