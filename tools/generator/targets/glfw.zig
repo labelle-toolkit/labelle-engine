@@ -26,8 +26,7 @@ pub fn generateMainZigBgfx(
     task_hooks: TaskHookScanResult,
     scenes: []const []const u8,
 ) ![]const u8 {
-    _ = scenes;
-    return generateMainZigGlfw(main_bgfx_tmpl, true, allocator, config, prefabs, enums, components, scripts, hooks, gizmos, enum_type_names, component_type_names, task_hooks);
+    return generateMainZigGlfw(main_bgfx_tmpl, true, allocator, config, prefabs, enums, components, scripts, hooks, gizmos, enum_type_names, component_type_names, task_hooks, scenes);
 }
 
 /// Generate main.zig content for wgpu_native backend
@@ -45,8 +44,7 @@ pub fn generateMainZigWgpuNative(
     task_hooks: TaskHookScanResult,
     scenes: []const []const u8,
 ) ![]const u8 {
-    _ = scenes;
-    return generateMainZigGlfw(main_wgpu_native_tmpl, false, allocator, config, prefabs, enums, components, scripts, hooks, gizmos, enum_type_names, component_type_names, task_hooks);
+    return generateMainZigGlfw(main_wgpu_native_tmpl, false, allocator, config, prefabs, enums, components, scripts, hooks, gizmos, enum_type_names, component_type_names, task_hooks, scenes);
 }
 
 /// Generic main.zig generator for GLFW-based backends (bgfx, wgpu_native)
@@ -65,7 +63,9 @@ fn generateMainZigGlfw(
     enum_type_names: []const []const u8,
     component_type_names: []const []const u8,
     task_hooks: TaskHookScanResult,
+    scenes: []const []const u8,
 ) ![]const u8 {
+    _ = scenes;
     var buf: std.ArrayListUnmanaged(u8) = .{};
     const writer = buf.writer(allocator);
 
