@@ -326,8 +326,13 @@ fn FlecsView(comptime _includes: anytype, comptime _excludes: anytype) type {
         }
 
         /// Entity iterator that streams entities from a flecs query chunk by chunk.
-        /// Call `deinit()` if you break out of the loop early to free the query.
-        /// If you exhaust the iterator (next() returns null), cleanup is automatic.
+        /// The iterator owns a flecs query that must be freed. Always use with defer:
+        ///
+        ///   var iter = view.entityIterator();
+        ///   defer iter.deinit();
+        ///   while (iter.next()) |entity| { ... }
+        ///
+        /// `deinit()` is safe to call after exhaustion (next() returned null).
         pub fn entityIterator(self: *Self) EntityIterator {
             return EntityIterator.init(self);
         }

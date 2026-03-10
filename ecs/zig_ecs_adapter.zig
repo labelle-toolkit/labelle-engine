@@ -483,7 +483,7 @@ test "view excludes entities with excluded component" {
     var count: usize = 0;
     while (iter.next()) |entity| {
         // e2 should never appear
-        try std.testing.expect(!entity.eql(e2));
+        try std.testing.expect(entity != e2);
         count += 1;
     }
     try std.testing.expectEqual(@as(usize, 2), count);
