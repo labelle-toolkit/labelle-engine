@@ -242,8 +242,8 @@ fn generateBuildZigRaylibWasm(allocator: std.mem.Allocator, config: ProjectConfi
                 const adjusted_plugin_path = try std.fmt.allocPrint(allocator, "../../{s}", .{plugin.path.?});
                 defer allocator.free(adjusted_plugin_path);
 
-                // Template args: zig_name, adjusted_path, zig_name, zig_name, module_name
-                try zts.print(build_raylib_wasm_tmpl, "plugin_dep_path", .{ plugin_zig_name, adjusted_plugin_path, plugin_zig_name, plugin_zig_name, plugin_module_name }, writer);
+                // Template args: zig_name, adjusted_path, zig_name, zig_name, zig_name, zig_name
+                try zts.print(build_raylib_wasm_tmpl, "plugin_dep_path", .{ plugin_zig_name, adjusted_plugin_path, plugin_zig_name, plugin_zig_name, plugin_zig_name, plugin_zig_name }, writer);
             }
         } else {
             // Remote plugin: get module from dependency
@@ -386,8 +386,8 @@ pub fn generateBuildZig(allocator: std.mem.Allocator, config: ProjectConfig, tar
                 const adjusted_plugin_path = try std.fmt.allocPrint(allocator, "../../{s}", .{plugin.path.?});
                 defer allocator.free(adjusted_plugin_path);
 
-                // Template args: zig_name, adjusted_path, zig_name, zig_name, module_name
-                try zts.print(build_zig_tmpl, "plugin_dep_path", .{ plugin_zig_name, adjusted_plugin_path, plugin_zig_name, plugin_zig_name, plugin_module_name }, writer);
+                // Template args: zig_name, adjusted_path, zig_name, zig_name, zig_name, zig_name
+                try zts.print(build_zig_tmpl, "plugin_dep_path", .{ plugin_zig_name, adjusted_plugin_path, plugin_zig_name, plugin_zig_name, plugin_zig_name, plugin_zig_name }, writer);
             }
         } else {
             // Remote plugin: get module from dependency

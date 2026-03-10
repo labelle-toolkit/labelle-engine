@@ -129,6 +129,13 @@ pub fn build(b: *std.Build) void {
         b.modules.put("wgpu_native", wn) catch @panic("Failed to export wgpu_native module");
     }
 
+    // Re-export shared utility modules for standalone plugins
+    // This allows plugins to use engine_dep.builder.modules.get("zig_utils") etc.
+    // to share the same module instance, avoiding "file exists in two modules" errors.
+    if (labelle_dep.builder.modules.get("zig_utils")) |zu| {
+        b.modules.put("zig_utils", zu) catch @panic("Failed to export zig_utils module");
+    }
+
     // ==========================================================================
     // Other Dependencies
     // ==========================================================================
@@ -212,6 +219,9 @@ pub fn build(b: *std.Build) void {
     // labelle-core plugin SDK (RFC #289) — needed by ecs_interface for core.Ecs(Backend) trait
     const labelle_core_dep = b.dependency("labelle-core", .{ .target = target, .optimize = optimize });
     const labelle_core_mod = labelle_core_dep.module("labelle-core");
+
+    // Re-export labelle-core for standalone plugins that depend on it
+    b.modules.put("labelle-core", labelle_core_mod) catch @panic("Failed to export labelle-core module");
 
     // ECS interface
     const ecs_interface = b.addModule("ecs", .{

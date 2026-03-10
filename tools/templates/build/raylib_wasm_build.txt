@@ -69,7 +69,8 @@ pub fn build(b: *std.Build) !void {{
     }});
     {s}_mod.addImport("labelle-engine", engine_mod);
     {s}_mod.addImport("ecs", engine_dep.module("ecs"));
-    _ = "{s}"; // unused: module_name
+    if (engine_dep.builder.modules.get("labelle-core")) |lc| {s}_mod.addImport("labelle-core", lc);
+    if (engine_dep.builder.modules.get("zig_utils")) |zu| {s}_mod.addImport("zig_utils", zu);
 
 .plugin_dep_path_standalone
     // Standalone path-based plugin: manages its own dependencies (does not depend on labelle-engine).
