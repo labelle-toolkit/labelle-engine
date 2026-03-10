@@ -293,14 +293,7 @@ fn FlecsView(comptime _includes: anytype, comptime _excludes: anytype) type {
 
         pub fn init(registry: *Registry) Self {
             // Ensure all component types are registered with this world
-            inline for (_includes) |T| {
-                if (@sizeOf(T) == 0) {
-                    flecs.TAG(registry.world, T);
-                } else {
-                    flecs.COMPONENT(registry.world, T);
-                }
-            }
-            inline for (_excludes) |T| {
+            inline for (_includes ++ _excludes) |T| {
                 if (@sizeOf(T) == 0) {
                     flecs.TAG(registry.world, T);
                 } else {
