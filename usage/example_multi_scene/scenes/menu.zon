@@ -1,0 +1,5 @@
+.{
+    .name = "menu",
+    .scripts = .{ "scene_menu" },
+    .entities = .{},
+}
