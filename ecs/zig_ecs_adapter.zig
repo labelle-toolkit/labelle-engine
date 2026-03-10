@@ -260,9 +260,13 @@ pub const Registry = struct {
         // via position component mutation detection.
     }
 
-    /// Determine the view type based on the number of components
-    /// Single component -> BasicView (optimized), multiple -> MultiView
+    /// Determine the view type based on the number of components and excludes
+    /// Single include + no excludes -> BasicView (optimized), otherwise -> MultiView
     fn ViewType(comptime includes: anytype) type {
+        return ViewTypeExcluding(includes, .{});
+    }
+
+    fn ViewTypeExcluding(comptime includes: anytype, comptime excludes: anytype) type {
         comptime {
             const T = @TypeOf(includes);
             const ti = @typeInfo(T);
@@ -273,8 +277,8 @@ pub const Registry = struct {
                 @compileError("view() requires at least one component type; empty tuples are not supported");
             }
         }
-        if (includes.len == 1) return zig_ecs.BasicView(includes[0]);
-        return zig_ecs.MultiView(includes, .{});
+        if (includes.len == 1 and excludes.len == 0) return zig_ecs.BasicView(includes[0]);
+        return zig_ecs.MultiView(includes, excludes);
     }
 
     /// Create a view for iterating entities with specific components
@@ -282,6 +286,13 @@ pub const Registry = struct {
     /// Note: Single-component views return BasicView for better performance
     pub fn view(self: *Self, comptime includes: anytype) ViewType(includes) {
         return self.inner.view(includes, .{});
+    }
+
+    /// Create a view with exclude filters
+    /// Usage: var view = registry.viewExcluding(.{ Worker, Position }, .{ Locked });
+    /// Entities with any excluded component are skipped during iteration.
+    pub fn viewExcluding(self: *Self, comptime includes: anytype, comptime excludes: anytype) ViewTypeExcluding(includes, excludes) {
+        return self.inner.view(includes, excludes);
     }
 
     /// Create a basic view for a single component (faster than MultiView)
