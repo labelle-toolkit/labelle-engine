@@ -694,7 +694,7 @@ pub fn SceneLoaderWithGizmos(
         /// inline component definitions. Returns the created child entity.
         fn spawnNestedChild(
             comptime child_def: anytype,
-            _: Entity,
+            parent_entity: Entity,
             game: *GameType,
             parent_pos: Pos,
             ref_ctx: *RefCtx,
@@ -753,9 +753,17 @@ pub fn SceneLoaderWithGizmos(
                 fireOnReadyForComponents(child_entity, game, child_def.components);
             }
 
-            // Nested entities store accumulated world positions, so we skip
-            // setParent to avoid the renderer double-counting via computeWorldTransform.
-            // Parent-child linkage is maintained through component fields (e.g. storages).
+            // Register child for cascade destruction without setting Parent on the
+            // child. setParent would cause the renderer's computeWorldTransform to
+            // double-count positions (stored pos is already accumulated world coords).
+            const ChildrenComp = ChildrenComponent(Entity);
+            if (game.ecs_backend.getComponent(parent_entity, ChildrenComp)) |children_comp| {
+                children_comp.addChild(child_entity);
+            } else {
+                var new_children = ChildrenComp{};
+                new_children.addChild(child_entity);
+                game.ecs_backend.addComponent(parent_entity, new_children);
+            }
 
             // Register by name if present
             if (@hasField(@TypeOf(child_def), "name")) {
