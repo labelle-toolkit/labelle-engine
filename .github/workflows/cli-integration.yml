@@ -78,20 +78,12 @@ jobs:
       - name: Test CLI workflow - Create raylib project
         run: |
           cd test-projects
-          echo "::group::Creating raylib project"
-          labelle init test_raylib_game --backend=raylib --ecs=zig_ecs
-          echo "::endgroup::"
-
-      - name: Test CLI workflow - Patch project to use local engine
-        run: |
-          cd test-projects/test_raylib_game
-          # Override version fields to point at the locally checked-out repos
-          sed -i 's|.core_version = ".*"|.core_version = "local:../../labelle-core"|' project.labelle
-          sed -i 's|.engine_version = ".*"|.engine_version = "local:../../labelle-engine"|' project.labelle
-          sed -i 's|.gfx_version = ".*"|.gfx_version = "local:../../labelle-gfx"|' project.labelle
-          sed -i 's|.labelle_version = ".*"|.labelle_version = "local:../../labelle-cli"|' project.labelle
-          echo "Patched project.labelle:"
-          cat project.labelle
+          labelle init test_raylib_game --backend=raylib --ecs=zig_ecs \
+            --core-version="local:../../labelle-core" \
+            --engine-version="local:../../labelle-engine" \
+            --gfx-version="local:../../labelle-gfx" \
+            --labelle-version="local:../../labelle-cli"
+          cat test_raylib_game/project.labelle
 
       - name: Test CLI workflow - Generate with local engine
         shell: bash
@@ -179,14 +171,12 @@ jobs:
           echo "::group::Creating project with multiple targets"
 
           cd test-projects
-          labelle init test_multi_target --backend=raylib --ecs=zig_ecs
+          labelle init test_multi_target --backend=raylib --ecs=zig_ecs \
+            --core-version="local:../../labelle-core" \
+            --engine-version="local:../../labelle-engine" \
+            --gfx-version="local:../../labelle-gfx" \
+            --labelle-version="local:../../labelle-cli"
           cd test_multi_target
-
-          # Patch to use local repos
-          sed -i 's|.core_version = ".*"|.core_version = "local:../../labelle-core"|' project.labelle
-          sed -i 's|.engine_version = ".*"|.engine_version = "local:../../labelle-engine"|' project.labelle
-          sed -i 's|.gfx_version = ".*"|.gfx_version = "local:../../labelle-gfx"|' project.labelle
-          sed -i 's|.labelle_version = ".*"|.labelle_version = "local:../../labelle-cli"|' project.labelle
 
           BUILD_DIR=".labelle/raylib_desktop"
           success=0
