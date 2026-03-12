@@ -567,7 +567,7 @@ pub fn GameConfig(
 
         // ── Atlas Resolution ──────────────────────────────────────
 
-        const has_atlas_sprite_fields = @hasField(Sprite, "source_rect") and @hasField(Sprite, "texture");
+        const has_atlas_sprite_fields = @hasField(Sprite, "source_rect") and @hasField(Sprite, "texture") and @hasField(Sprite, "sprite_name");
 
         /// Resolve sprite_name → source_rect + texture for all atlas sprites.
         /// Called automatically before renderer sync each frame.

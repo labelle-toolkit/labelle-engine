@@ -433,8 +433,9 @@ fn parseFramesObject(
         const sprite = extractSpriteData(val) orelse continue;
 
         const owned_name = try allocator.dupe(u8, name);
-        errdefer allocator.free(owned_name);
-        try sprites.put(owned_name, sprite);
+        if (sprites.fetchPut(owned_name, sprite) catch null) |old| {
+            allocator.free(old.key);
+        }
     }
 }
 
@@ -454,8 +455,9 @@ fn parseFramesArray(
         const sprite = extractSpriteData(val) orelse continue;
 
         const owned_name = try allocator.dupe(u8, name);
-        errdefer allocator.free(owned_name);
-        try sprites.put(owned_name, sprite);
+        if (sprites.fetchPut(owned_name, sprite) catch null) |old| {
+            allocator.free(old.key);
+        }
     }
 }
 
