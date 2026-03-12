@@ -81,8 +81,7 @@ jobs:
           labelle init test_raylib_game --backend=raylib --ecs=zig_ecs \
             --core-version="local:../../labelle-core" \
             --engine-version="local:../../labelle-engine" \
-            --gfx-version="local:../../labelle-gfx" \
-            --labelle-version="local:../../labelle-cli"
+            --gfx-version="local:../../labelle-gfx"
           cat test_raylib_game/project.labelle
 
       - name: Test CLI workflow - Generate with local engine
@@ -174,8 +173,7 @@ jobs:
           labelle init test_multi_target --backend=raylib --ecs=zig_ecs \
             --core-version="local:../../labelle-core" \
             --engine-version="local:../../labelle-engine" \
-            --gfx-version="local:../../labelle-gfx" \
-            --labelle-version="local:../../labelle-cli"
+            --gfx-version="local:../../labelle-gfx"
           cd test_multi_target
 
           BUILD_DIR=".labelle/raylib_desktop"
