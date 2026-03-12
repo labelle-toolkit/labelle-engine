@@ -29,6 +29,12 @@ jobs:
           repository: labelle-toolkit/labelle-gfx
           path: labelle-gfx
 
+      - name: Checkout labelle-cli (sibling dependency)
+        uses: actions/checkout@v4
+        with:
+          repository: labelle-toolkit/labelle-cli
+          path: labelle-cli
+
       - name: Install Zig
         uses: mlugg/setup-zig@v2
         with:
@@ -81,7 +87,8 @@ jobs:
           labelle init test_raylib_game --backend=raylib --ecs=zig_ecs \
             --core-version="local:../../labelle-core" \
             --engine-version="local:../../labelle-engine" \
-            --gfx-version="local:../../labelle-gfx"
+            --gfx-version="local:../../labelle-gfx" \
+            --labelle-version="local:../../labelle-cli"
           cat test_raylib_game/project.labelle
 
       - name: Test CLI workflow - Generate with local engine
@@ -173,7 +180,8 @@ jobs:
           labelle init test_multi_target --backend=raylib --ecs=zig_ecs \
             --core-version="local:../../labelle-core" \
             --engine-version="local:../../labelle-engine" \
-            --gfx-version="local:../../labelle-gfx"
+            --gfx-version="local:../../labelle-gfx" \
+            --labelle-version="local:../../labelle-cli"
           cd test_multi_target
 
           BUILD_DIR=".labelle/raylib_desktop"
