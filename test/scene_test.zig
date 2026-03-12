@@ -1,260 +1,671 @@
 const std = @import("std");
-const zspec = @import("zspec");
-const expect = zspec.expect;
+const testing = std.testing;
 
-const engine = @import("labelle-engine");
-const ecs = @import("ecs");
+const core = @import("labelle-core");
+const Position = core.Position;
+const VisualType = core.VisualType;
 
-const Game = engine.Game;
+const engine = @import("engine");
 const Scene = engine.Scene;
-const SceneContext = engine.SceneContext;
-const EntityInstance = engine.EntityInstance;
-const Entity = engine.Entity;
-const RenderPipeline = engine.RenderPipeline;
+const SceneLoader = engine.SceneLoader;
+const SimpleSceneLoader = engine.SimpleSceneLoader;
+const PrefabRegistry = engine.PrefabRegistry;
+const ComponentRegistry = engine.ComponentRegistry;
+const ScriptRegistry = engine.ScriptRegistry;
+const NoScripts = engine.NoScripts;
+const isReference = engine.isReference;
+const extractRefInfo = engine.extractRefInfo;
+const ParentComponent = engine.scene_mod.ParentComponent;
+const ChildrenComponent = engine.scene_mod.ChildrenComponent;
 
-test {
-    zspec.runAll(@This());
-}
+const game_mod = engine.game_mod;
 
-// Note: Scene and SceneContext have circular dependency with script.UpdateFn
-// so we can only test the module exports without triggering the dependency loop
+// ============================================================
+// Test Helpers
+// ============================================================
 
-pub const MODULE_EXPORTS = struct {
-    pub const PREFAB_EXPORTS = struct {
-        test "exports SpriteConfig type" {
-            try expect.toBeTrue(@hasDecl(engine, "SpriteConfig"));
-        }
-
-        test "exports PrefabRegistry function" {
-            try expect.toBeTrue(@hasDecl(engine, "PrefabRegistry"));
-        }
-    };
-
-    pub const LOADER_EXPORTS = struct {
-        test "exports SceneLoader function" {
-            try expect.toBeTrue(@hasDecl(engine, "SceneLoader"));
-        }
-    };
-
-    pub const COMPONENT_EXPORTS = struct {
-        test "exports ComponentRegistry function" {
-            try expect.toBeTrue(@hasDecl(engine, "ComponentRegistry"));
-        }
-    };
-
-    pub const SCRIPT_EXPORTS = struct {
-        test "exports ScriptRegistry function" {
-            try expect.toBeTrue(@hasDecl(engine, "ScriptRegistry"));
-        }
-    };
-
-    pub const SCENE_EXPORTS = struct {
-        test "exports Scene type" {
-            try expect.toBeTrue(@hasDecl(engine, "Scene"));
-        }
-
-        test "exports SceneContext type" {
-            try expect.toBeTrue(@hasDecl(engine, "SceneContext"));
-        }
-
-        test "exports EntityInstance type" {
-            try expect.toBeTrue(@hasDecl(engine, "EntityInstance"));
-        }
-    };
-
-    pub const EXTERNAL_EXPORTS = struct {
-        test "exports Game type" {
-            try expect.toBeTrue(@hasDecl(engine, "Game"));
-        }
-
-        test "exports RenderPipeline type" {
-            try expect.toBeTrue(@hasDecl(engine, "RenderPipeline"));
-        }
-
-        test "exports RetainedEngine type" {
-            try expect.toBeTrue(@hasDecl(engine, "RetainedEngine"));
-        }
-
-        test "exports Position type" {
-            try expect.toBeTrue(@hasDecl(engine, "Position"));
-        }
-
-        test "exports Sprite type" {
-            try expect.toBeTrue(@hasDecl(engine, "Sprite"));
-        }
-
-        test "exports Shape type" {
-            try expect.toBeTrue(@hasDecl(engine, "Shape"));
-        }
-
-        test "exports Registry type" {
-            try expect.toBeTrue(@hasDecl(engine, "Registry"));
-        }
-
-        test "exports Entity type" {
-            try expect.toBeTrue(@hasDecl(engine, "Entity"));
-        }
-    };
-
-    pub const SUBMODULE_EXPORTS = struct {
-        test "exports prefab submodule" {
-            try expect.toBeTrue(@hasDecl(engine.scene, "prefab"));
-        }
-
-        test "exports loader submodule" {
-            try expect.toBeTrue(@hasDecl(engine.scene, "loader"));
-        }
-
-        test "exports component submodule" {
-            try expect.toBeTrue(@hasDecl(engine.scene, "component"));
-        }
-
-        test "exports script submodule" {
-            try expect.toBeTrue(@hasDecl(engine.scene, "script"));
-        }
-    };
+const Health = struct {
+    current: f32 = 0,
+    max: f32 = 100,
 };
 
-// ============================================
-// ENTITY DESTROY CLEANUP (Issue #268)
-// ============================================
-
-fn createTestGame() Game {
-    const alloc = std.testing.allocator;
-    var game: Game = undefined;
-    game.allocator = alloc;
-    game.registry = ecs.Registry.init(alloc);
-    game.pipeline = RenderPipeline.init(alloc, undefined);
-    game.on_entity_destroy_cleanup = null;
-    return game;
-}
-
-fn fixTestGamePointers(game: *Game) void {
-    game.pipeline.registry = &game.registry;
-}
-
-fn deinitTestGame(game: *Game) void {
-    game.pipeline.deinit();
-    game.registry.deinit();
-}
-
-pub const ENTITY_DESTROY_CLEANUP = struct {
-    pub const REMOVE_ENTITY = struct {
-        test "removeEntity removes entity from scene list" {
-            var game = createTestGame();
-            fixTestGamePointers(&game);
-            defer deinitTestGame(&game);
-
-            const ctx = SceneContext.init(&game);
-            var scene = Scene.init("test", &.{}, &.{}, ctx);
-            defer scene.entities.deinit(std.testing.allocator);
-
-            const e1 = game.registry.createEntity();
-            const e2 = game.registry.createEntity();
-            const e3 = game.registry.createEntity();
-
-            try scene.addEntity(.{ .entity = e1 });
-            try scene.addEntity(.{ .entity = e2 });
-            try scene.addEntity(.{ .entity = e3 });
-
-            try expect.equal(scene.entityCount(), 3);
-
-            scene.removeEntity(e2);
-
-            try expect.equal(scene.entityCount(), 2);
-        }
-
-        test "removeEntity with nonexistent entity is a no-op" {
-            var game = createTestGame();
-            fixTestGamePointers(&game);
-            defer deinitTestGame(&game);
-
-            const ctx = SceneContext.init(&game);
-            var scene = Scene.init("test", &.{}, &.{}, ctx);
-            defer scene.entities.deinit(std.testing.allocator);
-
-            const e1 = game.registry.createEntity();
-            const e2 = game.registry.createEntity();
-
-            try scene.addEntity(.{ .entity = e1 });
-
-            scene.removeEntity(e2);
-
-            try expect.equal(scene.entityCount(), 1);
-        }
-
-        test "removeEntity on empty scene is a no-op" {
-            var game = createTestGame();
-            fixTestGamePointers(&game);
-            defer deinitTestGame(&game);
-
-            const ctx = SceneContext.init(&game);
-            var scene = Scene.init("test", &.{}, &.{}, ctx);
-            defer scene.entities.deinit(std.testing.allocator);
-
-            const e1 = game.registry.createEntity();
-
-            scene.removeEntity(e1);
-
-            try expect.equal(scene.entityCount(), 0);
-        }
-    };
-
-    pub const CALLBACK_WIRING = struct {
-        test "destroyEntity removes entity from scene list via callback" {
-            var game = createTestGame();
-            fixTestGamePointers(&game);
-            defer deinitTestGame(&game);
-
-            const ctx = SceneContext.init(&game);
-            var scene = Scene.init("test", &.{}, &.{}, ctx);
-            defer scene.entities.deinit(std.testing.allocator);
-
-            const e1 = game.registry.createEntity();
-            const e2 = game.registry.createEntity();
-
-            try scene.addEntity(.{ .entity = e1 });
-            try scene.addEntity(.{ .entity = e2 });
-
-            // Register callback via initScripts (the public API)
-            scene.initScripts();
-            defer {
-                game.on_entity_destroy_cleanup = null;
-            }
-
-            try expect.equal(scene.entityCount(), 2);
-
-            // Destroy entity through Game — should trigger callback and remove from scene
-            game.destroyEntity(e1);
-
-            try expect.equal(scene.entityCount(), 1);
-            try expect.equal(scene.entities.items[0].entity, e2);
-        }
-
-        test "destroyed entity is not in scene list during deinit" {
-            var game = createTestGame();
-            fixTestGamePointers(&game);
-            defer deinitTestGame(&game);
-
-            const ctx = SceneContext.init(&game);
-            var scene = Scene.init("test", &.{}, &.{}, ctx);
-
-            const e1 = game.registry.createEntity();
-            const e2 = game.registry.createEntity();
-            const e3 = game.registry.createEntity();
-
-            try scene.addEntity(.{ .entity = e1 });
-            try scene.addEntity(.{ .entity = e2 });
-            try scene.addEntity(.{ .entity = e3 });
-
-            // Register callback via initScripts
-            scene.initScripts();
-
-            game.destroyEntity(e2);
-
-            // Only 2 entities remain — deinit should destroy them cleanly (no panic)
-            try expect.equal(scene.entityCount(), 2);
-            scene.deinit();
-        }
-    };
+const Velocity = struct {
+    x: f32 = 0,
+    y: f32 = 0,
 };
+
+const TestComponents = ComponentRegistry(.{
+    .Health = Health,
+    .Velocity = Velocity,
+});
+
+const TestPrefabs = PrefabRegistry(.{
+    .player = .{
+        .components = .{
+            .Position = .{ .x = 100, .y = 200 },
+            .Sprite = .{ .sprite_name = "player.png", .scale_x = 2.0, .scale_y = 2.0 },
+        },
+    },
+    .enemy = .{
+        .components = .{
+            .Sprite = .{ .sprite_name = "enemy.png" },
+            .Health = .{ .current = 50, .max = 50 },
+        },
+    },
+    .rock = .{
+        .components = .{
+            .Position = .{ .x = 0, .y = 0 },
+        },
+    },
+});
+
+// Test script module
+const test_script = struct {
+    var init_called: bool = false;
+    var update_count: u32 = 0;
+    var deinit_called: bool = false;
+
+    pub fn init(_: *anyopaque, _: *anyopaque) void {
+        init_called = true;
+    }
+    pub fn update(_: *anyopaque, _: *anyopaque, _: f32) void {
+        update_count += 1;
+    }
+    pub fn deinit(_: *anyopaque, _: *anyopaque) void {
+        deinit_called = true;
+    }
+
+    fn reset() void {
+        init_called = false;
+        update_count = 0;
+        deinit_called = false;
+    }
+};
+
+const TestScripts = ScriptRegistry(struct {
+    pub const movement = test_script;
+});
+
+const TestGame = game_mod.Game;
+const TestLoader = SceneLoader(TestGame, TestPrefabs, TestComponents, TestScripts);
+const SimpleTestLoader = SimpleSceneLoader(TestGame, TestPrefabs, TestComponents);
+const TestScene = Scene(TestGame.EntityType);
+
+// ============================================================
+// Scene Loading Tests
+// ============================================================
+
+test "Scene: load simple prefab entity" {
+    var game = TestGame.init(testing.allocator);
+    defer game.deinit();
+
+    var scene = try SimpleTestLoader.load(.{
+        .name = "test",
+        .entities = .{
+            .{ .prefab = "player" },
+        },
+    }, &game, testing.allocator);
+    defer scene.deinit();
+
+    try testing.expectEqual(1, scene.entityCount());
+    try testing.expectEqualStrings("test", scene.name);
+    try testing.expectEqualStrings("player", scene.entities.items[0].prefab_name.?);
+    try testing.expectEqual(VisualType.sprite, scene.entities.items[0].visual_type);
+}
+
+test "Scene: prefab position from prefab defaults" {
+    var game = TestGame.init(testing.allocator);
+    defer game.deinit();
+
+    var scene = try SimpleTestLoader.load(.{
+        .name = "pos_test",
+        .entities = .{
+            .{ .prefab = "player" },
+        },
+    }, &game, testing.allocator);
+    defer scene.deinit();
+
+    const entity = scene.entities.items[0].entity;
+    const pos = game.ecs_backend.getComponent(entity, Position).?;
+    try testing.expectEqual(100.0, pos.x);
+    try testing.expectEqual(200.0, pos.y);
+}
+
+test "Scene: prefab position overridden by scene" {
+    var game = TestGame.init(testing.allocator);
+    defer game.deinit();
+
+    var scene = try SimpleTestLoader.load(.{
+        .name = "override_test",
+        .entities = .{
+            .{ .prefab = "player", .components = .{ .Position = .{ .x = 500, .y = 300 } } },
+        },
+    }, &game, testing.allocator);
+    defer scene.deinit();
+
+    const entity = scene.entities.items[0].entity;
+    const pos = game.ecs_backend.getComponent(entity, Position).?;
+    try testing.expectEqual(500.0, pos.x);
+    try testing.expectEqual(300.0, pos.y);
+}
+
+test "Scene: inline entity with components" {
+    var game = TestGame.init(testing.allocator);
+    defer game.deinit();
+
+    var scene = try SimpleTestLoader.load(.{
+        .name = "inline_test",
+        .entities = .{
+            .{
+                .components = .{
+                    .Position = .{ .x = 200, .y = 150 },
+                    .Sprite = .{ .sprite_name = "gem" },
+                },
+            },
+        },
+    }, &game, testing.allocator);
+    defer scene.deinit();
+
+    try testing.expectEqual(1, scene.entityCount());
+    try testing.expectEqual(VisualType.sprite, scene.entities.items[0].visual_type);
+    try testing.expect(scene.entities.items[0].prefab_name == null);
+}
+
+test "Scene: custom component via registry" {
+    var game = TestGame.init(testing.allocator);
+    defer game.deinit();
+
+    var scene = try SimpleTestLoader.load(.{
+        .name = "custom_comp_test",
+        .entities = .{
+            .{
+                .components = .{
+                    .Position = .{ .x = 0, .y = 0 },
+                    .Health = .{ .current = 75, .max = 100 },
+                },
+            },
+        },
+    }, &game, testing.allocator);
+    defer scene.deinit();
+
+    const entity = scene.entities.items[0].entity;
+    const health = game.ecs_backend.getComponent(entity, Health).?;
+    try testing.expectEqual(75.0, health.current);
+    try testing.expectEqual(100.0, health.max);
+}
+
+test "Scene: prefab with component override (merging)" {
+    var game = TestGame.init(testing.allocator);
+    defer game.deinit();
+
+    var scene = try SimpleTestLoader.load(.{
+        .name = "merge_test",
+        .entities = .{
+            .{
+                .prefab = "enemy",
+                .components = .{
+                    .Health = .{ .current = 25 },
+                },
+            },
+        },
+    }, &game, testing.allocator);
+    defer scene.deinit();
+
+    const entity = scene.entities.items[0].entity;
+    const health = game.ecs_backend.getComponent(entity, Health).?;
+    try testing.expectEqual(25.0, health.current);
+    try testing.expectEqual(50.0, health.max);
+}
+
+test "Scene: prefab with extra scene-only component" {
+    var game = TestGame.init(testing.allocator);
+    defer game.deinit();
+
+    var scene = try SimpleTestLoader.load(.{
+        .name = "extra_comp_test",
+        .entities = .{
+            .{
+                .prefab = "player",
+                .components = .{
+                    .Velocity = .{ .x = 10, .y = 0 },
+                },
+            },
+        },
+    }, &game, testing.allocator);
+    defer scene.deinit();
+
+    const entity = scene.entities.items[0].entity;
+    const vel = game.ecs_backend.getComponent(entity, Velocity).?;
+    try testing.expectEqual(10.0, vel.x);
+    try testing.expectEqual(0.0, vel.y);
+}
+
+test "Scene: multiple entities" {
+    var game = TestGame.init(testing.allocator);
+    defer game.deinit();
+
+    var scene = try SimpleTestLoader.load(.{
+        .name = "multi_test",
+        .entities = .{
+            .{ .prefab = "player" },
+            .{ .prefab = "enemy" },
+            .{ .components = .{ .Position = .{ .x = 50, .y = 75 }, .Health = .{ .current = 100 } } },
+        },
+    }, &game, testing.allocator);
+    defer scene.deinit();
+
+    try testing.expectEqual(3, scene.entityCount());
+}
+
+test "Scene: data-only entity (no visual)" {
+    var game = TestGame.init(testing.allocator);
+    defer game.deinit();
+
+    var scene = try SimpleTestLoader.load(.{
+        .name = "data_only",
+        .entities = .{
+            .{
+                .components = .{
+                    .Position = .{ .x = 10, .y = 20 },
+                    .Health = .{ .current = 100, .max = 100 },
+                },
+            },
+        },
+    }, &game, testing.allocator);
+    defer scene.deinit();
+
+    try testing.expectEqual(VisualType.none, scene.entities.items[0].visual_type);
+}
+
+test "Scene: scripts lifecycle" {
+    test_script.reset();
+
+    var game = TestGame.init(testing.allocator);
+    defer game.deinit();
+
+    var scene = try TestLoader.load(.{
+        .name = "script_test",
+        .scripts = .{"movement"},
+        .entities = .{
+            .{ .prefab = "player" },
+        },
+    }, &game, testing.allocator);
+
+    try testing.expect(!test_script.init_called);
+
+    // First update triggers init
+    scene.update(0.016);
+    try testing.expect(test_script.init_called);
+    try testing.expectEqual(1, test_script.update_count);
+
+    // Subsequent updates
+    scene.update(0.016);
+    scene.update(0.016);
+    try testing.expectEqual(3, test_script.update_count);
+
+    // Deinit fires on scene deinit
+    try testing.expect(!test_script.deinit_called);
+    scene.deinit();
+    try testing.expect(test_script.deinit_called);
+}
+
+test "Scene: removeEntity" {
+    var game = TestGame.init(testing.allocator);
+    defer game.deinit();
+
+    var scene = try SimpleTestLoader.load(.{
+        .name = "remove_test",
+        .entities = .{
+            .{ .prefab = "player" },
+            .{ .prefab = "enemy" },
+        },
+    }, &game, testing.allocator);
+    defer scene.deinit();
+
+    try testing.expectEqual(2, scene.entityCount());
+
+    const player_entity = scene.entities.items[0].entity;
+    scene.removeEntity(player_entity);
+    try testing.expectEqual(1, scene.entityCount());
+}
+
+test "Scene: instantiatePrefab at runtime" {
+    var game = TestGame.init(testing.allocator);
+    defer game.deinit();
+
+    var scene = try SimpleTestLoader.load(.{
+        .name = "runtime_test",
+        .entities = .{},
+    }, &game, testing.allocator);
+    defer scene.deinit();
+
+    try testing.expectEqual(0, scene.entityCount());
+
+    const entity = try SimpleTestLoader.instantiatePrefab("player", &scene, &game, 300, 400);
+    try testing.expectEqual(1, scene.entityCount());
+
+    const pos = game.ecs_backend.getComponent(entity, Position).?;
+    try testing.expectEqual(300.0, pos.x);
+    try testing.expectEqual(400.0, pos.y);
+}
+
+// ============================================================
+// Entity Reference Tests
+// ============================================================
+
+const Follower = struct {
+    target: u32 = 0, // Entity type
+    speed: f32 = 1.0,
+};
+
+const RefTestComponents = ComponentRegistry(.{
+    .Health = Health,
+    .Velocity = Velocity,
+    .Follower = Follower,
+});
+
+const RefTestLoader = SceneLoader(TestGame, TestPrefabs, RefTestComponents, NoScripts);
+
+test "isReference: detects reference markers" {
+    try testing.expect(isReference(.{ .ref = .self }));
+    try testing.expect(isReference(.{ .ref = .{ .entity = "player" } }));
+    try testing.expect(isReference(.{ .ref = .{ .id = "player_1" } }));
+    try testing.expect(!isReference(.{ .x = 10 }));
+    try testing.expect(!isReference(.{ .name = "test" }));
+}
+
+test "extractRefInfo: self reference" {
+    const info = extractRefInfo(.{ .ref = .self }).?;
+    try testing.expect(info.is_self);
+    try testing.expect(info.ref_key == null);
+    try testing.expect(!info.is_id_ref);
+}
+
+test "extractRefInfo: entity name reference" {
+    const info = extractRefInfo(.{ .ref = .{ .entity = "player" } }).?;
+    try testing.expect(!info.is_self);
+    try testing.expectEqualStrings("player", info.ref_key.?);
+    try testing.expect(!info.is_id_ref);
+}
+
+test "extractRefInfo: entity ID reference" {
+    const info = extractRefInfo(.{ .ref = .{ .id = "player_1" } }).?;
+    try testing.expect(!info.is_self);
+    try testing.expectEqualStrings("player_1", info.ref_key.?);
+    try testing.expect(info.is_id_ref);
+}
+
+test "generateAutoId: produces indexed IDs" {
+    const generateAutoId = engine.scene_mod.generateAutoId;
+    try testing.expectEqualStrings("_e0", generateAutoId(0));
+    try testing.expectEqualStrings("_e1", generateAutoId(1));
+    try testing.expectEqualStrings("_e42", generateAutoId(42));
+}
+
+test "getEntityId: explicit ID takes precedence" {
+    const getEntityId = engine.scene_mod.getEntityId;
+    try testing.expectEqualStrings("my_id", getEntityId(.{ .id = "my_id" }, 5));
+    try testing.expectEqualStrings("_e5", getEntityId(.{ .name = "foo" }, 5));
+    try testing.expectEqualStrings("_e0", getEntityId(.{}, 0));
+}
+
+test "Scene: entity reference by name" {
+    var game = TestGame.init(testing.allocator);
+    defer game.deinit();
+
+    var scene = try RefTestLoader.load(.{
+        .name = "ref_test",
+        .entities = .{
+            .{ .name = "leader", .components = .{ .Position = .{ .x = 100, .y = 100 }, .Health = .{ .current = 100 } } },
+            .{ .components = .{ .Position = .{ .x = 200, .y = 200 }, .Follower = .{ .target = .{ .ref = .{ .entity = "leader" } }, .speed = 2.0 } } },
+        },
+    }, &game, testing.allocator);
+    defer scene.deinit();
+
+    try testing.expectEqual(2, scene.entityCount());
+
+    const leader_entity = scene.entities.items[0].entity;
+    const follower_entity = scene.entities.items[1].entity;
+
+    // Follower's target should be resolved to the leader entity
+    const follower = game.ecs_backend.getComponent(follower_entity, Follower).?;
+    try testing.expectEqual(leader_entity, follower.target);
+    try testing.expectEqual(2.0, follower.speed);
+}
+
+test "Scene: entity self-reference" {
+    var game = TestGame.init(testing.allocator);
+    defer game.deinit();
+
+    var scene = try RefTestLoader.load(.{
+        .name = "self_ref_test",
+        .entities = .{
+            .{ .components = .{ .Position = .{ .x = 0, .y = 0 }, .Follower = .{ .target = .{ .ref = .self } } } },
+        },
+    }, &game, testing.allocator);
+    defer scene.deinit();
+
+    const entity = scene.entities.items[0].entity;
+    const follower = game.ecs_backend.getComponent(entity, Follower).?;
+    try testing.expectEqual(entity, follower.target);
+}
+
+test "Scene: entity reference by ID" {
+    var game = TestGame.init(testing.allocator);
+    defer game.deinit();
+
+    var scene = try RefTestLoader.load(.{
+        .name = "id_ref_test",
+        .entities = .{
+            .{ .id = "hero_1", .components = .{ .Position = .{ .x = 50, .y = 50 } } },
+            .{ .components = .{ .Position = .{ .x = 200, .y = 200 }, .Follower = .{ .target = .{ .ref = .{ .id = "hero_1" } } } } },
+        },
+    }, &game, testing.allocator);
+    defer scene.deinit();
+
+    const hero_entity = scene.entities.items[0].entity;
+    const follower_entity = scene.entities.items[1].entity;
+    const follower = game.ecs_backend.getComponent(follower_entity, Follower).?;
+    try testing.expectEqual(hero_entity, follower.target);
+}
+
+test "Scene: forward entity reference (child before parent)" {
+    var game = TestGame.init(testing.allocator);
+    defer game.deinit();
+
+    // Follower is defined BEFORE the leader -- forward reference
+    var scene = try RefTestLoader.load(.{
+        .name = "forward_ref_test",
+        .entities = .{
+            .{ .components = .{ .Position = .{ .x = 200, .y = 200 }, .Follower = .{ .target = .{ .ref = .{ .entity = "leader" } } } } },
+            .{ .name = "leader", .components = .{ .Position = .{ .x = 100, .y = 100 } } },
+        },
+    }, &game, testing.allocator);
+    defer scene.deinit();
+
+    const follower_entity = scene.entities.items[0].entity;
+    const leader_entity = scene.entities.items[1].entity;
+    const follower = game.ecs_backend.getComponent(follower_entity, Follower).?;
+    try testing.expectEqual(leader_entity, follower.target);
+}
+
+// ============================================================
+// Parent-Child Hierarchy Tests
+// ============================================================
+
+test "Scene: parent-child via .parent field" {
+    var game = TestGame.init(testing.allocator);
+    defer game.deinit();
+
+    const Parent = ParentComponent(u32);
+    const Children = ChildrenComponent(u32);
+
+    var scene = try RefTestLoader.load(.{
+        .name = "parent_test",
+        .entities = .{
+            .{ .name = "parent", .components = .{ .Position = .{ .x = 100, .y = 100 } } },
+            .{ .name = "child", .parent = "parent", .components = .{ .Position = .{ .x = 150, .y = 150 } } },
+        },
+    }, &game, testing.allocator);
+    defer scene.deinit();
+
+    const parent_entity = scene.entities.items[0].entity;
+    const child_entity = scene.entities.items[1].entity;
+
+    // Child should have Parent component
+    const parent_comp = game.ecs_backend.getComponent(child_entity, Parent).?;
+    try testing.expectEqual(parent_entity, parent_comp.entity);
+
+    // Parent should have Children component
+    const children_comp = game.ecs_backend.getComponent(parent_entity, Children).?;
+    try testing.expectEqual(1, children_comp.count());
+    try testing.expectEqual(child_entity, children_comp.getChildren()[0]);
+}
+
+test "Scene: parent-child forward reference (child before parent in .zon)" {
+    var game = TestGame.init(testing.allocator);
+    defer game.deinit();
+
+    const Parent = ParentComponent(u32);
+
+    // Child defined BEFORE parent -- forward reference
+    var scene = try RefTestLoader.load(.{
+        .name = "forward_parent_test",
+        .entities = .{
+            .{ .name = "child", .parent = "the_parent", .components = .{ .Position = .{ .x = 0, .y = 0 } } },
+            .{ .name = "the_parent", .components = .{ .Position = .{ .x = 50, .y = 50 } } },
+        },
+    }, &game, testing.allocator);
+    defer scene.deinit();
+
+    const child_entity = scene.entities.items[0].entity;
+    const parent_entity = scene.entities.items[1].entity;
+
+    const parent_comp = game.ecs_backend.getComponent(child_entity, Parent).?;
+    try testing.expectEqual(parent_entity, parent_comp.entity);
+}
+
+// ============================================================
+// onReady Callback Tests
+// ============================================================
+
+const OnReadyTracker = struct {
+    var ready_called: bool = false;
+    var health_seen_at_ready: ?f32 = null;
+    var velocity_seen_at_ready: ?f32 = null;
+
+    fn reset() void {
+        ready_called = false;
+        health_seen_at_ready = null;
+        velocity_seen_at_ready = null;
+    }
+};
+
+const ReadyHealth = struct {
+    current: f32 = 0,
+    max: f32 = 100,
+
+    pub fn onReady(payload: engine.ComponentPayload) void {
+        const game = payload.getGame(TestGame);
+        const entity: u32 = @intCast(payload.entity_id);
+        OnReadyTracker.ready_called = true;
+        // At onReady time, sibling components should be accessible
+        if (game.getComponent(entity, ReadyVelocity)) |vel| {
+            OnReadyTracker.velocity_seen_at_ready = vel.x;
+        }
+    }
+};
+
+const ReadyVelocity = struct {
+    x: f32 = 0,
+    y: f32 = 0,
+
+    pub fn onReady(payload: engine.ComponentPayload) void {
+        const game = payload.getGame(TestGame);
+        const entity: u32 = @intCast(payload.entity_id);
+        // At onReady time, sibling components should be accessible
+        if (game.getComponent(entity, ReadyHealth)) |hp| {
+            OnReadyTracker.health_seen_at_ready = hp.current;
+        }
+    }
+};
+
+const ReadyComponents = ComponentRegistry(.{
+    .Health = ReadyHealth,
+    .Velocity = ReadyVelocity,
+});
+
+const ReadyTestLoader = SimpleSceneLoader(TestGame, TestPrefabs, ReadyComponents);
+
+test "Scene: onReady fires after all components are added" {
+    OnReadyTracker.reset();
+    var game = TestGame.init(testing.allocator);
+    defer game.deinit();
+
+    var scene = try ReadyTestLoader.load(.{
+        .name = "ready_test",
+        .entities = .{
+            .{
+                .components = .{
+                    .Position = .{ .x = 0, .y = 0 },
+                    .Health = .{ .current = 80, .max = 100 },
+                    .Velocity = .{ .x = 5, .y = 0 },
+                },
+            },
+        },
+    }, &game, testing.allocator);
+    defer scene.deinit();
+
+    // onReady should have fired
+    try testing.expect(OnReadyTracker.ready_called);
+}
+
+test "Scene: onReady can access sibling components" {
+    OnReadyTracker.reset();
+    var game = TestGame.init(testing.allocator);
+    defer game.deinit();
+
+    var scene = try ReadyTestLoader.load(.{
+        .name = "ready_sibling_test",
+        .entities = .{
+            .{
+                .components = .{
+                    .Position = .{ .x = 0, .y = 0 },
+                    .Health = .{ .current = 42, .max = 100 },
+                    .Velocity = .{ .x = 7, .y = 0 },
+                },
+            },
+        },
+    }, &game, testing.allocator);
+    defer scene.deinit();
+
+    // ReadyHealth.onReady should have seen Velocity
+    try testing.expect(OnReadyTracker.velocity_seen_at_ready != null);
+    try testing.expectEqual(7.0, OnReadyTracker.velocity_seen_at_ready.?);
+
+    // ReadyVelocity.onReady should have seen Health
+    try testing.expect(OnReadyTracker.health_seen_at_ready != null);
+    try testing.expectEqual(42.0, OnReadyTracker.health_seen_at_ready.?);
+}
+
+test "Scene: multiple children under one parent" {
+    var game = TestGame.init(testing.allocator);
+    defer game.deinit();
+
+    const Children = ChildrenComponent(u32);
+
+    var scene = try RefTestLoader.load(.{
+        .name = "multi_child_test",
+        .entities = .{
+            .{ .name = "root", .components = .{ .Position = .{ .x = 0, .y = 0 } } },
+            .{ .parent = "root", .components = .{ .Position = .{ .x = 10, .y = 10 } } },
+            .{ .parent = "root", .components = .{ .Position = .{ .x = 20, .y = 20 } } },
+            .{ .parent = "root", .components = .{ .Position = .{ .x = 30, .y = 30 } } },
+        },
+    }, &game, testing.allocator);
+    defer scene.deinit();
+
+    const root_entity = scene.entities.items[0].entity;
+    const children_comp = game.ecs_backend.getComponent(root_entity, Children).?;
+    try testing.expectEqual(3, children_comp.count());
+}

@@ -1,20 +1,16 @@
 .{
-    .fingerprint = 0xe8a81a8dc7f48c87,
-    .name = .engine,
+    .fingerprint = 0xd979efda52a13648,
+    .name = .scene,
     .version = "0.1.0",
     .minimum_zig_version = "0.15.2",
     .dependencies = .{
         .labelle_core = .{
-            .path = "../labelle-core",
-        },
-        .scene = .{
-            .path = "scene",
+            .path = "../../labelle-core",
         },
     },
     .paths = .{
         "build.zig",
         "build.zig.zon",
         "src",
-        "scene",
     },
 }

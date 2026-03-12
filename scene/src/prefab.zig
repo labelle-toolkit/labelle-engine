@@ -1,25 +1,9 @@
-// Prefab system - comptime prefabs with typed components
+// Prefab Registry — comptime prefab lookup
 //
-// Prefabs are .zon files imported at comptime that define:
-// - components.Position: Entity position (can be overridden in scene)
-// - components.Sprite: Visual configuration for the entity
-// - components.*: Other typed component data
-//
-// Gizmos are defined separately in the gizmos/ directory (see GizmoRegistry).
-//
-// Example prefab file (prefabs/player.zon):
-// .{
-//     .components = .{
-//         .Position = .{ .x = 0, .y = 0 },  // default position, can be overridden in scene
-//         .Sprite = .{ .name = "player.png", .scale_x = 2.0, .scale_y = 2.0 },
-//         .Health = .{ .current = 100, .max = 100 },
-//         .Speed = .{ .value = 5.0 },
-//     },
-// }
+// Ported from v1 scene/src/prefab.zig
 
-const std = @import("std");
-
-/// Comptime prefab registry - maps prefab names to their comptime data
+/// Comptime prefab registry — maps names to .zon prefab data.
+///
 /// Usage:
 ///   const Prefabs = PrefabRegistry(.{
 ///       .player = @import("prefabs/player.zon"),
@@ -27,29 +11,33 @@ const std = @import("std");
 ///   });
 pub fn PrefabRegistry(comptime prefab_map: anytype) type {
     return struct {
-        const Self = @This();
         const PrefabMap = @TypeOf(prefab_map);
 
-        /// Check if a prefab exists
         pub fn has(comptime name: anytype) bool {
             const name_str: []const u8 = name;
             return @hasField(PrefabMap, name_str);
         }
 
-        /// Get prefab data by name (comptime only)
         pub fn get(comptime name: []const u8) @TypeOf(@field(prefab_map, name)) {
             return @field(prefab_map, name);
         }
 
-        /// Check if prefab has components
         pub fn hasComponents(comptime name: []const u8) bool {
-            const prefab_data = get(name);
-            return @hasField(@TypeOf(prefab_data), "components");
+            const data = get(name);
+            return @hasField(@TypeOf(data), "components");
         }
 
-        /// Get prefab components data (for use with ComponentRegistry.addComponents)
         pub fn getComponents(comptime name: []const u8) @TypeOf(@field(get(name), "components")) {
             return get(name).components;
+        }
+
+        pub fn hasChildren(comptime name: []const u8) bool {
+            const data = get(name);
+            return @hasField(@TypeOf(data), "children");
+        }
+
+        pub fn getChildren(comptime name: []const u8) @TypeOf(@field(get(name), "children")) {
+            return get(name).children;
         }
     };
 }
