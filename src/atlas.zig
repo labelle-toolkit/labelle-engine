@@ -156,11 +156,7 @@ pub const TextureManager = struct {
     }
 
     pub fn deinit(self: *TextureManager) void {
-        var it = self.atlases.iterator();
-        while (it.next()) |entry| {
-            self.allocator.free(entry.key_ptr.*);
-            entry.value_ptr.deinit();
-        }
+        self.freeAllEntries();
         self.atlases.deinit();
     }
 
@@ -284,13 +280,17 @@ pub const TextureManager = struct {
 
     /// Remove all atlases.
     pub fn unloadAll(self: *TextureManager) void {
+        self.freeAllEntries();
+        self.atlases.clearRetainingCapacity();
+        self.version += 1;
+    }
+
+    fn freeAllEntries(self: *TextureManager) void {
         var it = self.atlases.iterator();
         while (it.next()) |entry| {
             self.allocator.free(entry.key_ptr.*);
             entry.value_ptr.deinit();
         }
-        self.atlases.clearRetainingCapacity();
-        self.version += 1;
     }
 
     pub fn atlasCount(self: *const TextureManager) usize {

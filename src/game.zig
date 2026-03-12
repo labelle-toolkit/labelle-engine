@@ -579,22 +579,21 @@ pub fn GameConfig(
             var v = self.ecs_backend.view(.{Sprite}, .{});
             defer v.deinit();
             while (v.next()) |entity| {
-                if (self.ecs_backend.getComponent(entity, Sprite)) |sprite| {
-                    if (sprite.sprite_name.len == 0) continue;
+                const sprite = self.ecs_backend.getComponent(entity, Sprite).?;
+                if (sprite.sprite_name.len == 0) continue;
 
-                    const misses_before = self.sprite_cache.misses;
-                    if (self.sprite_cache.lookup(@intCast(entity), sprite.sprite_name, &self.atlas_manager)) |result| {
-                        // Only update and mark dirty on cache miss (new sprite or atlas changed)
-                        if (self.sprite_cache.misses != misses_before) {
-                            sprite.texture = @enumFromInt(result.texture_id);
-                            sprite.source_rect = .{
-                                .x = @floatFromInt(result.sprite.x),
-                                .y = @floatFromInt(result.sprite.y),
-                                .width = @floatFromInt(result.sprite.getWidth()),
-                                .height = @floatFromInt(result.sprite.getHeight()),
-                            };
-                            self.renderer.markVisualDirty(entity);
-                        }
+                const misses_before = self.sprite_cache.misses;
+                if (self.sprite_cache.lookup(@intCast(entity), sprite.sprite_name, &self.atlas_manager)) |result| {
+                    // Only update and mark dirty on cache miss (new sprite or atlas changed)
+                    if (self.sprite_cache.misses != misses_before) {
+                        sprite.texture = @enumFromInt(result.texture_id);
+                        sprite.source_rect = .{
+                            .x = @floatFromInt(result.sprite.x),
+                            .y = @floatFromInt(result.sprite.y),
+                            .width = @floatFromInt(result.sprite.getWidth()),
+                            .height = @floatFromInt(result.sprite.getHeight()),
+                        };
+                        self.renderer.markVisualDirty(entity);
                     }
                 }
             }
