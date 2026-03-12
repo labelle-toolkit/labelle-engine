@@ -432,9 +432,9 @@ pub fn GameConfig(
                 self.active_scene_update_fn = null;
                 self.active_scene_deinit_fn = null;
                 self.active_scene_get_entity_fn = null;
+                // Free nested entity array allocations from the outgoing scene
+                _ = self.nested_entity_arena.reset(.retain_capacity);
             }
-            // Free all nested entity array allocations from scene loading
-            _ = self.nested_entity_arena.reset(.retain_capacity);
         }
 
         // ── Game Loop ─────────────────────────────────────────────
