@@ -10,6 +10,8 @@ const VisualType = core.VisualType;
 const ParentComponent = core.ParentComponent;
 const ChildrenComponent = core.ChildrenComponent;
 
+const atlas_mod = @import("atlas.zig");
+
 const hierarchy = @import("game/hierarchy.zig");
 const gizmo_draws_mod = @import("game/gizmo_draws.zig");
 
@@ -86,6 +88,8 @@ pub fn GameConfig(
         allocator: std.mem.Allocator,
         ecs_backend: EcsImpl,
         renderer: RenderImpl,
+        atlas_manager: atlas_mod.TextureManager,
+        sprite_cache: atlas_mod.SpriteCache,
         hooks: HooksField = if (has_hooks) null else {},
 
         // Scene management
@@ -117,6 +121,8 @@ pub fn GameConfig(
                 .allocator = allocator,
                 .ecs_backend = EcsImpl.init(allocator),
                 .renderer = RenderImpl.init(allocator),
+                .atlas_manager = atlas_mod.TextureManager.init(allocator),
+                .sprite_cache = atlas_mod.SpriteCache.init(allocator),
                 .scenes = std.StringHashMap(SceneEntry).init(allocator),
                 .gizmo_state = gizmo_draws_mod.GizmoState(Entity).init(allocator),
                 .nested_entity_arena = std.heap.ArenaAllocator.init(allocator),
@@ -135,6 +141,8 @@ pub fn GameConfig(
             self.nested_entity_arena.deinit();
             self.gizmo_state.deinit(self.allocator);
             self.scenes.deinit();
+            self.sprite_cache.deinit();
+            self.atlas_manager.deinit();
             self.renderer.deinit();
             self.ecs_backend.deinit();
         }
@@ -168,12 +176,14 @@ pub fn GameConfig(
                     self.destroyEntity(child);
                 }
             }
+            self.sprite_cache.invalidate(@intCast(entity));
             self.renderer.untrackEntity(entity);
             self.ecs_backend.destroyEntity(entity);
             self.emitHook(.{ .entity_destroyed = .{ .entity_id = entity } });
         }
 
         pub fn destroyEntityOnly(self: *Self, entity: Entity) void {
+            self.sprite_cache.invalidate(@intCast(entity));
             self.renderer.untrackEntity(entity);
             self.ecs_backend.destroyEntity(entity);
             self.emitHook(.{ .entity_destroyed = .{ .entity_id = entity } });
@@ -432,6 +442,7 @@ pub fn GameConfig(
                 self.active_scene_update_fn = null;
                 self.active_scene_deinit_fn = null;
                 self.active_scene_get_entity_fn = null;
+                self.sprite_cache.clear();
                 // Free nested entity array allocations from the outgoing scene
                 _ = self.nested_entity_arena.reset(.retain_capacity);
             }
@@ -451,6 +462,7 @@ pub fn GameConfig(
             self.emitHook(.{ .frame_start = .{ .frame_number = self.frame_number, .dt = dt } });
             Audio.update();
             Input.updateGestures(dt); // Poll gesture recognition (no-op if backend lacks touch support)
+            self.resolveAtlasSprites();
             self.renderer.sync(EcsImpl, &self.ecs_backend);
 
             if (self.pending_scene_change) |next_scene| {
@@ -498,6 +510,93 @@ pub fn GameConfig(
         pub const getCameraManager = if (has_camera) getCameraManagerImpl else void;
         fn getCameraManagerImpl(self: *Self) *CameraManagerType {
             return self.renderer.getCameraManager();
+        }
+
+        // ── Atlas ─────────────────────────────────────────────────
+
+        const has_load_texture = @hasDecl(RenderImpl, "loadTexture");
+
+        /// Load a TexturePacker JSON atlas. Parses the JSON into the engine's
+        /// TextureManager and loads the texture via the renderer.
+        /// Only available when the renderer supports loadTexture.
+        pub const loadAtlas = if (has_load_texture) loadAtlasImpl else @compileError("Renderer does not support loadTexture");
+
+        fn loadAtlasImpl(self: *Self, name: []const u8, json_path: [:0]const u8, texture_path: [:0]const u8) !void {
+            const tex_id = try self.renderer.loadTexture(texture_path);
+            // Convert renderer's TextureId (enum/opaque) to u32 for engine storage
+            const id: u32 = if (@typeInfo(@TypeOf(tex_id)) == .@"enum")
+                @intFromEnum(tex_id)
+            else
+                tex_id;
+            try self.atlas_manager.loadAtlasFromJson(name, json_path, id);
+        }
+
+        /// Load an atlas from comptime sprite data (zero runtime parsing).
+        /// Usage: game.loadAtlasComptime("chars", &MyAtlas.sprites, "chars.png");
+        /// Only available when the renderer supports loadTexture.
+        pub const loadAtlasComptime = if (has_load_texture) loadAtlasComptimeImpl else @compileError("Renderer does not support loadTexture");
+
+        fn loadAtlasComptimeImpl(self: *Self, name: []const u8, comptime sprites: []const atlas_mod.SpriteData, texture_path: [:0]const u8) !void {
+            const tex_id = try self.renderer.loadTexture(texture_path);
+            const id: u32 = if (@typeInfo(@TypeOf(tex_id)) == .@"enum")
+                @intFromEnum(tex_id)
+            else
+                tex_id;
+            try self.atlas_manager.loadAtlasComptime(name, sprites, id);
+        }
+
+        pub fn getTextureManager(self: *Self) *atlas_mod.TextureManager {
+            return &self.atlas_manager;
+        }
+
+        /// Look up a sprite by name across all loaded atlases (uncached).
+        pub fn findSprite(self: *const Self, sprite_name: []const u8) ?atlas_mod.FindSpriteResult {
+            return self.atlas_manager.findSprite(sprite_name);
+        }
+
+        /// Look up a sprite for an entity using the per-entity cache.
+        /// Returns cached result when atlas version and sprite name haven't changed.
+        pub fn findSpriteCached(self: *Self, entity_id: u32, sprite_name: []const u8) ?atlas_mod.FindSpriteResult {
+            return self.sprite_cache.lookup(entity_id, sprite_name, &self.atlas_manager);
+        }
+
+        /// Unload an atlas by name, freeing sprite data.
+        pub fn unloadAtlas(self: *Self, name: []const u8) void {
+            self.atlas_manager.unloadAtlas(name);
+        }
+
+        // ── Atlas Resolution ──────────────────────────────────────
+
+        const has_atlas_sprite_fields = @hasField(Sprite, "source_rect") and @hasField(Sprite, "texture") and @hasField(Sprite, "sprite_name");
+
+        /// Resolve sprite_name → source_rect + texture for all atlas sprites.
+        /// Called automatically before renderer sync each frame.
+        /// Only marks entities dirty on cache misses (sprite name or atlas version changed).
+        fn resolveAtlasSprites(self: *Self) void {
+            if (!has_atlas_sprite_fields) return;
+            if (self.atlas_manager.atlasCount() == 0) return;
+
+            var v = self.ecs_backend.view(.{Sprite}, .{});
+            defer v.deinit();
+            while (v.next()) |entity| {
+                const sprite = self.ecs_backend.getComponent(entity, Sprite).?;
+                if (sprite.sprite_name.len == 0) continue;
+
+                const misses_before = self.sprite_cache.misses;
+                if (self.sprite_cache.lookup(@intCast(entity), sprite.sprite_name, &self.atlas_manager)) |result| {
+                    // Only update and mark dirty on cache miss (new sprite or atlas changed)
+                    if (self.sprite_cache.misses != misses_before) {
+                        sprite.texture = @enumFromInt(result.texture_id);
+                        sprite.source_rect = .{
+                            .x = @floatFromInt(result.sprite.x),
+                            .y = @floatFromInt(result.sprite.y),
+                            .width = @floatFromInt(result.sprite.getWidth()),
+                            .height = @floatFromInt(result.sprite.getHeight()),
+                        };
+                        self.renderer.markVisualDirty(entity);
+                    }
+                }
+            }
         }
 
         // ── Accessors ─────────────────────────────────────────────
