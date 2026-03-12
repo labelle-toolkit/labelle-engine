@@ -79,11 +79,19 @@ jobs:
         run: |
           cd test-projects
           echo "::group::Creating raylib project"
-          
-          # Use labelle-cli to create a new project
           labelle init test_raylib_game --backend=raylib --ecs=zig_ecs
-          
           echo "::endgroup::"
+
+      - name: Test CLI workflow - Patch project to use local engine
+        run: |
+          cd test-projects/test_raylib_game
+          # Override version fields to point at the locally checked-out repos
+          sed -i 's|.core_version = ".*"|.core_version = "local:../../labelle-core"|' project.labelle
+          sed -i 's|.engine_version = ".*"|.engine_version = "local:../../labelle-engine"|' project.labelle
+          sed -i 's|.gfx_version = ".*"|.gfx_version = "local:../../labelle-gfx"|' project.labelle
+          sed -i 's|.labelle_version = ".*"|.labelle_version = "local:../../labelle-cli"|' project.labelle
+          echo "Patched project.labelle:"
+          cat project.labelle
 
       - name: Test CLI workflow - Generate with local engine
         shell: bash
@@ -91,15 +99,11 @@ jobs:
           cd test-projects/test_raylib_game
           echo "::group::Generating build files with local engine"
 
-          # Generate using the checked-out engine (relative path from project dir)
-          # Retry to handle transient dependency fetch failures (sokol-tools-bin via Git LFS)
-          # Note: labelle-cli may exit 0 even when generation fails internally,
-          # so we also verify the output directory exists before declaring success.
           set -euo pipefail
           BUILD_DIR=".labelle/raylib_desktop"
           success=0
           for attempt in 1 2 3; do
-            labelle generate --engine-path=../../labelle-engine || true
+            labelle generate || true
             if [ -d "$BUILD_DIR" ] && [ -f "$BUILD_DIR/build.zig" ]; then
               success=1
               break
@@ -175,16 +179,19 @@ jobs:
           echo "::group::Creating project with multiple targets"
 
           cd test-projects
-          # Create a project
           labelle init test_multi_target --backend=raylib --ecs=zig_ecs
           cd test_multi_target
 
-          # Generate with local engine (retry for transient fetch failures)
-          # Verify output directory exists before declaring success.
+          # Patch to use local repos
+          sed -i 's|.core_version = ".*"|.core_version = "local:../../labelle-core"|' project.labelle
+          sed -i 's|.engine_version = ".*"|.engine_version = "local:../../labelle-engine"|' project.labelle
+          sed -i 's|.gfx_version = ".*"|.gfx_version = "local:../../labelle-gfx"|' project.labelle
+          sed -i 's|.labelle_version = ".*"|.labelle_version = "local:../../labelle-cli"|' project.labelle
+
           BUILD_DIR=".labelle/raylib_desktop"
           success=0
           for attempt in 1 2 3; do
-            labelle generate --engine-path=../../labelle-engine || true
+            labelle generate || true
             if [ -d "$BUILD_DIR" ] && [ -f "$BUILD_DIR/build.zig" ]; then
               success=1
               break
