@@ -14,8 +14,9 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Checkout labelle-gfx (sibling dependency)
+      - name: Checkout sibling dependencies
         run: |
+          git clone --depth 1 https://github.com/labelle-toolkit/labelle-core.git ../labelle-core
           git clone --depth 1 https://github.com/labelle-toolkit/labelle-gfx.git ../labelle-gfx
 
       - name: Install Zig

@@ -17,6 +17,12 @@ jobs:
         with:
           path: labelle-engine
 
+      - name: Checkout labelle-core (sibling dependency)
+        uses: actions/checkout@v4
+        with:
+          repository: labelle-toolkit/labelle-core
+          path: labelle-core
+
       - name: Checkout labelle-gfx (sibling dependency)
         uses: actions/checkout@v4
         with:
