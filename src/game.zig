@@ -100,6 +100,10 @@ pub fn GameConfig(
         active_scene_get_entity_fn: ?*const fn (*anyopaque, []const u8) ?Entity = null,
         gizmo_reconcile_fn: ?*const fn (*Self) void = null,
 
+        // Arena for heap-allocated slices in nested entity arrays (scene loader).
+        // Freed on scene teardown.
+        nested_entity_arena: std.heap.ArenaAllocator,
+
         // Game state
         running: bool = true,
         frame_number: u64 = 0,
@@ -115,6 +119,7 @@ pub fn GameConfig(
                 .renderer = RenderImpl.init(allocator),
                 .scenes = std.StringHashMap(SceneEntry).init(allocator),
                 .gizmo_state = gizmo_draws_mod.GizmoState(Entity).init(allocator),
+                .nested_entity_arena = std.heap.ArenaAllocator.init(allocator),
             };
         }
 
@@ -127,6 +132,7 @@ pub fn GameConfig(
             if (self.pending_scene_change) |name| {
                 self.allocator.free(name);
             }
+            self.nested_entity_arena.deinit();
             self.gizmo_state.deinit(self.allocator);
             self.scenes.deinit();
             self.renderer.deinit();
@@ -427,6 +433,8 @@ pub fn GameConfig(
                 self.active_scene_deinit_fn = null;
                 self.active_scene_get_entity_fn = null;
             }
+            // Free all nested entity array allocations from scene loading
+            _ = self.nested_entity_arena.reset(.retain_capacity);
         }
 
         // ── Game Loop ─────────────────────────────────────────────

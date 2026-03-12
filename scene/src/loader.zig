@@ -672,8 +672,9 @@ pub fn SceneLoaderWithGizmos(
             const FieldType = @TypeOf(@field(@as(CompType, undefined), field_name));
             const ElemType = if (FieldType == []const u64) u64 else Entity;
 
-            // Allocate a runtime buffer for child entity IDs
-            const ids = game.allocator.alloc(ElemType, count) catch @panic("OOM");
+            // Allocate child ID buffer from the game's nested entity arena
+            // (freed on scene teardown, not per-entity)
+            const ids = game.nested_entity_arena.allocator().alloc(ElemType, count) catch @panic("OOM");
             comptime var i: usize = 0;
             inline for (NestedInfo.@"struct".fields) |_| {
                 const child_def = nested_data[i];
