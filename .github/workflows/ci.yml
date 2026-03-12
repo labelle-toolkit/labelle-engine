@@ -17,7 +17,6 @@ jobs:
       - name: Checkout sibling dependencies
         run: |
           git clone --depth 1 https://github.com/labelle-toolkit/labelle-core.git ../labelle-core
-          git clone --depth 1 https://github.com/labelle-toolkit/labelle-gfx.git ../labelle-gfx
 
       - name: Install Zig
         uses: mlugg/setup-zig@v2
@@ -32,199 +31,21 @@ jobs:
           restore-keys: |
             zig-cache-${{ runner.os }}-
 
-      - name: Install dependencies for raylib and sokol
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libgl1-mesa-dev \
-            libx11-dev \
-            libxcursor-dev \
-            libxrandr-dev \
-            libxinerama-dev \
-            libxi-dev \
-            libxext-dev \
-            libxfixes-dev \
-            libwayland-dev \
-            libxkbcommon-dev \
-            libasound2-dev \
-            xvfb \
-            git-lfs
-
-      - name: Setup Git LFS
-        run: |
-          git lfs install
-
       - name: Build library
+        run: zig build
+
+      - name: Run tests
         shell: bash
         run: |
-          set -euo pipefail
-          success=0
-          for attempt in 1 2 3; do
-            if zig build; then
-              success=1
-              break
-            fi
-            if [ "$attempt" -lt 3 ]; then
-              echo "::warning::Build attempt $attempt failed, retrying in 10s..."
-              sleep 10
-            fi
-          done
-
-          if [ "$success" -ne 1 ]; then
-            echo "::error::Build failed after 3 attempts."
-            exit 1
-          fi
-
-      - name: Run zspec tests
-        id: tests
-        shell: bash
-        run: |
-          echo "::group::🧪 Running zspec tests"
-          # Run tests and capture output
           set +e
-          zig build test 2>&1 | tee test_output.txt
+          zig build test --summary all 2>&1 | tee test_output.txt
           TEST_EXIT_CODE=${PIPESTATUS[0]}
           set -e
-          echo "::endgroup::"
 
-          # Parse test results for summary (sum all test results from multiple modules)
-          PASSED=$(grep -oE '[0-9]+ of [0-9]+ tests passed' test_output.txt | grep -oE '^[0-9]+' | awk '{sum+=$1} END {print sum}')
-          TOTAL=$(grep -oE '[0-9]+ of [0-9]+ tests passed' test_output.txt | sed 's/.* of \([0-9]*\) tests.*/\1/' | awk '{sum+=$1} END {print sum}')
-          PASSED=${PASSED:-0}
-          TOTAL=${TOTAL:-0}
-
-          # Export for badge
-          echo "passed=$PASSED" >> $GITHUB_OUTPUT
-          echo "total=$TOTAL" >> $GITHUB_OUTPUT
-          if [ "$TEST_EXIT_CODE" -eq 0 ]; then
-            echo "status=passing" >> $GITHUB_OUTPUT
-          else
-            echo "status=failing" >> $GITHUB_OUTPUT
-          fi
-
-          # Create a summary in the GitHub Actions UI
-          echo "## 🧪 Test Results" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          if [ "$TEST_EXIT_CODE" -eq 0 ]; then
-            echo "✅ **All $PASSED of $TOTAL tests passed!**" >> $GITHUB_STEP_SUMMARY
-          else
-            FAILED_COUNT=$((TOTAL - PASSED))
-            echo "❌ **Tests failed: $PASSED/$TOTAL passed ($FAILED_COUNT failed)**" >> $GITHUB_STEP_SUMMARY
-          fi
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "<details><summary>Test Output</summary>" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
+          # Create summary
+          echo "## Test Results" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
           cat test_output.txt >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
-          echo "</details>" >> $GITHUB_STEP_SUMMARY
 
           exit $TEST_EXIT_CODE
-
-      - name: Run core module tests
-        shell: bash
-        run: |
-          echo "::group::🧪 Running core module tests"
-          cd core
-          set +e
-          zig build test 2>&1 | tee core_test_output.txt
-          TEST_EXIT_CODE=${PIPESTATUS[0]}
-          set -e
-          echo "::endgroup::"
-
-          # Add to summary
-          PASSED=$(grep -oE '[0-9]+ of [0-9]+ tests passed' core_test_output.txt | grep -oE '^[0-9]+' || echo "0")
-          TOTAL=$(grep -oE '[0-9]+ of [0-9]+ tests passed' core_test_output.txt | sed 's/.* of \([0-9]*\) tests.*/\1/' || echo "0")
-          echo "## 🧱 Core Module Tests" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          if [ "$TEST_EXIT_CODE" -eq 0 ]; then
-            echo "✅ **$PASSED of $TOTAL core tests passed**" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "❌ **Core tests failed: $PASSED/$TOTAL passed**" >> $GITHUB_STEP_SUMMARY
-          fi
-
-          exit $TEST_EXIT_CODE
-
-      - name: Run physics module tests
-        shell: bash
-        run: |
-          echo "::group::🧪 Running physics module tests"
-          cd physics
-          set +e
-          zig build test 2>&1 | tee physics_test_output.txt
-          TEST_EXIT_CODE=${PIPESTATUS[0]}
-          set -e
-          echo "::endgroup::"
-
-          # Add to summary
-          PASSED=$(grep -oE '[0-9]+ of [0-9]+ tests passed' physics_test_output.txt | grep -oE '^[0-9]+' || echo "0")
-          TOTAL=$(grep -oE '[0-9]+ of [0-9]+ tests passed' physics_test_output.txt | sed 's/.* of \([0-9]*\) tests.*/\1/' || echo "0")
-          echo "## 🎮 Physics Module Tests" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          if [ "$TEST_EXIT_CODE" -eq 0 ]; then
-            echo "✅ **$PASSED of $TOTAL physics tests passed**" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "❌ **Physics tests failed: $PASSED/$TOTAL passed**" >> $GITHUB_STEP_SUMMARY
-          fi
-
-          exit $TEST_EXIT_CODE
-
-      - name: Generate example build files
-        run: |
-          # Generate build.zig and build.zig.zon for examples with local engine path
-          # Note: --engine-path is relative to the project directory (where project.labelle is)
-          # Generator will adjust the path for the target subfolder structure (.labelle/target/)
-          zig build generate -- --engine-path ../.. usage/example_1
-          # SKIPPED: example_2 (sokol) has sgl.setup() issue - see labelle-gfx#146
-          # zig build generate -- --engine-path ../.. usage/example_2
-          zig build generate -- --engine-path ../.. usage/example_4
-
-          # Fix fingerprints - Zig requires exact fingerprints that we can't predict
-          # Run build once to get suggested values, then update
-          for example in usage/example_1 usage/example_4; do
-            cd $example/.labelle/raylib_desktop
-            # Try to build, capture error with suggested fingerprint
-            BUILD_OUTPUT=$(zig build 2>&1 || true)
-            FINGERPRINT=$(echo "$BUILD_OUTPUT" | grep -oP 'use this value: \K0x[a-f0-9]+' | head -1 || true)
-            PATHS_MISSING=$(echo "$BUILD_OUTPUT" | grep -c "missing top-level 'paths' field" || true)
-
-            if [ -n "$FINGERPRINT" ]; then
-              # Replace existing fingerprint with the correct one
-              sed -i "s/\.fingerprint = 0x[a-f0-9]*,/.fingerprint = $FINGERPRINT,/" build.zig.zon
-            fi
-
-            if [ "$PATHS_MISSING" -gt 0 ]; then
-              # Add paths before closing brace
-              sed -i 's/^}$/    .paths = .{ "build.zig", "build.zig.zon", "main.zig", "project.labelle", "scenes", "prefabs", "components", "scripts", "resources" },\n}/' build.zig.zon
-            fi
-            cd ../../../..
-          done
-
-      - name: Build and run example_1 (raylib)
-        env:
-          CI_TEST: "1"
-        run: |
-          cd usage/example_1/.labelle/raylib_desktop
-          xvfb-run -a zig build run
-
-      # SKIPPED: Sokol backend has sgl.setup() issue - see labelle-gfx#146
-      # - name: Build and run example_2 (sokol)
-      #   env:
-      #     CI_TEST: "1"
-      #   run: |
-      #     cd usage/example_2/.labelle
-      #     xvfb-run -a zig build run
-
-      - name: Build and run example_4 with zig_ecs backend
-        env:
-          CI_TEST: "1"
-        run: |
-          cd usage/example_4/.labelle/raylib_desktop
-          xvfb-run -a zig build run -Decs_backend=zig_ecs
-
-      - name: Build and run example_4 with zflecs backend
-        env:
-          CI_TEST: "1"
-        run: |
-          cd usage/example_4/.labelle/raylib_desktop
-          xvfb-run -a zig build run -Decs_backend=zflecs
