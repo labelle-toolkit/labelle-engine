@@ -30,8 +30,10 @@ jobs:
           path: labelle-gfx
 
       - name: Checkout labelle-cli (sibling dependency)
-        run: |
-          git clone --depth 1 https://x-access-token:${{ github.token }}@github.com/labelle-toolkit/labelle-cli.git labelle-cli
+        uses: actions/checkout@v4
+        with:
+          repository: labelle-toolkit/labelle-cli
+          path: labelle-cli
 
       - name: Install Zig
         uses: mlugg/setup-zig@v2
