@@ -571,6 +571,7 @@ pub fn GameConfig(
 
         /// Resolve sprite_name → source_rect + texture for all atlas sprites.
         /// Called automatically before renderer sync each frame.
+        /// Only marks entities dirty on cache misses (sprite name or atlas version changed).
         fn resolveAtlasSprites(self: *Self) void {
             if (!has_atlas_sprite_fields) return;
             if (self.atlas_manager.atlasCount() == 0) return;
@@ -581,15 +582,19 @@ pub fn GameConfig(
                 if (self.ecs_backend.getComponent(entity, Sprite)) |sprite| {
                     if (sprite.sprite_name.len == 0) continue;
 
+                    const misses_before = self.sprite_cache.misses;
                     if (self.sprite_cache.lookup(@intCast(entity), sprite.sprite_name, &self.atlas_manager)) |result| {
-                        sprite.texture = @enumFromInt(result.texture_id);
-                        sprite.source_rect = .{
-                            .x = @floatFromInt(result.sprite.x),
-                            .y = @floatFromInt(result.sprite.y),
-                            .width = @floatFromInt(result.sprite.getWidth()),
-                            .height = @floatFromInt(result.sprite.getHeight()),
-                        };
-                        self.renderer.markVisualDirty(entity);
+                        // Only update and mark dirty on cache miss (new sprite or atlas changed)
+                        if (self.sprite_cache.misses != misses_before) {
+                            sprite.texture = @enumFromInt(result.texture_id);
+                            sprite.source_rect = .{
+                                .x = @floatFromInt(result.sprite.x),
+                                .y = @floatFromInt(result.sprite.y),
+                                .width = @floatFromInt(result.sprite.getWidth()),
+                                .height = @floatFromInt(result.sprite.getHeight()),
+                            };
+                            self.renderer.markVisualDirty(entity);
+                        }
                     }
                 }
             }

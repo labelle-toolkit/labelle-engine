@@ -164,8 +164,9 @@ pub const TextureManager = struct {
         self.atlases.deinit();
     }
 
-    /// Register a new empty atlas by name.
+    /// Register a new empty atlas by name. Replaces any existing atlas with the same name.
     pub fn addAtlas(self: *TextureManager, name: []const u8) !*RuntimeAtlas {
+        self.removeExisting(name);
         const owned_name = try self.allocator.dupe(u8, name);
         errdefer self.allocator.free(owned_name);
         try self.atlases.put(owned_name, RuntimeAtlas.init(self.allocator));
@@ -174,6 +175,7 @@ pub const TextureManager = struct {
     }
 
     /// Load an atlas from a TexturePacker JSON file and associate it with a texture.
+    /// Replaces any existing atlas with the same name.
     pub fn loadAtlasFromJson(
         self: *TextureManager,
         name: []const u8,
@@ -187,6 +189,7 @@ pub const TextureManager = struct {
 
         try parseTexturePackerJson(self.allocator, json_path, &atlas.sprites);
 
+        self.removeExisting(name);
         const owned_name = try self.allocator.dupe(u8, name);
         errdefer self.allocator.free(owned_name);
 
@@ -195,6 +198,7 @@ pub const TextureManager = struct {
     }
 
     /// Load an atlas from JSON content already in memory.
+    /// Replaces any existing atlas with the same name.
     pub fn loadAtlasFromJsonContent(
         self: *TextureManager,
         name: []const u8,
@@ -208,6 +212,7 @@ pub const TextureManager = struct {
 
         try parseTexturePackerJsonContent(self.allocator, json_content, &atlas.sprites);
 
+        self.removeExisting(name);
         const owned_name = try self.allocator.dupe(u8, name);
         errdefer self.allocator.free(owned_name);
 
@@ -217,6 +222,7 @@ pub const TextureManager = struct {
 
     /// Register an atlas from comptime sprite data (from ComptimeAtlas).
     /// Sprite names are comptime string literals — no heap allocation needed for keys.
+    /// Replaces any existing atlas with the same name.
     pub fn loadAtlasComptime(
         self: *TextureManager,
         name: []const u8,
@@ -233,6 +239,7 @@ pub const TextureManager = struct {
             try atlas.sprites.put(sprite.name, sprite);
         }
 
+        self.removeExisting(name);
         const owned_name = try self.allocator.dupe(u8, name);
         errdefer self.allocator.free(owned_name);
 
@@ -254,6 +261,15 @@ pub const TextureManager = struct {
             }
         }
         return null;
+    }
+
+    /// Remove an existing atlas if present (used before replacing with a new one).
+    fn removeExisting(self: *TextureManager, name: []const u8) void {
+        if (self.atlases.fetchRemove(name)) |kv| {
+            self.allocator.free(kv.key);
+            var atlas = kv.value;
+            atlas.deinit();
+        }
     }
 
     /// Remove an atlas by name, freeing all associated memory.
