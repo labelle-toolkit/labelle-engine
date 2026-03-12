@@ -1,214 +1,173 @@
-//! Scene Core Types
-//!
-//! Runtime scene types: Scene, SceneContext, EntityInstance
+// Scene Core — Runtime scene and entity instance types
+//
+// Ported from v1 scene/src/core.zig
 
 const std = @import("std");
-const ecs = @import("ecs");
-const core_mod = @import("../../core/mod.zig");
-const engine_mod = @import("../../engine/game.zig");
+const labelle_core = @import("labelle-core");
+
 const script_mod = @import("script.zig");
+pub const ScriptFns = script_mod.ScriptFns;
+pub const VisualType = labelle_core.VisualType;
 
-pub const Entity = ecs.Entity;
-pub const Registry = ecs.Registry;
-pub const Game = engine_mod.Game;
-pub const entityToU64 = core_mod.entityToU64;
+// ============================================================
+// Parent-child hierarchy components (re-exported from labelle-core)
+// ============================================================
 
-/// Visual type for entity instances (render-agnostic)
-pub const VisualType = enum {
-    none, // Entity has no visual (e.g., nested data-only entities)
-    sprite,
-    shape,
-    text,
-};
+pub const ParentComponent = labelle_core.ParentComponent;
+pub const ChildrenComponent = labelle_core.ChildrenComponent;
 
-/// Context passed to prefab lifecycle functions and scene loading
-/// Uses Game facade for unified access to ECS, pipeline, and engine
-pub const SceneContext = struct {
-    game_ptr: *anyopaque,
+// ============================================================
+// Scene runtime
+// ============================================================
 
-    /// Initialize SceneContext with any GameWith(Hooks) type
-    pub fn init(g: anytype) SceneContext {
-        return .{ .game_ptr = @ptrCast(g) };
-    }
+/// Runtime scene — tracks loaded entities, runs scripts, manages lifecycle.
+pub fn Scene(comptime Entity: type) type {
+    return struct {
+        const Self = @This();
 
-    /// Get the underlying Game pointer (as base Game type)
-    pub fn game(self: *const SceneContext) *Game {
-        return @ptrCast(@alignCast(self.game_ptr));
-    }
+        pub const EntityInstance = struct {
+            entity: Entity,
+            visual_type: VisualType = .sprite,
+            prefab_name: ?[]const u8 = null,
+            persistent: bool = false,
+            onUpdate: ?*const fn (u64, *anyopaque, f32) void = null,
+            onDestroy: ?*const fn (u64, *anyopaque) void = null,
+        };
 
-    // Convenience accessors
-    pub fn registry(self: *const SceneContext) *Registry {
-        return self.game().getRegistry();
-    }
+        const NameMap = std.StringHashMapUnmanaged(Entity);
 
-    pub fn allocator(self: *const SceneContext) std.mem.Allocator {
-        return self.game().allocator;
-    }
-};
-
-/// Runtime scene instance that tracks loaded entities
-pub const Scene = struct {
-    name: []const u8,
-    entities: std.ArrayListUnmanaged(EntityInstance),
-    scripts: []const script_mod.ScriptFns,
-    /// GUI view names to render with this scene (from .gui_views in scene .zon)
-    gui_view_names: []const []const u8 = &.{},
-    ctx: SceneContext,
-    initialized: bool = false,
-    /// Tracks allocated entity slices for cleanup (used by nested entity composition)
-    allocated_entity_slices: std.ArrayListUnmanaged([]Entity) = .{},
-
-    pub fn init(
         name: []const u8,
-        scripts: []const script_mod.ScriptFns,
-        gui_view_names: []const []const u8,
-        ctx: SceneContext,
-    ) Scene {
-        return .{
-            .name = name,
-            .entities = .{},
-            .scripts = scripts,
-            .gui_view_names = gui_view_names,
-            .ctx = ctx,
-            .initialized = false,
-            .allocated_entity_slices = .{},
-        };
-    }
+        entities: std.ArrayListUnmanaged(EntityInstance),
+        named_entities: NameMap,
+        scripts: []const ScriptFns,
+        /// GUI view names to render with this scene (from .gui_views in scene .zon)
+        gui_view_names: []const []const u8 = &.{},
+        allocator: std.mem.Allocator,
+        game_ptr: *anyopaque,
+        /// Type-erased callback to game.destroyEntity() — used to clean up ECS on scene unload.
+        destroy_entity_fn: ?*const fn (*anyopaque, Entity) void = null,
+        initialized: bool = false,
 
-    /// Register an allocated entity slice for cleanup on scene deinit.
-    /// Used by nested entity composition to track dynamically allocated slices.
-    pub fn trackAllocatedSlice(self: *Scene, slice: []Entity) !void {
-        try self.allocated_entity_slices.append(self.ctx.allocator(), slice);
-    }
-
-    /// Call all script init functions. Called automatically on first update,
-    /// but can be called manually if needed before the game loop starts.
-    pub fn initScripts(self: *Scene) void {
-        if (self.initialized) return;
-        self.initialized = true;
-
-        // Register entity destroy cleanup callback so destroyed entities
-        // are removed from the scene's list at destroy time (zero per-frame cost)
-        const g = self.ctx.game();
-        g.on_entity_destroy_cleanup = .{
-            .context = @ptrCast(self),
-            .callback = removeEntityCallback,
-        };
-
-        for (self.scripts) |script_fns| {
-            if (script_fns.init) |init_fn| {
-                init_fn(self.ctx.game_ptr, @ptrCast(self));
-            }
+        pub fn init(
+            allocator: std.mem.Allocator,
+            name: []const u8,
+            scripts: []const ScriptFns,
+            gui_view_names: []const []const u8,
+            game_ptr: *anyopaque,
+            destroy_entity_fn: ?*const fn (*anyopaque, Entity) void,
+        ) Self {
+            return .{
+                .name = name,
+                .entities = .{},
+                .named_entities = .{},
+                .scripts = scripts,
+                .gui_view_names = gui_view_names,
+                .allocator = allocator,
+                .game_ptr = game_ptr,
+                .destroy_entity_fn = destroy_entity_fn,
+            };
         }
-    }
 
-    /// Remove an entity from the scene's entity list (called via destroy cleanup callback).
-    pub fn removeEntity(self: *Scene, entity: Entity) void {
-        for (self.entities.items, 0..) |instance, i| {
-            if (instance.entity == entity) {
-                _ = self.entities.swapRemove(i);
-                return;
+        pub fn deinit(self: *Self) void {
+            // Script deinit (reverse order)
+            if (self.initialized) {
+                var i = self.scripts.len;
+                while (i > 0) {
+                    i -= 1;
+                    if (self.scripts[i].deinit) |deinit_fn| {
+                        deinit_fn(self.game_ptr, @ptrCast(self));
+                    }
+                }
             }
+
+            // Destroy non-persistent entities in the ECS; fire onDestroy hooks.
+            // Persistent entities survive scene unload (DontDestroyOnLoad pattern).
+            for (self.entities.items) |*instance| {
+                if (instance.onDestroy) |destroy_fn| {
+                    if (!instance.persistent) {
+                        destroy_fn(entityToU64(instance.entity), self.game_ptr);
+                    }
+                }
+                if (!instance.persistent) {
+                    if (self.destroy_entity_fn) |destroy_fn| {
+                        destroy_fn(self.game_ptr, instance.entity);
+                    }
+                }
+            }
+
+            self.entities.deinit(self.allocator);
+            self.named_entities.deinit(self.allocator);
         }
-    }
 
-    /// Static callback for Game.EntityDestroyCleanup — casts context to *Scene and calls removeEntity.
-    fn removeEntityCallback(ctx: *anyopaque, entity: Entity) void {
-        const scene: *Scene = @ptrCast(@alignCast(ctx));
-        scene.removeEntity(entity);
-    }
+        /// Look up a named entity registered during scene loading.
+        pub fn getEntityByName(self: *const Self, name: []const u8) ?Entity {
+            return self.named_entities.get(name);
+        }
 
-    pub fn deinit(self: *Scene) void {
-        const alloc = self.ctx.allocator();
-        const g = self.ctx.game();
+        /// Register a named entity (called by the scene loader).
+        pub fn registerName(self: *Self, name: []const u8, entity: Entity) !void {
+            try self.named_entities.put(self.allocator, name, entity);
+        }
 
-        // 1. Script deinit (may destroy entities → callback → removeEntity)
-        if (self.initialized) {
-            var i = self.scripts.len;
-            while (i > 0) {
-                i -= 1;
-                if (self.scripts[i].deinit) |deinit_fn| {
-                    deinit_fn(self.ctx.game_ptr, @ptrCast(self));
+        /// Initialize scripts. Called automatically on first update.
+        pub fn initScripts(self: *Self) void {
+            if (self.initialized) return;
+            self.initialized = true;
+
+            for (self.scripts) |script_fns| {
+                if (script_fns.init) |init_fn| {
+                    init_fn(self.game_ptr, @ptrCast(self));
                 }
             }
         }
 
-        // 2. Deregister callback (so bulk destroy below doesn't trigger swapRemove)
-        if (self.initialized) {
-            g.on_entity_destroy_cleanup = null;
-        }
-
-        // 3. Destroy remaining entities (no callback fires, no swapRemove)
-        for (self.entities.items) |*instance| {
-            if (instance.onDestroy) |destroy_fn| {
-                destroy_fn(entityToU64(instance.entity), @ptrCast(g));
+        /// Per-frame update: runs entity onUpdate hooks then script updates.
+        pub fn update(self: *Self, dt: f32) void {
+            if (!self.initialized) {
+                self.initScripts();
             }
-            g.getPipeline().untrackEntity(instance.entity);
-            g.getRegistry().destroyEntity(instance.entity);
-        }
 
-        // 4. Free entity list and allocated slices
-        self.entities.deinit(alloc);
+            // Entity onUpdate hooks (reverse iteration for safe removal)
+            var i: usize = self.entities.items.len;
+            while (i > 0) {
+                i -= 1;
+                if (i >= self.entities.items.len) continue;
+                const instance = self.entities.items[i];
+                if (instance.onUpdate) |update_fn| {
+                    update_fn(entityToU64(instance.entity), self.game_ptr, dt);
+                }
+            }
 
-        for (self.allocated_entity_slices.items) |slice| {
-            alloc.free(slice);
-        }
-        self.allocated_entity_slices.deinit(alloc);
-    }
-
-    pub fn update(self: *Scene, dt: f32) void {
-        // Initialize scripts on first update if not already done
-        if (!self.initialized) {
-            self.initScripts();
-        }
-
-        // Call prefab onUpdate hooks (reverse iteration: safe with swapRemove during callbacks).
-        // Note: if a callback destroys a different entity at a lower index, the swapped-in
-        // element (already processed) may be visited again — benign double-processing at worst.
-        const g = self.ctx.game();
-        var i: usize = self.entities.items.len;
-        while (i > 0) {
-            i -= 1;
-            if (i >= self.entities.items.len) continue;
-            const entity_instance = self.entities.items[i];
-            if (entity_instance.onUpdate) |update_fn| {
-                update_fn(entityToU64(entity_instance.entity), @ptrCast(g), dt);
+            // Script updates
+            for (self.scripts) |script_fns| {
+                if (script_fns.update) |update_fn| {
+                    update_fn(self.game_ptr, @ptrCast(self), dt);
+                }
             }
         }
 
-        // Call scene script update functions
-        for (self.scripts) |script_fns| {
-            if (script_fns.update) |update_fn| {
-                update_fn(self.ctx.game_ptr, @ptrCast(self), dt);
+        pub fn removeEntity(self: *Self, entity: Entity) void {
+            for (self.entities.items, 0..) |instance, idx| {
+                if (instance.entity == entity) {
+                    _ = self.entities.swapRemove(idx);
+                    return;
+                }
             }
         }
-    }
 
-    pub fn addEntity(self: *Scene, instance: EntityInstance) !void {
-        try self.entities.append(self.ctx.allocator(), instance);
-    }
-
-    pub fn entityCount(self: *const Scene) usize {
-        return self.entities.items.len;
-    }
-};
-
-/// Runtime entity instance
-///
-/// Uses u64 for entity and *anyopaque for lifecycle hooks to avoid circular imports in prefab.zig.
-/// This is necessary because prefab.zig cannot import game.zig without creating a cycle.
-/// The u64 type accommodates both 32-bit (zig_ecs) and 64-bit (zflecs) entity IDs.
-pub const EntityInstance = struct {
-    entity: Entity,
-    visual_type: VisualType = .sprite,
-    prefab_name: ?[]const u8 = null,
-    onUpdate: ?*const fn (u64, *anyopaque, f32) void = null,
-    onDestroy: ?*const fn (u64, *anyopaque) void = null,
-
-    // Compile-time verification that Entity fits in u64
-    comptime {
-        if (@sizeOf(Entity) > @sizeOf(u64)) {
-            @compileError("Entity must fit in u64 for lifecycle hooks");
+        pub fn addEntity(self: *Self, instance: EntityInstance) !void {
+            try self.entities.append(self.allocator, instance);
         }
-    }
-};
+
+        pub fn entityCount(self: *const Self) usize {
+            return self.entities.items.len;
+        }
+
+        fn entityToU64(entity: Entity) u64 {
+            if (Entity == u32) return @intCast(entity);
+            if (Entity == u64) return entity;
+            if (@hasDecl(Entity, "toU64")) return entity.toU64();
+            return @intCast(@as(u32, @bitCast(entity)));
+        }
+    };
+}
