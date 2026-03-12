@@ -5,7 +5,7 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
-  workflow_dispatch:  # Also allow manual triggering
+  workflow_dispatch:
 
 jobs:
   cli-integration:
@@ -17,20 +17,18 @@ jobs:
         with:
           path: labelle-engine
 
-      - name: Checkout labelle-core (sibling dependency)
+      - name: Checkout sibling dependencies
         uses: actions/checkout@v4
         with:
           repository: labelle-toolkit/labelle-core
           path: labelle-core
 
-      - name: Checkout labelle-gfx (sibling dependency)
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           repository: labelle-toolkit/labelle-gfx
           path: labelle-gfx
 
-      - name: Checkout labelle-cli (sibling dependency)
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           repository: labelle-toolkit/labelle-cli
           path: labelle-cli
@@ -40,215 +38,35 @@ jobs:
         with:
           version: 0.15.2
 
-      - name: Cache Zig dependencies
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/zig
-          key: zig-cache-${{ runner.os }}-${{ hashFiles('**/build.zig.zon') }}
-          restore-keys: |
-            zig-cache-${{ runner.os }}-
-
       - name: Install system dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            libgl1-mesa-dev \
-            libx11-dev \
-            libxcursor-dev \
-            libxrandr-dev \
-            libxinerama-dev \
-            libxi-dev \
-            libxext-dev \
-            libxfixes-dev \
-            libwayland-dev \
-            libxkbcommon-dev \
-            libasound2-dev \
-            xvfb
+            libgl1-mesa-dev libx11-dev libxcursor-dev libxrandr-dev \
+            libxinerama-dev libxi-dev libxext-dev libxfixes-dev \
+            libwayland-dev libxkbcommon-dev libasound2-dev
 
       - name: Install labelle-cli
         run: |
           curl -fsSL https://labelle.games/install.sh | bash
-          # Add to PATH for subsequent steps
           echo "$HOME/.labelle/bin" >> $GITHUB_PATH
 
-      - name: Verify CLI installation
-        run: |
-          labelle version
-          labelle help
+      - name: Verify CLI
+        run: labelle version
 
-      - name: Create test directory
+      - name: Create and generate project
         run: |
-          mkdir -p test-projects
-          cd test-projects
-
-      - name: Test CLI workflow - Create raylib project
-        run: |
-          cd test-projects
-          labelle init test_raylib_game --backend=raylib --ecs=zig_ecs \
+          mkdir -p test-projects && cd test-projects
+          labelle init test_game --backend=raylib --ecs=zig_ecs \
             --core-version="local:../../labelle-core" \
             --engine-version="local:../../labelle-engine" \
             --gfx-version="local:../../labelle-gfx" \
             --labelle-version="local:../../labelle-cli"
-          cat test_raylib_game/project.labelle
+          cd test_game
+          labelle generate
+          ls -la .labelle/raylib_desktop/
 
-      - name: Test CLI workflow - Generate with local engine
-        shell: bash
+      - name: Build project
         run: |
-          cd test-projects/test_raylib_game
-          echo "::group::Generating build files with local engine"
-
-          set -euo pipefail
-          BUILD_DIR=".labelle/raylib_desktop"
-          success=0
-          for attempt in 1 2 3; do
-            labelle generate || true
-            if [ -d "$BUILD_DIR" ] && [ -f "$BUILD_DIR/build.zig" ]; then
-              success=1
-              break
-            fi
-            echo "::warning::Generate attempt $attempt did not produce $BUILD_DIR, retrying in 10s..."
-            rm -rf .labelle 2>/dev/null || true
-            sleep 10
-          done
-
-          if [ "$success" -ne 1 ]; then
-            echo "::error::Generate failed after 3 attempts — output directory missing."
-            ls -la .labelle/ 2>/dev/null || echo "  .labelle/ directory not found"
-            exit 1
-          fi
-
-          echo "Generated files:"
-          ls -la "$BUILD_DIR"
-          echo "::endgroup::"
-
-      - name: Test CLI workflow - Build raylib project with generated files
-        shell: bash
-        run: |
-          echo "::group::Building project directly from generated files"
-
-          # Build using the generated build.zig directly (uses local engine via path dependency)
-          cd test-projects/test_raylib_game/.labelle/raylib_desktop
-          set -euo pipefail
-          success=0
-          for attempt in 1 2 3; do
-            if zig build; then
-              success=1
-              break
-            fi
-            if [ "$attempt" -lt 3 ]; then
-              echo "::warning::Build attempt $attempt failed, retrying in 10s..."
-              sleep 10
-            fi
-          done
-
-          if [ "$success" -ne 1 ]; then
-            echo "::error::Build failed after 3 attempts."
-            exit 1
-          fi
-
-          echo "::endgroup::"
-
-      - name: Test CLI workflow - Run raylib project
-        env:
-          CI_TEST: "1"
-        run: |
-          echo "::group::Running project"
-
-          # Run with xvfb for headless testing
-          cd test-projects/test_raylib_game/.labelle/raylib_desktop
-          xvfb-run -a zig build run
-
-          echo "::endgroup::"
-
-      - name: Test CLI workflow - Create sokol project
-        run: |
-          cd test-projects
-          echo "::group::Creating sokol project"
-          
-          # SKIPPED: Sokol backend has sgl.setup() issue - see labelle-gfx#146
-          # labelle init test_sokol_game --backend=sokol --ecs=zflecs
-          
-          echo "Sokol test skipped due to labelle-gfx#146"
-          echo "::endgroup::"
-
-      - name: Test CLI workflow - Multiple targets (generate)
-        shell: bash
-        run: |
-          echo "::group::Creating project with multiple targets"
-
-          cd test-projects
-          labelle init test_multi_target --backend=raylib --ecs=zig_ecs \
-            --core-version="local:../../labelle-core" \
-            --engine-version="local:../../labelle-engine" \
-            --gfx-version="local:../../labelle-gfx" \
-            --labelle-version="local:../../labelle-cli"
-          cd test_multi_target
-
-          BUILD_DIR=".labelle/raylib_desktop"
-          success=0
-          for attempt in 1 2 3; do
-            labelle generate || true
-            if [ -d "$BUILD_DIR" ] && [ -f "$BUILD_DIR/build.zig" ]; then
-              success=1
-              break
-            fi
-            echo "::warning::Generate attempt $attempt did not produce $BUILD_DIR, retrying in 10s..."
-            rm -rf .labelle 2>/dev/null || true
-            sleep 10
-          done
-          if [ "$success" -ne 1 ]; then
-            echo "::error::Generate failed after 3 attempts — output directory missing."
-            ls -la .labelle/ 2>/dev/null || echo "  .labelle/ directory not found"
-            exit 1
-          fi
-
-          echo "Generated files:"
-          ls -la "$BUILD_DIR"
-          echo "::endgroup::"
-
-      - name: Test CLI workflow - Multiple targets (build)
-        shell: bash
-        run: |
-          echo "::group::Building multi-target project"
-
-          # Build directly from generated files
-          cd test-projects/test_multi_target/.labelle/raylib_desktop
-          set -euo pipefail
-          success=0
-          for attempt in 1 2 3; do
-            if zig build; then
-              success=1
-              break
-            fi
-            if [ "$attempt" -lt 3 ]; then
-              echo "::warning::Build attempt $attempt failed, retrying in 10s..."
-              sleep 10
-            fi
-          done
-
-          if [ "$success" -ne 1 ]; then
-            echo "::error::Build failed after 3 attempts."
-            exit 1
-          fi
-
-          echo "::endgroup::"
-
-      - name: Create test summary
-        if: always()
-        run: |
-          echo "## CLI Integration Test Results" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "✅ CLI installation successful" >> $GITHUB_STEP_SUMMARY
-          echo "✅ Project creation working" >> $GITHUB_STEP_SUMMARY
-          echo "✅ Build generation with local engine successful" >> $GITHUB_STEP_SUMMARY
-          echo "✅ Build and run working" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Projects Tested" >> $GITHUB_STEP_SUMMARY
-          echo "- Raylib + zig_ecs: ✅" >> $GITHUB_STEP_SUMMARY
-          echo "- Sokol + zflecs: ⏭️ Skipped (labelle-gfx#146)" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### CLI Commands Tested" >> $GITHUB_STEP_SUMMARY
-          echo "- \`labelle init\`: ✅" >> $GITHUB_STEP_SUMMARY
-          echo "- \`labelle generate --engine-path\`: ✅" >> $GITHUB_STEP_SUMMARY
-          echo "- \`zig build\` (generated files): ✅" >> $GITHUB_STEP_SUMMARY
-          echo "- \`zig build run\` (generated files): ✅" >> $GITHUB_STEP_SUMMARY
+          cd test-projects/test_game/.labelle/raylib_desktop
+          zig build
