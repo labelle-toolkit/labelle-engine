@@ -116,9 +116,11 @@ pub const DefaultAnimationType = animation_mod.DefaultAnimationType;
 
 // ── Atlas ──
 pub const SpriteData = atlas_mod.SpriteData;
+pub const FindSpriteResult = atlas_mod.FindSpriteResult;
 pub const ComptimeAtlas = atlas_mod.ComptimeAtlas;
 pub const RuntimeAtlas = atlas_mod.RuntimeAtlas;
 pub const TextureManager = atlas_mod.TextureManager;
+pub const SpriteCache = atlas_mod.SpriteCache;
 
 // ── Core Re-exports ──
 pub const Position = core.Position;

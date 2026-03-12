@@ -1,5 +1,5 @@
-/// Texture atlas — compile-time (.zon) and runtime sprite lookup.
-/// Ported from v1. Supports TexturePacker frame format.
+/// Texture atlas — compile-time (.zon), runtime, and JSON-loaded sprite lookup.
+/// Supports TexturePacker JSON Hash format.
 const std = @import("std");
 
 /// Per-sprite data in an atlas.
@@ -39,6 +39,12 @@ pub const SpriteData = struct {
         if (self.source_height > 0) return self.source_height;
         return self.getHeight();
     }
+};
+
+/// Result of looking up a sprite by name across all loaded atlases.
+pub const FindSpriteResult = struct {
+    sprite: SpriteData,
+    texture_id: u32,
 };
 
 /// Compile-time atlas from a .zon frame definition.
@@ -103,12 +109,19 @@ pub fn ComptimeAtlas(comptime frames: anytype) type {
 pub const RuntimeAtlas = struct {
     sprites: std.StringHashMap(SpriteData),
     texture_id: u32 = 0,
+    owns_keys: bool = false,
 
     pub fn init(allocator: std.mem.Allocator) RuntimeAtlas {
         return .{ .sprites = std.StringHashMap(SpriteData).init(allocator) };
     }
 
     pub fn deinit(self: *RuntimeAtlas) void {
+        if (self.owns_keys) {
+            var it = self.sprites.keyIterator();
+            while (it.next()) |key| {
+                self.sprites.allocator.free(key.*);
+            }
+        }
         self.sprites.deinit();
     }
 
@@ -129,10 +142,11 @@ pub const RuntimeAtlas = struct {
     }
 };
 
-/// Texture manager — unified API for multiple atlases.
+/// Texture manager — unified API for multiple atlases with JSON loading.
 pub const TextureManager = struct {
     atlases: std.StringHashMap(RuntimeAtlas),
     allocator: std.mem.Allocator,
+    version: u32 = 0,
 
     pub fn init(allocator: std.mem.Allocator) TextureManager {
         return .{
@@ -142,17 +156,88 @@ pub const TextureManager = struct {
     }
 
     pub fn deinit(self: *TextureManager) void {
-        var it = self.atlases.valueIterator();
-        while (it.next()) |atlas| {
-            atlas.deinit();
+        var it = self.atlases.iterator();
+        while (it.next()) |entry| {
+            self.allocator.free(entry.key_ptr.*);
+            entry.value_ptr.deinit();
         }
         self.atlases.deinit();
     }
 
-    /// Register a new atlas by name.
+    /// Register a new empty atlas by name.
     pub fn addAtlas(self: *TextureManager, name: []const u8) !*RuntimeAtlas {
-        try self.atlases.put(name, RuntimeAtlas.init(self.allocator));
-        return self.atlases.getPtr(name).?;
+        const owned_name = try self.allocator.dupe(u8, name);
+        errdefer self.allocator.free(owned_name);
+        try self.atlases.put(owned_name, RuntimeAtlas.init(self.allocator));
+        self.version += 1;
+        return self.atlases.getPtr(owned_name).?;
+    }
+
+    /// Load an atlas from a TexturePacker JSON file and associate it with a texture.
+    pub fn loadAtlasFromJson(
+        self: *TextureManager,
+        name: []const u8,
+        json_path: [:0]const u8,
+        texture_id: u32,
+    ) !void {
+        var atlas = RuntimeAtlas.init(self.allocator);
+        atlas.texture_id = texture_id;
+        atlas.owns_keys = true;
+        errdefer atlas.deinit();
+
+        try parseTexturePackerJson(self.allocator, json_path, &atlas.sprites);
+
+        const owned_name = try self.allocator.dupe(u8, name);
+        errdefer self.allocator.free(owned_name);
+
+        try self.atlases.put(owned_name, atlas);
+        self.version += 1;
+    }
+
+    /// Load an atlas from JSON content already in memory.
+    pub fn loadAtlasFromJsonContent(
+        self: *TextureManager,
+        name: []const u8,
+        json_content: []const u8,
+        texture_id: u32,
+    ) !void {
+        var atlas = RuntimeAtlas.init(self.allocator);
+        atlas.texture_id = texture_id;
+        atlas.owns_keys = true;
+        errdefer atlas.deinit();
+
+        try parseTexturePackerJsonContent(self.allocator, json_content, &atlas.sprites);
+
+        const owned_name = try self.allocator.dupe(u8, name);
+        errdefer self.allocator.free(owned_name);
+
+        try self.atlases.put(owned_name, atlas);
+        self.version += 1;
+    }
+
+    /// Register an atlas from comptime sprite data (from ComptimeAtlas).
+    /// Sprite names are comptime string literals — no heap allocation needed for keys.
+    pub fn loadAtlasComptime(
+        self: *TextureManager,
+        name: []const u8,
+        comptime sprites: []const SpriteData,
+        texture_id: u32,
+    ) !void {
+        var atlas = RuntimeAtlas.init(self.allocator);
+        atlas.texture_id = texture_id;
+        // Keys are comptime literals, no need to dupe or free them
+        atlas.owns_keys = false;
+        errdefer atlas.deinit();
+
+        inline for (sprites) |sprite| {
+            try atlas.sprites.put(sprite.name, sprite);
+        }
+
+        const owned_name = try self.allocator.dupe(u8, name);
+        errdefer self.allocator.free(owned_name);
+
+        try self.atlases.put(owned_name, atlas);
+        self.version += 1;
     }
 
     /// Get an atlas by name.
@@ -161,15 +246,244 @@ pub const TextureManager = struct {
     }
 
     /// Search all atlases for a sprite by name.
-    pub fn findSprite(self: *const TextureManager, sprite_name: []const u8) ?SpriteData {
+    pub fn findSprite(self: *const TextureManager, sprite_name: []const u8) ?FindSpriteResult {
         var it = self.atlases.valueIterator();
         while (it.next()) |atlas| {
-            if (atlas.get(sprite_name)) |data| return data;
+            if (atlas.get(sprite_name)) |data| {
+                return .{ .sprite = data, .texture_id = atlas.texture_id };
+            }
         }
         return null;
+    }
+
+    /// Remove an atlas by name, freeing all associated memory.
+    pub fn unloadAtlas(self: *TextureManager, name: []const u8) void {
+        if (self.atlases.fetchRemove(name)) |kv| {
+            self.allocator.free(kv.key);
+            var atlas = kv.value;
+            atlas.deinit();
+            self.version += 1;
+        }
+    }
+
+    /// Remove all atlases.
+    pub fn unloadAll(self: *TextureManager) void {
+        var it = self.atlases.iterator();
+        while (it.next()) |entry| {
+            self.allocator.free(entry.key_ptr.*);
+            entry.value_ptr.deinit();
+        }
+        self.atlases.clearRetainingCapacity();
+        self.version += 1;
     }
 
     pub fn atlasCount(self: *const TextureManager) usize {
         return self.atlases.count();
     }
+
+    pub fn totalSpriteCount(self: *const TextureManager) usize {
+        var total: usize = 0;
+        var it = self.atlases.valueIterator();
+        while (it.next()) |atlas| {
+            total += atlas.count();
+        }
+        return total;
+    }
+
+    pub fn getVersion(self: *const TextureManager) u32 {
+        return self.version;
+    }
 };
+
+/// Per-entity sprite lookup cache with version-based invalidation.
+/// Avoids repeated hash map lookups when sprite names and atlases haven't changed.
+pub const SpriteCache = struct {
+    entries: std.AutoHashMap(u32, CacheEntry),
+    allocator: std.mem.Allocator,
+    hits: u64 = 0,
+    misses: u64 = 0,
+
+    const CacheEntry = struct {
+        result: FindSpriteResult,
+        atlas_version: u32,
+        name_hash: u64,
+    };
+
+    pub fn init(allocator: std.mem.Allocator) SpriteCache {
+        return .{
+            .entries = std.AutoHashMap(u32, CacheEntry).init(allocator),
+            .allocator = allocator,
+        };
+    }
+
+    pub fn deinit(self: *SpriteCache) void {
+        self.entries.deinit();
+    }
+
+    /// Look up a sprite for an entity, using the cache when possible.
+    /// Returns cached result if atlas version and sprite name haven't changed.
+    pub fn lookup(
+        self: *SpriteCache,
+        entity_id: u32,
+        sprite_name: []const u8,
+        manager: *const TextureManager,
+    ) ?FindSpriteResult {
+        if (sprite_name.len == 0) return null;
+
+        const current_version = manager.version;
+        const name_hash = std.hash.Wyhash.hash(0, sprite_name);
+
+        if (self.entries.get(entity_id)) |cached| {
+            if (cached.atlas_version == current_version and cached.name_hash == name_hash) {
+                self.hits += 1;
+                return cached.result;
+            }
+        }
+
+        // Cache miss — do the full lookup
+        self.misses += 1;
+        const result = manager.findSprite(sprite_name) orelse return null;
+
+        self.entries.put(entity_id, .{
+            .result = result,
+            .atlas_version = current_version,
+            .name_hash = name_hash,
+        }) catch {};
+
+        return result;
+    }
+
+    /// Remove a cached entry (e.g. when entity is destroyed).
+    pub fn invalidate(self: *SpriteCache, entity_id: u32) void {
+        _ = self.entries.remove(entity_id);
+    }
+
+    /// Clear the entire cache (e.g. on scene change).
+    pub fn clear(self: *SpriteCache) void {
+        self.entries.clearRetainingCapacity();
+    }
+
+    pub fn entryCount(self: *const SpriteCache) usize {
+        return self.entries.count();
+    }
+};
+
+// ── JSON Parsing ────────────────────────────────────────────
+
+/// Parse a TexturePacker JSON Hash format file into a sprite map.
+fn parseTexturePackerJson(
+    allocator: std.mem.Allocator,
+    json_path: [:0]const u8,
+    sprites: *std.StringHashMap(SpriteData),
+) !void {
+    const file = try std.fs.cwd().openFile(json_path, .{});
+    defer file.close();
+
+    const content = try file.readToEndAlloc(allocator, 10 * 1024 * 1024);
+    defer allocator.free(content);
+
+    try parseTexturePackerJsonContent(allocator, content, sprites);
+}
+
+/// Parse TexturePacker JSON content (already in memory) into a sprite map.
+fn parseTexturePackerJsonContent(
+    allocator: std.mem.Allocator,
+    content: []const u8,
+    sprites: *std.StringHashMap(SpriteData),
+) !void {
+    const parsed = try std.json.parseFromSlice(std.json.Value, allocator, content, .{});
+    defer parsed.deinit();
+
+    const root = parsed.value.object;
+    const frames_val = root.get("frames") orelse return error.InvalidAtlasFormat;
+
+    switch (frames_val) {
+        .object => |frames_obj| try parseFramesObject(allocator, frames_obj, sprites),
+        .array => |frames_arr| try parseFramesArray(allocator, frames_arr, sprites),
+        else => return error.InvalidAtlasFormat,
+    }
+}
+
+/// Parse frames in JSON Hash format: { "name": { "frame": {...}, ... }, ... }
+fn parseFramesObject(
+    allocator: std.mem.Allocator,
+    frames: std.json.ObjectMap,
+    sprites: *std.StringHashMap(SpriteData),
+) !void {
+    var it = frames.iterator();
+    while (it.next()) |entry| {
+        const name = entry.key_ptr.*;
+        const val = entry.value_ptr.object;
+        const sprite = extractSpriteData(val) orelse continue;
+
+        const owned_name = try allocator.dupe(u8, name);
+        errdefer allocator.free(owned_name);
+        try sprites.put(owned_name, sprite);
+    }
+}
+
+/// Parse frames in JSON Array format: [ { "filename": "name", "frame": {...}, ... }, ... ]
+fn parseFramesArray(
+    allocator: std.mem.Allocator,
+    frames: std.json.Array,
+    sprites: *std.StringHashMap(SpriteData),
+) !void {
+    for (frames.items) |item| {
+        const val = item.object;
+        const filename = val.get("filename") orelse continue;
+        const name = switch (filename) {
+            .string => |s| s,
+            else => continue,
+        };
+        const sprite = extractSpriteData(val) orelse continue;
+
+        const owned_name = try allocator.dupe(u8, name);
+        errdefer allocator.free(owned_name);
+        try sprites.put(owned_name, sprite);
+    }
+}
+
+/// Extract SpriteData from a single frame's JSON object.
+fn extractSpriteData(val: std.json.ObjectMap) ?SpriteData {
+    const frame_obj = (val.get("frame") orelse return null).object;
+    const rotated = if (val.get("rotated")) |v| v.bool else false;
+    const trimmed = if (val.get("trimmed")) |v| v.bool else false;
+
+    var offset_x: i32 = 0;
+    var offset_y: i32 = 0;
+    if (val.get("spriteSourceSize")) |sss_val| {
+        const sss = sss_val.object;
+        offset_x = jsonInt(i32, sss.get("x"));
+        offset_y = jsonInt(i32, sss.get("y"));
+    }
+
+    var source_width: u32 = 0;
+    var source_height: u32 = 0;
+    if (val.get("sourceSize")) |ss_val| {
+        const ss = ss_val.object;
+        source_width = jsonInt(u32, ss.get("w"));
+        source_height = jsonInt(u32, ss.get("h"));
+    }
+
+    return .{
+        .x = jsonInt(u32, frame_obj.get("x")),
+        .y = jsonInt(u32, frame_obj.get("y")),
+        .width = jsonInt(u32, frame_obj.get("w")),
+        .height = jsonInt(u32, frame_obj.get("h")),
+        .rotated = rotated,
+        .trimmed = trimmed,
+        .offset_x = offset_x,
+        .offset_y = offset_y,
+        .source_width = source_width,
+        .source_height = source_height,
+    };
+}
+
+fn jsonInt(comptime T: type, val: ?std.json.Value) T {
+    const v = val orelse return 0;
+    return switch (v) {
+        .integer => |i| @intCast(i),
+        .float => |f| @intFromFloat(f),
+        else => 0,
+    };
+}
