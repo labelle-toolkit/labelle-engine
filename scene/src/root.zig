@@ -45,6 +45,7 @@ pub const PrefabRegistry = prefab.PrefabRegistry;
 // ── Component ──
 pub const ComponentRegistry = component.ComponentRegistry;
 pub const ComponentRegistryMulti = component.ComponentRegistryMulti;
+pub const ComponentRegistryWithPlugins = component.ComponentRegistryWithPlugins;
 
 // ── Gizmo ──
 pub const GizmoComponent = gizmo.GizmoComponent;

@@ -98,6 +98,7 @@ pub const SimpleSceneLoader = scene_mod.SimpleSceneLoader;
 pub const PrefabRegistry = scene_mod.PrefabRegistry;
 pub const ComponentRegistry = scene_mod.ComponentRegistry;
 pub const ComponentRegistryMulti = scene_mod.ComponentRegistryMulti;
+pub const ComponentRegistryWithPlugins = scene_mod.ComponentRegistryWithPlugins;
 pub const ScriptRegistry = scene_mod.ScriptRegistry;
 pub const ScriptFns = scene_mod.ScriptFns;
 pub const GizmoRegistry = scene_mod.GizmoRegistry;

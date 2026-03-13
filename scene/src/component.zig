@@ -54,3 +54,51 @@ pub fn ComponentRegistryMulti(comptime component_maps: anytype) type {
         }
     };
 }
+
+/// Component registry with automatic plugin component discovery.
+///
+/// Game-local components (field-based struct) take precedence over plugin
+/// components. Plugin modules are checked for a `Components` declaration
+/// whose public declarations are registered automatically.
+///
+/// Usage:
+///   const Components = ComponentRegistryWithPlugins(
+///       .{ .Health = Health, .Velocity = Velocity },
+///       .{ @import("pathfinding"), @import("labelle-gfx") },
+///   );
+pub fn ComponentRegistryWithPlugins(comptime local_map: anytype, comptime plugin_modules: anytype) type {
+    const plugins_info = @typeInfo(@TypeOf(plugin_modules));
+
+    return struct {
+        pub fn has(comptime name: []const u8) bool {
+            // Local components take precedence
+            if (@hasField(@TypeOf(local_map), name)) return true;
+            // Check plugin Components declarations
+            inline for (plugins_info.@"struct".fields) |field| {
+                const mod = @field(plugin_modules, field.name);
+                if (@hasDecl(mod, "Components")) {
+                    if (@hasDecl(@field(mod, "Components"), name)) return true;
+                }
+            }
+            return false;
+        }
+
+        pub fn getType(comptime name: []const u8) type {
+            // Local components take precedence
+            if (@hasField(@TypeOf(local_map), name)) {
+                return @field(local_map, name);
+            }
+            // Check plugin Components declarations
+            inline for (plugins_info.@"struct".fields) |field| {
+                const mod = @field(plugin_modules, field.name);
+                if (@hasDecl(mod, "Components")) {
+                    const Comps = @field(mod, "Components");
+                    if (@hasDecl(Comps, name)) {
+                        return @field(Comps, name);
+                    }
+                }
+            }
+            @compileError("Unknown component: " ++ name);
+        }
+    };
+}

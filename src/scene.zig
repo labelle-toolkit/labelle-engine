@@ -40,6 +40,7 @@ pub const PrefabRegistry = scene.PrefabRegistry;
 // ── Component ──
 pub const ComponentRegistry = scene.ComponentRegistry;
 pub const ComponentRegistryMulti = scene.ComponentRegistryMulti;
+pub const ComponentRegistryWithPlugins = scene.ComponentRegistryWithPlugins;
 
 // ── Gizmo ──
 pub const GizmoComponent = scene.GizmoComponent;
