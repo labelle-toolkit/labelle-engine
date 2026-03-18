@@ -31,6 +31,7 @@ pub fn build(b: *std.Build) void {
         "test/animation_atlas_test.zig",
         "test/gui_runtime_state_test.zig",
         "test/form_binder_test.zig",
+        "test/script_runner_test.zig",
     };
 
     for (test_files) |test_file| {

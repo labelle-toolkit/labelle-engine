@@ -130,23 +130,48 @@ pub fn ScriptRunner(
         }
 
         pub fn tick(self: *Self, game: anytype, dt: f32) void {
+            const active = getActiveFilter(game);
             const decls = @typeInfo(AllScripts).@"struct".decls;
             inline for (decls) |d| {
                 const mod = @field(AllScripts, d.name);
                 if (comptime @hasDecl(mod, "tick")) {
-                    dispatchTickCall(mod.tick, game, self, d.name, dt);
+                    if (active == null or nameInSlice(d.name, active.?)) {
+                        dispatchTickCall(mod.tick, game, self, d.name, dt);
+                    }
                 }
             }
         }
 
         pub fn drawGui(self: *Self, game: anytype) void {
+            const active = getActiveFilter(game);
             const decls = @typeInfo(AllScripts).@"struct".decls;
             inline for (decls) |d| {
                 const mod = @field(AllScripts, d.name);
                 if (comptime @hasDecl(mod, "drawGui")) {
-                    dispatchCall(mod.drawGui, game, self, d.name);
+                    if (active == null or nameInSlice(d.name, active.?)) {
+                        dispatchCall(mod.drawGui, game, self, d.name);
+                    }
                 }
             }
+        }
+
+        /// Query the game for the active scene's script filter list.
+        /// Returns null if no filtering (tick all scripts).
+        /// Handles both pointer and value game types.
+        fn getActiveFilter(game: anytype) ?[]const []const u8 {
+            const info = @typeInfo(@TypeOf(game));
+            const GameType = if (info == .pointer) info.pointer.child else @TypeOf(game);
+            if (comptime @hasDecl(GameType, "getActiveScriptNames")) {
+                return game.getActiveScriptNames();
+            }
+            return null;
+        }
+
+        fn nameInSlice(comptime name: []const u8, names: []const []const u8) bool {
+            for (names) |n| {
+                if (std.mem.eql(u8, n, name)) return true;
+            }
+            return false;
         }
 
         /// Dispatch setup/drawGui by arity:
