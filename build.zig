@@ -48,4 +48,28 @@ pub fn build(b: *std.Build) void {
         });
         test_step.dependOn(&b.addRunArtifact(t).step);
     }
+
+    // Zspec BDD tests (from spec/ directory)
+    const zspec_dep = b.dependency("zspec", .{ .target = target, .optimize = optimize });
+
+    const spec_mod = b.createModule(.{
+        .root_source_file = b.path("spec/root.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "labelle-core", .module = core_module },
+            .{ .name = "engine", .module = engine_module },
+            .{ .name = "scene", .module = scene_module },
+            .{ .name = "zspec", .module = zspec_dep.module("zspec") },
+        },
+    });
+
+    const spec_tests = b.addTest(.{
+        .root_module = spec_mod,
+        .test_runner = .{ .path = zspec_dep.path("src/runner.zig"), .mode = .simple },
+    });
+
+    const spec_step = b.step("spec", "Run zspec BDD tests");
+    spec_step.dependOn(&b.addRunArtifact(spec_tests).step);
+    test_step.dependOn(&b.addRunArtifact(spec_tests).step);
 }
