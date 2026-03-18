@@ -5,7 +5,6 @@
 ///   2. Standalone scoped logger: const log = GameLog.scoped(.movement)
 ///                                log.info(game, "vel: {d}", .{v})
 const core = @import("labelle-core");
-const LogLevel = core.LogLevel;
 
 /// Game-aware logger parameterized by a comptime LogSink backend.
 pub fn GameLog(comptime LogSink: type) type {
@@ -14,11 +13,11 @@ pub fn GameLog(comptime LogSink: type) type {
     return struct {
         const Self = @This();
 
-        elapsed_s: f32 = 0,
+        elapsed_s: f64 = 0,
 
         /// Called by game.tick() each frame to accumulate elapsed time.
         pub fn update(self: *Self, dt: f32) void {
-            self.elapsed_s += dt;
+            self.elapsed_s += @as(f64, dt);
         }
 
         /// Reset elapsed time (e.g., on scene change).
