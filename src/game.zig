@@ -27,7 +27,32 @@ const scene_mixin = @import("game/scene_mixin.zig");
 /// Full game configuration — the assembler fills ALL comptime slots.
 /// RenderImpl is a renderer plugin (e.g. gfx.GfxRenderer) satisfying RenderInterface.
 /// The engine does NOT depend on labelle-gfx — it accesses component types through RenderImpl.
+/// Extended GameConfig with LogSink parameter.
+pub fn GameConfigWithLog(
+    comptime RenderImpl: type,
+    comptime EcsImpl: type,
+    comptime InputImpl: type,
+    comptime AudioImpl: type,
+    comptime GuiImpl: type,
+    comptime Hooks: type,
+    comptime LogSinkImpl: type,
+) type {
+    return GameConfigImpl(RenderImpl, EcsImpl, InputImpl, AudioImpl, GuiImpl, Hooks, LogSinkImpl);
+}
+
+/// Standard GameConfig — defaults LogSink to StubLogSink for backward compatibility.
 pub fn GameConfig(
+    comptime RenderImpl: type,
+    comptime EcsImpl: type,
+    comptime InputImpl: type,
+    comptime AudioImpl: type,
+    comptime GuiImpl: type,
+    comptime Hooks: type,
+) type {
+    return GameConfigImpl(RenderImpl, EcsImpl, InputImpl, AudioImpl, GuiImpl, Hooks, core.StubLogSink);
+}
+
+fn GameConfigImpl(
     comptime RenderImpl: type,
     comptime EcsImpl: type,
     comptime InputImpl: type,
@@ -636,7 +661,7 @@ pub fn GameConfig(
 
 /// Convenience: Game with custom hooks, StubRender + mock ECS
 pub fn GameWith(comptime Hooks: type) type {
-    return GameConfig(
+    return GameConfigImpl(
         core.StubRender(MockEcsBackend(u32).Entity),
         MockEcsBackend(u32),
         @import("input.zig").StubInput,

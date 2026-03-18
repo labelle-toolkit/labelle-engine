@@ -21,6 +21,7 @@ pub const atlas_mod = @import("atlas.zig");
 
 // ── Game ──
 pub const GameConfig = game_mod.GameConfig;
+pub const GameConfigWithLog = game_mod.GameConfigWithLog;
 pub const GameLog = game_log_mod.GameLog;
 pub const StubLogSink = core.StubLogSink;
 pub const StderrLogSink = core.StderrLogSink;
