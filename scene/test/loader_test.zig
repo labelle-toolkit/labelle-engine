@@ -2,9 +2,7 @@ const std = @import("std");
 const labelle_core = @import("labelle-core");
 const scene = @import("scene");
 
-const SceneLoader = scene.SceneLoader;
 const SimpleSceneLoader = scene.SimpleSceneLoader;
-const ScriptRegistry = scene.ScriptRegistry;
 
 // =============================================================================
 // Shared mock types
