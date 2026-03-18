@@ -157,8 +157,10 @@ pub fn ScriptRunner(
 
         /// Query the game for the active scene's script filter list.
         /// Returns null if no filtering (tick all scripts).
+        /// Handles both pointer and value game types.
         fn getActiveFilter(game: anytype) ?[]const []const u8 {
-            const GameType = @typeInfo(@TypeOf(game)).pointer.child;
+            const info = @typeInfo(@TypeOf(game));
+            const GameType = if (info == .pointer) info.pointer.child else @TypeOf(game);
             if (comptime @hasDecl(GameType, "getActiveScriptNames")) {
                 return game.getActiveScriptNames();
             }
