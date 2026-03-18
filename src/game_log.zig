@@ -2,8 +2,8 @@
 ///
 /// Provides two usage patterns:
 ///   1. Through the game object:  game.log.info("msg", .{})
-///   2. Standalone scoped logger: const log = GameLog.scoped(.movement)
-///                                log.info(game, "vel: {d}", .{v})
+///   2. Standalone scoped logger: const log = Log.scoped("movement");
+///                                log.info(&game.log, "vel: {d}", .{v})
 const core = @import("labelle-core");
 
 /// Game-aware logger parameterized by a comptime LogSink backend.
@@ -46,28 +46,27 @@ pub fn GameLog(comptime LogSink: type) type {
         // ── Scoped logging ──────────────────────────────────────────
 
         /// Returns a scoped logger. Declare at module level for zero-cost scope tagging:
-        ///   const log = GameLog.scoped("movement");
+        ///   const log = Log.scoped("movement");
         pub fn scoped(comptime scope: []const u8) ScopedLog(scope) {
             return .{};
         }
 
         pub fn ScopedLog(comptime scope: []const u8) type {
             return struct {
-                /// Log through a game reference (gets elapsed time from game.log).
-                pub fn debug(_: @This(), game: anytype, comptime fmt: []const u8, args: anytype) void {
-                    Sink.write(.debug, scope, game.log.elapsed_s, fmt, args);
+                pub fn debug(_: @This(), log: *const Self, comptime fmt: []const u8, args: anytype) void {
+                    Sink.write(.debug, scope, log.elapsed_s, fmt, args);
                 }
 
-                pub fn info(_: @This(), game: anytype, comptime fmt: []const u8, args: anytype) void {
-                    Sink.write(.info, scope, game.log.elapsed_s, fmt, args);
+                pub fn info(_: @This(), log: *const Self, comptime fmt: []const u8, args: anytype) void {
+                    Sink.write(.info, scope, log.elapsed_s, fmt, args);
                 }
 
-                pub fn warn(_: @This(), game: anytype, comptime fmt: []const u8, args: anytype) void {
-                    Sink.write(.warn, scope, game.log.elapsed_s, fmt, args);
+                pub fn warn(_: @This(), log: *const Self, comptime fmt: []const u8, args: anytype) void {
+                    Sink.write(.warn, scope, log.elapsed_s, fmt, args);
                 }
 
-                pub fn err(_: @This(), game: anytype, comptime fmt: []const u8, args: anytype) void {
-                    Sink.write(.err, scope, game.log.elapsed_s, fmt, args);
+                pub fn err(_: @This(), log: *const Self, comptime fmt: []const u8, args: anytype) void {
+                    Sink.write(.err, scope, log.elapsed_s, fmt, args);
                 }
             };
         }
