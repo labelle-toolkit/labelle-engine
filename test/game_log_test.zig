@@ -4,6 +4,7 @@ const engine = @import("engine");
 const core = @import("labelle-core");
 
 const GameLog = engine.GameLog;
+const LogLevel = core.LogLevel;
 
 // A test sink that captures the last log call for assertions.
 const CapturingSink = struct {
@@ -33,7 +34,7 @@ const CapturingSink = struct {
     }
 };
 
-const Log = GameLog(CapturingSink);
+const Log = GameLog(CapturingSink, .debug);
 
 test "GameLog: elapsed time accumulates from dt" {
     var log = Log{};
@@ -95,4 +96,37 @@ test "GameLog: scoped log passes scope and elapsed time" {
     try testing.expectEqual(core.LogLevel.info, CapturingSink.last_level.?);
     try testing.expectEqualStrings("movement", CapturingSink.last_scope);
     try testing.expectApproxEqAbs(@as(f64, 1.0), CapturingSink.last_elapsed, 1e-6);
+}
+
+test "GameLog: min_level filters out lower levels" {
+    // WarnLog only passes warn + err to the sink
+    const WarnLog = GameLog(CapturingSink, .warn);
+    var log = WarnLog{};
+    CapturingSink.reset();
+
+    log.debug("should not appear", .{});
+    log.info("should not appear", .{});
+    try testing.expectEqual(@as(usize, 0), CapturingSink.call_count);
+
+    log.warn("this should appear", .{});
+    try testing.expectEqual(@as(usize, 1), CapturingSink.call_count);
+    try testing.expectEqual(core.LogLevel.warn, CapturingSink.last_level.?);
+
+    log.err("this too", .{});
+    try testing.expectEqual(@as(usize, 2), CapturingSink.call_count);
+    try testing.expectEqual(core.LogLevel.err, CapturingSink.last_level.?);
+}
+
+test "GameLog: scoped log also respects min_level" {
+    const ErrLog = GameLog(CapturingSink, .err);
+    var log = ErrLog{};
+    CapturingSink.reset();
+
+    const scoped = ErrLog.scoped("test");
+    scoped.info(&log, "filtered", .{});
+    scoped.warn(&log, "filtered", .{});
+    try testing.expectEqual(@as(usize, 0), CapturingSink.call_count);
+
+    scoped.err(&log, "passes", .{});
+    try testing.expectEqual(@as(usize, 1), CapturingSink.call_count);
 }

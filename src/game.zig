@@ -27,32 +27,7 @@ const scene_mixin = @import("game/scene_mixin.zig");
 /// Full game configuration — the assembler fills ALL comptime slots.
 /// RenderImpl is a renderer plugin (e.g. gfx.GfxRenderer) satisfying RenderInterface.
 /// The engine does NOT depend on labelle-gfx — it accesses component types through RenderImpl.
-/// Extended GameConfig with LogSink parameter.
-pub fn GameConfigWithLog(
-    comptime RenderImpl: type,
-    comptime EcsImpl: type,
-    comptime InputImpl: type,
-    comptime AudioImpl: type,
-    comptime GuiImpl: type,
-    comptime Hooks: type,
-    comptime LogSinkImpl: type,
-) type {
-    return GameConfigImpl(RenderImpl, EcsImpl, InputImpl, AudioImpl, GuiImpl, Hooks, LogSinkImpl);
-}
-
-/// Standard GameConfig — defaults LogSink to StubLogSink for backward compatibility.
 pub fn GameConfig(
-    comptime RenderImpl: type,
-    comptime EcsImpl: type,
-    comptime InputImpl: type,
-    comptime AudioImpl: type,
-    comptime GuiImpl: type,
-    comptime Hooks: type,
-) type {
-    return GameConfigImpl(RenderImpl, EcsImpl, InputImpl, AudioImpl, GuiImpl, Hooks, core.StubLogSink);
-}
-
-fn GameConfigImpl(
     comptime RenderImpl: type,
     comptime EcsImpl: type,
     comptime InputImpl: type,
@@ -90,7 +65,7 @@ fn GameConfigImpl(
         pub const Audio = @import("audio.zig").AudioInterface(AudioImpl);
         pub const Gui = @import("gui.zig").GuiInterface(GuiImpl);
         pub const GizmoDraw = gizmo_draws_mod.GizmoDraw;
-        pub const Log = game_log_mod.GameLog(LogSinkImpl);
+        pub const Log = game_log_mod.GameLog(LogSinkImpl, core.log.default_min_level);
 
         // ── Mixin types ──────────────────────────────────────────
         const Visuals = visuals_mixin.Mixin(Self);
@@ -661,7 +636,7 @@ fn GameConfigImpl(
 
 /// Convenience: Game with custom hooks, StubRender + mock ECS
 pub fn GameWith(comptime Hooks: type) type {
-    return GameConfigImpl(
+    return GameConfig(
         core.StubRender(MockEcsBackend(u32).Entity),
         MockEcsBackend(u32),
         @import("input.zig").StubInput,

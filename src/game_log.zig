@@ -4,10 +4,14 @@
 ///   1. Through the game object:  game.log.info("msg", .{})
 ///   2. Standalone scoped logger: const log = Log.scoped("movement");
 ///                                log.info(&game.log, "vel: {d}", .{v})
+///
+/// Log level filtering is comptime — calls below min_level generate zero code.
+/// Default: Debug=all, ReleaseSafe=info+, ReleaseFast/Small=warn+.
 const core = @import("labelle-core");
+const LogLevel = core.LogLevel;
 
-/// Game-aware logger parameterized by a comptime LogSink backend.
-pub fn GameLog(comptime LogSink: type) type {
+/// Game-aware logger parameterized by a comptime LogSink backend and minimum log level.
+pub fn GameLog(comptime LogSink: type, comptime min_level: LogLevel) type {
     const Sink = core.LogSinkInterface(LogSink);
 
     return struct {
@@ -28,19 +32,27 @@ pub fn GameLog(comptime LogSink: type) type {
         // ── Direct logging (default scope) ──────────────────────────
 
         pub fn debug(self: *const Self, comptime fmt: []const u8, args: anytype) void {
-            Sink.write(.debug, "", self.elapsed_s, fmt, args);
+            if (comptime @intFromEnum(LogLevel.debug) >= @intFromEnum(min_level)) {
+                Sink.write(.debug, "", self.elapsed_s, fmt, args);
+            }
         }
 
         pub fn info(self: *const Self, comptime fmt: []const u8, args: anytype) void {
-            Sink.write(.info, "", self.elapsed_s, fmt, args);
+            if (comptime @intFromEnum(LogLevel.info) >= @intFromEnum(min_level)) {
+                Sink.write(.info, "", self.elapsed_s, fmt, args);
+            }
         }
 
         pub fn warn(self: *const Self, comptime fmt: []const u8, args: anytype) void {
-            Sink.write(.warn, "", self.elapsed_s, fmt, args);
+            if (comptime @intFromEnum(LogLevel.warn) >= @intFromEnum(min_level)) {
+                Sink.write(.warn, "", self.elapsed_s, fmt, args);
+            }
         }
 
         pub fn err(self: *const Self, comptime fmt: []const u8, args: anytype) void {
-            Sink.write(.err, "", self.elapsed_s, fmt, args);
+            if (comptime @intFromEnum(LogLevel.err) >= @intFromEnum(min_level)) {
+                Sink.write(.err, "", self.elapsed_s, fmt, args);
+            }
         }
 
         // ── Scoped logging ──────────────────────────────────────────
@@ -54,19 +66,27 @@ pub fn GameLog(comptime LogSink: type) type {
         pub fn ScopedLog(comptime scope: []const u8) type {
             return struct {
                 pub fn debug(_: @This(), log: *const Self, comptime fmt: []const u8, args: anytype) void {
-                    Sink.write(.debug, scope, log.elapsed_s, fmt, args);
+                    if (comptime @intFromEnum(LogLevel.debug) >= @intFromEnum(min_level)) {
+                        Sink.write(.debug, scope, log.elapsed_s, fmt, args);
+                    }
                 }
 
                 pub fn info(_: @This(), log: *const Self, comptime fmt: []const u8, args: anytype) void {
-                    Sink.write(.info, scope, log.elapsed_s, fmt, args);
+                    if (comptime @intFromEnum(LogLevel.info) >= @intFromEnum(min_level)) {
+                        Sink.write(.info, scope, log.elapsed_s, fmt, args);
+                    }
                 }
 
                 pub fn warn(_: @This(), log: *const Self, comptime fmt: []const u8, args: anytype) void {
-                    Sink.write(.warn, scope, log.elapsed_s, fmt, args);
+                    if (comptime @intFromEnum(LogLevel.warn) >= @intFromEnum(min_level)) {
+                        Sink.write(.warn, scope, log.elapsed_s, fmt, args);
+                    }
                 }
 
                 pub fn err(_: @This(), log: *const Self, comptime fmt: []const u8, args: anytype) void {
-                    Sink.write(.err, scope, log.elapsed_s, fmt, args);
+                    if (comptime @intFromEnum(LogLevel.err) >= @intFromEnum(min_level)) {
+                        Sink.write(.err, scope, log.elapsed_s, fmt, args);
+                    }
                 }
             };
         }

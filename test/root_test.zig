@@ -39,6 +39,7 @@ test "GameConfig: RenderImpl slot is parameterized" {
         StubAudio,
         StubGui,
         void,
+        StubLogSink,
     );
 
     var game = CustomGame.init(testing.allocator);
