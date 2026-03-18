@@ -27,4 +27,24 @@ pub fn build(b: *std.Build) void {
         }),
     });
     test_step.dependOn(&b.addRunArtifact(tests).step);
+
+    // Test files in test/ directory
+    const test_files = [_][]const u8{
+        "test/loader_test.zig",
+    };
+
+    for (test_files) |test_file| {
+        const t = b.addTest(.{
+            .root_module = b.createModule(.{
+                .root_source_file = b.path(test_file),
+                .target = target,
+                .optimize = optimize,
+                .imports = &.{
+                    .{ .name = "labelle-core", .module = core_module },
+                    .{ .name = "scene", .module = scene_module },
+                },
+            }),
+        });
+        test_step.dependOn(&b.addRunArtifact(t).step);
+    }
 }
