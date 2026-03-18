@@ -188,6 +188,13 @@ pub fn SceneLoaderWithGizmos(
         /// which ensures update() runs each tick and deinit() runs on scene unload.
         pub fn sceneLoaderFn(comptime scene_data: anytype) fn (*GameType) anyerror!void {
             return struct {
+                /// Script names from the scene's .scripts field.
+                /// null if the scene doesn't define .scripts (no filtering).
+                const scene_script_names: ?[]const []const u8 = if (@hasField(@TypeOf(scene_data), "scripts"))
+                    tupleToStringSlice(scene_data.scripts)
+                else
+                    null;
+
                 fn loader(game: *GameType) anyerror!void {
                     const scene = try load(scene_data, game, game.allocator);
                     const scene_ptr = try game.allocator.create(SceneType);
@@ -197,6 +204,7 @@ pub fn SceneLoaderWithGizmos(
                         &sceneUpdate,
                         &sceneDeinit,
                         &sceneGetEntityByName,
+                        scene_script_names,
                     );
                     game.gizmo_reconcile_fn = &gizmoReconcile;
                 }
@@ -1004,7 +1012,7 @@ test "addCustomComponent handles union and enum component types" {
         pub fn fireOnReady(_: *Self, _: u32, comptime _: type) void {}
         pub fn setParent(_: *Self, _: u32, _: u32, _: anytype) void {}
 
-        pub fn setActiveScene(_: *Self, _: *anyopaque, _: anytype, _: anytype) void {}
+        pub fn setActiveScene(_: *Self, _: *anyopaque, _: anytype, _: anytype, _: anytype) void {}
     };
 
     // A union component type
@@ -1128,7 +1136,7 @@ test "nested entity arrays in prefab components spawn child entities" {
         pub fn setParent(_: *Self, _: u32, _: u32, _: anytype) void {}
         pub fn destroyEntityOnly(_: *Self, _: u32) void {}
 
-        pub fn setActiveScene(_: *Self, _: *anyopaque, _: anytype, _: anytype) void {}
+        pub fn setActiveScene(_: *Self, _: *anyopaque, _: anytype, _: anytype, _: anytype) void {}
     };
 
     const Components = @import("component.zig").ComponentRegistry(.{
@@ -1234,7 +1242,7 @@ test "nested entity arrays with inline component entities" {
         pub fn setParent(_: *Self, _: u32, _: u32, _: anytype) void {}
         pub fn destroyEntityOnly(_: *Self, _: u32) void {}
 
-        pub fn setActiveScene(_: *Self, _: *anyopaque, _: anytype, _: anytype) void {}
+        pub fn setActiveScene(_: *Self, _: *anyopaque, _: anytype, _: anytype, _: anytype) void {}
     };
 
     const Components = @import("component.zig").ComponentRegistry(.{

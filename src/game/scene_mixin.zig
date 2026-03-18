@@ -65,11 +65,13 @@ pub fn Mixin(comptime Game: type) type {
             ptr: *anyopaque,
             update_fn: *const fn (*anyopaque, f32) void,
             deinit_fn: *const fn (*anyopaque, std.mem.Allocator) void,
+            script_names: ?[]const []const u8,
         ) void {
             self.teardownActiveScene();
             self.active_scene_ptr = ptr;
             self.active_scene_update_fn = update_fn;
             self.active_scene_deinit_fn = deinit_fn;
+            self.active_scene_script_names = script_names;
         }
     };
 }
