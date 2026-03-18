@@ -11,6 +11,7 @@ const ParentComponent = core.ParentComponent;
 const ChildrenComponent = core.ChildrenComponent;
 
 const atlas_mod = @import("atlas.zig");
+const game_log_mod = @import("game_log.zig");
 
 const hierarchy = @import("game/hierarchy.zig");
 const gizmo_draws_mod = @import("game/gizmo_draws.zig");
@@ -33,6 +34,7 @@ pub fn GameConfig(
     comptime AudioImpl: type,
     comptime GuiImpl: type,
     comptime Hooks: type,
+    comptime LogSinkImpl: type,
 ) type {
     // Validate renderer satisfies the contract
     _ = core.RenderInterface(RenderImpl);
@@ -63,6 +65,7 @@ pub fn GameConfig(
         pub const Audio = @import("audio.zig").AudioInterface(AudioImpl);
         pub const Gui = @import("gui.zig").GuiInterface(GuiImpl);
         pub const GizmoDraw = gizmo_draws_mod.GizmoDraw;
+        pub const Log = game_log_mod.GameLog(LogSinkImpl, core.log.default_min_level);
 
         // ── Mixin types ──────────────────────────────────────────
         const Visuals = visuals_mixin.Mixin(Self);
@@ -110,6 +113,9 @@ pub fn GameConfig(
         // Arena for heap-allocated slices in nested entity arrays (scene loader).
         // Freed on scene teardown.
         nested_entity_arena: std.heap.ArenaAllocator,
+
+        // Logging
+        log: Log = .{},
 
         // Game state
         running: bool = true,
@@ -471,6 +477,7 @@ pub fn GameConfig(
         }
 
         pub fn tick(self: *Self, dt: f32) void {
+            self.log.update(dt);
             self.emitHook(.{ .frame_start = .{ .frame_number = self.frame_number, .dt = dt } });
             Audio.update();
             Input.updateGestures(dt); // Poll gesture recognition (no-op if backend lacks touch support)
@@ -636,6 +643,7 @@ pub fn GameWith(comptime Hooks: type) type {
         @import("audio.zig").StubAudio,
         @import("gui.zig").StubGui,
         Hooks,
+        core.StubLogSink,
     );
 }
 

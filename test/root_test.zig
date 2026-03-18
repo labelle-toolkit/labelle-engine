@@ -10,6 +10,7 @@ const MockEcsBackend = engine.MockEcsBackend;
 const StubInput = engine.StubInput;
 const StubAudio = engine.StubAudio;
 const StubGui = engine.StubGui;
+const StubLogSink = engine.StubLogSink;
 const InputInterface = engine.InputInterface;
 const AudioInterface = engine.AudioInterface;
 const GuiInterface = engine.GuiInterface;
@@ -38,6 +39,7 @@ test "GameConfig: RenderImpl slot is parameterized" {
         StubAudio,
         StubGui,
         void,
+        StubLogSink,
     );
 
     var game = CustomGame.init(testing.allocator);

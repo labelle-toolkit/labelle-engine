@@ -4,6 +4,7 @@ pub const core = @import("labelle-core");
 
 // Engine modules
 pub const game_mod = @import("game.zig");
+pub const game_log_mod = @import("game_log.zig");
 pub const input_mod = @import("input.zig");
 pub const audio_mod = @import("audio.zig");
 pub const gui_mod = @import("gui.zig");
@@ -20,6 +21,9 @@ pub const atlas_mod = @import("atlas.zig");
 
 // ── Game ──
 pub const GameConfig = game_mod.GameConfig;
+pub const GameLog = game_log_mod.GameLog;
+pub const StubLogSink = core.StubLogSink;
+pub const StderrLogSink = core.StderrLogSink;
 pub const GameWith = game_mod.GameWith;
 pub const Game = game_mod.Game;
 
