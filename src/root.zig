@@ -109,6 +109,7 @@ pub const GizmoRegistry = scene_mod.GizmoRegistry;
 pub const NoGizmos = scene_mod.NoGizmos;
 pub const NoScripts = scene_mod.NoScripts;
 pub const ScriptRunner = script_runner_mod.ScriptRunner;
+pub const SystemRegistry = scene_mod.SystemRegistry;
 pub const RefInfo = scene_mod.RefInfo;
 pub const isReference = scene_mod.isReference;
 pub const extractRefInfo = scene_mod.extractRefInfo;

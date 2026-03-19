@@ -42,6 +42,9 @@ pub const ComponentRegistry = scene.ComponentRegistry;
 pub const ComponentRegistryMulti = scene.ComponentRegistryMulti;
 pub const ComponentRegistryWithPlugins = scene.ComponentRegistryWithPlugins;
 
+// ── System ──
+pub const SystemRegistry = scene.SystemRegistry;
+
 // ── Gizmo ──
 pub const GizmoComponent = scene.GizmoComponent;
 pub const GizmoRegistry = scene.GizmoRegistry;

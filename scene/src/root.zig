@@ -14,6 +14,7 @@ pub const prefab = @import("prefab.zig");
 pub const component = @import("component.zig");
 pub const script = @import("script.zig");
 pub const gizmo = @import("gizmo.zig");
+pub const system = @import("system.zig");
 
 // ── Types ──
 pub const RefInfo = types.RefInfo;
@@ -54,6 +55,9 @@ pub const NoGizmos = gizmo.NoGizmos;
 
 // ── Entity Writer ──
 pub const EntityWriter = entity_writer.EntityWriter;
+
+// ── System ──
+pub const SystemRegistry = system.SystemRegistry;
 
 // ── Loader ──
 pub const SceneLoader = loader.SceneLoader;
