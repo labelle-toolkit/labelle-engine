@@ -81,10 +81,13 @@ pub fn SystemRegistry(comptime plugin_modules: anytype) type {
             }
         }
 
-        /// Call deinit() on all plugin systems that declare it.
+        /// Call deinit() on all plugin systems in reverse order (mirrors setup).
         pub fn deinit() void {
-            inline for (info.@"struct".fields) |field| {
-                const mod = @field(plugin_modules, field.name);
+            const fields = info.@"struct".fields;
+            comptime var i: usize = fields.len;
+            inline while (i > 0) {
+                i -= 1;
+                const mod = @field(plugin_modules, fields[i].name);
                 if (@hasDecl(mod, "Systems")) {
                     const Sys = @field(mod, "Systems");
                     if (@hasDecl(Sys, "deinit")) {
