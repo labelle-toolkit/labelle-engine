@@ -93,6 +93,7 @@ pub const ComponentPayload = hooks_types_mod.ComponentPayload;
 
 // ── Hook Dispatcher ──
 pub const MergeHooks = core.MergeHooks;
+pub const MergeHookPayloads = core.MergeHookPayloads;
 
 // ── Scene System ──
 pub const Scene = scene_mod.Scene;
