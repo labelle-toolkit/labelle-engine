@@ -21,6 +21,22 @@ pub fn ComponentRegistry(comptime component_map: anytype) type {
         pub fn getType(comptime name: []const u8) type {
             return @field(component_map, name);
         }
+
+        pub fn names() []const []const u8 {
+            comptime {
+                const fields = @typeInfo(@TypeOf(component_map)).@"struct".fields;
+                var result: [fields.len][]const u8 = undefined;
+                for (fields, 0..) |f, i| {
+                    result[i] = f.name;
+                }
+                return &result;
+            }
+        }
+
+        pub fn entityHasNamed(ecs: anytype, entity: anytype, comptime name: []const u8) bool {
+            const T = getType(name);
+            return ecs.hasComponent(entity, T);
+        }
     };
 }
 
@@ -71,9 +87,7 @@ pub fn ComponentRegistryWithPlugins(comptime local_map: anytype, comptime plugin
 
     return struct {
         pub fn has(comptime name: []const u8) bool {
-            // Local components take precedence
             if (@hasField(@TypeOf(local_map), name)) return true;
-            // Check plugin Components declarations
             inline for (plugins_info.@"struct".fields) |field| {
                 const mod = @field(plugin_modules, field.name);
                 if (@hasDecl(mod, "Components")) {
@@ -84,11 +98,9 @@ pub fn ComponentRegistryWithPlugins(comptime local_map: anytype, comptime plugin
         }
 
         pub fn getType(comptime name: []const u8) type {
-            // Local components take precedence
             if (@hasField(@TypeOf(local_map), name)) {
                 return @field(local_map, name);
             }
-            // Check plugin Components declarations
             inline for (plugins_info.@"struct".fields) |field| {
                 const mod = @field(plugin_modules, field.name);
                 if (@hasDecl(mod, "Components")) {
@@ -99,6 +111,61 @@ pub fn ComponentRegistryWithPlugins(comptime local_map: anytype, comptime plugin
                 }
             }
             @compileError("Unknown component: " ++ name);
+        }
+
+        /// Returns a comptime slice of all registered component names.
+        pub fn names() []const []const u8 {
+            comptime {
+                var count: usize = 0;
+
+                // Count local components
+                for (@typeInfo(@TypeOf(local_map)).@"struct".fields) |_| {
+                    count += 1;
+                }
+
+                // Count plugin components (skip duplicates with local)
+                for (plugins_info.@"struct".fields) |field| {
+                    const mod = @field(plugin_modules, field.name);
+                    if (@hasDecl(mod, "Components")) {
+                        const Comps = @field(mod, "Components");
+                        for (@typeInfo(Comps).@"struct".decls) |decl| {
+                            if (!@hasField(@TypeOf(local_map), decl.name)) {
+                                count += 1;
+                            }
+                        }
+                    }
+                }
+
+                var result: [count][]const u8 = undefined;
+                var idx: usize = 0;
+
+                for (@typeInfo(@TypeOf(local_map)).@"struct".fields) |f| {
+                    result[idx] = f.name;
+                    idx += 1;
+                }
+
+                for (plugins_info.@"struct".fields) |field| {
+                    const mod = @field(plugin_modules, field.name);
+                    if (@hasDecl(mod, "Components")) {
+                        const Comps = @field(mod, "Components");
+                        for (@typeInfo(Comps).@"struct".decls) |decl| {
+                            if (!@hasField(@TypeOf(local_map), decl.name)) {
+                                result[idx] = decl.name;
+                                idx += 1;
+                            }
+                        }
+                    }
+                }
+
+                return &result;
+            }
+        }
+
+        /// Check if an entity has a named component (runtime name, comptime dispatch).
+        /// Returns true if the entity has the component matching the given name.
+        pub fn entityHasNamed(ecs: anytype, entity: anytype, comptime name: []const u8) bool {
+            const T = getType(name);
+            return ecs.hasComponent(entity, T);
         }
     };
 }

@@ -32,6 +32,10 @@ test "Game: full lifecycle with StubRender" {
 
 test "GameConfig: RenderImpl slot is parameterized" {
     const TestRenderer = StubRender(u32);
+    const EmptyComponents = struct {
+        pub fn has(comptime _: []const u8) bool { return false; }
+        pub fn names() []const []const u8 { return &.{}; }
+    };
     const CustomGame = GameConfig(
         TestRenderer,
         MockEcsBackend(u32),
@@ -40,6 +44,7 @@ test "GameConfig: RenderImpl slot is parameterized" {
         StubGui,
         void,
         StubLogSink,
+        EmptyComponents,
     );
 
     var game = CustomGame.init(testing.allocator);
