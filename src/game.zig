@@ -35,6 +35,7 @@ pub fn GameConfig(
     comptime GuiImpl: type,
     comptime Hooks: type,
     comptime LogSinkImpl: type,
+    comptime ComponentsType: type,
 ) type {
     // Validate renderer satisfies the contract
     _ = core.RenderInterface(RenderImpl);
@@ -66,6 +67,8 @@ pub fn GameConfig(
         pub const Gui = @import("gui.zig").GuiInterface(GuiImpl);
         pub const GizmoDraw = gizmo_draws_mod.GizmoDraw;
         pub const Log = game_log_mod.GameLog(LogSinkImpl, core.log.default_min_level);
+        /// Component registry — for debug introspection by plugins.
+        pub const ComponentRegistry = ComponentsType;
 
         // ── Mixin types ──────────────────────────────────────────
         const Visuals = visuals_mixin.Mixin(Self);
@@ -120,6 +123,9 @@ pub fn GameConfig(
         // Game state
         running: bool = true,
         frame_number: u64 = 0,
+        /// Time scale factor: 0 = paused, 0.5 = slow-mo, 1.0 = normal, 2.0 = fast.
+        /// When paused (0), rendering and GUI continue but tick logic stops.
+        time_scale: f32 = 1.0,
 
         // Gizmos
         gizmos_enabled: bool = true,
@@ -476,13 +482,51 @@ pub fn GameConfig(
             return self.running;
         }
 
+        // ── Time scale ──
+
+        pub fn setTimeScale(self: *Self, scale: f32) void {
+            self.time_scale = @max(0, scale);
+        }
+
+        pub fn getTimeScale(self: *const Self) f32 {
+            return self.time_scale;
+        }
+
+        pub fn isPaused(self: *const Self) bool {
+            return self.time_scale == 0;
+        }
+
+        pub fn pause(self: *Self) void {
+            self.time_scale = 0;
+        }
+
+        pub fn resume_(self: *Self) void {
+            self.time_scale = 1.0;
+        }
+
         pub fn tick(self: *Self, dt: f32) void {
+            const scaled_dt = dt * self.time_scale;
+
+            // Always run: logging, audio, input, renderer sync, gizmo reconciliation.
+            // These must run even when paused so the game remains responsive.
             self.log.update(dt);
-            self.emitHook(.{ .frame_start = .{ .frame_number = self.frame_number, .dt = dt } });
             Audio.update();
-            Input.updateGestures(dt); // Poll gesture recognition (no-op if backend lacks touch support)
+            Input.updateGestures(dt);
             self.resolveAtlasSprites();
             self.renderer.sync(EcsImpl, &self.ecs_backend);
+
+            // Reconcile gizmos for runtime-created entities
+            if (self.gizmo_reconcile_fn) |reconcile_fn| {
+                reconcile_fn(self);
+            }
+
+            // Paused: skip game logic but keep frame counter advancing
+            if (scaled_dt == 0) {
+                self.frame_number += 1;
+                return;
+            }
+
+            self.emitHook(.{ .frame_start = .{ .frame_number = self.frame_number, .dt = scaled_dt } });
 
             if (self.pending_scene_change) |next_scene| {
                 defer {
@@ -494,16 +538,11 @@ pub fn GameConfig(
 
             if (self.active_scene_ptr) |scene_ptr| {
                 if (self.active_scene_update_fn) |update_fn| {
-                    update_fn(scene_ptr, dt);
+                    update_fn(scene_ptr, scaled_dt);
                 }
             }
 
-            // Reconcile gizmos for runtime-created entities
-            if (self.gizmo_reconcile_fn) |reconcile_fn| {
-                reconcile_fn(self);
-            }
-
-            self.emitHook(.{ .frame_end = .{ .frame_number = self.frame_number, .dt = dt } });
+            self.emitHook(.{ .frame_end = .{ .frame_number = self.frame_number, .dt = scaled_dt } });
             self.frame_number += 1;
         }
 
@@ -636,6 +675,10 @@ pub fn GameConfig(
 
 /// Convenience: Game with custom hooks, StubRender + mock ECS
 pub fn GameWith(comptime Hooks: type) type {
+    const EmptyComponents = struct {
+        pub fn has(comptime _: []const u8) bool { return false; }
+        pub fn names() []const []const u8 { return &.{}; }
+    };
     return GameConfig(
         core.StubRender(MockEcsBackend(u32).Entity),
         MockEcsBackend(u32),
@@ -644,6 +687,7 @@ pub fn GameWith(comptime Hooks: type) type {
         @import("gui.zig").StubGui,
         Hooks,
         core.StubLogSink,
+        EmptyComponents,
     );
 }
 
