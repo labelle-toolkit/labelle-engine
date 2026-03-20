@@ -520,14 +520,7 @@ pub fn GameConfig(
                 reconcile_fn(self);
             }
 
-            // Paused: skip game logic but keep frame counter advancing
-            if (scaled_dt == 0) {
-                self.frame_number += 1;
-                return;
-            }
-
-            self.emitHook(.{ .frame_start = .{ .frame_number = self.frame_number, .dt = scaled_dt } });
-
+            // Scene changes must process even when paused (e.g. pause menu → new scene)
             if (self.pending_scene_change) |next_scene| {
                 defer {
                     self.allocator.free(next_scene);
@@ -535,6 +528,14 @@ pub fn GameConfig(
                 }
                 self.setScene(next_scene) catch {};
             }
+
+            // Paused: skip game logic but keep frame counter advancing
+            if (scaled_dt == 0) {
+                self.frame_number += 1;
+                return;
+            }
+
+            self.emitHook(.{ .frame_start = .{ .frame_number = self.frame_number, .dt = scaled_dt } });
 
             if (self.active_scene_ptr) |scene_ptr| {
                 if (self.active_scene_update_fn) |update_fn| {
