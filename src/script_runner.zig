@@ -21,10 +21,46 @@ pub fn ScriptRunner(
 ) type {
     return struct {
         const Self = @This();
+        const builtin = @import("builtin");
+        pub const profiling_enabled = builtin.mode == .Debug;
 
+        /// Profiling data — timing per script per phase. Only in debug builds.
+        pub const ProfileEntry = struct {
+            name: []const u8,
+            tick_ns: u64 = 0,
+            draw_gui_ns: u64 = 0,
+        };
+
+        pub const script_count: usize = blk: {
+            var count: usize = 0;
+            for (@typeInfo(AllScripts).@"struct".decls) |d| {
+                const mod = @field(AllScripts, d.name);
+                if (isGameScript(mod)) count += 1;
+            }
+            break :blk count;
+        };
+
+        // Fields
         states: States,
         ctx: CtxType,
         allocator: std.mem.Allocator,
+        profile: if (profiling_enabled) [script_count]ProfileEntry else void =
+            if (profiling_enabled) initProfile() else {},
+
+        fn initProfile() [script_count]ProfileEntry {
+            comptime {
+                var entries: [script_count]ProfileEntry = undefined;
+                var idx: usize = 0;
+                for (@typeInfo(AllScripts).@"struct".decls) |d| {
+                    const mod = @field(AllScripts, d.name);
+                    if (isGameScript(mod)) {
+                        entries[idx] = .{ .name = d.name };
+                        idx += 1;
+                    }
+                }
+                return entries;
+            }
+        }
 
         /// Comptime-built struct with one field per script that exports State.
         const States = buildStatesType();
@@ -132,12 +168,26 @@ pub fn ScriptRunner(
         pub fn tick(self: *Self, game: anytype, dt: f32) void {
             const active = getActiveFilter(game);
             const decls = @typeInfo(AllScripts).@"struct".decls;
+            comptime var profile_idx: usize = 0;
             inline for (decls) |d| {
                 const mod = @field(AllScripts, d.name);
-                if (comptime @hasDecl(mod, "tick")) {
-                    if (active == null or nameInSlice(d.name, active.?)) {
-                        dispatchTickCall(mod.tick, game, self, d.name, dt);
+                if (comptime isGameScript(mod)) {
+                    if (comptime @hasDecl(mod, "tick")) {
+                        if (active == null or nameInSlice(d.name, active.?)) {
+                            if (profiling_enabled) {
+                                var timer = std.time.Timer.start() catch null;
+                                dispatchTickCall(mod.tick, game, self, d.name, dt);
+                                if (timer) |*t| {
+                                    self.profile[profile_idx].tick_ns = t.read();
+                                }
+                            } else {
+                                dispatchTickCall(mod.tick, game, self, d.name, dt);
+                            }
+                        } else if (profiling_enabled) {
+                            self.profile[profile_idx].tick_ns = 0;
+                        }
                     }
+                    profile_idx += 1;
                 }
             }
         }
@@ -145,12 +195,26 @@ pub fn ScriptRunner(
         pub fn drawGui(self: *Self, game: anytype) void {
             const active = getActiveFilter(game);
             const decls = @typeInfo(AllScripts).@"struct".decls;
+            comptime var profile_idx: usize = 0;
             inline for (decls) |d| {
                 const mod = @field(AllScripts, d.name);
-                if (comptime @hasDecl(mod, "drawGui")) {
-                    if (active == null or nameInSlice(d.name, active.?)) {
-                        dispatchCall(mod.drawGui, game, self, d.name);
+                if (comptime isGameScript(mod)) {
+                    if (comptime @hasDecl(mod, "drawGui")) {
+                        if (active == null or nameInSlice(d.name, active.?)) {
+                            if (profiling_enabled) {
+                                var timer = std.time.Timer.start() catch null;
+                                dispatchCall(mod.drawGui, game, self, d.name);
+                                if (timer) |*t| {
+                                    self.profile[profile_idx].draw_gui_ns = t.read();
+                                }
+                            } else {
+                                dispatchCall(mod.drawGui, game, self, d.name);
+                            }
+                        } else if (profiling_enabled) {
+                            self.profile[profile_idx].draw_gui_ns = 0;
+                        }
                     }
+                    profile_idx += 1;
                 }
             }
         }

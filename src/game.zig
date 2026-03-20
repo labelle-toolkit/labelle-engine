@@ -36,6 +36,7 @@ pub fn GameConfig(
     comptime Hooks: type,
     comptime LogSinkImpl: type,
     comptime ComponentsType: type,
+    comptime GizmoCategoriesSlice: anytype,
 ) type {
     // Validate renderer satisfies the contract
     _ = core.RenderInterface(RenderImpl);
@@ -69,6 +70,8 @@ pub fn GameConfig(
         pub const Log = game_log_mod.GameLog(LogSinkImpl, core.log.default_min_level);
         /// Component registry — for debug introspection by plugins.
         pub const ComponentRegistry = ComponentsType;
+        /// Gizmo categories discovered from plugins at comptime.
+        pub const gizmo_categories = GizmoCategoriesSlice;
 
         // ── Mixin types ──────────────────────────────────────────
         const Visuals = visuals_mixin.Mixin(Self);
@@ -126,6 +129,14 @@ pub fn GameConfig(
         /// Time scale factor: 0 = paused, 0.5 = slow-mo, 1.0 = normal, 2.0 = fast.
         /// When paused (0), rendering and GUI continue but tick logic stops.
         time_scale: f32 = 1.0,
+
+        // Profiling (debug builds only)
+        /// Opaque pointer to ScriptRunner's profile array. Set by generated code.
+        script_profile_ptr: ?*const anyopaque = null,
+        script_profile_count: usize = 0,
+        /// Opaque pointer to SystemRegistry's plugin_profile array. Set by generated code.
+        plugin_profile_ptr: ?*const anyopaque = null,
+        plugin_profile_count: usize = 0,
 
         // Gizmos
         gizmos_enabled: bool = true,
@@ -389,6 +400,12 @@ pub fn GameConfig(
         pub const drawGizmoRect = GizmoMixin.drawGizmoRect;
         pub const drawGizmoCircle = GizmoMixin.drawGizmoCircle;
         pub const drawGizmoArrow = GizmoMixin.drawGizmoArrow;
+        pub const drawGizmoLineCategory = GizmoMixin.drawGizmoLineCategory;
+        pub const drawGizmoRectCategory = GizmoMixin.drawGizmoRectCategory;
+        pub const drawGizmoCircleCategory = GizmoMixin.drawGizmoCircleCategory;
+        pub const drawGizmoArrowCategory = GizmoMixin.drawGizmoArrowCategory;
+        pub const setGizmoCategory = GizmoMixin.setGizmoCategory;
+        pub const isGizmoCategoryEnabled = GizmoMixin.isGizmoCategoryEnabled;
         pub const drawGizmoLineScreen = GizmoMixin.drawGizmoLineScreen;
         pub const drawGizmoRectScreen = GizmoMixin.drawGizmoRectScreen;
         pub const drawGizmoCircleScreen = GizmoMixin.drawGizmoCircleScreen;
@@ -689,6 +706,7 @@ pub fn GameWith(comptime Hooks: type) type {
         Hooks,
         core.StubLogSink,
         EmptyComponents,
+        &.{}, // no gizmo categories
     );
 }
 
