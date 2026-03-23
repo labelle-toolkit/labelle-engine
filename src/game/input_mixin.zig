@@ -26,5 +26,9 @@ pub fn Mixin(comptime Game: type) type {
         pub fn getMouse(_: *Game) Position {
             return .{ .x = Input.getMouseX(), .y = Input.getMouseY() };
         }
+
+        pub fn getMouseWheelMove(_: *Game) f32 {
+            return Input.getMouseWheelMove();
+        }
     };
 }

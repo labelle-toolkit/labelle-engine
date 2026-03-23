@@ -379,6 +379,7 @@ pub fn GameConfig(
         pub const getMouseX = InputMixin.getMouseX;
         pub const getMouseY = InputMixin.getMouseY;
         pub const getMouse = InputMixin.getMouse;
+        pub const getMouseWheelMove = InputMixin.getMouseWheelMove;
 
         // ── Audio (mixin) ────────────────────────────────────────
         pub const playSound = AudioMixin.playSound;
