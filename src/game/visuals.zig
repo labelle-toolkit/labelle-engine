@@ -13,22 +13,22 @@ pub fn Mixin(comptime Game: type) type {
 
     return struct {
         pub fn addSprite(self: *Game, entity: Entity, sprite: Sprite) void {
-            self.active_world.ecs_backend.addComponent(entity, sprite);
+            self.ecs_backend.addComponent(entity, sprite);
             self.active_world.renderer.trackEntity(entity, .sprite);
         }
 
         pub fn addShape(self: *Game, entity: Entity, shape: Shape) void {
-            self.active_world.ecs_backend.addComponent(entity, shape);
+            self.ecs_backend.addComponent(entity, shape);
             self.active_world.renderer.trackEntity(entity, .shape);
         }
 
         pub fn addText(self: *Game, entity: Entity, text: Text) void {
-            self.active_world.ecs_backend.addComponent(entity, text);
+            self.ecs_backend.addComponent(entity, text);
             self.active_world.renderer.trackEntity(entity, .text);
         }
 
         pub fn addIcon(self: *Game, entity: Entity, icon: Icon) void {
-            self.active_world.ecs_backend.addComponent(entity, icon);
+            self.ecs_backend.addComponent(entity, icon);
             self.active_world.renderer.trackEntity(entity, .sprite);
         }
 
@@ -38,7 +38,7 @@ pub fn Mixin(comptime Game: type) type {
             const gizmo_entity = self.createEntity();
             const parent_pos = self.getPosition(parent);
 
-            self.active_world.ecs_backend.addComponent(gizmo_entity, Gizmo{
+            self.ecs_backend.addComponent(gizmo_entity, Gizmo{
                 .parent_entity = parent,
                 .offset_x = offset_x,
                 .offset_y = offset_y,
@@ -54,31 +54,31 @@ pub fn Mixin(comptime Game: type) type {
 
         pub fn removeSprite(self: *Game, entity: Entity) void {
             self.active_world.renderer.untrackEntity(entity);
-            self.active_world.ecs_backend.removeComponent(entity, Sprite);
+            self.ecs_backend.removeComponent(entity, Sprite);
         }
 
         pub fn removeShape(self: *Game, entity: Entity) void {
             self.active_world.renderer.untrackEntity(entity);
-            self.active_world.ecs_backend.removeComponent(entity, Shape);
+            self.ecs_backend.removeComponent(entity, Shape);
         }
 
         pub fn removeText(self: *Game, entity: Entity) void {
             self.active_world.renderer.untrackEntity(entity);
-            self.active_world.ecs_backend.removeComponent(entity, Text);
+            self.ecs_backend.removeComponent(entity, Text);
         }
 
         pub fn setZIndex(self: *Game, entity: Entity, z_index: i16) void {
             var updated = false;
-            if (self.active_world.ecs_backend.getComponent(entity, Sprite)) |sprite| {
+            if (self.ecs_backend.getComponent(entity, Sprite)) |sprite| {
                 sprite.z_index = z_index;
                 updated = true;
             }
-            if (self.active_world.ecs_backend.getComponent(entity, Shape)) |shape| {
+            if (self.ecs_backend.getComponent(entity, Shape)) |shape| {
                 shape.z_index = z_index;
                 updated = true;
             }
             if (Text != void) {
-                if (self.active_world.ecs_backend.getComponent(entity, Text)) |text| {
+                if (self.ecs_backend.getComponent(entity, Text)) |text| {
                     text.z_index = z_index;
                     updated = true;
                 }

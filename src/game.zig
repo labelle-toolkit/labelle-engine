@@ -229,27 +229,27 @@ pub fn GameConfig(
         // ── Entity Management ─────────────────────────────────────
 
         pub fn createEntity(self: *Self) Entity {
-            const entity = self.active_world.ecs_backend.createEntity();
+            const entity = self.ecs_backend.createEntity();
             self.emitHook(.{ .entity_created = .{ .entity_id = entity } });
             return entity;
         }
 
         pub fn destroyEntity(self: *Self, entity: Entity) void {
-            if (self.active_world.ecs_backend.getComponent(entity, Children)) |children_comp| {
+            if (self.ecs_backend.getComponent(entity, Children)) |children_comp| {
                 for (children_comp.getChildren()) |child| {
                     self.destroyEntity(child);
                 }
             }
             self.active_world.sprite_cache.invalidate(@intCast(entity));
             self.active_world.renderer.untrackEntity(entity);
-            self.active_world.ecs_backend.destroyEntity(entity);
+            self.ecs_backend.destroyEntity(entity);
             self.emitHook(.{ .entity_destroyed = .{ .entity_id = entity } });
         }
 
         pub fn destroyEntityOnly(self: *Self, entity: Entity) void {
             self.active_world.sprite_cache.invalidate(@intCast(entity));
             self.active_world.renderer.untrackEntity(entity);
-            self.active_world.ecs_backend.destroyEntity(entity);
+            self.ecs_backend.destroyEntity(entity);
             self.emitHook(.{ .entity_destroyed = .{ .entity_id = entity } });
         }
 
@@ -267,22 +267,22 @@ pub fn GameConfig(
         // ── Position & Hierarchy ──────────────────────────────────
 
         pub fn setPosition(self: *Self, entity: Entity, pos: Position) void {
-            self.active_world.ecs_backend.addComponent(entity, pos);
-            self.active_world.renderer.markPositionDirtyWithChildren(EcsImpl, &self.active_world.ecs_backend, entity);
+            self.ecs_backend.addComponent(entity, pos);
+            self.active_world.renderer.markPositionDirtyWithChildren(EcsImpl, self.ecs_backend, entity);
         }
 
         pub fn getPosition(self: *Self, entity: Entity) Position {
-            if (self.active_world.ecs_backend.getComponent(entity, Position)) |p| return p.*;
+            if (self.ecs_backend.getComponent(entity, Position)) |p| return p.*;
             return Position{};
         }
 
         pub fn getWorldPosition(self: *Self, entity: Entity) Position {
-            return hierarchy.computeWorldPos(EcsImpl, Parent, &self.active_world.ecs_backend, entity, 0);
+            return hierarchy.computeWorldPos(EcsImpl, Parent, self.ecs_backend, entity, 0);
         }
 
         pub fn setWorldPosition(self: *Self, entity: Entity, world_pos: Position) void {
-            if (self.active_world.ecs_backend.getComponent(entity, Parent)) |parent_comp| {
-                const parent_world = hierarchy.computeWorldPos(EcsImpl, Parent, &self.active_world.ecs_backend, parent_comp.entity, 0);
+            if (self.ecs_backend.getComponent(entity, Parent)) |parent_comp| {
+                const parent_world = hierarchy.computeWorldPos(EcsImpl, Parent, self.ecs_backend, parent_comp.entity, 0);
                 self.setPosition(entity, .{ .x = world_pos.x - parent_world.x, .y = world_pos.y - parent_world.y });
             } else {
                 self.setPosition(entity, world_pos);
@@ -293,26 +293,26 @@ pub fn GameConfig(
             inherit_rotation: bool = false,
             inherit_scale: bool = false,
         }) void {
-            if (hierarchy.wouldCreateCycle(EcsImpl, Parent, &self.active_world.ecs_backend, child, parent_entity)) return;
+            if (hierarchy.wouldCreateCycle(EcsImpl, Parent, self.ecs_backend, child, parent_entity)) return;
 
-            if (self.active_world.ecs_backend.getComponent(child, Parent)) |old_parent_comp| {
-                if (self.active_world.ecs_backend.getComponent(old_parent_comp.entity, Children)) |old_children| {
+            if (self.ecs_backend.getComponent(child, Parent)) |old_parent_comp| {
+                if (self.ecs_backend.getComponent(old_parent_comp.entity, Children)) |old_children| {
                     old_children.removeChild(child);
                 }
             }
 
-            self.active_world.ecs_backend.addComponent(child, Parent{
+            self.ecs_backend.addComponent(child, Parent{
                 .entity = parent_entity,
                 .inherit_rotation = opts.inherit_rotation,
                 .inherit_scale = opts.inherit_scale,
             });
 
-            if (self.active_world.ecs_backend.getComponent(parent_entity, Children)) |children_comp| {
+            if (self.ecs_backend.getComponent(parent_entity, Children)) |children_comp| {
                 children_comp.addChild(child);
             } else {
                 var new_children = Children{};
                 new_children.addChild(child);
-                self.active_world.ecs_backend.addComponent(parent_entity, new_children);
+                self.ecs_backend.addComponent(parent_entity, new_children);
             }
 
             self.active_world.renderer.updateHierarchyFlag(child, true);
@@ -329,12 +329,12 @@ pub fn GameConfig(
         }
 
         pub fn removeParent(self: *Self, child: Entity) void {
-            if (self.active_world.ecs_backend.getComponent(child, Parent)) |parent_comp| {
-                if (self.active_world.ecs_backend.getComponent(parent_comp.entity, Children)) |children_comp| {
+            if (self.ecs_backend.getComponent(child, Parent)) |parent_comp| {
+                if (self.ecs_backend.getComponent(parent_comp.entity, Children)) |children_comp| {
                     children_comp.removeChild(child);
                 }
             }
-            self.active_world.ecs_backend.removeComponent(child, Parent);
+            self.ecs_backend.removeComponent(child, Parent);
             self.active_world.renderer.updateHierarchyFlag(child, false);
             self.active_world.renderer.markPositionDirty(child);
         }
@@ -346,28 +346,28 @@ pub fn GameConfig(
         }
 
         pub fn getParent(self: *Self, entity: Entity) ?Entity {
-            if (self.active_world.ecs_backend.getComponent(entity, Parent)) |p| return p.entity;
+            if (self.ecs_backend.getComponent(entity, Parent)) |p| return p.entity;
             return null;
         }
 
         pub fn getChildren(self: *Self, entity: Entity) []const Entity {
-            if (self.active_world.ecs_backend.getComponent(entity, Children)) |c| return c.getChildren();
+            if (self.ecs_backend.getComponent(entity, Children)) |c| return c.getChildren();
             return &.{};
         }
 
         pub fn hasChildren(self: *Self, entity: Entity) bool {
-            if (self.active_world.ecs_backend.getComponent(entity, Children)) |c| return c.count() > 0;
+            if (self.ecs_backend.getComponent(entity, Children)) |c| return c.count() > 0;
             return false;
         }
 
         pub fn isRoot(self: *Self, entity: Entity) bool {
-            return !self.active_world.ecs_backend.hasComponent(entity, Parent);
+            return !self.ecs_backend.hasComponent(entity, Parent);
         }
 
         // ── Generic Component Access ──────────────────────────────
 
         pub fn addComponent(self: *Self, entity: Entity, component: anytype) void {
-            self.active_world.ecs_backend.addComponent(entity, component);
+            self.ecs_backend.addComponent(entity, component);
             const T = @TypeOf(component);
             if (@typeInfo(T) == .@"struct" and @hasDecl(T, "onAdd")) {
                 T.onAdd(ComponentPayload{ .entity_id = @intCast(entity), .game_ptr = @ptrCast(self) });
@@ -376,8 +376,8 @@ pub fn GameConfig(
 
         pub fn setComponent(self: *Self, entity: Entity, component: anytype) void {
             const T = @TypeOf(component);
-            const is_update = self.active_world.ecs_backend.hasComponent(entity, T);
-            self.active_world.ecs_backend.addComponent(entity, component);
+            const is_update = self.ecs_backend.hasComponent(entity, T);
+            self.ecs_backend.addComponent(entity, component);
             if (@typeInfo(T) == .@"struct") {
                 if (is_update and @hasDecl(T, "onSet")) {
                     T.onSet(ComponentPayload{ .entity_id = @intCast(entity), .game_ptr = @ptrCast(self) });
@@ -388,18 +388,18 @@ pub fn GameConfig(
         }
 
         pub fn getComponent(self: *Self, entity: Entity, comptime T: type) ?*T {
-            return self.active_world.ecs_backend.getComponent(entity, T);
+            return self.ecs_backend.getComponent(entity, T);
         }
 
         pub fn hasComponent(self: *Self, entity: Entity, comptime T: type) bool {
-            return self.active_world.ecs_backend.hasComponent(entity, T);
+            return self.ecs_backend.hasComponent(entity, T);
         }
 
         pub fn removeComponent(self: *Self, entity: Entity, comptime T: type) void {
             if (@typeInfo(T) == .@"struct" and @hasDecl(T, "onRemove")) {
                 T.onRemove(ComponentPayload{ .entity_id = @intCast(entity), .game_ptr = @ptrCast(self) });
             }
-            self.active_world.ecs_backend.removeComponent(entity, T);
+            self.ecs_backend.removeComponent(entity, T);
         }
 
         /// Fire onReady for a component type on a given entity.
@@ -705,7 +705,7 @@ pub fn GameConfig(
             Audio.update();
             Input.updateGestures(dt);
             self.resolveAtlasSprites();
-            self.active_world.renderer.sync(EcsImpl, &self.active_world.ecs_backend);
+            self.active_world.renderer.sync(EcsImpl, self.ecs_backend);
 
             // Reconcile gizmos for runtime-created entities
             if (self.gizmo_reconcile_fn) |reconcile_fn| {
@@ -838,10 +838,10 @@ pub fn GameConfig(
             if (!has_atlas_sprite_fields) return;
             if (self.atlas_manager.atlasCount() == 0) return;
 
-            var v = self.active_world.ecs_backend.view(.{Sprite}, .{});
+            var v = self.ecs_backend.view(.{Sprite}, .{});
             defer v.deinit();
             while (v.next()) |entity| {
-                const sprite = self.active_world.ecs_backend.getComponent(entity, Sprite).?;
+                const sprite = self.ecs_backend.getComponent(entity, Sprite).?;
                 if (sprite.sprite_name.len == 0) continue;
 
                 const misses_before = self.active_world.sprite_cache.misses;
@@ -868,11 +868,11 @@ pub fn GameConfig(
         }
 
         pub fn getEcsBackend(self: *Self) *EcsImpl {
-            return &self.active_world.ecs_backend;
+            return self.ecs_backend;
         }
 
         pub fn entityCount(self: *Self) usize {
-            return @intCast(self.active_world.ecs_backend.entityCount());
+            return @intCast(self.ecs_backend.entityCount());
         }
     };
 }
