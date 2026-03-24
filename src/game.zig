@@ -131,6 +131,7 @@ pub fn GameConfig(
         scenes: std.StringHashMap(SceneEntry),
         current_scene_name: ?[]const u8 = null,
         pending_scene_change: ?[]const u8 = null,
+        pending_scene_atomic: bool = false,
 
         // Active scene (type-erased) — managed by sceneLoaderFn / setActiveScene
         active_scene_ptr: ?*anyopaque = null,
@@ -468,7 +469,9 @@ pub fn GameConfig(
         pub const registerScene = SceneMixin.registerScene;
         pub const registerSceneSimple = SceneMixin.registerSceneSimple;
         pub const setScene = SceneMixin.setScene;
+        pub const setSceneAtomic = SceneMixin.setSceneAtomic;
         pub const queueSceneChange = SceneMixin.queueSceneChange;
+        pub const queueSceneChangeAtomic = SceneMixin.queueSceneChangeAtomic;
         pub const getCurrentSceneName = SceneMixin.getCurrentSceneName;
         pub fn unloadCurrentScene(self: *Self) void {
             if (self.current_scene_name) |name| {
@@ -698,11 +701,17 @@ pub fn GameConfig(
 
             // Scene changes must process even when paused (e.g. pause menu → new scene)
             if (self.pending_scene_change) |next_scene| {
+                const atomic = self.pending_scene_atomic;
                 defer {
                     self.allocator.free(next_scene);
                     self.pending_scene_change = null;
+                    self.pending_scene_atomic = false;
                 }
-                self.setScene(next_scene) catch {};
+                if (atomic) {
+                    self.setSceneAtomic(next_scene) catch {};
+                } else {
+                    self.setScene(next_scene) catch {};
+                }
             }
 
             // Paused: skip game logic but keep frame counter advancing
