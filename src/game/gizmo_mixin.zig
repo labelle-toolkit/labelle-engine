@@ -117,9 +117,9 @@ pub fn Mixin(comptime Game: type) type {
         pub fn renderGizmos(self: *Game) void {
             if (!self.gizmos_enabled) return;
             const draws = self.gizmo_state.getDraws();
-            const Renderer = @TypeOf(self.active_world.renderer);
+            const Renderer = @TypeOf(self.renderer.*);
             if (@hasDecl(Renderer, "renderGizmoDraws")) {
-                self.active_world.renderer.renderGizmoDraws(draws);
+                self.renderer.renderGizmoDraws(draws);
             }
         }
     };

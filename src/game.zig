@@ -124,6 +124,8 @@ pub fn GameConfig(
         active_world: *World,
         /// Backward-compatible ECS access — always points to active world's ECS.
         ecs_backend: *EcsImpl = undefined,
+        /// Backward-compatible renderer access — always points to active world's renderer.
+        renderer: *RenderImpl = undefined,
         worlds: std.StringHashMap(*World),
         active_world_name: ?[]const u8 = null,
         atlas_manager: atlas_mod.TextureManager,
@@ -176,6 +178,7 @@ pub fn GameConfig(
                 .allocator = allocator,
                 .active_world = world,
                 .ecs_backend = &world.ecs_backend,
+                .renderer = &world.renderer,
                 .worlds = std.StringHashMap(*World).init(allocator),
                 .atlas_manager = atlas_mod.TextureManager.init(allocator),
                 .scenes = std.StringHashMap(SceneEntry).init(allocator),
@@ -241,14 +244,14 @@ pub fn GameConfig(
                 }
             }
             self.active_world.sprite_cache.invalidate(@intCast(entity));
-            self.active_world.renderer.untrackEntity(entity);
+            self.renderer.untrackEntity(entity);
             self.ecs_backend.destroyEntity(entity);
             self.emitHook(.{ .entity_destroyed = .{ .entity_id = entity } });
         }
 
         pub fn destroyEntityOnly(self: *Self, entity: Entity) void {
             self.active_world.sprite_cache.invalidate(@intCast(entity));
-            self.active_world.renderer.untrackEntity(entity);
+            self.renderer.untrackEntity(entity);
             self.ecs_backend.destroyEntity(entity);
             self.emitHook(.{ .entity_destroyed = .{ .entity_id = entity } });
         }
@@ -268,7 +271,7 @@ pub fn GameConfig(
 
         pub fn setPosition(self: *Self, entity: Entity, pos: Position) void {
             self.ecs_backend.addComponent(entity, pos);
-            self.active_world.renderer.markPositionDirtyWithChildren(EcsImpl, self.ecs_backend, entity);
+            self.renderer.markPositionDirtyWithChildren(EcsImpl, self.ecs_backend, entity);
         }
 
         pub fn getPosition(self: *Self, entity: Entity) Position {
@@ -315,8 +318,8 @@ pub fn GameConfig(
                 self.ecs_backend.addComponent(parent_entity, new_children);
             }
 
-            self.active_world.renderer.updateHierarchyFlag(child, true);
-            self.active_world.renderer.markPositionDirty(child);
+            self.renderer.updateHierarchyFlag(child, true);
+            self.renderer.markPositionDirty(child);
         }
 
         pub fn setParentKeepTransform(self: *Self, child: Entity, parent_entity: Entity, opts: struct {
@@ -335,8 +338,8 @@ pub fn GameConfig(
                 }
             }
             self.ecs_backend.removeComponent(child, Parent);
-            self.active_world.renderer.updateHierarchyFlag(child, false);
-            self.active_world.renderer.markPositionDirty(child);
+            self.renderer.updateHierarchyFlag(child, false);
+            self.renderer.markPositionDirty(child);
         }
 
         pub fn removeParentKeepTransform(self: *Self, child: Entity) void {
@@ -585,6 +588,7 @@ pub fn GameConfig(
             // Activate the named world
             self.active_world = kv.value;
             self.ecs_backend = &kv.value.ecs_backend;
+            self.renderer = &kv.value.renderer;
             self.active_world_name = kv.key;
         }
 
@@ -639,8 +643,9 @@ pub fn GameConfig(
             self.active_world.renderer = RenderImpl.init(self.allocator);
             self.active_world.sprite_cache = atlas_mod.SpriteCache.init(self.allocator);
             self.gizmo_state = gizmo_draws_mod.GizmoState(Entity).init(self.allocator);
-            // Re-sync backward-compatible pointer
+            // Re-sync backward-compatible pointers
             self.ecs_backend = &self.active_world.ecs_backend;
+            self.renderer = &self.active_world.renderer;
         }
 
         pub fn teardownActiveScene(self: *Self) void {
@@ -702,7 +707,7 @@ pub fn GameConfig(
             Audio.update();
             Input.updateGestures(dt);
             self.resolveAtlasSprites();
-            self.active_world.renderer.sync(EcsImpl, self.ecs_backend);
+            self.renderer.sync(EcsImpl, self.ecs_backend);
 
             // Reconcile gizmos for runtime-created entities
             if (self.gizmo_reconcile_fn) |reconcile_fn| {
@@ -743,7 +748,7 @@ pub fn GameConfig(
         }
 
         pub fn render(self: *Self) void {
-            self.active_world.renderer.render();
+            self.renderer.render();
             self.renderGizmos();
             self.clearGizmos();
         }
@@ -756,19 +761,19 @@ pub fn GameConfig(
 
         /// Set the screen height on the active world's renderer.
         pub fn setScreenHeight(self: *Self, height: f32) void {
-            self.active_world.renderer.setScreenHeight(height);
+            self.renderer.setScreenHeight(height);
         }
 
         /// Get the primary camera (for renderers that support cameras).
         pub const getCamera = if (has_camera) getCameraImpl else void;
         fn getCameraImpl(self: *Self) *CameraType {
-            return self.active_world.renderer.getCamera();
+            return self.renderer.getCamera();
         }
 
         /// Get the camera manager (for multi-camera / split-screen).
         pub const getCameraManager = if (has_camera) getCameraManagerImpl else void;
         fn getCameraManagerImpl(self: *Self) *CameraManagerType {
-            return self.active_world.renderer.getCameraManager();
+            return self.renderer.getCameraManager();
         }
 
         // ── Atlas ─────────────────────────────────────────────────
@@ -781,7 +786,7 @@ pub fn GameConfig(
         pub const loadAtlas = if (has_load_texture) loadAtlasImpl else @compileError("Renderer does not support loadTexture");
 
         fn loadAtlasImpl(self: *Self, name: []const u8, json_path: [:0]const u8, texture_path: [:0]const u8) !void {
-            const tex_id = try self.active_world.renderer.loadTexture(texture_path);
+            const tex_id = try self.renderer.loadTexture(texture_path);
             // Convert renderer's TextureId (enum/opaque) to u32 for engine storage
             const id: u32 = if (@typeInfo(@TypeOf(tex_id)) == .@"enum")
                 @intFromEnum(tex_id)
@@ -796,7 +801,7 @@ pub fn GameConfig(
         pub const loadAtlasComptime = if (has_load_texture) loadAtlasComptimeImpl else @compileError("Renderer does not support loadTexture");
 
         fn loadAtlasComptimeImpl(self: *Self, name: []const u8, comptime sprites: []const atlas_mod.SpriteData, texture_path: [:0]const u8) !void {
-            const tex_id = try self.active_world.renderer.loadTexture(texture_path);
+            const tex_id = try self.renderer.loadTexture(texture_path);
             const id: u32 = if (@typeInfo(@TypeOf(tex_id)) == .@"enum")
                 @intFromEnum(tex_id)
             else
@@ -852,7 +857,7 @@ pub fn GameConfig(
                             .width = @floatFromInt(result.sprite.getWidth()),
                             .height = @floatFromInt(result.sprite.getHeight()),
                         };
-                        self.active_world.renderer.markVisualDirty(entity);
+                        self.renderer.markVisualDirty(entity);
                     }
                 }
             }
@@ -861,7 +866,7 @@ pub fn GameConfig(
         // ── Accessors ─────────────────────────────────────────────
 
         pub fn getRenderer(self: *Self) *RenderImpl {
-            return &self.active_world.renderer;
+            return self.renderer;
         }
 
         pub fn getEcsBackend(self: *Self) *EcsImpl {
