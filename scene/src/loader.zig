@@ -138,7 +138,7 @@ pub fn SceneLoaderWithGizmos(
                         continue;
                     };
 
-                pending.resolve_callback(@ptrCast(&game.active_world.ecs_backend), pending.target_entity, resolved_entity);
+                pending.resolve_callback(@ptrCast(game.ecs_backend), pending.target_entity, resolved_entity);
             }
 
             // =============================================
@@ -156,17 +156,17 @@ pub fn SceneLoaderWithGizmos(
                 };
 
                 // Add parent component to child, children tracking to parent
-                game.active_world.ecs_backend.addComponent(pending.child_entity, ParentComponent(Entity){
+                game.ecs_backend.addComponent(pending.child_entity, ParentComponent(Entity){
                     .entity = parent_entity,
                 });
 
                 // Update parent's children list
-                if (game.active_world.ecs_backend.getComponent(parent_entity, ChildrenComponent(Entity))) |children| {
+                if (game.ecs_backend.getComponent(parent_entity, ChildrenComponent(Entity))) |children| {
                     children.addChild(pending.child_entity);
                 } else {
                     var children = ChildrenComponent(Entity){};
                     children.addChild(pending.child_entity);
-                    game.active_world.ecs_backend.addComponent(parent_entity, children);
+                    game.ecs_backend.addComponent(parent_entity, children);
                 }
             }
 
@@ -332,7 +332,7 @@ pub fn SceneLoaderWithGizmos(
             var count: usize = 0;
 
             {
-                var v = game.active_world.ecs_backend.view(.{PrimaryType}, .{GizmoAttached});
+                var v = game.ecs_backend.view(.{PrimaryType}, .{GizmoAttached});
                 while (v.next()) |entity| {
                     if (count < buf.len and matchesGizmoRules(entity, game, gizmo_data, has_match, has_exclude)) {
                         buf[count] = entity;
@@ -349,7 +349,7 @@ pub fn SceneLoaderWithGizmos(
             for (buf[0..count]) |entity| {
                 const pos = game.getPosition(entity);
                 createGizmosForPrefab(gizmo_name, entity, game, .{ .x = pos.x, .y = pos.y });
-                game.active_world.ecs_backend.addComponent(entity, GizmoAttached{});
+                game.ecs_backend.addComponent(entity, GizmoAttached{});
             }
         }
 
@@ -366,7 +366,7 @@ pub fn SceneLoaderWithGizmos(
                 inline for (match_fields[1..]) |f| {
                     const name = @field(gizmo_data.match, f.name);
                     const T = Components.getType(name);
-                    if (game.active_world.ecs_backend.getComponent(entity, T) == null) return false;
+                    if (game.ecs_backend.getComponent(entity, T) == null) return false;
                 }
             }
             // Check no excluded components are present
@@ -375,7 +375,7 @@ pub fn SceneLoaderWithGizmos(
                 inline for (exclude_fields) |f| {
                     const name = @field(gizmo_data.exclude, f.name);
                     const T = Components.getType(name);
-                    if (game.active_world.ecs_backend.getComponent(entity, T) != null) return false;
+                    if (game.ecs_backend.getComponent(entity, T) != null) return false;
                 }
             }
             return true;
@@ -707,7 +707,7 @@ pub fn SceneLoaderWithGizmos(
             }
 
             // Update the parent component's field with the child IDs
-            if (game.active_world.ecs_backend.getComponent(parent_entity, CompType)) |comp| {
+            if (game.ecs_backend.getComponent(parent_entity, CompType)) |comp| {
                 @field(comp, field_name) = ids;
             }
         }
@@ -780,12 +780,12 @@ pub fn SceneLoaderWithGizmos(
             // child. setParent would cause the renderer's computeWorldTransform to
             // double-count positions (stored pos is already accumulated world coords).
             const ChildrenComp = ChildrenComponent(Entity);
-            if (game.active_world.ecs_backend.getComponent(parent_entity, ChildrenComp)) |children_comp| {
+            if (game.ecs_backend.getComponent(parent_entity, ChildrenComp)) |children_comp| {
                 children_comp.addChild(child_entity);
             } else {
                 var new_children = ChildrenComp{};
                 new_children.addChild(child_entity);
-                game.active_world.ecs_backend.addComponent(parent_entity, new_children);
+                game.ecs_backend.addComponent(parent_entity, new_children);
             }
 
             // Register by name if present
@@ -913,8 +913,8 @@ pub fn SceneLoaderWithGizmos(
                 if (comptime GizmoReg.getEntityGizmos(prefab_name)) |gizmos| {
                     createGizmoEntities(gizmos, entity, game, pos);
                 }
-                if (!game.active_world.ecs_backend.hasComponent(entity, GizmoAttached)) {
-                    game.active_world.ecs_backend.addComponent(entity, GizmoAttached{});
+                if (!game.ecs_backend.hasComponent(entity, GizmoAttached)) {
+                    game.ecs_backend.addComponent(entity, GizmoAttached{});
                 }
             }
         }
@@ -930,7 +930,7 @@ pub fn SceneLoaderWithGizmos(
                 const offset_y: f32 = comptime if (@hasField(@TypeOf(gizmo_data), "y")) gizmo_data.y else 0;
 
                 // Add Gizmo marker component
-                game.active_world.ecs_backend.addComponent(gizmo_entity, Gizmo{
+                game.ecs_backend.addComponent(gizmo_entity, Gizmo{
                     .parent_entity = parent_entity,
                     .offset_x = offset_x,
                     .offset_y = offset_y,
