@@ -205,6 +205,8 @@ pub fn SceneLoaderWithGizmos(
                         &sceneDeinit,
                         &sceneGetEntityByName,
                         scene_script_names,
+                        &sceneAddEntity,
+                        &sceneClearEntities,
                     );
                     game.gizmo_reconcile_fn = &gizmoReconcile;
                 }
@@ -223,6 +225,17 @@ pub fn SceneLoaderWithGizmos(
                 fn sceneGetEntityByName(ptr: *anyopaque, name: []const u8) ?Entity {
                     const s: *const SceneType = @ptrCast(@alignCast(ptr));
                     return s.getEntityByName(name);
+                }
+
+                fn sceneAddEntity(ptr: *anyopaque, entity: Entity) void {
+                    const s: *SceneType = @ptrCast(@alignCast(ptr));
+                    s.addEntity(.{ .entity = entity }) catch {};
+                }
+
+                fn sceneClearEntities(ptr: *anyopaque) void {
+                    const s: *SceneType = @ptrCast(@alignCast(ptr));
+                    s.entities.clearRetainingCapacity();
+                    s.named_entities.clearRetainingCapacity();
                 }
 
                 fn gizmoReconcile(game: *GameType) void {

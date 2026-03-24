@@ -111,6 +111,8 @@ pub fn GameConfig(
         active_scene_update_fn: ?*const fn (*anyopaque, f32) void = null,
         active_scene_deinit_fn: ?*const fn (*anyopaque, std.mem.Allocator) void = null,
         active_scene_get_entity_fn: ?*const fn (*anyopaque, []const u8) ?Entity = null,
+        active_scene_add_entity_fn: ?*const fn (*anyopaque, Entity) void = null,
+        active_scene_clear_entities_fn: ?*const fn (*anyopaque) void = null,
         /// Script names listed in the active scene's .scripts field.
         /// null = no filtering (scene without .scripts or no scene), slice = only these run.
         active_scene_script_names: ?[]const []const u8 = null,
@@ -449,12 +451,16 @@ pub fn GameConfig(
             deinit_fn: *const fn (*anyopaque, std.mem.Allocator) void,
             get_entity_fn: ?*const fn (*anyopaque, []const u8) ?Entity,
             script_names: ?[]const []const u8,
+            add_entity_fn: ?*const fn (*anyopaque, Entity) void,
+            clear_entities_fn: ?*const fn (*anyopaque) void,
         ) void {
             self.teardownActiveScene();
             self.active_scene_ptr = ptr;
             self.active_scene_update_fn = update_fn;
             self.active_scene_deinit_fn = deinit_fn;
             self.active_scene_get_entity_fn = get_entity_fn;
+            self.active_scene_add_entity_fn = add_entity_fn;
+            self.active_scene_clear_entities_fn = clear_entities_fn;
             self.active_scene_script_names = script_names;
         }
 
@@ -474,6 +480,25 @@ pub fn GameConfig(
             return null;
         }
 
+        /// Register a runtime-created entity with the active scene.
+        pub fn addEntityToActiveScene(self: *Self, entity: Entity) void {
+            if (self.active_scene_ptr) |ptr| {
+                if (self.active_scene_add_entity_fn) |add_fn| {
+                    add_fn(ptr, entity);
+                }
+            }
+        }
+
+        /// Remove all entities from the active scene's entity list.
+        /// Does NOT destroy ECS entities — caller handles that.
+        pub fn clearActiveSceneEntities(self: *Self) void {
+            if (self.active_scene_ptr) |ptr| {
+                if (self.active_scene_clear_entities_fn) |clear_fn| {
+                    clear_fn(ptr);
+                }
+            }
+        }
+
         pub fn teardownActiveScene(self: *Self) void {
             if (self.active_scene_ptr) |ptr| {
                 if (self.active_scene_deinit_fn) |deinit_fn| {
@@ -483,6 +508,8 @@ pub fn GameConfig(
                 self.active_scene_update_fn = null;
                 self.active_scene_deinit_fn = null;
                 self.active_scene_get_entity_fn = null;
+                self.active_scene_add_entity_fn = null;
+                self.active_scene_clear_entities_fn = null;
                 self.active_scene_script_names = null;
                 self.sprite_cache.clear();
                 // Free nested entity array allocations from the outgoing scene
