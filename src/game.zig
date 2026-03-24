@@ -495,6 +495,25 @@ pub fn GameConfig(
             };
         }
 
+        /// Destroy all entities and visuals atomically, then reinitialize
+        /// the ECS backend and renderer to a clean state. The nested entity
+        /// arena is also reset. Scene tracking (active_scene_ptr, etc.) is
+        /// NOT affected — the scene remains active with an empty entity list.
+        /// Call clearActiveSceneEntities() first if the scene's entity list
+        /// should also be cleared.
+        pub fn resetEcsBackend(self: *Self) void {
+            // Tear down
+            self.renderer.deinit();
+            self.ecs_backend.deinit();
+            self.sprite_cache.deinit();
+            _ = self.nested_entity_arena.reset(.retain_capacity);
+
+            // Reinitialize
+            self.ecs_backend = EcsImpl.init(self.allocator);
+            self.renderer = RenderImpl.init(self.allocator);
+            self.sprite_cache = atlas_mod.SpriteCache.init(self.allocator);
+        }
+
         pub fn teardownActiveScene(self: *Self) void {
             if (self.active_scene_ptr) |ptr| {
                 if (self.active_scene_deinit_fn) |deinit_fn| {
