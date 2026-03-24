@@ -229,13 +229,15 @@ pub fn SceneLoaderWithGizmos(
 
                 fn sceneAddEntity(ptr: *anyopaque, entity: Entity) void {
                     const s: *SceneType = @ptrCast(@alignCast(ptr));
-                    s.addEntity(.{ .entity = entity }) catch {};
+                    s.addEntity(.{ .entity = entity }) catch @panic("Failed to add entity to scene: OOM");
                 }
 
                 fn sceneClearEntities(ptr: *anyopaque) void {
                     const s: *SceneType = @ptrCast(@alignCast(ptr));
                     s.entities.clearRetainingCapacity();
-                    s.named_entities.clearRetainingCapacity();
+                    // Deinit and reinit named_entities to free duplicated key strings
+                    s.named_entities.deinit(s.allocator);
+                    s.named_entities = .{};
                 }
 
                 fn gizmoReconcile(game: *GameType) void {

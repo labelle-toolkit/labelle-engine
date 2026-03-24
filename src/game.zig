@@ -482,21 +482,17 @@ pub fn GameConfig(
 
         /// Register a runtime-created entity with the active scene.
         pub fn addEntityToActiveScene(self: *Self, entity: Entity) void {
-            if (self.active_scene_ptr) |ptr| {
-                if (self.active_scene_add_entity_fn) |add_fn| {
-                    add_fn(ptr, entity);
-                }
-            }
+            if (self.active_scene_ptr) |ptr| if (self.active_scene_add_entity_fn) |add_fn| {
+                add_fn(ptr, entity);
+            };
         }
 
         /// Remove all entities from the active scene's entity list.
         /// Does NOT destroy ECS entities — caller handles that.
         pub fn clearActiveSceneEntities(self: *Self) void {
-            if (self.active_scene_ptr) |ptr| {
-                if (self.active_scene_clear_entities_fn) |clear_fn| {
-                    clear_fn(ptr);
-                }
-            }
+            if (self.active_scene_ptr) |ptr| if (self.active_scene_clear_entities_fn) |clear_fn| {
+                clear_fn(ptr);
+            };
         }
 
         pub fn teardownActiveScene(self: *Self) void {
