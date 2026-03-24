@@ -94,17 +94,48 @@ pub fn GameConfig(
 
         pub const FrameCallback = *const fn (*Self, f32) void;
 
+        /// A world bundles ECS, renderer, sprite cache, and arena.
+        /// The active world is a heap-allocated pointer for stable references.
+        /// Inactive worlds live in the `worlds` map as heap pointers.
+        pub const World = struct {
+            ecs_backend: EcsImpl,
+            renderer: RenderImpl,
+            sprite_cache: atlas_mod.SpriteCache,
+            nested_entity_arena: std.heap.ArenaAllocator,
+
+            pub fn init(allocator: std.mem.Allocator) World {
+                return .{
+                    .ecs_backend = EcsImpl.init(allocator),
+                    .renderer = RenderImpl.init(allocator),
+                    .sprite_cache = atlas_mod.SpriteCache.init(allocator),
+                    .nested_entity_arena = std.heap.ArenaAllocator.init(allocator),
+                };
+            }
+
+            pub fn deinit(self: *World) void {
+                self.nested_entity_arena.deinit();
+                self.sprite_cache.deinit();
+                self.renderer.deinit();
+                self.ecs_backend.deinit();
+            }
+        };
+
         allocator: std.mem.Allocator,
-        ecs_backend: EcsImpl,
-        renderer: RenderImpl,
+        active_world: *World,
+        /// Backward-compatible ECS access — always points to active world's ECS.
+        ecs_backend: *EcsImpl = undefined,
+        /// Backward-compatible renderer access — always points to active world's renderer.
+        renderer: *RenderImpl = undefined,
+        worlds: std.StringHashMap(*World),
+        active_world_name: ?[]const u8 = null,
         atlas_manager: atlas_mod.TextureManager,
-        sprite_cache: atlas_mod.SpriteCache,
         hooks: HooksField = if (has_hooks) null else {},
 
         // Scene management
         scenes: std.StringHashMap(SceneEntry),
         current_scene_name: ?[]const u8 = null,
         pending_scene_change: ?[]const u8 = null,
+        pending_scene_atomic: bool = false,
 
         // Active scene (type-erased) — managed by sceneLoaderFn / setActiveScene
         active_scene_ptr: ?*anyopaque = null,
@@ -117,10 +148,6 @@ pub fn GameConfig(
         /// null = no filtering (scene without .scripts or no scene), slice = only these run.
         active_scene_script_names: ?[]const []const u8 = null,
         gizmo_reconcile_fn: ?*const fn (*Self) void = null,
-
-        // Arena for heap-allocated slices in nested entity arrays (scene loader).
-        // Freed on scene teardown.
-        nested_entity_arena: std.heap.ArenaAllocator,
 
         // Logging
         log: Log = .{},
@@ -145,15 +172,17 @@ pub fn GameConfig(
         gizmo_state: gizmo_draws_mod.GizmoState(Entity),
 
         pub fn init(allocator: std.mem.Allocator) Self {
+            const world = allocator.create(World) catch @panic("failed to allocate default world");
+            world.* = World.init(allocator);
             return .{
                 .allocator = allocator,
-                .ecs_backend = EcsImpl.init(allocator),
-                .renderer = RenderImpl.init(allocator),
+                .active_world = world,
+                .ecs_backend = &world.ecs_backend,
+                .renderer = &world.renderer,
+                .worlds = std.StringHashMap(*World).init(allocator),
                 .atlas_manager = atlas_mod.TextureManager.init(allocator),
-                .sprite_cache = atlas_mod.SpriteCache.init(allocator),
                 .scenes = std.StringHashMap(SceneEntry).init(allocator),
                 .gizmo_state = gizmo_draws_mod.GizmoState(Entity).init(allocator),
-                .nested_entity_arena = std.heap.ArenaAllocator.init(allocator),
             };
         }
 
@@ -166,13 +195,23 @@ pub fn GameConfig(
             if (self.pending_scene_change) |name| {
                 self.allocator.free(name);
             }
-            self.nested_entity_arena.deinit();
+            // Clean up inactive worlds
+            var world_iter = self.worlds.iterator();
+            while (world_iter.next()) |entry| {
+                self.allocator.free(entry.key_ptr.*);
+                entry.value_ptr.*.deinit();
+                self.allocator.destroy(entry.value_ptr.*);
+            }
+            self.worlds.deinit();
+            if (self.active_world_name) |name| {
+                self.allocator.free(name);
+            }
+            // Clean up active world
+            self.active_world.deinit();
+            self.allocator.destroy(self.active_world);
             self.gizmo_state.deinit(self.allocator);
             self.scenes.deinit();
-            self.sprite_cache.deinit();
             self.atlas_manager.deinit();
-            self.renderer.deinit();
-            self.ecs_backend.deinit();
         }
 
         pub fn setHooks(self: *Self, receiver: Hooks) void {
@@ -204,14 +243,14 @@ pub fn GameConfig(
                     self.destroyEntity(child);
                 }
             }
-            self.sprite_cache.invalidate(@intCast(entity));
+            self.active_world.sprite_cache.invalidate(@intCast(entity));
             self.renderer.untrackEntity(entity);
             self.ecs_backend.destroyEntity(entity);
             self.emitHook(.{ .entity_destroyed = .{ .entity_id = entity } });
         }
 
         pub fn destroyEntityOnly(self: *Self, entity: Entity) void {
-            self.sprite_cache.invalidate(@intCast(entity));
+            self.active_world.sprite_cache.invalidate(@intCast(entity));
             self.renderer.untrackEntity(entity);
             self.ecs_backend.destroyEntity(entity);
             self.emitHook(.{ .entity_destroyed = .{ .entity_id = entity } });
@@ -232,7 +271,7 @@ pub fn GameConfig(
 
         pub fn setPosition(self: *Self, entity: Entity, pos: Position) void {
             self.ecs_backend.addComponent(entity, pos);
-            self.renderer.markPositionDirtyWithChildren(EcsImpl, &self.ecs_backend, entity);
+            self.renderer.markPositionDirtyWithChildren(EcsImpl, self.ecs_backend, entity);
         }
 
         pub fn getPosition(self: *Self, entity: Entity) Position {
@@ -241,12 +280,12 @@ pub fn GameConfig(
         }
 
         pub fn getWorldPosition(self: *Self, entity: Entity) Position {
-            return hierarchy.computeWorldPos(EcsImpl, Parent, &self.ecs_backend, entity, 0);
+            return hierarchy.computeWorldPos(EcsImpl, Parent, self.ecs_backend, entity, 0);
         }
 
         pub fn setWorldPosition(self: *Self, entity: Entity, world_pos: Position) void {
             if (self.ecs_backend.getComponent(entity, Parent)) |parent_comp| {
-                const parent_world = hierarchy.computeWorldPos(EcsImpl, Parent, &self.ecs_backend, parent_comp.entity, 0);
+                const parent_world = hierarchy.computeWorldPos(EcsImpl, Parent, self.ecs_backend, parent_comp.entity, 0);
                 self.setPosition(entity, .{ .x = world_pos.x - parent_world.x, .y = world_pos.y - parent_world.y });
             } else {
                 self.setPosition(entity, world_pos);
@@ -257,7 +296,7 @@ pub fn GameConfig(
             inherit_rotation: bool = false,
             inherit_scale: bool = false,
         }) void {
-            if (hierarchy.wouldCreateCycle(EcsImpl, Parent, &self.ecs_backend, child, parent_entity)) return;
+            if (hierarchy.wouldCreateCycle(EcsImpl, Parent, self.ecs_backend, child, parent_entity)) return;
 
             if (self.ecs_backend.getComponent(child, Parent)) |old_parent_comp| {
                 if (self.ecs_backend.getComponent(old_parent_comp.entity, Children)) |old_children| {
@@ -426,7 +465,9 @@ pub fn GameConfig(
         pub const registerScene = SceneMixin.registerScene;
         pub const registerSceneSimple = SceneMixin.registerSceneSimple;
         pub const setScene = SceneMixin.setScene;
+        pub const setSceneAtomic = SceneMixin.setSceneAtomic;
         pub const queueSceneChange = SceneMixin.queueSceneChange;
+        pub const queueSceneChangeAtomic = SceneMixin.queueSceneChangeAtomic;
         pub const getCurrentSceneName = SceneMixin.getCurrentSceneName;
         pub fn unloadCurrentScene(self: *Self) void {
             if (self.current_scene_name) |name| {
@@ -495,6 +536,118 @@ pub fn GameConfig(
             };
         }
 
+        /// Destroy all entities and visuals atomically, then reinitialize
+        /// the ECS backend and renderer to a clean state. The nested entity
+        /// arena is also reset. Scene tracking (active_scene_ptr, etc.) is
+        /// NOT affected — the scene remains active with an empty entity list.
+        /// Call clearActiveSceneEntities() first if the scene's entity list
+        /// should also be cleared.
+        // ── World Management ─────────────────────────────────────
+
+        /// Create a new named world. The world is inactive (stored in the map).
+        /// Returns error.WorldAlreadyExists if the name is taken.
+        pub fn createWorld(self: *Self, name: []const u8) !void {
+            if (self.worlds.contains(name)) return error.WorldAlreadyExists;
+            const duped = try self.allocator.dupe(u8, name);
+            errdefer self.allocator.free(duped);
+            const world = try self.allocator.create(World);
+            errdefer {
+                world.deinit();
+                self.allocator.destroy(world);
+            }
+            world.* = World.init(self.allocator);
+            try self.worlds.put(duped, world);
+        }
+
+        /// Destroy a named inactive world. Frees all its entities and visuals.
+        pub fn destroyWorld(self: *Self, name: []const u8) void {
+            if (self.worlds.fetchRemove(name)) |kv| {
+                kv.value.deinit();
+                self.allocator.destroy(kv.value);
+                self.allocator.free(kv.key);
+            }
+        }
+
+        /// Swap the active world. The named world becomes active; the current
+        /// active world is shelved into the map (if named) or destroyed (if unnamed).
+        /// Verifies the target exists BEFORE modifying any state.
+        pub fn setActiveWorld(self: *Self, name: []const u8) !void {
+            // Remove target first — guarantees a free slot for shelving the current world
+            const kv = self.worlds.fetchRemove(name) orelse return error.WorldNotFound;
+
+            // Shelve or destroy current active world
+            if (self.active_world_name) |current_name| {
+                // Named world — shelve into map (can't fail: we just freed a slot)
+                self.worlds.put(current_name, self.active_world) catch @panic("OOM shelving world");
+            } else {
+                // Unnamed default world — destroy it
+                self.active_world.deinit();
+                self.allocator.destroy(self.active_world);
+            }
+
+            // Activate the named world
+            self.active_world = kv.value;
+            self.ecs_backend = &kv.value.ecs_backend;
+            self.renderer = &kv.value.renderer;
+            self.active_world_name = kv.key;
+        }
+
+        /// Rename an inactive world in the map.
+        pub fn renameWorld(self: *Self, old_name: []const u8, new_name: []const u8) !void {
+            if (self.worlds.contains(new_name)) return error.WorldAlreadyExists;
+
+            // Dupe new name first (before removing) so failure is safe
+            const duped = try self.allocator.dupe(u8, new_name);
+            errdefer self.allocator.free(duped);
+
+            if (self.worlds.fetchRemove(old_name)) |kv| {
+                self.allocator.free(kv.key);
+                self.worlds.put(duped, kv.value) catch {
+                    // Restore old entry on failure
+                    const restored_key = self.allocator.dupe(u8, old_name) catch @panic("OOM restoring world");
+                    self.worlds.put(restored_key, kv.value) catch @panic("OOM restoring world");
+                    self.allocator.free(duped);
+                    return error.OutOfMemory;
+                };
+            } else {
+                self.allocator.free(duped);
+                return error.WorldNotFound;
+            }
+        }
+
+        /// Get a pointer to an inactive world.
+        pub fn getWorld(self: *Self, name: []const u8) ?*World {
+            return self.worlds.get(name);
+        }
+
+        /// Get the name of the active world (null if unnamed/default).
+        pub fn getActiveWorldName(self: *const Self) ?[]const u8 {
+            return self.active_world_name;
+        }
+
+        /// Check if a world exists in the inactive map.
+        pub fn worldExists(self: *const Self, name: []const u8) bool {
+            return self.worlds.contains(name);
+        }
+
+        pub fn resetEcsBackend(self: *Self) void {
+            // Tear down active world's fields (reverse of init order)
+            self.gizmo_state.deinit(self.allocator);
+            self.active_world.sprite_cache.deinit();
+            self.active_world.renderer.deinit();
+            self.active_world.ecs_backend.deinit();
+            _ = self.active_world.nested_entity_arena.reset(.retain_capacity);
+
+            // Reinitialize active world's fields
+            self.active_world.ecs_backend = EcsImpl.init(self.allocator);
+            self.active_world.renderer = RenderImpl.init(self.allocator);
+            self.active_world.sprite_cache = atlas_mod.SpriteCache.init(self.allocator);
+            self.gizmo_state = gizmo_draws_mod.GizmoState(Entity).init(self.allocator);
+            // Re-sync backward-compatible pointers
+            self.ecs_backend = &self.active_world.ecs_backend;
+            self.renderer = &self.active_world.renderer;
+        }
+
         pub fn teardownActiveScene(self: *Self) void {
             if (self.active_scene_ptr) |ptr| {
                 if (self.active_scene_deinit_fn) |deinit_fn| {
@@ -507,9 +660,9 @@ pub fn GameConfig(
                 self.active_scene_add_entity_fn = null;
                 self.active_scene_clear_entities_fn = null;
                 self.active_scene_script_names = null;
-                self.sprite_cache.clear();
+                self.active_world.sprite_cache.clear();
                 // Free nested entity array allocations from the outgoing scene
-                _ = self.nested_entity_arena.reset(.retain_capacity);
+                _ = self.active_world.nested_entity_arena.reset(.retain_capacity);
             }
         }
 
@@ -554,7 +707,7 @@ pub fn GameConfig(
             Audio.update();
             Input.updateGestures(dt);
             self.resolveAtlasSprites();
-            self.renderer.sync(EcsImpl, &self.ecs_backend);
+            self.renderer.sync(EcsImpl, self.ecs_backend);
 
             // Reconcile gizmos for runtime-created entities
             if (self.gizmo_reconcile_fn) |reconcile_fn| {
@@ -563,11 +716,17 @@ pub fn GameConfig(
 
             // Scene changes must process even when paused (e.g. pause menu → new scene)
             if (self.pending_scene_change) |next_scene| {
+                const atomic = self.pending_scene_atomic;
                 defer {
                     self.allocator.free(next_scene);
                     self.pending_scene_change = null;
+                    self.pending_scene_atomic = false;
                 }
-                self.setScene(next_scene) catch {};
+                if (atomic) {
+                    self.setSceneAtomic(next_scene) catch {};
+                } else {
+                    self.setScene(next_scene) catch {};
+                }
             }
 
             // Paused: skip game logic but keep frame counter advancing
@@ -599,6 +758,11 @@ pub fn GameConfig(
         const has_camera = @hasDecl(RenderImpl, "CameraType");
         pub const CameraType = if (has_camera) RenderImpl.CameraType else void;
         pub const CameraManagerType = if (has_camera) RenderImpl.CameraManagerType else void;
+
+        /// Set the screen height on the active world's renderer.
+        pub fn setScreenHeight(self: *Self, height: f32) void {
+            self.renderer.setScreenHeight(height);
+        }
 
         /// Get the primary camera (for renderers that support cameras).
         pub const getCamera = if (has_camera) getCameraImpl else void;
@@ -657,7 +821,7 @@ pub fn GameConfig(
         /// Look up a sprite for an entity using the per-entity cache.
         /// Returns cached result when atlas version and sprite name haven't changed.
         pub fn findSpriteCached(self: *Self, entity_id: u32, sprite_name: []const u8) ?atlas_mod.FindSpriteResult {
-            return self.sprite_cache.lookup(entity_id, sprite_name, &self.atlas_manager);
+            return self.active_world.sprite_cache.lookup(entity_id, sprite_name, &self.atlas_manager);
         }
 
         /// Unload an atlas by name, freeing sprite data.
@@ -682,10 +846,10 @@ pub fn GameConfig(
                 const sprite = self.ecs_backend.getComponent(entity, Sprite).?;
                 if (sprite.sprite_name.len == 0) continue;
 
-                const misses_before = self.sprite_cache.misses;
-                if (self.sprite_cache.lookup(@intCast(entity), sprite.sprite_name, &self.atlas_manager)) |result| {
+                const misses_before = self.active_world.sprite_cache.misses;
+                if (self.active_world.sprite_cache.lookup(@intCast(entity), sprite.sprite_name, &self.atlas_manager)) |result| {
                     // Only update and mark dirty on cache miss (new sprite or atlas changed)
-                    if (self.sprite_cache.misses != misses_before) {
+                    if (self.active_world.sprite_cache.misses != misses_before) {
                         sprite.texture = @enumFromInt(result.texture_id);
                         sprite.source_rect = .{
                             .x = @floatFromInt(result.sprite.x),
@@ -702,11 +866,11 @@ pub fn GameConfig(
         // ── Accessors ─────────────────────────────────────────────
 
         pub fn getRenderer(self: *Self) *RenderImpl {
-            return &self.renderer;
+            return self.renderer;
         }
 
         pub fn getEcsBackend(self: *Self) *EcsImpl {
-            return &self.ecs_backend;
+            return self.ecs_backend;
         }
 
         pub fn entityCount(self: *Self) usize {

@@ -20,9 +20,26 @@ const TestGame = struct {
     pub const SpriteComp = MockSprite;
     pub const ShapeComp = MockShape;
 
-    ecs_backend: MockEcs,
+    const World = struct {
+        ecs_backend: MockEcs,
+        nested_entity_arena: std.heap.ArenaAllocator,
+
+        fn init(allocator: std.mem.Allocator) World {
+            return .{
+                .ecs_backend = MockEcs.init(allocator),
+                .nested_entity_arena = std.heap.ArenaAllocator.init(allocator),
+            };
+        }
+
+        fn deinit(self: *World) void {
+            self.nested_entity_arena.deinit();
+            self.ecs_backend.deinit();
+        }
+    };
+
+    active_world: *World,
+    ecs_backend: *MockEcs = undefined,
     allocator: std.mem.Allocator,
-    nested_entity_arena: std.heap.ArenaAllocator,
 
     pub fn createEntity(self: *Self) u32 {
         return self.ecs_backend.createEntity();
@@ -36,16 +53,18 @@ const TestGame = struct {
     pub fn setActiveScene(_: *Self, _: *anyopaque, _: anytype, _: anytype, _: anytype, _: anytype, _: anytype, _: anytype) void {}
 
     fn init(allocator: std.mem.Allocator) Self {
+        const world = allocator.create(World) catch @panic("OOM");
+        world.* = World.init(allocator);
         return .{
-            .ecs_backend = MockEcs.init(allocator),
+            .active_world = world,
+            .ecs_backend = &world.ecs_backend,
             .allocator = allocator,
-            .nested_entity_arena = std.heap.ArenaAllocator.init(allocator),
         };
     }
 
     fn deinit(self: *Self) void {
-        self.nested_entity_arena.deinit();
-        self.ecs_backend.deinit();
+        self.active_world.deinit();
+        self.allocator.destroy(self.active_world);
     }
 };
 

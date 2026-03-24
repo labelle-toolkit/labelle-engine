@@ -138,7 +138,7 @@ pub fn SceneLoaderWithGizmos(
                         continue;
                     };
 
-                pending.resolve_callback(@ptrCast(&game.ecs_backend), pending.target_entity, resolved_entity);
+                pending.resolve_callback(@ptrCast(game.ecs_backend), pending.target_entity, resolved_entity);
             }
 
             // =============================================
@@ -697,7 +697,7 @@ pub fn SceneLoaderWithGizmos(
 
             // Allocate child ID buffer from the game's nested entity arena
             // (freed on scene teardown, not per-entity)
-            const ids = game.nested_entity_arena.allocator().alloc(ElemType, count) catch @panic("OOM");
+            const ids = game.active_world.nested_entity_arena.allocator().alloc(ElemType, count) catch @panic("OOM");
             comptime var i: usize = 0;
             inline for (NestedInfo.@"struct".fields) |_| {
                 const child_def = nested_data[i];
