@@ -122,6 +122,8 @@ pub fn GameConfig(
 
         allocator: std.mem.Allocator,
         active_world: *World,
+        /// Backward-compatible ECS access — always points to active world's ECS.
+        ecs_backend: *EcsImpl = undefined,
         worlds: std.StringHashMap(*World),
         active_world_name: ?[]const u8 = null,
         atlas_manager: atlas_mod.TextureManager,
@@ -173,6 +175,7 @@ pub fn GameConfig(
             return .{
                 .allocator = allocator,
                 .active_world = world,
+                .ecs_backend = &world.ecs_backend,
                 .worlds = std.StringHashMap(*World).init(allocator),
                 .atlas_manager = atlas_mod.TextureManager.init(allocator),
                 .scenes = std.StringHashMap(SceneEntry).init(allocator),
@@ -584,6 +587,7 @@ pub fn GameConfig(
             // Activate the named world (guaranteed to exist from check above)
             const kv = self.worlds.fetchRemove(name).?;
             self.active_world = kv.value;
+            self.ecs_backend = &kv.value.ecs_backend;
             self.active_world_name = kv.key;
         }
 
@@ -638,6 +642,8 @@ pub fn GameConfig(
             self.active_world.renderer = RenderImpl.init(self.allocator);
             self.active_world.sprite_cache = atlas_mod.SpriteCache.init(self.allocator);
             self.gizmo_state = gizmo_draws_mod.GizmoState(Entity).init(self.allocator);
+            // Re-sync backward-compatible pointer
+            self.ecs_backend = &self.active_world.ecs_backend;
         }
 
         pub fn teardownActiveScene(self: *Self) void {
