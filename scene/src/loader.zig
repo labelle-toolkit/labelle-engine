@@ -98,7 +98,7 @@ pub fn SceneLoaderWithGizmos(
             else
                 &[_][]const u8{};
 
-            var scene = SceneType.init(allocator, scene_data.name, script_fns, gui_view_names, @ptrCast(game), &gameDestroyEntity);
+            var scene = SceneType.init(allocator, scene_data.name, script_fns, gui_view_names, @ptrCast(game), &gameDestroyEntity, &gameEntityValid);
             errdefer scene.deinit();
 
             // Reference context for two-phase loading
@@ -179,7 +179,14 @@ pub fn SceneLoaderWithGizmos(
         /// all entities including children — recursive child destruction would double-free.
         fn gameDestroyEntity(game_ptr: *anyopaque, entity: Entity) void {
             const game: *GameType = @ptrCast(@alignCast(game_ptr));
-            game.destroyEntityOnly(entity);
+            if (game.ecs_backend.entityExists(entity)) {
+                game.destroyEntityOnly(entity);
+            }
+        }
+
+        fn gameEntityValid(game_ptr: *anyopaque, entity: Entity) bool {
+            const game: *GameType = @ptrCast(@alignCast(game_ptr));
+            return game.ecs_backend.entityExists(entity);
         }
 
         /// Returns a function pointer suitable for registerScene/registerSceneSimple.

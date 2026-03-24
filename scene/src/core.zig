@@ -46,6 +46,8 @@ pub fn Scene(comptime Entity: type) type {
         game_ptr: *anyopaque,
         /// Type-erased callback to game.destroyEntity() — used to clean up ECS on scene unload.
         destroy_entity_fn: ?*const fn (*anyopaque, Entity) void = null,
+        /// Type-erased callback to check if an entity is still valid in the ECS.
+        entity_valid_fn: ?*const fn (*anyopaque, Entity) bool = null,
         initialized: bool = false,
 
         pub fn init(
@@ -55,6 +57,7 @@ pub fn Scene(comptime Entity: type) type {
             gui_view_names: []const []const u8,
             game_ptr: *anyopaque,
             destroy_entity_fn: ?*const fn (*anyopaque, Entity) void,
+            entity_valid_fn: ?*const fn (*anyopaque, Entity) bool,
         ) Self {
             return .{
                 .name = name,
@@ -65,7 +68,13 @@ pub fn Scene(comptime Entity: type) type {
                 .allocator = allocator,
                 .game_ptr = game_ptr,
                 .destroy_entity_fn = destroy_entity_fn,
+                .entity_valid_fn = entity_valid_fn,
             };
+        }
+
+        fn isEntityValid(self: *const Self, entity: Entity) bool {
+            if (self.entity_valid_fn) |valid_fn| return valid_fn(self.game_ptr, entity);
+            return true; // assume valid if no check available
         }
 
         pub fn deinit(self: *Self) void {
@@ -82,16 +91,16 @@ pub fn Scene(comptime Entity: type) type {
 
             // Destroy non-persistent entities in the ECS; fire onDestroy hooks.
             // Persistent entities survive scene unload (DontDestroyOnLoad pattern).
+            // Check entity validity before destroying — entities may have been
+            // destroyed externally (e.g. by save/load or parent-child cascading).
             for (self.entities.items) |*instance| {
+                if (instance.persistent) continue;
+                if (!self.isEntityValid(instance.entity)) continue;
                 if (instance.onDestroy) |destroy_fn| {
-                    if (!instance.persistent) {
-                        destroy_fn(entityToU64(instance.entity), self.game_ptr);
-                    }
+                    destroy_fn(entityToU64(instance.entity), self.game_ptr);
                 }
-                if (!instance.persistent) {
-                    if (self.destroy_entity_fn) |destroy_fn| {
-                        destroy_fn(self.game_ptr, instance.entity);
-                    }
+                if (self.destroy_entity_fn) |destroy_fn| {
+                    destroy_fn(self.game_ptr, instance.entity);
                 }
             }
 
