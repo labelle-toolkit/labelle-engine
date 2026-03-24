@@ -75,7 +75,9 @@ World "ui"    →  GfxRenderer instance B  →  RetainedEngine { sprites: {42: .
 ```zig
 // Only sync worlds that need rendering this frame
 for (self.rendered_worlds) |world_name| {
-    self.worlds.get(world_name).renderer.sync(EcsImpl, &world.ecs_backend);
+    if (self.worlds.get(world_name)) |world| {
+        world.renderer.sync(EcsImpl, &world.ecs_backend);
+    }
 }
 ```
 
@@ -284,5 +286,5 @@ This destroys all entities and visuals atomically. No iteration. Unblocks save/l
 
 1. **Non-active worlds do not tick.** Only the active world runs scripts and systems. Plugins that need to operate on other worlds must do so explicitly.
 2. **No cross-world entity references.** Worlds are fully isolated. No world-qualified entity handles.
-3. **World render ordering is implicit.** Worlds render in creation order.
+3. **World render ordering is explicit.** Games control render order by calling `renderWorld()` in the desired sequence (e.g. game world first, UI world on top).
 4. **No memory budget limit.** No configurable cap on concurrent worlds for now.
