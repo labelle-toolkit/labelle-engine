@@ -88,6 +88,7 @@ pub fn Mixin(comptime Game: type) type {
                 self.allocator.free(old);
             }
             self.pending_scene_change = self.allocator.dupe(u8, name) catch null;
+            self.pending_scene_atomic = false;
         }
 
         /// Queue an atomic scene change for the next frame.

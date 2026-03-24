@@ -724,39 +724,21 @@ test "World: round-trip swap preserves state" {
     var game = TestGame.init(testing.allocator);
     defer game.deinit();
 
-    // Name the default world by creating + swapping
-    try game.createWorld("main");
-    // Move current state to "default" first
-    try game.createWorld("default");
-
-    // Create entity in active (unnamed) world
-    const e1 = game.createEntity();
-    game.ecs_backend.addComponent(e1, Health{ .current = 10, .max = 50 });
-
-    // Swap to "main" (shelves current unnamed world — but unnamed can't be retrieved)
-    // Instead, let's test with named worlds only:
-
-    // Start fresh
-    var game2 = TestGame.init(testing.allocator);
-    defer game2.deinit();
-
-    // Create two named worlds
-    try game2.createWorld("world_a");
-    try game2.createWorld("world_b");
+    try game.createWorld("world_a");
+    try game.createWorld("world_b");
 
     // Activate world_a, create entity
-    try game2.setActiveWorld("world_a");
-    const ea = game2.createEntity();
-    game2.ecs_backend.addComponent(ea, Health{ .current = 10, .max = 50 });
+    try game.setActiveWorld("world_a");
+    const ea = game.createEntity();
+    game.ecs_backend.addComponent(ea, Health{ .current = 10, .max = 50 });
 
     // Swap to world_b, create different entity
-    try game2.setActiveWorld("world_b");
-    const eb = game2.createEntity();
-    game2.ecs_backend.addComponent(eb, Velocity{ .x = 5, .y = 3 });
+    try game.setActiveWorld("world_b");
+    _ = game.createEntity();
 
     // Swap back to world_a — entity should still be there
-    try game2.setActiveWorld("world_a");
-    const health = game2.ecs_backend.getComponent(ea, Health);
+    try game.setActiveWorld("world_a");
+    const health = game.ecs_backend.getComponent(ea, Health);
     try testing.expect(health != null);
     try testing.expectEqual(@as(f32, 10), health.?.current);
 }
