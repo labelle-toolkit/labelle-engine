@@ -1,0 +1,12 @@
+.{
+    .fingerprint = 0x3dda308fa396ad7d,
+    .name = .labelle_bootstrap,
+    .version = "0.0.0",
+    .minimum_zig_version = "0.15.2",
+    .dependencies = .{
+        .@"labelle-engine" = .{
+            .path = "../../..",
+        },
+    },
+    .paths = .{ "build.zig", "build.zig.zon" },
+}

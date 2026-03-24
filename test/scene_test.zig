@@ -126,7 +126,7 @@ test "Scene: prefab position from prefab defaults" {
     defer scene.deinit();
 
     const entity = scene.entities.items[0].entity;
-    const pos = game.ecs_backend.getComponent(entity, Position).?;
+    const pos = game.active_world.ecs_backend.getComponent(entity, Position).?;
     try testing.expectEqual(100.0, pos.x);
     try testing.expectEqual(200.0, pos.y);
 }
@@ -144,7 +144,7 @@ test "Scene: prefab position overridden by scene" {
     defer scene.deinit();
 
     const entity = scene.entities.items[0].entity;
-    const pos = game.ecs_backend.getComponent(entity, Position).?;
+    const pos = game.active_world.ecs_backend.getComponent(entity, Position).?;
     try testing.expectEqual(500.0, pos.x);
     try testing.expectEqual(300.0, pos.y);
 }
@@ -189,7 +189,7 @@ test "Scene: custom component via registry" {
     defer scene.deinit();
 
     const entity = scene.entities.items[0].entity;
-    const health = game.ecs_backend.getComponent(entity, Health).?;
+    const health = game.active_world.ecs_backend.getComponent(entity, Health).?;
     try testing.expectEqual(75.0, health.current);
     try testing.expectEqual(100.0, health.max);
 }
@@ -212,7 +212,7 @@ test "Scene: prefab with component override (merging)" {
     defer scene.deinit();
 
     const entity = scene.entities.items[0].entity;
-    const health = game.ecs_backend.getComponent(entity, Health).?;
+    const health = game.active_world.ecs_backend.getComponent(entity, Health).?;
     try testing.expectEqual(25.0, health.current);
     try testing.expectEqual(50.0, health.max);
 }
@@ -235,7 +235,7 @@ test "Scene: prefab with extra scene-only component" {
     defer scene.deinit();
 
     const entity = scene.entities.items[0].entity;
-    const vel = game.ecs_backend.getComponent(entity, Velocity).?;
+    const vel = game.active_world.ecs_backend.getComponent(entity, Velocity).?;
     try testing.expectEqual(10.0, vel.x);
     try testing.expectEqual(0.0, vel.y);
 }
@@ -344,7 +344,7 @@ test "Scene: instantiatePrefab at runtime" {
     const entity = try SimpleTestLoader.instantiatePrefab("player", &scene, &game, 300, 400);
     try testing.expectEqual(1, scene.entityCount());
 
-    const pos = game.ecs_backend.getComponent(entity, Position).?;
+    const pos = game.active_world.ecs_backend.getComponent(entity, Position).?;
     try testing.expectEqual(300.0, pos.x);
     try testing.expectEqual(400.0, pos.y);
 }
@@ -428,7 +428,7 @@ test "Scene: entity reference by name" {
     const follower_entity = scene.entities.items[1].entity;
 
     // Follower's target should be resolved to the leader entity
-    const follower = game.ecs_backend.getComponent(follower_entity, Follower).?;
+    const follower = game.active_world.ecs_backend.getComponent(follower_entity, Follower).?;
     try testing.expectEqual(leader_entity, follower.target);
     try testing.expectEqual(2.0, follower.speed);
 }
@@ -446,7 +446,7 @@ test "Scene: entity self-reference" {
     defer scene.deinit();
 
     const entity = scene.entities.items[0].entity;
-    const follower = game.ecs_backend.getComponent(entity, Follower).?;
+    const follower = game.active_world.ecs_backend.getComponent(entity, Follower).?;
     try testing.expectEqual(entity, follower.target);
 }
 
@@ -465,7 +465,7 @@ test "Scene: entity reference by ID" {
 
     const hero_entity = scene.entities.items[0].entity;
     const follower_entity = scene.entities.items[1].entity;
-    const follower = game.ecs_backend.getComponent(follower_entity, Follower).?;
+    const follower = game.active_world.ecs_backend.getComponent(follower_entity, Follower).?;
     try testing.expectEqual(hero_entity, follower.target);
 }
 
@@ -485,7 +485,7 @@ test "Scene: forward entity reference (child before parent)" {
 
     const follower_entity = scene.entities.items[0].entity;
     const leader_entity = scene.entities.items[1].entity;
-    const follower = game.ecs_backend.getComponent(follower_entity, Follower).?;
+    const follower = game.active_world.ecs_backend.getComponent(follower_entity, Follower).?;
     try testing.expectEqual(leader_entity, follower.target);
 }
 
@@ -513,11 +513,11 @@ test "Scene: parent-child via .parent field" {
     const child_entity = scene.entities.items[1].entity;
 
     // Child should have Parent component
-    const parent_comp = game.ecs_backend.getComponent(child_entity, Parent).?;
+    const parent_comp = game.active_world.ecs_backend.getComponent(child_entity, Parent).?;
     try testing.expectEqual(parent_entity, parent_comp.entity);
 
     // Parent should have Children component
-    const children_comp = game.ecs_backend.getComponent(parent_entity, Children).?;
+    const children_comp = game.active_world.ecs_backend.getComponent(parent_entity, Children).?;
     try testing.expectEqual(1, children_comp.count());
     try testing.expectEqual(child_entity, children_comp.getChildren()[0]);
 }
@@ -541,7 +541,7 @@ test "Scene: parent-child forward reference (child before parent in .zon)" {
     const child_entity = scene.entities.items[0].entity;
     const parent_entity = scene.entities.items[1].entity;
 
-    const parent_comp = game.ecs_backend.getComponent(child_entity, Parent).?;
+    const parent_comp = game.active_world.ecs_backend.getComponent(child_entity, Parent).?;
     try testing.expectEqual(parent_entity, parent_comp.entity);
 }
 
@@ -666,7 +666,7 @@ test "Scene: multiple children under one parent" {
     defer scene.deinit();
 
     const root_entity = scene.entities.items[0].entity;
-    const children_comp = game.ecs_backend.getComponent(root_entity, Children).?;
+    const children_comp = game.active_world.ecs_backend.getComponent(root_entity, Children).?;
     try testing.expectEqual(3, children_comp.count());
 }
 
@@ -703,19 +703,19 @@ test "World: setActiveWorld swaps ECS state" {
     // Activate world_a, create entity
     try game.setActiveWorld("world_a");
     const e1 = game.createEntity();
-    game.ecs_backend.addComponent(e1, Health{ .current = 42, .max = 100 });
+    game.active_world.ecs_backend.addComponent(e1, Health{ .current = 42, .max = 100 });
 
     // Swap to world_b — entity from world_a should not be visible
     try game.setActiveWorld("world_b");
-    try testing.expect(!game.ecs_backend.hasComponent(e1, Health));
+    try testing.expect(!game.active_world.ecs_backend.hasComponent(e1, Health));
 
     // Create entity in world_b
     const e2 = game.createEntity();
-    game.ecs_backend.addComponent(e2, Velocity{ .x = 5, .y = 3 });
+    game.active_world.ecs_backend.addComponent(e2, Velocity{ .x = 5, .y = 3 });
 
     // Swap back to world_a — original entity should be there
     try game.setActiveWorld("world_a");
-    const health = game.ecs_backend.getComponent(e1, Health);
+    const health = game.active_world.ecs_backend.getComponent(e1, Health);
     try testing.expect(health != null);
     try testing.expectEqual(@as(f32, 42), health.?.current);
 }
@@ -730,7 +730,7 @@ test "World: round-trip swap preserves state" {
     // Activate world_a, create entity
     try game.setActiveWorld("world_a");
     const ea = game.createEntity();
-    game.ecs_backend.addComponent(ea, Health{ .current = 10, .max = 50 });
+    game.active_world.ecs_backend.addComponent(ea, Health{ .current = 10, .max = 50 });
 
     // Swap to world_b, create different entity
     try game.setActiveWorld("world_b");
@@ -738,7 +738,7 @@ test "World: round-trip swap preserves state" {
 
     // Swap back to world_a — entity should still be there
     try game.setActiveWorld("world_a");
-    const health = game.ecs_backend.getComponent(ea, Health);
+    const health = game.active_world.ecs_backend.getComponent(ea, Health);
     try testing.expect(health != null);
     try testing.expectEqual(@as(f32, 10), health.?.current);
 }

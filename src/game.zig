@@ -95,8 +95,8 @@ pub fn GameConfig(
         pub const FrameCallback = *const fn (*Self, f32) void;
 
         /// A world bundles ECS, renderer, sprite cache, and arena.
-        /// The active world's fields are stored directly on Game for
-        /// backward compatibility. Inactive worlds live in the `worlds` map.
+        /// The active world is a heap-allocated pointer for stable references.
+        /// Inactive worlds live in the `worlds` map as heap pointers.
         pub const World = struct {
             ecs_backend: EcsImpl,
             renderer: RenderImpl,
@@ -121,10 +121,10 @@ pub fn GameConfig(
         };
 
         allocator: std.mem.Allocator,
-        ecs_backend: EcsImpl,
-        renderer: RenderImpl,
+        active_world: *World,
+        worlds: std.StringHashMap(*World),
+        active_world_name: ?[]const u8 = null,
         atlas_manager: atlas_mod.TextureManager,
-        sprite_cache: atlas_mod.SpriteCache,
         hooks: HooksField = if (has_hooks) null else {},
 
         // Scene management
@@ -144,14 +144,6 @@ pub fn GameConfig(
         /// null = no filtering (scene without .scripts or no scene), slice = only these run.
         active_scene_script_names: ?[]const []const u8 = null,
         gizmo_reconcile_fn: ?*const fn (*Self) void = null,
-
-        // Arena for heap-allocated slices in nested entity arrays (scene loader).
-        // Freed on scene teardown.
-        nested_entity_arena: std.heap.ArenaAllocator,
-
-        // Named worlds (inactive worlds stored here; active world is the direct fields above)
-        worlds: std.StringHashMap(World),
-        active_world_name: ?[]const u8 = null,
 
         // Logging
         log: Log = .{},
@@ -176,16 +168,15 @@ pub fn GameConfig(
         gizmo_state: gizmo_draws_mod.GizmoState(Entity),
 
         pub fn init(allocator: std.mem.Allocator) Self {
+            const world = allocator.create(World) catch @panic("failed to allocate default world");
+            world.* = World.init(allocator);
             return .{
                 .allocator = allocator,
-                .ecs_backend = EcsImpl.init(allocator),
-                .renderer = RenderImpl.init(allocator),
+                .active_world = world,
+                .worlds = std.StringHashMap(*World).init(allocator),
                 .atlas_manager = atlas_mod.TextureManager.init(allocator),
-                .sprite_cache = atlas_mod.SpriteCache.init(allocator),
                 .scenes = std.StringHashMap(SceneEntry).init(allocator),
                 .gizmo_state = gizmo_draws_mod.GizmoState(Entity).init(allocator),
-                .nested_entity_arena = std.heap.ArenaAllocator.init(allocator),
-                .worlds = std.StringHashMap(World).init(allocator),
             };
         }
 
@@ -202,20 +193,19 @@ pub fn GameConfig(
             var world_iter = self.worlds.iterator();
             while (world_iter.next()) |entry| {
                 self.allocator.free(entry.key_ptr.*);
-                entry.value_ptr.deinit();
+                entry.value_ptr.*.deinit();
+                self.allocator.destroy(entry.value_ptr.*);
             }
             self.worlds.deinit();
             if (self.active_world_name) |name| {
                 self.allocator.free(name);
             }
-            // Clean up active world fields
-            self.nested_entity_arena.deinit();
+            // Clean up active world
+            self.active_world.deinit();
+            self.allocator.destroy(self.active_world);
             self.gizmo_state.deinit(self.allocator);
             self.scenes.deinit();
-            self.sprite_cache.deinit();
             self.atlas_manager.deinit();
-            self.renderer.deinit();
-            self.ecs_backend.deinit();
         }
 
         pub fn setHooks(self: *Self, receiver: Hooks) void {
@@ -236,27 +226,27 @@ pub fn GameConfig(
         // ── Entity Management ─────────────────────────────────────
 
         pub fn createEntity(self: *Self) Entity {
-            const entity = self.ecs_backend.createEntity();
+            const entity = self.active_world.ecs_backend.createEntity();
             self.emitHook(.{ .entity_created = .{ .entity_id = entity } });
             return entity;
         }
 
         pub fn destroyEntity(self: *Self, entity: Entity) void {
-            if (self.ecs_backend.getComponent(entity, Children)) |children_comp| {
+            if (self.active_world.ecs_backend.getComponent(entity, Children)) |children_comp| {
                 for (children_comp.getChildren()) |child| {
                     self.destroyEntity(child);
                 }
             }
-            self.sprite_cache.invalidate(@intCast(entity));
-            self.renderer.untrackEntity(entity);
-            self.ecs_backend.destroyEntity(entity);
+            self.active_world.sprite_cache.invalidate(@intCast(entity));
+            self.active_world.renderer.untrackEntity(entity);
+            self.active_world.ecs_backend.destroyEntity(entity);
             self.emitHook(.{ .entity_destroyed = .{ .entity_id = entity } });
         }
 
         pub fn destroyEntityOnly(self: *Self, entity: Entity) void {
-            self.sprite_cache.invalidate(@intCast(entity));
-            self.renderer.untrackEntity(entity);
-            self.ecs_backend.destroyEntity(entity);
+            self.active_world.sprite_cache.invalidate(@intCast(entity));
+            self.active_world.renderer.untrackEntity(entity);
+            self.active_world.ecs_backend.destroyEntity(entity);
             self.emitHook(.{ .entity_destroyed = .{ .entity_id = entity } });
         }
 
@@ -274,22 +264,22 @@ pub fn GameConfig(
         // ── Position & Hierarchy ──────────────────────────────────
 
         pub fn setPosition(self: *Self, entity: Entity, pos: Position) void {
-            self.ecs_backend.addComponent(entity, pos);
-            self.renderer.markPositionDirtyWithChildren(EcsImpl, &self.ecs_backend, entity);
+            self.active_world.ecs_backend.addComponent(entity, pos);
+            self.active_world.renderer.markPositionDirtyWithChildren(EcsImpl, &self.active_world.ecs_backend, entity);
         }
 
         pub fn getPosition(self: *Self, entity: Entity) Position {
-            if (self.ecs_backend.getComponent(entity, Position)) |p| return p.*;
+            if (self.active_world.ecs_backend.getComponent(entity, Position)) |p| return p.*;
             return Position{};
         }
 
         pub fn getWorldPosition(self: *Self, entity: Entity) Position {
-            return hierarchy.computeWorldPos(EcsImpl, Parent, &self.ecs_backend, entity, 0);
+            return hierarchy.computeWorldPos(EcsImpl, Parent, &self.active_world.ecs_backend, entity, 0);
         }
 
         pub fn setWorldPosition(self: *Self, entity: Entity, world_pos: Position) void {
-            if (self.ecs_backend.getComponent(entity, Parent)) |parent_comp| {
-                const parent_world = hierarchy.computeWorldPos(EcsImpl, Parent, &self.ecs_backend, parent_comp.entity, 0);
+            if (self.active_world.ecs_backend.getComponent(entity, Parent)) |parent_comp| {
+                const parent_world = hierarchy.computeWorldPos(EcsImpl, Parent, &self.active_world.ecs_backend, parent_comp.entity, 0);
                 self.setPosition(entity, .{ .x = world_pos.x - parent_world.x, .y = world_pos.y - parent_world.y });
             } else {
                 self.setPosition(entity, world_pos);
@@ -300,30 +290,30 @@ pub fn GameConfig(
             inherit_rotation: bool = false,
             inherit_scale: bool = false,
         }) void {
-            if (hierarchy.wouldCreateCycle(EcsImpl, Parent, &self.ecs_backend, child, parent_entity)) return;
+            if (hierarchy.wouldCreateCycle(EcsImpl, Parent, &self.active_world.ecs_backend, child, parent_entity)) return;
 
-            if (self.ecs_backend.getComponent(child, Parent)) |old_parent_comp| {
-                if (self.ecs_backend.getComponent(old_parent_comp.entity, Children)) |old_children| {
+            if (self.active_world.ecs_backend.getComponent(child, Parent)) |old_parent_comp| {
+                if (self.active_world.ecs_backend.getComponent(old_parent_comp.entity, Children)) |old_children| {
                     old_children.removeChild(child);
                 }
             }
 
-            self.ecs_backend.addComponent(child, Parent{
+            self.active_world.ecs_backend.addComponent(child, Parent{
                 .entity = parent_entity,
                 .inherit_rotation = opts.inherit_rotation,
                 .inherit_scale = opts.inherit_scale,
             });
 
-            if (self.ecs_backend.getComponent(parent_entity, Children)) |children_comp| {
+            if (self.active_world.ecs_backend.getComponent(parent_entity, Children)) |children_comp| {
                 children_comp.addChild(child);
             } else {
                 var new_children = Children{};
                 new_children.addChild(child);
-                self.ecs_backend.addComponent(parent_entity, new_children);
+                self.active_world.ecs_backend.addComponent(parent_entity, new_children);
             }
 
-            self.renderer.updateHierarchyFlag(child, true);
-            self.renderer.markPositionDirty(child);
+            self.active_world.renderer.updateHierarchyFlag(child, true);
+            self.active_world.renderer.markPositionDirty(child);
         }
 
         pub fn setParentKeepTransform(self: *Self, child: Entity, parent_entity: Entity, opts: struct {
@@ -336,14 +326,14 @@ pub fn GameConfig(
         }
 
         pub fn removeParent(self: *Self, child: Entity) void {
-            if (self.ecs_backend.getComponent(child, Parent)) |parent_comp| {
-                if (self.ecs_backend.getComponent(parent_comp.entity, Children)) |children_comp| {
+            if (self.active_world.ecs_backend.getComponent(child, Parent)) |parent_comp| {
+                if (self.active_world.ecs_backend.getComponent(parent_comp.entity, Children)) |children_comp| {
                     children_comp.removeChild(child);
                 }
             }
-            self.ecs_backend.removeComponent(child, Parent);
-            self.renderer.updateHierarchyFlag(child, false);
-            self.renderer.markPositionDirty(child);
+            self.active_world.ecs_backend.removeComponent(child, Parent);
+            self.active_world.renderer.updateHierarchyFlag(child, false);
+            self.active_world.renderer.markPositionDirty(child);
         }
 
         pub fn removeParentKeepTransform(self: *Self, child: Entity) void {
@@ -353,28 +343,28 @@ pub fn GameConfig(
         }
 
         pub fn getParent(self: *Self, entity: Entity) ?Entity {
-            if (self.ecs_backend.getComponent(entity, Parent)) |p| return p.entity;
+            if (self.active_world.ecs_backend.getComponent(entity, Parent)) |p| return p.entity;
             return null;
         }
 
         pub fn getChildren(self: *Self, entity: Entity) []const Entity {
-            if (self.ecs_backend.getComponent(entity, Children)) |c| return c.getChildren();
+            if (self.active_world.ecs_backend.getComponent(entity, Children)) |c| return c.getChildren();
             return &.{};
         }
 
         pub fn hasChildren(self: *Self, entity: Entity) bool {
-            if (self.ecs_backend.getComponent(entity, Children)) |c| return c.count() > 0;
+            if (self.active_world.ecs_backend.getComponent(entity, Children)) |c| return c.count() > 0;
             return false;
         }
 
         pub fn isRoot(self: *Self, entity: Entity) bool {
-            return !self.ecs_backend.hasComponent(entity, Parent);
+            return !self.active_world.ecs_backend.hasComponent(entity, Parent);
         }
 
         // ── Generic Component Access ──────────────────────────────
 
         pub fn addComponent(self: *Self, entity: Entity, component: anytype) void {
-            self.ecs_backend.addComponent(entity, component);
+            self.active_world.ecs_backend.addComponent(entity, component);
             const T = @TypeOf(component);
             if (@typeInfo(T) == .@"struct" and @hasDecl(T, "onAdd")) {
                 T.onAdd(ComponentPayload{ .entity_id = @intCast(entity), .game_ptr = @ptrCast(self) });
@@ -383,8 +373,8 @@ pub fn GameConfig(
 
         pub fn setComponent(self: *Self, entity: Entity, component: anytype) void {
             const T = @TypeOf(component);
-            const is_update = self.ecs_backend.hasComponent(entity, T);
-            self.ecs_backend.addComponent(entity, component);
+            const is_update = self.active_world.ecs_backend.hasComponent(entity, T);
+            self.active_world.ecs_backend.addComponent(entity, component);
             if (@typeInfo(T) == .@"struct") {
                 if (is_update and @hasDecl(T, "onSet")) {
                     T.onSet(ComponentPayload{ .entity_id = @intCast(entity), .game_ptr = @ptrCast(self) });
@@ -395,18 +385,18 @@ pub fn GameConfig(
         }
 
         pub fn getComponent(self: *Self, entity: Entity, comptime T: type) ?*T {
-            return self.ecs_backend.getComponent(entity, T);
+            return self.active_world.ecs_backend.getComponent(entity, T);
         }
 
         pub fn hasComponent(self: *Self, entity: Entity, comptime T: type) bool {
-            return self.ecs_backend.hasComponent(entity, T);
+            return self.active_world.ecs_backend.hasComponent(entity, T);
         }
 
         pub fn removeComponent(self: *Self, entity: Entity, comptime T: type) void {
             if (@typeInfo(T) == .@"struct" and @hasDecl(T, "onRemove")) {
                 T.onRemove(ComponentPayload{ .entity_id = @intCast(entity), .game_ptr = @ptrCast(self) });
             }
-            self.ecs_backend.removeComponent(entity, T);
+            self.active_world.ecs_backend.removeComponent(entity, T);
         }
 
         /// Fire onReady for a component type on a given entity.
@@ -553,42 +543,45 @@ pub fn GameConfig(
         pub fn createWorld(self: *Self, name: []const u8) !void {
             const duped = try self.allocator.dupe(u8, name);
             errdefer self.allocator.free(duped);
-            try self.worlds.put(duped, World.init(self.allocator));
+            const world = try self.allocator.create(World);
+            errdefer self.allocator.destroy(world);
+            world.* = World.init(self.allocator);
+            try self.worlds.put(duped, world);
         }
 
         /// Destroy a named inactive world. Frees all its entities and visuals.
         /// Cannot destroy the active world — call setActiveWorld() first.
         pub fn destroyWorld(self: *Self, name: []const u8) void {
             if (self.worlds.fetchRemove(name)) |kv| {
-                var world = kv.value;
-                world.deinit();
+                kv.value.deinit();
+                self.allocator.destroy(kv.value);
                 self.allocator.free(kv.key);
             }
         }
 
-        /// Swap the active world. The current active fields are shelved
-        /// into the map, and the named world's fields become active.
-        /// game.ecs_backend, game.renderer, etc. all point to the new world.
+        /// Swap the active world. The current active world pointer is shelved
+        /// into the map (if named), and the named world's pointer becomes active.
+        /// If the current active world is unnamed, it is destroyed.
         pub fn setActiveWorld(self: *Self, name: []const u8) !void {
-            // Shelve current active world
+            // Shelve or destroy current active world
             if (self.active_world_name) |current_name| {
-                try self.worlds.put(current_name, .{
-                    .ecs_backend = self.ecs_backend,
-                    .renderer = self.renderer,
-                    .sprite_cache = self.sprite_cache,
-                    .nested_entity_arena = self.nested_entity_arena,
-                });
+                try self.worlds.put(current_name, self.active_world);
                 self.active_world_name = null;
+            } else {
+                // Unnamed default world — destroy it
+                self.active_world.deinit();
+                self.allocator.destroy(self.active_world);
             }
 
             // Activate the named world
             if (self.worlds.fetchRemove(name)) |kv| {
-                self.ecs_backend = kv.value.ecs_backend;
-                self.renderer = kv.value.renderer;
-                self.sprite_cache = kv.value.sprite_cache;
-                self.nested_entity_arena = kv.value.nested_entity_arena;
+                self.active_world = kv.value;
                 self.active_world_name = kv.key;
             } else {
+                // Restore a fresh default world so the Game stays valid
+                const fresh = self.allocator.create(World) catch @panic("failed to allocate world");
+                fresh.* = World.init(self.allocator);
+                self.active_world = fresh;
                 return error.WorldNotFound;
             }
         }
@@ -607,7 +600,7 @@ pub fn GameConfig(
 
         /// Get a pointer to an inactive world.
         pub fn getWorld(self: *Self, name: []const u8) ?*World {
-            return self.worlds.getPtr(name);
+            return self.worlds.get(name);
         }
 
         /// Get the name of the active world (null if unnamed/default).
@@ -621,17 +614,17 @@ pub fn GameConfig(
         }
 
         pub fn resetEcsBackend(self: *Self) void {
-            // Tear down (reverse of init order, matching deinit convention)
+            // Tear down active world's fields (reverse of init order)
             self.gizmo_state.deinit(self.allocator);
-            self.sprite_cache.deinit();
-            self.renderer.deinit();
-            self.ecs_backend.deinit();
-            _ = self.nested_entity_arena.reset(.retain_capacity);
+            self.active_world.sprite_cache.deinit();
+            self.active_world.renderer.deinit();
+            self.active_world.ecs_backend.deinit();
+            _ = self.active_world.nested_entity_arena.reset(.retain_capacity);
 
-            // Reinitialize
-            self.ecs_backend = EcsImpl.init(self.allocator);
-            self.renderer = RenderImpl.init(self.allocator);
-            self.sprite_cache = atlas_mod.SpriteCache.init(self.allocator);
+            // Reinitialize active world's fields
+            self.active_world.ecs_backend = EcsImpl.init(self.allocator);
+            self.active_world.renderer = RenderImpl.init(self.allocator);
+            self.active_world.sprite_cache = atlas_mod.SpriteCache.init(self.allocator);
             self.gizmo_state = gizmo_draws_mod.GizmoState(Entity).init(self.allocator);
         }
 
@@ -647,9 +640,9 @@ pub fn GameConfig(
                 self.active_scene_add_entity_fn = null;
                 self.active_scene_clear_entities_fn = null;
                 self.active_scene_script_names = null;
-                self.sprite_cache.clear();
+                self.active_world.sprite_cache.clear();
                 // Free nested entity array allocations from the outgoing scene
-                _ = self.nested_entity_arena.reset(.retain_capacity);
+                _ = self.active_world.nested_entity_arena.reset(.retain_capacity);
             }
         }
 
@@ -694,7 +687,7 @@ pub fn GameConfig(
             Audio.update();
             Input.updateGestures(dt);
             self.resolveAtlasSprites();
-            self.renderer.sync(EcsImpl, &self.ecs_backend);
+            self.active_world.renderer.sync(EcsImpl, &self.active_world.ecs_backend);
 
             // Reconcile gizmos for runtime-created entities
             if (self.gizmo_reconcile_fn) |reconcile_fn| {
@@ -735,7 +728,7 @@ pub fn GameConfig(
         }
 
         pub fn render(self: *Self) void {
-            self.renderer.render();
+            self.active_world.renderer.render();
             self.renderGizmos();
             self.clearGizmos();
         }
@@ -746,16 +739,21 @@ pub fn GameConfig(
         pub const CameraType = if (has_camera) RenderImpl.CameraType else void;
         pub const CameraManagerType = if (has_camera) RenderImpl.CameraManagerType else void;
 
+        /// Set the screen height on the active world's renderer.
+        pub fn setScreenHeight(self: *Self, height: f32) void {
+            self.active_world.renderer.setScreenHeight(height);
+        }
+
         /// Get the primary camera (for renderers that support cameras).
         pub const getCamera = if (has_camera) getCameraImpl else void;
         fn getCameraImpl(self: *Self) *CameraType {
-            return self.renderer.getCamera();
+            return self.active_world.renderer.getCamera();
         }
 
         /// Get the camera manager (for multi-camera / split-screen).
         pub const getCameraManager = if (has_camera) getCameraManagerImpl else void;
         fn getCameraManagerImpl(self: *Self) *CameraManagerType {
-            return self.renderer.getCameraManager();
+            return self.active_world.renderer.getCameraManager();
         }
 
         // ── Atlas ─────────────────────────────────────────────────
@@ -768,7 +766,7 @@ pub fn GameConfig(
         pub const loadAtlas = if (has_load_texture) loadAtlasImpl else @compileError("Renderer does not support loadTexture");
 
         fn loadAtlasImpl(self: *Self, name: []const u8, json_path: [:0]const u8, texture_path: [:0]const u8) !void {
-            const tex_id = try self.renderer.loadTexture(texture_path);
+            const tex_id = try self.active_world.renderer.loadTexture(texture_path);
             // Convert renderer's TextureId (enum/opaque) to u32 for engine storage
             const id: u32 = if (@typeInfo(@TypeOf(tex_id)) == .@"enum")
                 @intFromEnum(tex_id)
@@ -783,7 +781,7 @@ pub fn GameConfig(
         pub const loadAtlasComptime = if (has_load_texture) loadAtlasComptimeImpl else @compileError("Renderer does not support loadTexture");
 
         fn loadAtlasComptimeImpl(self: *Self, name: []const u8, comptime sprites: []const atlas_mod.SpriteData, texture_path: [:0]const u8) !void {
-            const tex_id = try self.renderer.loadTexture(texture_path);
+            const tex_id = try self.active_world.renderer.loadTexture(texture_path);
             const id: u32 = if (@typeInfo(@TypeOf(tex_id)) == .@"enum")
                 @intFromEnum(tex_id)
             else
@@ -803,7 +801,7 @@ pub fn GameConfig(
         /// Look up a sprite for an entity using the per-entity cache.
         /// Returns cached result when atlas version and sprite name haven't changed.
         pub fn findSpriteCached(self: *Self, entity_id: u32, sprite_name: []const u8) ?atlas_mod.FindSpriteResult {
-            return self.sprite_cache.lookup(entity_id, sprite_name, &self.atlas_manager);
+            return self.active_world.sprite_cache.lookup(entity_id, sprite_name, &self.atlas_manager);
         }
 
         /// Unload an atlas by name, freeing sprite data.
@@ -822,16 +820,16 @@ pub fn GameConfig(
             if (!has_atlas_sprite_fields) return;
             if (self.atlas_manager.atlasCount() == 0) return;
 
-            var v = self.ecs_backend.view(.{Sprite}, .{});
+            var v = self.active_world.ecs_backend.view(.{Sprite}, .{});
             defer v.deinit();
             while (v.next()) |entity| {
-                const sprite = self.ecs_backend.getComponent(entity, Sprite).?;
+                const sprite = self.active_world.ecs_backend.getComponent(entity, Sprite).?;
                 if (sprite.sprite_name.len == 0) continue;
 
-                const misses_before = self.sprite_cache.misses;
-                if (self.sprite_cache.lookup(@intCast(entity), sprite.sprite_name, &self.atlas_manager)) |result| {
+                const misses_before = self.active_world.sprite_cache.misses;
+                if (self.active_world.sprite_cache.lookup(@intCast(entity), sprite.sprite_name, &self.atlas_manager)) |result| {
                     // Only update and mark dirty on cache miss (new sprite or atlas changed)
-                    if (self.sprite_cache.misses != misses_before) {
+                    if (self.active_world.sprite_cache.misses != misses_before) {
                         sprite.texture = @enumFromInt(result.texture_id);
                         sprite.source_rect = .{
                             .x = @floatFromInt(result.sprite.x),
@@ -839,7 +837,7 @@ pub fn GameConfig(
                             .width = @floatFromInt(result.sprite.getWidth()),
                             .height = @floatFromInt(result.sprite.getHeight()),
                         };
-                        self.renderer.markVisualDirty(entity);
+                        self.active_world.renderer.markVisualDirty(entity);
                     }
                 }
             }
@@ -848,15 +846,15 @@ pub fn GameConfig(
         // ── Accessors ─────────────────────────────────────────────
 
         pub fn getRenderer(self: *Self) *RenderImpl {
-            return &self.renderer;
+            return &self.active_world.renderer;
         }
 
         pub fn getEcsBackend(self: *Self) *EcsImpl {
-            return &self.ecs_backend;
+            return &self.active_world.ecs_backend;
         }
 
         pub fn entityCount(self: *Self) usize {
-            return @intCast(self.ecs_backend.entityCount());
+            return @intCast(self.active_world.ecs_backend.entityCount());
         }
     };
 }

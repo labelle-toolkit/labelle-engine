@@ -20,12 +20,28 @@ const TestGame = struct {
     pub const SpriteComp = MockSprite;
     pub const ShapeComp = MockShape;
 
-    ecs_backend: MockEcs,
+    const World = struct {
+        ecs_backend: MockEcs,
+        nested_entity_arena: std.heap.ArenaAllocator,
+
+        fn init(allocator: std.mem.Allocator) World {
+            return .{
+                .ecs_backend = MockEcs.init(allocator),
+                .nested_entity_arena = std.heap.ArenaAllocator.init(allocator),
+            };
+        }
+
+        fn deinit(self: *World) void {
+            self.nested_entity_arena.deinit();
+            self.ecs_backend.deinit();
+        }
+    };
+
+    active_world: *World,
     allocator: std.mem.Allocator,
-    nested_entity_arena: std.heap.ArenaAllocator,
 
     pub fn createEntity(self: *Self) u32 {
-        return self.ecs_backend.createEntity();
+        return self.active_world.ecs_backend.createEntity();
     }
     pub fn setPosition(_: *Self, _: u32, _: anytype) void {}
     pub fn addSprite(_: *Self, _: u32, _: MockSprite) void {}
@@ -36,16 +52,17 @@ const TestGame = struct {
     pub fn setActiveScene(_: *Self, _: *anyopaque, _: anytype, _: anytype, _: anytype, _: anytype, _: anytype, _: anytype) void {}
 
     fn init(allocator: std.mem.Allocator) Self {
+        const world = allocator.create(World) catch @panic("OOM");
+        world.* = World.init(allocator);
         return .{
-            .ecs_backend = MockEcs.init(allocator),
+            .active_world = world,
             .allocator = allocator,
-            .nested_entity_arena = std.heap.ArenaAllocator.init(allocator),
         };
     }
 
     fn deinit(self: *Self) void {
-        self.nested_entity_arena.deinit();
-        self.ecs_backend.deinit();
+        self.active_world.deinit();
+        self.allocator.destroy(self.active_world);
     }
 };
 
@@ -88,24 +105,24 @@ test "addCustomComponent handles union and enum component types" {
     try std.testing.expectEqual(@as(usize, 3), s.entityCount());
 
     const fire_entity = s.getEntityByName("fire_entity").?;
-    const fire_dmg = game.ecs_backend.getComponent(fire_entity, DamageType).?;
+    const fire_dmg = game.active_world.ecs_backend.getComponent(fire_entity, DamageType).?;
     try std.testing.expectEqual(DamageType{ .fire = 25.0 }, fire_dmg.*);
 
     const ice_entity = s.getEntityByName("ice_entity").?;
-    const ice_dmg = game.ecs_backend.getComponent(ice_entity, DamageType).?;
+    const ice_dmg = game.active_world.ecs_backend.getComponent(ice_entity, DamageType).?;
     try std.testing.expectEqual(DamageType{ .ice = 10.0 }, ice_dmg.*);
 
     const phys_entity = s.getEntityByName("physical_entity").?;
-    const phys_dmg = game.ecs_backend.getComponent(phys_entity, DamageType).?;
+    const phys_dmg = game.active_world.ecs_backend.getComponent(phys_entity, DamageType).?;
     try std.testing.expectEqual(DamageType{ .physical = {} }, phys_dmg.*);
 
-    const fire_team = game.ecs_backend.getComponent(fire_entity, Team).?;
+    const fire_team = game.active_world.ecs_backend.getComponent(fire_entity, Team).?;
     try std.testing.expectEqual(Team.red, fire_team.*);
 
-    const ice_team = game.ecs_backend.getComponent(ice_entity, Team).?;
+    const ice_team = game.active_world.ecs_backend.getComponent(ice_entity, Team).?;
     try std.testing.expectEqual(Team.blue, ice_team.*);
 
-    const phys_team = game.ecs_backend.getComponent(phys_entity, Team).?;
+    const phys_team = game.active_world.ecs_backend.getComponent(phys_entity, Team).?;
     try std.testing.expectEqual(Team.neutral, phys_team.*);
 }
 
@@ -150,14 +167,14 @@ test "nested entity arrays in prefab components spawn child entities" {
     defer s.deinit();
 
     const bakery = s.getEntityByName("bakery").?;
-    const room = game.ecs_backend.getComponent(bakery, Room).?;
+    const room = game.active_world.ecs_backend.getComponent(bakery, Room).?;
 
     try std.testing.expectEqualStrings("Bakery", room.name);
     try std.testing.expectEqual(@as(usize, 2), room.workstations.len);
 
     for (room.workstations) |child_id| {
         const child_entity: u32 = @intCast(child_id);
-        const child_health = game.ecs_backend.getComponent(child_entity, Health).?;
+        const child_health = game.active_world.ecs_backend.getComponent(child_entity, Health).?;
         try std.testing.expectEqual(@as(f32, 50), child_health.hp);
     }
 
@@ -200,14 +217,14 @@ test "nested entity arrays with inline component entities" {
     defer s.deinit();
 
     const chest = s.getEntityByName("chest").?;
-    const container = game.ecs_backend.getComponent(chest, Container).?;
+    const container = game.active_world.ecs_backend.getComponent(chest, Container).?;
 
     try std.testing.expectEqual(@as(usize, 3), container.items.len);
 
     const expected_hp = [_]f32{ 10, 20, 30 };
     for (container.items, 0..) |child_id, i| {
         const child_entity: u32 = @intCast(child_id);
-        const child_health = game.ecs_backend.getComponent(child_entity, Health).?;
+        const child_health = game.active_world.ecs_backend.getComponent(child_entity, Health).?;
         try std.testing.expectEqual(expected_hp[i], child_health.hp);
     }
 
