@@ -94,6 +94,32 @@ pub fn GameConfig(
 
         pub const FrameCallback = *const fn (*Self, f32) void;
 
+        /// A world bundles ECS, renderer, sprite cache, and arena.
+        /// The active world's fields are stored directly on Game for
+        /// backward compatibility. Inactive worlds live in the `worlds` map.
+        pub const World = struct {
+            ecs_backend: EcsImpl,
+            renderer: RenderImpl,
+            sprite_cache: atlas_mod.SpriteCache,
+            nested_entity_arena: std.heap.ArenaAllocator,
+
+            pub fn init(allocator: std.mem.Allocator) World {
+                return .{
+                    .ecs_backend = EcsImpl.init(allocator),
+                    .renderer = RenderImpl.init(allocator),
+                    .sprite_cache = atlas_mod.SpriteCache.init(allocator),
+                    .nested_entity_arena = std.heap.ArenaAllocator.init(allocator),
+                };
+            }
+
+            pub fn deinit(self: *World) void {
+                self.nested_entity_arena.deinit();
+                self.sprite_cache.deinit();
+                self.renderer.deinit();
+                self.ecs_backend.deinit();
+            }
+        };
+
         allocator: std.mem.Allocator,
         ecs_backend: EcsImpl,
         renderer: RenderImpl,
@@ -121,6 +147,10 @@ pub fn GameConfig(
         // Arena for heap-allocated slices in nested entity arrays (scene loader).
         // Freed on scene teardown.
         nested_entity_arena: std.heap.ArenaAllocator,
+
+        // Named worlds (inactive worlds stored here; active world is the direct fields above)
+        worlds: std.StringHashMap(World),
+        active_world_name: ?[]const u8 = null,
 
         // Logging
         log: Log = .{},
@@ -154,6 +184,7 @@ pub fn GameConfig(
                 .scenes = std.StringHashMap(SceneEntry).init(allocator),
                 .gizmo_state = gizmo_draws_mod.GizmoState(Entity).init(allocator),
                 .nested_entity_arena = std.heap.ArenaAllocator.init(allocator),
+                .worlds = std.StringHashMap(World).init(allocator),
             };
         }
 
@@ -166,6 +197,17 @@ pub fn GameConfig(
             if (self.pending_scene_change) |name| {
                 self.allocator.free(name);
             }
+            // Clean up inactive worlds
+            var world_iter = self.worlds.iterator();
+            while (world_iter.next()) |entry| {
+                self.allocator.free(entry.key_ptr.*);
+                entry.value_ptr.deinit();
+            }
+            self.worlds.deinit();
+            if (self.active_world_name) |name| {
+                self.allocator.free(name);
+            }
+            // Clean up active world fields
             self.nested_entity_arena.deinit();
             self.gizmo_state.deinit(self.allocator);
             self.scenes.deinit();
@@ -501,6 +543,80 @@ pub fn GameConfig(
         /// NOT affected — the scene remains active with an empty entity list.
         /// Call clearActiveSceneEntities() first if the scene's entity list
         /// should also be cleared.
+        // ── World Management ─────────────────────────────────────
+
+        /// Create a new named world. The world is inactive (stored in the map).
+        /// Use setActiveWorld() to make it the active world.
+        pub fn createWorld(self: *Self, name: []const u8) !void {
+            const duped = try self.allocator.dupe(u8, name);
+            errdefer self.allocator.free(duped);
+            try self.worlds.put(duped, World.init(self.allocator));
+        }
+
+        /// Destroy a named inactive world. Frees all its entities and visuals.
+        /// Cannot destroy the active world — call setActiveWorld() first.
+        pub fn destroyWorld(self: *Self, name: []const u8) void {
+            if (self.worlds.fetchRemove(name)) |kv| {
+                var world = kv.value;
+                world.deinit();
+                self.allocator.free(kv.key);
+            }
+        }
+
+        /// Swap the active world. The current active fields are shelved
+        /// into the map, and the named world's fields become active.
+        /// game.ecs_backend, game.renderer, etc. all point to the new world.
+        pub fn setActiveWorld(self: *Self, name: []const u8) !void {
+            // Shelve current active world
+            if (self.active_world_name) |current_name| {
+                try self.worlds.put(current_name, .{
+                    .ecs_backend = self.ecs_backend,
+                    .renderer = self.renderer,
+                    .sprite_cache = self.sprite_cache,
+                    .nested_entity_arena = self.nested_entity_arena,
+                });
+                self.active_world_name = null;
+            }
+
+            // Activate the named world
+            if (self.worlds.fetchRemove(name)) |kv| {
+                self.ecs_backend = kv.value.ecs_backend;
+                self.renderer = kv.value.renderer;
+                self.sprite_cache = kv.value.sprite_cache;
+                self.nested_entity_arena = kv.value.nested_entity_arena;
+                self.active_world_name = kv.key;
+            } else {
+                return error.WorldNotFound;
+            }
+        }
+
+        /// Rename an inactive world in the map.
+        pub fn renameWorld(self: *Self, old_name: []const u8, new_name: []const u8) !void {
+            if (self.worlds.fetchRemove(old_name)) |kv| {
+                self.allocator.free(kv.key);
+                const duped = try self.allocator.dupe(u8, new_name);
+                errdefer self.allocator.free(duped);
+                try self.worlds.put(duped, kv.value);
+            } else {
+                return error.WorldNotFound;
+            }
+        }
+
+        /// Get a pointer to an inactive world.
+        pub fn getWorld(self: *Self, name: []const u8) ?*World {
+            return self.worlds.getPtr(name);
+        }
+
+        /// Get the name of the active world (null if unnamed/default).
+        pub fn getActiveWorldName(self: *const Self) ?[]const u8 {
+            return self.active_world_name;
+        }
+
+        /// Check if a world exists in the inactive map.
+        pub fn worldExists(self: *const Self, name: []const u8) bool {
+            return self.worlds.contains(name);
+        }
+
         pub fn resetEcsBackend(self: *Self) void {
             // Tear down
             self.renderer.deinit();
