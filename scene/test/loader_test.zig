@@ -33,7 +33,7 @@ const TestGame = struct {
     pub fn fireOnReady(_: *Self, _: u32, comptime _: type) void {}
     pub fn setParent(_: *Self, _: u32, _: u32, _: anytype) void {}
     pub fn destroyEntityOnly(_: *Self, _: u32) void {}
-    pub fn setActiveScene(_: *Self, _: *anyopaque, _: anytype, _: anytype, _: anytype) void {}
+    pub fn setActiveScene(_: *Self, _: *anyopaque, _: anytype, _: anytype, _: anytype, _: anytype, _: anytype, _: anytype) void {}
 
     fn init(allocator: std.mem.Allocator) Self {
         return .{
@@ -213,4 +213,81 @@ test "nested entity arrays with inline component entities" {
 
     // Nested entity slices are allocated from game.nested_entity_arena,
     // freed automatically by game.deinit().
+}
+
+// =============================================================================
+// Scene entity management tests
+// =============================================================================
+
+test "scene addEntity and clear" {
+    const allocator = std.testing.allocator;
+
+    const Health = struct { hp: f32 = 100 };
+    const Components = scene.ComponentRegistry(.{ .Health = Health });
+    const Prefabs = scene.PrefabRegistry(.{});
+    const Loader = SimpleSceneLoader(TestGame, Prefabs, Components);
+
+    var game = TestGame.init(allocator);
+    defer game.deinit();
+
+    const scene_data = .{
+        .name = "test_entity_mgmt",
+        .entities = .{
+            .{ .components = .{ .Health = .{ .hp = 50 } } },
+        },
+    };
+
+    var s = try Loader.load(scene_data, &game, allocator);
+    defer s.deinit();
+
+    // Scene starts with 1 entity
+    try std.testing.expectEqual(@as(usize, 1), s.entityCount());
+
+    // Add a runtime entity
+    const new_entity = game.createEntity();
+    try s.addEntity(.{ .entity = new_entity });
+    try std.testing.expectEqual(@as(usize, 2), s.entityCount());
+
+    // Clear all entities from scene tracking
+    s.entities.clearRetainingCapacity();
+    try std.testing.expectEqual(@as(usize, 0), s.entityCount());
+
+    // Can add entities again after clear
+    const another = game.createEntity();
+    try s.addEntity(.{ .entity = another });
+    try std.testing.expectEqual(@as(usize, 1), s.entityCount());
+}
+
+test "scene named_entities cleared properly" {
+    const allocator = std.testing.allocator;
+
+    const Health = struct { hp: f32 = 100 };
+    const Components = scene.ComponentRegistry(.{ .Health = Health });
+    const Prefabs = scene.PrefabRegistry(.{});
+    const Loader = SimpleSceneLoader(TestGame, Prefabs, Components);
+
+    var game = TestGame.init(allocator);
+    defer game.deinit();
+
+    const scene_data = .{
+        .name = "test_named_clear",
+        .entities = .{
+            .{ .name = "hero", .components = .{ .Health = .{ .hp = 100 } } },
+        },
+    };
+
+    var s = try Loader.load(scene_data, &game, allocator);
+    defer s.deinit();
+
+    // Named entity exists
+    try std.testing.expect(s.getEntityByName("hero") != null);
+
+    // Clear entities and named_entities (simulates sceneClearEntities)
+    s.entities.clearRetainingCapacity();
+    s.named_entities.deinit(s.allocator);
+    s.named_entities = .{};
+
+    // Named entity no longer found
+    try std.testing.expect(s.getEntityByName("hero") == null);
+    try std.testing.expectEqual(@as(usize, 0), s.entityCount());
 }
