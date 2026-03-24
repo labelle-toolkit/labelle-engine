@@ -569,23 +569,20 @@ pub fn GameConfig(
         /// active world is shelved into the map (if named) or destroyed (if unnamed).
         /// Verifies the target exists BEFORE modifying any state.
         pub fn setActiveWorld(self: *Self, name: []const u8) !void {
-            // Verify target exists before modifying anything
-            if (!self.worlds.contains(name)) return error.WorldNotFound;
+            // Remove target first — guarantees a free slot for shelving the current world
+            const kv = self.worlds.fetchRemove(name) orelse return error.WorldNotFound;
 
             // Shelve or destroy current active world
             if (self.active_world_name) |current_name| {
-                // Named world — shelve into map (put can't fail because we
-                // just removed an entry below, so capacity is available)
+                // Named world — shelve into map (can't fail: we just freed a slot)
                 self.worlds.put(current_name, self.active_world) catch @panic("OOM shelving world");
-                self.active_world_name = null;
             } else {
                 // Unnamed default world — destroy it
                 self.active_world.deinit();
                 self.allocator.destroy(self.active_world);
             }
 
-            // Activate the named world (guaranteed to exist from check above)
-            const kv = self.worlds.fetchRemove(name).?;
+            // Activate the named world
             self.active_world = kv.value;
             self.ecs_backend = &kv.value.ecs_backend;
             self.active_world_name = kv.key;
