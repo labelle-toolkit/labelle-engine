@@ -502,16 +502,18 @@ pub fn GameConfig(
         /// Call clearActiveSceneEntities() first if the scene's entity list
         /// should also be cleared.
         pub fn resetEcsBackend(self: *Self) void {
-            // Tear down
+            // Tear down (reverse of init order, matching deinit convention)
+            self.gizmo_state.deinit(self.allocator);
+            self.sprite_cache.deinit();
             self.renderer.deinit();
             self.ecs_backend.deinit();
-            self.sprite_cache.deinit();
             _ = self.nested_entity_arena.reset(.retain_capacity);
 
             // Reinitialize
             self.ecs_backend = EcsImpl.init(self.allocator);
             self.renderer = RenderImpl.init(self.allocator);
             self.sprite_cache = atlas_mod.SpriteCache.init(self.allocator);
+            self.gizmo_state = gizmo_draws_mod.GizmoState(Entity).init(self.allocator);
         }
 
         pub fn teardownActiveScene(self: *Self) void {
