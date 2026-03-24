@@ -539,18 +539,21 @@ pub fn GameConfig(
         // ── World Management ─────────────────────────────────────
 
         /// Create a new named world. The world is inactive (stored in the map).
-        /// Use setActiveWorld() to make it the active world.
+        /// Returns error.WorldAlreadyExists if the name is taken.
         pub fn createWorld(self: *Self, name: []const u8) !void {
+            if (self.worlds.contains(name)) return error.WorldAlreadyExists;
             const duped = try self.allocator.dupe(u8, name);
             errdefer self.allocator.free(duped);
             const world = try self.allocator.create(World);
-            errdefer self.allocator.destroy(world);
+            errdefer {
+                world.deinit();
+                self.allocator.destroy(world);
+            }
             world.* = World.init(self.allocator);
             try self.worlds.put(duped, world);
         }
 
         /// Destroy a named inactive world. Frees all its entities and visuals.
-        /// Cannot destroy the active world — call setActiveWorld() first.
         pub fn destroyWorld(self: *Self, name: []const u8) void {
             if (self.worlds.fetchRemove(name)) |kv| {
                 kv.value.deinit();
@@ -559,13 +562,18 @@ pub fn GameConfig(
             }
         }
 
-        /// Swap the active world. The current active world pointer is shelved
-        /// into the map (if named), and the named world's pointer becomes active.
-        /// If the current active world is unnamed, it is destroyed.
+        /// Swap the active world. The named world becomes active; the current
+        /// active world is shelved into the map (if named) or destroyed (if unnamed).
+        /// Verifies the target exists BEFORE modifying any state.
         pub fn setActiveWorld(self: *Self, name: []const u8) !void {
+            // Verify target exists before modifying anything
+            if (!self.worlds.contains(name)) return error.WorldNotFound;
+
             // Shelve or destroy current active world
             if (self.active_world_name) |current_name| {
-                try self.worlds.put(current_name, self.active_world);
+                // Named world — shelve into map (put can't fail because we
+                // just removed an entry below, so capacity is available)
+                self.worlds.put(current_name, self.active_world) catch @panic("OOM shelving world");
                 self.active_world_name = null;
             } else {
                 // Unnamed default world — destroy it
@@ -573,27 +581,31 @@ pub fn GameConfig(
                 self.allocator.destroy(self.active_world);
             }
 
-            // Activate the named world
-            if (self.worlds.fetchRemove(name)) |kv| {
-                self.active_world = kv.value;
-                self.active_world_name = kv.key;
-            } else {
-                // Restore a fresh default world so the Game stays valid
-                const fresh = self.allocator.create(World) catch @panic("failed to allocate world");
-                fresh.* = World.init(self.allocator);
-                self.active_world = fresh;
-                return error.WorldNotFound;
-            }
+            // Activate the named world (guaranteed to exist from check above)
+            const kv = self.worlds.fetchRemove(name).?;
+            self.active_world = kv.value;
+            self.active_world_name = kv.key;
         }
 
         /// Rename an inactive world in the map.
         pub fn renameWorld(self: *Self, old_name: []const u8, new_name: []const u8) !void {
+            if (self.worlds.contains(new_name)) return error.WorldAlreadyExists;
+
+            // Dupe new name first (before removing) so failure is safe
+            const duped = try self.allocator.dupe(u8, new_name);
+            errdefer self.allocator.free(duped);
+
             if (self.worlds.fetchRemove(old_name)) |kv| {
                 self.allocator.free(kv.key);
-                const duped = try self.allocator.dupe(u8, new_name);
-                errdefer self.allocator.free(duped);
-                try self.worlds.put(duped, kv.value);
+                self.worlds.put(duped, kv.value) catch {
+                    // Restore old entry on failure
+                    const restored_key = self.allocator.dupe(u8, old_name) catch @panic("OOM restoring world");
+                    self.worlds.put(restored_key, kv.value) catch @panic("OOM restoring world");
+                    self.allocator.free(duped);
+                    return error.OutOfMemory;
+                };
             } else {
+                self.allocator.free(duped);
                 return error.WorldNotFound;
             }
         }
