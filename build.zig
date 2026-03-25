@@ -34,6 +34,7 @@ pub fn build(b: *std.Build) void {
         "test/script_runner_test.zig",
         "test/game_log_test.zig",
         "test/save_policy_test.zig",
+        "test/save_load_mixin_test.zig",
     };
 
     for (test_files) |test_file| {
