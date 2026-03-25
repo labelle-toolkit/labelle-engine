@@ -164,7 +164,15 @@ test "save/load mixin: full round-trip" {
     }
     try testing.expectEqual(@as(usize, 1), worker_count);
 
-    // Storage entity should have remapped owner
+    // Find the new worker entity ID for remapping assertions
+    var new_worker_id: u64 = 0;
+    {
+        var view = game.active_world.ecs_backend.view(.{Worker}, .{});
+        if (view.next()) |ent| new_worker_id = @intCast(ent);
+        view.deinit();
+    }
+
+    // Storage entity should have remapped owner pointing to new worker
     var storage_count: usize = 0;
     {
         var view = game.active_world.ecs_backend.view(.{Storage}, .{});
@@ -172,10 +180,7 @@ test "save/load mixin: full round-trip" {
             storage_count += 1;
             const stor = game.active_world.ecs_backend.getComponent(ent, Storage).?;
             try testing.expectEqual(@as(u32, 20), stor.capacity);
-            // Owner should be remapped to the new worker entity ID
-            // We can't predict the exact new ID, but it should NOT be the old one
-            // (unless it happens to be the same, which is unlikely with MockEcsBackend)
-            _ = stor.owner; // Just verify it loaded without crash
+            try testing.expectEqual(new_worker_id, stor.owner);
         }
         view.deinit();
     }
