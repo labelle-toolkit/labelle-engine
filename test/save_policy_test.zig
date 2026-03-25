@@ -531,7 +531,7 @@ test "full pipeline: save and load entire game state" {
         // Restore ref_arrays
         if (obj.get("ref_arrays")) |ref_arrays_val| {
             if (new_world[i].workstation) |*ws| {
-                serde.readRefArrays(Workstation, ws, ref_arrays_val.object, &id_map, arena);
+                try serde.readRefArrays(Workstation, ws, ref_arrays_val.object, &id_map, arena);
             }
         }
     }
