@@ -18,6 +18,7 @@ pub const query_mod = @import("query.zig");
 pub const hooks_types_mod = @import("hooks_types.zig");
 pub const animation_mod = @import("animation.zig");
 pub const atlas_mod = @import("atlas.zig");
+pub const save_load_mod = @import("game/save_load_mixin.zig");
 
 // ── Game ──
 pub const GameConfig = game_mod.GameConfig;

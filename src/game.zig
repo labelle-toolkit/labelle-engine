@@ -23,6 +23,7 @@ const audio_mixin = @import("game/audio_mixin.zig");
 const gui_mixin = @import("game/gui_mixin.zig");
 const gizmo_mixin = @import("game/gizmo_mixin.zig");
 const scene_mixin = @import("game/scene_mixin.zig");
+const save_load_mixin = @import("game/save_load_mixin.zig");
 
 /// Full game configuration — the assembler fills ALL comptime slots.
 /// RenderImpl is a renderer plugin (e.g. gfx.GfxRenderer) satisfying RenderInterface.
@@ -80,6 +81,7 @@ pub fn GameConfig(
         const GuiMixin = gui_mixin.Mixin(Self);
         const GizmoMixin = gizmo_mixin.Mixin(Self);
         const SceneMixin = scene_mixin.Mixin(Self);
+        const SaveLoadMixin = save_load_mixin.Mixin(Self);
 
         /// Scene lifecycle hooks
         pub const SceneHooks = struct {
@@ -469,6 +471,11 @@ pub fn GameConfig(
         pub const queueSceneChange = SceneMixin.queueSceneChange;
         pub const queueSceneChangeAtomic = SceneMixin.queueSceneChangeAtomic;
         pub const getCurrentSceneName = SceneMixin.getCurrentSceneName;
+
+        // ── Save/Load (mixin) ───────────────────────────────────────
+        pub const saveGameState = SaveLoadMixin.saveGameState;
+        pub const loadGameState = SaveLoadMixin.loadGameState;
+
         pub fn unloadCurrentScene(self: *Self) void {
             if (self.current_scene_name) |name| {
                 self.emitHook(.{ .scene_unload = .{ .name = name } });
