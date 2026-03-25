@@ -6,7 +6,6 @@
 
 const std = @import("std");
 const core = @import("labelle-core");
-const Position = core.Position;
 const serde = core.serde;
 
 const SAVE_VERSION: u32 = 2;
@@ -63,12 +62,7 @@ pub fn Mixin(comptime Game: type) type {
                 try writer.writeAll("    {\n");
                 try std.fmt.format(writer, "      \"id\": {d}", .{id});
 
-                // Position
-                if (self.active_world.ecs_backend.getComponent(entity, Position)) |pos| {
-                    try std.fmt.format(writer, ",\n      \"x\": {d:.4},\n      \"y\": {d:.4}", .{ pos.x, pos.y });
-                }
-
-                // Components (saveable + marker)
+                // Components (saveable + marker — includes Position)
                 try writer.writeAll(",\n      \"components\": {");
                 var first_comp = true;
                 inline for (names) |name| {
@@ -158,24 +152,7 @@ pub fn Mixin(comptime Game: type) type {
                 try id_map.put(saved_id, entityToU64(new_entity));
             }
 
-            // Step 3: Restore positions
-            for (entities_json.items) |entry| {
-                const obj = entry.object;
-                const saved_id: u64 = @intCast((obj.get("id") orelse continue).integer);
-                const current_id = id_map.get(saved_id) orelse continue;
-                const entity: Entity = @intCast(current_id);
-
-                if (obj.get("x")) |x_val| {
-                    if (obj.get("y")) |y_val| {
-                        self.active_world.ecs_backend.addComponent(entity, Position{
-                            .x = serde.jsonFloat(x_val),
-                            .y = serde.jsonFloat(y_val),
-                        });
-                    }
-                }
-            }
-
-            // Step 4: Restore components
+            // Step 3: Restore components (includes Position)
             for (entities_json.items) |entry| {
                 const obj = entry.object;
                 const saved_id: u64 = @intCast((obj.get("id") orelse continue).integer);
