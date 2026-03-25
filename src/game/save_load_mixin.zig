@@ -99,15 +99,17 @@ pub fn Mixin(comptime Game: type) type {
                 var has_ref_arrays = false;
                 inline for (names) |name| {
                     const T = Reg.getType(name);
-                    if (comptime serde.hasRefArrayFields(T)) {
-                        if (self.active_world.ecs_backend.getComponent(entity, T)) |comp| {
-                            if (!has_ref_arrays) {
-                                try writer.writeAll(",\n      \"ref_arrays\": {");
-                                has_ref_arrays = true;
-                            } else {
-                                try writer.writeAll(",");
+                    if (comptime core.getSavePolicy(T)) |policy| {
+                        if ((policy == .saveable or policy == .marker) and comptime serde.hasRefArrayFields(T)) {
+                            if (self.active_world.ecs_backend.getComponent(entity, T)) |comp| {
+                                if (!has_ref_arrays) {
+                                    try writer.writeAll(",\n      \"ref_arrays\": {");
+                                    has_ref_arrays = true;
+                                } else {
+                                    try writer.writeAll(",");
+                                }
+                                try serde.writeRefArrayFields(T, comp, writer);
                             }
-                            try serde.writeRefArrayFields(T, comp, writer);
                         }
                     }
                 }

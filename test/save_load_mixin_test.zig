@@ -51,6 +51,15 @@ const Storage = struct {
     capacity: u32 = 10,
 };
 
+/// Transient component with ref arrays — should NOT be saved.
+const TransientRefs = struct {
+    pub const save = Saveable(.transient, @This(), .{
+        .skip = &.{"targets"},
+        .ref_arrays = &.{"targets"},
+    });
+    targets: []const u64 = &.{},
+};
+
 const Container = struct {
     pub const save = Saveable(.saveable, @This(), .{
         .skip = &.{"children"},
@@ -76,6 +85,7 @@ const TestComponents = ComponentRegistry(.{
     .Container = Container,
     .NeedsRecalc = NeedsRecalc,
     .RebuildMarker = RebuildMarker,
+    .TransientRefs = TransientRefs,
 });
 
 // ── Test Game Type ──────────────────────────────────────────────────────
@@ -242,6 +252,55 @@ test "save/load mixin: empty world round-trip" {
         view.deinit();
     }
     try testing.expectEqual(@as(usize, 1), rebuild_count);
+}
+
+test "save/load mixin: transient ref arrays are not saved" {
+    var game = TestGame.init(testing.allocator);
+    defer game.deinit();
+
+    // Create entity with both saveable and transient ref array components
+    const entity = game.createEntity();
+    game.active_world.ecs_backend.addComponent(entity, Position{ .x = 1.0, .y = 2.0 });
+    game.active_world.ecs_backend.addComponent(entity, Worker{});
+
+    const targets = try testing.allocator.alloc(u64, 2);
+    defer testing.allocator.free(targets);
+    targets[0] = 10;
+    targets[1] = 20;
+    game.active_world.ecs_backend.addComponent(entity, TransientRefs{ .targets = targets });
+
+    // Save
+    const filename = "test_save_transient.json";
+    try game.saveGameState(filename);
+    defer std.fs.cwd().deleteFile(filename) catch {};
+
+    // Verify transient ref arrays are NOT in the JSON
+    const json = try std.fs.cwd().readFileAlloc(testing.allocator, filename, 1024 * 1024);
+    defer testing.allocator.free(json);
+
+    // The JSON should not contain "targets" in ref_arrays
+    try testing.expect(std.mem.indexOf(u8, json, "targets") == null);
+
+    // Load and verify entity exists but without TransientRefs
+    game.resetEcsBackend();
+    try game.loadGameState(filename);
+
+    var worker_count: usize = 0;
+    {
+        var view = game.active_world.ecs_backend.view(.{Worker}, .{});
+        while (view.next()) |_| worker_count += 1;
+        view.deinit();
+    }
+    try testing.expectEqual(@as(usize, 1), worker_count);
+
+    // TransientRefs should NOT be restored
+    var transient_count: usize = 0;
+    {
+        var view = game.active_world.ecs_backend.view(.{TransientRefs}, .{});
+        while (view.next()) |_| transient_count += 1;
+        view.deinit();
+    }
+    try testing.expectEqual(@as(usize, 0), transient_count);
 }
 
 test "save/load mixin: load nonexistent file returns error" {
