@@ -9,7 +9,6 @@ const core = @import("labelle-core");
 const Position = core.Position;
 const serde = core.serde;
 
-const MAX_ENTITIES = 512;
 const SAVE_VERSION: u32 = 2;
 
 pub fn Mixin(comptime Game: type) type {
@@ -29,8 +28,10 @@ pub fn Mixin(comptime Game: type) type {
             const names = comptime Reg.names();
 
             // Collect all entities with saveable or marker components
-            var entity_ids: [MAX_ENTITIES]u64 = undefined;
-            var entity_count: usize = 0;
+            var entity_set = std.AutoHashMap(u64, void).init(allocator);
+            defer entity_set.deinit();
+            var entity_list: std.ArrayList(u64) = .{};
+            defer entity_list.deinit(allocator);
 
             inline for (names) |name| {
                 const T = Reg.getType(name);
@@ -39,11 +40,9 @@ pub fn Mixin(comptime Game: type) type {
                         var view = self.active_world.ecs_backend.view(.{T}, .{});
                         while (view.next()) |entity| {
                             const id = entityToU64(entity);
-                            if (!serde.isInSet(id, entity_ids[0..entity_count])) {
-                                if (entity_count < MAX_ENTITIES) {
-                                    entity_ids[entity_count] = id;
-                                    entity_count += 1;
-                                }
+                            if (!entity_set.contains(id)) {
+                                try entity_set.put(id, {});
+                                try entity_list.append(allocator, id);
                             }
                         }
                         view.deinit();
@@ -57,7 +56,7 @@ pub fn Mixin(comptime Game: type) type {
 
             try std.fmt.format(writer, "{{\n  \"version\": {d},\n  \"entities\": [\n", .{SAVE_VERSION});
 
-            for (entity_ids[0..entity_count], 0..) |id, idx| {
+            for (entity_list.items, 0..) |id, idx| {
                 const entity: Entity = @intCast(id);
 
                 if (idx > 0) try writer.writeAll(",\n");
@@ -89,19 +88,25 @@ pub fn Mixin(comptime Game: type) type {
                 }
                 try writer.writeAll("\n      }");
 
-                // Ref arrays ([]const u64 slices)
+                // Ref arrays — collect all ref array fields across components into one JSON object
                 var has_ref_arrays = false;
                 inline for (names) |name| {
                     const T = Reg.getType(name);
                     if (comptime serde.hasRefArrayFields(T)) {
                         if (self.active_world.ecs_backend.getComponent(entity, T)) |comp| {
                             if (!has_ref_arrays) {
-                                try writer.writeAll(",\n      \"ref_arrays\": ");
+                                try writer.writeAll(",\n      \"ref_arrays\": {");
                                 has_ref_arrays = true;
+                            } else {
+                                try writer.writeAll(",");
                             }
-                            try serde.writeRefArrays(T, comp, writer);
+                            // Write individual fields (without outer braces)
+                            try serde.writeRefArrayFields(T, comp, writer);
                         }
                     }
+                }
+                if (has_ref_arrays) {
+                    try writer.writeAll("}");
                 }
 
                 try writer.writeAll("\n    }");
@@ -233,19 +238,16 @@ pub fn Mixin(comptime Game: type) type {
             inline for (names) |name| {
                 const T = Reg.getType(name);
                 if (comptime core.hasPostLoad(T)) {
-                    var buf: [64]Entity = undefined;
-                    var count: usize = 0;
+                    var entities_buf: std.ArrayList(Entity) = .{};
+                    defer entities_buf.deinit(allocator);
                     {
                         var view = self.active_world.ecs_backend.view(.{T}, .{});
                         while (view.next()) |ent| {
-                            if (count < buf.len) {
-                                buf[count] = ent;
-                                count += 1;
-                            }
+                            entities_buf.append(allocator, ent) catch break;
                         }
                         view.deinit();
                     }
-                    for (buf[0..count]) |ent| {
+                    for (entities_buf.items) |ent| {
                         if (self.active_world.ecs_backend.getComponent(ent, T)) |comp| {
                             comp.postLoad(self, ent);
                         }
@@ -258,19 +260,16 @@ pub fn Mixin(comptime Game: type) type {
                 const T = Reg.getType(name);
                 const markers = comptime core.getPostLoadMarkers(T);
                 if (markers.len > 0) {
-                    var buf: [64]Entity = undefined;
-                    var count: usize = 0;
+                    var entities_buf: std.ArrayList(Entity) = .{};
+                    defer entities_buf.deinit(allocator);
                     {
                         var view = self.active_world.ecs_backend.view(.{T}, .{});
                         while (view.next()) |ent| {
-                            if (count < buf.len) {
-                                buf[count] = ent;
-                                count += 1;
-                            }
+                            entities_buf.append(allocator, ent) catch break;
                         }
                         view.deinit();
                     }
-                    for (buf[0..count]) |ent| {
+                    for (entities_buf.items) |ent| {
                         inline for (markers) |Marker| {
                             if (!self.active_world.ecs_backend.hasComponent(ent, Marker)) {
                                 self.active_world.ecs_backend.addComponent(ent, Marker{});
