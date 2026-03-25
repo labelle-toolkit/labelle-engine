@@ -9,6 +9,7 @@ const core = @import("labelle-core");
 const serde = core.serde;
 
 const SAVE_VERSION: u32 = 2;
+const MAX_SAVE_SIZE = 256 * 1024 * 1024; // 256 MB
 
 pub fn Mixin(comptime Game: type) type {
     const Entity = Game.EntityType;
@@ -17,6 +18,18 @@ pub fn Mixin(comptime Game: type) type {
     return struct {
         fn entityToU64(entity: Entity) u64 {
             return @intCast(entity);
+        }
+
+        /// Collect entities from a view into an ArrayList, closing the view after.
+        fn collectEntities(comptime T: type, ecs: anytype, allocator: std.mem.Allocator) !std.ArrayList(Entity) {
+            var buf: std.ArrayList(Entity) = .{};
+            errdefer buf.deinit(allocator);
+            var view = ecs.view(.{T}, .{});
+            defer view.deinit();
+            while (view.next()) |ent| {
+                try buf.append(allocator, ent);
+            }
+            return buf;
         }
 
         // ─── Save ───────────────────────────────────────────────────
@@ -36,15 +49,15 @@ pub fn Mixin(comptime Game: type) type {
                 const T = Reg.getType(name);
                 if (comptime core.getSavePolicy(T)) |policy| {
                     if (policy == .saveable or policy == .marker) {
-                        var view = self.active_world.ecs_backend.view(.{T}, .{});
-                        while (view.next()) |entity| {
+                        var entities = try collectEntities(T, &self.active_world.ecs_backend, allocator);
+                        defer entities.deinit(allocator);
+                        for (entities.items) |entity| {
                             const id = entityToU64(entity);
                             if (!entity_set.contains(id)) {
                                 try entity_set.put(id, {});
                                 try entity_list.append(allocator, id);
                             }
                         }
-                        view.deinit();
                     }
                 }
             }
@@ -94,7 +107,6 @@ pub fn Mixin(comptime Game: type) type {
                             } else {
                                 try writer.writeAll(",");
                             }
-                            // Write individual fields (without outer braces)
                             try serde.writeRefArrayFields(T, comp, writer);
                         }
                     }
@@ -122,7 +134,7 @@ pub fn Mixin(comptime Game: type) type {
             const names = comptime Reg.names();
 
             const cwd = std.fs.cwd();
-            const json = try cwd.readFileAlloc(allocator, filename, 16 * 1024 * 1024);
+            const json = try cwd.readFileAlloc(allocator, filename, MAX_SAVE_SIZE);
             defer allocator.free(json);
 
             const parsed = try std.json.parseFromSlice(std.json.Value, allocator, json, .{});
@@ -178,7 +190,7 @@ pub fn Mixin(comptime Game: type) type {
                 }
             }
 
-            // Step 5: Restore ref arrays ([]const u64 slices)
+            // Step 4: Restore ref arrays ([]const u64 slices)
             const arena = self.active_world.nested_entity_arena.allocator();
 
             for (entities_json.items) |entry| {
@@ -200,7 +212,7 @@ pub fn Mixin(comptime Game: type) type {
                 }
             }
 
-            // Step 6: Register entities with scene
+            // Step 5: Register entities with scene
             for (entities_json.items) |entry| {
                 const obj = entry.object;
                 const saved_id: u64 = @intCast((obj.get("id") orelse continue).integer);
@@ -209,22 +221,15 @@ pub fn Mixin(comptime Game: type) type {
                 self.addEntityToActiveScene(entity);
             }
 
-            // Step 7: Post-load cleanup
+            // Step 6: Post-load cleanup
 
-            // 7a: Component-level postLoad hooks
+            // 6a: Component-level postLoad hooks
             inline for (names) |name| {
                 const T = Reg.getType(name);
                 if (comptime core.hasPostLoad(T)) {
-                    var entities_buf: std.ArrayList(Entity) = .{};
-                    defer entities_buf.deinit(allocator);
-                    {
-                        var view = self.active_world.ecs_backend.view(.{T}, .{});
-                        while (view.next()) |ent| {
-                            entities_buf.append(allocator, ent) catch break;
-                        }
-                        view.deinit();
-                    }
-                    for (entities_buf.items) |ent| {
+                    var entities = try collectEntities(T, &self.active_world.ecs_backend, allocator);
+                    defer entities.deinit(allocator);
+                    for (entities.items) |ent| {
                         if (self.active_world.ecs_backend.getComponent(ent, T)) |comp| {
                             comp.postLoad(self, ent);
                         }
@@ -232,21 +237,14 @@ pub fn Mixin(comptime Game: type) type {
                 }
             }
 
-            // 7b: post_load_add markers
+            // 6b: post_load_add markers
             inline for (names) |name| {
                 const T = Reg.getType(name);
                 const markers = comptime core.getPostLoadMarkers(T);
                 if (markers.len > 0) {
-                    var entities_buf: std.ArrayList(Entity) = .{};
-                    defer entities_buf.deinit(allocator);
-                    {
-                        var view = self.active_world.ecs_backend.view(.{T}, .{});
-                        while (view.next()) |ent| {
-                            entities_buf.append(allocator, ent) catch break;
-                        }
-                        view.deinit();
-                    }
-                    for (entities_buf.items) |ent| {
+                    var entities = try collectEntities(T, &self.active_world.ecs_backend, allocator);
+                    defer entities.deinit(allocator);
+                    for (entities.items) |ent| {
                         inline for (markers) |Marker| {
                             if (!self.active_world.ecs_backend.hasComponent(ent, Marker)) {
                                 self.active_world.ecs_backend.addComponent(ent, Marker{});
@@ -256,12 +254,13 @@ pub fn Mixin(comptime Game: type) type {
                 }
             }
 
-            // 7c: post_load_create entities
+            // 6c: post_load_create entities
             inline for (names) |name| {
                 const T = Reg.getType(name);
                 if (comptime core.getPostLoadCreate(T)) {
                     const ent = self.createEntity();
                     self.active_world.ecs_backend.addComponent(ent, T{});
+                    self.addEntityToActiveScene(ent);
                 }
             }
         }
