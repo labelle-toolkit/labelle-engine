@@ -37,15 +37,24 @@ pub fn Mixin(comptime Game: type) type {
                 self.current_scene_name = null;
             }
 
-            const entry = self.scenes.get(name) orelse return error.SceneNotFound;
-
             self.emitHook(.{ .scene_before_load = .{ .name = name, .allocator = self.allocator } });
-            try entry.loader_fn(self);
-            self.current_scene_name = self.allocator.dupe(u8, name) catch null;
-            self.emitHook(.{ .scene_load = .{ .name = name } });
 
-            if (entry.hooks.onLoad) |onLoad| {
-                onLoad(self);
+            if (self.scenes.get(name)) |entry| {
+                // Comptime-registered scene
+                try entry.loader_fn(self);
+                self.current_scene_name = self.allocator.dupe(u8, name) catch null;
+                self.emitHook(.{ .scene_load = .{ .name = name } });
+                if (entry.hooks.onLoad) |onLoad| {
+                    onLoad(self);
+                }
+            } else if (self.jsonc_scenes.get(name)) |_| {
+                // Runtime JSONC scene — loaded at runtime by the game loop
+                // The actual loading is deferred: the generated code or game code
+                // handles parsing the JSONC file and creating entities.
+                self.current_scene_name = self.allocator.dupe(u8, name) catch null;
+                self.emitHook(.{ .scene_load = .{ .name = name } });
+            } else {
+                return error.SceneNotFound;
             }
         }
 

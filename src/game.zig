@@ -96,6 +96,12 @@ pub fn GameConfig(
             hooks: SceneHooks,
         };
 
+        /// Runtime JSONC scene path info.
+        pub const JsoncSceneInfo = struct {
+            scene_path: []const u8,
+            prefab_dir: []const u8,
+        };
+
         pub const FrameCallback = *const fn (*Self, f32) void;
 
         /// A world bundles ECS, renderer, sprite cache, and arena.
@@ -137,6 +143,7 @@ pub fn GameConfig(
 
         // Scene management
         scenes: std.StringHashMap(SceneEntry),
+        jsonc_scenes: std.StringHashMap(JsoncSceneInfo),
         current_scene_name: ?[]const u8 = null,
         pending_scene_change: ?[]const u8 = null,
         pending_scene_atomic: bool = false,
@@ -191,6 +198,7 @@ pub fn GameConfig(
                 .worlds = std.StringHashMap(*World).init(allocator),
                 .atlas_manager = atlas_mod.TextureManager.init(allocator),
                 .scenes = std.StringHashMap(SceneEntry).init(allocator),
+                .jsonc_scenes = std.StringHashMap(JsoncSceneInfo).init(allocator),
                 .gizmo_state = gizmo_draws_mod.GizmoState(Entity).init(allocator),
             };
         }
@@ -220,6 +228,7 @@ pub fn GameConfig(
             self.allocator.destroy(self.active_world);
             self.gizmo_state.deinit(self.allocator);
             self.scenes.deinit();
+            self.jsonc_scenes.deinit();
             self.atlas_manager.deinit();
         }
 
@@ -478,6 +487,15 @@ pub fn GameConfig(
         pub const queueSceneChange = SceneMixin.queueSceneChange;
         pub const queueSceneChangeAtomic = SceneMixin.queueSceneChangeAtomic;
         pub const getCurrentSceneName = SceneMixin.getCurrentSceneName;
+
+        /// Register a runtime JSONC scene by name.
+        /// The scene file is loaded from disk when setScene() is called.
+        pub fn registerJsoncScene(self: *Self, name: []const u8, scene_path: []const u8, prefab_dir: []const u8) void {
+            self.jsonc_scenes.put(name, .{
+                .scene_path = scene_path,
+                .prefab_dir = prefab_dir,
+            }) catch {};
+        }
 
         // ── Save/Load (mixin) ───────────────────────────────────────
         pub const saveGameState = SaveLoadMixin.saveGameState;
