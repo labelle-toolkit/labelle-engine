@@ -283,7 +283,6 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
                             if (std.mem.eql(u8, field.name, field_name)) {
                                 if (field.type == []const u64) {
                                     @field(comp, field.name) = ids;
-                                    std.log.info("[JsoncBridge] patched {s}.{s} with {d} entity IDs on entity {d}", .{ cn, field_name, ids.len, @as(u64, @intCast(entity)) });
                                 }
                             }
                         }
@@ -326,7 +325,6 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
                     // Call postLoad if the component type has one (used by Workstation etc.)
                     if (@hasDecl(T, "postLoad")) {
                         if (game.ecs_backend.getComponent(entity, T)) |comp| {
-                            std.log.info("[JsoncBridge] calling postLoad for {s} on entity {d}", .{ comp_name, @as(u64, @intCast(entity)) });
                             comp.postLoad(game, entity);
                         }
                     }
