@@ -89,6 +89,10 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
         };
 
         fn loadEntity(game: *GameType, entity_val: Value, prefab_cache: *PrefabCache, depth: usize) !void {
+            return loadEntityWithOffset(game, entity_val, prefab_cache, depth, .{ .x = 0, .y = 0 });
+        }
+
+        fn loadEntityWithOffset(game: *GameType, entity_val: Value, prefab_cache: *PrefabCache, depth: usize, parent_offset: Position) !void {
             if (depth > MAX_DEPTH) return error.IncludeDepthExceeded;
             const entity_obj = entity_val.asObject() orelse return;
 
@@ -116,10 +120,8 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
             // Apply scene components (these override prefab defaults)
             if (scene_components) |sc| {
                 for (sc.entries) |entry| {
-                    applyComponent(game, entity, entry.key, entry.value);
+                    applyComponent(game, entity, entry.key, entry.value, parent_offset);
                     applied.put(entry.key, {}) catch {};
-                    // Spawn nested entity arrays found inside component values
-                    spawnNestedEntities(game, entity_val, entry.value, prefab_cache, depth);
                 }
             }
 
@@ -127,9 +129,24 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
             if (prefab_components) |pc| {
                 for (pc.entries) |entry| {
                     if (!applied.contains(entry.key)) {
-                        applyComponent(game, entity, entry.key, entry.value);
-                        // Spawn nested entity arrays from prefab components
-                        spawnNestedEntities(game, entity_val, entry.value, prefab_cache, depth);
+                        applyComponent(game, entity, entry.key, entry.value, parent_offset);
+                    }
+                }
+            }
+
+            // Get this entity's world position for offsetting nested children
+            const entity_pos = game.getPosition(entity);
+
+            // Spawn nested entity arrays from applied components (scene overrides first)
+            if (scene_components) |sc| {
+                for (sc.entries) |entry| {
+                    spawnNestedEntities(game, entry.value, entity_pos, prefab_cache, depth);
+                }
+            }
+            if (prefab_components) |pc| {
+                for (pc.entries) |entry| {
+                    if (!applied.contains(entry.key)) {
+                        spawnNestedEntities(game, entry.value, entity_pos, prefab_cache, depth);
                     }
                 }
             }
@@ -153,14 +170,13 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
         /// Scans object fields for arrays containing objects with "prefab" or "components" keys.
         /// This handles domain-specific patterns like Room.workstations, Room.movement_nodes,
         /// Workstation.storages, ShipCarcase.movement_nodes.
-        fn spawnNestedEntities(game: *GameType, parent_val: Value, comp_value: Value, prefab_cache: *PrefabCache, depth: usize) void {
-            _ = parent_val;
+        fn spawnNestedEntities(game: *GameType, comp_value: Value, parent_world_pos: Position, prefab_cache: *PrefabCache, depth: usize) void {
             const obj = comp_value.asObject() orelse return;
             for (obj.entries) |entry| {
                 if (entry.value.asArray()) |arr| {
                     for (arr.items) |item| {
                         if (isEntityLike(item)) {
-                            loadEntity(game, item, prefab_cache, depth + 1) catch {};
+                            loadEntityWithOffset(game, item, prefab_cache, depth + 1, parent_world_pos) catch {};
                         }
                     }
                 }
@@ -176,8 +192,8 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
         /// Apply a single named component to an entity.
         /// Handles visual components (Sprite, Shape) specially via renderer registration.
         /// Uses comptime dispatch over the Components registry for everything else.
-        fn applyComponent(game: *GameType, entity: Entity, name: []const u8, value: Value) void {
-            // Position — uses setPosition for renderer integration
+        fn applyComponent(game: *GameType, entity: Entity, name: []const u8, value: Value, parent_offset: Position) void {
+            // Position — uses setPosition, offset by parent position
             if (std.mem.eql(u8, name, "Position")) {
                 if (value.asObject()) |obj| {
                     var pos = Position{};
@@ -185,7 +201,7 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
                     if (obj.getFloat("x")) |x| pos.x = @floatCast(x);
                     if (obj.getInteger("y")) |y| pos.y = @floatFromInt(y);
                     if (obj.getFloat("y")) |y| pos.y = @floatCast(y);
-                    game.setPosition(entity, pos);
+                    game.setPosition(entity, .{ .x = parent_offset.x + pos.x, .y = parent_offset.y + pos.y });
                 }
                 return;
             }
