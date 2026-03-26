@@ -11,7 +11,7 @@ const core = @import("labelle-core");
 const Position = core.Position;
 
 /// Create a JSONC scene loader parameterized by game and component types.
-/// Returns a function that can be called to load a JSONC scene into the game.
+/// Components is a ComponentRegistry/ComponentRegistryWithPlugins type with has/getType/names.
 pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type {
     return struct {
         /// Load a JSONC scene file and instantiate all entities in the ECS.
@@ -133,7 +133,8 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
             }
 
             // Dispatch to registered components via comptime unrolled switch
-            inline for (Components.names()) |comp_name| {
+            const comp_names = comptime Components.names();
+            inline for (comp_names) |comp_name| {
                 if (std.mem.eql(u8, name, comp_name)) {
                     const T = Components.getType(comp_name);
                     if (jsonc.deserialize(T, value, game.allocator)) |component| {
