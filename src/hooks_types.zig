@@ -22,6 +22,10 @@ pub fn HookPayload(comptime Entity: type) type {
         scene_load: SceneInfo,
         scene_unload: SceneInfo,
 
+        // State lifecycle
+        state_before_change: StateChangeInfo,
+        state_after_change: StateChangeInfo,
+
         // Entity lifecycle
         entity_created: EntityInfo(Entity),
         entity_destroyed: EntityInfo(Entity),
@@ -44,6 +48,11 @@ pub const SceneBeforeLoadInfo = struct {
 
 pub const SceneInfo = struct {
     name: []const u8,
+};
+
+pub const StateChangeInfo = struct {
+    old_state: []const u8,
+    new_state: []const u8,
 };
 
 pub fn EntityInfo(comptime Entity: type) type {

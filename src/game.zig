@@ -24,6 +24,7 @@ const gui_mixin = @import("game/gui_mixin.zig");
 const gizmo_mixin = @import("game/gizmo_mixin.zig");
 const scene_mixin = @import("game/scene_mixin.zig");
 const save_load_mixin = @import("game/save_load_mixin.zig");
+const state_mixin = @import("game/state_mixin.zig");
 
 /// Full game configuration — the assembler fills ALL comptime slots.
 /// RenderImpl is a renderer plugin (e.g. gfx.GfxRenderer) satisfying RenderInterface.
@@ -82,6 +83,7 @@ pub fn GameConfig(
         const GizmoMixin = gizmo_mixin.Mixin(Self);
         const SceneMixin = scene_mixin.Mixin(Self);
         const SaveLoadMixin = save_load_mixin.Mixin(Self);
+        const StateMixin = state_mixin.Mixin(Self);
 
         /// Scene lifecycle hooks
         pub const SceneHooks = struct {
@@ -157,6 +159,11 @@ pub fn GameConfig(
         // Game state
         running: bool = true,
         frame_number: u64 = 0,
+        /// Current game state (e.g. "menu", "playing", "paused").
+        /// Set via setState() or queueStateChange(). Default is "running".
+        game_state: []const u8 = "running",
+        pending_state_change: ?[]const u8 = null,
+        state_change_count: usize = 0,
         /// Time scale factor: 0 = paused, 0.5 = slow-mo, 1.0 = normal, 2.0 = fast.
         /// When paused (0), rendering and GUI continue but tick logic stops.
         time_scale: f32 = 1.0,
@@ -476,6 +483,11 @@ pub fn GameConfig(
         pub const saveGameState = SaveLoadMixin.saveGameState;
         pub const loadGameState = SaveLoadMixin.loadGameState;
 
+        // ── Game State Machine (mixin) ──────────────────────────────
+        pub const setState = StateMixin.setState;
+        pub const queueStateChange = StateMixin.queueStateChange;
+        pub const getState = StateMixin.getState;
+
         pub fn unloadCurrentScene(self: *Self) void {
             if (self.current_scene_name) |name| {
                 self.emitHook(.{ .scene_unload = .{ .name = name } });
@@ -719,6 +731,13 @@ pub fn GameConfig(
             // Reconcile gizmos for runtime-created entities
             if (self.gizmo_reconcile_fn) |reconcile_fn| {
                 reconcile_fn(self);
+            }
+
+            // State changes must process even when paused (e.g. pause → menu).
+            // Clear pending BEFORE setState so hooks can re-queue without being overwritten.
+            if (self.pending_state_change) |new_state| {
+                self.pending_state_change = null;
+                self.setState(new_state);
             }
 
             // Scene changes must process even when paused (e.g. pause menu → new scene)
