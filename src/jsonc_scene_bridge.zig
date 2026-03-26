@@ -155,6 +155,9 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
                 }
             }
 
+            // Fire onReady for all applied components (after entity is fully assembled)
+            fireOnReadyAll(game, entity, scene_components, prefab_components, &applied);
+
             // Process prefab children
             if (prefab_children) |children| {
                 for (children.items) |child_val| {
@@ -284,6 +287,41 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
                             }
                         }
                     }
+                    return;
+                }
+            }
+        }
+
+        /// Fire onReady for all components that were applied to an entity.
+        fn fireOnReadyAll(
+            game: *GameType,
+            entity: Entity,
+            scene_components: ?Value.Object,
+            prefab_components: ?Value.Object,
+            applied: *std.StringHashMap(void),
+        ) void {
+            // Collect all component names that were applied
+            if (scene_components) |sc| {
+                for (sc.entries) |entry| {
+                    fireOnReadyByName(game, entity, entry.key);
+                }
+            }
+            if (prefab_components) |pc| {
+                for (pc.entries) |entry| {
+                    if (!applied.contains(entry.key)) {
+                        fireOnReadyByName(game, entity, entry.key);
+                    }
+                }
+            }
+        }
+
+        /// Fire onReady for a single component by name using comptime dispatch.
+        fn fireOnReadyByName(game: *GameType, entity: Entity, name: []const u8) void {
+            const comp_names = comptime Components.names();
+            inline for (comp_names) |comp_name| {
+                if (std.mem.eql(u8, name, comp_name)) {
+                    const T = Components.getType(comp_name);
+                    game.fireOnReady(entity, T);
                     return;
                 }
             }
