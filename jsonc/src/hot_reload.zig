@@ -61,8 +61,7 @@ pub const HotReloader = struct {
 
     /// Initial load. Must be called before polling.
     pub fn load(self: *HotReloader) !void {
-        try self.doReload();
-        try self.snapshotFileTimes();
+        try self.forceReload();
     }
 
     /// Force an immediate reload from disk (e.g., triggered by F5 keypress).
@@ -132,8 +131,11 @@ pub const HotReloader = struct {
         // Watch the scene file
         try self.watchFile(self.scene_path);
 
-        // Watch all prefab files in the directory
-        var dir = std.fs.cwd().openDir(self.prefab_dir, .{ .iterate = true }) catch return;
+        // Watch all prefab files in the directory (skip if dir doesn't exist)
+        var dir = std.fs.cwd().openDir(self.prefab_dir, .{ .iterate = true }) catch |err| {
+            if (err == error.FileNotFound) return;
+            return err;
+        };
         defer dir.close();
 
         var it = dir.iterate();
@@ -148,8 +150,9 @@ pub const HotReloader = struct {
 
     fn watchFile(self: *HotReloader, path: []const u8) !void {
         const mtime = getFileMtime(path) orelse return;
-        const owned_path = try self.allocator.dupe(u8, path);
-        try self.watched_files.put(owned_path, mtime);
+        if (self.watched_files.fetchPut(try self.allocator.dupe(u8, path), mtime) catch null) |old| {
+            self.allocator.free(old.key);
+        }
     }
 
     fn hasFileChanges(self: *HotReloader) !bool {
