@@ -119,15 +119,25 @@ fn deserializeUnion(comptime T: type, value: Value, allocator: Allocator) Deseri
 
 fn deserializeInt(comptime T: type, value: Value) DeserializeError!T {
     switch (value) {
-        .integer => |i| return @intCast(i),
-        .float => |f| return @intFromFloat(f),
+        .integer => |i| return std.math.cast(T, i) orelse return error.TypeMismatch,
+        .float => |f| {
+            if (f != f or f == std.math.inf(f64) or f == -std.math.inf(f64)) return error.TypeMismatch;
+            const truncated = @as(i64, @intFromFloat(f));
+            return std.math.cast(T, truncated) orelse return error.TypeMismatch;
+        },
         else => return error.TypeMismatch,
     }
 }
 
 fn deserializeFloat(comptime T: type, value: Value) DeserializeError!T {
     switch (value) {
-        .float => |f| return @floatCast(f),
+        .float => |f| {
+            if (T == f64) return f;
+            // Check f32 range
+            if (f != f) return @as(T, @floatCast(f)); // preserve NaN
+            if (f > std.math.floatMax(T) or f < -std.math.floatMax(T)) return error.TypeMismatch;
+            return @floatCast(f);
+        },
         .integer => |i| return @floatFromInt(i),
         else => return error.TypeMismatch,
     }

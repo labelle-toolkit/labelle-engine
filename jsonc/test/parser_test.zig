@@ -3,53 +3,71 @@ const expect = @import("zspec").expect;
 const jsonc = @import("jsonc");
 const JsoncParser = jsonc.JsoncParser;
 
-fn parse(input: []const u8) !jsonc.Value {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    // Note: arena is intentionally not deinitialized — tests are short-lived.
-    // In production, the caller owns the arena.
-    var p = JsoncParser.init(arena.allocator(), input);
+/// Test-scoped arena — each test gets its own, freed via `defer`.
+fn testArena() std.heap.ArenaAllocator {
+    return std.heap.ArenaAllocator.init(std.testing.allocator);
+}
+
+fn parseWith(allocator: std.mem.Allocator, input: []const u8) !jsonc.Value {
+    var p = JsoncParser.init(allocator, input);
     return p.parse();
 }
 
 pub const JsoncParserSpec = struct {
     pub const primitives = struct {
         test "parses integer" {
-            const val = try parse("42");
+            var arena = testArena();
+            defer arena.deinit();
+            const val = try parseWith(arena.allocator(), "42");
             try expect.equal(val.asInteger().?, 42);
         }
 
         test "parses negative integer" {
-            const val = try parse("-20");
+            var arena = testArena();
+            defer arena.deinit();
+            const val = try parseWith(arena.allocator(), "-20");
             try expect.equal(val.asInteger().?, -20);
         }
 
         test "parses float" {
-            const val = try parse("3.14");
+            var arena = testArena();
+            defer arena.deinit();
+            const val = try parseWith(arena.allocator(), "3.14");
             try expect.approx_eq(val.asFloat().?, 3.14, 0.001);
         }
 
         test "parses scientific notation" {
-            const val = try parse("1.5E-3");
+            var arena = testArena();
+            defer arena.deinit();
+            const val = try parseWith(arena.allocator(), "1.5E-3");
             try expect.approx_eq(val.asFloat().?, 0.0015, 0.0001);
         }
 
         test "parses true" {
-            const val = try parse("true");
+            var arena = testArena();
+            defer arena.deinit();
+            const val = try parseWith(arena.allocator(), "true");
             try expect.equal(val.asBool().?, true);
         }
 
         test "parses false" {
-            const val = try parse("false");
+            var arena = testArena();
+            defer arena.deinit();
+            const val = try parseWith(arena.allocator(), "false");
             try expect.equal(val.asBool().?, false);
         }
 
         test "parses null" {
-            const val = try parse("null");
+            var arena = testArena();
+            defer arena.deinit();
+            const val = try parseWith(arena.allocator(), "null");
             try expect.equal(@as(bool, val == .null_value), true);
         }
 
         test "parses string" {
-            const val = try parse(
+            var arena = testArena();
+            defer arena.deinit();
+            const val = try parseWith(arena.allocator(),
                 \\"hello world"
             );
             try expect.equal(val.asString().?, "hello world");
@@ -58,35 +76,45 @@ pub const JsoncParserSpec = struct {
 
     pub const strings = struct {
         test "handles newline escape" {
-            const val = try parse(
+            var arena = testArena();
+            defer arena.deinit();
+            const val = try parseWith(arena.allocator(),
                 \\"line1\nline2"
             );
             try expect.equal(val.asString().?, "line1\nline2");
         }
 
         test "handles tab escape" {
-            const val = try parse(
+            var arena = testArena();
+            defer arena.deinit();
+            const val = try parseWith(arena.allocator(),
                 \\"\t"
             );
             try expect.equal(val.asString().?, "\t");
         }
 
         test "handles backslash escape" {
-            const val = try parse(
+            var arena = testArena();
+            defer arena.deinit();
+            const val = try parseWith(arena.allocator(),
                 \\"\\"
             );
             try expect.equal(val.asString().?, "\\");
         }
 
         test "handles slash escape" {
-            const val = try parse(
+            var arena = testArena();
+            defer arena.deinit();
+            const val = try parseWith(arena.allocator(),
                 \\"a\/b"
             );
             try expect.equal(val.asString().?, "a/b");
         }
 
         test "handles backspace escape" {
-            const val = try parse(
+            var arena = testArena();
+            defer arena.deinit();
+            const val = try parseWith(arena.allocator(),
                 \\"\b"
             );
             const s = val.asString().?;
@@ -94,7 +122,9 @@ pub const JsoncParserSpec = struct {
         }
 
         test "handles form feed escape" {
-            const val = try parse(
+            var arena = testArena();
+            defer arena.deinit();
+            const val = try parseWith(arena.allocator(),
                 \\"\f"
             );
             const s = val.asString().?;
@@ -102,7 +132,7 @@ pub const JsoncParserSpec = struct {
         }
 
         test "rejects invalid escape" {
-            var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+            var arena = testArena();
             defer arena.deinit();
             var p = JsoncParser.init(arena.allocator(),
                 \\"\x"
@@ -111,7 +141,7 @@ pub const JsoncParserSpec = struct {
         }
 
         test "rejects unterminated string" {
-            var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+            var arena = testArena();
             defer arena.deinit();
             var p = JsoncParser.init(arena.allocator(),
                 \\"hello
@@ -122,12 +152,16 @@ pub const JsoncParserSpec = struct {
 
     pub const objects = struct {
         test "parses empty object" {
-            const val = try parse("{}");
+            var arena = testArena();
+            defer arena.deinit();
+            const val = try parseWith(arena.allocator(), "{}");
             try expect.equal(val.asObject().?.entries.len, 0);
         }
 
         test "parses object with string values" {
-            const val = try parse(
+            var arena = testArena();
+            defer arena.deinit();
+            const val = try parseWith(arena.allocator(),
                 \\{ "name": "main", "type": "scene" }
             );
             const obj = val.asObject().?;
@@ -136,7 +170,9 @@ pub const JsoncParserSpec = struct {
         }
 
         test "parses object with mixed types" {
-            const val = try parse(
+            var arena = testArena();
+            defer arena.deinit();
+            const val = try parseWith(arena.allocator(),
                 \\{ "name": "test", "x": 100, "scale": 0.5, "visible": true }
             );
             const obj = val.asObject().?;
@@ -147,7 +183,9 @@ pub const JsoncParserSpec = struct {
         }
 
         test "parses nested objects" {
-            const val = try parse(
+            var arena = testArena();
+            defer arena.deinit();
+            const val = try parseWith(arena.allocator(),
                 \\{ "pos": { "x": 10, "y": 20 } }
             );
             const pos = val.asObject().?.getObject("pos").?;
@@ -156,7 +194,9 @@ pub const JsoncParserSpec = struct {
         }
 
         test "supports trailing comma" {
-            const val = try parse(
+            var arena = testArena();
+            defer arena.deinit();
+            const val = try parseWith(arena.allocator(),
                 \\{ "a": 1, "b": 2, }
             );
             const obj = val.asObject().?;
@@ -165,7 +205,7 @@ pub const JsoncParserSpec = struct {
         }
 
         test "rejects missing comma between properties" {
-            var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+            var arena = testArena();
             defer arena.deinit();
             var p = JsoncParser.init(arena.allocator(),
                 \\{ "a": 1 "b": 2 }
@@ -174,7 +214,7 @@ pub const JsoncParserSpec = struct {
         }
 
         test "rejects missing colon" {
-            var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+            var arena = testArena();
             defer arena.deinit();
             var p = JsoncParser.init(arena.allocator(),
                 \\{ "a" 1 }
@@ -185,12 +225,16 @@ pub const JsoncParserSpec = struct {
 
     pub const arrays = struct {
         test "parses empty array" {
-            const val = try parse("[]");
+            var arena = testArena();
+            defer arena.deinit();
+            const val = try parseWith(arena.allocator(), "[]");
             try expect.equal(val.asArray().?.items.len, 0);
         }
 
         test "parses array of integers" {
-            const val = try parse("[1, 2, 3]");
+            var arena = testArena();
+            defer arena.deinit();
+            const val = try parseWith(arena.allocator(), "[1, 2, 3]");
             const arr = val.asArray().?;
             try expect.equal(arr.len(), 3);
             try expect.equal(arr.items[0].asInteger().?, 1);
@@ -198,7 +242,9 @@ pub const JsoncParserSpec = struct {
         }
 
         test "parses array of strings" {
-            const val = try parse(
+            var arena = testArena();
+            defer arena.deinit();
+            const val = try parseWith(arena.allocator(),
                 \\["physics", "camera", "save"]
             );
             const arr = val.asArray().?;
@@ -207,7 +253,9 @@ pub const JsoncParserSpec = struct {
         }
 
         test "parses array of objects" {
-            const val = try parse(
+            var arena = testArena();
+            defer arena.deinit();
+            const val = try parseWith(arena.allocator(),
                 \\[{ "x": 1 }, { "x": 2 }]
             );
             const arr = val.asArray().?;
@@ -216,12 +264,14 @@ pub const JsoncParserSpec = struct {
         }
 
         test "supports trailing comma" {
-            const val = try parse("[1, 2, 3,]");
+            var arena = testArena();
+            defer arena.deinit();
+            const val = try parseWith(arena.allocator(), "[1, 2, 3,]");
             try expect.equal(val.asArray().?.len(), 3);
         }
 
         test "rejects missing comma between elements" {
-            var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+            var arena = testArena();
             defer arena.deinit();
             var p = JsoncParser.init(arena.allocator(), "[1 2]");
             try expect.err(jsonc.ParseError, p.parse(), error.UnexpectedCharacter);
@@ -230,7 +280,9 @@ pub const JsoncParserSpec = struct {
 
     pub const comments = struct {
         test "skips line comments" {
-            const val = try parse(
+            var arena = testArena();
+            defer arena.deinit();
+            const val = try parseWith(arena.allocator(),
                 \\{
                 \\    // This is a comment
                 \\    "x": 10
@@ -240,7 +292,9 @@ pub const JsoncParserSpec = struct {
         }
 
         test "skips block comments" {
-            const val = try parse(
+            var arena = testArena();
+            defer arena.deinit();
+            const val = try parseWith(arena.allocator(),
                 \\{
                 \\    /* multi
                 \\       line */
@@ -251,7 +305,9 @@ pub const JsoncParserSpec = struct {
         }
 
         test "skips inline comments between values" {
-            const val = try parse(
+            var arena = testArena();
+            defer arena.deinit();
+            const val = try parseWith(arena.allocator(),
                 \\{
                 \\    "a": 1, // first
                 \\    "b": 2  // second
@@ -265,7 +321,9 @@ pub const JsoncParserSpec = struct {
 
     pub const scenes = struct {
         test "parses full scene structure" {
-            const val = try parse(
+            var arena = testArena();
+            defer arena.deinit();
+            const val = try parseWith(arena.allocator(),
                 \\{
                 \\    "name": "main",
                 \\    "camera": { "x": 400, "y": 300 },
@@ -287,7 +345,9 @@ pub const JsoncParserSpec = struct {
         }
 
         test "parses prefab with children" {
-            const val = try parse(
+            var arena = testArena();
+            defer arena.deinit();
+            const val = try parseWith(arena.allocator(),
                 \\{
                 \\    "components": {
                 \\        "Room": {},
@@ -311,7 +371,9 @@ pub const JsoncParserSpec = struct {
         }
 
         test "parses scene with includes" {
-            const val = try parse(
+            var arena = testArena();
+            defer arena.deinit();
+            const val = try parseWith(arena.allocator(),
                 \\{
                 \\    "name": "main",
                 \\    "include": ["scenes/floor1.json", "scenes/floor2.json"],
@@ -327,14 +389,12 @@ pub const JsoncParserSpec = struct {
 
     pub const location = struct {
         test "reports correct line and column" {
-            var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+            var arena = testArena();
             defer arena.deinit();
             var p = JsoncParser.init(arena.allocator(), "{\n  \"x\": }");
-            // Parse until error
             const result = p.parse();
             try expect.err(jsonc.ParseError, result, error.UnexpectedCharacter);
 
-            // After error, location should point near the problem
             const loc = p.getLocation();
             try expect.equal(loc.line, 2);
         }

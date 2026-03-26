@@ -7,11 +7,14 @@ const JsoncParser = jsonc.JsoncParser;
 const ComponentRegistry = jsonc.ComponentRegistry;
 const component = jsonc.component;
 
-fn parseAndDeserialize(comptime T: type, input: []const u8) !T {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    var p = JsoncParser.init(arena.allocator(), input);
+fn parseAndDeserialize(comptime T: type, allocator: std.mem.Allocator, input: []const u8) !T {
+    var p = JsoncParser.init(allocator, input);
     const val = try p.parse();
-    return deserialize(T, val, arena.allocator());
+    return deserialize(T, val, allocator);
+}
+
+fn testArena() std.heap.ArenaAllocator {
+    return std.heap.ArenaAllocator.init(std.testing.allocator);
 }
 
 // ── Test types ──
@@ -36,7 +39,9 @@ const OptionalName = struct { name: ?[]const u8 = null, x: i32 = 0 };
 pub const DeserializeSpec = struct {
     pub const structs = struct {
         test "deserializes struct with all fields" {
-            const pos = try parseAndDeserialize(Position,
+            var arena = testArena();
+            defer arena.deinit();
+            const pos = try parseAndDeserialize(Position, arena.allocator(),
                 \\{ "x": 50, "y": 100 }
             );
             try expect.equal(pos.x, 50);
@@ -44,7 +49,9 @@ pub const DeserializeSpec = struct {
         }
 
         test "uses defaults for missing fields" {
-            const pos = try parseAndDeserialize(Position,
+            var arena = testArena();
+            defer arena.deinit();
+            const pos = try parseAndDeserialize(Position, arena.allocator(),
                 \\{ "x": 42 }
             );
             try expect.equal(pos.x, 42);
@@ -52,11 +59,15 @@ pub const DeserializeSpec = struct {
         }
 
         test "deserializes empty struct (marker component)" {
-            _ = try parseAndDeserialize(Worker, "{}");
+            var arena = testArena();
+            defer arena.deinit();
+            _ = try parseAndDeserialize(Worker, arena.allocator(), "{}");
         }
 
         test "deserializes nested structs" {
-            const shape = try parseAndDeserialize(Shape,
+            var arena = testArena();
+            defer arena.deinit();
+            const shape = try parseAndDeserialize(Shape, arena.allocator(),
                 \\{ "shape": { "circle": { "radius": 30 } }, "color": { "r": 255, "g": 100, "b": 100 } }
             );
             try expect.equal(shape.color.r, 255);
@@ -64,7 +75,7 @@ pub const DeserializeSpec = struct {
         }
 
         test "returns error for non-object value" {
-            var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+            var arena = testArena();
             defer arena.deinit();
             const val = Value{ .integer = 42 };
             try expect.err(
@@ -77,14 +88,16 @@ pub const DeserializeSpec = struct {
 
     pub const enums = struct {
         test "deserializes enum from string (JSONC)" {
-            const rb = try parseAndDeserialize(RigidBody,
+            var arena = testArena();
+            defer arena.deinit();
+            const rb = try parseAndDeserialize(RigidBody, arena.allocator(),
                 \\{ "body_type": "dynamic" }
             );
             try expect.equal(rb.body_type, BodyType.dynamic);
         }
 
         test "returns error for unknown enum value" {
-            var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+            var arena = testArena();
             defer arena.deinit();
             var p = JsoncParser.init(arena.allocator(),
                 \\{ "body_type": "flying" }
@@ -100,7 +113,9 @@ pub const DeserializeSpec = struct {
 
     pub const unions = struct {
         test "deserializes tagged union (circle)" {
-            const shape = try parseAndDeserialize(ShapeKind,
+            var arena = testArena();
+            defer arena.deinit();
+            const shape = try parseAndDeserialize(ShapeKind, arena.allocator(),
                 \\{ "circle": { "radius": 30 } }
             );
             switch (shape) {
@@ -110,7 +125,9 @@ pub const DeserializeSpec = struct {
         }
 
         test "deserializes tagged union (rectangle)" {
-            const shape = try parseAndDeserialize(ShapeKind,
+            var arena = testArena();
+            defer arena.deinit();
+            const shape = try parseAndDeserialize(ShapeKind, arena.allocator(),
                 \\{ "rectangle": { "width": 780, "height": 20 } }
             );
             switch (shape) {
@@ -123,7 +140,7 @@ pub const DeserializeSpec = struct {
         }
 
         test "returns error for unknown union field" {
-            var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+            var arena = testArena();
             defer arena.deinit();
             var p = JsoncParser.init(arena.allocator(),
                 \\{ "triangle": { "base": 10 } }
@@ -139,8 +156,9 @@ pub const DeserializeSpec = struct {
 
     pub const coercion = struct {
         test "integer to float coercion" {
-            // JSON "30" is integer, but radius is f32
-            const shape = try parseAndDeserialize(ShapeKind,
+            var arena = testArena();
+            defer arena.deinit();
+            const shape = try parseAndDeserialize(ShapeKind, arena.allocator(),
                 \\{ "circle": { "radius": 30 } }
             );
             switch (shape) {
@@ -150,7 +168,9 @@ pub const DeserializeSpec = struct {
         }
 
         test "float to integer coercion" {
-            const pos = try parseAndDeserialize(Position,
+            var arena = testArena();
+            defer arena.deinit();
+            const pos = try parseAndDeserialize(Position, arena.allocator(),
                 \\{ "x": 10.0, "y": 20.0 }
             );
             try expect.equal(pos.x, 10);
@@ -160,7 +180,9 @@ pub const DeserializeSpec = struct {
 
     pub const optionals = struct {
         test "deserializes null as null optional" {
-            const val = try parseAndDeserialize(OptionalName,
+            var arena = testArena();
+            defer arena.deinit();
+            const val = try parseAndDeserialize(OptionalName, arena.allocator(),
                 \\{ "name": null, "x": 5 }
             );
             try expect.to_be_null(val.name);
@@ -168,14 +190,18 @@ pub const DeserializeSpec = struct {
         }
 
         test "deserializes present optional" {
-            const val = try parseAndDeserialize(OptionalName,
+            var arena = testArena();
+            defer arena.deinit();
+            const val = try parseAndDeserialize(OptionalName, arena.allocator(),
                 \\{ "name": "player", "x": 10 }
             );
             try expect.equal(val.name.?, "player");
         }
 
         test "uses default null for missing optional" {
-            const val = try parseAndDeserialize(OptionalName,
+            var arena = testArena();
+            defer arena.deinit();
+            const val = try parseAndDeserialize(OptionalName, arena.allocator(),
                 \\{ "x": 7 }
             );
             try expect.to_be_null(val.name);
@@ -185,7 +211,9 @@ pub const DeserializeSpec = struct {
 
     pub const booleans = struct {
         test "deserializes bool fields" {
-            const storage = try parseAndDeserialize(Storage,
+            var arena = testArena();
+            defer arena.deinit();
+            const storage = try parseAndDeserialize(Storage, arena.allocator(),
                 \\{ "accepted_items": { "Water": true } }
             );
             try expect.equal(storage.accepted_items.Water, true);
@@ -195,7 +223,9 @@ pub const DeserializeSpec = struct {
 
     pub const floats = struct {
         test "deserializes float fields" {
-            const col = try parseAndDeserialize(Collider,
+            var arena = testArena();
+            defer arena.deinit();
+            const col = try parseAndDeserialize(Collider, arena.allocator(),
                 \\{ "shape": { "circle": { "radius": 30 } }, "restitution": 0.9, "friction": 0.1 }
             );
             try expect.approx_eq(col.restitution, 0.9, 0.001);
@@ -205,7 +235,9 @@ pub const DeserializeSpec = struct {
 
     pub const negative_integers = struct {
         test "deserializes negative integers" {
-            const pos = try parseAndDeserialize(Position,
+            var arena = testArena();
+            defer arena.deinit();
+            const pos = try parseAndDeserialize(Position, arena.allocator(),
                 \\{ "x": -20, "y": 0 }
             );
             try expect.equal(pos.x, -20);
@@ -214,8 +246,10 @@ pub const DeserializeSpec = struct {
 
     pub const slices = struct {
         test "deserializes slice of strings" {
+            var arena = testArena();
+            defer arena.deinit();
             const Scripts = struct { names: []const []const u8 = &.{} };
-            const val = try parseAndDeserialize(Scripts,
+            const val = try parseAndDeserialize(Scripts, arena.allocator(),
                 \\{ "names": ["physics", "camera", "save"] }
             );
             try expect.equal(val.names.len, 3);
@@ -224,8 +258,10 @@ pub const DeserializeSpec = struct {
         }
 
         test "deserializes slice of structs" {
+            var arena = testArena();
+            defer arena.deinit();
             const Positions = struct { items: []const Position = &.{} };
-            const val = try parseAndDeserialize(Positions,
+            const val = try parseAndDeserialize(Positions, arena.allocator(),
                 \\{ "items": [{ "x": 1, "y": 2 }, { "x": 3, "y": 4 }] }
             );
             try expect.equal(val.items.len, 2);
