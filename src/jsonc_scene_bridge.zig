@@ -110,7 +110,6 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
             const entity = game.createEntity();
 
             // Build merged component map: prefab defaults, then scene overrides
-            // We track which components have been applied to handle overrides
             var applied = std.StringHashMap(void).init(game.allocator);
             defer applied.deinit();
 
@@ -119,6 +118,8 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
                 for (sc.entries) |entry| {
                     applyComponent(game, entity, entry.key, entry.value);
                     applied.put(entry.key, {}) catch {};
+                    // Spawn nested entity arrays found inside component values
+                    try spawnNestedEntities(game, entity_val, entry.value, prefab_cache, depth);
                 }
             }
 
@@ -127,6 +128,8 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
                 for (pc.entries) |entry| {
                     if (!applied.contains(entry.key)) {
                         applyComponent(game, entity, entry.key, entry.value);
+                        // Spawn nested entity arrays from prefab components
+                        try spawnNestedEntities(game, entity_val, entry.value, prefab_cache, depth);
                     }
                 }
             }
@@ -144,6 +147,30 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
                     try loadEntity(game, child_val, prefab_cache, depth + 1);
                 }
             }
+        }
+
+        /// Detect and spawn entity-like objects nested inside component values.
+        /// Scans object fields for arrays containing objects with "prefab" or "components" keys.
+        /// This handles domain-specific patterns like Room.workstations, Room.movement_nodes,
+        /// Workstation.storages, ShipCarcase.movement_nodes.
+        fn spawnNestedEntities(game: *GameType, parent_val: Value, comp_value: Value, prefab_cache: *PrefabCache, depth: usize) !void {
+            _ = parent_val;
+            const obj = comp_value.asObject() orelse return;
+            for (obj.entries) |entry| {
+                if (entry.value.asArray()) |arr| {
+                    for (arr.items) |item| {
+                        if (isEntityLike(item)) {
+                            try loadEntity(game, item, prefab_cache, depth + 1);
+                        }
+                    }
+                }
+            }
+        }
+
+        /// Check if a Value looks like an entity definition (has "prefab" or "components" key).
+        fn isEntityLike(value: Value) bool {
+            const obj = value.asObject() orelse return false;
+            return obj.getString("prefab") != null or obj.getObject("components") != null;
         }
 
         /// Apply a single named component to an entity.
