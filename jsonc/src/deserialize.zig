@@ -53,6 +53,11 @@ fn deserializeInner(comptime T: type, value: Value, allocator: Allocator) Deseri
 }
 
 fn deserializeStruct(comptime T: type, value: Value, allocator: Allocator) DeserializeError!T {
+    // Detect std.EnumSet — has `Key` decl that is an enum type and `initMany` method
+    if (@hasDecl(T, "Key") and @typeInfo(T.Key) == .@"enum" and @hasDecl(T, "initMany")) {
+        return deserializeEnumSet(T, value);
+    }
+
     const obj = switch (value) {
         .object => |o| o,
         else => return error.TypeMismatch,
@@ -69,6 +74,31 @@ fn deserializeStruct(comptime T: type, value: Value, allocator: Allocator) Deser
             @field(result, field.name) = ptr.*;
         } else {
             return error.MissingRequiredField;
+        }
+    }
+
+    return result;
+}
+
+/// Deserialize a std.EnumSet from { "VariantA": true, "VariantB": true } object.
+fn deserializeEnumSet(comptime T: type, value: Value) DeserializeError!T {
+    const obj = switch (value) {
+        .object => |o| o,
+        else => return error.TypeMismatch,
+    };
+
+    var result = T{};
+    const Key = T.Key;
+    const enum_fields = @typeInfo(Key).@"enum".fields;
+
+    for (obj.entries) |entry| {
+        const is_set = if (entry.value.asBool()) |b| b else true;
+        if (!is_set) continue;
+
+        inline for (enum_fields) |ef| {
+            if (std.mem.eql(u8, entry.key, ef.name)) {
+                result.insert(@enumFromInt(ef.value));
+            }
         }
     }
 
