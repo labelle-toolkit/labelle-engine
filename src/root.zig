@@ -131,6 +131,9 @@ pub const RuntimeAtlas = atlas_mod.RuntimeAtlas;
 pub const TextureManager = atlas_mod.TextureManager;
 pub const SpriteCache = atlas_mod.SpriteCache;
 
+// ── JSONC Scene Bridge ──
+pub const JsoncSceneBridge = @import("jsonc_scene_bridge.zig").JsoncSceneBridge;
+
 // ── Scene Value, JSONC Parser & Deserializer ──
 pub const SceneValue = jsonc_mod.Value;
 pub const JsoncParser = jsonc_mod.JsoncParser;
