@@ -106,6 +106,8 @@ pub const JsoncParser = struct {
 
             if (self.pos < self.source.len and self.source[self.pos] == ',') {
                 self.pos += 1;
+            } else if (self.pos < self.source.len and self.source[self.pos] != '}') {
+                return error.UnexpectedCharacter;
             }
         }
     }
@@ -139,6 +141,8 @@ pub const JsoncParser = struct {
 
             if (self.pos < self.source.len and self.source[self.pos] == ',') {
                 self.pos += 1;
+            } else if (self.pos < self.source.len and self.source[self.pos] != ']') {
+                return error.UnexpectedCharacter;
             }
         }
     }
@@ -162,6 +166,8 @@ pub const JsoncParser = struct {
                     'n' => try result.append(self.allocator, '\n'),
                     't' => try result.append(self.allocator, '\t'),
                     'r' => try result.append(self.allocator, '\r'),
+                    'b' => try result.append(self.allocator, 0x08),
+                    'f' => try result.append(self.allocator, 0x0C),
                     '\\' => try result.append(self.allocator, '\\'),
                     '"' => try result.append(self.allocator, '"'),
                     '/' => try result.append(self.allocator, '/'),
