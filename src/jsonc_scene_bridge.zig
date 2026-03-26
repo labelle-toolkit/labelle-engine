@@ -160,19 +160,91 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
             // Fire onReady for all applied components (after entity is fully assembled)
             fireOnReadyAll(game, entity, scene_components, prefab_components, &applied);
 
-            // Process prefab children
+            // Process prefab children (full parent-child relationship)
             if (prefab_children) |children| {
                 for (children.items) |child_val| {
-                    try loadEntity(game, child_val, prefab_cache, depth + 1);
+                    const child = try spawnChildEntity(game, child_val, prefab_cache, depth + 1, entity_pos);
+                    game.setParent(child, entity, .{});
                 }
             }
 
-            // Process entity-level children
+            // Process entity-level children (full parent-child relationship)
             if (entity_obj.getArray("children")) |children| {
                 for (children.items) |child_val| {
-                    try loadEntity(game, child_val, prefab_cache, depth + 1);
+                    const child = try spawnChildEntity(game, child_val, prefab_cache, depth + 1, entity_pos);
+                    game.setParent(child, entity, .{});
                 }
             }
+        }
+
+        /// Spawn a child entity and return its ID. Uses loadEntityWithOffset internally.
+        fn spawnChildEntity(game: *GameType, entity_val: Value, prefab_cache: *PrefabCache, depth: usize, parent_pos: Position) LoadEntityError!Entity {
+            // We need to create the entity ourselves to return its ID
+            const entity_obj = entity_val.asObject() orelse return error.OutOfMemory;
+
+            var child_prefab_comps: ?Value.Object = null;
+            var child_prefab_children: ?Value.Array = null;
+            if (entity_obj.getString("prefab")) |pname| {
+                if (prefab_cache.get(pname)) |pval| {
+                    if (pval.asObject()) |pobj| {
+                        child_prefab_comps = pobj.getObject("components");
+                        child_prefab_children = pobj.getArray("children");
+                    }
+                }
+            }
+
+            const child_scene_comps = entity_obj.getObject("components");
+            const child = game.createEntity();
+
+            var applied = std.StringHashMap(void).init(game.allocator);
+            defer applied.deinit();
+
+            if (child_scene_comps) |sc| {
+                for (sc.entries) |entry| {
+                    applyComponent(game, child, entry.key, entry.value, parent_pos);
+                    applied.put(entry.key, {}) catch {};
+                }
+            }
+            if (child_prefab_comps) |pc| {
+                for (pc.entries) |entry| {
+                    if (!applied.contains(entry.key)) {
+                        applyComponent(game, child, entry.key, entry.value, parent_pos);
+                    }
+                }
+            }
+
+            const child_pos = game.getPosition(child);
+
+            if (child_scene_comps) |sc| {
+                for (sc.entries) |entry| {
+                    spawnAndLinkNestedEntities(game, child, entry.key, entry.value, child_pos, prefab_cache, depth);
+                }
+            }
+            if (child_prefab_comps) |pc| {
+                for (pc.entries) |entry| {
+                    if (!applied.contains(entry.key)) {
+                        spawnAndLinkNestedEntities(game, child, entry.key, entry.value, child_pos, prefab_cache, depth);
+                    }
+                }
+            }
+
+            fireOnReadyAll(game, child, child_scene_comps, child_prefab_comps, &applied);
+
+            // Recursive children with parent relationship
+            if (child_prefab_children) |children| {
+                for (children.items) |cv| {
+                    const grandchild = spawnChildEntity(game, cv, prefab_cache, depth + 1, child_pos) catch continue;
+                    game.setParent(grandchild, child, .{});
+                }
+            }
+            if (entity_obj.getArray("children")) |children| {
+                for (children.items) |cv| {
+                    const grandchild = spawnChildEntity(game, cv, prefab_cache, depth + 1, child_pos) catch continue;
+                    game.setParent(grandchild, child, .{});
+                }
+            }
+
+            return child;
         }
 
         /// Spawn entity-like objects nested inside a component's fields, collect their
@@ -269,6 +341,20 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
 
                 // Patch the entity ID array back into the parent component
                 patchEntityIdField(game, parent_entity, comp_name, entry.key, ids);
+
+                // Register nested entities as children for cascade destruction.
+                // Don't use setParent — positions are already world coords.
+                const ChildrenComp = core.ChildrenComponent(Entity);
+                for (ids) |child_id| {
+                    const child_entity: Entity = @intCast(child_id);
+                    if (game.ecs_backend.getComponent(parent_entity, ChildrenComp)) |children_comp| {
+                        children_comp.addChild(child_entity);
+                    } else {
+                        var new_children = ChildrenComp{};
+                        new_children.addChild(child_entity);
+                        game.ecs_backend.addComponent(parent_entity, new_children);
+                    }
+                }
             }
         }
 
