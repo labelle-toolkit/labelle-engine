@@ -733,10 +733,11 @@ pub fn GameConfig(
                 reconcile_fn(self);
             }
 
-            // State changes must process even when paused (e.g. pause → menu)
+            // State changes must process even when paused (e.g. pause → menu).
+            // Clear pending BEFORE setState so hooks can re-queue without being overwritten.
             if (self.pending_state_change) |new_state| {
-                self.setState(new_state);
                 self.pending_state_change = null;
+                self.setState(new_state);
             }
 
             // Scene changes must process even when paused (e.g. pause menu → new scene)
