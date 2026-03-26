@@ -133,6 +133,7 @@ pub const SpriteCache = atlas_mod.SpriteCache;
 
 // ── JSONC Scene Bridge ──
 pub const JsoncSceneBridge = @import("jsonc_scene_bridge.zig").JsoncSceneBridge;
+pub const JsoncSceneBridgeWithGizmos = @import("jsonc_scene_bridge.zig").JsoncSceneBridgeWithGizmos;
 
 // ── Scene Value, JSONC Parser & Deserializer ──
 pub const SceneValue = jsonc_mod.Value;
