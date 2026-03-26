@@ -59,35 +59,7 @@ const TestPrefabs = PrefabRegistry(.{
     },
 });
 
-// Test script module
-const test_script = struct {
-    var init_called: bool = false;
-    var update_count: u32 = 0;
-    var deinit_called: bool = false;
-
-    pub fn init(_: *anyopaque, _: *anyopaque) void {
-        init_called = true;
-    }
-    pub fn update(_: *anyopaque, _: *anyopaque, _: f32) void {
-        update_count += 1;
-    }
-    pub fn deinit(_: *anyopaque, _: *anyopaque) void {
-        deinit_called = true;
-    }
-
-    fn reset() void {
-        init_called = false;
-        update_count = 0;
-        deinit_called = false;
-    }
-};
-
-const TestScripts = ScriptRegistry(struct {
-    pub const movement = test_script;
-});
-
 const TestGame = game_mod.Game;
-const TestLoader = SceneLoader(TestGame, TestPrefabs, TestComponents, TestScripts);
 const SimpleTestLoader = SimpleSceneLoader(TestGame, TestPrefabs, TestComponents);
 const TestScene = Scene(TestGame.EntityType);
 
