@@ -88,13 +88,15 @@ pub const PrefabCache = struct {
         if (self.prefabs.get(name)) |val| return val;
 
         const path = try std.fmt.allocPrint(self.allocator, "{s}/{s}.jsonc", .{ self.prefab_dir, name });
-        const file = std.fs.cwd().openFile(path, .{}) catch {
-            self.allocator.free(path);
-            return null;
+        defer self.allocator.free(path);
+        const file = std.fs.cwd().openFile(path, .{}) catch |err| {
+            if (err == error.FileNotFound) return null;
+            return error.FileNotFound; // propagate as LoadError
         };
         defer file.close();
 
         const source = try file.readToEndAlloc(self.allocator, 1024 * 1024);
+        defer self.allocator.free(source);
         var p = jsonc_parser.JsoncParser.init(self.allocator, source);
         const val = try p.parse();
 
@@ -125,16 +127,12 @@ pub fn loadScene(allocator: Allocator, scene_path: []const u8, prefab_dir: []con
     const file = try std.fs.cwd().openFile(scene_path, .{});
     defer file.close();
     const source = try file.readToEndAlloc(allocator, 1024 * 1024);
+    defer allocator.free(source);
     var p = jsonc_parser.JsoncParser.init(allocator, source);
     const scene_value = try p.parse();
 
     // Resolve base_dir from scene_path for relative includes
-    const base_dir = blk: {
-        if (std.mem.lastIndexOfScalar(u8, scene_path, '/')) |idx| {
-            break :blk scene_path[0..idx];
-        }
-        break :blk ".";
-    };
+    const base_dir = std.fs.path.dirname(scene_path) orelse ".";
 
     return loadSceneFromValue(allocator, scene_value, prefab_dir, base_dir);
 }
@@ -167,6 +165,7 @@ pub fn loadSceneInner(
     var scripts: []const []const u8 = &.{};
     if (scene_obj.getArray("scripts")) |scripts_arr| {
         var script_list: std.ArrayList([]const u8) = .{};
+        errdefer script_list.deinit(allocator);
         for (scripts_arr.items) |item| {
             if (item.asString()) |s| {
                 try script_list.append(allocator, s);
@@ -188,6 +187,7 @@ pub fn loadSceneInner(
     }
 
     var entities: std.ArrayList(Entity) = .{};
+    errdefer entities.deinit(allocator);
 
     // Process includes first — included entities come before local entities
     if (scene_obj.getArray("include")) |include_arr| {
@@ -236,18 +236,15 @@ fn loadInclude(
     const file = std.fs.cwd().openFile(path, .{}) catch |err| return err;
     defer file.close();
     const source = try file.readToEndAlloc(allocator, 1024 * 1024);
+    defer allocator.free(source);
     var p = jsonc_parser.JsoncParser.init(allocator, source);
     const val = try p.parse();
     const obj = val.asObject() orelse return error.InvalidScene;
 
-    const inc_base_dir = blk: {
-        if (std.mem.lastIndexOfScalar(u8, path, '/')) |idx| {
-            break :blk path[0..idx];
-        }
-        break :blk ".";
-    };
+    const inc_base_dir = std.fs.path.dirname(path) orelse ".";
 
     var entities: std.ArrayList(Entity) = .{};
+    errdefer entities.deinit(allocator);
 
     // Nested includes
     if (obj.getArray("include")) |include_arr| {
@@ -306,6 +303,7 @@ fn loadEntityInner(allocator: Allocator, entity_val: Value, prefab_cache: *Prefa
 
     // Merge components: prefab first, scene overrides
     var merged: std.ArrayList(Entity.ComponentData) = .{};
+    errdefer merged.deinit(allocator);
 
     if (prefab_components) |pc| {
         for (pc.entries) |entry| {
@@ -331,6 +329,7 @@ fn loadEntityInner(allocator: Allocator, entity_val: Value, prefab_cache: *Prefa
 
     // Collect children: from prefab + from entity definition
     var children: std.ArrayList(Entity) = .{};
+    errdefer children.deinit(allocator);
 
     // Prefab children
     if (prefab_children) |pc| {
