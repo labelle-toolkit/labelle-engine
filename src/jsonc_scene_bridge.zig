@@ -139,16 +139,18 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
             // Get this entity's world position for offsetting nested children
             const entity_pos = game.getPosition(entity);
 
-            // Spawn nested entity arrays from applied components (scene overrides first)
+            // Spawn nested entity arrays and collect IDs to patch back into components.
+            // Components like Room, Workstation, ShipCarcase have []const u64 fields
+            // (workstations, storages, movement_nodes) that hold spawned entity IDs.
             if (scene_components) |sc| {
                 for (sc.entries) |entry| {
-                    spawnNestedEntities(game, entry.value, entity_pos, prefab_cache, depth);
+                    spawnAndLinkNestedEntities(game, entity, entry.key, entry.value, entity_pos, prefab_cache, depth);
                 }
             }
             if (prefab_components) |pc| {
                 for (pc.entries) |entry| {
                     if (!applied.contains(entry.key)) {
-                        spawnNestedEntities(game, entry.value, entity_pos, prefab_cache, depth);
+                        spawnAndLinkNestedEntities(game, entity, entry.key, entry.value, entity_pos, prefab_cache, depth);
                     }
                 }
             }
@@ -168,19 +170,121 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
             }
         }
 
-        /// Detect and spawn entity-like objects nested inside component values.
-        /// Scans object fields for arrays containing objects with "prefab" or "components" keys.
-        /// This handles domain-specific patterns like Room.workstations, Room.movement_nodes,
-        /// Workstation.storages, ShipCarcase.movement_nodes.
-        fn spawnNestedEntities(game: *GameType, comp_value: Value, parent_world_pos: Position, prefab_cache: *PrefabCache, depth: usize) void {
+        /// Spawn entity-like objects nested inside a component's fields, collect their
+        /// entity IDs, and patch them back into the component's []const u64 fields.
+        fn spawnAndLinkNestedEntities(
+            game: *GameType,
+            parent_entity: Entity,
+            comp_name: []const u8,
+            comp_value: Value,
+            parent_world_pos: Position,
+            prefab_cache: *PrefabCache,
+            depth: usize,
+        ) void {
             const obj = comp_value.asObject() orelse return;
+
             for (obj.entries) |entry| {
-                if (entry.value.asArray()) |arr| {
-                    for (arr.items) |item| {
-                        if (isEntityLike(item)) {
-                            loadEntityWithOffset(game, item, prefab_cache, depth + 1, parent_world_pos) catch {};
+                const arr = entry.value.asArray() orelse continue;
+
+                // Count entity-like items
+                var entity_count: usize = 0;
+                for (arr.items) |item| {
+                    if (isEntityLike(item)) entity_count += 1;
+                }
+                if (entity_count == 0) continue;
+
+                // Spawn entities and collect IDs
+                const ids = game.allocator.alloc(u64, entity_count) catch continue;
+                var idx: usize = 0;
+                for (arr.items) |item| {
+                    if (isEntityLike(item)) {
+                        const child = game.createEntity();
+
+                        // Apply child's components with parent offset
+                        if (item.asObject()) |child_obj| {
+                            // Resolve child prefab
+                            var child_prefab_comps: ?Value.Object = null;
+                            if (child_obj.getString("prefab")) |pname| {
+                                if (prefab_cache.get(pname)) |pval| {
+                                    if (pval.asObject()) |pobj| {
+                                        child_prefab_comps = pobj.getObject("components");
+                                    }
+                                }
+                            }
+
+                            const child_scene_comps = child_obj.getObject("components");
+
+                            // Scene overrides first
+                            if (child_scene_comps) |sc| {
+                                for (sc.entries) |e| {
+                                    applyComponent(game, child, e.key, e.value, parent_world_pos);
+                                }
+                            }
+                            // Prefab defaults
+                            if (child_prefab_comps) |pc| {
+                                for (pc.entries) |e| {
+                                    const already_set = if (child_scene_comps) |sc| blk: {
+                                        for (sc.entries) |se| {
+                                            if (std.mem.eql(u8, se.key, e.key)) break :blk true;
+                                        }
+                                        break :blk false;
+                                    } else false;
+                                    if (!already_set) {
+                                        applyComponent(game, child, e.key, e.value, parent_world_pos);
+                                    }
+                                }
+                            }
+
+                            // Recursively spawn nested entities inside this child's components
+                            const child_pos = game.getPosition(child);
+                            if (child_scene_comps) |sc| {
+                                for (sc.entries) |e| {
+                                    spawnAndLinkNestedEntities(game, child, e.key, e.value, child_pos, prefab_cache, depth + 1);
+                                }
+                            }
+                            if (child_prefab_comps) |pc| {
+                                for (pc.entries) |e| {
+                                    const already_set = if (child_scene_comps) |sc| blk: {
+                                        for (sc.entries) |se| {
+                                            if (std.mem.eql(u8, se.key, e.key)) break :blk true;
+                                        }
+                                        break :blk false;
+                                    } else false;
+                                    if (!already_set) {
+                                        spawnAndLinkNestedEntities(game, child, e.key, e.value, child_pos, prefab_cache, depth + 1);
+                                    }
+                                }
+                            }
+                        }
+
+                        ids[idx] = @intCast(child);
+                        idx += 1;
+                    }
+                }
+
+                // Patch the entity ID array back into the parent component
+                patchEntityIdField(game, parent_entity, comp_name, entry.key, ids);
+            }
+        }
+
+        /// Patch a []const u64 field on a component with spawned entity IDs.
+        /// Uses comptime dispatch to find the component type and update the field.
+        fn patchEntityIdField(game: *GameType, entity: Entity, comp_name: []const u8, field_name: []const u8, ids: []const u64) void {
+            const comp_names = comptime Components.names();
+            inline for (comp_names) |cn| {
+                if (std.mem.eql(u8, comp_name, cn)) {
+                    const T = Components.getType(cn);
+                    if (game.ecs_backend.getComponent(entity, T)) |comp| {
+                        // Find the field and patch it
+                        inline for (@typeInfo(T).@"struct".fields) |field| {
+                            if (std.mem.eql(u8, field.name, field_name)) {
+                                if (field.type == []const u64) {
+                                    @field(comp, field.name) = ids;
+                                }
+                            }
                         }
                     }
+                    return;
                 }
             }
         }
