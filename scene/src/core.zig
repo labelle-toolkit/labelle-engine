@@ -5,6 +5,7 @@
 const std = @import("std");
 const labelle_core = @import("labelle-core");
 
+// ScriptFns re-exported here so scene/src/root.zig can expose it
 const script_mod = @import("script.zig");
 pub const ScriptFns = script_mod.ScriptFns;
 pub const VisualType = labelle_core.VisualType;
@@ -39,19 +40,16 @@ pub fn Scene(comptime Entity: type) type {
         name: []const u8,
         entities: std.ArrayListUnmanaged(EntityInstance),
         named_entities: NameMap,
-        scripts: []const ScriptFns,
         /// GUI view names to render with this scene (from .gui_views in scene .zon)
         gui_view_names: []const []const u8 = &.{},
         allocator: std.mem.Allocator,
         game_ptr: *anyopaque,
         /// Type-erased callback to game.destroyEntity() — used to clean up ECS on scene unload.
         destroy_entity_fn: ?*const fn (*anyopaque, Entity) void = null,
-        initialized: bool = false,
 
         pub fn init(
             allocator: std.mem.Allocator,
             name: []const u8,
-            scripts: []const ScriptFns,
             gui_view_names: []const []const u8,
             game_ptr: *anyopaque,
             destroy_entity_fn: ?*const fn (*anyopaque, Entity) void,
@@ -60,7 +58,6 @@ pub fn Scene(comptime Entity: type) type {
                 .name = name,
                 .entities = .{},
                 .named_entities = .{},
-                .scripts = scripts,
                 .gui_view_names = gui_view_names,
                 .allocator = allocator,
                 .game_ptr = game_ptr,
@@ -69,17 +66,6 @@ pub fn Scene(comptime Entity: type) type {
         }
 
         pub fn deinit(self: *Self) void {
-            // Script deinit (reverse order)
-            if (self.initialized) {
-                var i = self.scripts.len;
-                while (i > 0) {
-                    i -= 1;
-                    if (self.scripts[i].deinit) |deinit_fn| {
-                        deinit_fn(self.game_ptr, @ptrCast(self));
-                    }
-                }
-            }
-
             // Destroy non-persistent entities in the ECS; fire onDestroy hooks.
             // Persistent entities survive scene unload (DontDestroyOnLoad pattern).
             for (self.entities.items) |*instance| {
@@ -109,24 +95,9 @@ pub fn Scene(comptime Entity: type) type {
             try self.named_entities.put(self.allocator, name, entity);
         }
 
-        /// Initialize scripts. Called automatically on first update.
-        pub fn initScripts(self: *Self) void {
-            if (self.initialized) return;
-            self.initialized = true;
-
-            for (self.scripts) |script_fns| {
-                if (script_fns.init) |init_fn| {
-                    init_fn(self.game_ptr, @ptrCast(self));
-                }
-            }
-        }
-
-        /// Per-frame update: runs entity onUpdate hooks then script updates.
+        /// Per-frame update: runs entity onUpdate hooks.
+        /// Script lifecycle is handled by ScriptRunner, not by Scene.
         pub fn update(self: *Self, dt: f32) void {
-            if (!self.initialized) {
-                self.initScripts();
-            }
-
             // Entity onUpdate hooks (reverse iteration for safe removal)
             var i: usize = self.entities.items.len;
             while (i > 0) {
@@ -135,13 +106,6 @@ pub fn Scene(comptime Entity: type) type {
                 const instance = self.entities.items[i];
                 if (instance.onUpdate) |update_fn| {
                     update_fn(entityToU64(instance.entity), self.game_ptr, dt);
-                }
-            }
-
-            // Script updates
-            for (self.scripts) |script_fns| {
-                if (script_fns.update) |update_fn| {
-                    update_fn(self.game_ptr, @ptrCast(self), dt);
                 }
             }
         }
