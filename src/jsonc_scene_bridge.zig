@@ -119,7 +119,7 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
                     applyComponent(game, entity, entry.key, entry.value);
                     applied.put(entry.key, {}) catch {};
                     // Spawn nested entity arrays found inside component values
-                    try spawnNestedEntities(game, entity_val, entry.value, prefab_cache, depth);
+                    spawnNestedEntities(game, entity_val, entry.value, prefab_cache, depth);
                 }
             }
 
@@ -129,7 +129,7 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
                     if (!applied.contains(entry.key)) {
                         applyComponent(game, entity, entry.key, entry.value);
                         // Spawn nested entity arrays from prefab components
-                        try spawnNestedEntities(game, entity_val, entry.value, prefab_cache, depth);
+                        spawnNestedEntities(game, entity_val, entry.value, prefab_cache, depth);
                     }
                 }
             }
@@ -153,14 +153,14 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
         /// Scans object fields for arrays containing objects with "prefab" or "components" keys.
         /// This handles domain-specific patterns like Room.workstations, Room.movement_nodes,
         /// Workstation.storages, ShipCarcase.movement_nodes.
-        fn spawnNestedEntities(game: *GameType, parent_val: Value, comp_value: Value, prefab_cache: *PrefabCache, depth: usize) !void {
+        fn spawnNestedEntities(game: *GameType, parent_val: Value, comp_value: Value, prefab_cache: *PrefabCache, depth: usize) void {
             _ = parent_val;
             const obj = comp_value.asObject() orelse return;
             for (obj.entries) |entry| {
                 if (entry.value.asArray()) |arr| {
                     for (arr.items) |item| {
                         if (isEntityLike(item)) {
-                            try loadEntity(game, item, prefab_cache, depth + 1);
+                            loadEntity(game, item, prefab_cache, depth + 1) catch {};
                         }
                     }
                 }
