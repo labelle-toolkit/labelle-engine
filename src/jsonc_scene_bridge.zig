@@ -335,6 +335,25 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
             }
         }
 
+        /// Strip fields that contain entity-like arrays from a component Value.
+        /// These fields (storages, workstations, movement_nodes) will be populated
+        /// later with spawned entity IDs via patchEntityIdField.
+        fn stripEntityArrayFields(value: Value, allocator: std.mem.Allocator) Value {
+            const obj = value.asObject() orelse return value;
+            var filtered: std.ArrayList(Value.Object.Entry) = .{};
+            for (obj.entries) |entry| {
+                const is_entity_array = blk: {
+                    const arr = entry.value.asArray() orelse break :blk false;
+                    if (arr.items.len == 0) break :blk false;
+                    break :blk isEntityLike(arr.items[0]);
+                };
+                if (!is_entity_array) {
+                    filtered.append(allocator, entry) catch {};
+                }
+            }
+            return Value{ .object = .{ .entries = filtered.toOwnedSlice(allocator) catch obj.entries } };
+        }
+
         /// Check if a Value looks like an entity definition (has "prefab" or "components" key).
         fn isEntityLike(value: Value) bool {
             const obj = value.asObject() orelse return false;
@@ -374,12 +393,14 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
                 return;
             }
 
-            // All other components — comptime dispatch via Components registry
+            // All other components — comptime dispatch via Components registry.
+            // Strip entity-array fields before deserializing (they'll be patched later).
+            const filtered = stripEntityArrayFields(value, game.allocator);
             const comp_names = comptime Components.names();
             inline for (comp_names) |comp_name| {
                 if (std.mem.eql(u8, name, comp_name)) {
                     const T = Components.getType(comp_name);
-                    if (jsonc.deserialize(T, value, game.allocator)) |component| {
+                    if (jsonc.deserialize(T, filtered, game.allocator)) |component| {
                         game.addComponent(entity, component);
                     } else |_| {
                         // Deserialization failed — skip this component
