@@ -88,11 +88,13 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
             }
         };
 
-        fn loadEntity(game: *GameType, entity_val: Value, prefab_cache: *PrefabCache, depth: usize) !void {
+        const LoadEntityError = error{ IncludeDepthExceeded, OutOfMemory };
+
+        fn loadEntity(game: *GameType, entity_val: Value, prefab_cache: *PrefabCache, depth: usize) LoadEntityError!void {
             return loadEntityWithOffset(game, entity_val, prefab_cache, depth, .{ .x = 0, .y = 0 });
         }
 
-        fn loadEntityWithOffset(game: *GameType, entity_val: Value, prefab_cache: *PrefabCache, depth: usize, parent_offset: Position) !void {
+        fn loadEntityWithOffset(game: *GameType, entity_val: Value, prefab_cache: *PrefabCache, depth: usize, parent_offset: Position) LoadEntityError!void {
             if (depth > MAX_DEPTH) return error.IncludeDepthExceeded;
             const entity_obj = entity_val.asObject() orelse return;
 
