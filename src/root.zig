@@ -18,6 +18,8 @@ pub const query_mod = @import("query.zig");
 pub const hooks_types_mod = @import("hooks_types.zig");
 pub const animation_mod = @import("animation.zig");
 pub const atlas_mod = @import("atlas.zig");
+pub const scene_value_mod = @import("scene_value.zig");
+pub const jsonc_parser_mod = @import("jsonc_parser.zig");
 
 // ── Game ──
 pub const GameConfig = game_mod.GameConfig;
@@ -88,6 +90,7 @@ pub const GameInitInfo = hooks_types_mod.GameInitInfo;
 pub const FrameInfo = hooks_types_mod.FrameInfo;
 pub const SceneBeforeLoadInfo = hooks_types_mod.SceneBeforeLoadInfo;
 pub const SceneInfo = hooks_types_mod.SceneInfo;
+pub const StateChangeInfo = hooks_types_mod.StateChangeInfo;
 pub const EntityInfo = hooks_types_mod.EntityInfo;
 pub const ComponentPayload = hooks_types_mod.ComponentPayload;
 
@@ -128,6 +131,11 @@ pub const ComptimeAtlas = atlas_mod.ComptimeAtlas;
 pub const RuntimeAtlas = atlas_mod.RuntimeAtlas;
 pub const TextureManager = atlas_mod.TextureManager;
 pub const SpriteCache = atlas_mod.SpriteCache;
+
+// ── Scene Value & JSONC Parser ──
+pub const SceneValue = scene_value_mod.Value;
+pub const JsoncParser = jsonc_parser_mod.JsoncParser;
+pub const JsoncParseError = jsonc_parser_mod.ParseError;
 
 // ── Core Re-exports ──
 pub const Position = core.Position;
