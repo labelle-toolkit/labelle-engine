@@ -173,7 +173,7 @@ pub fn ScriptRunner(
                 const mod = @field(AllScripts, d.name);
                 if (comptime isGameScript(mod)) {
                     if (comptime @hasDecl(mod, "tick")) {
-                        if (active == null or nameInSlice(d.name, active.?)) {
+                        if ((active == null or nameInSlice(d.name, active.?)) and isStateAllowed(mod, game)) {
                             if (profiling_enabled) {
                                 var timer = std.time.Timer.start() catch null;
                                 dispatchTickCall(mod.tick, game, self, d.name, dt);
@@ -200,7 +200,7 @@ pub fn ScriptRunner(
                 const mod = @field(AllScripts, d.name);
                 if (comptime isGameScript(mod)) {
                     if (comptime @hasDecl(mod, "drawGui")) {
-                        if (active == null or nameInSlice(d.name, active.?)) {
+                        if ((active == null or nameInSlice(d.name, active.?)) and isStateAllowed(mod, game)) {
                             if (profiling_enabled) {
                                 var timer = std.time.Timer.start() catch null;
                                 dispatchCall(mod.drawGui, game, self, d.name);
@@ -236,6 +236,32 @@ pub fn ScriptRunner(
                 if (std.mem.eql(u8, n, name)) return true;
             }
             return false;
+        }
+
+        /// Check whether a script is allowed to run in the current game state.
+        /// Scripts with a `pub const game_states` tuple only run when the active
+        /// state matches one of the listed strings.  Scripts without the decl
+        /// (or when the game has no state machine) run unconditionally.
+        fn isStateAllowed(comptime mod: type, game: anytype) bool {
+            if (!@hasDecl(mod, "game_states")) return true;
+
+            const game_state = getGameState(game) orelse return true;
+            const states = mod.game_states;
+            inline for (states) |s| {
+                if (std.mem.eql(u8, s, game_state)) return true;
+            }
+            return false;
+        }
+
+        /// Query the game for its current state string.
+        /// Returns null if the game type has no state machine.
+        fn getGameState(game: anytype) ?[]const u8 {
+            const info = @typeInfo(@TypeOf(game));
+            const GameType = if (info == .pointer) info.pointer.child else @TypeOf(game);
+            if (comptime @hasDecl(GameType, "getState")) {
+                return game.getState();
+            }
+            return null;
         }
 
         /// Dispatch setup/drawGui by arity:
