@@ -88,7 +88,10 @@ pub const PrefabCache = struct {
         if (self.prefabs.get(name)) |val| return val;
 
         const path = try std.fmt.allocPrint(self.allocator, "{s}/{s}.jsonc", .{ self.prefab_dir, name });
-        const file = std.fs.cwd().openFile(path, .{}) catch return null;
+        const file = std.fs.cwd().openFile(path, .{}) catch {
+            self.allocator.free(path);
+            return null;
+        };
         defer file.close();
 
         const source = try file.readToEndAlloc(self.allocator, 1024 * 1024);
@@ -115,6 +118,7 @@ pub const LoadError = error{
 } || std.fs.File.OpenError || std.fs.File.ReadError || jsonc_parser.ParseError;
 
 const MAX_INCLUDE_DEPTH = 16;
+const MAX_ENTITY_DEPTH = 16;
 
 /// Load a scene from a file path, resolving prefabs and includes.
 pub fn loadScene(allocator: Allocator, scene_path: []const u8, prefab_dir: []const u8) LoadError!Scene {
@@ -190,10 +194,12 @@ pub fn loadSceneInner(
         for (include_arr.items) |include_val| {
             if (include_val.asString()) |include_path| {
                 const full_path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ base_dir, include_path });
+                defer allocator.free(full_path);
                 const included = loadInclude(allocator, full_path, prefab_cache, depth + 1) catch |err| {
                     if (err == error.FileNotFound) continue; // skip missing includes gracefully
                     return err;
                 };
+                defer allocator.free(included);
                 for (included) |e| {
                     try entities.append(allocator, e);
                 }
@@ -248,10 +254,12 @@ fn loadInclude(
         for (include_arr.items) |include_val| {
             if (include_val.asString()) |include_path| {
                 const full_path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ inc_base_dir, include_path });
+                defer allocator.free(full_path);
                 const included = loadInclude(allocator, full_path, prefab_cache, depth + 1) catch |err| {
                     if (err == error.FileNotFound) continue;
                     return err;
                 };
+                defer allocator.free(included);
                 for (included) |e| {
                     try entities.append(allocator, e);
                 }
@@ -272,7 +280,13 @@ fn loadInclude(
 
 /// Load a single entity, merging with prefab if specified.
 /// Prefabs can define children, which become child entities.
+/// Depth is capped at MAX_ENTITY_DEPTH to prevent infinite recursion from self-referencing prefabs.
 pub fn loadEntity(allocator: Allocator, entity_val: Value, prefab_cache: *PrefabCache) LoadError!Entity {
+    return loadEntityInner(allocator, entity_val, prefab_cache, 0);
+}
+
+fn loadEntityInner(allocator: Allocator, entity_val: Value, prefab_cache: *PrefabCache, depth: usize) LoadError!Entity {
+    if (depth > MAX_ENTITY_DEPTH) return error.IncludeDepthExceeded;
     const entity_obj = entity_val.asObject() orelse return error.InvalidEntity;
 
     const prefab_name = entity_obj.getString("prefab");
@@ -321,15 +335,15 @@ pub fn loadEntity(allocator: Allocator, entity_val: Value, prefab_cache: *Prefab
     // Prefab children
     if (prefab_children) |pc| {
         for (pc.items) |child_val| {
-            const child = try loadEntity(allocator, child_val, prefab_cache);
+            const child = try loadEntityInner(allocator, child_val, prefab_cache, depth + 1);
             try children.append(allocator, child);
         }
     }
 
-    // Entity-level children (override or extend prefab children)
+    // Entity-level children (extend prefab children)
     if (entity_obj.getArray("children")) |entity_children| {
         for (entity_children.items) |child_val| {
-            const child = try loadEntity(allocator, child_val, prefab_cache);
+            const child = try loadEntityInner(allocator, child_val, prefab_cache, depth + 1);
             try children.append(allocator, child);
         }
     }
