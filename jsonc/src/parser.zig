@@ -4,8 +4,8 @@
 /// (deserialize, scene_loader, hot_reload) works unchanged.
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const scene_value = @import("scene_value.zig");
-const Value = scene_value.Value;
+const value_mod = @import("value.zig");
+const Value = value_mod.Value;
 
 pub const JsoncParser = struct {
     source: []const u8,
@@ -35,7 +35,7 @@ pub const JsoncParser = struct {
         return p.parse();
     }
 
-    pub fn getLocation(self: *const JsoncParser) scene_value.Location {
+    pub fn getLocation(self: *const JsoncParser) value_mod.Location {
         var line: usize = 1;
         var col: usize = 1;
         for (self.source[0..self.pos]) |c| {

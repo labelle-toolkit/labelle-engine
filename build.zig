@@ -10,6 +10,9 @@ pub fn build(b: *std.Build) void {
     const scene_dep = b.dependency("scene", .{ .target = target, .optimize = optimize });
     const scene_module = scene_dep.module("scene");
 
+    const jsonc_dep = b.dependency("jsonc", .{ .target = target, .optimize = optimize });
+    const jsonc_module = jsonc_dep.module("jsonc");
+
     const engine_module = b.addModule("engine", .{
         .root_source_file = b.path("src/root.zig"),
         .target = target,
@@ -17,6 +20,7 @@ pub fn build(b: *std.Build) void {
     });
     engine_module.addImport("labelle-core", core_module);
     engine_module.addImport("scene", scene_module);
+    engine_module.addImport("jsonc", jsonc_module);
 
     const test_step = b.step("test", "Run engine tests");
 
