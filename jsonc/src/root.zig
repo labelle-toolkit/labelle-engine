@@ -14,10 +14,12 @@ pub const TypeErasedComponent = deserialize_mod.TypeErasedComponent;
 pub const component = deserialize_mod.component;
 
 pub const scene_loader = @import("scene_loader.zig");
+pub const hot_reload = @import("hot_reload.zig");
 
 test {
     _ = @import("value.zig");
     _ = @import("parser.zig");
     _ = @import("deserialize.zig");
     _ = @import("scene_loader.zig");
+    _ = @import("hot_reload.zig");
 }
