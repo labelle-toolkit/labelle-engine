@@ -277,37 +277,9 @@ test "Scene: data-only entity (no visual)" {
     try testing.expectEqual(VisualType.none, scene.entities.items[0].visual_type);
 }
 
-test "Scene: scripts lifecycle" {
-    test_script.reset();
-
-    var game = TestGame.init(testing.allocator);
-    defer game.deinit();
-
-    var scene = try TestLoader.load(.{
-        .name = "script_test",
-        .scripts = .{"movement"},
-        .entities = .{
-            .{ .prefab = "player" },
-        },
-    }, &game, testing.allocator);
-
-    try testing.expect(!test_script.init_called);
-
-    // First update triggers init
-    scene.update(0.016);
-    try testing.expect(test_script.init_called);
-    try testing.expectEqual(1, test_script.update_count);
-
-    // Subsequent updates
-    scene.update(0.016);
-    scene.update(0.016);
-    try testing.expectEqual(3, test_script.update_count);
-
-    // Deinit fires on scene deinit
-    try testing.expect(!test_script.deinit_called);
-    scene.deinit();
-    try testing.expect(test_script.deinit_called);
-}
+// Scripts are no longer managed by Scene — they are handled by ScriptRunner.
+// The .scripts field has been removed from Scene as part of #96.
+// Script lifecycle (init/update/deinit) is tested in ScriptRunner tests.
 
 test "Scene: removeEntity" {
     var game = TestGame.init(testing.allocator);

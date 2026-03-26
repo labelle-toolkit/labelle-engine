@@ -8,12 +8,10 @@ const labelle_core = @import("labelle-core");
 const types = @import("types.zig");
 const core_mod = @import("core.zig");
 const gizmo_mod = @import("gizmo.zig");
-const script_mod = @import("script.zig");
 const entity_writer_mod = @import("entity_writer.zig");
 
 const Position = labelle_core.Position;
 const VisualType = labelle_core.VisualType;
-const ScriptFns = script_mod.ScriptFns;
 const isReference = types.isReference;
 const extractRefInfo = types.extractRefInfo;
 const getEntityId = types.getEntityId;
@@ -67,6 +65,11 @@ pub fn SceneLoaderWithGizmos(
     comptime Scripts: type,
     comptime GizmoReg: type,
 ) type {
+    // Scripts parameter retained for API compatibility. Script lifecycle is now
+    // handled by ScriptRunner, not by Scene. Will be removed in a follow-up PR
+    // when the comptime scene system is fully removed (#96).
+    _ = Scripts;
+
     const Entity = GameType.EntityType;
     const Sprite = GameType.SpriteComp;
     const Shape = GameType.ShapeComp;
@@ -86,19 +89,13 @@ pub fn SceneLoaderWithGizmos(
         /// - Phase 2: Resolve entity references (.ref = .{ .entity = "name" })
         /// - Phase 2b: Resolve parent-child relationships (.parent = "name")
         pub fn load(comptime scene_data: anytype, game: *GameType, allocator: std.mem.Allocator) !SceneType {
-            // Resolve scripts
-            const script_fns = comptime if (@hasField(@TypeOf(scene_data), "scripts"))
-                Scripts.getScriptFnsList(scene_data.scripts)
-            else
-                &[_]ScriptFns{};
-
             // Resolve gui_views (tuple of string literals → slice)
             const gui_view_names = comptime if (@hasField(@TypeOf(scene_data), "gui_views"))
                 tupleToStringSlice(scene_data.gui_views)
             else
                 &[_][]const u8{};
 
-            var scene = SceneType.init(allocator, scene_data.name, script_fns, gui_view_names, @ptrCast(game), &gameDestroyEntity);
+            var scene = SceneType.init(allocator, scene_data.name, gui_view_names, @ptrCast(game), &gameDestroyEntity);
             errdefer scene.deinit();
 
             // Reference context for two-phase loading
@@ -188,13 +185,6 @@ pub fn SceneLoaderWithGizmos(
         /// which ensures update() runs each tick and deinit() runs on scene unload.
         pub fn sceneLoaderFn(comptime scene_data: anytype) fn (*GameType) anyerror!void {
             return struct {
-                /// Script names from the scene's .scripts field.
-                /// null if the scene doesn't define .scripts (no filtering).
-                const scene_script_names: ?[]const []const u8 = if (@hasField(@TypeOf(scene_data), "scripts"))
-                    tupleToStringSlice(scene_data.scripts)
-                else
-                    null;
-
                 fn loader(game: *GameType) anyerror!void {
                     const scene = try load(scene_data, game, game.allocator);
                     const scene_ptr = try game.allocator.create(SceneType);
@@ -204,7 +194,7 @@ pub fn SceneLoaderWithGizmos(
                         &sceneUpdate,
                         &sceneDeinit,
                         &sceneGetEntityByName,
-                        scene_script_names,
+                        null,
                         &sceneAddEntity,
                         &sceneClearEntities,
                     );
@@ -990,8 +980,8 @@ pub fn SceneLoaderWithGizmos(
 
 /// Convenience: SceneLoader without scripts.
 pub fn SimpleSceneLoader(comptime GameType: type, comptime Prefabs: type, comptime Components: type) type {
-    const NoScripts = script_mod.NoScripts;
-    return SceneLoader(GameType, Prefabs, Components, NoScripts);
+    const script = @import("script.zig");
+    return SceneLoader(GameType, Prefabs, Components, script.NoScripts);
 }
 
 

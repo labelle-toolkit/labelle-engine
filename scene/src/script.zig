@@ -42,20 +42,6 @@ pub fn ScriptRegistry(comptime ScriptMap: type) type {
                 .deinit = if (@hasDecl(script_module, "deinit")) @ptrCast(&script_module.deinit) else null,
             };
         }
-
-        pub fn getScriptFnsList(comptime script_names: anytype) []const ScriptFns {
-            comptime {
-                var fns: [script_names.len]ScriptFns = undefined;
-                for (script_names, 0..) |name, i| {
-                    if (!has(name)) {
-                        @compileError("Unknown script: " ++ name);
-                    }
-                    fns[i] = getScriptFns(name);
-                }
-                const result = fns;
-                return &result;
-            }
-        }
     };
 }
 
