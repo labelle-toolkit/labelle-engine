@@ -10,11 +10,15 @@
         .scene = .{
             .path = "scene",
         },
+        .jsonc = .{
+            .path = "jsonc",
+        },
     },
     .paths = .{
         "build.zig",
         "build.zig.zon",
         "src",
         "scene",
+        "jsonc",
     },
 }

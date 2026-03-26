@@ -18,6 +18,7 @@ pub const query_mod = @import("query.zig");
 pub const hooks_types_mod = @import("hooks_types.zig");
 pub const animation_mod = @import("animation.zig");
 pub const atlas_mod = @import("atlas.zig");
+pub const jsonc_mod = @import("jsonc");
 
 // ── Game ──
 pub const GameConfig = game_mod.GameConfig;
@@ -88,6 +89,7 @@ pub const GameInitInfo = hooks_types_mod.GameInitInfo;
 pub const FrameInfo = hooks_types_mod.FrameInfo;
 pub const SceneBeforeLoadInfo = hooks_types_mod.SceneBeforeLoadInfo;
 pub const SceneInfo = hooks_types_mod.SceneInfo;
+pub const StateChangeInfo = hooks_types_mod.StateChangeInfo;
 pub const EntityInfo = hooks_types_mod.EntityInfo;
 pub const ComponentPayload = hooks_types_mod.ComponentPayload;
 
@@ -128,6 +130,16 @@ pub const ComptimeAtlas = atlas_mod.ComptimeAtlas;
 pub const RuntimeAtlas = atlas_mod.RuntimeAtlas;
 pub const TextureManager = atlas_mod.TextureManager;
 pub const SpriteCache = atlas_mod.SpriteCache;
+
+// ── Scene Value, JSONC Parser & Deserializer ──
+pub const SceneValue = jsonc_mod.Value;
+pub const JsoncParser = jsonc_mod.JsoncParser;
+pub const JsoncParseError = jsonc_mod.ParseError;
+pub const sceneDeserialize = jsonc_mod.deserialize;
+pub const SceneDeserializeError = jsonc_mod.DeserializeError;
+pub const SceneComponentRegistry = jsonc_mod.ComponentRegistry;
+pub const sceneComponent = jsonc_mod.component;
+pub const TypeErasedComponent = jsonc_mod.TypeErasedComponent;
 
 // ── Core Re-exports ──
 pub const Position = core.Position;
