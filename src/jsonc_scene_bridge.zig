@@ -3,6 +3,9 @@
 /// Bridges the jsonc subproject's Value tree with the engine's comptime
 /// component registry. Components are deserialized at runtime using
 /// comptime-generated type dispatch.
+///
+/// Visual components (Sprite, Shape) are registered with the renderer
+/// via game.addSprite() / game.addShape() instead of plain addComponent().
 const std = @import("std");
 const jsonc = @import("jsonc");
 const Value = jsonc.Value;
@@ -13,6 +16,10 @@ const Position = core.Position;
 /// Create a JSONC scene loader parameterized by game and component types.
 /// Components is a ComponentRegistry/ComponentRegistryWithPlugins type with has/getType/names.
 pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type {
+    const Entity = GameType.EntityType;
+    const Sprite = GameType.SpriteComp;
+    const Shape = GameType.ShapeComp;
+
     return struct {
         /// Load a JSONC scene file and instantiate all entities in the ECS.
         pub fn loadScene(game: *GameType, scene_path: []const u8, prefab_dir: []const u8) !void {
@@ -26,18 +33,20 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
 
             const scene_obj = scene_value.asObject() orelse return;
 
-            // Load prefab cache
+            // Load prefab cache (tries .jsonc then .zon)
             var prefab_cache = PrefabCache.init(game.allocator, prefab_dir);
 
             // Process entities
             if (scene_obj.getArray("entities")) |entities_arr| {
                 for (entities_arr.items) |entity_val| {
-                    try loadEntity(game, entity_val, &prefab_cache);
+                    try loadEntity(game, entity_val, &prefab_cache, 0);
                 }
             }
         }
 
-        /// Minimal prefab cache — loads and caches prefab JSONC files.
+        const MAX_DEPTH = 16;
+
+        /// Minimal prefab cache — loads and caches prefab files from disk.
         const PrefabCache = struct {
             prefabs: std.StringHashMap(Value),
             allocator: std.mem.Allocator,
@@ -54,20 +63,33 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
             fn get(self: *PrefabCache, name: []const u8) ?Value {
                 if (self.prefabs.get(name)) |val| return val;
 
-                const path = std.fmt.allocPrint(self.allocator, "{s}/{s}.jsonc", .{ self.prefab_dir, name }) catch return null;
-                defer self.allocator.free(path);
-                const file = std.fs.cwd().openFile(path, .{}) catch return null;
-                defer file.close();
+                // Try .jsonc first, then .zon
+                const extensions = [_][]const u8{ ".jsonc", ".zon" };
+                for (extensions) |ext| {
+                    const path = std.fmt.allocPrint(self.allocator, "{s}/{s}{s}", .{ self.prefab_dir, name, ext }) catch return null;
+                    defer self.allocator.free(path);
+                    const file = std.fs.cwd().openFile(path, .{}) catch continue;
+                    defer file.close();
 
-                const src = file.readToEndAlloc(self.allocator, 1024 * 1024) catch return null;
-                var p = JsoncParser.init(self.allocator, src);
-                const val = p.parse() catch return null;
-                self.prefabs.put(self.allocator.dupe(u8, name) catch return null, val) catch return null;
-                return val;
+                    const src = file.readToEndAlloc(self.allocator, 1024 * 1024) catch return null;
+                    // Both JSONC and ZON prefabs use the same structure after the RFC:
+                    // { "components": { ... }, "children": [...] }
+                    // For .zon files, we still parse with JSONC parser — won't work for ZON syntax.
+                    // .zon prefabs must be converted to .jsonc for runtime loading.
+                    var p = JsoncParser.init(self.allocator, src);
+                    const val = p.parse() catch {
+                        self.allocator.free(src);
+                        continue;
+                    };
+                    self.prefabs.put(self.allocator.dupe(u8, name) catch return null, val) catch return null;
+                    return val;
+                }
+                return null;
             }
         };
 
-        fn loadEntity(game: *GameType, entity_val: Value, prefab_cache: *PrefabCache) !void {
+        fn loadEntity(game: *GameType, entity_val: Value, prefab_cache: *PrefabCache, depth: usize) !void {
+            if (depth > MAX_DEPTH) return error.IncludeDepthExceeded;
             const entity_obj = entity_val.asObject() orelse return;
 
             // Resolve prefab
@@ -87,39 +109,48 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
             // Create entity
             const entity = game.createEntity();
 
-            // Apply prefab components first
-            if (prefab_components) |pc| {
-                for (pc.entries) |entry| {
-                    applyComponent(game, entity, entry.key, entry.value);
-                }
-            }
+            // Build merged component map: prefab defaults, then scene overrides
+            // We track which components have been applied to handle overrides
+            var applied = std.StringHashMap(void).init(game.allocator);
+            defer applied.deinit();
 
-            // Apply scene component overrides
+            // Apply scene components (these override prefab defaults)
             if (scene_components) |sc| {
                 for (sc.entries) |entry| {
                     applyComponent(game, entity, entry.key, entry.value);
+                    applied.put(entry.key, {}) catch {};
+                }
+            }
+
+            // Apply prefab components (skip if already overridden by scene)
+            if (prefab_components) |pc| {
+                for (pc.entries) |entry| {
+                    if (!applied.contains(entry.key)) {
+                        applyComponent(game, entity, entry.key, entry.value);
+                    }
                 }
             }
 
             // Process prefab children
             if (prefab_children) |children| {
                 for (children.items) |child_val| {
-                    try loadEntity(game, child_val, prefab_cache);
+                    try loadEntity(game, child_val, prefab_cache, depth + 1);
                 }
             }
 
             // Process entity-level children
             if (entity_obj.getArray("children")) |children| {
                 for (children.items) |child_val| {
-                    try loadEntity(game, child_val, prefab_cache);
+                    try loadEntity(game, child_val, prefab_cache, depth + 1);
                 }
             }
         }
 
         /// Apply a single named component to an entity.
-        /// Uses comptime dispatch over the Components registry.
-        fn applyComponent(game: *GameType, entity: GameType.EntityType, name: []const u8, value: Value) void {
-            // Handle Position specially
+        /// Handles visual components (Sprite, Shape) specially via renderer registration.
+        /// Uses comptime dispatch over the Components registry for everything else.
+        fn applyComponent(game: *GameType, entity: Entity, name: []const u8, value: Value) void {
+            // Position — uses setPosition for renderer integration
             if (std.mem.eql(u8, name, "Position")) {
                 if (value.asObject()) |obj| {
                     var pos = Position{};
@@ -132,7 +163,23 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
                 return;
             }
 
-            // Dispatch to registered components via comptime unrolled switch
+            // Sprite — uses addSprite for renderer registration
+            if (std.mem.eql(u8, name, "Sprite")) {
+                if (jsonc.deserialize(Sprite, value, game.allocator)) |sprite| {
+                    game.addSprite(entity, sprite);
+                } else |_| {}
+                return;
+            }
+
+            // Shape — uses addShape for renderer registration
+            if (std.mem.eql(u8, name, "Shape")) {
+                if (jsonc.deserialize(Shape, value, game.allocator)) |shape| {
+                    game.addShape(entity, shape);
+                } else |_| {}
+                return;
+            }
+
+            // All other components — comptime dispatch via Components registry
             const comp_names = comptime Components.names();
             inline for (comp_names) |comp_name| {
                 if (std.mem.eql(u8, name, comp_name)) {
