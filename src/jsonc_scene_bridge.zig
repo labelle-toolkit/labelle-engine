@@ -315,13 +315,19 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
             }
         }
 
-        /// Fire onReady for a single component by name using comptime dispatch.
+        /// Fire onReady and postLoad for a single component by name using comptime dispatch.
         fn fireOnReadyByName(game: *GameType, entity: Entity, name: []const u8) void {
             const comp_names = comptime Components.names();
             inline for (comp_names) |comp_name| {
                 if (std.mem.eql(u8, name, comp_name)) {
                     const T = Components.getType(comp_name);
                     game.fireOnReady(entity, T);
+                    // Call postLoad if the component type has one (used by Workstation etc.)
+                    if (@hasDecl(T, "postLoad")) {
+                        if (game.ecs_backend.getComponent(entity, T)) |comp| {
+                            comp.postLoad(game, entity);
+                        }
+                    }
                     return;
                 }
             }
