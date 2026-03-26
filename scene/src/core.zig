@@ -5,7 +5,7 @@
 const std = @import("std");
 const labelle_core = @import("labelle-core");
 
-// ScriptFns import retained for backwards compat (re-exported by root.zig)
+// ScriptFns re-exported here so scene/src/root.zig can expose it
 const script_mod = @import("script.zig");
 pub const ScriptFns = script_mod.ScriptFns;
 pub const VisualType = labelle_core.VisualType;
