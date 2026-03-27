@@ -5,8 +5,10 @@ pub const Value = @import("value.zig").Value;
 pub const Location = @import("value.zig").Location;
 pub const JsoncParser = @import("parser.zig").JsoncParser;
 pub const ParseError = @import("parser.zig").ParseError;
+pub const HotReloader = @import("hot_reload.zig").HotReloader;
 
 test {
     _ = @import("value.zig");
     _ = @import("parser.zig");
+    _ = @import("hot_reload.zig");
 }

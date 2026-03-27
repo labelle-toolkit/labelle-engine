@@ -182,6 +182,9 @@ pub fn GameConfig(
         plugin_profile_ptr: ?*const anyopaque = null,
         plugin_profile_count: usize = 0,
 
+        // Hot reload
+        hot_reload_dirty: bool = false,
+
         // Gizmos
         gizmos_enabled: bool = true,
         gizmo_state: gizmo_draws_mod.GizmoState(Entity),
@@ -496,6 +499,13 @@ pub fn GameConfig(
             }) catch {};
         }
 
+        // ── Hot Reload ──────────────────────────────────────────────
+
+        /// Signal that the current scene should be reloaded on the next tick.
+        pub fn requestReload(self: *Self) void {
+            self.hot_reload_dirty = true;
+        }
+
         // ── Save/Load (mixin) ───────────────────────────────────────
         pub const saveGameState = SaveLoadMixin.saveGameState;
         pub const loadGameState = SaveLoadMixin.loadGameState;
@@ -762,6 +772,19 @@ pub fn GameConfig(
                     self.setSceneAtomic(next_scene) catch {};
                 } else {
                     self.setScene(next_scene) catch {};
+                }
+            }
+
+            // Hot reload: re-trigger the current scene's loader
+            if (self.hot_reload_dirty) {
+                self.hot_reload_dirty = false;
+                if (self.current_scene_name) |name| {
+                    if (self.scenes.get(name)) |entry| {
+                        self.unloadCurrentScene();
+                        self.emitHook(.{ .scene_before_load = .{ .name = name, .allocator = self.allocator } });
+                        entry.loader_fn(self) catch {};
+                        self.emitHook(.{ .scene_load = .{ .name = name } });
+                    }
                 }
             }
 

@@ -133,6 +133,7 @@ pub const JsoncSceneBridgeWithGizmos = @import("jsonc_scene_bridge.zig").JsoncSc
 pub const SceneValue = jsonc_mod.Value;
 pub const JsoncParser = jsonc_mod.JsoncParser;
 pub const JsoncParseError = jsonc_mod.ParseError;
+pub const HotReloader = jsonc_mod.HotReloader;
 
 // ── Core Re-exports ──
 pub const Position = core.Position;
