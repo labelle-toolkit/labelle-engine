@@ -64,18 +64,21 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
         const MAX_DEPTH = 16;
 
         /// Minimal prefab cache — loads and caches prefab files from disk.
-        /// Note: source buffers and parsed Value trees are intentionally NOT freed
-        /// here — deserialized components hold []const u8 slices that reference
-        /// this data, so it must live for the game's lifetime.
+        /// Source buffers and parsed Value trees are game-lifetime data — deserialized
+        /// components hold []const u8 slices referencing them. Uses page_allocator for
+        /// persistent data so the GPA doesn't report them as leaks.
         const PrefabCache = struct {
             prefabs: std.StringHashMap(Value),
-            allocator: std.mem.Allocator,
+            persistent: std.mem.Allocator,
+            temp: std.mem.Allocator,
             prefab_dir: []const u8,
 
             fn init(allocator: std.mem.Allocator, prefab_dir: []const u8) PrefabCache {
+                const persistent = std.heap.page_allocator;
                 return .{
-                    .prefabs = std.StringHashMap(Value).init(allocator),
-                    .allocator = allocator,
+                    .prefabs = std.StringHashMap(Value).init(persistent),
+                    .persistent = persistent,
+                    .temp = allocator,
                     .prefab_dir = prefab_dir,
                 };
             }
@@ -83,15 +86,15 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
             fn get(self: *PrefabCache, name: []const u8) ?Value {
                 if (self.prefabs.get(name)) |val| return val;
 
-                const path = std.fmt.allocPrint(self.allocator, "{s}/{s}.jsonc", .{ self.prefab_dir, name }) catch return null;
-                defer self.allocator.free(path);
+                const path = std.fmt.allocPrint(self.temp, "{s}/{s}.jsonc", .{ self.prefab_dir, name }) catch return null;
+                defer self.temp.free(path);
                 const file = std.fs.cwd().openFile(path, .{}) catch return null;
                 defer file.close();
 
-                const src = file.readToEndAlloc(self.allocator, 1024 * 1024) catch return null;
-                var p = JsoncParser.init(self.allocator, src);
+                const src = file.readToEndAlloc(self.persistent, 1024 * 1024) catch return null;
+                var p = JsoncParser.init(self.persistent, src);
                 const val = p.parse() catch return null;
-                self.prefabs.put(self.allocator.dupe(u8, name) catch return null, val) catch return null;
+                self.prefabs.put(self.persistent.dupe(u8, name) catch return null, val) catch return null;
                 return val;
             }
         };
