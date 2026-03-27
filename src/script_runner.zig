@@ -71,7 +71,7 @@ pub fn ScriptRunner(
             var count: usize = 0;
             for (decls) |d| {
                 const mod = @field(AllScripts, d.name);
-                if (comptime isGameScript(mod) and @hasDecl(mod, "State")) {
+                if (comptime isGameScript(mod) and hasStateDecl(mod)) {
                     const ST = resolveState(mod);
                     fields[count] = .{
                         .name = d.name,
@@ -109,9 +109,21 @@ pub fn ScriptRunner(
 
         /// A game script exports at least one of: setup, tick, drawGui, State.
         /// Scripts without any of these are scene scripts (init/update/deinit).
+        /// Decls must be actual functions/types, not empty struct literals from wrappers.
         fn isGameScript(comptime mod: type) bool {
-            return @hasDecl(mod, "setup") or @hasDecl(mod, "tick") or
-                @hasDecl(mod, "drawGui") or @hasDecl(mod, "State");
+            return isFnDecl(mod, "setup") or isFnDecl(mod, "tick") or
+                isFnDecl(mod, "drawGui") or @hasDecl(mod, "State");
+        }
+
+        fn hasStateDecl(comptime mod: type) bool {
+            if (!@hasDecl(mod, "State")) return false;
+            const info = @typeInfo(@TypeOf(@field(mod, "State")));
+            return info == .type or info == .@"fn";
+        }
+
+        fn isFnDecl(comptime mod: type, comptime name: []const u8) bool {
+            if (!@hasDecl(mod, name)) return false;
+            return @typeInfo(@TypeOf(@field(mod, name))) == .@"fn";
         }
 
         pub fn init(allocator: std.mem.Allocator, ecs_backend: anytype) Self {
@@ -123,7 +135,7 @@ pub fn ScriptRunner(
             const decls = @typeInfo(AllScripts).@"struct".decls;
             inline for (decls) |d| {
                 const mod = @field(AllScripts, d.name);
-                if (comptime isGameScript(mod) and @hasDecl(mod, "State")) {
+                if (comptime isGameScript(mod) and hasStateDecl(mod)) {
                     const ST = resolveState(mod);
                     if (comptime @hasDecl(ST, "init")) {
                         @field(self.states, d.name) = ST.init(allocator, ecs_backend);
@@ -139,7 +151,7 @@ pub fn ScriptRunner(
             const decls = @typeInfo(AllScripts).@"struct".decls;
             inline for (decls) |d| {
                 const mod = @field(AllScripts, d.name);
-                if (comptime isGameScript(mod) and @hasDecl(mod, "State")) {
+                if (comptime isGameScript(mod) and hasStateDecl(mod)) {
                     const ST = resolveState(mod);
                     if (comptime @hasDecl(ST, "deinit")) {
                         (&@field(self.states, d.name)).deinit();
@@ -159,7 +171,7 @@ pub fn ScriptRunner(
             const decls = @typeInfo(AllScripts).@"struct".decls;
             inline for (decls) |d| {
                 const mod = @field(AllScripts, d.name);
-                if (comptime @hasDecl(mod, "setup")) {
+                if (comptime isFnDecl(mod, "setup")) {
                     dispatchCall(mod.setup, game, self, d.name);
                 }
             }
@@ -172,7 +184,7 @@ pub fn ScriptRunner(
             inline for (decls) |d| {
                 const mod = @field(AllScripts, d.name);
                 if (comptime isGameScript(mod)) {
-                    if (comptime @hasDecl(mod, "tick")) {
+                    if (comptime isFnDecl(mod, "tick")) {
                         if (isStateAllowedCached(mod, current_state)) {
                             if (profiling_enabled) {
                                 var timer = std.time.Timer.start() catch null;
@@ -199,7 +211,7 @@ pub fn ScriptRunner(
             inline for (decls) |d| {
                 const mod = @field(AllScripts, d.name);
                 if (comptime isGameScript(mod)) {
-                    if (comptime @hasDecl(mod, "drawGui")) {
+                    if (comptime isFnDecl(mod, "drawGui")) {
                         if (isStateAllowedCached(mod, current_state)) {
                             if (profiling_enabled) {
                                 var timer = std.time.Timer.start() catch null;
