@@ -131,19 +131,10 @@ pub const RuntimeAtlas = atlas_mod.RuntimeAtlas;
 pub const TextureManager = atlas_mod.TextureManager;
 pub const SpriteCache = atlas_mod.SpriteCache;
 
-// ── JSONC Scene Bridge ──
-pub const JsoncSceneBridge = @import("jsonc_scene_bridge.zig").JsoncSceneBridge;
-pub const JsoncSceneBridgeWithGizmos = @import("jsonc_scene_bridge.zig").JsoncSceneBridgeWithGizmos;
-
-// ── Scene Value, JSONC Parser & Deserializer ──
+// ── Scene Value & JSONC Parser ──
 pub const SceneValue = jsonc_mod.Value;
 pub const JsoncParser = jsonc_mod.JsoncParser;
 pub const JsoncParseError = jsonc_mod.ParseError;
-pub const sceneDeserialize = jsonc_mod.deserialize;
-pub const SceneDeserializeError = jsonc_mod.DeserializeError;
-pub const SceneComponentRegistry = jsonc_mod.ComponentRegistry;
-pub const sceneComponent = jsonc_mod.component;
-pub const TypeErasedComponent = jsonc_mod.TypeErasedComponent;
 
 // ── Core Re-exports ──
 pub const Position = core.Position;

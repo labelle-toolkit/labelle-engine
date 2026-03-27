@@ -31,9 +31,6 @@ pub fn build(b: *std.Build) void {
     const test_files = [_][]const u8{
         "test/parser_test.zig",
         "test/value_test.zig",
-        "test/deserialize_test.zig",
-        "test/scene_loader_test.zig",
-        "test/hot_reload_test.zig",
     };
 
     for (test_files) |test_file| {
