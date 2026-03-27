@@ -25,7 +25,17 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
     return struct {
         /// Load a JSONC scene file and instantiate all entities in the ECS.
         pub fn loadScene(game: *GameType, scene_path: []const u8, prefab_dir: []const u8) !void {
-            const file = try std.fs.cwd().openFile(scene_path, .{});
+            // Load prefab cache (tries .jsonc then .zon)
+            var prefab_cache = PrefabCache.init(game.allocator, prefab_dir);
+
+            try loadSceneFile(game, scene_path, &prefab_cache, 0);
+        }
+
+        /// Load a single scene/fragment file, processing includes recursively then its own entities.
+        fn loadSceneFile(game: *GameType, path: []const u8, prefab_cache: *PrefabCache, include_depth: usize) !void {
+            if (include_depth > MAX_DEPTH) return error.IncludeDepthExceeded;
+
+            const file = try std.fs.cwd().openFile(path, .{});
             defer file.close();
             const source = try file.readToEndAlloc(game.allocator, 1024 * 1024);
             defer game.allocator.free(source);
@@ -35,13 +45,18 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
 
             const scene_obj = scene_value.asObject() orelse return;
 
-            // Load prefab cache (tries .jsonc then .zon)
-            var prefab_cache = PrefabCache.init(game.allocator, prefab_dir);
+            // Process includes first — their entities are created before this file's own entities
+            if (scene_obj.getArray("include")) |include_arr| {
+                for (include_arr.items) |include_val| {
+                    const include_path = include_val.asString() orelse continue;
+                    try loadSceneFile(game, include_path, prefab_cache, include_depth + 1);
+                }
+            }
 
-            // Process entities
+            // Process this file's entities
             if (scene_obj.getArray("entities")) |entities_arr| {
                 for (entities_arr.items) |entity_val| {
-                    try loadEntity(game, entity_val, &prefab_cache, 0);
+                    try loadEntity(game, entity_val, prefab_cache, 0);
                 }
             }
         }
