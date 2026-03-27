@@ -27,7 +27,6 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
         pub fn loadScene(game: *GameType, scene_path: []const u8, prefab_dir: []const u8) !void {
             // Load prefab cache (tries .jsonc then .zon)
             var prefab_cache = PrefabCache.init(game.allocator, prefab_dir);
-            defer prefab_cache.deinit();
 
             try loadSceneFile(game, scene_path, &prefab_cache, 0);
         }
@@ -65,13 +64,13 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
         const MAX_DEPTH = 16;
 
         /// Minimal prefab cache — loads and caches prefab files from disk.
+        /// Note: source buffers and parsed Value trees are intentionally NOT freed
+        /// here — deserialized components hold []const u8 slices that reference
+        /// this data, so it must live for the game's lifetime.
         const PrefabCache = struct {
             prefabs: std.StringHashMap(Value),
             allocator: std.mem.Allocator,
             prefab_dir: []const u8,
-            // Track source buffers — the parsed Value tree references them,
-            // so they must stay alive until the cache is cleaned up.
-            source_buffers: std.ArrayList([]const u8) = .{},
 
             fn init(allocator: std.mem.Allocator, prefab_dir: []const u8) PrefabCache {
                 return .{
@@ -79,17 +78,6 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
                     .allocator = allocator,
                     .prefab_dir = prefab_dir,
                 };
-            }
-
-            fn deinit(self: *PrefabCache) void {
-                // Free duped key strings
-                var it = self.prefabs.keyIterator();
-                while (it.next()) |key| self.allocator.free(key.*);
-                self.prefabs.deinit();
-
-                // Free source buffers backing the parsed Value trees
-                for (self.source_buffers.items) |buf| self.allocator.free(buf);
-                self.source_buffers.deinit(self.allocator);
             }
 
             fn get(self: *PrefabCache, name: []const u8) ?Value {
@@ -101,7 +89,6 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
                 defer file.close();
 
                 const src = file.readToEndAlloc(self.allocator, 1024 * 1024) catch return null;
-                self.source_buffers.append(self.allocator, src) catch return null;
                 var p = JsoncParser.init(self.allocator, src);
                 const val = p.parse() catch return null;
                 self.prefabs.put(self.allocator.dupe(u8, name) catch return null, val) catch return null;
@@ -611,6 +598,16 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
 
             // All other components — comptime dispatch via Components registry.
             const filtered = stripEntityArrayFields(value, game.allocator);
+            defer {
+                // Free the filtered entries slice if it was newly allocated
+                if (filtered.asObject()) |fo| {
+                    if (value.asObject()) |orig| {
+                        if (fo.entries.ptr != orig.entries.ptr) {
+                            game.allocator.free(fo.entries);
+                        }
+                    }
+                }
+            }
             const comp_names = comptime Components.names();
             inline for (comp_names) |comp_name| {
                 if (std.mem.eql(u8, name, comp_name)) {
