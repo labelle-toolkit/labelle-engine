@@ -5,6 +5,7 @@
 ///
 /// Plugin system convention:
 ///   pub const Systems = struct {
+///       pub const game_states = .{ "playing" };  // optional — omit to run in all states
 ///       pub fn setup(game: anytype) void { ... }
 ///       pub fn tick(game: anytype, dt: f32) void { ... }
 ///       pub fn postTick(game: anytype, dt: f32) void { ... }
@@ -13,6 +14,8 @@
 ///   };
 ///
 /// All functions are optional — only declare what you need.
+/// game_states is optional — omit to run in all states. The game's
+/// project.labelle can override this with per-plugin `.states`.
 ///
 /// Usage (in generated main.zig):
 ///   const PluginSystems = engine.SystemRegistry(.{
@@ -27,7 +30,8 @@ pub fn SystemRegistry(comptime plugin_modules: anytype) type {
     const info = @typeInfo(@TypeOf(plugin_modules));
 
     return struct {
-        const std_time = @import("std").time;
+        const std = @import("std");
+        const std_time = std.time;
         const builtin = @import("builtin");
         pub const profiling_enabled = builtin.mode == .Debug;
 
@@ -84,16 +88,22 @@ pub fn SystemRegistry(comptime plugin_modules: anytype) type {
         }
 
         /// Call tick() on all plugin systems that declare it.
+        /// Respects game_states — skips plugins not active in the current state.
         pub fn tick(game: anytype, dt: f32) void {
+            const current_state = getGameState(game);
             comptime var pidx: usize = 0;
             inline for (info.@"struct".fields) |field| {
                 const mod = @field(plugin_modules, field.name);
                 if (@hasDecl(mod, "Systems")) {
                     const Sys = @field(mod, "Systems");
                     if (@hasDecl(Sys, "tick")) {
-                        var timer = std_time.Timer.start() catch null;
-                        Sys.tick(game, dt);
-                        if (timer) |*t| plugin_profile[pidx].tick_ns = t.read();
+                        if (isStateAllowed(Sys, current_state)) {
+                            var timer = std_time.Timer.start() catch null;
+                            Sys.tick(game, dt);
+                            if (timer) |*t| plugin_profile[pidx].tick_ns = t.read();
+                        } else if (profiling_enabled) {
+                            plugin_profile[pidx].tick_ns = 0;
+                        }
                     }
                     pidx += 1;
                 }
@@ -102,15 +112,20 @@ pub fn SystemRegistry(comptime plugin_modules: anytype) type {
 
         /// Call postTick() on all plugin systems that declare it.
         pub fn postTick(game: anytype, dt: f32) void {
+            const current_state = getGameState(game);
             comptime var pidx: usize = 0;
             inline for (info.@"struct".fields) |field| {
                 const mod = @field(plugin_modules, field.name);
                 if (@hasDecl(mod, "Systems")) {
                     const Sys = @field(mod, "Systems");
                     if (@hasDecl(Sys, "postTick")) {
-                        var timer = std_time.Timer.start() catch null;
-                        Sys.postTick(game, dt);
-                        if (timer) |*t| plugin_profile[pidx].post_tick_ns = t.read();
+                        if (isStateAllowed(Sys, current_state)) {
+                            var timer = std_time.Timer.start() catch null;
+                            Sys.postTick(game, dt);
+                            if (timer) |*t| plugin_profile[pidx].post_tick_ns = t.read();
+                        } else if (profiling_enabled) {
+                            plugin_profile[pidx].post_tick_ns = 0;
+                        }
                     }
                     pidx += 1;
                 }
@@ -119,19 +134,46 @@ pub fn SystemRegistry(comptime plugin_modules: anytype) type {
 
         /// Call drawGui() on all plugin systems that declare it.
         pub fn drawGui(game: anytype) void {
+            const current_state = getGameState(game);
             comptime var pidx: usize = 0;
             inline for (info.@"struct".fields) |field| {
                 const mod = @field(plugin_modules, field.name);
                 if (@hasDecl(mod, "Systems")) {
                     const Sys = @field(mod, "Systems");
                     if (@hasDecl(Sys, "drawGui")) {
-                        var timer = std_time.Timer.start() catch null;
-                        Sys.drawGui(game);
-                        if (timer) |*t| plugin_profile[pidx].draw_gui_ns = t.read();
+                        if (isStateAllowed(Sys, current_state)) {
+                            var timer = std_time.Timer.start() catch null;
+                            Sys.drawGui(game);
+                            if (timer) |*t| plugin_profile[pidx].draw_gui_ns = t.read();
+                        } else if (profiling_enabled) {
+                            plugin_profile[pidx].draw_gui_ns = 0;
+                        }
                     }
                     pidx += 1;
                 }
             }
+        }
+
+        /// Check if a plugin's Systems is allowed to run in the current game state.
+        /// Plugins without game_states run in all states.
+        fn isStateAllowed(comptime Sys: type, state: ?[]const u8) bool {
+            if (!@hasDecl(Sys, "game_states")) return true;
+            const game_state = state orelse return true;
+            const states = Sys.game_states;
+            inline for (states) |s| {
+                if (std.mem.eql(u8, s, game_state)) return true;
+            }
+            return false;
+        }
+
+        /// Query the game for its current state string.
+        fn getGameState(game: anytype) ?[]const u8 {
+            const GameType = @TypeOf(game);
+            const Inner = if (@typeInfo(GameType) == .pointer) @typeInfo(GameType).pointer.child else GameType;
+            if (@hasDecl(Inner, "getState")) {
+                return game.getState();
+            }
+            return null;
         }
 
         /// Call deinit() on all plugin systems in reverse order (mirrors setup).
