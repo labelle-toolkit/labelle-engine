@@ -8,7 +8,6 @@
 // Submodules
 pub const types = @import("types.zig");
 pub const core = @import("core.zig");
-pub const loader = @import("loader.zig");
 pub const entity_writer = @import("entity_writer.zig");
 pub const prefab = @import("prefab.zig");
 pub const component = @import("component.zig");
@@ -20,8 +19,6 @@ pub const system = @import("system.zig");
 pub const RefInfo = types.RefInfo;
 pub const isReference = types.isReference;
 pub const extractRefInfo = types.extractRefInfo;
-pub const generateAutoId = types.generateAutoId;
-pub const getEntityId = types.getEntityId;
 pub const ReferenceContext = types.ReferenceContext;
 pub const PendingReference = types.PendingReference;
 pub const PendingParentRef = types.PendingParentRef;
@@ -59,7 +56,3 @@ pub const EntityWriter = entity_writer.EntityWriter;
 // ── System ──
 pub const SystemRegistry = system.SystemRegistry;
 
-// ── Loader ──
-pub const SceneLoader = loader.SceneLoader;
-pub const SceneLoaderWithGizmos = loader.SceneLoaderWithGizmos;
-pub const SimpleSceneLoader = loader.SimpleSceneLoader;

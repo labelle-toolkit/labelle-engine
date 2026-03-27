@@ -52,19 +52,6 @@ pub fn extractRefInfo(comptime val: anytype) ?RefInfo {
     return null;
 }
 
-/// Generate an auto-ID for an entity at a given index (e.g., "_e0", "_e1").
-pub fn generateAutoId(comptime index: usize) []const u8 {
-    return std.fmt.comptimePrint("_e{d}", .{index});
-}
-
-/// Get the entity ID from a .zon entity definition, or generate one.
-pub fn getEntityId(comptime entity_def: anytype, comptime index: usize) []const u8 {
-    if (@hasField(@TypeOf(entity_def), "id")) {
-        return entity_def.id;
-    }
-    return generateAutoId(index);
-}
-
 // ============================================================
 // Reference context for two-phase loading
 // ============================================================

@@ -99,9 +99,6 @@ pub const MergeHookPayloads = core.MergeHookPayloads;
 
 // ── Scene System ──
 pub const Scene = scene_mod.Scene;
-pub const SceneLoader = scene_mod.SceneLoader;
-pub const SceneLoaderWithGizmos = scene_mod.SceneLoaderWithGizmos;
-pub const SimpleSceneLoader = scene_mod.SimpleSceneLoader;
 pub const PrefabRegistry = scene_mod.PrefabRegistry;
 pub const ComponentRegistry = scene_mod.ComponentRegistry;
 pub const ComponentRegistryMulti = scene_mod.ComponentRegistryMulti;
@@ -113,9 +110,6 @@ pub const NoGizmos = scene_mod.NoGizmos;
 pub const NoScripts = scene_mod.NoScripts;
 pub const ScriptRunner = script_runner_mod.ScriptRunner;
 pub const SystemRegistry = scene_mod.SystemRegistry;
-pub const RefInfo = scene_mod.RefInfo;
-pub const isReference = scene_mod.isReference;
-pub const extractRefInfo = scene_mod.extractRefInfo;
 pub const ReferenceContext = scene_mod.ReferenceContext;
 
 // ── Animation ──
