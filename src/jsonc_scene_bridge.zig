@@ -37,10 +37,16 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
 
             const file = try std.fs.cwd().openFile(path, .{});
             defer file.close();
-            const source = try file.readToEndAlloc(game.allocator, 1024 * 1024);
-            defer game.allocator.free(source);
 
-            var parser = JsoncParser.init(game.allocator, source);
+            // Use an arena for the scene parser — the source buffer and parsed
+            // Value tree (entries/items slices) are only needed during entity
+            // processing and can be freed together afterwards.
+            var parse_arena = std.heap.ArenaAllocator.init(game.allocator);
+            defer parse_arena.deinit();
+            const parse_alloc = parse_arena.allocator();
+
+            const source = try file.readToEndAlloc(parse_alloc, 1024 * 1024);
+            var parser = JsoncParser.init(parse_alloc, source);
             const scene_value = try parser.parse();
 
             const scene_obj = scene_value.asObject() orelse return;
@@ -276,8 +282,10 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
                 }
                 if (entity_count == 0) continue;
 
-                // Spawn entities and collect IDs
-                const ids = game.allocator.alloc(u64, entity_count) catch continue;
+                // Spawn entities and collect IDs.
+                // Uses page_allocator because IDs are stored in component fields
+                // ([]const u64) and live for the game's lifetime.
+                const ids = std.heap.page_allocator.alloc(u64, entity_count) catch continue;
                 var idx: usize = 0;
                 for (arr.items) |item| {
                     if (isEntityLike(item)) {

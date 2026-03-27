@@ -39,6 +39,7 @@ pub fn build(b: *std.Build) void {
         "test/game_log_test.zig",
         "test/save_policy_test.zig",
         "test/save_load_mixin_test.zig",
+        "test/jsonc_bridge_leak_test.zig",
     };
 
     for (test_files) |test_file| {
