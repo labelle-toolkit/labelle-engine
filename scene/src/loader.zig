@@ -194,7 +194,6 @@ pub fn SceneLoaderWithGizmos(
                         &sceneUpdate,
                         &sceneDeinit,
                         &sceneGetEntityByName,
-                        null,
                         &sceneAddEntity,
                         &sceneClearEntities,
                     );

@@ -155,9 +155,8 @@ pub fn GameConfig(
         active_scene_get_entity_fn: ?*const fn (*anyopaque, []const u8) ?Entity = null,
         active_scene_add_entity_fn: ?*const fn (*anyopaque, Entity) void = null,
         active_scene_clear_entities_fn: ?*const fn (*anyopaque) void = null,
-        /// Script names listed in the active scene's .scripts field.
-        /// null = no filtering (scene without .scripts or no scene), slice = only these run.
-        active_scene_script_names: ?[]const []const u8 = null,
+
+
         gizmo_reconcile_fn: ?*const fn (*Self) void = null,
 
         // Logging
@@ -528,7 +527,6 @@ pub fn GameConfig(
             update_fn: *const fn (*anyopaque, f32) void,
             deinit_fn: *const fn (*anyopaque, std.mem.Allocator) void,
             get_entity_fn: ?*const fn (*anyopaque, []const u8) ?Entity,
-            script_names: ?[]const []const u8,
             add_entity_fn: ?*const fn (*anyopaque, Entity) void,
             clear_entities_fn: ?*const fn (*anyopaque) void,
         ) void {
@@ -539,13 +537,6 @@ pub fn GameConfig(
             self.active_scene_get_entity_fn = get_entity_fn;
             self.active_scene_add_entity_fn = add_entity_fn;
             self.active_scene_clear_entities_fn = clear_entities_fn;
-            self.active_scene_script_names = script_names;
-        }
-
-        /// Returns the active scene's script name list for ScriptRunner filtering.
-        /// null = no filtering (tick all), slice = only tick listed scripts.
-        pub fn getActiveScriptNames(self: *const Self) ?[]const []const u8 {
-            return self.active_scene_script_names;
         }
 
         /// Look up a named entity from the active scene.
@@ -696,7 +687,8 @@ pub fn GameConfig(
                 self.active_scene_get_entity_fn = null;
                 self.active_scene_add_entity_fn = null;
                 self.active_scene_clear_entities_fn = null;
-                self.active_scene_script_names = null;
+
+
                 self.active_world.sprite_cache.clear();
                 // Free nested entity array allocations from the outgoing scene
                 _ = self.active_world.nested_entity_arena.reset(.retain_capacity);

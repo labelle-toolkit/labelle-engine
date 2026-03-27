@@ -120,7 +120,6 @@ pub fn Mixin(comptime Game: type) type {
             update_fn: *const fn (*anyopaque, f32) void,
             deinit_fn: *const fn (*anyopaque, std.mem.Allocator) void,
             get_entity_fn: ?*const fn (*anyopaque, []const u8) ?Game.EntityType,
-            script_names: ?[]const []const u8,
             add_entity_fn: ?*const fn (*anyopaque, Game.EntityType) void,
             clear_entities_fn: ?*const fn (*anyopaque) void,
         ) void {
@@ -131,7 +130,6 @@ pub fn Mixin(comptime Game: type) type {
             self.active_scene_get_entity_fn = get_entity_fn;
             self.active_scene_add_entity_fn = add_entity_fn;
             self.active_scene_clear_entities_fn = clear_entities_fn;
-            self.active_scene_script_names = script_names;
         }
     };
 }

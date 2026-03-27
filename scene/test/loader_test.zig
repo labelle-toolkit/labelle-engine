@@ -50,7 +50,7 @@ const TestGame = struct {
     pub fn fireOnReady(_: *Self, _: u32, comptime _: type) void {}
     pub fn setParent(_: *Self, _: u32, _: u32, _: anytype) void {}
     pub fn destroyEntityOnly(_: *Self, _: u32) void {}
-    pub fn setActiveScene(_: *Self, _: *anyopaque, _: anytype, _: anytype, _: anytype, _: anytype, _: anytype, _: anytype) void {}
+    pub fn setActiveScene(_: *Self, _: *anyopaque, _: anytype, _: anytype, _: anytype, _: anytype, _: anytype) void {}
 
     fn init(allocator: std.mem.Allocator) Self {
         const world = allocator.create(World) catch @panic("OOM");

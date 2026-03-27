@@ -166,7 +166,6 @@ pub fn ScriptRunner(
         }
 
         pub fn tick(self: *Self, game: anytype, dt: f32) void {
-            const active = getActiveFilter(game);
             const current_state = getGameState(game);
             const decls = @typeInfo(AllScripts).@"struct".decls;
             comptime var profile_idx: usize = 0;
@@ -174,7 +173,7 @@ pub fn ScriptRunner(
                 const mod = @field(AllScripts, d.name);
                 if (comptime isGameScript(mod)) {
                     if (comptime @hasDecl(mod, "tick")) {
-                        if ((active == null or nameInSlice(d.name, active.?)) and isStateAllowedCached(mod, current_state)) {
+                        if (isStateAllowedCached(mod, current_state)) {
                             if (profiling_enabled) {
                                 var timer = std.time.Timer.start() catch null;
                                 dispatchTickCall(mod.tick, game, self, d.name, dt);
@@ -194,7 +193,6 @@ pub fn ScriptRunner(
         }
 
         pub fn drawGui(self: *Self, game: anytype) void {
-            const active = getActiveFilter(game);
             const current_state = getGameState(game);
             const decls = @typeInfo(AllScripts).@"struct".decls;
             comptime var profile_idx: usize = 0;
@@ -202,7 +200,7 @@ pub fn ScriptRunner(
                 const mod = @field(AllScripts, d.name);
                 if (comptime isGameScript(mod)) {
                     if (comptime @hasDecl(mod, "drawGui")) {
-                        if ((active == null or nameInSlice(d.name, active.?)) and isStateAllowedCached(mod, current_state)) {
+                        if (isStateAllowedCached(mod, current_state)) {
                             if (profiling_enabled) {
                                 var timer = std.time.Timer.start() catch null;
                                 dispatchCall(mod.drawGui, game, self, d.name);
@@ -219,25 +217,6 @@ pub fn ScriptRunner(
                     profile_idx += 1;
                 }
             }
-        }
-
-        /// Query the game for the active scene's script filter list.
-        /// Returns null if no filtering (tick all scripts).
-        /// Handles both pointer and value game types.
-        fn getActiveFilter(game: anytype) ?[]const []const u8 {
-            const info = @typeInfo(@TypeOf(game));
-            const GameType = if (info == .pointer) info.pointer.child else @TypeOf(game);
-            if (comptime @hasDecl(GameType, "getActiveScriptNames")) {
-                return game.getActiveScriptNames();
-            }
-            return null;
-        }
-
-        fn nameInSlice(comptime name: []const u8, names: []const []const u8) bool {
-            for (names) |n| {
-                if (std.mem.eql(u8, n, name)) return true;
-            }
-            return false;
         }
 
         /// Check whether a script is allowed to run given a cached game state.
