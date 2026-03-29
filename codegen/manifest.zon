@@ -21,7 +21,6 @@
         "game_layers_block",
         "resource_registry_block",
         "game_hooks_block",
-        "assembled_game_block",
         "prefab_registry_block",
         "component_registry_block",
         "system_registry_block",
