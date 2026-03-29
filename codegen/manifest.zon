@@ -1,0 +1,41 @@
+.{
+    .format_version = 1,
+    .templates = .{
+        .main_zig = "main.zig.template",
+    },
+
+    // All scalar variables the CLI must provide when rendering main.zig.template.
+    // Scalars are inserted verbatim at {{name}} sites.
+    .required_scalars = .{
+        // ECS mode — true when using MockEcsBackend, false for adapter
+        "ecs_mode_mock",
+        // GUI — true when a real GUI backend is configured
+        "has_gui",
+        // Whether scripts/context.zig exists
+        "has_context",
+
+        // Pre-computed code blocks (the CLI builds these from project config):
+        "hook_imports_block",
+        "enum_imports_block",
+        "jsonc_scene_block",
+        "game_layers_block",
+        "resource_registry_block",
+        "game_hooks_block",
+        "prefab_registry_block",
+        "component_registry_block",
+        "system_registry_block",
+        "all_scripts_block",
+        "view_registry_block",
+        "gizmo_registry_block",
+
+        // Lifecycle placeholder — the CLI fills this with the
+        // backend-specific main/setup/tick/draw section.
+        "lifecycle",
+    },
+
+    // List variables are not used by main.zig.template — all list-dependent
+    // sections are pre-computed into scalar blocks by the CLI, because they
+    // require identifier transformations (pathToIdent, snakeToPascal) that
+    // the template engine does not perform.
+    .required_lists = .{},
+}

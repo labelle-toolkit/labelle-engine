@@ -20,5 +20,6 @@
         "src",
         "scene",
         "jsonc",
+        "codegen",
     },
 }
