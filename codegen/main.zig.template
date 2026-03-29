@@ -18,8 +18,7 @@ const gfx = @import("labelle-gfx");
 {{game_layers_block}}
 {{resource_registry_block}}const AllHookPayloads = engine.HookPayload(EcsBackend.Entity);
 
-{{game_hooks_block}}{{assembled_game_block}}
-{{prefab_registry_block}}{{component_registry_block}}{{system_registry_block}}{{all_scripts_block}}const Scripts = engine.ScriptRegistry(AllScripts);
+{{game_hooks_block}}{{assembled_game_block}}{{prefab_registry_block}}{{component_registry_block}}{{system_registry_block}}{{all_scripts_block}}const Scripts = engine.ScriptRegistry(AllScripts);
 
 {{#if has_context}}const GameContext = @import("scripts/context.zig").GameContext(EcsBackend);
 {{#else}}const GameContext = struct {};
