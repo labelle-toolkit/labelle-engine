@@ -32,6 +32,7 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
         }
 
         /// Load a scene from an in-memory JSONC source string (for embedded/release builds).
+        /// The source must outlive the loaded scene — typically a comptime `@embedFile` slice.
         pub fn loadSceneFromSource(game: *GameType, source: []const u8, prefab_dir: []const u8) !void {
             var prefab_cache = PrefabCache.init(game.allocator, prefab_dir);
 
