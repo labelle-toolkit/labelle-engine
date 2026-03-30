@@ -68,6 +68,29 @@ test "loadScene: simple scene with components does not leak" {
     try Bridge.loadScene(&game, scene_path, prefab_path);
 }
 
+test "loadSceneFromSource: simple scene with components does not leak" {
+    var tmp_dir = testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    try tmp_dir.dir.makeDir("prefabs");
+    const prefab_path = try tmpPath(&tmp_dir, "prefabs");
+    defer testing.allocator.free(prefab_path);
+
+    const source =
+        \\{
+        \\  "entities": [
+        \\    { "components": { "Position": { "x": 10, "y": 20 }, "Health": { "current": 50, "max": 100 } } },
+        \\    { "components": { "Position": { "x": 30, "y": 40 }, "Inventory": { "slots": 5 } } }
+        \\  ]
+        \\}
+    ;
+
+    var game = engine.Game.init(testing.allocator);
+    defer game.deinit();
+
+    try Bridge.loadSceneFromSource(&game, source, prefab_path);
+}
+
 test "loadScene: scene with prefabs does not leak" {
     var tmp_dir = testing.tmpDir(.{});
     defer tmp_dir.cleanup();

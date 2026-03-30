@@ -31,6 +31,14 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
             try loadSceneFile(game, scene_path, &prefab_cache, 0);
         }
 
+        /// Load a scene from an in-memory JSONC source string (for embedded/release builds).
+        /// The source must outlive the loaded scene — typically a comptime `@embedFile` slice.
+        pub fn loadSceneFromSource(game: *GameType, source: []const u8, prefab_dir: []const u8) !void {
+            var prefab_cache = PrefabCache.init(game.allocator, prefab_dir);
+
+            try loadSceneSource(game, source, &prefab_cache);
+        }
+
         /// Load a single scene/fragment file, processing includes recursively then its own entities.
         fn loadSceneFile(game: *GameType, path: []const u8, prefab_cache: *PrefabCache, include_depth: usize) !void {
             if (include_depth > MAX_DEPTH) return error.IncludeDepthExceeded;
@@ -60,6 +68,34 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
             }
 
             // Process this file's entities
+            if (scene_obj.getArray("entities")) |entities_arr| {
+                for (entities_arr.items) |entity_val| {
+                    try loadEntity(game, entity_val, prefab_cache, 0);
+                }
+            }
+        }
+
+        /// Load a scene from an in-memory source string (no file I/O).
+        /// Includes still load from disk if present in the scene.
+        /// Note: duplicates parse/entity logic from loadSceneFile because Zig cannot
+        /// resolve inferred error sets with mutual recursion (processScene <-> loadSceneFile).
+        fn loadSceneSource(game: *GameType, source: []const u8, prefab_cache: *PrefabCache) !void {
+            var parse_arena = std.heap.ArenaAllocator.init(game.allocator);
+            defer parse_arena.deinit();
+            const parse_alloc = parse_arena.allocator();
+
+            var parser = JsoncParser.init(parse_alloc, source);
+            const scene_value = try parser.parse();
+
+            const scene_obj = scene_value.asObject() orelse return;
+
+            if (scene_obj.getArray("include")) |include_arr| {
+                for (include_arr.items) |include_val| {
+                    const include_path = include_val.asString() orelse continue;
+                    try loadSceneFile(game, include_path, prefab_cache, 1);
+                }
+            }
+
             if (scene_obj.getArray("entities")) |entities_arr| {
                 for (entities_arr.items) |entity_val| {
                     try loadEntity(game, entity_val, prefab_cache, 0);
@@ -651,6 +687,12 @@ pub fn JsoncSceneBridgeWithGizmos(
         /// Load a JSONC scene file and set up gizmo reconciliation.
         pub fn loadScene(game: *GameType, scene_path: []const u8, prefab_dir: []const u8) !void {
             try BaseBridge.loadScene(game, scene_path, prefab_dir);
+            game.gizmo_reconcile_fn = &reconcileGizmos;
+        }
+
+        /// Load a scene from an in-memory JSONC source string and set up gizmo reconciliation.
+        pub fn loadSceneFromSource(game: *GameType, source: []const u8, prefab_dir: []const u8) !void {
+            try BaseBridge.loadSceneFromSource(game, source, prefab_dir);
             game.gizmo_reconcile_fn = &reconcileGizmos;
         }
 
