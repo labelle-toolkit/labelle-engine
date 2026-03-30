@@ -31,6 +31,13 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
             try loadSceneFile(game, scene_path, &prefab_cache, 0);
         }
 
+        /// Load a scene from an in-memory JSONC source string (for embedded/release builds).
+        pub fn loadSceneFromSource(game: *GameType, source: []const u8, prefab_dir: []const u8) !void {
+            var prefab_cache = PrefabCache.init(game.allocator, prefab_dir);
+
+            try loadSceneSource(game, source, &prefab_cache);
+        }
+
         /// Load a single scene/fragment file, processing includes recursively then its own entities.
         fn loadSceneFile(game: *GameType, path: []const u8, prefab_cache: *PrefabCache, include_depth: usize) !void {
             if (include_depth > MAX_DEPTH) return error.IncludeDepthExceeded;
@@ -38,14 +45,26 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
             const file = try std.fs.cwd().openFile(path, .{});
             defer file.close();
 
-            // Use an arena for the scene parser — the source buffer and parsed
-            // Value tree (entries/items slices) are only needed during entity
-            // processing and can be freed together afterwards.
             var parse_arena = std.heap.ArenaAllocator.init(game.allocator);
             defer parse_arena.deinit();
             const parse_alloc = parse_arena.allocator();
 
             const source = try file.readToEndAlloc(parse_alloc, 1024 * 1024);
+
+            try processScene(game, source, parse_alloc, prefab_cache, include_depth);
+        }
+
+        /// Load a scene from an in-memory source string.
+        fn loadSceneSource(game: *GameType, source: []const u8, prefab_cache: *PrefabCache) !void {
+            var parse_arena = std.heap.ArenaAllocator.init(game.allocator);
+            defer parse_arena.deinit();
+            const parse_alloc = parse_arena.allocator();
+
+            try processScene(game, source, parse_alloc, prefab_cache, 0);
+        }
+
+        /// Shared scene processing: parse JSONC, handle includes, instantiate entities.
+        fn processScene(game: *GameType, source: []const u8, parse_alloc: std.mem.Allocator, prefab_cache: *PrefabCache, include_depth: usize) !void {
             var parser = JsoncParser.init(parse_alloc, source);
             const scene_value = try parser.parse();
 
@@ -651,6 +670,12 @@ pub fn JsoncSceneBridgeWithGizmos(
         /// Load a JSONC scene file and set up gizmo reconciliation.
         pub fn loadScene(game: *GameType, scene_path: []const u8, prefab_dir: []const u8) !void {
             try BaseBridge.loadScene(game, scene_path, prefab_dir);
+            game.gizmo_reconcile_fn = &reconcileGizmos;
+        }
+
+        /// Load a scene from an in-memory JSONC source string and set up gizmo reconciliation.
+        pub fn loadSceneFromSource(game: *GameType, source: []const u8, prefab_dir: []const u8) !void {
+            try BaseBridge.loadSceneFromSource(game, source, prefab_dir);
             game.gizmo_reconcile_fn = &reconcileGizmos;
         }
 
