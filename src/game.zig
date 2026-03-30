@@ -159,6 +159,10 @@ pub fn GameConfig(
 
         gizmo_reconcile_fn: ?*const fn (*Self) void = null,
 
+        // Prefab spawning — set by JSONC scene bridge during loadScene.
+        prefab_dir: ?[]const u8 = null,
+        spawn_prefab_fn: ?*const fn (*Self, []const u8, Position) ?Entity = null,
+
         // Logging
         log: Log = .{},
 
@@ -255,6 +259,17 @@ pub fn GameConfig(
             const entity = self.ecs_backend.createEntity();
             self.emitHook(.{ .entity_created = .{ .entity_id = entity } });
             return entity;
+        }
+
+        /// Spawn an entity from a named prefab at the given position.
+        /// Returns the entity, or null if the prefab was not found.
+        /// Requires a JSONC scene to have been loaded (which sets up the prefab directory).
+        pub fn spawnPrefab(self: *Self, name: []const u8, pos: Position) ?Entity {
+            if (self.spawn_prefab_fn) |func| {
+                return func(self, name, pos);
+            }
+            self.log.err("[Game] spawnPrefab: no prefab loader configured (load a JSONC scene first)", .{});
+            return null;
         }
 
         pub fn destroyEntity(self: *Self, entity: Entity) void {
