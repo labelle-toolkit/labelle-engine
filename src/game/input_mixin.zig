@@ -1,18 +1,20 @@
 /// Input mixin — keyboard, mouse, and touch forwarding.
 const core = @import("labelle-core");
 const Position = core.Position;
+const input_types = @import("../input_types.zig");
+const KeyboardKey = input_types.KeyboardKey;
 
 /// Returns the input forwarding mixin for a given Game type.
 pub fn Mixin(comptime Game: type) type {
     const Input = Game.Input;
 
     return struct {
-        pub fn isKeyDown(_: *Game, key: u32) bool {
-            return Input.isKeyDown(key);
+        pub fn isKeyDown(_: *Game, key: KeyboardKey) bool {
+            return Input.isKeyDown(@intCast(@intFromEnum(key)));
         }
 
-        pub fn isKeyPressed(_: *Game, key: u32) bool {
-            return Input.isKeyPressed(key);
+        pub fn isKeyPressed(_: *Game, key: KeyboardKey) bool {
+            return Input.isKeyPressed(@intCast(@intFromEnum(key)));
         }
 
         pub fn getMouseX(_: *Game) f32 {
