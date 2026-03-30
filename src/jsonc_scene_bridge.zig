@@ -76,6 +76,8 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
 
         /// Load a scene from an in-memory source string (no file I/O).
         /// Includes still load from disk if present in the scene.
+        /// Note: duplicates parse/entity logic from loadSceneFile because Zig cannot
+        /// resolve inferred error sets with mutual recursion (processScene <-> loadSceneFile).
         fn loadSceneSource(game: *GameType, source: []const u8, prefab_cache: *PrefabCache) !void {
             var parse_arena = std.heap.ArenaAllocator.init(game.allocator);
             defer parse_arena.deinit();
