@@ -29,6 +29,10 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
             var prefab_cache = PrefabCache.init(game.allocator, prefab_dir);
 
             try loadSceneFile(game, scene_path, &prefab_cache, 0);
+
+            // Enable runtime prefab spawning
+            game.prefab_dir = prefab_dir;
+            game.spawn_prefab_fn = &spawnPrefabImpl;
         }
 
         /// Load a scene from an in-memory JSONC source string (for embedded/release builds).
@@ -37,6 +41,51 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
             var prefab_cache = PrefabCache.init(game.allocator, prefab_dir);
 
             try loadSceneSource(game, source, &prefab_cache);
+
+            // Enable runtime prefab spawning
+            game.prefab_dir = prefab_dir;
+            game.spawn_prefab_fn = &spawnPrefabImpl;
+        }
+
+        /// Runtime prefab instantiation — creates an entity from a named prefab.
+        fn spawnPrefabImpl(game: *GameType, name: []const u8, pos: Position) ?Entity {
+            const prefab_dir = game.prefab_dir orelse return null;
+            var prefab_cache = PrefabCache.init(game.allocator, prefab_dir);
+            const prefab_val = prefab_cache.get(name) orelse {
+                game.log.err("[spawnPrefab] Prefab '{s}' not found in '{s}'", .{ name, prefab_dir });
+                return null;
+            };
+            const prefab_obj = prefab_val.asObject() orelse return null;
+            const prefab_components = prefab_obj.getObject("components") orelse return null;
+
+            const entity = game.createEntity();
+            game.setPosition(entity, pos);
+
+            // Apply all prefab components
+            for (prefab_components.entries) |entry| {
+                applyComponent(game, entity, entry.key, entry.value, .{ .x = 0, .y = 0 });
+            }
+
+            // Handle nested entities (e.g. workstation storages)
+            const entity_pos = game.getPosition(entity);
+            for (prefab_components.entries) |entry| {
+                spawnAndLinkNestedEntities(game, entity, entry.key, entry.value, entity_pos, &prefab_cache, 0);
+            }
+
+            // Fire onReady hooks
+            var applied = std.StringHashMap(void).init(game.allocator);
+            defer applied.deinit();
+            fireOnReadyAll(game, entity, null, prefab_components, &applied);
+
+            // Process children
+            if (prefab_obj.getArray("children")) |children| {
+                for (children.items) |child_val| {
+                    const child = spawnChildEntity(game, child_val, &prefab_cache, 1, entity_pos) catch continue;
+                    game.setParent(child, entity, .{});
+                }
+            }
+
+            return entity;
         }
 
         /// Load a single scene/fragment file, processing includes recursively then its own entities.
