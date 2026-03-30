@@ -162,6 +162,7 @@ pub fn GameConfig(
         // Prefab spawning — set by JSONC scene bridge during loadScene.
         prefab_dir: ?[]const u8 = null,
         spawn_prefab_fn: ?*const fn (*Self, []const u8, Position) ?Entity = null,
+        prefab_cache_ptr: ?*anyopaque = null,
 
         // Logging
         log: Log = .{},

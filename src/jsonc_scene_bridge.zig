@@ -23,12 +23,21 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
     const Shape = GameType.ShapeComp;
 
     return struct {
+        /// Allocate a persistent PrefabCache and store it on the game for reuse.
+        fn initPersistentCache(game: *GameType, prefab_dir: []const u8) !*PrefabCache {
+            const persistent = std.heap.page_allocator;
+            const cache = try persistent.create(PrefabCache);
+            cache.* = PrefabCache.init(game.allocator, prefab_dir);
+            game.prefab_cache_ptr = cache;
+            return cache;
+        }
+
         /// Load a JSONC scene file and instantiate all entities in the ECS.
         pub fn loadScene(game: *GameType, scene_path: []const u8, prefab_dir: []const u8) !void {
             // Load prefab cache (tries .jsonc then .zon)
-            var prefab_cache = PrefabCache.init(game.allocator, prefab_dir);
+            const prefab_cache = try initPersistentCache(game, prefab_dir);
 
-            try loadSceneFile(game, scene_path, &prefab_cache, 0);
+            try loadSceneFile(game, scene_path, prefab_cache, 0);
 
             // Enable runtime prefab spawning
             game.prefab_dir = prefab_dir;
@@ -38,9 +47,9 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
         /// Load a scene from an in-memory JSONC source string (for embedded/release builds).
         /// The source must outlive the loaded scene — typically a comptime `@embedFile` slice.
         pub fn loadSceneFromSource(game: *GameType, source: []const u8, prefab_dir: []const u8) !void {
-            var prefab_cache = PrefabCache.init(game.allocator, prefab_dir);
+            const prefab_cache = try initPersistentCache(game, prefab_dir);
 
-            try loadSceneSource(game, source, &prefab_cache);
+            try loadSceneSource(game, source, prefab_cache);
 
             // Enable runtime prefab spawning
             game.prefab_dir = prefab_dir;
@@ -49,9 +58,10 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
 
         /// Runtime prefab instantiation — creates an entity from a named prefab.
         fn spawnPrefabImpl(game: *GameType, name: []const u8, pos: Position) ?Entity {
-            const prefab_dir = game.prefab_dir orelse return null;
-            var prefab_cache = PrefabCache.init(game.allocator, prefab_dir);
+            const cache_ptr = game.prefab_cache_ptr orelse return null;
+            var prefab_cache = @as(*PrefabCache, @ptrCast(@alignCast(cache_ptr)));
             const prefab_val = prefab_cache.get(name) orelse {
+                const prefab_dir = game.prefab_dir orelse "?";
                 game.log.err("[spawnPrefab] Prefab '{s}' not found in '{s}'", .{ name, prefab_dir });
                 return null;
             };
@@ -61,15 +71,16 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
             const entity = game.createEntity();
             game.setPosition(entity, pos);
 
-            // Apply all prefab components
+            // Apply all prefab components — use pos as parent_offset so
+            // prefab positions are relative to the spawn point.
             for (prefab_components.entries) |entry| {
-                applyComponent(game, entity, entry.key, entry.value, .{ .x = 0, .y = 0 });
+                applyComponent(game, entity, entry.key, entry.value, pos);
             }
 
             // Handle nested entities (e.g. workstation storages)
             const entity_pos = game.getPosition(entity);
             for (prefab_components.entries) |entry| {
-                spawnAndLinkNestedEntities(game, entity, entry.key, entry.value, entity_pos, &prefab_cache, 0);
+                spawnAndLinkNestedEntities(game, entity, entry.key, entry.value, entity_pos, prefab_cache, 0);
             }
 
             // Fire onReady hooks
@@ -80,7 +91,7 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
             // Process children
             if (prefab_obj.getArray("children")) |children| {
                 for (children.items) |child_val| {
-                    const child = spawnChildEntity(game, child_val, &prefab_cache, 1, entity_pos) catch continue;
+                    const child = spawnChildEntity(game, child_val, prefab_cache, 1, entity_pos) catch continue;
                     game.setParent(child, entity, .{});
                 }
             }
