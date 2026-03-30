@@ -45,26 +45,14 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
             const file = try std.fs.cwd().openFile(path, .{});
             defer file.close();
 
+            // Use an arena for the scene parser — the source buffer and parsed
+            // Value tree (entries/items slices) are only needed during entity
+            // processing and can be freed together afterwards.
             var parse_arena = std.heap.ArenaAllocator.init(game.allocator);
             defer parse_arena.deinit();
             const parse_alloc = parse_arena.allocator();
 
             const source = try file.readToEndAlloc(parse_alloc, 1024 * 1024);
-
-            try processScene(game, source, parse_alloc, prefab_cache, include_depth);
-        }
-
-        /// Load a scene from an in-memory source string.
-        fn loadSceneSource(game: *GameType, source: []const u8, prefab_cache: *PrefabCache) !void {
-            var parse_arena = std.heap.ArenaAllocator.init(game.allocator);
-            defer parse_arena.deinit();
-            const parse_alloc = parse_arena.allocator();
-
-            try processScene(game, source, parse_alloc, prefab_cache, 0);
-        }
-
-        /// Shared scene processing: parse JSONC, handle includes, instantiate entities.
-        fn processScene(game: *GameType, source: []const u8, parse_alloc: std.mem.Allocator, prefab_cache: *PrefabCache, include_depth: usize) !void {
             var parser = JsoncParser.init(parse_alloc, source);
             const scene_value = try parser.parse();
 
@@ -79,6 +67,32 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
             }
 
             // Process this file's entities
+            if (scene_obj.getArray("entities")) |entities_arr| {
+                for (entities_arr.items) |entity_val| {
+                    try loadEntity(game, entity_val, prefab_cache, 0);
+                }
+            }
+        }
+
+        /// Load a scene from an in-memory source string (no file I/O).
+        /// Includes still load from disk if present in the scene.
+        fn loadSceneSource(game: *GameType, source: []const u8, prefab_cache: *PrefabCache) !void {
+            var parse_arena = std.heap.ArenaAllocator.init(game.allocator);
+            defer parse_arena.deinit();
+            const parse_alloc = parse_arena.allocator();
+
+            var parser = JsoncParser.init(parse_alloc, source);
+            const scene_value = try parser.parse();
+
+            const scene_obj = scene_value.asObject() orelse return;
+
+            if (scene_obj.getArray("include")) |include_arr| {
+                for (include_arr.items) |include_val| {
+                    const include_path = include_val.asString() orelse continue;
+                    try loadSceneFile(game, include_path, prefab_cache, 1);
+                }
+            }
+
             if (scene_obj.getArray("entities")) |entities_arr| {
                 for (entities_arr.items) |entity_val| {
                     try loadEntity(game, entity_val, prefab_cache, 0);
