@@ -527,12 +527,31 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
                                 }
                             }
 
-                            // Register ref name in the parent's ref context (#415)
-                            // Scene-level ref on the nested entity takes precedence,
-                            // then fall back to the prefab-level ref.
+                            // Register scene-level ref in the parent's ref context.
+                            // Only explicit "ref" on the nested entity (not from the prefab)
+                            // goes into the parent scope — prefab-internal refs are scoped
+                            // per-instance below to avoid collisions between repeated prefabs.
                             if (ref_ctx) |rctx| {
+                                if (child_obj.getString("ref")) |rn| {
+                                    const entity_id: u64 = @intCast(child);
+                                    if (rctx.ref_map.fetchPut(rn, entity_id) catch null) |existing| {
+                                        game.log.warn("[SceneRef] Duplicate ref '{s}' (entities {d} and {d})", .{ rn, existing.value, entity_id });
+                                    }
+                                }
+                            }
+
+                            // Use a local RefContext for this nested entity's children so that
+                            // prefab-internal refs (e.g. @storage/@item in eis_with_water) are
+                            // scoped per-instance and don't collide across repeated prefabs.
+                            var local_ref_ctx = RefContext.init(game.allocator);
+                            defer local_ref_ctx.deinit();
+                            const nested_ref_ctx: *RefContext = &local_ref_ctx;
+
+                            // Register the nested entity itself in the local context so
+                            // its children can reference it via @ref.
+                            {
                                 const entity_id: u64 = @intCast(child);
-                                const ref_name = child_obj.getString("ref") orelse
+                                const self_ref = child_obj.getString("ref") orelse
                                     if (child_obj.getString("prefab")) |pname|
                                     (if (prefab_cache.get(pname)) |pval|
                                         if (pval.asObject()) |pobj| pobj.getString("ref") else null
@@ -540,10 +559,8 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
                                         null)
                                 else
                                     null;
-                                if (ref_name) |rn| {
-                                    if (rctx.ref_map.fetchPut(rn, entity_id) catch null) |existing| {
-                                        game.log.warn("[SceneRef] Duplicate ref '{s}' (entities {d} and {d})", .{ rn, existing.value, entity_id });
-                                    }
+                                if (self_ref) |rn| {
+                                    local_ref_ctx.ref_map.put(rn, entity_id) catch {};
                                 }
                             }
 
@@ -552,7 +569,7 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
                             // Scene overrides first
                             if (child_scene_comps) |sc| {
                                 for (sc.entries) |e| {
-                                    applyComponentWithRefs(game, child, e.key, e.value, parent_world_pos, ref_ctx) catch {};
+                                    applyComponentWithRefs(game, child, e.key, e.value, parent_world_pos, nested_ref_ctx) catch {};
                                 }
                             }
                             // Prefab defaults
@@ -565,7 +582,7 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
                                         break :blk false;
                                     } else false;
                                     if (!already_set) {
-                                        applyComponentWithRefs(game, child, e.key, e.value, parent_world_pos, ref_ctx) catch {};
+                                        applyComponentWithRefs(game, child, e.key, e.value, parent_world_pos, nested_ref_ctx) catch {};
                                     }
                                 }
                             }
@@ -574,7 +591,7 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
                             const child_pos = game.getPosition(child);
                             if (child_scene_comps) |sc| {
                                 for (sc.entries) |e| {
-                                    spawnAndLinkNestedEntities(game, child, e.key, e.value, child_pos, prefab_cache, depth + 1, ref_ctx);
+                                    spawnAndLinkNestedEntities(game, child, e.key, e.value, child_pos, prefab_cache, depth + 1, nested_ref_ctx);
                                 }
                             }
                             if (child_prefab_comps) |pc| {
@@ -586,7 +603,7 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
                                         break :blk false;
                                     } else false;
                                     if (!already_set) {
-                                        spawnAndLinkNestedEntities(game, child, e.key, e.value, child_pos, prefab_cache, depth + 1, ref_ctx);
+                                        spawnAndLinkNestedEntities(game, child, e.key, e.value, child_pos, prefab_cache, depth + 1, nested_ref_ctx);
                                     }
                                 }
                             }
@@ -594,15 +611,20 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
                             // Process children (prefab children + inline children) (#415)
                             if (child_prefab_children) |children| {
                                 for (children.items) |child_val| {
-                                    const grandchild = loadEntityInternal(game, child_val, prefab_cache, depth + 1, child_pos, ref_ctx) catch continue;
+                                    const grandchild = loadEntityInternal(game, child_val, prefab_cache, depth + 1, child_pos, nested_ref_ctx) catch continue;
                                     game.setParent(grandchild, child, .{});
                                 }
                             }
                             if (child_obj.getArray("children")) |children| {
                                 for (children.items) |child_val| {
-                                    const grandchild = loadEntityInternal(game, child_val, prefab_cache, depth + 1, child_pos, ref_ctx) catch continue;
+                                    const grandchild = loadEntityInternal(game, child_val, prefab_cache, depth + 1, child_pos, nested_ref_ctx) catch continue;
                                     game.setParent(grandchild, child, .{});
                                 }
+                            }
+
+                            // Patch deferred refs from the local context
+                            for (local_ref_ctx.deferred.items) |deferred| {
+                                patchRefField(game, deferred, &local_ref_ctx.ref_map);
                             }
                         }
 
