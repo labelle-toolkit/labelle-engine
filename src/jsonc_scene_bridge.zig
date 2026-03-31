@@ -569,7 +569,9 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
                             // Scene overrides first
                             if (child_scene_comps) |sc| {
                                 for (sc.entries) |e| {
-                                    applyComponentWithRefs(game, child, e.key, e.value, parent_world_pos, nested_ref_ctx) catch {};
+                                    applyComponentWithRefs(game, child, e.key, e.value, parent_world_pos, nested_ref_ctx) catch |err| {
+                                        game.log.err("[NestedEntity] Failed to apply {s}: {s}", .{ e.key, @errorName(err) });
+                                    };
                                 }
                             }
                             // Prefab defaults
@@ -582,7 +584,9 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
                                         break :blk false;
                                     } else false;
                                     if (!already_set) {
-                                        applyComponentWithRefs(game, child, e.key, e.value, parent_world_pos, nested_ref_ctx) catch {};
+                                        applyComponentWithRefs(game, child, e.key, e.value, parent_world_pos, nested_ref_ctx) catch |err| {
+                                            game.log.err("[NestedEntity] Failed to apply {s}: {s}", .{ e.key, @errorName(err) });
+                                        };
                                     }
                                 }
                             }
