@@ -353,7 +353,7 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
             }
         };
 
-        const LoadEntityError = error{ IncludeDepthExceeded, OutOfMemory };
+        const LoadEntityError = error{ IncludeDepthExceeded, OutOfMemory, InvalidFormat };
 
         fn loadEntity(game: *GameType, entity_val: Value, prefab_cache: *PrefabCache, depth: usize) LoadEntityError!void {
             _ = try loadEntityInternal(game, entity_val, prefab_cache, depth, .{ .x = 0, .y = 0 }, null);
@@ -366,7 +366,7 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
         /// When ref_ctx is null, follows the original single-pass path.
         fn loadEntityInternal(game: *GameType, entity_val: Value, prefab_cache: *PrefabCache, depth: usize, parent_offset: Position, ref_ctx: ?*RefContext) LoadEntityError!Entity {
             if (depth > MAX_DEPTH) return error.IncludeDepthExceeded;
-            const entity_obj = entity_val.asObject() orelse return error.OutOfMemory;
+            const entity_obj = entity_val.asObject() orelse return error.InvalidFormat;
 
             // Resolve prefab
             var prefab_components: ?Value.Object = null;
@@ -387,15 +387,17 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
             // Create entity
             const entity = game.createEntity();
 
-            // Register ref name if ref context is active
+            // Register ref name if ref context is active.
+            // Scene-level ref overrides prefab-level ref.
+            // Note: @ref is scoped to a single scene file — refs from included
+            // files are not visible (each file gets its own RefContext).
             if (ref_ctx) |rctx| {
                 const entity_id: u64 = @intCast(entity);
-                // Scene-level ref overrides prefab-level ref
-                if (entity_obj.getString("ref")) |ref_name| {
-                    try rctx.ref_map.put(ref_name, entity_id);
-                } else if (prefab_obj_opt) |pobj| {
-                    if (pobj.getString("ref")) |ref_name| {
-                        try rctx.ref_map.put(ref_name, entity_id);
+                const ref_name = entity_obj.getString("ref") orelse
+                    if (prefab_obj_opt) |pobj| pobj.getString("ref") else null;
+                if (ref_name) |rn| {
+                    if (try rctx.ref_map.fetchPut(rn, entity_id)) |existing| {
+                        game.log.warn("[SceneRef] Duplicate ref '{s}' (entities {d} and {d})", .{ rn, existing.value, entity_id });
                     }
                 }
             }
@@ -465,9 +467,15 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
         fn applyComponentWithRefs(game: *GameType, entity: Entity, comp_name: []const u8, value: Value, parent_offset: Position, ref_ctx: ?*RefContext) !void {
             if (ref_ctx) |rctx| {
                 if (valueHasRefs(comp_name, value)) {
-                    // Replace @ref strings with 0 so the full pipeline works
-                    var buf: [64]Value.Object.Entry = undefined;
-                    const zeroed = replaceRefsWithZero(comp_name, value, &buf) orelse value;
+                    // Replace @ref strings with 0 so the full pipeline works.
+                    // Allocate buffer sized to the object's entry count.
+                    const obj = value.asObject() orelse {
+                        applyComponent(game, entity, comp_name, value, parent_offset);
+                        return;
+                    };
+                    const entries = try game.allocator.alloc(Value.Object.Entry, obj.entries.len);
+                    defer game.allocator.free(entries);
+                    const zeroed = replaceRefsWithZero(comp_name, value, entries) orelse value;
                     applyComponent(game, entity, comp_name, zeroed, parent_offset);
                     // Record which fields need patching in pass 2
                     try collectDeferredRefFields(rctx, entity, comp_name, value);
