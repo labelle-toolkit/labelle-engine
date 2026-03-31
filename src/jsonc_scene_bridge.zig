@@ -380,8 +380,9 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
 
             const scene_components = entity_obj.getObject("components");
 
-            // Create entity
+            // Create entity — destroy on error to prevent orphans
             const entity = game.createEntity();
+            errdefer game.destroyEntity(entity);
 
             // Register ref name if ref context is active.
             // Scene-level ref overrides prefab-level ref.
