@@ -80,7 +80,7 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
             // Handle nested entities (e.g. workstation storages)
             const entity_pos = game.getPosition(entity);
             for (prefab_components.entries) |entry| {
-                spawnAndLinkNestedEntities(game, entity, entry.key, entry.value, entity_pos, prefab_cache, 0);
+                spawnAndLinkNestedEntities(game, entity, entry.key, entry.value, entity_pos, prefab_cache, 0, null);
             }
 
             // Fire onReady hooks
@@ -425,13 +425,13 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
             // Spawn nested entity arrays and collect IDs to patch back into components
             if (scene_components) |sc| {
                 for (sc.entries) |entry| {
-                    spawnAndLinkNestedEntities(game, entity, entry.key, entry.value, entity_pos, prefab_cache, depth);
+                    spawnAndLinkNestedEntities(game, entity, entry.key, entry.value, entity_pos, prefab_cache, depth, ref_ctx);
                 }
             }
             if (prefab_components) |pc| {
                 for (pc.entries) |entry| {
                     if (!applied.contains(entry.key)) {
-                        spawnAndLinkNestedEntities(game, entity, entry.key, entry.value, entity_pos, prefab_cache, depth);
+                        spawnAndLinkNestedEntities(game, entity, entry.key, entry.value, entity_pos, prefab_cache, depth, ref_ctx);
                     }
                 }
             }
@@ -491,6 +491,7 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
             parent_world_pos: Position,
             prefab_cache: *PrefabCache,
             depth: usize,
+            ref_ctx: ?*RefContext,
         ) void {
             const obj = comp_value.asObject() orelse return;
 
@@ -515,11 +516,32 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
 
                         if (item.asObject()) |child_obj| {
                             var child_prefab_comps: ?Value.Object = null;
+                            var child_prefab_children: ?Value.Array = null;
                             if (child_obj.getString("prefab")) |pname| {
                                 if (prefab_cache.get(pname)) |pval| {
                                     if (pval.asObject()) |pobj| {
                                         child_prefab_comps = pobj.getObject("components");
+                                        child_prefab_children = pobj.getArray("children");
                                     }
+                                }
+                            }
+
+                            // Register ref name in the parent's ref context (#415)
+                            if (ref_ctx) |rctx| {
+                                const entity_id: u64 = @intCast(child);
+                                const ref_name = child_obj.getString("ref") orelse
+                                    if (child_prefab_comps) |_|
+                                    (if (child_obj.getString("prefab")) |pname|
+                                        if (prefab_cache.get(pname)) |pval|
+                                            if (pval.asObject()) |pobj| pobj.getString("ref") else null
+                                        else
+                                            null
+                                    else
+                                        null)
+                                else
+                                    null;
+                                if (ref_name) |rn| {
+                                    rctx.ref_map.put(rn, entity_id) catch {};
                                 }
                             }
 
@@ -528,7 +550,7 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
                             // Scene overrides first
                             if (child_scene_comps) |sc| {
                                 for (sc.entries) |e| {
-                                    applyComponent(game, child, e.key, e.value, parent_world_pos);
+                                    applyComponentWithRefs(game, child, e.key, e.value, parent_world_pos, ref_ctx) catch {};
                                 }
                             }
                             // Prefab defaults
@@ -541,7 +563,7 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
                                         break :blk false;
                                     } else false;
                                     if (!already_set) {
-                                        applyComponent(game, child, e.key, e.value, parent_world_pos);
+                                        applyComponentWithRefs(game, child, e.key, e.value, parent_world_pos, ref_ctx) catch {};
                                     }
                                 }
                             }
@@ -550,7 +572,7 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
                             const child_pos = game.getPosition(child);
                             if (child_scene_comps) |sc| {
                                 for (sc.entries) |e| {
-                                    spawnAndLinkNestedEntities(game, child, e.key, e.value, child_pos, prefab_cache, depth + 1);
+                                    spawnAndLinkNestedEntities(game, child, e.key, e.value, child_pos, prefab_cache, depth + 1, ref_ctx);
                                 }
                             }
                             if (child_prefab_comps) |pc| {
@@ -562,8 +584,22 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
                                         break :blk false;
                                     } else false;
                                     if (!already_set) {
-                                        spawnAndLinkNestedEntities(game, child, e.key, e.value, child_pos, prefab_cache, depth + 1);
+                                        spawnAndLinkNestedEntities(game, child, e.key, e.value, child_pos, prefab_cache, depth + 1, ref_ctx);
                                     }
+                                }
+                            }
+
+                            // Process children (prefab children + inline children) (#415)
+                            if (child_prefab_children) |children| {
+                                for (children.items) |child_val| {
+                                    const grandchild = loadEntityInternal(game, child_val, prefab_cache, depth + 1, child_pos, ref_ctx) catch continue;
+                                    game.setParent(grandchild, child, .{});
+                                }
+                            }
+                            if (child_obj.getArray("children")) |children| {
+                                for (children.items) |child_val| {
+                                    const grandchild = loadEntityInternal(game, child_val, prefab_cache, depth + 1, child_pos, ref_ctx) catch continue;
+                                    game.setParent(grandchild, child, .{});
                                 }
                             }
                         }
