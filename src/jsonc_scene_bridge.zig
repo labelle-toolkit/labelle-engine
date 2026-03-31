@@ -547,20 +547,29 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
                             defer local_ref_ctx.deinit();
                             const nested_ref_ctx: *RefContext = &local_ref_ctx;
 
-                            // Register the nested entity itself in the local context so
-                            // its children can reference it via @ref.
+                            // Register the nested entity in the local context so its
+                            // children can reference it via @ref. Always register the
+                            // prefab-defined ref (for internal @refs like @storage),
+                            // plus the scene-level ref if different (as an alias).
                             {
                                 const entity_id: u64 = @intCast(child);
-                                const self_ref = child_obj.getString("ref") orelse
-                                    if (child_obj.getString("prefab")) |pname|
-                                    (if (prefab_cache.get(pname)) |pval|
-                                        if (pval.asObject()) |pobj| pobj.getString("ref") else null
-                                    else
-                                        null)
-                                else
-                                    null;
-                                if (self_ref) |rn| {
-                                    local_ref_ctx.ref_map.put(rn, entity_id) catch {};
+                                const scene_ref = child_obj.getString("ref");
+                                var prefab_ref: ?[]const u8 = null;
+                                if (child_obj.getString("prefab")) |pname| {
+                                    if (prefab_cache.get(pname)) |pval| {
+                                        if (pval.asObject()) |pobj| {
+                                            prefab_ref = pobj.getString("ref");
+                                        }
+                                    }
+                                }
+                                if (prefab_ref) |prn| {
+                                    local_ref_ctx.ref_map.put(prn, entity_id) catch {};
+                                }
+                                if (scene_ref) |srn| {
+                                    const is_same = if (prefab_ref) |prn| std.mem.eql(u8, srn, prn) else false;
+                                    if (!is_same) {
+                                        local_ref_ctx.ref_map.put(srn, entity_id) catch {};
+                                    }
                                 }
                             }
 
