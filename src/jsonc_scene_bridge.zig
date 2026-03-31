@@ -80,7 +80,7 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
             // Handle nested entities (e.g. workstation storages)
             const entity_pos = game.getPosition(entity);
             for (prefab_components.entries) |entry| {
-                spawnAndLinkNestedEntities(game, entity, entry.key, entry.value, entity_pos, prefab_cache, 0);
+                spawnAndLinkNestedEntities(game, entity, entry.key, entry.value, entity_pos, prefab_cache, 0, null);
             }
 
             // Fire onReady hooks
@@ -425,13 +425,13 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
             // Spawn nested entity arrays and collect IDs to patch back into components
             if (scene_components) |sc| {
                 for (sc.entries) |entry| {
-                    spawnAndLinkNestedEntities(game, entity, entry.key, entry.value, entity_pos, prefab_cache, depth);
+                    spawnAndLinkNestedEntities(game, entity, entry.key, entry.value, entity_pos, prefab_cache, depth, ref_ctx);
                 }
             }
             if (prefab_components) |pc| {
                 for (pc.entries) |entry| {
                     if (!applied.contains(entry.key)) {
-                        spawnAndLinkNestedEntities(game, entity, entry.key, entry.value, entity_pos, prefab_cache, depth);
+                        spawnAndLinkNestedEntities(game, entity, entry.key, entry.value, entity_pos, prefab_cache, depth, ref_ctx);
                     }
                 }
             }
@@ -491,6 +491,7 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
             parent_world_pos: Position,
             prefab_cache: *PrefabCache,
             depth: usize,
+            ref_ctx: ?*RefContext,
         ) void {
             const obj = comp_value.asObject() orelse return;
 
@@ -511,62 +512,8 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
                 var idx: usize = 0;
                 for (arr.items) |item| {
                     if (isEntityLike(item)) {
-                        const child = game.createEntity();
-
-                        if (item.asObject()) |child_obj| {
-                            var child_prefab_comps: ?Value.Object = null;
-                            if (child_obj.getString("prefab")) |pname| {
-                                if (prefab_cache.get(pname)) |pval| {
-                                    if (pval.asObject()) |pobj| {
-                                        child_prefab_comps = pobj.getObject("components");
-                                    }
-                                }
-                            }
-
-                            const child_scene_comps = child_obj.getObject("components");
-
-                            // Scene overrides first
-                            if (child_scene_comps) |sc| {
-                                for (sc.entries) |e| {
-                                    applyComponent(game, child, e.key, e.value, parent_world_pos);
-                                }
-                            }
-                            // Prefab defaults
-                            if (child_prefab_comps) |pc| {
-                                for (pc.entries) |e| {
-                                    const already_set = if (child_scene_comps) |sc| blk: {
-                                        for (sc.entries) |se| {
-                                            if (std.mem.eql(u8, se.key, e.key)) break :blk true;
-                                        }
-                                        break :blk false;
-                                    } else false;
-                                    if (!already_set) {
-                                        applyComponent(game, child, e.key, e.value, parent_world_pos);
-                                    }
-                                }
-                            }
-
-                            // Recursively spawn nested entities inside this child's components
-                            const child_pos = game.getPosition(child);
-                            if (child_scene_comps) |sc| {
-                                for (sc.entries) |e| {
-                                    spawnAndLinkNestedEntities(game, child, e.key, e.value, child_pos, prefab_cache, depth + 1);
-                                }
-                            }
-                            if (child_prefab_comps) |pc| {
-                                for (pc.entries) |e| {
-                                    const already_set = if (child_scene_comps) |sc| blk: {
-                                        for (sc.entries) |se| {
-                                            if (std.mem.eql(u8, se.key, e.key)) break :blk true;
-                                        }
-                                        break :blk false;
-                                    } else false;
-                                    if (!already_set) {
-                                        spawnAndLinkNestedEntities(game, child, e.key, e.value, child_pos, prefab_cache, depth + 1);
-                                    }
-                                }
-                            }
-                        }
+                        // Use loadEntityInternal for full @ref + children support
+                        const child = loadEntityInternal(game, item, prefab_cache, depth + 1, parent_world_pos, ref_ctx) catch continue;
 
                         ids[idx] = @intCast(child);
                         idx += 1;

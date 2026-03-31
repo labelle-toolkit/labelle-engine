@@ -42,11 +42,20 @@ const Link = struct {
     target: u64 = 0,
 };
 
+/// Component with nested entity array (like Workstation's storages).
+const Container = struct {
+    pub const save = core.Saveable(.saveable, @This(), .{
+        .ref_arrays = &.{"slots"},
+    });
+    slots: []const u64 = &.{},
+};
+
 const Components = engine.ComponentRegistry(.{
     .StoredIn = StoredIn,
     .HoldsItem = HoldsItem,
     .Health = Health,
     .Link = Link,
+    .Container = Container,
 });
 
 const Game = engine.Game;
@@ -532,4 +541,81 @@ test "@ref: position offset applied correctly with refs" {
 
     const stored = game.ecs_backend.getComponent(child_entity.?, StoredIn).?;
     try testing.expectEqual(@as(u64, @intCast(parent_entity.?)), stored.container_id);
+}
+
+test "@ref: refs inside nested entity arrays (like workstation storages)" {
+    // Simulates a workstation with a "slots" array containing nested entities.
+    // One slot has a pre-filled item using @ref, like an EIS with water.
+    var game = Game.init(testing.allocator);
+    defer game.deinit();
+
+    try loadSource(&game,
+        \\{
+        \\  "entities": [
+        \\    { "components": {
+        \\      "Container": {
+        \\        "slots": [
+        \\          {
+        \\            "ref": "slot1",
+        \\            "components": {
+        \\              "Health": { "current": 1, "max": 1 },
+        \\              "HoldsItem": { "item_id": "@item1" }
+        \\            },
+        \\            "children": [
+        \\              {
+        \\                "ref": "item1",
+        \\                "components": {
+        \\                  "Health": { "current": 2, "max": 2 },
+        \\                  "StoredIn": { "container_id": "@slot1" }
+        \\                }
+        \\              }
+        \\            ]
+        \\          },
+        \\          { "components": { "Health": { "current": 3, "max": 3 } } }
+        \\        ]
+        \\      }
+        \\    }}
+        \\  ]
+        \\}
+    );
+
+    const Entity = Game.EntityType;
+
+    // Find entities by health values
+    var slot_entity: ?Entity = null;
+    var item_entity: ?Entity = null;
+    var empty_slot: ?Entity = null;
+    {
+        var view = game.ecs_backend.view(.{Health}, .{});
+        while (view.next()) |e| {
+            const h = game.ecs_backend.getComponent(e, Health).?;
+            if (h.current == 1) slot_entity = e;
+            if (h.current == 2) item_entity = e;
+            if (h.current == 3) empty_slot = e;
+        }
+        view.deinit();
+    }
+
+    try testing.expect(slot_entity != null);
+    try testing.expect(item_entity != null);
+    try testing.expect(empty_slot != null);
+
+    // Slot's HoldsItem should reference the item
+    const holds = game.ecs_backend.getComponent(slot_entity.?, HoldsItem).?;
+    try testing.expectEqual(@as(u64, @intCast(item_entity.?)), holds.item_id);
+
+    // Item's StoredIn should reference the slot
+    const stored = game.ecs_backend.getComponent(item_entity.?, StoredIn).?;
+    try testing.expectEqual(@as(u64, @intCast(slot_entity.?)), stored.container_id);
+
+    // Container should have 2 slots in its array
+    var container_entity: ?Entity = null;
+    {
+        var view = game.ecs_backend.view(.{Container}, .{});
+        if (view.next()) |e| container_entity = e;
+        view.deinit();
+    }
+    try testing.expect(container_entity != null);
+    const container = game.ecs_backend.getComponent(container_entity.?, Container).?;
+    try testing.expectEqual(@as(usize, 2), container.slots.len);
 }
