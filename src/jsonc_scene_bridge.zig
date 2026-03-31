@@ -91,7 +91,7 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
             // Process children
             if (prefab_obj.getArray("children")) |children| {
                 for (children.items) |child_val| {
-                    const child = spawnChildEntity(game, child_val, prefab_cache, 1, entity_pos) catch continue;
+                    const child = loadEntityInternal(game, child_val, prefab_cache, 1, entity_pos, null) catch continue;
                     game.setParent(child, entity, .{});
                 }
             }
@@ -103,20 +103,19 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
         // Entity cross-references (@ref syntax)
         // ================================================================
 
-        /// A component whose entity_ref fields contain @ref strings.
-        /// Deferred to pass 2 for resolution after all entities are created.
-        const DeferredRef = struct {
+        /// A single entity_ref field that needs patching with a resolved @ref ID.
+        const DeferredRefField = struct {
             entity: Entity,
             comp_name: []const u8,
-            value: Value,
-            parent_offset: Position,
+            field_name: []const u8,
+            ref_name: []const u8,
         };
 
         /// Ref context shared across entity loading — collects named refs
-        /// and deferred components for two-pass resolution.
+        /// and deferred field patches for two-pass resolution.
         const RefContext = struct {
             ref_map: std.StringHashMap(u64),
-            deferred: std.ArrayListUnmanaged(DeferredRef),
+            deferred: std.ArrayListUnmanaged(DeferredRefField),
             allocator: std.mem.Allocator,
 
             fn init(allocator: std.mem.Allocator) RefContext {
@@ -155,77 +154,100 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
             return false;
         }
 
-        /// Resolve a single @ref component: replace @name strings with entity IDs and apply.
-        fn resolveRefComponent(game: *GameType, deferred: DeferredRef, ref_map: *const std.StringHashMap(u64)) void {
-            const comp_name = deferred.comp_name;
-            const obj = deferred.value.asObject() orelse return;
+        /// Replace @ref strings with integer 0 in entity_ref fields so the
+        /// deserializer can parse the component through the normal pipeline.
+        fn replaceRefsWithZero(comp_name: []const u8, value: Value, buf: []Value.Object.Entry) ?Value {
+            const obj = value.asObject() orelse return null;
             const comp_names = comptime Components.names();
-
             inline for (comp_names) |name| {
                 if (std.mem.eql(u8, comp_name, name)) {
                     const T = Components.getType(name);
-                    resolveAndApply(T, game, deferred.entity, obj, deferred.value, ref_map);
+                    const ref_fields = comptime core.getEntityRefFields(T);
+                    if (ref_fields.len == 0) return null;
+                    var len: usize = 0;
+                    for (obj.entries) |entry| {
+                        if (len >= buf.len) break;
+                        var e = entry;
+                        inline for (ref_fields) |field_name| {
+                            if (std.mem.eql(u8, entry.key, field_name)) {
+                                if (entry.value.asString()) |str| {
+                                    if (str.len > 0 and str[0] == '@') {
+                                        e.value = .{ .integer = 0 };
+                                    }
+                                }
+                            }
+                        }
+                        buf[len] = e;
+                        len += 1;
+                    }
+                    return Value{ .object = .{ .entries = buf[0..len] } };
+                }
+            }
+            return null;
+        }
+
+        /// Collect DeferredRefField entries for each @ref string in entity_ref fields.
+        fn collectDeferredRefFields(ref_ctx: *RefContext, entity: Entity, comp_name: []const u8, value: Value) !void {
+            const obj = value.asObject() orelse return;
+            const comp_names = comptime Components.names();
+            inline for (comp_names) |name| {
+                if (std.mem.eql(u8, comp_name, name)) {
+                    const T = Components.getType(name);
+                    const ref_fields = comptime core.getEntityRefFields(T);
+                    inline for (ref_fields) |field_name| {
+                        if (obj.getString(field_name)) |str| {
+                            if (str.len > 0 and str[0] == '@') {
+                                try ref_ctx.deferred.append(ref_ctx.allocator, .{
+                                    .entity = entity,
+                                    .comp_name = comp_name,
+                                    .field_name = field_name,
+                                    .ref_name = str[1..],
+                                });
+                            }
+                        }
+                    }
                     return;
                 }
             }
         }
 
-        /// Type-specific ref resolution — called with comptime-known T.
-        /// Builds a filtered Value with @ref strings replaced by 0 so the
-        /// deserializer can parse the component, then patches resolved IDs.
-        fn resolveAndApply(comptime T: type, game: *GameType, entity: Entity, obj: Value.Object, value: Value, ref_map: *const std.StringHashMap(u64)) void {
-            _ = value;
-            // Build filtered entries: replace @ref strings with integer 0
-            // so the deserializer doesn't choke on strings in u64 fields.
-            const ref_fields = comptime core.getEntityRefFields(T);
-            var filtered_buf: [64]Value.Object.Entry = undefined;
-            var filtered_len: usize = 0;
-            for (obj.entries) |entry| {
-                if (filtered_len >= filtered_buf.len) break;
-                var e = entry;
+        /// Patch a single deferred ref field in-place on an already-applied component.
+        fn patchRefField(game: *GameType, deferred: DeferredRefField, ref_map: *const std.StringHashMap(u64)) void {
+            const comp_names = comptime Components.names();
+            inline for (comp_names) |name| {
+                if (std.mem.eql(u8, deferred.comp_name, name)) {
+                    const T = Components.getType(name);
+                    patchFieldOnComponent(T, game, deferred, ref_map);
+                    return;
+                }
+            }
+        }
+
+        fn patchFieldOnComponent(comptime T: type, game: *GameType, deferred: DeferredRefField, ref_map: *const std.StringHashMap(u64)) void {
+            if (game.ecs_backend.getComponent(deferred.entity, T)) |comp| {
+                const ref_fields = comptime core.getEntityRefFields(T);
                 inline for (ref_fields) |field_name| {
-                    if (std.mem.eql(u8, entry.key, field_name)) {
-                        if (entry.value.asString()) |str| {
-                            if (str.len > 0 and str[0] == '@') {
-                                e.value = .{ .integer = 0 };
-                            }
-                        }
-                    }
-                }
-                filtered_buf[filtered_len] = e;
-                filtered_len += 1;
-            }
-
-            const filtered_value = Value{ .object = .{ .entries = filtered_buf[0..filtered_len] } };
-            var component = deserialize(T, filtered_value, game.allocator) orelse return;
-
-            // Patch entity_ref fields with resolved @ref IDs
-            inline for (ref_fields) |field_name| {
-                if (obj.getString(field_name)) |str| {
-                    if (str.len > 0 and str[0] == '@') {
-                        const ref_name = str[1..];
-                        if (ref_map.get(ref_name)) |resolved_id| {
-                            @field(component, field_name) = resolved_id;
+                    if (std.mem.eql(u8, deferred.field_name, field_name)) {
+                        if (ref_map.get(deferred.ref_name)) |resolved_id| {
+                            @field(comp, field_name) = resolved_id;
                         } else {
-                            game.log.err("[SceneRef] Unresolved ref '@{s}' in {s}", .{ ref_name, field_name });
+                            game.log.err("[SceneRef] Unresolved ref '@{s}' in {s}.{s}", .{ deferred.ref_name, deferred.comp_name, field_name });
                         }
                     }
                 }
             }
-
-            game.addComponent(entity, component);
         }
 
         /// Process entities from a parsed scene, with two-pass ref resolution.
         fn processEntities(game: *GameType, entities_arr: Value.Array, prefab_cache: *PrefabCache, ref_ctx: *RefContext) LoadEntityError!void {
-            // Pass 1: create entities, collect refs, defer @ref components
+            // Pass 1: create entities, apply components (with @ref→0), collect refs
             for (entities_arr.items) |entity_val| {
-                try loadEntityWithRefs(game, entity_val, prefab_cache, 0, .{ .x = 0, .y = 0 }, ref_ctx);
+                _ = try loadEntityInternal(game, entity_val, prefab_cache, 0, .{ .x = 0, .y = 0 }, ref_ctx);
             }
 
-            // Pass 2: resolve deferred @ref components
+            // Pass 2: patch @ref fields with resolved entity IDs
             for (ref_ctx.deferred.items) |deferred| {
-                resolveRefComponent(game, deferred, &ref_ctx.ref_map);
+                patchRefField(game, deferred, &ref_ctx.ref_map);
             }
         }
 
@@ -334,22 +356,26 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
         const LoadEntityError = error{ IncludeDepthExceeded, OutOfMemory };
 
         fn loadEntity(game: *GameType, entity_val: Value, prefab_cache: *PrefabCache, depth: usize) LoadEntityError!void {
-            return loadEntityWithOffset(game, entity_val, prefab_cache, depth, .{ .x = 0, .y = 0 });
+            _ = try loadEntityInternal(game, entity_val, prefab_cache, depth, .{ .x = 0, .y = 0 }, null);
         }
 
-        /// Load entity with ref support — collects "ref" names and defers @ref components.
-        fn loadEntityWithRefs(game: *GameType, entity_val: Value, prefab_cache: *PrefabCache, depth: usize, parent_offset: Position, ref_ctx: *RefContext) LoadEntityError!void {
+        /// Unified entity loader — handles top-level and child entities, with
+        /// optional ref context for @ref cross-reference support.
+        /// When ref_ctx is non-null, registers "ref" names and applies components
+        /// with @ref strings replaced by 0 (patched in pass 2).
+        /// When ref_ctx is null, follows the original single-pass path.
+        fn loadEntityInternal(game: *GameType, entity_val: Value, prefab_cache: *PrefabCache, depth: usize, parent_offset: Position, ref_ctx: ?*RefContext) LoadEntityError!Entity {
             if (depth > MAX_DEPTH) return error.IncludeDepthExceeded;
-            const entity_obj = entity_val.asObject() orelse return;
+            const entity_obj = entity_val.asObject() orelse return error.OutOfMemory;
 
             // Resolve prefab
             var prefab_components: ?Value.Object = null;
             var prefab_children: ?Value.Array = null;
-            var prefab_obj: ?Value.Object = null;
+            var prefab_obj_opt: ?Value.Object = null;
             if (entity_obj.getString("prefab")) |prefab_name| {
                 if (prefab_cache.get(prefab_name)) |prefab_val| {
                     if (prefab_val.asObject()) |pobj| {
-                        prefab_obj = pobj;
+                        prefab_obj_opt = pobj;
                         prefab_components = pobj.getObject("components");
                         prefab_children = pobj.getArray("children");
                     }
@@ -360,14 +386,17 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
 
             // Create entity
             const entity = game.createEntity();
-            const entity_id: u64 = @intCast(entity);
 
-            // Register ref name — scene-level ref overrides prefab-level ref
-            if (entity_obj.getString("ref")) |ref_name| {
-                ref_ctx.ref_map.put(ref_name, entity_id) catch {};
-            } else if (prefab_obj) |pobj| {
-                if (pobj.getString("ref")) |ref_name| {
-                    ref_ctx.ref_map.put(ref_name, entity_id) catch {};
+            // Register ref name if ref context is active
+            if (ref_ctx) |rctx| {
+                const entity_id: u64 = @intCast(entity);
+                // Scene-level ref overrides prefab-level ref
+                if (entity_obj.getString("ref")) |ref_name| {
+                    try rctx.ref_map.put(ref_name, entity_id);
+                } else if (prefab_obj_opt) |pobj| {
+                    if (pobj.getString("ref")) |ref_name| {
+                        try rctx.ref_map.put(ref_name, entity_id);
+                    }
                 }
             }
 
@@ -376,201 +405,10 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
             defer applied.deinit();
 
             // Apply scene components (these override prefab defaults)
-            // Defer components with @ref values
             if (scene_components) |sc| {
                 for (sc.entries) |entry| {
-                    if (valueHasRefs(entry.key, entry.value)) {
-                        ref_ctx.deferred.append(ref_ctx.allocator, .{
-                            .entity = entity,
-                            .comp_name = entry.key,
-                            .value = entry.value,
-                            .parent_offset = parent_offset,
-                        }) catch {};
-                    } else {
-                        applyComponent(game, entity, entry.key, entry.value, parent_offset);
-                    }
-                    applied.put(entry.key, {}) catch {};
-                }
-            }
-
-            // Apply prefab components (skip if overridden; defer if has @ref)
-            if (prefab_components) |pc| {
-                for (pc.entries) |entry| {
-                    if (!applied.contains(entry.key)) {
-                        if (valueHasRefs(entry.key, entry.value)) {
-                            ref_ctx.deferred.append(ref_ctx.allocator, .{
-                                .entity = entity,
-                                .comp_name = entry.key,
-                                .value = entry.value,
-                                .parent_offset = parent_offset,
-                            }) catch {};
-                        } else {
-                            applyComponent(game, entity, entry.key, entry.value, parent_offset);
-                        }
-                    }
-                }
-            }
-
-            // Get this entity's world position for offsetting nested children
-            const entity_pos = game.getPosition(entity);
-
-            // Spawn nested entity arrays and collect IDs
-            if (scene_components) |sc| {
-                for (sc.entries) |entry| {
-                    spawnAndLinkNestedEntities(game, entity, entry.key, entry.value, entity_pos, prefab_cache, depth);
-                }
-            }
-            if (prefab_components) |pc| {
-                for (pc.entries) |entry| {
-                    if (!applied.contains(entry.key)) {
-                        spawnAndLinkNestedEntities(game, entity, entry.key, entry.value, entity_pos, prefab_cache, depth);
-                    }
-                }
-            }
-
-            // Fire onReady for all applied components
-            fireOnReadyAll(game, entity, scene_components, prefab_components, &applied);
-
-            // Process prefab children (with ref support)
-            if (prefab_children) |children| {
-                for (children.items) |child_val| {
-                    const child = try spawnChildEntityWithRefs(game, child_val, prefab_cache, depth + 1, entity_pos, ref_ctx);
-                    game.setParent(child, entity, .{});
-                }
-            }
-
-            // Process entity-level children (with ref support)
-            if (entity_obj.getArray("children")) |children| {
-                for (children.items) |child_val| {
-                    const child = try spawnChildEntityWithRefs(game, child_val, prefab_cache, depth + 1, entity_pos, ref_ctx);
-                    game.setParent(child, entity, .{});
-                }
-            }
-        }
-
-        /// Spawn a child entity with ref context support.
-        fn spawnChildEntityWithRefs(game: *GameType, entity_val: Value, prefab_cache: *PrefabCache, depth: usize, parent_pos: Position, ref_ctx: *RefContext) LoadEntityError!Entity {
-            const entity_obj = entity_val.asObject() orelse return error.OutOfMemory;
-
-            var child_prefab_comps: ?Value.Object = null;
-            var child_prefab_children: ?Value.Array = null;
-            if (entity_obj.getString("prefab")) |pname| {
-                if (prefab_cache.get(pname)) |pval| {
-                    if (pval.asObject()) |pobj| {
-                        child_prefab_comps = pobj.getObject("components");
-                        child_prefab_children = pobj.getArray("children");
-                    }
-                }
-            }
-
-            const child_scene_comps = entity_obj.getObject("components");
-            const child = game.createEntity();
-            const child_id: u64 = @intCast(child);
-
-            // Register ref name if present
-            if (entity_obj.getString("ref")) |ref_name| {
-                ref_ctx.ref_map.put(ref_name, child_id) catch {};
-            }
-
-            var applied = std.StringHashMap(void).init(game.allocator);
-            defer applied.deinit();
-
-            if (child_scene_comps) |sc| {
-                for (sc.entries) |entry| {
-                    if (valueHasRefs(entry.key, entry.value)) {
-                        ref_ctx.deferred.append(ref_ctx.allocator, .{
-                            .entity = child,
-                            .comp_name = entry.key,
-                            .value = entry.value,
-                            .parent_offset = parent_pos,
-                        }) catch {};
-                    } else {
-                        applyComponent(game, child, entry.key, entry.value, parent_pos);
-                    }
-                    applied.put(entry.key, {}) catch {};
-                }
-            }
-            if (child_prefab_comps) |pc| {
-                for (pc.entries) |entry| {
-                    if (!applied.contains(entry.key)) {
-                        if (valueHasRefs(entry.key, entry.value)) {
-                            ref_ctx.deferred.append(ref_ctx.allocator, .{
-                                .entity = child,
-                                .comp_name = entry.key,
-                                .value = entry.value,
-                                .parent_offset = parent_pos,
-                            }) catch {};
-                        } else {
-                            applyComponent(game, child, entry.key, entry.value, parent_pos);
-                        }
-                    }
-                }
-            }
-
-            const child_pos = game.getPosition(child);
-
-            if (child_scene_comps) |sc| {
-                for (sc.entries) |entry| {
-                    spawnAndLinkNestedEntities(game, child, entry.key, entry.value, child_pos, prefab_cache, depth);
-                }
-            }
-            if (child_prefab_comps) |pc| {
-                for (pc.entries) |entry| {
-                    if (!applied.contains(entry.key)) {
-                        spawnAndLinkNestedEntities(game, child, entry.key, entry.value, child_pos, prefab_cache, depth);
-                    }
-                }
-            }
-
-            fireOnReadyAll(game, child, child_scene_comps, child_prefab_comps, &applied);
-
-            // Recursive children with ref support
-            if (child_prefab_children) |children| {
-                for (children.items) |cv| {
-                    const grandchild = spawnChildEntityWithRefs(game, cv, prefab_cache, depth + 1, child_pos, ref_ctx) catch continue;
-                    game.setParent(grandchild, child, .{});
-                }
-            }
-            if (entity_obj.getArray("children")) |children| {
-                for (children.items) |cv| {
-                    const grandchild = spawnChildEntityWithRefs(game, cv, prefab_cache, depth + 1, child_pos, ref_ctx) catch continue;
-                    game.setParent(grandchild, child, .{});
-                }
-            }
-
-            return child;
-        }
-
-        fn loadEntityWithOffset(game: *GameType, entity_val: Value, prefab_cache: *PrefabCache, depth: usize, parent_offset: Position) LoadEntityError!void {
-            if (depth > MAX_DEPTH) return error.IncludeDepthExceeded;
-            const entity_obj = entity_val.asObject() orelse return;
-
-            // Resolve prefab
-            var prefab_components: ?Value.Object = null;
-            var prefab_children: ?Value.Array = null;
-            if (entity_obj.getString("prefab")) |prefab_name| {
-                if (prefab_cache.get(prefab_name)) |prefab_val| {
-                    if (prefab_val.asObject()) |prefab_obj| {
-                        prefab_components = prefab_obj.getObject("components");
-                        prefab_children = prefab_obj.getArray("children");
-                    }
-                }
-            }
-
-            const scene_components = entity_obj.getObject("components");
-
-            // Create entity
-            const entity = game.createEntity();
-
-            // Build merged component map: prefab defaults, then scene overrides
-            var applied = std.StringHashMap(void).init(game.allocator);
-            defer applied.deinit();
-
-            // Apply scene components (these override prefab defaults)
-            if (scene_components) |sc| {
-                for (sc.entries) |entry| {
-                    applyComponent(game, entity, entry.key, entry.value, parent_offset);
-                    applied.put(entry.key, {}) catch {};
+                    try applyComponentWithRefs(game, entity, entry.key, entry.value, parent_offset, ref_ctx);
+                    try applied.put(entry.key, {});
                 }
             }
 
@@ -578,7 +416,7 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
             if (prefab_components) |pc| {
                 for (pc.entries) |entry| {
                     if (!applied.contains(entry.key)) {
-                        applyComponent(game, entity, entry.key, entry.value, parent_offset);
+                        try applyComponentWithRefs(game, entity, entry.key, entry.value, parent_offset, ref_ctx);
                     }
                 }
             }
@@ -586,7 +424,7 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
             // Get this entity's world position for offsetting nested children
             const entity_pos = game.getPosition(entity);
 
-            // Spawn nested entity arrays and collect IDs to patch back into components.
+            // Spawn nested entity arrays and collect IDs to patch back into components
             if (scene_components) |sc| {
                 for (sc.entries) |entry| {
                     spawnAndLinkNestedEntities(game, entity, entry.key, entry.value, entity_pos, prefab_cache, depth);
@@ -603,90 +441,40 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
             // Fire onReady for all applied components (after entity is fully assembled)
             fireOnReadyAll(game, entity, scene_components, prefab_components, &applied);
 
-            // Process prefab children (full parent-child relationship)
+            // Process children recursively (prefab children + entity-level children)
             if (prefab_children) |children| {
                 for (children.items) |child_val| {
-                    const child = try spawnChildEntity(game, child_val, prefab_cache, depth + 1, entity_pos);
+                    const child = try loadEntityInternal(game, child_val, prefab_cache, depth + 1, entity_pos, ref_ctx);
+                    game.setParent(child, entity, .{});
+                }
+            }
+            if (entity_obj.getArray("children")) |children| {
+                for (children.items) |child_val| {
+                    const child = try loadEntityInternal(game, child_val, prefab_cache, depth + 1, entity_pos, ref_ctx);
                     game.setParent(child, entity, .{});
                 }
             }
 
-            // Process entity-level children (full parent-child relationship)
-            if (entity_obj.getArray("children")) |children| {
-                for (children.items) |child_val| {
-                    const child = try spawnChildEntity(game, child_val, prefab_cache, depth + 1, entity_pos);
-                    game.setParent(child, entity, .{});
-                }
-            }
+            return entity;
         }
 
-        /// Spawn a child entity and return its ID.
-        fn spawnChildEntity(game: *GameType, entity_val: Value, prefab_cache: *PrefabCache, depth: usize, parent_pos: Position) LoadEntityError!Entity {
-            const entity_obj = entity_val.asObject() orelse return error.OutOfMemory;
-
-            var child_prefab_comps: ?Value.Object = null;
-            var child_prefab_children: ?Value.Array = null;
-            if (entity_obj.getString("prefab")) |pname| {
-                if (prefab_cache.get(pname)) |pval| {
-                    if (pval.asObject()) |pobj| {
-                        child_prefab_comps = pobj.getObject("components");
-                        child_prefab_children = pobj.getArray("children");
-                    }
+        /// Apply a component, handling @ref substitution when ref_ctx is active.
+        /// Components with @ref strings are applied with 0 placeholders through
+        /// the full applyComponent pipeline, and their ref fields are collected
+        /// for patching in pass 2.
+        fn applyComponentWithRefs(game: *GameType, entity: Entity, comp_name: []const u8, value: Value, parent_offset: Position, ref_ctx: ?*RefContext) !void {
+            if (ref_ctx) |rctx| {
+                if (valueHasRefs(comp_name, value)) {
+                    // Replace @ref strings with 0 so the full pipeline works
+                    var buf: [64]Value.Object.Entry = undefined;
+                    const zeroed = replaceRefsWithZero(comp_name, value, &buf) orelse value;
+                    applyComponent(game, entity, comp_name, zeroed, parent_offset);
+                    // Record which fields need patching in pass 2
+                    try collectDeferredRefFields(rctx, entity, comp_name, value);
+                    return;
                 }
             }
-
-            const child_scene_comps = entity_obj.getObject("components");
-            const child = game.createEntity();
-
-            var applied = std.StringHashMap(void).init(game.allocator);
-            defer applied.deinit();
-
-            if (child_scene_comps) |sc| {
-                for (sc.entries) |entry| {
-                    applyComponent(game, child, entry.key, entry.value, parent_pos);
-                    applied.put(entry.key, {}) catch {};
-                }
-            }
-            if (child_prefab_comps) |pc| {
-                for (pc.entries) |entry| {
-                    if (!applied.contains(entry.key)) {
-                        applyComponent(game, child, entry.key, entry.value, parent_pos);
-                    }
-                }
-            }
-
-            const child_pos = game.getPosition(child);
-
-            if (child_scene_comps) |sc| {
-                for (sc.entries) |entry| {
-                    spawnAndLinkNestedEntities(game, child, entry.key, entry.value, child_pos, prefab_cache, depth);
-                }
-            }
-            if (child_prefab_comps) |pc| {
-                for (pc.entries) |entry| {
-                    if (!applied.contains(entry.key)) {
-                        spawnAndLinkNestedEntities(game, child, entry.key, entry.value, child_pos, prefab_cache, depth);
-                    }
-                }
-            }
-
-            fireOnReadyAll(game, child, child_scene_comps, child_prefab_comps, &applied);
-
-            // Recursive children with parent relationship
-            if (child_prefab_children) |children| {
-                for (children.items) |cv| {
-                    const grandchild = spawnChildEntity(game, cv, prefab_cache, depth + 1, child_pos) catch continue;
-                    game.setParent(grandchild, child, .{});
-                }
-            }
-            if (entity_obj.getArray("children")) |children| {
-                for (children.items) |cv| {
-                    const grandchild = spawnChildEntity(game, cv, prefab_cache, depth + 1, child_pos) catch continue;
-                    game.setParent(grandchild, child, .{});
-                }
-            }
-
-            return child;
+            applyComponent(game, entity, comp_name, value, parent_offset);
         }
 
         /// Spawn entity-like objects nested inside a component's fields, collect their
