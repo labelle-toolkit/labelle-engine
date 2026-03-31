@@ -527,21 +527,22 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
                             }
 
                             // Register ref name in the parent's ref context (#415)
+                            // Scene-level ref on the nested entity takes precedence,
+                            // then fall back to the prefab-level ref.
                             if (ref_ctx) |rctx| {
                                 const entity_id: u64 = @intCast(child);
                                 const ref_name = child_obj.getString("ref") orelse
-                                    if (child_prefab_comps) |_|
-                                    (if (child_obj.getString("prefab")) |pname|
-                                        if (prefab_cache.get(pname)) |pval|
-                                            if (pval.asObject()) |pobj| pobj.getString("ref") else null
-                                        else
-                                            null
+                                    if (child_obj.getString("prefab")) |pname|
+                                    (if (prefab_cache.get(pname)) |pval|
+                                        if (pval.asObject()) |pobj| pobj.getString("ref") else null
                                     else
                                         null)
                                 else
                                     null;
                                 if (ref_name) |rn| {
-                                    rctx.ref_map.put(rn, entity_id) catch {};
+                                    if (rctx.ref_map.fetchPut(rn, entity_id) catch null) |existing| {
+                                        game.log.warn("[SceneRef] Duplicate ref '{s}' (entities {d} and {d})", .{ rn, existing.value, entity_id });
+                                    }
                                 }
                             }
 
