@@ -355,10 +355,6 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
 
         const LoadEntityError = error{ IncludeDepthExceeded, OutOfMemory, InvalidFormat };
 
-        fn loadEntity(game: *GameType, entity_val: Value, prefab_cache: *PrefabCache, depth: usize) LoadEntityError!void {
-            _ = try loadEntityInternal(game, entity_val, prefab_cache, depth, .{ .x = 0, .y = 0 }, null);
-        }
-
         /// Unified entity loader — handles top-level and child entities, with
         /// optional ref context for @ref cross-reference support.
         /// When ref_ctx is non-null, registers "ref" names and applies components
