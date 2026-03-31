@@ -42,11 +42,17 @@ const Link = struct {
     target: u64 = 0,
 };
 
+/// Simulates a Workstation with nested storage entities ([]const u64).
+const Container = struct {
+    slots: []const u64 = &.{},
+};
+
 const Components = engine.ComponentRegistry(.{
     .StoredIn = StoredIn,
     .HoldsItem = HoldsItem,
     .Health = Health,
     .Link = Link,
+    .Container = Container,
 });
 
 const Game = engine.Game;
@@ -532,4 +538,156 @@ test "@ref: position offset applied correctly with refs" {
 
     const stored = game.ecs_backend.getComponent(child_entity.?, StoredIn).?;
     try testing.expectEqual(@as(u64, @intCast(parent_entity.?)), stored.container_id);
+}
+
+test "@ref: nested entity arrays register refs (#415)" {
+    // A container with nested entity-like items in its "slots" array.
+    // The nested entities should be visible via @ref from top-level entities.
+    var game = Game.init(testing.allocator);
+    defer game.deinit();
+
+    try loadSource(&game,
+        \\{
+        \\  "entities": [
+        \\    {
+        \\      "components": {
+        \\        "Container": {
+        \\          "slots": [
+        \\            { "ref": "slot_a", "components": { "Health": { "current": 10, "max": 10 } } },
+        \\            { "ref": "slot_b", "components": { "Health": { "current": 20, "max": 20 } } }
+        \\          ]
+        \\        }
+        \\      }
+        \\    },
+        \\    { "components": { "StoredIn": { "container_id": "@slot_a" } } }
+        \\  ]
+        \\}
+    );
+
+    const Entity = Game.EntityType;
+
+    // Find slot_a by health value
+    var slot_a: ?Entity = null;
+    {
+        var view = game.ecs_backend.view(.{Health}, .{});
+        while (view.next()) |e| {
+            const h = game.ecs_backend.getComponent(e, Health).?;
+            if (h.current == 10) slot_a = e;
+        }
+        view.deinit();
+    }
+
+    // Find the entity that references slot_a
+    var stored_entity: ?Entity = null;
+    {
+        var view = game.ecs_backend.view(.{StoredIn}, .{});
+        if (view.next()) |e| stored_entity = e;
+        view.deinit();
+    }
+
+    try testing.expect(slot_a != null);
+    try testing.expect(stored_entity != null);
+
+    const stored_in = game.ecs_backend.getComponent(stored_entity.?, StoredIn).?;
+    try testing.expectEqual(@as(u64, @intCast(slot_a.?)), stored_in.container_id);
+}
+
+test "@ref: nested entities with children and cross-refs (#415)" {
+    // Nested entity (in slots array) uses a prefab with children.
+    // The prefab's children use @ref to reference each other.
+    // Simulates eis_with_water inside a workstation's storages array.
+    var tmp_dir = testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    try tmp_dir.dir.makeDir("prefabs");
+
+    // Prefab: storage with a child item, cross-referenced
+    try tmp_dir.dir.writeFile(.{
+        .sub_path = "prefabs/filled_slot.jsonc",
+        .data =
+        \\{
+        \\  "ref": "storage",
+        \\  "components": {
+        \\    "Health": { "current": 50, "max": 50 },
+        \\    "HoldsItem": { "item_id": "@item" }
+        \\  },
+        \\  "children": [
+        \\    {
+        \\      "ref": "item",
+        \\      "components": {
+        \\        "Health": { "current": 5, "max": 5 },
+        \\        "StoredIn": { "container_id": "@storage" }
+        \\      }
+        \\    }
+        \\  ]
+        \\}
+        ,
+    });
+
+    try tmp_dir.dir.writeFile(.{
+        .sub_path = "scene.jsonc",
+        .data =
+        \\{
+        \\  "entities": [
+        \\    {
+        \\      "components": {
+        \\        "Container": {
+        \\          "slots": [
+        \\            { "prefab": "filled_slot", "components": { "Position": { "x": 10, "y": 0 } } },
+        \\            { "components": { "Health": { "current": 1, "max": 1 } } }
+        \\          ]
+        \\        }
+        \\      }
+        \\    }
+        \\  ]
+        \\}
+        ,
+    });
+
+    const scene_path = try tmpPath(&tmp_dir, "scene.jsonc");
+    defer testing.allocator.free(scene_path);
+    const prefab_path = try tmpPath(&tmp_dir, "prefabs");
+    defer testing.allocator.free(prefab_path);
+
+    var game = Game.init(testing.allocator);
+    defer game.deinit();
+
+    try Bridge.loadScene(&game, scene_path, prefab_path);
+
+    const Entity = Game.EntityType;
+
+    // Find storage (health=50), item (health=5), empty slot (health=1)
+    var storage_entity: ?Entity = null;
+    var item_entity: ?Entity = null;
+    {
+        var view = game.ecs_backend.view(.{Health}, .{});
+        while (view.next()) |e| {
+            const h = game.ecs_backend.getComponent(e, Health).?;
+            if (h.current == 50) storage_entity = e;
+            if (h.current == 5) item_entity = e;
+        }
+        view.deinit();
+    }
+
+    try testing.expect(storage_entity != null);
+    try testing.expect(item_entity != null);
+
+    // Storage's HoldsItem should reference the item
+    const holds = game.ecs_backend.getComponent(storage_entity.?, HoldsItem).?;
+    try testing.expectEqual(@as(u64, @intCast(item_entity.?)), holds.item_id);
+
+    // Item's StoredIn should reference the storage
+    const stored = game.ecs_backend.getComponent(item_entity.?, StoredIn).?;
+    try testing.expectEqual(@as(u64, @intCast(storage_entity.?)), stored.container_id);
+
+    // Container should have 2 slots
+    var container_entity: ?Entity = null;
+    {
+        var view = game.ecs_backend.view(.{Container}, .{});
+        if (view.next()) |e| container_entity = e;
+        view.deinit();
+    }
+    try testing.expect(container_entity != null);
+    const container = game.ecs_backend.getComponent(container_entity.?, Container).?;
+    try testing.expectEqual(@as(usize, 2), container.slots.len);
 }
