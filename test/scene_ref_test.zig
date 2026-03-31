@@ -307,3 +307,141 @@ test "@ref: ref with non-ref components on same entity" {
     const health = game.ecs_backend.getComponent(stored_entity.?, Health).?;
     try testing.expectEqual(@as(f32, 33), health.current);
 }
+
+test "@ref: refs inside prefab with children" {
+    // Prefab defines a parent + child that reference each other via @ref.
+    // This tests that refs work within prefab children, not just top-level entities.
+    var tmp_dir = testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    try tmp_dir.dir.makeDir("prefabs");
+
+    // Prefab: container with a stored item as a child
+    try tmp_dir.dir.writeFile(.{
+        .sub_path = "prefabs/box_with_item.jsonc",
+        .data =
+        \\{
+        \\  "ref": "box",
+        \\  "components": {
+        \\    "Health": { "current": 99, "max": 99 },
+        \\    "HoldsItem": { "item_id": "@item" }
+        \\  },
+        \\  "children": [
+        \\    {
+        \\      "ref": "item",
+        \\      "components": {
+        \\        "Health": { "current": 11, "max": 11 },
+        \\        "StoredIn": { "container_id": "@box" }
+        \\      }
+        \\    }
+        \\  ]
+        \\}
+        ,
+    });
+
+    try tmp_dir.dir.writeFile(.{
+        .sub_path = "scene.jsonc",
+        .data =
+        \\{
+        \\  "entities": [
+        \\    { "prefab": "box_with_item", "components": { "Position": { "x": 10, "y": 20 } } }
+        \\  ]
+        \\}
+        ,
+    });
+
+    const scene_path = try tmpPath(&tmp_dir, "scene.jsonc");
+    defer testing.allocator.free(scene_path);
+    const prefab_path = try tmpPath(&tmp_dir, "prefabs");
+    defer testing.allocator.free(prefab_path);
+
+    var game = Game.init(testing.allocator);
+    defer game.deinit();
+
+    try Bridge.loadScene(&game, scene_path, prefab_path);
+
+    const Entity = Game.EntityType;
+    var box_entity: ?Entity = null;
+    var item_entity: ?Entity = null;
+    {
+        var view = game.ecs_backend.view(.{Health}, .{});
+        while (view.next()) |e| {
+            const h = game.ecs_backend.getComponent(e, Health).?;
+            if (h.current == 99) box_entity = e;
+            if (h.current == 11) item_entity = e;
+        }
+        view.deinit();
+    }
+
+    try testing.expect(box_entity != null);
+    try testing.expect(item_entity != null);
+
+    // Box's HoldsItem should reference the item
+    const holds = game.ecs_backend.getComponent(box_entity.?, HoldsItem).?;
+    try testing.expectEqual(@as(u64, @intCast(item_entity.?)), holds.item_id);
+
+    // Item's StoredIn should reference the box
+    const stored = game.ecs_backend.getComponent(item_entity.?, StoredIn).?;
+    try testing.expectEqual(@as(u64, @intCast(box_entity.?)), stored.container_id);
+}
+
+test "@ref: cross-reference between prefab and scene entity" {
+    // A scene entity references a prefab-spawned entity via @ref.
+    var tmp_dir = testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    try tmp_dir.dir.makeDir("prefabs");
+
+    try tmp_dir.dir.writeFile(.{
+        .sub_path = "prefabs/container.jsonc",
+        .data =
+        \\{
+        \\  "components": {
+        \\    "Health": { "current": 88, "max": 88 }
+        \\  }
+        \\}
+        ,
+    });
+
+    try tmp_dir.dir.writeFile(.{
+        .sub_path = "scene.jsonc",
+        .data =
+        \\{
+        \\  "entities": [
+        \\    { "ref": "mybox", "prefab": "container", "components": { "Position": { "x": 0, "y": 0 } } },
+        \\    { "components": { "StoredIn": { "container_id": "@mybox" } } }
+        \\  ]
+        \\}
+        ,
+    });
+
+    const scene_path = try tmpPath(&tmp_dir, "scene.jsonc");
+    defer testing.allocator.free(scene_path);
+    const prefab_path = try tmpPath(&tmp_dir, "prefabs");
+    defer testing.allocator.free(prefab_path);
+
+    var game = Game.init(testing.allocator);
+    defer game.deinit();
+
+    try Bridge.loadScene(&game, scene_path, prefab_path);
+
+    const Entity = Game.EntityType;
+    var box_entity: ?Entity = null;
+    var stored_entity: ?Entity = null;
+    {
+        var view = game.ecs_backend.view(.{Health}, .{});
+        if (view.next()) |e| box_entity = e;
+        view.deinit();
+    }
+    {
+        var view = game.ecs_backend.view(.{StoredIn}, .{});
+        if (view.next()) |e| stored_entity = e;
+        view.deinit();
+    }
+
+    try testing.expect(box_entity != null);
+    try testing.expect(stored_entity != null);
+
+    const stored = game.ecs_backend.getComponent(stored_entity.?, StoredIn).?;
+    try testing.expectEqual(@as(u64, @intCast(box_entity.?)), stored.container_id);
+}
