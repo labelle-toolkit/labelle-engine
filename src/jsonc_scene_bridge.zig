@@ -99,6 +99,112 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
             return entity;
         }
 
+        // ================================================================
+        // Entity cross-references (@ref syntax)
+        // ================================================================
+
+        /// A component whose entity_ref fields contain @ref strings.
+        /// Deferred to pass 2 for resolution after all entities are created.
+        const DeferredRef = struct {
+            entity: Entity,
+            comp_name: []const u8,
+            value: Value,
+            parent_offset: Position,
+        };
+
+        /// Ref context shared across entity loading — collects named refs
+        /// and deferred components for two-pass resolution.
+        const RefContext = struct {
+            ref_map: std.StringHashMap(u64),
+            deferred: std.ArrayListUnmanaged(DeferredRef),
+            allocator: std.mem.Allocator,
+
+            fn init(allocator: std.mem.Allocator) RefContext {
+                return .{
+                    .ref_map = std.StringHashMap(u64).init(allocator),
+                    .deferred = .{},
+                    .allocator = allocator,
+                };
+            }
+
+            fn deinit(self: *RefContext) void {
+                self.ref_map.deinit();
+                self.deferred.deinit(self.allocator);
+            }
+        };
+
+        /// Check if a component value contains @ref strings in entity_ref fields.
+        fn valueHasRefs(comp_name: []const u8, value: Value) bool {
+            const obj = value.asObject() orelse return false;
+            const comp_names = comptime Components.names();
+            inline for (comp_names) |name| {
+                if (std.mem.eql(u8, comp_name, name)) {
+                    return hasRefsInFields(Components.getType(name), obj);
+                }
+            }
+            return false;
+        }
+
+        fn hasRefsInFields(comptime T: type, obj: Value.Object) bool {
+            const ref_fields = comptime core.getEntityRefFields(T);
+            inline for (ref_fields) |field_name| {
+                if (obj.getString(field_name)) |str| {
+                    if (str.len > 0 and str[0] == '@') return true;
+                }
+            }
+            return false;
+        }
+
+        /// Resolve a single @ref component: replace @name strings with entity IDs and apply.
+        fn resolveRefComponent(game: *GameType, deferred: DeferredRef, ref_map: *const std.StringHashMap(u64)) void {
+            const comp_name = deferred.comp_name;
+            const obj = deferred.value.asObject() orelse return;
+            const comp_names = comptime Components.names();
+
+            inline for (comp_names) |name| {
+                if (std.mem.eql(u8, comp_name, name)) {
+                    const T = Components.getType(name);
+                    resolveAndApply(T, game, deferred.entity, obj, deferred.value, ref_map);
+                    return;
+                }
+            }
+        }
+
+        /// Type-specific ref resolution — called with comptime-known T.
+        fn resolveAndApply(comptime T: type, game: *GameType, entity: Entity, obj: Value.Object, value: Value, ref_map: *const std.StringHashMap(u64)) void {
+            var component = deserialize(T, value, game.allocator) orelse return;
+
+            // Patch entity_ref fields that had @ref values
+            const ref_fields = comptime core.getEntityRefFields(T);
+            inline for (ref_fields) |field_name| {
+                if (obj.getString(field_name)) |str| {
+                    if (str.len > 0 and str[0] == '@') {
+                        const ref_name = str[1..];
+                        if (ref_map.get(ref_name)) |resolved_id| {
+                            @field(component, field_name) = resolved_id;
+                        } else {
+                            game.log.err("[SceneRef] Unresolved ref '@{s}' in {s}", .{ ref_name, field_name });
+                        }
+                    }
+                }
+            }
+
+            game.addComponent(entity, component);
+        }
+
+        /// Process entities from a parsed scene, with two-pass ref resolution.
+        fn processEntities(game: *GameType, entities_arr: Value.Array, prefab_cache: *PrefabCache, ref_ctx: *RefContext) LoadEntityError!void {
+            // Pass 1: create entities, collect refs, defer @ref components
+            for (entities_arr.items) |entity_val| {
+                try loadEntityWithRefs(game, entity_val, prefab_cache, 0, .{ .x = 0, .y = 0 }, ref_ctx);
+            }
+
+            // Pass 2: resolve deferred @ref components
+            for (ref_ctx.deferred.items) |deferred| {
+                resolveRefComponent(game, deferred, &ref_ctx.ref_map);
+            }
+        }
+
         /// Load a single scene/fragment file, processing includes recursively then its own entities.
         fn loadSceneFile(game: *GameType, path: []const u8, prefab_cache: *PrefabCache, include_depth: usize) !void {
             if (include_depth > MAX_DEPTH) return error.IncludeDepthExceeded;
@@ -127,11 +233,11 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
                 }
             }
 
-            // Process this file's entities
+            // Process this file's entities with ref support
             if (scene_obj.getArray("entities")) |entities_arr| {
-                for (entities_arr.items) |entity_val| {
-                    try loadEntity(game, entity_val, prefab_cache, 0);
-                }
+                var ref_ctx = RefContext.init(game.allocator);
+                defer ref_ctx.deinit();
+                try processEntities(game, entities_arr, prefab_cache, &ref_ctx);
             }
         }
 
@@ -157,9 +263,9 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
             }
 
             if (scene_obj.getArray("entities")) |entities_arr| {
-                for (entities_arr.items) |entity_val| {
-                    try loadEntity(game, entity_val, prefab_cache, 0);
-                }
+                var ref_ctx = RefContext.init(game.allocator);
+                defer ref_ctx.deinit();
+                try processEntities(game, entities_arr, prefab_cache, &ref_ctx);
             }
         }
 
@@ -205,6 +311,102 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
 
         fn loadEntity(game: *GameType, entity_val: Value, prefab_cache: *PrefabCache, depth: usize) LoadEntityError!void {
             return loadEntityWithOffset(game, entity_val, prefab_cache, depth, .{ .x = 0, .y = 0 });
+        }
+
+        /// Load entity with ref support — collects "ref" names and defers @ref components.
+        fn loadEntityWithRefs(game: *GameType, entity_val: Value, prefab_cache: *PrefabCache, depth: usize, parent_offset: Position, ref_ctx: *RefContext) LoadEntityError!void {
+            if (depth > MAX_DEPTH) return error.IncludeDepthExceeded;
+            const entity_obj = entity_val.asObject() orelse return;
+
+            // Resolve prefab
+            var prefab_components: ?Value.Object = null;
+            var prefab_children: ?Value.Array = null;
+            if (entity_obj.getString("prefab")) |prefab_name| {
+                if (prefab_cache.get(prefab_name)) |prefab_val| {
+                    if (prefab_val.asObject()) |prefab_obj| {
+                        prefab_components = prefab_obj.getObject("components");
+                        prefab_children = prefab_obj.getArray("children");
+                    }
+                }
+            }
+
+            const scene_components = entity_obj.getObject("components");
+
+            // Create entity
+            const entity = game.createEntity();
+            const entity_id: u64 = @intCast(entity);
+
+            // Register ref name if present
+            if (entity_obj.getString("ref")) |ref_name| {
+                ref_ctx.ref_map.put(ref_name, entity_id) catch {};
+            }
+
+            // Build merged component map: prefab defaults, then scene overrides
+            var applied = std.StringHashMap(void).init(game.allocator);
+            defer applied.deinit();
+
+            // Apply scene components (these override prefab defaults)
+            // Defer components with @ref values
+            if (scene_components) |sc| {
+                for (sc.entries) |entry| {
+                    if (valueHasRefs(entry.key, entry.value)) {
+                        ref_ctx.deferred.append(ref_ctx.allocator, .{
+                            .entity = entity,
+                            .comp_name = entry.key,
+                            .value = entry.value,
+                            .parent_offset = parent_offset,
+                        }) catch {};
+                    } else {
+                        applyComponent(game, entity, entry.key, entry.value, parent_offset);
+                    }
+                    applied.put(entry.key, {}) catch {};
+                }
+            }
+
+            // Apply prefab components (skip if already overridden by scene)
+            if (prefab_components) |pc| {
+                for (pc.entries) |entry| {
+                    if (!applied.contains(entry.key)) {
+                        applyComponent(game, entity, entry.key, entry.value, parent_offset);
+                    }
+                }
+            }
+
+            // Get this entity's world position for offsetting nested children
+            const entity_pos = game.getPosition(entity);
+
+            // Spawn nested entity arrays and collect IDs
+            if (scene_components) |sc| {
+                for (sc.entries) |entry| {
+                    spawnAndLinkNestedEntities(game, entity, entry.key, entry.value, entity_pos, prefab_cache, depth);
+                }
+            }
+            if (prefab_components) |pc| {
+                for (pc.entries) |entry| {
+                    if (!applied.contains(entry.key)) {
+                        spawnAndLinkNestedEntities(game, entity, entry.key, entry.value, entity_pos, prefab_cache, depth);
+                    }
+                }
+            }
+
+            // Fire onReady for all applied components
+            fireOnReadyAll(game, entity, scene_components, prefab_components, &applied);
+
+            // Process prefab children
+            if (prefab_children) |children| {
+                for (children.items) |child_val| {
+                    const child = try spawnChildEntity(game, child_val, prefab_cache, depth + 1, entity_pos);
+                    game.setParent(child, entity, .{});
+                }
+            }
+
+            // Process entity-level children
+            if (entity_obj.getArray("children")) |children| {
+                for (children.items) |child_val| {
+                    const child = try spawnChildEntity(game, child_val, prefab_cache, depth + 1, entity_pos);
+                    game.setParent(child, entity, .{});
+                }
+            }
         }
 
         fn loadEntityWithOffset(game: *GameType, entity_val: Value, prefab_cache: *PrefabCache, depth: usize, parent_offset: Position) LoadEntityError!void {
