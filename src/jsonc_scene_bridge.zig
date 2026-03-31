@@ -624,13 +624,19 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
                             // Process children (prefab children + inline children) (#415)
                             if (child_prefab_children) |children| {
                                 for (children.items) |child_val| {
-                                    const grandchild = loadEntityInternal(game, child_val, prefab_cache, depth + 1, child_pos, nested_ref_ctx) catch continue;
+                                    const grandchild = loadEntityInternal(game, child_val, prefab_cache, depth + 1, child_pos, nested_ref_ctx) catch |err| {
+                                        game.log.err("[NestedEntity] Failed to load child: {s}", .{@errorName(err)});
+                                        continue;
+                                    };
                                     game.setParent(grandchild, child, .{});
                                 }
                             }
                             if (child_obj.getArray("children")) |children| {
                                 for (children.items) |child_val| {
-                                    const grandchild = loadEntityInternal(game, child_val, prefab_cache, depth + 1, child_pos, nested_ref_ctx) catch continue;
+                                    const grandchild = loadEntityInternal(game, child_val, prefab_cache, depth + 1, child_pos, nested_ref_ctx) catch |err| {
+                                        game.log.err("[NestedEntity] Failed to load child: {s}", .{@errorName(err)});
+                                        continue;
+                                    };
                                     game.setParent(grandchild, child, .{});
                                 }
                             }
