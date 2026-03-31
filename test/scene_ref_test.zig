@@ -445,3 +445,91 @@ test "@ref: cross-reference between prefab and scene entity" {
     const stored = game.ecs_backend.getComponent(stored_entity.?, StoredIn).?;
     try testing.expectEqual(@as(u64, @intCast(box_entity.?)), stored.container_id);
 }
+
+test "@ref: position offset applied correctly with refs" {
+    // Parent at (100, 200), child at relative (10, 20).
+    // Child should end up at absolute (110, 220).
+    // Refs should resolve correctly alongside position offsetting.
+    var tmp_dir = testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    try tmp_dir.dir.makeDir("prefabs");
+
+    try tmp_dir.dir.writeFile(.{
+        .sub_path = "prefabs/parent_with_child.jsonc",
+        .data =
+        \\{
+        \\  "ref": "parent",
+        \\  "components": {
+        \\    "Health": { "current": 50, "max": 50 },
+        \\    "HoldsItem": { "item_id": "@child" }
+        \\  },
+        \\  "children": [
+        \\    {
+        \\      "ref": "child",
+        \\      "components": {
+        \\        "Position": { "x": 10, "y": 20 },
+        \\        "Health": { "current": 25, "max": 25 },
+        \\        "StoredIn": { "container_id": "@parent" }
+        \\      }
+        \\    }
+        \\  ]
+        \\}
+        ,
+    });
+
+    try tmp_dir.dir.writeFile(.{
+        .sub_path = "scene.jsonc",
+        .data =
+        \\{
+        \\  "entities": [
+        \\    { "prefab": "parent_with_child", "components": { "Position": { "x": 100, "y": 200 } } }
+        \\  ]
+        \\}
+        ,
+    });
+
+    const scene_path = try tmpPath(&tmp_dir, "scene.jsonc");
+    defer testing.allocator.free(scene_path);
+    const prefab_path = try tmpPath(&tmp_dir, "prefabs");
+    defer testing.allocator.free(prefab_path);
+
+    var game = Game.init(testing.allocator);
+    defer game.deinit();
+
+    try Bridge.loadScene(&game, scene_path, prefab_path);
+
+    const Entity = Game.EntityType;
+    const Position = @import("labelle-core").Position;
+    var parent_entity: ?Entity = null;
+    var child_entity: ?Entity = null;
+    {
+        var view = game.ecs_backend.view(.{Health}, .{});
+        while (view.next()) |e| {
+            const h = game.ecs_backend.getComponent(e, Health).?;
+            if (h.current == 50) parent_entity = e;
+            if (h.current == 25) child_entity = e;
+        }
+        view.deinit();
+    }
+
+    try testing.expect(parent_entity != null);
+    try testing.expect(child_entity != null);
+
+    // Parent position: (100, 200)
+    const parent_pos: Position = game.getPosition(parent_entity.?);
+    try testing.expectEqual(@as(f32, 100), parent_pos.x);
+    try testing.expectEqual(@as(f32, 200), parent_pos.y);
+
+    // Child position: parent (100, 200) + local (10, 20) = (110, 220)
+    const child_pos: Position = game.getPosition(child_entity.?);
+    try testing.expectEqual(@as(f32, 110), child_pos.x);
+    try testing.expectEqual(@as(f32, 220), child_pos.y);
+
+    // Refs should still resolve correctly
+    const holds = game.ecs_backend.getComponent(parent_entity.?, HoldsItem).?;
+    try testing.expectEqual(@as(u64, @intCast(child_entity.?)), holds.item_id);
+
+    const stored = game.ecs_backend.getComponent(child_entity.?, StoredIn).?;
+    try testing.expectEqual(@as(u64, @intCast(parent_entity.?)), stored.container_id);
+}
