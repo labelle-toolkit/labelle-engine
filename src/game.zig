@@ -884,6 +884,20 @@ pub fn GameConfig(
             try self.atlas_manager.loadAtlasComptime(name, sprites, id);
         }
 
+        /// Load an atlas from embedded memory (PNG bytes + JSON content).
+        /// Usage: game.loadAtlasFromMemory("bg", json_bytes, png_bytes, ".png");
+        const has_load_from_memory = @hasDecl(RenderImpl, "loadTextureFromMemory");
+        pub const loadAtlasFromMemory = if (has_load_from_memory) loadAtlasFromMemoryImpl else @compileError("Renderer does not support loadTextureFromMemory");
+
+        fn loadAtlasFromMemoryImpl(self: *Self, name: []const u8, json_content: []const u8, image_data: []const u8, file_type: [:0]const u8) !void {
+            const tex_id = try self.renderer.loadTextureFromMemory(file_type, image_data);
+            const id: u32 = if (@typeInfo(@TypeOf(tex_id)) == .@"enum")
+                @intFromEnum(tex_id)
+            else
+                tex_id;
+            try self.atlas_manager.loadAtlasFromJsonContent(name, json_content, id);
+        }
+
         pub fn getTextureManager(self: *Self) *atlas_mod.TextureManager {
             return &self.atlas_manager;
         }
