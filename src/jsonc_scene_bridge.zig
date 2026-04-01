@@ -762,7 +762,7 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
 
             // Primitives
             if (T == f32 or T == f64) return valueToFloat(T, value);
-            if (T == i32 or T == i64 or T == u8 or T == u16 or T == u32 or T == u64 or T == usize) return valueToInt(T, value);
+            if (T == i8 or T == i16 or T == i32 or T == i64 or T == u8 or T == u16 or T == u32 or T == u64 or T == usize) return valueToInt(T, value);
             if (T == bool) return value.asBool();
             if (T == []const u8) return value.asString();
 
