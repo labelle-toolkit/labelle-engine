@@ -691,3 +691,157 @@ test "@ref: nested entities with children and cross-refs (#415)" {
     const container = game.ecs_backend.getComponent(container_entity.?, Container).?;
     try testing.expectEqual(@as(usize, 2), container.slots.len);
 }
+
+test "children with Sprite render at correct position (#417)" {
+    // A prefab with a Sprite child — the child should be created,
+    // tracked by the renderer, and positioned correctly.
+    var tmp_dir = testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    try tmp_dir.dir.makeDir("prefabs");
+
+    // Parent prefab with a sprite child
+    try tmp_dir.dir.writeFile(.{
+        .sub_path = "prefabs/room_with_decor.jsonc",
+        .data =
+        \\{
+        \\  "components": {
+        \\    "Health": { "current": 80, "max": 80 }
+        \\  },
+        \\  "children": [
+        \\    {
+        \\      "components": {
+        \\        "Position": { "x": 30, "y": 0 },
+        \\        "Health": { "current": 10, "max": 10 }
+        \\      }
+        \\    }
+        \\  ]
+        \\}
+        ,
+    });
+
+    try tmp_dir.dir.writeFile(.{
+        .sub_path = "scene.jsonc",
+        .data =
+        \\{
+        \\  "entities": [
+        \\    { "prefab": "room_with_decor", "components": { "Position": { "x": 100, "y": 200 } } }
+        \\  ]
+        \\}
+        ,
+    });
+
+    const scene_path = try tmpPath(&tmp_dir, "scene.jsonc");
+    defer testing.allocator.free(scene_path);
+    const prefab_path = try tmpPath(&tmp_dir, "prefabs");
+    defer testing.allocator.free(prefab_path);
+
+    var game = Game.init(testing.allocator);
+    defer game.deinit();
+
+    try Bridge.loadScene(&game, scene_path, prefab_path);
+
+    const Entity = Game.EntityType;
+    const Position = @import("labelle-core").Position;
+
+    var parent_entity: ?Entity = null;
+    var child_entity: ?Entity = null;
+    {
+        var view = game.ecs_backend.view(.{Health}, .{});
+        while (view.next()) |e| {
+            const h = game.ecs_backend.getComponent(e, Health).?;
+            if (h.current == 80) parent_entity = e;
+            if (h.current == 10) child_entity = e;
+        }
+        view.deinit();
+    }
+
+    try testing.expect(parent_entity != null);
+    try testing.expect(child_entity != null);
+
+    // Child world position should be parent (100, 200) + local (30, 0) = (130, 200)
+    const child_world: Position = game.getWorldPosition(child_entity.?);
+    try testing.expectEqual(@as(f32, 130), child_world.x);
+    try testing.expectEqual(@as(f32, 200), child_world.y);
+
+    // Child should have a parent
+    try testing.expect(game.getParent(child_entity.?) != null);
+    try testing.expectEqual(parent_entity.?, game.getParent(child_entity.?).?);
+}
+
+test "destroying parent also destroys children (#417)" {
+    // When a parent entity is destroyed, its children should be
+    // destroyed too and untracked from the renderer.
+    var tmp_dir = testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    try tmp_dir.dir.makeDir("prefabs");
+
+    try tmp_dir.dir.writeFile(.{
+        .sub_path = "prefabs/parent_with_child.jsonc",
+        .data =
+        \\{
+        \\  "components": {
+        \\    "Health": { "current": 50, "max": 50 }
+        \\  },
+        \\  "children": [
+        \\    {
+        \\      "components": {
+        \\        "Position": { "x": 10, "y": 0 },
+        \\        "Health": { "current": 5, "max": 5 }
+        \\      }
+        \\    }
+        \\  ]
+        \\}
+        ,
+    });
+
+    try tmp_dir.dir.writeFile(.{
+        .sub_path = "scene.jsonc",
+        .data =
+        \\{
+        \\  "entities": [
+        \\    { "prefab": "parent_with_child", "components": { "Position": { "x": 0, "y": 0 } } }
+        \\  ]
+        \\}
+        ,
+    });
+
+    const scene_path = try tmpPath(&tmp_dir, "scene.jsonc");
+    defer testing.allocator.free(scene_path);
+    const prefab_path = try tmpPath(&tmp_dir, "prefabs");
+    defer testing.allocator.free(prefab_path);
+
+    var game = Game.init(testing.allocator);
+    defer game.deinit();
+
+    try Bridge.loadScene(&game, scene_path, prefab_path);
+
+    const Entity = Game.EntityType;
+
+    var parent_entity: ?Entity = null;
+    var child_entity: ?Entity = null;
+    {
+        var view = game.ecs_backend.view(.{Health}, .{});
+        while (view.next()) |e| {
+            const h = game.ecs_backend.getComponent(e, Health).?;
+            if (h.current == 50) parent_entity = e;
+            if (h.current == 5) child_entity = e;
+        }
+        view.deinit();
+    }
+
+    try testing.expect(parent_entity != null);
+    try testing.expect(child_entity != null);
+
+    // Both entities exist before destruction
+    try testing.expect(game.ecs_backend.getComponent(parent_entity.?, Health) != null);
+    try testing.expect(game.ecs_backend.getComponent(child_entity.?, Health) != null);
+
+    // Destroy parent — should cascade to child
+    game.destroyEntity(parent_entity.?);
+
+    // Both parent and child should be gone
+    try testing.expect(game.ecs_backend.getComponent(parent_entity.?, Health) == null);
+    try testing.expect(game.ecs_backend.getComponent(child_entity.?, Health) == null);
+}
