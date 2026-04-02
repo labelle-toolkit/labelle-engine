@@ -631,13 +631,17 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
                             }
 
                             // Process children (prefab children + inline children) (#415)
+                            // Process children — save world pos before setParent to
+                            // avoid double-offset (#417)
                             if (child_prefab_children) |children| {
                                 for (children.items) |child_val| {
                                     const grandchild = loadEntityInternal(game, child_val, prefab_cache, depth + 1, child_pos, nested_ref_ctx) catch |err| {
                                         game.log.err("[NestedEntity] Failed to load child: {s}", .{@errorName(err)});
                                         continue;
                                     };
+                                    const gc_world = game.getPosition(grandchild);
                                     game.setParent(grandchild, child, .{});
+                                    game.setWorldPosition(grandchild, gc_world);
                                 }
                             }
                             if (child_obj.getArray("children")) |children| {
@@ -646,7 +650,9 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
                                         game.log.err("[NestedEntity] Failed to load child: {s}", .{@errorName(err)});
                                         continue;
                                     };
+                                    const gc_world = game.getPosition(grandchild);
                                     game.setParent(grandchild, child, .{});
+                                    game.setWorldPosition(grandchild, gc_world);
                                 }
                             }
 
