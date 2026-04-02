@@ -75,9 +75,29 @@ pub fn Mixin(comptime Game: type) type {
                 try writer.writeAll("    {\n");
                 try std.fmt.format(writer, "      \"id\": {d}", .{id});
 
-                // Components (saveable + marker — includes Position)
+                // Components (saveable + marker from registry + built-in Position)
                 try writer.writeAll(",\n      \"components\": {");
                 var first_comp = true;
+
+                // Save Position (built-in) — only if not already in the component registry
+                const Position = core.Position;
+                const has_position_in_registry = comptime blk: {
+                    for (names) |name| {
+                        if (Reg.getType(name) == Position) break :blk true;
+                    }
+                    break :blk false;
+                };
+                if (!has_position_in_registry) {
+                    const pos = self.getPosition(entity);
+                    if (!first_comp) try writer.writeAll(",");
+                    try writer.writeAll("\n        \"Position\": {\"x\": ");
+                    try std.fmt.format(writer, "{d}", .{pos.x});
+                    try writer.writeAll(", \"y\": ");
+                    try std.fmt.format(writer, "{d}", .{pos.y});
+                    try writer.writeAll("}");
+                    first_comp = false;
+                }
+
                 inline for (names) |name| {
                     const T = Reg.getType(name);
                     if (comptime core.getSavePolicy(T)) |policy| {
@@ -175,6 +195,37 @@ pub fn Mixin(comptime Game: type) type {
 
                 const components = (obj.get("components") orelse continue).object;
 
+                // Restore Position (built-in) — only if not in component registry
+                const Position_load = core.Position;
+                const has_position_in_registry_load = comptime blk: {
+                    for (names) |name| {
+                        if (Reg.getType(name) == Position_load) break :blk true;
+                    }
+                    break :blk false;
+                };
+                if (!has_position_in_registry_load) {
+                    if (components.get("Position")) |pos_val| {
+                        const pos_obj = pos_val.object;
+                        var px: f32 = 0;
+                        var py: f32 = 0;
+                        if (pos_obj.get("x")) |xv| {
+                            px = switch (xv) {
+                                .float => |f| @floatCast(f),
+                                .integer => |i| @floatFromInt(i),
+                                else => 0,
+                            };
+                        }
+                        if (pos_obj.get("y")) |yv| {
+                            py = switch (yv) {
+                                .float => |f| @floatCast(f),
+                                .integer => |i| @floatFromInt(i),
+                                else => 0,
+                            };
+                        }
+                        self.setPosition(entity, .{ .x = px, .y = py });
+                    }
+                }
+
                 inline for (names) |name| {
                     const T = Reg.getType(name);
                     if (comptime core.getSavePolicy(T)) |policy| {
@@ -214,13 +265,22 @@ pub fn Mixin(comptime Game: type) type {
                 }
             }
 
-            // Step 5: Register entities with scene
+            // Step 5: Register entities with scene + re-track visuals
+            const Sprite = Game.SpriteComp;
+            const Shape = Game.ShapeComp;
             for (entities_json.items) |entry| {
                 const obj = entry.object;
                 const saved_id: u64 = @intCast((obj.get("id") orelse continue).integer);
                 const current_id = id_map.get(saved_id) orelse continue;
                 const entity: Entity = @intCast(current_id);
                 self.addEntityToActiveScene(entity);
+
+                // Re-register visual components with the renderer (#38)
+                if (self.active_world.ecs_backend.hasComponent(entity, Sprite)) {
+                    self.renderer.trackEntity(entity, .sprite);
+                } else if (self.active_world.ecs_backend.hasComponent(entity, Shape)) {
+                    self.renderer.trackEntity(entity, .shape);
+                }
             }
 
             // Step 6: Post-load cleanup

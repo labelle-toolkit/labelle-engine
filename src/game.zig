@@ -688,18 +688,18 @@ pub fn GameConfig(
             // Tear down active world's fields (reverse of init order)
             self.gizmo_state.deinit(self.allocator);
             self.active_world.sprite_cache.deinit();
-            self.active_world.renderer.deinit();
+            // Clear renderer entity tracking but keep GPU textures loaded.
+            // Textures are expensive to reload (embedded atlas data parsed at startup).
+            self.active_world.renderer.clear();
             self.active_world.ecs_backend.deinit();
             _ = self.active_world.nested_entity_arena.reset(.retain_capacity);
 
-            // Reinitialize active world's fields
+            // Reinitialize ECS + sprite cache (but NOT renderer — textures preserved)
             self.active_world.ecs_backend = EcsImpl.init(self.allocator);
-            self.active_world.renderer = RenderImpl.init(self.allocator);
             self.active_world.sprite_cache = atlas_mod.SpriteCache.init(self.allocator);
             self.gizmo_state = gizmo_draws_mod.GizmoState(Entity).init(self.allocator);
             // Re-sync backward-compatible pointers
             self.ecs_backend = &self.active_world.ecs_backend;
-            self.renderer = &self.active_world.renderer;
         }
 
         pub fn teardownActiveScene(self: *Self) void {
