@@ -88,11 +88,13 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
             defer applied.deinit();
             fireOnReadyAll(game, entity, null, prefab_components, &applied);
 
-            // Process children
+            // Process children — save world pos, set parent, restore (#417)
             if (prefab_obj.getArray("children")) |children| {
                 for (children.items) |child_val| {
                     const child = loadEntityInternal(game, child_val, prefab_cache, 1, entity_pos, null) catch continue;
+                    const world_pos = game.getPosition(child);
                     game.setParent(child, entity, .{});
+                    game.setWorldPosition(child, world_pos);
                 }
             }
 
@@ -440,17 +442,24 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
             // Fire onReady for all applied components (after entity is fully assembled)
             fireOnReadyAll(game, entity, scene_components, prefab_components, &applied);
 
-            // Process children recursively (prefab children + entity-level children)
+            // Process children recursively (prefab children + entity-level children).
+            // loadEntityInternal already applied parent_offset to the child's Position
+            // (world coords). setParent would double-offset via computeWorldTransform,
+            // so we save the world pos, set parent, then restore it (#417).
             if (prefab_children) |children| {
                 for (children.items) |child_val| {
                     const child = try loadEntityInternal(game, child_val, prefab_cache, depth + 1, entity_pos, ref_ctx);
+                    const world_pos = game.getPosition(child);
                     game.setParent(child, entity, .{});
+                    game.setWorldPosition(child, world_pos);
                 }
             }
             if (entity_obj.getArray("children")) |children| {
                 for (children.items) |child_val| {
                     const child = try loadEntityInternal(game, child_val, prefab_cache, depth + 1, entity_pos, ref_ctx);
+                    const world_pos = game.getPosition(child);
                     game.setParent(child, entity, .{});
+                    game.setWorldPosition(child, world_pos);
                 }
             }
 

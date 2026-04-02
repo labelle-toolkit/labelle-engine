@@ -527,8 +527,8 @@ test "@ref: position offset applied correctly with refs" {
     try testing.expectEqual(@as(f32, 100), parent_pos.x);
     try testing.expectEqual(@as(f32, 200), parent_pos.y);
 
-    // Child position: parent (100, 200) + local (10, 20) = (110, 220)
-    const child_pos: Position = game.getPosition(child_entity.?);
+    // Child world position: parent (100, 200) + local (10, 20) = (110, 220)
+    const child_pos: Position = game.getWorldPosition(child_entity.?);
     try testing.expectEqual(@as(f32, 110), child_pos.x);
     try testing.expectEqual(@as(f32, 220), child_pos.y);
 
