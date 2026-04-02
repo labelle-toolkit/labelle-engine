@@ -56,6 +56,21 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
             game.spawn_prefab_fn = &spawnPrefabImpl;
         }
 
+        /// Pre-load a prefab from an in-memory JSONC source into the persistent cache.
+        /// Call this before loadSceneFromSource to make prefabs available without file I/O.
+        /// The source must outlive the game — typically a comptime `@embedFile` slice.
+        pub fn addEmbeddedPrefab(game: *GameType, name: []const u8, source: []const u8, prefab_dir: []const u8) !void {
+            const prefab_cache = if (game.prefab_cache_ptr) |ptr|
+                @as(*PrefabCache, @ptrCast(@alignCast(ptr)))
+            else
+                try initPersistentCache(game, prefab_dir);
+
+            const persistent = prefab_cache.persistent;
+            var parser = JsoncParser.init(persistent, source);
+            const val = try parser.parse();
+            try prefab_cache.prefabs.put(try persistent.dupe(u8, name), val);
+        }
+
         /// Runtime prefab instantiation — creates an entity from a named prefab.
         fn spawnPrefabImpl(game: *GameType, name: []const u8, pos: Position) ?Entity {
             const cache_ptr = game.prefab_cache_ptr orelse return null;
@@ -974,6 +989,11 @@ pub fn JsoncSceneBridgeWithGizmos(
         pub fn loadSceneFromSource(game: *GameType, source: []const u8, prefab_dir: []const u8) !void {
             try BaseBridge.loadSceneFromSource(game, source, prefab_dir);
             game.gizmo_reconcile_fn = &reconcileGizmos;
+        }
+
+        /// Pre-load a prefab from embedded JSONC source. Delegates to BaseBridge.
+        pub fn addEmbeddedPrefab(game: *GameType, name: []const u8, source: []const u8, prefab_dir: []const u8) !void {
+            return BaseBridge.addEmbeddedPrefab(game, name, source, prefab_dir);
         }
 
         /// Per-frame gizmo reconciliation.
