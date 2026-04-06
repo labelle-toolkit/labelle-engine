@@ -327,7 +327,6 @@ pub fn GameConfig(
         }
 
         pub fn destroyEntity(self: *Self, entity: Entity) void {
-            self.assertEntityAlive(entity, "destroyEntity");
             if (self.ecs_backend.getComponent(entity, Children)) |children_comp| {
                 for (children_comp.getChildren()) |child| {
                     self.destroyEntity(child);
@@ -341,7 +340,6 @@ pub fn GameConfig(
         }
 
         pub fn destroyEntityOnly(self: *Self, entity: Entity) void {
-            self.assertEntityAlive(entity, "destroyEntityOnly");
             self.active_world.sprite_cache.invalidate(@intCast(entity));
             self.renderer.untrackEntity(entity);
             self.ecs_backend.destroyEntity(entity);
@@ -363,7 +361,6 @@ pub fn GameConfig(
         // ── Position & Hierarchy ──────────────────────────────────
 
         pub fn setPosition(self: *Self, entity: Entity, pos: Position) void {
-            self.assertEntityAlive(entity, "setPosition");
             self.ecs_backend.addComponent(entity, pos);
             self.renderer.markPositionDirtyWithChildren(EcsImpl, self.ecs_backend, entity);
         }
@@ -378,7 +375,6 @@ pub fn GameConfig(
         }
 
         pub fn setWorldPosition(self: *Self, entity: Entity, world_pos: Position) void {
-            self.assertEntityAlive(entity, "setWorldPosition");
             if (self.ecs_backend.getComponent(entity, Parent)) |parent_comp| {
                 const parent_world = hierarchy.computeWorldPos(EcsImpl, Parent, self.ecs_backend, parent_comp.entity, 0);
                 self.setPosition(entity, .{ .x = world_pos.x - parent_world.x, .y = world_pos.y - parent_world.y });
@@ -468,7 +464,6 @@ pub fn GameConfig(
         // ── Generic Component Access ──────────────────────────────
 
         pub fn addComponent(self: *Self, entity: Entity, component: anytype) void {
-            self.assertEntityAlive(entity, "addComponent");
             self.ecs_backend.addComponent(entity, component);
             const T = @TypeOf(component);
             if (@typeInfo(T) == .@"struct" and @hasDecl(T, "onAdd")) {
@@ -477,7 +472,6 @@ pub fn GameConfig(
         }
 
         pub fn setComponent(self: *Self, entity: Entity, component: anytype) void {
-            self.assertEntityAlive(entity, "setComponent");
             const T = @TypeOf(component);
             const is_update = self.ecs_backend.hasComponent(entity, T);
             self.ecs_backend.addComponent(entity, component);
@@ -499,7 +493,6 @@ pub fn GameConfig(
         }
 
         pub fn removeComponent(self: *Self, entity: Entity, comptime T: type) void {
-            self.assertEntityAlive(entity, "removeComponent");
             if (@typeInfo(T) == .@"struct" and @hasDecl(T, "onRemove")) {
                 T.onRemove(ComponentPayload{ .entity_id = @intCast(entity), .game_ptr = @ptrCast(self) });
             }
