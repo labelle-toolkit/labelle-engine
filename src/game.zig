@@ -60,8 +60,8 @@ pub fn GameConfig(
         const is_debug = builtin.mode == .Debug;
 
         // Debug-only: entity tombstone tracking (#419, #420)
-        const tombstone_size = 64;
-        const TombstoneEntry = struct { entity: Entity, frame: u64 };
+        pub const tombstone_size = 64;
+        pub const TombstoneEntry = struct { entity: Entity, frame: u64 };
 
         pub const EntityType = Entity;
         pub const EcsBackend = EcsImpl;
@@ -201,8 +201,8 @@ pub fn GameConfig(
         gizmo_state: gizmo_draws_mod.GizmoState(Entity),
 
         // Debug-only: tombstone ring buffer (#420)
-        tombstones: if (is_debug) [tombstone_size]TombstoneEntry else void =
-            if (is_debug) @as([tombstone_size]TombstoneEntry, undefined) else {},
+        tombstones: if (is_debug) [tombstone_size]?TombstoneEntry else void =
+            if (is_debug) [_]?TombstoneEntry{null} ** tombstone_size else {},
         tombstone_cursor: if (is_debug) usize else void =
             if (is_debug) 0 else {},
 
@@ -270,15 +270,17 @@ pub fn GameConfig(
 
         fn recordTombstone(self: *Self, entity: Entity) void {
             if (is_debug) {
-                self.tombstones[self.tombstone_cursor] = .{ .entity = entity, .frame = self.frame_number };
+                self.tombstones[self.tombstone_cursor] = TombstoneEntry{ .entity = entity, .frame = self.frame_number };
                 self.tombstone_cursor = (self.tombstone_cursor + 1) % tombstone_size;
             }
         }
 
-        fn findTombstone(self: *const Self, entity: Entity) ?TombstoneEntry {
+        pub fn findTombstone(self: *const Self, entity: Entity) ?TombstoneEntry {
             if (!is_debug) return null;
-            for (&self.tombstones) |entry| {
-                if (entry.entity == entity) return entry;
+            for (self.tombstones) |maybe_entry| {
+                if (maybe_entry) |entry| {
+                    if (entry.entity == entity) return entry;
+                }
             }
             return null;
         }
@@ -290,12 +292,13 @@ pub fn GameConfig(
                         std.debug.print("{s} on destroyed entity {d} (destroyed in frame {d}, current frame {d})\n", .{
                             operation, entity, tomb.frame, self.frame_number,
                         });
+                        @panic(operation ++ " on destroyed entity");
                     } else {
                         std.debug.print("{s} on invalid entity {d} (not in tombstone ring — destroyed long ago or never existed)\n", .{
                             operation, entity,
                         });
+                        @panic(operation ++ " on invalid entity");
                     }
-                    @panic(operation ++ " on destroyed entity");
                 }
             }
         }
