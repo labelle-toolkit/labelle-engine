@@ -277,15 +277,19 @@ pub fn GameConfig(
 
         pub fn findTombstone(self: *const Self, entity: Entity) ?TombstoneEntry {
             if (!is_debug) return null;
-            for (self.tombstones) |maybe_entry| {
-                if (maybe_entry) |entry| {
+            // Iterate backwards from cursor to return the most recent match
+            // (entity IDs can be reused after resetEcsBackend or ECS recycling)
+            var j: usize = 0;
+            while (j < tombstone_size) : (j += 1) {
+                const i = (self.tombstone_cursor + tombstone_size - 1 - j) % tombstone_size;
+                if (self.tombstones[i]) |entry| {
                     if (entry.entity == entity) return entry;
                 }
             }
             return null;
         }
 
-        fn assertEntityAlive(self: *const Self, entity: Entity, comptime operation: []const u8) void {
+        pub fn assertEntityAlive(self: *const Self, entity: Entity, comptime operation: []const u8) void {
             if (is_debug) {
                 if (!self.ecs_backend.entityExists(entity)) {
                     if (self.findTombstone(entity)) |tomb| {
@@ -761,6 +765,11 @@ pub fn GameConfig(
             self.gizmo_state = gizmo_draws_mod.GizmoState(Entity).init(self.allocator);
             // Re-sync backward-compatible pointers
             self.ecs_backend = &self.active_world.ecs_backend;
+            // Clear tombstones — old entity IDs are meaningless after ECS reset
+            if (is_debug) {
+                self.tombstones = [_]?TombstoneEntry{null} ** tombstone_size;
+                self.tombstone_cursor = 0;
+            }
         }
 
         pub fn teardownActiveScene(self: *Self) void {

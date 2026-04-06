@@ -13,21 +13,25 @@ pub fn Mixin(comptime Game: type) type {
 
     return struct {
         pub fn addSprite(self: *Game, entity: Entity, sprite: Sprite) void {
+            self.assertEntityAlive(entity, "addSprite");
             self.ecs_backend.addComponent(entity, sprite);
             self.renderer.trackEntity(entity, .sprite);
         }
 
         pub fn addShape(self: *Game, entity: Entity, shape: Shape) void {
+            self.assertEntityAlive(entity, "addShape");
             self.ecs_backend.addComponent(entity, shape);
             self.renderer.trackEntity(entity, .shape);
         }
 
         pub fn addText(self: *Game, entity: Entity, text: Text) void {
+            self.assertEntityAlive(entity, "addText");
             self.ecs_backend.addComponent(entity, text);
             self.renderer.trackEntity(entity, .text);
         }
 
         pub fn addIcon(self: *Game, entity: Entity, icon: Icon) void {
+            self.assertEntityAlive(entity, "addIcon");
             self.ecs_backend.addComponent(entity, icon);
             self.renderer.trackEntity(entity, .sprite);
         }
@@ -53,21 +57,25 @@ pub fn Mixin(comptime Game: type) type {
         }
 
         pub fn removeSprite(self: *Game, entity: Entity) void {
+            self.assertEntityAlive(entity, "removeSprite");
             self.renderer.untrackEntity(entity);
             self.ecs_backend.removeComponent(entity, Sprite);
         }
 
         pub fn removeShape(self: *Game, entity: Entity) void {
+            self.assertEntityAlive(entity, "removeShape");
             self.renderer.untrackEntity(entity);
             self.ecs_backend.removeComponent(entity, Shape);
         }
 
         pub fn removeText(self: *Game, entity: Entity) void {
+            self.assertEntityAlive(entity, "removeText");
             self.renderer.untrackEntity(entity);
             self.ecs_backend.removeComponent(entity, Text);
         }
 
         pub fn setZIndex(self: *Game, entity: Entity, z_index: i16) void {
+            self.assertEntityAlive(entity, "setZIndex");
             var updated = false;
             if (self.ecs_backend.getComponent(entity, Sprite)) |sprite| {
                 sprite.z_index = z_index;
