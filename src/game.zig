@@ -15,6 +15,7 @@ const game_log_mod = @import("game_log.zig");
 
 const hierarchy = @import("game/hierarchy.zig");
 const gizmo_draws_mod = @import("game/gizmo_draws.zig");
+const builtin = @import("builtin");
 
 // Mixin modules — domain-specific method groups
 const visuals_mixin = @import("game/visuals.zig");
@@ -56,6 +57,11 @@ pub fn GameConfig(
 
     return struct {
         const Self = @This();
+        const is_debug = builtin.mode == .Debug;
+
+        // Debug-only: entity tombstone tracking (#419, #420)
+        const tombstone_size = 64;
+        const TombstoneEntry = struct { entity: Entity, frame: u64 };
 
         pub const EntityType = Entity;
         pub const EcsBackend = EcsImpl;
@@ -194,6 +200,12 @@ pub fn GameConfig(
         gizmos_enabled: bool = true,
         gizmo_state: gizmo_draws_mod.GizmoState(Entity),
 
+        // Debug-only: tombstone ring buffer (#420)
+        tombstones: if (is_debug) [tombstone_size]TombstoneEntry else void =
+            if (is_debug) @as([tombstone_size]TombstoneEntry, undefined) else {},
+        tombstone_cursor: if (is_debug) usize else void =
+            if (is_debug) 0 else {},
+
         pub fn init(allocator: std.mem.Allocator) Self {
             const world = allocator.create(World) catch @panic("failed to allocate default world");
             world.* = World.init(allocator);
@@ -254,6 +266,40 @@ pub fn GameConfig(
             }
         }
 
+        // ── Debug entity guards (#419, #420) ─────────────────────
+
+        fn recordTombstone(self: *Self, entity: Entity) void {
+            if (is_debug) {
+                self.tombstones[self.tombstone_cursor] = .{ .entity = entity, .frame = self.frame_number };
+                self.tombstone_cursor = (self.tombstone_cursor + 1) % tombstone_size;
+            }
+        }
+
+        fn findTombstone(self: *const Self, entity: Entity) ?TombstoneEntry {
+            if (!is_debug) return null;
+            for (&self.tombstones) |entry| {
+                if (entry.entity == entity) return entry;
+            }
+            return null;
+        }
+
+        fn assertEntityAlive(self: *const Self, entity: Entity, comptime operation: []const u8) void {
+            if (is_debug) {
+                if (!self.ecs_backend.entityExists(entity)) {
+                    if (self.findTombstone(entity)) |tomb| {
+                        std.debug.print("{s} on destroyed entity {d} (destroyed in frame {d}, current frame {d})\n", .{
+                            operation, entity, tomb.frame, self.frame_number,
+                        });
+                    } else {
+                        std.debug.print("{s} on invalid entity {d} (not in tombstone ring — destroyed long ago or never existed)\n", .{
+                            operation, entity,
+                        });
+                    }
+                    @panic(operation ++ " on destroyed entity");
+                }
+            }
+        }
+
         // ── Entity Management ─────────────────────────────────────
 
         pub fn createEntity(self: *Self) Entity {
@@ -274,6 +320,7 @@ pub fn GameConfig(
         }
 
         pub fn destroyEntity(self: *Self, entity: Entity) void {
+            self.assertEntityAlive(entity, "destroyEntity");
             if (self.ecs_backend.getComponent(entity, Children)) |children_comp| {
                 for (children_comp.getChildren()) |child| {
                     self.destroyEntity(child);
@@ -282,13 +329,16 @@ pub fn GameConfig(
             self.active_world.sprite_cache.invalidate(@intCast(entity));
             self.renderer.untrackEntity(entity);
             self.ecs_backend.destroyEntity(entity);
+            self.recordTombstone(entity);
             self.emitHook(.{ .entity_destroyed = .{ .entity_id = entity } });
         }
 
         pub fn destroyEntityOnly(self: *Self, entity: Entity) void {
+            self.assertEntityAlive(entity, "destroyEntityOnly");
             self.active_world.sprite_cache.invalidate(@intCast(entity));
             self.renderer.untrackEntity(entity);
             self.ecs_backend.destroyEntity(entity);
+            self.recordTombstone(entity);
             self.emitHook(.{ .entity_destroyed = .{ .entity_id = entity } });
         }
 
@@ -306,6 +356,7 @@ pub fn GameConfig(
         // ── Position & Hierarchy ──────────────────────────────────
 
         pub fn setPosition(self: *Self, entity: Entity, pos: Position) void {
+            self.assertEntityAlive(entity, "setPosition");
             self.ecs_backend.addComponent(entity, pos);
             self.renderer.markPositionDirtyWithChildren(EcsImpl, self.ecs_backend, entity);
         }
@@ -320,6 +371,7 @@ pub fn GameConfig(
         }
 
         pub fn setWorldPosition(self: *Self, entity: Entity, world_pos: Position) void {
+            self.assertEntityAlive(entity, "setWorldPosition");
             if (self.ecs_backend.getComponent(entity, Parent)) |parent_comp| {
                 const parent_world = hierarchy.computeWorldPos(EcsImpl, Parent, self.ecs_backend, parent_comp.entity, 0);
                 self.setPosition(entity, .{ .x = world_pos.x - parent_world.x, .y = world_pos.y - parent_world.y });
@@ -332,6 +384,8 @@ pub fn GameConfig(
             inherit_rotation: bool = false,
             inherit_scale: bool = false,
         }) void {
+            self.assertEntityAlive(child, "setParent (child)");
+            self.assertEntityAlive(parent_entity, "setParent (parent)");
             if (hierarchy.wouldCreateCycle(EcsImpl, Parent, self.ecs_backend, child, parent_entity)) return;
 
             if (self.ecs_backend.getComponent(child, Parent)) |old_parent_comp| {
@@ -368,6 +422,7 @@ pub fn GameConfig(
         }
 
         pub fn removeParent(self: *Self, child: Entity) void {
+            self.assertEntityAlive(child, "removeParent");
             if (self.ecs_backend.getComponent(child, Parent)) |parent_comp| {
                 if (self.ecs_backend.getComponent(parent_comp.entity, Children)) |children_comp| {
                     children_comp.removeChild(child);
@@ -406,6 +461,7 @@ pub fn GameConfig(
         // ── Generic Component Access ──────────────────────────────
 
         pub fn addComponent(self: *Self, entity: Entity, component: anytype) void {
+            self.assertEntityAlive(entity, "addComponent");
             self.ecs_backend.addComponent(entity, component);
             const T = @TypeOf(component);
             if (@typeInfo(T) == .@"struct" and @hasDecl(T, "onAdd")) {
@@ -414,6 +470,7 @@ pub fn GameConfig(
         }
 
         pub fn setComponent(self: *Self, entity: Entity, component: anytype) void {
+            self.assertEntityAlive(entity, "setComponent");
             const T = @TypeOf(component);
             const is_update = self.ecs_backend.hasComponent(entity, T);
             self.ecs_backend.addComponent(entity, component);
@@ -435,6 +492,7 @@ pub fn GameConfig(
         }
 
         pub fn removeComponent(self: *Self, entity: Entity, comptime T: type) void {
+            self.assertEntityAlive(entity, "removeComponent");
             if (@typeInfo(T) == .@"struct" and @hasDecl(T, "onRemove")) {
                 T.onRemove(ComponentPayload{ .entity_id = @intCast(entity), .game_ptr = @ptrCast(self) });
             }
