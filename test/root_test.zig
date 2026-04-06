@@ -214,3 +214,104 @@ test "Game: cascade destroy removes children" {
     game.destroyEntity(parent);
     try testing.expectEqual(0, game.entityCount());
 }
+
+// ── Entity liveness guards (#419) ──────────────────────────────
+
+test "Game: destroyed entity is no longer alive" {
+    var game = Game.init(testing.allocator);
+    defer game.deinit();
+
+    const e = game.createEntity();
+    game.setPosition(e, .{ .x = 1, .y = 2 });
+    try testing.expect(game.ecs_backend.entityExists(e));
+
+    game.destroyEntity(e);
+    try testing.expect(!game.ecs_backend.entityExists(e));
+}
+
+test "Game: read-only ops on destroyed entity return null/default" {
+    var game = Game.init(testing.allocator);
+    defer game.deinit();
+
+    const Tag = struct { label: u32 };
+    const e = game.createEntity();
+    game.addComponent(e, Tag{ .label = 42 });
+    game.setPosition(e, .{ .x = 5, .y = 10 });
+    game.destroyEntity(e);
+
+    // getComponent returns null — safe, no panic
+    try testing.expectEqual(@as(?*Tag, null), game.getComponent(e, Tag));
+    // hasComponent returns false — safe, no panic
+    try testing.expect(!game.hasComponent(e, Tag));
+    // getPosition returns default — safe, no panic
+    const pos = game.getPosition(e);
+    try testing.expectEqual(0, pos.x);
+    try testing.expectEqual(0, pos.y);
+}
+
+// ── Tombstone tracking (#420) ──────────────────────────────────
+
+test "Game: tombstone records frame number" {
+    if (@import("builtin").mode != .Debug) return;
+    var game = Game.init(testing.allocator);
+    defer game.deinit();
+
+    const e = game.createEntity();
+    game.frame_number = 42;
+    game.destroyEntity(e);
+
+    const tomb = game.findTombstone(e);
+    try testing.expect(tomb != null);
+    try testing.expectEqual(42, tomb.?.frame);
+    try testing.expectEqual(e, tomb.?.entity);
+}
+
+test "Game: tombstone ring wraps around" {
+    if (@import("builtin").mode != .Debug) return;
+    var game = Game.init(testing.allocator);
+    defer game.deinit();
+
+    // Fill the ring buffer beyond capacity
+    var first_entity: Game.EntityType = undefined;
+    for (0..Game.tombstone_size + 10) |i| {
+        const e = game.createEntity();
+        if (i == 0) first_entity = e;
+        game.frame_number = @intCast(i);
+        game.destroyEntity(e);
+    }
+
+    // First entity should have been evicted from the ring
+    try testing.expectEqual(@as(?Game.TombstoneEntry, null), game.findTombstone(first_entity));
+
+    // Recent entities should still be in the ring
+    const last = game.createEntity();
+    game.frame_number = 999;
+    game.destroyEntity(last);
+    const tomb = game.findTombstone(last);
+    try testing.expect(tomb != null);
+    try testing.expectEqual(999, tomb.?.frame);
+}
+
+test "Game: cascade destroy records tombstones for parent and children" {
+    if (@import("builtin").mode != .Debug) return;
+    var game = Game.init(testing.allocator);
+    defer game.deinit();
+
+    const parent = game.createEntity();
+    game.setPosition(parent, .{ .x = 0, .y = 0 });
+    const child = game.createEntity();
+    game.setPosition(child, .{ .x = 10, .y = 10 });
+    game.setParent(child, parent, .{});
+
+    game.frame_number = 100;
+    game.destroyEntity(parent);
+
+    // Both parent and child should have tombstones
+    const parent_tomb = game.findTombstone(parent);
+    try testing.expect(parent_tomb != null);
+    try testing.expectEqual(100, parent_tomb.?.frame);
+
+    const child_tomb = game.findTombstone(child);
+    try testing.expect(child_tomb != null);
+    try testing.expectEqual(100, child_tomb.?.frame);
+}
