@@ -35,6 +35,7 @@ pub fn Mixin(comptime Game: type) type {
         /// Create a gizmo entity attached to a parent. The gizmo follows
         /// the parent's position automatically via GizmoComponent.
         pub fn addGizmo(self: *Game, parent: Entity, shape: Shape, offset_x: f32, offset_y: f32) Entity {
+            self.assertEntityAlive(parent, "addGizmo (parent)");
             const gizmo_entity = self.createEntity();
             const parent_pos = self.getPosition(parent);
 

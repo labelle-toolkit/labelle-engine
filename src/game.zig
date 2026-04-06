@@ -269,14 +269,14 @@ pub fn GameConfig(
         // ── Debug entity guards (#419, #420) ─────────────────────
 
         fn recordTombstone(self: *Self, entity: Entity) void {
-            if (is_debug) {
+            if (comptime is_debug) {
                 self.tombstones[self.tombstone_cursor] = TombstoneEntry{ .entity = entity, .frame = self.frame_number };
                 self.tombstone_cursor = (self.tombstone_cursor + 1) % tombstone_size;
             }
         }
 
         pub fn findTombstone(self: *const Self, entity: Entity) ?TombstoneEntry {
-            if (!is_debug) return null;
+            if (comptime !is_debug) return null;
             // Iterate backwards from cursor to return the most recent match
             // (entity IDs can be reused after resetEcsBackend or ECS recycling)
             var j: usize = 0;
@@ -290,7 +290,7 @@ pub fn GameConfig(
         }
 
         pub fn assertEntityAlive(self: *const Self, entity: Entity, comptime operation: []const u8) void {
-            if (is_debug) {
+            if (comptime is_debug) {
                 if (!self.ecs_backend.entityExists(entity)) {
                     if (self.findTombstone(entity)) |tomb| {
                         std.debug.print("{s} on destroyed entity {d} (destroyed in frame {d}, current frame {d})\n", .{
@@ -759,7 +759,7 @@ pub fn GameConfig(
             // Re-sync backward-compatible pointers
             self.ecs_backend = &self.active_world.ecs_backend;
             // Clear tombstones — old entity IDs are meaningless after ECS reset
-            if (is_debug) {
+            if (comptime is_debug) {
                 self.tombstones = [_]?TombstoneEntry{null} ** tombstone_size;
                 self.tombstone_cursor = 0;
             }

@@ -245,8 +245,8 @@ test "Game: read-only ops on destroyed entity return null/default" {
     try testing.expect(!game.hasComponent(e, Tag));
     // getPosition returns default — safe, no panic
     const pos = game.getPosition(e);
-    try testing.expectEqual(0, pos.x);
-    try testing.expectEqual(0, pos.y);
+    try testing.expectEqual(0.0, pos.x);
+    try testing.expectEqual(0.0, pos.y);
 }
 
 // ── Tombstone tracking (#420) ──────────────────────────────────
