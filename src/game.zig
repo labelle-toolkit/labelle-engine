@@ -52,10 +52,17 @@ pub fn GameConfig(
     const Icon = if (@hasDecl(RenderImpl, "Icon")) RenderImpl.Icon else void;
     const Parent = ParentComponent(Entity);
     const Children = ChildrenComponent(Entity);
-    const Payload = hooks_types.HookPayload(Entity);
-    const has_hooks = Hooks != void;
-    const HooksField = if (has_hooks) ?HookDispatcher(Payload, Hooks, .{}) else void;
+    const EnginePayload = hooks_types.HookPayload(Entity);
     const has_events = GameEvents != void;
+    const Payload = if (has_events) core.MergeHookPayloads(.{ EnginePayload, GameEvents }) else EnginePayload;
+    const has_hooks = Hooks != void;
+    const HooksIsMerged = has_hooks and @typeInfo(Hooks) == .pointer and @hasDecl(@typeInfo(Hooks).pointer.child, "emit");
+    const HooksField = if (!has_hooks)
+        void
+    else if (HooksIsMerged)
+        ?Hooks
+    else
+        ?HookDispatcher(Payload, Hooks, .{});
     const EventBuffer = if (has_events) std.ArrayList(GameEvents) else void;
 
     return struct {
@@ -258,7 +265,11 @@ pub fn GameConfig(
 
         pub fn setHooks(self: *Self, receiver: Hooks) void {
             if (has_hooks) {
-                self.hooks = .{ .receiver = receiver };
+                if (HooksIsMerged) {
+                    self.hooks = receiver;
+                } else {
+                    self.hooks = .{ .receiver = receiver };
+                }
                 self.emitHook(.{ .game_init = .{ .allocator = self.allocator } });
             }
         }
@@ -271,13 +282,37 @@ pub fn GameConfig(
             }
         }
 
-        /// Emit a game event. Buffered and delivered to scripts at end of frame.
+        /// Emit a game event. Buffered and delivered to hooks at end of frame.
         pub fn emit(self: *Self, event: GameEvents) void {
             if (has_events) {
                 self.event_buffer.append(self.allocator, event) catch |err| {
                     self.log.err("Failed to emit game event: {s}", .{@errorName(err)});
                 };
             }
+        }
+
+        /// Deliver buffered game events to hooks. Called at end of frame.
+        pub fn dispatchEvents(self: *Self) void {
+            if (!has_events) return;
+
+            // Swap to avoid invalidation if a hook emits new events.
+            var dispatch_buf: EventBuffer = .{};
+            std.mem.swap(EventBuffer, &self.event_buffer, &dispatch_buf);
+
+            for (dispatch_buf.items) |event| {
+                // Convert GameEvents variant to merged Payload variant
+                switch (event) {
+                    inline else => |data, tag| {
+                        self.emitHook(@unionInit(Payload, @tagName(tag), data));
+                    },
+                }
+            }
+            dispatch_buf.clearRetainingCapacity();
+
+            if (self.event_buffer.items.len == 0) {
+                std.mem.swap(EventBuffer, &self.event_buffer, &dispatch_buf);
+            }
+            dispatch_buf.deinit(self.allocator);
         }
 
         // ── Debug entity guards (#419, #420) ─────────────────────

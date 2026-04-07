@@ -16,9 +16,8 @@ const EcsBackend = EcsAdapter;
 const gfx = @import("labelle-gfx");
 
 {{game_layers_block}}
-{{resource_registry_block}}const AllHookPayloads = engine.HookPayload(EcsBackend.Entity);
-
-{{game_hooks_block}}{{game_events_block}}const Renderer = gfx.GfxRenderer(BackendGfx, GameLayers, EcsBackend.Entity);
+{{resource_registry_block}}{{game_events_block}}{{all_hook_payloads_block}}
+{{game_hooks_block}}const Renderer = gfx.GfxRenderer(BackendGfx, GameLayers, EcsBackend.Entity);
 
 const AssembledGame = engine.GameConfig(
     Renderer,
