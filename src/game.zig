@@ -274,7 +274,9 @@ pub fn GameConfig(
         /// Emit a game event. Buffered and delivered to scripts at end of frame.
         pub fn emit(self: *Self, event: GameEvents) void {
             if (has_events) {
-                self.event_buffer.append(self.allocator, event) catch {};
+                self.event_buffer.append(self.allocator, event) catch |err| {
+                    self.log.err("Failed to emit game event: {s}", .{@errorName(err)});
+                };
             }
         }
 
