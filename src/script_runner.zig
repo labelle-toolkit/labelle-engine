@@ -234,13 +234,19 @@ pub fn ScriptRunner(
         /// Deliver buffered game events to all scripts that declare onEvent.
         /// Called after all script ticks complete (end-of-frame delivery).
         pub fn dispatchEvents(self: *Self, game: anytype) void {
-            const GameType = @typeInfo(@TypeOf(game)).pointer.child;
+            const info = @typeInfo(@TypeOf(game));
+            const GameType = if (info == .pointer) info.pointer.child else @TypeOf(game);
             if (comptime !@hasField(GameType, "event_buffer")) return;
             if (comptime @TypeOf(@as(GameType, undefined).event_buffer) == void) return;
 
             const current_state = getGameState(game);
             const decls = @typeInfo(AllScripts).@"struct".decls;
-            for (game.event_buffer.items) |event| {
+
+            // Swap buffers to avoid invalidation if onEvent emits new events.
+            var dispatch_buf: @TypeOf(game.event_buffer) = .{};
+            std.mem.swap(@TypeOf(game.event_buffer), &game.event_buffer, &dispatch_buf);
+
+            for (dispatch_buf.items) |event| {
                 inline for (decls) |d| {
                     const mod = @field(AllScripts, d.name);
                     if (comptime isGameScript(mod) and isFnDecl(mod, "onEvent")) {
@@ -250,7 +256,15 @@ pub fn ScriptRunner(
                     }
                 }
             }
-            game.event_buffer.clearRetainingCapacity();
+            dispatch_buf.clearRetainingCapacity();
+
+            // Swap back — any events emitted during dispatch are now in game.event_buffer
+            // and will be delivered next frame.
+            if (game.event_buffer.items.len == 0) {
+                // No new events emitted during dispatch — reuse the dispatch buffer
+                std.mem.swap(@TypeOf(game.event_buffer), &game.event_buffer, &dispatch_buf);
+            }
+            dispatch_buf.deinit(game.allocator);
         }
 
         /// Dispatch onEvent by arity:
