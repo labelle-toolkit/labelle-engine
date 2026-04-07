@@ -31,6 +31,7 @@ const AssembledGame = engine.GameConfig(
     DiscoveredGizmoCategories,
     GameEvents,
 );
+pub const Game = AssembledGame;
 {{prefab_registry_block}}{{component_registry_block}}{{system_registry_block}}{{all_scripts_block}}const Scripts = engine.ScriptRegistry(AllScripts);
 
 {{#if has_context}}const GameContext = @import("scripts/context.zig").GameContext(EcsBackend);
