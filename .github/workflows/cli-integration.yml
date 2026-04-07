@@ -48,7 +48,8 @@ jobs:
 
       - name: Install labelle-cli
         run: |
-          curl -fsSL https://labelle.games/install.sh | bash
+          cd labelle-cli
+          zig build install --prefix $HOME/.labelle
           echo "$HOME/.labelle/bin" >> $GITHUB_PATH
 
       - name: Verify CLI
