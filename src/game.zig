@@ -308,7 +308,6 @@ pub fn GameConfig(
         /// Deliver buffered game events to hooks. Called at end of frame.
         pub fn dispatchEvents(self: *Self) void {
             if (!has_events) return;
-
             var dispatch_buf: EventBuffer = .{};
             std.mem.swap(EventBuffer, &self.event_buffer, &dispatch_buf);
 
