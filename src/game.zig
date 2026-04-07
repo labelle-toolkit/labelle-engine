@@ -267,8 +267,22 @@ pub fn GameConfig(
             if (has_hooks) {
                 if (HooksIsMerged) {
                     self.hooks = receiver;
+                    // Inject game pointer into hook structs that declare game_ptr
+                    const merged = receiver.*;
+                    inline for (std.meta.fields(@TypeOf(merged.receivers))) |field| {
+                        const hook_ptr = @field(merged.receivers, field.name);
+                        const HookType = @typeInfo(@TypeOf(hook_ptr)).pointer.child;
+                        if (@hasField(HookType, "game_ptr")) {
+                            hook_ptr.game_ptr = @ptrCast(self);
+                        }
+                    }
                 } else {
                     self.hooks = .{ .receiver = receiver };
+                    // Inject game pointer for single hook
+                    const HookType = @typeInfo(Hooks).pointer.child;
+                    if (@hasField(HookType, "game_ptr")) {
+                        receiver.game_ptr = @ptrCast(self);
+                    }
                 }
                 self.emitHook(.{ .game_init = .{ .allocator = self.allocator } });
             }
