@@ -112,7 +112,7 @@ pub fn ScriptRunner(
         /// Decls must be actual functions/types, not empty struct literals from wrappers.
         fn isGameScript(comptime mod: type) bool {
             return isFnDecl(mod, "setup") or isFnDecl(mod, "tick") or
-                isFnDecl(mod, "drawGui") or isFnDecl(mod, "onEvent") or @hasDecl(mod, "State");
+                isFnDecl(mod, "drawGui") or @hasDecl(mod, "State");
         }
 
         fn hasStateDecl(comptime mod: type) bool {
@@ -228,62 +228,6 @@ pub fn ScriptRunner(
                     }
                     profile_idx += 1;
                 }
-            }
-        }
-
-        /// Deliver buffered game events to all scripts that declare onEvent.
-        /// Called after all script ticks complete (end-of-frame delivery).
-        pub fn dispatchEvents(self: *Self, game: anytype) void {
-            const info = @typeInfo(@TypeOf(game));
-            const GameType = if (info == .pointer) info.pointer.child else @TypeOf(game);
-            if (comptime !@hasField(GameType, "event_buffer")) return;
-            if (comptime @TypeOf(@as(GameType, undefined).event_buffer) == void) return;
-
-            const current_state = getGameState(game);
-            const decls = @typeInfo(AllScripts).@"struct".decls;
-
-            // Swap buffers to avoid invalidation if onEvent emits new events.
-            var dispatch_buf: @TypeOf(game.event_buffer) = .{};
-            std.mem.swap(@TypeOf(game.event_buffer), &game.event_buffer, &dispatch_buf);
-
-            for (dispatch_buf.items) |event| {
-                inline for (decls) |d| {
-                    const mod = @field(AllScripts, d.name);
-                    if (comptime isGameScript(mod) and isFnDecl(mod, "onEvent")) {
-                        if (isStateAllowedCached(mod, current_state)) {
-                            dispatchEventCall(mod.onEvent, game, self, d.name, event);
-                        }
-                    }
-                }
-            }
-            dispatch_buf.clearRetainingCapacity();
-
-            // Swap back — any events emitted during dispatch are now in game.event_buffer
-            // and will be delivered next frame.
-            if (game.event_buffer.items.len == 0) {
-                // No new events emitted during dispatch — reuse the dispatch buffer
-                std.mem.swap(@TypeOf(game.event_buffer), &game.event_buffer, &dispatch_buf);
-            }
-            dispatch_buf.deinit(game.allocator);
-        }
-
-        /// Dispatch onEvent by arity:
-        ///   2 args: func(game, event)
-        ///   3 args: func(game, state, event)
-        fn dispatchEventCall(
-            comptime func: anytype,
-            game: anytype,
-            self: *Self,
-            comptime name: []const u8,
-            event: anytype,
-        ) void {
-            const n = comptime @typeInfo(@TypeOf(func)).@"fn".params.len;
-            if (n == 3) {
-                func(game, &@field(self.states, name), event);
-            } else if (n == 2) {
-                func(game, event);
-            } else {
-                @compileError("onEvent in '" ++ name ++ "' must take 2-3 args (game + [state] + event)");
             }
         }
 
