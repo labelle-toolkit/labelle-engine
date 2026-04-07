@@ -1060,6 +1060,7 @@ pub fn GameWith(comptime Hooks: type) type {
         core.StubLogSink,
         EmptyComponents,
         &.{}, // no gizmo categories
+        void, // no game events
     );
 }
 

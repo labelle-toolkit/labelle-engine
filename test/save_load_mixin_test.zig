@@ -101,6 +101,7 @@ const TestGame = game_mod.GameConfig(
     core.StubLogSink,
     TestComponents,
     &.{}, // no gizmo categories
+    void, // no game events
 );
 
 // ── Tests ───────────────────────────────────────────────────────────────

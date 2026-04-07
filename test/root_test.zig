@@ -46,6 +46,7 @@ test "GameConfig: RenderImpl slot is parameterized" {
         StubLogSink,
         EmptyComponents,
         &.{}, // no gizmo categories
+        void, // no game events
     );
 
     var game = CustomGame.init(testing.allocator);
