@@ -40,6 +40,7 @@ pub fn GameConfig(
     comptime LogSinkImpl: type,
     comptime ComponentsType: type,
     comptime GizmoCategoriesSlice: anytype,
+    comptime GameEvents: type,
 ) type {
     // Validate renderer satisfies the contract
     _ = core.RenderInterface(RenderImpl);
@@ -54,6 +55,8 @@ pub fn GameConfig(
     const Payload = hooks_types.HookPayload(Entity);
     const has_hooks = Hooks != void;
     const HooksField = if (has_hooks) ?HookDispatcher(Payload, Hooks, .{}) else void;
+    const has_events = GameEvents != void;
+    const EventBuffer = if (has_events) std.ArrayList(GameEvents) else void;
 
     return struct {
         const Self = @This();
@@ -146,6 +149,7 @@ pub fn GameConfig(
         active_world_name: ?[]const u8 = null,
         atlas_manager: atlas_mod.TextureManager,
         hooks: HooksField = if (has_hooks) null else {},
+        event_buffer: EventBuffer = if (has_events) .{} else {},
 
         // Scene management
         scenes: std.StringHashMap(SceneEntry),
@@ -224,6 +228,7 @@ pub fn GameConfig(
 
         pub fn deinit(self: *Self) void {
             self.emitHook(.{ .game_deinit = {} });
+            if (has_events) self.event_buffer.deinit(self.allocator);
             self.teardownActiveScene();
             if (self.current_scene_name) |name| {
                 self.allocator.free(name);
@@ -263,6 +268,15 @@ pub fn GameConfig(
                 if (self.hooks) |h| {
                     h.emit(payload);
                 }
+            }
+        }
+
+        /// Emit a game event. Buffered and delivered to scripts at end of frame.
+        pub fn emit(self: *Self, event: GameEvents) void {
+            if (has_events) {
+                self.event_buffer.append(self.allocator, event) catch |err| {
+                    self.log.err("Failed to emit game event: {s}", .{@errorName(err)});
+                };
             }
         }
 
@@ -590,6 +604,7 @@ pub fn GameConfig(
         pub const getState = StateMixin.getState;
 
         pub fn unloadCurrentScene(self: *Self) void {
+            if (has_events) self.event_buffer.clearRetainingCapacity();
             if (self.current_scene_name) |name| {
                 self.emitHook(.{ .scene_unload = .{ .name = name } });
                 if (self.scenes.get(name)) |entry| {
@@ -1047,6 +1062,7 @@ pub fn GameWith(comptime Hooks: type) type {
         core.StubLogSink,
         EmptyComponents,
         &.{}, // no gizmo categories
+        void, // no game events
     );
 }
 
