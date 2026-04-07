@@ -12,13 +12,13 @@ const LogSink = engine.core.StderrLogSink;
 const EcsBackend = EcsAdapter;
 {{/if}}{{#if has_gui}}const GuiBackend = @import("gui_backend");
 {{#else}}const GuiBackend = engine.StubGui;
-{{/if}}{{hook_imports_block}}{{enum_imports_block}}{{jsonc_scene_block}}
+{{/if}}{{hook_imports_block}}{{event_imports_block}}{{enum_imports_block}}{{jsonc_scene_block}}
 const gfx = @import("labelle-gfx");
 
 {{game_layers_block}}
 {{resource_registry_block}}const AllHookPayloads = engine.HookPayload(EcsBackend.Entity);
 
-{{game_hooks_block}}const Renderer = gfx.GfxRenderer(BackendGfx, GameLayers, EcsBackend.Entity);
+{{game_hooks_block}}{{game_events_block}}const Renderer = gfx.GfxRenderer(BackendGfx, GameLayers, EcsBackend.Entity);
 
 const AssembledGame = engine.GameConfig(
     Renderer,
@@ -30,6 +30,7 @@ const AssembledGame = engine.GameConfig(
     LogSink,
     Components,
     DiscoveredGizmoCategories,
+    GameEvents,
 );
 {{prefab_registry_block}}{{component_registry_block}}{{system_registry_block}}{{all_scripts_block}}const Scripts = engine.ScriptRegistry(AllScripts);
 
