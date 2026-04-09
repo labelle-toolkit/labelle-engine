@@ -516,14 +516,10 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
             parent_pos: Position,
             ref_ctx: ?*RefContext,
         ) LoadEntityError!void {
-            const child_is_prefab = blk: {
-                if (child_val.asObject()) |cobj| {
-                    break :blk cobj.getString("prefab") != null;
-                }
-                break :blk false;
-            };
+            const child_obj = child_val.asObject();
+            const child_is_prefab = if (child_obj) |cobj| cobj.getString("prefab") != null else false;
 
-            if (child_is_prefab and ref_ctx != null) {
+            const child = if (child_is_prefab and ref_ctx != null) blk: {
                 // Per-instance ref scope for prefab children. Chained to
                 // the parent scope so a prefab-body entity can still
                 // resolve refs declared in an enclosing scope (e.g.
@@ -534,17 +530,17 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
                 var local_ctx = RefContext.init(game.allocator, ref_ctx);
                 defer local_ctx.deinit();
 
-                const child = try loadEntityInternal(game, child_val, prefab_cache, depth + 1, parent_pos, &local_ctx);
+                const c = try loadEntityInternal(game, child_val, prefab_cache, depth + 1, parent_pos, &local_ctx);
 
                 // If the child was given a scene-level ref override, bubble
                 // it up to the parent scope so siblings and the parent
                 // entity can reference this child. Prefab-internal refs
                 // stay local.
                 if (ref_ctx) |rctx| {
-                    if (child_val.asObject()) |cobj| {
+                    if (child_obj) |cobj| {
                         if (cobj.getString("ref")) |scene_ref| {
                             if (local_ctx.ref_map.get(scene_ref)) |eid| {
-                                if (rctx.ref_map.fetchPut(scene_ref, eid) catch null) |existing| {
+                                if (try rctx.ref_map.fetchPut(scene_ref, eid)) |existing| {
                                     game.log.warn("[SceneRef] Duplicate ref '{s}' (entities {d} and {d})", .{ scene_ref, existing.value, eid });
                                 }
                             }
@@ -560,17 +556,16 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
                     patchRefField(game, deferred, &local_ctx);
                 }
 
-                const world_pos = game.getPosition(child);
-                game.setParent(child, parent_entity, .{});
-                game.setWorldPosition(child, world_pos);
-            } else {
+                break :blk c;
+            } else
                 // Plain child: uses the parent's ref_ctx so scene-level
                 // cross-references still work.
-                const child = try loadEntityInternal(game, child_val, prefab_cache, depth + 1, parent_pos, ref_ctx);
-                const world_pos = game.getPosition(child);
-                game.setParent(child, parent_entity, .{});
-                game.setWorldPosition(child, world_pos);
-            }
+                try loadEntityInternal(game, child_val, prefab_cache, depth + 1, parent_pos, ref_ctx);
+
+            // Save world pos before setParent to avoid double-offset (#417).
+            const world_pos = game.getPosition(child);
+            game.setParent(child, parent_entity, .{});
+            game.setWorldPosition(child, world_pos);
         }
 
         /// Apply a component, handling @ref substitution when ref_ctx is active.
