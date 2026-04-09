@@ -461,24 +461,89 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
             // loadEntityInternal already applied parent_offset to the child's Position
             // (world coords). setParent would double-offset via computeWorldTransform,
             // so we save the world pos, set parent, then restore it (#417).
+            //
+            // When a child is itself a prefab instance, it gets its own local
+            // RefContext so prefab-internal refs (e.g. `ref: "storage"` inside
+            // `food_storage_with_packet`) don't collide across sibling
+            // instances of the same prefab. This mirrors the pattern already
+            // used by `spawnAndLinkNestedEntities` for entities nested inside
+            // component array fields. See engine #425 / flying-platform #53.
+            //
+            // Plain children (no `prefab` key) keep using the parent's ref_ctx
+            // so scene-level cross-references between top-level entities still
+            // work as before.
             if (prefab_children) |children| {
                 for (children.items) |child_val| {
-                    const child = try loadEntityInternal(game, child_val, prefab_cache, depth + 1, entity_pos, ref_ctx);
-                    const world_pos = game.getPosition(child);
-                    game.setParent(child, entity, .{});
-                    game.setWorldPosition(child, world_pos);
+                    try loadChildEntity(game, entity, child_val, prefab_cache, depth, entity_pos, ref_ctx);
                 }
             }
             if (entity_obj.getArray("children")) |children| {
                 for (children.items) |child_val| {
-                    const child = try loadEntityInternal(game, child_val, prefab_cache, depth + 1, entity_pos, ref_ctx);
-                    const world_pos = game.getPosition(child);
-                    game.setParent(child, entity, .{});
-                    game.setWorldPosition(child, world_pos);
+                    try loadChildEntity(game, entity, child_val, prefab_cache, depth, entity_pos, ref_ctx);
                 }
             }
 
             return entity;
+        }
+
+        /// Load a single child entity and attach it to its parent. Handles
+        /// the per-instance ref-scoping wrapper when the child is itself a
+        /// prefab instance — see the comment in the caller for the rationale.
+        fn loadChildEntity(
+            game: *GameType,
+            parent_entity: Entity,
+            child_val: Value,
+            prefab_cache: *PrefabCache,
+            depth: usize,
+            parent_pos: Position,
+            ref_ctx: ?*RefContext,
+        ) LoadEntityError!void {
+            const child_is_prefab = blk: {
+                if (child_val.asObject()) |cobj| {
+                    break :blk cobj.getString("prefab") != null;
+                }
+                break :blk false;
+            };
+
+            if (child_is_prefab and ref_ctx != null) {
+                // Per-instance ref scope for prefab children.
+                var local_ctx = RefContext.init(game.allocator);
+                defer local_ctx.deinit();
+
+                const child = try loadEntityInternal(game, child_val, prefab_cache, depth + 1, parent_pos, &local_ctx);
+
+                // If the child was given a scene-level ref override, bubble
+                // it up to the parent scope so siblings and the parent
+                // entity can reference this child. Prefab-internal refs
+                // stay local.
+                if (ref_ctx) |rctx| {
+                    if (child_val.asObject()) |cobj| {
+                        if (cobj.getString("ref")) |scene_ref| {
+                            if (local_ctx.ref_map.get(scene_ref)) |eid| {
+                                if (rctx.ref_map.fetchPut(scene_ref, eid) catch null) |existing| {
+                                    game.log.warn("[SceneRef] Duplicate ref '{s}' (entities {d} and {d})", .{ scene_ref, existing.value, eid });
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Patch deferred refs collected inside the local context.
+                for (local_ctx.deferred.items) |deferred| {
+                    patchRefField(game, deferred, &local_ctx.ref_map);
+                }
+
+                const world_pos = game.getPosition(child);
+                game.setParent(child, parent_entity, .{});
+                game.setWorldPosition(child, world_pos);
+            } else {
+                // Plain child: uses the parent's ref_ctx so scene-level
+                // cross-references still work.
+                const child = try loadEntityInternal(game, child_val, prefab_cache, depth + 1, parent_pos, ref_ctx);
+                const world_pos = game.getPosition(child);
+                game.setParent(child, parent_entity, .{});
+                game.setWorldPosition(child, world_pos);
+            }
         }
 
         /// Apply a component, handling @ref substitution when ref_ctx is active.
