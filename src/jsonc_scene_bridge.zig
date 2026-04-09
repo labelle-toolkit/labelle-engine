@@ -130,22 +130,38 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
 
         /// Ref context shared across entity loading — collects named refs
         /// and deferred field patches for two-pass resolution.
+        ///
+        /// Scopes form a chain via `parent`: registrations stay in the
+        /// current scope (so repeated prefab instances don't collide on
+        /// their internal ref names), but lookups walk up the chain (so a
+        /// `@ref` inside a prefab body can still resolve to something
+        /// registered in an enclosing scope — e.g. `food_packet` inside
+        /// `food_storage_with_packet` referencing its parent's `@storage`).
         const RefContext = struct {
             ref_map: std.StringHashMap(u64),
             deferred: std.ArrayListUnmanaged(DeferredRefField),
             allocator: std.mem.Allocator,
+            parent: ?*RefContext,
 
-            fn init(allocator: std.mem.Allocator) RefContext {
+            fn init(allocator: std.mem.Allocator, parent: ?*RefContext) RefContext {
                 return .{
                     .ref_map = std.StringHashMap(u64).init(allocator),
                     .deferred = .{},
                     .allocator = allocator,
+                    .parent = parent,
                 };
             }
 
             fn deinit(self: *RefContext) void {
                 self.ref_map.deinit();
                 self.deferred.deinit(self.allocator);
+            }
+
+            /// Resolve a ref name, walking up the parent chain when not found locally.
+            fn lookup(self: *const RefContext, name: []const u8) ?u64 {
+                if (self.ref_map.get(name)) |id| return id;
+                if (self.parent) |p| return p.lookup(name);
+                return null;
             }
         };
 
@@ -229,23 +245,25 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
         }
 
         /// Patch a single deferred ref field in-place on an already-applied component.
-        fn patchRefField(game: *GameType, deferred: DeferredRefField, ref_map: *const std.StringHashMap(u64)) void {
+        /// Lookups walk up the RefContext parent chain so a prefab-body entity can
+        /// resolve refs registered in its enclosing scope.
+        fn patchRefField(game: *GameType, deferred: DeferredRefField, ref_ctx: *const RefContext) void {
             const comp_names = comptime Components.names();
             inline for (comp_names) |name| {
                 if (std.mem.eql(u8, deferred.comp_name, name)) {
                     const T = Components.getType(name);
-                    patchFieldOnComponent(T, game, deferred, ref_map);
+                    patchFieldOnComponent(T, game, deferred, ref_ctx);
                     return;
                 }
             }
         }
 
-        fn patchFieldOnComponent(comptime T: type, game: *GameType, deferred: DeferredRefField, ref_map: *const std.StringHashMap(u64)) void {
+        fn patchFieldOnComponent(comptime T: type, game: *GameType, deferred: DeferredRefField, ref_ctx: *const RefContext) void {
             if (game.ecs_backend.getComponent(deferred.entity, T)) |comp| {
                 const ref_fields = comptime core.getEntityRefFields(T);
                 inline for (ref_fields) |field_name| {
                     if (std.mem.eql(u8, deferred.field_name, field_name)) {
-                        if (ref_map.get(deferred.ref_name)) |resolved_id| {
+                        if (ref_ctx.lookup(deferred.ref_name)) |resolved_id| {
                             @field(comp, field_name) = resolved_id;
                         } else {
                             game.log.err("[SceneRef] Unresolved ref '@{s}' in {s}.{s}", .{ deferred.ref_name, deferred.comp_name, field_name });
@@ -264,7 +282,7 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
 
             // Pass 2: patch @ref fields with resolved entity IDs
             for (ref_ctx.deferred.items) |deferred| {
-                patchRefField(game, deferred, &ref_ctx.ref_map);
+                patchRefField(game, deferred, ref_ctx);
             }
         }
 
@@ -298,7 +316,7 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
 
             // Process this file's entities with ref support
             if (scene_obj.getArray("entities")) |entities_arr| {
-                var ref_ctx = RefContext.init(game.allocator);
+                var ref_ctx = RefContext.init(game.allocator, null);
                 defer ref_ctx.deinit();
                 try processEntities(game, entities_arr, prefab_cache, &ref_ctx);
             }
@@ -326,7 +344,7 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
             }
 
             if (scene_obj.getArray("entities")) |entities_arr| {
-                var ref_ctx = RefContext.init(game.allocator);
+                var ref_ctx = RefContext.init(game.allocator, null);
                 defer ref_ctx.deinit();
                 try processEntities(game, entities_arr, prefab_cache, &ref_ctx);
             }
@@ -506,8 +524,14 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
             };
 
             if (child_is_prefab and ref_ctx != null) {
-                // Per-instance ref scope for prefab children.
-                var local_ctx = RefContext.init(game.allocator);
+                // Per-instance ref scope for prefab children. Chained to
+                // the parent scope so a prefab-body entity can still
+                // resolve refs declared in an enclosing scope (e.g.
+                // `food_packet` inside `food_storage_with_packet` looking
+                // up its parent's `@storage`). Registrations stay local
+                // so repeated sibling instances of the same prefab don't
+                // collide on their internal ref names.
+                var local_ctx = RefContext.init(game.allocator, ref_ctx);
                 defer local_ctx.deinit();
 
                 const child = try loadEntityInternal(game, child_val, prefab_cache, depth + 1, parent_pos, &local_ctx);
@@ -529,8 +553,11 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
                 }
 
                 // Patch deferred refs collected inside the local context.
+                // Lookups walk up the parent chain, so refs that point at
+                // an ancestor scope (e.g. `@storage` inside a nested
+                // prefab body) resolve correctly.
                 for (local_ctx.deferred.items) |deferred| {
-                    patchRefField(game, deferred, &local_ctx.ref_map);
+                    patchRefField(game, deferred, &local_ctx);
                 }
 
                 const world_pos = game.getPosition(child);
@@ -632,7 +659,9 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
                             // Use a local RefContext for this nested entity's children so that
                             // prefab-internal refs (e.g. @storage/@item in eis_with_water) are
                             // scoped per-instance and don't collide across repeated prefabs.
-                            var local_ref_ctx = RefContext.init(game.allocator);
+                            // Chained to the caller's ref_ctx so prefab bodies can still
+                            // resolve refs from enclosing scopes via parent-chain lookup.
+                            var local_ref_ctx = RefContext.init(game.allocator, ref_ctx);
                             defer local_ref_ctx.deinit();
                             const nested_ref_ctx: *RefContext = &local_ref_ctx;
 
@@ -736,9 +765,11 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
                                 }
                             }
 
-                            // Patch deferred refs from the local context
+                            // Patch deferred refs from the local context.
+                            // Lookups walk up the parent chain to resolve
+                            // refs that point at an enclosing scope.
                             for (local_ref_ctx.deferred.items) |deferred| {
-                                patchRefField(game, deferred, &local_ref_ctx.ref_map);
+                                patchRefField(game, deferred, &local_ref_ctx);
                             }
                         }
 
