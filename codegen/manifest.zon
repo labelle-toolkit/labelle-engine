@@ -27,6 +27,7 @@
         "all_scripts_block",
         "view_registry_block",
         "gizmo_registry_block",
+        "animation_registry_block",
 
         // Lifecycle placeholder — the CLI fills this with the
         // backend-specific main/setup/tick/draw section.
