@@ -32,10 +32,18 @@ pub const ClipMeta = struct {
 };
 
 pub fn AnimationDef(comptime zon: anytype) type {
+    if (!@hasField(@TypeOf(zon), "clips")) @compileError("animation .zon must have a .clips field");
+    if (!@hasField(@TypeOf(zon), "variants")) @compileError("animation .zon must have a .variants field");
+
     const clip_fields = @typeInfo(@TypeOf(zon.clips)).@"struct".fields;
     const variant_list = zon.variants;
     const variant_count = variant_list.len;
     const clip_count = clip_fields.len;
+
+    comptime {
+        if (variant_count == 0) @compileError("animation .zon must define at least one variant");
+        if (clip_count == 0) @compileError("animation .zon must define at least one clip");
+    }
 
     // Build Clip enum fields
     const ClipEnumFields = blk: {
@@ -109,6 +117,9 @@ pub fn AnimationDef(comptime zon: anytype) type {
     // Format: "{folder}/{variant}_{frame:04}.png"
     const SpriteNameTable = [clip_count][variant_count][max_frames][]const u8;
 
+    // Precompute all sprite name strings at comptime. The branch quota scales
+    // with the table size because comptimePrint uses Writer internals that
+    // consume many branches per formatted string.
     const sprite_names: SpriteNameTable = blk: {
         @setEvalBranchQuota(clip_count * variant_count * max_frames * 2000);
         var table: SpriteNameTable = undefined;
@@ -145,6 +156,7 @@ pub fn AnimationDef(comptime zon: anytype) type {
         /// Look up the precomputed sprite name for a clip/variant/frame combination.
         /// Frame is 0-based.
         pub fn spriteName(clip: Clip, variant: Variant, frame: u8) []const u8 {
+            if (frame >= max_frames) return "";
             return sprite_names[@intFromEnum(clip)][@intFromEnum(variant)][frame];
         }
 
