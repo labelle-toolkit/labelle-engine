@@ -15,6 +15,35 @@ const Position = core.Position;
 const scene_mod = @import("scene");
 const gizmo_mod = scene_mod.gizmo;
 
+// ── String intern pool ──────────────────────────────────────────────
+//
+// Component `[]const u8` fields deserialized from a scene or prefab need
+// to outlive the parse arena (which is freed after loadSceneFile returns).
+// We intern them into a single arena wrapping page_allocator and dedupe
+// via a hashmap: identical strings (e.g. "player.png" shared by many
+// entities, or a prefab spawned N times) collapse to one allocation.
+//
+// Bounded by the number of *unique* strings seen over the process
+// lifetime, not by the number of deserialize calls — so repeated prefab
+// spawns no longer leak page_allocator memory per call.
+//
+// File-scope on purpose: shared across all JsoncSceneBridge
+// instantiations so a project with multiple Game types still dedupes.
+// Never freed; matches the PrefabCache page_allocator convention.
+var intern_arena: ?std.heap.ArenaAllocator = null;
+var intern_map: ?std.StringHashMap(void) = null;
+
+fn internString(s: []const u8) ?[]const u8 {
+    if (intern_arena == null) {
+        intern_arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+        intern_map = std.StringHashMap(void).init(intern_arena.?.allocator());
+    }
+    if (intern_map.?.getKey(s)) |existing| return existing;
+    const owned = intern_arena.?.allocator().dupe(u8, s) catch return null;
+    intern_map.?.put(owned, {}) catch return null;
+    return owned;
+}
+
 /// Create a JSONC scene loader parameterized by game and component types.
 /// Components is a ComponentRegistry/ComponentRegistryWithPlugins type with has/getType/names.
 pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type {
@@ -885,7 +914,15 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
             if (T == f32 or T == f64) return valueToFloat(T, value);
             if (T == i8 or T == i16 or T == i32 or T == i64 or T == u8 or T == u16 or T == u32 or T == u64 or T == usize) return valueToInt(T, value);
             if (T == bool) return value.asBool();
-            if (T == []const u8) return value.asString();
+            if (T == []const u8) {
+                const s = value.asString() orelse return null;
+                // Intern into the shared pool so (a) identical strings
+                // dedupe and repeated prefab spawns don't leak, and (b)
+                // allocations are batched through an arena instead of a
+                // system call per string. See the intern pool docs at
+                // the top of this file.
+                return internString(s);
+            }
 
             // Enums
             if (info == .@"enum") {
