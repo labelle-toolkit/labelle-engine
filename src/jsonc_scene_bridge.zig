@@ -76,7 +76,51 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
         /// Load a scene from an in-memory JSONC source string (for embedded/release builds).
         /// The source must outlive the loaded scene — typically a comptime `@embedFile` slice.
         pub fn loadSceneFromSource(game: *GameType, source: []const u8, prefab_dir: []const u8) !void {
-            const prefab_cache = try initPersistentCache(game, prefab_dir);
+            // ================================================================
+            // !!! CRITICAL — DO NOT REPLACE WITH `initPersistentCache` !!!
+            // ================================================================
+            //
+            // This MUST reuse an existing PrefabCache when one is already
+            // attached to the game. The cache is populated up-front by
+            // `addEmbeddedPrefab` calls that the assembler emits in init()
+            // for every `prefabs/*.jsonc` in the project — the only mechanism
+            // by which prefabs are made available to mobile builds (Android,
+            // iOS), where the app has no filesystem access.
+            //
+            // If we instead create a fresh cache here (the obvious-looking
+            // `try initPersistentCache(...)` one-liner), every embedded
+            // prefab is silently discarded. Subsequent lookups in
+            // `PrefabCache.get` then fall through to
+            // `std.fs.cwd().openFile("prefabs/<name>.jsonc")`. On desktop
+            // that "happens to work" because the project directory is the
+            // cwd — and that accidental success is what masked this bug for
+            // ages. On Android the openFile returns `error.FileNotFound`,
+            // `get` returns null, and **every nested prefab entity
+            // (workstations, storages, movement_nodes, …) silently fails
+            // to spawn**. The visible symptom is a black screen with the
+            // simulation alive but no rooms — exactly what bit
+            // flying-platform-labelle when first deployed to the emulator.
+            //
+            // Past tense, present danger: any "tidy-up" refactor that
+            // replaces the conditional below with an unconditional call to
+            // `initPersistentCache` will reintroduce the regression. The
+            // assembler's `addEmbeddedPrefab` ordering is fixed — it runs
+            // BEFORE `setScene`/`loadSceneFromSource` — so the cache is
+            // ALWAYS already populated by the time we get here on a properly
+            // generated build. Reuse it. Don't replace it.
+            //
+            // See:
+            //   - flying-platform-labelle Android black-screen debug
+            //     (entityCount went from 19 → 125, pathfinder graph
+            //     0 → 39 nodes after this fix)
+            //   - PR for this fix in labelle-engine
+            //   - Mirrors the same defensive pattern already used by
+            //     `addEmbeddedPrefab` itself (line ~92 in this file)
+            // ================================================================
+            const prefab_cache = if (game.prefab_cache_ptr) |ptr|
+                @as(*PrefabCache, @ptrCast(@alignCast(ptr)))
+            else
+                try initPersistentCache(game, prefab_dir);
 
             try loadSceneSource(game, source, prefab_cache);
 
