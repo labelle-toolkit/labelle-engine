@@ -32,5 +32,32 @@ pub fn Mixin(comptime Game: type) type {
         pub fn getMouseWheelMove(_: *Game) f32 {
             return Input.getMouseWheelMove();
         }
+
+        // ── Touch ────────────────────────────────────────────────
+
+        /// Number of currently-active touches reported by the backend.
+        /// 0 on platforms without touch input. Up to MAX_TOUCHES.
+        pub fn getTouchCount(_: *Game) u32 {
+            return Input.getTouchCount();
+        }
+
+        /// X position (physical framebuffer pixels) of touch `index`.
+        /// Returns 0 if `index >= getTouchCount()`.
+        pub fn getTouchX(_: *Game, index: u32) f32 {
+            return Input.getTouchX(index);
+        }
+
+        /// Y position (physical framebuffer pixels) of touch `index`.
+        /// Returns 0 if `index >= getTouchCount()`.
+        pub fn getTouchY(_: *Game, index: u32) f32 {
+            return Input.getTouchY(index);
+        }
+
+        /// Stable per-touch identifier from the OS — useful when matching
+        /// touches across frames (e.g. for gesture recognition that needs
+        /// to know which finger is which).
+        pub fn getTouchId(_: *Game, index: u32) u64 {
+            return Input.getTouchId(index);
+        }
     };
 }
