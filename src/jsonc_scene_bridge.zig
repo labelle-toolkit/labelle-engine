@@ -35,10 +35,14 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
         /// Load a JSONC scene file and instantiate all entities in the ECS.
         pub fn loadScene(game: *GameType, scene_path: []const u8, prefab_dir: []const u8) !void {
             // Reuse the existing prefab cache when available (preserves prefabs registered
-            // via addEmbeddedPrefab before this call).
-            const prefab_cache = if (game.prefab_cache_ptr) |ptr|
-                @as(*PrefabCache, @ptrCast(@alignCast(ptr)))
-            else
+            // via addEmbeddedPrefab before this call). When reusing, refresh the cache's
+            // prefab_dir so PrefabCache.get()'s filesystem fallback resolves against the
+            // caller-specified directory rather than whatever dir seeded the cache.
+            const prefab_cache = if (game.prefab_cache_ptr) |ptr| blk: {
+                const cache = @as(*PrefabCache, @ptrCast(@alignCast(ptr)));
+                cache.prefab_dir = prefab_dir;
+                break :blk cache;
+            } else
                 try initPersistentCache(game, prefab_dir);
 
             try loadSceneFile(game, scene_path, prefab_cache, 0);
@@ -54,10 +58,14 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
             // Reuse the existing prefab cache when available (preserves prefabs registered
             // via addEmbeddedPrefab). On platforms without a filesystem (Android), the
             // PrefabCache.get() file fallback is unavailable, so discarding the embedded
-            // cache would leave all prefab lookups returning null.
-            const prefab_cache = if (game.prefab_cache_ptr) |ptr|
-                @as(*PrefabCache, @ptrCast(@alignCast(ptr)))
-            else
+            // cache would leave all prefab lookups returning null. When reusing, refresh
+            // the cache's prefab_dir so the filesystem fallback resolves against the
+            // caller-specified directory rather than whatever dir seeded the cache.
+            const prefab_cache = if (game.prefab_cache_ptr) |ptr| blk: {
+                const cache = @as(*PrefabCache, @ptrCast(@alignCast(ptr)));
+                cache.prefab_dir = prefab_dir;
+                break :blk cache;
+            } else
                 try initPersistentCache(game, prefab_dir);
 
             try loadSceneSource(game, source, prefab_cache);
