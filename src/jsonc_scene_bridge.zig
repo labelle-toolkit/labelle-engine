@@ -34,8 +34,12 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
 
         /// Load a JSONC scene file and instantiate all entities in the ECS.
         pub fn loadScene(game: *GameType, scene_path: []const u8, prefab_dir: []const u8) !void {
-            // Load prefab cache (tries .jsonc then .zon)
-            const prefab_cache = try initPersistentCache(game, prefab_dir);
+            // Reuse the existing prefab cache when available (preserves prefabs registered
+            // via addEmbeddedPrefab before this call).
+            const prefab_cache = if (game.prefab_cache_ptr) |ptr|
+                @as(*PrefabCache, @ptrCast(@alignCast(ptr)))
+            else
+                try initPersistentCache(game, prefab_dir);
 
             try loadSceneFile(game, scene_path, prefab_cache, 0);
 

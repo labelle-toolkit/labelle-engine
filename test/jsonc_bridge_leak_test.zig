@@ -204,3 +204,50 @@ test "loadScene: children entities do not leak" {
 
     try Bridge.loadScene(&game, scene_path, prefab_path);
 }
+
+test "loadSceneFromSource: embedded prefabs are preserved across loadSceneFromSource" {
+    var tmp_dir = testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    try tmp_dir.dir.makeDir("prefabs");
+    const prefab_path = try tmpPath(&tmp_dir, "prefabs");
+    defer testing.allocator.free(prefab_path);
+
+    // Embedded prefab — intentionally not written to disk so file fallback cannot help.
+    const prefab_source =
+        \\{
+        \\  "components": {
+        \\    "Health": { "current": 42, "max": 100 },
+        \\    "Position": { "x": 0, "y": 0 }
+        \\  }
+        \\}
+    ;
+
+    // Scene that references the embedded prefab by name.
+    const scene_source =
+        \\{
+        \\  "entities": [
+        \\    { "prefab": "hero", "components": { "Position": { "x": 10, "y": 20 } } }
+        \\  ]
+        \\}
+    ;
+
+    var game = engine.Game.init(testing.allocator);
+    defer game.deinit();
+
+    try Bridge.addEmbeddedPrefab(&game, "hero", prefab_source, prefab_path);
+    try Bridge.loadSceneFromSource(&game, scene_source, prefab_path);
+
+    // The entity must carry the Health component from the embedded prefab (current == 42).
+    // If the cache was discarded by loadSceneFromSource the component would be absent.
+    var found_health = false;
+    {
+        var view = game.ecs_backend.view(.{Health}, .{});
+        while (view.next()) |e| {
+            const h = game.ecs_backend.getComponent(e, Health).?;
+            if (h.current == 42) found_health = true;
+        }
+        view.deinit();
+    }
+    try testing.expect(found_health);
+}
