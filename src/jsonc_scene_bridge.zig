@@ -32,18 +32,25 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
             return cache;
         }
 
-        /// Load a JSONC scene file and instantiate all entities in the ECS.
-        pub fn loadScene(game: *GameType, scene_path: []const u8, prefab_dir: []const u8) !void {
-            // Reuse the existing prefab cache when available (preserves prefabs registered
-            // via addEmbeddedPrefab before this call). When reusing, refresh the cache's
-            // prefab_dir so PrefabCache.get()'s filesystem fallback resolves against the
-            // caller-specified directory rather than whatever dir seeded the cache.
-            const prefab_cache = if (game.prefab_cache_ptr) |ptr| blk: {
+        /// Return the game's persistent PrefabCache, creating it if needed.
+        /// Always refreshes the cache's `prefab_dir` to `prefab_dir` so that
+        /// PrefabCache.get()'s filesystem fallback resolves against the most
+        /// recent directory rather than whatever dir seeded the cache. This
+        /// lets addEmbeddedPrefab / loadScene / loadSceneFromSource be called
+        /// in any order with any dir — the most recent caller wins, and
+        /// embedded prefabs registered by earlier calls are preserved.
+        fn getOrCreateCache(game: *GameType, prefab_dir: []const u8) !*PrefabCache {
+            if (game.prefab_cache_ptr) |ptr| {
                 const cache = @as(*PrefabCache, @ptrCast(@alignCast(ptr)));
                 cache.prefab_dir = prefab_dir;
-                break :blk cache;
-            } else
-                try initPersistentCache(game, prefab_dir);
+                return cache;
+            }
+            return try initPersistentCache(game, prefab_dir);
+        }
+
+        /// Load a JSONC scene file and instantiate all entities in the ECS.
+        pub fn loadScene(game: *GameType, scene_path: []const u8, prefab_dir: []const u8) !void {
+            const prefab_cache = try getOrCreateCache(game, prefab_dir);
 
             try loadSceneFile(game, scene_path, prefab_cache, 0);
 
@@ -55,18 +62,7 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
         /// Load a scene from an in-memory JSONC source string (for embedded/release builds).
         /// The source must outlive the loaded scene — typically a comptime `@embedFile` slice.
         pub fn loadSceneFromSource(game: *GameType, source: []const u8, prefab_dir: []const u8) !void {
-            // Reuse the existing prefab cache when available (preserves prefabs registered
-            // via addEmbeddedPrefab). On platforms without a filesystem (Android), the
-            // PrefabCache.get() file fallback is unavailable, so discarding the embedded
-            // cache would leave all prefab lookups returning null. When reusing, refresh
-            // the cache's prefab_dir so the filesystem fallback resolves against the
-            // caller-specified directory rather than whatever dir seeded the cache.
-            const prefab_cache = if (game.prefab_cache_ptr) |ptr| blk: {
-                const cache = @as(*PrefabCache, @ptrCast(@alignCast(ptr)));
-                cache.prefab_dir = prefab_dir;
-                break :blk cache;
-            } else
-                try initPersistentCache(game, prefab_dir);
+            const prefab_cache = try getOrCreateCache(game, prefab_dir);
 
             try loadSceneSource(game, source, prefab_cache);
 
@@ -79,10 +75,7 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
         /// Call this before loadSceneFromSource to make prefabs available without file I/O.
         /// The source must outlive the game — typically a comptime `@embedFile` slice.
         pub fn addEmbeddedPrefab(game: *GameType, name: []const u8, source: []const u8, prefab_dir: []const u8) !void {
-            const prefab_cache = if (game.prefab_cache_ptr) |ptr|
-                @as(*PrefabCache, @ptrCast(@alignCast(ptr)))
-            else
-                try initPersistentCache(game, prefab_dir);
+            const prefab_cache = try getOrCreateCache(game, prefab_dir);
 
             const persistent = prefab_cache.persistent;
             var parser = JsoncParser.init(persistent, source);
