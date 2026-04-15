@@ -320,9 +320,12 @@ pub const TextureManager = struct {
     }
 
     /// Register an atlas in **pending** state — JSON parsed eagerly,
-    /// PNG decode deferred. The caller must keep `image_data` alive
-    /// until `markPendingLoaded` is called for this atlas (or hand
-    /// over a `@embedFile` slice, which lives forever).
+    /// PNG decode deferred. The caller must keep BOTH `image_data`
+    /// and `file_type` alive until `markPendingLoaded` is called for
+    /// this atlas — both are stored as borrowed slices on
+    /// `PendingImage` without being duplicated. Passing
+    /// `@embedFile`/comptime string-literal slices is the easy path,
+    /// since they live for the program lifetime.
     ///
     /// Used by the lazy-load init path. Pair with
     /// `Game.loadAtlasIfNeeded(name)` to materialise the texture on
