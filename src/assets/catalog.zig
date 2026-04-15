@@ -33,30 +33,8 @@ const loader_mod = @import("loader.zig");
 pub const LoaderKind = loader_mod.LoaderKind;
 pub const DecodedPayload = loader_mod.DecodedPayload;
 pub const AssetLoaderVTable = loader_mod.AssetLoaderVTable;
-
-/// Lifecycle of a single entry.
-///
-/// `registered` — metadata is in the catalog, no decode in flight.
-/// `queued`     — refcount > 0, work request enqueued for the worker.
-/// `decoding`   — worker has picked up the request.
-/// `ready`      — `decoded` is populated and `upload` succeeded.
-/// `failed`     — `last_error` is set; `pump()` will not retry.
-pub const AssetState = enum { registered, queued, decoding, ready, failed };
-
-pub const AssetEntry = struct {
-    state: AssetState,
-    refcount: u32,
-    loader: *const AssetLoaderVTable,
-    loader_kind: LoaderKind,
-    /// Borrowed from `@embedFile` — program lifetime, never freed.
-    raw_bytes: []const u8,
-    /// Borrowed sentinel-terminated string — program lifetime.
-    file_type: [:0]const u8,
-    /// Populated by `pump()` on the success path; cleared back to
-    /// `null` when refcount returns to zero (ticket #446).
-    decoded: ?DecodedPayload,
-    last_error: ?anyerror,
-};
+pub const AssetState = loader_mod.AssetState;
+pub const AssetEntry = loader_mod.AssetEntry;
 
 pub const AssetCatalog = struct {
     allocator: Allocator,
@@ -70,6 +48,11 @@ pub const AssetCatalog = struct {
     }
 
     pub fn deinit(self: *AssetCatalog) void {
+        // TODO(#446): iterate and call entry.loader.free / loader.drop
+        // for any entry whose decoded payload is non-null before the
+        // real loaders land (image pixels, audio handles, font glyphs).
+        // For now placeholder loaders have no-op drop/free, so this is
+        // safe. Add the loop here once #440/#441 provide real cleanup.
         self.entries.deinit();
     }
 

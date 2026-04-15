@@ -7,11 +7,10 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 
 const loader = @import("../loader.zig");
-const catalog = @import("../catalog.zig");
 
 const AssetLoaderVTable = loader.AssetLoaderVTable;
 const DecodedPayload = loader.DecodedPayload;
-const AssetEntry = catalog.AssetEntry;
+const AssetEntry = loader.AssetEntry;
 
 fn decode(
     file_type: [:0]const u8,

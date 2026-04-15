@@ -1,7 +1,12 @@
-//! Asset loader vtable + decoded payload union.
+//! Asset entry state, loader vtable + decoded payload union.
 //!
-//! Concrete loaders (image, audio, font) live in `loaders/` and provide
-//! a `pub const vtable: AssetLoaderVTable` that the catalog stores on
+//! Owns the shared types that both the catalog and the concrete loaders
+//! (image, audio, font) need. Keeping them here avoids a circular
+//! dependency: `catalog.zig` imports this file; this file does not
+//! import `catalog.zig`.
+//!
+//! Concrete loaders live in `loaders/` and provide a
+//! `pub const vtable: AssetLoaderVTable` that the catalog stores on
 //! each `AssetEntry` at registration time.
 //!
 //! This file declares **types only** — no implementations. The real
@@ -9,9 +14,6 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-
-const catalog = @import("catalog.zig");
-const AssetEntry = catalog.AssetEntry;
 
 /// Discriminator for `DecodedPayload` and for selecting a loader at
 /// `AssetCatalog.register` time. Stored on the entry; callers do not
@@ -30,6 +32,30 @@ pub const DecodedPayload = union(LoaderKind) {
     },
     audio: struct {}, // placeholder for Phase 4 (#441)
     font: struct {}, // placeholder for Phase 4 (#441)
+};
+
+/// Lifecycle of a single entry.
+///
+/// `registered` — metadata is in the catalog, no decode in flight.
+/// `queued`     — refcount > 0, work request enqueued for the worker.
+/// `decoding`   — worker has picked up the request.
+/// `ready`      — `decoded` is populated and `upload` succeeded.
+/// `failed`     — `last_error` is set; `pump()` will not retry.
+pub const AssetState = enum { registered, queued, decoding, ready, failed };
+
+pub const AssetEntry = struct {
+    state: AssetState,
+    refcount: u32,
+    loader: *const AssetLoaderVTable,
+    loader_kind: LoaderKind,
+    /// Borrowed from `@embedFile` — program lifetime, never freed.
+    raw_bytes: []const u8,
+    /// Borrowed sentinel-terminated string — program lifetime.
+    file_type: [:0]const u8,
+    /// Populated by `pump()` on the success path; cleared back to
+    /// `null` when refcount returns to zero (ticket #446).
+    decoded: ?DecodedPayload,
+    last_error: ?anyerror,
 };
 
 /// Per-asset-type plug-in. Every loader (image, audio, font, …)
