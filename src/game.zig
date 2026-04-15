@@ -1096,8 +1096,15 @@ pub fn GameConfig(
 
         fn clampToU32(v: f32) u32 {
             if (!std.math.isFinite(v) or v <= 0) return 0;
-            const max_f: f32 = @floatFromInt(std.math.maxInt(u32));
-            return @intFromFloat(@min(v, max_f));
+            // `@floatFromInt(maxInt(u32))` rounds *up* to 2^32 in f32
+            // because the f32 mantissa is only 24 bits, so comparing
+            // against it would let `@intFromFloat` see exactly 2^32 —
+            // one above the u32 range, triggering UB / safety panic.
+            // The largest f32 value strictly less than 2^32 is
+            // 4_294_967_040 (= 2^32 - 2^8). Clamp to that.
+            const max_safe: f32 = 4_294_967_040.0;
+            if (v >= max_safe) return std.math.maxInt(u32);
+            return @intFromFloat(v);
         }
 
         pub fn getTextureManager(self: *Self) *atlas_mod.TextureManager {
