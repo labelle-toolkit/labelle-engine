@@ -575,6 +575,22 @@ pub fn GameConfig(
         pub const getMouseY = InputMixin.getMouseY;
         pub const getMouse = InputMixin.getMouse;
         pub const getMouseWheelMove = InputMixin.getMouseWheelMove;
+        pub const getTouchCount = InputMixin.getTouchCount;
+        pub const getTouchX = InputMixin.getTouchX;
+        pub const getTouchY = InputMixin.getTouchY;
+        pub const getTouchId = InputMixin.getTouchId;
+
+        /// Convert a physical-pixel screen coordinate (raw touch / mouse
+        /// event coords from the backend) to a design-pixel coordinate
+        /// inside the pillarboxed/letterboxed canvas. Use this before
+        /// feeding touch / mouse coords to `cam.screenToWorld` so the
+        /// math lines up with the game's design coordinate system.
+        ///
+        /// Backends without a design/physical distinction (raylib) get
+        /// a passthrough — the input is returned unchanged.
+        pub fn screenToDesign(self: *Self, px: f32, py: f32) RenderImpl.ScreenPoint {
+            return self.renderer.screenToDesign(px, py);
+        }
 
         // ── Audio (mixin) ────────────────────────────────────────
         pub const playSound = AudioMixin.playSound;
