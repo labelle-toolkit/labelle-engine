@@ -1067,8 +1067,18 @@ pub fn GameConfig(
                         sprite.source_rect = .{
                             .x = @floatFromInt(result.sprite.x),
                             .y = @floatFromInt(result.sprite.y),
+                            // `width`/`height` are texture-pixel coords used
+                            // for UV sampling. `display_*` carry the original
+                            // artwork's design-space size (TexturePacker
+                            // `sourceSize`) — when the atlas PNG has been
+                            // downscaled relative to the source artwork they
+                            // diverge, and the renderer uses `display_*` for
+                            // the destination rect so the on-screen sprite
+                            // size stays the same.
                             .width = @floatFromInt(result.sprite.getWidth()),
                             .height = @floatFromInt(result.sprite.getHeight()),
+                            .display_width = @floatFromInt(result.sprite.getSourceWidth()),
+                            .display_height = @floatFromInt(result.sprite.getSourceHeight()),
                         };
                         self.renderer.markVisualDirty(entity);
                     }
