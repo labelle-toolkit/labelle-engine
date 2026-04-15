@@ -1084,26 +1084,46 @@ pub fn GameConfig(
                         // grid. `texture_scale_*` maps that grid onto the
                         // actual texture pixels — `1.0` for the common
                         // case, `< 1` when the user shipped a downscaled
-                        // PNG without re-running TexturePacker. Multiply
-                        // x/y/w/h by the scale so UV sampling tracks the
-                        // smaller texture, but keep the unscaled
-                        // dimensions in `display_*` so the on-screen
-                        // sprite stays the same size. For trimmed sprites
-                        // this matters: `getWidth()` is the actual
-                        // trimmed pixel count, so display=getWidth() is
-                        // the right rendered size, not the un-trimmed
-                        // `sourceSize`.
-                        const logical_w: f32 = @floatFromInt(result.sprite.getWidth());
-                        const logical_h: f32 = @floatFromInt(result.sprite.getHeight());
-                        const logical_x: f32 = @floatFromInt(result.sprite.x);
-                        const logical_y: f32 = @floatFromInt(result.sprite.y);
+                        // PNG without re-running TexturePacker.
+                        //
+                        // Two distinct mappings are needed:
+                        //
+                        //   * The PHYSICAL atlas footprint (`sprite.x/y`,
+                        //     `sprite.width/height`) is in texture-pixel
+                        //     coordinates regardless of rotation. Each
+                        //     axis scales independently, so x/width go
+                        //     through `texture_scale_x` and y/height go
+                        //     through `texture_scale_y`.
+                        //
+                        //   * The DISPLAY dimensions (`getWidth/Height`)
+                        //     swap when the sprite was rotated 90° in the
+                        //     atlas — that's the on-screen size. They
+                        //     stay un-scaled.
+                        //
+                        // Mixing the two (multiplying `getWidth()` by
+                        // `texture_scale_x`) is wrong for rotated sprites
+                        // because `getWidth()` returns the post-rotation
+                        // height — a vertical dimension scaled by a
+                        // horizontal factor.
+                        const phys_x: f32 = @floatFromInt(result.sprite.x);
+                        const phys_y: f32 = @floatFromInt(result.sprite.y);
+                        const phys_w: f32 = @floatFromInt(result.sprite.width);
+                        const phys_h: f32 = @floatFromInt(result.sprite.height);
+                        const display_w: f32 = @floatFromInt(result.sprite.getWidth());
+                        const display_h: f32 = @floatFromInt(result.sprite.getHeight());
+                        const scaled_w = phys_w * result.texture_scale_x;
+                        const scaled_h = phys_h * result.texture_scale_y;
                         sprite.source_rect = .{
-                            .x = logical_x * result.texture_scale_x,
-                            .y = logical_y * result.texture_scale_y,
-                            .width = logical_w * result.texture_scale_x,
-                            .height = logical_h * result.texture_scale_y,
-                            .display_width = logical_w,
-                            .display_height = logical_h,
+                            .x = phys_x * result.texture_scale_x,
+                            .y = phys_y * result.texture_scale_y,
+                            // `source_rect.width/height` are in the same
+                            // post-rotation orientation that the renderer
+                            // expects (matching `getWidth/Height`),
+                            // so swap when the sprite was rotated.
+                            .width = if (result.sprite.rotated) scaled_h else scaled_w,
+                            .height = if (result.sprite.rotated) scaled_w else scaled_h,
+                            .display_width = display_w,
+                            .display_height = display_h,
                         };
                         self.renderer.markVisualDirty(entity);
                     }
