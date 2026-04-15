@@ -18,6 +18,7 @@ pub const query_mod = @import("query.zig");
 pub const hooks_types_mod = @import("hooks_types.zig");
 pub const animation_mod = @import("animation.zig");
 pub const atlas_mod = @import("atlas.zig");
+pub const assets_mod = @import("assets/mod.zig");
 pub const jsonc_mod = @import("jsonc");
 
 // ── Game ──
@@ -124,6 +125,20 @@ pub const ComptimeAtlas = atlas_mod.ComptimeAtlas;
 pub const RuntimeAtlas = atlas_mod.RuntimeAtlas;
 pub const TextureManager = atlas_mod.TextureManager;
 pub const SpriteCache = atlas_mod.SpriteCache;
+
+// ── Assets (Asset Streaming RFC, Phase 1 — #438) ──
+// AssetCatalog is intentionally NOT yet wired into Game state — that
+// coupling lands in ticket #443's legacy shim. For now the module
+// just needs to compile cleanly and be importable so subsequent
+// tickets (#439–#446) can build on it.
+pub const AssetCatalog = assets_mod.AssetCatalog;
+pub const AssetEntry = assets_mod.AssetEntry;
+pub const AssetState = assets_mod.AssetState;
+pub const LoaderKind = assets_mod.LoaderKind;
+pub const DecodedPayload = assets_mod.DecodedPayload;
+pub const AssetLoaderVTable = assets_mod.AssetLoaderVTable;
+pub const AssetWorkRequest = assets_mod.WorkRequest;
+pub const AssetWorkResult = assets_mod.WorkResult;
 
 // ── JSONC Scene Bridge ──
 pub const JsoncSceneBridge = @import("jsonc_scene_bridge.zig").JsoncSceneBridge;

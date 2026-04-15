@@ -41,6 +41,7 @@ pub fn build(b: *std.Build) void {
         "test/save_load_mixin_test.zig",
         "test/jsonc_bridge_leak_test.zig",
         "test/scene_ref_test.zig",
+        "test/asset_catalog_test.zig",
     };
 
     for (test_files) |test_file| {
