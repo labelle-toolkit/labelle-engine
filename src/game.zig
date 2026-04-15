@@ -1007,7 +1007,8 @@ pub fn GameConfig(
                 @intFromEnum(tex_id)
             else
                 tex_id;
-            try self.atlas_manager.loadAtlasFromJson(name, json_path, id);
+            const dims = self.queryTextureDims(tex_id);
+            try self.atlas_manager.loadAtlasFromJson(name, json_path, id, dims);
         }
 
         /// Load an atlas from comptime sprite data (zero runtime parsing).
@@ -1035,7 +1036,22 @@ pub fn GameConfig(
                 @intFromEnum(tex_id)
             else
                 tex_id;
-            try self.atlas_manager.loadAtlasFromJsonContent(name, json_content, id);
+            const dims = self.queryTextureDims(tex_id);
+            try self.atlas_manager.loadAtlasFromJsonContent(name, json_content, id, dims);
+        }
+
+        /// Look up the actual pixel dimensions of a freshly-loaded
+        /// texture, so the atlas loader can derive a scale against the
+        /// JSON's logical `meta.size`. Returns null when the renderer
+        /// doesn't expose a `getTextureInfo` accessor — the atlas
+        /// loader then falls back to scale=1.0 (legacy behavior).
+        fn queryTextureDims(self: *Self, tex_id: anytype) ?atlas_mod.TextureManager.TextureDims {
+            if (!@hasDecl(RenderImpl, "getTextureInfo")) return null;
+            const info = self.renderer.getTextureInfo(tex_id) orelse return null;
+            return .{
+                .width = @intFromFloat(info.width),
+                .height = @intFromFloat(info.height),
+            };
         }
 
         pub fn getTextureManager(self: *Self) *atlas_mod.TextureManager {
@@ -1080,11 +1096,50 @@ pub fn GameConfig(
                     // Only update and mark dirty on cache miss (new sprite or atlas changed)
                     if (self.active_world.sprite_cache.misses != misses_before) {
                         sprite.texture = @enumFromInt(result.texture_id);
+                        // The atlas data is in the JSON's logical pixel
+                        // grid. `texture_scale_*` maps that grid onto the
+                        // actual texture pixels — `1.0` for the common
+                        // case, `< 1` when the user shipped a downscaled
+                        // PNG without re-running TexturePacker.
+                        //
+                        // Two distinct mappings are needed:
+                        //
+                        //   * The PHYSICAL atlas footprint (`sprite.x/y`,
+                        //     `sprite.width/height`) is in texture-pixel
+                        //     coordinates regardless of rotation. Each
+                        //     axis scales independently, so x/width go
+                        //     through `texture_scale_x` and y/height go
+                        //     through `texture_scale_y`.
+                        //
+                        //   * The DISPLAY dimensions (`getWidth/Height`)
+                        //     swap when the sprite was rotated 90° in the
+                        //     atlas — that's the on-screen size. They
+                        //     stay un-scaled.
+                        //
+                        // Mixing the two (multiplying `getWidth()` by
+                        // `texture_scale_x`) is wrong for rotated sprites
+                        // because `getWidth()` returns the post-rotation
+                        // height — a vertical dimension scaled by a
+                        // horizontal factor.
+                        const phys_x: f32 = @floatFromInt(result.sprite.x);
+                        const phys_y: f32 = @floatFromInt(result.sprite.y);
+                        const phys_w: f32 = @floatFromInt(result.sprite.width);
+                        const phys_h: f32 = @floatFromInt(result.sprite.height);
+                        const display_w: f32 = @floatFromInt(result.sprite.getWidth());
+                        const display_h: f32 = @floatFromInt(result.sprite.getHeight());
+                        const scaled_w = phys_w * result.texture_scale_x;
+                        const scaled_h = phys_h * result.texture_scale_y;
                         sprite.source_rect = .{
-                            .x = @floatFromInt(result.sprite.x),
-                            .y = @floatFromInt(result.sprite.y),
-                            .width = @floatFromInt(result.sprite.getWidth()),
-                            .height = @floatFromInt(result.sprite.getHeight()),
+                            .x = phys_x * result.texture_scale_x,
+                            .y = phys_y * result.texture_scale_y,
+                            // `source_rect.width/height` are in the same
+                            // post-rotation orientation that the renderer
+                            // expects (matching `getWidth/Height`),
+                            // so swap when the sprite was rotated.
+                            .width = if (result.sprite.rotated) scaled_h else scaled_w,
+                            .height = if (result.sprite.rotated) scaled_w else scaled_h,
+                            .display_width = display_w,
+                            .display_height = display_h,
                         };
                         self.renderer.markVisualDirty(entity);
                     }
