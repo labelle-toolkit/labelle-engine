@@ -56,6 +56,7 @@ pub fn Mixin(comptime Game: type) type {
         /// Stable per-touch identifier from the OS — useful when matching
         /// touches across frames (e.g. for gesture recognition that needs
         /// to know which finger is which).
+        /// Returns 0 if `index >= getTouchCount()`.
         pub fn getTouchId(_: *Game, index: u32) u64 {
             return Input.getTouchId(index);
         }
