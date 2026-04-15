@@ -116,11 +116,13 @@ pub fn ComptimeAtlas(comptime frames: anytype) type {
 }
 
 /// Image bytes captured by a pending (registered-but-not-yet-decoded)
-/// atlas. The slices reference caller-owned memory — typically
-/// `@embedFile` strings, which live forever. Don't use these fields for
-/// runtime-loaded atlases unless the caller can guarantee the bytes
-/// outlive the atlas (the eager-load shim does the decode immediately
-/// so no lifetime issue).
+/// atlas. **Both `bytes` and `file_type` reference caller-owned memory
+/// — neither is duplicated by the manager.** They must outlive the
+/// atlas, or until `markPendingLoaded` is called for it (whichever
+/// comes first). Typically both are `@embedFile` slices / comptime
+/// string literals, which live forever — the lifetime constraint is
+/// invisible in practice. The eager-load shim decodes immediately, so
+/// it has no lifetime issue.
 pub const PendingImage = struct {
     bytes: []const u8,
     file_type: [:0]const u8,

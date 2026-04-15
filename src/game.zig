@@ -1079,13 +1079,25 @@ pub fn GameConfig(
         /// JSON's logical `meta.size`. Returns null when the renderer
         /// doesn't expose a `getTextureInfo` accessor — the atlas
         /// loader then falls back to scale=1.0 (legacy behavior).
+        ///
+        /// Texture dims are clamped to `[0, max u32]` before the float
+        /// → int cast so a malformed renderer that returns negative or
+        /// NaN values can't trigger an `@intFromFloat` panic. Real
+        /// renderers always return positive integers, so this is a
+        /// belt-and-braces guard for buggy backend mocks.
         fn queryTextureDims(self: *Self, tex_id: anytype) ?atlas_mod.TextureManager.TextureDims {
             if (!@hasDecl(RenderImpl, "getTextureInfo")) return null;
             const info = self.renderer.getTextureInfo(tex_id) orelse return null;
             return .{
-                .width = @intFromFloat(info.width),
-                .height = @intFromFloat(info.height),
+                .width = clampToU32(info.width),
+                .height = clampToU32(info.height),
             };
+        }
+
+        fn clampToU32(v: f32) u32 {
+            if (!std.math.isFinite(v) or v <= 0) return 0;
+            const max_f: f32 = @floatFromInt(std.math.maxInt(u32));
+            return @intFromFloat(@min(v, max_f));
         }
 
         pub fn getTextureManager(self: *Self) *atlas_mod.TextureManager {
