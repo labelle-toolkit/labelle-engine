@@ -1,6 +1,6 @@
 # RFC: Asset Streaming
 
-**Status:** Draft
+**Status:** Draft (revision 2 — addresses #437 review comments)
 **Author:** Alexandre
 **Date:** 2026-04-15
 
@@ -22,7 +22,7 @@ The big-engine playbook (Unity Addressables, Unreal soft references + Streamable
 2. **Per-scene asset manifests** — scenes declare their assets in the `.jsonc` file; the engine acquires/releases them on transition.
 3. **Reference-counted unload** — assets that no live scene needs get freed automatically.
 4. **Generic across asset types** — one `AssetCatalog` + per-type `AssetLoader` plug-in pattern. Atlas, audio, font, raw bytes all flow through the same primitives.
-5. **Backwards-compatible** — existing `loadAtlasFromMemory` remains as a sync convenience wrapping the new path.
+5. **Backwards-compatible at the API surface** — existing `loadAtlasFromMemory` keeps working as a sync wrapper. (Caveat: the wrapper is still a main-thread block — see Migration §Phase 1. The cold-start UX win lands in Phase 2 when scene transitions go through the catalog without the sync wrapper.)
 
 ## Non-goals
 
@@ -35,34 +35,42 @@ The big-engine playbook (Unity Addressables, Unreal soft references + Streamable
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│  Game / Scripts                                                 │
+│  Game / Scripts (main thread)                                   │
 │    g.assets.acquire("background")  →  AssetHandle               │
 │    g.assets.isReady("background")                               │
 │    g.assets.release("background")                               │
+│    g.assets.allReady(slice) / progress(slice) / lastError(name) │
 └─────────────────────────────────────────────────────────────────┘
                               │
                               ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │  AssetCatalog  (labelle-engine/src/assets/catalog.zig)          │
 │    StringHashMap(AssetEntry)                                    │
-│      state: { registered, queued, decoding, ready, error }     │
+│      state: { registered, queued, decoding, ready, failed }     │
 │      refcount: u32                                              │
 │      loader: *const AssetLoaderVTable                           │
-│      raw_bytes / file_type   (borrowed, lives for program)      │
+│      raw_bytes / file_type   (borrowed @embedFile, see below)   │
 │      decoded:  union { texture: TextureId, audio: …, font: … }  │
+│      last_error: ?anyerror                                      │
 └─────────────────────────────────────────────────────────────────┘
-        │                                       ▲
-        │ enqueue(entry)              upload() (main thread)
-        ▼                                       │
+        │ enqueue(WorkRequest)            ▲ drain WorkResult
+        │  (SPSC: main → worker)          │  (SPSC: worker → main)
+        ▼                                 │
 ┌──────────────────────────┐     ┌──────────────────────────────┐
 │  AssetWorker (1 thread)  │     │  Main thread upload pump     │
-│    bounded MPSC queue    │ ──▶ │   drains decoded-but-not-    │
-│    decode → raw pixels   │     │   uploaded queue, calls      │
-│    push to upload queue  │     │   backend.uploadTexture()    │
+│    pulls WorkRequest     │ ──▶ │    drains WorkResult queue,  │
+│    calls loader.decode() │     │    refcount-checks, then     │
+│    pushes WorkResult     │     │    calls loader.upload(...)  │
+│    NEVER mutates         │     │    via the vtable — generic  │
+│    AssetEntry directly   │     │    across asset types        │
 └──────────────────────────┘     └──────────────────────────────┘
 ```
 
-Decode happens off-thread. Upload (the GPU call) happens on the main thread because both sokol_gfx and raylib's GL backend are single-threaded by spec — there is no portable way to upload from a worker. The split is the same pattern Unity, Unreal and Godot all use under the hood.
+Decode happens off-thread. Upload (the GPU call, or audio device init, or font glyph rasterise) happens on the main thread because both sokol_gfx and raylib's GL backend are single-threaded by spec — there is no portable way to upload from a worker. The split is the same pattern Unity, Unreal and Godot all use under the hood.
+
+**Threading invariant:** `AssetEntry` is owned exclusively by the main thread. The worker only reads `WorkRequest` (a snapshot — entry id, loader pointer, borrowed bytes, file_type) and writes `WorkResult` (entry id + decoded payload OR error) back. State transitions (`queued → decoding → ready/failed`) and refcount changes happen only inside `pump()` and the public catalog methods, so no mutex is needed on the catalog itself. Both queues are bounded SPSC ring buffers.
+
+**Embedded byte lifetime:** All `raw_bytes` and `file_type` slices originate from `@embedFile` in the assembler-generated init code, so they live for the entire program. The catalog stores them as borrowed slices without copying. This is the same lifetime guarantee that engine #434's `PendingImage` already relies on.
 
 ## Per-layer changes
 
@@ -72,7 +80,10 @@ Add to backend interface:
 
 ```zig
 /// Decode an embedded image to raw RGBA8 pixels. Pure CPU, safe to
-/// call from a worker thread. Returns owned pixel buffer + dims.
+/// call from a worker thread. The returned `pixels` slice is owned
+/// by `allocator` — the caller (loader.upload, see below) is
+/// responsible for freeing it after the GPU upload OR after deciding
+/// to discard the result.
 pub fn decodeImage(
     file_type: [:0]const u8,
     data: []const u8,
@@ -86,11 +97,12 @@ pub const DecodedImage = struct {
 };
 
 /// Upload pre-decoded pixels to a GPU texture. MUST be called from
-/// the main / GL thread.
+/// the main / GL thread. Does NOT free `decoded.pixels` — the caller
+/// frees, since the catalog needs to free on the discard path too.
 pub fn uploadTexture(decoded: DecodedImage) !Texture;
 ```
 
-The existing `loadTextureFromMemory` becomes a convenience: `decodeImage` + `uploadTexture` back-to-back on the calling thread. Same return type, same error set, no caller-side break.
+The existing `loadTextureFromMemory` becomes a convenience: `decodeImage` + `uploadTexture` + free, back-to-back on the calling thread. Same return type, same error set, no caller-side break.
 
 `decodeImage` for stb (sokol/raylib both ship it) is just `stbi_load_from_memory` into an allocator-owned buffer instead of the static one. For the mock backend it returns a stub `1×1` decoded buffer.
 
@@ -100,47 +112,134 @@ New module: `src/assets/`
 
 ```
 src/assets/
-  catalog.zig       ← public AssetCatalog API
-  worker.zig        ← std.Thread + bounded queue
-  loader.zig        ← AssetLoaderVTable (decode/upload/free)
+  catalog.zig       ← public AssetCatalog API + AssetEntry
+  worker.zig        ← std.Thread + 2× bounded SPSC ring buffers
+  loader.zig        ← AssetLoaderVTable { decode, upload, free, drop }
   loaders/
-    image.zig       ← uses gfx decodeImage/uploadTexture
-    audio.zig       ← stub for now (panics on load)
-    font.zig        ← stub for now (panics on load)
+    image.zig       ← uses gfx.decodeImage / gfx.uploadTexture
+    audio.zig       ← stub (decode returns error.LoaderNotImplemented)
+    font.zig        ← stub (decode returns error.LoaderNotImplemented)
+```
+
+`AssetLoaderVTable`:
+
+```zig
+pub const AssetLoaderVTable = struct {
+    /// Worker-thread CPU decode. Allocator-owned output stored in
+    /// `WorkResult.decoded`. May return error → result.err set.
+    decode: *const fn (file_type: [:0]const u8, data: []const u8, allocator: Allocator) anyerror!DecodedPayload,
+
+    /// Main-thread finalise: GPU upload, audio device handle, font
+    /// glyph rasterise — whatever turns the worker output into the
+    /// "ready" representation. ALSO frees the CPU-side payload
+    /// (success path).
+    upload: *const fn (entry: *AssetEntry, decoded: DecodedPayload) anyerror!void,
+
+    /// Discard path: refcount hit zero between decode and upload.
+    /// Frees the CPU-side payload without touching the GPU.
+    drop: *const fn (allocator: Allocator, decoded: DecodedPayload) void,
+
+    /// Unload path: refcount hit zero on a `ready` asset. Releases
+    /// the GPU/audio/font resource the upload created.
+    free: *const fn (entry: *AssetEntry) void,
+};
 ```
 
 Game gets:
 
 ```zig
-g.assets.register(name, loader_kind, file_type, bytes);  // metadata only
-g.assets.acquire(name)   → *AssetEntry  // bumps refcount, enqueues if needed
-g.assets.release(name)                  // drops refcount, unloads on zero
-g.assets.isReady(name)   → bool
-g.assets.pump()                         // called once per frame from game loop;
-                                        // drains the upload queue
+g.assets.register(name, loader_kind, file_type, bytes);   // metadata only
+g.assets.acquire(name)    → *AssetEntry  // bumps refcount, enqueues if needed
+g.assets.release(name)                   // drops refcount, unloads on zero
+g.assets.isReady(name)    → bool         // entry.state == .ready
+g.assets.allReady(names)  → bool         // every name in slice is ready
+g.assets.progress(names)  → f32          // 0..1, ready_count / names.len
+g.assets.lastError(name)  → ?anyerror    // set on .failed
+g.assets.pump()                          // called once per frame from game loop
 ```
 
-The existing atlas-specific `RuntimeAtlas.pending` mechanism (engine #434) collapses into `AssetCatalog` — `loadAtlasIfNeeded` becomes `acquire("atlas:" ++ name)` plus a busy-wait on `isReady` for back-compat. The lazy registration done by the assembler now goes through `g.assets.register("atlas:foo", .image, ".png", @embedFile(...))` instead of `g.registerAtlasFromMemory(...)`.
+Names are unique across loader kinds — the loader is selected by the `loader_kind` argument at registration time, then stored on the entry, so callers don't need a `"atlas:"` prefix. The assembler-generated registration code uses each resource's plain `name` from `project.labelle`.
 
-`pump()` is a one-line addition to the existing per-frame work in `Game.tick`. It drains decoded-but-not-uploaded entries by calling the loader's main-thread upload step; cap at N per frame to avoid hitch spikes when many assets land at once (start with N=4, tune later).
+`pump()` body:
 
-### 3. labelle-engine — scene transition hooks
+```zig
+pub fn pump(self: *AssetCatalog) void {
+    var drained: u8 = 0;
+    while (drained < UPLOAD_BUDGET_PER_FRAME) : (drained += 1) {
+        const result = self.worker.tryRecvResult() orelse return;
+        const entry = self.entries.getPtr(result.entry_id) orelse continue;
 
-`SceneLoader` already has `enterScene` / `exitScene` hooks. Add two phases:
+        // Released while decoding → discard.
+        if (entry.refcount == 0) {
+            entry.loader.drop(self.allocator, result.decoded);
+            entry.state = .registered;
+            continue;
+        }
+        if (result.err) |err| {
+            entry.last_error = err;
+            entry.state = .failed;
+            continue;
+        }
+        entry.loader.upload(entry, result.decoded) catch |err| {
+            entry.last_error = err;
+            entry.state = .failed;
+            continue;
+        };
+        entry.state = .ready;
+    }
+}
+```
+
+`UPLOAD_BUDGET_PER_FRAME` starts at 4 — tunable, see Open Questions.
+
+The existing atlas-specific `RuntimeAtlas.pending` mechanism (engine #434) collapses into `AssetCatalog` — `loadAtlasIfNeeded` becomes a pump-driven sync shim:
+
+```zig
+pub fn loadAtlasIfNeeded(self: *Game, name: []const u8) !void {
+    self.assets.acquire(name);
+    while (!self.assets.isReady(name)) {
+        if (self.assets.lastError(name)) |err| return err;
+        self.assets.pump();           // CRITICAL: without this, deadlock —
+                                      // isReady only flips inside pump
+        std.Thread.yield() catch {};
+    }
+}
+```
+
+This shim still blocks the calling frame (decode is async but the wait is sync), so it freezes the main thread the same way the current `loadAtlasFromMemory` does. Phase 1 deliberately preserves that behavior to keep the caller surface unchanged; Phase 2 introduces the non-blocking path via scene manifests.
+
+### 3. labelle-engine — scene transition wiring
+
+Today's scene loader exposes `setScene` + `setSceneAtomic` and emits hooks `scene_before_load` and `scene_load`. Phase 2 introduces two new built-in hooks fired from `setScene`:
+
+- `scene_assets_acquire(target)` — fired *before* `scene_before_load` for the new scene.
+- `scene_assets_release(previous)` — fired *after* `scene_load` for the new scene completes.
+
+The engine's default handler implements:
 
 ```
-exitScene(old):
-  for asset in old.manifest.assets:
-    catalog.release(asset)
-
-enterScene(new):
-  for asset in new.manifest.assets:
+setScene(target):
+  # Acquire NEW first so shared assets keep refcount ≥ 1 across the
+  # swap and don't get freed-then-reloaded. Standard refcount idiom.
+  for asset in target.manifest.assets:
     catalog.acquire(asset)
-  // game tick is gated until catalog.allReady(new.manifest.assets)
-  // — the loading screen scene runs in the meantime
+
+  # If anything is still decoding, swap to the loading scene; the
+  # loading scene's tick polls allReady() and re-enters setScene
+  # for the real target once everything resolves.
+  if not catalog.allReady(target.manifest.assets):
+    setSceneAtomic(loading_scene)
+    return
+
+  setSceneAtomic(target)
+
+  # Only NOW release the previous scene's manifest. Shared assets
+  # keep refcount ≥ 1 across the entire transition.
+  for asset in previous.manifest.assets:
+    catalog.release(asset)
 ```
 
-The "loading screen scene" is just a regular scene with its own (small) manifest that's eager-loaded at startup. The engine swaps to it on `setScene`, runs the worker until the target's manifest is ready, then completes the transition.
+The "loading scene" is just a regular scene with its own (small, eager) manifest — see the example below. Eager loading means its manifest is preloaded at `Game.init` time, so swapping into it never blocks.
 
 ### 4. Scene file — `assets:` block
 
@@ -153,25 +252,28 @@ Add to `scene.jsonc`:
 }
 ```
 
-Optional. Omitted = no preload, scripts manage manually (legacy path).
+Optional. Omitted = no preload, scripts manage manually (legacy path). Each name must match a resource declared in `project.labelle` — the assembler validates this at build time, see §5 below.
 
-### 5. labelle-assembler — manifest emission
+### 5. labelle-assembler — manifest emission + validation
 
-Two changes:
+Three changes:
 
-1. When parsing each scene `.jsonc`, collect the `assets:` array. Emit a comptime map: `scene_name → []const []const u8`. The engine reads this map in `enterScene`.
-2. `lazy: true` on `project.labelle` resources becomes the default. The fallback for resources that no scene declares stays eager (back-compat for projects that don't migrate).
+1. **Collect manifests.** When parsing each scene `.jsonc`, read the `assets:` array. Emit a comptime map: `scene_name → []const []const u8`. The engine reads this map in `setScene` and stores it on `SceneEntry.assets` (a new field added in Phase 2).
+2. **Validate names.** Every entry in an `assets:` block must match a resource declared in the top-level `project.labelle` `resources` array. Unknown names → hard build error with a "did you mean…" suggestion based on Levenshtein distance against the known set. This is the typo-detection guard: `"asset"` vs `"assets"` would be caught by an unknown-key check on the scene file itself.
+3. **Switch lazy default.** `lazy: true` on a `project.labelle` resource becomes the default. Resources that no scene declares fall back to eager registration (back-compat for projects that don't migrate to manifests).
 
-### 6. Audio + font loaders
+### 6. Audio + font loaders (stubs)
 
-Stub `audio.zig` and `font.zig` panic on `decode()` for v1, but the registration path works — projects can declare audio/font assets in `project.labelle` and the assembler/catalog plumbing is exercised. Real loaders land in follow-up RFCs (one per format) without re-touching the streaming machinery.
+Stub `audio.zig` and `font.zig` register a vtable whose `decode()` returns `error.LoaderNotImplemented`. The error flows through the standard `pump()` failure path: entry transitions to `.failed`, `lastError` returns the error, `setScene` aborts with it (or warns, per Open Questions #3). Crucially, **no panics** — a typo'd manifest entry cannot crash the process; it produces a localised, debuggable error.
+
+The registration / queue / pump path is exercised end-to-end by the stubs, so when real `decodeAudio` / `decodeFont` loaders land in their own RFCs, they only need to provide the vtable functions — no streaming machinery work.
 
 ## Example: FP loading screen, post-RFC
 
 ```jsonc
 // scenes/loading.jsonc
 {
-  "assets": ["loading_bar"],   // tiny, eager
+  "assets": ["loading_bar"],   // tiny, eager-preloaded at Game.init
   "entities": [ … bar setup … ]
 }
 
@@ -185,41 +287,41 @@ Stub `audio.zig` and `font.zig` panic on `decode()` for v1, but the registration
 ```zig
 // scripts/loading_controller.zig
 pub fn tick(game: anytype, state: anytype, _: anytype, _: f32) void {
-    const target = "main";
-    const ready = game.assets.allReady(game.scenes.get(target).assets);
-    state.bar_scale = game.assets.progress(game.scenes.get(target).assets);
-    if (ready) game.setScene(target);
+    const target = game.scenes.get("main");      // SceneEntry, with `.assets` field added in Phase 2
+    state.bar_scale = game.assets.progress(target.assets);
+    if (game.assets.allReady(target.assets)) game.setScene("main");
 }
 ```
 
-The bar animates because decode is on the worker thread. Scene transition is automatic. No manual `loadAtlasIfNeeded` calls anywhere.
+The bar animates because decode is on the worker thread and the loading scene's own assets are already ready. Scene transition is automatic on completion. No manual `loadAtlasIfNeeded` calls anywhere.
 
 ## Migration plan
 
-1. **Phase 1 — primitives (this RFC):**
+1. **Phase 1 — primitives:**
    - Add `gfx.decodeImage` / `gfx.uploadTexture` (sokol + raylib + mock).
-   - Add `AssetCatalog`, `AssetWorker`, `image` loader.
-   - `loadAtlasFromMemory` and `loadAtlasIfNeeded` become sync wrappers over `acquire` + busy-wait.
-   - Status: green CI, no caller break, no behavior change for existing projects.
+   - Add `AssetCatalog`, `AssetWorker`, `image` loader, audio/font stubs.
+   - `loadAtlasFromMemory` and `loadAtlasIfNeeded` become pump-driven sync shims (see §2).
+   - **No UX change yet:** the sync shims still block the main thread, so the cold-start freeze on FP is unchanged. This phase exists to land the plumbing without touching any caller. CI green, no behavior change visible to projects.
 
-2. **Phase 2 — scene manifests:**
-   - Scene loader reads `assets:` block, calls `acquire`/`release` on transition.
-   - Assembler emits the per-scene asset map.
-   - FP migrates `main.jsonc` to use the manifest. Cold start should drop further as the loading screen actually animates.
+2. **Phase 2 — scene manifests (the cold-start win):**
+   - Scene loader gains `scene_assets_acquire/release` hooks; `setScene` calls them in acquire-new-then-release-old order.
+   - Assembler reads `assets:` blocks, validates against `project.labelle`, emits the per-scene asset map onto `SceneEntry.assets`.
+   - FP migrates `main.jsonc` and `loading.jsonc`. The loading bar finally animates because the wait happens *between* scenes, not *inside* a frame.
 
 3. **Phase 3 — refcount unload:**
-   - Catalog frees assets on `refcount == 0`.
-   - Validate against FP (it has only one main scene, so unload mostly happens at shutdown).
+   - Catalog frees ready assets (via `loader.free`) when refcount hits zero.
+   - Validate against FP (it has only one main scene, so unload mostly happens at shutdown, but the codepath is exercised when shaders/UI swap atlases in/out).
 
 4. **Phase 4 — audio + font loaders:**
-   - Real `decodeAudio` / `decodeFont` backend hooks; one follow-up RFC per format.
+   - Real `decodeAudio` / `decodeFont` implementations replace the stubs; one follow-up RFC per format.
 
-Each phase ships as its own PR set across `labelle-gfx`, `labelle-engine`, `labelle-assembler`. Phases 1 and 2 deliver the cold-start win; 3 and 4 are quality-of-life follow-ups.
+Each phase ships as its own PR set across `labelle-gfx`, `labelle-engine`, `labelle-assembler`. Phases 1 + 2 together deliver the cold-start win; 3 and 4 are quality-of-life follow-ups that don't touch the streaming machinery.
 
 ## Open questions
 
 1. **Worker pool vs single thread.** Single thread is simpler and enough for FP. If a project ever needs to load 50+ atlases in parallel during a loading screen, we'd want a small fixed-size pool. Defer until profiling shows contention.
-2. **Upload throttle (`N` per frame in `pump()`).** Starting value is a guess; needs measurement on the Galaxy Tab to confirm 4/frame doesn't hitch.
-3. **Error propagation.** A decode failure should mark the asset `error` and surface via `isReady` returning false plus a `lastError(name)` accessor — but should it be fatal at `setScene` time, or let the scene run with a missing texture? Probably configurable, default fatal.
+2. **Upload throttle (`UPLOAD_BUDGET_PER_FRAME`).** Starting value of 4 is a guess; needs measurement on the Galaxy Tab to confirm it doesn't hitch.
+3. **Failure policy at `setScene` time.** Should a `.failed` asset abort the transition, or let the scene tick with the asset missing? Current proposal: configurable via a `Game.asset_failure_policy` enum (`fatal` | `warn` | `silent`), default `fatal`. Stub loaders use the same path, so a typo'd audio entry produces a hard error in dev.
 4. **Scene-as-asset.** Should scene `.jsonc` themselves go through the catalog? Symmetrically clean, but they're tiny and eager-load from `@embedFile` is fine. Punt unless a real need shows up.
 5. **`acquire` from non-main threads.** v1 makes the catalog single-threaded (acquire/release on main). Worker only touches its own queue. If scripts ever run on worker threads (they don't today), revisit.
+6. **SPSC ring buffer sizing.** Both queues are bounded. If `register()` is called more times than the ring can hold before `pump()` drains, we'd block on enqueue. Initial size 64 covers FP's 6 atlases × loading-screen burst with room to spare; revisit if a project hits the ceiling.
