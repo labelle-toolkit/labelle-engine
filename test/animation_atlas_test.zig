@@ -133,7 +133,7 @@ test "TextureManager: loadAtlasFromJsonContent" {
         \\}
     ;
 
-    try mgr.loadAtlasFromJsonContent("test_atlas", json, 7);
+    try mgr.loadAtlasFromJsonContent("test_atlas", json, 7, null);
 
     try testing.expectEqual(1, mgr.atlasCount());
     try testing.expectEqual(2, mgr.totalSpriteCount());
@@ -188,7 +188,7 @@ test "TextureManager: JSON array format" {
         \\}
     ;
 
-    try mgr.loadAtlasFromJsonContent("arr_atlas", json, 3);
+    try mgr.loadAtlasFromJsonContent("arr_atlas", json, 3, null);
     try testing.expectEqual(2, mgr.totalSpriteCount());
 
     const a = mgr.findSprite("sprite_a").?;
@@ -197,6 +197,90 @@ test "TextureManager: JSON array format" {
 
     const b = mgr.findSprite("sprite_b").?;
     try testing.expectEqual(16, b.sprite.x);
+}
+
+test "TextureManager: texture_scale defaults to 1.0 when actual_dims is null" {
+    // Legacy path: callers that don't track actual texture dims pass
+    // null and get scale=1.0, matching pre-fix behavior.
+    var mgr = engine.TextureManager.init(testing.allocator);
+    defer mgr.deinit();
+
+    const json =
+        \\{
+        \\  "frames": {
+        \\    "hero": {
+        \\      "frame": {"x": 0, "y": 0, "w": 32, "h": 32},
+        \\      "rotated": false,
+        \\      "trimmed": false,
+        \\      "spriteSourceSize": {"x": 0, "y": 0, "w": 32, "h": 32},
+        \\      "sourceSize": {"w": 32, "h": 32}
+        \\    }
+        \\  },
+        \\  "meta": {"image": "atlas.png", "size": {"w": 64, "h": 64}}
+        \\}
+    ;
+
+    try mgr.loadAtlasFromJsonContent("a", json, 1, null);
+    const hero = mgr.findSprite("hero").?;
+    try testing.expectEqual(@as(f32, 1.0), hero.texture_scale_x);
+    try testing.expectEqual(@as(f32, 1.0), hero.texture_scale_y);
+}
+
+test "TextureManager: texture_scale derived from meta.size vs actual dims" {
+    // Fix for labelle-toolkit/labelle-gfx#240. When the user resizes
+    // the source PNG without re-running TexturePacker, meta.size in
+    // the JSON stays at the original logical resolution while the
+    // actual texture is smaller. The loader computes the per-axis
+    // scale so source-rect coords can be mapped to physical UV pixels
+    // at sprite-cache-lookup time, while display dimensions stay at
+    // the un-scaled values.
+    var mgr = engine.TextureManager.init(testing.allocator);
+    defer mgr.deinit();
+
+    const json =
+        \\{
+        \\  "frames": {
+        \\    "hero": {
+        \\      "frame": {"x": 0, "y": 0, "w": 32, "h": 32},
+        \\      "rotated": false,
+        \\      "trimmed": false,
+        \\      "spriteSourceSize": {"x": 0, "y": 0, "w": 32, "h": 32},
+        \\      "sourceSize": {"w": 32, "h": 32}
+        \\    }
+        \\  },
+        \\  "meta": {"image": "atlas.png", "size": {"w": 64, "h": 32}}
+        \\}
+    ;
+
+    try mgr.loadAtlasFromJsonContent("a", json, 1, .{ .width = 32, .height = 8 });
+    const hero = mgr.findSprite("hero").?;
+    try testing.expectEqual(@as(f32, 0.5), hero.texture_scale_x);
+    try testing.expectEqual(@as(f32, 0.25), hero.texture_scale_y);
+}
+
+test "TextureManager: texture_scale stays 1.0 when meta.size matches actual" {
+    var mgr = engine.TextureManager.init(testing.allocator);
+    defer mgr.deinit();
+
+    const json =
+        \\{
+        \\  "frames": {
+        \\    "hero": {
+        \\      "frame": {"x": 0, "y": 0, "w": 32, "h": 32},
+        \\      "rotated": false,
+        \\      "trimmed": false,
+        \\      "spriteSourceSize": {"x": 0, "y": 0, "w": 32, "h": 32},
+        \\      "sourceSize": {"w": 32, "h": 32}
+        \\    }
+        \\  },
+        \\  "meta": {"image": "atlas.png", "size": {"w": 64, "h": 64}}
+        \\}
+    ;
+
+    try mgr.loadAtlasFromJsonContent("a", json, 1, .{ .width = 64, .height = 64 });
+    const hero = mgr.findSprite("hero").?;
+    try testing.expectEqual(@as(f32, 1.0), hero.texture_scale_x);
+    try testing.expectEqual(@as(f32, 1.0), hero.texture_scale_y);
 }
 
 test "TextureManager: unload atlas" {

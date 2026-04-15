@@ -991,7 +991,8 @@ pub fn GameConfig(
                 @intFromEnum(tex_id)
             else
                 tex_id;
-            try self.atlas_manager.loadAtlasFromJson(name, json_path, id);
+            const dims = self.queryTextureDims(tex_id);
+            try self.atlas_manager.loadAtlasFromJson(name, json_path, id, dims);
         }
 
         /// Load an atlas from comptime sprite data (zero runtime parsing).
@@ -1019,7 +1020,22 @@ pub fn GameConfig(
                 @intFromEnum(tex_id)
             else
                 tex_id;
-            try self.atlas_manager.loadAtlasFromJsonContent(name, json_content, id);
+            const dims = self.queryTextureDims(tex_id);
+            try self.atlas_manager.loadAtlasFromJsonContent(name, json_content, id, dims);
+        }
+
+        /// Look up the actual pixel dimensions of a freshly-loaded
+        /// texture, so the atlas loader can derive a scale against the
+        /// JSON's logical `meta.size`. Returns null when the renderer
+        /// doesn't expose a `getTextureInfo` accessor — the atlas
+        /// loader then falls back to scale=1.0 (legacy behavior).
+        fn queryTextureDims(self: *Self, tex_id: anytype) ?atlas_mod.TextureManager.TextureDims {
+            if (!@hasDecl(RenderImpl, "getTextureInfo")) return null;
+            const info = self.renderer.getTextureInfo(tex_id) orelse return null;
+            return .{
+                .width = @intFromFloat(info.width),
+                .height = @intFromFloat(info.height),
+            };
         }
 
         pub fn getTextureManager(self: *Self) *atlas_mod.TextureManager {
@@ -1064,11 +1080,30 @@ pub fn GameConfig(
                     // Only update and mark dirty on cache miss (new sprite or atlas changed)
                     if (self.active_world.sprite_cache.misses != misses_before) {
                         sprite.texture = @enumFromInt(result.texture_id);
+                        // The atlas data is in the JSON's logical pixel
+                        // grid. `texture_scale_*` maps that grid onto the
+                        // actual texture pixels — `1.0` for the common
+                        // case, `< 1` when the user shipped a downscaled
+                        // PNG without re-running TexturePacker. Multiply
+                        // x/y/w/h by the scale so UV sampling tracks the
+                        // smaller texture, but keep the unscaled
+                        // dimensions in `display_*` so the on-screen
+                        // sprite stays the same size. For trimmed sprites
+                        // this matters: `getWidth()` is the actual
+                        // trimmed pixel count, so display=getWidth() is
+                        // the right rendered size, not the un-trimmed
+                        // `sourceSize`.
+                        const logical_w: f32 = @floatFromInt(result.sprite.getWidth());
+                        const logical_h: f32 = @floatFromInt(result.sprite.getHeight());
+                        const logical_x: f32 = @floatFromInt(result.sprite.x);
+                        const logical_y: f32 = @floatFromInt(result.sprite.y);
                         sprite.source_rect = .{
-                            .x = @floatFromInt(result.sprite.x),
-                            .y = @floatFromInt(result.sprite.y),
-                            .width = @floatFromInt(result.sprite.getWidth()),
-                            .height = @floatFromInt(result.sprite.getHeight()),
+                            .x = logical_x * result.texture_scale_x,
+                            .y = logical_y * result.texture_scale_y,
+                            .width = logical_w * result.texture_scale_x,
+                            .height = logical_h * result.texture_scale_y,
+                            .display_width = logical_w,
+                            .display_height = logical_h,
                         };
                         self.renderer.markVisualDirty(entity);
                     }
