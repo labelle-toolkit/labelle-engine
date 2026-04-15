@@ -42,9 +42,19 @@ pub const SpriteData = struct {
 };
 
 /// Result of looking up a sprite by name across all loaded atlases.
+///
+/// `texture_scale_x` / `texture_scale_y` map the JSON's logical pixel grid
+/// (the "meta.size" the atlas was authored against) onto the actual texture
+/// pixel dims at load time. They are `1.0` for a 1:1 atlas (the common case)
+/// and `< 1` when the user shipped a downscaled PNG without re-running
+/// TexturePacker. Callers building a `SourceRect` for the renderer should
+/// multiply x/y/w/h by the scale (so UV sampling tracks the smaller texture)
+/// and pass the un-scaled `sprite.width/height` as the display dimensions.
 pub const FindSpriteResult = struct {
     sprite: SpriteData,
     texture_id: u32,
+    texture_scale_x: f32 = 1.0,
+    texture_scale_y: f32 = 1.0,
 };
 
 /// Compile-time atlas from a .zon frame definition.
@@ -105,11 +115,43 @@ pub fn ComptimeAtlas(comptime frames: anytype) type {
     };
 }
 
+/// Image bytes captured by a pending (registered-but-not-yet-decoded)
+/// atlas. **Both `bytes` and `file_type` reference caller-owned memory
+/// — neither is duplicated by the manager.** They must outlive the
+/// atlas, or until `markPendingLoaded` is called for it (whichever
+/// comes first). Typically both are `@embedFile` slices / comptime
+/// string literals, which live forever — the lifetime constraint is
+/// invisible in practice. The eager-load shim decodes immediately, so
+/// it has no lifetime issue.
+pub const PendingImage = struct {
+    bytes: []const u8,
+    file_type: [:0]const u8,
+    /// Cached `meta.size` from the JSON. Kept on the pending atlas so
+    /// we can derive `texture_scale_*` once the actual texture dims
+    /// come back from `loadTextureFromMemory`.
+    meta: AtlasMeta,
+};
+
 /// Runtime atlas backed by a hashmap. For JSON/dynamic loading.
 pub const RuntimeAtlas = struct {
     sprites: std.StringHashMap(SpriteData),
     texture_id: u32 = 0,
     owns_keys: bool = false,
+    /// Scale from the JSON's logical pixel grid to the actual texture's
+    /// physical pixels. `1.0` when the atlas matches the texture; `< 1`
+    /// when the source PNG was downscaled without re-running TexturePacker
+    /// (a workflow we support to cut PNG decode time without touching
+    /// the JSON or losing trim info). Stored separately per axis because
+    /// nothing forces uniform scaling.
+    texture_scale_x: f32 = 1.0,
+    texture_scale_y: f32 = 1.0,
+    /// Lazy-load state. When non-null, the atlas's JSON has been parsed
+    /// into `sprites` but the PNG hasn't been decoded yet. Calling
+    /// `Game.loadAtlasIfNeeded(name)` decodes the bytes, uploads the
+    /// texture, populates `texture_id`, derives the scale, and clears
+    /// `pending`. After that point the atlas is indistinguishable from
+    /// one loaded eagerly. `is_loaded()` is the predicate.
+    pending: ?PendingImage = null,
 
     pub fn init(allocator: std.mem.Allocator) RuntimeAtlas {
         return .{ .sprites = std.StringHashMap(SpriteData).init(allocator) };
@@ -139,6 +181,13 @@ pub const RuntimeAtlas = struct {
 
     pub fn count(self: *const RuntimeAtlas) usize {
         return self.sprites.count();
+    }
+
+    /// `true` when the PNG has been decoded and a real `texture_id` is
+    /// available. `false` for atlases that have only been registered
+    /// (parsed JSON, deferred PNG decode).
+    pub fn isLoaded(self: *const RuntimeAtlas) bool {
+        return self.pending == null;
     }
 };
 
@@ -170,6 +219,16 @@ pub const TextureManager = struct {
         return self.atlases.getPtr(owned_name).?;
     }
 
+    /// Texture dimensions for the actual loaded image. Used by the
+    /// scale-aware atlas loaders to compute `texture_scale_*` against
+    /// the JSON's `meta.size`. When the dims aren't known (e.g. the
+    /// caller doesn't track them), passing `null` falls back to a
+    /// scale of 1.0 — matching the legacy behavior.
+    pub const TextureDims = struct {
+        width: u32,
+        height: u32,
+    };
+
     /// Load an atlas from a TexturePacker JSON file and associate it with a texture.
     /// Replaces any existing atlas with the same name.
     pub fn loadAtlasFromJson(
@@ -177,13 +236,15 @@ pub const TextureManager = struct {
         name: []const u8,
         json_path: [:0]const u8,
         texture_id: u32,
+        actual_dims: ?TextureDims,
     ) !void {
         var atlas = RuntimeAtlas.init(self.allocator);
         atlas.texture_id = texture_id;
         atlas.owns_keys = true;
         errdefer atlas.deinit();
 
-        try parseTexturePackerJson(self.allocator, json_path, &atlas.sprites);
+        const meta = try parseTexturePackerJson(self.allocator, json_path, &atlas.sprites);
+        applyTextureScale(&atlas, meta, actual_dims);
 
         self.removeExisting(name);
         const owned_name = try self.allocator.dupe(u8, name);
@@ -200,13 +261,15 @@ pub const TextureManager = struct {
         name: []const u8,
         json_content: []const u8,
         texture_id: u32,
+        actual_dims: ?TextureDims,
     ) !void {
         var atlas = RuntimeAtlas.init(self.allocator);
         atlas.texture_id = texture_id;
         atlas.owns_keys = true;
         errdefer atlas.deinit();
 
-        try parseTexturePackerJsonContent(self.allocator, json_content, &atlas.sprites);
+        const meta = try parseTexturePackerJsonContent(self.allocator, json_content, &atlas.sprites);
+        applyTextureScale(&atlas, meta, actual_dims);
 
         self.removeExisting(name);
         const owned_name = try self.allocator.dupe(u8, name);
@@ -248,12 +311,82 @@ pub const TextureManager = struct {
         return self.atlases.getPtr(name);
     }
 
+    /// Mutable accessor used by the lazy-load path to mark a pending
+    /// atlas as decoded. Not exposed as part of the read API because
+    /// modifying sprites after registration would invalidate the
+    /// sprite cache.
+    pub fn getAtlasMut(self: *TextureManager, name: []const u8) ?*RuntimeAtlas {
+        return self.atlases.getPtr(name);
+    }
+
+    /// Register an atlas in **pending** state — JSON parsed eagerly,
+    /// PNG decode deferred. The caller must keep BOTH `image_data`
+    /// and `file_type` alive until `markPendingLoaded` is called for
+    /// this atlas — both are stored as borrowed slices on
+    /// `PendingImage` without being duplicated. Passing
+    /// `@embedFile`/comptime string-literal slices is the easy path,
+    /// since they live for the program lifetime.
+    ///
+    /// Used by the lazy-load init path. Pair with
+    /// `Game.loadAtlasIfNeeded(name)` to materialise the texture on
+    /// demand.
+    pub fn registerPendingAtlas(
+        self: *TextureManager,
+        name: []const u8,
+        json_content: []const u8,
+        image_data: []const u8,
+        file_type: [:0]const u8,
+    ) !void {
+        var atlas = RuntimeAtlas.init(self.allocator);
+        atlas.texture_id = 0;
+        atlas.owns_keys = true;
+        errdefer atlas.deinit();
+
+        const meta = try parseTexturePackerJsonContent(self.allocator, json_content, &atlas.sprites);
+        atlas.pending = .{
+            .bytes = image_data,
+            .file_type = file_type,
+            .meta = meta,
+        };
+
+        self.removeExisting(name);
+        const owned_name = try self.allocator.dupe(u8, name);
+        errdefer self.allocator.free(owned_name);
+
+        try self.atlases.put(owned_name, atlas);
+        self.version += 1;
+    }
+
+    /// Promote a pending atlas to "loaded" once the renderer has
+    /// decoded its PNG and returned the actual texture id + dims.
+    /// Called by `Game.loadAtlasIfNeeded` after the renderer call.
+    /// Returns `error.AtlasNotPending` if the atlas was already loaded
+    /// (idempotent caller-side: just check `isLoaded` first).
+    pub fn markPendingLoaded(
+        self: *TextureManager,
+        name: []const u8,
+        texture_id: u32,
+        actual_dims: ?TextureDims,
+    ) !void {
+        const atlas = self.atlases.getPtr(name) orelse return error.AtlasNotFound;
+        const pending = atlas.pending orelse return error.AtlasNotPending;
+        atlas.texture_id = texture_id;
+        applyTextureScale(atlas, pending.meta, actual_dims);
+        atlas.pending = null;
+        self.version += 1;
+    }
+
     /// Search all atlases for a sprite by name.
     pub fn findSprite(self: *const TextureManager, sprite_name: []const u8) ?FindSpriteResult {
         var it = self.atlases.valueIterator();
         while (it.next()) |atlas| {
             if (atlas.get(sprite_name)) |data| {
-                return .{ .sprite = data, .texture_id = atlas.texture_id };
+                return .{
+                    .sprite = data,
+                    .texture_id = atlas.texture_id,
+                    .texture_scale_x = atlas.texture_scale_x,
+                    .texture_scale_y = atlas.texture_scale_y,
+                };
             }
         }
         return null;
@@ -386,27 +519,40 @@ pub const SpriteCache = struct {
 
 // ── JSON Parsing ────────────────────────────────────────────
 
+/// Per-atlas metadata extracted from `meta.size` in the JSON. Optional
+/// because not every TexturePacker output includes a `meta` block.
+pub const AtlasMeta = struct {
+    /// Logical pixel grid the atlas was authored against. When this
+    /// differs from the actual texture pixel dims, the loader derives
+    /// a `texture_scale` so source-rect coords stay in physical space
+    /// while display coords stay at the original resolution.
+    logical_width: ?u32 = null,
+    logical_height: ?u32 = null,
+};
+
 /// Parse a TexturePacker JSON Hash format file into a sprite map.
+/// Returns `meta.size` so the caller can derive a texture scale.
 fn parseTexturePackerJson(
     allocator: std.mem.Allocator,
     json_path: [:0]const u8,
     sprites: *std.StringHashMap(SpriteData),
-) !void {
+) !AtlasMeta {
     const file = try std.fs.cwd().openFile(json_path, .{});
     defer file.close();
 
     const content = try file.readToEndAlloc(allocator, 10 * 1024 * 1024);
     defer allocator.free(content);
 
-    try parseTexturePackerJsonContent(allocator, content, sprites);
+    return parseTexturePackerJsonContent(allocator, content, sprites);
 }
 
 /// Parse TexturePacker JSON content (already in memory) into a sprite map.
+/// Returns `meta.size` so the caller can derive a texture scale.
 fn parseTexturePackerJsonContent(
     allocator: std.mem.Allocator,
     content: []const u8,
     sprites: *std.StringHashMap(SpriteData),
-) !void {
+) !AtlasMeta {
     const parsed = try std.json.parseFromSlice(std.json.Value, allocator, content, .{});
     defer parsed.deinit();
 
@@ -417,6 +563,38 @@ fn parseTexturePackerJsonContent(
         .object => |frames_obj| try parseFramesObject(allocator, frames_obj, sprites),
         .array => |frames_arr| try parseFramesArray(allocator, frames_arr, sprites),
         else => return error.InvalidAtlasFormat,
+    }
+
+    var meta: AtlasMeta = .{};
+    if (root.get("meta")) |meta_val| {
+        if (meta_val == .object) {
+            if (meta_val.object.get("size")) |size_val| {
+                if (size_val == .object) {
+                    const size_obj = size_val.object;
+                    meta.logical_width = jsonInt(u32, size_obj.get("w"));
+                    meta.logical_height = jsonInt(u32, size_obj.get("h"));
+                }
+            }
+        }
+    }
+    return meta;
+}
+
+/// Compute and apply the per-axis texture scale by comparing the JSON's
+/// logical size against the actual texture's pixel dims. When either is
+/// missing or zero the scale stays at `1.0` — preserving legacy
+/// behavior for callers that don't track texture dims.
+fn applyTextureScale(atlas: *RuntimeAtlas, meta: AtlasMeta, actual_dims: ?TextureManager.TextureDims) void {
+    const dims = actual_dims orelse return;
+    if (meta.logical_width) |lw| {
+        if (lw > 0 and dims.width > 0) {
+            atlas.texture_scale_x = @as(f32, @floatFromInt(dims.width)) / @as(f32, @floatFromInt(lw));
+        }
+    }
+    if (meta.logical_height) |lh| {
+        if (lh > 0 and dims.height > 0) {
+            atlas.texture_scale_y = @as(f32, @floatFromInt(dims.height)) / @as(f32, @floatFromInt(lh));
+        }
     }
 }
 

@@ -38,6 +38,6 @@ pub const Game = AssembledGame;
 {{#else}}const GameContext = struct {};
 {{/if}}const Runner = engine.ScriptRunner(AllScripts, GameContext, EcsBackend);
 
-{{view_registry_block}}{{gizmo_registry_block}}// Gizmo rendering is now handled by g.renderGizmos() — no generated code needed.
+{{view_registry_block}}{{gizmo_registry_block}}{{animation_registry_block}}// Gizmo rendering is now handled by g.renderGizmos() — no generated code needed.
 // The engine delegates to the renderer's renderGizmoDraws() method.
 {{lifecycle}}

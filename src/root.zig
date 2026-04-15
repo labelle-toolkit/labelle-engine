@@ -17,6 +17,8 @@ pub const sparse_set_mod = @import("sparse_set.zig");
 pub const query_mod = @import("query.zig");
 pub const hooks_types_mod = @import("hooks_types.zig");
 pub const animation_mod = @import("animation.zig");
+pub const animation_def_mod = @import("animation_def.zig");
+pub const animation_state_mod = @import("animation_state.zig");
 pub const atlas_mod = @import("atlas.zig");
 pub const assets_mod = @import("assets/mod.zig");
 pub const jsonc_mod = @import("jsonc");
@@ -117,6 +119,10 @@ pub const ReferenceContext = scene_mod.ReferenceContext;
 pub const Animation = animation_mod.Animation;
 pub const AnimConfig = animation_mod.AnimConfig;
 pub const DefaultAnimationType = animation_mod.DefaultAnimationType;
+pub const AnimationDef = animation_def_mod.AnimationDef;
+pub const AnimationState = animation_state_mod.AnimationState;
+pub const AnimMode = animation_def_mod.Mode;
+pub const AnimClipMeta = animation_def_mod.ClipMeta;
 
 // ── Atlas ──
 pub const SpriteData = atlas_mod.SpriteData;

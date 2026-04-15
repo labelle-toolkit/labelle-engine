@@ -133,7 +133,7 @@ test "TextureManager: loadAtlasFromJsonContent" {
         \\}
     ;
 
-    try mgr.loadAtlasFromJsonContent("test_atlas", json, 7);
+    try mgr.loadAtlasFromJsonContent("test_atlas", json, 7, null);
 
     try testing.expectEqual(1, mgr.atlasCount());
     try testing.expectEqual(2, mgr.totalSpriteCount());
@@ -188,7 +188,7 @@ test "TextureManager: JSON array format" {
         \\}
     ;
 
-    try mgr.loadAtlasFromJsonContent("arr_atlas", json, 3);
+    try mgr.loadAtlasFromJsonContent("arr_atlas", json, 3, null);
     try testing.expectEqual(2, mgr.totalSpriteCount());
 
     const a = mgr.findSprite("sprite_a").?;
@@ -197,6 +197,173 @@ test "TextureManager: JSON array format" {
 
     const b = mgr.findSprite("sprite_b").?;
     try testing.expectEqual(16, b.sprite.x);
+}
+
+test "TextureManager: texture_scale defaults to 1.0 when actual_dims is null" {
+    // Legacy path: callers that don't track actual texture dims pass
+    // null and get scale=1.0, matching pre-fix behavior.
+    var mgr = engine.TextureManager.init(testing.allocator);
+    defer mgr.deinit();
+
+    const json =
+        \\{
+        \\  "frames": {
+        \\    "hero": {
+        \\      "frame": {"x": 0, "y": 0, "w": 32, "h": 32},
+        \\      "rotated": false,
+        \\      "trimmed": false,
+        \\      "spriteSourceSize": {"x": 0, "y": 0, "w": 32, "h": 32},
+        \\      "sourceSize": {"w": 32, "h": 32}
+        \\    }
+        \\  },
+        \\  "meta": {"image": "atlas.png", "size": {"w": 64, "h": 64}}
+        \\}
+    ;
+
+    try mgr.loadAtlasFromJsonContent("a", json, 1, null);
+    const hero = mgr.findSprite("hero").?;
+    try testing.expectEqual(@as(f32, 1.0), hero.texture_scale_x);
+    try testing.expectEqual(@as(f32, 1.0), hero.texture_scale_y);
+}
+
+test "TextureManager: texture_scale derived from meta.size vs actual dims" {
+    // Fix for labelle-toolkit/labelle-gfx#240. When the user resizes
+    // the source PNG without re-running TexturePacker, meta.size in
+    // the JSON stays at the original logical resolution while the
+    // actual texture is smaller. The loader computes the per-axis
+    // scale so source-rect coords can be mapped to physical UV pixels
+    // at sprite-cache-lookup time, while display dimensions stay at
+    // the un-scaled values.
+    var mgr = engine.TextureManager.init(testing.allocator);
+    defer mgr.deinit();
+
+    const json =
+        \\{
+        \\  "frames": {
+        \\    "hero": {
+        \\      "frame": {"x": 0, "y": 0, "w": 32, "h": 32},
+        \\      "rotated": false,
+        \\      "trimmed": false,
+        \\      "spriteSourceSize": {"x": 0, "y": 0, "w": 32, "h": 32},
+        \\      "sourceSize": {"w": 32, "h": 32}
+        \\    }
+        \\  },
+        \\  "meta": {"image": "atlas.png", "size": {"w": 64, "h": 32}}
+        \\}
+    ;
+
+    try mgr.loadAtlasFromJsonContent("a", json, 1, .{ .width = 32, .height = 8 });
+    const hero = mgr.findSprite("hero").?;
+    try testing.expectEqual(@as(f32, 0.5), hero.texture_scale_x);
+    try testing.expectEqual(@as(f32, 0.25), hero.texture_scale_y);
+}
+
+test "TextureManager: texture_scale stays 1.0 when meta.size matches actual" {
+    var mgr = engine.TextureManager.init(testing.allocator);
+    defer mgr.deinit();
+
+    const json =
+        \\{
+        \\  "frames": {
+        \\    "hero": {
+        \\      "frame": {"x": 0, "y": 0, "w": 32, "h": 32},
+        \\      "rotated": false,
+        \\      "trimmed": false,
+        \\      "spriteSourceSize": {"x": 0, "y": 0, "w": 32, "h": 32},
+        \\      "sourceSize": {"w": 32, "h": 32}
+        \\    }
+        \\  },
+        \\  "meta": {"image": "atlas.png", "size": {"w": 64, "h": 64}}
+        \\}
+    ;
+
+    try mgr.loadAtlasFromJsonContent("a", json, 1, .{ .width = 64, .height = 64 });
+    const hero = mgr.findSprite("hero").?;
+    try testing.expectEqual(@as(f32, 1.0), hero.texture_scale_x);
+    try testing.expectEqual(@as(f32, 1.0), hero.texture_scale_y);
+}
+
+test "TextureManager: registerPendingAtlas leaves atlas unloaded" {
+    var mgr = engine.TextureManager.init(testing.allocator);
+    defer mgr.deinit();
+
+    const json =
+        \\{
+        \\  "frames": {
+        \\    "hero": {
+        \\      "frame": {"x": 0, "y": 0, "w": 32, "h": 32},
+        \\      "rotated": false,
+        \\      "trimmed": false,
+        \\      "spriteSourceSize": {"x": 0, "y": 0, "w": 32, "h": 32},
+        \\      "sourceSize": {"w": 32, "h": 32}
+        \\    }
+        \\  },
+        \\  "meta": {"image": "atlas.png", "size": {"w": 64, "h": 64}}
+        \\}
+    ;
+    const fake_png: []const u8 = &.{ 0x89, 'P', 'N', 'G' };
+
+    try mgr.registerPendingAtlas("a", json, fake_png, ".png");
+    const atlas = mgr.getAtlas("a").?;
+    try testing.expect(!atlas.isLoaded());
+    try testing.expectEqual(@as(u32, 0), atlas.texture_id);
+
+    // Sprites are parsed eagerly so name lookups still work.
+    const hero = mgr.findSprite("hero").?;
+    try testing.expectEqual(@as(u32, 32), hero.sprite.width);
+    // texture_id stays 0 until markPendingLoaded is called.
+    try testing.expectEqual(@as(u32, 0), hero.texture_id);
+}
+
+test "TextureManager: markPendingLoaded promotes pending → loaded with scale" {
+    var mgr = engine.TextureManager.init(testing.allocator);
+    defer mgr.deinit();
+
+    const json =
+        \\{
+        \\  "frames": {
+        \\    "hero": {
+        \\      "frame": {"x": 0, "y": 0, "w": 32, "h": 32},
+        \\      "rotated": false,
+        \\      "trimmed": false,
+        \\      "spriteSourceSize": {"x": 0, "y": 0, "w": 32, "h": 32},
+        \\      "sourceSize": {"w": 32, "h": 32}
+        \\    }
+        \\  },
+        \\  "meta": {"image": "atlas.png", "size": {"w": 64, "h": 64}}
+        \\}
+    ;
+    const fake_png: []const u8 = &.{ 0x89, 'P', 'N', 'G' };
+
+    try mgr.registerPendingAtlas("a", json, fake_png, ".png");
+    try mgr.markPendingLoaded("a", 42, .{ .width = 32, .height = 32 });
+
+    const atlas = mgr.getAtlas("a").?;
+    try testing.expect(atlas.isLoaded());
+    try testing.expectEqual(@as(u32, 42), atlas.texture_id);
+    // 32 / 64 = 0.5
+    try testing.expectEqual(@as(f32, 0.5), atlas.texture_scale_x);
+    try testing.expectEqual(@as(f32, 0.5), atlas.texture_scale_y);
+
+    // findSprite now returns the real texture_id and scale.
+    const hero = mgr.findSprite("hero").?;
+    try testing.expectEqual(@as(u32, 42), hero.texture_id);
+    try testing.expectEqual(@as(f32, 0.5), hero.texture_scale_x);
+}
+
+test "TextureManager: markPendingLoaded errors on unknown atlas" {
+    var mgr = engine.TextureManager.init(testing.allocator);
+    defer mgr.deinit();
+    try testing.expectError(error.AtlasNotFound, mgr.markPendingLoaded("missing", 1, null));
+}
+
+test "TextureManager: markPendingLoaded errors when atlas is already loaded" {
+    var mgr = engine.TextureManager.init(testing.allocator);
+    defer mgr.deinit();
+
+    const json = "{ \"frames\": {}, \"meta\": {\"size\": {\"w\": 1, \"h\": 1}} }";
+    try mgr.loadAtlasFromJsonContent("a", json, 99, null);
+    try testing.expectError(error.AtlasNotPending, mgr.markPendingLoaded("a", 1, null));
 }
 
 test "TextureManager: unload atlas" {

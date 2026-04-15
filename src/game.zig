@@ -575,6 +575,22 @@ pub fn GameConfig(
         pub const getMouseY = InputMixin.getMouseY;
         pub const getMouse = InputMixin.getMouse;
         pub const getMouseWheelMove = InputMixin.getMouseWheelMove;
+        pub const getTouchCount = InputMixin.getTouchCount;
+        pub const getTouchX = InputMixin.getTouchX;
+        pub const getTouchY = InputMixin.getTouchY;
+        pub const getTouchId = InputMixin.getTouchId;
+
+        /// Convert a physical-pixel screen coordinate (raw touch / mouse
+        /// event coords from the backend) to a design-pixel coordinate
+        /// inside the pillarboxed/letterboxed canvas. Use this before
+        /// feeding touch / mouse coords to `cam.screenToWorld` so the
+        /// math lines up with the game's design coordinate system.
+        ///
+        /// Backends without a design/physical distinction (raylib) get
+        /// a passthrough — the input is returned unchanged.
+        pub fn screenToDesign(self: *Self, px: f32, py: f32) RenderImpl.ScreenPoint {
+            return self.renderer.screenToDesign(px, py);
+        }
 
         // ── Audio (mixin) ────────────────────────────────────────
         pub const playSound = AudioMixin.playSound;
@@ -991,7 +1007,8 @@ pub fn GameConfig(
                 @intFromEnum(tex_id)
             else
                 tex_id;
-            try self.atlas_manager.loadAtlasFromJson(name, json_path, id);
+            const dims = self.queryTextureDims(tex_id);
+            try self.atlas_manager.loadAtlasFromJson(name, json_path, id, dims);
         }
 
         /// Load an atlas from comptime sprite data (zero runtime parsing).
@@ -1019,7 +1036,91 @@ pub fn GameConfig(
                 @intFromEnum(tex_id)
             else
                 tex_id;
-            try self.atlas_manager.loadAtlasFromJsonContent(name, json_content, id);
+            const dims = self.queryTextureDims(tex_id);
+            try self.atlas_manager.loadAtlasFromJsonContent(name, json_content, id, dims);
+        }
+
+        /// Register an atlas in **deferred** mode: parse the JSON
+        /// eagerly (cheap) but skip the PNG decode (expensive). The
+        /// atlas is added to the manager with no `texture_id` and a
+        /// `pending` block carrying the PNG byte slice. The first call
+        /// to `loadAtlasIfNeeded(name)` decodes the PNG, uploads to
+        /// the GPU, and promotes the atlas to "loaded".
+        ///
+        /// `image_data` must outlive the atlas — typically a slice
+        /// from `@embedFile`, which lives forever. Pair this with
+        /// `loadAtlasIfNeeded` from a loading-scene script to spread
+        /// PNG decode cost across multiple frames instead of paying
+        /// for everything in `init()`.
+        pub const registerAtlasFromMemory = if (has_load_from_memory) registerAtlasFromMemoryImpl else @compileError("Renderer does not support loadTextureFromMemory");
+
+        fn registerAtlasFromMemoryImpl(self: *Self, name: []const u8, json_content: []const u8, image_data: []const u8, file_type: [:0]const u8) !void {
+            try self.atlas_manager.registerPendingAtlas(name, json_content, image_data, file_type);
+        }
+
+        /// Decode a previously-registered pending atlas if it hasn't
+        /// already been loaded. No-op (returns `false`) when the atlas
+        /// is already loaded — safe to call every frame from a loading
+        /// loop. Returns `true` on the call that actually performed
+        /// the decode, so a loading script can advance a progress
+        /// counter.
+        pub const loadAtlasIfNeeded = if (has_load_from_memory) loadAtlasIfNeededImpl else @compileError("Renderer does not support loadTextureFromMemory");
+
+        fn loadAtlasIfNeededImpl(self: *Self, name: []const u8) !bool {
+            const atlas = self.atlas_manager.getAtlasMut(name) orelse return error.AtlasNotFound;
+            if (atlas.isLoaded()) return false;
+
+            const pending = atlas.pending.?; // checked by isLoaded above
+            const tex_id = try self.renderer.loadTextureFromMemory(pending.file_type, pending.bytes);
+            const id: u32 = if (@typeInfo(@TypeOf(tex_id)) == .@"enum")
+                @intFromEnum(tex_id)
+            else
+                tex_id;
+            const dims = self.queryTextureDims(tex_id);
+            try self.atlas_manager.markPendingLoaded(name, id, dims);
+            return true;
+        }
+
+        /// Whether an atlas's PNG has been decoded. Returns `false`
+        /// for unregistered atlases too — both states mean "you can't
+        /// use it yet". Used by loading scripts to decide which
+        /// atlases still need a `loadAtlasIfNeeded` call.
+        pub fn isAtlasLoaded(self: *Self, name: []const u8) bool {
+            const atlas = self.atlas_manager.getAtlas(name) orelse return false;
+            return atlas.isLoaded();
+        }
+
+        /// Look up the actual pixel dimensions of a freshly-loaded
+        /// texture, so the atlas loader can derive a scale against the
+        /// JSON's logical `meta.size`. Returns null when the renderer
+        /// doesn't expose a `getTextureInfo` accessor — the atlas
+        /// loader then falls back to scale=1.0 (legacy behavior).
+        ///
+        /// Texture dims are clamped to `[0, max u32]` before the float
+        /// → int cast so a malformed renderer that returns negative or
+        /// NaN values can't trigger an `@intFromFloat` panic. Real
+        /// renderers always return positive integers, so this is a
+        /// belt-and-braces guard for buggy backend mocks.
+        fn queryTextureDims(self: *Self, tex_id: anytype) ?atlas_mod.TextureManager.TextureDims {
+            if (!@hasDecl(RenderImpl, "getTextureInfo")) return null;
+            const info = self.renderer.getTextureInfo(tex_id) orelse return null;
+            return .{
+                .width = clampToU32(info.width),
+                .height = clampToU32(info.height),
+            };
+        }
+
+        fn clampToU32(v: f32) u32 {
+            if (!std.math.isFinite(v) or v <= 0) return 0;
+            // `@floatFromInt(maxInt(u32))` rounds *up* to 2^32 in f32
+            // because the f32 mantissa is only 24 bits, so comparing
+            // against it would let `@intFromFloat` see exactly 2^32 —
+            // one above the u32 range, triggering UB / safety panic.
+            // The largest f32 value strictly less than 2^32 is
+            // 4_294_967_040 (= 2^32 - 2^8). Clamp to that.
+            const max_safe: f32 = 4_294_967_040.0;
+            if (v >= max_safe) return std.math.maxInt(u32);
+            return @intFromFloat(v);
         }
 
         pub fn getTextureManager(self: *Self) *atlas_mod.TextureManager {
@@ -1064,11 +1165,50 @@ pub fn GameConfig(
                     // Only update and mark dirty on cache miss (new sprite or atlas changed)
                     if (self.active_world.sprite_cache.misses != misses_before) {
                         sprite.texture = @enumFromInt(result.texture_id);
+                        // The atlas data is in the JSON's logical pixel
+                        // grid. `texture_scale_*` maps that grid onto the
+                        // actual texture pixels — `1.0` for the common
+                        // case, `< 1` when the user shipped a downscaled
+                        // PNG without re-running TexturePacker.
+                        //
+                        // Two distinct mappings are needed:
+                        //
+                        //   * The PHYSICAL atlas footprint (`sprite.x/y`,
+                        //     `sprite.width/height`) is in texture-pixel
+                        //     coordinates regardless of rotation. Each
+                        //     axis scales independently, so x/width go
+                        //     through `texture_scale_x` and y/height go
+                        //     through `texture_scale_y`.
+                        //
+                        //   * The DISPLAY dimensions (`getWidth/Height`)
+                        //     swap when the sprite was rotated 90° in the
+                        //     atlas — that's the on-screen size. They
+                        //     stay un-scaled.
+                        //
+                        // Mixing the two (multiplying `getWidth()` by
+                        // `texture_scale_x`) is wrong for rotated sprites
+                        // because `getWidth()` returns the post-rotation
+                        // height — a vertical dimension scaled by a
+                        // horizontal factor.
+                        const phys_x: f32 = @floatFromInt(result.sprite.x);
+                        const phys_y: f32 = @floatFromInt(result.sprite.y);
+                        const phys_w: f32 = @floatFromInt(result.sprite.width);
+                        const phys_h: f32 = @floatFromInt(result.sprite.height);
+                        const display_w: f32 = @floatFromInt(result.sprite.getWidth());
+                        const display_h: f32 = @floatFromInt(result.sprite.getHeight());
+                        const scaled_w = phys_w * result.texture_scale_x;
+                        const scaled_h = phys_h * result.texture_scale_y;
                         sprite.source_rect = .{
-                            .x = @floatFromInt(result.sprite.x),
-                            .y = @floatFromInt(result.sprite.y),
-                            .width = @floatFromInt(result.sprite.getWidth()),
-                            .height = @floatFromInt(result.sprite.getHeight()),
+                            .x = phys_x * result.texture_scale_x,
+                            .y = phys_y * result.texture_scale_y,
+                            // `source_rect.width/height` are in the same
+                            // post-rotation orientation that the renderer
+                            // expects (matching `getWidth/Height`),
+                            // so swap when the sprite was rotated.
+                            .width = if (result.sprite.rotated) scaled_h else scaled_w,
+                            .height = if (result.sprite.rotated) scaled_w else scaled_h,
+                            .display_width = display_w,
+                            .display_height = display_h,
                         };
                         self.renderer.markVisualDirty(entity);
                     }

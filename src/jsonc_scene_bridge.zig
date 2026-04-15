@@ -15,6 +15,35 @@ const Position = core.Position;
 const scene_mod = @import("scene");
 const gizmo_mod = scene_mod.gizmo;
 
+// ── String intern pool ──────────────────────────────────────────────
+//
+// Component `[]const u8` fields deserialized from a scene or prefab need
+// to outlive the parse arena (which is freed after loadSceneFile returns).
+// We intern them into a single arena wrapping page_allocator and dedupe
+// via a hashmap: identical strings (e.g. "player.png" shared by many
+// entities, or a prefab spawned N times) collapse to one allocation.
+//
+// Bounded by the number of *unique* strings seen over the process
+// lifetime, not by the number of deserialize calls — so repeated prefab
+// spawns no longer leak page_allocator memory per call.
+//
+// File-scope on purpose: shared across all JsoncSceneBridge
+// instantiations so a project with multiple Game types still dedupes.
+// Never freed; matches the PrefabCache page_allocator convention.
+var intern_arena: ?std.heap.ArenaAllocator = null;
+var intern_map: ?std.StringHashMap(void) = null;
+
+fn internString(s: []const u8) ?[]const u8 {
+    if (intern_arena == null) {
+        intern_arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+        intern_map = std.StringHashMap(void).init(intern_arena.?.allocator());
+    }
+    if (intern_map.?.getKey(s)) |existing| return existing;
+    const owned = intern_arena.?.allocator().dupe(u8, s) catch return null;
+    intern_map.?.put(owned, {}) catch return null;
+    return owned;
+}
+
 /// Create a JSONC scene loader parameterized by game and component types.
 /// Components is a ComponentRegistry/ComponentRegistryWithPlugins type with has/getType/names.
 pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type {
@@ -32,10 +61,30 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
             return cache;
         }
 
+        /// Reuse the game's attached PrefabCache when one exists, refreshing
+        /// its `prefab_dir` so filesystem fallback lookups track the current
+        /// scene's directory. Otherwise allocate a fresh persistent cache.
+        ///
+        /// Shared by `loadScene`, `loadSceneFromSource` and `addEmbeddedPrefab`
+        /// so the three entry points can never drift apart on this critical
+        /// path — see the !!! CRITICAL !!! block in `loadSceneFromSource` for
+        /// the mobile-build failure mode this protects against.
+        fn getOrCreatePrefabCache(game: *GameType, prefab_dir: []const u8) !*PrefabCache {
+            if (game.prefab_cache_ptr) |ptr| {
+                const cache = @as(*PrefabCache, @ptrCast(@alignCast(ptr)));
+                cache.prefab_dir = prefab_dir;
+                return cache;
+            }
+            return try initPersistentCache(game, prefab_dir);
+        }
+
         /// Load a JSONC scene file and instantiate all entities in the ECS.
         pub fn loadScene(game: *GameType, scene_path: []const u8, prefab_dir: []const u8) !void {
-            // Load prefab cache (tries .jsonc then .zon)
-            const prefab_cache = try initPersistentCache(game, prefab_dir);
+            // Reuse any existing cache so prefabs registered via
+            // `addEmbeddedPrefab` before `loadScene` runs survive — same
+            // failure mode as `loadSceneFromSource`, just less commonly
+            // hit because filesystem-based `loadScene` is a desktop path.
+            const prefab_cache = try getOrCreatePrefabCache(game, prefab_dir);
 
             try loadSceneFile(game, scene_path, prefab_cache, 0);
 
@@ -47,7 +96,48 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
         /// Load a scene from an in-memory JSONC source string (for embedded/release builds).
         /// The source must outlive the loaded scene — typically a comptime `@embedFile` slice.
         pub fn loadSceneFromSource(game: *GameType, source: []const u8, prefab_dir: []const u8) !void {
-            const prefab_cache = try initPersistentCache(game, prefab_dir);
+            // ================================================================
+            // !!! CRITICAL — DO NOT REPLACE WITH `initPersistentCache` !!!
+            // ================================================================
+            //
+            // This MUST reuse an existing PrefabCache when one is already
+            // attached to the game. The cache is populated up-front by
+            // `addEmbeddedPrefab` calls that the assembler emits in init()
+            // for every `prefabs/*.jsonc` in the project — the only mechanism
+            // by which prefabs are made available to mobile builds (Android,
+            // iOS), where the app has no filesystem access.
+            //
+            // If we instead create a fresh cache here (the obvious-looking
+            // `try initPersistentCache(...)` one-liner), every embedded
+            // prefab is silently discarded. Subsequent lookups in
+            // `PrefabCache.get` then fall through to
+            // `std.fs.cwd().openFile("prefabs/<name>.jsonc")`. On desktop
+            // that "happens to work" because the project directory is the
+            // cwd — and that accidental success is what masked this bug for
+            // ages. On Android the openFile returns `error.FileNotFound`,
+            // `get` returns null, and **every nested prefab entity
+            // (workstations, storages, movement_nodes, …) silently fails
+            // to spawn**. The visible symptom is a black screen with the
+            // simulation alive but no rooms — exactly what bit
+            // flying-platform-labelle when first deployed to the emulator.
+            //
+            // Past tense, present danger: any "tidy-up" refactor that
+            // replaces the conditional below with an unconditional call to
+            // `initPersistentCache` will reintroduce the regression. The
+            // assembler's `addEmbeddedPrefab` ordering is fixed — it runs
+            // BEFORE `setScene`/`loadSceneFromSource` — so the cache is
+            // ALWAYS already populated by the time we get here on a properly
+            // generated build. Reuse it. Don't replace it.
+            //
+            // See:
+            //   - flying-platform-labelle Android black-screen debug
+            //     (entityCount went from 19 → 125, pathfinder graph
+            //     0 → 39 nodes after this fix)
+            //   - PR for this fix in labelle-engine
+            //   - Mirrors the same defensive pattern already used by
+            //     `addEmbeddedPrefab` itself (line ~92 in this file)
+            // ================================================================
+            const prefab_cache = try getOrCreatePrefabCache(game, prefab_dir);
 
             try loadSceneSource(game, source, prefab_cache);
 
@@ -60,10 +150,7 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
         /// Call this before loadSceneFromSource to make prefabs available without file I/O.
         /// The source must outlive the game — typically a comptime `@embedFile` slice.
         pub fn addEmbeddedPrefab(game: *GameType, name: []const u8, source: []const u8, prefab_dir: []const u8) !void {
-            const prefab_cache = if (game.prefab_cache_ptr) |ptr|
-                @as(*PrefabCache, @ptrCast(@alignCast(ptr)))
-            else
-                try initPersistentCache(game, prefab_dir);
+            const prefab_cache = try getOrCreatePrefabCache(game, prefab_dir);
 
             const persistent = prefab_cache.persistent;
             var parser = JsoncParser.init(persistent, source);
@@ -885,7 +972,15 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
             if (T == f32 or T == f64) return valueToFloat(T, value);
             if (T == i8 or T == i16 or T == i32 or T == i64 or T == u8 or T == u16 or T == u32 or T == u64 or T == usize) return valueToInt(T, value);
             if (T == bool) return value.asBool();
-            if (T == []const u8) return value.asString();
+            if (T == []const u8) {
+                const s = value.asString() orelse return null;
+                // Intern into the shared pool so (a) identical strings
+                // dedupe and repeated prefab spawns don't leak, and (b)
+                // allocations are batched through an arena instead of a
+                // system call per string. See the intern pool docs at
+                // the top of this file.
+                return internString(s);
+            }
 
             // Enums
             if (info == .@"enum") {
