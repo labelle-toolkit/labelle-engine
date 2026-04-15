@@ -1040,18 +1040,87 @@ pub fn GameConfig(
             try self.atlas_manager.loadAtlasFromJsonContent(name, json_content, id, dims);
         }
 
+        /// Register an atlas in **deferred** mode: parse the JSON
+        /// eagerly (cheap) but skip the PNG decode (expensive). The
+        /// atlas is added to the manager with no `texture_id` and a
+        /// `pending` block carrying the PNG byte slice. The first call
+        /// to `loadAtlasIfNeeded(name)` decodes the PNG, uploads to
+        /// the GPU, and promotes the atlas to "loaded".
+        ///
+        /// `image_data` must outlive the atlas — typically a slice
+        /// from `@embedFile`, which lives forever. Pair this with
+        /// `loadAtlasIfNeeded` from a loading-scene script to spread
+        /// PNG decode cost across multiple frames instead of paying
+        /// for everything in `init()`.
+        pub const registerAtlasFromMemory = if (has_load_from_memory) registerAtlasFromMemoryImpl else @compileError("Renderer does not support loadTextureFromMemory");
+
+        fn registerAtlasFromMemoryImpl(self: *Self, name: []const u8, json_content: []const u8, image_data: []const u8, file_type: [:0]const u8) !void {
+            try self.atlas_manager.registerPendingAtlas(name, json_content, image_data, file_type);
+        }
+
+        /// Decode a previously-registered pending atlas if it hasn't
+        /// already been loaded. No-op (returns `false`) when the atlas
+        /// is already loaded — safe to call every frame from a loading
+        /// loop. Returns `true` on the call that actually performed
+        /// the decode, so a loading script can advance a progress
+        /// counter.
+        pub const loadAtlasIfNeeded = if (has_load_from_memory) loadAtlasIfNeededImpl else @compileError("Renderer does not support loadTextureFromMemory");
+
+        fn loadAtlasIfNeededImpl(self: *Self, name: []const u8) !bool {
+            const atlas = self.atlas_manager.getAtlasMut(name) orelse return error.AtlasNotFound;
+            if (atlas.isLoaded()) return false;
+
+            const pending = atlas.pending.?; // checked by isLoaded above
+            const tex_id = try self.renderer.loadTextureFromMemory(pending.file_type, pending.bytes);
+            const id: u32 = if (@typeInfo(@TypeOf(tex_id)) == .@"enum")
+                @intFromEnum(tex_id)
+            else
+                tex_id;
+            const dims = self.queryTextureDims(tex_id);
+            try self.atlas_manager.markPendingLoaded(name, id, dims);
+            return true;
+        }
+
+        /// Whether an atlas's PNG has been decoded. Returns `false`
+        /// for unregistered atlases too — both states mean "you can't
+        /// use it yet". Used by loading scripts to decide which
+        /// atlases still need a `loadAtlasIfNeeded` call.
+        pub fn isAtlasLoaded(self: *Self, name: []const u8) bool {
+            const atlas = self.atlas_manager.getAtlas(name) orelse return false;
+            return atlas.isLoaded();
+        }
+
         /// Look up the actual pixel dimensions of a freshly-loaded
         /// texture, so the atlas loader can derive a scale against the
         /// JSON's logical `meta.size`. Returns null when the renderer
         /// doesn't expose a `getTextureInfo` accessor — the atlas
         /// loader then falls back to scale=1.0 (legacy behavior).
+        ///
+        /// Texture dims are clamped to `[0, max u32]` before the float
+        /// → int cast so a malformed renderer that returns negative or
+        /// NaN values can't trigger an `@intFromFloat` panic. Real
+        /// renderers always return positive integers, so this is a
+        /// belt-and-braces guard for buggy backend mocks.
         fn queryTextureDims(self: *Self, tex_id: anytype) ?atlas_mod.TextureManager.TextureDims {
             if (!@hasDecl(RenderImpl, "getTextureInfo")) return null;
             const info = self.renderer.getTextureInfo(tex_id) orelse return null;
             return .{
-                .width = @intFromFloat(info.width),
-                .height = @intFromFloat(info.height),
+                .width = clampToU32(info.width),
+                .height = clampToU32(info.height),
             };
+        }
+
+        fn clampToU32(v: f32) u32 {
+            if (!std.math.isFinite(v) or v <= 0) return 0;
+            // `@floatFromInt(maxInt(u32))` rounds *up* to 2^32 in f32
+            // because the f32 mantissa is only 24 bits, so comparing
+            // against it would let `@intFromFloat` see exactly 2^32 —
+            // one above the u32 range, triggering UB / safety panic.
+            // The largest f32 value strictly less than 2^32 is
+            // 4_294_967_040 (= 2^32 - 2^8). Clamp to that.
+            const max_safe: f32 = 4_294_967_040.0;
+            if (v >= max_safe) return std.math.maxInt(u32);
+            return @intFromFloat(v);
         }
 
         pub fn getTextureManager(self: *Self) *atlas_mod.TextureManager {
