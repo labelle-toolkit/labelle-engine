@@ -29,6 +29,50 @@ pub fn Mixin(comptime Game: type) type {
             self.registerScene(name, loader_fn, .{});
         }
 
+        /// Register a scene together with its declared asset manifest.
+        /// Manifest-aware overload emitted by the assembler for scenes with
+        /// an `"assets": [...]` block. Delegates to `registerSceneSimple`
+        /// so any future change to scene-entry construction only lives in
+        /// one place, then attaches the slice via `getPtr`.
+        ///
+        /// Lifetime: `assets` is stored by reference on the `SceneEntry`
+        /// and must outlive the `Game`. The assembler passes a file-scope
+        /// slice from `SceneAssetManifests.entries` in the generated
+        /// `main.zig`, which is program-lifetime. Runtime callers passing
+        /// a stack-allocated slice would leave `SceneEntry.assets`
+        /// dangling — prefer an allocator-owned or static slice.
+        pub fn registerSceneWithAssets(
+            self: *Game,
+            comptime name: []const u8,
+            comptime loader_fn: fn (*Game) anyerror!void,
+            assets: []const []const u8,
+        ) void {
+            self.registerSceneSimple(name, loader_fn);
+            if (self.scenes.getPtr(name)) |entry| {
+                entry.assets = assets;
+            }
+        }
+
+        /// Attach an asset manifest to a previously-registered scene.
+        /// Returns `error.SceneNotFound` if `name` was never registered.
+        /// Used by the assembler to thread `SceneAssetManifests.entries` into
+        /// `SceneEntry.assets` after the normal `registerSceneSimple` loop
+        /// (keeps the codegen diff to a single extra inline-for in the
+        /// generated `main.zig`). Scripts can then read
+        /// `game.scenes.get("main").?.assets` at runtime.
+        ///
+        /// Lifetime: `assets` is stored by reference and must outlive the
+        /// `Game`. See `registerSceneWithAssets` for the usual caller
+        /// pattern (file-scope slice from `SceneAssetManifests.entries`).
+        pub fn setSceneAssets(
+            self: *Game,
+            name: []const u8,
+            assets: []const []const u8,
+        ) error{SceneNotFound}!void {
+            const entry = self.scenes.getPtr(name) orelse return error.SceneNotFound;
+            entry.assets = assets;
+        }
+
         pub fn setScene(self: *Game, name: []const u8) !void {
             self.unloadCurrentScene();
 
