@@ -288,8 +288,13 @@ pub const AssetCatalog = struct {
     ///    pixels (confirmed: `loaders/image.zig` `upload` returns
     ///    before reaching its `allocator.free` on the error path).
     pub fn pump(self: *AssetCatalog) void {
-        var drained: u8 = 0;
-        while (drained < UPLOAD_BUDGET_PER_FRAME) : (drained += 1) {
+        // Counter bounds ACTUAL GPU uploads, not dequeued results. Cheap
+        // paths (zombie drops, decode errors, removed-entry cleanup) are
+        // nearly free and should be cleared in a single pump tick so a
+        // burst of them doesn't starve the valid uploads waiting behind
+        // them in the ring.
+        var uploads_done: u8 = 0;
+        while (uploads_done < UPLOAD_BUDGET_PER_FRAME) {
             const result = self.results.tryDequeue() orelse return;
 
             // (1) Entry was removed between enqueue and dequeue. No
@@ -325,14 +330,16 @@ pub const AssetCatalog = struct {
                 continue;
             }
 
-            // (4) Happy path. `err == null` implies `decoded` is
-            // populated (see worker.zig:runLoop). Upload hands the
-            // pixels to the backend, populates `entry.resource`, and
-            // frees the CPU buffer itself on success. On failure it
-            // leaves the CPU buffer alive — so we route the payload
-            // to `vtable.drop` before flipping to `.failed`, else the
-            // allocator-owned pixels would leak (testing.allocator
-            // catches this).
+            // (4) Happy path — count it against the upload budget only
+            // once we're actually about to touch the GPU. `err == null`
+            // implies `decoded` is populated (see worker.zig:runLoop).
+            // Upload hands the pixels to the backend, populates
+            // `entry.resource`, and frees the CPU buffer itself on
+            // success. On failure it leaves the CPU buffer alive — so
+            // we route the payload to `vtable.drop` before flipping to
+            // `.failed`, else the allocator-owned pixels would leak
+            // (testing.allocator catches this).
+            uploads_done += 1;
             const payload = result.decoded.?;
             result.vtable.upload(entry, payload, self.allocator) catch |err| {
                 result.vtable.drop(self.allocator, payload);
