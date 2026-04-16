@@ -60,4 +60,22 @@ pub fn build(b: *std.Build) void {
         });
         test_step.dependOn(&b.addRunArtifact(t).step);
     }
+
+    // In-source tests under `src/assets/` (catalog, worker, loader,
+    // loaders/*) cannot be dragged into a `test/*` binary through the
+    // cross-module `engine` import — Zig only discovers top-level
+    // `test` blocks in files that belong to the **same** module as
+    // the test binary's root. Rooting an extra test binary directly
+    // at `src/assets/mod.zig` gives those files a module of their
+    // own where `_ = @import("...")` chains actually cascade the
+    // test blocks into the binary. Added as part of #440 while the
+    // real image loader started writing its own in-source tests.
+    const assets_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/assets/mod.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(assets_tests).step);
 }

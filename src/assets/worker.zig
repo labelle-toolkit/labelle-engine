@@ -312,6 +312,11 @@ test "SpscRing preserves order across producer/consumer threads" {
 }
 
 test "AssetWorker decodes a stub request and publishes a result" {
+    const image_loader = @import("loaders/image.zig");
+    // Leave the image backend unset so the real loader surfaces its
+    // "not initialised" error instead of actually decoding bytes.
+    image_loader.clearBackend();
+
     var requests = RequestRing.init();
     var results = ResultRing.init();
 
@@ -319,7 +324,6 @@ test "AssetWorker decodes a stub request and publishes a result" {
     try worker.start();
     defer worker.stop();
 
-    const image_loader = @import("loaders/image.zig");
     try requests.tryEnqueue(.{
         .entry_name = "stub",
         .vtable = &image_loader.vtable,
@@ -341,7 +345,7 @@ test "AssetWorker decodes a stub request and publishes a result" {
 
     try testing.expectEqualStrings("stub", result.entry_name);
     try testing.expectEqual(@as(?DecodedPayload, null), result.decoded);
-    try testing.expectEqual(@as(?anyerror, error.NotImplemented), result.err);
+    try testing.expectEqual(@as(?anyerror, error.ImageBackendNotInitialized), result.err);
 }
 
 test "AssetWorker shuts down cleanly with a request still in flight" {

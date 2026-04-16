@@ -33,6 +33,8 @@ const worker_mod = @import("worker.zig");
 
 pub const LoaderKind = loader_mod.LoaderKind;
 pub const DecodedPayload = loader_mod.DecodedPayload;
+pub const UploadedResource = loader_mod.UploadedResource;
+pub const Texture = loader_mod.Texture;
 pub const AssetLoaderVTable = loader_mod.AssetLoaderVTable;
 pub const AssetState = loader_mod.AssetState;
 pub const AssetEntry = loader_mod.AssetEntry;
@@ -138,6 +140,7 @@ pub const AssetCatalog = struct {
             .raw_bytes = bytes,
             .file_type = file_type,
             .decoded = null,
+            .resource = null,
             .last_error = null,
         });
     }
@@ -289,7 +292,8 @@ test "register then acquire bumps refcount and enqueues work" {
     try testing.expectEqual(@as(u32, 1), entry.refcount);
     // First acquire moved the entry to `.queued` — the worker ring
     // has taken ownership of the request and will eventually publish
-    // an `error.NotImplemented` result on the stub loader.
+    // an `error.ImageBackendNotInitialized` result on the real image
+    // loader (no backend injected in the unit-test harness).
     try testing.expectEqual(AssetState.queued, entry.state);
     try testing.expectEqual(LoaderKind.image, entry.loader_kind);
     try testing.expectEqual(@as(?DecodedPayload, null), entry.decoded);
@@ -408,7 +412,13 @@ test "pump is a no-op until the worker lands (#442)" {
     try testing.expect(!catalog.isReady("background"));
 }
 
-test "acquire spawns worker which produces NotImplemented for stub loader" {
+test "acquire spawns worker which surfaces ImageBackendNotInitialized without a backend" {
+    // Make sure no previous test left a backend injected on this
+    // process-global slot — the assertions below rely on the loader
+    // returning the not-initialised error, not a mock success.
+    const image_loader_mod = @import("loaders/image.zig");
+    image_loader_mod.clearBackend();
+
     var catalog = AssetCatalog.init(testing.allocator);
     defer catalog.deinit();
 
@@ -431,7 +441,7 @@ test "acquire spawns worker which produces NotImplemented for stub loader" {
 
     try testing.expectEqualStrings("background", result.entry_name);
     try testing.expectEqual(@as(?DecodedPayload, null), result.decoded);
-    try testing.expectEqual(@as(?anyerror, error.NotImplemented), result.err);
+    try testing.expectEqual(@as(?anyerror, error.ImageBackendNotInitialized), result.err);
 }
 
 test "deinit with a pending acquire shuts down cleanly" {

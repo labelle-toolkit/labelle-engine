@@ -142,9 +142,19 @@ pub const AssetEntry = assets_mod.AssetEntry;
 pub const AssetState = assets_mod.AssetState;
 pub const LoaderKind = assets_mod.LoaderKind;
 pub const DecodedPayload = assets_mod.DecodedPayload;
+pub const UploadedResource = assets_mod.UploadedResource;
+pub const AssetTexture = assets_mod.Texture;
 pub const AssetLoaderVTable = assets_mod.AssetLoaderVTable;
 pub const AssetWorkRequest = assets_mod.WorkRequest;
 pub const AssetWorkResult = assets_mod.WorkResult;
+/// Runtime backend hook for the image asset loader. The assembler
+/// populates this at `Game.init` via `ImageLoader.setBackend(...)`
+/// with adapters that forward to labelle-gfx's `decodeImage` /
+/// `uploadTexture` / `unloadTexture`. See
+/// `src/assets/loaders/image.zig` for the full rationale.
+pub const ImageLoader = assets_mod.image_loader;
+pub const ImageBackend = assets_mod.image_loader.ImageBackend;
+pub const DecodedImage = assets_mod.image_loader.DecodedImage;
 
 // ── JSONC Scene Bridge ──
 pub const JsoncSceneBridge = @import("jsonc_scene_bridge.zig").JsoncSceneBridge;

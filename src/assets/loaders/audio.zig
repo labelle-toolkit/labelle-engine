@@ -23,9 +23,10 @@ fn decode(
     return error.NotImplemented;
 }
 
-fn upload(entry: *AssetEntry, decoded: DecodedPayload) anyerror!void {
+fn upload(entry: *AssetEntry, decoded: DecodedPayload, allocator: Allocator) anyerror!void {
     _ = entry;
     _ = decoded;
+    _ = allocator;
     return error.NotImplemented;
 }
 
