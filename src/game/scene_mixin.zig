@@ -30,29 +30,27 @@ pub fn Mixin(comptime Game: type) type {
         }
 
         /// Register a scene together with its declared asset manifest.
-        /// This is the manifest-aware overload emitted by the assembler for
-        /// scenes with an `"assets": [...]` block — it's equivalent to
-        /// `registerSceneSimple` followed by `setSceneAssets`, but avoids a
-        /// second map lookup. The slice must live at least as long as the
-        /// `Game` (the assembler passes a comptime slice from
-        /// `SceneAssetManifests.entries`, which is file-scope in the generated
-        /// `main.zig`, so this is always the case in practice).
+        /// Manifest-aware overload emitted by the assembler for scenes with
+        /// an `"assets": [...]` block. Delegates to `registerSceneSimple`
+        /// so any future change to scene-entry construction only lives in
+        /// one place, then attaches the slice via `getPtr`.
+        ///
+        /// Lifetime: `assets` is stored by reference on the `SceneEntry`
+        /// and must outlive the `Game`. The assembler passes a file-scope
+        /// slice from `SceneAssetManifests.entries` in the generated
+        /// `main.zig`, which is program-lifetime. Runtime callers passing
+        /// a stack-allocated slice would leave `SceneEntry.assets`
+        /// dangling — prefer an allocator-owned or static slice.
         pub fn registerSceneWithAssets(
             self: *Game,
             comptime name: []const u8,
             comptime loader_fn: fn (*Game) anyerror!void,
             assets: []const []const u8,
         ) void {
-            const wrapper = struct {
-                fn load(game: *Game) anyerror!void {
-                    return loader_fn(game);
-                }
-            }.load;
-            self.scenes.put(name, .{
-                .loader_fn = wrapper,
-                .hooks = .{},
-                .assets = assets,
-            }) catch {};
+            self.registerSceneSimple(name, loader_fn);
+            if (self.scenes.getPtr(name)) |entry| {
+                entry.assets = assets;
+            }
         }
 
         /// Attach an asset manifest to a previously-registered scene.
@@ -62,6 +60,10 @@ pub fn Mixin(comptime Game: type) type {
         /// (keeps the codegen diff to a single extra inline-for in the
         /// generated `main.zig`). Scripts can then read
         /// `game.scenes.get("main").?.assets` at runtime.
+        ///
+        /// Lifetime: `assets` is stored by reference and must outlive the
+        /// `Game`. See `registerSceneWithAssets` for the usual caller
+        /// pattern (file-scope slice from `SceneAssetManifests.entries`).
         pub fn setSceneAssets(
             self: *Game,
             name: []const u8,

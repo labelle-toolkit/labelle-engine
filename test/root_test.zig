@@ -207,9 +207,9 @@ test "Game: slash-named scene preserves original name for lookup" {
     }.load;
 
     // The assembler flattens "world/intro" to "world_intro" for the Zig ident
-    // in SceneAssetManifests, but the Entry.name field and the registerScene
-    // call both use the original slash-style name, so game.scenes.get lookup
-    // must use the slash form too.
+    // in SceneAssetManifests, but the registerScene call and the `game.scenes`
+    // map key both use the original slash-style name, so game.scenes.get
+    // lookup must use the slash form too.
     const intro_assets: []const []const u8 = &.{ "hero_idle", "city_bg" };
     game.registerSceneWithAssets("world/intro", emptyLoader, intro_assets);
 
