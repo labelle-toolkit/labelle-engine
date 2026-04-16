@@ -290,6 +290,17 @@ pub const AssetCatalog = struct {
         return entry.last_error;
     }
 
+    /// First `.failed` entry's error from `names`, or null when no
+    /// entry is `.failed`. Used by the scene-manifest gate (Phase 2
+    /// of RFC #437) to abort `setScene` with a meaningful error
+    /// rather than spinning forever in the not-ready branch.
+    pub fn anyFailed(self: *AssetCatalog, names: []const []const u8) ?anyerror {
+        for (names) |name| {
+            if (self.lastError(name)) |err| return err;
+        }
+        return null;
+    }
+
     /// Rewind a `.failed` entry back to `.registered` so the next
     /// `acquire` re-enqueues the decode. Without this, a transient
     /// decode/upload failure becomes permanent: `acquire` only
