@@ -232,7 +232,7 @@ pub fn loadAtlasIfNeeded(self: *Game, name: []const u8) !void {
         }
         self.assets.pump();           // CRITICAL: without this, deadlock —
                                       // isReady only flips inside pump
-        std.Thread.yield();           // std.Thread.yield returns void, no catch
+        std.Thread.yield() catch {};  // YieldError!void (Windows quirk), must catch
     }
 }
 ```
