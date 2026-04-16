@@ -1,6 +1,6 @@
 # RFC: Asset Streaming
 
-**Status:** Draft (revision 2 — addresses #437 review comments)
+**Status:** Draft (revision 3 — addresses second-round review on rev 2)
 **Author:** Alexandre
 **Date:** 2026-04-15
 
@@ -155,6 +155,9 @@ g.assets.isReady(name)    → bool         // entry.state == .ready
 g.assets.allReady(names)  → bool         // every name in slice is ready
 g.assets.progress(names)  → f32          // 0..1, ready_count / names.len
 g.assets.lastError(name)  → ?anyerror    // set on .failed
+g.assets.anyFailed(names) → bool         // any name in slice is .failed
+g.assets.resetFailed(name)               // .failed → .registered, clears last_error;
+                                         // lets a future acquire retry the load
 g.assets.pump()                          // called once per frame from game loop
 ```
 
@@ -169,18 +172,35 @@ pub fn pump(self: *AssetCatalog) void {
         const result = self.worker.tryRecvResult() orelse return;
         const entry = self.entries.getPtr(result.entry_id) orelse continue;
 
-        // Released while decoding → discard.
-        if (entry.refcount == 0) {
-            entry.loader.drop(self.allocator, result.decoded);
-            entry.state = .registered;
-            continue;
-        }
+        // ── 1. Decode failure first.
+        // Worker reported an error → result.decoded is undefined and
+        // MUST NOT be passed to drop/upload. Surface the error and
+        // move on. The entry's refcount stays where the caller left
+        // it — the caller releases on its own error path.
         if (result.err) |err| {
             entry.last_error = err;
             entry.state = .failed;
             continue;
         }
+
+        // ── 2. Released while decoding → discard.
+        // The entry is still alive (release only frees on .ready),
+        // but no one wants the result anymore. drop() owns + frees
+        // result.decoded. Reset to .registered so a future acquire
+        // can re-trigger the decode.
+        if (entry.refcount == 0) {
+            entry.loader.drop(self.allocator, result.decoded);
+            entry.state = .registered;
+            continue;
+        }
+
+        // ── 3. Upload (success path frees inside upload).
+        // Upload failure must also free result.decoded — upload's
+        // contract only says "frees on success", so we drop on the
+        // catch branch to avoid leaking the (potentially large) RGBA8
+        // buffer every time a GPU upload fails.
         entry.loader.upload(entry, result.decoded) catch |err| {
+            entry.loader.drop(self.allocator, result.decoded);
             entry.last_error = err;
             entry.state = .failed;
             continue;
@@ -196,12 +216,23 @@ The existing atlas-specific `RuntimeAtlas.pending` mechanism (engine #434) colla
 
 ```zig
 pub fn loadAtlasIfNeeded(self: *Game, name: []const u8) !void {
-    self.assets.acquire(name);
+    try self.assets.acquire(name);
+    // Release on every error path so a failed/retry cycle doesn't
+    // leak refcount. On success the caller eventually calls
+    // unloadAtlas (or scene release) which is the matching release.
+    errdefer self.assets.release(name);
+
     while (!self.assets.isReady(name)) {
-        if (self.assets.lastError(name)) |err| return err;
+        if (self.assets.lastError(name)) |err| {
+            // Reset .failed → .registered so the next acquire retries
+            // (transient failures shouldn't be permanent — see Open
+            // Questions §7).
+            self.assets.resetFailed(name);
+            return err;
+        }
         self.assets.pump();           // CRITICAL: without this, deadlock —
                                       // isReady only flips inside pump
-        std.Thread.yield() catch {};
+        std.Thread.yield();           // std.Thread.yield returns void, no catch
     }
 }
 ```
@@ -219,27 +250,48 @@ The engine's default handler implements:
 
 ```
 setScene(target):
-  # Acquire NEW first so shared assets keep refcount ≥ 1 across the
-  # swap and don't get freed-then-reloaded. Standard refcount idiom.
-  for asset in target.manifest.assets:
-    catalog.acquire(asset)
+  # Idempotent re-entry: if the previous setScene call already
+  # acquired this same target and parked us in the loading scene
+  # waiting on it, don't acquire a SECOND time. The pending_target
+  # field is cleared once the swap completes (or is replaced by a
+  # different target).
+  if pending_target != target:
+    # Acquire NEW first so shared assets keep refcount ≥ 1 across
+    # the swap and don't get freed-then-reloaded.
+    for asset in target.manifest.assets:
+      catalog.acquire(asset)
+    pending_target = target
 
-  # If anything is still decoding, swap to the loading scene; the
-  # loading scene's tick polls allReady() and re-enters setScene
-  # for the real target once everything resolves.
+  # Still decoding → park in the loading scene. The loading scene's
+  # tick re-enters setScene(target) every frame; the idempotency
+  # check above keeps the acquire from happening again.
+  #
+  # CRUCIAL: do NOT release the previous scene's assets here. If we
+  # did, then re-entered while still decoding, we'd lose the
+  # previous scene's refcounts permanently (the previous scene is
+  # already torn down by the first detour to loading_scene).
   if not catalog.allReady(target.manifest.assets):
-    setSceneAtomic(loading_scene)
+    if active_scene != loading_scene:
+      previous = active_scene
+      setSceneAtomic(loading_scene)
+      # Release the OUTGOING gameplay scene's assets exactly once,
+      # at the moment we leave it for the loading scene. Shared
+      # assets stayed alive because we acquired the target first.
+      for asset in previous.manifest.assets:
+        catalog.release(asset)
     return
 
+  # Target is ready → swap and clear the pending marker. No release
+  # call here — the previous gameplay scene's release already
+  # happened at the loading-scene detour above. The loading scene
+  # itself is eager-preloaded; its manifest is never released.
   setSceneAtomic(target)
-
-  # Only NOW release the previous scene's manifest. Shared assets
-  # keep refcount ≥ 1 across the entire transition.
-  for asset in previous.manifest.assets:
-    catalog.release(asset)
+  pending_target = null
 ```
 
 The "loading scene" is just a regular scene with its own (small, eager) manifest — see the example below. Eager loading means its manifest is preloaded at `Game.init` time, so swapping into it never blocks.
+
+**Failure case:** if any of `target.manifest.assets` ends in `.failed`, the loop above would spin forever. The `setScene` impl additionally checks `catalog.anyFailed(target.manifest.assets)` and aborts the transition (per the configurable failure policy, Open Questions §3) — this releases the target's acquired refcounts via `errdefer` to avoid a leak symmetrical to the sync-shim case.
 
 ### 4. Scene file — `assets:` block
 
@@ -325,3 +377,5 @@ Each phase ships as its own PR set across `labelle-gfx`, `labelle-engine`, `labe
 4. **Scene-as-asset.** Should scene `.jsonc` themselves go through the catalog? Symmetrically clean, but they're tiny and eager-load from `@embedFile` is fine. Punt unless a real need shows up.
 5. **`acquire` from non-main threads.** v1 makes the catalog single-threaded (acquire/release on main). Worker only touches its own queue. If scripts ever run on worker threads (they don't today), revisit.
 6. **SPSC ring buffer sizing.** Both queues are bounded. If `register()` is called more times than the ring can hold before `pump()` drains, we'd block on enqueue. Initial size 64 covers FP's 6 atlases × loading-screen burst with room to spare; revisit if a project hits the ceiling.
+7. **Retry policy for `.failed` assets.** A decode/upload failure leaves the entry in `.failed` so callers can surface the error. But if the cause was transient (out of GPU memory during a spike, transient driver hiccup), the entry would block all future loads of the same asset. v1 exposes a manual `resetFailed(name)` so the sync shim and scene loader can opt into automatic retry; v2 might auto-rewind on refcount-to-zero, mirroring the `.ready` unload path.
+8. **`acquire` enqueue overflow behaviour.** If the worker request ring is full (a burst that exceeds budget §6), `acquire` should return `error.QueueFull` rather than silently dropping the request. Callers handle the error explicitly: the sync shim retries after a `pump()`; the scene loader treats it like decode failure. Silently dropping was the bug that made an early prototype hang in `loadAtlasIfNeeded` — never let `acquire` succeed when the work didn't enqueue.
