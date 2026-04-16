@@ -121,9 +121,8 @@ pub const AssetCatalog = struct {
         //    (game teardown, test that forgot to balance acquires, …);
         //    hand those handles back to their backends so we don't leak
         //    GPU textures / audio devices / font atlases on exit.
-        var it = self.entries.iterator();
-        while (it.next()) |kv| {
-            const entry = kv.value_ptr;
+        var it = self.entries.valueIterator();
+        while (it.next()) |entry| {
             if (entry.state == .ready) {
                 entry.loader.free(entry);
                 entry.decoded = null;
@@ -229,14 +228,33 @@ pub const AssetCatalog = struct {
         entry.refcount -= 1;
         if (entry.refcount != 0) return;
 
-        if (entry.state == .ready) {
-            // Hand the GPU/audio/font handle back to the backend. The
-            // vtable contract in `loader.zig` says `free` clears
-            // `entry.resource` to null — see `loaders/image.zig`
-            // `free` for the canonical implementation.
-            entry.loader.free(entry);
-            entry.decoded = null;
-            entry.state = .registered;
+        switch (entry.state) {
+            .ready => {
+                // Hand the GPU/audio/font handle back to the backend.
+                // The vtable contract in `loader.zig` says `free`
+                // clears `entry.resource` to null — see
+                // `loaders/image.zig` `free` for the canonical impl.
+                entry.loader.free(entry);
+                entry.decoded = null;
+                entry.state = .registered;
+            },
+            .failed => {
+                // Rewind to `.registered` so a later `acquire` re-
+                // enqueues a fresh decode (transient errors — network
+                // race, backend hiccup, etc. — become retryable once
+                // nobody is holding the failed reference). Preserving
+                // `.failed` past refcount 0 would permanently brick
+                // the entry for no benefit: `last_error` is already
+                // gone from the caller's POV the moment they released.
+                // Clear `last_error` so the next acquire starts clean.
+                entry.last_error = null;
+                entry.state = .registered;
+            },
+            // `.registered`, `.queued`, `.decoding` have no GPU/CPU
+            // payload to free from the release path — pump handles the
+            // zombie-drop case for `.queued`/`.decoding` when it sees
+            // a refcount-zero entry come back from the worker.
+            else => {},
         }
     }
 
@@ -995,11 +1013,15 @@ test "release on .failed entry decrements refcount without calling free" {
     try testing.expectEqual(@as(u32, 1), entry.refcount);
 
     // `.failed` has no resource to free and pump already dropped the
-    // CPU payload. `release` is a pure refcount drop — the state is
-    // left at `.failed` so subsequent `lastError` calls keep working.
+    // CPU payload, so `release` never calls the vtable's `free`. On
+    // refcount-to-zero we rewind to `.registered` (clearing
+    // `last_error`) so a later `acquire` can retry a transient
+    // failure cleanly — leaving the entry stuck at `.failed` forever
+    // would permanently brick it for no benefit.
     catalog.release("broken");
     try testing.expectEqual(@as(u32, 0), entry.refcount);
-    try testing.expectEqual(AssetState.failed, entry.state);
+    try testing.expectEqual(AssetState.registered, entry.state);
+    try testing.expectEqual(@as(?anyerror, null), entry.last_error);
     try testing.expectEqual(@as(u32, 0), PumpMock.unload_calls);
 }
 
