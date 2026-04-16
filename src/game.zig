@@ -300,9 +300,6 @@ pub fn GameConfig(
             self.scenes.deinit();
             self.jsonc_scenes.deinit();
             self.atlas_manager.deinit();
-            // AssetCatalog last — joining the worker happens inside
-            // deinit and must run while the allocator is still alive.
-            self.assets.deinit();
         }
 
         pub fn setHooks(self: *Self, receiver: Hooks) void {
@@ -1195,7 +1192,21 @@ pub fn GameConfig(
             // follow-up should either make `acquire` fail on
             // QueueFull or add retry logic to `pump()`.
             while (!self.assets.isReady(name)) {
-                if (self.assets.lastError(name)) |err| return err;
+                if (self.assets.lastError(name)) |err| {
+                    // Rewind .failed → .registered so the next
+                    // loadAtlasIfNeeded retries the decode instead of
+                    // returning the stale error forever. Without this,
+                    // any decode/upload failure becomes permanent: the
+                    // errdefer above drops refcount to 0, but state
+                    // stays .failed, and `acquire` only re-enqueues
+                    // from .registered. So the retry would hit the
+                    // already-set lastError and immediately return
+                    // the old error without re-triggering work — a
+                    // regression from the legacy direct-decode path
+                    // which simply re-attempted the call.
+                    self.assets.resetFailed(name);
+                    return err;
+                }
                 self.assets.pump();
                 std.Thread.yield() catch {};
             }

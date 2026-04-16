@@ -290,6 +290,25 @@ pub const AssetCatalog = struct {
         return entry.last_error;
     }
 
+    /// Rewind a `.failed` entry back to `.registered` so the next
+    /// `acquire` re-enqueues the decode. Without this, a transient
+    /// decode/upload failure becomes permanent: `acquire` only
+    /// enqueues from `.registered`, so a retry would re-bump the
+    /// refcount and immediately surface the stale `last_error` from
+    /// the failed attempt without re-triggering work.
+    ///
+    /// Caller-driven (not automatic) so the failure is observable
+    /// via `lastError` first — letting the caller decide whether to
+    /// retry or surface the error to the user. No-op for entries
+    /// that aren't `.failed`. Clears `last_error` so a subsequent
+    /// `lastError` call returns null.
+    pub fn resetFailed(self: *AssetCatalog, name: []const u8) void {
+        const entry = self.entries.getPtr(name) orelse return;
+        if (entry.state != .failed) return;
+        entry.state = .registered;
+        entry.last_error = null;
+    }
+
     /// Drains worker results and finalises uploads on the main thread.
     /// Caps itself at `UPLOAD_BUDGET_PER_FRAME` so a burst of ready
     /// decodes cannot stall a frame; the next `pump()` picks up where
