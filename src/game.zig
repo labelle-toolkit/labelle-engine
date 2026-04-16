@@ -110,6 +110,13 @@ pub fn GameConfig(
         pub const SceneEntry = struct {
             loader_fn: *const fn (*Self) anyerror!void,
             hooks: SceneHooks,
+            /// Declared asset manifest for this scene — the slice of asset names
+            /// the scene needs loaded before it runs. Populated by the assembler
+            /// from each scene's `"assets": [...]` block (see Asset Streaming
+            /// RFC #437 / issue #445). Defaults to an empty slice for scenes
+            /// registered via the legacy (non-manifest) path; scripts can then
+            /// do `game.scenes.get("main").?.assets` without a null check.
+            assets: []const []const u8 = &.{},
         };
 
         /// Runtime JSONC scene path info.
@@ -634,6 +641,8 @@ pub fn GameConfig(
         // ── Scene Management (mixin) ─────────────────────────────
         pub const registerScene = SceneMixin.registerScene;
         pub const registerSceneSimple = SceneMixin.registerSceneSimple;
+        pub const registerSceneWithAssets = SceneMixin.registerSceneWithAssets;
+        pub const setSceneAssets = SceneMixin.setSceneAssets;
         pub const setScene = SceneMixin.setScene;
         pub const setSceneAtomic = SceneMixin.setSceneAtomic;
         pub const queueSceneChange = SceneMixin.queueSceneChange;

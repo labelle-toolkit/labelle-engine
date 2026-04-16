@@ -29,6 +29,48 @@ pub fn Mixin(comptime Game: type) type {
             self.registerScene(name, loader_fn, .{});
         }
 
+        /// Register a scene together with its declared asset manifest.
+        /// This is the manifest-aware overload emitted by the assembler for
+        /// scenes with an `"assets": [...]` block — it's equivalent to
+        /// `registerSceneSimple` followed by `setSceneAssets`, but avoids a
+        /// second map lookup. The slice must live at least as long as the
+        /// `Game` (the assembler passes a comptime slice from
+        /// `SceneAssetManifests.entries`, which is file-scope in the generated
+        /// `main.zig`, so this is always the case in practice).
+        pub fn registerSceneWithAssets(
+            self: *Game,
+            comptime name: []const u8,
+            comptime loader_fn: fn (*Game) anyerror!void,
+            assets: []const []const u8,
+        ) void {
+            const wrapper = struct {
+                fn load(game: *Game) anyerror!void {
+                    return loader_fn(game);
+                }
+            }.load;
+            self.scenes.put(name, .{
+                .loader_fn = wrapper,
+                .hooks = .{},
+                .assets = assets,
+            }) catch {};
+        }
+
+        /// Attach an asset manifest to a previously-registered scene.
+        /// Returns `error.SceneNotFound` if `name` was never registered.
+        /// Used by the assembler to thread `SceneAssetManifests.entries` into
+        /// `SceneEntry.assets` after the normal `registerSceneSimple` loop
+        /// (keeps the codegen diff to a single extra inline-for in the
+        /// generated `main.zig`). Scripts can then read
+        /// `game.scenes.get("main").?.assets` at runtime.
+        pub fn setSceneAssets(
+            self: *Game,
+            name: []const u8,
+            assets: []const []const u8,
+        ) error{SceneNotFound}!void {
+            const entry = self.scenes.getPtr(name) orelse return error.SceneNotFound;
+            entry.assets = assets;
+        }
+
         pub fn setScene(self: *Game, name: []const u8) !void {
             self.unloadCurrentScene();
 

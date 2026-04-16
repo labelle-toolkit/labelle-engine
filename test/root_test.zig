@@ -142,6 +142,83 @@ test "Game: scene management" {
     try testing.expectEqual(1, game.entityCount());
 }
 
+test "Game: SceneEntry.assets defaults to empty for legacy registration" {
+    var game = Game.init(testing.allocator);
+    defer game.deinit();
+
+    const emptyLoader = struct {
+        fn load(_: *Game) anyerror!void {}
+    }.load;
+
+    game.registerSceneSimple("legacy", emptyLoader);
+
+    const entry = game.scenes.get("legacy").?;
+    try testing.expectEqual(@as(usize, 0), entry.assets.len);
+}
+
+test "Game: registerSceneWithAssets attaches manifest slice" {
+    var game = Game.init(testing.allocator);
+    defer game.deinit();
+
+    const emptyLoader = struct {
+        fn load(_: *Game) anyerror!void {}
+    }.load;
+
+    const menu_assets: []const []const u8 = &.{ "background", "ship" };
+    game.registerSceneWithAssets("main", emptyLoader, menu_assets);
+
+    const entry = game.scenes.get("main").?;
+    try testing.expectEqual(@as(usize, 2), entry.assets.len);
+    try testing.expectEqualStrings("background", entry.assets[0]);
+    try testing.expectEqualStrings("ship", entry.assets[1]);
+}
+
+test "Game: setSceneAssets threads manifest into existing SceneEntry" {
+    var game = Game.init(testing.allocator);
+    defer game.deinit();
+
+    const emptyLoader = struct {
+        fn load(_: *Game) anyerror!void {}
+    }.load;
+
+    game.registerSceneSimple("menu", emptyLoader);
+
+    // Before — legacy default.
+    try testing.expectEqual(@as(usize, 0), game.scenes.get("menu").?.assets.len);
+
+    const menu_assets: []const []const u8 = &.{ "background", "ship" };
+    try game.setSceneAssets("menu", menu_assets);
+
+    const entry = game.scenes.get("menu").?;
+    try testing.expectEqual(@as(usize, 2), entry.assets.len);
+    try testing.expectEqualStrings("background", entry.assets[0]);
+    try testing.expectEqualStrings("ship", entry.assets[1]);
+
+    // Unknown scene returns an error instead of silently dropping.
+    try testing.expectError(error.SceneNotFound, game.setSceneAssets("nope", menu_assets));
+}
+
+test "Game: slash-named scene preserves original name for lookup" {
+    var game = Game.init(testing.allocator);
+    defer game.deinit();
+
+    const emptyLoader = struct {
+        fn load(_: *Game) anyerror!void {}
+    }.load;
+
+    // The assembler flattens "world/intro" to "world_intro" for the Zig ident
+    // in SceneAssetManifests, but the Entry.name field and the registerScene
+    // call both use the original slash-style name, so game.scenes.get lookup
+    // must use the slash form too.
+    const intro_assets: []const []const u8 = &.{ "hero_idle", "city_bg" };
+    game.registerSceneWithAssets("world/intro", emptyLoader, intro_assets);
+
+    const entry = game.scenes.get("world/intro").?;
+    try testing.expectEqual(@as(usize, 2), entry.assets.len);
+    try testing.expectEqualStrings("hero_idle", entry.assets[0]);
+    try testing.expectEqualStrings("city_bg", entry.assets[1]);
+}
+
 test "Game: hierarchy parent/child" {
     var game = Game.init(testing.allocator);
     defer game.deinit();
