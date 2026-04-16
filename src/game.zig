@@ -256,15 +256,18 @@ pub fn GameConfig(
 
         pub fn deinit(self: *Self) void {
             self.emitHook(.{ .game_deinit = {} });
-            // Shut down the asset catalog FIRST: its worker thread
-            // holds a borrowed reference to the game allocator via
-            // the decoded CPU payloads on the result ring. Joining the
-            // worker and draining the ring here guarantees no
-            // background allocation-frees race with the rest of
-            // deinit, and no in-flight payloads outlive the allocator.
-            self.assets.deinit();
+            // Tear down the active scene FIRST. Scene teardown runs
+            // user-provided `deinit_fn`s that may call `game.assets.*`
+            // (release on unload is the natural pattern for the very
+            // API this PR is exposing), so the catalog MUST still be
+            // alive through it. Worker-thread safety is handled inside
+            // `AssetCatalog.deinit` — it stops the worker and drains
+            // the result ring before touching the hashmap, and its
+            // allocator is the Game's allocator which stays live
+            // through this whole call.
             if (has_events) self.event_buffer.deinit(self.allocator);
             self.teardownActiveScene();
+            self.assets.deinit();
             if (self.current_scene_name) |name| {
                 self.allocator.free(name);
             }
