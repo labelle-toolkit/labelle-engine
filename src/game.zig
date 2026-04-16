@@ -11,6 +11,7 @@ const ParentComponent = core.ParentComponent;
 const ChildrenComponent = core.ChildrenComponent;
 
 const atlas_mod = @import("atlas.zig");
+const assets_mod = @import("assets/mod.zig");
 const game_log_mod = @import("game_log.zig");
 
 const hierarchy = @import("game/hierarchy.zig");
@@ -162,6 +163,18 @@ pub fn GameConfig(
         worlds: std.StringHashMap(*World),
         active_world_name: ?[]const u8 = null,
         atlas_manager: atlas_mod.TextureManager,
+        /// Streaming asset catalog — register + refcounted acquire/release
+        /// for atlases, audio, fonts, etc. Worker thread is spawned lazily
+        /// on the first `acquire` (see `assets/catalog.zig`), so wiring
+        /// this eagerly in `Game.init` is near-free for games that never
+        /// stream anything. Scripts call `game.assets.acquire(...)`,
+        /// `game.assets.progress(...)`, etc. directly.
+        ///
+        /// `pump()` is the caller's responsibility for now: the engine
+        /// tick does NOT call it automatically. Automatic per-frame
+        /// pumping is deferred to the scene-hooks ticket (#444) so the
+        /// design can be settled alongside scene-manifest auto-acquire.
+        assets: assets_mod.AssetCatalog,
         hooks: HooksField = if (has_hooks) null else {},
         event_buffer: EventBuffer = if (has_events) .{} else {},
 
@@ -234,6 +247,7 @@ pub fn GameConfig(
                 .renderer = &world.renderer,
                 .worlds = std.StringHashMap(*World).init(allocator),
                 .atlas_manager = atlas_mod.TextureManager.init(allocator),
+                .assets = assets_mod.AssetCatalog.init(allocator),
                 .scenes = std.StringHashMap(SceneEntry).init(allocator),
                 .jsonc_scenes = std.StringHashMap(JsoncSceneInfo).init(allocator),
                 .gizmo_state = gizmo_draws_mod.GizmoState(Entity).init(allocator),
@@ -242,8 +256,18 @@ pub fn GameConfig(
 
         pub fn deinit(self: *Self) void {
             self.emitHook(.{ .game_deinit = {} });
+            // Tear down the active scene FIRST. Scene teardown runs
+            // user-provided `deinit_fn`s that may call `game.assets.*`
+            // (release on unload is the natural pattern for the very
+            // API this PR is exposing), so the catalog MUST still be
+            // alive through it. Worker-thread safety is handled inside
+            // `AssetCatalog.deinit` — it stops the worker and drains
+            // the result ring before touching the hashmap, and its
+            // allocator is the Game's allocator which stays live
+            // through this whole call.
             if (has_events) self.event_buffer.deinit(self.allocator);
             self.teardownActiveScene();
+            self.assets.deinit();
             if (self.current_scene_name) |name| {
                 self.allocator.free(name);
             }

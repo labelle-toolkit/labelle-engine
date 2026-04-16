@@ -132,11 +132,12 @@ pub const RuntimeAtlas = atlas_mod.RuntimeAtlas;
 pub const TextureManager = atlas_mod.TextureManager;
 pub const SpriteCache = atlas_mod.SpriteCache;
 
-// ── Assets (Asset Streaming RFC, Phase 1 — #438) ──
-// AssetCatalog is intentionally NOT yet wired into Game state — that
-// coupling lands in ticket #443's legacy shim. For now the module
-// just needs to compile cleanly and be importable so subsequent
-// tickets (#439–#446) can build on it.
+// ── Assets (Asset Streaming RFC — #437) ──
+// `AssetCatalog` is reachable from games both as this module-level
+// alias and — the user-facing form the RFC is written against — as
+// `game.assets` (wired into `Game` in #454). Scripts should prefer
+// the `game.assets.*` path; the module alias is still useful for
+// unit tests and assembler-generated init code.
 pub const AssetCatalog = assets_mod.AssetCatalog;
 pub const AssetEntry = assets_mod.AssetEntry;
 pub const AssetState = assets_mod.AssetState;
