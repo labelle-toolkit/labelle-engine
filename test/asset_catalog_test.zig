@@ -151,15 +151,15 @@ test "image loader: catalog → worker → upload → free end to end" {
     try testing.expect(entry.resource.?.image >= 100);
     try testing.expectEqual(@as(u32, 1), IntegrationMock.upload_calls);
 
-    // Release → emulate pump()'s eventual free hook dispatch.
+    // Release drops refcount to zero on a `.ready` entry, so the
+    // catalog dispatches `vtable.free` (#446): the backend unload
+    // fires, `entry.resource` is cleared, state rewinds to
+    // `.registered`.
     catalog.release("ship");
     try testing.expectEqual(@as(u32, 0), entry.refcount);
-    // The catalog's refcount-zero-on-ready path still defers the
-    // `loader.free` call to #446; invoke it manually here so the
-    // mock backend can record the unload.
-    result.vtable.free(entry);
     try testing.expectEqual(@as(u32, 1), IntegrationMock.unload_calls);
     try testing.expectEqual(@as(?engine.UploadedResource, null), entry.resource);
+    try testing.expectEqual(engine.AssetState.registered, entry.state);
 }
 
 test "image loader: catalog discard path frees pixels when refcount hits zero before upload" {
