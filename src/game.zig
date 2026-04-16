@@ -193,6 +193,19 @@ pub fn GameConfig(
         pending_scene_change: ?[]const u8 = null,
         pending_scene_atomic: bool = false,
 
+        /// Phase 2 of the Asset Streaming RFC (#437). Tracks the
+        /// scene name we have already called `assets.acquire()` for
+        /// from inside `setScene` / `setSceneAtomic`. The transition
+        /// is poll-driven: if the manifest is not yet `allReady`,
+        /// `setScene` returns early and the script keeps calling it
+        /// every frame. `pending_scene_assets` is the idempotency
+        /// guard — without it we would re-acquire on every frame
+        /// and the refcount would never come back to zero.
+        ///
+        /// Cleared after the swap completes (success path) or after
+        /// an explicit abort (`scene_assets_release_pending`).
+        pending_scene_assets: ?[]const u8 = null,
+
         // Active scene (type-erased) — managed by sceneLoaderFn / setActiveScene
         active_scene_ptr: ?*anyopaque = null,
         active_scene_update_fn: ?*const fn (*anyopaque, f32) void = null,
@@ -280,6 +293,9 @@ pub fn GameConfig(
                 self.allocator.free(name);
             }
             if (self.pending_scene_change) |name| {
+                self.allocator.free(name);
+            }
+            if (self.pending_scene_assets) |name| {
                 self.allocator.free(name);
             }
             // Clean up inactive worlds
