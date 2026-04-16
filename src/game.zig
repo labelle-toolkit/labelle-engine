@@ -1158,6 +1158,15 @@ pub fn GameConfig(
             // entry enqueues the decode; subsequent acquires just pin
             // the refcount so the zombie-drop path in `pump()` can't
             // rewind us while we are waiting for the upload to land.
+            //
+            // `errdefer release` guarantees the shim returns the
+            // refcount on every failure path (lastError, missing
+            // entry, wrong asset kind, markPendingLoaded error, …).
+            // Without it, a failed load leaks a phantom refcount that
+            // keeps the entry acquired forever — and since `acquire`
+            // only re-enqueues on the 0→1 transition, a retry after
+            // failure would just bump the leak without re-triggering
+            // a decode.
             _ = try self.assets.acquire(name);
             // Mirror of the acquire above. Runs on any error path so
             // the catalog refcount stays consistent. On the happy path
@@ -1175,6 +1184,16 @@ pub fn GameConfig(
             // UX change from the legacy path that called
             // `renderer.loadTextureFromMemory` directly on the main
             // thread.
+            //
+            // Known limitation (pre-existing from #450's acquire
+            // design): if the request ring was full when `acquire`
+            // fired, the work request is dropped, state stays
+            // `.registered`, refcount is bumped, and neither `pump()`
+            // nor any other layer re-enqueues it. This loop would
+            // then spin forever. Not reachable on current workloads
+            // (64-slot ring vs single-digit asset counts), but a
+            // follow-up should either make `acquire` fail on
+            // QueueFull or add retry logic to `pump()`.
             while (!self.assets.isReady(name)) {
                 if (self.assets.lastError(name)) |err| return err;
                 self.assets.pump();
