@@ -454,6 +454,7 @@ pub fn GameConfig(
                     self.destroyEntity(child);
                 }
             }
+            self.untrackSceneEntity(entity);
             self.active_world.sprite_cache.invalidate(@intCast(entity));
             self.renderer.untrackEntity(entity);
             self.ecs_backend.destroyEntity(entity);
@@ -462,6 +463,7 @@ pub fn GameConfig(
         }
 
         pub fn destroyEntityOnly(self: *Self, entity: Entity) void {
+            self.untrackSceneEntity(entity);
             self.active_world.sprite_cache.invalidate(@intCast(entity));
             self.renderer.untrackEntity(entity);
             self.ecs_backend.destroyEntity(entity);
@@ -741,11 +743,13 @@ pub fn GameConfig(
             }
             // Destroy every entity the outgoing scene's loader created.
             // `destroyEntityOnly` skips the children-recursion so a parent
-            // destroy doesn't double-free an already-listed child.
-            for (self.scene_entities.items) |entity| {
+            // destroy doesn't double-free an already-listed child, and it
+            // calls `untrackSceneEntity` which swap-removes from this same
+            // list — so we pop from the end instead of iterating by index
+            // (which would skip entries).
+            while (self.scene_entities.pop()) |entity| {
                 self.destroyEntityOnly(entity);
             }
-            self.scene_entities.clearRetainingCapacity();
 
             // Scene deinit destroys non-persistent entities (which untracks them
             // from the renderer). Persistent entities remain in ECS + renderer.
@@ -759,6 +763,23 @@ pub fn GameConfig(
         /// just lose the auto-cleanup for the un-tracked entity.
         pub fn trackSceneEntity(self: *Self, entity: Entity) void {
             self.scene_entities.append(self.allocator, entity) catch {};
+        }
+
+        /// Remove an entity from the scene-tracking list. Called by
+        /// `destroyEntity`/`destroyEntityOnly` so (1) a scene's cleanup
+        /// loop never double-destroys a tracked-then-manually-destroyed
+        /// entity and (2) the list doesn't grow unboundedly across a
+        /// scene that churns through short-lived entities. O(N) scan +
+        /// swap-remove — fine for scenes with hundreds of entities;
+        /// revisit if a project pushes tens of thousands.
+        fn untrackSceneEntity(self: *Self, entity: Entity) void {
+            var i: usize = 0;
+            while (i < self.scene_entities.items.len) : (i += 1) {
+                if (self.scene_entities.items[i] == entity) {
+                    _ = self.scene_entities.swapRemove(i);
+                    return;
+                }
+            }
         }
 
         /// Store a type-erased active scene. Called by sceneLoaderFn to hand

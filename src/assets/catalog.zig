@@ -55,6 +55,12 @@ pub const UPLOAD_BUDGET_PER_FRAME: u8 = 4;
 /// main + render threads); override by changing this constant.
 pub const NUM_WORKERS: u8 = 3;
 
+comptime {
+    // `acquire` and `pump` both use `% NUM_WORKERS` — a zero here
+    // would trap at runtime. Guard at compile time instead.
+    if (NUM_WORKERS == 0) @compileError("NUM_WORKERS must be >= 1");
+}
+
 pub const AssetCatalog = struct {
     allocator: Allocator,
     entries: std.StringHashMap(AssetEntry),
@@ -71,6 +77,11 @@ pub const AssetCatalog = struct {
     /// NUM_WORKERS to pick the target request ring so decode load is
     /// spread across cores.
     dispatch_counter: u32,
+    /// Rotation cursor for `pump`'s result-ring scan. Persists across
+    /// frames so fairness isn't tied to `acquire` cadence — if several
+    /// frames pass without new work, the next `pump` still starts
+    /// where the last one left off.
+    pump_cursor: u8,
 
     /// Builds the catalog. The worker thread is spawned lazily on
     /// the first `acquire` — this keeps `init`'s signature infallible
@@ -95,6 +106,7 @@ pub const AssetCatalog = struct {
             .workers = undefined,
             .workers_started = false,
             .dispatch_counter = 0,
+            .pump_cursor = 0,
         };
     }
 
@@ -400,15 +412,17 @@ pub const AssetCatalog = struct {
         // them in the ring.
         var uploads_done: u8 = 0;
         // Rotate through the result rings so a burst from one worker
-        // doesn't starve the others.
-        var ring_start: usize = self.dispatch_counter % NUM_WORKERS;
+        // doesn't starve the others. Uses a dedicated `pump_cursor`
+        // that persists across frames — decoupled from acquire's
+        // `dispatch_counter`, which may sit idle for many frames after
+        // the initial scene load.
         while (uploads_done < UPLOAD_BUDGET_PER_FRAME) {
             const result = blk: {
-                var tried: usize = 0;
+                var tried: u8 = 0;
                 while (tried < NUM_WORKERS) : (tried += 1) {
-                    const idx = (ring_start + tried) % NUM_WORKERS;
+                    const idx: u8 = @intCast((@as(usize, self.pump_cursor) + tried) % NUM_WORKERS);
                     if (self.results[idx].tryDequeue()) |r| {
-                        ring_start = (idx + 1) % NUM_WORKERS;
+                        self.pump_cursor = @intCast((@as(usize, idx) + 1) % NUM_WORKERS);
                         break :blk r;
                     }
                 }
