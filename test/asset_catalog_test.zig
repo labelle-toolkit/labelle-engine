@@ -121,8 +121,10 @@ test "image loader: catalog → worker → upload → free end to end" {
     const deadline_ns: u64 = 200 * std.time.ns_per_ms;
     var waited_ns: u64 = 0;
     const step_ns: u64 = 1 * std.time.ns_per_ms;
-    const result = while (waited_ns < deadline_ns) {
-        if (catalog.results.tryDequeue()) |r| break r;
+    const result = outer: while (waited_ns < deadline_ns) {
+        for (&catalog.results) |*ring| {
+            if (ring.tryDequeue()) |r| break :outer r;
+        }
         std.Thread.sleep(step_ns);
         waited_ns += step_ns;
     } else {
