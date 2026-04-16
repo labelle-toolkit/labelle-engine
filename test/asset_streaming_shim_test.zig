@@ -321,6 +321,32 @@ test "shim: deadlock regression — decode error surfaces within 200ms, no hang"
     try testing.expect(!game.isAtlasLoaded("dead"));
 }
 
+test "shim: acquire refcount is released when decode fails" {
+    // Regression for missing `errdefer release` in `loadAtlasIfNeededImpl`.
+    // Before the fix, a decode failure left the catalog refcount at 1
+    // indefinitely: the atlas stayed "acquired" even though it would
+    // never load. The test verifies the refcount is back to 0 after the
+    // error so the catalog can be torn down cleanly (testing.allocator
+    // catches any leak from a still-pinned entry).
+
+    Mock.reset();
+    Mock.decode_fails = true;
+    engine.ImageLoader.setBackend(Mock.backend);
+    defer engine.ImageLoader.clearBackend();
+
+    var game = TestGame.init(testing.allocator);
+    defer game.deinit();
+
+    try game.registerAtlasFromMemory("err_release", tiny_atlas_json, fake_png, file_type);
+    try testing.expectError(error.MockDecodeFailure, game.loadAtlasIfNeeded("err_release"));
+
+    // After the error the catalog entry must not be pinned: refcount
+    // should be back at 0. Accessing `.entries` directly is
+    // intentional — there is no higher-level API for this check.
+    const entry = game.assets.entries.get("err_release").?;
+    try testing.expectEqual(@as(u32, 0), entry.refcount);
+}
+
 test "shim: double register through the shim is tolerated" {
     // The assembler emits `engine.AssetCatalog.register(...)` from a
     // scene's asset manifest at init time; later the same asset is

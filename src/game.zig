@@ -1159,6 +1159,15 @@ pub fn GameConfig(
             // the refcount so the zombie-drop path in `pump()` can't
             // rewind us while we are waiting for the upload to land.
             _ = try self.assets.acquire(name);
+            // Mirror of the acquire above. Runs on any error path so
+            // the catalog refcount stays consistent. On the happy path
+            // — when `markPendingLoaded` succeeds and we `return true`
+            // — the defer does NOT fire, intentionally leaving the
+            // refcount at 1 to keep the loaded entry pinned in the
+            // catalog (prevents the zombie-drop path from rewinding
+            // the state back to `.registered` if Phase 2 ever calls
+            // `release` for an unrelated scene transition).
+            errdefer self.assets.release(name);
 
             // Busy-pump until the decode + upload complete OR the
             // catalog surfaces an error via `lastError`. Same-thread
