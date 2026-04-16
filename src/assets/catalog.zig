@@ -116,10 +116,20 @@ pub const AssetCatalog = struct {
             }
         }
 
-        // TODO(#446): iterate and call entry.loader.free for any entry
-        // that is still `.ready` so GPU/audio/font handles go back to
-        // their backends. Current placeholder loaders have no-op free,
-        // so this is safe until real loaders arrive.
+        // 3. Release any backend resources that are still live. Anything
+        //    at `.ready` at shutdown skipped the normal `release` path
+        //    (game teardown, test that forgot to balance acquires, …);
+        //    hand those handles back to their backends so we don't leak
+        //    GPU textures / audio devices / font atlases on exit.
+        var it = self.entries.iterator();
+        while (it.next()) |kv| {
+            const entry = kv.value_ptr;
+            if (entry.state == .ready) {
+                entry.loader.free(entry);
+                entry.decoded = null;
+                entry.state = .registered;
+            }
+        }
         self.entries.deinit();
     }
 
@@ -202,9 +212,14 @@ pub const AssetCatalog = struct {
     }
 
     /// Drops the refcount. When it hits zero on a `.ready` entry, the
-    /// CPU-side decoded payload is cleared and the entry is moved
-    /// back to `.registered`. The matching GPU/audio/font free via
-    /// `entry.loader.free` is wired in ticket #446.
+    /// backend resource is released via `entry.loader.free` (GPU
+    /// texture, audio device, font atlas, …), the CPU-side decoded
+    /// payload slot is cleared, and the entry is moved back to
+    /// `.registered` so a future `acquire` can re-enqueue a fresh
+    /// decode. Non-`.ready` states are left alone — the worker / pump
+    /// pipeline owns their cleanup (zombie drops in `pump`, CPU buffer
+    /// already gone for `.failed`, no resource allocated yet for
+    /// `.queued` / `.decoding`).
     ///
     /// Releasing an unknown or already-zero entry is a no-op — the
     /// catalog never panics on a stale handle.
@@ -215,9 +230,11 @@ pub const AssetCatalog = struct {
         if (entry.refcount != 0) return;
 
         if (entry.state == .ready) {
-            // TODO(#446): entry.loader.free(entry); to release GPU /
-            // audio / font handle. For now we just drop the CPU-side
-            // payload reference and rewind the state.
+            // Hand the GPU/audio/font handle back to the backend. The
+            // vtable contract in `loader.zig` says `free` clears
+            // `entry.resource` to null — see `loaders/image.zig`
+            // `free` for the canonical implementation.
+            entry.loader.free(entry);
             entry.decoded = null;
             entry.state = .registered;
         }
@@ -667,11 +684,15 @@ test "pump: happy path transitions to .ready with resource populated" {
     // Catalog must report ready via the same query sites the scene
     // hooks (#444) will use.
     try testing.expect(catalog.isReady("ship"));
-    // Manually free the GPU handle so the mock's unload counter is
-    // symmetric with the upload counter — `release` does not yet
-    // trigger `vtable.free` (that lands in #446).
-    entry.loader.free(entry);
+    // `release` on a `.ready` entry triggers `vtable.free` (#446),
+    // which hands the texture back to the backend and clears
+    // `entry.resource`. State rewinds to `.registered` so a later
+    // `acquire` re-enqueues a fresh decode.
+    catalog.release("ship");
     try testing.expectEqual(@as(u32, 1), PumpMock.unload_calls);
+    try testing.expectEqual(@as(?UploadedResource, null), entry.resource);
+    try testing.expectEqual(AssetState.registered, entry.state);
+    try testing.expectEqual(@as(u32, 0), entry.refcount);
 }
 
 test "pump: zombie drop — release before upload rewinds to .registered and frees pixels" {
@@ -807,11 +828,13 @@ test "pump: UPLOAD_BUDGET_PER_FRAME caps finalised uploads per call" {
     }
     try testing.expectEqual(@as(u32, total), ready_final);
 
-    // Manually release GPU handles so the mock's unload counter balances.
+    // Release every entry through the catalog so the mock's unload
+    // counter balances the upload counter — `release` on a `.ready`
+    // entry now fires `vtable.free` per #446.
     for (names) |n| {
-        const entry = catalog.entries.getPtr(n).?;
-        entry.loader.free(entry);
+        catalog.release(n);
     }
+    try testing.expectEqual(@as(u32, total), PumpMock.unload_calls);
 }
 
 test "pump: empty result ring is a no-op even with an active worker" {
@@ -835,4 +858,193 @@ test "pump: empty result ring is a no-op even with an active worker" {
     // Either the worker never got there (state stuck at .queued) or
     // pump drained the zombie (state == .registered). Both are legal.
     try testing.expect(entry.state == .queued or entry.state == .registered);
+}
+
+// ---------------------------------------------------------------------
+// release() tests (#446)
+// ---------------------------------------------------------------------
+//
+// Focused on the `.ready` refcount-to-zero path: `release` must call
+// `vtable.free` so backend handles (GPU textures today, audio devices /
+// font atlases later) are returned to the backend. Before #446 the
+// catalog only cleared CPU state and rewound to `.registered`, which
+// leaked the texture handle for the whole program lifetime.
+
+test "release on .ready entry with refcount 1 calls vtable.free and rewinds state" {
+    PumpMock.reset();
+    image_loader.setBackend(PumpMock.backend_value);
+    defer image_loader.clearBackend();
+
+    var catalog = AssetCatalog.init(testing.allocator);
+    defer catalog.deinit();
+
+    try catalog.register("ship", .image, dummy_file_type, dummy_bytes);
+    _ = try catalog.acquire("ship");
+
+    try spinForResults(&catalog, 1);
+    catalog.pump();
+
+    const entry = catalog.entries.getPtr("ship").?;
+    try testing.expectEqual(AssetState.ready, entry.state);
+    try testing.expect(entry.resource != null);
+
+    // The single-owner release: refcount hits zero, `.ready` path
+    // fires `vtable.free` which hands the texture back to the backend,
+    // clears `entry.resource`, and rewinds state for a future acquire.
+    catalog.release("ship");
+
+    try testing.expectEqual(@as(u32, 0), entry.refcount);
+    try testing.expectEqual(AssetState.registered, entry.state);
+    try testing.expectEqual(@as(?UploadedResource, null), entry.resource);
+    try testing.expectEqual(@as(?DecodedPayload, null), entry.decoded);
+    try testing.expectEqual(@as(u32, 1), PumpMock.unload_calls);
+    try testing.expect(!catalog.isReady("ship"));
+}
+
+test "release on .ready entry with refcount > 1 decrements without unload" {
+    PumpMock.reset();
+    image_loader.setBackend(PumpMock.backend_value);
+    defer image_loader.clearBackend();
+
+    var catalog = AssetCatalog.init(testing.allocator);
+    defer catalog.deinit();
+
+    try catalog.register("shared", .image, dummy_file_type, dummy_bytes);
+    _ = try catalog.acquire("shared");
+    _ = try catalog.acquire("shared");
+
+    try spinForResults(&catalog, 1);
+    catalog.pump();
+
+    const entry = catalog.entries.getPtr("shared").?;
+    try testing.expectEqual(AssetState.ready, entry.state);
+    try testing.expectEqual(@as(u32, 2), entry.refcount);
+
+    // First release: two owners → one owner. No unload, state stays
+    // `.ready`, resource is still live.
+    catalog.release("shared");
+    try testing.expectEqual(@as(u32, 1), entry.refcount);
+    try testing.expectEqual(AssetState.ready, entry.state);
+    try testing.expect(entry.resource != null);
+    try testing.expectEqual(@as(u32, 0), PumpMock.unload_calls);
+
+    // Second release drops to zero: backend unload fires exactly once.
+    catalog.release("shared");
+    try testing.expectEqual(@as(u32, 0), entry.refcount);
+    try testing.expectEqual(AssetState.registered, entry.state);
+    try testing.expectEqual(@as(?UploadedResource, null), entry.resource);
+    try testing.expectEqual(@as(u32, 1), PumpMock.unload_calls);
+}
+
+test "acquire after release round-trips cleanly on a ready asset" {
+    PumpMock.reset();
+    image_loader.setBackend(PumpMock.backend_value);
+    defer image_loader.clearBackend();
+
+    var catalog = AssetCatalog.init(testing.allocator);
+    defer catalog.deinit();
+
+    try catalog.register("ship", .image, dummy_file_type, dummy_bytes);
+
+    // Round 1: acquire → decode → pump → ready → release.
+    _ = try catalog.acquire("ship");
+    try spinForResults(&catalog, 1);
+    catalog.pump();
+    try testing.expect(catalog.isReady("ship"));
+
+    catalog.release("ship");
+    try testing.expectEqual(@as(u32, 1), PumpMock.unload_calls);
+    try testing.expect(!catalog.isReady("ship"));
+
+    // Round 2: fresh acquire re-enqueues through the worker, pump
+    // finalises, state is `.ready` again with a NEW texture handle.
+    _ = try catalog.acquire("ship");
+    try spinForResults(&catalog, 1);
+    catalog.pump();
+
+    const entry = catalog.entries.getPtr("ship").?;
+    try testing.expectEqual(AssetState.ready, entry.state);
+    try testing.expect(entry.resource != null);
+    try testing.expectEqual(@as(u32, 2), PumpMock.decode_calls);
+    try testing.expectEqual(@as(u32, 2), PumpMock.upload_calls);
+    try testing.expectEqual(@as(u32, 1), PumpMock.unload_calls);
+
+    // Final release balances the books for the catalog's deinit.
+    catalog.release("ship");
+    try testing.expectEqual(@as(u32, 2), PumpMock.unload_calls);
+}
+
+test "release on .failed entry decrements refcount without calling free" {
+    PumpMock.reset();
+    image_loader.setBackend(PumpMock.backend_value);
+    PumpMock.upload_fails = true;
+    defer image_loader.clearBackend();
+
+    var catalog = AssetCatalog.init(testing.allocator);
+    defer catalog.deinit();
+
+    try catalog.register("broken", .image, dummy_file_type, dummy_bytes);
+    _ = try catalog.acquire("broken");
+
+    try spinForResults(&catalog, 1);
+    catalog.pump();
+
+    const entry = catalog.entries.getPtr("broken").?;
+    try testing.expectEqual(AssetState.failed, entry.state);
+    try testing.expectEqual(@as(?UploadedResource, null), entry.resource);
+    try testing.expectEqual(@as(u32, 1), entry.refcount);
+
+    // `.failed` has no resource to free and pump already dropped the
+    // CPU payload. `release` is a pure refcount drop — the state is
+    // left at `.failed` so subsequent `lastError` calls keep working.
+    catalog.release("broken");
+    try testing.expectEqual(@as(u32, 0), entry.refcount);
+    try testing.expectEqual(AssetState.failed, entry.state);
+    try testing.expectEqual(@as(u32, 0), PumpMock.unload_calls);
+}
+
+test "release past zero on a released .ready entry is idempotent" {
+    PumpMock.reset();
+    image_loader.setBackend(PumpMock.backend_value);
+    defer image_loader.clearBackend();
+
+    var catalog = AssetCatalog.init(testing.allocator);
+    defer catalog.deinit();
+
+    try catalog.register("once", .image, dummy_file_type, dummy_bytes);
+    _ = try catalog.acquire("once");
+    try spinForResults(&catalog, 1);
+    catalog.pump();
+
+    // First release frees. Second + third releases are no-ops — no
+    // double unload, no double free, testing.allocator stays happy.
+    catalog.release("once");
+    catalog.release("once");
+    catalog.release("once");
+
+    try testing.expectEqual(@as(u32, 1), PumpMock.unload_calls);
+
+    const entry = catalog.entries.getPtr("once").?;
+    try testing.expectEqual(@as(u32, 0), entry.refcount);
+    try testing.expectEqual(AssetState.registered, entry.state);
+}
+
+test "deinit frees leftover .ready entries so GPU handles do not leak" {
+    PumpMock.reset();
+    image_loader.setBackend(PumpMock.backend_value);
+    defer image_loader.clearBackend();
+
+    var catalog = AssetCatalog.init(testing.allocator);
+
+    try catalog.register("leaky", .image, dummy_file_type, dummy_bytes);
+    _ = try catalog.acquire("leaky");
+    try spinForResults(&catalog, 1);
+    catalog.pump();
+
+    // Intentionally skip `release` — simulate a game teardown where
+    // the scene forgot to balance acquires. `deinit` must still hand
+    // the GPU handle back to the backend.
+    catalog.deinit();
+
+    try testing.expectEqual(@as(u32, 1), PumpMock.unload_calls);
 }
