@@ -29,30 +29,88 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 
 const loader_mod = @import("loader.zig");
+const worker_mod = @import("worker.zig");
 
 pub const LoaderKind = loader_mod.LoaderKind;
 pub const DecodedPayload = loader_mod.DecodedPayload;
 pub const AssetLoaderVTable = loader_mod.AssetLoaderVTable;
 pub const AssetState = loader_mod.AssetState;
 pub const AssetEntry = loader_mod.AssetEntry;
+pub const WorkRequest = worker_mod.WorkRequest;
+pub const WorkResult = worker_mod.WorkResult;
 
 pub const AssetCatalog = struct {
     allocator: Allocator,
     entries: std.StringHashMap(AssetEntry),
+    /// Main → worker ring. The catalog is the sole producer (from
+    /// `acquire`); the worker is the sole consumer.
+    requests: worker_mod.RequestRing,
+    /// Worker → main ring. The worker is the sole producer; `pump()`
+    /// (#442) will be the sole consumer. For now `deinit` drains it.
+    results: worker_mod.ResultRing,
+    worker: worker_mod.AssetWorker,
+    worker_started: bool,
 
+    /// Builds the catalog. The worker thread is spawned lazily on
+    /// the first `acquire` — this keeps `init`'s signature infallible
+    /// relative to `std.Thread.spawn` failures *and* dodges the
+    /// classic "return-by-value captures a stack pointer" trap: the
+    /// rings need to live at a stable address before the worker
+    /// captures `&self.requests`, and the stable address only exists
+    /// once the caller has moved the returned value into its own
+    /// slot.
     pub fn init(allocator: Allocator) AssetCatalog {
         return .{
             .allocator = allocator,
             .entries = std.StringHashMap(AssetEntry).init(allocator),
+            .requests = worker_mod.RequestRing.init(),
+            .results = worker_mod.ResultRing.init(),
+            .worker = undefined,
+            .worker_started = false,
         };
     }
 
+    /// Ensures the background worker is running. Idempotent. Called
+    /// from `acquire` on the first `0 → 1` refcount transition so
+    /// catalogs that never `acquire` (e.g. most unit tests) don't
+    /// pay the thread-spawn cost at all.
+    fn ensureWorker(self: *AssetCatalog) !void {
+        if (self.worker_started) return;
+        self.worker = worker_mod.AssetWorker.init(
+            self.allocator,
+            &self.requests,
+            &self.results,
+        );
+        try self.worker.start();
+        self.worker_started = true;
+    }
+
     pub fn deinit(self: *AssetCatalog) void {
-        // TODO(#446): iterate and call entry.loader.free / loader.drop
-        // for any entry whose decoded payload is non-null before the
-        // real loaders land (image pixels, audio handles, font glyphs).
-        // For now placeholder loaders have no-op drop/free, so this is
-        // safe. Add the loop here once #440/#441 provide real cleanup.
+        // 1. Stop the worker (sets the shutdown flag and joins).
+        //    Only meaningful if `acquire` ever ran and kicked the
+        //    lazy spawn — otherwise `worker` is undefined.
+        if (self.worker_started) {
+            self.worker.stop();
+            self.worker_started = false;
+        }
+
+        // 2. Drain any in-flight results. Real loaders (Phase 4) will
+        //    have allocator-owned CPU payloads here; placeholders are
+        //    no-ops but the contract is already wired so #440 / #441
+        //    can drop the TODOs.
+        while (self.results.tryDequeue()) |result| {
+            if (result.decoded) |payload| {
+                // Use the vtable carried on the result itself — avoids
+                // a hashmap lookup and survives the case where an entry
+                // was removed after its WorkRequest was submitted.
+                result.vtable.drop(self.allocator, payload);
+            }
+        }
+
+        // TODO(#446): iterate and call entry.loader.free for any entry
+        // that is still `.ready` so GPU/audio/font handles go back to
+        // their backends. Current placeholder loaders have no-op free,
+        // so this is safe until real loaders arrive.
         self.entries.deinit();
     }
 
@@ -89,14 +147,46 @@ pub const AssetCatalog = struct {
     /// rehash invalidates pointers); call sites must not retain it
     /// across catalog mutations.
     ///
-    /// TODO(#439): on the *first* acquire (refcount transitions
-    /// 0 → 1) of a non-`.ready` entry, enqueue a `WorkRequest` on the
-    /// worker SPSC ring and transition the state to `.queued`. The
-    /// transition is intentionally absent until the worker lands —
-    /// adding it now would dead-end into a worker that does not yet
-    /// exist.
+    /// On the *first* acquire (refcount transitions 0 → 1) of a
+    /// `.registered` entry, a `WorkRequest` is enqueued on the
+    /// main→worker ring and the state moves to `.queued`. If the
+    /// ring is full we log and leave the state at `.registered` —
+    /// `pump()` (#442) will retry on its next tick. The pointer is
+    /// still returned either way; callers can keep polling `isReady`.
     pub fn acquire(self: *AssetCatalog, name: []const u8) !*AssetEntry {
-        const entry = self.entries.getPtr(name) orelse return error.AssetNotRegistered;
+        // Resolve the stable hashmap-owned key up front: `name` itself may
+        // be a temporary (stack buffer, formatted string, etc.), so the
+        // worker must never borrow it directly — use `kv.key_ptr.*`, which
+        // is the original `register`-time slice and therefore program-
+        // lifetime per the `@embedFile` invariant at the top of this file.
+        const kv = self.entries.getEntry(name) orelse return error.AssetNotRegistered;
+        const entry = kv.value_ptr;
+        const needs_enqueue = entry.refcount == 0 and entry.state == .registered;
+
+        if (needs_enqueue) {
+            // Spawn the worker BEFORE touching the refcount. If thread
+            // spawn fails, `try` bubbles the error with the catalog
+            // state unchanged — no leaked refcount that would trap the
+            // entry at `.registered` with `refcount > 0` forever.
+            try self.ensureWorker();
+            const request: WorkRequest = .{
+                .entry_name = kv.key_ptr.*,
+                .vtable = entry.loader,
+                .file_type = entry.file_type,
+                .bytes = entry.raw_bytes,
+            };
+            if (self.requests.tryEnqueue(request)) |_| {
+                entry.state = .queued;
+            } else |err| switch (err) {
+                // Ring saturated — pump() will retry the transition
+                // on its next tick (#442). Leave the state at
+                // `.registered` so the retry can fire naturally.
+                error.QueueFull => std.log.debug(
+                    "assets: request ring full, deferring acquire of '{s}'",
+                    .{kv.key_ptr.*},
+                ),
+            }
+        }
         entry.refcount += 1;
         return entry;
     }
@@ -189,7 +279,7 @@ const testing = std.testing;
 const dummy_bytes: []const u8 = "PNG-fake-bytes";
 const dummy_file_type: [:0]const u8 = "png";
 
-test "register then acquire bumps refcount and leaves state at registered" {
+test "register then acquire bumps refcount and enqueues work" {
     var catalog = AssetCatalog.init(testing.allocator);
     defer catalog.deinit();
 
@@ -197,7 +287,10 @@ test "register then acquire bumps refcount and leaves state at registered" {
 
     const entry = try catalog.acquire("background");
     try testing.expectEqual(@as(u32, 1), entry.refcount);
-    try testing.expectEqual(AssetState.registered, entry.state);
+    // First acquire moved the entry to `.queued` — the worker ring
+    // has taken ownership of the request and will eventually publish
+    // an `error.NotImplemented` result on the stub loader.
+    try testing.expectEqual(AssetState.queued, entry.state);
     try testing.expectEqual(LoaderKind.image, entry.loader_kind);
     try testing.expectEqual(@as(?DecodedPayload, null), entry.decoded);
 }
@@ -217,7 +310,10 @@ test "double acquire then release ordering" {
 
     catalog.release("ship");
     try testing.expectEqual(@as(u32, 0), e1.refcount);
-    try testing.expectEqual(AssetState.registered, e1.state);
+    // State stays at `.queued` until `pump()` (#442) drains the
+    // worker result — `release` on a non-`.ready` entry only touches
+    // the refcount.
+    try testing.expectEqual(AssetState.queued, e1.state);
 }
 
 test "release on already-zero entry is a no-op" {
@@ -310,4 +406,40 @@ test "pump is a no-op until the worker lands (#442)" {
     try catalog.register("background", .image, dummy_file_type, dummy_bytes);
     catalog.pump();
     try testing.expect(!catalog.isReady("background"));
+}
+
+test "acquire spawns worker which produces NotImplemented for stub loader" {
+    var catalog = AssetCatalog.init(testing.allocator);
+    defer catalog.deinit();
+
+    try catalog.register("background", .image, dummy_file_type, dummy_bytes);
+    _ = try catalog.acquire("background");
+
+    // Spin up to 200ms waiting for the worker to publish a result.
+    // `pump()` is still a no-op (#442) so we peek at the ring
+    // directly to verify the machinery.
+    const deadline_ns: u64 = 200 * std.time.ns_per_ms;
+    var waited_ns: u64 = 0;
+    const step_ns: u64 = 1 * std.time.ns_per_ms;
+    const result = while (waited_ns < deadline_ns) {
+        if (catalog.results.tryDequeue()) |r| break r;
+        std.Thread.sleep(step_ns);
+        waited_ns += step_ns;
+    } else {
+        return error.WorkerDidNotRespond;
+    };
+
+    try testing.expectEqualStrings("background", result.entry_name);
+    try testing.expectEqual(@as(?DecodedPayload, null), result.decoded);
+    try testing.expectEqual(@as(?anyerror, error.NotImplemented), result.err);
+}
+
+test "deinit with a pending acquire shuts down cleanly" {
+    var catalog = AssetCatalog.init(testing.allocator);
+    defer catalog.deinit();
+
+    try catalog.register("background", .image, dummy_file_type, dummy_bytes);
+    _ = try catalog.acquire("background");
+    // Intentionally do not drain — deinit must join the worker and
+    // drop any in-flight results without deadlocking or leaking.
 }

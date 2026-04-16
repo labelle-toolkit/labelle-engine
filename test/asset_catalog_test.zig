@@ -22,7 +22,10 @@ test "engine re-exports AssetCatalog and friends" {
 
     const entry = try catalog.acquire("background");
     try testing.expectEqual(@as(u32, 1), entry.refcount);
-    try testing.expectEqual(engine.AssetState.registered, entry.state);
+    // First acquire spawns the worker and moves the entry to
+    // `.queued` — the real `.ready` transition lands with #442's
+    // pump() body.
+    try testing.expectEqual(engine.AssetState.queued, entry.state);
     try testing.expectEqual(engine.LoaderKind.image, entry.loader_kind);
 
     catalog.release("background");
