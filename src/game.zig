@@ -953,6 +953,14 @@ pub fn GameConfig(
         pub fn tick(self: *Self, dt: f32) void {
             const scaled_dt = dt * self.time_scale;
 
+            // Drain any worker-decoded asset uploads onto the GPU.
+            // Without this no acquired asset ever reaches `.ready`,
+            // and the Phase 2 setScene gate (#458) spins forever in
+            // its `not_ready` branch. Pump runs every frame even
+            // when paused so loading screens keep filling the bar
+            // through pause states.
+            self.assets.pump();
+
             // Always run: logging, audio, input, renderer sync, gizmo reconciliation.
             // These must run even when paused so the game remains responsive.
             self.log.update(dt);

@@ -66,6 +66,36 @@ fn rollbackPendingAssets(game: anytype) void {
     game.pending_scene_assets = null;
 }
 
+/// Bridge catalog-uploaded image assets into `atlas_manager` so
+/// the renderer's `findSprite` lookup returns the right texture
+/// id. Without this the catalog owns the texture (and the renderer
+/// has it via labelle-gfx#248's `registerCatalogTexture`), but
+/// `atlas.texture_id` stays at 0 — `findSprite` returns 0,
+/// `resolveAtlasSprites` writes 0 into every sprite, and all
+/// non-first atlases render with the wrong UVs (the jumper sprite
+/// would sample from sprites.png because its atlas's texture_id
+/// is the same default 0 as sprites.png's).
+///
+/// Idempotent — `markPendingLoaded` errors with `AtlasNotPending`
+/// for already-bridged atlases; we silently ignore.
+fn bridgeImageAssetsToAtlasManager(game: anytype, assets: []const []const u8) void {
+    for (assets) |asset_name| {
+        const entry = game.assets.entries.getPtr(asset_name) orelse continue;
+        if (entry.loader_kind != .image) continue;
+        const resource = entry.resource orelse continue;
+        const handle = switch (resource) {
+            .image => |t| t,
+            else => continue,
+        };
+        // Bridge is best-effort — already-loaded atlases return
+        // AtlasNotPending, missing atlases return AtlasNotFound.
+        // Both are normal: the first means we already bridged on
+        // an earlier setScene; the second means the asset name
+        // doesn't correspond to a registered atlas (e.g. audio).
+        game.atlas_manager.markPendingLoaded(asset_name, handle, null) catch {};
+    }
+}
+
 /// Returns the scene management mixin for a given Game type.
 pub fn Mixin(comptime Game: type) type {
     return struct {
@@ -160,6 +190,12 @@ pub fn Mixin(comptime Game: type) type {
                 },
             }
 
+            // Bridge catalog-uploaded image handles into
+            // atlas_manager so findSprite can return the right
+            // texture id. See `bridgeImageAssetsToAtlasManager`
+            // for the full failure mode this prevents.
+            bridgeImageAssetsToAtlasManager(self, target_assets);
+
             // Capture the previous scene name BEFORE we wipe
             // `current_scene_name` — we need it to release the
             // outgoing manifest after the swap completes.
@@ -226,6 +262,8 @@ pub fn Mixin(comptime Game: type) type {
                     return err;
                 },
             }
+
+            bridgeImageAssetsToAtlasManager(self, entry.assets);
 
             const previous_name = if (self.current_scene_name) |n| self.allocator.dupe(u8, n) catch null else null;
             defer if (previous_name) |p| self.allocator.free(p);
