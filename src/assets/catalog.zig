@@ -41,6 +41,13 @@ pub const AssetEntry = loader_mod.AssetEntry;
 pub const WorkRequest = worker_mod.WorkRequest;
 pub const WorkResult = worker_mod.WorkResult;
 
+/// Upper bound on finalised uploads per `pump()` call. Caps the main-
+/// thread time budget spent inside `loader.upload` — important for a
+/// frame-pump that runs every tick once the legacy atlas shim (#443)
+/// lands. If more results are sitting on the ring, the next `pump()`
+/// will drain the remainder. Matches the RFC §2 sketch.
+pub const UPLOAD_BUDGET_PER_FRAME: u8 = 4;
+
 pub const AssetCatalog = struct {
     allocator: Allocator,
     entries: std.StringHashMap(AssetEntry),
@@ -248,12 +255,97 @@ pub const AssetCatalog = struct {
         return entry.last_error;
     }
 
-    /// Drains worker results and finalises uploads. The real body
-    /// lands in ticket #442 once #439's worker exists; for now this
-    /// is a no-op so callers (and the future legacy shim in #443)
-    /// can already wire it into their frame loop without churn.
+    /// Drains worker results and finalises uploads on the main thread.
+    /// Caps itself at `UPLOAD_BUDGET_PER_FRAME` so a burst of ready
+    /// decodes cannot stall a frame; the next `pump()` picks up where
+    /// this one left off.
+    ///
+    /// Four outcomes per dequeued result, in order of precedence:
+    ///
+    /// 1. **Entry removed** (future `remove()` path): the entry was
+    ///    deleted between enqueue and dequeue. The `result.vtable` was
+    ///    copied out of the originating request so we can still drop
+    ///    the allocator-owned CPU payload without a hashmap lookup.
+    ///
+    /// 2. **Zombie upload**: refcount hit zero while the decode was in
+    ///    flight. Drop the CPU payload, rewind the entry to
+    ///    `.registered` — a later `acquire` will re-enqueue the work.
+    ///
+    /// 3. **Worker-reported error**: bubble `result.err` into
+    ///    `entry.last_error` and flip to `.failed`. Refcount stays put
+    ///    — the caller's `acquire` still holds a reference until an
+    ///    explicit `release`.
+    ///
+    /// 4. **Happy path**: call `vtable.upload`. The loader's contract
+    ///    (see `loaders/image.zig` §"Ownership of DecodedImage.pixels"
+    ///    and `loader.zig` `AssetLoaderVTable.upload` docs) says
+    ///    upload owns the free of the CPU buffer on success AND
+    ///    populates `entry.resource` with the backend handle. On
+    ///    upload failure the loader's contract is that it leaves the
+    ///    CPU buffer alive and returns the error — so `pump` hands
+    ///    the payload to `vtable.drop` before flipping to `.failed`.
+    ///    Without that, a failed upload would leak allocator-owned
+    ///    pixels (confirmed: `loaders/image.zig` `upload` returns
+    ///    before reaching its `allocator.free` on the error path).
     pub fn pump(self: *AssetCatalog) void {
-        _ = self;
+        var drained: u8 = 0;
+        while (drained < UPLOAD_BUDGET_PER_FRAME) : (drained += 1) {
+            const result = self.results.tryDequeue() orelse return;
+
+            // (1) Entry was removed between enqueue and dequeue. No
+            // `remove()` exists today, but the RFC reserves the right
+            // to add one and the worker result already carries its own
+            // vtable so we can clean up without the hashmap.
+            const entry = self.entries.getPtr(result.entry_name) orelse {
+                if (result.decoded) |payload| {
+                    result.vtable.drop(self.allocator, payload);
+                }
+                continue;
+            };
+
+            // (2) Released while the worker was decoding → zombie. Drop
+            // the CPU payload and rewind to `.registered` so a future
+            // `acquire` can re-enqueue the work cleanly.
+            if (entry.refcount == 0) {
+                if (result.decoded) |payload| {
+                    result.vtable.drop(self.allocator, payload);
+                }
+                entry.decoded = null;
+                entry.state = .registered;
+                continue;
+            }
+
+            // (3) Worker-reported decode error. The worker already knew
+            // there was no payload to free; just record the error and
+            // flip state. Leave refcount intact — the caller still owns
+            // their reference and must `release` to clear it.
+            if (result.err) |err| {
+                entry.last_error = err;
+                entry.state = .failed;
+                continue;
+            }
+
+            // (4) Happy path. `err == null` implies `decoded` is
+            // populated (see worker.zig:runLoop). Upload hands the
+            // pixels to the backend, populates `entry.resource`, and
+            // frees the CPU buffer itself on success. On failure it
+            // leaves the CPU buffer alive — so we route the payload
+            // to `vtable.drop` before flipping to `.failed`, else the
+            // allocator-owned pixels would leak (testing.allocator
+            // catches this).
+            const payload = result.decoded.?;
+            result.vtable.upload(entry, payload, self.allocator) catch |err| {
+                result.vtable.drop(self.allocator, payload);
+                entry.decoded = null;
+                entry.last_error = err;
+                entry.state = .failed;
+                continue;
+            };
+            // Upload succeeded: CPU buffer was freed by the loader,
+            // resource handle is parked on `entry.resource`.
+            entry.decoded = null;
+            entry.state = .ready;
+        }
     }
 };
 
@@ -403,12 +495,16 @@ test "acquire on unknown asset returns AssetNotRegistered" {
     try testing.expectError(error.AssetNotRegistered, catalog.acquire("ghost"));
 }
 
-test "pump is a no-op until the worker lands (#442)" {
+test "pump on an empty result ring is a no-op" {
     var catalog = AssetCatalog.init(testing.allocator);
     defer catalog.deinit();
 
     try catalog.register("background", .image, dummy_file_type, dummy_bytes);
+    // No acquire → worker never spawned, no results to drain. `pump`
+    // must stay passive — no panic, no state change, no allocation.
     catalog.pump();
+    const entry = catalog.entries.getPtr("background").?;
+    try testing.expectEqual(AssetState.registered, entry.state);
     try testing.expect(!catalog.isReady("background"));
 }
 
@@ -416,8 +512,7 @@ test "acquire spawns worker which surfaces ImageBackendNotInitialized without a 
     // Make sure no previous test left a backend injected on this
     // process-global slot — the assertions below rely on the loader
     // returning the not-initialised error, not a mock success.
-    const image_loader_mod = @import("loaders/image.zig");
-    image_loader_mod.clearBackend();
+    image_loader.clearBackend();
 
     var catalog = AssetCatalog.init(testing.allocator);
     defer catalog.deinit();
@@ -452,4 +547,285 @@ test "deinit with a pending acquire shuts down cleanly" {
     _ = try catalog.acquire("background");
     // Intentionally do not drain — deinit must join the worker and
     // drop any in-flight results without deadlocking or leaking.
+}
+
+// ---------------------------------------------------------------------
+// pump() tests (#442)
+// ---------------------------------------------------------------------
+//
+// These share a module-scoped mock backend for the image loader so
+// each test can tune `decode_fails` / `upload_fails` independently.
+// `testing.allocator` is a GPA under the hood, so a leaked CPU buffer
+// or a double-free on any path below will fail the test.
+
+const DecodedImage = image_loader.DecodedImage;
+const ImageBackend = image_loader.ImageBackend;
+
+const PumpMock = struct {
+    var decode_calls: u32 = 0;
+    var upload_calls: u32 = 0;
+    var unload_calls: u32 = 0;
+    var next_tex: Texture = 500;
+    var decode_fails: bool = false;
+    var upload_fails: bool = false;
+
+    fn reset() void {
+        decode_calls = 0;
+        upload_calls = 0;
+        unload_calls = 0;
+        next_tex = 500;
+        decode_fails = false;
+        upload_fails = false;
+    }
+
+    fn decodeFn(
+        file_type: [:0]const u8,
+        data: []const u8,
+        allocator: Allocator,
+    ) anyerror!DecodedImage {
+        _ = file_type;
+        _ = data;
+        decode_calls += 1;
+        if (decode_fails) return error.PumpMockDecodeError;
+        // 1×1 RGBA — tiny enough to keep the tests fast, big enough
+        // that `testing.allocator` catches a leak if `drop` / upload
+        // forget to free.
+        const pixels = try allocator.alloc(u8, 4);
+        @memset(pixels, 0xCD);
+        return .{ .pixels = pixels, .width = 1, .height = 1 };
+    }
+
+    fn uploadFn(decoded: DecodedImage) anyerror!Texture {
+        _ = decoded;
+        upload_calls += 1;
+        if (upload_fails) return error.PumpMockUploadError;
+        const t = next_tex;
+        next_tex += 1;
+        return t;
+    }
+
+    fn unloadFn(texture: Texture) void {
+        _ = texture;
+        unload_calls += 1;
+    }
+
+    const backend_value: ImageBackend = .{
+        .decode = decodeFn,
+        .upload = uploadFn,
+        .unload = unloadFn,
+    };
+};
+
+/// Spin until the worker has published `at_least` results onto the
+/// result ring or a 200ms deadline elapses. The worker parks for
+/// ~100µs between empty polls so this is fine-grained enough for
+/// tests but never a busy-wait in production.
+fn spinForResults(catalog: *AssetCatalog, at_least: u32) !void {
+    const deadline_ns: u64 = 200 * std.time.ns_per_ms;
+    var waited_ns: u64 = 0;
+    const step_ns: u64 = 1 * std.time.ns_per_ms;
+    while (waited_ns < deadline_ns) : (waited_ns += step_ns) {
+        // Non-atomic peek — safe here because the test is the sole
+        // consumer and the worker is the sole producer. `pump()`
+        // would normally race us for these slots.
+        const head = catalog.results.head.load(.acquire);
+        const tail = catalog.results.tail.load(.acquire);
+        if (head -% tail >= at_least) return;
+        std.Thread.sleep(step_ns);
+    }
+    return error.WorkerDidNotRespond;
+}
+
+test "pump: happy path transitions to .ready with resource populated" {
+    PumpMock.reset();
+    image_loader.setBackend(PumpMock.backend_value);
+    defer image_loader.clearBackend();
+
+    var catalog = AssetCatalog.init(testing.allocator);
+    defer catalog.deinit();
+
+    try catalog.register("ship", .image, dummy_file_type, dummy_bytes);
+    _ = try catalog.acquire("ship");
+
+    try spinForResults(&catalog, 1);
+    catalog.pump();
+
+    const entry = catalog.entries.getPtr("ship").?;
+    try testing.expectEqual(AssetState.ready, entry.state);
+    try testing.expect(entry.resource != null);
+    try testing.expect(entry.resource.?.image >= 500);
+    try testing.expectEqual(@as(?DecodedPayload, null), entry.decoded);
+    try testing.expectEqual(@as(?anyerror, null), entry.last_error);
+    try testing.expectEqual(@as(u32, 1), PumpMock.upload_calls);
+    // Catalog must report ready via the same query sites the scene
+    // hooks (#444) will use.
+    try testing.expect(catalog.isReady("ship"));
+    // Manually free the GPU handle so the mock's unload counter is
+    // symmetric with the upload counter — `release` does not yet
+    // trigger `vtable.free` (that lands in #446).
+    entry.loader.free(entry);
+    try testing.expectEqual(@as(u32, 1), PumpMock.unload_calls);
+}
+
+test "pump: zombie drop — release before upload rewinds to .registered and frees pixels" {
+    PumpMock.reset();
+    image_loader.setBackend(PumpMock.backend_value);
+    defer image_loader.clearBackend();
+
+    var catalog = AssetCatalog.init(testing.allocator);
+    defer catalog.deinit();
+
+    try catalog.register("transient", .image, dummy_file_type, dummy_bytes);
+    _ = try catalog.acquire("transient");
+
+    // Wait for the worker to actually decode so there is an
+    // allocator-owned pixel buffer pending on the result ring.
+    try spinForResults(&catalog, 1);
+    // Drop the refcount to zero *before* pump runs — this is the
+    // classic "scene unloaded before its assets finished loading"
+    // race the RFC §2 zombie-drop path protects against.
+    catalog.release("transient");
+
+    catalog.pump();
+
+    const entry = catalog.entries.getPtr("transient").?;
+    try testing.expectEqual(AssetState.registered, entry.state);
+    try testing.expectEqual(@as(?DecodedPayload, null), entry.decoded);
+    try testing.expectEqual(@as(?UploadedResource, null), entry.resource);
+    // Upload must NOT have fired — the zombie path skips it entirely.
+    try testing.expectEqual(@as(u32, 0), PumpMock.upload_calls);
+    try testing.expectEqual(@as(u32, 0), PumpMock.unload_calls);
+    // `testing.allocator` would report a leak here if the pixel buffer
+    // from `decodeFn` was not handed back to `vtable.drop`.
+}
+
+test "pump: upload error bubbles to .failed and frees the CPU payload" {
+    PumpMock.reset();
+    image_loader.setBackend(PumpMock.backend_value);
+    PumpMock.upload_fails = true;
+    defer image_loader.clearBackend();
+
+    var catalog = AssetCatalog.init(testing.allocator);
+    defer catalog.deinit();
+
+    try catalog.register("bad-upload", .image, dummy_file_type, dummy_bytes);
+    _ = try catalog.acquire("bad-upload");
+
+    try spinForResults(&catalog, 1);
+    catalog.pump();
+
+    const entry = catalog.entries.getPtr("bad-upload").?;
+    try testing.expectEqual(AssetState.failed, entry.state);
+    try testing.expectEqual(
+        @as(?anyerror, error.PumpMockUploadError),
+        entry.last_error,
+    );
+    // Refcount is untouched — caller still owns the reference and
+    // must `release` explicitly (per #442 state-transition contract).
+    try testing.expectEqual(@as(u32, 1), entry.refcount);
+    try testing.expectEqual(@as(?UploadedResource, null), entry.resource);
+    // CPU payload was freed by pump's drop-on-upload-failure branch.
+    try testing.expectEqual(@as(?DecodedPayload, null), entry.decoded);
+    try testing.expectEqual(@as(u32, 1), PumpMock.upload_calls);
+}
+
+test "pump: worker-side decode error bubbles to .failed without touching upload" {
+    PumpMock.reset();
+    image_loader.setBackend(PumpMock.backend_value);
+    PumpMock.decode_fails = true;
+    defer image_loader.clearBackend();
+
+    var catalog = AssetCatalog.init(testing.allocator);
+    defer catalog.deinit();
+
+    try catalog.register("bad-decode", .image, dummy_file_type, dummy_bytes);
+    _ = try catalog.acquire("bad-decode");
+
+    try spinForResults(&catalog, 1);
+    catalog.pump();
+
+    const entry = catalog.entries.getPtr("bad-decode").?;
+    try testing.expectEqual(AssetState.failed, entry.state);
+    try testing.expectEqual(
+        @as(?anyerror, error.PumpMockDecodeError),
+        entry.last_error,
+    );
+    try testing.expectEqual(@as(u32, 0), PumpMock.upload_calls);
+    try testing.expectEqual(@as(?UploadedResource, null), entry.resource);
+    try testing.expectEqual(@as(?DecodedPayload, null), entry.decoded);
+}
+
+test "pump: UPLOAD_BUDGET_PER_FRAME caps finalised uploads per call" {
+    PumpMock.reset();
+    image_loader.setBackend(PumpMock.backend_value);
+    defer image_loader.clearBackend();
+
+    var catalog = AssetCatalog.init(testing.allocator);
+    defer catalog.deinit();
+
+    // Enqueue double the budget + a bit more to prove multiple pumps
+    // finish the drain without losing any results.
+    const total: u8 = UPLOAD_BUDGET_PER_FRAME * 2 + 1;
+    var name_buffers: [total][16]u8 = undefined;
+    var names: [total][]const u8 = undefined;
+    for (0..total) |i| {
+        names[i] = std.fmt.bufPrint(&name_buffers[i], "asset_{d}", .{i}) catch unreachable;
+        try catalog.register(names[i], .image, dummy_file_type, dummy_bytes);
+        _ = try catalog.acquire(names[i]);
+    }
+
+    try spinForResults(&catalog, total);
+
+    // First pump drains exactly UPLOAD_BUDGET_PER_FRAME.
+    catalog.pump();
+    var ready_after_first: u32 = 0;
+    for (names) |n| {
+        if (catalog.isReady(n)) ready_after_first += 1;
+    }
+    try testing.expectEqual(@as(u32, UPLOAD_BUDGET_PER_FRAME), ready_after_first);
+
+    // Second pump picks up another budget worth.
+    catalog.pump();
+    var ready_after_second: u32 = 0;
+    for (names) |n| {
+        if (catalog.isReady(n)) ready_after_second += 1;
+    }
+    try testing.expectEqual(@as(u32, UPLOAD_BUDGET_PER_FRAME * 2), ready_after_second);
+
+    // Third pump drains the remainder (1 leftover).
+    catalog.pump();
+    var ready_final: u32 = 0;
+    for (names) |n| {
+        if (catalog.isReady(n)) ready_final += 1;
+    }
+    try testing.expectEqual(@as(u32, total), ready_final);
+
+    // Manually release GPU handles so the mock's unload counter balances.
+    for (names) |n| {
+        const entry = catalog.entries.getPtr(n).?;
+        entry.loader.free(entry);
+    }
+}
+
+test "pump: empty result ring is a no-op even with an active worker" {
+    PumpMock.reset();
+    image_loader.setBackend(PumpMock.backend_value);
+    defer image_loader.clearBackend();
+
+    var catalog = AssetCatalog.init(testing.allocator);
+    defer catalog.deinit();
+
+    // Register + acquire to spawn the worker, then immediately release
+    // + pump before anything has been decoded. The worker may have
+    // raced and produced a result; that is fine — the zombie path
+    // handles it. The core assertion is "no panic, no leak".
+    try catalog.register("ghost", .image, dummy_file_type, dummy_bytes);
+    _ = try catalog.acquire("ghost");
+    catalog.release("ghost");
+    catalog.pump();
+
+    const entry = catalog.entries.getPtr("ghost").?;
+    // Either the worker never got there (state stuck at .queued) or
+    // pump drained the zombie (state == .registered). Both are legal.
+    try testing.expect(entry.state == .queued or entry.state == .registered);
 }
