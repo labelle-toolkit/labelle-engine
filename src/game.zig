@@ -170,6 +170,14 @@ pub fn GameConfig(
         /// stream anything. Scripts call `game.assets.acquire(...)`,
         /// `game.assets.progress(...)`, etc. directly.
         ///
+        /// The `loadAtlas*` family in this file pumps image decodes
+        /// through this catalog instead of calling
+        /// `renderer.loadTextureFromMemory` on the main thread — see
+        /// `loadAtlasIfNeededImpl` below. Every asset registered through
+        /// `registerAtlasFromMemory` / `loadAtlasFromMemory` gets a
+        /// parallel entry here keyed by the same name so the PNG decode
+        /// runs off-thread even for the legacy eager path.
+        ///
         /// `pump()` is the caller's responsibility for now: the engine
         /// tick does NOT call it automatically. Automatic per-frame
         /// pumping is deferred to the scene-hooks ticket (#444) so the
@@ -1060,17 +1068,21 @@ pub fn GameConfig(
 
         /// Load an atlas from embedded memory (PNG bytes + JSON content).
         /// Usage: game.loadAtlasFromMemory("bg", json_bytes, png_bytes, ".png");
+        ///
+        /// Convenience: `registerAtlasFromMemory` + `loadAtlasIfNeeded`.
+        /// Still blocks the calling frame — the PNG decode now runs on
+        /// the asset worker thread (Asset Streaming RFC #437), but this
+        /// method pumps the catalog synchronously until the atlas is
+        /// `.ready` so the surface behaviour matches the legacy eager
+        /// path. Cold-start UX is unchanged by design — spreading the
+        /// decode cost across frames is Phase 2's job (scene-manifest
+        /// acquire, not this shim).
         const has_load_from_memory = @hasDecl(RenderImpl, "loadTextureFromMemory");
         pub const loadAtlasFromMemory = if (has_load_from_memory) loadAtlasFromMemoryImpl else @compileError("Renderer does not support loadTextureFromMemory");
 
         fn loadAtlasFromMemoryImpl(self: *Self, name: []const u8, json_content: []const u8, image_data: []const u8, file_type: [:0]const u8) !void {
-            const tex_id = try self.renderer.loadTextureFromMemory(file_type, image_data);
-            const id: u32 = if (@typeInfo(@TypeOf(tex_id)) == .@"enum")
-                @intFromEnum(tex_id)
-            else
-                tex_id;
-            const dims = self.queryTextureDims(tex_id);
-            try self.atlas_manager.loadAtlasFromJsonContent(name, json_content, id, dims);
+            try self.registerAtlasFromMemoryImpl(name, json_content, image_data, file_type);
+            _ = try self.loadAtlasIfNeededImpl(name);
         }
 
         /// Register an atlas in **deferred** mode: parse the JSON
@@ -1085,10 +1097,35 @@ pub fn GameConfig(
         /// `loadAtlasIfNeeded` from a loading-scene script to spread
         /// PNG decode cost across multiple frames instead of paying
         /// for everything in `init()`.
+        ///
+        /// Side effect (RFC #437 #443): the same name is registered on
+        /// `self.assets` as a `.image` asset carrying the PNG bytes, so
+        /// the pump-driven shim below can run the decode off-thread.
+        /// Existing scene / script code that already registered the
+        /// asset directly on the catalog — e.g. assembler-generated
+        /// init code that walks the scene's `assets` manifest — is
+        /// tolerated: `register` reports `AssetAlreadyRegistered` and
+        /// we swallow that specific error.
         pub const registerAtlasFromMemory = if (has_load_from_memory) registerAtlasFromMemoryImpl else @compileError("Renderer does not support loadTextureFromMemory");
 
         fn registerAtlasFromMemoryImpl(self: *Self, name: []const u8, json_content: []const u8, image_data: []const u8, file_type: [:0]const u8) !void {
+            // Keep the legacy TextureManager side-effects: parse JSON
+            // eagerly so `findSprite` works after the catalog finishes
+            // uploading, stash the `PendingImage` so `markPendingLoaded`
+            // can derive the texture scale against the JSON's meta.size
+            // once the shim learns the actual dims.
             try self.atlas_manager.registerPendingAtlas(name, json_content, image_data, file_type);
+
+            // Mirror onto the catalog. Double-registration (e.g. when
+            // the assembler's scene manifest code already registered
+            // the same name on the catalog) is not an error: the
+            // catalog is the source of truth for the PNG bytes, and
+            // re-registering identical bytes is a no-op from the
+            // loader's perspective.
+            self.assets.register(name, .image, file_type, image_data) catch |err| switch (err) {
+                error.AssetAlreadyRegistered => {},
+                else => return err,
+            };
         }
 
         /// Decode a previously-registered pending atlas if it hasn't
@@ -1097,20 +1134,108 @@ pub fn GameConfig(
         /// loop. Returns `true` on the call that actually performed
         /// the decode, so a loading script can advance a progress
         /// counter.
+        ///
+        /// Implementation (RFC #437 §2): bumps the catalog refcount so
+        /// the worker thread picks up the decode, then busy-pumps until
+        /// the entry is `.ready` (happy path) or `lastError` is set
+        /// (decode / upload failed). `std.Thread.yield()` between
+        /// iterations keeps the loop cooperative on single-core
+        /// targets. **The `pump()` call inside the loop is
+        /// load-bearing** — without it the worker finishes the decode
+        /// but the main thread never finalises the upload, and the
+        /// loop spins forever. See the "deadlock regression" test in
+        /// `test/asset_streaming_shim_test.zig`.
         pub const loadAtlasIfNeeded = if (has_load_from_memory) loadAtlasIfNeededImpl else @compileError("Renderer does not support loadTextureFromMemory");
 
         fn loadAtlasIfNeededImpl(self: *Self, name: []const u8) !bool {
             const atlas = self.atlas_manager.getAtlasMut(name) orelse return error.AtlasNotFound;
             if (atlas.isLoaded()) return false;
 
-            const pending = atlas.pending.?; // checked by isLoaded above
-            const tex_id = try self.renderer.loadTextureFromMemory(pending.file_type, pending.bytes);
-            const id: u32 = if (@typeInfo(@TypeOf(tex_id)) == .@"enum")
-                @intFromEnum(tex_id)
-            else
-                tex_id;
-            const dims = self.queryTextureDims(tex_id);
-            try self.atlas_manager.markPendingLoaded(name, id, dims);
+            // Bump refcount on the catalog. First acquire on a fresh
+            // entry enqueues the decode; subsequent acquires just pin
+            // the refcount so the zombie-drop path in `pump()` can't
+            // rewind us while we are waiting for the upload to land.
+            //
+            // `errdefer release` guarantees the shim returns the
+            // refcount on every failure path (lastError, missing
+            // entry, wrong asset kind, markPendingLoaded error, …).
+            // Without it, a failed load leaks a phantom refcount that
+            // keeps the entry acquired forever — and since `acquire`
+            // only re-enqueues on the 0→1 transition, a retry after
+            // failure would just bump the leak without re-triggering
+            // a decode.
+            _ = try self.assets.acquire(name);
+            // Mirror of the acquire above. Runs on any error path so
+            // the catalog refcount stays consistent. On the happy path
+            // — when `markPendingLoaded` succeeds and we `return true`
+            // — the defer does NOT fire, intentionally leaving the
+            // refcount at 1 to keep the loaded entry pinned in the
+            // catalog (prevents the zombie-drop path from rewinding
+            // the state back to `.registered` if Phase 2 ever calls
+            // `release` for an unrelated scene transition).
+            errdefer self.assets.release(name);
+
+            // Busy-pump until the decode + upload complete OR the
+            // catalog surfaces an error via `lastError`. Same-thread
+            // async-under-the-hood, sync-at-the-surface: no visible
+            // UX change from the legacy path that called
+            // `renderer.loadTextureFromMemory` directly on the main
+            // thread.
+            //
+            // Known limitation (pre-existing from #450's acquire
+            // design): if the request ring was full when `acquire`
+            // fired, the work request is dropped, state stays
+            // `.registered`, refcount is bumped, and neither `pump()`
+            // nor any other layer re-enqueues it. This loop would
+            // then spin forever. Not reachable on current workloads
+            // (64-slot ring vs single-digit asset counts), but a
+            // follow-up should either make `acquire` fail on
+            // QueueFull or add retry logic to `pump()`.
+            while (!self.assets.isReady(name)) {
+                if (self.assets.lastError(name)) |err| {
+                    // Rewind .failed → .registered so the next
+                    // loadAtlasIfNeeded retries the decode instead of
+                    // returning the stale error forever. Without this,
+                    // any decode/upload failure becomes permanent: the
+                    // errdefer above drops refcount to 0, but state
+                    // stays .failed, and `acquire` only re-enqueues
+                    // from .registered. So the retry would hit the
+                    // already-set lastError and immediately return
+                    // the old error without re-triggering work — a
+                    // regression from the legacy direct-decode path
+                    // which simply re-attempted the call.
+                    self.assets.resetFailed(name);
+                    return err;
+                }
+                self.assets.pump();
+                std.Thread.yield() catch {};
+            }
+
+            // Upload done — the catalog has a valid `UploadedResource`
+            // for the entry. Pull the backend-assigned texture handle
+            // out and seed the TextureManager's `RuntimeAtlas` so the
+            // rest of the engine (sprite cache, `findSprite`, etc.)
+            // can look the texture up through the legacy path.
+            const entry = self.assets.entries.getPtr(name) orelse return error.AtlasNotFound;
+            const resource = entry.resource orelse return error.AssetNotReady;
+            const id: u32 = switch (resource) {
+                .image => |t| t,
+                else => return error.WrongAssetKind,
+            };
+
+            // The catalog-managed upload path does NOT populate the
+            // renderer's texture side-table — the assembler-generated
+            // adapter uploads directly to the GPU backend, bypassing
+            // `renderer.loadTextureFromMemory`. `getTextureInfo` would
+            // therefore return null for catalog-uploaded textures, so
+            // `markPendingLoaded` gets `null` dims and falls back to
+            // scale=1.0. Matches the legacy fallback behavior when the
+            // renderer doesn't expose `getTextureInfo` at all. Atlases
+            // that shipped a downscaled PNG and relied on automatic
+            // texture_scale derivation will need an explicit workflow
+            // once Phase 2 takes over the cold-start path — out of
+            // scope for #443.
+            try self.atlas_manager.markPendingLoaded(name, id, null);
             return true;
         }
 
@@ -1118,6 +1243,13 @@ pub fn GameConfig(
         /// for unregistered atlases too — both states mean "you can't
         /// use it yet". Used by loading scripts to decide which
         /// atlases still need a `loadAtlasIfNeeded` call.
+        ///
+        /// Reads from the `TextureManager` side, not the catalog: the
+        /// atlas is only "loaded" from the engine's point of view once
+        /// `markPendingLoaded` has populated the `RuntimeAtlas` with a
+        /// real `texture_id`. A catalog entry that is `.ready` but has
+        /// not yet been drained by `loadAtlasIfNeeded` is still
+        /// considered "not loaded" for the legacy surface.
         pub fn isAtlasLoaded(self: *Self, name: []const u8) bool {
             const atlas = self.atlas_manager.getAtlas(name) orelse return false;
             return atlas.isLoaded();
