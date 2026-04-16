@@ -171,6 +171,7 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
             const prefab_components = prefab_obj.getObject("components") orelse return null;
 
             const entity = game.createEntity();
+            game.trackSceneEntity(entity);
             game.setPosition(entity, pos);
 
             // Apply all prefab components — use pos as parent_offset so
@@ -504,6 +505,7 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
 
             // Create entity — destroy on error to prevent orphans
             const entity = game.createEntity();
+            game.trackSceneEntity(entity);
             errdefer game.destroyEntity(entity);
 
             // Register ref name if ref context is active.
@@ -712,6 +714,7 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
                 for (arr.items) |item| {
                     if (isEntityLike(item)) {
                         const child = game.createEntity();
+                        game.trackSceneEntity(child);
 
                         if (item.asObject()) |child_obj| {
                             var child_prefab_comps: ?Value.Object = null;
@@ -1280,6 +1283,7 @@ pub fn JsoncSceneBridgeWithGizmos(
                 const gizmo_data = @field(gizmos_data, field.name);
 
                 const gizmo_entity = game.createEntity();
+                game.trackSceneEntity(gizmo_entity);
 
                 const offset_x: f32 = comptime if (@hasField(@TypeOf(gizmo_data), "x")) gizmo_data.x else 0;
                 const offset_y: f32 = comptime if (@hasField(@TypeOf(gizmo_data), "y")) gizmo_data.y else 0;

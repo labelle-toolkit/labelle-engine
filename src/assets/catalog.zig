@@ -48,17 +48,29 @@ pub const WorkResult = worker_mod.WorkResult;
 /// will drain the remainder. Matches the RFC §2 sketch.
 pub const UPLOAD_BUDGET_PER_FRAME: u8 = 4;
 
+/// Number of decode worker threads. Each owns its own SPSC request +
+/// result ring pair — keeps the existing single-producer / single-
+/// consumer ring invariants untouched. 3 is a sensible default on a
+/// quad-core big.LITTLE tablet (leaves one performance core for the
+/// main + render threads); override by changing this constant.
+pub const NUM_WORKERS: u8 = 3;
+
 pub const AssetCatalog = struct {
     allocator: Allocator,
     entries: std.StringHashMap(AssetEntry),
-    /// Main → worker ring. The catalog is the sole producer (from
-    /// `acquire`); the worker is the sole consumer.
-    requests: worker_mod.RequestRing,
-    /// Worker → main ring. The worker is the sole producer; `pump()`
-    /// (#442) will be the sole consumer. For now `deinit` drains it.
-    results: worker_mod.ResultRing,
-    worker: worker_mod.AssetWorker,
-    worker_started: bool,
+    /// Main → worker rings (one per worker). The catalog is the sole
+    /// producer for each ring (via `acquire`); each worker is the sole
+    /// consumer of its own ring.
+    requests: [NUM_WORKERS]worker_mod.RequestRing,
+    /// Worker → main rings (one per worker). Each worker is the sole
+    /// producer of its own ring; `pump()` is the sole consumer across all.
+    results: [NUM_WORKERS]worker_mod.ResultRing,
+    workers: [NUM_WORKERS]worker_mod.AssetWorker,
+    workers_started: bool,
+    /// Round-robin dispatch counter for `acquire`. Wraps; used modulo
+    /// NUM_WORKERS to pick the target request ring so decode load is
+    /// spread across cores.
+    dispatch_counter: u32,
 
     /// Builds the catalog. The worker thread is spawned lazily on
     /// the first `acquire` — this keeps `init`'s signature infallible
@@ -69,50 +81,74 @@ pub const AssetCatalog = struct {
     /// once the caller has moved the returned value into its own
     /// slot.
     pub fn init(allocator: Allocator) AssetCatalog {
+        var requests: [NUM_WORKERS]worker_mod.RequestRing = undefined;
+        var results: [NUM_WORKERS]worker_mod.ResultRing = undefined;
+        for (0..NUM_WORKERS) |i| {
+            requests[i] = worker_mod.RequestRing.init();
+            results[i] = worker_mod.ResultRing.init();
+        }
         return .{
             .allocator = allocator,
             .entries = std.StringHashMap(AssetEntry).init(allocator),
-            .requests = worker_mod.RequestRing.init(),
-            .results = worker_mod.ResultRing.init(),
-            .worker = undefined,
-            .worker_started = false,
+            .requests = requests,
+            .results = results,
+            .workers = undefined,
+            .workers_started = false,
+            .dispatch_counter = 0,
         };
     }
 
-    /// Ensures the background worker is running. Idempotent. Called
-    /// from `acquire` on the first `0 → 1` refcount transition so
-    /// catalogs that never `acquire` (e.g. most unit tests) don't
+    /// Ensures the background worker pool is running. Idempotent.
+    /// Called from `acquire` on the first `0 → 1` refcount transition
+    /// so catalogs that never `acquire` (e.g. most unit tests) don't
     /// pay the thread-spawn cost at all.
     fn ensureWorker(self: *AssetCatalog) !void {
-        if (self.worker_started) return;
-        self.worker = worker_mod.AssetWorker.init(
-            self.allocator,
-            &self.requests,
-            &self.results,
-        );
-        try self.worker.start();
-        self.worker_started = true;
+        if (self.workers_started) return;
+
+        // Init all workers first so their ring pointers are stable
+        // before any thread captures them.
+        for (0..NUM_WORKERS) |i| {
+            self.workers[i] = worker_mod.AssetWorker.init(
+                self.allocator,
+                &self.requests[i],
+                &self.results[i],
+            );
+        }
+
+        // Spawn threads one by one. If any spawn fails, stop the ones
+        // we started so the caller isn't left with half a pool running
+        // and `workers_started` out of sync with reality.
+        var spawned: usize = 0;
+        errdefer {
+            var i: usize = 0;
+            while (i < spawned) : (i += 1) self.workers[i].stop();
+        }
+        while (spawned < NUM_WORKERS) : (spawned += 1) {
+            try self.workers[spawned].start();
+        }
+        self.workers_started = true;
     }
 
     pub fn deinit(self: *AssetCatalog) void {
-        // 1. Stop the worker (sets the shutdown flag and joins).
-        //    Only meaningful if `acquire` ever ran and kicked the
-        //    lazy spawn — otherwise `worker` is undefined.
-        if (self.worker_started) {
-            self.worker.stop();
-            self.worker_started = false;
+        // 1. Stop every worker (sets shutdown flags, joins threads).
+        //    Only meaningful if `acquire` ever ran — otherwise
+        //    `workers` is undefined.
+        if (self.workers_started) {
+            for (&self.workers) |*w| w.stop();
+            self.workers_started = false;
         }
 
-        // 2. Drain any in-flight results. Real loaders (Phase 4) will
-        //    have allocator-owned CPU payloads here; placeholders are
-        //    no-ops but the contract is already wired so #440 / #441
-        //    can drop the TODOs.
-        while (self.results.tryDequeue()) |result| {
-            if (result.decoded) |payload| {
-                // Use the vtable carried on the result itself — avoids
-                // a hashmap lookup and survives the case where an entry
-                // was removed after its WorkRequest was submitted.
-                result.vtable.drop(self.allocator, payload);
+        // 2. Drain any in-flight results across every result ring.
+        //    Real loaders have allocator-owned CPU payloads here; we
+        //    hand them to the vtable's drop hook so nothing leaks.
+        for (&self.results) |*ring| {
+            while (ring.tryDequeue()) |result| {
+                if (result.decoded) |payload| {
+                    // Use the vtable carried on the result itself — avoids
+                    // a hashmap lookup and survives the case where an entry
+                    // was removed after its WorkRequest was submitted.
+                    result.vtable.drop(self.allocator, payload);
+                }
             }
         }
 
@@ -183,10 +219,10 @@ pub const AssetCatalog = struct {
         const needs_enqueue = entry.refcount == 0 and entry.state == .registered;
 
         if (needs_enqueue) {
-            // Spawn the worker BEFORE touching the refcount. If thread
-            // spawn fails, `try` bubbles the error with the catalog
-            // state unchanged — no leaked refcount that would trap the
-            // entry at `.registered` with `refcount > 0` forever.
+            // Spawn the worker pool BEFORE touching the refcount. If
+            // thread spawn fails, `try` bubbles the error with the
+            // catalog state unchanged — no leaked refcount that would
+            // trap the entry at `.registered` with `refcount > 0` forever.
             try self.ensureWorker();
             const request: WorkRequest = .{
                 .entry_name = kv.key_ptr.*,
@@ -194,15 +230,19 @@ pub const AssetCatalog = struct {
                 .file_type = entry.file_type,
                 .bytes = entry.raw_bytes,
             };
-            if (self.requests.tryEnqueue(request)) |_| {
+            // Round-robin across the worker pool so decode load is
+            // spread. If the picked ring is full (shouldn't happen in
+            // practice — 64-slot capacity vs. typical 6–30 atlases —
+            // but the contract tolerates it), fall through to
+            // `.registered` and let pump() retry via a future acquire.
+            const idx = self.dispatch_counter % NUM_WORKERS;
+            self.dispatch_counter +%= 1;
+            if (self.requests[idx].tryEnqueue(request)) |_| {
                 entry.state = .queued;
             } else |err| switch (err) {
-                // Ring saturated — pump() will retry the transition
-                // on its next tick (#442). Leave the state at
-                // `.registered` so the retry can fire naturally.
                 error.QueueFull => std.log.debug(
-                    "assets: request ring full, deferring acquire of '{s}'",
-                    .{kv.key_ptr.*},
+                    "assets: request ring {d} full, deferring acquire of '{s}'",
+                    .{ idx, kv.key_ptr.* },
                 ),
             }
         }
@@ -359,8 +399,21 @@ pub const AssetCatalog = struct {
         // burst of them doesn't starve the valid uploads waiting behind
         // them in the ring.
         var uploads_done: u8 = 0;
+        // Rotate through the result rings so a burst from one worker
+        // doesn't starve the others.
+        var ring_start: usize = self.dispatch_counter % NUM_WORKERS;
         while (uploads_done < UPLOAD_BUDGET_PER_FRAME) {
-            const result = self.results.tryDequeue() orelse return;
+            const result = blk: {
+                var tried: usize = 0;
+                while (tried < NUM_WORKERS) : (tried += 1) {
+                    const idx = (ring_start + tried) % NUM_WORKERS;
+                    if (self.results[idx].tryDequeue()) |r| {
+                        ring_start = (idx + 1) % NUM_WORKERS;
+                        break :blk r;
+                    }
+                }
+                return; // all rings empty
+            };
 
             // (1) Entry was removed between enqueue and dequeue. No
             // `remove()` exists today, but the RFC reserves the right
@@ -598,8 +651,10 @@ test "acquire spawns worker which surfaces ImageBackendNotInitialized without a 
     const deadline_ns: u64 = 200 * std.time.ns_per_ms;
     var waited_ns: u64 = 0;
     const step_ns: u64 = 1 * std.time.ns_per_ms;
-    const result = while (waited_ns < deadline_ns) {
-        if (catalog.results.tryDequeue()) |r| break r;
+    const result = outer: while (waited_ns < deadline_ns) {
+        for (&catalog.results) |*ring| {
+            if (ring.tryDequeue()) |r| break :outer r;
+        }
         std.Thread.sleep(step_ns);
         waited_ns += step_ns;
     } else {
@@ -697,12 +752,17 @@ fn spinForResults(catalog: *AssetCatalog, at_least: u32) !void {
     var waited_ns: u64 = 0;
     const step_ns: u64 = 1 * std.time.ns_per_ms;
     while (waited_ns < deadline_ns) : (waited_ns += step_ns) {
-        // Non-atomic peek — safe here because the test is the sole
-        // consumer and the worker is the sole producer. `pump()`
-        // would normally race us for these slots.
-        const head = catalog.results.head.load(.acquire);
-        const tail = catalog.results.tail.load(.acquire);
-        if (head -% tail >= at_least) return;
+        // Non-atomic peek across all result rings — safe here because
+        // the test is the sole consumer and each worker is the sole
+        // producer of its own ring. `pump()` would normally race us
+        // for these slots.
+        var total: u32 = 0;
+        for (&catalog.results) |*ring| {
+            const head = ring.head.load(.acquire);
+            const tail = ring.tail.load(.acquire);
+            total += head -% tail;
+        }
+        if (total >= at_least) return;
         std.Thread.sleep(step_ns);
     }
     return error.WorkerDidNotRespond;
