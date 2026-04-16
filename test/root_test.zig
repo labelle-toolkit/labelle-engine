@@ -219,6 +219,134 @@ test "Game: slash-named scene preserves original name for lookup" {
     try testing.expectEqualStrings("city_bg", entry.assets[1]);
 }
 
+// ── game.assets wiring (#454) ──────────────────────────────────
+
+test "Game: assets field is initialized and round-trips cleanly (no worker spawn)" {
+    var game = Game.init(testing.allocator);
+    defer game.deinit();
+
+    // Fresh catalog: no worker thread until the first acquire. Basic
+    // query sites must all be safe to hit immediately after init —
+    // this is the "no one ever streams anything" degenerate case that
+    // proves the field costs nothing.
+    const empty: []const []const u8 = &.{};
+    try testing.expect(game.assets.allReady(empty));
+    try testing.expectEqual(@as(f32, 1.0), game.assets.progress(empty));
+    try testing.expect(!game.assets.isReady("missing"));
+    try testing.expectEqual(@as(?anyerror, null), game.assets.lastError("missing"));
+
+    // `pump()` is safe to call with nothing queued (the engine tick
+    // does NOT pump automatically — scripts do).
+    game.assets.pump();
+}
+
+test "Game: assets.register + acquire + release exercise full catalog API through the field" {
+    var game = Game.init(testing.allocator);
+    defer game.deinit();
+
+    // Register a placeholder image asset — no backend injected, so the
+    // worker will eventually surface `error.ImageBackendNotInitialized`
+    // on the result ring, but that's fine for this smoke test: we're
+    // only proving the API surface is reachable through `game.assets`.
+    try game.assets.register("background", .image, "png", "fake-bytes");
+
+    const entry = try game.assets.acquire("background");
+    try testing.expectEqual(@as(u32, 1), entry.refcount);
+
+    const manifest: []const []const u8 = &.{"background"};
+    try testing.expect(!game.assets.allReady(manifest));
+    try testing.expectEqual(@as(f32, 0.0), game.assets.progress(manifest));
+
+    game.assets.release("background");
+    try testing.expectEqual(@as(u32, 0), entry.refcount);
+}
+
+test "Game: assets.register + acquire + pump round-trips to .ready via mock image backend" {
+    const image_loader = engine.ImageLoader;
+    // Defensive: clear any backend leaked by a previous test in this binary.
+    image_loader.clearBackend();
+
+    const Mock = struct {
+        var upload_calls: u32 = 0;
+        var unload_calls: u32 = 0;
+        var next_tex: engine.AssetTexture = 900;
+
+        fn decodeFn(
+            file_type: [:0]const u8,
+            data: []const u8,
+            allocator: std.mem.Allocator,
+        ) anyerror!engine.DecodedImage {
+            _ = file_type;
+            _ = data;
+            const pixels = try allocator.alloc(u8, 4);
+            @memset(pixels, 0xAA);
+            return .{ .pixels = pixels, .width = 1, .height = 1 };
+        }
+
+        fn uploadFn(decoded: engine.DecodedImage) anyerror!engine.AssetTexture {
+            _ = decoded;
+            upload_calls += 1;
+            const t = next_tex;
+            next_tex += 1;
+            return t;
+        }
+
+        fn unloadFn(_: engine.AssetTexture) void {
+            unload_calls += 1;
+        }
+
+        const backend: engine.ImageBackend = .{
+            .decode = decodeFn,
+            .upload = uploadFn,
+            .unload = unloadFn,
+        };
+    };
+    Mock.upload_calls = 0;
+    Mock.unload_calls = 0;
+    Mock.next_tex = 900;
+
+    image_loader.setBackend(Mock.backend);
+    defer image_loader.clearBackend();
+
+    var game = Game.init(testing.allocator);
+    defer game.deinit();
+
+    try game.assets.register("hero", .image, "png", "fake-png-bytes");
+    const entry = try game.assets.acquire("hero");
+    try testing.expectEqual(@as(u32, 1), entry.refcount);
+
+    // Spin up to 200ms for the worker to publish a decode result, then
+    // pump on the main thread. Mirrors the test harness from
+    // `src/assets/catalog.zig` so we don't need to duplicate the
+    // ring-peeking helper.
+    const deadline_ns: u64 = 200 * std.time.ns_per_ms;
+    var waited_ns: u64 = 0;
+    const step_ns: u64 = 1 * std.time.ns_per_ms;
+    while (waited_ns < deadline_ns) : (waited_ns += step_ns) {
+        const head = game.assets.results.head.load(.acquire);
+        const tail = game.assets.results.tail.load(.acquire);
+        if (head -% tail >= 1) break;
+        std.Thread.sleep(step_ns);
+    } else {
+        return error.WorkerDidNotRespond;
+    }
+
+    game.assets.pump();
+
+    try testing.expect(game.assets.isReady("hero"));
+    try testing.expectEqual(@as(u32, 1), Mock.upload_calls);
+
+    const manifest: []const []const u8 = &.{"hero"};
+    try testing.expect(game.assets.allReady(manifest));
+    try testing.expectEqual(@as(f32, 1.0), game.assets.progress(manifest));
+
+    // Free the GPU handle explicitly so the mock balances its counters
+    // (catalog-driven free on release lands in #446).
+    const entry_ptr = game.assets.entries.getPtr("hero").?;
+    entry_ptr.loader.free(entry_ptr);
+    try testing.expectEqual(@as(u32, 1), Mock.unload_calls);
+}
+
 test "Game: hierarchy parent/child" {
     var game = Game.init(testing.allocator);
     defer game.deinit();
