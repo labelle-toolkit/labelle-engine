@@ -100,9 +100,10 @@ pub const AssetCatalog = struct {
         //    can drop the TODOs.
         while (self.results.tryDequeue()) |result| {
             if (result.decoded) |payload| {
-                if (self.entries.getPtr(result.entry_name)) |entry| {
-                    entry.loader.drop(self.allocator, payload);
-                }
+                // Use the vtable carried on the result itself — avoids
+                // a hashmap lookup and survives the case where an entry
+                // was removed after its WorkRequest was submitted.
+                result.vtable.drop(self.allocator, payload);
             }
         }
 
@@ -153,14 +154,23 @@ pub const AssetCatalog = struct {
     /// `pump()` (#442) will retry on its next tick. The pointer is
     /// still returned either way; callers can keep polling `isReady`.
     pub fn acquire(self: *AssetCatalog, name: []const u8) !*AssetEntry {
-        const entry = self.entries.getPtr(name) orelse return error.AssetNotRegistered;
-        const was_zero = entry.refcount == 0;
-        entry.refcount += 1;
+        // Resolve the stable hashmap-owned key up front: `name` itself may
+        // be a temporary (stack buffer, formatted string, etc.), so the
+        // worker must never borrow it directly — use `kv.key_ptr.*`, which
+        // is the original `register`-time slice and therefore program-
+        // lifetime per the `@embedFile` invariant at the top of this file.
+        const kv = self.entries.getEntry(name) orelse return error.AssetNotRegistered;
+        const entry = kv.value_ptr;
+        const needs_enqueue = entry.refcount == 0 and entry.state == .registered;
 
-        if (was_zero and entry.state == .registered) {
+        if (needs_enqueue) {
+            // Spawn the worker BEFORE touching the refcount. If thread
+            // spawn fails, `try` bubbles the error with the catalog
+            // state unchanged — no leaked refcount that would trap the
+            // entry at `.registered` with `refcount > 0` forever.
             try self.ensureWorker();
             const request: WorkRequest = .{
-                .entry_name = name,
+                .entry_name = kv.key_ptr.*,
                 .vtable = entry.loader,
                 .file_type = entry.file_type,
                 .bytes = entry.raw_bytes,
@@ -173,10 +183,11 @@ pub const AssetCatalog = struct {
                 // `.registered` so the retry can fire naturally.
                 error.QueueFull => std.log.debug(
                     "assets: request ring full, deferring acquire of '{s}'",
-                    .{name},
+                    .{kv.key_ptr.*},
                 ),
             }
         }
+        entry.refcount += 1;
         return entry;
     }
 

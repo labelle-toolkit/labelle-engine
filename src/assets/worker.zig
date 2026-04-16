@@ -58,8 +58,14 @@ pub const WorkRequest = struct {
 /// Worker → main message. Either `decoded` is set (success) or
 /// `err` is set (failure); `pump()` discriminates and routes to
 /// `loader.upload` / `loader.drop` accordingly. Drained in #442.
+///
+/// `vtable` is carried through from the originating `WorkRequest` so
+/// consumers (`deinit` drain, future `pump()`) can drop or upload the
+/// payload without a hashmap lookup — and still do the right thing
+/// even if the entry was removed between enqueue and dequeue.
 pub const WorkResult = struct {
     entry_name: []const u8,
+    vtable: *const AssetLoaderVTable,
     decoded: ?DecodedPayload,
     err: ?anyerror,
 };
@@ -93,9 +99,14 @@ pub fn SpscRing(comptime T: type, comptime capacity: u32) type {
     return struct {
         const Self = @This();
         const mask: u32 = capacity - 1;
+        // Align head and tail to separate cache lines so the producer
+        // (writing head) and consumer (writing tail) don't ping-pong a
+        // shared cache line on every publish/consume — classic SPSC
+        // false-sharing mitigation.
+        const cache_line: usize = 64;
 
-        head: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
-        tail: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
+        head: std.atomic.Value(u32) align(cache_line) = std.atomic.Value(u32).init(0),
+        tail: std.atomic.Value(u32) align(cache_line) = std.atomic.Value(u32).init(0),
         buffer: [capacity]T = undefined,
 
         pub fn init() Self {
@@ -199,12 +210,14 @@ pub const AssetWorker = struct {
                 if (decoded_or_err) |decoded| {
                     break :blk WorkResult{
                         .entry_name = request.entry_name,
+                        .vtable = request.vtable,
                         .decoded = decoded,
                         .err = null,
                     };
                 } else |err| {
                     break :blk WorkResult{
                         .entry_name = request.entry_name,
+                        .vtable = request.vtable,
                         .decoded = null,
                         .err = err,
                     };
