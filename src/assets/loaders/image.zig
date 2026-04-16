@@ -177,12 +177,16 @@ fn drop(allocator: Allocator, decoded_payload: DecodedPayload) void {
 }
 
 fn free(entry: *AssetEntry) void {
-    const b = backend orelse return;
     const resource = entry.resource orelse return;
-    switch (resource) {
+    // Release the GPU handle if a backend is installed. If the backend
+    // was cleared (e.g. a test's `clearBackend`) after an asset uploaded,
+    // we can't reach the GPU — skip the `unload` call but STILL clear
+    // `entry.resource` so callers that check `entry.resource != null` as
+    // a cleanup-completed flag get the contract `loader.zig` documents.
+    if (backend) |b| switch (resource) {
         .image => |tex| b.unload(tex),
         else => {},
-    }
+    };
     entry.resource = null;
 }
 
