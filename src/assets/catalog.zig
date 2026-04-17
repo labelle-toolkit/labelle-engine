@@ -26,6 +26,7 @@
 //!    `project.labelle`.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
 
 const loader_mod = @import("loader.zig");
@@ -251,6 +252,15 @@ pub const AssetCatalog = struct {
             self.dispatch_counter +%= 1;
             if (self.requests[idx].tryEnqueue(request)) |_| {
                 entry.state = .queued;
+
+                // `single_threaded` (WASM) has no worker thread
+                // running — `start()` is a no-op there (issue #461).
+                // Drain the request we just enqueued on the main
+                // thread so the result lands in the result ring
+                // before the next `pump()`.
+                if (builtin.single_threaded) {
+                    self.workers[idx].runOnce();
+                }
             } else |err| switch (err) {
                 error.QueueFull => std.log.debug(
                     "assets: request ring {d} full, deferring acquire of '{s}'",
