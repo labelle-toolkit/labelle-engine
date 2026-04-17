@@ -219,7 +219,14 @@ pub const AssetWorker = struct {
     ///
     /// Bounded by the request ring — this doesn't loop forever;
     /// it processes exactly what has been enqueued so far.
+    ///
+    /// SAFETY: Must not be called while the background thread is
+    /// running. `self.requests` is a single-consumer ring; a
+    /// concurrent `runLoop` + `runOnce` would violate the SPSC
+    /// invariant. In practice the catalog only calls this under
+    /// `builtin.single_threaded`, where `start()` is a no-op.
     pub fn runOnce(self: *AssetWorker) void {
+        std.debug.assert(self.thread == null);
         while (self.requests.tryDequeue()) |request| {
             decodeAndPublish(self, request, .sync);
         }
@@ -241,7 +248,7 @@ pub const AssetWorker = struct {
     fn decodeAndPublish(
         self: *AssetWorker,
         request: WorkRequest,
-        mode: enum { thread, sync },
+        comptime mode: enum { thread, sync },
     ) void {
         const result = buildResult(self.allocator, request);
 
