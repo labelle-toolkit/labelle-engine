@@ -138,6 +138,20 @@ pub fn SpscRing(comptime T: type, comptime capacity: u32) type {
         pub fn isEmpty(self: *const Self) bool {
             return self.head.load(.acquire) == self.tail.load(.acquire);
         }
+
+        /// Snapshot used by the `runOnce` single-threaded drain to
+        /// decide whether it can safely dequeue another request: if
+        /// the result ring is already full, decoding the next work
+        /// item would leave nowhere to publish the outcome. Called
+        /// from the producer side on the result ring and from the
+        /// consumer side on the request ring — both match the
+        /// usual SPSC atomic contract (`acquire` on the remote
+        /// cursor).
+        pub fn isFull(self: *const Self) bool {
+            const head = self.head.load(.acquire);
+            const tail = self.tail.load(.acquire);
+            return head -% tail == capacity;
+        }
     };
 }
 
@@ -182,10 +196,12 @@ pub const AssetWorker = struct {
     /// Zig `-Dsingle-threaded`), `std.Thread.spawn` is a hard compile
     /// error — so this becomes a no-op and the pipeline runs on the
     /// main thread via `runOnce`, driven from `AssetCatalog.acquire`.
-    /// See issue #461.
+    /// See issue #461. The assert stays in front of the early return
+    /// so the "exactly once" contract is enforced on every target
+    /// rather than quietly relaxed for WASM.
     pub fn start(self: *AssetWorker) !void {
-        if (builtin.single_threaded) return;
         std.debug.assert(self.thread == null);
+        if (builtin.single_threaded) return;
         self.thread = try std.Thread.spawn(.{}, runLoop, .{self});
     }
 
@@ -220,6 +236,13 @@ pub const AssetWorker = struct {
     /// Bounded by the request ring — this doesn't loop forever;
     /// it processes exactly what has been enqueued so far.
     ///
+    /// Checks result-ring space *before* dequeueing so a full result
+    /// ring leaves the request where it is. Dequeueing and then
+    /// dropping a decoded payload would permanently strand the
+    /// entry: `AssetCatalog.acquire` only enqueues from `.registered`
+    /// so the dropped work cannot be re-queued, and `pump()` cannot
+    /// advance the state without a published result.
+    ///
     /// SAFETY: Must not be called while the background thread is
     /// running. `self.requests` is a single-consumer ring; a
     /// concurrent `runLoop` + `runOnce` would violate the SPSC
@@ -227,7 +250,8 @@ pub const AssetWorker = struct {
     /// `builtin.single_threaded`, where `start()` is a no-op.
     pub fn runOnce(self: *AssetWorker) void {
         std.debug.assert(self.thread == null);
-        while (self.requests.tryDequeue()) |request| {
+        while (!self.results.isFull()) {
+            const request = self.requests.tryDequeue() orelse return;
             decodeAndPublish(self, request, .sync);
         }
     }
@@ -271,17 +295,22 @@ pub const AssetWorker = struct {
                         std.Thread.sleep(idle_park_ns);
                     },
                     .sync => {
-                        // No main thread to wait for — nobody's
-                        // going to drain the ring while we spin.
-                        // Drop the decoded payload and log; the
-                        // entry stays `.queued` until the next
-                        // `acquire` re-enqueues.
+                        // Defensive fallback. `runOnce` checks
+                        // `results.isFull()` before dequeueing, so
+                        // this branch is only reachable if some
+                        // other code path dequeued a request and
+                        // tried to publish while the ring filled up
+                        // underneath it — not a valid state today.
+                        // Drop the payload so the allocator doesn't
+                        // leak. The entry is left at `.queued`; a
+                        // warning surfaces the bookkeeping bug
+                        // rather than hiding it.
                         if (result.decoded) |payload| {
                             request.vtable.drop(self.allocator, payload);
                         }
-                        std.log.debug(
-                            "assets: result ring full during sync drain for '{s}', dropping decode",
-                            .{request.entry_name},
+                        std.log.warn(
+                            "assets: result ring full during sync publish for '{s}' — bookkeeping drift, entry '{s}' stranded at .queued",
+                            .{ request.entry_name, request.entry_name },
                         );
                         return;
                     },
@@ -368,6 +397,12 @@ test "SpscRing preserves order across producer/consumer threads" {
 }
 
 test "AssetWorker decodes a stub request and publishes a result" {
+    // The threaded happy-path test. `runOnce` is covered below for
+    // single_threaded targets (WASM) where `start()` is a no-op
+    // and this test would otherwise hang waiting for a worker
+    // thread that never spawns.
+    if (builtin.single_threaded) return error.SkipZigTest;
+
     const image_loader = @import("loaders/image.zig");
     // Leave the image backend unset so the real loader surfaces its
     // "not initialised" error instead of actually decoding bytes.

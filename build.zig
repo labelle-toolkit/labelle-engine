@@ -86,8 +86,9 @@ pub fn build(b: *std.Build) void {
     // Historically `std.Thread.spawn` was unconditional and this
     // combination was a hard compile error on `main`, breaking every
     // downstream WASM build. A compile-only check here catches any
-    // regression at `zig build` time — no runtime needed because the
-    // point is the type-checker reaching `std.Thread.spawn`.
+    // regression at `zig build test` time (the step it's wired to) —
+    // no runtime needed because the point is the type-checker
+    // reaching `std.Thread.spawn`.
     const assets_single_threaded = b.addTest(.{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/assets/mod.zig"),
