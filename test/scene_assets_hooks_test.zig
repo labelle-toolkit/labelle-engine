@@ -177,3 +177,45 @@ test "asset_failure_policy.silent: setScene swallows without logging" {
     try game.setScene("level");
     try testing.expectEqualStrings("level", game.getCurrentSceneName().?);
 }
+
+test "asset_failure_policy.warn: defers swap while other manifest assets are still in-flight" {
+    var game = Game.init(testing.allocator);
+    defer game.deinit();
+    game.asset_failure_policy = .warn;
+
+    const manifest: []const []const u8 = &.{ "broken", "still_loading" };
+    game.registerSceneWithAssets("level", emptyLoader, manifest);
+    try registerFailedAsset(&game, "broken");
+
+    // `still_loading` is registered but stuck in an in-flight
+    // state — simulates an asset the real worker hasn't finished.
+    try game.assets.register("still_loading", .image, "png", "stub");
+    const loading = game.assets.entries.getPtr("still_loading").?;
+    loading.state = .queued;
+
+    try game.setScene("level");
+    // Swap deferred — `broken` is .failed (OK under .warn) but
+    // `still_loading` hasn't reached .ready or .failed yet.
+    try testing.expectEqual(@as(?[]const u8, null), game.getCurrentSceneName());
+
+    // Move `still_loading` to a terminal state — swap unblocks.
+    loading.state = .ready;
+    try game.setScene("level");
+    try testing.expectEqualStrings("level", game.getCurrentSceneName().?);
+}
+
+test "acquire error bypasses asset_failure_policy (always fatal)" {
+    var game = Game.init(testing.allocator);
+    defer game.deinit();
+    game.asset_failure_policy = .silent; // even under .silent…
+
+    // Reference an asset name that was never registered with the
+    // catalog. `acquire` fails with `error.AssetNotRegistered`
+    // (or similar) — that's an acquire_error path, not an
+    // asset_error, and must bubble regardless of policy.
+    const manifest: []const []const u8 = &.{"unregistered_asset"};
+    game.registerSceneWithAssets("level", emptyLoader, manifest);
+
+    try testing.expectError(error.AssetNotRegistered, game.setScene("level"));
+    try testing.expectEqual(@as(?[]const u8, null), game.pending_scene_assets);
+}

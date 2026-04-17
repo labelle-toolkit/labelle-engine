@@ -5,12 +5,20 @@ const std = @import("std");
 /// of `setScene`/`setSceneAtomic` (Phase 2 of the Asset Streaming
 /// RFC #437). `proceed` lets the swap continue; `not_ready` defers
 /// the swap until the next call (the script is expected to poll
-/// `setScene` every frame); `failed` aborts the swap with the
-/// underlying load error.
+/// `setScene` every frame). The two failure variants are kept
+/// separate because they carry different severity:
+///   - `acquire_error` — `catalog.acquire` itself failed (e.g. the
+///     asset wasn't registered, or the worker couldn't be spawned).
+///     Always a bug in the caller or platform layer; bypasses
+///     `asset_failure_policy` and is always fatal.
+///   - `asset_error` — `catalog.anyFailed` reports a manifest entry
+///     in `.failed` state. Subject to `asset_failure_policy`
+///     (fatal / warn / silent).
 const ManifestGate = union(enum) {
     proceed,
     not_ready,
-    failed: anyerror,
+    acquire_error: anyerror,
+    asset_error: anyerror,
 };
 
 /// Acquire any not-yet-acquired assets in `target_assets`, then
@@ -34,33 +42,72 @@ fn gateOnManifest(game: anytype, target_name: []const u8, target_assets: []const
                         if (e.refcount > 0) game.assets.release(rb);
                     }
                 }
-                return .{ .failed = err };
+                return .{ .acquire_error = err };
             };
         }
         if (game.pending_scene_assets) |old| game.allocator.free(old);
         game.pending_scene_assets = game.allocator.dupe(u8, target_name) catch null;
     }
 
-    if (game.assets.anyFailed(target_assets)) |err| return .{ .failed = err };
+    if (game.assets.anyFailed(target_assets)) |err| return .{ .asset_error = err };
     if (!game.assets.allReady(target_assets)) return .not_ready;
     return .proceed;
 }
 
-/// Release the previous scene's asset manifest after a successful
-/// swap. Called from the success path of both setScene variants.
-fn releasePreviousAssets(game: anytype, prev_name: []const u8) void {
-    if (game.scenes.get(prev_name)) |entry| {
-        for (entry.assets) |asset_name| game.assets.release(asset_name);
+/// Run the gate and interpret the result. Returns `true` iff the
+/// caller should proceed with the swap. Returns `false` when the
+/// swap must be deferred (manifest still decoding, or a `.warn` /
+/// `.silent` policy swallowed an asset failure but other assets
+/// in the manifest are not yet `.ready`). `acquire_error` always
+/// bubbles — it signals a bug upstream, not an expected load
+/// failure, so `asset_failure_policy` does not apply.
+fn gateOrDefer(
+    game: anytype,
+    caller_tag: []const u8,
+    target_name: []const u8,
+    target_assets: []const []const u8,
+) !bool {
+    switch (gateOnManifest(game, target_name, target_assets)) {
+        .proceed => return true,
+        .not_ready => return false,
+        .acquire_error => |err| {
+            rollbackPendingAssets(game);
+            return err;
+        },
+        .asset_error => |err| {
+            try handleAssetFailure(game, caller_tag, target_name, err);
+            // Policy was `.warn` or `.silent` — the failed asset is
+            // OK to ship with, but other entries in the manifest
+            // might still be in flight (`.queued` / `.decoding`).
+            // Proceeding now would pop the scene up with half-loaded
+            // assets. Defer until every manifest entry reaches a
+            // terminal state — `.ready` (usable) or `.failed`
+            // (policy already said this is OK).
+            for (target_assets) |n| {
+                if (game.assets.entries.getPtr(n)) |e| {
+                    if (e.state != .ready and e.state != .failed) return false;
+                }
+            }
+            return true;
+        },
     }
 }
 
+/// Release every asset in `assets`. Called from the success path
+/// of both `setScene` variants with the outgoing scene's manifest
+/// slice (looked up once by the caller — no second `scenes.get`).
+fn releasePreviousAssets(game: anytype, assets: []const []const u8) void {
+    for (assets) |asset_name| game.assets.release(asset_name);
+}
+
 /// Consults `game.asset_failure_policy` when the manifest gate
-/// reports a `.failed` asset. `.fatal` rolls back and bubbles the
-/// error; `.warn` logs and swallows; `.silent` swallows without
-/// logging. Under `.warn`/`.silent` the caller proceeds with the
-/// swap despite the failure — lookups on the broken asset fall
-/// through to whatever fallback the loader installed.
-fn handleAssetFailure(game: anytype, target_name: []const u8, err: anyerror) !void {
+/// reports an asset in `.failed` state (the `anyFailed` path —
+/// `acquire` errors are routed separately and bypass this helper).
+/// `.fatal` rolls back and bubbles the error; `.warn` logs and
+/// swallows; `.silent` swallows without logging. `caller_tag`
+/// distinguishes the log message between `setScene` and
+/// `setSceneAtomic` entry points.
+fn handleAssetFailure(game: anytype, caller_tag: []const u8, target_name: []const u8, err: anyerror) !void {
     switch (game.asset_failure_policy) {
         .fatal => {
             rollbackPendingAssets(game);
@@ -68,8 +115,8 @@ fn handleAssetFailure(game: anytype, target_name: []const u8, err: anyerror) !vo
         },
         .warn => {
             game.log.warn(
-                "setScene('{s}'): asset load failure ({s}) — proceeding under .warn policy",
-                .{ target_name, @errorName(err) },
+                "{s}('{s}'): asset load failure ({s}) — proceeding under .warn policy",
+                .{ caller_tag, target_name, @errorName(err) },
             );
         },
         .silent => {},
@@ -203,11 +250,7 @@ pub fn Mixin(comptime Game: type) type {
                 e.assets
             else
                 &.{};
-            switch (gateOnManifest(self, name, target_assets)) {
-                .proceed => {},
-                .not_ready => return,
-                .failed => |err| try handleAssetFailure(self, name, err),
-            }
+            if (!try gateOrDefer(self, "setScene", name, target_assets)) return;
 
             // Bridge catalog-uploaded image handles into
             // atlas_manager so findSprite can return the right
@@ -260,13 +303,14 @@ pub fn Mixin(comptime Game: type) type {
             // clear the pending marker. Order is acquire-new-then-
             // release-old (RFC §scene transition wiring) so shared
             // assets keep refcount ≥ 1 across the swap and never
-            // get freed-then-reloaded.
+            // get freed-then-reloaded. The scene-entry lookup
+            // happens once here and the resulting slice is shared
+            // between the release hook (which lets listeners read
+            // the final refcount state) and the release loop.
             if (previous_name) |p| {
                 const prev_assets: []const []const u8 = if (self.scenes.get(p)) |e| e.assets else &.{};
-                // Fire BEFORE the release so listeners observe the
-                // final refcount state while the assets still exist.
                 self.emitHook(.{ .scene_assets_release = .{ .name = p, .assets = prev_assets } });
-                releasePreviousAssets(self, p);
+                releasePreviousAssets(self, prev_assets);
             }
             if (self.pending_scene_assets) |p| {
                 self.allocator.free(p);
@@ -286,11 +330,7 @@ pub fn Mixin(comptime Game: type) type {
             // same idempotent acquire/release cycle so callers can
             // mix `setScene` and `setSceneAtomic` without confusing
             // the gate.
-            switch (gateOnManifest(self, name, entry.assets)) {
-                .proceed => {},
-                .not_ready => return,
-                .failed => |err| try handleAssetFailure(self, name, err),
-            }
+            if (!try gateOrDefer(self, "setSceneAtomic", name, entry.assets)) return;
 
             bridgeImageAssetsToAtlasManager(self, entry.assets);
 
@@ -328,7 +368,7 @@ pub fn Mixin(comptime Game: type) type {
             if (previous_name) |p| {
                 const prev_assets: []const []const u8 = if (self.scenes.get(p)) |e| e.assets else &.{};
                 self.emitHook(.{ .scene_assets_release = .{ .name = p, .assets = prev_assets } });
-                releasePreviousAssets(self, p);
+                releasePreviousAssets(self, prev_assets);
             }
             if (self.pending_scene_assets) |p| {
                 self.allocator.free(p);
