@@ -21,6 +21,8 @@ pub fn HookPayload(comptime Entity: type) type {
         scene_before_load: SceneBeforeLoadInfo,
         scene_load: SceneInfo,
         scene_unload: SceneInfo,
+        scene_assets_acquire: SceneAssetsInfo,
+        scene_assets_release: SceneAssetsInfo,
 
         // State lifecycle
         state_before_change: StateChangeInfo,
@@ -48,6 +50,16 @@ pub const SceneBeforeLoadInfo = struct {
 
 pub const SceneInfo = struct {
     name: []const u8,
+};
+
+/// Payload for `scene_assets_acquire` / `scene_assets_release`. `assets`
+/// is the manifest attached to the scene entry — listeners can read it
+/// without a `scenes.get(name)` lookup. Slice lifetime matches the
+/// `SceneEntry.assets` slice (program-lifetime when populated by the
+/// assembler).
+pub const SceneAssetsInfo = struct {
+    name: []const u8,
+    assets: []const []const u8,
 };
 
 pub const StateChangeInfo = struct {

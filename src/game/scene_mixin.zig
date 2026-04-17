@@ -54,6 +54,28 @@ fn releasePreviousAssets(game: anytype, prev_name: []const u8) void {
     }
 }
 
+/// Consults `game.asset_failure_policy` when the manifest gate
+/// reports a `.failed` asset. `.fatal` rolls back and bubbles the
+/// error; `.warn` logs and swallows; `.silent` swallows without
+/// logging. Under `.warn`/`.silent` the caller proceeds with the
+/// swap despite the failure — lookups on the broken asset fall
+/// through to whatever fallback the loader installed.
+fn handleAssetFailure(game: anytype, target_name: []const u8, err: anyerror) !void {
+    switch (game.asset_failure_policy) {
+        .fatal => {
+            rollbackPendingAssets(game);
+            return err;
+        },
+        .warn => {
+            game.log.warn(
+                "setScene('{s}'): asset load failure ({s}) — proceeding under .warn policy",
+                .{ target_name, @errorName(err) },
+            );
+        },
+        .silent => {},
+    }
+}
+
 /// Roll back the acquire batch on failure / abort. Frees the
 /// `pending_scene_assets` marker so the next setScene call starts
 /// from scratch.
@@ -184,10 +206,7 @@ pub fn Mixin(comptime Game: type) type {
             switch (gateOnManifest(self, name, target_assets)) {
                 .proceed => {},
                 .not_ready => return,
-                .failed => |err| {
-                    rollbackPendingAssets(self);
-                    return err;
-                },
+                .failed => |err| try handleAssetFailure(self, name, err),
             }
 
             // Bridge catalog-uploaded image handles into
@@ -201,6 +220,13 @@ pub fn Mixin(comptime Game: type) type {
             // outgoing manifest after the swap completes.
             const previous_name = if (self.current_scene_name) |n| self.allocator.dupe(u8, n) catch null else null;
             defer if (previous_name) |p| self.allocator.free(p);
+
+            // Fire `scene_assets_acquire` at the "we own the new
+            // manifest and are about to swap" moment — after the
+            // gate proved allReady, before any scene teardown. This
+            // gives listeners a chance to cache the manifest and
+            // react before `scene_before_load` fires.
+            self.emitHook(.{ .scene_assets_acquire = .{ .name = name, .assets = target_assets } });
 
             self.unloadCurrentScene();
 
@@ -235,7 +261,13 @@ pub fn Mixin(comptime Game: type) type {
             // release-old (RFC §scene transition wiring) so shared
             // assets keep refcount ≥ 1 across the swap and never
             // get freed-then-reloaded.
-            if (previous_name) |p| releasePreviousAssets(self, p);
+            if (previous_name) |p| {
+                const prev_assets: []const []const u8 = if (self.scenes.get(p)) |e| e.assets else &.{};
+                // Fire BEFORE the release so listeners observe the
+                // final refcount state while the assets still exist.
+                self.emitHook(.{ .scene_assets_release = .{ .name = p, .assets = prev_assets } });
+                releasePreviousAssets(self, p);
+            }
             if (self.pending_scene_assets) |p| {
                 self.allocator.free(p);
                 self.pending_scene_assets = null;
@@ -257,16 +289,15 @@ pub fn Mixin(comptime Game: type) type {
             switch (gateOnManifest(self, name, entry.assets)) {
                 .proceed => {},
                 .not_ready => return,
-                .failed => |err| {
-                    rollbackPendingAssets(self);
-                    return err;
-                },
+                .failed => |err| try handleAssetFailure(self, name, err),
             }
 
             bridgeImageAssetsToAtlasManager(self, entry.assets);
 
             const previous_name = if (self.current_scene_name) |n| self.allocator.dupe(u8, n) catch null else null;
             defer if (previous_name) |p| self.allocator.free(p);
+
+            self.emitHook(.{ .scene_assets_acquire = .{ .name = name, .assets = entry.assets } });
 
             // Clear scene entity list BEFORE deinit so Scene.deinit's entity
             // destruction loop has nothing to iterate (entities will be destroyed
@@ -294,7 +325,11 @@ pub fn Mixin(comptime Game: type) type {
                 onLoad(self);
             }
 
-            if (previous_name) |p| releasePreviousAssets(self, p);
+            if (previous_name) |p| {
+                const prev_assets: []const []const u8 = if (self.scenes.get(p)) |e| e.assets else &.{};
+                self.emitHook(.{ .scene_assets_release = .{ .name = p, .assets = prev_assets } });
+                releasePreviousAssets(self, p);
+            }
             if (self.pending_scene_assets) |p| {
                 self.allocator.free(p);
                 self.pending_scene_assets = null;
