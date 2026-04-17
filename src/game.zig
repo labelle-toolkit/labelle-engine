@@ -189,6 +189,12 @@ pub fn GameConfig(
         // Scene management
         scenes: std.StringHashMap(SceneEntry),
         jsonc_scenes: std.StringHashMap(JsoncSceneInfo),
+        /// Entities created by the active scene's loader (e.g. the JSONC
+        /// bridge). `unloadCurrentScene` destroys everything in this list
+        /// on scene swap so entities from the outgoing scene don't leak
+        /// into the incoming one. Loaders MUST call `trackSceneEntity`
+        /// for every entity they create.
+        scene_entities: std.ArrayList(Entity) = .{},
         current_scene_name: ?[]const u8 = null,
         pending_scene_change: ?[]const u8 = null,
         pending_scene_atomic: bool = false,
@@ -288,6 +294,7 @@ pub fn GameConfig(
             // through this whole call.
             if (has_events) self.event_buffer.deinit(self.allocator);
             self.teardownActiveScene();
+            self.scene_entities.deinit(self.allocator);
             self.assets.deinit();
             if (self.current_scene_name) |name| {
                 self.allocator.free(name);
@@ -447,6 +454,7 @@ pub fn GameConfig(
                     self.destroyEntity(child);
                 }
             }
+            self.untrackSceneEntity(entity);
             self.active_world.sprite_cache.invalidate(@intCast(entity));
             self.renderer.untrackEntity(entity);
             self.ecs_backend.destroyEntity(entity);
@@ -455,6 +463,7 @@ pub fn GameConfig(
         }
 
         pub fn destroyEntityOnly(self: *Self, entity: Entity) void {
+            self.untrackSceneEntity(entity);
             self.active_world.sprite_cache.invalidate(@intCast(entity));
             self.renderer.untrackEntity(entity);
             self.ecs_backend.destroyEntity(entity);
@@ -732,9 +741,45 @@ pub fn GameConfig(
                     }
                 }
             }
+            // Destroy every entity the outgoing scene's loader created.
+            // `destroyEntityOnly` skips the children-recursion so a parent
+            // destroy doesn't double-free an already-listed child, and it
+            // calls `untrackSceneEntity` which swap-removes from this same
+            // list — so we pop from the end instead of iterating by index
+            // (which would skip entries).
+            while (self.scene_entities.pop()) |entity| {
+                self.destroyEntityOnly(entity);
+            }
+
             // Scene deinit destroys non-persistent entities (which untracks them
             // from the renderer). Persistent entities remain in ECS + renderer.
             self.teardownActiveScene();
+        }
+
+        /// Register an entity as owned by the current scene. Called by
+        /// scene loaders (JSONC bridge, comptime registerScene callbacks)
+        /// so `unloadCurrentScene` can destroy the entity when the scene
+        /// swaps out. Silently no-ops on OOM — the scene still works, we
+        /// just lose the auto-cleanup for the un-tracked entity.
+        pub fn trackSceneEntity(self: *Self, entity: Entity) void {
+            self.scene_entities.append(self.allocator, entity) catch {};
+        }
+
+        /// Remove an entity from the scene-tracking list. Called by
+        /// `destroyEntity`/`destroyEntityOnly` so (1) a scene's cleanup
+        /// loop never double-destroys a tracked-then-manually-destroyed
+        /// entity and (2) the list doesn't grow unboundedly across a
+        /// scene that churns through short-lived entities. O(N) scan +
+        /// swap-remove — fine for scenes with hundreds of entities;
+        /// revisit if a project pushes tens of thousands.
+        fn untrackSceneEntity(self: *Self, entity: Entity) void {
+            var i: usize = 0;
+            while (i < self.scene_entities.items.len) : (i += 1) {
+                if (self.scene_entities.items[i] == entity) {
+                    _ = self.scene_entities.swapRemove(i);
+                    return;
+                }
+            }
         }
 
         /// Store a type-erased active scene. Called by sceneLoaderFn to hand

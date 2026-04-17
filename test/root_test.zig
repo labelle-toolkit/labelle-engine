@@ -323,9 +323,11 @@ test "Game: assets.register + acquire + pump round-trips to .ready via mock imag
     var waited_ns: u64 = 0;
     const step_ns: u64 = 1 * std.time.ns_per_ms;
     while (waited_ns < deadline_ns) : (waited_ns += step_ns) {
-        const head = game.assets.results.head.load(.acquire);
-        const tail = game.assets.results.tail.load(.acquire);
-        if (head -% tail >= 1) break;
+        var total: u32 = 0;
+        for (&game.assets.results) |*ring| {
+            total += ring.head.load(.acquire) -% ring.tail.load(.acquire);
+        }
+        if (total >= 1) break;
         std.Thread.sleep(step_ns);
     } else {
         return error.WorkerDidNotRespond;
