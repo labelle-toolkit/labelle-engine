@@ -44,6 +44,7 @@ pub fn build(b: *std.Build) void {
         "test/asset_catalog_test.zig",
         "test/asset_streaming_shim_test.zig",
         "test/animation_def_test.zig",
+        "test/scene_assets_hooks_test.zig",
     };
 
     for (test_files) |test_file| {

@@ -108,6 +108,11 @@ pub fn GameConfig(
             onUnload: ?*const fn (*Self) void = null,
         };
 
+        /// Controls how `setScene` reacts when the new scene's asset
+        /// manifest contains a `.failed` entry. See
+        /// `Self.asset_failure_policy`.
+        pub const AssetFailurePolicy = enum { fatal, warn, silent };
+
         pub const SceneEntry = struct {
             loader_fn: *const fn (*Self) anyerror!void,
             hooks: SceneHooks,
@@ -211,6 +216,18 @@ pub fn GameConfig(
         /// Cleared after the swap completes (success path) or after
         /// an explicit abort (`scene_assets_release_pending`).
         pending_scene_assets: ?[]const u8 = null,
+
+        /// Controls how `setScene` / `setSceneAtomic` react when
+        /// `catalog.anyFailed(target.assets)` returns non-null during
+        /// the manifest gate. `.fatal` (default) preserves today's
+        /// behaviour — the swap is rolled back and the load error is
+        /// returned. `.warn` logs via `game.log.warn` and proceeds
+        /// (broken assets stay in `.failed` state; lookups return
+        /// whatever fallback the loader installed). `.silent` proceeds
+        /// without logging. Games that ship with optional assets
+        /// (e.g. missing background music) can set this to `.warn`
+        /// at startup.
+        asset_failure_policy: AssetFailurePolicy = .fatal,
 
         // Active scene (type-erased) — managed by sceneLoaderFn / setActiveScene
         active_scene_ptr: ?*anyopaque = null,
