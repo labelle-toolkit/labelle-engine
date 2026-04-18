@@ -28,6 +28,9 @@ pub fn HookPayload(comptime Entity: type) type {
         state_before_change: StateChangeInfo,
         state_after_change: StateChangeInfo,
 
+        // Pause lifecycle
+        pause_changed: PauseChangedInfo,
+
         // Entity lifecycle
         entity_created: EntityInfo(Entity),
         entity_destroyed: EntityInfo(Entity),
@@ -65,6 +68,14 @@ pub const SceneAssetsInfo = struct {
 pub const StateChangeInfo = struct {
     old_state: []const u8,
     new_state: []const u8,
+};
+
+/// Payload for `pause_changed` — emitted by `Game.setPaused` when the
+/// pause flag actually changes value. Plugin-shipped scripts gate on
+/// `game.isPaused()` directly; this hook is for game/system code that
+/// wants to react to the transition (e.g. fade audio, pulse a UI badge).
+pub const PauseChangedInfo = struct {
+    paused: bool,
 };
 
 pub fn EntityInfo(comptime Entity: type) type {
