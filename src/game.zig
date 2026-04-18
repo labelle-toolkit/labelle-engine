@@ -259,6 +259,15 @@ pub fn GameConfig(
         /// Time scale factor: 0 = paused, 0.5 = slow-mo, 1.0 = normal, 2.0 = fast.
         /// When paused (0), rendering and GUI continue but tick logic stops.
         time_scale: f32 = 1.0,
+        /// Plugin-accessible pause flag (#465). Plugin-shipped scripts
+        /// (pathfinder's `Controller.advance`, asset-catalog's `pump`,
+        /// etc.) gate on `game.isPaused()` instead of importing a
+        /// game-side `GamePaused` component, which would cross the Zig
+        /// module-path boundary. The game owns the source of truth —
+        /// typically a tiny always-on script syncing its own
+        /// `GamePaused` component into `setPaused` — and the engine
+        /// just stores + dispatches the bool.
+        paused: bool = false,
 
         // Profiling (debug builds only)
         /// Opaque pointer to ScriptRunner's profile array. Set by generated code.
@@ -748,6 +757,34 @@ pub fn GameConfig(
         pub const queueStateChange = StateMixin.queueStateChange;
         pub const getState = StateMixin.getState;
 
+        // ── Pause flag (#465) ───────────────────────────────────────
+
+        /// Set the engine-level pause flag. Emits `pause_changed` when
+        /// the value transitions; idempotent if already at `paused`.
+        ///
+        /// Intended to be called from a game-side sync script that
+        /// mirrors a game-owned `GamePaused` component (or equivalent)
+        /// into the engine, so plugin-shipped scripts can gate via
+        /// `game.isPaused()` without importing game components.
+        pub fn setPaused(self: *Self, paused: bool) void {
+            if (self.paused == paused) return;
+            self.paused = paused;
+            self.emitHook(.{ .pause_changed = .{ .paused = paused } });
+        }
+
+        /// Read the engine-level pause predicate. Returns true if
+        /// *either* the explicit `paused` flag is set OR `time_scale`
+        /// is zero — both are valid pause mechanisms and tick gating
+        /// should honour both uniformly.
+        ///
+        /// Plugin scripts should use this instead of reaching for a
+        /// game-side `GamePaused` component — the latter would couple
+        /// plugin code to the game's component types across module
+        /// boundaries.
+        pub fn isPaused(self: *const Self) bool {
+            return self.paused or self.time_scale == 0;
+        }
+
         pub fn unloadCurrentScene(self: *Self) void {
             if (has_events) self.event_buffer.clearRetainingCapacity();
             if (self.current_scene_name) |name| {
@@ -1000,16 +1037,14 @@ pub fn GameConfig(
             return self.time_scale;
         }
 
-        pub fn isPaused(self: *const Self) bool {
-            return self.time_scale == 0;
-        }
-
         pub fn pause(self: *Self) void {
             self.time_scale = 0;
+            self.setPaused(true);
         }
 
         pub fn resume_(self: *Self) void {
             self.time_scale = 1.0;
+            self.setPaused(false);
         }
 
         pub fn tick(self: *Self, dt: f32) void {
@@ -1071,8 +1106,11 @@ pub fn GameConfig(
                 }
             }
 
-            // Paused: skip game logic but keep frame counter advancing
-            if (scaled_dt == 0) {
+            // Paused: skip game logic but keep frame counter advancing.
+            // Gates on the unified `isPaused()` so an explicit
+            // `setPaused(true)` halts the tick even when time_scale is
+            // still 1.0 — not just the `scaled_dt == 0` variant below.
+            if (self.isPaused()) {
                 self.frame_number += 1;
                 return;
             }

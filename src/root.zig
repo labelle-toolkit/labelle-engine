@@ -93,6 +93,7 @@ pub const FrameInfo = hooks_types_mod.FrameInfo;
 pub const SceneBeforeLoadInfo = hooks_types_mod.SceneBeforeLoadInfo;
 pub const SceneInfo = hooks_types_mod.SceneInfo;
 pub const StateChangeInfo = hooks_types_mod.StateChangeInfo;
+pub const PauseChangedInfo = hooks_types_mod.PauseChangedInfo;
 pub const EntityInfo = hooks_types_mod.EntityInfo;
 pub const ComponentPayload = hooks_types_mod.ComponentPayload;
 
