@@ -856,6 +856,30 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
                             for (local_ref_ctx.deferred.items) |deferred| {
                                 patchRefField(game, deferred, &local_ref_ctx);
                             }
+
+                            // Fire onReady + postLoad for this nested child
+                            // now that its components, nested entities, and
+                            // refs are all in place. Parity with the
+                            // top-level `fireOnReadyAll` in `loadEntityInternal`
+                            // — without this, components declared on nested
+                            // entities (e.g. `Workstation.postLoad` inside a
+                            // Room's `workstations` array) never run.
+                            //
+                            // Pre-populate `applied` with scene component
+                            // names so `fireOnReadyAll`'s prefab-loop
+                            // `contains` check skips prefab entries that
+                            // the scene already overrode. Otherwise any
+                            // component present in BOTH maps would fire
+                            // its hooks twice (once from the scene loop,
+                            // once from the prefab loop).
+                            var nested_applied = std.StringHashMap(void).init(game.allocator);
+                            defer nested_applied.deinit();
+                            if (child_scene_comps) |sc| {
+                                for (sc.entries) |e| {
+                                    nested_applied.put(e.key, {}) catch {};
+                                }
+                            }
+                            fireOnReadyAll(game, child, child_scene_comps, child_prefab_comps, &nested_applied);
                         }
 
                         ids[idx] = @intCast(child);
