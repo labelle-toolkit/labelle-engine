@@ -54,10 +54,50 @@ const Container = struct {
     slots: []const u64 = &.{},
 };
 
+/// Captures the value of a `[]const u64` ref-array at postLoad time,
+/// so tests can assert whether the array was patched with spawned
+/// child entity IDs *before* postLoad ran.
+const SlotsCapture = struct {
+    slots: []const u64 = &.{},
+    /// Sentinel — set by postLoad. Non-zero means postLoad ran and
+    /// observed at least one resolved ID; zero means postLoad saw
+    /// the default empty slice.
+    captured_len: u32 = 0,
+    captured_first: u64 = 0,
+
+    pub fn postLoad(self: *@This(), game: anytype, entity: anytype) void {
+        _ = game;
+        _ = entity;
+        self.captured_len = @intCast(self.slots.len);
+        if (self.slots.len > 0) self.captured_first = self.slots[0];
+    }
+};
+
+/// Captures the value of a `u64` entity-ref field at postLoad time,
+/// so tests can assert whether `@ref` was resolved *before* postLoad
+/// ran. `entity_refs` is what tells the loader to do the deferred
+/// `@name` → entity-id patching.
+const RefCapture = struct {
+    pub const save = core.Saveable(.saveable, @This(), .{
+        .entity_refs = &.{"target"},
+    });
+    target: u64 = 0,
+    /// Snapshot of `target` at postLoad time.
+    captured: u64 = 0,
+
+    pub fn postLoad(self: *@This(), game: anytype, entity: anytype) void {
+        _ = game;
+        _ = entity;
+        self.captured = self.target;
+    }
+};
+
 const Components = engine.ComponentRegistry(.{
     .PostLoadBump = PostLoadBump,
     .OnReadyBump = OnReadyBump,
     .Container = Container,
+    .SlotsCapture = SlotsCapture,
+    .RefCapture = RefCapture,
 });
 
 const Game = engine.Game;
@@ -300,4 +340,100 @@ test "nested scene override + prefab definition fires onReady exactly once" {
     try Bridge.loadSceneFromSource(&game, scene_src, prefab_path);
 
     try testing.expectEqual(@as(u32, 1), on_ready_calls);
+}
+
+test "nested postLoad sees resolved ref-array (spawned child IDs patched)" {
+    // A nested entity carrying a `[]const u64` whose items are
+    // auto-spawned child entities. The loader is expected to have
+    // patched the slice with spawned IDs BEFORE `postLoad` fires on
+    // the owning entity — otherwise `postLoad` would see an empty
+    // slice and components like `Workstation.postLoad` (which build
+    // runtime slot tables from the patched IDs) would silently
+    // misinitialize.
+    var game = Game.init(testing.allocator);
+    defer game.deinit();
+
+    try loadSource(&game,
+        \\{
+        \\  "entities": [
+        \\    {
+        \\      "components": {
+        \\        "Container": {
+        \\          "slots": [
+        \\            {
+        \\              "components": {
+        \\                "SlotsCapture": {
+        \\                  "slots": [
+        \\                    { "components": { "PostLoadBump": {} } },
+        \\                    { "components": { "PostLoadBump": {} } }
+        \\                  ]
+        \\                }
+        \\              }
+        \\            }
+        \\          ]
+        \\        }
+        \\      }
+        \\    }
+        \\  ]
+        \\}
+    );
+
+    var view = game.ecs_backend.view(.{SlotsCapture}, .{});
+    defer view.deinit();
+    const e = view.next() orelse return error.TestExpectedEntity;
+    const cap = game.ecs_backend.getComponent(e, SlotsCapture).?;
+    try testing.expectEqual(@as(u32, 2), cap.captured_len);
+    try testing.expect(cap.captured_first != 0);
+    // Sanity: the captured id should match one of the spawned children.
+    const first_entity: Game.EntityType = @intCast(cap.captured_first);
+    try testing.expect(game.ecs_backend.hasComponent(first_entity, PostLoadBump));
+}
+
+test "nested postLoad sees resolved @ref entity-ref" {
+    // A nested entity with a `u64` entity-ref field declared via
+    // `entity_refs` in the component's Saveable. The loader defers
+    // the `@name` → id patch until the ref context resolves, then
+    // patches before firing `postLoad`. This test guards that
+    // ordering: postLoad snapshots `target` into `captured`, and the
+    // captured value must be non-zero and point at the referenced
+    // entity.
+    var game = Game.init(testing.allocator);
+    defer game.deinit();
+
+    try loadSource(&game,
+        \\{
+        \\  "entities": [
+        \\    {
+        \\      "components": {
+        \\        "Container": {
+        \\          "slots": [
+        \\            { "ref": "anchor", "components": { "PostLoadBump": {} } },
+        \\            { "components": { "RefCapture": { "target": "@anchor" } } }
+        \\          ]
+        \\        }
+        \\      }
+        \\    }
+        \\  ]
+        \\}
+    );
+
+    // Find the anchor via PostLoadBump.
+    const Entity = Game.EntityType;
+    var anchor: ?Entity = null;
+    {
+        var view = game.ecs_backend.view(.{PostLoadBump}, .{});
+        defer view.deinit();
+        while (view.next()) |e| {
+            anchor = e;
+        }
+    }
+    try testing.expect(anchor != null);
+
+    var view = game.ecs_backend.view(.{RefCapture}, .{});
+    defer view.deinit();
+    const e = view.next() orelse return error.TestExpectedEntity;
+    const cap = game.ecs_backend.getComponent(e, RefCapture).?;
+    // postLoad must have seen the patched ref, not the default 0.
+    try testing.expectEqual(@as(u64, @intCast(anchor.?)), cap.captured);
+    try testing.expectEqual(cap.target, cap.captured);
 }
