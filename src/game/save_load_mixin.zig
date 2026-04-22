@@ -292,26 +292,42 @@ pub fn Mixin(comptime Game: type) type {
                 // save block above. Uses `setParent` so the engine's
                 // Children back-link is rebuilt alongside.
                 //
+                // Mirrors the save-side `has_parent_in_registry` guard
+                // and Position's load-side guard: if a game ever
+                // registers `Game.ParentComp`, the registry-driven
+                // restore already handles Parent via `addComponent`, so
+                // this built-in block would double-restore and trigger
+                // `setParent` with stale state (review #470).
+                //
                 // Skip the restore unless we can both parse a valid
                 // saved entity ID and map it to a post-load entity —
                 // passing a stale or raw ID to `setParent` would trip
                 // `assertEntityAlive` in debug or corrupt hierarchy
-                // state in release builds (cursor / Copilot review).
-                if (components.get("Parent")) |parent_val| blk: {
-                    const parent_obj = parent_val.object;
-                    const ent_val = parent_obj.get("entity") orelse break :blk;
-                    const saved_parent_id: u64 = switch (ent_val) {
-                        .integer => |i| if (i >= 0) @intCast(i) else break :blk,
-                        else => break :blk,
-                    };
-                    const current_parent_id = id_map.get(saved_parent_id) orelse break :blk;
-                    const parent_entity: Entity = @intCast(current_parent_id);
-                    const inherit_rotation = parentFlag(parent_obj, "inherit_rotation");
-                    const inherit_scale = parentFlag(parent_obj, "inherit_scale");
-                    self.setParent(entity, parent_entity, .{
-                        .inherit_rotation = inherit_rotation,
-                        .inherit_scale = inherit_scale,
-                    });
+                // state in release builds.
+                const Parent_load = Game.ParentComp;
+                const has_parent_in_registry_load = comptime blk: {
+                    for (names) |name| {
+                        if (Reg.getType(name) == Parent_load) break :blk true;
+                    }
+                    break :blk false;
+                };
+                if (!has_parent_in_registry_load) {
+                    if (components.get("Parent")) |parent_val| blk: {
+                        const parent_obj = parent_val.object;
+                        const ent_val = parent_obj.get("entity") orelse break :blk;
+                        const saved_parent_id: u64 = switch (ent_val) {
+                            .integer => |i| if (i >= 0) @intCast(i) else break :blk,
+                            else => break :blk,
+                        };
+                        const current_parent_id = id_map.get(saved_parent_id) orelse break :blk;
+                        const parent_entity: Entity = @intCast(current_parent_id);
+                        const inherit_rotation = parentFlag(parent_obj, "inherit_rotation");
+                        const inherit_scale = parentFlag(parent_obj, "inherit_scale");
+                        self.setParent(entity, parent_entity, .{
+                            .inherit_rotation = inherit_rotation,
+                            .inherit_scale = inherit_scale,
+                        });
+                    }
                 }
             }
 
