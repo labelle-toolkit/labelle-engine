@@ -20,6 +20,19 @@ pub fn Mixin(comptime Game: type) type {
             return @intCast(entity);
         }
 
+        /// Read a boolean field out of a serialised Parent object,
+        /// defaulting to `false` for missing / non-bool values. Kept
+        /// local so the save and load sides of the built-in Parent
+        /// pathway stay symmetric and the call sites don't repeat the
+        /// `switch (v) { .bool => ... }` boilerplate.
+        fn parentFlag(parent_obj: std.json.ObjectMap, field: []const u8) bool {
+            const v = parent_obj.get(field) orelse return false;
+            return switch (v) {
+                .bool => |b| b,
+                else => false,
+            };
+        }
+
         /// Collect entities from a view into an ArrayList, closing the view after.
         fn collectEntities(comptime T: type, ecs: anytype, allocator: std.mem.Allocator) !std.ArrayList(Entity) {
             var buf: std.ArrayList(Entity) = .{};
@@ -105,17 +118,30 @@ pub fn Mixin(comptime Game: type) type {
                 // so prefab hierarchies survive save/load — otherwise
                 // every child-with-Position drifts to scene origin
                 // after load (see labelle-core #11).
+                //
+                // Guarded by a registry-type check so a game that does
+                // register a component serialised as `"Parent"` in the
+                // future doesn't produce duplicate JSON keys (mirrors
+                // Position's `has_position_in_registry`).
                 const Parent = Game.ParentComp;
-                if (self.active_world.ecs_backend.getComponent(entity, Parent)) |parent| {
-                    if (!first_comp) try writer.writeAll(",");
-                    try writer.writeAll("\n        \"Parent\": {\"entity\": ");
-                    try std.fmt.format(writer, "{d}", .{entityToU64(parent.entity)});
-                    try writer.writeAll(", \"inherit_rotation\": ");
-                    try writer.writeAll(if (parent.inherit_rotation) "true" else "false");
-                    try writer.writeAll(", \"inherit_scale\": ");
-                    try writer.writeAll(if (parent.inherit_scale) "true" else "false");
-                    try writer.writeAll("}");
-                    first_comp = false;
+                const has_parent_in_registry = comptime blk: {
+                    for (names) |name| {
+                        if (Reg.getType(name) == Parent) break :blk true;
+                    }
+                    break :blk false;
+                };
+                if (!has_parent_in_registry) {
+                    if (self.active_world.ecs_backend.getComponent(entity, Parent)) |parent| {
+                        if (!first_comp) try writer.writeAll(",");
+                        try writer.writeAll("\n        \"Parent\": {\"entity\": ");
+                        try std.fmt.format(writer, "{d}", .{entityToU64(parent.entity)});
+                        try writer.writeAll(", \"inherit_rotation\": ");
+                        try writer.writeAll(if (parent.inherit_rotation) "true" else "false");
+                        try writer.writeAll(", \"inherit_scale\": ");
+                        try writer.writeAll(if (parent.inherit_scale) "true" else "false");
+                        try writer.writeAll("}");
+                        first_comp = false;
+                    }
                 }
 
                 inline for (names) |name| {
@@ -265,29 +291,27 @@ pub fn Mixin(comptime Game: type) type {
                 // Restore Parent (built-in) — counterpart to the Parent
                 // save block above. Uses `setParent` so the engine's
                 // Children back-link is rebuilt alongside.
-                if (components.get("Parent")) |parent_val| {
+                //
+                // Skip the restore unless we can both parse a valid
+                // saved entity ID and map it to a post-load entity —
+                // passing a stale or raw ID to `setParent` would trip
+                // `assertEntityAlive` in debug or corrupt hierarchy
+                // state in release builds (cursor / Copilot review).
+                if (components.get("Parent")) |parent_val| blk: {
                     const parent_obj = parent_val.object;
-                    if (parent_obj.get("entity")) |ent_val| {
-                        const saved_parent_id: u64 = switch (ent_val) {
-                            .integer => |i| @intCast(i),
-                            .float => |f| @intFromFloat(f),
-                            else => 0,
-                        };
-                        const current_parent_id = id_map.get(saved_parent_id) orelse saved_parent_id;
-                        const parent_entity: Entity = @intCast(current_parent_id);
-                        const inherit_rotation = if (parent_obj.get("inherit_rotation")) |v| switch (v) {
-                            .bool => |b| b,
-                            else => false,
-                        } else false;
-                        const inherit_scale = if (parent_obj.get("inherit_scale")) |v| switch (v) {
-                            .bool => |b| b,
-                            else => false,
-                        } else false;
-                        self.setParent(entity, parent_entity, .{
-                            .inherit_rotation = inherit_rotation,
-                            .inherit_scale = inherit_scale,
-                        });
-                    }
+                    const ent_val = parent_obj.get("entity") orelse break :blk;
+                    const saved_parent_id: u64 = switch (ent_val) {
+                        .integer => |i| if (i >= 0) @intCast(i) else break :blk,
+                        else => break :blk,
+                    };
+                    const current_parent_id = id_map.get(saved_parent_id) orelse break :blk;
+                    const parent_entity: Entity = @intCast(current_parent_id);
+                    const inherit_rotation = parentFlag(parent_obj, "inherit_rotation");
+                    const inherit_scale = parentFlag(parent_obj, "inherit_scale");
+                    self.setParent(entity, parent_entity, .{
+                        .inherit_rotation = inherit_rotation,
+                        .inherit_scale = inherit_scale,
+                    });
                 }
             }
 

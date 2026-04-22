@@ -379,6 +379,62 @@ test "save/load mixin: Parent component round-trips and remaps entity ID" {
     try testing.expectEqual(@as(usize, 1), children_comp.count());
 }
 
+test "save/load mixin: Parent restore skips when id_map lookup misses" {
+    // Guards the Copilot / cursor review on #470 — if the saved parent
+    // entity isn't in the load id_map (missing from the file, malformed,
+    // or negative integer), the restore path must SKIP the Parent rather
+    // than hand a pre-reset raw ID to `setParent` (which would assert in
+    // debug or corrupt hierarchy state in release).
+    var game = TestGame.init(testing.allocator);
+    defer game.deinit();
+
+    // Hand-craft a save file with a Parent pointing at an entity that
+    // doesn't appear in the "entities" list.
+    const crafted_json =
+        \\{
+        \\  "version": 2,
+        \\  "entities": [
+        \\    {
+        \\      "id": 5,
+        \\      "components": {
+        \\        "Position": {"x": 1, "y": 2},
+        \\        "Health": {"current": 42, "max": 100},
+        \\        "Parent": {"entity": 999, "inherit_rotation": false, "inherit_scale": false}
+        \\      }
+        \\    }
+        \\  ]
+        \\}
+    ;
+    const filename = "test_save_parent_miss.json";
+    {
+        const file = try std.fs.cwd().createFile(filename, .{});
+        defer file.close();
+        try file.writeAll(crafted_json);
+    }
+    defer std.fs.cwd().deleteFile(filename) catch {};
+
+    try game.loadGameState(filename);
+
+    const Parent = TestGame.ParentComp;
+    var orphan_seen: usize = 0;
+    {
+        var view = game.active_world.ecs_backend.view(.{Health}, .{});
+        while (view.next()) |ent| {
+            orphan_seen += 1;
+            // The child entity exists and its non-hierarchy state
+            // restored fine. The Parent entry in the JSON referenced
+            // an entity that was never created — so the restore must
+            // have skipped setParent rather than attaching to a stale
+            // ID.
+            try testing.expect(!game.active_world.ecs_backend.hasComponent(ent, Parent));
+            const pos = game.active_world.ecs_backend.getComponent(ent, Position).?;
+            try testing.expectApproxEqAbs(@as(f32, 1.0), pos.x, 0.01);
+        }
+        view.deinit();
+    }
+    try testing.expectEqual(@as(usize, 1), orphan_seen);
+}
+
 test "save/load mixin: load nonexistent file returns error" {
     var game = TestGame.init(testing.allocator);
     defer game.deinit();
