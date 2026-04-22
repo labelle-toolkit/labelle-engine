@@ -393,6 +393,20 @@ pub fn GameConfig(
             }
         }
 
+        /// Emit a game event synchronously — dispatch to registered hooks
+        /// immediately, bypassing the end-of-frame buffer. Use when the
+        /// caller needs the handler to have run before the next
+        /// statement (cross-plugin state machines that can't tolerate
+        /// the buffered-dispatch window).
+        pub fn emitSync(self: *Self, event: GameEvents) void {
+            if (!has_events) return;
+            switch (event) {
+                inline else => |data, tag| {
+                    self.emitHook(@unionInit(Payload, @tagName(tag), data));
+                },
+            }
+        }
+
         /// Deliver buffered game events to hooks. Called at end of frame.
         pub fn dispatchEvents(self: *Self) void {
             if (!has_events) return;
