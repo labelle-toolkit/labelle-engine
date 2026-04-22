@@ -304,6 +304,81 @@ test "save/load mixin: transient ref arrays are not saved" {
     try testing.expectEqual(@as(usize, 0), transient_count);
 }
 
+test "save/load mixin: Parent component round-trips and remaps entity ID" {
+    // Guards the fix for labelle-core #11 / flying-platform-labelle #286.
+    // Parent is engine-internal (parameterised over Entity inside
+    // `GameConfig`) so it never appears in the game's ComponentRegistry.
+    // The save mixin therefore needs to emit it as a built-in (like
+    // Position) and rebuild the hierarchy on load via `setParent`.
+    // Without that, every child-with-Position drifts to scene origin
+    // on load because the Parent edge is silently dropped.
+    var game = TestGame.init(testing.allocator);
+    defer game.deinit();
+
+    const parent_entity = game.createEntity();
+    game.active_world.ecs_backend.addComponent(parent_entity, Position{ .x = 100.0, .y = 50.0 });
+    game.active_world.ecs_backend.addComponent(parent_entity, Worker{});
+
+    const child_entity = game.createEntity();
+    game.active_world.ecs_backend.addComponent(child_entity, Position{ .x = 15.0, .y = 0.0 });
+    game.active_world.ecs_backend.addComponent(child_entity, Health{ .current = 42.0, .max = 100.0 });
+    game.setParent(child_entity, parent_entity, .{});
+
+    // Sanity: parent link exists pre-save.
+    const Parent = TestGame.ParentComp;
+    try testing.expect(game.active_world.ecs_backend.hasComponent(child_entity, Parent));
+
+    const filename = "test_save_parent.json";
+    try game.saveGameState(filename);
+    defer std.fs.cwd().deleteFile(filename) catch {};
+
+    // Save output should carry a Parent block (built-in, alongside Position).
+    {
+        const json = try std.fs.cwd().readFileAlloc(testing.allocator, filename, 1024 * 1024);
+        defer testing.allocator.free(json);
+        try testing.expect(std.mem.indexOf(u8, json, "\"Parent\"") != null);
+    }
+
+    game.resetEcsBackend();
+    try game.loadGameState(filename);
+
+    // Find the post-load parent (Worker marker) and child (Health + Parent).
+    var new_parent_id: u64 = 0;
+    {
+        var view = game.active_world.ecs_backend.view(.{Worker}, .{});
+        if (view.next()) |ent| new_parent_id = @intCast(ent);
+        view.deinit();
+    }
+    try testing.expect(new_parent_id != 0);
+
+    var child_seen: usize = 0;
+    {
+        var view = game.active_world.ecs_backend.view(.{ Health, Parent }, .{});
+        while (view.next()) |ent| {
+            child_seen += 1;
+            const parent_comp = game.active_world.ecs_backend.getComponent(ent, Parent).?;
+            // Parent.entity must be remapped through the load id_map —
+            // the saved runtime ID wouldn't match after `resetEcsBackend`.
+            try testing.expectEqual(new_parent_id, @as(u64, @intCast(parent_comp.entity)));
+
+            // Child's local Position survives save/load (saveable via
+            // labelle-core), and rendering should now anchor under the
+            // restored parent.
+            const pos = game.active_world.ecs_backend.getComponent(ent, Position).?;
+            try testing.expectApproxEqAbs(@as(f32, 15.0), pos.x, 0.01);
+            try testing.expectApproxEqAbs(@as(f32, 0.0), pos.y, 0.01);
+        }
+        view.deinit();
+    }
+    try testing.expectEqual(@as(usize, 1), child_seen);
+
+    // setParent rebuilds the Children back-link — the parent entity should
+    // now list the child among its children.
+    const Children = TestGame.ChildrenComp;
+    const children_comp = game.active_world.ecs_backend.getComponent(@as(MockEcs.Entity, @intCast(new_parent_id)), Children).?;
+    try testing.expectEqual(@as(usize, 1), children_comp.count());
+}
+
 test "save/load mixin: load nonexistent file returns error" {
     var game = TestGame.init(testing.allocator);
     defer game.deinit();
