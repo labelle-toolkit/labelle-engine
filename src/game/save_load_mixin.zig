@@ -98,6 +98,26 @@ pub fn Mixin(comptime Game: type) type {
                     first_comp = false;
                 }
 
+                // Save Parent (built-in). Games don't register the
+                // engine's `ParentComponent` in their ComponentRegistry
+                // (it's generic over Entity + used internally by
+                // `setParent`), but the save mixin needs to persist it
+                // so prefab hierarchies survive save/load — otherwise
+                // every child-with-Position drifts to scene origin
+                // after load (see labelle-core #11).
+                const Parent = Game.ParentComp;
+                if (self.active_world.ecs_backend.getComponent(entity, Parent)) |parent| {
+                    if (!first_comp) try writer.writeAll(",");
+                    try writer.writeAll("\n        \"Parent\": {\"entity\": ");
+                    try std.fmt.format(writer, "{d}", .{entityToU64(parent.entity)});
+                    try writer.writeAll(", \"inherit_rotation\": ");
+                    try writer.writeAll(if (parent.inherit_rotation) "true" else "false");
+                    try writer.writeAll(", \"inherit_scale\": ");
+                    try writer.writeAll(if (parent.inherit_scale) "true" else "false");
+                    try writer.writeAll("}");
+                    first_comp = false;
+                }
+
                 inline for (names) |name| {
                     const T = Reg.getType(name);
                     if (comptime core.getSavePolicy(T)) |policy| {
@@ -239,6 +259,34 @@ pub fn Mixin(comptime Game: type) type {
                                 } else |_| {}
                             }
                         }
+                    }
+                }
+
+                // Restore Parent (built-in) — counterpart to the Parent
+                // save block above. Uses `setParent` so the engine's
+                // Children back-link is rebuilt alongside.
+                if (components.get("Parent")) |parent_val| {
+                    const parent_obj = parent_val.object;
+                    if (parent_obj.get("entity")) |ent_val| {
+                        const saved_parent_id: u64 = switch (ent_val) {
+                            .integer => |i| @intCast(i),
+                            .float => |f| @intFromFloat(f),
+                            else => 0,
+                        };
+                        const current_parent_id = id_map.get(saved_parent_id) orelse saved_parent_id;
+                        const parent_entity: Entity = @intCast(current_parent_id);
+                        const inherit_rotation = if (parent_obj.get("inherit_rotation")) |v| switch (v) {
+                            .bool => |b| b,
+                            else => false,
+                        } else false;
+                        const inherit_scale = if (parent_obj.get("inherit_scale")) |v| switch (v) {
+                            .bool => |b| b,
+                            else => false,
+                        } else false;
+                        self.setParent(entity, parent_entity, .{
+                            .inherit_rotation = inherit_rotation,
+                            .inherit_scale = inherit_scale,
+                        });
                     }
                 }
             }
