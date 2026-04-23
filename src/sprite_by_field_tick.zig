@@ -80,24 +80,14 @@ fn readFieldAsI32(comptime T: type, comp: *const T, field_name: []const u8) ?i32
             const finfo = @typeInfo(FT);
             const raw = @field(comp.*, field.name);
             return switch (finfo) {
-                .int => |int_info| blk: {
-                    if (int_info.signedness == .unsigned) {
-                        // Clamp unsigned values that might exceed i32
-                        // max — signed / unsigned mismatch never
-                        // produces a negative i32 from an unsigned
-                        // source, so simple saturation is fine.
-                        const max_i32: i64 = std.math.maxInt(i32);
-                        const widened: i64 = @intCast(raw);
-                        break :blk @intCast(@min(widened, max_i32));
-                    } else {
-                        // Signed: widen to i64 to avoid overflow on
-                        // conversion, then clamp both ends to i32 range.
-                        const widened: i64 = @intCast(raw);
-                        const clamped = std.math.clamp(widened, std.math.minInt(i32), std.math.maxInt(i32));
-                        break :blk @intCast(clamped);
-                    }
-                },
-                .@"enum" => @intFromEnum(raw),
+                // `std.math.cast` returns `null` for values outside i32's
+                // range — no overflow panic on `u64` > `i64::MAX` or
+                // `i128` or other edge widths. Out-of-range keys end up
+                // matching `.no_match` in the lookup table, which is the
+                // intended graceful-fail path — the prefab just doesn't
+                // have an entry for that value.
+                .int => std.math.cast(i32, raw),
+                .@"enum" => std.math.cast(i32, @intFromEnum(raw)),
                 else => null,
             };
         }
@@ -119,7 +109,7 @@ fn applyLookup(game: anytype, entity: anytype, sbf: *SpriteByField, key: i32) vo
     switch (sbf.lookup(key)) {
         .match => |maybe_sprite_name| {
             if (maybe_sprite_name) |name| {
-                if (@hasField(Sprite, "visible")) sprite.visible = true;
+                if (comptime @hasField(Sprite, "visible")) sprite.visible = true;
                 sprite.sprite_name = name;
                 if (comptime @hasField(Sprite, "source_rect") and @hasField(Sprite, "texture")) {
                     if (game.findSprite(name)) |result| {
@@ -134,7 +124,7 @@ fn applyLookup(game: anytype, entity: anytype, sbf: *SpriteByField, key: i32) vo
                 }
             } else {
                 // Null sprite_name → hide the overlay.
-                if (@hasField(Sprite, "visible")) sprite.visible = false;
+                if (comptime @hasField(Sprite, "visible")) sprite.visible = false;
             }
             game.renderer.markVisualDirty(entity);
         },
