@@ -111,21 +111,21 @@ fn applyLookup(game: anytype, entity: anytype, sbf: *SpriteByField, key: i32) vo
             if (maybe_sprite_name) |name| {
                 if (comptime @hasField(Sprite, "visible")) sprite.visible = true;
                 sprite.sprite_name = name;
-                if (comptime @hasField(Sprite, "source_rect") and @hasField(Sprite, "texture")) {
-                    if (game.findSprite(name)) |result| {
-                        sprite.source_rect = .{
-                            .x = @floatFromInt(result.sprite.x),
-                            .y = @floatFromInt(result.sprite.y),
-                            .width = @floatFromInt(result.sprite.getWidth()),
-                            .height = @floatFromInt(result.sprite.getHeight()),
-                        };
-                        sprite.texture = @enumFromInt(result.texture_id);
-                    }
-                }
+                // Atlas fields (source_rect / texture / display_*) are
+                // resolved by `Game.resolveAtlasSprites` every frame
+                // before renderer sync — writing `sprite_name` here is
+                // enough to invalidate its per-entity cache and pull
+                // in the correct mapping (including rotation + per-
+                // axis texture scaling). See sprite_animation_tick.zig
+                // for the full rationale.
             } else {
                 // Null sprite_name → hide the overlay.
                 if (comptime @hasField(Sprite, "visible")) sprite.visible = false;
             }
+            // Always dirty: on atlas builds `resolveAtlasSprites` will
+            // also dirty on its cache miss (idempotent); on stub or
+            // sprite-by-name renderers this is the only signal the
+            // renderer gets that the visual changed.
             game.renderer.markVisualDirty(entity);
         },
         .no_match => {
