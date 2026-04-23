@@ -69,7 +69,7 @@ pub const DecodedAudio = struct {
 
 Mirrors `ImageBackend` exactly. Engine never imports the audio crate; the assembler injects adapters at `Game.init`.
 
-The handle the backend returns is the existing `audio_types.SoundId` (`{ index: u32, generation: u32 }`, already used across `src/audio.zig` with `isValid` + generation-based staleness detection). Defining a second `u32` SoundId here would collide with that type and split the engine's sound-handle vocabulary in two — reviewers flagged this as an API-consistency hazard on the first draft. Keep the existing struct; the backend can build one from a raw backend integer via `.{ .index = raw, .generation = … }`.
+The handle the backend returns is the existing `audio_types.SoundId` (`{ index: u16, generation: u16 }`, already used across `src/audio.zig` with `isValid` + generation-based staleness detection). Defining a second `u32` SoundId here would collide with that type and split the engine's sound-handle vocabulary in two — reviewers flagged this as an API-consistency hazard on the first draft. Keep the existing struct; the backend can build one from a raw backend integer via `.{ .index = raw, .generation = … }`.
 
 ```zig
 const audio_types = @import("audio_types.zig");  // existing engine module
@@ -225,7 +225,7 @@ Three landable commits, each green.
 - `src/assets/loaders/image.zig` — reference implementation this RFC mirrors.
 - `src/assets/loader.zig` — `DecodedPayload` / `UploadedResource` / `AssetLoaderVTable` shared types.
 - `src/assets/catalog.zig` — refcount + pump + failure path (unchanged by this RFC).
-- `src/audio_types.zig` — existing `SoundId` / `MusicId` (opaque handles used by the runtime audio interface, distinct from the `SoundId` this RFC adds to `UploadedResource`; the opaque handle type is what flows through the catalog).
+- `src/audio_types.zig` — existing `SoundId` / `MusicId` (opaque handles used by the runtime audio interface; `SoundId` is the same type this RFC places in `UploadedResource.audio` — no new handle type is introduced).
 - [dr_wav](https://github.com/mackron/dr_libs) — proposed WAV decoder (public domain, single header).
 - [stb_vorbis](https://github.com/nothings/stb) — proposed OGG decoder (public domain, single header).
 - #444 (just shipped) — `scene_assets_acquire` / `scene_assets_release` hooks and `asset_failure_policy`; audio assets inherit this wiring unchanged.
