@@ -394,3 +394,88 @@ test "two-phase load: spawnFromPrefab failure falls back to v2 createEntity" {
     try testing.expectEqual(@as(usize, 1), count);
 }
 
+test "two-phase load: nested prefab doesn't duplicate into a ghost root" {
+    // Regression guard for the HIGH-severity bug gemini flagged on
+    // #484: an entity that carries BOTH PrefabInstance and PrefabChild
+    // (nested prefab — outer prefab has a child that is itself a
+    // prefab) must NOT be respawned standalone by Phase 1a. Outer's
+    // `spawnFromPrefab` reinstantiates the nested subtree; Phase 1b
+    // then maps the inner root via `(outer_root, local_path)`.
+    // Processing it in Phase 1a would create a duplicate "ghost"
+    // root and leak the second subtree.
+    //
+    // The bug + fix span two branches:
+    // - #484 added the Phase 1a skip-if-PrefabChild guard.
+    // - #485 (this branch) tags scene-loaded prefab descendants so
+    //   nested prefabs actually have BOTH tags after save/load — the
+    //   scenario the guard protects against can now be exercised
+    //   end-to-end, hence this test lives here.
+    var tmp_dir = testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    try tmp_dir.dir.makeDir("prefabs");
+    try tmp_dir.dir.writeFile(.{
+        .sub_path = "prefabs/inner.jsonc",
+        .data =
+        \\{ "components": { "Health": { "current": 25, "max": 25 } } }
+        ,
+    });
+    try tmp_dir.dir.writeFile(.{
+        .sub_path = "prefabs/outer.jsonc",
+        .data =
+        \\{
+        \\  "components": { "Health": { "current": 50, "max": 50 } },
+        \\  "children": [
+        \\    { "prefab": "inner" }
+        \\  ]
+        \\}
+        ,
+    });
+
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    const dir_path = try tmp_dir.dir.realpath(".", &buf);
+    const prefab_dir = try std.fmt.allocPrint(testing.allocator, "{s}/prefabs", .{dir_path});
+    defer testing.allocator.free(prefab_dir);
+
+    var game = TestGame.init(testing.allocator);
+    defer game.deinit();
+
+    try Bridge.loadSceneFromSource(&game,
+        \\{
+        \\  "entities": [
+        \\    { "prefab": "outer" }
+        \\  ]
+        \\}
+    , prefab_dir);
+
+    const save_path = "test_save_nested_prefab.json";
+    try game.saveGameState(save_path);
+    defer std.fs.cwd().deleteFile(save_path) catch {};
+
+    game.resetEcsBackend();
+    try game.loadGameState(save_path);
+
+    // If Phase 1a processed the inner (carrying PrefabInstance +
+    // PrefabChild) it would create a second "inner" root — a ghost.
+    // Expect exactly one of each.
+    var outer_count: usize = 0;
+    var inner_count: usize = 0;
+    var view = game.active_world.ecs_backend.view(.{PrefabInstance}, .{});
+    defer view.deinit();
+    while (view.next()) |ent| {
+        const pi = game.active_world.ecs_backend.getComponent(ent, PrefabInstance).?;
+        if (std.mem.eql(u8, pi.path, "outer")) outer_count += 1;
+        if (std.mem.eql(u8, pi.path, "inner")) inner_count += 1;
+    }
+    try testing.expectEqual(@as(usize, 1), outer_count);
+    try testing.expectEqual(@as(usize, 1), inner_count);
+
+    // Total Health-carrying entities = 2 (outer root + nested inner).
+    // Ghost scenario would produce 3+ (second inner spawned standalone).
+    var total: usize = 0;
+    var h_view = game.active_world.ecs_backend.view(.{Health}, .{});
+    defer h_view.deinit();
+    while (h_view.next()) |_| total += 1;
+    try testing.expectEqual(@as(usize, 2), total);
+}
+
