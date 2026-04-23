@@ -146,6 +146,21 @@ pub fn Mixin(comptime Game: type) type {
             return current;
         }
 
+        /// Recursively insert `root` and every descendant into `set`.
+        /// Used by Phase 1a to record which entities came in through
+        /// `spawnFromPrefab` (and were therefore renderer-tracked by
+        /// the prefab spawn path) so Step 5 can skip re-tracking them.
+        fn markSubtreeRendererTracked(
+            self: *Game,
+            root: Entity,
+            set: *std.AutoHashMap(u64, void),
+        ) !void {
+            try set.put(entityToU64(root), {});
+            for (self.getChildren(root)) |child| {
+                try markSubtreeRendererTracked(self, child, set);
+            }
+        }
+
         /// Write a JSON-escaped string literal (including surrounding
         /// quotes) to `writer`. Used by the built-in save pathway for
         /// components with `[]const u8` fields (PrefabInstance.path,
@@ -433,6 +448,20 @@ pub fn Mixin(comptime Game: type) type {
             var id_map = std.AutoHashMap(u64, u64).init(allocator);
             defer id_map.deinit();
 
+            // Entities spawned via Phase 1a's `spawnFromPrefab` (the
+            // root + every descendant the prefab creates) are already
+            // renderer-tracked by `spawnPrefabImpl` — it routes each
+            // visual component through `game.addSprite`/`addShape`,
+            // which call `renderer.trackEntity` themselves. Step 5
+            // below re-tracks any entity carrying a Sprite/Shape for
+            // the Phase 1c createEntity path (bare entities whose
+            // visuals come via Phase 2's `addComponent`). Without this
+            // set, Phase 1a entities get registered with the renderer
+            // twice — duplicate render-list entries, double cleanup
+            // pressure, etc. Bugbot flagged this on da17581.
+            var renderer_already_tracked = std.AutoHashMap(u64, void).init(allocator);
+            defer renderer_already_tracked.deinit();
+
             // Phase 1a: spawn prefab roots. We need Position for the
             // spawn point; read it from the saved `Position` component.
             //
@@ -470,6 +499,10 @@ pub fn Mixin(comptime Game: type) type {
                 };
 
                 try id_map.put(saved_id, entityToU64(new_root));
+                // Mark the root + every descendant as already-tracked
+                // so Step 5's trackEntity pass skips them (see the
+                // comment on `renderer_already_tracked` above).
+                try markSubtreeRendererTracked(self, new_root, &renderer_already_tracked);
             }
 
             // Phase 1b: for each saved PrefabChild, walk the spawned
@@ -686,7 +719,14 @@ pub fn Mixin(comptime Game: type) type {
                 const entity: Entity = @intCast(current_id);
                 self.addEntityToActiveScene(entity);
 
-                // Re-register visual components with the renderer (#38)
+                // Re-register visual components with the renderer (#38).
+                // Skip entities spawned via Phase 1a's `spawnFromPrefab`
+                // — their Sprite/Shape already went through `addSprite`
+                // / `addShape` during the prefab spawn, which tracks
+                // with the renderer. Double-tracking risks duplicate
+                // render-list entries / mismatched cleanup.
+                if (renderer_already_tracked.contains(entityToU64(entity))) continue;
+
                 if (self.active_world.ecs_backend.hasComponent(entity, Sprite)) {
                     self.renderer.trackEntity(entity, .sprite);
                 } else if (self.active_world.ecs_backend.hasComponent(entity, Shape)) {
