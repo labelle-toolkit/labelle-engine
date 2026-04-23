@@ -420,6 +420,7 @@ test "save/load mixin: marker-driven re-hydration of non-saveable render compone
         var buf: [4]MockEcs.Entity = undefined;
         var count: usize = 0;
         while (view.next()) |ent| {
+            try testing.expect(count < buf.len);
             buf[count] = ent;
             count += 1;
         }
