@@ -559,12 +559,19 @@ pub fn GameConfig(
                     .root = root,
                     .local_path = child_path,
                 });
-                const next_base = try std.fmt.allocPrint(
-                    arena,
-                    "{s}.children",
-                    .{child_path},
-                );
-                try tagPrefabChildren(self, root, child, next_base, arena);
+                // Skip the `.children` suffix allocation when `child` is
+                // a leaf. Two-level prefab trees (hydroponics: root +
+                // room + plant overlay) are common; without this gate
+                // the leaf gets an unused `"children[i].children"`
+                // string arena-allocated every spawn.
+                if (self.hasChildren(child)) {
+                    const next_base = try std.fmt.allocPrint(
+                        arena,
+                        "{s}.children",
+                        .{child_path},
+                    );
+                    try tagPrefabChildren(self, root, child, next_base, arena);
+                }
             }
         }
 
