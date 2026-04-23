@@ -53,6 +53,8 @@ Example — flying-platform-labelle's `scripts/condenser_animation.zig` and `scr
 
 **Why it goes away:** the runtime-created overlays become children of the workstation prefab, spawned via `spawnFromPrefab` at scene-init. After F9, the two-phase load re-spawns the prefab (including the overlay children). The animation itself is driven by `SpriteAnimation` declared on the overlay child in the prefab — no per-game tick script needed for frame cycling.
 
+> `SpriteAnimation` is a new component introduced by the prefab-animation RFC — distinct from the pre-existing `AnimationState`/`AnimationDef` character-rig system. Its `mode` enum is `.loop` / `.once` / `.ping_pong`, not the `.time` / `.distance` / `.static` of `AnimationState`. Keep using `AnimationDef` for workers (multi-clip × multi-variant rigs); `SpriteAnimation` is the one-clip-fixed-frames primitive for simple overlays.
+
 **Migration (per animation script):**
 
 1. Move the overlay creation into a prefab. The condenser pipe becomes:
@@ -113,7 +115,9 @@ The default `engine.Game` uses `EmptyComponents` — its save mixin iterates an 
 
 ### `[]const u8` fields and arena ownership
 
-`PrefabInstance.path`, `PrefabInstance.overrides`, `PrefabChild.local_path` are string slices. The component does **not** own its backing memory — the engine allocates into `active_world.nested_entity_arena` (lifetime = scene). If you need to construct one yourself, dupe into the arena (not the testing allocator, not the game allocator).
+`PrefabInstance.path`, `PrefabInstance.overrides`, `PrefabChild.local_path` are string slices. The component does **not** own its backing memory — `spawnFromPrefab`, `tagAsPrefabInstance`, and the scene bridge's load path all dupe these into `active_world.nested_entity_arena` (lifetime = scene). If you need to construct one yourself, dupe into that arena (not the testing allocator, not the game allocator).
+
+> Don't confuse this with the scene bridge's file-scope `intern_arena` (`src/jsonc_scene_bridge.zig`). That arena is for *ordinary* component `[]const u8` fields parsed from jsonc — it dedupes identical strings across prefab spawns and never frees. Prefab-lineage strings skip it on purpose and go through `nested_entity_arena` so they track scene lifetime.
 
 ### Scene-declared prefabs vs runtime-spawned prefabs
 
@@ -136,7 +140,6 @@ A realistic order for a downstream migration:
 
 ## Reference implementation
 
-- **Save/load-for-prefabs RFC** — [RFC-SAVE-LOAD-PREFABS.md](../RFC-SAVE-LOAD-PREFABS.md).
-- **Prefab-animation RFC** — [RFC-PREFAB-ANIMATION.md](../RFC-PREFAB-ANIMATION.md).
+- **Save/load-for-prefabs RFC** + **Prefab-animation RFC** — tracked in [labelle-engine #472](https://github.com/labelle-toolkit/labelle-engine/pull/472). Once that PR merges, the RFCs live at `RFC-SAVE-LOAD-PREFABS.md` and `RFC-PREFAB-ANIMATION.md` at the engine repo root (one directory up from this file).
 - **Engine chain** — #474 handlers, #482 spawnFromPrefab, #483 scene tag, #484 two-phase load, #485 scene descendants. #475/#480 SpriteAnimation. #476/#481 SpriteByField.
 - **First downstream pilot** — flying-platform-labelle (expected as a follow-up once the engine chain merges and engine 1.24 tags).
