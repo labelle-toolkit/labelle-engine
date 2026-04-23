@@ -227,3 +227,39 @@ test "SpriteAnimation: isFinished false for empty-frame animation" {
     };
     try testing.expect(!anim.isFinished());
 }
+
+test "SpriteAnimation: negative dt does not panic" {
+    // Regression guard for gemini HIGH feedback on #475: negative
+    // `dt` would drive `timer` below zero, and the later signed →
+    // unsigned cast in `@intFromFloat(@floor(steps_f))` would trap.
+    // The fix clamps `timer` to non-negative before the cast.
+    var anim = SpriteAnimation{
+        .frames = &pipe_frames,
+        .fps = 6,
+        .mode = .loop,
+    };
+    try testing.expect(!anim.advance(-1.0));
+    try testing.expectEqual(@as(u8, 0), anim.frame);
+    try testing.expectEqual(@as(f32, 0), anim.timer);
+    // Subsequent positive tick still advances normally — the clamp
+    // just erased the backward travel, it didn't break the clock.
+    try testing.expect(anim.advance(1.0 / 6.0));
+    try testing.expectEqual(@as(u8, 1), anim.frame);
+}
+
+test "SpriteAnimation: sub-zero timer from FP residual does not panic" {
+    // The other path into the same bug: a prior `timer -= steps *
+    // frame_duration` can land marginally below zero because of FP
+    // rounding. The next `advance` would then see a negative timer
+    // and trap on the cast. Simulate by poking the timer directly
+    // to a tiny negative value, then calling advance with small dt.
+    var anim = SpriteAnimation{
+        .frames = &pipe_frames,
+        .fps = 6,
+        .mode = .loop,
+    };
+    anim.timer = -1e-7;
+    // No panic, no frame change, timer clamped.
+    try testing.expect(!anim.advance(0));
+    try testing.expectEqual(@as(f32, 0), anim.timer);
+}

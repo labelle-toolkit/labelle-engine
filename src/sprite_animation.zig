@@ -93,6 +93,17 @@ pub const SpriteAnimation = struct {
 
         const old_frame = self.frame;
         self.timer += dt;
+        // Clamp to zero before the signed → unsigned cast below.
+        // `timer` can go sub-zero two ways: a negative `dt` (paused
+        // game rewinding its scaled clock, a test driving the tick
+        // backwards), or floating-point residual from the previous
+        // `timer -= steps * frame_duration` landing marginally under
+        // the true remainder. Either leaves `steps_f` negative,
+        // which turns `@intFromFloat(@floor(...))` into a u32 cast
+        // of a negative value — a runtime trap. Treating the
+        // clamped case as "no frame advance this tick" matches the
+        // steady-state `steps == 0` branch below.
+        if (self.timer < 0) self.timer = 0;
         const frame_duration = 1.0 / self.fps;
         const steps_f: f32 = self.timer / frame_duration;
         const steps: u32 = @intFromFloat(@floor(steps_f));
