@@ -134,13 +134,7 @@ pub fn Mixin(comptime Game: type) type {
 
                 // Save Position (built-in) — only if not already in the component registry
                 const Position = core.Position;
-                const has_position_in_registry = comptime blk: {
-                    for (names) |name| {
-                        if (Reg.getType(name) == Position) break :blk true;
-                    }
-                    break :blk false;
-                };
-                if (!has_position_in_registry) {
+                if (comptime !isRegistered(Position)) {
                     const pos = self.getPosition(entity);
                     if (!first_comp) try writer.writeAll(",");
                     try writer.writeAll("\n        \"Position\": {\"x\": ");
@@ -170,13 +164,7 @@ pub fn Mixin(comptime Game: type) type {
                 // be "Parent" — that would still collide. Deliberately
                 // scoped to the common case (same type) for now.
                 const Parent = Game.ParentComp;
-                const has_parent_in_registry = comptime blk: {
-                    for (names) |name| {
-                        if (Reg.getType(name) == Parent) break :blk true;
-                    }
-                    break :blk false;
-                };
-                if (!has_parent_in_registry) {
+                if (comptime !isRegistered(Parent)) {
                     if (self.active_world.ecs_backend.getComponent(entity, Parent)) |parent| {
                         if (!first_comp) try writer.writeAll(",");
                         try writer.writeAll("\n        \"Parent\": {\"entity\": ");
@@ -332,13 +320,7 @@ pub fn Mixin(comptime Game: type) type {
 
                 // Restore Position (built-in) — only if not in component registry
                 const Position_load = core.Position;
-                const has_position_in_registry_load = comptime blk: {
-                    for (names) |name| {
-                        if (Reg.getType(name) == Position_load) break :blk true;
-                    }
-                    break :blk false;
-                };
-                if (!has_position_in_registry_load) {
+                if (comptime !isRegistered(Position_load)) {
                     if (components.get("Position")) |pos_val| {
                         const pos_obj = pos_val.object;
                         var px: f32 = 0;
@@ -394,13 +376,7 @@ pub fn Mixin(comptime Game: type) type {
                 // `assertEntityAlive` in debug or corrupt hierarchy
                 // state in release builds.
                 const Parent_load = Game.ParentComp;
-                const has_parent_in_registry_load = comptime blk: {
-                    for (names) |name| {
-                        if (Reg.getType(name) == Parent_load) break :blk true;
-                    }
-                    break :blk false;
-                };
-                if (!has_parent_in_registry_load) {
+                if (comptime !isRegistered(Parent_load)) {
                     if (components.get("Parent")) |parent_val| blk: {
                         // A malformed save carrying `"Parent": 123` or
                         // `"Parent": null` would otherwise trip the
