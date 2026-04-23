@@ -119,10 +119,16 @@ pub fn Mixin(comptime Game: type) type {
                 // every child-with-Position drifts to scene origin
                 // after load (see labelle-core #11).
                 //
-                // Guarded by a registry-type check so a game that does
-                // register a component serialised as `"Parent"` in the
-                // future doesn't produce duplicate JSON keys (mirrors
-                // Position's `has_position_in_registry`).
+                // Guarded by a type-identity check: if a game does
+                // register the engine's `ParentComponent` directly in
+                // its ComponentRegistry, the registry-driven save/load
+                // path already handles it and writing the built-in
+                // block on top would produce duplicate JSON keys.
+                // Mirrors Position's `has_position_in_registry`.
+                // Note: this does NOT protect against a game defining
+                // a *different* component whose serde name happens to
+                // be "Parent" — that would still collide. Deliberately
+                // scoped to the common case (same type) for now.
                 const Parent = Game.ParentComp;
                 const has_parent_in_registry = comptime blk: {
                     for (names) |name| {
@@ -313,7 +319,15 @@ pub fn Mixin(comptime Game: type) type {
                 };
                 if (!has_parent_in_registry_load) {
                     if (components.get("Parent")) |parent_val| blk: {
-                        const parent_obj = parent_val.object;
+                        // A malformed save carrying `"Parent": 123` or
+                        // `"Parent": null` would otherwise trip the
+                        // `.object` tag-cast safety check and panic in
+                        // debug before the field-level guards below
+                        // had a chance to skip the restore.
+                        const parent_obj = switch (parent_val) {
+                            .object => |o| o,
+                            else => break :blk,
+                        };
                         const ent_val = parent_obj.get("entity") orelse break :blk;
                         const saved_parent_id: u64 = switch (ent_val) {
                             .integer => |i| if (i >= 0) @intCast(i) else break :blk,
