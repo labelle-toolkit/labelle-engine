@@ -503,20 +503,30 @@ pub fn GameConfig(
         /// prefab defaults) lands in a follow-up.
         pub fn spawnFromPrefab(self: *Self, path: []const u8, pos: Position) ?Entity {
             const entity = self.spawnPrefab(path, pos) orelse return null;
-
-            const arena = self.active_world.nested_entity_arena.allocator();
-            const path_dup = arena.dupe(u8, path) catch {
-                self.log.err("[Game] spawnFromPrefab: arena dupe failed for path", .{});
+            // Any tagging failure (arena OOM on path dupe, or inside
+            // the recursive child walk) leaves the world with an
+            // orphan entity tree that has no `PrefabInstance` tag —
+            // scene-tracked, component-populated, but invisible to
+            // the save mixin's Phase 1. Destroy the whole tree on
+            // failure so `spawnFromPrefab`'s null return really
+            // means "the world is unchanged."
+            tagAndSpawnChildren(self, entity, path) catch {
+                self.destroyEntity(entity);
                 return null;
             };
+            return entity;
+        }
+
+        fn tagAndSpawnChildren(self: *Self, entity: Entity, path: []const u8) !void {
+            const arena = self.active_world.nested_entity_arena.allocator();
+            const path_dup = try arena.dupe(u8, path);
 
             self.ecs_backend.addComponent(entity, PrefabInstance{
                 .path = path_dup,
                 .overrides = "",
             });
 
-            tagPrefabChildren(self, entity, entity, "children", arena);
-            return entity;
+            try tagPrefabChildren(self, entity, entity, "children", arena);
         }
 
         /// Recursively tag every descendant of `root` with `PrefabChild`.
@@ -524,33 +534,37 @@ pub fn GameConfig(
         /// `"children"` at the top level; `"children[0].children"` one
         /// level in). Each child appends `[i]` to form its unique path
         /// within the prefab tree.
+        ///
+        /// Propagates allocation errors up instead of silently
+        /// `continue`-ing — a partially-tagged tree would have
+        /// `PrefabChild` on some descendants and not others, breaking
+        /// the `(root, local_path)` lookup the two-phase load relies
+        /// on. Atomic: if anything fails, `spawnFromPrefab` destroys
+        /// the tree and returns null.
         fn tagPrefabChildren(
             self: *Self,
             root: Entity,
             parent: Entity,
             base_path: []const u8,
             arena: std.mem.Allocator,
-        ) void {
+        ) !void {
             const children = self.getChildren(parent);
             for (children, 0..) |child, i| {
-                const child_path = std.fmt.allocPrint(
+                const child_path = try std.fmt.allocPrint(
                     arena,
                     "{s}[{d}]",
                     .{ base_path, i },
-                ) catch {
-                    self.log.err("[Game] spawnFromPrefab: arena allocPrint failed for child path", .{});
-                    continue;
-                };
+                );
                 self.ecs_backend.addComponent(child, PrefabChildT{
                     .root = root,
                     .local_path = child_path,
                 });
-                const next_base = std.fmt.allocPrint(
+                const next_base = try std.fmt.allocPrint(
                     arena,
                     "{s}.children",
                     .{child_path},
-                ) catch continue;
-                tagPrefabChildren(self, root, child, next_base, arena);
+                );
+                try tagPrefabChildren(self, root, child, next_base, arena);
             }
         }
 
