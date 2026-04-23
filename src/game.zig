@@ -479,6 +479,81 @@ pub fn GameConfig(
             return null;
         }
 
+        /// Spawn a prefab *and* tag it for save/load Phase 1 reinstantiation.
+        ///
+        /// Wraps `spawnPrefab` with two additions from
+        /// `RFC-SAVE-LOAD-PREFABS.md`:
+        ///
+        /// 1. The **root** entity gets `PrefabInstance { path, overrides = "" }`
+        ///    so the save mixin's built-in handler (added in #474)
+        ///    records its prefab origin.
+        /// 2. Each **child** entity (recursively) gets
+        ///    `PrefabChild { root, local_path = "children[i]..." }` so
+        ///    Phase 1 on load can map saved child IDs back to newly-
+        ///    spawned children via `(root, local_path)`.
+        ///
+        /// String fields are allocated in `active_world.nested_entity_arena`
+        /// — lifetime matches the prefab children (world-scoped), freed
+        /// on scene change. Same ownership contract as the save mixin's
+        /// load-side allocation.
+        ///
+        /// `overrides` is passed through as an empty blob in this
+        /// first-cut implementation — the full structured-overrides
+        /// pipeline (apply caller-supplied component values on top of
+        /// prefab defaults) lands in a follow-up.
+        pub fn spawnFromPrefab(self: *Self, path: []const u8, pos: Position) ?Entity {
+            const entity = self.spawnPrefab(path, pos) orelse return null;
+
+            const arena = self.active_world.nested_entity_arena.allocator();
+            const path_dup = arena.dupe(u8, path) catch {
+                self.log.err("[Game] spawnFromPrefab: arena dupe failed for path", .{});
+                return null;
+            };
+
+            self.ecs_backend.addComponent(entity, PrefabInstance{
+                .path = path_dup,
+                .overrides = "",
+            });
+
+            tagPrefabChildren(self, entity, entity, "children", arena);
+            return entity;
+        }
+
+        /// Recursively tag every descendant of `root` with `PrefabChild`.
+        /// `base_path` is the dotted path accumulated so far (e.g.
+        /// `"children"` at the top level; `"children[0].children"` one
+        /// level in). Each child appends `[i]` to form its unique path
+        /// within the prefab tree.
+        fn tagPrefabChildren(
+            self: *Self,
+            root: Entity,
+            parent: Entity,
+            base_path: []const u8,
+            arena: std.mem.Allocator,
+        ) void {
+            const children = self.getChildren(parent);
+            for (children, 0..) |child, i| {
+                const child_path = std.fmt.allocPrint(
+                    arena,
+                    "{s}[{d}]",
+                    .{ base_path, i },
+                ) catch {
+                    self.log.err("[Game] spawnFromPrefab: arena allocPrint failed for child path", .{});
+                    continue;
+                };
+                self.ecs_backend.addComponent(child, PrefabChildT{
+                    .root = root,
+                    .local_path = child_path,
+                });
+                const next_base = std.fmt.allocPrint(
+                    arena,
+                    "{s}.children",
+                    .{child_path},
+                ) catch continue;
+                tagPrefabChildren(self, root, child, next_base, arena);
+            }
+        }
+
         pub fn destroyEntity(self: *Self, entity: Entity) void {
             if (self.ecs_backend.getComponent(entity, Children)) |children_comp| {
                 for (children_comp.getChildren()) |child| {
