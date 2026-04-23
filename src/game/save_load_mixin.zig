@@ -20,6 +20,21 @@ pub fn Mixin(comptime Game: type) type {
             return @intCast(entity);
         }
 
+        /// `true` when `T` is registered in the game's
+        /// `ComponentRegistry`. The built-in save/load channel for
+        /// engine-defined components (`Position`, `Parent`,
+        /// `PrefabInstance`, `PrefabChild`) guards on the negation
+        /// of this so a game that decides to register one of them
+        /// directly doesn't end up with duplicate JSON keys (the
+        /// registry-driven path would also emit that component).
+        fn isRegistered(comptime T: type) bool {
+            const names = comptime Reg.names();
+            inline for (names) |name| {
+                if (Reg.getType(name) == T) return true;
+            }
+            return false;
+        }
+
         /// Read a boolean field out of a serialised Parent object,
         /// defaulting to `false` for missing / non-bool values. Kept
         /// local so the save and load sides of the built-in Parent
@@ -186,13 +201,7 @@ pub fn Mixin(comptime Game: type) type {
                 // a game registering the type in its ComponentRegistry
                 // doesn't produce duplicate JSON keys.
                 const PrefabInstance = Game.PrefabInstanceComp;
-                const has_prefab_instance_in_registry = comptime blk: {
-                    for (names) |name| {
-                        if (Reg.getType(name) == PrefabInstance) break :blk true;
-                    }
-                    break :blk false;
-                };
-                if (!has_prefab_instance_in_registry) {
+                if (comptime !isRegistered(PrefabInstance)) {
                     if (self.active_world.ecs_backend.getComponent(entity, PrefabInstance)) |pi| {
                         if (!first_comp) try writer.writeAll(",");
                         try writer.writeAll("\n        \"PrefabInstance\": {\"path\": ");
@@ -212,13 +221,7 @@ pub fn Mixin(comptime Game: type) type {
                 // survives entity-ID reassignment (same pattern
                 // Parent.entity uses).
                 const PrefabChildT = Game.PrefabChildComp;
-                const has_prefab_child_in_registry = comptime blk: {
-                    for (names) |name| {
-                        if (Reg.getType(name) == PrefabChildT) break :blk true;
-                    }
-                    break :blk false;
-                };
-                if (!has_prefab_child_in_registry) {
+                if (comptime !isRegistered(PrefabChildT)) {
                     if (self.active_world.ecs_backend.getComponent(entity, PrefabChildT)) |pc| {
                         if (!first_comp) try writer.writeAll(",");
                         try writer.writeAll("\n        \"PrefabChild\": {\"root\": ");
@@ -429,13 +432,7 @@ pub fn Mixin(comptime Game: type) type {
                 // the world's nested-entity arena so they outlive the
                 // parsed JSON deinit.
                 const PrefabInstance_load = Game.PrefabInstanceComp;
-                const has_prefab_instance_in_registry_load = comptime blk: {
-                    for (names) |name| {
-                        if (Reg.getType(name) == PrefabInstance_load) break :blk true;
-                    }
-                    break :blk false;
-                };
-                if (!has_prefab_instance_in_registry_load) {
+                if (comptime !isRegistered(PrefabInstance_load)) {
                     if (components.get("PrefabInstance")) |pi_val| blk: {
                         const pi_obj = switch (pi_val) {
                             .object => |o| o,
@@ -464,13 +461,7 @@ pub fn Mixin(comptime Game: type) type {
                 // through `id_map`; `local_path` is duped into the
                 // world arena to outlive the parsed JSON.
                 const PrefabChild_load = Game.PrefabChildComp;
-                const has_prefab_child_in_registry_load = comptime blk: {
-                    for (names) |name| {
-                        if (Reg.getType(name) == PrefabChild_load) break :blk true;
-                    }
-                    break :blk false;
-                };
-                if (!has_prefab_child_in_registry_load) {
+                if (comptime !isRegistered(PrefabChild_load)) {
                     if (components.get("PrefabChild")) |pc_val| blk: {
                         const pc_obj = switch (pc_val) {
                             .object => |o| o,
