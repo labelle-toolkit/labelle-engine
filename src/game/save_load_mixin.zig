@@ -48,6 +48,32 @@ pub fn Mixin(comptime Game: type) type {
             };
         }
 
+        /// Walk a dotted `children[i]...` path from `root` through
+        /// `game.getChildren`, returning the entity at the end or
+        /// `null` when the path doesn't resolve (missing index,
+        /// malformed syntax, root has no children, etc.). Matches the
+        /// path format `spawnFromPrefab` (and the scene-bridge
+        /// auto-tagger) emit, so save/load Phase 1 can find the
+        /// re-spawned child that corresponds to each saved PrefabChild.
+        fn findChildByLocalPath(self: *Game, root: Entity, local_path: []const u8) ?Entity {
+            var current: Entity = root;
+            var rest = local_path;
+            while (rest.len > 0) {
+                if (rest[0] == '.') rest = rest[1..];
+                const prefix = "children[";
+                if (!std.mem.startsWith(u8, rest, prefix)) return null;
+                rest = rest[prefix.len..];
+                const close = std.mem.indexOfScalar(u8, rest, ']') orelse return null;
+                const idx = std.fmt.parseInt(usize, rest[0..close], 10) catch return null;
+                rest = rest[close + 1 ..];
+
+                const children = self.getChildren(current);
+                if (idx >= children.len) return null;
+                current = children[idx];
+            }
+            return current;
+        }
+
         /// Write a JSON-escaped string literal (including surrounding
         /// quotes) to `writer`. Used by the built-in save pathway for
         /// components with `[]const u8` fields (PrefabInstance.path,
@@ -298,13 +324,119 @@ pub fn Mixin(comptime Game: type) type {
             self.clearActiveSceneEntities();
             self.resetEcsBackend();
 
-            // Step 2: Create new entities and build ID map
+            // Step 2: Create new entities and build ID map.
+            //
+            // Two-phase structure (RFC-SAVE-LOAD-PREFABS §Architecture,
+            // Slice 3):
+            //
+            //   Phase 1 — PrefabInstance-tagged entities are re-spawned
+            //   via `game.spawnFromPrefab`. The prefab reinstantiation
+            //   brings back non-saveable components (Sprite, animation
+            //   overlays, etc.) and the full child structure for free.
+            //   For each saved PrefabChild, we walk the spawned tree by
+            //   its `local_path` and map the saved child ID to the
+            //   newly-spawned child entity.
+            //
+            //   Phase 1b — any saved entity NOT covered by Phase 1 (no
+            //   PrefabInstance tag, and its ID wasn't mapped via a
+            //   PrefabChild lookup) is created fresh with `createEntity`.
+            //   Same as the v2 behaviour; preserves the non-prefab path.
+            //
+            //   Phase 2 (Step 3 below) applies saved component data on
+            //   every entity — prefab-spawned or fresh — as overrides.
             var id_map = std.AutoHashMap(u64, u64).init(allocator);
             defer id_map.deinit();
 
+            // Phase 1a: spawn prefab roots. We need Position for the
+            // spawn point; read it from the saved `Position` component.
+            for (entities_json.items) |entry| {
+                const obj = entry.object;
+                const components = (obj.get("components") orelse continue).object;
+                const pi_val = components.get("PrefabInstance") orelse continue;
+                const pi_obj = switch (pi_val) {
+                    .object => |o| o,
+                    else => continue,
+                };
+                const path_str = switch (pi_obj.get("path") orelse continue) {
+                    .string => |s| s,
+                    else => continue,
+                };
+
+                // Extract spawn Position from saved components, defaulting
+                // to (0,0) when absent (the prefab's own Position wins in
+                // that case via `spawnPrefab`'s `parent_offset` path).
+                var spawn_pos: core.Position = .{ .x = 0, .y = 0 };
+                if (components.get("Position")) |pos_val| {
+                    if (pos_val == .object) {
+                        if (pos_val.object.get("x")) |xv| {
+                            spawn_pos.x = switch (xv) {
+                                .float => |f| @floatCast(f),
+                                .integer => |i| @floatFromInt(i),
+                                else => 0,
+                            };
+                        }
+                        if (pos_val.object.get("y")) |yv| {
+                            spawn_pos.y = switch (yv) {
+                                .float => |f| @floatCast(f),
+                                .integer => |i| @floatFromInt(i),
+                                else => 0,
+                            };
+                        }
+                    }
+                }
+
+                const new_root = self.spawnFromPrefab(path_str, spawn_pos) orelse {
+                    self.log.warn("[SaveLoad] Phase 1: spawnFromPrefab('{s}') failed; falling back to fresh entity", .{path_str});
+                    continue;
+                };
+
+                const saved_id: u64 = @intCast((obj.get("id") orelse continue).integer);
+                try id_map.put(saved_id, entityToU64(new_root));
+            }
+
+            // Phase 1b: for each saved PrefabChild, walk the spawned
+            // tree by `local_path` and map the saved child ID to the
+            // already-spawned child entity. Requires Phase 1a to have
+            // populated `id_map` with the root mappings first.
+            for (entities_json.items) |entry| {
+                const obj = entry.object;
+                const components = (obj.get("components") orelse continue).object;
+                const pc_val = components.get("PrefabChild") orelse continue;
+                const pc_obj = switch (pc_val) {
+                    .object => |o| o,
+                    else => continue,
+                };
+                const saved_child_id: u64 = @intCast((obj.get("id") orelse continue).integer);
+                const saved_root_id: u64 = switch (pc_obj.get("root") orelse continue) {
+                    .integer => |i| if (i >= 0) @intCast(i) else continue,
+                    else => continue,
+                };
+                const local_path: []const u8 = switch (pc_obj.get("local_path") orelse continue) {
+                    .string => |s| s,
+                    else => continue,
+                };
+
+                const current_root_id = id_map.get(saved_root_id) orelse {
+                    self.log.warn("[SaveLoad] Phase 1b: PrefabChild root {d} not in id_map — root spawn failed or save is inconsistent", .{saved_root_id});
+                    continue;
+                };
+                const root_entity: Entity = @intCast(current_root_id);
+
+                const child_entity = findChildByLocalPath(self, root_entity, local_path) orelse {
+                    self.log.warn("[SaveLoad] Phase 1b: failed to walk local_path '{s}' from root entity {d}", .{ local_path, current_root_id });
+                    continue;
+                };
+                try id_map.put(saved_child_id, entityToU64(child_entity));
+            }
+
+            // Phase 1c (the v2 path): any saved entity whose ID isn't
+            // already in the id_map — non-prefab entities, or entities
+            // whose prefab resolve failed — gets a fresh `createEntity`
+            // so Phase 2 has something to apply components to.
             for (entities_json.items) |entry| {
                 const obj = entry.object;
                 const saved_id: u64 = @intCast((obj.get("id") orelse continue).integer);
+                if (id_map.contains(saved_id)) continue;
                 const new_entity = self.createEntity();
                 try id_map.put(saved_id, entityToU64(new_entity));
             }
