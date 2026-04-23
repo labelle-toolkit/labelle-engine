@@ -572,3 +572,241 @@ test "save/load mixin: marker-driven re-hydration of non-saveable render compone
         try testing.expectEqual(expected.z_index, visual.z_index);
     }
 }
+
+// Slice 1b of the save/load-for-prefabs RFC (labelle-engine #472):
+// PrefabInstance + PrefabChild get serialised as built-ins alongside
+// Position and Parent. This test locks that round-trip:
+//
+// 1. Create a "prefab root" entity with `PrefabInstance { path,
+//    overrides }` plus a registered saveable component (Worker) so it
+//    gets picked up by the entity-collection pass.
+// 2. Create a "prefab child" entity with `PrefabChild { root,
+//    local_path }` pointing at the root, plus Position and another
+//    registered component.
+// 3. Save → reset → load.
+// 4. Assert: PrefabInstance survives with its exact string fields;
+//    PrefabChild.root is remapped via `id_map` to the new root entity
+//    ID; local_path round-trips; the save file contains escaped JSON
+//    strings (not a pointer address or raw byte dump).
+//
+// The save file's entity order isn't stable across implementations,
+// so the test looks up the new root entity by walking entities with
+// PrefabInstance, then asserts PrefabChild.root matches that entity.
+test "save/load mixin: PrefabInstance + PrefabChild round-trip with id_map remap" {
+    var game = TestGame.init(testing.allocator);
+    defer game.deinit();
+
+    const PrefabInstanceT = @TypeOf(game).PrefabInstanceComp;
+    const PrefabChildT = @TypeOf(game).PrefabChildComp;
+
+    // Root entity: registered Worker + built-in Position + PrefabInstance.
+    const root_entity = game.createEntity();
+    game.active_world.ecs_backend.addComponent(root_entity, Position{ .x = 156, .y = 0 });
+    game.active_world.ecs_backend.addComponent(root_entity, Worker{});
+    game.active_world.ecs_backend.addComponent(root_entity, PrefabInstanceT{
+        .path = "hydroponics",
+        // Overrides blob — a JSON string embedded as a string field,
+        // exercising the writeJsonString escape path for `"` and `\`.
+        .overrides = "{\"components\":{\"Position\":{\"x\":156,\"y\":0}}}",
+    });
+
+    // Child entity: registered Health + Position + PrefabChild.
+    const child_entity = game.createEntity();
+    game.active_world.ecs_backend.addComponent(child_entity, Position{ .x = 15, .y = 0 });
+    game.active_world.ecs_backend.addComponent(child_entity, Health{ .current = 100, .max = 100 });
+    game.active_world.ecs_backend.addComponent(child_entity, PrefabChildT{
+        .root = @intCast(root_entity),
+        .local_path = "children[0]",
+    });
+
+    // Save.
+    const filename = "test_save_prefab.json";
+    try game.saveGameState(filename);
+    defer std.fs.cwd().deleteFile(filename) catch {};
+
+    // Inspect the save file: the path + escaped overrides + local_path
+    // should be present as JSON strings. Guards against a regression
+    // where writeJsonString stops escaping quotes / backslashes.
+    const json = try std.fs.cwd().readFileAlloc(testing.allocator, filename, 1024 * 1024);
+    defer testing.allocator.free(json);
+    try testing.expect(std.mem.indexOf(u8, json, "\"path\": \"hydroponics\"") != null);
+    try testing.expect(std.mem.indexOf(u8, json, "\\\"components\\\"") != null); // escaped quote
+    try testing.expect(std.mem.indexOf(u8, json, "\"local_path\": \"children[0]\"") != null);
+
+    // Reset + load.
+    game.resetEcsBackend();
+    try game.loadGameState(filename);
+
+    // Find the new root entity (the one carrying PrefabInstance).
+    var new_root_id: ?u64 = null;
+    var root_count: usize = 0;
+    {
+        var view = game.active_world.ecs_backend.view(.{PrefabInstanceT}, .{});
+        while (view.next()) |ent| {
+            root_count += 1;
+            new_root_id = @intCast(ent);
+            const pi = game.active_world.ecs_backend.getComponent(ent, PrefabInstanceT).?;
+            try testing.expectEqualStrings("hydroponics", pi.path);
+            try testing.expectEqualStrings(
+                "{\"components\":{\"Position\":{\"x\":156,\"y\":0}}}",
+                pi.overrides,
+            );
+        }
+        view.deinit();
+    }
+    try testing.expectEqual(@as(usize, 1), root_count);
+
+    // Assert PrefabChild.root was remapped through id_map to point at
+    // the new root entity (not the saved 1 or 2 or whatever ID).
+    var child_count: usize = 0;
+    {
+        var view = game.active_world.ecs_backend.view(.{PrefabChildT}, .{});
+        while (view.next()) |ent| {
+            child_count += 1;
+            const pc = game.active_world.ecs_backend.getComponent(ent, PrefabChildT).?;
+            try testing.expectEqual(new_root_id.?, @as(u64, @intCast(pc.root)));
+            try testing.expectEqualStrings("children[0]", pc.local_path);
+        }
+        view.deinit();
+    }
+    try testing.expectEqual(@as(usize, 1), child_count);
+}
+
+// Regression guard: a save file carrying a malformed PrefabInstance
+// value (e.g. a bare integer or null where the loader expects an
+// object) must NOT panic in debug builds. The defensive
+// `switch (pi_val) { .object => ..., else => break :blk }` on the
+// load side exists specifically for this; if someone ever simplifies
+// it to `pi_val.object` (tag-cast), this test will panic.
+test "save/load mixin: malformed PrefabInstance JSON value is skipped, not panicked" {
+    var game = TestGame.init(testing.allocator);
+    defer game.deinit();
+
+    const filename = "test_save_malformed_pi.json";
+    const malformed =
+        \\{
+        \\  "version": 2,
+        \\  "entities": [
+        \\    {
+        \\      "id": 99,
+        \\      "components": {
+        \\        "Position": {"x": 0, "y": 0},
+        \\        "Worker": {},
+        \\        "PrefabInstance": 123
+        \\      }
+        \\    }
+        \\  ]
+        \\}
+    ;
+    try std.fs.cwd().writeFile(.{ .sub_path = filename, .data = malformed });
+    defer std.fs.cwd().deleteFile(filename) catch {};
+
+    // Load must succeed — the malformed PrefabInstance is silently
+    // skipped, the rest of the entity loads normally.
+    try game.loadGameState(filename);
+
+    const PrefabInstanceT = @TypeOf(game).PrefabInstanceComp;
+    var worker_count: usize = 0;
+    var pi_count: usize = 0;
+    {
+        var view = game.active_world.ecs_backend.view(.{Worker}, .{});
+        while (view.next()) |ent| {
+            worker_count += 1;
+            // Entity exists + Worker was restored; PrefabInstance is
+            // NOT attached because its JSON payload was unusable.
+            try testing.expect(!game.active_world.ecs_backend.hasComponent(ent, PrefabInstanceT));
+        }
+        view.deinit();
+    }
+    try testing.expectEqual(@as(usize, 1), worker_count);
+    {
+        var view = game.active_world.ecs_backend.view(.{PrefabInstanceT}, .{});
+        while (view.next()) |_| pi_count += 1;
+        view.deinit();
+    }
+    try testing.expectEqual(@as(usize, 0), pi_count);
+}
+
+// Regression guard: when a save file's PrefabChild.root points at a
+// saved entity ID that isn't present in the save, the `id_map.get
+// orelse break :blk` guard must skip the restore — otherwise the
+// child would be attached to entity 0 (or whatever integer the JSON
+// carries, stale) and corrupt the lineage.
+test "save/load mixin: PrefabChild with unresolvable root is skipped, not attached to stale id" {
+    var game = TestGame.init(testing.allocator);
+    defer game.deinit();
+
+    const filename = "test_save_unresolvable_root.json";
+    // Entity 77 references a non-existent root 9999 via PrefabChild;
+    // the only registered saveable on entity 77 is Worker so it gets
+    // collected, and Position is emitted as a built-in.
+    const malformed =
+        \\{
+        \\  "version": 2,
+        \\  "entities": [
+        \\    {
+        \\      "id": 77,
+        \\      "components": {
+        \\        "Position": {"x": 0, "y": 0},
+        \\        "Worker": {},
+        \\        "PrefabChild": {"root": 9999, "local_path": "children[0]"}
+        \\      }
+        \\    }
+        \\  ]
+        \\}
+    ;
+    try std.fs.cwd().writeFile(.{ .sub_path = filename, .data = malformed });
+    defer std.fs.cwd().deleteFile(filename) catch {};
+
+    try game.loadGameState(filename);
+
+    const PrefabChildT = @TypeOf(game).PrefabChildComp;
+    var count: usize = 0;
+    {
+        var view = game.active_world.ecs_backend.view(.{PrefabChildT}, .{});
+        while (view.next()) |_| count += 1;
+        view.deinit();
+    }
+    try testing.expectEqual(@as(usize, 0), count);
+}
+
+// Regression guard for `writeJsonString` control-char handling.
+// `overrides` is a JSON blob; in practice it might carry escape
+// sequences like `\n` (newline), `\t` (tab), or `\b` (backspace)
+// when scene-level overrides span multiple lines. This test pins the
+// round-trip: a string containing every short escape case survives
+// save + load byte-for-byte.
+test "save/load mixin: PrefabInstance overrides round-trips with control-char escapes" {
+    var game = TestGame.init(testing.allocator);
+    defer game.deinit();
+
+    const PrefabInstanceT = @TypeOf(game).PrefabInstanceComp;
+    const tricky: []const u8 = "line1\nline2\ttabbed\\back\"quote\rcr\x08bs\x0cff\x01ctl";
+
+    const entity = game.createEntity();
+    game.active_world.ecs_backend.addComponent(entity, Position{ .x = 0, .y = 0 });
+    game.active_world.ecs_backend.addComponent(entity, Worker{});
+    game.active_world.ecs_backend.addComponent(entity, PrefabInstanceT{
+        .path = "test",
+        .overrides = tricky,
+    });
+
+    const filename = "test_save_escapes.json";
+    try game.saveGameState(filename);
+    defer std.fs.cwd().deleteFile(filename) catch {};
+
+    game.resetEcsBackend();
+    try game.loadGameState(filename);
+
+    var count: usize = 0;
+    {
+        var view = game.active_world.ecs_backend.view(.{PrefabInstanceT}, .{});
+        while (view.next()) |ent| {
+            count += 1;
+            const pi = game.active_world.ecs_backend.getComponent(ent, PrefabInstanceT).?;
+            try testing.expectEqualStrings(tricky, pi.overrides);
+        }
+        view.deinit();
+    }
+    try testing.expectEqual(@as(usize, 1), count);
+}

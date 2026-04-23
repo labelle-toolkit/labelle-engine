@@ -20,6 +20,21 @@ pub fn Mixin(comptime Game: type) type {
             return @intCast(entity);
         }
 
+        /// `true` when `T` is registered in the game's
+        /// `ComponentRegistry`. The built-in save/load channel for
+        /// engine-defined components (`Position`, `Parent`,
+        /// `PrefabInstance`, `PrefabChild`) guards on the negation
+        /// of this so a game that decides to register one of them
+        /// directly doesn't end up with duplicate JSON keys (the
+        /// registry-driven path would also emit that component).
+        fn isRegistered(comptime T: type) bool {
+            const names = comptime Reg.names();
+            inline for (names) |name| {
+                if (Reg.getType(name) == T) return true;
+            }
+            return false;
+        }
+
         /// Read a boolean field out of a serialised Parent object,
         /// defaulting to `false` for missing / non-bool values. Kept
         /// local so the save and load sides of the built-in Parent
@@ -31,6 +46,31 @@ pub fn Mixin(comptime Game: type) type {
                 .bool => |b| b,
                 else => false,
             };
+        }
+
+        /// Write a JSON-escaped string literal (including surrounding
+        /// quotes) to `writer`. Used by the built-in save pathway for
+        /// components with `[]const u8` fields (PrefabInstance.path,
+        /// PrefabInstance.overrides, PrefabChild.local_path) — serde's
+        /// `writeComponent` doesn't support string slices, so the save
+        /// mixin handles these components as built-ins and needs its
+        /// own escape helper.
+        fn writeJsonString(writer: anytype, s: []const u8) !void {
+            try writer.writeByte('"');
+            for (s) |c| {
+                switch (c) {
+                    '"' => try writer.writeAll("\\\""),
+                    '\\' => try writer.writeAll("\\\\"),
+                    '\n' => try writer.writeAll("\\n"),
+                    '\r' => try writer.writeAll("\\r"),
+                    '\t' => try writer.writeAll("\\t"),
+                    0x08 => try writer.writeAll("\\b"),
+                    0x0c => try writer.writeAll("\\f"),
+                    0...0x07, 0x0b, 0x0e...0x1f => try std.fmt.format(writer, "\\u{x:0>4}", .{c}),
+                    else => try writer.writeByte(c),
+                }
+            }
+            try writer.writeByte('"');
         }
 
         /// Collect entities from a view into an ArrayList, closing the view after.
@@ -94,13 +134,7 @@ pub fn Mixin(comptime Game: type) type {
 
                 // Save Position (built-in) — only if not already in the component registry
                 const Position = core.Position;
-                const has_position_in_registry = comptime blk: {
-                    for (names) |name| {
-                        if (Reg.getType(name) == Position) break :blk true;
-                    }
-                    break :blk false;
-                };
-                if (!has_position_in_registry) {
+                if (comptime !isRegistered(Position)) {
                     const pos = self.getPosition(entity);
                     if (!first_comp) try writer.writeAll(",");
                     try writer.writeAll("\n        \"Position\": {\"x\": ");
@@ -130,13 +164,7 @@ pub fn Mixin(comptime Game: type) type {
                 // be "Parent" — that would still collide. Deliberately
                 // scoped to the common case (same type) for now.
                 const Parent = Game.ParentComp;
-                const has_parent_in_registry = comptime blk: {
-                    for (names) |name| {
-                        if (Reg.getType(name) == Parent) break :blk true;
-                    }
-                    break :blk false;
-                };
-                if (!has_parent_in_registry) {
+                if (comptime !isRegistered(Parent)) {
                     if (self.active_world.ecs_backend.getComponent(entity, Parent)) |parent| {
                         if (!first_comp) try writer.writeAll(",");
                         try writer.writeAll("\n        \"Parent\": {\"entity\": ");
@@ -145,6 +173,49 @@ pub fn Mixin(comptime Game: type) type {
                         try writer.writeAll(if (parent.inherit_rotation) "true" else "false");
                         try writer.writeAll(", \"inherit_scale\": ");
                         try writer.writeAll(if (parent.inherit_scale) "true" else "false");
+                        try writer.writeAll("}");
+                        first_comp = false;
+                    }
+                }
+
+                // Save PrefabInstance (built-in) — attached by
+                // `spawnFromPrefab` to prefab-root entities so save/load
+                // Phase 1 can re-instantiate the prefab and bring back
+                // non-saveable components (Sprite, animation overlays)
+                // on load. Path + overrides-blob are both `[]const u8`,
+                // which serde.writeComponent can't round-trip, so
+                // PrefabInstance lives in the built-in channel alongside
+                // Position and Parent. Same registry-identity guard so
+                // a game registering the type in its ComponentRegistry
+                // doesn't produce duplicate JSON keys.
+                const PrefabInstance = Game.PrefabInstanceComp;
+                if (comptime !isRegistered(PrefabInstance)) {
+                    if (self.active_world.ecs_backend.getComponent(entity, PrefabInstance)) |pi| {
+                        if (!first_comp) try writer.writeAll(",");
+                        try writer.writeAll("\n        \"PrefabInstance\": {\"path\": ");
+                        try writeJsonString(writer, pi.path);
+                        try writer.writeAll(", \"overrides\": ");
+                        try writeJsonString(writer, pi.overrides);
+                        try writer.writeAll("}");
+                        first_comp = false;
+                    }
+                }
+
+                // Save PrefabChild (built-in) — attached by
+                // `spawnFromPrefab` to every child entity created as
+                // part of a prefab instantiation. `root` points back
+                // at the PrefabInstance entity; serialised as u64 and
+                // remapped through the load `id_map` so lineage
+                // survives entity-ID reassignment (same pattern
+                // Parent.entity uses).
+                const PrefabChildT = Game.PrefabChildComp;
+                if (comptime !isRegistered(PrefabChildT)) {
+                    if (self.active_world.ecs_backend.getComponent(entity, PrefabChildT)) |pc| {
+                        if (!first_comp) try writer.writeAll(",");
+                        try writer.writeAll("\n        \"PrefabChild\": {\"root\": ");
+                        try std.fmt.format(writer, "{d}", .{entityToU64(pc.root)});
+                        try writer.writeAll(", \"local_path\": ");
+                        try writeJsonString(writer, pc.local_path);
                         try writer.writeAll("}");
                         first_comp = false;
                     }
@@ -249,13 +320,7 @@ pub fn Mixin(comptime Game: type) type {
 
                 // Restore Position (built-in) — only if not in component registry
                 const Position_load = core.Position;
-                const has_position_in_registry_load = comptime blk: {
-                    for (names) |name| {
-                        if (Reg.getType(name) == Position_load) break :blk true;
-                    }
-                    break :blk false;
-                };
-                if (!has_position_in_registry_load) {
+                if (comptime !isRegistered(Position_load)) {
                     if (components.get("Position")) |pos_val| {
                         const pos_obj = pos_val.object;
                         var px: f32 = 0;
@@ -311,13 +376,7 @@ pub fn Mixin(comptime Game: type) type {
                 // `assertEntityAlive` in debug or corrupt hierarchy
                 // state in release builds.
                 const Parent_load = Game.ParentComp;
-                const has_parent_in_registry_load = comptime blk: {
-                    for (names) |name| {
-                        if (Reg.getType(name) == Parent_load) break :blk true;
-                    }
-                    break :blk false;
-                };
-                if (!has_parent_in_registry_load) {
+                if (comptime !isRegistered(Parent_load)) {
                     if (components.get("Parent")) |parent_val| blk: {
                         // A malformed save carrying `"Parent": 123` or
                         // `"Parent": null` would otherwise trip the
@@ -340,6 +399,66 @@ pub fn Mixin(comptime Game: type) type {
                         self.setParent(entity, parent_entity, .{
                             .inherit_rotation = inherit_rotation,
                             .inherit_scale = inherit_scale,
+                        });
+                    }
+                }
+
+                // Restore PrefabInstance (built-in) — counterpart to
+                // the save block above. String fields are duped into
+                // the world's nested-entity arena so they outlive the
+                // parsed JSON deinit.
+                const PrefabInstance_load = Game.PrefabInstanceComp;
+                if (comptime !isRegistered(PrefabInstance_load)) {
+                    if (components.get("PrefabInstance")) |pi_val| blk: {
+                        const pi_obj = switch (pi_val) {
+                            .object => |o| o,
+                            else => break :blk,
+                        };
+                        const path_str = switch (pi_obj.get("path") orelse break :blk) {
+                            .string => |s| s,
+                            else => break :blk,
+                        };
+                        const overrides_str = switch (pi_obj.get("overrides") orelse break :blk) {
+                            .string => |s| s,
+                            else => break :blk,
+                        };
+                        const pi_arena = self.active_world.nested_entity_arena.allocator();
+                        const path_dup = try pi_arena.dupe(u8, path_str);
+                        const overrides_dup = try pi_arena.dupe(u8, overrides_str);
+                        self.active_world.ecs_backend.addComponent(entity, PrefabInstance_load{
+                            .path = path_dup,
+                            .overrides = overrides_dup,
+                        });
+                    }
+                }
+
+                // Restore PrefabChild (built-in) — counterpart to the
+                // save block above. `root` is an entity ref, remapped
+                // through `id_map`; `local_path` is duped into the
+                // world arena to outlive the parsed JSON.
+                const PrefabChild_load = Game.PrefabChildComp;
+                if (comptime !isRegistered(PrefabChild_load)) {
+                    if (components.get("PrefabChild")) |pc_val| blk: {
+                        const pc_obj = switch (pc_val) {
+                            .object => |o| o,
+                            else => break :blk,
+                        };
+                        const root_val = pc_obj.get("root") orelse break :blk;
+                        const saved_root_id: u64 = switch (root_val) {
+                            .integer => |i| if (i >= 0) @intCast(i) else break :blk,
+                            else => break :blk,
+                        };
+                        const current_root_id = id_map.get(saved_root_id) orelse break :blk;
+                        const root_entity: Entity = @intCast(current_root_id);
+                        const local_path_str = switch (pc_obj.get("local_path") orelse break :blk) {
+                            .string => |s| s,
+                            else => break :blk,
+                        };
+                        const pc_arena = self.active_world.nested_entity_arena.allocator();
+                        const local_path_dup = try pc_arena.dupe(u8, local_path_str);
+                        self.active_world.ecs_backend.addComponent(entity, PrefabChild_load{
+                            .root = root_entity,
+                            .local_path = local_path_dup,
                         });
                     }
                 }
