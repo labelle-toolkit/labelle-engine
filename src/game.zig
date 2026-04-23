@@ -398,8 +398,32 @@ pub fn GameConfig(
         /// caller needs the handler to have run before the next
         /// statement (cross-plugin state machines that can't tolerate
         /// the buffered-dispatch window).
+        ///
+        /// ## Caveats
+        ///
+        /// The event-buffer design in the custom-game-events RFC exists
+        /// precisely to avoid these, so reach for `emitSync` only when
+        /// the buffered path is provably wrong for the call site:
+        ///
+        /// - **Re-entrancy.** Handlers run mid-tick, inside whatever
+        ///   script or plugin called `emitSync`. A handler that itself
+        ///   mutates entity state, emits more events, or calls back
+        ///   into the caller's own code can interleave with partially-
+        ///   completed work on the stack above. Favour buffered `emit`
+        ///   unless the caller is a leaf operation.
+        ///
+        /// - **Ordering vs buffered events.** `emitSync` does NOT drain
+        ///   the end-of-frame buffer first. A hook fired synchronously
+        ///   mid-tick runs *before* all the events `emit` queued
+        ///   earlier in the same frame, even though those were queued
+        ///   first. Mixing the two on a single event kind produces
+        ///   out-of-order handler calls — usually not what you want.
         pub fn emitSync(self: *Self, event: GameEvents) void {
-            if (!has_events) return;
+            // Skip the switch + @unionInit payload construction when
+            // the game has no hooks to dispatch to — same comptime
+            // shortcut `emitHook` relies on. Folds the entire call
+            // away in zero-hook builds.
+            if (!has_events or !has_hooks) return;
             switch (event) {
                 inline else => |data, tag| {
                     self.emitHook(@unionInit(Payload, @tagName(tag), data));
