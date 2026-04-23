@@ -584,28 +584,37 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
                     try loadChildEntity(game, entity, child_val, prefab_cache, depth, entity_pos, ref_ctx);
                 }
             }
-            if (entity_obj.getArray("children")) |children| {
-                for (children.items) |child_val| {
-                    try loadChildEntity(game, entity, child_val, prefab_cache, depth, entity_pos, ref_ctx);
-                }
-            }
 
             // Save/load: tag prefab-sourced entities with `PrefabInstance`
             // (root) + `PrefabChild` (each descendant) so the save mixin
             // records their prefab origin and the two-phase load can
             // respawn the prefab + remap saved child IDs to the newly-
-            // spawned descendants via `(root, local_path)`.
+            // spawned descendants via `(root, local_path)`. Uses the
+            // shared `game.tagAsPrefabInstance` so the `local_path`
+            // format stays identical to the runtime `spawnFromPrefab`
+            // path — save mixin's `findChildByLocalPath` can match
+            // either.
             //
-            // Runs after children are fully attached (`loadChildEntity`
-            // above) so `game.getChildren(entity)` walks the real tree
-            // rather than an in-progress one. Uses the shared
-            // `game.tagAsPrefabInstance` so the `local_path` format
-            // stays identical to the runtime `spawnFromPrefab` path —
-            // save mixin's `findChildByLocalPath` can match either.
+            // Tag BEFORE scene-declared children are attached. If a scene
+            // over-declares children on top of a prefab (e.g. the scene
+            // adds decorations around a prefab-sourced room), those
+            // scene-only children must NOT get `PrefabChild` markers —
+            // they don't belong to the prefab definition, and on load
+            // Phase 1b would otherwise walk `children[N]` and either
+            // miss (prefab grew fewer children than saved) or mis-map
+            // onto a newly-added prefab child at the same index (prefab
+            // evolved). Propagate the error via `try` instead of logging
+            // and continuing: an untagged prefab root is invisible to
+            // Phase 1a, so a silent failure breaks F5 → F9 round-trip.
+            // `LoadEntityError` already carries `OutOfMemory`.
             if (entity_obj.getString("prefab")) |prefab_name| {
-                game.tagAsPrefabInstance(entity, prefab_name) catch |err| {
-                    game.log.err("[JsoncSceneBridge] tagAsPrefabInstance failed for '{s}': {}", .{ prefab_name, err });
-                };
+                try game.tagAsPrefabInstance(entity, prefab_name);
+            }
+
+            if (entity_obj.getArray("children")) |children| {
+                for (children.items) |child_val| {
+                    try loadChildEntity(game, entity, child_val, prefab_cache, depth, entity_pos, ref_ctx);
+                }
             }
 
             return entity;
