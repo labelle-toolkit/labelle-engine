@@ -77,6 +77,25 @@ const Container = struct {
     }
 };
 
+/// Models the "saveable marker with enum tag" pattern used by downstream
+/// games (e.g. flying-platform-labelle's `RoomDecor` / `HydroponicsPlant`)
+/// to re-hydrate a non-saveable render component after load.
+const DecorKind = enum { background, shelf };
+
+const Decor = struct {
+    pub const save = Saveable(.saveable, @This(), .{});
+    kind: DecorKind = .background,
+};
+
+/// Models a non-saveable render component (e.g. labelle-gfx's Sprite).
+/// NOT registered in `TestComponents` below — that's what makes it
+/// "transient" from the save mixin's perspective: instances live in the
+/// world at runtime but are never serialised or restored.
+const VisualMock = struct {
+    sprite_name: []const u8 = "",
+    z_index: i16 = 0,
+};
+
 const TestComponents = ComponentRegistry(.{
     .Position = Position,
     .Worker = Worker,
@@ -86,6 +105,9 @@ const TestComponents = ComponentRegistry(.{
     .NeedsRecalc = NeedsRecalc,
     .RebuildMarker = RebuildMarker,
     .TransientRefs = TransientRefs,
+    .Decor = Decor,
+    // Note: VisualMock is intentionally absent — modelling a render
+    // component that isn't owned by the ECS save path.
 });
 
 // ── Test Game Type ──────────────────────────────────────────────────────
@@ -441,4 +463,112 @@ test "save/load mixin: load nonexistent file returns error" {
 
     const result = game.loadGameState("nonexistent_file.json");
     try testing.expectError(error.FileNotFound, result);
+}
+
+// Regression guard for flying-platform-labelle #286 ("save/load:
+// restoreSprites ignores child-entity room backgrounds").
+//
+// PRs #283 and #285 moved the hydroponics/condenser room backgrounds
+// from the Room entity onto a child entity with a `Position` offset
+// (so the art centers in its slot). After save/load, the child's
+// Sprite was gone — Sprite isn't owned by the ECS save path — and
+// the game's `restoreSprites` only re-added sprites on Room entities,
+// so the decor child rendered blank.
+//
+// The fix is a saveable `RoomDecor { kind }` marker on the child
+// plus a restore-pass that walks `view(.{RoomDecor}, .{Sprite})`
+// and re-adds Sprite from a `kind → (sprite_name, z_index)` switch
+// table. This test exercises that pattern end-to-end at the engine
+// layer: save → reset → load → assert marker persists and render
+// component is missing → run mock walker → assert render component
+// is restored with the right fields.
+test "save/load mixin: marker-driven re-hydration of non-saveable render component" {
+    var game = TestGame.init(testing.allocator);
+    defer game.deinit();
+
+    // Two decor entities — a background and a shelf — each with a
+    // transient VisualMock (models Sprite).
+    const bg = game.createEntity();
+    game.active_world.ecs_backend.addComponent(bg, Position{ .x = 15, .y = 0 });
+    game.active_world.ecs_backend.addComponent(bg, Decor{ .kind = .background });
+    game.active_world.ecs_backend.addComponent(bg, VisualMock{
+        .sprite_name = "room_background.png",
+        .z_index = -5,
+    });
+
+    const shelf = game.createEntity();
+    game.active_world.ecs_backend.addComponent(shelf, Position{ .x = 15, .y = 0 });
+    game.active_world.ecs_backend.addComponent(shelf, Decor{ .kind = .shelf });
+    game.active_world.ecs_backend.addComponent(shelf, VisualMock{
+        .sprite_name = "wooden_shelf.png",
+        .z_index = -3,
+    });
+
+    const filename = "test_save_decor.json";
+    try game.saveGameState(filename);
+    defer std.fs.cwd().deleteFile(filename) catch {};
+
+    // Verify VisualMock did NOT end up in the save file — it isn't
+    // registered in ComponentRegistry, so the save mixin shouldn't see it.
+    const json = try std.fs.cwd().readFileAlloc(testing.allocator, filename, 1024 * 1024);
+    defer testing.allocator.free(json);
+    try testing.expect(std.mem.indexOf(u8, json, "VisualMock") == null);
+    try testing.expect(std.mem.indexOf(u8, json, "sprite_name") == null);
+
+    // Reset + load — same shape as the F9 handler.
+    game.resetEcsBackend();
+    try game.loadGameState(filename);
+
+    // Collect decor entities, assert marker persisted + visual is gone.
+    var decor_entities: [4]MockEcs.Entity = undefined;
+    var decor_count: usize = 0;
+    {
+        var view = game.active_world.ecs_backend.view(.{Decor}, .{});
+        while (view.next()) |ent| {
+            try testing.expect(decor_count < decor_entities.len);
+            decor_entities[decor_count] = ent;
+            decor_count += 1;
+            try testing.expect(!game.active_world.ecs_backend.hasComponent(ent, VisualMock));
+        }
+        view.deinit();
+    }
+    try testing.expectEqual(@as(usize, 2), decor_count);
+
+    // Mock `restoreSprites` — exactly the shape of
+    // `flying-platform-labelle/scripts/save_load.zig::restoreSprites`
+    // for the RoomDecor branch.
+    const resolve = struct {
+        fn call(kind: DecorKind) VisualMock {
+            return switch (kind) {
+                .background => .{ .sprite_name = "room_background.png", .z_index = -5 },
+                .shelf => .{ .sprite_name = "wooden_shelf.png", .z_index = -3 },
+            };
+        }
+    }.call;
+
+    {
+        var view = game.active_world.ecs_backend.view(.{Decor}, .{VisualMock});
+        var buf: [4]MockEcs.Entity = undefined;
+        var count: usize = 0;
+        while (view.next()) |ent| {
+            try testing.expect(count < buf.len);
+            buf[count] = ent;
+            count += 1;
+        }
+        view.deinit();
+        try testing.expectEqual(@as(usize, 2), count);
+        for (buf[0..count]) |ent| {
+            const decor = game.active_world.ecs_backend.getComponent(ent, Decor).?;
+            game.active_world.ecs_backend.addComponent(ent, resolve(decor.kind));
+        }
+    }
+
+    // Assert every decor entity now carries the expected VisualMock.
+    for (decor_entities[0..decor_count]) |ent| {
+        const decor = game.active_world.ecs_backend.getComponent(ent, Decor).?;
+        const visual = game.active_world.ecs_backend.getComponent(ent, VisualMock).?;
+        const expected = resolve(decor.kind);
+        try testing.expectEqualStrings(expected.sprite_name, visual.sprite_name);
+        try testing.expectEqual(expected.z_index, visual.z_index);
+    }
 }
