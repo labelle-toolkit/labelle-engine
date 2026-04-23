@@ -21,6 +21,7 @@ pub const animation_def_mod = @import("animation_def.zig");
 pub const animation_state_mod = @import("animation_state.zig");
 pub const sprite_animation_mod = @import("sprite_animation.zig");
 pub const sprite_by_field_mod = @import("sprite_by_field.zig");
+pub const sprite_by_field_tick_mod = @import("sprite_by_field_tick.zig");
 pub const atlas_mod = @import("atlas.zig");
 pub const assets_mod = @import("assets/mod.zig");
 pub const jsonc_mod = @import("jsonc");
@@ -130,6 +131,7 @@ pub const SpriteAnimation = sprite_animation_mod.SpriteAnimation;
 pub const SpriteAnimationMode = sprite_animation_mod.AnimationMode;
 pub const SpriteByField = sprite_by_field_mod.SpriteByField;
 pub const SpriteByFieldSource = sprite_by_field_mod.SpriteByFieldSource;
+pub const spriteByFieldTick = sprite_by_field_tick_mod.tick;
 
 // ── Atlas ──
 pub const SpriteData = atlas_mod.SpriteData;
