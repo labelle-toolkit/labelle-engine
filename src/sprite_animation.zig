@@ -55,9 +55,19 @@ pub const AnimationMode = enum {
 /// frames; use `AnimationDef` / `AnimationState` for character rigs
 /// that push against that ceiling.
 pub const SpriteAnimation = struct {
-    pub const save = save_policy.Saveable(.saveable, @This(), .{
-        .skip = &.{ "timer", "frame", "forward" },
-    });
+    // `.transient` because:
+    //   * `frames: []const []const u8` isn't serde-writable — the
+    //     serializer doesn't support slice-of-slice — so `.saveable`
+    //     would fail at comptime if this component were registered.
+    //   * The whole point of this component under the prefab-
+    //     foundations RFC is that it comes back via Phase 1 re-spawn:
+    //     the prefab jsonc redeclares it from scratch on load, so
+    //     there's nothing to round-trip through the save file.
+    // Runtime state (`timer` / `frame` / `forward`) resets to zero on
+    // re-spawn; one-frame visual continuity loss is invisible at 60
+    // Hz, and a shipping game cares more about deterministic save
+    // shapes than which frame a pipe animation happened to be on.
+    pub const save = save_policy.Saveable(.transient, @This(), .{});
 
     frames: []const []const u8,
     fps: f32,

@@ -1022,6 +1022,25 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
         fn deserialize(comptime T: type, value: Value, allocator: std.mem.Allocator) ?T {
             const info = @typeInfo(T);
 
+            // Optionals — JSONC `null` → component field stays `null`,
+            // anything else unwraps and recurses with the child type.
+            // Must run BEFORE the string check so `?[]const u8` fields
+            // (e.g. `SpriteByField.Entry.sprite_name`) reach here
+            // instead of getting routed into the string branch with a
+            // null value and failing.
+            //
+            // Note the two distinct `null`s at play: the function
+            // returns `?T` to signal "deserialize failed," but for an
+            // optional field type the *success* case of "JSON value
+            // was null" is a valid `T` — so we return `@as(T, null)`,
+            // the inner optional's null wrapped in the outer Optional
+            // as a success, not a bare `null` which would read as a
+            // failure up in `deserializeStruct`.
+            if (info == .optional) {
+                if (value == .null_value) return @as(T, null);
+                return deserialize(info.optional.child, value, allocator);
+            }
+
             // Primitives
             if (T == f32 or T == f64) return valueToFloat(T, value);
             if (T == i8 or T == i16 or T == i32 or T == i64 or T == u8 or T == u16 or T == u32 or T == u64 or T == usize) return valueToInt(T, value);
@@ -1034,6 +1053,32 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
                 // system call per string. See the intern pool docs at
                 // the top of this file.
                 return internString(s);
+            }
+
+            // Slices of other types (`[]const Struct`, `[]const []const u8`,
+            // etc.). The `[]const u8` case is handled specifically
+            // above so string deduplication still runs via the
+            // intern pool; this branch covers everything else.
+            //
+            // Lifetime: the caller passes its per-world arena
+            // allocator (see `applyComponent`), which matches the
+            // spawned entity's lifetime and resets on
+            // `resetEcsBackend`. Prior revisions used the file-scope
+            // `intern_arena`, which is never freed — slice contents
+            // aren't deduplicable (unlike bare strings), so every
+            // prefab spawn leaked a new allocation over the process
+            // lifetime. Using the scene-scoped arena instead caps
+            // the cost at "one allocation per entity per scene load,"
+            // released on scene change.
+            if (info == .pointer and info.pointer.size == .slice) {
+                const arr = value.asArray() orelse return null;
+                const Element = info.pointer.child;
+
+                const buf = allocator.alloc(Element, arr.items.len) catch return null;
+                for (arr.items, 0..) |item, i| {
+                    buf[i] = deserialize(Element, item, allocator) orelse return null;
+                }
+                return buf;
             }
 
             // Enums
@@ -1162,9 +1207,21 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
                 return;
             }
 
+            // `deserialize`-side allocations (slices for `frames` /
+            // `entries` / etc.) land in `active_world.nested_entity_arena`
+            // so they share the lifetime of the spawned entity —
+            // freed atomically on scene change via `resetEcsBackend`.
+            // `game.allocator` was tempting as a default but leaves
+            // nothing to free per-scene, which bit us on #488
+            // (gemini flagged unbounded per-spawn slice growth). The
+            // transient `stripEntityArrayFields` scratch below still
+            // uses `game.allocator` because its lifetime is this
+            // function call only and the `defer` above frees it.
+            const comp_alloc = game.active_world.nested_entity_arena.allocator();
+
             // Sprite — uses addSprite for renderer registration
             if (std.mem.eql(u8, name, "Sprite")) {
-                if (deserialize(Sprite, value, game.allocator)) |sprite| {
+                if (deserialize(Sprite, value, comp_alloc)) |sprite| {
                     game.addSprite(entity, sprite);
                 }
                 return;
@@ -1172,7 +1229,7 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
 
             // Shape — uses addShape for renderer registration
             if (std.mem.eql(u8, name, "Shape")) {
-                if (deserialize(Shape, value, game.allocator)) |shape| {
+                if (deserialize(Shape, value, comp_alloc)) |shape| {
                     game.addShape(entity, shape);
                 }
                 return;
@@ -1194,7 +1251,7 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
             inline for (comp_names) |comp_name| {
                 if (std.mem.eql(u8, name, comp_name)) {
                     const T = Components.getType(comp_name);
-                    if (deserialize(T, filtered, game.allocator)) |component| {
+                    if (deserialize(T, filtered, comp_alloc)) |component| {
                         game.addComponent(entity, component);
                     }
                     return;
