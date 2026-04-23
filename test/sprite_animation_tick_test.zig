@@ -3,9 +3,10 @@
 //!
 //! Uses the same MockEcs + StubRender harness the save/load mixin
 //! tests use. `StubRender.Sprite` carries only `sprite_name` / `visible`
-//! / `z_index` — no `source_rect` / `texture` — so the tick's atlas
-//! resolution branch is a no-op in these tests (guarded by
-//! `@hasField`). That still lets us verify the critical behaviour:
+//! / `z_index` — no `source_rect` / `texture`. That's fine: the tick
+//! only writes `sprite_name`; `source_rect` / `texture` / `display_*`
+//! are resolved by `Game.resolveAtlasSprites` each frame before
+//! renderer sync. The critical invariants verified here are:
 //! frame flip → `sprite_name` rewritten; idle tick → `sprite_name`
 //! unchanged.
 
