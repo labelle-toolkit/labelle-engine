@@ -28,6 +28,10 @@
 //!      declared animation components (via respawn); a single post-
 //!      load tick re-resolves the field-driven child against the
 //!      restored level.
+//!   6. Drive the field to a lookup-table entry whose `sprite_name`
+//!      is JSONC `null`, demonstrating that the tick toggles
+//!      `Sprite.visible = false` end-to-end (null survives optional
+//!      deserialization + save-skipping transient + prefab respawn).
 //!
 //! Runnable under `zig build test`. Uses `MockEcs` + `StubRender` so
 //! there's no window, GPU, or atlas — the pipeline itself is what
@@ -302,4 +306,19 @@ test "walkthrough: prefab + animation + save/load round-trips end-to-end" {
         "leaf_lvl3.png",
         game.ecs_backend.getComponent(field_child_post, Sprite).?.sprite_name,
     );
+
+    // ── Step 5: null entries hide the sprite ────────────────────
+    //
+    // The prefab's entries[0] has `{ "key": 0, "sprite_name": null }`
+    // — a JSONC null that rode through the bridge's optional
+    // deserialize branch (#488 / #489) as `null`. When the driver
+    // matches this entry, the tick system is contracted to toggle
+    // `Sprite.visible = false` rather than rewriting the name. This
+    // exercises the full null-entry path: parse-time optional
+    // deserialization → save survives (via prefab respawn, since the
+    // component is `.transient`) → tick reads the null and hides.
+    game.ecs_backend.getComponent(root_post, PlantLevel).?.level = 0;
+    engine.spriteByFieldTick(game, 0);
+    const sprite_hidden = game.ecs_backend.getComponent(field_child_post, Sprite).?;
+    try testing.expect(!sprite_hidden.visible);
 }
