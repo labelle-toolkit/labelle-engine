@@ -48,6 +48,119 @@ pub fn Mixin(comptime Game: type) type {
             };
         }
 
+        /// Safe JSON accessors for the load path. All return `null`
+        /// on a tag mismatch rather than panicking via `.object` /
+        /// `.integer` tag casts — so a malformed save file (wrong
+        /// type, missing field, `null` where an object is expected)
+        /// produces a logged warning and a skipped entity, not a
+        /// debug-assertion panic or release-mode memory corruption.
+        fn getComponentsObject(entry: std.json.Value) ?std.json.ObjectMap {
+            if (entry != .object) return null;
+            const comps_val = entry.object.get("components") orelse return null;
+            return switch (comps_val) {
+                .object => |o| o,
+                else => null,
+            };
+        }
+
+        fn getObjectField(obj: std.json.ObjectMap, name: []const u8) ?std.json.ObjectMap {
+            const v = obj.get(name) orelse return null;
+            return switch (v) {
+                .object => |o| o,
+                else => null,
+            };
+        }
+
+        fn getStringField(obj: std.json.ObjectMap, name: []const u8) ?[]const u8 {
+            const v = obj.get(name) orelse return null;
+            return switch (v) {
+                .string => |s| s,
+                else => null,
+            };
+        }
+
+        /// Read a non-negative integer field as `u64` (for entity IDs).
+        /// Clamps negative and out-of-range values to `null` so the
+        /// caller's `orelse continue` pattern gracefully drops malformed
+        /// entries.
+        fn getU64Field(obj: std.json.ObjectMap, name: []const u8) ?u64 {
+            const v = obj.get(name) orelse return null;
+            return switch (v) {
+                .integer => |i| if (i >= 0) @intCast(i) else null,
+                else => null,
+            };
+        }
+
+        /// Read the top-level `id` of a save entry as `u64`. Missing
+        /// or non-integer `id` fields return `null` so the caller can
+        /// skip the entry instead of panicking.
+        fn getSavedId(entry: std.json.Value) ?u64 {
+            if (entry != .object) return null;
+            return getU64Field(entry.object, "id");
+        }
+
+        /// Read a numeric field as `f32`, accepting both `.float` and
+        /// `.integer` JSON tags; returns 0 for missing or non-numeric
+        /// values. Used for the Position shim in Phase 1a.
+        fn getNumberField(obj: std.json.ObjectMap, name: []const u8) f32 {
+            const v = obj.get(name) orelse return 0;
+            return switch (v) {
+                .float => |f| @floatCast(f),
+                .integer => |i| @floatFromInt(i),
+                else => 0,
+            };
+        }
+
+        /// Walk a dotted `children[i]...` path from `root` through
+        /// `game.getChildren`, returning the entity at the end or
+        /// `null` when the path doesn't resolve (missing index,
+        /// malformed syntax, root has no children, etc.). Matches the
+        /// path format `spawnFromPrefab` (and the scene-bridge
+        /// auto-tagger) emit, so save/load Phase 1 can find the
+        /// re-spawned child that corresponds to each saved PrefabChild.
+        fn findChildByLocalPath(self: *Game, root: Entity, local_path: []const u8) ?Entity {
+            // Empty path is not valid — `PrefabChild.local_path` is always
+            // at least `"children[0]"` when a child was legitimately
+            // emitted. An empty string on the saved side indicates a
+            // corrupted save, and resolving it to `root` would alias the
+            // child's ID onto the root entity in `id_map`, causing Phase 2
+            // to apply the child's components on top of the root. Return
+            // null so the caller's `orelse` path logs + skips instead.
+            if (local_path.len == 0) return null;
+
+            var current: Entity = root;
+            var rest = local_path;
+            while (rest.len > 0) {
+                if (rest[0] == '.') rest = rest[1..];
+                const prefix = "children[";
+                if (!std.mem.startsWith(u8, rest, prefix)) return null;
+                rest = rest[prefix.len..];
+                const close = std.mem.indexOfScalar(u8, rest, ']') orelse return null;
+                const idx = std.fmt.parseInt(usize, rest[0..close], 10) catch return null;
+                rest = rest[close + 1 ..];
+
+                const children = self.getChildren(current);
+                if (idx >= children.len) return null;
+                current = children[idx];
+            }
+            return current;
+        }
+
+        /// Recursively insert `root` and every descendant into `set`.
+        /// Used by Phase 1a to record which entities came in through
+        /// `spawnFromPrefab` (and were therefore renderer-tracked by
+        /// the prefab spawn path) so Step 5 can skip re-tracking them.
+        fn markSubtreeRendererTracked(
+            self: *Game,
+            root: Entity,
+            set: *std.AutoHashMap(u64, void),
+        ) !void {
+            try set.put(entityToU64(root), {});
+            for (self.getChildren(root)) |child| {
+                try markSubtreeRendererTracked(self, child, set);
+            }
+        }
+
         /// Write a JSON-escaped string literal (including surrounding
         /// quotes) to `writer`. Used by the built-in save pathway for
         /// components with `[]const u8` fields (PrefabInstance.path,
@@ -294,52 +407,162 @@ pub fn Mixin(comptime Game: type) type {
 
             const entities_json = (root.get("entities") orelse return error.MissingField).array;
 
-            // Step 1: Clear scene tracking and destroy all entities atomically
+            // Step 1: Clear scene tracking and destroy all entities atomically.
+            //
+            // Both scene-entity lists have to be cleared here:
+            //   * `clearActiveSceneEntities()` — clears the active scene's
+            //     *own* list (the one `active_scene_clear_entities_fn`
+            //     wraps).
+            //   * `self.scene_entities` — the Game-level list, populated
+            //     by `trackSceneEntity` via the JSONC bridge's
+            //     `spawnPrefabImpl`. `resetEcsBackend` doesn't touch it,
+            //     so without this clear the list retains pre-load entity
+            //     IDs that are dangling after the ECS reset. Phase 1a's
+            //     `spawnFromPrefab` then appends new IDs on top, and a
+            //     later `unloadCurrentScene` would iterate the stale ones
+            //     and hit `destroyEntityOnly` with invalid handles.
+            self.scene_entities.clearRetainingCapacity();
             self.clearActiveSceneEntities();
             self.resetEcsBackend();
 
-            // Step 2: Create new entities and build ID map
+            // Step 2: Create new entities and build ID map.
+            //
+            // Two-phase structure (RFC-SAVE-LOAD-PREFABS §Architecture,
+            // Slice 3):
+            //
+            //   Phase 1 — PrefabInstance-tagged entities are re-spawned
+            //   via `game.spawnFromPrefab`. The prefab reinstantiation
+            //   brings back non-saveable components (Sprite, animation
+            //   overlays, etc.) and the full child structure for free.
+            //   For each saved PrefabChild, we walk the spawned tree by
+            //   its `local_path` and map the saved child ID to the
+            //   newly-spawned child entity.
+            //
+            //   Phase 1b — any saved entity NOT covered by Phase 1 (no
+            //   PrefabInstance tag, and its ID wasn't mapped via a
+            //   PrefabChild lookup) is created fresh with `createEntity`.
+            //   Same as the v2 behaviour; preserves the non-prefab path.
+            //
+            //   Phase 2 (Step 3 below) applies saved component data on
+            //   every entity — prefab-spawned or fresh — as overrides.
             var id_map = std.AutoHashMap(u64, u64).init(allocator);
             defer id_map.deinit();
 
+            // Entities spawned via Phase 1a's `spawnFromPrefab` (the
+            // root + every descendant the prefab creates) are already
+            // renderer-tracked by `spawnPrefabImpl` — it routes each
+            // visual component through `game.addSprite`/`addShape`,
+            // which call `renderer.trackEntity` themselves. Step 5
+            // below re-tracks any entity carrying a Sprite/Shape for
+            // the Phase 1c createEntity path (bare entities whose
+            // visuals come via Phase 2's `addComponent`). Without this
+            // set, Phase 1a entities get registered with the renderer
+            // twice — duplicate render-list entries, double cleanup
+            // pressure, etc. Bugbot flagged this on da17581.
+            var renderer_already_tracked = std.AutoHashMap(u64, void).init(allocator);
+            defer renderer_already_tracked.deinit();
+
+            // Phase 1a: spawn prefab roots. We need Position for the
+            // spawn point; read it from the saved `Position` component.
+            //
+            // Skip entities that ALSO carry a PrefabChild tag — those
+            // are nested-prefab entries where an outer prefab's
+            // `spawnFromPrefab` already reinstantiates this whole
+            // subtree. Calling spawnFromPrefab again here would create
+            // a duplicate "ghost" root alongside the already-spawned
+            // one. Phase 1b maps the nested root through the outer
+            // tree's `(root, local_path)` walk instead.
             for (entities_json.items) |entry| {
-                const obj = entry.object;
-                const saved_id: u64 = @intCast((obj.get("id") orelse continue).integer);
+                const components = getComponentsObject(entry) orelse continue;
+                const pi_obj = getObjectField(components, "PrefabInstance") orelse continue;
+                if (components.get("PrefabChild") != null) continue;
+                const path_str = getStringField(pi_obj, "path") orelse continue;
+                // Validate `saved_id` BEFORE spawning. If the entry is
+                // missing a valid id, the spawned tree would have no
+                // id_map entry — Phase 2 couldn't reconcile it and it
+                // would remain as an orphan prefab tree in the world.
+                // Reading first turns a silent leak into a skip.
+                const saved_id = getSavedId(entry) orelse continue;
+
+                // Extract spawn Position from saved components, defaulting
+                // to (0,0) when absent (the prefab's own Position wins in
+                // that case via `spawnPrefab`'s `parent_offset` path).
+                var spawn_pos: core.Position = .{ .x = 0, .y = 0 };
+                if (getObjectField(components, "Position")) |pos_obj| {
+                    spawn_pos.x = getNumberField(pos_obj, "x");
+                    spawn_pos.y = getNumberField(pos_obj, "y");
+                }
+
+                const new_root = self.spawnFromPrefab(path_str, spawn_pos) orelse {
+                    self.log.warn("[SaveLoad] Phase 1: spawnFromPrefab('{s}') failed; falling back to fresh entity", .{path_str});
+                    continue;
+                };
+
+                try id_map.put(saved_id, entityToU64(new_root));
+                // Mark the root + every descendant as already-tracked
+                // so Step 5's trackEntity pass skips them (see the
+                // comment on `renderer_already_tracked` above).
+                try markSubtreeRendererTracked(self, new_root, &renderer_already_tracked);
+            }
+
+            // Phase 1b: for each saved PrefabChild, walk the spawned
+            // tree by `local_path` and map the saved child ID to the
+            // already-spawned child entity. Requires Phase 1a to have
+            // populated `id_map` with the root mappings first.
+            for (entities_json.items) |entry| {
+                const components = getComponentsObject(entry) orelse continue;
+                const pc_obj = getObjectField(components, "PrefabChild") orelse continue;
+                const saved_child_id = getSavedId(entry) orelse continue;
+                const saved_root_id = getU64Field(pc_obj, "root") orelse continue;
+                const local_path = getStringField(pc_obj, "local_path") orelse continue;
+
+                const current_root_id = id_map.get(saved_root_id) orelse {
+                    self.log.warn("[SaveLoad] Phase 1b: PrefabChild root {d} not in id_map — root spawn failed or save is inconsistent", .{saved_root_id});
+                    continue;
+                };
+                const root_entity: Entity = @intCast(current_root_id);
+
+                const child_entity = findChildByLocalPath(self, root_entity, local_path) orelse {
+                    self.log.warn("[SaveLoad] Phase 1b: failed to walk local_path '{s}' from root entity {d}", .{ local_path, current_root_id });
+                    continue;
+                };
+                try id_map.put(saved_child_id, entityToU64(child_entity));
+            }
+
+            // Phase 1c (the v2 path): any saved entity whose ID isn't
+            // already in the id_map — non-prefab entities, or entities
+            // whose prefab resolve failed — gets a fresh `createEntity`
+            // so Phase 2 has something to apply components to.
+            for (entities_json.items) |entry| {
+                const saved_id = getSavedId(entry) orelse continue;
+                if (id_map.contains(saved_id)) continue;
                 const new_entity = self.createEntity();
                 try id_map.put(saved_id, entityToU64(new_entity));
             }
 
             // Step 3: Restore components (includes Position)
             for (entities_json.items) |entry| {
-                const obj = entry.object;
-                const saved_id: u64 = @intCast((obj.get("id") orelse continue).integer);
+                // Defensive accessors — a malformed entry whose `id` isn't
+                // an integer, or whose `components` field is the wrong
+                // shape, must not crash the load; skip the entry so the
+                // rest of the save still applies. Same treatment
+                // Phase 1a/1b/1c went through; mirror here so no
+                // direct `.integer` / `.object` tag casts remain in the
+                // load path.
+                const saved_id = getSavedId(entry) orelse continue;
                 const current_id = id_map.get(saved_id) orelse continue;
                 const entity: Entity = @intCast(current_id);
 
-                const components = (obj.get("components") orelse continue).object;
+                const components = getComponentsObject(entry) orelse continue;
 
                 // Restore Position (built-in) — only if not in component registry
                 const Position_load = core.Position;
                 if (comptime !isRegistered(Position_load)) {
-                    if (components.get("Position")) |pos_val| {
-                        const pos_obj = pos_val.object;
-                        var px: f32 = 0;
-                        var py: f32 = 0;
-                        if (pos_obj.get("x")) |xv| {
-                            px = switch (xv) {
-                                .float => |f| @floatCast(f),
-                                .integer => |i| @floatFromInt(i),
-                                else => 0,
-                            };
-                        }
-                        if (pos_obj.get("y")) |yv| {
-                            py = switch (yv) {
-                                .float => |f| @floatCast(f),
-                                .integer => |i| @floatFromInt(i),
-                                else => 0,
-                            };
-                        }
-                        self.setPosition(entity, .{ .x = px, .y = py });
+                    if (getObjectField(components, "Position")) |pos_obj| {
+                        self.setPosition(entity, .{
+                            .x = getNumberField(pos_obj, "x"),
+                            .y = getNumberField(pos_obj, "y"),
+                        });
                     }
                 }
 
@@ -496,7 +719,14 @@ pub fn Mixin(comptime Game: type) type {
                 const entity: Entity = @intCast(current_id);
                 self.addEntityToActiveScene(entity);
 
-                // Re-register visual components with the renderer (#38)
+                // Re-register visual components with the renderer (#38).
+                // Skip entities spawned via Phase 1a's `spawnFromPrefab`
+                // — their Sprite/Shape already went through `addSprite`
+                // / `addShape` during the prefab spawn, which tracks
+                // with the renderer. Double-tracking risks duplicate
+                // render-list entries / mismatched cleanup.
+                if (renderer_already_tracked.contains(entityToU64(entity))) continue;
+
                 if (self.active_world.ecs_backend.hasComponent(entity, Sprite)) {
                     self.renderer.trackEntity(entity, .sprite);
                 } else if (self.active_world.ecs_backend.hasComponent(entity, Shape)) {
