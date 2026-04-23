@@ -492,15 +492,28 @@ pub fn GameConfig(
         ///    Phase 1 on load can map saved child IDs back to newly-
         ///    spawned children via `(root, local_path)`.
         ///
-        /// String fields are allocated in `active_world.nested_entity_arena`
-        /// — lifetime matches the prefab children (world-scoped), freed
-        /// on scene change. Same ownership contract as the save mixin's
-        /// load-side allocation.
+        /// `PrefabInstance.path` and every `PrefabChild.local_path` are
+        /// duped into `active_world.nested_entity_arena` — lifetime
+        /// matches the prefab children (world-scoped), freed on scene
+        /// change. Same ownership contract as the save mixin's load-
+        /// side allocation. `PrefabInstance.overrides` is the string
+        /// literal `""` in this first-cut slice (program lifetime, no
+        /// arena allocation needed for a zero-length literal); the
+        /// structured-overrides pipeline lands in a follow-up and will
+        /// dupe `overrides` into the same arena then.
         ///
-        /// `overrides` is passed through as an empty blob in this
-        /// first-cut implementation — the full structured-overrides
-        /// pipeline (apply caller-supplied component values on top of
-        /// prefab defaults) lands in a follow-up.
+        /// **Interaction with the save mixin:** `spawnFromPrefab` tags
+        /// the entity so Phase 1 on load can respawn it from its
+        /// prefab. But the save mixin only *collects* entities that
+        /// carry at least one component with `.saveable` or `.marker`
+        /// save policy (see `saveGameState` in
+        /// `src/game/save_load_mixin.zig`). A prefab-spawned entity
+        /// that carries only engine built-ins (PrefabInstance/
+        /// PrefabChild) + non-saveable components (e.g. Sprite) will
+        /// NOT appear in the save file and therefore won't be respawned
+        /// on load. Authors relying on save/load round-trip need at
+        /// least one saveable or marker component on the prefab root —
+        /// typically game-owned (e.g. `Workstation`, `RoomDecor`).
         pub fn spawnFromPrefab(self: *Self, path: []const u8, pos: Position) ?Entity {
             const entity = self.spawnPrefab(path, pos) orelse return null;
             // Any tagging failure (arena OOM on path dupe, or inside
@@ -510,7 +523,13 @@ pub fn GameConfig(
             // the save mixin's Phase 1. Destroy the whole tree on
             // failure so `spawnFromPrefab`'s null return really
             // means "the world is unchanged."
-            tagAndSpawnChildren(self, entity, path) catch {
+            //
+            // Log the error name before tearing down: `null` return
+            // collides with the "unknown prefab" signal from
+            // `spawnPrefab`, so without the log an OOM during tagging
+            // is indistinguishable from a typo in the prefab path.
+            tagAndSpawnChildren(self, entity, path) catch |err| {
+                self.log.err("[Game] spawnFromPrefab: tagging failed for '{s}': {s}", .{ path, @errorName(err) });
                 self.destroyEntity(entity);
                 return null;
             };
