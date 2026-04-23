@@ -16,7 +16,6 @@
 //! the full motivation and the staging rationale for splitting these
 //! across two files (and two PRs).
 
-const std = @import("std");
 const SpriteAnimation = @import("sprite_animation.zig").SpriteAnimation;
 
 /// Advance all `SpriteAnimation` components by `dt` and update their
@@ -37,15 +36,15 @@ pub fn tick(game: anytype, dt: f32) void {
     const Game = @TypeOf(game.*);
     const Sprite = Game.SpriteComp;
 
-    var view = game.active_world.ecs_backend.view(.{ SpriteAnimation, Sprite }, .{});
+    var view = game.ecs_backend.view(.{ SpriteAnimation, Sprite }, .{});
     defer view.deinit();
 
     while (view.next()) |entity| {
-        const anim = game.active_world.ecs_backend.getComponent(entity, SpriteAnimation) orelse continue;
+        const anim = game.ecs_backend.getComponent(entity, SpriteAnimation) orelse continue;
         if (!anim.advance(dt)) continue;
 
         const new_name = anim.currentSprite() orelse continue;
-        const sprite = game.active_world.ecs_backend.getComponent(entity, Sprite) orelse continue;
+        const sprite = game.ecs_backend.getComponent(entity, Sprite) orelse continue;
         sprite.sprite_name = new_name;
 
         // Atlas resolution — optional, guarded by `@hasField` so the
