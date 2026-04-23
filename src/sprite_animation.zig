@@ -49,6 +49,11 @@ pub const AnimationMode = enum {
 ///   stay small and post-load the animation starts from frame 0 (one-
 ///   frame visual continuity loss is invisible at 60 fps; a shipping
 ///   game cares more about the save being small and deterministic).
+///
+/// Frame count limit: `frame` is stored as `u8`, so `frames.len` must
+/// not exceed 255. Simple overlay cycles rarely need more than a dozen
+/// frames; use `AnimationDef` / `AnimationState` for character rigs
+/// that push against that ceiling.
 pub const SpriteAnimation = struct {
     pub const save = save_policy.Saveable(.saveable, @This(), .{
         .skip = &.{ "timer", "frame", "forward" },
@@ -80,6 +85,11 @@ pub const SpriteAnimation = struct {
         // (e.g. a prefab with `"frames": []`) without a compile-time
         // constraint that would complicate the prefab schema.
         if (self.frames.len == 0 or self.fps <= 0) return false;
+        // `frame` is u8 — enforce the 255-frame ceiling at the call
+        // site so misuse surfaces immediately rather than producing a
+        // silent wraparound or a cryptic @intCast panic deep in the
+        // switch below.
+        std.debug.assert(self.frames.len <= std.math.maxInt(u8) + 1);
 
         const old_frame = self.frame;
         self.timer += dt;
@@ -149,5 +159,17 @@ pub const SpriteAnimation = struct {
     pub fn currentSprite(self: *const SpriteAnimation) ?[]const u8 {
         if (self.frames.len == 0) return null;
         return self.frames[self.frame];
+    }
+
+    /// Returns `true` when a `.once` animation has played through to
+    /// its last frame and will not advance further. The tick system
+    /// (or game code) can use this to remove the component and replay
+    /// the clip from the start.
+    ///
+    /// Always returns `false` for `.loop` and `.ping_pong` (neither
+    /// finishes) and for degenerate zero-frame animations.
+    pub fn isFinished(self: *const SpriteAnimation) bool {
+        if (self.mode != .once or self.frames.len == 0) return false;
+        return @as(usize, self.frame) + 1 >= self.frames.len;
     }
 };

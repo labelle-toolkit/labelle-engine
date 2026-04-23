@@ -184,3 +184,46 @@ test "SpriteAnimation: currentSprite on empty frames returns null" {
     };
     try testing.expect(anim.currentSprite() == null);
 }
+
+test "SpriteAnimation: isFinished false for loop and ping_pong" {
+    var loop_anim = SpriteAnimation{
+        .frames = &pipe_frames,
+        .fps = 6,
+        .mode = .loop,
+    };
+    _ = loop_anim.advance(100.0);
+    try testing.expect(!loop_anim.isFinished());
+
+    var pp_anim = SpriteAnimation{
+        .frames = &pipe_frames,
+        .fps = 6,
+        .mode = .ping_pong,
+    };
+    _ = pp_anim.advance(100.0);
+    try testing.expect(!pp_anim.isFinished());
+}
+
+test "SpriteAnimation: isFinished true after once completes" {
+    var anim = SpriteAnimation{
+        .frames = &pipe_frames,
+        .fps = 6,
+        .mode = .once,
+    };
+    try testing.expect(!anim.isFinished()); // not done at frame 0
+    _ = anim.advance(1.0); // advance through all 6 frames
+    try testing.expectEqual(@as(u8, 5), anim.frame);
+    try testing.expect(anim.isFinished());
+    // stays finished after further advances
+    _ = anim.advance(10.0);
+    try testing.expect(anim.isFinished());
+}
+
+test "SpriteAnimation: isFinished false for empty-frame animation" {
+    const empty: []const []const u8 = &.{};
+    const anim = SpriteAnimation{
+        .frames = empty,
+        .fps = 6,
+        .mode = .once,
+    };
+    try testing.expect(!anim.isFinished());
+}
