@@ -572,3 +572,102 @@ test "save/load mixin: marker-driven re-hydration of non-saveable render compone
         try testing.expectEqual(expected.z_index, visual.z_index);
     }
 }
+
+// Slice 1b of the save/load-for-prefabs RFC (labelle-engine #472):
+// PrefabInstance + PrefabChild get serialised as built-ins alongside
+// Position and Parent. This test locks that round-trip:
+//
+// 1. Create a "prefab root" entity with `PrefabInstance { path,
+//    overrides }` plus a registered saveable component (Worker) so it
+//    gets picked up by the entity-collection pass.
+// 2. Create a "prefab child" entity with `PrefabChild { root,
+//    local_path }` pointing at the root, plus Position and another
+//    registered component.
+// 3. Save → reset → load.
+// 4. Assert: PrefabInstance survives with its exact string fields;
+//    PrefabChild.root is remapped via `id_map` to the new root entity
+//    ID; local_path round-trips; the save file contains escaped JSON
+//    strings (not a pointer address or raw byte dump).
+//
+// The save file's entity order isn't stable across implementations,
+// so the test looks up the new root entity by walking entities with
+// PrefabInstance, then asserts PrefabChild.root matches that entity.
+test "save/load mixin: PrefabInstance + PrefabChild round-trip with id_map remap" {
+    var game = TestGame.init(testing.allocator);
+    defer game.deinit();
+
+    const PrefabInstanceT = @TypeOf(game).PrefabInstanceComp;
+    const PrefabChildT = @TypeOf(game).PrefabChildComp;
+
+    // Root entity: registered Worker + built-in Position + PrefabInstance.
+    const root_entity = game.createEntity();
+    game.active_world.ecs_backend.addComponent(root_entity, Position{ .x = 156, .y = 0 });
+    game.active_world.ecs_backend.addComponent(root_entity, Worker{});
+    game.active_world.ecs_backend.addComponent(root_entity, PrefabInstanceT{
+        .path = "hydroponics",
+        // Overrides blob — a JSON string embedded as a string field,
+        // exercising the writeJsonString escape path for `"` and `\`.
+        .overrides = "{\"components\":{\"Position\":{\"x\":156,\"y\":0}}}",
+    });
+
+    // Child entity: registered Health + Position + PrefabChild.
+    const child_entity = game.createEntity();
+    game.active_world.ecs_backend.addComponent(child_entity, Position{ .x = 15, .y = 0 });
+    game.active_world.ecs_backend.addComponent(child_entity, Health{ .current = 100, .max = 100 });
+    game.active_world.ecs_backend.addComponent(child_entity, PrefabChildT{
+        .root = @intCast(root_entity),
+        .local_path = "children[0]",
+    });
+
+    // Save.
+    const filename = "test_save_prefab.json";
+    try game.saveGameState(filename);
+    defer std.fs.cwd().deleteFile(filename) catch {};
+
+    // Inspect the save file: the path + escaped overrides + local_path
+    // should be present as JSON strings. Guards against a regression
+    // where writeJsonString stops escaping quotes / backslashes.
+    const json = try std.fs.cwd().readFileAlloc(testing.allocator, filename, 1024 * 1024);
+    defer testing.allocator.free(json);
+    try testing.expect(std.mem.indexOf(u8, json, "\"path\": \"hydroponics\"") != null);
+    try testing.expect(std.mem.indexOf(u8, json, "\\\"components\\\"") != null); // escaped quote
+    try testing.expect(std.mem.indexOf(u8, json, "\"local_path\": \"children[0]\"") != null);
+
+    // Reset + load.
+    game.resetEcsBackend();
+    try game.loadGameState(filename);
+
+    // Find the new root entity (the one carrying PrefabInstance).
+    var new_root_id: ?u64 = null;
+    var root_count: usize = 0;
+    {
+        var view = game.active_world.ecs_backend.view(.{PrefabInstanceT}, .{});
+        while (view.next()) |ent| {
+            root_count += 1;
+            new_root_id = @intCast(ent);
+            const pi = game.active_world.ecs_backend.getComponent(ent, PrefabInstanceT).?;
+            try testing.expectEqualStrings("hydroponics", pi.path);
+            try testing.expectEqualStrings(
+                "{\"components\":{\"Position\":{\"x\":156,\"y\":0}}}",
+                pi.overrides,
+            );
+        }
+        view.deinit();
+    }
+    try testing.expectEqual(@as(usize, 1), root_count);
+
+    // Assert PrefabChild.root was remapped through id_map to point at
+    // the new root entity (not the saved 1 or 2 or whatever ID).
+    var child_count: usize = 0;
+    {
+        var view = game.active_world.ecs_backend.view(.{PrefabChildT}, .{});
+        while (view.next()) |ent| {
+            child_count += 1;
+            const pc = game.active_world.ecs_backend.getComponent(ent, PrefabChildT).?;
+            try testing.expectEqual(new_root_id.?, @as(u64, @intCast(pc.root)));
+            try testing.expectEqualStrings("children[0]", pc.local_path);
+        }
+        view.deinit();
+    }
+    try testing.expectEqual(@as(usize, 1), child_count);
+}

@@ -9,6 +9,8 @@ const ComponentPayload = hooks_types.ComponentPayload;
 const VisualType = core.VisualType;
 const ParentComponent = core.ParentComponent;
 const ChildrenComponent = core.ChildrenComponent;
+const PrefabInstance = core.PrefabInstance;
+const PrefabChild = core.PrefabChild;
 
 const atlas_mod = @import("atlas.zig");
 const assets_mod = @import("assets/mod.zig");
@@ -53,6 +55,7 @@ pub fn GameConfig(
     const Icon = if (@hasDecl(RenderImpl, "Icon")) RenderImpl.Icon else void;
     const Parent = ParentComponent(Entity);
     const Children = ChildrenComponent(Entity);
+    const PrefabChildT = PrefabChild(Entity);
     const EnginePayload = hooks_types.HookPayload(Entity);
     const has_events = GameEvents != void;
     const Payload = if (has_events) core.MergeHookPayloads(.{ EnginePayload, GameEvents }) else EnginePayload;
@@ -82,6 +85,8 @@ pub fn GameConfig(
         pub const IconComp = Icon;
         pub const ParentComp = Parent;
         pub const ChildrenComp = Children;
+        pub const PrefabInstanceComp = PrefabInstance;
+        pub const PrefabChildComp = PrefabChildT;
         pub const Input = @import("input.zig").InputInterface(InputImpl);
         pub const Audio = @import("audio.zig").AudioInterface(AudioImpl);
         pub const Gui = @import("gui.zig").GuiInterface(GuiImpl);
