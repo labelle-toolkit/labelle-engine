@@ -119,6 +119,15 @@ pub fn Mixin(comptime Game: type) type {
         /// auto-tagger) emit, so save/load Phase 1 can find the
         /// re-spawned child that corresponds to each saved PrefabChild.
         fn findChildByLocalPath(self: *Game, root: Entity, local_path: []const u8) ?Entity {
+            // Empty path is not valid — `PrefabChild.local_path` is always
+            // at least `"children[0]"` when a child was legitimately
+            // emitted. An empty string on the saved side indicates a
+            // corrupted save, and resolving it to `root` would alias the
+            // child's ID onto the root entity in `id_map`, causing Phase 2
+            // to apply the child's components on top of the root. Return
+            // null so the caller's `orelse` path logs + skips instead.
+            if (local_path.len == 0) return null;
+
             var current: Entity = root;
             var rest = local_path;
             while (rest.len > 0) {
@@ -383,7 +392,21 @@ pub fn Mixin(comptime Game: type) type {
 
             const entities_json = (root.get("entities") orelse return error.MissingField).array;
 
-            // Step 1: Clear scene tracking and destroy all entities atomically
+            // Step 1: Clear scene tracking and destroy all entities atomically.
+            //
+            // Both scene-entity lists have to be cleared here:
+            //   * `clearActiveSceneEntities()` — clears the active scene's
+            //     *own* list (the one `active_scene_clear_entities_fn`
+            //     wraps).
+            //   * `self.scene_entities` — the Game-level list, populated
+            //     by `trackSceneEntity` via the JSONC bridge's
+            //     `spawnPrefabImpl`. `resetEcsBackend` doesn't touch it,
+            //     so without this clear the list retains pre-load entity
+            //     IDs that are dangling after the ECS reset. Phase 1a's
+            //     `spawnFromPrefab` then appends new IDs on top, and a
+            //     later `unloadCurrentScene` would iterate the stale ones
+            //     and hit `destroyEntityOnly` with invalid handles.
+            self.scene_entities.clearRetainingCapacity();
             self.clearActiveSceneEntities();
             self.resetEcsBackend();
 
@@ -425,6 +448,12 @@ pub fn Mixin(comptime Game: type) type {
                 const pi_obj = getObjectField(components, "PrefabInstance") orelse continue;
                 if (components.get("PrefabChild") != null) continue;
                 const path_str = getStringField(pi_obj, "path") orelse continue;
+                // Validate `saved_id` BEFORE spawning. If the entry is
+                // missing a valid id, the spawned tree would have no
+                // id_map entry — Phase 2 couldn't reconcile it and it
+                // would remain as an orphan prefab tree in the world.
+                // Reading first turns a silent leak into a skip.
+                const saved_id = getSavedId(entry) orelse continue;
 
                 // Extract spawn Position from saved components, defaulting
                 // to (0,0) when absent (the prefab's own Position wins in
@@ -440,7 +469,6 @@ pub fn Mixin(comptime Game: type) type {
                     continue;
                 };
 
-                const saved_id = getSavedId(entry) orelse continue;
                 try id_map.put(saved_id, entityToU64(new_root));
             }
 
@@ -481,35 +509,27 @@ pub fn Mixin(comptime Game: type) type {
 
             // Step 3: Restore components (includes Position)
             for (entities_json.items) |entry| {
-                const obj = entry.object;
-                const saved_id: u64 = @intCast((obj.get("id") orelse continue).integer);
+                // Defensive accessors — a malformed entry whose `id` isn't
+                // an integer, or whose `components` field is the wrong
+                // shape, must not crash the load; skip the entry so the
+                // rest of the save still applies. Same treatment
+                // Phase 1a/1b/1c went through; mirror here so no
+                // direct `.integer` / `.object` tag casts remain in the
+                // load path.
+                const saved_id = getSavedId(entry) orelse continue;
                 const current_id = id_map.get(saved_id) orelse continue;
                 const entity: Entity = @intCast(current_id);
 
-                const components = (obj.get("components") orelse continue).object;
+                const components = getComponentsObject(entry) orelse continue;
 
                 // Restore Position (built-in) — only if not in component registry
                 const Position_load = core.Position;
                 if (comptime !isRegistered(Position_load)) {
-                    if (components.get("Position")) |pos_val| {
-                        const pos_obj = pos_val.object;
-                        var px: f32 = 0;
-                        var py: f32 = 0;
-                        if (pos_obj.get("x")) |xv| {
-                            px = switch (xv) {
-                                .float => |f| @floatCast(f),
-                                .integer => |i| @floatFromInt(i),
-                                else => 0,
-                            };
-                        }
-                        if (pos_obj.get("y")) |yv| {
-                            py = switch (yv) {
-                                .float => |f| @floatCast(f),
-                                .integer => |i| @floatFromInt(i),
-                                else => 0,
-                            };
-                        }
-                        self.setPosition(entity, .{ .x = px, .y = py });
+                    if (getObjectField(components, "Position")) |pos_obj| {
+                        self.setPosition(entity, .{
+                            .x = getNumberField(pos_obj, "x"),
+                            .y = getNumberField(pos_obj, "y"),
+                        });
                     }
                 }
 
