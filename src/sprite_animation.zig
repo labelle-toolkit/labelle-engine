@@ -85,11 +85,11 @@ pub const SpriteAnimation = struct {
         // (e.g. a prefab with `"frames": []`) without a compile-time
         // constraint that would complicate the prefab schema.
         if (self.frames.len == 0 or self.fps <= 0) return false;
-        // `frame` is u8 — enforce the 255-frame ceiling at the call
-        // site so misuse surfaces immediately rather than producing a
-        // silent wraparound or a cryptic @intCast panic deep in the
-        // switch below.
-        std.debug.assert(self.frames.len <= std.math.maxInt(u8) + 1);
+        // `frame` is u8 — enforce the true 255-frame ceiling here so
+        // misuse surfaces immediately rather than producing a silent
+        // wraparound or a cryptic @intCast panic when `frames.len` is
+        // converted to `u8` below.
+        std.debug.assert(self.frames.len <= std.math.maxInt(u8));
 
         const old_frame = self.frame;
         self.timer += dt;
