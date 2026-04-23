@@ -608,14 +608,19 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
             if (entity_obj.getString("prefab")) |prefab_name| {
                 const PrefabInstance = GameType.PrefabInstanceComp;
                 const arena = game.active_world.nested_entity_arena.allocator();
-                if (arena.dupe(u8, prefab_name)) |path_dup| {
-                    game.active_world.ecs_backend.addComponent(entity, PrefabInstance{
-                        .path = path_dup,
-                        .overrides = "",
-                    });
-                } else |_| {
-                    game.log.err("[JsoncSceneBridge] failed to allocate PrefabInstance.path for '{s}'", .{prefab_name});
-                }
+                // Propagate arena OOM up through `LoadEntityError` (which
+                // already carries `OutOfMemory`). Swallowing the error
+                // here and continuing would load the entity without its
+                // `PrefabInstance` tag — invisible to the save mixin's
+                // Phase 1, breaking F5 → F9 silently. Same atomicity
+                // contract `spawnFromPrefab` adopted in #482: any
+                // tagging failure tears the load down instead of
+                // leaving a half-tagged world behind.
+                const path_dup = try arena.dupe(u8, prefab_name);
+                game.active_world.ecs_backend.addComponent(entity, PrefabInstance{
+                    .path = path_dup,
+                    .overrides = "",
+                });
             }
 
             return entity;
