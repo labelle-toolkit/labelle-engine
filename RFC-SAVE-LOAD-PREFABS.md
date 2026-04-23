@@ -123,7 +123,7 @@ Once adopted, the re-hydration scripts above **delete**:
 ### New built-in components
 
 - `PrefabInstance { path: []const u8, overrides: []const u8 }` — marker on prefab-root entities. `overrides` is an opaque JSON blob (the engine produces it at spawn time and replays it on load).
-- `PrefabChild { root: u64, local_path: []const u8 }` — marker on each child entity created by the prefab. `local_path` is the dotted path within the prefab (e.g., `"children[0]"`, `"children[2].children[0]"`). Survives save/load so Phase 1 can map old child IDs to newly-spawned child IDs.
+- `PrefabChild { root: Entity, local_path: []const u8 }` — marker on each child entity created by the prefab. `local_path` is the dotted path within the prefab (e.g., `"children[0]"`, `"children[2].children[0]"`). Survives save/load so Phase 1 can map old child IDs to newly-spawned child IDs. In-memory `root` is the native `Entity` handle (matching `Parent`'s convention); the save format serialises it as `u64` and remaps through the load `id_map`.
 
 Both are engine built-ins, not registered by the game. Same treatment as `Position` and (after #470) `Parent`.
 

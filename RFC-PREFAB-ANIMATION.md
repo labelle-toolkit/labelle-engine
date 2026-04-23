@@ -98,7 +98,7 @@ pub const SpriteAnimation = struct {
 
 **Tick semantics:**
 
-- `.loop` — `frame = @intFromFloat(@mod(timer * fps, frames.len))`. Classic cycle.
+- `.loop` — `frame = @intFromFloat(@mod(timer * fps, @as(f32, @floatFromInt(frames.len))))`. Classic cycle. (Both `@mod` operands must be the same type; `frames.len` is `usize` and needs the explicit float cast.)
 - `.once` — plays through `frames` once; stays on the last frame after. Game can remove the component to replay.
 - `.ping_pong` — plays forward to `frames.len - 1`, then backward to 0, flipping `forward` each end.
 
@@ -154,7 +154,7 @@ pub const SpriteByField = struct {
     last_sprite_ptr: ?[*]const u8 = null,
 
     pub const Entry = struct {
-        key: u32,
+        key: i32,  // signed so `-1 = unset` and other sentinel values work
         sprite_name: ?[]const u8,
     };
 };
@@ -194,7 +194,7 @@ pub const SpriteByField = struct {
 
 **Component lookup.** `component` is resolved via the game's `ComponentRegistry.getType(name)` (same pattern plugin controllers already use — e.g., `libs/production/src/controller.zig:284` and `libs/command_buffer/src/controller.zig:397`). Missing component at the given source → tick skips silently.
 
-**Field extraction.** `std.meta.fieldIndex` + `@field` via comptime-generated switch. Values coerce to `u32`: integers direct, enums via `@intFromEnum`. Unsupported field types fail at `spawnFromPrefab` time with a clear error.
+**Field extraction.** `std.meta.fieldIndex` + `@field` via comptime-generated switch. Values coerce to `i32`: signed + unsigned integers direct (widening / bounds-checked), enums via `@intFromEnum`. Unsupported field types fail at `spawnFromPrefab` time with a clear error.
 
 ## Gating
 
