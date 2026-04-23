@@ -590,37 +590,22 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
                 }
             }
 
-            // Save/load Slice 2b: tag prefab-sourced entities with
-            // PrefabInstance so the save mixin's built-in handler
-            // records their prefab origin. This is the scene-load
-            // counterpart to the runtime `game.spawnFromPrefab` API.
+            // Save/load: tag prefab-sourced entities with `PrefabInstance`
+            // (root) + `PrefabChild` (each descendant) so the save mixin
+            // records their prefab origin and the two-phase load can
+            // respawn the prefab + remap saved child IDs to the newly-
+            // spawned descendants via `(root, local_path)`.
             //
-            // Scope: tags the ROOT only (entities whose scene jsonc
-            // declared a `"prefab"` field). PrefabChild tagging of
-            // nested prefab children lands in a follow-up — the
-            // children loop above doesn't know which children came
-            // from the prefab's `children` array vs the scene's
-            // (they interleave), so structured path generation needs
-            // its own pass. For now, runtime `spawnFromPrefab` handles
-            // the full root+children tagging; scene-load covers just
-            // the root, which is what the save mixin needs to
-            // reinstantiate the prefab on load.
+            // Runs after children are fully attached (`loadChildEntity`
+            // above) so `game.getChildren(entity)` walks the real tree
+            // rather than an in-progress one. Uses the shared
+            // `game.tagAsPrefabInstance` so the `local_path` format
+            // stays identical to the runtime `spawnFromPrefab` path —
+            // save mixin's `findChildByLocalPath` can match either.
             if (entity_obj.getString("prefab")) |prefab_name| {
-                const PrefabInstance = GameType.PrefabInstanceComp;
-                const arena = game.active_world.nested_entity_arena.allocator();
-                // Propagate arena OOM up through `LoadEntityError` (which
-                // already carries `OutOfMemory`). Swallowing the error
-                // here and continuing would load the entity without its
-                // `PrefabInstance` tag — invisible to the save mixin's
-                // Phase 1, breaking F5 → F9 silently. Same atomicity
-                // contract `spawnFromPrefab` adopted in #482: any
-                // tagging failure tears the load down instead of
-                // leaving a half-tagged world behind.
-                const path_dup = try arena.dupe(u8, prefab_name);
-                game.active_world.ecs_backend.addComponent(entity, PrefabInstance{
-                    .path = path_dup,
-                    .overrides = "",
-                });
+                game.tagAsPrefabInstance(entity, prefab_name) catch |err| {
+                    game.log.err("[JsoncSceneBridge] tagAsPrefabInstance failed for '{s}': {}", .{ prefab_name, err });
+                };
             }
 
             return entity;

@@ -244,6 +244,111 @@ test "two-phase load: non-prefab entities still load through v2 path" {
     try testing.expect(plain_found);
 }
 
+test "two-phase load: scene-loaded prefab with children round-trips end-to-end" {
+    // Integration exercising the real downstream path — scene jsonc
+    // references a prefab by name, load does the instantiation +
+    // tagging automatically, save writes both root and children
+    // tags, load re-spawns and remaps. This is the flying-platform-
+    // labelle scenario (decor rooms + their children).
+    var tmp_dir = testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    // Write the prefab file.
+    try tmp_dir.dir.makeDir("prefabs");
+    try tmp_dir.dir.writeFile(.{
+        .sub_path = "prefabs/room.jsonc",
+        .data =
+        \\{
+        \\  "components": { "Health": { "current": 100, "max": 100 } },
+        \\  "children": [
+        \\    { "components": { "Health": { "current": 11, "max": 11 } } },
+        \\    { "components": { "Health": { "current": 22, "max": 22 } } }
+        \\  ]
+        \\}
+        ,
+    });
+
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    const dir_path = try tmp_dir.dir.realpath(".", &buf);
+    const prefab_dir = try std.fmt.allocPrint(testing.allocator, "{s}/prefabs", .{dir_path});
+    defer testing.allocator.free(prefab_dir);
+
+    var game = TestGame.init(testing.allocator);
+    defer game.deinit();
+
+    try Bridge.loadSceneFromSource(&game,
+        \\{
+        \\  "entities": [
+        \\    { "prefab": "room" }
+        \\  ]
+        \\}
+    , prefab_dir);
+
+    // Before save: mutate child Health so we can detect Phase 2
+    // overrides on load.
+    const orig_root = blk: {
+        var view = game.active_world.ecs_backend.view(.{PrefabInstance}, .{});
+        defer view.deinit();
+        break :blk view.next().?;
+    };
+    const orig_children = game.getChildren(orig_root);
+    try testing.expectEqual(@as(usize, 2), orig_children.len);
+    game.active_world.ecs_backend.getComponent(orig_children[0], Health).?.current = 88;
+    game.active_world.ecs_backend.getComponent(orig_children[1], Health).?.current = 77;
+
+    // Save + reset + load.
+    const save_path = "test_save_scene_e2e.json";
+    try game.saveGameState(save_path);
+    defer std.fs.cwd().deleteFile(save_path) catch {};
+
+    game.resetEcsBackend();
+    try game.loadGameState(save_path);
+
+    // Exactly one PrefabInstance-tagged root came back.
+    var loaded_root: TestGame.EntityType = 0;
+    {
+        var root_count: usize = 0;
+        var view = game.active_world.ecs_backend.view(.{PrefabInstance}, .{});
+        defer view.deinit();
+        while (view.next()) |ent| {
+            root_count += 1;
+            loaded_root = ent;
+        }
+        try testing.expectEqual(@as(usize, 1), root_count);
+    }
+
+    // Two children, freshly respawned from the prefab, each carrying
+    // the mutated saved Health (Phase 2 overrides on top of Phase 1
+    // defaults).
+    const loaded_children = game.getChildren(loaded_root);
+    try testing.expectEqual(@as(usize, 2), loaded_children.len);
+    try testing.expectApproxEqAbs(
+        @as(f32, 88),
+        game.active_world.ecs_backend.getComponent(loaded_children[0], Health).?.current,
+        0.01,
+    );
+    try testing.expectApproxEqAbs(
+        @as(f32, 77),
+        game.active_world.ecs_backend.getComponent(loaded_children[1], Health).?.current,
+        0.01,
+    );
+
+    // Both children carry PrefabChild tags pointing at the new root.
+    const root_id: u32 = @intCast(loaded_root);
+    for (loaded_children) |child| {
+        const pc = game.active_world.ecs_backend.getComponent(child, PrefabChild).?;
+        try testing.expectEqual(root_id, @as(u32, @intCast(pc.root)));
+    }
+
+    // Total Health-carrying entities: 1 root + 2 children = 3. No
+    // duplicates.
+    var total: usize = 0;
+    var view = game.active_world.ecs_backend.view(.{Health}, .{});
+    defer view.deinit();
+    while (view.next()) |_| total += 1;
+    try testing.expectEqual(@as(usize, 3), total);
+}
+
 test "two-phase load: spawnFromPrefab failure falls back to v2 createEntity" {
     // The save records a PrefabInstance with a prefab name that
     // doesn't exist in the current prefab cache (e.g. renamed

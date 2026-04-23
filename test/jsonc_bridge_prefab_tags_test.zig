@@ -171,6 +171,74 @@ test "jsonc_scene_bridge: multiple prefab instances each get their own PrefabIns
     try testing.expectEqual(@as(usize, 1), archer_count);
 }
 
+test "jsonc_scene_bridge: prefab children get PrefabChild tags on scene load" {
+    // Scene-load counterpart to the runtime-spawn test in
+    // `spawn_from_prefab_test.zig`. A prefab with nested children
+    // declared via its own `"children"` array, referenced from the
+    // scene by `"prefab"` name, should get its descendants tagged
+    // with the same `local_path` format `spawnFromPrefab` uses —
+    // otherwise the save mixin's two-phase load can't match saved
+    // child IDs to newly-respawned children on F9.
+    var tmp_dir = testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    var fixture = try setupFixture(&tmp_dir, .{
+        .tree =
+        \\{
+        \\  "components": { "Health": { "current": 100, "max": 100 } },
+        \\  "children": [
+        \\    { "components": { "Health": { "current": 10, "max": 10 } } },
+        \\    {
+        \\      "components": { "Health": { "current": 20, "max": 20 } },
+        \\      "children": [
+        \\        { "components": { "Health": { "current": 30, "max": 30 } } }
+        \\      ]
+        \\    }
+        \\  ]
+        \\}
+        ,
+    },
+        \\{
+        \\  "entities": [
+        \\    { "prefab": "tree" }
+        \\  ]
+        \\}
+    );
+    defer fixture.deinit();
+
+    // Find the root (carries PrefabInstance).
+    var root: TestGame.EntityType = 0;
+    {
+        var view = fixture.game.active_world.ecs_backend.view(.{PrefabInstance}, .{});
+        defer view.deinit();
+        root = view.next().?;
+    }
+
+    // Three descendants: children[0], children[1], children[1].children[0].
+    const PrefabChild = TestGame.PrefabChildComp;
+    var found_c0 = false;
+    var found_c1 = false;
+    var found_c1_gc0 = false;
+    var tagged_count: usize = 0;
+
+    const root_id: u32 = @intCast(root);
+    var view = fixture.game.active_world.ecs_backend.view(.{PrefabChild}, .{});
+    defer view.deinit();
+    while (view.next()) |ent| {
+        tagged_count += 1;
+        const pc = fixture.game.active_world.ecs_backend.getComponent(ent, PrefabChild).?;
+        try testing.expectEqual(root_id, @as(u32, @intCast(pc.root)));
+        if (std.mem.eql(u8, pc.local_path, "children[0]")) found_c0 = true;
+        if (std.mem.eql(u8, pc.local_path, "children[1]")) found_c1 = true;
+        if (std.mem.eql(u8, pc.local_path, "children[1].children[0]")) found_c1_gc0 = true;
+    }
+
+    try testing.expectEqual(@as(usize, 3), tagged_count);
+    try testing.expect(found_c0);
+    try testing.expect(found_c1);
+    try testing.expect(found_c1_gc0);
+}
+
 test "jsonc_scene_bridge: PrefabInstance.path survives save/load round-trip" {
     // End-to-end: scene-load tags → save → reset → load → tag restored.
     // This is the contract the save mixin's Slice 1b handlers build on,

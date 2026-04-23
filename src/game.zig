@@ -528,7 +528,7 @@ pub fn GameConfig(
             // collides with the "unknown prefab" signal from
             // `spawnPrefab`, so without the log an OOM during tagging
             // is indistinguishable from a typo in the prefab path.
-            tagAndSpawnChildren(self, entity, path) catch |err| {
+            self.tagAsPrefabInstance(entity, path) catch |err| {
                 self.log.err("[Game] spawnFromPrefab: tagging failed for '{s}': {s}", .{ path, @errorName(err) });
                 self.destroyEntity(entity);
                 return null;
@@ -536,7 +536,15 @@ pub fn GameConfig(
             return entity;
         }
 
-        fn tagAndSpawnChildren(self: *Self, entity: Entity, path: []const u8) !void {
+        /// Tag `entity` as a prefab root (attach `PrefabInstance`) and
+        /// walk its descendants attaching `PrefabChild` markers with
+        /// `local_path` relative to the root.
+        ///
+        /// Used by both `spawnFromPrefab` (runtime spawn path) and
+        /// `JsoncSceneBridge::loadEntityInternal` (scene-load path) so
+        /// the `(root, local_path)` key the save mixin uses to match
+        /// saved children to respawned ones is generated consistently.
+        pub fn tagAsPrefabInstance(self: *Self, entity: Entity, path: []const u8) !void {
             const arena = self.active_world.nested_entity_arena.allocator();
             const path_dup = try arena.dupe(u8, path);
 
