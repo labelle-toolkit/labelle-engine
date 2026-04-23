@@ -2,10 +2,22 @@
 //!
 //! Walks entities that have both `SpriteAnimation` + the renderer's
 //! Sprite component, advances the animation state, and writes the new
-//! frame's `sprite_name` / `source_rect` / `texture` onto the Sprite
-//! on frame flips. Idle entities (same frame as last tick) write
-//! nothing — `advance` returns a changed-flag the tick uses to
-//! short-circuit.
+//! frame's `sprite_name` onto the Sprite on frame flips. Idle entities
+//! (same frame as last tick) write nothing — `advance` returns a
+//! changed-flag the tick uses to short-circuit.
+//!
+//! ## Atlas resolution is delegated
+//!
+//! This tick only writes `sprite_name`. Mapping that name to
+//! `source_rect` + `texture` + `display_*` + rotation handling is
+//! `Game.resolveAtlasSprites`'s job (src/game.zig) — it runs every
+//! frame before renderer sync, uses the per-entity `sprite_cache`,
+//! and marks the entity visually dirty only on cache miss. Writing
+//! `sprite_name` here is enough to invalidate that cache on the next
+//! frame, so the canonical resolver picks up the change and handles
+//! rotated atlases, per-axis `texture_scale`, and `display_width/
+//! height` correctly — features a reimplementation here would either
+//! duplicate or get subtly wrong.
 //!
 //! Generic over the game type, same shape `save_load_mixin` uses.
 //! Called once per frame from the game's scene-tick slot, or auto-
@@ -23,14 +35,12 @@ const SpriteAnimation = @import("sprite_animation.zig").SpriteAnimation;
 ///
 /// Semantics:
 /// - Entities without both `SpriteAnimation` and `Sprite` are skipped.
-/// - On a frame flip, `Sprite.sprite_name` is set to the resolved
-///   frame name. If `game.findSprite(name)` returns a valid atlas
-///   entry, `source_rect` + `texture` are updated too; otherwise
-///   those are left alone (the missing-atlas case — frame name
-///   written, but no texture resolution — is acceptable for tests
-///   and for the brief window while an atlas loads).
-/// - `markVisualDirty(entity)` fires on frame flip only. Idle ticks
-///   write nothing, produce no dirty signal, and cost only the
+/// - On a frame flip, `Sprite.sprite_name` is written. Atlas fields
+///   (`source_rect`, `texture`, `display_*`) are NOT touched here —
+///   `Game.resolveAtlasSprites` handles the full atlas mapping
+///   before renderer sync, including rotation and per-axis texture
+///   scaling.
+/// - Idle ticks (sub-frame `dt`) write nothing and cost only the
 ///   timer bookkeeping inside `advance`.
 pub fn tick(game: anytype, dt: f32) void {
     const Game = @TypeOf(game.*);
@@ -47,29 +57,12 @@ pub fn tick(game: anytype, dt: f32) void {
         const sprite = game.ecs_backend.getComponent(entity, Sprite) orelse continue;
         sprite.sprite_name = new_name;
 
-        // Atlas resolution — optional, guarded by `@hasField` so the
-        // tick compiles against `StubRender` (which only carries
-        // `sprite_name` / `visible` / `z_index` for engine-level
-        // tests) as well as the full labelle-gfx Sprite (with
-        // `source_rect` + `texture`). Skipping resolution on a
-        // stub-render build means the frame name advances but
-        // textures don't bind — correct for unit tests, inert in
-        // release because every shipping game uses the full Sprite.
-        if (comptime @hasField(Sprite, "source_rect") and @hasField(Sprite, "texture")) {
-            if (game.findSprite(new_name)) |result| {
-                sprite.source_rect = .{
-                    .x = @floatFromInt(result.sprite.x),
-                    .y = @floatFromInt(result.sprite.y),
-                    .width = @floatFromInt(result.sprite.getWidth()),
-                    .height = @floatFromInt(result.sprite.getHeight()),
-                };
-                sprite.texture = @enumFromInt(result.texture_id);
-            }
-        }
-
-        // `markVisualDirty` is the contract every renderer plugin
-        // exposes per `core.RenderInterface`, so this is always safe
-        // to call — no `@hasDecl` gate needed.
+        // On atlas builds `resolveAtlasSprites` will also dirty the
+        // entity on its cache miss later this frame — harmless
+        // double-dirty. On stub or sprite-by-name renderers where
+        // `resolveAtlasSprites` is a comptime no-op, this is the
+        // only place the visual change gets signalled, so the call
+        // has to stay here rather than being pushed downstream.
         game.renderer.markVisualDirty(entity);
     }
 }
