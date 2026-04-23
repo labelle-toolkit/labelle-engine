@@ -46,6 +46,7 @@ pub fn build(b: *std.Build) void {
         "test/asset_streaming_shim_test.zig",
         "test/animation_def_test.zig",
         "test/sprite_animation_test.zig",
+        "test/sprite_by_field_test.zig",
         "test/scene_assets_hooks_test.zig",
         "test/pause_hook_test.zig",
         "test/spawn_from_prefab_test.zig",
