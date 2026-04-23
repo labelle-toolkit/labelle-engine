@@ -109,24 +109,15 @@ test "SpriteByField: first-match-wins on duplicate keys" {
     try testing.expectEqualStrings("first.png", table.lookup(42).match.?);
 }
 
-test "SpriteByField: save policy is saveable with runtime cache skipped" {
+test "SpriteByField: save policy is transient — comes back via prefab respawn" {
     try testing.expect(core.hasSavePolicy(SpriteByField));
-    try testing.expectEqual(core.SavePolicy.saveable, core.getSavePolicy(SpriteByField).?);
-
-    // `last_key_set` and `last_key` form the steady-state cache the
-    // tick system uses to skip `markVisualDirty` when nothing
-    // changed. They must stay out of the save file — restoring a
-    // stale cache would mask a legitimate sprite update on the
-    // first post-load tick.
-    const skip = core.getSkipFields(SpriteByField);
-    var has_last_key_set = false;
-    var has_last_key = false;
-    for (skip) |name| {
-        if (std.mem.eql(u8, name, "last_key_set")) has_last_key_set = true;
-        if (std.mem.eql(u8, name, "last_key")) has_last_key = true;
-    }
-    try testing.expect(has_last_key_set);
-    try testing.expect(has_last_key);
+    // `.transient`. Two reasons: `entries` is a slice-of-struct-of-
+    // slice that serde can't write, and the prefab-foundations RFC
+    // assumes the component is redeclared by the prefab's jsonc on
+    // every load. The runtime cache (`last_key_set`, `last_key`)
+    // resets to zero naturally and the next tick re-resolves the
+    // current key — no serialization needed.
+    try testing.expectEqual(core.SavePolicy.transient, core.getSavePolicy(SpriteByField).?);
 }
 
 test "SpriteByField: default source is .self" {

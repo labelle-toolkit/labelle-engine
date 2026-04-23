@@ -54,6 +54,7 @@ pub fn build(b: *std.Build) void {
         "test/spawn_from_prefab_test.zig",
         "test/jsonc_bridge_prefab_tags_test.zig",
         "test/save_load_two_phase_test.zig",
+        "test/example_prefab_animation_walkthrough_test.zig",
     };
 
     for (test_files) |test_file| {

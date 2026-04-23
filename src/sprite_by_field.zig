@@ -67,15 +67,24 @@ pub const SpriteByFieldSource = enum {
 ///
 /// ## Save policy
 ///
-/// `.saveable` with the runtime `last_key_set` / `last_key` cache
-/// skipped. On load, both reset and the next tick re-resolves
-/// through the whole pipeline — a one-tick recheck is negligible
-/// compared to saving the cache. Ensures save files stay small and
-/// deterministic.
+/// `.transient`. Two reasons:
+///
+///   * `entries: []const Entry` (and within each Entry the
+///     `sprite_name: ?[]const u8`) is a slice-of-struct-of-slice that
+///     the serde writer doesn't support — `.saveable` would be a
+///     comptime error whenever this component lands in a game's
+///     `ComponentRegistry`.
+///   * The prefab-foundations RFC keeps this component in the
+///     "comes back via Phase 1 re-spawn" bucket. The prefab jsonc
+///     redeclares `entries` from scratch on load; the runtime cache
+///     (`last_key_set` / `last_key`) naturally resets to zero, and
+///     the next tick re-resolves the current key.
+///
+/// Game-owned saveable components (`PlantLevel`, `Workstation`, …)
+/// on the same entity are what actually trigger save collection;
+/// this component rides along and is rebuilt by the prefab.
 pub const SpriteByField = struct {
-    pub const save = save_policy.Saveable(.saveable, @This(), .{
-        .skip = &.{ "last_key_set", "last_key" },
-    });
+    pub const save = save_policy.Saveable(.transient, @This(), .{});
 
     pub const Entry = struct {
         /// Signed (per gemini review on RFC #472) so components using

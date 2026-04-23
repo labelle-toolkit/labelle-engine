@@ -143,25 +143,13 @@ test "SpriteAnimation: large dt covers multiple frames in one call" {
     try testing.expectEqual(@as(u8, 3), anim.frame);
 }
 
-test "SpriteAnimation: save policy is saveable with timer/frame/forward skipped" {
+test "SpriteAnimation: save policy is transient — comes back via prefab respawn" {
     try testing.expect(core.hasSavePolicy(SpriteAnimation));
-    try testing.expectEqual(core.SavePolicy.saveable, core.getSavePolicy(SpriteAnimation).?);
-
-    // In-flight state (timer, frame, forward) must be skipped so save
-    // files don't bloat with per-tick mutation and post-load animations
-    // start from frame 0.
-    const skip = core.getSkipFields(SpriteAnimation);
-    var has_timer = false;
-    var has_frame = false;
-    var has_forward = false;
-    for (skip) |name| {
-        if (std.mem.eql(u8, name, "timer")) has_timer = true;
-        if (std.mem.eql(u8, name, "frame")) has_frame = true;
-        if (std.mem.eql(u8, name, "forward")) has_forward = true;
-    }
-    try testing.expect(has_timer);
-    try testing.expect(has_frame);
-    try testing.expect(has_forward);
+    // `.transient` is intentional. `frames: []const []const u8` isn't
+    // serde-writable, and the prefab-foundations RFC assumes this
+    // component is redeclared by the prefab's jsonc on every load —
+    // so there's nothing to round-trip through the save file.
+    try testing.expectEqual(core.SavePolicy.transient, core.getSavePolicy(SpriteAnimation).?);
 }
 
 test "SpriteAnimation: currentSprite returns the expected frame name" {
