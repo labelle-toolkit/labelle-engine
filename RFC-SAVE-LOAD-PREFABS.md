@@ -98,7 +98,7 @@ Once adopted, the re-hydration scripts above **delete**:
 ┌──────────────────────────────────────────────────────────────────┐
 │  saveGameState                                                   │
 │    For each entity:                                              │
-│      if PrefabInstance: emit {"prefab": path, "overrides": {…},  │
+│      if PrefabInstance: emit {"prefab": path, "overrides": "…",  │
 │                                "components": {…}}                │
 │      else if PrefabChild: emit {"prefab_child": {root, path},    │
 │                                 "components": {…}}               │
@@ -122,7 +122,7 @@ Once adopted, the re-hydration scripts above **delete**:
 
 ### New built-in components
 
-- `PrefabInstance { path: []const u8, overrides: []const u8 }` — marker on prefab-root entities. `overrides` is an opaque JSON blob (the engine produces it at spawn time and replays it on load).
+- `PrefabInstance { path: []const u8, overrides: []const u8 }` — marker on prefab-root entities. `overrides` is an opaque JSON blob (the engine produces it at spawn time and replays it on load). Because it's a `[]const u8` in the component, the save format stores it as an **escaped JSON string** rather than a nested object — the save layer treats it as opaque content it doesn't need to re-parse. The architecture diagram above and the v3 format example below both use the string form; any prior snippets showing a nested object are pre-revision residue.
 - `PrefabChild { root: Entity, local_path: []const u8 }` — marker on each child entity created by the prefab. `local_path` is the dotted path within the prefab (e.g., `"children[0]"`, `"children[2].children[0]"`). Survives save/load so Phase 1 can map old child IDs to newly-spawned child IDs. In-memory `root` is the native `Entity` handle (matching `Parent`'s convention); the save format serialises it as `u64` and remaps through the load `id_map`.
 
 Both are engine built-ins, not registered by the game. Same treatment as `Position` and (after #470) `Parent`.
@@ -216,7 +216,7 @@ Each of these becomes a deletion in its own PR once the infra lands.
 
 4. **Transient vs saveable on the PrefabChild marker.** `PrefabChild` needs to survive save/load (so Phase 1 can map old IDs to new IDs). But once a prefab-child's mapping is applied, the `local_path` string never gets looked at again at runtime. Fine to keep it saveable; it's ~30 bytes per child. The question is whether we also need to store it in memory at runtime (yes — to re-emit it on a subsequent save).
 
-5. **Cycles in prefab references.** Out of scope v1. Prefab A containing prefab B containing prefab A would recurse infinitely; the loader rejects cycles at jsonc-parse time, same rule applies at spawn.
+5. **Cycles in prefab references.** Out of scope v1. Prefab A containing prefab B containing prefab A would recurse infinitely. Today the JSONC scene bridge doesn't do explicit cycle detection — it bounds recursion with a generic `MAX_DEPTH` counter and fails with `IncludeDepthExceeded` once the stack gets too deep. That's a depth limit, not a cycle check, so a shallow cycle could in principle go unreported. A dedicated graph-walk with an explicit "already-visited" set is left for a follow-up; the `MAX_DEPTH` guard is sufficient to prevent runaway recursion in the meantime.
 
 6. **Ordering of Phase 1.** A prefab-root entity whose `overrides` reference other entities via `@ref` needs those others spawned first. Sort by topological order (no-refs first). If there's a cycle in inter-entity refs, load fails with an explicit error rather than silent corruption.
 

@@ -91,10 +91,18 @@ pub const SpriteAnimation = struct {
     // runtime state — excluded from save; re-instantiation from prefab
     // resets to frame 0 which is fine for cycling animations.
     timer: f32 = 0,
-    frame: u8 = 0,
+    frame: u8 = 0,  // max 255 frames per clip; see ceiling note below
     forward: bool = true,  // for ping_pong
 };
 ```
+
+**Frame-count ceiling.** `frame` is `u8`, capping a clip at 255 frames.
+Intentional: this component is the "simple cycle" primitive (pipe
+puffs, smoke, growth overlays — all well under a dozen frames). Rigs
+that need more go through `AnimationDef` / `AnimationState`, which
+carry clip+variant tables and were designed for that scale. The
+`advance` implementation asserts `frames.len <= 255` so misuse traps
+immediately rather than silently wrapping.
 
 **Tick semantics:**
 
@@ -139,7 +147,7 @@ pub const SpriteByFieldSource = enum { self, parent };
 
 pub const SpriteByField = struct {
     pub const save = Saveable(.saveable, @This(), .{
-        .skip = &.{"last_sprite_ptr"},
+        .skip = &.{ "last_key", "last_key_set" },
     });
 
     component: []const u8,    // component name on target entity
@@ -149,9 +157,16 @@ pub const SpriteByField = struct {
     // null sprite_name means "hide" (set Sprite.visible = false).
     entries: []const Entry,
 
-    // runtime state (skipped from save): last sprite_name.ptr written, used
-    // to skip markVisualDirty when nothing changed.
-    last_sprite_ptr: ?[*]const u8 = null,
+    // Runtime cache: last key value we wrote through. Skips the
+    // lookup + Sprite mutation + markVisualDirty when the field
+    // hasn't moved since last tick. Keyed on the i32 value rather
+    // than a raw pointer to the last sprite name — pointer equality
+    // across allocations isn't reliable (two different names could
+    // share the same pointer, or the same name could come from two
+    // arenas), whereas the i32 key is a stable identity for "same
+    // lookup result as before."
+    last_key: i32 = 0,
+    last_key_set: bool = false,
 
     pub const Entry = struct {
         key: i32,  // signed so `-1 = unset` and other sentinel values work
@@ -192,7 +207,7 @@ pub const SpriteByField = struct {
 
 `HydroponicsPlant` reduces to a pure role marker (`.transient` save policy) — it's still useful for scripts that want to find plant entities, but no longer carries the re-hydration burden. The entire `hydroponics_animation.zig` file deletes.
 
-**Component lookup.** `component` is resolved via the game's `ComponentRegistry.getType(name)` (same pattern plugin controllers already use — e.g., `libs/production/src/controller.zig:284` and `libs/command_buffer/src/controller.zig:397`). Missing component at the given source → tick skips silently.
+**Component lookup.** `component` is resolved via the game's `ComponentRegistry.getType(name)` — the same runtime name → comptime type pattern already used by `src/jsonc_scene_bridge.zig` (entity-component deserialisation) and `src/game/save_load_mixin.zig` (saveable component iteration). Both walk `Reg.names()` with `inline for` and match the runtime name against each comptime-known type. Missing component at the given source → tick skips silently.
 
 **Field extraction.** `std.meta.fieldIndex` + `@field` via comptime-generated switch. Values coerce to `i32`: signed + unsigned integers direct (widening / bounds-checked), enums via `@intFromEnum`. Unsupported field types fail at `spawnFromPrefab` time with a clear error.
 
