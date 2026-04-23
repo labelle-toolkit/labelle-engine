@@ -48,6 +48,69 @@ pub fn Mixin(comptime Game: type) type {
             };
         }
 
+        /// Safe JSON accessors for the load path. All return `null`
+        /// on a tag mismatch rather than panicking via `.object` /
+        /// `.integer` tag casts — so a malformed save file (wrong
+        /// type, missing field, `null` where an object is expected)
+        /// produces a logged warning and a skipped entity, not a
+        /// debug-assertion panic or release-mode memory corruption.
+        fn getComponentsObject(entry: std.json.Value) ?std.json.ObjectMap {
+            if (entry != .object) return null;
+            const comps_val = entry.object.get("components") orelse return null;
+            return switch (comps_val) {
+                .object => |o| o,
+                else => null,
+            };
+        }
+
+        fn getObjectField(obj: std.json.ObjectMap, name: []const u8) ?std.json.ObjectMap {
+            const v = obj.get(name) orelse return null;
+            return switch (v) {
+                .object => |o| o,
+                else => null,
+            };
+        }
+
+        fn getStringField(obj: std.json.ObjectMap, name: []const u8) ?[]const u8 {
+            const v = obj.get(name) orelse return null;
+            return switch (v) {
+                .string => |s| s,
+                else => null,
+            };
+        }
+
+        /// Read a non-negative integer field as `u64` (for entity IDs).
+        /// Clamps negative and out-of-range values to `null` so the
+        /// caller's `orelse continue` pattern gracefully drops malformed
+        /// entries.
+        fn getU64Field(obj: std.json.ObjectMap, name: []const u8) ?u64 {
+            const v = obj.get(name) orelse return null;
+            return switch (v) {
+                .integer => |i| if (i >= 0) @intCast(i) else null,
+                else => null,
+            };
+        }
+
+        /// Read the top-level `id` of a save entry as `u64`. Missing
+        /// or non-integer `id` fields return `null` so the caller can
+        /// skip the entry instead of panicking.
+        fn getSavedId(entry: std.json.Value) ?u64 {
+            if (entry != .object) return null;
+            return getU64Field(entry.object, "id");
+        }
+
+        /// Read a numeric field as `f32`, accepting both `.float` and
+        /// `.integer` JSON tags; returns 0 for missing or non-numeric
+        /// values. Used for the Position shim in Phase 1a.
+        fn getNumberField(obj: std.json.ObjectMap, name: []const u8) f32 {
+            const v = obj.get(name) orelse return 0;
+            return switch (v) {
+                .float => |f| @floatCast(f),
+                .integer => |i| @floatFromInt(i),
+                else => 0,
+            };
+        }
+
         /// Walk a dotted `children[i]...` path from `root` through
         /// `game.getChildren`, returning the entity at the end or
         /// `null` when the path doesn't resolve (missing index,
@@ -349,40 +412,27 @@ pub fn Mixin(comptime Game: type) type {
 
             // Phase 1a: spawn prefab roots. We need Position for the
             // spawn point; read it from the saved `Position` component.
+            //
+            // Skip entities that ALSO carry a PrefabChild tag — those
+            // are nested-prefab entries where an outer prefab's
+            // `spawnFromPrefab` already reinstantiates this whole
+            // subtree. Calling spawnFromPrefab again here would create
+            // a duplicate "ghost" root alongside the already-spawned
+            // one. Phase 1b maps the nested root through the outer
+            // tree's `(root, local_path)` walk instead.
             for (entities_json.items) |entry| {
-                const obj = entry.object;
-                const components = (obj.get("components") orelse continue).object;
-                const pi_val = components.get("PrefabInstance") orelse continue;
-                const pi_obj = switch (pi_val) {
-                    .object => |o| o,
-                    else => continue,
-                };
-                const path_str = switch (pi_obj.get("path") orelse continue) {
-                    .string => |s| s,
-                    else => continue,
-                };
+                const components = getComponentsObject(entry) orelse continue;
+                const pi_obj = getObjectField(components, "PrefabInstance") orelse continue;
+                if (components.get("PrefabChild") != null) continue;
+                const path_str = getStringField(pi_obj, "path") orelse continue;
 
                 // Extract spawn Position from saved components, defaulting
                 // to (0,0) when absent (the prefab's own Position wins in
                 // that case via `spawnPrefab`'s `parent_offset` path).
                 var spawn_pos: core.Position = .{ .x = 0, .y = 0 };
-                if (components.get("Position")) |pos_val| {
-                    if (pos_val == .object) {
-                        if (pos_val.object.get("x")) |xv| {
-                            spawn_pos.x = switch (xv) {
-                                .float => |f| @floatCast(f),
-                                .integer => |i| @floatFromInt(i),
-                                else => 0,
-                            };
-                        }
-                        if (pos_val.object.get("y")) |yv| {
-                            spawn_pos.y = switch (yv) {
-                                .float => |f| @floatCast(f),
-                                .integer => |i| @floatFromInt(i),
-                                else => 0,
-                            };
-                        }
-                    }
+                if (getObjectField(components, "Position")) |pos_obj| {
+                    spawn_pos.x = getNumberField(pos_obj, "x");
+                    spawn_pos.y = getNumberField(pos_obj, "y");
                 }
 
                 const new_root = self.spawnFromPrefab(path_str, spawn_pos) orelse {
@@ -390,7 +440,7 @@ pub fn Mixin(comptime Game: type) type {
                     continue;
                 };
 
-                const saved_id: u64 = @intCast((obj.get("id") orelse continue).integer);
+                const saved_id = getSavedId(entry) orelse continue;
                 try id_map.put(saved_id, entityToU64(new_root));
             }
 
@@ -399,22 +449,11 @@ pub fn Mixin(comptime Game: type) type {
             // already-spawned child entity. Requires Phase 1a to have
             // populated `id_map` with the root mappings first.
             for (entities_json.items) |entry| {
-                const obj = entry.object;
-                const components = (obj.get("components") orelse continue).object;
-                const pc_val = components.get("PrefabChild") orelse continue;
-                const pc_obj = switch (pc_val) {
-                    .object => |o| o,
-                    else => continue,
-                };
-                const saved_child_id: u64 = @intCast((obj.get("id") orelse continue).integer);
-                const saved_root_id: u64 = switch (pc_obj.get("root") orelse continue) {
-                    .integer => |i| if (i >= 0) @intCast(i) else continue,
-                    else => continue,
-                };
-                const local_path: []const u8 = switch (pc_obj.get("local_path") orelse continue) {
-                    .string => |s| s,
-                    else => continue,
-                };
+                const components = getComponentsObject(entry) orelse continue;
+                const pc_obj = getObjectField(components, "PrefabChild") orelse continue;
+                const saved_child_id = getSavedId(entry) orelse continue;
+                const saved_root_id = getU64Field(pc_obj, "root") orelse continue;
+                const local_path = getStringField(pc_obj, "local_path") orelse continue;
 
                 const current_root_id = id_map.get(saved_root_id) orelse {
                     self.log.warn("[SaveLoad] Phase 1b: PrefabChild root {d} not in id_map — root spawn failed or save is inconsistent", .{saved_root_id});
@@ -434,8 +473,7 @@ pub fn Mixin(comptime Game: type) type {
             // whose prefab resolve failed — gets a fresh `createEntity`
             // so Phase 2 has something to apply components to.
             for (entities_json.items) |entry| {
-                const obj = entry.object;
-                const saved_id: u64 = @intCast((obj.get("id") orelse continue).integer);
+                const saved_id = getSavedId(entry) orelse continue;
                 if (id_map.contains(saved_id)) continue;
                 const new_entity = self.createEntity();
                 try id_map.put(saved_id, entityToU64(new_entity));

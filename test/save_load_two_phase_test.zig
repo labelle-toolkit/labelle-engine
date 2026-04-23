@@ -288,3 +288,4 @@ test "two-phase load: spawnFromPrefab failure falls back to v2 createEntity" {
     while (view.next()) |_| count += 1;
     try testing.expectEqual(@as(usize, 1), count);
 }
+
