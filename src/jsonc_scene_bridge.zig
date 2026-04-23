@@ -1022,6 +1022,25 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
         fn deserialize(comptime T: type, value: Value, allocator: std.mem.Allocator) ?T {
             const info = @typeInfo(T);
 
+            // Optionals — JSONC `null` → component field stays `null`,
+            // anything else unwraps and recurses with the child type.
+            // Must run BEFORE the string check so `?[]const u8` fields
+            // (e.g. `SpriteByField.Entry.sprite_name`) reach here
+            // instead of getting routed into the string branch with a
+            // null value and failing.
+            //
+            // Note the two distinct `null`s at play: the function
+            // returns `?T` to signal "deserialize failed," but for an
+            // optional field type the *success* case of "JSON value
+            // was null" is a valid `T` — so we return `@as(T, null)`,
+            // the inner optional's null wrapped in the outer Optional
+            // as a success, not a bare `null` which would read as a
+            // failure up in `deserializeStruct`.
+            if (info == .optional) {
+                if (value == .null_value) return @as(T, null);
+                return deserialize(info.optional.child, value, allocator);
+            }
+
             // Primitives
             if (T == f32 or T == f64) return valueToFloat(T, value);
             if (T == i8 or T == i16 or T == i32 or T == i64 or T == u8 or T == u16 or T == u32 or T == u64 or T == usize) return valueToInt(T, value);
@@ -1034,6 +1053,33 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
                 // system call per string. See the intern pool docs at
                 // the top of this file.
                 return internString(s);
+            }
+
+            // Slices of other types (`[]const Struct`, `[]const []const u8`,
+            // etc.). The `[]const u8` case is handled specifically above
+            // so string deduplication still runs; this branch covers
+            // everything else. Backing storage lands in `intern_arena`
+            // because (a) scene/prefab parse arenas get freed after
+            // load but components borrow these slices for the entity's
+            // lifetime, and (b) we don't want every prefab spawn to
+            // re-allocate identical slices — the shared arena matches
+            // the contract every other cross-parse string already
+            // uses. Each element deserializes recursively, so nested
+            // slices and slice-of-struct both work.
+            if (info == .pointer and info.pointer.size == .slice) {
+                const arr = value.asArray() orelse return null;
+                const Element = info.pointer.child;
+
+                if (intern_arena == null) {
+                    intern_arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+                    intern_map = std.StringHashMap(void).init(intern_arena.?.allocator());
+                }
+                const arena_alloc = intern_arena.?.allocator();
+                const buf = arena_alloc.alloc(Element, arr.items.len) catch return null;
+                for (arr.items, 0..) |item, i| {
+                    buf[i] = deserialize(Element, item, allocator) orelse return null;
+                }
+                return buf;
             }
 
             // Enums
