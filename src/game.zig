@@ -479,6 +479,121 @@ pub fn GameConfig(
             return null;
         }
 
+        /// Spawn a prefab *and* tag it for save/load Phase 1 reinstantiation.
+        ///
+        /// Wraps `spawnPrefab` with two additions from
+        /// `RFC-SAVE-LOAD-PREFABS.md`:
+        ///
+        /// 1. The **root** entity gets `PrefabInstance { path, overrides = "" }`
+        ///    so the save mixin's built-in handler (added in #474)
+        ///    records its prefab origin.
+        /// 2. Each **child** entity (recursively) gets
+        ///    `PrefabChild { root, local_path = "children[i]..." }` so
+        ///    Phase 1 on load can map saved child IDs back to newly-
+        ///    spawned children via `(root, local_path)`.
+        ///
+        /// `PrefabInstance.path` and every `PrefabChild.local_path` are
+        /// duped into `active_world.nested_entity_arena` — lifetime
+        /// matches the prefab children (world-scoped), freed on scene
+        /// change. Same ownership contract as the save mixin's load-
+        /// side allocation. `PrefabInstance.overrides` is the string
+        /// literal `""` in this first-cut slice (program lifetime, no
+        /// arena allocation needed for a zero-length literal); the
+        /// structured-overrides pipeline lands in a follow-up and will
+        /// dupe `overrides` into the same arena then.
+        ///
+        /// **Interaction with the save mixin:** `spawnFromPrefab` tags
+        /// the entity so Phase 1 on load can respawn it from its
+        /// prefab. But the save mixin only *collects* entities that
+        /// carry at least one component with `.saveable` or `.marker`
+        /// save policy (see `saveGameState` in
+        /// `src/game/save_load_mixin.zig`). A prefab-spawned entity
+        /// that carries only engine built-ins (PrefabInstance/
+        /// PrefabChild) + non-saveable components (e.g. Sprite) will
+        /// NOT appear in the save file and therefore won't be respawned
+        /// on load. Authors relying on save/load round-trip need at
+        /// least one saveable or marker component on the prefab root —
+        /// typically game-owned (e.g. `Workstation`, `RoomDecor`).
+        pub fn spawnFromPrefab(self: *Self, path: []const u8, pos: Position) ?Entity {
+            const entity = self.spawnPrefab(path, pos) orelse return null;
+            // Any tagging failure (arena OOM on path dupe, or inside
+            // the recursive child walk) leaves the world with an
+            // orphan entity tree that has no `PrefabInstance` tag —
+            // scene-tracked, component-populated, but invisible to
+            // the save mixin's Phase 1. Destroy the whole tree on
+            // failure so `spawnFromPrefab`'s null return really
+            // means "the world is unchanged."
+            //
+            // Log the error name before tearing down: `null` return
+            // collides with the "unknown prefab" signal from
+            // `spawnPrefab`, so without the log an OOM during tagging
+            // is indistinguishable from a typo in the prefab path.
+            tagAndSpawnChildren(self, entity, path) catch |err| {
+                self.log.err("[Game] spawnFromPrefab: tagging failed for '{s}': {s}", .{ path, @errorName(err) });
+                self.destroyEntity(entity);
+                return null;
+            };
+            return entity;
+        }
+
+        fn tagAndSpawnChildren(self: *Self, entity: Entity, path: []const u8) !void {
+            const arena = self.active_world.nested_entity_arena.allocator();
+            const path_dup = try arena.dupe(u8, path);
+
+            self.ecs_backend.addComponent(entity, PrefabInstance{
+                .path = path_dup,
+                .overrides = "",
+            });
+
+            try tagPrefabChildren(self, entity, entity, "children", arena);
+        }
+
+        /// Recursively tag every descendant of `root` with `PrefabChild`.
+        /// `base_path` is the dotted path accumulated so far (e.g.
+        /// `"children"` at the top level; `"children[0].children"` one
+        /// level in). Each child appends `[i]` to form its unique path
+        /// within the prefab tree.
+        ///
+        /// Propagates allocation errors up instead of silently
+        /// `continue`-ing — a partially-tagged tree would have
+        /// `PrefabChild` on some descendants and not others, breaking
+        /// the `(root, local_path)` lookup the two-phase load relies
+        /// on. Atomic: if anything fails, `spawnFromPrefab` destroys
+        /// the tree and returns null.
+        fn tagPrefabChildren(
+            self: *Self,
+            root: Entity,
+            parent: Entity,
+            base_path: []const u8,
+            arena: std.mem.Allocator,
+        ) !void {
+            const children = self.getChildren(parent);
+            for (children, 0..) |child, i| {
+                const child_path = try std.fmt.allocPrint(
+                    arena,
+                    "{s}[{d}]",
+                    .{ base_path, i },
+                );
+                self.ecs_backend.addComponent(child, PrefabChildT{
+                    .root = root,
+                    .local_path = child_path,
+                });
+                // Skip the `.children` suffix allocation when `child` is
+                // a leaf. Two-level prefab trees (hydroponics: root +
+                // room + plant overlay) are common; without this gate
+                // the leaf gets an unused `"children[i].children"`
+                // string arena-allocated every spawn.
+                if (self.hasChildren(child)) {
+                    const next_base = try std.fmt.allocPrint(
+                        arena,
+                        "{s}.children",
+                        .{child_path},
+                    );
+                    try tagPrefabChildren(self, root, child, next_base, arena);
+                }
+            }
+        }
+
         pub fn destroyEntity(self: *Self, entity: Entity) void {
             if (self.ecs_backend.getComponent(entity, Children)) |children_comp| {
                 for (children_comp.getChildren()) |child| {

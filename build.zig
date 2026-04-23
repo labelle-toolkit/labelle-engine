@@ -47,6 +47,7 @@ pub fn build(b: *std.Build) void {
         "test/animation_def_test.zig",
         "test/scene_assets_hooks_test.zig",
         "test/pause_hook_test.zig",
+        "test/spawn_from_prefab_test.zig",
     };
 
     for (test_files) |test_file| {
