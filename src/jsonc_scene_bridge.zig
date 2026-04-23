@@ -584,43 +584,37 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
                     try loadChildEntity(game, entity, child_val, prefab_cache, depth, entity_pos, ref_ctx);
                 }
             }
+
+            // Save/load: tag prefab-sourced entities with `PrefabInstance`
+            // (root) + `PrefabChild` (each descendant) so the save mixin
+            // records their prefab origin and the two-phase load can
+            // respawn the prefab + remap saved child IDs to the newly-
+            // spawned descendants via `(root, local_path)`. Uses the
+            // shared `game.tagAsPrefabInstance` so the `local_path`
+            // format stays identical to the runtime `spawnFromPrefab`
+            // path — save mixin's `findChildByLocalPath` can match
+            // either.
+            //
+            // Tag BEFORE scene-declared children are attached. If a scene
+            // over-declares children on top of a prefab (e.g. the scene
+            // adds decorations around a prefab-sourced room), those
+            // scene-only children must NOT get `PrefabChild` markers —
+            // they don't belong to the prefab definition, and on load
+            // Phase 1b would otherwise walk `children[N]` and either
+            // miss (prefab grew fewer children than saved) or mis-map
+            // onto a newly-added prefab child at the same index (prefab
+            // evolved). Propagate the error via `try` instead of logging
+            // and continuing: an untagged prefab root is invisible to
+            // Phase 1a, so a silent failure breaks F5 → F9 round-trip.
+            // `LoadEntityError` already carries `OutOfMemory`.
+            if (entity_obj.getString("prefab")) |prefab_name| {
+                try game.tagAsPrefabInstance(entity, prefab_name);
+            }
+
             if (entity_obj.getArray("children")) |children| {
                 for (children.items) |child_val| {
                     try loadChildEntity(game, entity, child_val, prefab_cache, depth, entity_pos, ref_ctx);
                 }
-            }
-
-            // Save/load Slice 2b: tag prefab-sourced entities with
-            // PrefabInstance so the save mixin's built-in handler
-            // records their prefab origin. This is the scene-load
-            // counterpart to the runtime `game.spawnFromPrefab` API.
-            //
-            // Scope: tags the ROOT only (entities whose scene jsonc
-            // declared a `"prefab"` field). PrefabChild tagging of
-            // nested prefab children lands in a follow-up — the
-            // children loop above doesn't know which children came
-            // from the prefab's `children` array vs the scene's
-            // (they interleave), so structured path generation needs
-            // its own pass. For now, runtime `spawnFromPrefab` handles
-            // the full root+children tagging; scene-load covers just
-            // the root, which is what the save mixin needs to
-            // reinstantiate the prefab on load.
-            if (entity_obj.getString("prefab")) |prefab_name| {
-                const PrefabInstance = GameType.PrefabInstanceComp;
-                const arena = game.active_world.nested_entity_arena.allocator();
-                // Propagate arena OOM up through `LoadEntityError` (which
-                // already carries `OutOfMemory`). Swallowing the error
-                // here and continuing would load the entity without its
-                // `PrefabInstance` tag — invisible to the save mixin's
-                // Phase 1, breaking F5 → F9 silently. Same atomicity
-                // contract `spawnFromPrefab` adopted in #482: any
-                // tagging failure tears the load down instead of
-                // leaving a half-tagged world behind.
-                const path_dup = try arena.dupe(u8, prefab_name);
-                game.active_world.ecs_backend.addComponent(entity, PrefabInstance{
-                    .path = path_dup,
-                    .overrides = "",
-                });
             }
 
             return entity;

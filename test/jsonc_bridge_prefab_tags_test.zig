@@ -1,11 +1,10 @@
 //! Slice 2b tests: `JsoncSceneBridge` auto-tags scene-loaded prefab
-//! entities with `PrefabInstance` so the save mixin can reinstantiate
+//! entities with `PrefabInstance` (root) + `PrefabChild` (each
+//! prefab-declared descendant) so the save mixin can reinstantiate
 //! them on load without the game having to call `spawnFromPrefab`
-//! manually.
-//!
-//! Scope covered here (root-only tagging; PrefabChild for scene-load
-//! nested children is a follow-up — see the comment in
-//! `loadEntityInternal` near the tagging call).
+//! manually. Root tagging landed first in Slice 2b; descendant
+//! tagging was completed in the Slice 2b+ follow-up that shares
+//! the call site with the runtime `Game.tagAsPrefabInstance` helper.
 
 const std = @import("std");
 const testing = std.testing;
@@ -169,6 +168,128 @@ test "jsonc_scene_bridge: multiple prefab instances each get their own PrefabIns
 
     try testing.expectEqual(@as(usize, 2), warrior_count);
     try testing.expectEqual(@as(usize, 1), archer_count);
+}
+
+test "jsonc_scene_bridge: prefab children get PrefabChild tags on scene load" {
+    // Scene-load counterpart to the runtime-spawn test in
+    // `spawn_from_prefab_test.zig`. A prefab with nested children
+    // declared via its own `"children"` array, referenced from the
+    // scene by `"prefab"` name, should get its descendants tagged
+    // with the same `local_path` format `spawnFromPrefab` uses —
+    // otherwise the save mixin's two-phase load can't match saved
+    // child IDs to newly-respawned children on F9.
+    var tmp_dir = testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    var fixture = try setupFixture(&tmp_dir, .{
+        .tree =
+        \\{
+        \\  "components": { "Health": { "current": 100, "max": 100 } },
+        \\  "children": [
+        \\    { "components": { "Health": { "current": 10, "max": 10 } } },
+        \\    {
+        \\      "components": { "Health": { "current": 20, "max": 20 } },
+        \\      "children": [
+        \\        { "components": { "Health": { "current": 30, "max": 30 } } }
+        \\      ]
+        \\    }
+        \\  ]
+        \\}
+        ,
+    },
+        \\{
+        \\  "entities": [
+        \\    { "prefab": "tree" }
+        \\  ]
+        \\}
+    );
+    defer fixture.deinit();
+
+    // Find the root (carries PrefabInstance).
+    var root: TestGame.EntityType = 0;
+    {
+        var view = fixture.game.active_world.ecs_backend.view(.{PrefabInstance}, .{});
+        defer view.deinit();
+        root = view.next().?;
+    }
+
+    // Three descendants: children[0], children[1], children[1].children[0].
+    const PrefabChild = TestGame.PrefabChildComp;
+    var found_c0 = false;
+    var found_c1 = false;
+    var found_c1_gc0 = false;
+    var tagged_count: usize = 0;
+
+    const root_id: u32 = @intCast(root);
+    var view = fixture.game.active_world.ecs_backend.view(.{PrefabChild}, .{});
+    defer view.deinit();
+    while (view.next()) |ent| {
+        tagged_count += 1;
+        const pc = fixture.game.active_world.ecs_backend.getComponent(ent, PrefabChild).?;
+        try testing.expectEqual(root_id, @as(u32, @intCast(pc.root)));
+        if (std.mem.eql(u8, pc.local_path, "children[0]")) found_c0 = true;
+        if (std.mem.eql(u8, pc.local_path, "children[1]")) found_c1 = true;
+        if (std.mem.eql(u8, pc.local_path, "children[1].children[0]")) found_c1_gc0 = true;
+    }
+
+    try testing.expectEqual(@as(usize, 3), tagged_count);
+    try testing.expect(found_c0);
+    try testing.expect(found_c1);
+    try testing.expect(found_c1_gc0);
+}
+
+test "jsonc_scene_bridge: scene-declared children on a prefab do NOT get PrefabChild" {
+    // Regression guard for copilot L531/L608 on #485. A scene may
+    // over-declare children on top of a prefab (e.g. the scene adds
+    // decorations around a prefab-sourced room). Those scene-only
+    // children must NOT be tagged with `PrefabChild`, because the
+    // prefab definition doesn't own them — if the prefab later grows
+    // a new child at the same `children[N]` slot, Phase 1b on load
+    // would mis-map the saved scene-only child onto the new prefab
+    // child.
+    //
+    // Fix: the scene bridge calls `tagAsPrefabInstance` BETWEEN the
+    // prefab-declared children loop and the scene-declared children
+    // loop, so only prefab-owned children are within reach of the
+    // tagger's `getChildren` walk.
+    var tmp_dir = testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    var fixture = try setupFixture(&tmp_dir, .{
+        // Prefab with one own child.
+        .room =
+        \\{
+        \\  "components": { "Health": { "current": 100, "max": 100 } },
+        \\  "children": [
+        \\    { "components": { "Health": { "current": 50, "max": 50 } } }
+        \\  ]
+        \\}
+        ,
+    },
+        // Scene adds TWO extra children on top of the prefab instance.
+        \\{
+        \\  "entities": [
+        \\    {
+        \\      "prefab": "room",
+        \\      "children": [
+        \\        { "components": { "Health": { "current": 10, "max": 10 } } },
+        \\        { "components": { "Health": { "current": 20, "max": 20 } } }
+        \\      ]
+        \\    }
+        \\  ]
+        \\}
+    );
+    defer fixture.deinit();
+
+    const PrefabChild = TestGame.PrefabChildComp;
+    var tagged_count: usize = 0;
+    var view = fixture.game.active_world.ecs_backend.view(.{PrefabChild}, .{});
+    defer view.deinit();
+    while (view.next()) |_| tagged_count += 1;
+
+    // Only the single prefab-declared child should carry PrefabChild;
+    // the two scene-added children must not.
+    try testing.expectEqual(@as(usize, 1), tagged_count);
 }
 
 test "jsonc_scene_bridge: PrefabInstance.path survives save/load round-trip" {
