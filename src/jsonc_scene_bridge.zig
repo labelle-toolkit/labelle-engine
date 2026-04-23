@@ -590,6 +590,34 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
                 }
             }
 
+            // Save/load Slice 2b: tag prefab-sourced entities with
+            // PrefabInstance so the save mixin's built-in handler
+            // records their prefab origin. This is the scene-load
+            // counterpart to the runtime `game.spawnFromPrefab` API.
+            //
+            // Scope: tags the ROOT only (entities whose scene jsonc
+            // declared a `"prefab"` field). PrefabChild tagging of
+            // nested prefab children lands in a follow-up — the
+            // children loop above doesn't know which children came
+            // from the prefab's `children` array vs the scene's
+            // (they interleave), so structured path generation needs
+            // its own pass. For now, runtime `spawnFromPrefab` handles
+            // the full root+children tagging; scene-load covers just
+            // the root, which is what the save mixin needs to
+            // reinstantiate the prefab on load.
+            if (entity_obj.getString("prefab")) |prefab_name| {
+                const PrefabInstance = GameType.PrefabInstanceComp;
+                const arena = game.active_world.nested_entity_arena.allocator();
+                if (arena.dupe(u8, prefab_name)) |path_dup| {
+                    game.active_world.ecs_backend.addComponent(entity, PrefabInstance{
+                        .path = path_dup,
+                        .overrides = "",
+                    });
+                } else |_| {
+                    game.log.err("[JsoncSceneBridge] failed to allocate PrefabInstance.path for '{s}'", .{prefab_name});
+                }
+            }
+
             return entity;
         }
 
