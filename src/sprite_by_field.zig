@@ -19,7 +19,9 @@
 //! reads a field from a named component on each entity, coerces its
 //! value to `i32`, looks up via `lookup`, and mutates the entity's
 //! Sprite on match lands in a follow-up. Same staging as Phase A
-//! (`sprite_animation.zig`).
+//! (the sibling `SpriteAnimation` component) — that module introduces
+//! `sprite_animation.zig` when its PR lands; the two components ship
+//! together and cross-reference each other by intent.
 
 const std = @import("std");
 const save_policy = @import("labelle-core").save_policy;
@@ -48,10 +50,10 @@ pub const SpriteByFieldSource = enum {
 /// (signed or unsigned) and `enum` fields (via `@intFromEnum`) all
 /// feed the same `lookup` table.
 ///
-/// `entries` is parallel arrays — each `Entry.key` is matched against
-/// the coerced field value; the first match wins and its
-/// `sprite_name` is written onto the Sprite. A `null` `sprite_name`
-/// means "hide the sprite" (the tick system toggles
+/// `entries` is a slice of `Entry` structs — each `Entry.key` is
+/// matched against the coerced field value; the first match wins and
+/// its `sprite_name` is written onto the Sprite. A `null`
+/// `sprite_name` means "hide the sprite" (the tick system toggles
 /// `Sprite.visible = false` rather than setting a name) — used for
 /// the hydroponics level 0/1 case.
 ///
@@ -65,8 +67,8 @@ pub const SpriteByFieldSource = enum {
 ///
 /// ## Save policy
 ///
-/// `.saveable` with the runtime `last_key_set` / `last_sprite_ptr`
-/// cache skipped. On load, both reset and the next tick re-resolves
+/// `.saveable` with the runtime `last_key_set` / `last_key` cache
+/// skipped. On load, both reset and the next tick re-resolves
 /// through the whole pipeline — a one-tick recheck is negligible
 /// compared to saving the cache. Ensures save files stay small and
 /// deterministic.
