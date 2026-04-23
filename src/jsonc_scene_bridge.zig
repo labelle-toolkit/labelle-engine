@@ -1029,16 +1029,35 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
             // instead of getting routed into the string branch with a
             // null value and failing.
             //
-            // Note the two distinct `null`s at play: the function
-            // returns `?T` to signal "deserialize failed," but for an
-            // optional field type the *success* case of "JSON value
-            // was null" is a valid `T` — so we return `@as(T, null)`,
-            // the inner optional's null wrapped in the outer Optional
-            // as a success, not a bare `null` which would read as a
-            // failure up in `deserializeStruct`.
+            // Three distinct `null`s live at this boundary:
+            //
+            //   * JSONC `null` on an `?U` field — the field should
+            //     *successfully* deserialize to `U`'s `null`. Returned
+            //     as `@as(T, null)` so Zig coerces it as a non-null
+            //     outer Optional whose inner is `?U`'s null.
+            //
+            //   * Inner deserialize fails on a non-null JSON value
+            //     (type mismatch, malformed data) — this has to
+            //     propagate as a bare `null` from the function so
+            //     `deserializeStruct`'s `orelse` path reads it as
+            //     "failed, use default / fail the parent struct."
+            //
+            //   * Inner deserialize succeeds with a value — wrap it
+            //     back into the outer Optional via `@as(T, v)` so the
+            //     caller sees "succeeded, value is non-null."
+            //
+            // The earlier version of this branch naively `return`-ed
+            // the inner call's `?U` directly, which made Zig
+            // auto-wrap into `??U` on both the success AND failure
+            // paths: a failed inner became a non-null outer holding
+            // a null inner, silently reading as "success with null
+            // value" up in `deserializeStruct`. Cursor Bugbot flagged
+            // this on #488 @ 2311b2d. The explicit `orelse return
+            // null` + `@as(T, v)` makes both paths unambiguous.
             if (info == .optional) {
                 if (value == .null_value) return @as(T, null);
-                return deserialize(info.optional.child, value, allocator);
+                const inner = deserialize(info.optional.child, value, allocator) orelse return null;
+                return @as(T, inner);
             }
 
             // Primitives
