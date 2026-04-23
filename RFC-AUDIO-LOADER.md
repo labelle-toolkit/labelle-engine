@@ -69,8 +69,10 @@ pub const DecodedAudio = struct {
 
 Mirrors `ImageBackend` exactly. Engine never imports the audio crate; the assembler injects adapters at `Game.init`.
 
+The handle the backend returns is the existing `audio_types.SoundId` (`{ index: u32, generation: u32 }`, already used across `src/audio.zig` with `isValid` + generation-based staleness detection). Defining a second `u32` SoundId here would collide with that type and split the engine's sound-handle vocabulary in two — reviewers flagged this as an API-consistency hazard on the first draft. Keep the existing struct; the backend can build one from a raw backend integer via `.{ .index = raw, .generation = … }`.
+
 ```zig
-pub const SoundId = u32;  // opaque backend handle, parallels Texture
+const audio_types = @import("audio_types.zig");  // existing engine module
 
 pub const AudioBackend = struct {
     decode: *const fn (
@@ -80,12 +82,12 @@ pub const AudioBackend = struct {
     ) anyerror!DecodedAudio,
 
     /// Main-thread: hand the PCM buffer to the audio device, return
-    /// an opaque SoundId. Backend COPIES the samples — the caller
-    /// frees `decoded.samples` after this returns.
-    upload: *const fn (decoded: DecodedAudio) anyerror!SoundId,
+    /// a `SoundId`. Backend COPIES the samples — the caller frees
+    /// `decoded.samples` after this returns.
+    upload: *const fn (decoded: DecodedAudio) anyerror!audio_types.SoundId,
 
     /// Main-thread: release the device-side buffer.
-    unload: *const fn (sound: SoundId) void,
+    unload: *const fn (sound: audio_types.SoundId) void,
 };
 
 pub fn setBackend(backend: AudioBackend) void { ... }
@@ -96,23 +98,29 @@ Ownership of `samples`: same contract as `pixels` in the image loader. Worker al
 
 ### 4. Wiring into `DecodedPayload` / `UploadedResource`
 
-Both unions already declare an `audio:` variant as a placeholder (empty struct). Phase 4 fills them in:
+Both unions already declare an `audio:` variant as a placeholder (empty struct). Phase 4 fills them in **inline** inside `src/assets/loader.zig`, not as references to `audio_loader`:
 
 ```zig
 // src/assets/loader.zig — existing placeholders replaced
 
 pub const DecodedPayload = union(LoaderKind) {
     image: struct { pixels: []u8, width: u32, height: u32 },
-    audio: audio_loader.DecodedAudio,   // was: struct {}
-    font: struct {},                    // still placeholder, see #448
+    audio: struct {
+        samples: []i16,     // interleaved PCM, allocator-owned
+        sample_rate: u32,
+        channels: u8,
+    },
+    font: struct {},        // still placeholder, see #448
 };
 
 pub const UploadedResource = union(LoaderKind) {
     image: Texture,
-    audio: audio_loader.SoundId,        // was: struct {}
-    font: struct {},                    // still placeholder, see #448
+    audio: audio_types.SoundId,   // existing engine sound handle
+    font: struct {},              // still placeholder, see #448
 };
 ```
+
+**Why inline instead of `audio_loader.DecodedAudio` / `audio_loader.SoundId`.** The concrete audio loader (`src/assets/loaders/audio.zig`) already imports its parent `../loader.zig`. Pointing the parent back at the child here would cycle the dependency — the same trap the image loader already sidesteps by defining `image:` inline and using `Texture` (a shared handle type declared in `loader.zig`). For audio: keep the PCM struct inline and reuse the existing `audio_types.SoundId` rather than minting a loader-scoped one. The `audio_loader.DecodedAudio` alias can still exist in `src/assets/loaders/audio.zig` as a convenience for backend adapters, but it's a type alias, not the canonical definition.
 
 The type-erased `DecodedPayload` / `UploadedResource` mean the catalog, pump, and hooks code stay unchanged — the Phase 1 scaffolding already anticipated this.
 
@@ -129,7 +137,11 @@ fn decode(file_type: [:0]const u8, data: []const u8, allocator: Allocator) anyer
 
 fn upload(entry: *AssetEntry, decoded: DecodedPayload, allocator: Allocator) anyerror!void {
     const backend = active_backend orelse return error.AudioBackendNotSet;
-    const sound = try backend.upload(decoded.audio);
+    const sound = try backend.upload(.{
+        .samples = decoded.audio.samples,
+        .sample_rate = decoded.audio.sample_rate,
+        .channels = decoded.audio.channels,
+    });
     entry.resource = .{ .audio = sound };
     allocator.free(decoded.audio.samples);
 }
@@ -139,14 +151,22 @@ fn drop(allocator: Allocator, decoded: DecodedPayload) void {
 }
 
 fn free(entry: *AssetEntry) void {
-    const backend = active_backend orelse return;
-    const sound = switch (entry.resource.?) { .audio => |s| s, else => unreachable };
-    backend.unload(sound);
+    const resource = entry.resource orelse return;
+    // Mirror image.zig's free contract: if the backend was cleared
+    // (e.g. test teardown via `clearBackend`) after the asset
+    // uploaded, skip the `unload` call but STILL clear
+    // `entry.resource` — callers that check `entry.resource != null`
+    // as a cleanup-completed flag rely on that invariant (see the
+    // "loader.free contract" comment in `src/assets/loader.zig`).
+    if (active_backend) |backend| switch (resource) {
+        .audio => |sound| backend.unload(sound),
+        else => {},
+    };
     entry.resource = null;
 }
 ```
 
-Direct structural analogue of `image.zig`. The only novelty is the sample-buffer free instead of pixel-buffer free. `drop` and `free` split for the same reason image has them split — refcount-zero-mid-decode vs refcount-zero-at-ready.
+Direct structural analogue of `image.zig`. The only novelty is the sample-buffer free instead of pixel-buffer free. `drop` and `free` split for the same reason image has them split — refcount-zero-mid-decode vs refcount-zero-at-ready. The `upload` vtable slot takes `allocator: Allocator` per the definition in `src/assets/loader.zig::AssetLoaderVTable.upload`; any older snippet showing a three-argument `upload` in the parent asset-streaming RFC is stale against the merged implementation.
 
 ### 6. Asset manifest format — extension-driven
 
