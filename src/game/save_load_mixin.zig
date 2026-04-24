@@ -468,8 +468,6 @@ pub fn Mixin(comptime Game: type) type {
             //     `spawnFromPrefab` then appends new IDs on top, and a
             //     later `unloadCurrentScene` would iterate the stale ones
             //     and hit `destroyEntityOnly` with invalid handles.
-            self.scene_entities.clearRetainingCapacity();
-            self.clearActiveSceneEntities();
             // `scene_before_reset` fires for the same reason
             // `setSceneAtomic` emits it: plugin controllers with
             // per-world heap state must free it before
@@ -480,8 +478,20 @@ pub fn Mixin(comptime Game: type) type {
             // scene that's about to be reloaded (same name in,
             // same name out — the ECS is wiped and reloaded from
             // the save file, not swapped to a different scene).
-            const current_scene = self.current_scene_name orelse "";
-            self.emitHook(.{ .scene_before_reset = .{ .name = current_scene } });
+            //
+            // Only emit if `current_scene_name` is set —
+            // `loadGameState` called before any scene loaded has
+            // nothing to tear down that a name-keyed listener
+            // could key off, and firing with an empty-string
+            // payload would force listeners to handle the empty
+            // sentinel. Fires BEFORE the tracking-list clears so
+            // listeners see the pre-reset world — symmetrical
+            // with the ordering in `setSceneAtomic`.
+            if (self.current_scene_name) |current_scene| {
+                self.emitHook(.{ .scene_before_reset = .{ .name = current_scene } });
+            }
+            self.scene_entities.clearRetainingCapacity();
+            self.clearActiveSceneEntities();
             self.resetEcsBackend();
 
             // Step 2: Create new entities and build ID map.

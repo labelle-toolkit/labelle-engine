@@ -250,11 +250,16 @@ test "scene_before_reset: fires on setSceneAtomic before the ECS wipe" {
     // in flying-platform-labelle via `queueSceneChangeAtomic`.
     try game.setSceneAtomic("second");
 
-    // Scan the event log for before_reset. It must fire once
-    // for the atomic swap, carrying the NAME of the scene that's
-    // about to be torn down ("first" in this case, because we're
-    // about to replace it).
-    var saw_before_reset = false;
+    // Scan the event log for before_reset. It must fire EXACTLY
+    // once for the atomic swap, carrying the NAME of the scene
+    // that's about to be torn down ("first" in this case, because
+    // we're about to replace it). Counting (rather than just
+    // "saw at least one") is the tighter assertion: if a future
+    // refactor accidentally broadens the emit surface and fires
+    // the hook twice per atomic swap, plugin-controller listeners
+    // would double-free their heap state, and this test would
+    // stop catching it if we only checked "did it fire."
+    var before_reset_count: usize = 0;
     var before_reset_name: []const u8 = "";
     var before_reset_index: usize = 0;
     var before_load_index: usize = 0;
@@ -262,7 +267,7 @@ test "scene_before_reset: fires on setSceneAtomic before the ECS wipe" {
     for (hooks.events.items, 0..) |ev, i| {
         switch (ev.kind) {
             .before_reset => {
-                saw_before_reset = true;
+                before_reset_count += 1;
                 before_reset_name = ev.name;
                 before_reset_index = i;
             },
@@ -275,7 +280,7 @@ test "scene_before_reset: fires on setSceneAtomic before the ECS wipe" {
         }
     }
 
-    try testing.expect(saw_before_reset);
+    try testing.expectEqual(@as(usize, 1), before_reset_count);
     try testing.expectEqualStrings("first", before_reset_name);
 
     // before_reset must strictly precede the atomic swap's
@@ -306,6 +311,30 @@ test "scene_before_reset: does NOT fire on non-atomic setScene" {
 
     try game.setScene("first");
     try game.setScene("second");
+
+    for (hooks.events.items) |ev| {
+        try testing.expect(ev.kind != .before_reset);
+    }
+}
+
+test "scene_before_reset: does NOT fire on first atomic swap (no outgoing scene)" {
+    // Copilot L367 guard: firing with an empty-string name forces
+    // name-keyed listeners to handle an ambiguous sentinel. The
+    // contract is "only emit when there's actually something to
+    // tear down" — a brand-new Game with no prior setScene has
+    // nothing to signal a reset for.
+    var hooks = RecordingHooks{ .allocator = testing.allocator };
+    defer hooks.deinit();
+
+    var game = GameWith(*RecordingHooks).init(testing.allocator);
+    defer game.deinit();
+    game.setHooks(&hooks);
+
+    game.registerSceneSimple("first", emptyLoaderRec);
+
+    // First ever scene call — via the atomic path. No prior
+    // scene exists, so scene_before_reset should NOT fire.
+    try game.setSceneAtomic("first");
 
     for (hooks.events.items) |ev| {
         try testing.expect(ev.kind != .before_reset);
