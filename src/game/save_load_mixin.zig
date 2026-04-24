@@ -228,6 +228,53 @@ pub fn Mixin(comptime Game: type) type {
                 }
             }
 
+            // Auto-collect prefab-tagged entities regardless of whether
+            // they carry any game-owned saveable / marker component.
+            //
+            // Why: a "pure visual" prefab — e.g. a background
+            // prefab whose root declares only `Sprite` + the engine's
+            // auto-attached `PrefabInstance` — would otherwise be
+            // skipped by the registry-driven sweep above (no entry
+            // in `Reg.names()` carries it), silently miss from the
+            // save file, and never respawn on load. The prefab is
+            // gone even though Phase 1 would have perfectly
+            // reconstructed it from its `path`. Flagged in
+            // `Game.spawnFromPrefab`'s docstring as a "authors need
+            // at least one saveable or marker component" limitation;
+            // this sweep removes that limitation.
+            //
+            // Collects both tag types:
+            //
+            // * `PrefabInstance` — ensures every prefab root survives
+            //   save/load regardless of other components.
+            //
+            // * `PrefabChild` — usually redundant (most prefab
+            //   descendants carry game-owned saveables that got them
+            //   collected already), but catches the edge case where a
+            //   prefab-declared child has no game state at all and is
+            //   referenced by another saved entity via its entity ID.
+            //   Phase 1b's `(root, local_path)` remap can't populate
+            //   `id_map` without the child's saved entry, so saving
+            //   it is what keeps the ref-remap working.
+            //
+            // The registry-identity guard (`isRegistered`) that the
+            // write-side uses for these built-ins doesn't apply here
+            // — even if a game registers `PrefabInstance` / `PrefabChild`
+            // in its own registry, the entity-presence sweep is
+            // idempotent with the registry-driven one above (both
+            // funnel through the same `entity_set` dedup).
+            inline for (.{ Game.PrefabInstanceComp, Game.PrefabChildComp }) |Tag| {
+                var view = self.active_world.ecs_backend.view(.{Tag}, .{});
+                defer view.deinit();
+                while (view.next()) |entity| {
+                    const id = entityToU64(entity);
+                    if (!entity_set.contains(id)) {
+                        try entity_set.put(id, {});
+                        try entity_list.append(allocator, id);
+                    }
+                }
+            }
+
             var aw: std.ArrayList(u8) = .{};
             defer aw.deinit(allocator);
             const writer = aw.writer(allocator);

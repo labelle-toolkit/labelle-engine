@@ -540,18 +540,24 @@ pub fn GameConfig(
         /// structured-overrides pipeline lands in a follow-up and will
         /// dupe `overrides` into the same arena then.
         ///
-        /// **Interaction with the save mixin:** `spawnFromPrefab` tags
-        /// the entity so Phase 1 on load can respawn it from its
-        /// prefab. But the save mixin only *collects* entities that
-        /// carry at least one component with `.saveable` or `.marker`
-        /// save policy (see `saveGameState` in
-        /// `src/game/save_load_mixin.zig`). A prefab-spawned entity
-        /// that carries only engine built-ins (PrefabInstance/
-        /// PrefabChild) + non-saveable components (e.g. Sprite) will
-        /// NOT appear in the save file and therefore won't be respawned
-        /// on load. Authors relying on save/load round-trip need at
-        /// least one saveable or marker component on the prefab root —
-        /// typically game-owned (e.g. `Workstation`, `RoomDecor`).
+        /// **Interaction with the save mixin:** tagged entities
+        /// always survive `saveGameState` → `loadGameState` round-
+        /// trip. Since the sweep in `saveGameState` auto-collects
+        /// entities with `PrefabInstance` / `PrefabChild` (in
+        /// addition to the registry-driven saveable / marker pass),
+        /// a purely-visual prefab — even one whose root has only
+        /// `Sprite` + the engine's auto-attached `PrefabInstance` —
+        /// still round-trips cleanly and Phase 1 respawns it from
+        /// the `path`. Game authors don't need to sprinkle marker
+        /// components solely to placate save/load.
+        ///
+        /// Caveat: this covers *collection only*. If a prefab root's
+        /// components are all non-saveable, Phase 2 has no overrides
+        /// to apply, so the respawned entity reflects the prefab's
+        /// literal declaration. Game-owned `.saveable` components
+        /// override that (per-instance state lives through
+        /// round-trips). `.transient` components reset to the
+        /// prefab's values.
         pub fn spawnFromPrefab(self: *Self, path: []const u8, pos: Position) ?Entity {
             const entity = self.spawnPrefab(path, pos) orelse return null;
             // Any tagging failure (arena OOM on path dupe, or inside

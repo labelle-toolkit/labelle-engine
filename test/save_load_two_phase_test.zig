@@ -479,3 +479,73 @@ test "two-phase load: nested prefab doesn't duplicate into a ghost root" {
     try testing.expectEqual(@as(usize, 2), total);
 }
 
+
+test "save: entities with only PrefabInstance are collected (no game-owned saveable)" {
+    // Regression guard for the "pure visual prefab" gap flagged in
+    // `Game.spawnFromPrefab`'s docstring and surfaced by the
+    // flying-platform-labelle prefab-foundations adoption. A prefab
+    // whose root has ONLY a `Sprite` + `PrefabInstance` (no
+    // `.saveable` / `.marker` registered component) used to get
+    // skipped by the save mixin's registry-driven collection pass,
+    // silently miss from the save file, and vanish on load.
+    //
+    // The `saveGameState` collection step now auto-sweeps entities
+    // with `PrefabInstance` / `PrefabChild` regardless of other
+    // components, so the prefab survives round-trip and Phase 1
+    // respawns it cleanly.
+
+    var tmp_dir = testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    // Prefab that carries NO registered components — just Position
+    // and PrefabInstance (auto-attached by `spawnFromPrefab`). The
+    // entity exists in the world but the old collection step would
+    // have missed it entirely.
+    var fixture = try setupFixture(&tmp_dir, .{
+        .pure_visual =
+        \\{ "components": { "Position": { "x": 42, "y": 7 } } }
+        ,
+    });
+    defer fixture.deinit();
+
+    const spawned = fixture.game.spawnFromPrefab("pure_visual", .{ .x = 0, .y = 0 }).?;
+    try testing.expect(fixture.game.ecs_backend.hasComponent(spawned, PrefabInstance));
+
+    const save_path = try std.fmt.allocPrint(testing.allocator, "{s}/pure_visual.json", .{fixture.prefab_dir});
+    defer testing.allocator.free(save_path);
+    defer std.fs.cwd().deleteFile(save_path) catch {};
+    try fixture.game.saveGameState(save_path);
+
+    // The save file must mention the prefab — otherwise load can't
+    // respawn it. Check by reading raw bytes: any serialisation of
+    // `PrefabInstance.path = "pure_visual"` lands as a JSON string
+    // containing the path name, and nothing else in the test
+    // references that string.
+    const save_bytes = try std.fs.cwd().readFileAlloc(testing.allocator, save_path, 64 * 1024);
+    defer testing.allocator.free(save_bytes);
+    try testing.expect(std.mem.indexOf(u8, save_bytes, "\"pure_visual\"") != null);
+
+    // Round-trip: reset and load. The entity should be back with
+    // its PrefabInstance tag and the prefab-declared Position.
+    fixture.game.resetEcsBackend();
+    try fixture.game.loadGameState(save_path);
+
+    var view = fixture.game.ecs_backend.view(.{PrefabInstance}, .{});
+    defer view.deinit();
+    var count: usize = 0;
+    var restored_entity: TestGame.EntityType = 0;
+    while (view.next()) |ent| {
+        count += 1;
+        restored_entity = ent;
+    }
+    try testing.expectEqual(@as(usize, 1), count);
+
+    const pi = fixture.game.ecs_backend.getComponent(restored_entity, PrefabInstance).?;
+    try testing.expectEqualStrings("pure_visual", pi.path);
+
+    // Position is recovered (prefab default / saved override
+    // precedence is pinned by other tests; this test's contract
+    // is purely "did the entity survive the collection step at
+    // all").
+    _ = fixture.game.getPosition(restored_entity);
+}
