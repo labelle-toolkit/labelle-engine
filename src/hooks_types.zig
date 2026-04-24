@@ -18,6 +18,7 @@ pub fn HookPayload(comptime Entity: type) type {
         frame_end: FrameInfo,
 
         // Scene lifecycle
+        scene_before_reset: SceneInfo,
         scene_before_load: SceneBeforeLoadInfo,
         scene_load: SceneInfo,
         scene_unload: SceneInfo,

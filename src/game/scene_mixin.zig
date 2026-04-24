@@ -352,6 +352,20 @@ pub fn Mixin(comptime Game: type) type {
                 self.current_scene_name = null;
             }
 
+            // `scene_before_reset` fires right before the ECS is
+            // wiped. Plugin controllers with per-world heap state
+            // (pointed at by a singleton `state_ptr` component) MUST
+            // free it here — once `resetEcsBackend` runs, the
+            // singleton entity is destroyed and the pointer is
+            // orphaned forever, causing every downstream `.apply`
+            // call to either leak allocations across loads or
+            // panic on a null `findState` (flying-platform-labelle
+            // #290). Fires on both the F8 scene-restart path and
+            // the F9 save/load path (the latter also emits this
+            // before its own reset in `save_load_mixin.zig`).
+            const outgoing = previous_name orelse "";
+            self.emitHook(.{ .scene_before_reset = .{ .name = outgoing } });
+
             // Atomic reset — destroys all entities and visuals without iteration
             self.resetEcsBackend();
 

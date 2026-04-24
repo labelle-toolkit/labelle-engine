@@ -25,7 +25,7 @@ fn emptyLoaderRec(_: *GameWith(*RecordingHooks)) anyerror!void {}
 // ── Hook wiring tests ────────────────────────────────────────────────
 
 const HookEvent = struct {
-    kind: enum { acquire, release, before_load, load },
+    kind: enum { acquire, release, before_reset, before_load, load },
     name: []u8,
     assets_len: usize,
 };
@@ -49,6 +49,9 @@ const RecordingHooks = struct {
     }
     pub fn scene_assets_release(self: *@This(), info: anytype) void {
         self.push(.release, info.name, info.assets.len);
+    }
+    pub fn scene_before_reset(self: *@This(), info: anytype) void {
+        self.push(.before_reset, info.name, 0);
     }
     pub fn scene_before_load(self: *@This(), info: anytype) void {
         self.push(.before_load, info.name, 0);
@@ -218,4 +221,93 @@ test "acquire error bypasses asset_failure_policy (always fatal)" {
 
     try testing.expectError(error.AssetNotRegistered, game.setScene("level"));
     try testing.expectEqual(@as(?[]const u8, null), game.pending_scene_assets);
+}
+
+test "scene_before_reset: fires on setSceneAtomic before the ECS wipe" {
+    // Regression guard for labelle-toolkit/flying-platform-labelle#290.
+    // `setSceneAtomic` destroys the singleton ECS entities that
+    // plugin controllers anchor their heap state on; without a
+    // hook fired BEFORE the reset, those heap allocations leak
+    // and downstream `.apply` calls hit a null `findState`. The
+    // scene_before_reset event gives listeners a last chance to
+    // free their state while the singleton still exists.
+    var hooks = RecordingHooks{ .allocator = testing.allocator };
+    defer hooks.deinit();
+
+    var game = GameWith(*RecordingHooks).init(testing.allocator);
+    defer game.deinit();
+    game.setHooks(&hooks);
+
+    game.registerSceneSimple("first", emptyLoaderRec);
+    game.registerSceneSimple("second", emptyLoaderRec);
+
+    // Set initial scene via non-atomic setScene — does NOT fire
+    // before_reset, so the baseline event stream is just
+    // acquire/before_load/load as usual.
+    try game.setScene("first");
+
+    // Now swap to "second" via setSceneAtomic — the path F8 uses
+    // in flying-platform-labelle via `queueSceneChangeAtomic`.
+    try game.setSceneAtomic("second");
+
+    // Scan the event log for before_reset. It must fire once
+    // for the atomic swap, carrying the NAME of the scene that's
+    // about to be torn down ("first" in this case, because we're
+    // about to replace it).
+    var saw_before_reset = false;
+    var before_reset_name: []const u8 = "";
+    var before_reset_index: usize = 0;
+    var before_load_index: usize = 0;
+
+    for (hooks.events.items, 0..) |ev, i| {
+        switch (ev.kind) {
+            .before_reset => {
+                saw_before_reset = true;
+                before_reset_name = ev.name;
+                before_reset_index = i;
+            },
+            .before_load => {
+                // Track the LAST before_load — the one from the
+                // atomic swap, which should come AFTER before_reset.
+                before_load_index = i;
+            },
+            else => {},
+        }
+    }
+
+    try testing.expect(saw_before_reset);
+    try testing.expectEqualStrings("first", before_reset_name);
+
+    // before_reset must strictly precede the atomic swap's
+    // before_load — that's the whole contract listeners rely on.
+    // A plugin controller deinit'ing on before_reset would crash
+    // if the ordering flipped (entities already gone when deinit
+    // runs).
+    try testing.expect(before_reset_index < before_load_index);
+}
+
+test "scene_before_reset: does NOT fire on non-atomic setScene" {
+    // setScene (non-atomic) destroys entities individually via
+    // unloadCurrentScene rather than `resetEcsBackend`, so there's
+    // no "atomic wipe" moment to bracket and plugin controllers
+    // don't need the pre-reset deinit. Emitting the hook here
+    // would be wrong — listeners would free state that's about
+    // to be individually destroyed through the normal entity-
+    // destroyed path.
+    var hooks = RecordingHooks{ .allocator = testing.allocator };
+    defer hooks.deinit();
+
+    var game = GameWith(*RecordingHooks).init(testing.allocator);
+    defer game.deinit();
+    game.setHooks(&hooks);
+
+    game.registerSceneSimple("first", emptyLoaderRec);
+    game.registerSceneSimple("second", emptyLoaderRec);
+
+    try game.setScene("first");
+    try game.setScene("second");
+
+    for (hooks.events.items) |ev| {
+        try testing.expect(ev.kind != .before_reset);
+    }
 }

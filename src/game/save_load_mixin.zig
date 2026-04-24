@@ -470,6 +470,18 @@ pub fn Mixin(comptime Game: type) type {
             //     and hit `destroyEntityOnly` with invalid handles.
             self.scene_entities.clearRetainingCapacity();
             self.clearActiveSceneEntities();
+            // `scene_before_reset` fires for the same reason
+            // `setSceneAtomic` emits it: plugin controllers with
+            // per-world heap state must free it before
+            // `resetEcsBackend` destroys the singleton component
+            // that holds their pointer. Listeners that also handle
+            // the F8 path see a consistent bracket across both
+            // reset entry points. The scene name here is the
+            // scene that's about to be reloaded (same name in,
+            // same name out — the ECS is wiped and reloaded from
+            // the save file, not swapped to a different scene).
+            const current_scene = self.current_scene_name orelse "";
+            self.emitHook(.{ .scene_before_reset = .{ .name = current_scene } });
             self.resetEcsBackend();
 
             // Step 2: Create new entities and build ID map.
