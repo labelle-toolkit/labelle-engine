@@ -339,9 +339,53 @@ pub fn Mixin(comptime Game: type) type {
 
             self.emitHook(.{ .scene_assets_acquire = .{ .name = name, .assets = entry.assets } });
 
-            // Clear scene entity list BEFORE deinit so Scene.deinit's entity
-            // destruction loop has nothing to iterate (entities will be destroyed
-            // atomically by resetEcsBackend instead).
+            // `scene_before_reset` fires BEFORE any entity
+            // destruction — plugin controllers with per-world heap
+            // state (pointed at by a singleton `state_ptr`
+            // component) MUST be able to locate their singleton
+            // entity at this point to free the heap allocation.
+            // Once `unloadCurrentScene` / `resetEcsBackend` runs
+            // the pointer is orphaned forever, causing every
+            // downstream `.apply` call to either leak or panic on
+            // a null `findState` (flying-platform-labelle #290).
+            //
+            // Only emit if there's an outgoing scene — a first
+            // `setSceneAtomic` call from a fresh Game has nothing
+            // to tear down, and firing with an empty name payload
+            // would force listeners to handle a sentinel.
+            //
+            // Read from `self.current_scene_name` directly rather
+            // than the `previous_name` dupe allocated at line 337:
+            // that dupe's `catch null` fallback silently swallows
+            // OOM, and if OOM did hit there, using `previous_name`
+            // would skip the cleanup hook at exactly the moment
+            // cleanup matters most (the caller is already under
+            // memory pressure, so plugin-controller heap state
+            // MUST be freed to make room). `current_scene_name`
+            // is still intact here and survives OOM elsewhere.
+            //
+            // This fires BEFORE the tracking-list clears + the
+            // `unloadCurrentScene` iteration below so listeners
+            // see the full pre-teardown world. Mirrors the
+            // ordering in `save_load_mixin.zig::loadGameState`.
+            if (self.current_scene_name) |outgoing| {
+                self.emitHook(.{ .scene_before_reset = .{ .name = outgoing } });
+            }
+
+            // Clear both entity-tracking lists BEFORE
+            // `unloadCurrentScene` so its iteration loop has
+            // nothing to destroy individually — `resetEcsBackend`
+            // wipes everything atomically a few lines down. Same
+            // reason `loadGameState` clears `scene_entities` up
+            // front: if we let `unloadCurrentScene` destroy
+            // entities one-by-one, a listener that freed heap
+            // state on `scene_before_reset` would have already
+            // done its work, but the per-entity `entity_destroyed`
+            // hooks would still fire against the torn-down ECS.
+            // Clearing the lists up front keeps the contract
+            // clean: `scene_before_reset` ↔ full world, then a
+            // single atomic reset, then fresh load.
+            self.scene_entities.clearRetainingCapacity();
             self.clearActiveSceneEntities();
 
             // Unload old scene (runs script deinit, fires hooks, frees scene struct)
