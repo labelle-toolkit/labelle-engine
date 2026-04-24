@@ -263,21 +263,8 @@ pub fn Mixin(comptime Game: type) type {
             // in its own registry, the entity-presence sweep is
             // idempotent with the registry-driven one above (both
             // funnel through the same `entity_set` dedup).
-            {
-                const PI = Game.PrefabInstanceComp;
-                var view = self.active_world.ecs_backend.view(.{PI}, .{});
-                defer view.deinit();
-                while (view.next()) |entity| {
-                    const id = entityToU64(entity);
-                    if (!entity_set.contains(id)) {
-                        try entity_set.put(id, {});
-                        try entity_list.append(allocator, id);
-                    }
-                }
-            }
-            {
-                const PC = Game.PrefabChildComp;
-                var view = self.active_world.ecs_backend.view(.{PC}, .{});
+            inline for (.{ Game.PrefabInstanceComp, Game.PrefabChildComp }) |Tag| {
+                var view = self.active_world.ecs_backend.view(.{Tag}, .{});
                 defer view.deinit();
                 while (view.next()) |entity| {
                     const id = entityToU64(entity);
