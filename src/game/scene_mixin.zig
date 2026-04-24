@@ -354,11 +354,21 @@ pub fn Mixin(comptime Game: type) type {
             // to tear down, and firing with an empty name payload
             // would force listeners to handle a sentinel.
             //
+            // Read from `self.current_scene_name` directly rather
+            // than the `previous_name` dupe allocated at line 337:
+            // that dupe's `catch null` fallback silently swallows
+            // OOM, and if OOM did hit there, using `previous_name`
+            // would skip the cleanup hook at exactly the moment
+            // cleanup matters most (the caller is already under
+            // memory pressure, so plugin-controller heap state
+            // MUST be freed to make room). `current_scene_name`
+            // is still intact here and survives OOM elsewhere.
+            //
             // This fires BEFORE the tracking-list clears + the
             // `unloadCurrentScene` iteration below so listeners
             // see the full pre-teardown world. Mirrors the
             // ordering in `save_load_mixin.zig::loadGameState`.
-            if (previous_name) |outgoing| {
+            if (self.current_scene_name) |outgoing| {
                 self.emitHook(.{ .scene_before_reset = .{ .name = outgoing } });
             }
 

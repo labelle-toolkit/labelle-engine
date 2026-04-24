@@ -318,11 +318,11 @@ test "scene_before_reset: does NOT fire on non-atomic setScene" {
 }
 
 test "scene_before_reset: does NOT fire on first atomic swap (no outgoing scene)" {
-    // Copilot L367 guard: firing with an empty-string name forces
-    // name-keyed listeners to handle an ambiguous sentinel. The
-    // contract is "only emit when there's actually something to
-    // tear down" — a brand-new Game with no prior setScene has
-    // nothing to signal a reset for.
+    // Firing here with an empty-string name would force name-keyed
+    // listeners to handle an ambiguous sentinel. The contract is
+    // "only emit when there's actually something to tear down" —
+    // a brand-new Game with no prior setScene has no outgoing
+    // scene and therefore nothing to signal a reset for.
     var hooks = RecordingHooks{ .allocator = testing.allocator };
     defer hooks.deinit();
 
