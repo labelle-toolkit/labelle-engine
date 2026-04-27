@@ -241,16 +241,24 @@ fn deserializeTaggedUnion(comptime T: type, value: Value, allocator: std.mem.All
     return null;
 }
 
+/// Deserialize an `EnumSet(K)` from a JSONC object whose entries are
+/// `<enum_member>: <bool>` pairs. Strict on malformed input: returns
+/// `null` if any value is not a bool *or* any key is not a member of
+/// `K`. The lenient variant (silently dropping non-bool values and
+/// unknown keys) was reverted because typos like `"FoodPaket": true`
+/// failed open — the scene loaded with the flag missing and the bug
+/// surfaced much later as wrong gameplay (e.g. a storage refusing
+/// items it should accept). Returning `null` here lets the parent
+/// struct's `default_value_ptr` fallback fire, or — if the field is
+/// required — fails the load with a diagnostic at scene-load time.
+/// See issue #497.
 fn deserializeEnumSet(comptime T: type, value: Value) ?T {
     const obj = value.asObject() orelse return null;
     var set = T.initEmpty();
     for (obj.entries) |entry| {
-        const is_true = entry.value.asBool() orelse false;
-        if (is_true) {
-            if (std.meta.stringToEnum(T.Key, entry.key)) |key| {
-                set.insert(key);
-            }
-        }
+        const is_true = entry.value.asBool() orelse return null;
+        const key = std.meta.stringToEnum(T.Key, entry.key) orelse return null;
+        if (is_true) set.insert(key);
     }
     return set;
 }
