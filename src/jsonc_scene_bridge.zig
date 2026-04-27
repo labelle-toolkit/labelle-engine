@@ -23,6 +23,10 @@ const deserializer = @import("jsonc/deserializer.zig");
 // `GameType` and `Components` so each bridge instantiation gets its
 // own typed `RefContext` / `DeferredRefField`.
 const ref_resolver_mod = @import("jsonc/ref_resolver.zig");
+// Slice 3 of #495: component `onReady` / `postLoad` hook firing +
+// the `[]const u64` field-patcher used by the nested-entity spawn
+// path. Pure comptime dispatch over `Components`.
+const on_ready_mod = @import("jsonc/on_ready.zig");
 
 /// Create a JSONC scene loader parameterized by game and component types.
 /// Components is a ComponentRegistry/ComponentRegistryWithPlugins type with has/getType/names.
@@ -767,64 +771,10 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
             }
         }
 
-        /// Patch a []const u64 field on a component with spawned entity IDs.
-        fn patchEntityIdField(game: *GameType, entity: Entity, comp_name: []const u8, field_name: []const u8, ids: []const u64) void {
-            const comp_names = comptime Components.names();
-            inline for (comp_names) |cn| {
-                if (std.mem.eql(u8, comp_name, cn)) {
-                    const T = Components.getType(cn);
-                    if (game.ecs_backend.getComponent(entity, T)) |comp| {
-                        inline for (@typeInfo(T).@"struct".fields) |field| {
-                            if (std.mem.eql(u8, field.name, field_name)) {
-                                if (field.type == []const u64) {
-                                    @field(comp, field.name) = ids;
-                                }
-                            }
-                        }
-                    }
-                    return;
-                }
-            }
-        }
-
-        /// Fire onReady for all components that were applied to an entity.
-        fn fireOnReadyAll(
-            game: *GameType,
-            entity: Entity,
-            scene_components: ?Value.Object,
-            prefab_components: ?Value.Object,
-            applied: *std.StringHashMap(void),
-        ) void {
-            if (scene_components) |sc| {
-                for (sc.entries) |entry| {
-                    fireOnReadyByName(game, entity, entry.key);
-                }
-            }
-            if (prefab_components) |pc| {
-                for (pc.entries) |entry| {
-                    if (!applied.contains(entry.key)) {
-                        fireOnReadyByName(game, entity, entry.key);
-                    }
-                }
-            }
-        }
-
-        /// Fire onReady for a single component by name using comptime dispatch.
-        fn fireOnReadyByName(game: *GameType, entity: Entity, name: []const u8) void {
-            const comp_names = comptime Components.names();
-            inline for (comp_names) |comp_name| {
-                if (std.mem.eql(u8, name, comp_name)) {
-                    const T = Components.getType(comp_name);
-                    game.fireOnReady(entity, T);
-                    if (@hasDecl(T, "postLoad")) {
-                        if (game.ecs_backend.getComponent(entity, T)) |comp| {
-                            comp.postLoad(game, entity);
-                        }
-                    }
-                    return;
-                }
-            }
-        }
+        const OnReadyHelpers = on_ready_mod.OnReady(GameType, Components);
+        const fireOnReadyAll = OnReadyHelpers.fireOnReadyAll;
+        const fireOnReadyByName = OnReadyHelpers.fireOnReadyByName;
+        const patchEntityIdField = OnReadyHelpers.patchEntityIdField;
 
         /// Strip fields that contain entity-like arrays from a component Value.
         fn stripEntityArrayFields(value: Value, allocator: std.mem.Allocator) Value {
