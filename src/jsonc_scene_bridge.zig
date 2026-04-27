@@ -19,6 +19,10 @@ const gizmo_mod = scene_mod.gizmo;
 // Public surface is just `deserializer.deserialize`; the recursive
 // helpers stay file-local on the other side.
 const deserializer = @import("jsonc/deserializer.zig");
+// Slice 2 of #495: two-pass `@ref` resolution. Generic over both
+// `GameType` and `Components` so each bridge instantiation gets its
+// own typed `RefContext` / `DeferredRefField`.
+const ref_resolver_mod = @import("jsonc/ref_resolver.zig");
 
 /// Create a JSONC scene loader parameterized by game and component types.
 /// Components is a ComponentRegistry/ComponentRegistryWithPlugins type with has/getType/names.
@@ -184,158 +188,13 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
         // Entity cross-references (@ref syntax)
         // ================================================================
 
-        /// A single entity_ref field that needs patching with a resolved @ref ID.
-        const DeferredRefField = struct {
-            entity: Entity,
-            comp_name: []const u8,
-            field_name: []const u8,
-            ref_name: []const u8,
-        };
-
-        /// Ref context shared across entity loading — collects named refs
-        /// and deferred field patches for two-pass resolution.
-        ///
-        /// Scopes form a chain via `parent`: registrations stay in the
-        /// current scope (so repeated prefab instances don't collide on
-        /// their internal ref names), but lookups walk up the chain (so a
-        /// `@ref` inside a prefab body can still resolve to something
-        /// registered in an enclosing scope — e.g. `food_packet` inside
-        /// `food_storage_with_packet` referencing its parent's `@storage`).
-        const RefContext = struct {
-            ref_map: std.StringHashMap(u64),
-            deferred: std.ArrayListUnmanaged(DeferredRefField),
-            allocator: std.mem.Allocator,
-            parent: ?*RefContext,
-
-            fn init(allocator: std.mem.Allocator, parent: ?*RefContext) RefContext {
-                return .{
-                    .ref_map = std.StringHashMap(u64).init(allocator),
-                    .deferred = .{},
-                    .allocator = allocator,
-                    .parent = parent,
-                };
-            }
-
-            fn deinit(self: *RefContext) void {
-                self.ref_map.deinit();
-                self.deferred.deinit(self.allocator);
-            }
-
-            /// Resolve a ref name, walking up the parent chain when not found locally.
-            fn lookup(self: *const RefContext, name: []const u8) ?u64 {
-                if (self.ref_map.get(name)) |id| return id;
-                if (self.parent) |p| return p.lookup(name);
-                return null;
-            }
-        };
-
-        /// Check if a component value contains @ref strings in entity_ref fields.
-        fn valueHasRefs(comp_name: []const u8, value: Value) bool {
-            const obj = value.asObject() orelse return false;
-            const comp_names = comptime Components.names();
-            inline for (comp_names) |name| {
-                if (std.mem.eql(u8, comp_name, name)) {
-                    return hasRefsInFields(Components.getType(name), obj);
-                }
-            }
-            return false;
-        }
-
-        fn hasRefsInFields(comptime T: type, obj: Value.Object) bool {
-            const ref_fields = comptime core.getEntityRefFields(T);
-            inline for (ref_fields) |field_name| {
-                if (obj.getString(field_name)) |str| {
-                    if (str.len > 0 and str[0] == '@') return true;
-                }
-            }
-            return false;
-        }
-
-        /// Replace @ref strings with integer 0 in entity_ref fields so the
-        /// deserializer can parse the component through the normal pipeline.
-        fn replaceRefsWithZero(comp_name: []const u8, value: Value, buf: []Value.Object.Entry) ?Value {
-            const obj = value.asObject() orelse return null;
-            const comp_names = comptime Components.names();
-            inline for (comp_names) |name| {
-                if (std.mem.eql(u8, comp_name, name)) {
-                    const T = Components.getType(name);
-                    const ref_fields = comptime core.getEntityRefFields(T);
-                    if (ref_fields.len == 0) return null;
-                    var len: usize = 0;
-                    for (obj.entries) |entry| {
-                        if (len >= buf.len) break;
-                        var e = entry;
-                        inline for (ref_fields) |field_name| {
-                            if (std.mem.eql(u8, entry.key, field_name)) {
-                                if (entry.value.asString()) |str| {
-                                    if (str.len > 0 and str[0] == '@') {
-                                        e.value = .{ .integer = 0 };
-                                    }
-                                }
-                            }
-                        }
-                        buf[len] = e;
-                        len += 1;
-                    }
-                    return Value{ .object = .{ .entries = buf[0..len] } };
-                }
-            }
-            return null;
-        }
-
-        /// Collect DeferredRefField entries for each @ref string in entity_ref fields.
-        fn collectDeferredRefFields(ref_ctx: *RefContext, entity: Entity, comp_name: []const u8, value: Value) !void {
-            const obj = value.asObject() orelse return;
-            const comp_names = comptime Components.names();
-            inline for (comp_names) |name| {
-                if (std.mem.eql(u8, comp_name, name)) {
-                    const T = Components.getType(name);
-                    const ref_fields = comptime core.getEntityRefFields(T);
-                    inline for (ref_fields) |field_name| {
-                        if (obj.getString(field_name)) |str| {
-                            if (str.len > 0 and str[0] == '@') {
-                                try ref_ctx.deferred.append(ref_ctx.allocator, .{
-                                    .entity = entity,
-                                    .comp_name = comp_name,
-                                    .field_name = field_name,
-                                    .ref_name = str[1..],
-                                });
-                            }
-                        }
-                    }
-                    return;
-                }
-            }
-        }
-
-        /// Patch a single deferred ref field in-place on an already-applied component.
-        /// Lookups walk up the RefContext parent chain so a prefab-body entity can
-        /// resolve refs registered in its enclosing scope.
-        fn patchRefField(game: *GameType, deferred: DeferredRefField, ref_ctx: *const RefContext) void {
-            const comp_names = comptime Components.names();
-            inline for (comp_names) |name| {
-                if (std.mem.eql(u8, deferred.comp_name, name)) {
-                    const T = Components.getType(name);
-                    patchFieldOnComponent(T, game, deferred, ref_ctx);
-                    return;
-                }
-            }
-        }
-
-        fn patchFieldOnComponent(comptime T: type, game: *GameType, deferred: DeferredRefField, ref_ctx: *const RefContext) void {
-            if (game.ecs_backend.getComponent(deferred.entity, T)) |comp| {
-                const ref_fields = comptime core.getEntityRefFields(T);
-                inline for (ref_fields) |field_name| {
-                    if (std.mem.eql(u8, deferred.field_name, field_name)) {
-                        if (ref_ctx.lookup(deferred.ref_name)) |resolved_id| {
-                            @field(comp, field_name) = resolved_id;
-                        } else {
-                            game.log.err("[SceneRef] Unresolved ref '@{s}' in {s}.{s}", .{ deferred.ref_name, deferred.comp_name, field_name });
-                        }
-                    }
-                }
-            }
-        }
+        const RefResolver = ref_resolver_mod.RefResolver(GameType, Components);
+        const RefContext = RefResolver.RefContext;
+        const DeferredRefField = RefResolver.DeferredRefField;
+        const valueHasRefs = RefResolver.valueHasRefs;
+        const replaceRefsWithZero = RefResolver.replaceRefsWithZero;
+        const collectDeferredRefFields = RefResolver.collectDeferredRefFields;
+        const patchRefField = RefResolver.patchRefField;
 
         /// Process entities from a parsed scene, with two-pass ref resolution.
         fn processEntities(game: *GameType, entities_arr: Value.Array, prefab_cache: *PrefabCache, ref_ctx: *RefContext) LoadEntityError!void {
