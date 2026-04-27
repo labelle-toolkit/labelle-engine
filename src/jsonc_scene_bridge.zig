@@ -27,6 +27,12 @@ const ref_resolver_mod = @import("jsonc/ref_resolver.zig");
 // the `[]const u64` field-patcher used by the nested-entity spawn
 // path. Pure comptime dispatch over `Components`.
 const on_ready_mod = @import("jsonc/on_ready.zig");
+// Slice 4a of #495: `PrefabCache` type + the cache-init helpers
+// shared by `loadScene` / `loadSceneFromSource` / `addEmbeddedPrefab`.
+// Non-generic data structure; helpers take `game: anytype` so they
+// don't need to know the full `GameType` either.
+const prefab_cache_mod = @import("jsonc/prefab_cache.zig");
+const PrefabCache = prefab_cache_mod.PrefabCache;
 
 /// Create a JSONC scene loader parameterized by game and component types.
 /// Components is a ComponentRegistry/ComponentRegistryWithPlugins type with has/getType/names.
@@ -36,31 +42,8 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
     const Shape = GameType.ShapeComp;
 
     return struct {
-        /// Allocate a persistent PrefabCache and store it on the game for reuse.
-        fn initPersistentCache(game: *GameType, prefab_dir: []const u8) !*PrefabCache {
-            const persistent = std.heap.page_allocator;
-            const cache = try persistent.create(PrefabCache);
-            cache.* = PrefabCache.init(game.allocator, prefab_dir);
-            game.prefab_cache_ptr = cache;
-            return cache;
-        }
-
-        /// Reuse the game's attached PrefabCache when one exists, refreshing
-        /// its `prefab_dir` so filesystem fallback lookups track the current
-        /// scene's directory. Otherwise allocate a fresh persistent cache.
-        ///
-        /// Shared by `loadScene`, `loadSceneFromSource` and `addEmbeddedPrefab`
-        /// so the three entry points can never drift apart on this critical
-        /// path — see the !!! CRITICAL !!! block in `loadSceneFromSource` for
-        /// the mobile-build failure mode this protects against.
-        fn getOrCreatePrefabCache(game: *GameType, prefab_dir: []const u8) !*PrefabCache {
-            if (game.prefab_cache_ptr) |ptr| {
-                const cache = @as(*PrefabCache, @ptrCast(@alignCast(ptr)));
-                cache.prefab_dir = prefab_dir;
-                return cache;
-            }
-            return try initPersistentCache(game, prefab_dir);
-        }
+        const initPersistentCache = prefab_cache_mod.initPersistentCache;
+        const getOrCreatePrefabCache = prefab_cache_mod.getOrCreatePrefabCache;
 
         /// Load a JSONC scene file and instantiate all entities in the ECS.
         pub fn loadScene(game: *GameType, scene_path: []const u8, prefab_dir: []const u8) !void {
@@ -279,41 +262,9 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
 
         const MAX_DEPTH = 16;
 
-        /// Minimal prefab cache — loads and caches prefab files from disk.
-        /// Source buffers and parsed Value trees are game-lifetime data — deserialized
-        /// components hold []const u8 slices referencing them. Uses page_allocator for
-        /// persistent data so the GPA doesn't report them as leaks.
-        const PrefabCache = struct {
-            prefabs: std.StringHashMap(Value),
-            persistent: std.mem.Allocator,
-            temp: std.mem.Allocator,
-            prefab_dir: []const u8,
-
-            fn init(allocator: std.mem.Allocator, prefab_dir: []const u8) PrefabCache {
-                const persistent = std.heap.page_allocator;
-                return .{
-                    .prefabs = std.StringHashMap(Value).init(persistent),
-                    .persistent = persistent,
-                    .temp = allocator,
-                    .prefab_dir = prefab_dir,
-                };
-            }
-
-            fn get(self: *PrefabCache, name: []const u8) ?Value {
-                if (self.prefabs.get(name)) |val| return val;
-
-                const path = std.fmt.allocPrint(self.temp, "{s}/{s}.jsonc", .{ self.prefab_dir, name }) catch return null;
-                defer self.temp.free(path);
-                const file = std.fs.cwd().openFile(path, .{}) catch return null;
-                defer file.close();
-
-                const src = file.readToEndAlloc(self.persistent, 1024 * 1024) catch return null;
-                var p = JsoncParser.init(self.persistent, src);
-                const val = p.parse() catch return null;
-                self.prefabs.put(self.persistent.dupe(u8, name) catch return null, val) catch return null;
-                return val;
-            }
-        };
+        // PrefabCache type and its init helpers live in
+        // `src/jsonc/prefab_cache.zig` (slice 4a). The file-scope
+        // alias near the top of this file points at it.
 
         const LoadEntityError = error{ IncludeDepthExceeded, OutOfMemory, InvalidFormat };
 
