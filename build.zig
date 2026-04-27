@@ -39,8 +39,8 @@ pub fn build(b: *std.Build) void {
         "test/game_log_test.zig",
         "test/save_policy_test.zig",
         "test/save_load_mixin_test.zig",
-        "test/jsonc_bridge_leak_test.zig",
-        "test/jsonc_nested_lifecycle_test.zig",
+        "test/jsonc/bridge_leak_test.zig",
+        "test/jsonc/nested_lifecycle_test.zig",
         "test/scene_ref_test.zig",
         "test/asset_catalog_test.zig",
         "test/asset_streaming_shim_test.zig",
@@ -52,11 +52,11 @@ pub fn build(b: *std.Build) void {
         "test/scene_assets_hooks_test.zig",
         "test/pause_hook_test.zig",
         "test/spawn_from_prefab_test.zig",
-        "test/jsonc_bridge_prefab_tags_test.zig",
+        "test/jsonc/bridge_prefab_tags_test.zig",
         "test/save_load_two_phase_test.zig",
         "test/example_prefab_animation_walkthrough_test.zig",
-        "test/jsonc_bridge_deserialize_test.zig",
-        "test/jsonc_deserializer_test.zig",
+        "test/jsonc/bridge_deserialize_test.zig",
+        "test/jsonc/deserializer_test.zig",
     };
 
     for (test_files) |test_file| {
