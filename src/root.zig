@@ -171,6 +171,10 @@ pub const DecodedImage = assets_mod.image_loader.DecodedImage;
 // ── JSONC Scene Bridge ──
 pub const JsoncSceneBridge = @import("jsonc_scene_bridge.zig").JsoncSceneBridge;
 pub const JsoncSceneBridgeWithGizmos = @import("jsonc_scene_bridge.zig").JsoncSceneBridgeWithGizmos;
+// Subordinate modules from the #495 refactor — re-exported so tests
+// (and any downstream that wants a focused entry point) can pick
+// the piece they need without going through the full bridge.
+pub const jsonc_deserializer = @import("jsonc/deserializer.zig");
 
 // ── Scene Value & JSONC Parser ──
 pub const SceneValue = jsonc_mod.Value;
