@@ -36,10 +36,23 @@ const Value = jsonc.Value;
 // File-scope on purpose: shared across all bridge instantiations so
 // a project with multiple Game types still dedupes. Never freed;
 // matches the PrefabCache `page_allocator` convention.
+//
+// Thread-safety: scene loading is single-threaded today, but the
+// asset pipeline (#440 / #461) runs decode work on a worker thread
+// and could grow into adjacent paths that touch the deserializer.
+// Guard the mutable state with a mutex so the intern pool can't
+// race even if we end up with concurrent loads later (gemini review
+// on #496). The lock scope is the lazy-init + map lookup + arena
+// dupe + map put — all the read/write touchpoints — so a single
+// `internString` call is atomic from the caller's perspective.
 var intern_arena: ?std.heap.ArenaAllocator = null;
 var intern_map: ?std.StringHashMap(void) = null;
+var intern_mutex: std.Thread.Mutex = .{};
 
 fn internString(s: []const u8) ?[]const u8 {
+    intern_mutex.lock();
+    defer intern_mutex.unlock();
+
     if (intern_arena == null) {
         intern_arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
         intern_map = std.StringHashMap(void).init(intern_arena.?.allocator());
@@ -95,9 +108,12 @@ pub fn deserialize(comptime T: type, value: Value, allocator: std.mem.Allocator)
         return @as(T, inner);
     }
 
-    // Primitives
-    if (T == f32 or T == f64) return valueToFloat(T, value);
-    if (T == i8 or T == i16 or T == i32 or T == i64 or T == u8 or T == u16 or T == u32 or T == u64 or T == usize) return valueToInt(T, value);
+    // Primitives — dispatch by `@typeInfo` tag rather than
+    // enumerating every concrete width. Catches non-standard widths
+    // (`u128`, `i48`, etc.) for free and keeps the code from going
+    // stale if Zig grows new ones (cursor review on #496).
+    if (info == .float) return valueToFloat(T, value);
+    if (info == .int) return valueToInt(T, value);
     if (T == bool) return value.asBool();
     if (T == []const u8) {
         const s = value.asString() orelse return null;
@@ -225,16 +241,21 @@ fn deserializeTaggedUnion(comptime T: type, value: Value, allocator: std.mem.All
     return null;
 }
 
+/// Deserialize an EnumSet-shaped struct from a JSONC object whose
+/// keys are enum member names and values are bools (`true` →
+/// insert into set). Returns null on malformed input — non-bool
+/// value or an unknown key — rather than silently filtering, so
+/// scene typos surface as a load failure instead of a quietly
+/// dropped flag (cursor review on #496). Callers that rely on
+/// "use the default if any entry is bad" already handle the null
+/// via `deserializeStruct`'s `default_value_ptr` fallback.
 fn deserializeEnumSet(comptime T: type, value: Value) ?T {
     const obj = value.asObject() orelse return null;
     var set = T.initEmpty();
     for (obj.entries) |entry| {
-        const is_true = entry.value.asBool() orelse false;
-        if (is_true) {
-            if (std.meta.stringToEnum(T.Key, entry.key)) |key| {
-                set.insert(key);
-            }
-        }
+        const is_true = entry.value.asBool() orelse return null;
+        const key = std.meta.stringToEnum(T.Key, entry.key) orelse return null;
+        if (is_true) set.insert(key);
     }
     return set;
 }

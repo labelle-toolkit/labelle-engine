@@ -32,8 +32,6 @@ pub fn ComponentApply(comptime GameType: type, comptime Components: type) type {
     const RefContext = RefResolver.RefContext;
 
     return struct {
-        pub const Refs = RefResolver;
-
         /// Apply a component, handling `@ref` substitution when
         /// `ref_ctx` is non-null. Components with `@ref` strings
         /// are applied with `0` placeholders through the full
