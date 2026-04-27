@@ -241,21 +241,16 @@ fn deserializeTaggedUnion(comptime T: type, value: Value, allocator: std.mem.All
     return null;
 }
 
-/// Deserialize an EnumSet-shaped struct from a JSONC object whose
-/// keys are enum member names and values are bools (`true` →
-/// insert into set). Returns null on malformed input — non-bool
-/// value or an unknown key — rather than silently filtering, so
-/// scene typos surface as a load failure instead of a quietly
-/// dropped flag (cursor review on #496). Callers that rely on
-/// "use the default if any entry is bad" already handle the null
-/// via `deserializeStruct`'s `default_value_ptr` fallback.
 fn deserializeEnumSet(comptime T: type, value: Value) ?T {
     const obj = value.asObject() orelse return null;
     var set = T.initEmpty();
     for (obj.entries) |entry| {
-        const is_true = entry.value.asBool() orelse return null;
-        const key = std.meta.stringToEnum(T.Key, entry.key) orelse return null;
-        if (is_true) set.insert(key);
+        const is_true = entry.value.asBool() orelse false;
+        if (is_true) {
+            if (std.meta.stringToEnum(T.Key, entry.key)) |key| {
+                set.insert(key);
+            }
+        }
     }
     return set;
 }
