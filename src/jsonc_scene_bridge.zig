@@ -14,35 +14,11 @@ const core = @import("labelle-core");
 const Position = core.Position;
 const scene_mod = @import("scene");
 const gizmo_mod = scene_mod.gizmo;
-
-// ── String intern pool ──────────────────────────────────────────────
-//
-// Component `[]const u8` fields deserialized from a scene or prefab need
-// to outlive the parse arena (which is freed after loadSceneFile returns).
-// We intern them into a single arena wrapping page_allocator and dedupe
-// via a hashmap: identical strings (e.g. "player.png" shared by many
-// entities, or a prefab spawned N times) collapse to one allocation.
-//
-// Bounded by the number of *unique* strings seen over the process
-// lifetime, not by the number of deserialize calls — so repeated prefab
-// spawns no longer leak page_allocator memory per call.
-//
-// File-scope on purpose: shared across all JsoncSceneBridge
-// instantiations so a project with multiple Game types still dedupes.
-// Never freed; matches the PrefabCache page_allocator convention.
-var intern_arena: ?std.heap.ArenaAllocator = null;
-var intern_map: ?std.StringHashMap(void) = null;
-
-fn internString(s: []const u8) ?[]const u8 {
-    if (intern_arena == null) {
-        intern_arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-        intern_map = std.StringHashMap(void).init(intern_arena.?.allocator());
-    }
-    if (intern_map.?.getKey(s)) |existing| return existing;
-    const owned = intern_arena.?.allocator().dupe(u8, s) catch return null;
-    intern_map.?.put(owned, {}) catch return null;
-    return owned;
-}
+// Slice 1 of #495: the JSONC → Zig-struct deserializer (≈200
+// lines, no GameType/Components dependency) lives in its own file.
+// Public surface is just `deserializer.deserialize`; the recursive
+// helpers stay file-local on the other side.
+const deserializer = @import("jsonc/deserializer.zig");
 
 /// Create a JSONC scene loader parameterized by game and component types.
 /// Components is a ComponentRegistry/ComponentRegistryWithPlugins type with has/getType/names.
@@ -1019,192 +995,6 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
         // =====================================================================
 
         /// Deserialize a Value into a comptime-known Zig type.
-        fn deserialize(comptime T: type, value: Value, allocator: std.mem.Allocator) ?T {
-            const info = @typeInfo(T);
-
-            // Optionals — JSONC `null` → component field stays `null`,
-            // anything else unwraps and recurses with the child type.
-            // Must run BEFORE the string check so `?[]const u8` fields
-            // (e.g. `SpriteByField.Entry.sprite_name`) reach here
-            // instead of getting routed into the string branch with a
-            // null value and failing.
-            //
-            // Three distinct `null`s live at this boundary:
-            //
-            //   * JSONC `null` on an `?U` field — the field should
-            //     *successfully* deserialize to `U`'s `null`. Returned
-            //     as `@as(T, null)` so Zig coerces it as a non-null
-            //     outer Optional whose inner is `?U`'s null.
-            //
-            //   * Inner deserialize fails on a non-null JSON value
-            //     (type mismatch, malformed data) — this has to
-            //     propagate as a bare `null` from the function so
-            //     `deserializeStruct`'s `orelse` path reads it as
-            //     "failed, use default / fail the parent struct."
-            //
-            //   * Inner deserialize succeeds with a value — wrap it
-            //     back into the outer Optional via `@as(T, v)` so the
-            //     caller sees "succeeded, value is non-null."
-            //
-            // The earlier version of this branch naively `return`-ed
-            // the inner call's `?U` directly, which made Zig
-            // auto-wrap into `??U` on both the success AND failure
-            // paths: a failed inner became a non-null outer holding
-            // a null inner, silently reading as "success with null
-            // value" up in `deserializeStruct`. Cursor Bugbot flagged
-            // this on #488 @ 2311b2d. The explicit `orelse return
-            // null` + `@as(T, v)` makes both paths unambiguous.
-            if (info == .optional) {
-                if (value == .null_value) return @as(T, null);
-                const inner = deserialize(info.optional.child, value, allocator) orelse return null;
-                return @as(T, inner);
-            }
-
-            // Primitives
-            if (T == f32 or T == f64) return valueToFloat(T, value);
-            if (T == i8 or T == i16 or T == i32 or T == i64 or T == u8 or T == u16 or T == u32 or T == u64 or T == usize) return valueToInt(T, value);
-            if (T == bool) return value.asBool();
-            if (T == []const u8) {
-                const s = value.asString() orelse return null;
-                // Intern into the shared pool so (a) identical strings
-                // dedupe and repeated prefab spawns don't leak, and (b)
-                // allocations are batched through an arena instead of a
-                // system call per string. See the intern pool docs at
-                // the top of this file.
-                return internString(s);
-            }
-
-            // Slices of other types (`[]const Struct`, `[]const []const u8`,
-            // etc.). The `[]const u8` case is handled specifically
-            // above so string deduplication still runs via the
-            // intern pool; this branch covers everything else.
-            //
-            // Lifetime: the caller passes its per-world arena
-            // allocator (see `applyComponent`), which matches the
-            // spawned entity's lifetime and resets on
-            // `resetEcsBackend`. Prior revisions used the file-scope
-            // `intern_arena`, which is never freed — slice contents
-            // aren't deduplicable (unlike bare strings), so every
-            // prefab spawn leaked a new allocation over the process
-            // lifetime. Using the scene-scoped arena instead caps
-            // the cost at "one allocation per entity per scene load,"
-            // released on scene change.
-            if (info == .pointer and info.pointer.size == .slice) {
-                const arr = value.asArray() orelse return null;
-                const Element = info.pointer.child;
-
-                const buf = allocator.alloc(Element, arr.items.len) catch return null;
-                for (arr.items, 0..) |item, i| {
-                    buf[i] = deserialize(Element, item, allocator) orelse return null;
-                }
-                return buf;
-            }
-
-            // Enums
-            if (info == .@"enum") {
-                const name = value.asString() orelse return null;
-                return std.meta.stringToEnum(T, name);
-            }
-
-            // Tagged unions
-            if (info == .@"union") {
-                if (info.@"union".tag_type != null) {
-                    return deserializeTaggedUnion(T, value, allocator);
-                }
-                return null;
-            }
-
-            // EnumSet-like types
-            if (info == .@"struct" and @hasDecl(T, "initEmpty") and @hasDecl(T, "insert")) {
-                return deserializeEnumSet(T, value);
-            }
-
-            // Structs
-            if (info == .@"struct") {
-                return deserializeStruct(T, value, allocator);
-            }
-
-            return null;
-        }
-
-        fn valueToFloat(comptime T: type, value: Value) ?T {
-            return switch (value) {
-                .float => |f| @floatCast(f),
-                .integer => |i| @floatFromInt(i),
-                else => null,
-            };
-        }
-
-        fn valueToInt(comptime T: type, value: Value) ?T {
-            return switch (value) {
-                .integer => |i| std.math.cast(T, i),
-                .float => |f| blk: {
-                    const rounded: i64 = @intFromFloat(f);
-                    break :blk std.math.cast(T, rounded);
-                },
-                else => null,
-            };
-        }
-
-        fn deserializeStruct(comptime T: type, value: Value, allocator: std.mem.Allocator) ?T {
-            const obj = value.asObject() orelse return null;
-            const fields = @typeInfo(T).@"struct".fields;
-            var result: T = undefined;
-
-            inline for (fields) |field| {
-                if (obj.get(field.name)) |field_val| {
-                    if (deserialize(field.type, field_val, allocator)) |v| {
-                        @field(result, field.name) = v;
-                    } else if (field.default_value_ptr) |ptr| {
-                        const default = @as(*const field.type, @ptrCast(@alignCast(ptr)));
-                        @field(result, field.name) = default.*;
-                    } else {
-                        return null;
-                    }
-                } else if (field.default_value_ptr) |ptr| {
-                    const default = @as(*const field.type, @ptrCast(@alignCast(ptr)));
-                    @field(result, field.name) = default.*;
-                } else {
-                    return null;
-                }
-            }
-
-            return result;
-        }
-
-        fn deserializeTaggedUnion(comptime T: type, value: Value, allocator: std.mem.Allocator) ?T {
-            const obj = value.asObject() orelse return null;
-            if (obj.entries.len != 1) return null;
-            const entry = obj.entries[0];
-
-            inline for (@typeInfo(T).@"union".fields) |field| {
-                if (std.mem.eql(u8, entry.key, field.name)) {
-                    if (field.type == void) {
-                        return @unionInit(T, field.name, {});
-                    }
-                    if (deserialize(field.type, entry.value, allocator)) |payload| {
-                        return @unionInit(T, field.name, payload);
-                    }
-                    return null;
-                }
-            }
-            return null;
-        }
-
-        fn deserializeEnumSet(comptime T: type, value: Value) ?T {
-            const obj = value.asObject() orelse return null;
-            var set = T.initEmpty();
-            for (obj.entries) |entry| {
-                const is_true = entry.value.asBool() orelse false;
-                if (is_true) {
-                    if (std.meta.stringToEnum(T.Key, entry.key)) |key| {
-                        set.insert(key);
-                    }
-                }
-            }
-            return set;
-        }
-
         /// Apply a single named component to an entity.
         fn applyComponent(game: *GameType, entity: Entity, name: []const u8, value: Value, parent_offset: Position) void {
             // Position — uses setPosition, offset by parent position
@@ -1240,7 +1030,7 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
 
             // Sprite — uses addSprite for renderer registration
             if (std.mem.eql(u8, name, "Sprite")) {
-                if (deserialize(Sprite, value, comp_alloc)) |sprite| {
+                if (deserializer.deserialize(Sprite, value, comp_alloc)) |sprite| {
                     game.addSprite(entity, sprite);
                 }
                 return;
@@ -1248,7 +1038,7 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
 
             // Shape — uses addShape for renderer registration
             if (std.mem.eql(u8, name, "Shape")) {
-                if (deserialize(Shape, value, comp_alloc)) |shape| {
+                if (deserializer.deserialize(Shape, value, comp_alloc)) |shape| {
                     game.addShape(entity, shape);
                 }
                 return;
@@ -1270,7 +1060,7 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
             inline for (comp_names) |comp_name| {
                 if (std.mem.eql(u8, name, comp_name)) {
                     const T = Components.getType(comp_name);
-                    if (deserialize(T, filtered, comp_alloc)) |component| {
+                    if (deserializer.deserialize(T, filtered, comp_alloc)) |component| {
                         game.addComponent(entity, component);
                     }
                     return;
