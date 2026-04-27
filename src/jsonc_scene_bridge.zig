@@ -33,13 +33,16 @@ const on_ready_mod = @import("jsonc/on_ready.zig");
 // don't need to know the full `GameType` either.
 const prefab_cache_mod = @import("jsonc/prefab_cache.zig");
 const PrefabCache = prefab_cache_mod.PrefabCache;
+// Slice 4b of #495: per-component application. Owns the
+// Position/Sprite/Shape/`addComponent` dispatch plus the
+// `applyComponentWithRefs` two-pass wrapper and the
+// entity-array filtering helpers.
+const component_apply_mod = @import("jsonc/component_apply.zig");
 
 /// Create a JSONC scene loader parameterized by game and component types.
 /// Components is a ComponentRegistry/ComponentRegistryWithPlugins type with has/getType/names.
 pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type {
     const Entity = GameType.EntityType;
-    const Sprite = GameType.SpriteComp;
-    const Shape = GameType.ShapeComp;
 
     return struct {
         const initPersistentCache = prefab_cache_mod.initPersistentCache;
@@ -474,30 +477,11 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
             game.setWorldPosition(child, world_pos);
         }
 
-        /// Apply a component, handling @ref substitution when ref_ctx is active.
-        /// Components with @ref strings are applied with 0 placeholders through
-        /// the full applyComponent pipeline, and their ref fields are collected
-        /// for patching in pass 2.
-        fn applyComponentWithRefs(game: *GameType, entity: Entity, comp_name: []const u8, value: Value, parent_offset: Position, ref_ctx: ?*RefContext) !void {
-            if (ref_ctx) |rctx| {
-                if (valueHasRefs(comp_name, value)) {
-                    // Replace @ref strings with 0 so the full pipeline works.
-                    // Allocate buffer sized to the object's entry count.
-                    const obj = value.asObject() orelse {
-                        applyComponent(game, entity, comp_name, value, parent_offset);
-                        return;
-                    };
-                    const entries = try game.allocator.alloc(Value.Object.Entry, obj.entries.len);
-                    defer game.allocator.free(entries);
-                    const zeroed = replaceRefsWithZero(comp_name, value, entries) orelse value;
-                    applyComponent(game, entity, comp_name, zeroed, parent_offset);
-                    // Record which fields need patching in pass 2
-                    try collectDeferredRefFields(rctx, entity, comp_name, value);
-                    return;
-                }
-            }
-            applyComponent(game, entity, comp_name, value, parent_offset);
-        }
+        const ApplyHelpers = component_apply_mod.ComponentApply(GameType, Components);
+        const applyComponent = ApplyHelpers.applyComponent;
+        const applyComponentWithRefs = ApplyHelpers.applyComponentWithRefs;
+        const stripEntityArrayFields = ApplyHelpers.stripEntityArrayFields;
+        const isEntityLike = ApplyHelpers.isEntityLike;
 
         /// Spawn entity-like objects nested inside a component's fields, collect their
         /// entity IDs, and patch them back into the component's []const u64 fields.
@@ -727,106 +711,6 @@ pub fn JsoncSceneBridge(comptime GameType: type, comptime Components: type) type
         const fireOnReadyByName = OnReadyHelpers.fireOnReadyByName;
         const patchEntityIdField = OnReadyHelpers.patchEntityIdField;
 
-        /// Strip fields that contain entity-like arrays from a component Value.
-        fn stripEntityArrayFields(value: Value, allocator: std.mem.Allocator) Value {
-            const obj = value.asObject() orelse return value;
-            var filtered: std.ArrayList(Value.Object.Entry) = .{};
-            for (obj.entries) |entry| {
-                const is_entity_array = blk: {
-                    const arr = entry.value.asArray() orelse break :blk false;
-                    if (arr.items.len == 0) break :blk false;
-                    break :blk isEntityLike(arr.items[0]);
-                };
-                if (!is_entity_array) {
-                    filtered.append(allocator, entry) catch {};
-                }
-            }
-            return Value{ .object = .{ .entries = filtered.toOwnedSlice(allocator) catch obj.entries } };
-        }
-
-        /// Check if a Value looks like an entity definition.
-        fn isEntityLike(value: Value) bool {
-            const obj = value.asObject() orelse return false;
-            return obj.getString("prefab") != null or obj.getObject("components") != null;
-        }
-
-        // =====================================================================
-        // Value → Zig type deserialization (inlined, no external dependency)
-        // =====================================================================
-
-        /// Deserialize a Value into a comptime-known Zig type.
-        /// Apply a single named component to an entity.
-        fn applyComponent(game: *GameType, entity: Entity, name: []const u8, value: Value, parent_offset: Position) void {
-            // Position — uses setPosition, offset by parent position
-            if (std.mem.eql(u8, name, "Position")) {
-                if (value.asObject()) |obj| {
-                    var pos = Position{};
-                    if (obj.getInteger("x")) |x| {
-                        pos.x = @floatFromInt(x);
-                    } else if (obj.getFloat("x")) |x| {
-                        pos.x = @floatCast(x);
-                    }
-                    if (obj.getInteger("y")) |y| {
-                        pos.y = @floatFromInt(y);
-                    } else if (obj.getFloat("y")) |y| {
-                        pos.y = @floatCast(y);
-                    }
-                    game.setPosition(entity, .{ .x = parent_offset.x + pos.x, .y = parent_offset.y + pos.y });
-                }
-                return;
-            }
-
-            // `deserialize`-side allocations (slices for `frames` /
-            // `entries` / etc.) land in `active_world.nested_entity_arena`
-            // so they share the lifetime of the spawned entity —
-            // freed atomically on scene change via `resetEcsBackend`.
-            // `game.allocator` was tempting as a default but leaves
-            // nothing to free per-scene, which bit us on #488
-            // (gemini flagged unbounded per-spawn slice growth). The
-            // transient `stripEntityArrayFields` scratch below still
-            // uses `game.allocator` because its lifetime is this
-            // function call only and the `defer` above frees it.
-            const comp_alloc = game.active_world.nested_entity_arena.allocator();
-
-            // Sprite — uses addSprite for renderer registration
-            if (std.mem.eql(u8, name, "Sprite")) {
-                if (deserializer.deserialize(Sprite, value, comp_alloc)) |sprite| {
-                    game.addSprite(entity, sprite);
-                }
-                return;
-            }
-
-            // Shape — uses addShape for renderer registration
-            if (std.mem.eql(u8, name, "Shape")) {
-                if (deserializer.deserialize(Shape, value, comp_alloc)) |shape| {
-                    game.addShape(entity, shape);
-                }
-                return;
-            }
-
-            // All other components — comptime dispatch via Components registry.
-            const filtered = stripEntityArrayFields(value, game.allocator);
-            defer {
-                // Free the filtered entries slice if it was newly allocated
-                if (filtered.asObject()) |fo| {
-                    if (value.asObject()) |orig| {
-                        if (fo.entries.ptr != orig.entries.ptr) {
-                            game.allocator.free(fo.entries);
-                        }
-                    }
-                }
-            }
-            const comp_names = comptime Components.names();
-            inline for (comp_names) |comp_name| {
-                if (std.mem.eql(u8, name, comp_name)) {
-                    const T = Components.getType(comp_name);
-                    if (deserializer.deserialize(T, filtered, comp_alloc)) |component| {
-                        game.addComponent(entity, component);
-                    }
-                    return;
-                }
-            }
-        }
     };
 }
 
