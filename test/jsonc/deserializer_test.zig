@@ -224,3 +224,58 @@ test "deserialize: EnumSet from object of bools" {
     try testing.expect(got.contains(.meat));
     try testing.expect(!got.contains(.vegetable));
 }
+
+// Strict-on-malformed contract — see issue #497. The lenient variant
+// silently dropped bad entries; that meant a typo like
+// `"vegtable": true` produced an empty set and surfaced as a
+// gameplay bug far from the source. These tests pin the strict
+// behavior: any malformed entry => null, so the parent struct's
+// default fires (or scene load fails loudly at parse time).
+
+test "deserialize: EnumSet rejects non-bool value" {
+    var entries = [_]SceneValue.Object.Entry{
+        .{ .key = "water", .value = .{ .string = "yes" } },
+    };
+    const v = SceneValue{ .object = .{ .entries = &entries } };
+
+    const Set = std.EnumSet(Items);
+    try testing.expect(deserializer.deserialize(Set, v, testing.allocator) == null);
+}
+
+test "deserialize: EnumSet rejects unknown enum key" {
+    var entries = [_]SceneValue.Object.Entry{
+        // typo: `vegtable` instead of `vegetable`
+        .{ .key = "vegtable", .value = .{ .boolean = true } },
+    };
+    const v = SceneValue{ .object = .{ .entries = &entries } };
+
+    const Set = std.EnumSet(Items);
+    try testing.expect(deserializer.deserialize(Set, v, testing.allocator) == null);
+}
+
+test "deserialize: EnumSet rejects mixed valid + invalid entries" {
+    var entries = [_]SceneValue.Object.Entry{
+        .{ .key = "water", .value = .{ .boolean = true } },
+        // unknown key — should poison the whole set
+        .{ .key = "diamond", .value = .{ .boolean = true } },
+    };
+    const v = SceneValue{ .object = .{ .entries = &entries } };
+
+    const Set = std.EnumSet(Items);
+    try testing.expect(deserializer.deserialize(Set, v, testing.allocator) == null);
+}
+
+test "deserialize: EnumSet all-valid bools (mixed true/false) produces expected set" {
+    var entries = [_]SceneValue.Object.Entry{
+        .{ .key = "water", .value = .{ .boolean = true } },
+        .{ .key = "vegetable", .value = .{ .boolean = false } },
+        .{ .key = "meat", .value = .{ .boolean = true } },
+    };
+    const v = SceneValue{ .object = .{ .entries = &entries } };
+
+    const Set = std.EnumSet(Items);
+    const got = deserializer.deserialize(Set, v, testing.allocator).?;
+    try testing.expect(got.contains(.water));
+    try testing.expect(!got.contains(.vegetable));
+    try testing.expect(got.contains(.meat));
+}
