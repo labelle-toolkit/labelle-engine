@@ -198,6 +198,77 @@ test "Game: setSceneAssets threads manifest into existing SceneEntry" {
     try testing.expectError(error.SceneNotFound, game.setSceneAssets("nope", menu_assets));
 }
 
+test "Game: SceneEntry.initial_state defaults to null for legacy registration" {
+    var game = Game.init(testing.allocator);
+    defer game.deinit();
+
+    const emptyLoader = struct {
+        fn load(_: *Game) anyerror!void {}
+    }.load;
+
+    game.registerSceneSimple("legacy", emptyLoader);
+
+    try testing.expect(game.scenes.get("legacy").?.initial_state == null);
+}
+
+test "Game: setSceneInitialState threads state into existing SceneEntry" {
+    var game = Game.init(testing.allocator);
+    defer game.deinit();
+
+    const emptyLoader = struct {
+        fn load(_: *Game) anyerror!void {}
+    }.load;
+
+    game.registerSceneSimple("combat_arena", emptyLoader);
+
+    // Before — legacy default.
+    try testing.expect(game.scenes.get("combat_arena").?.initial_state == null);
+
+    try game.setSceneInitialState("combat_arena", "playing");
+    try testing.expectEqualStrings("playing", game.scenes.get("combat_arena").?.initial_state.?);
+
+    // Unknown scene returns an error instead of silently dropping.
+    try testing.expectError(error.SceneNotFound, game.setSceneInitialState("nope", "playing"));
+}
+
+test "Game: setScene honors SceneEntry.initial_state and transitions game_state" {
+    var game = Game.init(testing.allocator);
+    defer game.deinit();
+
+    const emptyLoader = struct {
+        fn load(_: *Game) anyerror!void {}
+    }.load;
+
+    game.registerSceneSimple("combat_arena", emptyLoader);
+    try game.setSceneInitialState("combat_arena", "playing");
+
+    // Default starting state — see game.zig:261.
+    try testing.expectEqualStrings("running", game.getState());
+
+    try game.setScene("combat_arena");
+
+    try testing.expectEqualStrings("playing", game.getState());
+}
+
+test "Game: setScene without initial_state leaves game_state untouched" {
+    var game = Game.init(testing.allocator);
+    defer game.deinit();
+
+    const emptyLoader = struct {
+        fn load(_: *Game) anyerror!void {}
+    }.load;
+
+    game.registerSceneSimple("plain", emptyLoader);
+
+    // Caller-set initial state must survive a setScene() with no
+    // initial_state declared on the scene — opt-in behavior.
+    game.setState("custom_state");
+
+    try game.setScene("plain");
+
+    try testing.expectEqualStrings("custom_state", game.getState());
+}
+
 test "Game: slash-named scene preserves original name for lookup" {
     var game = Game.init(testing.allocator);
     defer game.deinit();
