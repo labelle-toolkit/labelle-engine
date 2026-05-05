@@ -237,6 +237,30 @@ pub fn Mixin(comptime Game: type) type {
             entry.assets = assets;
         }
 
+        /// Attach a declared `initial_state` to a previously-registered scene.
+        /// `setScene` will call `setState(state)` after the scene loads.
+        ///
+        /// Returns `error.SceneNotFound` if `name` was never registered.
+        ///
+        /// Used by the assembler to thread each scene's `"initial_state": "<name>"`
+        /// JSONC field into `SceneEntry.initial_state` (issue #500). Same setter
+        /// pattern as `setSceneAssets` so the assembler can call both after the
+        /// `registerSceneSimple` loop.
+        ///
+        /// Lifetime: `state` is stored by reference and must outlive the `Game`.
+        /// The assembler emits a string-literal slice (program-lifetime). Runtime
+        /// callers passing a stack-allocated slice would leave
+        /// `SceneEntry.initial_state` dangling — prefer an allocator-owned or
+        /// static slice.
+        pub fn setSceneInitialState(
+            self: *Game,
+            name: []const u8,
+            state: []const u8,
+        ) error{SceneNotFound}!void {
+            const entry = self.scenes.getPtr(name) orelse return error.SceneNotFound;
+            entry.initial_state = state;
+        }
+
         pub fn setScene(self: *Game, name: []const u8) !void {
             // Phase 2 of the Asset Streaming RFC (#437) — gate the
             // swap on the new scene's `assets:` manifest. Acquires
@@ -315,6 +339,21 @@ pub fn Mixin(comptime Game: type) type {
             if (self.pending_scene_assets) |p| {
                 self.allocator.free(p);
                 self.pending_scene_assets = null;
+            }
+
+            // Honor the scene's declared `initial_state` (issue #500).
+            // This runs LAST so all the scene's entities + scripts are
+            // in place when state-gated scripts start ticking on the
+            // next frame. Logging the transition makes scene-driven
+            // state changes visible — anyone debugging the state
+            // machine can grep for `[Scene] '<name>' set state`.
+            if (self.scenes.get(name)) |entry| {
+                if (entry.initial_state) |state| {
+                    if (!std.mem.eql(u8, self.game_state, state)) {
+                        std.log.info("[Scene] '{s}' set state '{s}' → '{s}'", .{ name, self.game_state, state });
+                    }
+                    self.setState(state);
+                }
             }
         }
 
@@ -417,6 +456,18 @@ pub fn Mixin(comptime Game: type) type {
             if (self.pending_scene_assets) |p| {
                 self.allocator.free(p);
                 self.pending_scene_assets = null;
+            }
+
+            // Honor the scene's declared `initial_state` (issue #500).
+            // Mirrors `setScene` — keep the two paths in sync so a scene
+            // loaded via `setSceneAtomic` (or `queueSceneChangeAtomic`)
+            // gets the same state-transition treatment as `setScene`.
+            // `entry` is already in scope (line 365) so no re-lookup.
+            if (entry.initial_state) |state| {
+                if (!std.mem.eql(u8, self.game_state, state)) {
+                    std.log.info("[Scene] '{s}' set state '{s}' → '{s}'", .{ name, self.game_state, state });
+                }
+                self.setState(state);
             }
         }
 
