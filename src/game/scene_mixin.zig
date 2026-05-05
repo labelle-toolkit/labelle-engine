@@ -457,6 +457,18 @@ pub fn Mixin(comptime Game: type) type {
                 self.allocator.free(p);
                 self.pending_scene_assets = null;
             }
+
+            // Honor the scene's declared `initial_state` (issue #500).
+            // Mirrors `setScene` — keep the two paths in sync so a scene
+            // loaded via `setSceneAtomic` (or `queueSceneChangeAtomic`)
+            // gets the same state-transition treatment as `setScene`.
+            // `entry` is already in scope (line 365) so no re-lookup.
+            if (entry.initial_state) |state| {
+                if (!std.mem.eql(u8, self.game_state, state)) {
+                    std.log.info("[Scene] '{s}' set state '{s}' → '{s}'", .{ name, self.game_state, state });
+                }
+                self.setState(state);
+            }
         }
 
         pub fn queueSceneChange(self: *Game, name: []const u8) void {

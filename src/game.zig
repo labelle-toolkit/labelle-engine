@@ -129,11 +129,12 @@ pub fn GameConfig(
             /// do `game.scenes.get("main").?.assets` without a null check.
             assets: []const []const u8 = &.{},
             /// Optional state the scene wants the game to be in when it loads.
-            /// `setScene` calls `setState(initial_state.?)` after the scene's
-            /// assets are ready and the entity load finishes. Populated by the
-            /// assembler from each scene's `"initial_state": "<name>"` field
-            /// (issue #500). `null` (default) means the scene doesn't request
-            /// a state change — current behavior preserved.
+            /// Both `setScene` and `setSceneAtomic` call `setState(initial_state.?)`
+            /// after the scene's assets are ready and the entity load finishes.
+            /// Populated by the assembler from each scene's
+            /// `"initial_state": "<name>"` field (issue #500). `null` (default)
+            /// means the scene doesn't request a state change — current behavior
+            /// preserved.
             ///
             /// Lifetime: stored by reference, must outlive the `Game`. The
             /// assembler emits a string-literal slice, which is program-lifetime.

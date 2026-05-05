@@ -269,6 +269,46 @@ test "Game: setScene without initial_state leaves game_state untouched" {
     try testing.expectEqualStrings("custom_state", game.getState());
 }
 
+test "Game: setSceneAtomic honors SceneEntry.initial_state (mirrors setScene)" {
+    // Regression check: setSceneAtomic was the parallel code path that
+    // initially missed the initial_state handling — flagged by Cursor /
+    // gemini on PR #501. Both setScene and setSceneAtomic must apply
+    // the declared state, otherwise scenes loaded atomically silently
+    // ignore their preference (the exact bug #500 was filed to fix).
+    var game = Game.init(testing.allocator);
+    defer game.deinit();
+
+    const emptyLoader = struct {
+        fn load(_: *Game) anyerror!void {}
+    }.load;
+
+    game.registerSceneSimple("combat_arena", emptyLoader);
+    try game.setSceneInitialState("combat_arena", "playing");
+
+    try testing.expectEqualStrings("running", game.getState());
+
+    try game.setSceneAtomic("combat_arena");
+
+    try testing.expectEqualStrings("playing", game.getState());
+}
+
+test "Game: setSceneAtomic without initial_state leaves game_state untouched" {
+    var game = Game.init(testing.allocator);
+    defer game.deinit();
+
+    const emptyLoader = struct {
+        fn load(_: *Game) anyerror!void {}
+    }.load;
+
+    game.registerSceneSimple("plain", emptyLoader);
+
+    game.setState("custom_state");
+
+    try game.setSceneAtomic("plain");
+
+    try testing.expectEqualStrings("custom_state", game.getState());
+}
+
 test "Game: slash-named scene preserves original name for lookup" {
     var game = Game.init(testing.allocator);
     defer game.deinit();
