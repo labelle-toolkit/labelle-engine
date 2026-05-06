@@ -915,6 +915,7 @@ pub fn GameConfig(
         pub const queueSceneChange = SceneMixin.queueSceneChange;
         pub const queueSceneChangeAtomic = SceneMixin.queueSceneChangeAtomic;
         pub const getCurrentSceneName = SceneMixin.getCurrentSceneName;
+        pub const pendingSceneName = SceneMixin.pendingSceneName;
 
         /// Register a runtime JSONC scene by name.
         /// The scene file is loaded from disk when setScene() is called.

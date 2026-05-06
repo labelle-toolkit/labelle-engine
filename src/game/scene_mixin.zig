@@ -557,6 +557,31 @@ pub fn Mixin(comptime Game: type) type {
             return self.current_scene_name;
         }
 
+        /// Returns the name of the scene currently being loaded — i.e. the
+        /// `setScene`/`setSceneAtomic` target whose asset-manifest gate
+        /// is still deferring (atlases decoding, etc.). Returns `null`
+        /// when no swap is in flight.
+        ///
+        /// Distinct from `getCurrentSceneName()`, which returns the
+        /// COMMITTED scene (the one whose entities + scripts are
+        /// active). During the asset-loading deferral period:
+        ///   - `getCurrentSceneName()` returns the previous scene
+        ///     (or `null` on initial boot)
+        ///   - `pendingSceneName()` returns the requested scene
+        ///
+        /// Consumers writing scene-aware recovery code (e.g. "if no
+        /// scene is loaded, set this default scene") should check both:
+        ///
+        ///   const intended = game.getCurrentSceneName() orelse
+        ///       game.pendingSceneName() orelse return;
+        ///
+        /// Otherwise their recovery races with the deferred swap and
+        /// can hijack the user's requested scene before it lands —
+        /// see issue #504 for the surfaced case.
+        pub fn pendingSceneName(self: *const Game) ?[]const u8 {
+            return self.pending_scene_assets;
+        }
+
         pub fn setActiveScene(
             self: *Game,
             ptr: *anyopaque,

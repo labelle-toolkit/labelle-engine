@@ -346,6 +346,61 @@ test "Game: setScene with explicit manifest does NOT eager-load other resources"
     try testing.expectEqual(@as(u32, 0), game.assets.entries.get("not_declared").?.refcount);
 }
 
+test "Game: pendingSceneName returns null when no swap is in flight" {
+    var game = Game.init(testing.allocator);
+    defer game.deinit();
+
+    try testing.expect(game.pendingSceneName() == null);
+}
+
+test "Game: pendingSceneName returns target name during asset-loading deferral (issue #504)" {
+    // Reproduces the race from issue #504: setScene's manifest gate
+    // defers while atlases decode. During that window, consumers used
+    // to see `getCurrentSceneName() == null` and erroneously assume
+    // no scene was loaded. `pendingSceneName()` lets them tell the
+    // difference between "no swap requested" and "swap in flight".
+    var game = Game.init(testing.allocator);
+    defer game.deinit();
+
+    try game.assets.register("background", .image, "png", "fake-bytes");
+
+    const emptyLoader = struct {
+        fn load(_: *Game) anyerror!void {}
+    }.load;
+
+    game.registerSceneSimple("late_loader", emptyLoader);
+
+    // Asset is .registered (not .ready) — gate will defer.
+    _ = game.setScene("late_loader") catch {};
+
+    // Committed scene is still null (gate deferred), but the pending
+    // marker reflects the user's intent.
+    try testing.expect(game.getCurrentSceneName() == null);
+    try testing.expectEqualStrings("late_loader", game.pendingSceneName().?);
+}
+
+test "Game: pendingSceneName clears after the swap commits" {
+    var game = Game.init(testing.allocator);
+    defer game.deinit();
+
+    try game.assets.register("background", .image, "png", "fake-bytes");
+    {
+        const e = game.assets.entries.getPtr("background").?;
+        e.state = .ready;
+    }
+
+    const emptyLoader = struct {
+        fn load(_: *Game) anyerror!void {}
+    }.load;
+
+    game.registerSceneSimple("instant_loader", emptyLoader);
+
+    _ = game.setScene("instant_loader") catch {};
+
+    try testing.expectEqualStrings("instant_loader", game.getCurrentSceneName().?);
+    try testing.expect(game.pendingSceneName() == null);
+}
+
 test "Game: setSceneAtomic without initial_state leaves game_state untouched" {
     var game = Game.init(testing.allocator);
     defer game.deinit();
