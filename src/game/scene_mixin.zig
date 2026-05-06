@@ -210,6 +210,41 @@ fn bridgeImageAssetsToAtlasManager(game: anytype, assets: []const []const u8) vo
     }
 }
 
+/// Walks every `.image` asset currently in `.ready` state and bridges
+/// it into `atlas_manager`. Idempotent via `markPendingLoaded` (already-
+/// bridged atlases return `AtlasNotPending`, silently skipped).
+///
+/// Called every tick after the catalog pump (`Game.tick`'s pump call)
+/// so atlases that finish uploading AFTER the manifest-gate path's
+/// `bridgeImageAssetsToAtlasManager` call still get their texture_id
+/// wired before `resolveAtlasSprites` runs in the same frame.
+///
+/// Without this per-tick walk, the eager-fallback path (#502/#503/#506)
+/// — which intentionally completes setScene before assets reach
+/// `.ready` — leaves every atlas's texture_id at 0. `findSprite`
+/// returns 0, every sprite samples from texture 0, and the world
+/// renders with all-wrong UVs (issue #508).
+///
+/// For the production manifest-gated path this walk is redundant
+/// (assets are already `.ready` at setScene time, the bridge ran
+/// once and succeeded) — every per-tick call is a no-op. Cost is
+/// one HashMap iteration per frame; the catalog typically holds
+/// <20 entries.
+fn bridgeAllReadyImageAssets_impl(game: anytype) void {
+    var iter = game.assets.entries.iterator();
+    while (iter.next()) |kv| {
+        const entry = kv.value_ptr;
+        if (entry.loader_kind != .image) continue;
+        if (entry.state != .ready) continue;
+        const resource = entry.resource orelse continue;
+        const handle = switch (resource) {
+            .image => |t| t,
+            else => continue,
+        };
+        game.atlas_manager.markPendingLoaded(kv.key_ptr.*, handle, null) catch {};
+    }
+}
+
 /// Returns the scene management mixin for a given Game type.
 pub fn Mixin(comptime Game: type) type {
     return struct {
@@ -236,6 +271,14 @@ pub fn Mixin(comptime Game: type) type {
             comptime loader_fn: fn (*Game) anyerror!void,
         ) void {
             self.registerScene(name, loader_fn, .{});
+        }
+
+        /// Bridge late-uploaded atlases on every tick (issue #508).
+        /// Game.tick should call this after `self.assets.pump()` so
+        /// atlases finishing upload this frame are wired before
+        /// `resolveAtlasSprites` runs. See the free fn for details.
+        pub fn bridgeAllReadyImageAssets(self: *Game) void {
+            bridgeAllReadyImageAssets_impl(self);
         }
 
         /// Register a scene together with its declared asset manifest.
