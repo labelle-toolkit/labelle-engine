@@ -1,5 +1,28 @@
 /// Scene mixin — scene registration, loading, transitions, and lifecycle.
 const std = @import("std");
+const builtin = @import("builtin");
+
+/// Collect every asset name currently registered in the catalog into a
+/// fresh allocator-owned slice. The returned slice borrows the name
+/// pointers from the catalog — they're string literals from the
+/// assembler-emitted `register` calls (program-lifetime), so the caller
+/// only needs to free the slice itself.
+///
+/// Used by `setScene` / `setSceneAtomic`'s dev-mode eager-fallback
+/// (issue #502): when a scene declares no `assets:`, in Debug builds we
+/// load every project resource so the scene renders without forcing
+/// the developer to author a manifest just to peek at it. Production
+/// builds keep the strict explicit-declaration behavior.
+fn collectAllRegisteredAssetNames(allocator: std.mem.Allocator, catalog: anytype) ![][]const u8 {
+    var list = std.ArrayList([]const u8){};
+    errdefer list.deinit(allocator);
+    try list.ensureTotalCapacityPrecise(allocator, catalog.entries.count());
+    var iter = catalog.entries.keyIterator();
+    while (iter.next()) |key| {
+        try list.append(allocator, key.*);
+    }
+    return list.toOwnedSlice(allocator);
+}
 
 /// Possible outcomes of the asset-manifest gate fired at the start
 /// of `setScene`/`setSceneAtomic` (Phase 2 of the Asset Streaming
@@ -270,10 +293,36 @@ pub fn Mixin(comptime Game: type) type {
             // the gate entirely. Scenes registered via the legacy
             // `registerSceneSimple` (no manifest) have `assets ==
             // &.{}` and behave identically to before this change.
-            const target_assets: []const []const u8 = if (self.scenes.get(name)) |e|
+            const declared_assets: []const []const u8 = if (self.scenes.get(name)) |e|
                 e.assets
             else
                 &.{};
+
+            // Dev-mode eager-load fallback (issue #502) — if the scene
+            // declared no assets and we're a Debug build, load every
+            // registered project resource so the scene renders without
+            // forcing the developer to author a manifest just to peek
+            // at it. Production builds keep the silent-black behavior:
+            // a missing manifest there is a real bug that should be
+            // caught during smoke tests, not papered over.
+            //
+            // The collected slice is freed at end-of-function. Names
+            // inside it are borrows of the catalog's keys (string
+            // literals from the assembler-emitted register calls), so
+            // they outlive this call comfortably.
+            var eager_buf: ?[][]const u8 = null;
+            defer if (eager_buf) |b| self.allocator.free(b);
+            const target_assets: []const []const u8 = if (declared_assets.len == 0 and comptime builtin.mode == .Debug) blk: {
+                const all = collectAllRegisteredAssetNames(self.allocator, &self.assets) catch break :blk declared_assets;
+                if (all.len == 0) {
+                    self.allocator.free(all);
+                    break :blk declared_assets;
+                }
+                std.log.info("[Scene] '{s}' has no manifest, eager-loaded {d} resources (Debug build)", .{ name, all.len });
+                eager_buf = all;
+                break :blk @as([]const []const u8, all);
+            } else declared_assets;
+
             if (!try gateOrDefer(self, "setScene", name, target_assets)) return;
 
             // Bridge catalog-uploaded image handles into
@@ -364,19 +413,34 @@ pub fn Mixin(comptime Game: type) type {
         pub fn setSceneAtomic(self: *Game, name: []const u8) !void {
             const entry = self.scenes.get(name) orelse return error.SceneNotFound;
 
+            // Dev-mode eager-load fallback (issue #502) — same logic as
+            // setScene, kept in sync. See setScene for the full rationale.
+            var eager_buf: ?[][]const u8 = null;
+            defer if (eager_buf) |b| self.allocator.free(b);
+            const target_assets: []const []const u8 = if (entry.assets.len == 0 and comptime builtin.mode == .Debug) blk: {
+                const all = collectAllRegisteredAssetNames(self.allocator, &self.assets) catch break :blk entry.assets;
+                if (all.len == 0) {
+                    self.allocator.free(all);
+                    break :blk entry.assets;
+                }
+                std.log.info("[Scene] '{s}' has no manifest, eager-loaded {d} resources (Debug build)", .{ name, all.len });
+                eager_buf = all;
+                break :blk @as([]const []const u8, all);
+            } else entry.assets;
+
             // Manifest gate — see `setScene` for the full
             // explanation. Both entry points participate in the
             // same idempotent acquire/release cycle so callers can
             // mix `setScene` and `setSceneAtomic` without confusing
             // the gate.
-            if (!try gateOrDefer(self, "setSceneAtomic", name, entry.assets)) return;
+            if (!try gateOrDefer(self, "setSceneAtomic", name, target_assets)) return;
 
-            bridgeImageAssetsToAtlasManager(self, entry.assets);
+            bridgeImageAssetsToAtlasManager(self, target_assets);
 
             const previous_name = if (self.current_scene_name) |n| self.allocator.dupe(u8, n) catch null else null;
             defer if (previous_name) |p| self.allocator.free(p);
 
-            self.emitHook(.{ .scene_assets_acquire = .{ .name = name, .assets = entry.assets } });
+            self.emitHook(.{ .scene_assets_acquire = .{ .name = name, .assets = target_assets } });
 
             // `scene_before_reset` fires BEFORE any entity
             // destruction — plugin controllers with per-world heap

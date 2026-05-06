@@ -292,6 +292,60 @@ test "Game: setSceneAtomic honors SceneEntry.initial_state (mirrors setScene)" {
     try testing.expectEqualStrings("playing", game.getState());
 }
 
+test "Game: setScene with no manifest acquires all registered assets in Debug (issue #502)" {
+    // The eager-fallback is comptime-gated to `builtin.mode == .Debug`.
+    // The test binary IS a Debug build (Zig's default for `zig build test`),
+    // so this exercises the production-path-of-record behavior.
+    var game = Game.init(testing.allocator);
+    defer game.deinit();
+
+    try game.assets.register("background", .image, "png", "fake-bytes-1");
+    try game.assets.register("ship", .image, "png", "fake-bytes-2");
+
+    const emptyLoader = struct {
+        fn load(_: *Game) anyerror!void {}
+    }.load;
+
+    // Scene registered without a manifest — exactly the case #502 fixes.
+    game.registerSceneSimple("debug/peek", emptyLoader);
+
+    // Pre-condition: no acquires yet.
+    try testing.expectEqual(@as(u32, 0), game.assets.entries.get("background").?.refcount);
+    try testing.expectEqual(@as(u32, 0), game.assets.entries.get("ship").?.refcount);
+
+    // setScene defers the swap (assets aren't .ready without a backend),
+    // but the eager-fallback should still have acquire'd them — that's
+    // the half of the gate this test pins. The deferred swap is fine.
+    _ = game.setScene("debug/peek") catch {};
+
+    try testing.expectEqual(@as(u32, 1), game.assets.entries.get("background").?.refcount);
+    try testing.expectEqual(@as(u32, 1), game.assets.entries.get("ship").?.refcount);
+}
+
+test "Game: setScene with explicit manifest does NOT eager-load other resources" {
+    // The fallback only fires when the scene's `assets:` is empty —
+    // a scene that explicitly opts in to one resource shouldn't
+    // accidentally pull in the rest of the project's catalog.
+    var game = Game.init(testing.allocator);
+    defer game.deinit();
+
+    try game.assets.register("declared", .image, "png", "a");
+    try game.assets.register("not_declared", .image, "png", "b");
+
+    const emptyLoader = struct {
+        fn load(_: *Game) anyerror!void {}
+    }.load;
+
+    game.registerSceneSimple("scoped", emptyLoader);
+    const manifest: []const []const u8 = &.{"declared"};
+    try game.setSceneAssets("scoped", manifest);
+
+    _ = game.setScene("scoped") catch {};
+
+    try testing.expectEqual(@as(u32, 1), game.assets.entries.get("declared").?.refcount);
+    try testing.expectEqual(@as(u32, 0), game.assets.entries.get("not_declared").?.refcount);
+}
+
 test "Game: setSceneAtomic without initial_state leaves game_state untouched" {
     var game = Game.init(testing.allocator);
     defer game.deinit();
