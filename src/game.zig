@@ -916,6 +916,7 @@ pub fn GameConfig(
         pub const queueSceneChangeAtomic = SceneMixin.queueSceneChangeAtomic;
         pub const getCurrentSceneName = SceneMixin.getCurrentSceneName;
         pub const pendingSceneName = SceneMixin.pendingSceneName;
+        pub const bridgeAllReadyImageAssets = SceneMixin.bridgeAllReadyImageAssets;
 
         /// Register a runtime JSONC scene by name.
         /// The scene file is loaded from disk when setScene() is called.
@@ -1243,6 +1244,15 @@ pub fn GameConfig(
             // through pause states.
             self.assets.pump();
 
+            // Wire late-uploaded atlases into atlas_manager (#508). The
+            // setScene-time bridge is a no-op for any asset that wasn't
+            // .ready yet (eager-fallback path completes setScene before
+            // assets reach .ready). Without this per-tick walk those
+            // atlases keep texture_id=0, every sprite samples from
+            // texture 0, and rendering looks wrong. Idempotent — already-
+            // bridged atlases are silently skipped.
+            self.bridgeAllReadyImageAssets();
+
             // Always run: logging, audio, input, renderer sync, gizmo reconciliation.
             // These must run even when paused so the game remains responsive.
             self.log.update(dt);
@@ -1517,6 +1527,11 @@ pub fn GameConfig(
                     return err;
                 }
                 self.assets.pump();
+                // Don't bridge here — `loadAtlasIfNeeded` (the shim
+                // calling this loop) does its own `markPendingLoaded`
+                // after the asset reaches .ready, and double-bridging
+                // returns AtlasNotPending. The main tick loop catches
+                // late-uploaded atlases for the eager-fallback path.
                 std.Thread.yield() catch {};
             }
 
