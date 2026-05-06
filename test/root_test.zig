@@ -359,6 +359,11 @@ test "Game: pendingSceneName returns target name during asset-loading deferral (
     // to see `getCurrentSceneName() == null` and erroneously assume
     // no scene was loaded. `pendingSceneName()` lets them tell the
     // difference between "no swap requested" and "swap in flight".
+    //
+    // Use a declared manifest (not the eager-fallback) so the gate
+    // engages and defers. Post-#506 the eager-fallback path skips
+    // the gate, so this test must explicitly set assets to exercise
+    // the deferral semantics it cares about.
     var game = Game.init(testing.allocator);
     defer game.deinit();
 
@@ -369,6 +374,8 @@ test "Game: pendingSceneName returns target name during asset-loading deferral (
     }.load;
 
     game.registerSceneSimple("late_loader", emptyLoader);
+    const manifest: []const []const u8 = &.{"background"};
+    try game.setSceneAssets("late_loader", manifest);
 
     // Asset is .registered (not .ready) — gate will defer.
     _ = game.setScene("late_loader") catch {};
@@ -377,6 +384,35 @@ test "Game: pendingSceneName returns target name during asset-loading deferral (
     // marker reflects the user's intent.
     try testing.expect(game.getCurrentSceneName() == null);
     try testing.expectEqualStrings("late_loader", game.pendingSceneName().?);
+}
+
+test "Game: eager-fallback completes setScene even when assets aren't .ready (issue #506)" {
+    // Regression check: pre-#506 the eager-fallback routed through the
+    // same allReady gate as a declared manifest, so a setScene call
+    // would defer forever — no retrier exists for non-main scenes,
+    // and the assembler-emitted main.zig only calls setScene once.
+    // The fix: eager-fallback path uses acquireImmediately, accepting
+    // progressive atlas pop-in.
+    var game = Game.init(testing.allocator);
+    defer game.deinit();
+
+    try game.assets.register("background", .image, "png", "fake-bytes-1");
+    try game.assets.register("ship", .image, "png", "fake-bytes-2");
+    // Note: assets stay in `.registered` state — no backend, never reach .ready.
+
+    const emptyLoader = struct {
+        fn load(_: *Game) anyerror!void {}
+    }.load;
+
+    game.registerSceneSimple("debug/peek", emptyLoader);
+
+    _ = game.setScene("debug/peek") catch {};
+
+    // The swap committed despite assets not being .ready.
+    try testing.expectEqualStrings("debug/peek", game.getCurrentSceneName().?);
+    try testing.expect(game.pendingSceneName() == null);
+    try testing.expectEqual(@as(u32, 1), game.assets.entries.get("background").?.refcount);
+    try testing.expectEqual(@as(u32, 1), game.assets.entries.get("ship").?.refcount);
 }
 
 test "Game: pendingSceneName clears after the swap commits" {

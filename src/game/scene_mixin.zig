@@ -44,6 +44,34 @@ const ManifestGate = union(enum) {
     asset_error: anyerror,
 };
 
+/// Acquire any not-yet-acquired assets in `target_assets`. Idempotent
+/// across frames via `game.pending_scene_assets`. Used by both the
+/// readiness gate (`gateOnManifest`) and the dev-mode eager-fallback
+/// (`acquireImmediately`) — separates the acquire batch from the
+/// classify step so the eager-fallback can skip the `allReady` wait
+/// without duplicating the rollback logic. See issue #506.
+fn acquireBatch(game: anytype, target_name: []const u8, target_assets: []const []const u8) !void {
+    const already_acquired = if (game.pending_scene_assets) |p|
+        std.mem.eql(u8, p, target_name)
+    else
+        false;
+    if (already_acquired) return;
+
+    for (target_assets) |asset_name| {
+        _ = game.assets.acquire(asset_name) catch |err| {
+            // Roll back any prior acquires in this batch.
+            for (target_assets) |rb| {
+                if (game.assets.entries.getPtr(rb)) |e| {
+                    if (e.refcount > 0) game.assets.release(rb);
+                }
+            }
+            return err;
+        };
+    }
+    if (game.pending_scene_assets) |old| game.allocator.free(old);
+    game.pending_scene_assets = game.allocator.dupe(u8, target_name) catch null;
+}
+
 /// Acquire any not-yet-acquired assets in `target_assets`, then
 /// classify the current state. Idempotent across frames via
 /// `game.pending_scene_assets` — same scene name = same acquire
@@ -51,30 +79,24 @@ const ManifestGate = union(enum) {
 fn gateOnManifest(game: anytype, target_name: []const u8, target_assets: []const []const u8) ManifestGate {
     if (target_assets.len == 0) return .proceed;
 
-    const already_acquired = if (game.pending_scene_assets) |p|
-        std.mem.eql(u8, p, target_name)
-    else
-        false;
-
-    if (!already_acquired) {
-        for (target_assets) |asset_name| {
-            _ = game.assets.acquire(asset_name) catch |err| {
-                // Roll back any prior acquires in this batch.
-                for (target_assets) |rb| {
-                    if (game.assets.entries.getPtr(rb)) |e| {
-                        if (e.refcount > 0) game.assets.release(rb);
-                    }
-                }
-                return .{ .acquire_error = err };
-            };
-        }
-        if (game.pending_scene_assets) |old| game.allocator.free(old);
-        game.pending_scene_assets = game.allocator.dupe(u8, target_name) catch null;
-    }
+    acquireBatch(game, target_name, target_assets) catch |err| {
+        return .{ .acquire_error = err };
+    };
 
     if (game.assets.anyFailed(target_assets)) |err| return .{ .asset_error = err };
     if (!game.assets.allReady(target_assets)) return .not_ready;
     return .proceed;
+}
+
+/// Acquire-and-proceed counterpart to `gateOnManifest`. Used by the
+/// dev-mode eager-fallback (#502/#503) to skip the `allReady` wait —
+/// no retrier exists for non-`main` scenes (issue #506) and pop-in is
+/// acceptable in Debug. Production-path scenes with declared
+/// manifests still go through `gateOnManifest` and its readiness
+/// gate. The acquire-batch error path remains the same.
+fn acquireImmediately(game: anytype, target_name: []const u8, target_assets: []const []const u8) !void {
+    if (target_assets.len == 0) return;
+    try acquireBatch(game, target_name, target_assets);
 }
 
 /// Run the gate and interpret the result. Returns `true` iff the
@@ -323,7 +345,17 @@ pub fn Mixin(comptime Game: type) type {
                 break :blk @as([]const []const u8, all);
             } else declared_assets;
 
-            if (!try gateOrDefer(self, "setScene", name, target_assets)) return;
+            // Manifest gate: eager-fallback skips the allReady wait
+            // and proceeds with whatever's currently loaded, accepting
+            // progressive atlas pop-in. The assembler-emitted main.zig
+            // calls setScene exactly once at startup, and there's no
+            // retrier for non-main scenes — without this branch, an
+            // eager-fallback that defers stays pending forever (issue
+            // #506). Production scenes with declared manifests still
+            // go through the full gate.
+            if (eager_buf != null) {
+                try acquireImmediately(self, name, target_assets);
+            } else if (!try gateOrDefer(self, "setScene", name, target_assets)) return;
 
             // Bridge catalog-uploaded image handles into
             // atlas_manager so findSprite can return the right
@@ -433,7 +465,12 @@ pub fn Mixin(comptime Game: type) type {
             // same idempotent acquire/release cycle so callers can
             // mix `setScene` and `setSceneAtomic` without confusing
             // the gate.
-            if (!try gateOrDefer(self, "setSceneAtomic", name, target_assets)) return;
+            //
+            // Eager-fallback skips allReady (issue #506); see setScene
+            // for the rationale.
+            if (eager_buf != null) {
+                try acquireImmediately(self, name, target_assets);
+            } else if (!try gateOrDefer(self, "setSceneAtomic", name, target_assets)) return;
 
             bridgeImageAssetsToAtlasManager(self, target_assets);
 
