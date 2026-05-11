@@ -690,6 +690,7 @@ pub fn GameConfig(
         pub const removeShape = Visuals.removeShape;
         pub const removeText = Visuals.removeText;
         pub const setZIndex = Visuals.setZIndex;
+        pub const setSpriteFlip = Visuals.setSpriteFlip;
 
         // ── View collection helpers (#510) ────────────────────────
         //

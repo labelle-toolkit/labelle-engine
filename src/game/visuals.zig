@@ -89,5 +89,23 @@ pub fn Mixin(comptime Game: type) type {
                 self.renderer.markVisualDirty(entity);
             }
         }
+
+        /// Set the sprite's horizontal flip and mark the entity's visuals
+        /// dirty so the renderer picks up the change on the next sync.
+        ///
+        /// Bundles the `sprite.flip_x = X` + `renderer.markVisualDirty(entity)`
+        /// pair that callers previously had to write by hand — forgetting the
+        /// dirty-mark was a silent bug (visual stayed stale).
+        ///
+        /// Returns silently if the entity has no `Sprite` component — callers
+        /// that need to assert presence should `getComponent` themselves first.
+        /// Short-circuits when the flip value already matches, avoiding a
+        /// wasted dirty-mark.
+        pub fn setSpriteFlip(self: *Game, entity: Entity, flip_x: bool) void {
+            const sprite = self.ecs_backend.getComponent(entity, Sprite) orelse return;
+            if (sprite.flip_x == flip_x) return;
+            sprite.flip_x = flip_x;
+            self.renderer.markVisualDirty(entity);
+        }
     };
 }
