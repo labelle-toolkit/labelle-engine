@@ -162,3 +162,126 @@ test "collectEntitiesBuf: exclude tuple drops matching entities" {
     try testing.expectEqual(@as(usize, 1), n);
     try testing.expectEqual(alive, buf[0]);
 }
+
+// ── Predicate variants ──────────────────────────────────────────────
+
+/// Test-local predicate. Returns true when the entity's Health is
+/// at or below zero — the kind of runtime field check the
+/// comptime include / exclude tuple can't express.
+fn isCritical(game: *TestGame, entity: TestGame.EntityType) bool {
+    const h = game.ecs_backend.getComponent(entity, Health) orelse return false;
+    return h.current <= 0;
+}
+
+test "collectEntitiesIf: filters by runtime field check" {
+    var game = TestGame.init(testing.allocator);
+    defer game.deinit();
+
+    const healthy = game.createEntity();
+    const critical = game.createEntity();
+    game.ecs_backend.addComponent(healthy, Health{ .current = 80 });
+    game.ecs_backend.addComponent(critical, Health{ .current = 0 });
+
+    var list = try game.collectEntitiesIf(.{Health}, .{}, testing.allocator, isCritical);
+    defer list.deinit(testing.allocator);
+
+    try testing.expectEqual(@as(usize, 1), list.items.len);
+    try testing.expectEqual(critical, list.items[0]);
+}
+
+test "collectEntitiesIf: predicate returning false on every entity yields an empty list" {
+    var game = TestGame.init(testing.allocator);
+    defer game.deinit();
+
+    const e = game.createEntity();
+    game.ecs_backend.addComponent(e, Health{ .current = 100 });
+
+    var list = try game.collectEntitiesIf(.{Health}, .{}, testing.allocator, isCritical);
+    defer list.deinit(testing.allocator);
+
+    try testing.expectEqual(@as(usize, 0), list.items.len);
+}
+
+test "collectEntitiesIf: predicate composes with exclude tuple" {
+    // Two critical entities; the predicate would accept both, but
+    // the `Dying` exclude filter strips one before the predicate
+    // sees it. Proves the predicate runs *after* the view filter,
+    // not as a replacement.
+    var game = TestGame.init(testing.allocator);
+    defer game.deinit();
+
+    const e1 = game.createEntity();
+    const e2 = game.createEntity();
+    game.ecs_backend.addComponent(e1, Health{ .current = 0 });
+    game.ecs_backend.addComponent(e2, Health{ .current = 0 });
+    game.ecs_backend.addComponent(e2, Dying{});
+
+    var list = try game.collectEntitiesIf(.{Health}, .{Dying}, testing.allocator, isCritical);
+    defer list.deinit(testing.allocator);
+
+    try testing.expectEqual(@as(usize, 1), list.items.len);
+    try testing.expectEqual(e1, list.items[0]);
+}
+
+test "collectEntitiesBufIf: predicate variant fills stack buffer" {
+    var game = TestGame.init(testing.allocator);
+    defer game.deinit();
+
+    var i: usize = 0;
+    while (i < 5) : (i += 1) {
+        const ent = game.createEntity();
+        // Half critical, half healthy.
+        game.ecs_backend.addComponent(ent, Health{
+            .current = if (i % 2 == 0) 0 else 50,
+        });
+    }
+
+    var buf: [8]@TypeOf(game).EntityType = undefined;
+    var overflowed = false;
+    const n = game.collectEntitiesBufIf(.{Health}, .{}, &buf, &overflowed, isCritical);
+    // 3 critical entities (indices 0, 2, 4) — predicate accepts.
+    try testing.expectEqual(@as(usize, 3), n);
+    try testing.expect(!overflowed);
+}
+
+test "collectEntitiesBufIf: overflowed fires when accepted set exceeds the buffer" {
+    // All accepted, more than the buffer holds — overflow trips.
+    var game = TestGame.init(testing.allocator);
+    defer game.deinit();
+
+    var i: usize = 0;
+    while (i < 10) : (i += 1) {
+        const ent = game.createEntity();
+        game.ecs_backend.addComponent(ent, Health{ .current = 0 }); // all critical
+    }
+
+    var buf: [4]@TypeOf(game).EntityType = undefined;
+    var overflowed = false;
+    const n = game.collectEntitiesBufIf(.{Health}, .{}, &buf, &overflowed, isCritical);
+    try testing.expectEqual(@as(usize, 4), n);
+    try testing.expect(overflowed);
+}
+
+test "collectEntitiesBufIf: predicate-rejected entities don't count toward the cap" {
+    // Mix: 3 accepted + 7 rejected, buffer holds 5. The 7 rejects
+    // do NOT trip the overflow flag — only entities the predicate
+    // accepts count toward the cap. Caught by Copilot review:
+    // the previous test labelled this behavior but actually
+    // exercised the all-accepted overflow case instead.
+    var game = TestGame.init(testing.allocator);
+    defer game.deinit();
+
+    var i: usize = 0;
+    while (i < 10) : (i += 1) {
+        const ent = game.createEntity();
+        game.ecs_backend.addComponent(ent, Health{
+            .current = if (i < 3) 0 else 80, // 3 critical, 7 healthy
+        });
+    }
+
+    var buf: [5]@TypeOf(game).EntityType = undefined;
+    var overflowed = false;
+    const n = game.collectEntitiesBufIf(.{Health}, .{}, &buf, &overflowed, isCritical);
+    try testing.expectEqual(@as(usize, 3), n);
+    try testing.expect(!overflowed);
+}

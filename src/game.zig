@@ -759,6 +759,86 @@ pub fn GameConfig(
             return count;
         }
 
+        /// Same shape as `collectEntities`, with an extra runtime
+        /// `predicate(self, entity) bool` filter. Use when the
+        /// caller needs to check a component **field value** (or any
+        /// derived condition) — the comptime include / exclude
+        /// tuple only filters on component existence. The predicate
+        /// receives the live `Game` pointer so it can
+        /// `getComponent(...)` for whatever runtime state the
+        /// filter inspects.
+        ///
+        /// **Predicate contract: read-only.** The whole point of the
+        /// `collect*` helpers is to *avoid* mutating the world
+        /// inside the view's iteration. The predicate runs while
+        /// the iterator is live; adding / removing components or
+        /// destroying entities from inside it risks the same
+        /// concurrent-mutation hazard the helpers exist to dodge.
+        /// Use the predicate to *inspect* state (via
+        /// `getComponent`, etc.); commit mutations in the loop the
+        /// caller writes over the returned list.
+        pub fn collectEntitiesIf(
+            self: *Self,
+            comptime include: anytype,
+            comptime exclude: anytype,
+            allocator: std.mem.Allocator,
+            predicate: *const fn (*Self, Entity) bool,
+        ) !std.ArrayList(Entity) {
+            var buf: std.ArrayList(Entity) = .{};
+            errdefer buf.deinit(allocator);
+            var view = self.ecs_backend.view(include, exclude);
+            defer view.deinit();
+            while (view.next()) |ent| {
+                if (predicate(self, ent)) {
+                    try buf.append(allocator, ent);
+                }
+            }
+            return buf;
+        }
+
+        /// Same shape as `collectEntitiesBuf`, with the runtime
+        /// `predicate` filter. Useful for the per-tick scan path
+        /// where the worst case is bounded and a heap allocation
+        /// per frame would be wasteful — same `overflowed`
+        /// out-pointer contract.
+        ///
+        /// **Predicate contract: read-only** — same rule as
+        /// `collectEntitiesIf`. The hot-path stack variant is the
+        /// one most likely to be tempted with a per-tick mutation
+        /// inside the predicate; resist. Inspect only.
+        ///
+        /// On overflow the iteration breaks early: once the buffer
+        /// is full and we've seen one more predicate-accepted
+        /// entity, there's nothing the caller can do with the rest
+        /// (they go in next tick's pass), so spending more
+        /// predicate calls is wasted work. Predicate-rejected
+        /// entities don't count toward the cap — a view full of
+        /// rejects never trips the overflow flag.
+        pub fn collectEntitiesBufIf(
+            self: *Self,
+            comptime include: anytype,
+            comptime exclude: anytype,
+            buf: []Entity,
+            overflowed: *bool,
+            predicate: *const fn (*Self, Entity) bool,
+        ) usize {
+            overflowed.* = false;
+            var count: usize = 0;
+            var view = self.ecs_backend.view(include, exclude);
+            defer view.deinit();
+            while (view.next()) |ent| {
+                if (!predicate(self, ent)) continue;
+                if (count < buf.len) {
+                    buf[count] = ent;
+                    count += 1;
+                } else {
+                    overflowed.* = true;
+                    break;
+                }
+            }
+            return count;
+        }
+
         // ── Position & Hierarchy ──────────────────────────────────
 
         pub fn setPosition(self: *Self, entity: Entity, pos: Position) void {
