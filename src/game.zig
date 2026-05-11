@@ -767,6 +767,16 @@ pub fn GameConfig(
         /// receives the live `Game` pointer so it can
         /// `getComponent(...)` for whatever runtime state the
         /// filter inspects.
+        ///
+        /// **Predicate contract: read-only.** The whole point of the
+        /// `collect*` helpers is to *avoid* mutating the world
+        /// inside the view's iteration. The predicate runs while
+        /// the iterator is live; adding / removing components or
+        /// destroying entities from inside it risks the same
+        /// concurrent-mutation hazard the helpers exist to dodge.
+        /// Use the predicate to *inspect* state (via
+        /// `getComponent`, etc.); commit mutations in the loop the
+        /// caller writes over the returned list.
         pub fn collectEntitiesIf(
             self: *Self,
             comptime include: anytype,
@@ -791,6 +801,19 @@ pub fn GameConfig(
         /// where the worst case is bounded and a heap allocation
         /// per frame would be wasteful — same `overflowed`
         /// out-pointer contract.
+        ///
+        /// **Predicate contract: read-only** — same rule as
+        /// `collectEntitiesIf`. The hot-path stack variant is the
+        /// one most likely to be tempted with a per-tick mutation
+        /// inside the predicate; resist. Inspect only.
+        ///
+        /// On overflow the iteration breaks early: once the buffer
+        /// is full and we've seen one more predicate-accepted
+        /// entity, there's nothing the caller can do with the rest
+        /// (they go in next tick's pass), so spending more
+        /// predicate calls is wasted work. Predicate-rejected
+        /// entities don't count toward the cap — a view full of
+        /// rejects never trips the overflow flag.
         pub fn collectEntitiesBufIf(
             self: *Self,
             comptime include: anytype,
@@ -810,6 +833,7 @@ pub fn GameConfig(
                     count += 1;
                 } else {
                     overflowed.* = true;
+                    break;
                 }
             }
             return count;

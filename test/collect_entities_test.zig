@@ -244,9 +244,8 @@ test "collectEntitiesBufIf: predicate variant fills stack buffer" {
     try testing.expect(!overflowed);
 }
 
-test "collectEntitiesBufIf: overflowed fires only on predicate-accepted entities" {
-    // Buffer is smaller than the *accepted* set — entities the
-    // predicate rejects don't count toward the cap.
+test "collectEntitiesBufIf: overflowed fires when accepted set exceeds the buffer" {
+    // All accepted, more than the buffer holds — overflow trips.
     var game = TestGame.init(testing.allocator);
     defer game.deinit();
 
@@ -261,4 +260,28 @@ test "collectEntitiesBufIf: overflowed fires only on predicate-accepted entities
     const n = game.collectEntitiesBufIf(.{Health}, .{}, &buf, &overflowed, isCritical);
     try testing.expectEqual(@as(usize, 4), n);
     try testing.expect(overflowed);
+}
+
+test "collectEntitiesBufIf: predicate-rejected entities don't count toward the cap" {
+    // Mix: 3 accepted + 7 rejected, buffer holds 5. The 7 rejects
+    // do NOT trip the overflow flag — only entities the predicate
+    // accepts count toward the cap. Caught by Copilot review:
+    // the previous test labelled this behavior but actually
+    // exercised the all-accepted overflow case instead.
+    var game = TestGame.init(testing.allocator);
+    defer game.deinit();
+
+    var i: usize = 0;
+    while (i < 10) : (i += 1) {
+        const ent = game.createEntity();
+        game.ecs_backend.addComponent(ent, Health{
+            .current = if (i < 3) 0 else 80, // 3 critical, 7 healthy
+        });
+    }
+
+    var buf: [5]@TypeOf(game).EntityType = undefined;
+    var overflowed = false;
+    const n = game.collectEntitiesBufIf(.{Health}, .{}, &buf, &overflowed, isCritical);
+    try testing.expectEqual(@as(usize, 3), n);
+    try testing.expect(!overflowed);
 }
