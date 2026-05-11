@@ -187,6 +187,12 @@ pub fn Mixin(comptime Game: type) type {
         }
 
         /// Collect entities from a view into an ArrayList, closing the view after.
+        ///
+        /// Local convenience over the public `Game.collectEntities`
+        /// (game.zig). save/load callers reach the ecs backend
+        /// directly (no `Game` handle in scope), so this thin
+        /// wrapper keeps the same single-type signature while the
+        /// shape stays identical to the public helper.
         fn collectEntities(comptime T: type, ecs: anytype, allocator: std.mem.Allocator) !std.ArrayList(Entity) {
             var buf: std.ArrayList(Entity) = .{};
             errdefer buf.deinit(allocator);

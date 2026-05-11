@@ -58,6 +58,7 @@ pub fn build(b: *std.Build) void {
         "test/jsonc/bridge_deserialize_test.zig",
         "test/jsonc/deserializer_test.zig",
         "test/jsonc_bridge_gizmo_visibility_test.zig",
+        "test/collect_entities_test.zig",
     };
 
     for (test_files) |test_file| {
