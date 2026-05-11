@@ -691,6 +691,74 @@ pub fn GameConfig(
         pub const removeText = Visuals.removeText;
         pub const setZIndex = Visuals.setZIndex;
 
+        // ── View collection helpers (#510) ────────────────────────
+        //
+        // Iterating an ECS view while mutating the world (adding /
+        // removing components, destroying entities) risks
+        // invalidating the iterator on backends that don't tolerate
+        // concurrent mutation. The two helpers below absorb the
+        // "collect first, then mutate" boilerplate every dispatcher
+        // / hook / tick was hand-rolling.
+        //
+        // Both forward `include` and `exclude` straight to
+        // `self.active_world.ecs_backend.view(include, exclude)` and
+        // close the view via `defer view.deinit()`. The include /
+        // exclude tuple shape mirrors what the caller would have
+        // passed to `view` directly, so the migration from
+        // hand-rolled to helper is just lifting the iteration
+        // boilerplate out.
+
+        /// Heap-allocated collection. Returns an `ArrayList(Entity)`
+        /// the caller `deinit`s. Picks the heap path when the
+        /// expected size is unknown or large (save / load,
+        /// debug-snapshot scans, one-shot batch ops).
+        pub fn collectEntities(
+            self: *Self,
+            comptime include: anytype,
+            comptime exclude: anytype,
+            allocator: std.mem.Allocator,
+        ) !std.ArrayList(Entity) {
+            var buf: std.ArrayList(Entity) = .{};
+            errdefer buf.deinit(allocator);
+            var view = self.ecs_backend.view(include, exclude);
+            defer view.deinit();
+            while (view.next()) |ent| {
+                try buf.append(allocator, ent);
+            }
+            return buf;
+        }
+
+        /// Stack-allocated collection. Fills `buf` and returns the
+        /// number of entities written. Sets `overflowed.*` to true
+        /// if the view contained more entities than `buf.len`. Use
+        /// for per-tick scans where allocating in the hot loop
+        /// would be wasteful and the worst-case set is bounded.
+        ///
+        /// On overflow the caller decides what to do — typically
+        /// `log.warn(...)` + retry next frame (matches the existing
+        /// `sleep_hooks.frame_end` convention).
+        pub fn collectEntitiesBuf(
+            self: *Self,
+            comptime include: anytype,
+            comptime exclude: anytype,
+            buf: []Entity,
+            overflowed: *bool,
+        ) usize {
+            overflowed.* = false;
+            var count: usize = 0;
+            var view = self.ecs_backend.view(include, exclude);
+            defer view.deinit();
+            while (view.next()) |ent| {
+                if (count < buf.len) {
+                    buf[count] = ent;
+                    count += 1;
+                } else {
+                    overflowed.* = true;
+                }
+            }
+            return count;
+        }
+
         // ── Position & Hierarchy ──────────────────────────────────
 
         pub fn setPosition(self: *Self, entity: Entity, pos: Position) void {
