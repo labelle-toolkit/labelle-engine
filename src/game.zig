@@ -759,6 +759,62 @@ pub fn GameConfig(
             return count;
         }
 
+        /// Same shape as `collectEntities`, with an extra runtime
+        /// `predicate(self, entity) bool` filter. Use when the
+        /// caller needs to check a component **field value** (or any
+        /// derived condition) — the comptime include / exclude
+        /// tuple only filters on component existence. The predicate
+        /// receives the live `Game` pointer so it can
+        /// `getComponent(...)` for whatever runtime state the
+        /// filter inspects.
+        pub fn collectEntitiesIf(
+            self: *Self,
+            comptime include: anytype,
+            comptime exclude: anytype,
+            allocator: std.mem.Allocator,
+            predicate: *const fn (*Self, Entity) bool,
+        ) !std.ArrayList(Entity) {
+            var buf: std.ArrayList(Entity) = .{};
+            errdefer buf.deinit(allocator);
+            var view = self.ecs_backend.view(include, exclude);
+            defer view.deinit();
+            while (view.next()) |ent| {
+                if (predicate(self, ent)) {
+                    try buf.append(allocator, ent);
+                }
+            }
+            return buf;
+        }
+
+        /// Same shape as `collectEntitiesBuf`, with the runtime
+        /// `predicate` filter. Useful for the per-tick scan path
+        /// where the worst case is bounded and a heap allocation
+        /// per frame would be wasteful — same `overflowed`
+        /// out-pointer contract.
+        pub fn collectEntitiesBufIf(
+            self: *Self,
+            comptime include: anytype,
+            comptime exclude: anytype,
+            buf: []Entity,
+            overflowed: *bool,
+            predicate: *const fn (*Self, Entity) bool,
+        ) usize {
+            overflowed.* = false;
+            var count: usize = 0;
+            var view = self.ecs_backend.view(include, exclude);
+            defer view.deinit();
+            while (view.next()) |ent| {
+                if (!predicate(self, ent)) continue;
+                if (count < buf.len) {
+                    buf[count] = ent;
+                    count += 1;
+                } else {
+                    overflowed.* = true;
+                }
+            }
+            return count;
+        }
+
         // ── Position & Hierarchy ──────────────────────────────────
 
         pub fn setPosition(self: *Self, entity: Entity, pos: Position) void {
