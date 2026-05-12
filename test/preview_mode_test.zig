@@ -12,6 +12,8 @@ const preview_mode = engine.preview_mode_mod;
 
 const Preview = preview_mode.Preview;
 const ByeReason = preview_mode.ByeReason;
+const BinaryFrameKind = preview_mode.BinaryFrameKind;
+const binary_magic = preview_mode.binary_magic;
 
 test "parseArgs: returns null when flag is absent" {
     const argv = [_][]const u8{ "game", "--scene=main" };
@@ -89,7 +91,69 @@ const LoopbackHarness = struct {
             self.read_len += n;
         }
     }
+
+    /// Read exactly `n` bytes from the inbound buffer, blocking on
+    /// the socket if more is needed. Used by binary-frame readers.
+    fn readExact(self: *LoopbackHarness, out: []u8) !void {
+        const stream = self.conn.?.stream;
+        while (self.read_len < out.len) {
+            const n = try stream.read(self.read_buf[self.read_len..]);
+            if (n == 0) return error.EndOfStream;
+            self.read_len += n;
+        }
+        @memcpy(out, self.read_buf[0..out.len]);
+        const remaining = self.read_len - out.len;
+        std.mem.copyForwards(u8, self.read_buf[0..remaining], self.read_buf[out.len..self.read_len]);
+        self.read_len = remaining;
+    }
+
+    /// Read one binary frame: `[magic][kind][u32 len][payload]`.
+    /// Asserts the magic byte. Returns `kind` + a copy of the payload
+    /// in `out` (truncated to `out.len`).
+    fn readBinaryFrame(self: *LoopbackHarness, out: []u8) !struct { kind: u8, payload: []u8 } {
+        var header: [6]u8 = undefined;
+        try self.readExact(&header);
+        if (header[0] != binary_magic) return error.NotBinaryFrame;
+        const kind = header[1];
+        const len = std.mem.readInt(u32, header[2..6], .little);
+        if (len > out.len) return error.PayloadBufferTooSmall;
+        try self.readExact(out[0..len]);
+        return .{ .kind = kind, .payload = out[0..len] };
+    }
+
+    /// Peek the next byte without consuming. Blocks until at least
+    /// one byte is available.
+    fn peekByte(self: *LoopbackHarness) !u8 {
+        const stream = self.conn.?.stream;
+        while (self.read_len == 0) {
+            const n = try stream.read(self.read_buf[self.read_len..]);
+            if (n == 0) return error.EndOfStream;
+            self.read_len += n;
+        }
+        return self.read_buf[0];
+    }
+
+    /// Editor → engine direction: write a newline-terminated JSON
+    /// frame to the accepted connection.
+    fn writeJsonLine(self: *LoopbackHarness, line: []const u8) !void {
+        const stream = self.conn.?.stream;
+        try stream.writeAll(line);
+        try stream.writeAll("\n");
+    }
 };
+
+/// Spin until `preview.pollSubscription` reports a non-empty filter
+/// set. Bounded so a broken implementation can't hang the test runner.
+fn waitForSubscription(preview: *Preview, comp_name: []const u8, deadline_ms: u64) !void {
+    const start = std.time.milliTimestamp();
+    while (true) {
+        try preview.pollSubscription();
+        if (preview.isComponentSubscribed(comp_name)) return;
+        const now = std.time.milliTimestamp();
+        if (now - start > @as(i64, @intCast(deadline_ms))) return error.SubscriptionDeadlineExceeded;
+        std.Thread.sleep(1 * std.time.ns_per_ms);
+    }
+}
 
 test "Preview: hello round-trip over loopback TCP" {
     const allocator = std.testing.allocator;
@@ -239,6 +303,227 @@ test "Preview: full lifecycle — hello, heartbeats, bye, EOF" {
     var eof_buf: [16]u8 = undefined;
     const n = try harness.conn.?.stream.read(&eof_buf);
     try std.testing.expectEqual(@as(usize, 0), n);
+}
+
+// ── Phase 2 / #518 — binary state telemetry ─────────────────────────
+
+test "emitEntityCreated: writes magic+kind+length+payload with optional prefab name" {
+    const allocator = std.testing.allocator;
+    var harness = try LoopbackHarness.init();
+    defer harness.deinit();
+
+    var host_port_buf: [32]u8 = undefined;
+    const host_port = try harness.hostPort(&host_port_buf);
+    var preview = try Preview.connect(allocator, host_port);
+    defer preview.deinit();
+    try harness.accept();
+
+    try preview.emitEntityCreated(42, "Player");
+
+    var payload_buf: [256]u8 = undefined;
+    const frame = try harness.readBinaryFrame(&payload_buf);
+    try std.testing.expectEqual(@intFromEnum(BinaryFrameKind.entity_created), frame.kind);
+    try std.testing.expectEqual(@as(u64, 42), std.mem.readInt(u64, frame.payload[0..8], .little));
+    try std.testing.expectEqual(@as(u16, 6), std.mem.readInt(u16, frame.payload[8..10], .little));
+    try std.testing.expectEqualStrings("Player", frame.payload[10..16]);
+
+    // null prefab name → name_len = 0, no name bytes.
+    try preview.emitEntityCreated(43, null);
+    const frame2 = try harness.readBinaryFrame(&payload_buf);
+    try std.testing.expectEqual(@intFromEnum(BinaryFrameKind.entity_created), frame2.kind);
+    try std.testing.expectEqual(@as(u64, 43), std.mem.readInt(u64, frame2.payload[0..8], .little));
+    try std.testing.expectEqual(@as(u16, 0), std.mem.readInt(u16, frame2.payload[8..10], .little));
+    try std.testing.expectEqual(@as(usize, 10), frame2.payload.len);
+}
+
+test "emitEntityDestroyed: writes magic+kind+length+entity_id" {
+    const allocator = std.testing.allocator;
+    var harness = try LoopbackHarness.init();
+    defer harness.deinit();
+
+    var host_port_buf: [32]u8 = undefined;
+    const host_port = try harness.hostPort(&host_port_buf);
+    var preview = try Preview.connect(allocator, host_port);
+    defer preview.deinit();
+    try harness.accept();
+
+    try preview.emitEntityDestroyed(0xDEADBEEF);
+
+    var payload_buf: [64]u8 = undefined;
+    const frame = try harness.readBinaryFrame(&payload_buf);
+    try std.testing.expectEqual(@intFromEnum(BinaryFrameKind.entity_destroyed), frame.kind);
+    try std.testing.expectEqual(@as(usize, 8), frame.payload.len);
+    try std.testing.expectEqual(@as(u64, 0xDEADBEEF), std.mem.readInt(u64, frame.payload[0..8], .little));
+}
+
+test "emitComponentChanged: only emits when component is subscribed" {
+    const allocator = std.testing.allocator;
+    var harness = try LoopbackHarness.init();
+    defer harness.deinit();
+
+    var host_port_buf: [32]u8 = undefined;
+    const host_port = try harness.hostPort(&host_port_buf);
+    var preview = try Preview.connect(allocator, host_port);
+    defer preview.deinit();
+    try harness.accept();
+
+    // Default: empty subscription set → no traffic.
+    try std.testing.expect(!preview.isComponentSubscribed("Position"));
+    try preview.emitComponentChanged(1, "Position", "ignored");
+
+    // Subscribe via the editor → engine path.
+    try harness.writeJsonLine("{\"kind\":\"subscribe\",\"components\":[\"Position\"]}");
+    try waitForSubscription(&preview, "Position", 1000);
+    try std.testing.expect(preview.isComponentSubscribed("Position"));
+
+    // Subscribed components ride the wire; the wrong-name path stays silent.
+    try preview.emitComponentChanged(7, "Velocity", "still ignored");
+    try preview.emitComponentChanged(7, "Position", &[_]u8{ 0x11, 0x22, 0x33, 0x44 });
+
+    var payload_buf: [256]u8 = undefined;
+    const frame = try harness.readBinaryFrame(&payload_buf);
+    try std.testing.expectEqual(@intFromEnum(BinaryFrameKind.component_changed), frame.kind);
+    // [u64 entity_id][u16 name_len][name][u32 data_len][data]
+    try std.testing.expectEqual(@as(u64, 7), std.mem.readInt(u64, frame.payload[0..8], .little));
+    const name_len = std.mem.readInt(u16, frame.payload[8..10], .little);
+    try std.testing.expectEqual(@as(u16, 8), name_len);
+    try std.testing.expectEqualStrings("Position", frame.payload[10 .. 10 + name_len]);
+    const data_off: usize = 10 + name_len;
+    const data_len = std.mem.readInt(u32, frame.payload[data_off..][0..4], .little);
+    try std.testing.expectEqual(@as(u32, 4), data_len);
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0x11, 0x22, 0x33, 0x44 }, frame.payload[data_off + 4 .. data_off + 4 + data_len]);
+}
+
+test "pollSubscription: decodes subscribe and unsubscribe from editor" {
+    const allocator = std.testing.allocator;
+    var harness = try LoopbackHarness.init();
+    defer harness.deinit();
+
+    var host_port_buf: [32]u8 = undefined;
+    const host_port = try harness.hostPort(&host_port_buf);
+    var preview = try Preview.connect(allocator, host_port);
+    defer preview.deinit();
+    try harness.accept();
+
+    try harness.writeJsonLine("{\"kind\":\"subscribe\",\"components\":[\"Position\",\"Velocity\",\"Health\"]}");
+    try waitForSubscription(&preview, "Health", 1000);
+    try std.testing.expect(preview.isComponentSubscribed("Position"));
+    try std.testing.expect(preview.isComponentSubscribed("Velocity"));
+    try std.testing.expect(preview.isComponentSubscribed("Health"));
+    try std.testing.expect(!preview.isComponentSubscribed("MissingOne"));
+
+    try harness.writeJsonLine("{\"kind\":\"unsubscribe\",\"components\":[\"Velocity\"]}");
+    // Wait until Velocity drops out of the filter set.
+    const start = std.time.milliTimestamp();
+    while (preview.isComponentSubscribed("Velocity")) {
+        try preview.pollSubscription();
+        if (std.time.milliTimestamp() - start > 1000) return error.UnsubscribeDeadlineExceeded;
+        std.Thread.sleep(1 * std.time.ns_per_ms);
+    }
+    try std.testing.expect(preview.isComponentSubscribed("Position"));
+    try std.testing.expect(!preview.isComponentSubscribed("Velocity"));
+    try std.testing.expect(preview.isComponentSubscribed("Health"));
+}
+
+test "Preview: JSON heartbeats and binary frames multiplex on one socket" {
+    // The full Phase 2 wire scenario: editor sends a JSON subscribe,
+    // engine answers with binary frames interleaved with JSON
+    // heartbeats. Reader-side disambiguates by peeking the first
+    // byte (0x1B → binary, otherwise → JSON).
+    const allocator = std.testing.allocator;
+    var harness = try LoopbackHarness.init();
+    defer harness.deinit();
+
+    var host_port_buf: [32]u8 = undefined;
+    const host_port = try harness.hostPort(&host_port_buf);
+    var preview = try Preview.connect(allocator, host_port);
+    defer preview.deinit();
+    try harness.accept();
+
+    // Editor opts in to Position telemetry.
+    try harness.writeJsonLine("{\"kind\":\"subscribe\",\"components\":[\"Position\"]}");
+    try waitForSubscription(&preview, "Position", 1000);
+
+    // Engine emits an interleaved stream.
+    try preview.sendHello("phase2-spike", 99);
+    try preview.emitEntityCreated(101, "Goblin");
+    try preview.sendHeartbeat(500);
+    try preview.emitComponentChanged(101, "Position", &[_]u8{ 1, 0, 0, 0, 2, 0, 0, 0 });
+    try preview.emitEntityDestroyed(101);
+    try preview.sendBye(.normal);
+
+    // 1. hello (JSON)
+    {
+        try std.testing.expect((try harness.peekByte()) != binary_magic);
+        var buf: [256]u8 = undefined;
+        const f = try harness.readFrame(&buf);
+        try std.testing.expect(std.mem.indexOf(u8, f, "\"kind\":\"hello\"") != null);
+    }
+    // 2. entity_created (binary)
+    {
+        try std.testing.expectEqual(binary_magic, try harness.peekByte());
+        var buf: [256]u8 = undefined;
+        const f = try harness.readBinaryFrame(&buf);
+        try std.testing.expectEqual(@intFromEnum(BinaryFrameKind.entity_created), f.kind);
+    }
+    // 3. heartbeat (JSON)
+    {
+        try std.testing.expect((try harness.peekByte()) != binary_magic);
+        var buf: [256]u8 = undefined;
+        const f = try harness.readFrame(&buf);
+        try std.testing.expect(std.mem.indexOf(u8, f, "\"kind\":\"heartbeat\"") != null);
+    }
+    // 4. component_changed (binary)
+    {
+        try std.testing.expectEqual(binary_magic, try harness.peekByte());
+        var buf: [256]u8 = undefined;
+        const f = try harness.readBinaryFrame(&buf);
+        try std.testing.expectEqual(@intFromEnum(BinaryFrameKind.component_changed), f.kind);
+    }
+    // 5. entity_destroyed (binary)
+    {
+        try std.testing.expectEqual(binary_magic, try harness.peekByte());
+        var buf: [256]u8 = undefined;
+        const f = try harness.readBinaryFrame(&buf);
+        try std.testing.expectEqual(@intFromEnum(BinaryFrameKind.entity_destroyed), f.kind);
+    }
+    // 6. bye (JSON)
+    {
+        try std.testing.expect((try harness.peekByte()) != binary_magic);
+        var buf: [256]u8 = undefined;
+        const f = try harness.readFrame(&buf);
+        try std.testing.expect(std.mem.indexOf(u8, f, "\"kind\":\"bye\"") != null);
+    }
+}
+
+test "pollSubscription: malformed JSON surfaces MalformedSubscription" {
+    const allocator = std.testing.allocator;
+    var harness = try LoopbackHarness.init();
+    defer harness.deinit();
+
+    var host_port_buf: [32]u8 = undefined;
+    const host_port = try harness.hostPort(&host_port_buf);
+    var preview = try Preview.connect(allocator, host_port);
+    defer preview.deinit();
+    try harness.accept();
+
+    try harness.writeJsonLine("{\"kind\":\"subscribe\",\"components\":\"not-an-array\"}");
+
+    // Spin until the bytes have arrived in the engine's inbox and we
+    // can decode them.
+    const start = std.time.milliTimestamp();
+    while (true) {
+        const r = preview.pollSubscription();
+        if (r) {
+            // No bytes yet — try again.
+            if (std.time.milliTimestamp() - start > 1000) return error.NoMalformedFrameSurfaced;
+            std.Thread.sleep(1 * std.time.ns_per_ms);
+            continue;
+        } else |err| {
+            try std.testing.expectEqual(@as(anyerror, error.MalformedSubscription), err);
+            break;
+        }
+    }
 }
 
 test "Preview: bye produces wire bytes the editor can parse" {
