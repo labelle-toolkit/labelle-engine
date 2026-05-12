@@ -17,8 +17,23 @@
 //!    `nested_entity_arena`, which resets on `resetEcsBackend`.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const jsonc = @import("jsonc");
 const Value = jsonc.Value;
+
+// Persistent backing allocator for the intern arena. On
+// `wasm32-emscripten` `std.heap.page_allocator` resolves to
+// `WasmAllocator`, which uses `@wasmMemoryGrow` directly and bypasses
+// `_emscripten_resize_heap` / `updateMemoryViews()`. The next
+// `std.debug.print` to stderr after a grow then aborts on a detached
+// `HEAPU32`. Use `c_allocator` on emscripten (libc malloc routes
+// through emscripten's resize path), keep `page_allocator` on desktop
+// so GPA leak-detection ignores deliberately-unfreed game-lifetime
+// data. See `labelle-cli/docs/wasm-segfault-investigation.md` (#196).
+const intern_backing_allocator: std.mem.Allocator = if (builtin.target.os.tag == .emscripten)
+    std.heap.c_allocator
+else
+    std.heap.page_allocator;
 
 // ── String intern pool ──────────────────────────────────────────────
 //
@@ -54,7 +69,7 @@ fn internString(s: []const u8) ?[]const u8 {
     defer intern_mutex.unlock();
 
     if (intern_arena == null) {
-        intern_arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+        intern_arena = std.heap.ArenaAllocator.init(intern_backing_allocator);
         intern_map = std.StringHashMap(void).init(intern_arena.?.allocator());
     }
     if (intern_map.?.getKey(s)) |existing| return existing;
