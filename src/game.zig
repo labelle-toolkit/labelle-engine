@@ -211,6 +211,17 @@ pub fn GameConfig(
         // Scene management
         scenes: std.StringHashMap(SceneEntry),
         jsonc_scenes: std.StringHashMap(JsoncSceneInfo),
+        /// Embedded JSONC sources keyed by their include-relative path
+        /// (e.g. `"scenes/obstacles.jsonc"`). Mirrors the prefab cache
+        /// pattern: when a scene declares `"include": [...]`, the JSONC
+        /// loader looks here BEFORE falling back to `std.fs.cwd().openFile`,
+        /// so WASM/Android builds (no project directory in cwd) can still
+        /// resolve nested scene fragments. Populated by the assembler-
+        /// generated `addEmbeddedSceneSource` calls in `main()` / `init()`.
+        /// Keys are owned (dupe'd via `self.allocator`); values are
+        /// program-lifetime borrows of `@embedFile` slices and are NOT
+        /// freed by the map.
+        embedded_scene_sources: std.StringHashMap([]const u8),
         /// Entities created by the active scene's loader (e.g. the JSONC
         /// bridge). `unloadCurrentScene` destroys everything in this list
         /// on scene swap so entities from the outgoing scene don't leak
@@ -336,6 +347,7 @@ pub fn GameConfig(
                 .assets = assets_mod.AssetCatalog.init(allocator),
                 .scenes = std.StringHashMap(SceneEntry).init(allocator),
                 .jsonc_scenes = std.StringHashMap(JsoncSceneInfo).init(allocator),
+                .embedded_scene_sources = std.StringHashMap([]const u8).init(allocator),
                 .gizmo_state = gizmo_draws_mod.GizmoState(Entity).init(allocator),
             };
         }
@@ -387,6 +399,11 @@ pub fn GameConfig(
             self.gizmo_state.deinit(self.allocator);
             self.scenes.deinit();
             self.jsonc_scenes.deinit();
+            // Free duplicated keys; values are program-lifetime @embedFile
+            // borrows so they aren't owned by this map.
+            var emb_iter = self.embedded_scene_sources.iterator();
+            while (emb_iter.next()) |entry| self.allocator.free(entry.key_ptr.*);
+            self.embedded_scene_sources.deinit();
             self.atlas_manager.deinit();
         }
 
@@ -1125,6 +1142,24 @@ pub fn GameConfig(
         pub const registerScene = SceneMixin.registerScene;
         pub const registerSceneSimple = SceneMixin.registerSceneSimple;
         pub const registerSceneWithAssets = SceneMixin.registerSceneWithAssets;
+
+        /// Register an embedded JSONC scene source so `"include"`
+        /// directives can resolve against memory instead of disk.
+        /// Mirrors `addEmbeddedPrefab` — the assembler emits one call
+        /// per scene fragment in `main()` / `init()` so WASM and
+        /// Android builds (no project directory in cwd) can still
+        /// resolve nested scene includes. `path` is the include-
+        /// relative path (e.g. `"scenes/obstacles.jsonc"`); `source`
+        /// is typically a comptime `@embedFile(...)` slice. Caller
+        /// retains no ownership — the map dupes the key and borrows
+        /// the source's program-lifetime slice.
+        pub fn addEmbeddedSceneSource(self: *Self, path: []const u8, source: []const u8) !void {
+            const gop = try self.embedded_scene_sources.getOrPut(path);
+            if (!gop.found_existing) {
+                gop.key_ptr.* = try self.allocator.dupe(u8, path);
+            }
+            gop.value_ptr.* = source;
+        }
         pub const setSceneAssets = SceneMixin.setSceneAssets;
         pub const setSceneInitialState = SceneMixin.setSceneInitialState;
         pub const setScene = SceneMixin.setScene;
