@@ -15,6 +15,7 @@ const PrefabChild = core.PrefabChild;
 const atlas_mod = @import("atlas.zig");
 const assets_mod = @import("assets/mod.zig");
 const game_log_mod = @import("game_log.zig");
+const preview_mode_mod = @import("preview_mode.zig");
 
 const hierarchy = @import("game/hierarchy.zig");
 const gizmo_draws_mod = @import("game/gizmo_draws.zig");
@@ -285,6 +286,22 @@ pub fn GameConfig(
         /// just stores + dispatches the bool.
         paused: bool = false,
 
+        /// Connect-out preview channel to the labelle-gui editor
+        /// (`--preview-mode <host:port>`). `null` in normal runs — the
+        /// generated `main.zig` constructs a `Preview` and assigns it
+        /// here when the flag is present. Lifetime: owned by `Game`
+        /// when set, but `Preview.deinit` is the caller's
+        /// responsibility (mirrors the spawn-side pattern in
+        /// `preview_mode.zig`'s doc — the assembler-generated main
+        /// calls `sendBye` + `deinit` on shutdown).
+        ///
+        /// When set, ECS lifecycle paths (`createEntity`,
+        /// `destroyEntity`, `addComponent`, `setComponent`,
+        /// `setPosition`) emit Phase 2 telemetry frames. Component
+        /// frames are gated by `Preview.isComponentSubscribed` so an
+        /// idle editor pays nothing per write.
+        preview: ?preview_mode_mod.Preview = null,
+
         // Profiling (debug builds only)
         /// Opaque pointer to ScriptRunner's profile array. Set by generated code.
         script_profile_ptr: ?*const anyopaque = null,
@@ -325,6 +342,12 @@ pub fn GameConfig(
 
         pub fn deinit(self: *Self) void {
             self.emitHook(.{ .game_deinit = {} });
+            // `Game` owns the preview channel by value when set, so we
+            // release it here. The generated `main.zig` is expected to
+            // call `game.preview.?.sendBye(...)` before `game.deinit()`
+            // for a graceful shutdown; the socket close + arena tear-down
+            // happens here regardless.
+            if (self.preview) |*p| p.deinit();
             // Tear down the active scene FIRST. Scene teardown runs
             // user-provided `deinit_fn`s that may call `game.assets.*`
             // (release on unload is the natural pattern for the very
@@ -514,6 +537,11 @@ pub fn GameConfig(
         pub fn createEntity(self: *Self) Entity {
             const entity = self.ecs_backend.createEntity();
             self.emitHook(.{ .entity_created = .{ .entity_id = entity } });
+            // Preview telemetry: the prefab path tags `PrefabInstance`
+            // *after* createEntity returns (see `tagAsPrefabInstance`),
+            // so we can't carry the prefab name here. Emit null; a
+            // future enhancement can re-emit on tag.
+            if (self.preview) |*p| p.emitEntityCreated(@intCast(entity), null) catch {};
             return entity;
         }
 
@@ -663,6 +691,10 @@ pub fn GameConfig(
                     self.destroyEntity(child);
                 }
             }
+            // Preview telemetry emits BEFORE the actual destroy so any
+            // editor-side consumer can still introspect the entity from
+            // a `getComponent` style API while reacting to the frame.
+            if (self.preview) |*p| p.emitEntityDestroyed(@intCast(entity)) catch {};
             self.untrackSceneEntity(entity);
             self.active_world.sprite_cache.invalidate(@intCast(entity));
             self.renderer.untrackEntity(entity);
@@ -672,6 +704,7 @@ pub fn GameConfig(
         }
 
         pub fn destroyEntityOnly(self: *Self, entity: Entity) void {
+            if (self.preview) |*p| p.emitEntityDestroyed(@intCast(entity)) catch {};
             self.untrackSceneEntity(entity);
             self.active_world.sprite_cache.invalidate(@intCast(entity));
             self.renderer.untrackEntity(entity);
@@ -845,6 +878,39 @@ pub fn GameConfig(
         pub fn setPosition(self: *Self, entity: Entity, pos: Position) void {
             self.ecs_backend.addComponent(entity, pos);
             self.renderer.markPositionDirtyWithChildren(EcsImpl, self.ecs_backend, entity);
+            self.notifyComponentChanged(entity, pos);
+        }
+
+        /// Preview-mode helper. No-op unless `self.preview` is set AND
+        /// the editor has subscribed to this component's name. Folded
+        /// out by the compiler in non-preview builds because the
+        /// `preview` field defaults to `null`.
+        ///
+        /// Generic over the component type so it can be called from
+        /// any setter site without forcing the caller to spell out
+        /// `@typeName` + `std.mem.asBytes` boilerplate. The
+        /// subscription check runs first so `comp` is never read in
+        /// the common "nobody's watching" path.
+        inline fn notifyComponentChanged(self: *Self, entity: Entity, comp: anytype) void {
+            if (self.preview) |*p| {
+                // Callers may pass either a value or a `*T` (the
+                // generic `addComponent` / `setComponent` accept
+                // `anytype`). Strip the pointer so the subscription
+                // name and serialized bytes describe the component,
+                // not its address.
+                const T = @TypeOf(comp);
+                if (comptime @typeInfo(T) == .pointer) {
+                    const name = @typeName(@typeInfo(T).pointer.child);
+                    if (p.isComponentSubscribed(name)) {
+                        p.emitComponentChanged(@intCast(entity), name, std.mem.asBytes(comp)) catch {};
+                    }
+                } else {
+                    const name = @typeName(T);
+                    if (p.isComponentSubscribed(name)) {
+                        p.emitComponentChanged(@intCast(entity), name, std.mem.asBytes(&comp)) catch {};
+                    }
+                }
+            }
         }
 
         pub fn getPosition(self: *Self, entity: Entity) Position {
@@ -951,6 +1017,7 @@ pub fn GameConfig(
             if (@typeInfo(T) == .@"struct" and @hasDecl(T, "onAdd")) {
                 T.onAdd(ComponentPayload{ .entity_id = @intCast(entity), .game_ptr = @ptrCast(self) });
             }
+            self.notifyComponentChanged(entity, component);
         }
 
         pub fn setComponent(self: *Self, entity: Entity, component: anytype) void {
@@ -964,6 +1031,7 @@ pub fn GameConfig(
                     T.onAdd(ComponentPayload{ .entity_id = @intCast(entity), .game_ptr = @ptrCast(self) });
                 }
             }
+            self.notifyComponentChanged(entity, component);
         }
 
         pub fn getComponent(self: *Self, entity: Entity, comptime T: type) ?*T {

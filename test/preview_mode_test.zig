@@ -545,3 +545,182 @@ test "Preview: bye produces wire bytes the editor can parse" {
         try std.testing.expectEqualStrings(c.expected, out);
     }
 }
+
+// ── Phase 2 wiring (#520) — Game ECS lifecycle → Preview ────────────
+
+const Game = engine.Game;
+
+// Lightweight components defined here so their `@typeName` is stable
+// (`preview_mode_test.TestPos` / `preview_mode_test.TestSprite`) and
+// the subscription filter the test sends matches what the engine
+// emits via `@typeName(@TypeOf(component))` in
+// `notifyComponentChanged`.
+const TestPos = extern struct { x: i32, y: i32 };
+const TestSprite = extern struct { sprite_id: u32, visible: u8 };
+
+const BinaryFrameResult = struct { kind: u8, payload: []u8 };
+
+/// Walk to the next binary frame, draining any JSON noise (heartbeats,
+/// hello/bye, etc.) the engine emits in between. The Phase 2 wiring
+/// only touches binary frames, so JSON traffic mixed in is signal we
+/// can safely discard for this assertion path.
+fn nextBinaryFrame(
+    harness: *LoopbackHarness,
+    out: []u8,
+) !BinaryFrameResult {
+    var scratch: [1024]u8 = undefined;
+    while (true) {
+        const first = try harness.peekByte();
+        if (first == binary_magic) {
+            const f = try harness.readBinaryFrame(out);
+            return .{ .kind = f.kind, .payload = f.payload };
+        }
+        _ = try harness.readFrame(&scratch); // drop one JSON line
+    }
+}
+
+test "Game lifecycle: createEntity + addComponent emit telemetry; destroy + filter respected (#520)" {
+    const allocator = std.testing.allocator;
+
+    var harness = try LoopbackHarness.init();
+    defer harness.deinit();
+
+    var host_port_buf: [32]u8 = undefined;
+    const host_port = try harness.hostPort(&host_port_buf);
+
+    var game = Game.init(allocator);
+    defer game.deinit();
+
+    game.preview = try Preview.connect(allocator, host_port);
+    // Game.deinit cleans up `preview` — no manual deinit here.
+    try harness.accept();
+
+    // Phase 1 handshake — hello + heartbeat — proves the JSON plane
+    // is alive before binary frames start flowing.
+    try (game.preview.?).sendHello("phase2-wiring", 1);
+    try (game.preview.?).sendHeartbeat(0);
+    {
+        var buf: [512]u8 = undefined;
+        const f = try harness.readFrame(&buf);
+        try std.testing.expect(std.mem.indexOf(u8, f, "\"kind\":\"hello\"") != null);
+    }
+    {
+        var buf: [256]u8 = undefined;
+        const f = try harness.readFrame(&buf);
+        try std.testing.expect(std.mem.indexOf(u8, f, "\"kind\":\"heartbeat\"") != null);
+    }
+
+    // Editor subscribes to the two component names we'll exercise.
+    // The names must match what `@typeName` produces for the types
+    // the engine sees in `addComponent`.
+    const pos_name = @typeName(TestPos);
+    const sprite_name = @typeName(TestSprite);
+
+    var sub_buf: [256]u8 = undefined;
+    const sub_line = try std.fmt.bufPrint(
+        &sub_buf,
+        "{{\"kind\":\"subscribe\",\"components\":[\"{s}\",\"{s}\"]}}",
+        .{ pos_name, sprite_name },
+    );
+    try harness.writeJsonLine(sub_line);
+    try waitForSubscription(&game.preview.?, pos_name, 1000);
+    try waitForSubscription(&game.preview.?, sprite_name, 1000);
+
+    // Create one entity with both components — expect:
+    //   1 × entity_created  (id == 1)
+    //   1 × component_changed (TestPos)
+    //   1 × component_changed (TestSprite)
+    const e1 = game.createEntity();
+    game.addComponent(e1, TestPos{ .x = 10, .y = 20 });
+    game.addComponent(e1, TestSprite{ .sprite_id = 7, .visible = 1 });
+
+    var payload_buf: [512]u8 = undefined;
+
+    // entity_created(e1)
+    {
+        const f = try nextBinaryFrame(&harness, &payload_buf);
+        try std.testing.expectEqual(@intFromEnum(BinaryFrameKind.entity_created), f.kind);
+        const id = std.mem.readInt(u64, f.payload[0..8], .little);
+        try std.testing.expectEqual(@as(u64, @intCast(e1)), id);
+        const name_len = std.mem.readInt(u16, f.payload[8..10], .little);
+        // createEntity emits null prefab name → name_len == 0.
+        try std.testing.expectEqual(@as(u16, 0), name_len);
+    }
+    // component_changed(TestPos)
+    {
+        const f = try nextBinaryFrame(&harness, &payload_buf);
+        try std.testing.expectEqual(@intFromEnum(BinaryFrameKind.component_changed), f.kind);
+        const id = std.mem.readInt(u64, f.payload[0..8], .little);
+        try std.testing.expectEqual(@as(u64, @intCast(e1)), id);
+        const name_len = std.mem.readInt(u16, f.payload[8..10], .little);
+        try std.testing.expectEqualStrings(pos_name, f.payload[10 .. 10 + name_len]);
+        const data_off: usize = 10 + name_len;
+        const data_len = std.mem.readInt(u32, f.payload[data_off..][0..4], .little);
+        try std.testing.expectEqual(@as(u32, @sizeOf(TestPos)), data_len);
+        // Recover the x/y the engine handed us through `asBytes`.
+        const x = std.mem.readInt(i32, f.payload[data_off + 4 ..][0..4], .little);
+        const y = std.mem.readInt(i32, f.payload[data_off + 8 ..][0..4], .little);
+        try std.testing.expectEqual(@as(i32, 10), x);
+        try std.testing.expectEqual(@as(i32, 20), y);
+    }
+    // component_changed(TestSprite)
+    {
+        const f = try nextBinaryFrame(&harness, &payload_buf);
+        try std.testing.expectEqual(@intFromEnum(BinaryFrameKind.component_changed), f.kind);
+        const name_len = std.mem.readInt(u16, f.payload[8..10], .little);
+        try std.testing.expectEqualStrings(sprite_name, f.payload[10 .. 10 + name_len]);
+    }
+
+    // Destroy the entity → expect one entity_destroyed.
+    game.destroyEntity(e1);
+    {
+        const f = try nextBinaryFrame(&harness, &payload_buf);
+        try std.testing.expectEqual(@intFromEnum(BinaryFrameKind.entity_destroyed), f.kind);
+        const id = std.mem.readInt(u64, f.payload[0..8], .little);
+        try std.testing.expectEqual(@as(u64, @intCast(e1)), id);
+    }
+
+    // Subscription filter: touching a component the editor never
+    // subscribed to (and an entity it never asked about) MUST NOT
+    // produce a `component_changed` frame. We still expect the
+    // `entity_created` frame (lifecycle events bypass the filter),
+    // and then the next binary frame after that must be
+    // `entity_destroyed` — proving no Unsubscribed-component frame
+    // sneaked in between.
+    const Unsubscribed = extern struct { v: u32 };
+    const e2 = game.createEntity();
+    game.addComponent(e2, Unsubscribed{ .v = 99 });
+
+    {
+        const f = try nextBinaryFrame(&harness, &payload_buf);
+        try std.testing.expectEqual(@intFromEnum(BinaryFrameKind.entity_created), f.kind);
+        const id = std.mem.readInt(u64, f.payload[0..8], .little);
+        try std.testing.expectEqual(@as(u64, @intCast(e2)), id);
+    }
+
+    game.destroyEntity(e2);
+    {
+        const f = try nextBinaryFrame(&harness, &payload_buf);
+        try std.testing.expectEqual(@intFromEnum(BinaryFrameKind.entity_destroyed), f.kind);
+        const id = std.mem.readInt(u64, f.payload[0..8], .little);
+        try std.testing.expectEqual(@as(u64, @intCast(e2)), id);
+    }
+}
+
+test "Game without preview attached: ECS lifecycle is a no-op for telemetry (#520)" {
+    // Sanity check that the `if (self.preview) |*p|` guards genuinely
+    // short-circuit — a Game with `preview = null` must not crash, write
+    // to any socket, or otherwise misbehave on the lifecycle paths.
+    const allocator = std.testing.allocator;
+    var game = Game.init(allocator);
+    defer game.deinit();
+
+    try std.testing.expect(game.preview == null);
+
+    const e = game.createEntity();
+    game.addComponent(e, TestPos{ .x = 1, .y = 2 });
+    game.setComponent(e, TestPos{ .x = 3, .y = 4 });
+    game.destroyEntity(e);
+
+    try std.testing.expectEqual(@as(usize, 0), game.entityCount());
+}
