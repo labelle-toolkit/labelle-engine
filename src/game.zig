@@ -342,6 +342,12 @@ pub fn GameConfig(
 
         pub fn deinit(self: *Self) void {
             self.emitHook(.{ .game_deinit = {} });
+            // `Game` owns the preview channel by value when set, so we
+            // release it here. The generated `main.zig` is expected to
+            // call `game.preview.?.sendBye(...)` before `game.deinit()`
+            // for a graceful shutdown; the socket close + arena tear-down
+            // happens here regardless.
+            if (self.preview) |*p| p.deinit();
             // Tear down the active scene FIRST. Scene teardown runs
             // user-provided `deinit_fn`s that may call `game.assets.*`
             // (release on unload is the natural pattern for the very
@@ -887,9 +893,22 @@ pub fn GameConfig(
         /// the common "nobody's watching" path.
         inline fn notifyComponentChanged(self: *Self, entity: Entity, comp: anytype) void {
             if (self.preview) |*p| {
-                const name = @typeName(@TypeOf(comp));
-                if (p.isComponentSubscribed(name)) {
-                    p.emitComponentChanged(@intCast(entity), name, std.mem.asBytes(&comp)) catch {};
+                // Callers may pass either a value or a `*T` (the
+                // generic `addComponent` / `setComponent` accept
+                // `anytype`). Strip the pointer so the subscription
+                // name and serialized bytes describe the component,
+                // not its address.
+                const T = @TypeOf(comp);
+                if (comptime @typeInfo(T) == .pointer) {
+                    const name = @typeName(@typeInfo(T).pointer.child);
+                    if (p.isComponentSubscribed(name)) {
+                        p.emitComponentChanged(@intCast(entity), name, std.mem.asBytes(comp)) catch {};
+                    }
+                } else {
+                    const name = @typeName(T);
+                    if (p.isComponentSubscribed(name)) {
+                        p.emitComponentChanged(@intCast(entity), name, std.mem.asBytes(&comp)) catch {};
+                    }
                 }
             }
         }

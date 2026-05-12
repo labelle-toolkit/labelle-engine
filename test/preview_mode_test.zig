@@ -592,7 +592,7 @@ test "Game lifecycle: createEntity + addComponent emit telemetry; destroy + filt
     defer game.deinit();
 
     game.preview = try Preview.connect(allocator, host_port);
-    defer if (game.preview) |*p| p.deinit();
+    // Game.deinit cleans up `preview` — no manual deinit here.
     try harness.accept();
 
     // Phase 1 handshake — hello + heartbeat — proves the JSON plane
