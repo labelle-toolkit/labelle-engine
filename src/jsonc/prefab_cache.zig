@@ -14,9 +14,27 @@
 //! `loadSceneFromSource`.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const jsonc = @import("jsonc");
 const Value = jsonc.Value;
 const JsoncParser = jsonc.JsoncParser;
+
+// Persistent allocator for game-lifetime data. On `wasm32-emscripten`
+// we MUST go through libc (emscripten's malloc), because libc's
+// allocator routes through `_emscripten_resize_heap` which calls
+// `updateMemoryViews()` after `wasmMemory.grow()`. Zig's
+// `page_allocator` resolves to `WasmAllocator` on emscripten and
+// issues `@wasmMemoryGrow` directly — that bypasses the JS-side view
+// rebinding, leaving `HEAPU32` detached, and the next `_fd_write`
+// (i.e. the first `std.debug.print` after a page-alloc grow) aborts
+// with a spurious "segmentation fault". Desktop targets keep
+// `page_allocator` so GPA leak-detection ignores deliberately-unfreed
+// game-lifetime allocations. See
+// `labelle-cli/docs/wasm-segfault-investigation.md` (issue #196).
+const persistent_allocator: std.mem.Allocator = if (builtin.target.os.tag == .emscripten)
+    std.heap.c_allocator
+else
+    std.heap.page_allocator;
 
 pub const PrefabCache = struct {
     prefabs: std.StringHashMap(Value),
@@ -25,7 +43,7 @@ pub const PrefabCache = struct {
     prefab_dir: []const u8,
 
     pub fn init(allocator: std.mem.Allocator, prefab_dir: []const u8) PrefabCache {
-        const persistent = std.heap.page_allocator;
+        const persistent = persistent_allocator;
         return .{
             .prefabs = std.StringHashMap(Value).init(persistent),
             .persistent = persistent,
@@ -62,7 +80,7 @@ pub const PrefabCache = struct {
 /// engine's full `Game` type — any struct with a `prefab_cache_ptr:
 /// ?*anyopaque` field and an `allocator` works.
 pub fn initPersistentCache(game: anytype, prefab_dir: []const u8) !*PrefabCache {
-    const persistent = std.heap.page_allocator;
+    const persistent = persistent_allocator;
     const cache = try persistent.create(PrefabCache);
     cache.* = PrefabCache.init(game.allocator, prefab_dir);
     game.prefab_cache_ptr = cache;

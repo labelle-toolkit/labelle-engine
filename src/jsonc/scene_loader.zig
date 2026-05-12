@@ -15,11 +15,26 @@
 //! signature the rest of the codebase already calls into.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const jsonc = @import("jsonc");
 const Value = jsonc.Value;
 const JsoncParser = jsonc.JsoncParser;
 const core = @import("labelle-core");
 const Position = core.Position;
+
+// Game-lifetime allocator for persistent ID arrays. On
+// `wasm32-emscripten` we MUST use libc malloc, not Zig's
+// `page_allocator` (which is `WasmAllocator` there) — the latter
+// calls `@wasmMemoryGrow` directly, bypassing emscripten's
+// `updateMemoryViews()` and detaching the JS-side `HEAPU32`. The next
+// `_fd_write` (i.e. the first `std.debug.print` after a grow) aborts.
+// Desktop targets keep `page_allocator` so the existing convention
+// "deliberately not freed → page allocator so GPA doesn't flag" is
+// preserved. See `labelle-cli/docs/wasm-segfault-investigation.md` (#196).
+const persistent_id_allocator: std.mem.Allocator = if (builtin.target.os.tag == .emscripten)
+    std.heap.c_allocator
+else
+    std.heap.page_allocator;
 
 const prefab_cache_mod = @import("prefab_cache.zig");
 const PrefabCache = prefab_cache_mod.PrefabCache;
@@ -517,10 +532,12 @@ pub fn SceneLoader(comptime GameType: type, comptime Components: type) type {
                 if (entity_count == 0) continue;
 
                 // Spawn entities and collect IDs. Uses
-                // `page_allocator` because IDs are stored in
+                // `persistent_id_allocator` (page_allocator on
+                // desktop, c_allocator on wasm32-emscripten — see
+                // file-top comment) because IDs are stored in
                 // component fields (`[]const u64`) and live for
                 // the game's lifetime.
-                const ids = std.heap.page_allocator.alloc(u64, entity_count) catch continue;
+                const ids = persistent_id_allocator.alloc(u64, entity_count) catch continue;
                 var idx: usize = 0;
                 for (arr.items) |item| {
                     if (ApplyHelpers.isEntityLike(item)) {
