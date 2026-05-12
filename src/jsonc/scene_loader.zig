@@ -206,11 +206,16 @@ pub fn SceneLoader(comptime GameType: type, comptime Components: type) type {
 
         /// Load a single scene/fragment file, processing includes
         /// recursively then its own entities.
+        ///
+        /// Source resolution: check `game.embedded_scene_sources` first
+        /// (populated by the assembler-generated `addEmbeddedSceneSource`
+        /// calls — the only mechanism that works on WASM/Android where
+        /// the project directory isn't reachable from cwd), then fall
+        /// back to `std.fs.cwd().openFile(path)` for desktop dev runs.
+        /// Mirrors the embedded-first ordering established by
+        /// `PrefabCache.get` for prefabs.
         fn loadSceneFile(game: *GameType, path: []const u8, prefab_cache: *PrefabCache, include_depth: usize) !void {
             if (include_depth > MAX_DEPTH) return error.IncludeDepthExceeded;
-
-            const file = try std.fs.cwd().openFile(path, .{});
-            defer file.close();
 
             // Use an arena for the scene parser — the source
             // buffer and parsed `Value` tree (entries/items
@@ -220,7 +225,14 @@ pub fn SceneLoader(comptime GameType: type, comptime Components: type) type {
             defer parse_arena.deinit();
             const parse_alloc = parse_arena.allocator();
 
-            const source = try file.readToEndAlloc(parse_alloc, 1024 * 1024);
+            const source: []const u8 = if (game.embedded_scene_sources.get(path)) |embedded|
+                embedded
+            else blk: {
+                const file = try std.fs.cwd().openFile(path, .{});
+                defer file.close();
+                break :blk try file.readToEndAlloc(parse_alloc, 1024 * 1024);
+            };
+
             var parser = JsoncParser.init(parse_alloc, source);
             const scene_value = try parser.parse();
 
