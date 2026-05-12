@@ -178,6 +178,9 @@ pub const ByeReason = preview_mode_mod.ByeReason;
 pub const preview_protocol_version = preview_mode_mod.protocol_version;
 pub const preview_heartbeat_interval_ms = preview_mode_mod.heartbeat_interval_ms;
 pub const parsePreviewArgs = preview_mode_mod.parseArgs;
+// Phase 2 / #518 — binary state telemetry frame types.
+pub const PreviewBinaryFrameKind = preview_mode_mod.BinaryFrameKind;
+pub const preview_binary_magic = preview_mode_mod.binary_magic;
 
 // ── JSONC Scene Bridge ──
 pub const JsoncSceneBridge = @import("jsonc_scene_bridge.zig").JsoncSceneBridge;
