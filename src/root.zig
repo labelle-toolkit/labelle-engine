@@ -25,6 +25,7 @@ pub const sprite_by_field_mod = @import("sprite_by_field.zig");
 pub const sprite_by_field_tick_mod = @import("sprite_by_field_tick.zig");
 pub const atlas_mod = @import("atlas.zig");
 pub const assets_mod = @import("assets/mod.zig");
+pub const preview_mode_mod = @import("preview_mode.zig");
 pub const jsonc_mod = @import("jsonc");
 
 // ── Game ──
@@ -167,6 +168,16 @@ pub const AssetWorkResult = assets_mod.WorkResult;
 pub const ImageLoader = assets_mod.image_loader;
 pub const ImageBackend = assets_mod.image_loader.ImageBackend;
 pub const DecodedImage = assets_mod.image_loader.DecodedImage;
+
+// ── Preview Mode (#516) ──
+// Connect-out control channel to the labelle-gui editor. Engine
+// stays a library — the generated `main.zig` is what owns argv and
+// instantiates `Preview` when `--preview-mode <host:port>` is set.
+pub const Preview = preview_mode_mod.Preview;
+pub const ByeReason = preview_mode_mod.ByeReason;
+pub const preview_protocol_version = preview_mode_mod.protocol_version;
+pub const preview_heartbeat_interval_ms = preview_mode_mod.heartbeat_interval_ms;
+pub const parsePreviewArgs = preview_mode_mod.parseArgs;
 
 // ── JSONC Scene Bridge ──
 pub const JsoncSceneBridge = @import("jsonc_scene_bridge.zig").JsoncSceneBridge;
