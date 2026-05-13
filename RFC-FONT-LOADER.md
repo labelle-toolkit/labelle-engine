@@ -211,16 +211,39 @@ The type-erased `DecodedPayload` / `UploadedResource` mean the catalog, pump, an
 Replaces the three `error.NotImplemented` stubs:
 
 ```zig
-fn decode(file_type: [:0]const u8, data: []const u8, allocator: Allocator) anyerror!DecodedPayload {
-    const backend = active_backend orelse return error.FontBackendNotSet;
-    // params are carried alongside the entry — see §7
-    const params = pendingBakeParamsFor(entry_id);
-    const out = try backend.decode(file_type, data, params, allocator);
-    return .{ .font = out };
+fn decode(
+    file_type: [:0]const u8,
+    data: []const u8,
+    params: ?*const anyopaque,
+    allocator: Allocator,
+) anyerror!DecodedPayload {
+    const backend = active_backend orelse return error.FontBackendNotInitialized;
+    // §7: WorkRequest.params is type-erased; cast back to our params struct.
+    // A missing pointer here means the caller used `register` instead of
+    // `registerFont` — surface it as a distinct error.
+    const params_ptr = params orelse return error.FontBakeParamsMissing;
+    const bake_params: *const FontBakeParams = @ptrCast(@alignCast(params_ptr));
+
+    const decoded = try backend.decode(file_type, data, bake_params.*, allocator);
+    // Explicit field init — `DecodedPayload.font` is an anonymous inline
+    // struct nominally distinct from `DecodedFont`, so `.{ .font = decoded }`
+    // would be a type error (Copilot caught the same trap in the audio RFC).
+    return .{ .font = .{
+        .bitmap = decoded.bitmap,
+        .width = decoded.width,
+        .height = decoded.height,
+        .glyphs = decoded.glyphs,
+        .codepoint_index = decoded.codepoint_index,
+        .ascent = decoded.ascent,
+        .descent = decoded.descent,
+        .line_gap = decoded.line_gap,
+        .line_height = decoded.line_height,
+        .kerning = decoded.kerning,
+    } };
 }
 
 fn upload(entry: *AssetEntry, decoded: DecodedPayload, allocator: Allocator) anyerror!void {
-    const backend = active_backend orelse return error.FontBackendNotSet;
+    const backend = active_backend orelse return error.FontBackendNotInitialized;
     const font = try backend.upload(decoded.font);
     entry.resource = .{ .font = font };
     allocator.free(decoded.font.bitmap);
