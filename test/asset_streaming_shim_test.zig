@@ -370,3 +370,241 @@ test "shim: double register through the shim is tolerated" {
     _ = try game.loadAtlasIfNeeded("shared");
     try testing.expect(game.isAtlasLoaded("shared"));
 }
+
+// ── Audio shim (Phase 4, #447) ──
+//
+// `registerSoundFromMemory` / `loadSoundFromMemory` / `loadSoundIfNeeded`
+// are the audio siblings of the atlas shim methods above. The mock
+// backend below mirrors `Mock` for images: process-global slot, reset
+// between tests, counters for decode / upload / unload.
+
+const MockAudio = struct {
+    var decode_calls: u32 = 0;
+    var upload_calls: u32 = 0;
+    var unload_calls: u32 = 0;
+    const sentinel: engine.SoundId = .{ .index = 7, .generation = 1 };
+
+    fn reset() void {
+        decode_calls = 0;
+        upload_calls = 0;
+        unload_calls = 0;
+    }
+
+    fn decodeFn(_: [:0]const u8, _: []const u8, allocator: std.mem.Allocator) anyerror!engine.DecodedAudio {
+        decode_calls += 1;
+        // 4 frames stereo, recognisable fill so a sloppy backend gets
+        // caught by `last_uploaded` assertions in the loader test.
+        const samples = try allocator.alloc(i16, 8);
+        @memset(samples, 0x1234);
+        return .{ .samples = samples, .sample_rate = 44100, .channels = 2 };
+    }
+
+    fn uploadFn(_: engine.DecodedAudio) anyerror!engine.SoundId {
+        upload_calls += 1;
+        return sentinel;
+    }
+
+    fn unloadFn(_: engine.SoundId) void {
+        unload_calls += 1;
+    }
+
+    const backend: engine.AudioBackend = .{
+        .decode = decodeFn,
+        .upload = uploadFn,
+        .unload = unloadFn,
+    };
+};
+
+const fake_wav: []const u8 = "fake-wav-bytes";
+const audio_file_type: [:0]const u8 = "wav";
+
+test "audio shim: registerSoundFromMemory + loadSoundIfNeeded round-trip" {
+    MockAudio.reset();
+    engine.AudioLoader.setBackend(MockAudio.backend);
+    defer engine.AudioLoader.clearBackend();
+
+    var game = TestGame.init(testing.allocator);
+    defer game.deinit();
+
+    try game.registerSoundFromMemory("sfx", audio_file_type, fake_wav);
+    try testing.expect(!game.assets.isReady("sfx"));
+
+    const did_load = try game.loadSoundIfNeeded("sfx");
+    try testing.expect(did_load);
+    try testing.expect(game.assets.isReady("sfx"));
+    try testing.expectEqual(@as(u32, 1), MockAudio.decode_calls);
+    try testing.expectEqual(@as(u32, 1), MockAudio.upload_calls);
+}
+
+test "audio shim: loadSoundFromMemory is eager — ready before it returns" {
+    MockAudio.reset();
+    engine.AudioLoader.setBackend(MockAudio.backend);
+    defer engine.AudioLoader.clearBackend();
+
+    var game = TestGame.init(testing.allocator);
+    defer game.deinit();
+
+    try game.loadSoundFromMemory("eager_sfx", audio_file_type, fake_wav);
+    try testing.expect(game.assets.isReady("eager_sfx"));
+}
+
+test "audio shim: loadSoundIfNeeded twice is idempotent" {
+    MockAudio.reset();
+    engine.AudioLoader.setBackend(MockAudio.backend);
+    defer engine.AudioLoader.clearBackend();
+
+    var game = TestGame.init(testing.allocator);
+    defer game.deinit();
+
+    try game.registerSoundFromMemory("twice", audio_file_type, fake_wav);
+    const first = try game.loadSoundIfNeeded("twice");
+    const second = try game.loadSoundIfNeeded("twice");
+
+    try testing.expect(first);
+    try testing.expect(!second);
+    try testing.expectEqual(@as(u32, 1), MockAudio.decode_calls);
+    try testing.expectEqual(@as(u32, 1), MockAudio.upload_calls);
+}
+
+test "audio shim: double register through the shim is tolerated" {
+    MockAudio.reset();
+    engine.AudioLoader.setBackend(MockAudio.backend);
+    defer engine.AudioLoader.clearBackend();
+
+    var game = TestGame.init(testing.allocator);
+    defer game.deinit();
+
+    // Manifest-style direct register, then shim register — must not
+    // propagate `AssetAlreadyRegistered`.
+    try game.assets.register("shared_sfx", .audio, audio_file_type, fake_wav);
+    try game.registerSoundFromMemory("shared_sfx", audio_file_type, fake_wav);
+    _ = try game.loadSoundIfNeeded("shared_sfx");
+    try testing.expect(game.assets.isReady("shared_sfx"));
+}
+
+// ── Font shim (Phase 4, #448) ──
+//
+// `registerFontFromMemory` / `loadFontFromMemory` / `loadFontIfNeeded`.
+// The font loader is the only loader that takes decode-time params
+// (`FontBakeParams`); the shim borrows a pointer that must outlive
+// the catalog entry.
+
+const MockFont = struct {
+    var decode_calls: u32 = 0;
+    var upload_calls: u32 = 0;
+    var unload_calls: u32 = 0;
+    var last_params_pixel_height: f32 = 0;
+    const sentinel: engine.FontId = .{ .index = 9, .generation = 1 };
+
+    fn reset() void {
+        decode_calls = 0;
+        upload_calls = 0;
+        unload_calls = 0;
+        last_params_pixel_height = 0;
+    }
+
+    fn decodeFn(_: [:0]const u8, _: []const u8, params: engine.FontBakeParams, allocator: std.mem.Allocator) anyerror!engine.DecodedFont {
+        decode_calls += 1;
+        // Capture the params the loader unmarshalled from
+        // `WorkRequest.params` so tests can assert the shim's
+        // pointer plumbing through `registerFont`.
+        last_params_pixel_height = params.pixel_height;
+        // 1×1 alpha atlas, single ASCII space glyph — minimum viable
+        // payload that exercises the full slice-ownership contract.
+        const bitmap = try allocator.alloc(u8, 1);
+        bitmap[0] = 0xFF;
+        const glyphs = try allocator.alloc(engine.Glyph, 1);
+        glyphs[0] = .{ .u0 = 0, .v0 = 0, .u1 = 1, .v1 = 1, .xoff = 0, .yoff = 0, .advance = 8 };
+        const idx = try allocator.alloc(engine.CodepointEntry, 1);
+        idx[0] = .{ .codepoint = 0x20, .glyph_index = 0 };
+        const kern = try allocator.alloc(engine.KernPair, 0);
+        return .{
+            .bitmap = bitmap,
+            .width = 1,
+            .height = 1,
+            .glyphs = glyphs,
+            .codepoint_index = idx,
+            .ascent = 12,
+            .descent = -4,
+            .line_gap = 0,
+            .line_height = 16,
+            .kerning = kern,
+        };
+    }
+
+    fn uploadFn(_: engine.DecodedFont) anyerror!engine.FontId {
+        upload_calls += 1;
+        return sentinel;
+    }
+
+    fn unloadFn(_: engine.FontId) void {
+        unload_calls += 1;
+    }
+
+    const backend: engine.FontBackend = .{
+        .decode = decodeFn,
+        .upload = uploadFn,
+        .unload = unloadFn,
+    };
+};
+
+const fake_ttf: []const u8 = "fake-ttf-bytes";
+const font_file_type: [:0]const u8 = "ttf";
+
+test "font shim: registerFontFromMemory + loadFontIfNeeded round-trip" {
+    MockFont.reset();
+    engine.FontLoader.setBackend(MockFont.backend);
+    defer engine.FontLoader.clearBackend();
+
+    var game = TestGame.init(testing.allocator);
+    defer game.deinit();
+
+    const params: engine.FontBakeParams = .{ .pixel_height = 24 };
+    try game.registerFontFromMemory("ui", font_file_type, fake_ttf, &params);
+    try testing.expect(!game.assets.isReady("ui"));
+
+    const did_load = try game.loadFontIfNeeded("ui");
+    try testing.expect(did_load);
+    try testing.expect(game.assets.isReady("ui"));
+    try testing.expectEqual(@as(u32, 1), MockFont.decode_calls);
+    try testing.expectEqual(@as(u32, 1), MockFont.upload_calls);
+    // The shim must have routed `params` through `WorkRequest.params`
+    // so the loader's `@ptrCast(@alignCast(...))` casts back to the
+    // exact value we passed in.
+    try testing.expectEqual(@as(f32, 24), MockFont.last_params_pixel_height);
+}
+
+test "font shim: loadFontFromMemory is eager — ready before it returns" {
+    MockFont.reset();
+    engine.FontLoader.setBackend(MockFont.backend);
+    defer engine.FontLoader.clearBackend();
+
+    var game = TestGame.init(testing.allocator);
+    defer game.deinit();
+
+    const params: engine.FontBakeParams = .{ .pixel_height = 16 };
+    try game.loadFontFromMemory("eager_font", font_file_type, fake_ttf, &params);
+    try testing.expect(game.assets.isReady("eager_font"));
+}
+
+test "font shim: distinct registrations with different params produce distinct entries" {
+    MockFont.reset();
+    engine.FontLoader.setBackend(MockFont.backend);
+    defer engine.FontLoader.clearBackend();
+
+    var game = TestGame.init(testing.allocator);
+    defer game.deinit();
+
+    const small: engine.FontBakeParams = .{ .pixel_height = 12 };
+    const large: engine.FontBakeParams = .{ .pixel_height = 48 };
+    try game.registerFontFromMemory("font_small", font_file_type, fake_ttf, &small);
+    try game.registerFontFromMemory("font_large", font_file_type, fake_ttf, &large);
+
+    _ = try game.loadFontIfNeeded("font_small");
+    _ = try game.loadFontIfNeeded("font_large");
+
+    try testing.expect(game.assets.isReady("font_small"));
+    try testing.expect(game.assets.isReady("font_large"));
+    try testing.expectEqual(@as(u32, 2), MockFont.decode_calls);
+    try testing.expectEqual(@as(u32, 2), MockFont.upload_calls);
+}
