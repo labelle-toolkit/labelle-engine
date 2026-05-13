@@ -886,6 +886,268 @@ test "pollSubscription: subscribe_flow / unsubscribe_flow update subscribed_flow
     try std.testing.expect(preview.isFlowSubscribed("not_yet_loaded"));
 }
 
+// ── Phase 3 / #534 — watch_entity protocol + filtered emission ──────
+
+/// Spin until `preview.pollSubscription` reports the given entity is
+/// in the watched set. Bounded so a broken implementation can't hang
+/// the test runner.
+fn waitForWatchedEntity(preview: *Preview, id: u64, deadline_ms: u64) !void {
+    const start = std.time.milliTimestamp();
+    while (true) {
+        try preview.pollSubscription();
+        if (preview.watched_entities.contains(id)) return;
+        if (std.time.milliTimestamp() - start > @as(i64, @intCast(deadline_ms))) {
+            return error.WatchEntityDeadlineExceeded;
+        }
+        std.Thread.sleep(1 * std.time.ns_per_ms);
+    }
+}
+
+fn waitForUnwatchedEntity(preview: *Preview, id: u64, deadline_ms: u64) !void {
+    const start = std.time.milliTimestamp();
+    while (preview.watched_entities.contains(id)) {
+        try preview.pollSubscription();
+        if (std.time.milliTimestamp() - start > @as(i64, @intCast(deadline_ms))) {
+            return error.UnwatchEntityDeadlineExceeded;
+        }
+        std.Thread.sleep(1 * std.time.ns_per_ms);
+    }
+}
+
+test "watch_entity: adds id to watched_entities and filters subsequent emits" {
+    const allocator = std.testing.allocator;
+    var harness = try LoopbackHarness.init();
+    defer harness.deinit();
+
+    var host_port_buf: [32]u8 = undefined;
+    const host_port = try harness.hostPort(&host_port_buf);
+    var preview = try Preview.connect(allocator, host_port);
+    defer preview.deinit();
+    try harness.accept();
+
+    // Subscribe to Position so component_changed can actually flow.
+    try harness.writeJsonLine("{\"kind\":\"subscribe\",\"components\":[\"Position\"]}");
+    try waitForSubscription(&preview, "Position", 1000);
+
+    // Empty watched_entities → "watch everything" mode. Both entities
+    // should currently emit.
+    try std.testing.expect(preview.isEntityWatched(42));
+    try std.testing.expect(preview.isEntityWatched(99));
+
+    // Editor watches entity 42.
+    try harness.writeJsonLine("{\"kind\":\"watch_entity\",\"id\":42}");
+    try waitForWatchedEntity(&preview, 42, 1000);
+    try std.testing.expect(preview.isEntityWatched(42));
+    try std.testing.expect(!preview.isEntityWatched(99));
+
+    // Emit on entity 42 — should flow on the wire.
+    try preview.emitComponentChanged(42, "Position", &[_]u8{ 0xAA, 0xBB, 0xCC, 0xDD });
+    // Emit on entity 99 — must NOT flow (watched_entities non-empty,
+    // 99 not in the set).
+    try preview.emitComponentChanged(99, "Position", &[_]u8{ 0x11, 0x22, 0x33, 0x44 });
+    // A second emit on 42 to give us a deterministic "next frame".
+    try preview.emitComponentChanged(42, "Position", &[_]u8{ 0xEE, 0xFF });
+
+    // First frame is the first 42 emit.
+    var payload_buf: [256]u8 = undefined;
+    {
+        const f = try harness.readBinaryFrame(&payload_buf);
+        try std.testing.expectEqual(@intFromEnum(BinaryFrameKind.component_changed), f.kind);
+        try std.testing.expectEqual(@as(u64, 42), std.mem.readInt(u64, f.payload[0..8], .little));
+    }
+    // Second frame must skip 99 entirely and be the second 42 emit.
+    {
+        const f = try harness.readBinaryFrame(&payload_buf);
+        try std.testing.expectEqual(@intFromEnum(BinaryFrameKind.component_changed), f.kind);
+        try std.testing.expectEqual(@as(u64, 42), std.mem.readInt(u64, f.payload[0..8], .little));
+        const name_len = std.mem.readInt(u16, f.payload[8..10], .little);
+        const data_off: usize = 10 + name_len;
+        const data_len = std.mem.readInt(u32, f.payload[data_off..][0..4], .little);
+        try std.testing.expectEqual(@as(u32, 2), data_len);
+        try std.testing.expectEqualSlices(u8, &[_]u8{ 0xEE, 0xFF }, f.payload[data_off + 4 .. data_off + 4 + data_len]);
+    }
+}
+
+test "unwatch_entity: empty set restores Phase 2 'watch everything' behaviour" {
+    // Design decision (#534): when the editor removes the last watched
+    // id, `watched_entities` empties and we fall back to "watch
+    // everything" — i.e. the Phase 2 default. Rationale: multi-entity
+    // tracking is Phase 4+; today's editor watches one entity at a
+    // time, and a strict include-list that goes silent the instant the
+    // user deselects would surprise callers who rely on the Phase 2
+    // contract. The empty-set rule is the single chokepoint
+    // (`isEntityWatched`), so flipping the semantics later is a one-
+    // line change if Phase 4 wants it.
+    const allocator = std.testing.allocator;
+    var harness = try LoopbackHarness.init();
+    defer harness.deinit();
+
+    var host_port_buf: [32]u8 = undefined;
+    const host_port = try harness.hostPort(&host_port_buf);
+    var preview = try Preview.connect(allocator, host_port);
+    defer preview.deinit();
+    try harness.accept();
+
+    try harness.writeJsonLine("{\"kind\":\"subscribe\",\"components\":[\"Position\"]}");
+    try waitForSubscription(&preview, "Position", 1000);
+
+    try harness.writeJsonLine("{\"kind\":\"watch_entity\",\"id\":42}");
+    try waitForWatchedEntity(&preview, 42, 1000);
+
+    // Sanity: while 42 is watched, 99 stays silent.
+    try preview.emitComponentChanged(99, "Position", &[_]u8{0xCC});
+    try preview.emitComponentChanged(42, "Position", &[_]u8{0xDE});
+    var payload_buf: [256]u8 = undefined;
+    {
+        const f = try harness.readBinaryFrame(&payload_buf);
+        try std.testing.expectEqual(@as(u64, 42), std.mem.readInt(u64, f.payload[0..8], .little));
+    }
+
+    // Editor unwatches 42 → set becomes empty → back to "watch all".
+    try harness.writeJsonLine("{\"kind\":\"unwatch_entity\",\"id\":42}");
+    try waitForUnwatchedEntity(&preview, 42, 1000);
+    try std.testing.expectEqual(@as(usize, 0), preview.watched_entities.count());
+    try std.testing.expect(preview.isEntityWatched(42));
+    try std.testing.expect(preview.isEntityWatched(99));
+
+    // Both entities now ride the wire again.
+    try preview.emitComponentChanged(99, "Position", &[_]u8{0xAA});
+    try preview.emitComponentChanged(42, "Position", &[_]u8{0xBB});
+    {
+        const f = try harness.readBinaryFrame(&payload_buf);
+        try std.testing.expectEqual(@as(u64, 99), std.mem.readInt(u64, f.payload[0..8], .little));
+    }
+    {
+        const f = try harness.readBinaryFrame(&payload_buf);
+        try std.testing.expectEqual(@as(u64, 42), std.mem.readInt(u64, f.payload[0..8], .little));
+    }
+}
+
+test "emitEntitySnapshot: writes one component_changed frame per (entity, component)" {
+    const allocator = std.testing.allocator;
+    var harness = try LoopbackHarness.init();
+    defer harness.deinit();
+
+    var host_port_buf: [32]u8 = undefined;
+    const host_port = try harness.hostPort(&host_port_buf);
+    var preview = try Preview.connect(allocator, host_port);
+    defer preview.deinit();
+    try harness.accept();
+
+    try harness.writeJsonLine("{\"kind\":\"subscribe\",\"components\":[\"Position\",\"Velocity\"]}");
+    try waitForSubscription(&preview, "Position", 1000);
+    try waitForSubscription(&preview, "Velocity", 1000);
+
+    const components = [_]preview_mode.SnapshotComponent{
+        .{ .name = "Position", .bytes = &[_]u8{ 0x01, 0x02, 0x03, 0x04 } },
+        .{ .name = "Velocity", .bytes = &[_]u8{ 0x10, 0x20 } },
+    };
+    try preview.emitEntitySnapshot(42, &components);
+
+    var payload_buf: [256]u8 = undefined;
+    // Frame 1: Position.
+    {
+        const f = try harness.readBinaryFrame(&payload_buf);
+        try std.testing.expectEqual(@intFromEnum(BinaryFrameKind.component_changed), f.kind);
+        try std.testing.expectEqual(@as(u64, 42), std.mem.readInt(u64, f.payload[0..8], .little));
+        const name_len = std.mem.readInt(u16, f.payload[8..10], .little);
+        try std.testing.expectEqualStrings("Position", f.payload[10 .. 10 + name_len]);
+        const data_off: usize = 10 + name_len;
+        const data_len = std.mem.readInt(u32, f.payload[data_off..][0..4], .little);
+        try std.testing.expectEqual(@as(u32, 4), data_len);
+        try std.testing.expectEqualSlices(u8, &[_]u8{ 0x01, 0x02, 0x03, 0x04 }, f.payload[data_off + 4 .. data_off + 4 + data_len]);
+    }
+    // Frame 2: Velocity.
+    {
+        const f = try harness.readBinaryFrame(&payload_buf);
+        try std.testing.expectEqual(@intFromEnum(BinaryFrameKind.component_changed), f.kind);
+        try std.testing.expectEqual(@as(u64, 42), std.mem.readInt(u64, f.payload[0..8], .little));
+        const name_len = std.mem.readInt(u16, f.payload[8..10], .little);
+        try std.testing.expectEqualStrings("Velocity", f.payload[10 .. 10 + name_len]);
+        const data_off: usize = 10 + name_len;
+        const data_len = std.mem.readInt(u32, f.payload[data_off..][0..4], .little);
+        try std.testing.expectEqual(@as(u32, 2), data_len);
+        try std.testing.expectEqualSlices(u8, &[_]u8{ 0x10, 0x20 }, f.payload[data_off + 4 .. data_off + 4 + data_len]);
+    }
+}
+
+test "emitEntitySnapshot: skips components the editor did not subscribe to" {
+    // Snapshots bypass the entity filter but still honour the
+    // component-name filter so we don't leak component kinds the
+    // editor never asked for.
+    const allocator = std.testing.allocator;
+    var harness = try LoopbackHarness.init();
+    defer harness.deinit();
+
+    var host_port_buf: [32]u8 = undefined;
+    const host_port = try harness.hostPort(&host_port_buf);
+    var preview = try Preview.connect(allocator, host_port);
+    defer preview.deinit();
+    try harness.accept();
+
+    try harness.writeJsonLine("{\"kind\":\"subscribe\",\"components\":[\"Position\"]}");
+    try waitForSubscription(&preview, "Position", 1000);
+
+    const components = [_]preview_mode.SnapshotComponent{
+        .{ .name = "Position", .bytes = &[_]u8{0xAA} },
+        .{ .name = "Velocity", .bytes = &[_]u8{0xBB} },
+        .{ .name = "Health", .bytes = &[_]u8{0xCC} },
+    };
+    try preview.emitEntitySnapshot(7, &components);
+    // Follow with a sentinel emit on a different entity so we can
+    // bound the read — emitEntitySnapshot bypasses watched_entities
+    // so a watched-entity flip isn't needed to make this emit fire.
+    try preview.emitComponentChanged(8, "Position", &[_]u8{0xFF});
+
+    var payload_buf: [256]u8 = undefined;
+    // Only Position should appear from the snapshot.
+    {
+        const f = try harness.readBinaryFrame(&payload_buf);
+        try std.testing.expectEqual(@intFromEnum(BinaryFrameKind.component_changed), f.kind);
+        try std.testing.expectEqual(@as(u64, 7), std.mem.readInt(u64, f.payload[0..8], .little));
+        const name_len = std.mem.readInt(u16, f.payload[8..10], .little);
+        try std.testing.expectEqualStrings("Position", f.payload[10 .. 10 + name_len]);
+    }
+    // Then the sentinel — proving Velocity/Health were dropped.
+    {
+        const f = try harness.readBinaryFrame(&payload_buf);
+        try std.testing.expectEqual(@as(u64, 8), std.mem.readInt(u64, f.payload[0..8], .little));
+    }
+}
+
+test "emitEntitySnapshot: bypasses watched_entities filter for unwatched ids" {
+    // The editor has asked to watch entity 42 only, but a snapshot of
+    // entity 99 must still go out — by the time the caller invokes
+    // emitEntitySnapshot it has already decided that entity is
+    // interesting (typically because the editor just sent
+    // watch_entity for it; the in-engine wiring lands in a follow-up).
+    const allocator = std.testing.allocator;
+    var harness = try LoopbackHarness.init();
+    defer harness.deinit();
+
+    var host_port_buf: [32]u8 = undefined;
+    const host_port = try harness.hostPort(&host_port_buf);
+    var preview = try Preview.connect(allocator, host_port);
+    defer preview.deinit();
+    try harness.accept();
+
+    try harness.writeJsonLine("{\"kind\":\"subscribe\",\"components\":[\"Position\"]}");
+    try waitForSubscription(&preview, "Position", 1000);
+
+    try harness.writeJsonLine("{\"kind\":\"watch_entity\",\"id\":42}");
+    try waitForWatchedEntity(&preview, 42, 1000);
+
+    const components = [_]preview_mode.SnapshotComponent{
+        .{ .name = "Position", .bytes = &[_]u8{0x55} },
+    };
+    try preview.emitEntitySnapshot(99, &components);
+
+    var payload_buf: [256]u8 = undefined;
+    const f = try harness.readBinaryFrame(&payload_buf);
+    try std.testing.expectEqual(@intFromEnum(BinaryFrameKind.component_changed), f.kind);
+    try std.testing.expectEqual(@as(u64, 99), std.mem.readInt(u64, f.payload[0..8], .little));
+}
+
 test "Game without preview attached: ECS lifecycle is a no-op for telemetry (#520)" {
     // Sanity check that the `if (self.preview) |*p|` guards genuinely
     // short-circuit — a Game with `preview = null` must not crash, write
