@@ -109,6 +109,7 @@ pub const BinaryFrameKind = enum(u8) {
     entity_created = 1,
     entity_destroyed = 2,
     component_changed = 3,
+    node_entered = 4,
     _,
 };
 
@@ -154,6 +155,13 @@ pub const Preview = struct {
     /// frames for. Keys allocated in `subs_arena` so the editor can
     /// churn the set without leaking into the per-frame `arena`.
     subscribed_components: std.StringHashMapUnmanaged(void) = .{},
+    /// Set of flow names (the `.flow.zon` file stem, no path / no
+    /// extension) the editor wants `node_entered` frames for. Inverse
+    /// default vs. `subscribed_components`: empty set means **no**
+    /// emit. Flow nodes fire much more frequently than component
+    /// changes (60+ Hz across many flows), so opt-in is the safer
+    /// default — editors that don't care pay zero cost.
+    subscribed_flows: std.StringHashMapUnmanaged(void) = .{},
     subs_arena: std.heap.ArenaAllocator,
     /// Inbound newline-framing buffer for `pollSubscription`. Owned
     /// by `inbox_alloc` (the parent allocator) so it can grow past the
@@ -186,6 +194,7 @@ pub const Preview = struct {
         // close here.
         self.stream.close();
         self.subscribed_components.deinit(self.subs_arena.allocator());
+        self.subscribed_flows.deinit(self.subs_arena.allocator());
         self.subs_arena.deinit();
         self.inbox.deinit(self.inbox_alloc);
         self.arena.deinit();
@@ -314,8 +323,41 @@ pub const Preview = struct {
         try self.writeBinaryFrame(.component_changed, buf);
     }
 
-    /// Drain any pending `subscribe` / `unsubscribe` JSON frames sent
-    /// by the editor and apply them to `subscribed_components`. Non-
+    /// Emit a `node_entered` binary frame. **No-op when the flow
+    /// name is not in `subscribed_flows`** — flow nodes fire at
+    /// frame rate across many flows, so the early-out keeps the
+    /// engine from doing even a single allocation if the editor
+    /// hasn't asked for this flow yet.
+    ///
+    /// Payload layout (little-endian):
+    ///
+    ///     [u16 flow_name_len] [flow_name bytes (UTF-8)] [u32 node_id]
+    ///
+    /// `flow_name` is the `.flow.zon` file stem (no path, no
+    /// extension); `node_id` is the stable u32 id the flow_io parser
+    /// assigns to each node.
+    pub fn emitNodeEntered(
+        self: *Preview,
+        flow_name: []const u8,
+        node_id: u32,
+    ) WriteError!void {
+        if (!self.isFlowSubscribed(flow_name)) return;
+        defer _ = self.arena.reset(.retain_capacity);
+        const alloc = self.arena.allocator();
+        const payload_len: usize = @sizeOf(u16) + flow_name.len + @sizeOf(u32);
+        const buf = try alloc.alloc(u8, payload_len);
+        var off: usize = 0;
+        std.mem.writeInt(u16, buf[off..][0..2], @intCast(flow_name.len), .little);
+        off += 2;
+        @memcpy(buf[off .. off + flow_name.len], flow_name);
+        off += flow_name.len;
+        std.mem.writeInt(u32, buf[off..][0..4], node_id, .little);
+        try self.writeBinaryFrame(.node_entered, buf);
+    }
+
+    /// Drain any pending `subscribe` / `unsubscribe` / `subscribe_flow`
+    /// / `unsubscribe_flow` JSON frames sent by the editor and apply
+    /// them to `subscribed_components` / `subscribed_flows`. Non-
     /// blocking — reads only what's currently available on the
     /// socket. Safe to call once per tick.
     ///
@@ -323,6 +365,8 @@ pub const Preview = struct {
     ///
     ///     {"kind":"subscribe","components":["Position","Velocity"]}\n
     ///     {"kind":"unsubscribe","components":["Velocity"]}\n
+    ///     {"kind":"subscribe_flow","flow":"player_state_machine"}\n
+    ///     {"kind":"unsubscribe_flow","flow":"player_state_machine"}\n
     ///
     /// Returns `MalformedSubscription` if a frame parses as JSON but
     /// the shape doesn't match; the caller can choose to log + drop.
@@ -348,6 +392,13 @@ pub const Preview = struct {
     /// serializing the component bytes.
     pub fn isComponentSubscribed(self: *const Preview, comp_name: []const u8) bool {
         return self.subscribed_components.contains(comp_name);
+    }
+
+    /// Returns `true` if `emitNodeEntered` would emit a frame for
+    /// this flow. Useful as a guard around the cost of resolving the
+    /// flow name string at the call site.
+    pub fn isFlowSubscribed(self: *const Preview, flow_name: []const u8) bool {
+        return self.subscribed_flows.contains(flow_name);
     }
 
     // ── Internals ───────────────────────────────────────────────────
@@ -401,25 +452,52 @@ pub const Preview = struct {
         defer _ = self.arena.reset(.retain_capacity);
         const alloc = self.arena.allocator();
 
-        const Parsed = struct {
-            kind: []const u8,
-            components: []const []const u8,
-        };
-        const parsed = std.json.parseFromSliceLeaky(Parsed, alloc, line, .{
+        // Peek the kind first so we can dispatch to a shape-specific
+        // parser. `subscribe`/`unsubscribe` carry a `components`
+        // array; `subscribe_flow`/`unsubscribe_flow` carry a single
+        // `flow` string. Parsing each against its own shape keeps
+        // the wire forwards-compatible — future kinds just add a
+        // branch here.
+        const KindOnly = struct { kind: []const u8 };
+        const kind_only = std.json.parseFromSliceLeaky(KindOnly, alloc, line, .{
             .ignore_unknown_fields = true,
         }) catch return error.MalformedSubscription;
 
-        if (std.mem.eql(u8, parsed.kind, "subscribe")) {
+        if (std.mem.eql(u8, kind_only.kind, "subscribe")) {
+            const Parsed = struct { kind: []const u8, components: []const []const u8 };
+            const parsed = std.json.parseFromSliceLeaky(Parsed, alloc, line, .{
+                .ignore_unknown_fields = true,
+            }) catch return error.MalformedSubscription;
             const subs_alloc = self.subs_arena.allocator();
             for (parsed.components) |name| {
                 if (self.subscribed_components.contains(name)) continue;
                 const owned = try subs_alloc.dupe(u8, name);
                 try self.subscribed_components.put(subs_alloc, owned, {});
             }
-        } else if (std.mem.eql(u8, parsed.kind, "unsubscribe")) {
+        } else if (std.mem.eql(u8, kind_only.kind, "unsubscribe")) {
+            const Parsed = struct { kind: []const u8, components: []const []const u8 };
+            const parsed = std.json.parseFromSliceLeaky(Parsed, alloc, line, .{
+                .ignore_unknown_fields = true,
+            }) catch return error.MalformedSubscription;
             for (parsed.components) |name| {
                 _ = self.subscribed_components.remove(name);
             }
+        } else if (std.mem.eql(u8, kind_only.kind, "subscribe_flow")) {
+            const Parsed = struct { kind: []const u8, flow: []const u8 };
+            const parsed = std.json.parseFromSliceLeaky(Parsed, alloc, line, .{
+                .ignore_unknown_fields = true,
+            }) catch return error.MalformedSubscription;
+            if (!self.subscribed_flows.contains(parsed.flow)) {
+                const subs_alloc = self.subs_arena.allocator();
+                const owned = try subs_alloc.dupe(u8, parsed.flow);
+                try self.subscribed_flows.put(subs_alloc, owned, {});
+            }
+        } else if (std.mem.eql(u8, kind_only.kind, "unsubscribe_flow")) {
+            const Parsed = struct { kind: []const u8, flow: []const u8 };
+            const parsed = std.json.parseFromSliceLeaky(Parsed, alloc, line, .{
+                .ignore_unknown_fields = true,
+            }) catch return error.MalformedSubscription;
+            _ = self.subscribed_flows.remove(parsed.flow);
         } else {
             return error.MalformedSubscription;
         }

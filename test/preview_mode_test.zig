@@ -707,6 +707,185 @@ test "Game lifecycle: createEntity + addComponent emit telemetry; destroy + filt
     }
 }
 
+// ── Phase 3 / #535 — node_entered binary telemetry ──────────────────
+
+/// Spin until the engine reports the given flow as subscribed. Mirror
+/// of `waitForSubscription` for the flow opt-in set.
+fn waitForFlowSubscription(preview: *Preview, flow_name: []const u8, deadline_ms: u64) !void {
+    const start = std.time.milliTimestamp();
+    while (true) {
+        try preview.pollSubscription();
+        if (preview.isFlowSubscribed(flow_name)) return;
+        const now = std.time.milliTimestamp();
+        if (now - start > @as(i64, @intCast(deadline_ms))) return error.SubscriptionDeadlineExceeded;
+        std.Thread.sleep(1 * std.time.ns_per_ms);
+    }
+}
+
+fn waitForFlowUnsubscribed(preview: *Preview, flow_name: []const u8, deadline_ms: u64) !void {
+    const start = std.time.milliTimestamp();
+    while (preview.isFlowSubscribed(flow_name)) {
+        try preview.pollSubscription();
+        const now = std.time.milliTimestamp();
+        if (now - start > @as(i64, @intCast(deadline_ms))) return error.UnsubscribeDeadlineExceeded;
+        std.Thread.sleep(1 * std.time.ns_per_ms);
+    }
+}
+
+test "emitNodeEntered: emits one binary frame when flow is subscribed" {
+    const allocator = std.testing.allocator;
+    var harness = try LoopbackHarness.init();
+    defer harness.deinit();
+
+    var host_port_buf: [32]u8 = undefined;
+    const host_port = try harness.hostPort(&host_port_buf);
+    var preview = try Preview.connect(allocator, host_port);
+    defer preview.deinit();
+    try harness.accept();
+
+    try harness.writeJsonLine("{\"kind\":\"subscribe_flow\",\"flow\":\"test_flow\"}");
+    try waitForFlowSubscription(&preview, "test_flow", 1000);
+
+    try preview.emitNodeEntered("test_flow", 42);
+
+    var payload_buf: [256]u8 = undefined;
+    const frame = try harness.readBinaryFrame(&payload_buf);
+    try std.testing.expectEqual(@intFromEnum(BinaryFrameKind.node_entered), frame.kind);
+    // [u16 flow_name_len][flow_name][u32 node_id]
+    const name_len = std.mem.readInt(u16, frame.payload[0..2], .little);
+    try std.testing.expectEqual(@as(u16, 9), name_len);
+    try std.testing.expectEqualStrings("test_flow", frame.payload[2 .. 2 + name_len]);
+    const id_off: usize = 2 + name_len;
+    try std.testing.expectEqual(@as(u32, 42), std.mem.readInt(u32, frame.payload[id_off..][0..4], .little));
+    // Payload tightly sized — no trailing bytes.
+    try std.testing.expectEqual(id_off + 4, frame.payload.len);
+}
+
+test "emitNodeEntered: no-op when flow is not subscribed" {
+    // Default empty subscription set → opt-in semantics → silence.
+    const allocator = std.testing.allocator;
+    var harness = try LoopbackHarness.init();
+    defer harness.deinit();
+
+    var host_port_buf: [32]u8 = undefined;
+    const host_port = try harness.hostPort(&host_port_buf);
+    var preview = try Preview.connect(allocator, host_port);
+    defer preview.deinit();
+    try harness.accept();
+
+    try std.testing.expect(!preview.isFlowSubscribed("test_flow"));
+    try preview.emitNodeEntered("test_flow", 1);
+    try preview.emitNodeEntered("other_flow", 2);
+
+    // Send a single JSON frame so the harness has something to read
+    // after the (silent) emits — proves no binary bytes preceded it.
+    try preview.sendHeartbeat(500);
+    var buf: [256]u8 = undefined;
+    try std.testing.expect((try harness.peekByte()) != binary_magic);
+    const f = try harness.readFrame(&buf);
+    try std.testing.expect(std.mem.indexOf(u8, f, "\"kind\":\"heartbeat\"") != null);
+}
+
+test "emitNodeEntered: stops firing after unsubscribe_flow" {
+    const allocator = std.testing.allocator;
+    var harness = try LoopbackHarness.init();
+    defer harness.deinit();
+
+    var host_port_buf: [32]u8 = undefined;
+    const host_port = try harness.hostPort(&host_port_buf);
+    var preview = try Preview.connect(allocator, host_port);
+    defer preview.deinit();
+    try harness.accept();
+
+    try harness.writeJsonLine("{\"kind\":\"subscribe_flow\",\"flow\":\"player_state_machine\"}");
+    try waitForFlowSubscription(&preview, "player_state_machine", 1000);
+    try preview.emitNodeEntered("player_state_machine", 7);
+
+    // Consume the one expected frame.
+    var payload_buf: [256]u8 = undefined;
+    const frame = try harness.readBinaryFrame(&payload_buf);
+    try std.testing.expectEqual(@intFromEnum(BinaryFrameKind.node_entered), frame.kind);
+
+    try harness.writeJsonLine("{\"kind\":\"unsubscribe_flow\",\"flow\":\"player_state_machine\"}");
+    try waitForFlowUnsubscribed(&preview, "player_state_machine", 1000);
+
+    // After unsubscribe the emit must be a no-op. Probe with a
+    // heartbeat so we can prove no binary frame slipped through.
+    try preview.emitNodeEntered("player_state_machine", 8);
+    try preview.sendHeartbeat(999);
+    try std.testing.expect((try harness.peekByte()) != binary_magic);
+    var buf: [256]u8 = undefined;
+    const f = try harness.readFrame(&buf);
+    try std.testing.expect(std.mem.indexOf(u8, f, "\"kind\":\"heartbeat\"") != null);
+}
+
+test "emitNodeEntered: exact wire-format guard against drift" {
+    // Hand-compose the bytes we expect on the wire for one frame and
+    // diff against `emitNodeEntered`'s output byte-for-byte. Guards
+    // against accidental layout changes — the editor parses this
+    // exact shape.
+    const allocator = std.testing.allocator;
+    var harness = try LoopbackHarness.init();
+    defer harness.deinit();
+
+    var host_port_buf: [32]u8 = undefined;
+    const host_port = try harness.hostPort(&host_port_buf);
+    var preview = try Preview.connect(allocator, host_port);
+    defer preview.deinit();
+    try harness.accept();
+
+    try harness.writeJsonLine("{\"kind\":\"subscribe_flow\",\"flow\":\"hud\"}");
+    try waitForFlowSubscription(&preview, "hud", 1000);
+
+    try preview.emitNodeEntered("hud", 0x01020304);
+
+    // Header: magic(1) + kind(1) + length(4, LE)
+    // Payload: u16 name_len LE + "hud" + u32 node_id LE
+    // payload_len = 2 + 3 + 4 = 9
+    const expected = [_]u8{
+        binary_magic,
+        @intFromEnum(BinaryFrameKind.node_entered),
+        9, 0, 0, 0, // length LE
+        3, 0, // name_len LE
+        'h', 'u', 'd',
+        0x04, 0x03, 0x02, 0x01, // node_id LE
+    };
+    var actual: [expected.len]u8 = undefined;
+    try harness.readExact(&actual);
+    try std.testing.expectEqualSlices(u8, &expected, &actual);
+}
+
+test "pollSubscription: subscribe_flow / unsubscribe_flow update subscribed_flows" {
+    const allocator = std.testing.allocator;
+    var harness = try LoopbackHarness.init();
+    defer harness.deinit();
+
+    var host_port_buf: [32]u8 = undefined;
+    const host_port = try harness.hostPort(&host_port_buf);
+    var preview = try Preview.connect(allocator, host_port);
+    defer preview.deinit();
+    try harness.accept();
+
+    try harness.writeJsonLine("{\"kind\":\"subscribe_flow\",\"flow\":\"alpha\"}");
+    try harness.writeJsonLine("{\"kind\":\"subscribe_flow\",\"flow\":\"beta\"}");
+    try waitForFlowSubscription(&preview, "alpha", 1000);
+    try waitForFlowSubscription(&preview, "beta", 1000);
+    try std.testing.expect(preview.isFlowSubscribed("alpha"));
+    try std.testing.expect(preview.isFlowSubscribed("beta"));
+    try std.testing.expect(!preview.isFlowSubscribed("gamma"));
+
+    // Speculative subscribe to a flow that doesn't exist yet must
+    // silently succeed — editors subscribe before flows load.
+    try harness.writeJsonLine("{\"kind\":\"subscribe_flow\",\"flow\":\"not_yet_loaded\"}");
+    try waitForFlowSubscription(&preview, "not_yet_loaded", 1000);
+
+    try harness.writeJsonLine("{\"kind\":\"unsubscribe_flow\",\"flow\":\"beta\"}");
+    try waitForFlowUnsubscribed(&preview, "beta", 1000);
+    try std.testing.expect(preview.isFlowSubscribed("alpha"));
+    try std.testing.expect(!preview.isFlowSubscribed("beta"));
+    try std.testing.expect(preview.isFlowSubscribed("not_yet_loaded"));
+}
+
 test "Game without preview attached: ECS lifecycle is a no-op for telemetry (#520)" {
     // Sanity check that the `if (self.preview) |*p|` guards genuinely
     // short-circuit — a Game with `preview = null` must not crash, write
