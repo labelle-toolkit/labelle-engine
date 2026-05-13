@@ -31,6 +31,8 @@
 ///        {"kind":"bye","reason":"normal"}\n
 ///        {"kind":"subscribe","components":["Position","Velocity"]}\n   (editor → engine)
 ///        {"kind":"unsubscribe","components":["Velocity"]}\n             (editor → engine)
+///        {"kind":"watch_entity","id":42}\n                               (editor → engine, Phase 3)
+///        {"kind":"unwatch_entity","id":42}\n                             (editor → engine, Phase 3)
 ///
 /// 2. **Binary telemetry plane** (Phase 2) — length-prefixed records
 ///    led by an `ESC` (0x1B) magic byte:
@@ -118,6 +120,13 @@ pub const BinaryFrameKind = enum(u8) {
 /// wire traffic at ~4 Hz regardless of frame rate.
 pub const heartbeat_interval_ms: u64 = 250;
 
+/// A (component_name, raw_bytes) pair for `emitEntitySnapshot`. Both
+/// slices are borrowed — they only need to outlive the snapshot call.
+pub const SnapshotComponent = struct {
+    name: []const u8,
+    bytes: []const u8,
+};
+
 pub const ParseError = error{
     InvalidAddress,
     InvalidPort,
@@ -144,9 +153,15 @@ pub const PollError = std.net.Stream.ReadError || error{
 ///   `component_changed` frames for. Default empty: until the editor
 ///   opts in, no component traffic flows. Lifecycle frames
 ///   (`entity_created`/`entity_destroyed`) always emit.
+/// - `watched_entities` — entity IDs the editor has asked to scope
+///   `component_changed` frames to (Phase 3 / #534). Empty set means
+///   "watch everything" (Phase 2 back-compat). Non-empty set means
+///   only IDs in the set emit; the component-name filter still
+///   applies on top.
 /// - `inbox` — partial-read buffer for the editor → engine direction
-///   (newline-delimited JSON: `subscribe`/`unsubscribe`). Sized for a
-///   handful of component names; grows on demand via `inbox_alloc`.
+///   (newline-delimited JSON: `subscribe`/`unsubscribe`/
+///   `watch_entity`/`unwatch_entity`). Sized for a handful of names;
+///   grows on demand via `inbox_alloc`.
 pub const Preview = struct {
     stream: std.net.Stream,
     arena: std.heap.ArenaAllocator,
@@ -163,6 +178,10 @@ pub const Preview = struct {
     /// default — editors that don't care pay zero cost.
     subscribed_flows: std.StringHashMapUnmanaged(void) = .{},
     subs_arena: std.heap.ArenaAllocator,
+    /// Set of entity IDs the editor wants `component_changed` frames
+    /// scoped to. See the field-level doc on `Preview` for the
+    /// empty-set semantics (= "watch everything").
+    watched_entities: std.AutoHashMapUnmanaged(u64, void) = .{},
     /// Inbound newline-framing buffer for `pollSubscription`. Owned
     /// by `inbox_alloc` (the parent allocator) so it can grow past the
     /// initial capacity if a very long subscribe list arrives.
@@ -195,6 +214,7 @@ pub const Preview = struct {
         self.stream.close();
         self.subscribed_components.deinit(self.subs_arena.allocator());
         self.subscribed_flows.deinit(self.subs_arena.allocator());
+        self.watched_entities.deinit(self.subs_arena.allocator());
         self.subs_arena.deinit();
         self.inbox.deinit(self.inbox_alloc);
         self.arena.deinit();
@@ -292,6 +312,11 @@ pub const Preview = struct {
     /// even a single allocation if the editor hasn't asked for this
     /// component yet.
     ///
+    /// Phase 3 (#534): also no-op when `watched_entities` is non-
+    /// empty AND `entity_id` is not in the set. Empty `watched_entities`
+    /// preserves Phase 2 "watch everything" semantics so existing
+    /// callers see no behaviour change until the editor opts in.
+    ///
     /// Payload layout (little-endian):
     ///
     ///     [u64 entity_id] [u16 name_len] [name bytes] [u32 data_len] [data bytes]
@@ -306,6 +331,45 @@ pub const Preview = struct {
         comp_bytes: []const u8,
     ) WriteError!void {
         if (!self.isComponentSubscribed(comp_name)) return;
+        if (!self.isEntityWatched(entity_id)) return;
+        try self.writeComponentChangedFrame(entity_id, comp_name, comp_bytes);
+    }
+
+    /// Emit a one-shot "snapshot" of an entity's components. Mechanically
+    /// just N back-to-back `component_changed` frames — the snapshot is
+    /// the wire-level concept of "all current values right now" rather
+    /// than a distinct frame kind. Useful right after the editor sends
+    /// `watch_entity` so the UI doesn't sit on a stale view until the
+    /// next mutation.
+    ///
+    /// Bypasses the `watched_entities` filter (the caller has obviously
+    /// already decided this entity is interesting) but **honours**
+    /// `subscribed_components` so a snapshot doesn't leak component
+    /// kinds the editor hasn't opted into.
+    ///
+    /// Note: `Preview` does not own the ECS, so it can't walk an entity's
+    /// components on its own — `game.zig` knows that mapping and is
+    /// expected to call this helper from its `watch_entity` arrival
+    /// hook. As of Phase 3 the wiring on the `game.zig` side is still a
+    /// follow-up; this method exposes the wire format so that follow-up
+    /// has a single call site.
+    pub fn emitEntitySnapshot(
+        self: *Preview,
+        entity_id: u64,
+        components: []const SnapshotComponent,
+    ) WriteError!void {
+        for (components) |c| {
+            if (!self.isComponentSubscribed(c.name)) continue;
+            try self.writeComponentChangedFrame(entity_id, c.name, c.bytes);
+        }
+    }
+
+    fn writeComponentChangedFrame(
+        self: *Preview,
+        entity_id: u64,
+        comp_name: []const u8,
+        comp_bytes: []const u8,
+    ) WriteError!void {
         defer _ = self.arena.reset(.retain_capacity);
         const alloc = self.arena.allocator();
         const payload_len: usize = @sizeOf(u64) + @sizeOf(u16) + comp_name.len + @sizeOf(u32) + comp_bytes.len;
@@ -401,6 +465,14 @@ pub const Preview = struct {
         return self.subscribed_flows.contains(flow_name);
     }
 
+    /// Phase 3 (#534) entity-scope check. Returns `true` when the
+    /// caller should emit for `entity_id`. The "empty set means watch
+    /// everything" rule lives here so call sites stay free of policy.
+    pub fn isEntityWatched(self: *const Preview, entity_id: u64) bool {
+        if (self.watched_entities.count() == 0) return true;
+        return self.watched_entities.contains(entity_id);
+    }
+
     // ── Internals ───────────────────────────────────────────────────
 
     fn writeBinaryFrame(
@@ -455,9 +527,9 @@ pub const Preview = struct {
         // Peek the kind first so we can dispatch to a shape-specific
         // parser. `subscribe`/`unsubscribe` carry a `components`
         // array; `subscribe_flow`/`unsubscribe_flow` carry a single
-        // `flow` string. Parsing each against its own shape keeps
-        // the wire forwards-compatible — future kinds just add a
-        // branch here.
+        // `flow` string; `watch_entity`/`unwatch_entity` carry an
+        // `id`. Parsing each against its own shape keeps the wire
+        // forwards-compatible — future kinds just add a branch here.
         const KindOnly = struct { kind: []const u8 };
         const kind_only = std.json.parseFromSliceLeaky(KindOnly, alloc, line, .{
             .ignore_unknown_fields = true,
@@ -498,6 +570,24 @@ pub const Preview = struct {
                 .ignore_unknown_fields = true,
             }) catch return error.MalformedSubscription;
             _ = self.subscribed_flows.remove(parsed.flow);
+        } else if (std.mem.eql(u8, kind_only.kind, "watch_entity")) {
+            // Phase 3 (#534). Empty `watched_entities` means
+            // "watch everything"; once the editor adds an ID we
+            // switch to the strict include-list. The follow-up
+            // snapshot fire is left to the caller in this PR — the
+            // engine doesn't own the ECS, so it can't walk an
+            // entity's components from here. See `emitEntitySnapshot`.
+            const Parsed = struct { kind: []const u8, id: u64 };
+            const parsed = std.json.parseFromSliceLeaky(Parsed, alloc, line, .{
+                .ignore_unknown_fields = true,
+            }) catch return error.MalformedSubscription;
+            try self.watched_entities.put(self.subs_arena.allocator(), parsed.id, {});
+        } else if (std.mem.eql(u8, kind_only.kind, "unwatch_entity")) {
+            const Parsed = struct { kind: []const u8, id: u64 };
+            const parsed = std.json.parseFromSliceLeaky(Parsed, alloc, line, .{
+                .ignore_unknown_fields = true,
+            }) catch return error.MalformedSubscription;
+            _ = self.watched_entities.remove(parsed.id);
         } else {
             return error.MalformedSubscription;
         }
