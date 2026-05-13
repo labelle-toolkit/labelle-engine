@@ -196,6 +196,23 @@ pub const AssetCatalog = struct {
         file_type: [:0]const u8,
         bytes: []const u8,
     ) !void {
+        return self.registerWithParams(name, loader_kind, file_type, bytes, null);
+    }
+
+    /// Metadata + decode-parameters registration. Same lifetime
+    /// contract as `register`: every borrowed slice (`name`,
+    /// `file_type`, `bytes`) AND the `params` pointer must outlive the
+    /// catalog entry. Used by `registerFont` to attach a
+    /// `*const FontBakeParams` so the worker can hand it to the font
+    /// loader's `decode` via `WorkRequest.params`.
+    pub fn registerWithParams(
+        self: *AssetCatalog,
+        name: []const u8,
+        loader_kind: LoaderKind,
+        file_type: [:0]const u8,
+        bytes: []const u8,
+        params: ?*const anyopaque,
+    ) !void {
         if (self.entries.contains(name)) return error.AssetAlreadyRegistered;
         try self.entries.put(name, .{
             .state = .registered,
@@ -204,11 +221,30 @@ pub const AssetCatalog = struct {
             .loader_kind = loader_kind,
             .raw_bytes = bytes,
             .file_type = file_type,
-            .params = null,
+            .params = params,
             .decoded = null,
             .resource = null,
             .last_error = null,
         });
+    }
+
+    /// Convenience wrapper for the font loader: registers under
+    /// `LoaderKind.font` and attaches the `FontBakeParams` pointer
+    /// the worker must forward into the loader's `decode`.
+    ///
+    /// `params` is borrowed (not copied) under the same `@embedFile`
+    /// lifetime contract that governs the other slices on the entry.
+    /// Pass a pointer to a `static const` or assembler-generated
+    /// global; tests use a function-local `var` whose address is
+    /// stable for the duration of the catalog.
+    pub fn registerFont(
+        self: *AssetCatalog,
+        name: []const u8,
+        file_type: [:0]const u8,
+        bytes: []const u8,
+        params: *const font_loader.FontBakeParams,
+    ) !void {
+        return self.registerWithParams(name, .font, file_type, bytes, @ptrCast(params));
     }
 
     /// Bumps the refcount and returns a pointer to the entry. The
