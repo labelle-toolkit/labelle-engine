@@ -39,6 +39,13 @@ pub const Label = struct {
     font_size: f32 = 16,
     color: GuiColor = .{},
     visible: bool = true,
+    /// Optional name of a font asset registered in `game.assets`. When
+    /// non-null, the renderer looks up the asset, extracts the
+    /// `FontId` from `entry.resource.?.font`, and passes it to the GUI
+    /// backend's font-aware text draw call. Null falls back to the
+    /// backend's default font — today's behaviour. See
+    /// `src/game/gui_mixin.zig` for the lookup path.
+    font: ?[]const u8 = null,
 };
 
 pub const Button = struct {

@@ -62,6 +62,7 @@ pub fn build(b: *std.Build) void {
         "test/asset_catalog_test.zig",
         "test/audio_loader_test.zig",
         "test/font_types_test.zig",
+        "test/font_loader_test.zig",
         "test/asset_streaming_shim_test.zig",
         "test/animation_def_test.zig",
         "test/sprite_animation_test.zig",
