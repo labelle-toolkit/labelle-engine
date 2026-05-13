@@ -1815,6 +1815,112 @@ pub fn GameConfig(
             return true;
         }
 
+        // ── Audio asset shims (Phase 4 of Asset Streaming RFC, #447) ──
+
+        /// Register a sound effect in deferred mode: the catalog keeps
+        /// a pointer to the encoded WAV/OGG bytes; decode + upload
+        /// happen the first time `loadSoundIfNeeded(name)` (or the
+        /// scene-manifest acquire path) bumps the refcount above zero.
+        ///
+        /// `audio_data` must outlive the catalog entry — typically a
+        /// slice from `@embedFile`. `file_type` is the lower-case
+        /// extension without the leading dot (e.g. `"wav"`, `"ogg"`).
+        ///
+        /// Idempotent against repeat-registration of the same name —
+        /// the assembler-generated scene manifest may register the
+        /// asset before this shim, and re-registering identical bytes
+        /// is a no-op.
+        pub fn registerSoundFromMemory(self: *Self, name: []const u8, file_type: [:0]const u8, audio_data: []const u8) !void {
+            self.assets.register(name, .audio, file_type, audio_data) catch |err| switch (err) {
+                error.AssetAlreadyRegistered => {},
+                else => return err,
+            };
+        }
+
+        /// Convenience: `registerSoundFromMemory` + `loadSoundIfNeeded`.
+        /// Blocks the calling frame until decode + upload finish, same
+        /// surface contract as `loadAtlasFromMemory` for images.
+        pub fn loadSoundFromMemory(self: *Self, name: []const u8, file_type: [:0]const u8, audio_data: []const u8) !void {
+            try self.registerSoundFromMemory(name, file_type, audio_data);
+            _ = try self.loadSoundIfNeeded(name);
+        }
+
+        /// Decode + upload a previously-registered sound if it hasn't
+        /// already been loaded. No-op (returns `false`) on already-ready
+        /// entries. Mirrors `loadAtlasIfNeeded`'s busy-pump shape; see
+        /// the long-form rationale there for the `errdefer release`,
+        /// `resetFailed`, and `std.Thread.yield` choices.
+        pub fn loadSoundIfNeeded(self: *Self, name: []const u8) !bool {
+            if (self.assets.isReady(name)) return false;
+            _ = try self.assets.acquire(name);
+            errdefer self.assets.release(name);
+            while (!self.assets.isReady(name)) {
+                if (self.assets.lastError(name)) |err| {
+                    self.assets.resetFailed(name);
+                    return err;
+                }
+                self.assets.pump();
+                std.Thread.yield() catch {};
+            }
+            return true;
+        }
+
+        // ── Font asset shims (Phase 4 of Asset Streaming RFC, #448) ──
+
+        /// Register a font in deferred mode: the catalog stores the
+        /// encoded TTF/OTF bytes alongside the bake params; rasterise +
+        /// atlas upload happen the first time `loadFontIfNeeded(name)`
+        /// (or the scene-manifest acquire path) bumps the refcount.
+        ///
+        /// `font_data` and `params` are borrowed — both must outlive
+        /// the catalog entry. `params` rides through `WorkRequest.params`
+        /// as a `?*const anyopaque` and is cast back to
+        /// `*const FontBakeParams` inside the font loader's `decode`
+        /// (RFC-FONT-LOADER §7). `file_type` is the lower-case
+        /// extension without the leading dot (`"ttf"`, `"otf"`).
+        pub fn registerFontFromMemory(
+            self: *Self,
+            name: []const u8,
+            file_type: [:0]const u8,
+            font_data: []const u8,
+            params: *const assets_mod.font_loader.FontBakeParams,
+        ) !void {
+            self.assets.registerFont(name, file_type, font_data, params) catch |err| switch (err) {
+                error.AssetAlreadyRegistered => {},
+                else => return err,
+            };
+        }
+
+        /// Convenience: `registerFontFromMemory` + `loadFontIfNeeded`.
+        pub fn loadFontFromMemory(
+            self: *Self,
+            name: []const u8,
+            file_type: [:0]const u8,
+            font_data: []const u8,
+            params: *const assets_mod.font_loader.FontBakeParams,
+        ) !void {
+            try self.registerFontFromMemory(name, file_type, font_data, params);
+            _ = try self.loadFontIfNeeded(name);
+        }
+
+        /// Decode + upload a previously-registered font if it hasn't
+        /// already been loaded. Same busy-pump shape as
+        /// `loadAtlasIfNeeded` / `loadSoundIfNeeded`.
+        pub fn loadFontIfNeeded(self: *Self, name: []const u8) !bool {
+            if (self.assets.isReady(name)) return false;
+            _ = try self.assets.acquire(name);
+            errdefer self.assets.release(name);
+            while (!self.assets.isReady(name)) {
+                if (self.assets.lastError(name)) |err| {
+                    self.assets.resetFailed(name);
+                    return err;
+                }
+                self.assets.pump();
+                std.Thread.yield() catch {};
+            }
+            return true;
+        }
+
         /// Whether an atlas's PNG has been decoded. Returns `false`
         /// for unregistered atlases too — both states mean "you can't
         /// use it yet". Used by loading scripts to decide which
