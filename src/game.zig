@@ -1845,12 +1845,23 @@ pub fn GameConfig(
             _ = try self.loadSoundIfNeeded(name);
         }
 
-        /// Decode + upload a previously-registered sound if it hasn't
-        /// already been loaded. No-op (returns `false`) on already-ready
-        /// entries. Mirrors `loadAtlasIfNeeded`'s busy-pump shape; see
-        /// the long-form rationale there for the `errdefer release`,
-        /// `resetFailed`, and `std.Thread.yield` choices.
-        pub fn loadSoundIfNeeded(self: *Self, name: []const u8) !bool {
+        /// Shared busy-pump used by `loadSoundIfNeeded` and
+        /// `loadFontIfNeeded`. The atlas counterpart
+        /// (`loadAtlasIfNeededImpl`) does NOT delegate here because
+        /// it threads a `markPendingLoaded` call into the
+        /// `TextureManager` after the upload — the audio + font paths
+        /// have no equivalent post-upload bridging.
+        ///
+        /// Lifecycle (see `loadAtlasIfNeededImpl` for the long-form
+        /// rationale this mirrors): bumps the catalog refcount so the
+        /// worker enqueues the decode, then busy-pumps until the entry
+        /// is `.ready` (happy path) or `lastError` is set (decode /
+        /// upload failed). `errdefer release` keeps the refcount
+        /// consistent on every failure path so a retry after a failed
+        /// load actually re-triggers the decode (without the
+        /// `resetFailed`, `acquire` would only re-enqueue on a fresh
+        /// `.registered` entry).
+        fn loadAssetIfNeededInternal(self: *Self, name: []const u8) !bool {
             if (self.assets.isReady(name)) return false;
             _ = try self.assets.acquire(name);
             errdefer self.assets.release(name);
@@ -1863,6 +1874,13 @@ pub fn GameConfig(
                 std.Thread.yield() catch {};
             }
             return true;
+        }
+
+        /// Decode + upload a previously-registered sound if it hasn't
+        /// already been loaded. No-op (returns `false`) on already-ready
+        /// entries.
+        pub fn loadSoundIfNeeded(self: *Self, name: []const u8) !bool {
+            return self.loadAssetIfNeededInternal(name);
         }
 
         // ── Font asset shims (Phase 4 of Asset Streaming RFC, #448) ──
@@ -1904,21 +1922,10 @@ pub fn GameConfig(
         }
 
         /// Decode + upload a previously-registered font if it hasn't
-        /// already been loaded. Same busy-pump shape as
-        /// `loadAtlasIfNeeded` / `loadSoundIfNeeded`.
+        /// already been loaded. Delegates to the shared
+        /// `loadAssetIfNeededInternal` busy-pump.
         pub fn loadFontIfNeeded(self: *Self, name: []const u8) !bool {
-            if (self.assets.isReady(name)) return false;
-            _ = try self.assets.acquire(name);
-            errdefer self.assets.release(name);
-            while (!self.assets.isReady(name)) {
-                if (self.assets.lastError(name)) |err| {
-                    self.assets.resetFailed(name);
-                    return err;
-                }
-                self.assets.pump();
-                std.Thread.yield() catch {};
-            }
-            return true;
+            return self.loadAssetIfNeededInternal(name);
         }
 
         /// Whether an atlas's PNG has been decoded. Returns `false`
