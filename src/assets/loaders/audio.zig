@@ -15,10 +15,12 @@ const AssetEntry = loader.AssetEntry;
 fn decode(
     file_type: [:0]const u8,
     data: []const u8,
+    params: ?*const anyopaque,
     allocator: Allocator,
 ) anyerror!DecodedPayload {
     _ = file_type;
     _ = data;
+    _ = params;
     _ = allocator;
     return error.NotImplemented;
 }

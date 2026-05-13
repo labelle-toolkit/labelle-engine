@@ -333,6 +333,7 @@ pub const AssetWorker = struct {
         const decoded_or_err = request.vtable.decode(
             request.file_type,
             request.bytes,
+            request.params,
             allocator,
         );
         return if (decoded_or_err) |decoded|

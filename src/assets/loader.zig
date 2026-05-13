@@ -133,9 +133,16 @@ pub const AssetLoaderVTable = struct {
     /// Worker-thread CPU decode. Allocator-owned output stored on the
     /// resulting `WorkResult.decoded`. May return error → result.err
     /// is set and the entry transitions to `.failed` in `pump()`.
+    ///
+    /// `params` is the loader-specific decode parameter pointer
+    /// forwarded from `WorkRequest.params`. The concrete loader
+    /// `@ptrCast`s it to its own params type (e.g. the font loader
+    /// reads `*const FontBakeParams`). `null` for loaders that don't
+    /// take parameters (image, audio today).
     decode: *const fn (
         file_type: [:0]const u8,
         data: []const u8,
+        params: ?*const anyopaque,
         allocator: Allocator,
     ) anyerror!DecodedPayload,
 
