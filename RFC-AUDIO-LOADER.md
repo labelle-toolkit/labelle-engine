@@ -129,7 +129,13 @@ The type-erased `DecodedPayload` / `UploadedResource` mean the catalog, pump, an
 Replaces the three `error.NotImplemented` stubs:
 
 ```zig
-fn decode(file_type: [:0]const u8, data: []const u8, allocator: Allocator) anyerror!DecodedPayload {
+fn decode(
+    file_type: [:0]const u8,
+    data: []const u8,
+    params: ?*const anyopaque,
+    allocator: Allocator,
+) anyerror!DecodedPayload {
+    _ = params; // audio loader doesn't take decode params
     const backend = active_backend orelse return error.AudioBackendNotSet;
     const out = try backend.decode(file_type, data, allocator);
     return .{ .audio = .{
