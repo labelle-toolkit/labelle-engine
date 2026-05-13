@@ -7,6 +7,7 @@ pub const game_mod = @import("game.zig");
 pub const game_log_mod = @import("game_log.zig");
 pub const input_mod = @import("input.zig");
 pub const audio_mod = @import("audio.zig");
+pub const font_types_mod = @import("font_types");
 pub const gui_mod = @import("gui.zig");
 pub const gui_runtime_state_mod = @import("gui_runtime_state.zig");
 pub const form_binder_mod = @import("form_binder.zig");
@@ -63,6 +64,12 @@ pub const StubAudio = audio_mod.StubAudio;
 pub const SoundId = audio_mod.SoundId;
 pub const MusicId = audio_mod.MusicId;
 pub const AudioError = audio_mod.AudioError;
+
+// ── Fonts ──
+pub const FontId = font_types_mod.FontId;
+pub const Glyph = font_types_mod.Glyph;
+pub const CodepointEntry = font_types_mod.CodepointEntry;
+pub const KernPair = font_types_mod.KernPair;
 
 // ── GUI ──
 pub const GuiInterface = gui_mod.GuiInterface;

@@ -204,6 +204,7 @@ pub const AssetCatalog = struct {
             .loader_kind = loader_kind,
             .raw_bytes = bytes,
             .file_type = file_type,
+            .params = null,
             .decoded = null,
             .resource = null,
             .last_error = null,
@@ -242,6 +243,7 @@ pub const AssetCatalog = struct {
                 .vtable = entry.loader,
                 .file_type = entry.file_type,
                 .bytes = entry.raw_bytes,
+                .params = entry.params,
             };
             // Round-robin across the worker pool so decode load is
             // spread. If the picked ring is full (shouldn't happen in

@@ -304,6 +304,7 @@ test "image loader: mock backend decode→upload→free round-trip" {
         .file_type = "png",
         .decoded = payload,
         .resource = null,
+        .params = null,
         .last_error = null,
     };
     try upload(&entry, payload, testing.allocator);
@@ -356,6 +357,7 @@ test "image loader: upload error leaves pixels alive for drop cleanup" {
         .file_type = "png",
         .decoded = payload,
         .resource = null,
+        .params = null,
         .last_error = null,
     };
     try testing.expectError(error.MockUploadError, upload(&entry, payload, testing.allocator));
@@ -377,6 +379,7 @@ test "image loader: free without a backend or resource is a no-op" {
         .file_type = "png",
         .decoded = null,
         .resource = null,
+        .params = null,
         .last_error = null,
     };
     free(&entry);
