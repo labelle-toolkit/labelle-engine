@@ -13,6 +13,9 @@
         .jsonc = .{
             .path = "jsonc",
         },
+        .audio_backend = .{
+            .path = "audio_backend",
+        },
     },
     .paths = .{
         "build.zig",
@@ -21,5 +24,6 @@
         "scene",
         "jsonc",
         "codegen",
+        "audio_backend",
     },
 }
