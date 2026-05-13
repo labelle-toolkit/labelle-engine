@@ -132,7 +132,11 @@ Replaces the three `error.NotImplemented` stubs:
 fn decode(file_type: [:0]const u8, data: []const u8, allocator: Allocator) anyerror!DecodedPayload {
     const backend = active_backend orelse return error.AudioBackendNotSet;
     const out = try backend.decode(file_type, data, allocator);
-    return .{ .audio = out };
+    return .{ .audio = .{
+        .samples = out.samples,
+        .sample_rate = out.sample_rate,
+        .channels = out.channels,
+    } };
 }
 
 fn upload(entry: *AssetEntry, decoded: DecodedPayload, allocator: Allocator) anyerror!void {
