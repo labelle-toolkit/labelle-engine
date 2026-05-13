@@ -30,6 +30,11 @@ pub const WorkResult = worker_mod.WorkResult;
 /// mock backend via `engine.ImageLoader.setBackend`.
 pub const image_loader = @import("loaders/image.zig");
 
+/// Re-exported so the assembler can install the font baker via
+/// `engine.FontLoader.setBackend` and so tests in
+/// `test/font_loader_test.zig` can inject a mock the same way.
+pub const font_loader = @import("loaders/font.zig");
+
 test {
     // Pull every file in the module tree into the test binary. The
     // `zig build test` step rooted at this file (see `build.zig`'s

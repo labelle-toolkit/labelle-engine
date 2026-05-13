@@ -70,6 +70,15 @@ pub const FontId = font_types_mod.FontId;
 pub const Glyph = font_types_mod.Glyph;
 pub const CodepointEntry = font_types_mod.CodepointEntry;
 pub const KernPair = font_types_mod.KernPair;
+/// Runtime backend hook for the font asset loader, paired with the
+/// `FontBakeParams` / `CodepointRange` shapes the catalog stores on
+/// each font entry and forwards into `decode` via `WorkRequest.params`.
+/// See `src/assets/loaders/font.zig` for the full ownership contract.
+pub const FontLoader = assets_mod.font_loader;
+pub const FontBackend = assets_mod.font_loader.FontBackend;
+pub const FontBakeParams = assets_mod.font_loader.FontBakeParams;
+pub const CodepointRange = assets_mod.font_loader.CodepointRange;
+pub const DecodedFont = assets_mod.font_loader.DecodedFont;
 
 // ── GUI ──
 pub const GuiInterface = gui_mod.GuiInterface;
