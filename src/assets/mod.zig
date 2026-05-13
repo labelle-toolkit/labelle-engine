@@ -30,6 +30,13 @@ pub const WorkResult = worker_mod.WorkResult;
 /// mock backend via `engine.ImageLoader.setBackend`.
 pub const image_loader = @import("loaders/image.zig");
 
+/// Re-exported so the assembler-generated `main.zig` can call
+/// `setBackend` with adapters that forward to the chosen audio
+/// backend (raylib-audio, sokol-audio, …) via `dr_wav` / `stb_vorbis`.
+/// Tests inject a mock via `engine.AudioLoader.setBackend`. See
+/// `src/assets/loaders/audio.zig` for the full rationale.
+pub const audio_loader = @import("loaders/audio.zig");
+
 test {
     // Pull every file in the module tree into the test binary. The
     // `zig build test` step rooted at this file (see `build.zig`'s

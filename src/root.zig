@@ -64,6 +64,14 @@ pub const StubAudio = audio_mod.StubAudio;
 pub const SoundId = audio_mod.SoundId;
 pub const MusicId = audio_mod.MusicId;
 pub const AudioError = audio_mod.AudioError;
+/// Runtime backend hook for the audio asset loader. The assembler
+/// populates this at `Game.init` via `AudioLoader.setBackend(...)`
+/// with adapters that forward to the chosen audio backend's
+/// `decode` (dr_wav / stb_vorbis) / `upload` / `unload` calls. See
+/// `src/assets/loaders/audio.zig` for the full rationale.
+pub const AudioLoader = assets_mod.audio_loader;
+pub const AudioBackend = assets_mod.audio_loader.AudioBackend;
+pub const DecodedAudio = assets_mod.audio_loader.DecodedAudio;
 
 // ── Fonts ──
 pub const FontId = font_types_mod.FontId;
