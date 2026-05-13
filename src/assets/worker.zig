@@ -49,11 +49,21 @@ pub const ring_capacity: u32 = 64;
 /// `entry_name`, `file_type` and `bytes` all live for the program's
 /// entire lifetime (see the `@embedFile` invariant on the catalog),
 /// so the worker can read them without touching the catalog.
+///
+/// `params` is a loader-specific input that some decoders need
+/// alongside the raw bytes (e.g. fonts need pixel height + glyph
+/// ranges to bake an atlas — see RFC-FONT-LOADER §7). Type-erased so
+/// `WorkRequest` itself stays loader-agnostic; the concrete loader
+/// casts to its own params struct. Lifetime matches `bytes`: the
+/// catalog stores the params alongside the entry and the pointer
+/// stays valid until the entry is removed. `null` for loaders that
+/// don't need parameters (image, audio).
 pub const WorkRequest = struct {
     entry_name: []const u8,
     vtable: *const AssetLoaderVTable,
     file_type: [:0]const u8,
     bytes: []const u8,
+    params: ?*const anyopaque = null,
 };
 
 /// Worker → main message. Either `decoded` is set (success) or
@@ -323,6 +333,7 @@ pub const AssetWorker = struct {
         const decoded_or_err = request.vtable.decode(
             request.file_type,
             request.bytes,
+            request.params,
             allocator,
         );
         return if (decoded_or_err) |decoded|

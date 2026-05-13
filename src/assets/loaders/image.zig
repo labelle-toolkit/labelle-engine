@@ -125,8 +125,10 @@ pub fn currentBackend() ?ImageBackend {
 fn decode(
     file_type: [:0]const u8,
     data: []const u8,
+    params: ?*const anyopaque,
     allocator: Allocator,
 ) anyerror!DecodedPayload {
+    _ = params; // image loader doesn't take params
     const b = backend orelse return error.ImageBackendNotInitialized;
     const decoded = try b.decode(file_type, data, allocator);
     return .{ .image = .{
@@ -276,7 +278,7 @@ test "image loader: decode without backend errors cleanly" {
     defer clearBackend();
     try testing.expectError(
         error.ImageBackendNotInitialized,
-        decode("png", "fake", testing.allocator),
+        decode("png", "fake", null, testing.allocator),
     );
 }
 
@@ -286,7 +288,7 @@ test "image loader: mock backend decode→upload→free round-trip" {
     defer clearBackend();
 
     // 1. decode on the worker thread (synchronously in the test).
-    const payload = try decode("png", "fake-png-bytes", testing.allocator);
+    const payload = try decode("png", "fake-png-bytes", null, testing.allocator);
     try testing.expectEqual(@as(u32, 1), MockBackend.decode_calls);
     try testing.expectEqual(@as(u32, 2), payload.image.width);
     try testing.expectEqual(@as(u32, 2), payload.image.height);
@@ -304,6 +306,7 @@ test "image loader: mock backend decode→upload→free round-trip" {
         .file_type = "png",
         .decoded = payload,
         .resource = null,
+        .params = null,
         .last_error = null,
     };
     try upload(&entry, payload, testing.allocator);
@@ -333,7 +336,7 @@ test "image loader: drop path frees pixels without touching GPU" {
     // Simulate a decode landing on the result ring but the refcount
     // dropping back to zero before pump() can finalise — the catalog
     // routes the payload straight to `drop`.
-    const payload = try decode("png", "fake", testing.allocator);
+    const payload = try decode("png", "fake", null, testing.allocator);
     drop(testing.allocator, payload);
 
     try testing.expectEqual(@as(u32, 0), MockBackend.upload_calls);
@@ -346,7 +349,7 @@ test "image loader: upload error leaves pixels alive for drop cleanup" {
     MockBackend.upload_fails = true;
     defer clearBackend();
 
-    const payload = try decode("png", "fake", testing.allocator);
+    const payload = try decode("png", "fake", null, testing.allocator);
     var entry: AssetEntry = .{
         .state = .decoding,
         .refcount = 1,
@@ -356,6 +359,7 @@ test "image loader: upload error leaves pixels alive for drop cleanup" {
         .file_type = "png",
         .decoded = payload,
         .resource = null,
+        .params = null,
         .last_error = null,
     };
     try testing.expectError(error.MockUploadError, upload(&entry, payload, testing.allocator));
@@ -377,6 +381,7 @@ test "image loader: free without a backend or resource is a no-op" {
         .file_type = "png",
         .decoded = null,
         .resource = null,
+        .params = null,
         .last_error = null,
     };
     free(&entry);
@@ -391,7 +396,7 @@ test "image loader: decode propagates backend errors" {
 
     try testing.expectError(
         error.MockDecodeError,
-        decode("png", "fake", testing.allocator),
+        decode("png", "fake", null, testing.allocator),
     );
     try testing.expectEqual(@as(u32, 1), MockBackend.decode_calls);
 }

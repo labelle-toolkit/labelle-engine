@@ -13,6 +13,21 @@ pub fn build(b: *std.Build) void {
     const jsonc_dep = b.dependency("jsonc", .{ .target = target, .optimize = optimize });
     const jsonc_module = jsonc_dep.module("jsonc");
 
+    // Backend-agnostic handle/POD types referenced from both the
+    // engine module and the standalone `src/assets/` test root.
+    // Promoted to named modules so loader.zig can `@import("audio_types")` /
+    // `@import("font_types")` and resolve identically in both compilations.
+    const audio_types_module = b.createModule(.{
+        .root_source_file = b.path("src/audio_types.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const font_types_module = b.createModule(.{
+        .root_source_file = b.path("src/font_types.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
     const engine_module = b.addModule("engine", .{
         .root_source_file = b.path("src/root.zig"),
         .target = target,
@@ -21,6 +36,8 @@ pub fn build(b: *std.Build) void {
     engine_module.addImport("labelle-core", core_module);
     engine_module.addImport("scene", scene_module);
     engine_module.addImport("jsonc", jsonc_module);
+    engine_module.addImport("audio_types", audio_types_module);
+    engine_module.addImport("font_types", font_types_module);
 
     const test_step = b.step("test", "Run engine tests");
 
@@ -43,6 +60,7 @@ pub fn build(b: *std.Build) void {
         "test/jsonc/nested_lifecycle_test.zig",
         "test/scene_ref_test.zig",
         "test/asset_catalog_test.zig",
+        "test/font_types_test.zig",
         "test/asset_streaming_shim_test.zig",
         "test/animation_def_test.zig",
         "test/sprite_animation_test.zig",
@@ -88,13 +106,14 @@ pub fn build(b: *std.Build) void {
     // own where `_ = @import("...")` chains actually cascade the
     // test blocks into the binary. Added as part of #440 while the
     // real image loader started writing its own in-source tests.
-    const assets_tests = b.addTest(.{
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/assets/mod.zig"),
-            .target = target,
-            .optimize = optimize,
-        }),
+    const assets_tests_module = b.createModule(.{
+        .root_source_file = b.path("src/assets/mod.zig"),
+        .target = target,
+        .optimize = optimize,
     });
+    assets_tests_module.addImport("audio_types", audio_types_module);
+    assets_tests_module.addImport("font_types", font_types_module);
+    const assets_tests = b.addTest(.{ .root_module = assets_tests_module });
     test_step.dependOn(&b.addRunArtifact(assets_tests).step);
 
     // Issue #461 regression guard: the asset pipeline must compile
@@ -105,13 +124,14 @@ pub fn build(b: *std.Build) void {
     // regression at `zig build test` time (the step it's wired to) —
     // no runtime needed because the point is the type-checker
     // reaching `std.Thread.spawn`.
-    const assets_single_threaded = b.addTest(.{
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/assets/mod.zig"),
-            .target = target,
-            .optimize = optimize,
-            .single_threaded = true,
-        }),
+    const assets_single_threaded_module = b.createModule(.{
+        .root_source_file = b.path("src/assets/mod.zig"),
+        .target = target,
+        .optimize = optimize,
+        .single_threaded = true,
     });
+    assets_single_threaded_module.addImport("audio_types", audio_types_module);
+    assets_single_threaded_module.addImport("font_types", font_types_module);
+    const assets_single_threaded = b.addTest(.{ .root_module = assets_single_threaded_module });
     test_step.dependOn(&assets_single_threaded.step);
 }

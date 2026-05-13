@@ -32,6 +32,9 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
+const audio_types = @import("audio_types");
+const font_types = @import("font_types");
+
 /// Discriminator for `DecodedPayload` and for selecting a loader at
 /// `AssetCatalog.register` time. Stored on the entry; callers do not
 /// need to namespace asset names per loader.
@@ -45,27 +48,42 @@ pub const Texture = u32;
 
 /// Worker-thread output. Variants are populated on the worker, then
 /// either uploaded (success path) or dropped (refcount-zero discard
-/// path) on the main thread. Real payload shapes for `audio` and
-/// `font` arrive in Phase 4 — they are placeholders for now.
+/// path) on the main thread. Audio and font variants land in Phase 4
+/// (#447 / #448 RFCs); the loader implementations behind them stay
+/// stubbed until those PRs ship.
 pub const DecodedPayload = union(LoaderKind) {
     image: struct {
         pixels: []u8, // RGBA8, allocator-owned
         width: u32,
         height: u32,
     },
-    audio: struct {}, // placeholder for Phase 4 (#441)
-    font: struct {}, // placeholder for Phase 4 (#441)
+    audio: struct {
+        samples: []i16, // interleaved PCM, allocator-owned
+        sample_rate: u32,
+        channels: u8,
+    },
+    font: struct {
+        bitmap: []u8, // 8-bit alpha atlas, allocator-owned
+        width: u32,
+        height: u32,
+        glyphs: []font_types.Glyph,
+        codepoint_index: []const font_types.CodepointEntry,
+        ascent: f32,
+        descent: f32, // negative (below baseline)
+        line_gap: f32,
+        line_height: f32, // precomputed: ascent - descent + line_gap
+        kerning: []const font_types.KernPair,
+    },
 };
 
 /// Main-thread "after upload" payload. Populated by `loader.upload`
 /// once the CPU-side `DecodedPayload` has been handed to the backend
 /// (GPU for images, audio device for sounds, atlas for fonts). Cleared
-/// by `loader.free` on the unload path (#446). The `audio` and `font`
-/// variants are placeholders until #441.
+/// by `loader.free` on the unload path (#446).
 pub const UploadedResource = union(LoaderKind) {
     image: Texture,
-    audio: struct {}, // placeholder for Phase 4 (#441)
-    font: struct {}, // placeholder for Phase 4 (#441)
+    audio: audio_types.SoundId,
+    font: font_types.FontId,
 };
 
 /// Lifecycle of a single entry.
@@ -86,6 +104,13 @@ pub const AssetEntry = struct {
     raw_bytes: []const u8,
     /// Borrowed sentinel-terminated string — program lifetime.
     file_type: [:0]const u8,
+    /// Loader-specific decode parameters, borrowed at registration
+    /// time. Forwarded into `WorkRequest.params` so the worker can
+    /// hand it back to `loader.decode` via the concrete loader's cast.
+    /// `null` for loaders that don't take params (image, audio).
+    /// Currently exercised only by the font loader's `FontBakeParams`
+    /// (RFC-FONT-LOADER §7).
+    params: ?*const anyopaque,
     /// Populated by the worker's decode path and consumed by
     /// `loader.upload`. Cleared back to `null` by `pump()` (#442) once
     /// the upload has moved ownership into `resource`, or by
@@ -108,9 +133,16 @@ pub const AssetLoaderVTable = struct {
     /// Worker-thread CPU decode. Allocator-owned output stored on the
     /// resulting `WorkResult.decoded`. May return error → result.err
     /// is set and the entry transitions to `.failed` in `pump()`.
+    ///
+    /// `params` is the loader-specific decode parameter pointer
+    /// forwarded from `WorkRequest.params`. The concrete loader
+    /// `@ptrCast`s it to its own params type (e.g. the font loader
+    /// reads `*const FontBakeParams`). `null` for loaders that don't
+    /// take parameters (image, audio today).
     decode: *const fn (
         file_type: [:0]const u8,
         data: []const u8,
+        params: ?*const anyopaque,
         allocator: Allocator,
     ) anyerror!DecodedPayload,
 
