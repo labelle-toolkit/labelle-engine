@@ -60,6 +60,7 @@ pub fn build(b: *std.Build) void {
         "test/jsonc/nested_lifecycle_test.zig",
         "test/scene_ref_test.zig",
         "test/asset_catalog_test.zig",
+        "test/audio_loader_test.zig",
         "test/font_types_test.zig",
         "test/asset_streaming_shim_test.zig",
         "test/animation_def_test.zig",
