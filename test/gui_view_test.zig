@@ -20,3 +20,19 @@ test "ViewRegistry basic functionality" {
     try std.testing.expectEqualStrings("test_view", view.name);
     try std.testing.expectEqual(@as(usize, 1), view.elements.len);
 }
+
+test "renderView falls back to default label widget when Gui lacks labelWidgetWithFont" {
+    const TestViews = ViewRegistry(.{
+        .font_view = .{
+            .name = "font_view",
+            .elements = .{
+                .{ .Label = .{ .text = "Hello", .font = "title" } },
+            },
+        },
+    });
+
+    var game = engine.Game.init(std.testing.allocator);
+    defer game.deinit();
+
+    game.renderView(TestViews, "font_view");
+}

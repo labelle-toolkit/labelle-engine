@@ -69,24 +69,33 @@ pub fn Mixin(comptime Game: type) type {
                     // labels that don't use a custom font.
                     if (comptime lbl.font) |font_name| {
                         const font_id = resolveLabelFont(self, font_name);
-                        // The backend's font-aware label draw is
-                        // expected to accept an `?FontId` — null
-                        // means "fall back to default font", same
-                        // shape as `resolveLabelFont`'s contract
-                        // during streaming. Backends that don't
-                        // implement `labelWidgetWithFont` keep
-                        // working via the `@hasDecl` guard on the
-                        // `Gui` wrapper.
-                        Gui.labelWidgetWithFont(
-                            lbl.text[0..lbl.text.len :0],
-                            @intFromFloat(lbl.position.x),
-                            @intFromFloat(lbl.position.y),
-                            @intFromFloat(lbl.font_size),
-                            lbl.color.r,
-                            lbl.color.g,
-                            lbl.color.b,
-                            font_id,
-                        );
+                        if (comptime @hasDecl(Gui, "labelWidgetWithFont")) {
+                            // The backend's font-aware label draw is
+                            // expected to accept an `?FontId` — null
+                            // means "fall back to default font", same
+                            // shape as `resolveLabelFont`'s contract
+                            // during streaming.
+                            Gui.labelWidgetWithFont(
+                                lbl.text[0..lbl.text.len :0],
+                                @intFromFloat(lbl.position.x),
+                                @intFromFloat(lbl.position.y),
+                                @intFromFloat(lbl.font_size),
+                                lbl.color.r,
+                                lbl.color.g,
+                                lbl.color.b,
+                                font_id,
+                            );
+                        } else {
+                            Gui.labelWidget(
+                                lbl.text[0..lbl.text.len :0],
+                                @intFromFloat(lbl.position.x),
+                                @intFromFloat(lbl.position.y),
+                                @intFromFloat(lbl.font_size),
+                                lbl.color.r,
+                                lbl.color.g,
+                                lbl.color.b,
+                            );
+                        }
                     } else {
                         Gui.labelWidget(
                             lbl.text[0..lbl.text.len :0],
