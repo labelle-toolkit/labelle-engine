@@ -33,6 +33,7 @@
 //! the ceiling.
 
 const std = @import("std");
+const sleep_helper = @import("../sleep_helper.zig");
 const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
 
@@ -231,7 +232,7 @@ pub const AssetWorker = struct {
     fn runLoop(self: *AssetWorker) void {
         while (!self.shutdown.load(.acquire)) {
             const request = self.requests.tryDequeue() orelse {
-                std.Thread.sleep(idle_park_ns);
+                sleep_helper.sleepNs(idle_park_ns);
                 continue;
             };
             decodeAndPublish(self, request, .thread);
@@ -302,7 +303,7 @@ pub const AssetWorker = struct {
                             }
                             return;
                         }
-                        std.Thread.sleep(idle_park_ns);
+                        sleep_helper.sleepNs(idle_park_ns);
                     },
                     .sync => {
                         // Defensive fallback. `runOnce` checks
@@ -439,7 +440,7 @@ test "AssetWorker decodes a stub request and publishes a result" {
     const step_ns: u64 = 1 * std.time.ns_per_ms;
     const result = while (waited_ns < deadline_ns) {
         if (results.tryDequeue()) |r| break r;
-        std.Thread.sleep(step_ns);
+        sleep_helper.sleepNs(step_ns);
         waited_ns += step_ns;
     } else {
         return error.WorkerDidNotRespond;

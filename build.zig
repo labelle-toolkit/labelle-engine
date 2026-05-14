@@ -28,10 +28,13 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
+    // link_libc=true so std.c.nanosleep is available in the asset
+    // worker sleep helper (std.Thread.sleep was removed in 0.16).
     const engine_module = b.addModule("engine", .{
         .root_source_file = b.path("src/root.zig"),
         .target = target,
         .optimize = optimize,
+        .link_libc = true,
     });
     engine_module.addImport("labelle-core", core_module);
     engine_module.addImport("scene", scene_module);

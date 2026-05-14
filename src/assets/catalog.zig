@@ -26,6 +26,7 @@
 //!    `project.labelle`.
 
 const std = @import("std");
+const sleep_helper = @import("../sleep_helper.zig");
 const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
 
@@ -717,7 +718,7 @@ test "acquire spawns worker which surfaces ImageBackendNotInitialized without a 
         for (&catalog.results) |*ring| {
             if (ring.tryDequeue()) |r| break :outer r;
         }
-        std.Thread.sleep(step_ns);
+        sleep_helper.sleepNs(step_ns);
         waited_ns += step_ns;
     } else {
         return error.WorkerDidNotRespond;
@@ -825,7 +826,7 @@ fn spinForResults(catalog: *AssetCatalog, at_least: u32) !void {
             total += head -% tail;
         }
         if (total >= at_least) return;
-        std.Thread.sleep(step_ns);
+        sleep_helper.sleepNs(step_ns);
     }
     return error.WorkerDidNotRespond;
 }
