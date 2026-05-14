@@ -67,7 +67,7 @@ fn setupFixture(
     tmp_dir: *std.testing.TmpDir,
     prefab_files: anytype,
 ) !TestFixture {
-    try tmp_dir.dir.createDir(std.testing.io, "prefabs", .{});
+    try tmp_dir.dir.createDir(std.testing.io, "prefabs", .default_dir);
 
     inline for (std.meta.fields(@TypeOf(prefab_files))) |field| {
         const path = try std.fmt.allocPrint(testing.allocator, "prefabs/{s}.jsonc", .{field.name});
@@ -254,7 +254,7 @@ test "two-phase load: scene-loaded prefab with children round-trips end-to-end" 
     defer tmp_dir.cleanup();
 
     // Write the prefab file.
-    try tmp_dir.dir.createDir(std.testing.io, "prefabs", .{});
+    try tmp_dir.dir.createDir(std.testing.io, "prefabs", .default_dir);
     try tmp_dir.dir.writeFile(.{
         .sub_path = "prefabs/room.jsonc",
         .data =
@@ -413,7 +413,7 @@ test "two-phase load: nested prefab doesn't duplicate into a ghost root" {
     var tmp_dir = testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
-    try tmp_dir.dir.createDir(std.testing.io, "prefabs", .{});
+    try tmp_dir.dir.createDir(std.testing.io, "prefabs", .default_dir);
     try tmp_dir.dir.writeFile(.{
         .sub_path = "prefabs/inner.jsonc",
         .data =

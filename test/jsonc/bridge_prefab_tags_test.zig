@@ -58,7 +58,7 @@ fn setupFixture(
     prefab_files: anytype,
     scene_source: []const u8,
 ) !TestFixture {
-    try tmp_dir.dir.createDir(std.testing.io, "prefabs", .{});
+    try tmp_dir.dir.createDir(std.testing.io, "prefabs", .default_dir);
 
     inline for (std.meta.fields(@TypeOf(prefab_files))) |field| {
         const path = try std.fmt.allocPrint(testing.allocator, "prefabs/{s}.jsonc", .{field.name});
