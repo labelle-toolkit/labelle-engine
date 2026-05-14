@@ -433,7 +433,10 @@ pub fn Mixin(comptime Game: type) type {
             try writer.writeAll("\n  ]\n}\n");
 
             const _io = io_helper.io();
-            try std.Io.Dir.cwd().writeFile(_io, .{ .sub_path = filename, .data = alloc_writer.toArrayList().items });
+            // `buffered()` reads the not-yet-drained bytes without
+            // transferring ownership — `defer alloc_writer.deinit()`
+            // above is responsible for freeing the buffer.
+            try std.Io.Dir.cwd().writeFile(_io, .{ .sub_path = filename, .data = alloc_writer.writer.buffered() });
         }
 
         // ─── Load ───────────────────────────────────────────────────
