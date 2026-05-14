@@ -163,7 +163,7 @@ test "save/load mixin: full round-trip" {
     defer std.Io.Dir.cwd().deleteFile(std.testing.io, filename) catch {};
 
     // Verify file was created
-    const stat = try std.Io.Dir.cwd().statFile(std.testing.io, filename);
+    const stat = try std.Io.Dir.cwd().statFile(std.testing.io, filename, .{});
     try testing.expect(stat.size > 0);
 
     // Destroy all state

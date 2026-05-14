@@ -314,9 +314,9 @@ test "jsonc_scene_bridge: PrefabInstance.path survives save/load round-trip" {
 
     const save_path = "test_save_bridge_prefab.json";
     try fixture.game.saveGameState(save_path);
-    defer std.fs.cwd().deleteFile(save_path) catch {};
+    defer std.Io.Dir.cwd().deleteFile(std.testing.io, save_path) catch {};
 
-    const json = try std.fs.cwd().readFileAlloc(testing.allocator, save_path, 1024 * 1024);
+    const json = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, save_path, testing.allocator, .limited(1024 * 1024));
     defer testing.allocator.free(json);
     try testing.expect(std.mem.indexOf(u8, json, "\"PrefabInstance\"") != null);
     try testing.expect(std.mem.indexOf(u8, json, "\"path\": \"unit\"") != null);

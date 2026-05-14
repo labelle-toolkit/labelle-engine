@@ -268,7 +268,7 @@ test "walkthrough: prefab + animation + save/load round-trips end-to-end" {
     // they come back via the Phase 1 prefab respawn.
     const save_path = try std.fmt.allocPrint(testing.allocator, "{s}/save.json", .{fixture.prefab_dir});
     defer testing.allocator.free(save_path);
-    defer std.fs.cwd().deleteFile(save_path) catch {};
+    defer std.Io.Dir.cwd().deleteFile(std.testing.io, save_path) catch {};
 
     try game.saveGameState(save_path);
     game.resetEcsBackend();

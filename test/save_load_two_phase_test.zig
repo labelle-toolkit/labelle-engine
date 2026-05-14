@@ -124,7 +124,7 @@ test "two-phase load: prefab root + children re-spawn, saved state applies on to
     // Save.
     const save_path = "test_save_two_phase.json";
     try fixture.game.saveGameState(save_path);
-    defer std.fs.cwd().deleteFile(save_path) catch {};
+    defer std.Io.Dir.cwd().deleteFile(std.testing.io, save_path) catch {};
 
     // Reset + load. Phase 1 should spawn the prefab, Phase 2 should
     // apply the mutated Health values we saved.
@@ -188,7 +188,7 @@ test "two-phase load: no duplicate entities — saved children map to spawned ch
 
     const save_path = "test_save_no_dup.json";
     try fixture.game.saveGameState(save_path);
-    defer std.fs.cwd().deleteFile(save_path) catch {};
+    defer std.Io.Dir.cwd().deleteFile(std.testing.io, save_path) catch {};
 
     fixture.game.resetEcsBackend();
     try fixture.game.loadGameState(save_path);
@@ -224,7 +224,7 @@ test "two-phase load: non-prefab entities still load through v2 path" {
 
     const save_path = "test_save_mixed.json";
     try fixture.game.saveGameState(save_path);
-    defer std.fs.cwd().deleteFile(save_path) catch {};
+    defer std.Io.Dir.cwd().deleteFile(std.testing.io, save_path) catch {};
 
     fixture.game.resetEcsBackend();
     try fixture.game.loadGameState(save_path);
@@ -299,7 +299,7 @@ test "two-phase load: scene-loaded prefab with children round-trips end-to-end" 
     // Save + reset + load.
     const save_path = "test_save_scene_e2e.json";
     try game.saveGameState(save_path);
-    defer std.fs.cwd().deleteFile(save_path) catch {};
+    defer std.Io.Dir.cwd().deleteFile(std.testing.io, save_path) catch {};
 
     game.resetEcsBackend();
     try game.loadGameState(save_path);
@@ -373,14 +373,14 @@ test "two-phase load: spawnFromPrefab failure falls back to v2 createEntity" {
 
     const save_path = "test_save_rename.json";
     try fixture.game.saveGameState(save_path);
-    defer std.fs.cwd().deleteFile(save_path) catch {};
+    defer std.Io.Dir.cwd().deleteFile(std.testing.io, save_path) catch {};
 
     // Read back, replace "known" with "missing", write back.
-    const contents = try std.fs.cwd().readFileAlloc(testing.allocator, save_path, 1024 * 1024);
+    const contents = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, save_path, testing.allocator, .limited(1024 * 1024));
     defer testing.allocator.free(contents);
     const rewritten = try std.mem.replaceOwned(u8, testing.allocator, contents, "\"known\"", "\"missing\"");
     defer testing.allocator.free(rewritten);
-    try std.fs.cwd().writeFile(.{ .sub_path = save_path, .data = rewritten });
+    try std.Io.Dir.cwd().writeFile(std.testing.io, .{ .sub_path = save_path, .data = rewritten });
 
     fixture.game.resetEcsBackend();
     try fixture.game.loadGameState(save_path);
@@ -450,7 +450,7 @@ test "two-phase load: nested prefab doesn't duplicate into a ghost root" {
 
     const save_path = "test_save_nested_prefab.json";
     try game.saveGameState(save_path);
-    defer std.fs.cwd().deleteFile(save_path) catch {};
+    defer std.Io.Dir.cwd().deleteFile(std.testing.io, save_path) catch {};
 
     game.resetEcsBackend();
     try game.loadGameState(save_path);
@@ -513,7 +513,7 @@ test "save: entities with only PrefabInstance are collected (no game-owned savea
 
     const save_path = try std.fmt.allocPrint(testing.allocator, "{s}/pure_visual.json", .{fixture.prefab_dir});
     defer testing.allocator.free(save_path);
-    defer std.fs.cwd().deleteFile(save_path) catch {};
+    defer std.Io.Dir.cwd().deleteFile(std.testing.io, save_path) catch {};
     try fixture.game.saveGameState(save_path);
 
     // The save file must mention the prefab — otherwise load can't
@@ -521,7 +521,7 @@ test "save: entities with only PrefabInstance are collected (no game-owned savea
     // `PrefabInstance.path = "pure_visual"` lands as a JSON string
     // containing the path name, and nothing else in the test
     // references that string.
-    const save_bytes = try std.fs.cwd().readFileAlloc(testing.allocator, save_path, 64 * 1024);
+    const save_bytes = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, save_path, testing.allocator, .limited(64 * 1024));
     defer testing.allocator.free(save_bytes);
     try testing.expect(std.mem.indexOf(u8, save_bytes, "\"pure_visual\"") != null);
 
