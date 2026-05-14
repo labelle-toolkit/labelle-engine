@@ -55,7 +55,7 @@ test "loadScene: simple scene with components does not leak" {
         \\}
         ,
     });
-    try tmp_dir.dir.makeDir("prefabs");
+    try tmp_dir.dir.createDir(std.testing.io, "prefabs", .{});
 
     const scene_path = try tmpPath(&tmp_dir, "scene.jsonc");
     defer testing.allocator.free(scene_path);
@@ -72,7 +72,7 @@ test "loadSceneFromSource: simple scene with components does not leak" {
     var tmp_dir = testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
-    try tmp_dir.dir.makeDir("prefabs");
+    try tmp_dir.dir.createDir(std.testing.io, "prefabs", .{});
     const prefab_path = try tmpPath(&tmp_dir, "prefabs");
     defer testing.allocator.free(prefab_path);
 
@@ -95,7 +95,7 @@ test "loadScene: scene with prefabs does not leak" {
     var tmp_dir = testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
-    try tmp_dir.dir.makeDir("prefabs");
+    try tmp_dir.dir.createDir(std.testing.io, "prefabs", .{});
     try tmp_dir.dir.writeFile(.{
         .sub_path = "prefabs/enemy.jsonc",
         .data =
@@ -136,7 +136,7 @@ test "loadScene: nested entity arrays (spawnAndLinkNestedEntities) do not leak" 
     var tmp_dir = testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
-    try tmp_dir.dir.makeDir("prefabs");
+    try tmp_dir.dir.createDir(std.testing.io, "prefabs", .{});
 
     // Scene with a Squad component containing nested entity array
     try tmp_dir.dir.writeFile(.{
@@ -175,7 +175,7 @@ test "loadScene: children entities do not leak" {
     var tmp_dir = testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
-    try tmp_dir.dir.makeDir("prefabs");
+    try tmp_dir.dir.createDir(std.testing.io, "prefabs", .{});
 
     try tmp_dir.dir.writeFile(.{
         .sub_path = "scene.jsonc",

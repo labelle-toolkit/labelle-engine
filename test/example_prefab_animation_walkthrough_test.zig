@@ -145,7 +145,7 @@ const Fixture = struct {
 };
 
 fn boot(tmp_dir: *std.testing.TmpDir) !Fixture {
-    try tmp_dir.dir.makeDir("prefabs");
+    try tmp_dir.dir.createDir(std.testing.io, "prefabs", .{});
     try tmp_dir.dir.writeFile(.{ .sub_path = "prefabs/plant.jsonc", .data = PLANT_PREFAB });
 
     var buf: [std.fs.max_path_bytes]u8 = undefined;

@@ -69,7 +69,7 @@ fn tmpPath(tmp_dir: *std.testing.TmpDir, sub: []const u8) ![]const u8 {
 fn loadSource(game: *Game, source: []const u8) !void {
     var tmp_dir = testing.tmpDir(.{});
     defer tmp_dir.cleanup();
-    try tmp_dir.dir.makeDir("prefabs");
+    try tmp_dir.dir.createDir(std.testing.io, "prefabs", .{});
     const prefab_path = try tmpPath(&tmp_dir, "prefabs");
     defer testing.allocator.free(prefab_path);
     try Bridge.loadSceneFromSource(game, source, prefab_path);
@@ -320,7 +320,7 @@ test "@ref: refs inside prefab with children" {
     var tmp_dir = testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
-    try tmp_dir.dir.makeDir("prefabs");
+    try tmp_dir.dir.createDir(std.testing.io, "prefabs", .{});
 
     // Prefab: container with a stored item as a child
     try tmp_dir.dir.writeFile(.{
@@ -396,7 +396,7 @@ test "@ref: cross-reference between prefab and scene entity" {
     var tmp_dir = testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
-    try tmp_dir.dir.makeDir("prefabs");
+    try tmp_dir.dir.createDir(std.testing.io, "prefabs", .{});
 
     try tmp_dir.dir.writeFile(.{
         .sub_path = "prefabs/container.jsonc",
@@ -459,7 +459,7 @@ test "@ref: position offset applied correctly with refs" {
     var tmp_dir = testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
-    try tmp_dir.dir.makeDir("prefabs");
+    try tmp_dir.dir.createDir(std.testing.io, "prefabs", .{});
 
     try tmp_dir.dir.writeFile(.{
         .sub_path = "prefabs/parent_with_child.jsonc",
@@ -599,7 +599,7 @@ test "@ref: nested entities with children and cross-refs (#415)" {
     var tmp_dir = testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
-    try tmp_dir.dir.makeDir("prefabs");
+    try tmp_dir.dir.createDir(std.testing.io, "prefabs", .{});
 
     // Prefab: storage with a child item, cross-referenced
     try tmp_dir.dir.writeFile(.{
@@ -698,7 +698,7 @@ test "children with Sprite render at correct position (#417)" {
     var tmp_dir = testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
-    try tmp_dir.dir.makeDir("prefabs");
+    try tmp_dir.dir.createDir(std.testing.io, "prefabs", .{});
 
     // Parent prefab with a sprite child
     try tmp_dir.dir.writeFile(.{
@@ -775,7 +775,7 @@ test "destroying parent also destroys children (#417)" {
     var tmp_dir = testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
-    try tmp_dir.dir.makeDir("prefabs");
+    try tmp_dir.dir.createDir(std.testing.io, "prefabs", .{});
 
     try tmp_dir.dir.writeFile(.{
         .sub_path = "prefabs/parent_with_child.jsonc",

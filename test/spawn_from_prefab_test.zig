@@ -41,7 +41,7 @@ fn bootGameWithPrefab(
     prefab_name: []const u8,
     prefab_source: []const u8,
 ) !TestFixture {
-    try tmp_dir.dir.makeDir("prefabs");
+    try tmp_dir.dir.createDir(std.testing.io, "prefabs", .{});
 
     const prefab_sub = try std.fmt.allocPrint(testing.allocator, "prefabs/{s}.jsonc", .{prefab_name});
     defer testing.allocator.free(prefab_sub);
