@@ -81,6 +81,7 @@ pub fn build(b: *std.Build) void {
         "test/collect_entities_test.zig",
         "test/set_sprite_flip_test.zig",
         "test/preview_mode_test.zig",
+        "test/flows_game_api_test.zig",
     };
 
     for (test_files) |test_file| {
