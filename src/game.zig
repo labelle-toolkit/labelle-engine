@@ -1055,6 +1055,34 @@ pub fn GameConfig(
             return self.ecs_backend.getComponent(entity, T);
         }
 
+        /// Writes a single field of component `T` on `entity` in place.
+        ///
+        /// Silently no-ops when the entity does not have a component
+        /// of type `T` — same semantics as `getComponent` returning
+        /// `null`. This matches the flow-codegen runtime contract:
+        /// generated `OnUpdate` flows that touch a missing component
+        /// should not crash the game loop.
+        ///
+        /// The `comptime field: std.meta.FieldEnum(T)` selector keeps
+        /// the call site type-checked end-to-end. The flow-codegen
+        /// emits `game.setField(Position, .x, entity, value)`.
+        ///
+        /// Preview telemetry is fired after the mutation through the
+        /// same `notifyComponentChanged` path used by `setComponent`,
+        /// so the editor sees an updated component frame when it has
+        /// subscribed to `T`.
+        pub fn setField(
+            self: *Self,
+            comptime T: type,
+            comptime field: std.meta.FieldEnum(T),
+            entity: Entity,
+            value: @FieldType(T, @tagName(field)),
+        ) void {
+            const comp_ptr = self.ecs_backend.getComponent(entity, T) orelse return;
+            @field(comp_ptr.*, @tagName(field)) = value;
+            self.notifyComponentChanged(entity, comp_ptr);
+        }
+
         pub fn hasComponent(self: *Self, entity: Entity, comptime T: type) bool {
             return self.ecs_backend.hasComponent(entity, T);
         }
