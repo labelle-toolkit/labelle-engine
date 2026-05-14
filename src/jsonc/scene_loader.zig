@@ -15,6 +15,7 @@
 //! signature the rest of the codebase already calls into.
 
 const std = @import("std");
+const io_helper = @import("../io_helper.zig");
 const builtin = @import("builtin");
 const jsonc = @import("jsonc");
 const Value = jsonc.Value;
@@ -228,7 +229,7 @@ pub fn SceneLoader(comptime GameType: type, comptime Components: type) type {
             const source: []const u8 = if (game.embedded_scene_sources.get(path)) |embedded|
                 embedded
             else blk: {
-                const file = try std.fs.cwd().openFile(path, .{});
+                const file = try std.Io.Dir.cwd().openFile(io_helper.io(), path, .{});
                 defer file.close();
                 break :blk try file.readToEndAlloc(parse_alloc, 1024 * 1024);
             };

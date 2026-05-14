@@ -182,7 +182,7 @@ pub fn ScriptRunner(
                     if (comptime isFnDecl(mod, "tick")) {
                         if (isStateAllowedCached(mod, current_state)) {
                             if (profiling_enabled) {
-                                var timer = std.time.Timer.start() catch null;
+                                var timer: ?usize = null; // Timer removed in 0.16; profiling stubbed
                                 dispatchTickCall(mod.tick, game, self, d.name, dt);
                                 if (timer) |*t| {
                                     self.profile[profile_idx].tick_ns = t.read();
@@ -209,7 +209,7 @@ pub fn ScriptRunner(
                     if (comptime isFnDecl(mod, "drawGui")) {
                         if (isStateAllowedCached(mod, current_state)) {
                             if (profiling_enabled) {
-                                var timer = std.time.Timer.start() catch null;
+                                var timer: ?usize = null; // Timer removed in 0.16; profiling stubbed
                                 dispatchCall(mod.drawGui, game, self, d.name);
                                 if (timer) |*t| {
                                     self.profile[profile_idx].draw_gui_ns = t.read();

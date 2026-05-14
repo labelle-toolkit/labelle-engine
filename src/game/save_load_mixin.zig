@@ -5,6 +5,7 @@
 //! No game-specific code — works with any component registry.
 
 const std = @import("std");
+const io_helper = @import("../io_helper.zig");
 const core = @import("labelle-core");
 const serde = core.serde;
 
@@ -431,10 +432,8 @@ pub fn Mixin(comptime Game: type) type {
 
             try writer.writeAll("\n  ]\n}\n");
 
-            const cwd = std.fs.cwd();
-            const file = try cwd.createFile(filename, .{});
-            defer file.close();
-            try file.writeAll(aw.items);
+            const _io = io_helper.io();
+            try std.Io.Dir.cwd().writeFile(_io, .{ .sub_path = filename, .data = aw.items });
         }
 
         // ─── Load ───────────────────────────────────────────────────
@@ -444,8 +443,8 @@ pub fn Mixin(comptime Game: type) type {
             const allocator = self.allocator;
             const names = comptime Reg.names();
 
-            const cwd = std.fs.cwd();
-            const json = try cwd.readFileAlloc(allocator, filename, MAX_SAVE_SIZE);
+            const _io = io_helper.io();
+            const json = try std.Io.Dir.cwd().readFileAlloc(_io, filename, allocator, .limited(MAX_SAVE_SIZE));
             defer allocator.free(json);
 
             const parsed = try std.json.parseFromSlice(std.json.Value, allocator, json, .{});

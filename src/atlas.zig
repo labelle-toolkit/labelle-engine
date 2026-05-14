@@ -1,6 +1,7 @@
 /// Texture atlas — compile-time (.zon), runtime, and JSON-loaded sprite lookup.
 /// Supports TexturePacker JSON Hash format.
 const std = @import("std");
+const io_helper = @import("io_helper.zig");
 
 /// Per-sprite data in an atlas.
 pub const SpriteData = struct {
@@ -537,7 +538,7 @@ fn parseTexturePackerJson(
     json_path: [:0]const u8,
     sprites: *std.StringHashMap(SpriteData),
 ) !AtlasMeta {
-    const file = try std.fs.cwd().openFile(json_path, .{});
+    const file = try std.Io.Dir.cwd().openFile(io_helper.io(), json_path, .{});
     defer file.close();
 
     const content = try file.readToEndAlloc(allocator, 10 * 1024 * 1024);

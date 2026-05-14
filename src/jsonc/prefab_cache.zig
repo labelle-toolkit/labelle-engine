@@ -14,6 +14,7 @@
 //! `loadSceneFromSource`.
 
 const std = @import("std");
+const io_helper = @import("../io_helper.zig");
 const builtin = @import("builtin");
 const jsonc = @import("jsonc");
 const Value = jsonc.Value;
@@ -62,7 +63,7 @@ pub const PrefabCache = struct {
 
         const path = std.fmt.allocPrint(self.temp, "{s}/{s}.jsonc", .{ self.prefab_dir, name }) catch return null;
         defer self.temp.free(path);
-        const file = std.fs.cwd().openFile(path, .{}) catch return null;
+        const file = std.Io.Dir.cwd().openFile(io_helper.io(), path, .{}) catch return null;
         defer file.close();
 
         const src = file.readToEndAlloc(self.persistent, 1024 * 1024) catch return null;
