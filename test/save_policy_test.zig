@@ -148,7 +148,9 @@ test "Saveable: marker with post_load_add" {
     try testing.expectEqual(@as(usize, 0), core.getEntityRefFields(Worker).len);
     const markers = core.getPostLoadMarkers(Worker);
     try testing.expectEqual(@as(usize, 1), markers.len);
-    try comptime testing.expect(markers[0] == NeedsClosestNode);
+    comptime {
+        if (markers[0] != NeedsClosestNode) @compileError("markers[0] mismatch");
+    }
 }
 
 test "Saveable: simple saveable" {
@@ -380,7 +382,7 @@ test "full pipeline: save and load entire game state" {
     try writer.writeAll("{\"version\":2,\"entities\":[\n");
     for (&world, 0..) |*entity, idx| {
         if (idx > 0) try writer.writeAll(",\n");
-        try std.fmt.format(writer, "{{\"id\":{d},\"x\":{d:.4},\"y\":{d:.4},\"components\":{{", .{ entity.id, entity.x, entity.y });
+        try writer.print("{{\"id\":{d},\"x\":{d:.4},\"y\":{d:.4},\"components\":{{", .{ entity.id, entity.x, entity.y });
 
         var first = true;
 
