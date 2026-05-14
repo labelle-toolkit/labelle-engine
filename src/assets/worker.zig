@@ -33,7 +33,6 @@
 //! the ceiling.
 
 const std = @import("std");
-const builtin = @import("builtin");
 fn sleepNs(ns: u64) void {
     if (builtin.os.tag == .windows) {
         const K = struct { extern "kernel32" fn Sleep(ms: u32) callconv(.winapi) void; };
