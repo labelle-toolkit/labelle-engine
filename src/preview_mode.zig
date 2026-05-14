@@ -112,6 +112,7 @@ pub const BinaryFrameKind = enum(u8) {
     entity_destroyed = 2,
     component_changed = 3,
     node_entered = 4,
+    pin_value = 5,
     _,
 };
 
@@ -177,6 +178,13 @@ pub const Preview = struct {
     /// changes (60+ Hz across many flows), so opt-in is the safer
     /// default — editors that don't care pay zero cost.
     subscribed_flows: std.StringHashMapUnmanaged(void) = .{},
+    /// Set of flow names the editor wants `pin_value` frames for.
+    /// Mirror of `subscribed_flows` but tracks the (potentially much
+    /// higher-volume) live pin/edge value channel separately so the
+    /// editor can opt into node pulses without paying for per-pin
+    /// payloads (or vice versa). Empty set means **no** emit — same
+    /// opt-in semantics as `subscribed_flows`.
+    subscribed_pin_flows: std.StringHashMapUnmanaged(void) = .{},
     subs_arena: std.heap.ArenaAllocator,
     /// Set of entity IDs the editor wants `component_changed` frames
     /// scoped to. See the field-level doc on `Preview` for the
@@ -214,6 +222,7 @@ pub const Preview = struct {
         self.stream.close();
         self.subscribed_components.deinit(self.subs_arena.allocator());
         self.subscribed_flows.deinit(self.subs_arena.allocator());
+        self.subscribed_pin_flows.deinit(self.subs_arena.allocator());
         self.watched_entities.deinit(self.subs_arena.allocator());
         self.subs_arena.deinit();
         self.inbox.deinit(self.inbox_alloc);
@@ -419,11 +428,77 @@ pub const Preview = struct {
         try self.writeBinaryFrame(.node_entered, buf);
     }
 
+    /// Emit a `pin_value` binary frame. **No-op when the flow name is
+    /// not in `subscribed_pin_flows`** — pin values fire on every
+    /// edge evaluation (potentially many per node per frame), so the
+    /// early-out keeps the engine from doing even a single allocation
+    /// if the editor hasn't asked for this flow's pin stream yet.
+    ///
+    /// Tracked as a separate subscription set from `subscribed_flows`
+    /// (the `node_entered` opt-in) on purpose: the editor will
+    /// typically subscribe to both when a flow tab is opened, but the
+    /// pin channel is by far the higher-volume one and a future
+    /// editor (e.g. minimap) may want node pulses without paying for
+    /// pin payloads. Keeping the sets independent preserves symmetry
+    /// with `node_entered`'s `subscribe_flow` and avoids a flag-bit
+    /// hack inside one control message.
+    ///
+    /// Payload layout (little-endian):
+    ///
+    ///     [u16 flow_name_len] [flow_name bytes (UTF-8)]
+    ///     [u32 node_id]
+    ///     [u16 pin_name_len] [pin_name bytes (UTF-8)]
+    ///     [f64 value]
+    ///
+    /// `flow_name` is the `.flow.zon` file stem (no path, no
+    /// extension); `node_id` is the stable u32 id the flow_io parser
+    /// assigns to each node; `pin_name` is the pin label exactly as
+    /// it appears in the node definition (UTF-8, may contain quotes,
+    /// punctuation, non-ASCII).
+    ///
+    /// **v1 value is `f64`-only.** Covers BinOp results, Literal
+    /// numerics, and `dt`. String / bool / struct payloads are
+    /// deferred — see the follow-up listed in this PR's body.
+    pub fn emitPinValue(
+        self: *Preview,
+        flow_name: []const u8,
+        node_id: u32,
+        pin_name: []const u8,
+        value: f64,
+    ) WriteError!void {
+        if (!self.isPinFlowSubscribed(flow_name)) return;
+        defer _ = self.arena.reset(.retain_capacity);
+        const alloc = self.arena.allocator();
+        const payload_len: usize =
+            @sizeOf(u16) + flow_name.len +
+            @sizeOf(u32) +
+            @sizeOf(u16) + pin_name.len +
+            @sizeOf(f64);
+        const buf = try alloc.alloc(u8, payload_len);
+        var off: usize = 0;
+        std.mem.writeInt(u16, buf[off..][0..2], @intCast(flow_name.len), .little);
+        off += 2;
+        @memcpy(buf[off .. off + flow_name.len], flow_name);
+        off += flow_name.len;
+        std.mem.writeInt(u32, buf[off..][0..4], node_id, .little);
+        off += 4;
+        std.mem.writeInt(u16, buf[off..][0..2], @intCast(pin_name.len), .little);
+        off += 2;
+        @memcpy(buf[off .. off + pin_name.len], pin_name);
+        off += pin_name.len;
+        // f64 bit-pattern as u64, little-endian. Avoids any FP-aware
+        // codec — the editor reverses the bitcast on receive.
+        const bits: u64 = @bitCast(value);
+        std.mem.writeInt(u64, buf[off..][0..8], bits, .little);
+        try self.writeBinaryFrame(.pin_value, buf);
+    }
+
     /// Drain any pending `subscribe` / `unsubscribe` / `subscribe_flow`
-    /// / `unsubscribe_flow` JSON frames sent by the editor and apply
-    /// them to `subscribed_components` / `subscribed_flows`. Non-
-    /// blocking — reads only what's currently available on the
-    /// socket. Safe to call once per tick.
+    /// / `unsubscribe_flow` / `subscribe_pin_values` /
+    /// `unsubscribe_pin_values` JSON frames sent by the editor and
+    /// apply them to `subscribed_components` / `subscribed_flows` /
+    /// `subscribed_pin_flows`. Non-blocking — reads only what's
+    /// currently available on the socket. Safe to call once per tick.
     ///
     /// Wire shapes:
     ///
@@ -431,6 +506,8 @@ pub const Preview = struct {
     ///     {"kind":"unsubscribe","components":["Velocity"]}\n
     ///     {"kind":"subscribe_flow","flow":"player_state_machine"}\n
     ///     {"kind":"unsubscribe_flow","flow":"player_state_machine"}\n
+    ///     {"kind":"subscribe_pin_values","flow":"player_state_machine"}\n
+    ///     {"kind":"unsubscribe_pin_values","flow":"player_state_machine"}\n
     ///
     /// Returns `MalformedSubscription` if a frame parses as JSON but
     /// the shape doesn't match; the caller can choose to log + drop.
@@ -463,6 +540,14 @@ pub const Preview = struct {
     /// flow name string at the call site.
     pub fn isFlowSubscribed(self: *const Preview, flow_name: []const u8) bool {
         return self.subscribed_flows.contains(flow_name);
+    }
+
+    /// Returns `true` if `emitPinValue` would emit a frame for this
+    /// flow's pin stream. Useful as a guard around the cost of
+    /// computing the value (e.g. resolving a wire's source pin) at
+    /// the call site.
+    pub fn isPinFlowSubscribed(self: *const Preview, flow_name: []const u8) bool {
+        return self.subscribed_pin_flows.contains(flow_name);
     }
 
     /// Phase 3 (#534) entity-scope check. Returns `true` when the
@@ -570,6 +655,22 @@ pub const Preview = struct {
                 .ignore_unknown_fields = true,
             }) catch return error.MalformedSubscription;
             _ = self.subscribed_flows.remove(parsed.flow);
+        } else if (std.mem.eql(u8, kind_only.kind, "subscribe_pin_values")) {
+            const Parsed = struct { kind: []const u8, flow: []const u8 };
+            const parsed = std.json.parseFromSliceLeaky(Parsed, alloc, line, .{
+                .ignore_unknown_fields = true,
+            }) catch return error.MalformedSubscription;
+            if (!self.subscribed_pin_flows.contains(parsed.flow)) {
+                const subs_alloc = self.subs_arena.allocator();
+                const owned = try subs_alloc.dupe(u8, parsed.flow);
+                try self.subscribed_pin_flows.put(subs_alloc, owned, {});
+            }
+        } else if (std.mem.eql(u8, kind_only.kind, "unsubscribe_pin_values")) {
+            const Parsed = struct { kind: []const u8, flow: []const u8 };
+            const parsed = std.json.parseFromSliceLeaky(Parsed, alloc, line, .{
+                .ignore_unknown_fields = true,
+            }) catch return error.MalformedSubscription;
+            _ = self.subscribed_pin_flows.remove(parsed.flow);
         } else if (std.mem.eql(u8, kind_only.kind, "watch_entity")) {
             // Phase 3 (#534). Empty `watched_entities` means
             // "watch everything"; once the editor adds an ID we

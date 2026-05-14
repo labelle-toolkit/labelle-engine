@@ -886,6 +886,348 @@ test "pollSubscription: subscribe_flow / unsubscribe_flow update subscribed_flow
     try std.testing.expect(preview.isFlowSubscribed("not_yet_loaded"));
 }
 
+// ── #57 (labelle-gui) — pin_value binary telemetry ──────────────────
+
+/// Spin until the engine reports the given flow as pin-value
+/// subscribed. Mirror of `waitForFlowSubscription`.
+fn waitForPinFlowSubscription(preview: *Preview, flow_name: []const u8, deadline_ms: u64) !void {
+    const start = std.time.milliTimestamp();
+    while (true) {
+        try preview.pollSubscription();
+        if (preview.isPinFlowSubscribed(flow_name)) return;
+        const now = std.time.milliTimestamp();
+        if (now - start > @as(i64, @intCast(deadline_ms))) return error.SubscriptionDeadlineExceeded;
+        std.Thread.sleep(1 * std.time.ns_per_ms);
+    }
+}
+
+fn waitForPinFlowUnsubscribed(preview: *Preview, flow_name: []const u8, deadline_ms: u64) !void {
+    const start = std.time.milliTimestamp();
+    while (preview.isPinFlowSubscribed(flow_name)) {
+        try preview.pollSubscription();
+        const now = std.time.milliTimestamp();
+        if (now - start > @as(i64, @intCast(deadline_ms))) return error.UnsubscribeDeadlineExceeded;
+        std.Thread.sleep(1 * std.time.ns_per_ms);
+    }
+}
+
+/// Decode the `pin_value` payload into typed fields. Mirrors the
+/// editor-side reader. Returns slices into `payload` — caller must
+/// keep `payload` alive for the lifetime of the result.
+fn decodePinValuePayload(payload: []const u8) !struct {
+    flow_name: []const u8,
+    node_id: u32,
+    pin_name: []const u8,
+    value: f64,
+} {
+    if (payload.len < 2) return error.PayloadTruncated;
+    const flow_name_len = std.mem.readInt(u16, payload[0..2], .little);
+    var off: usize = 2;
+    if (payload.len < off + flow_name_len + 4 + 2 + 8) return error.PayloadTruncated;
+    const flow_name = payload[off .. off + flow_name_len];
+    off += flow_name_len;
+    const node_id = std.mem.readInt(u32, payload[off..][0..4], .little);
+    off += 4;
+    const pin_name_len = std.mem.readInt(u16, payload[off..][0..2], .little);
+    off += 2;
+    if (payload.len < off + pin_name_len + 8) return error.PayloadTruncated;
+    const pin_name = payload[off .. off + pin_name_len];
+    off += pin_name_len;
+    const bits = std.mem.readInt(u64, payload[off..][0..8], .little);
+    const value: f64 = @bitCast(bits);
+    off += 8;
+    if (off != payload.len) return error.TrailingBytes;
+    return .{
+        .flow_name = flow_name,
+        .node_id = node_id,
+        .pin_name = pin_name,
+        .value = value,
+    };
+}
+
+test "emitPinValue: no-op when flow is not pin-subscribed" {
+    // Default empty `subscribed_pin_flows` set → opt-in semantics →
+    // silence. Mirror of `emitNodeEntered: no-op when flow is not
+    // subscribed`.
+    const allocator = std.testing.allocator;
+    var harness = try LoopbackHarness.init();
+    defer harness.deinit();
+
+    var host_port_buf: [32]u8 = undefined;
+    const host_port = try harness.hostPort(&host_port_buf);
+    var preview = try Preview.connect(allocator, host_port);
+    defer preview.deinit();
+    try harness.accept();
+
+    try std.testing.expect(!preview.isPinFlowSubscribed("test_flow"));
+    try preview.emitPinValue("test_flow", 1, "out", 3.14);
+    try preview.emitPinValue("other_flow", 2, "a", 0.0);
+
+    // Probe with a JSON frame so we can prove no binary bytes
+    // preceded it on the wire.
+    try preview.sendHeartbeat(500);
+    var buf: [256]u8 = undefined;
+    try std.testing.expect((try harness.peekByte()) != binary_magic);
+    const f = try harness.readFrame(&buf);
+    try std.testing.expect(std.mem.indexOf(u8, f, "\"kind\":\"heartbeat\"") != null);
+}
+
+test "emitPinValue: subscribed flow emits a frame with the expected layout" {
+    const allocator = std.testing.allocator;
+    var harness = try LoopbackHarness.init();
+    defer harness.deinit();
+
+    var host_port_buf: [32]u8 = undefined;
+    const host_port = try harness.hostPort(&host_port_buf);
+    var preview = try Preview.connect(allocator, host_port);
+    defer preview.deinit();
+    try harness.accept();
+
+    try harness.writeJsonLine("{\"kind\":\"subscribe_pin_values\",\"flow\":\"move\"}");
+    try waitForPinFlowSubscription(&preview, "move", 1000);
+
+    try preview.emitPinValue("move", 42, "speed", 2.5);
+
+    var payload_buf: [256]u8 = undefined;
+    const frame = try harness.readBinaryFrame(&payload_buf);
+    try std.testing.expectEqual(@intFromEnum(BinaryFrameKind.pin_value), frame.kind);
+    const decoded = try decodePinValuePayload(frame.payload);
+    try std.testing.expectEqualStrings("move", decoded.flow_name);
+    try std.testing.expectEqual(@as(u32, 42), decoded.node_id);
+    try std.testing.expectEqualStrings("speed", decoded.pin_name);
+    try std.testing.expectEqual(@as(f64, 2.5), decoded.value);
+    // Payload tightly sized — no trailing bytes (decode helper
+    // asserts this, but assert the expected total too).
+    // flow: 2 + 4 + node: 4 + pin: 2 + 5 + value: 8 = 25
+    try std.testing.expectEqual(@as(usize, 25), frame.payload.len);
+}
+
+test "emitPinValue: unsubscribe_pin_values stops emission" {
+    const allocator = std.testing.allocator;
+    var harness = try LoopbackHarness.init();
+    defer harness.deinit();
+
+    var host_port_buf: [32]u8 = undefined;
+    const host_port = try harness.hostPort(&host_port_buf);
+    var preview = try Preview.connect(allocator, host_port);
+    defer preview.deinit();
+    try harness.accept();
+
+    try harness.writeJsonLine("{\"kind\":\"subscribe_pin_values\",\"flow\":\"move\"}");
+    try waitForPinFlowSubscription(&preview, "move", 1000);
+    try preview.emitPinValue("move", 7, "out", 1.0);
+
+    // Consume the one expected frame.
+    var payload_buf: [256]u8 = undefined;
+    const frame = try harness.readBinaryFrame(&payload_buf);
+    try std.testing.expectEqual(@intFromEnum(BinaryFrameKind.pin_value), frame.kind);
+
+    try harness.writeJsonLine("{\"kind\":\"unsubscribe_pin_values\",\"flow\":\"move\"}");
+    try waitForPinFlowUnsubscribed(&preview, "move", 1000);
+
+    // After unsubscribe the emit must be a no-op. Probe with a
+    // heartbeat so we can prove no binary frame slipped through.
+    try preview.emitPinValue("move", 8, "out", 2.0);
+    try preview.sendHeartbeat(999);
+    try std.testing.expect((try harness.peekByte()) != binary_magic);
+    var buf: [256]u8 = undefined;
+    const f = try harness.readFrame(&buf);
+    try std.testing.expect(std.mem.indexOf(u8, f, "\"kind\":\"heartbeat\"") != null);
+}
+
+test "emitPinValue: subscribing to flow A doesn't enable emission for flow B" {
+    const allocator = std.testing.allocator;
+    var harness = try LoopbackHarness.init();
+    defer harness.deinit();
+
+    var host_port_buf: [32]u8 = undefined;
+    const host_port = try harness.hostPort(&host_port_buf);
+    var preview = try Preview.connect(allocator, host_port);
+    defer preview.deinit();
+    try harness.accept();
+
+    try harness.writeJsonLine("{\"kind\":\"subscribe_pin_values\",\"flow\":\"alpha\"}");
+    try waitForPinFlowSubscription(&preview, "alpha", 1000);
+    try std.testing.expect(!preview.isPinFlowSubscribed("beta"));
+
+    // Emit for B (must be silent), then A (must emit), then a
+    // heartbeat as a wire-position anchor. The reader should see
+    // exactly one binary frame followed by the heartbeat — no B
+    // frame.
+    try preview.emitPinValue("beta", 1, "out", 99.0);
+    try preview.emitPinValue("alpha", 2, "out", 1.5);
+    try preview.sendHeartbeat(500);
+
+    var payload_buf: [256]u8 = undefined;
+    const frame = try harness.readBinaryFrame(&payload_buf);
+    try std.testing.expectEqual(@intFromEnum(BinaryFrameKind.pin_value), frame.kind);
+    const decoded = try decodePinValuePayload(frame.payload);
+    try std.testing.expectEqualStrings("alpha", decoded.flow_name);
+    try std.testing.expectEqual(@as(u32, 2), decoded.node_id);
+    try std.testing.expectEqual(@as(f64, 1.5), decoded.value);
+
+    var buf: [256]u8 = undefined;
+    const f = try harness.readFrame(&buf);
+    try std.testing.expect(std.mem.indexOf(u8, f, "\"kind\":\"heartbeat\"") != null);
+}
+
+test "emitPinValue: pin_name with non-ASCII and quotes round-trips through the wire" {
+    const allocator = std.testing.allocator;
+    var harness = try LoopbackHarness.init();
+    defer harness.deinit();
+
+    var host_port_buf: [32]u8 = undefined;
+    const host_port = try harness.hostPort(&host_port_buf);
+    var preview = try Preview.connect(allocator, host_port);
+    defer preview.deinit();
+    try harness.accept();
+
+    try harness.writeJsonLine("{\"kind\":\"subscribe_pin_values\",\"flow\":\"flow_unicode\"}");
+    try waitForPinFlowSubscription(&preview, "flow_unicode", 1000);
+
+    // The wire treats pin_name as opaque UTF-8 bytes — neither
+    // quoting nor multi-byte sequences should change the length
+    // prefix or the payload contents.
+    const cases = [_]struct { name: []const u8, value: f64 }{
+        .{ .name = "with \"quotes\"", .value = -0.0 },
+        .{ .name = "ünîcödé pîn", .value = 1234.5678 },
+        .{ .name = "日本語ピン", .value = -1e-10 },
+        .{ .name = "tab\there/newline\nhere", .value = 42.0 },
+    };
+
+    var payload_buf: [512]u8 = undefined;
+    for (cases, 0..) |c, i| {
+        try preview.emitPinValue("flow_unicode", @intCast(i), c.name, c.value);
+        const frame = try harness.readBinaryFrame(&payload_buf);
+        try std.testing.expectEqual(@intFromEnum(BinaryFrameKind.pin_value), frame.kind);
+        const decoded = try decodePinValuePayload(frame.payload);
+        try std.testing.expectEqualStrings("flow_unicode", decoded.flow_name);
+        try std.testing.expectEqual(@as(u32, @intCast(i)), decoded.node_id);
+        try std.testing.expectEqualStrings(c.name, decoded.pin_name);
+        try std.testing.expectEqual(c.value, decoded.value);
+    }
+}
+
+test "emitPinValue: f64 value preserves precision through encode/decode" {
+    const allocator = std.testing.allocator;
+    var harness = try LoopbackHarness.init();
+    defer harness.deinit();
+
+    var host_port_buf: [32]u8 = undefined;
+    const host_port = try harness.hostPort(&host_port_buf);
+    var preview = try Preview.connect(allocator, host_port);
+    defer preview.deinit();
+    try harness.accept();
+
+    try harness.writeJsonLine("{\"kind\":\"subscribe_pin_values\",\"flow\":\"precision\"}");
+    try waitForPinFlowSubscription(&preview, "precision", 1000);
+
+    // Pick values that would lose precision under any narrowing
+    // codec (f32, decimal text round-trip, etc.).
+    const values = [_]f64{
+        std.math.pi,
+        std.math.e,
+        -std.math.floatMax(f64),
+        std.math.floatMin(f64),
+        std.math.floatEps(f64),
+        1.0 / 3.0,
+        0.0,
+        -0.0,
+    };
+
+    var payload_buf: [256]u8 = undefined;
+    for (values, 0..) |v, i| {
+        try preview.emitPinValue("precision", @intCast(i), "v", v);
+        const frame = try harness.readBinaryFrame(&payload_buf);
+        const decoded = try decodePinValuePayload(frame.payload);
+        // Bit-exact comparison: f64 → u64 → f64 must round-trip
+        // for every finite value. `expectEqual` on f64 is exact.
+        try std.testing.expectEqual(v, decoded.value);
+        // -0.0 vs 0.0 disambiguation: compare the bit patterns
+        // directly for the signed-zero case.
+        const v_bits: u64 = @bitCast(v);
+        const d_bits: u64 = @bitCast(decoded.value);
+        try std.testing.expectEqual(v_bits, d_bits);
+    }
+}
+
+test "emitPinValue: exact wire-format guard against drift" {
+    // Hand-compose the bytes we expect on the wire for one frame
+    // and diff against `emitPinValue`'s output byte-for-byte.
+    // Mirror of `emitNodeEntered: exact wire-format guard`.
+    const allocator = std.testing.allocator;
+    var harness = try LoopbackHarness.init();
+    defer harness.deinit();
+
+    var host_port_buf: [32]u8 = undefined;
+    const host_port = try harness.hostPort(&host_port_buf);
+    var preview = try Preview.connect(allocator, host_port);
+    defer preview.deinit();
+    try harness.accept();
+
+    try harness.writeJsonLine("{\"kind\":\"subscribe_pin_values\",\"flow\":\"hud\"}");
+    try waitForPinFlowSubscription(&preview, "hud", 1000);
+
+    // Value `1.0` has the well-known bit pattern 0x3FF0000000000000.
+    try preview.emitPinValue("hud", 0x01020304, "x", 1.0);
+
+    // Header: magic(1) + kind(1) + length(4 LE)
+    // Payload:
+    //   u16 flow_name_len LE = 3
+    //   "hud"
+    //   u32 node_id LE       = 0x01020304
+    //   u16 pin_name_len LE  = 1
+    //   "x"
+    //   f64 value LE         = 0x3FF0000000000000
+    // payload_len = 2 + 3 + 4 + 2 + 1 + 8 = 20
+    const expected = [_]u8{
+        binary_magic,
+        @intFromEnum(BinaryFrameKind.pin_value),
+        20, 0, 0, 0, // length LE
+        3,  0, // flow_name_len LE
+        'h', 'u', 'd',
+        0x04, 0x03, 0x02, 0x01, // node_id LE
+        1, 0, // pin_name_len LE
+        'x',
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xF0, 0x3F, // f64 1.0 LE
+    };
+    var actual: [expected.len]u8 = undefined;
+    try harness.readExact(&actual);
+    try std.testing.expectEqualSlices(u8, &expected, &actual);
+}
+
+test "pollSubscription: subscribe_pin_values / unsubscribe_pin_values update subscribed_pin_flows" {
+    const allocator = std.testing.allocator;
+    var harness = try LoopbackHarness.init();
+    defer harness.deinit();
+
+    var host_port_buf: [32]u8 = undefined;
+    const host_port = try harness.hostPort(&host_port_buf);
+    var preview = try Preview.connect(allocator, host_port);
+    defer preview.deinit();
+    try harness.accept();
+
+    // The pin-values subscription set is independent of the
+    // node-entered subscription set: subscribing to one must not
+    // enable the other.
+    try harness.writeJsonLine("{\"kind\":\"subscribe_flow\",\"flow\":\"shared\"}");
+    try waitForFlowSubscription(&preview, "shared", 1000);
+    try std.testing.expect(preview.isFlowSubscribed("shared"));
+    try std.testing.expect(!preview.isPinFlowSubscribed("shared"));
+
+    try harness.writeJsonLine("{\"kind\":\"subscribe_pin_values\",\"flow\":\"shared\"}");
+    try waitForPinFlowSubscription(&preview, "shared", 1000);
+    try std.testing.expect(preview.isFlowSubscribed("shared"));
+    try std.testing.expect(preview.isPinFlowSubscribed("shared"));
+
+    // Unsubscribing from pins must leave the node-entered
+    // subscription untouched.
+    try harness.writeJsonLine("{\"kind\":\"unsubscribe_pin_values\",\"flow\":\"shared\"}");
+    try waitForPinFlowUnsubscribed(&preview, "shared", 1000);
+    try std.testing.expect(preview.isFlowSubscribed("shared"));
+    try std.testing.expect(!preview.isPinFlowSubscribed("shared"));
+}
+
 // ── Phase 3 / #534 — watch_entity protocol + filtered emission ──────
 
 /// Spin until `preview.pollSubscription` reports the given entity is
