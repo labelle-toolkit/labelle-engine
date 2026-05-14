@@ -1070,7 +1070,10 @@ pub fn GameConfig(
         /// Preview telemetry is fired after the mutation through the
         /// same `notifyComponentChanged` path used by `setComponent`,
         /// so the editor sees an updated component frame when it has
-        /// subscribed to `T`.
+        /// subscribed to `T`. For `Position` specifically the renderer's
+        /// dirty-tracking is also poked (mirroring `setPosition`) so
+        /// a flow that nudges `Position.x` doesn't drift the on-screen
+        /// sprite out of sync with the ECS state.
         pub fn setField(
             self: *Self,
             comptime T: type,
@@ -1080,6 +1083,9 @@ pub fn GameConfig(
         ) void {
             const comp_ptr = self.ecs_backend.getComponent(entity, T) orelse return;
             @field(comp_ptr.*, @tagName(field)) = value;
+            if (T == Position) {
+                self.renderer.markPositionDirtyWithChildren(EcsImpl, self.ecs_backend, entity);
+            }
             self.notifyComponentChanged(entity, comp_ptr);
         }
 
