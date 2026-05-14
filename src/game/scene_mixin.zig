@@ -14,7 +14,7 @@ const builtin = @import("builtin");
 /// the developer to author a manifest just to peek at it. Production
 /// builds keep the strict explicit-declaration behavior.
 fn collectAllRegisteredAssetNames(allocator: std.mem.Allocator, catalog: anytype) ![][]const u8 {
-    var list = std.ArrayList([]const u8){};
+    var list: std.ArrayList([]const u8) = .empty;
     errdefer list.deinit(allocator);
     try list.ensureTotalCapacityPrecise(allocator, catalog.entries.count());
     var iter = catalog.entries.keyIterator();
