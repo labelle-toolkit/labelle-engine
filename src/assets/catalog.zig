@@ -26,7 +26,17 @@
 //!    `project.labelle`.
 
 const std = @import("std");
-const sleep_helper = @import("../sleep_helper.zig");
+const builtin = @import("builtin");
+fn sleepNs(ns: u64) void {
+    if (builtin.os.tag == .windows) {
+        const K = struct { extern "kernel32" fn Sleep(ms: u32) callconv(.winapi) void; };
+        K.Sleep(@intCast(@min(ns / std.time.ns_per_ms, std.math.maxInt(u32))));
+        return;
+    }
+    var req: std.c.timespec = .{ .sec = @intCast(ns / std.time.ns_per_s), .nsec = @intCast(ns % std.time.ns_per_s) };
+    var rem: std.c.timespec = undefined;
+    while (true) { const rc = std.c.nanosleep(&req, &rem); if (rc == 0) return; req = rem; }
+}
 const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
 
@@ -718,7 +728,7 @@ test "acquire spawns worker which surfaces ImageBackendNotInitialized without a 
         for (&catalog.results) |*ring| {
             if (ring.tryDequeue()) |r| break :outer r;
         }
-        sleep_helper.sleepNs(step_ns);
+        sleepNs(step_ns);
         waited_ns += step_ns;
     } else {
         return error.WorkerDidNotRespond;
@@ -826,7 +836,7 @@ fn spinForResults(catalog: *AssetCatalog, at_least: u32) !void {
             total += head -% tail;
         }
         if (total >= at_least) return;
-        sleep_helper.sleepNs(step_ns);
+        sleepNs(step_ns);
     }
     return error.WorkerDidNotRespond;
 }

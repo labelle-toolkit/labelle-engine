@@ -282,9 +282,9 @@ pub fn Mixin(comptime Game: type) type {
                 }
             }
 
-            var aw: std.ArrayList(u8) = .empty;
-            defer aw.deinit(allocator);
-            const writer = aw.writer(allocator);
+            var alloc_writer: std.Io.Writer.Allocating = .init(allocator);
+            defer alloc_writer.deinit();
+            const writer = &alloc_writer.writer;
 
             try std.fmt.format(writer, "{{\n  \"version\": {d},\n  \"entities\": [\n", .{SAVE_VERSION});
 
@@ -433,7 +433,7 @@ pub fn Mixin(comptime Game: type) type {
             try writer.writeAll("\n  ]\n}\n");
 
             const _io = io_helper.io();
-            try std.Io.Dir.cwd().writeFile(_io, .{ .sub_path = filename, .data = aw.items });
+            try std.Io.Dir.cwd().writeFile(_io, .{ .sub_path = filename, .data = alloc_writer.toArrayList().items });
         }
 
         // ─── Load ───────────────────────────────────────────────────

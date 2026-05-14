@@ -125,7 +125,7 @@ test "image loader: catalog → worker → upload → free end to end" {
         for (&catalog.results) |*ring| {
             if (ring.tryDequeue()) |r| break :outer r;
         }
-        std.Thread.sleep(step_ns);
+        { var _req: std.c.timespec = .{ .sec = (step_ns / std.time.ns_per_s), .nsec = (step_ns % std.time.ns_per_s) }; var _rem: std.c.timespec = undefined; _ = std.c.nanosleep(&_req, &_rem); }
         waited_ns += step_ns;
     } else {
         return error.WorkerDidNotRespond;
@@ -183,7 +183,7 @@ test "image loader: catalog discard path frees pixels when refcount hits zero be
     const step_ns: u64 = 1 * std.time.ns_per_ms;
     while (waited_ns < deadline_ns) : (waited_ns += step_ns) {
         if (IntegrationMock.decode_calls > 0) break;
-        std.Thread.sleep(step_ns);
+        { var _req: std.c.timespec = .{ .sec = (step_ns / std.time.ns_per_s), .nsec = (step_ns % std.time.ns_per_s) }; var _rem: std.c.timespec = undefined; _ = std.c.nanosleep(&_req, &_rem); }
     }
     try testing.expectEqual(@as(u32, 1), IntegrationMock.decode_calls);
 

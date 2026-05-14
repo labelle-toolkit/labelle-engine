@@ -33,7 +33,17 @@
 //! the ceiling.
 
 const std = @import("std");
-const sleep_helper = @import("../sleep_helper.zig");
+const builtin = @import("builtin");
+fn sleepNs(ns: u64) void {
+    if (builtin.os.tag == .windows) {
+        const K = struct { extern "kernel32" fn Sleep(ms: u32) callconv(.winapi) void; };
+        K.Sleep(@intCast(@min(ns / std.time.ns_per_ms, std.math.maxInt(u32))));
+        return;
+    }
+    var req: std.c.timespec = .{ .sec = @intCast(ns / std.time.ns_per_s), .nsec = @intCast(ns % std.time.ns_per_s) };
+    var rem: std.c.timespec = undefined;
+    while (true) { const rc = std.c.nanosleep(&req, &rem); if (rc == 0) return; req = rem; }
+}
 const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
 
@@ -232,7 +242,7 @@ pub const AssetWorker = struct {
     fn runLoop(self: *AssetWorker) void {
         while (!self.shutdown.load(.acquire)) {
             const request = self.requests.tryDequeue() orelse {
-                sleep_helper.sleepNs(idle_park_ns);
+                sleepNs(idle_park_ns);
                 continue;
             };
             decodeAndPublish(self, request, .thread);
@@ -303,7 +313,7 @@ pub const AssetWorker = struct {
                             }
                             return;
                         }
-                        sleep_helper.sleepNs(idle_park_ns);
+                        sleepNs(idle_park_ns);
                     },
                     .sync => {
                         // Defensive fallback. `runOnce` checks
@@ -440,7 +450,7 @@ test "AssetWorker decodes a stub request and publishes a result" {
     const step_ns: u64 = 1 * std.time.ns_per_ms;
     const result = while (waited_ns < deadline_ns) {
         if (results.tryDequeue()) |r| break r;
-        sleep_helper.sleepNs(step_ns);
+        sleepNs(step_ns);
         waited_ns += step_ns;
     } else {
         return error.WorkerDidNotRespond;
