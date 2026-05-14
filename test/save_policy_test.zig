@@ -373,7 +373,7 @@ test "full pipeline: save and load entire game state" {
 
     // ── Step 2: SAVE — serialize all entities to JSON ──────────────────
 
-    var json_buf: std.ArrayList(u8) = .{};
+    var json_buf: std.ArrayList(u8) = .empty;
     defer json_buf.deinit(alloc);
     const writer = json_buf.writer(alloc);
 
