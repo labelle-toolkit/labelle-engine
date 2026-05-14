@@ -146,7 +146,7 @@ test "Saveable: marker with post_load_add" {
     try testing.expectEqual(SavePolicy.marker, core.getSavePolicy(Worker).?);
     try testing.expect(core.hasSavePolicy(Worker));
     try testing.expectEqual(@as(usize, 0), core.getEntityRefFields(Worker).len);
-    const markers = core.getPostLoadMarkers(Worker);
+    const markers = comptime core.getPostLoadMarkers(Worker);
     try testing.expectEqual(@as(usize, 1), markers.len);
     comptime {
         if (markers[0] != NeedsClosestNode) @compileError("markers[0] mismatch");
