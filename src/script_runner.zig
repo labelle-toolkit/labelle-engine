@@ -67,18 +67,20 @@ pub fn ScriptRunner(
 
         fn buildStatesType() type {
             const decls = @typeInfo(AllScripts).@"struct".decls;
-            var fields: [decls.len]std.builtin.Type.StructField = undefined;
+            var names: [decls.len][]const u8 = undefined;
+            var types: [decls.len]type = undefined;
+            var attrs: [decls.len]std.builtin.Type.StructField.Attributes = undefined;
             var count: usize = 0;
             for (decls) |d| {
                 const mod = @field(AllScripts, d.name);
                 if (comptime isGameScript(mod) and hasStateDecl(mod)) {
                     const ST = resolveState(mod);
-                    fields[count] = .{
-                        .name = d.name,
-                        .type = ST,
+                    names[count] = d.name;
+                    types[count] = ST;
+                    attrs[count] = .{
                         .default_value_ptr = null,
-                        .is_comptime = false,
-                        .alignment = @alignOf(ST),
+                        .@"comptime" = false,
+                        .@"align" = @alignOf(ST),
                     };
                     count += 1;
                 }
@@ -86,14 +88,7 @@ pub fn ScriptRunner(
             if (count == 0) {
                 return struct {};
             }
-            return @Type(.{
-                .@"struct" = .{
-                    .layout = .auto,
-                    .fields = fields[0..count],
-                    .decls = &.{},
-                    .is_tuple = false,
-                },
-            });
+            return @Struct(.auto, null, names[0..count], types[0..count], attrs[0..count]);
         }
 
         /// Resolve a script's State type. Handles both:
