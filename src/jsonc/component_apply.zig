@@ -144,7 +144,7 @@ pub fn ComponentApply(comptime GameType: type, comptime Components: type) type {
         /// parse them as `[]const Struct` and fail.
         pub fn stripEntityArrayFields(value: Value, allocator: std.mem.Allocator) Value {
             const obj = value.asObject() orelse return value;
-            var filtered: std.ArrayList(Value.Object.Entry) = .{};
+            var filtered: std.ArrayList(Value.Object.Entry) = .empty;
             for (obj.entries) |entry| {
                 const is_entity_array = blk: {
                     const arr = entry.value.asArray() orelse break :blk false;

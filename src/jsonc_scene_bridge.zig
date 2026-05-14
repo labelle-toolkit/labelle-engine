@@ -130,7 +130,7 @@ pub fn JsoncSceneBridgeWithGizmos(
             // grows with the count of entities currently in the
             // wrong state for this transition; once steady, the
             // list stays empty.
-            var pending: std.ArrayList(Entity) = .{};
+            var pending: std.ArrayList(Entity) = .empty;
             defer pending.deinit(game.allocator);
 
             if (target) {

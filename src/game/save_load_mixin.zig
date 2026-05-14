@@ -194,7 +194,7 @@ pub fn Mixin(comptime Game: type) type {
         /// wrapper keeps the same single-type signature while the
         /// shape stays identical to the public helper.
         fn collectEntities(comptime T: type, ecs: anytype, allocator: std.mem.Allocator) !std.ArrayList(Entity) {
-            var buf: std.ArrayList(Entity) = .{};
+            var buf: std.ArrayList(Entity) = .empty;
             errdefer buf.deinit(allocator);
             var view = ecs.view(.{T}, .{});
             defer view.deinit();
@@ -214,7 +214,7 @@ pub fn Mixin(comptime Game: type) type {
             // Collect all entities with saveable or marker components
             var entity_set = std.AutoHashMap(u64, void).init(allocator);
             defer entity_set.deinit();
-            var entity_list: std.ArrayList(u64) = .{};
+            var entity_list: std.ArrayList(u64) = .empty;
             defer entity_list.deinit(allocator);
 
             inline for (names) |name| {
@@ -281,7 +281,7 @@ pub fn Mixin(comptime Game: type) type {
                 }
             }
 
-            var aw: std.ArrayList(u8) = .{};
+            var aw: std.ArrayList(u8) = .empty;
             defer aw.deinit(allocator);
             const writer = aw.writer(allocator);
 
