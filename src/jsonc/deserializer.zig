@@ -17,6 +17,7 @@
 //!    `nested_entity_arena`, which resets on `resetEcsBackend`.
 
 const std = @import("std");
+const io_helper = @import("../io_helper.zig");
 const builtin = @import("builtin");
 const jsonc = @import("jsonc");
 const Value = jsonc.Value;
@@ -62,10 +63,10 @@ else
 // `internString` call is atomic from the caller's perspective.
 var intern_arena: ?std.heap.ArenaAllocator = null;
 var intern_map: ?std.StringHashMap(void) = null;
-var intern_mutex: std.Thread.Mutex = .{};
+var intern_mutex: std.Io.Mutex = .init;
 
 fn internString(s: []const u8) ?[]const u8 {
-    intern_mutex.lock();
+    intern_mutex.lock(io_helper.io()) catch return null;
     defer intern_mutex.unlock();
 
     if (intern_arena == null) {
