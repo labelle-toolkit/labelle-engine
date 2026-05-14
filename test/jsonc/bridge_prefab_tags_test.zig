@@ -63,11 +63,11 @@ fn setupFixture(
     inline for (std.meta.fields(@TypeOf(prefab_files))) |field| {
         const path = try std.fmt.allocPrint(testing.allocator, "prefabs/{s}.jsonc", .{field.name});
         defer testing.allocator.free(path);
-        try tmp_dir.dir.writeFile(.{ .sub_path = path, .data = @field(prefab_files, field.name) });
+        try tmp_dir.dir.writeFile(std.testing.io, .{ .sub_path = path, .data = @field(prefab_files, field.name) });
     }
 
     var buf: [std.fs.max_path_bytes]u8 = undefined;
-    const dir_path = try tmp_dir.dir.realpath(".", &buf);
+    const _len = try tmp_dir.dir.realPath(std.testing.io, &buf); const dir_path = buf[0.._len];
     const prefab_dir = try std.fmt.allocPrint(testing.allocator, "{s}/prefabs", .{dir_path});
     errdefer testing.allocator.free(prefab_dir);
 

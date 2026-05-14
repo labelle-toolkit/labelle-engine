@@ -107,8 +107,8 @@ const Bridge = engine.JsoncSceneBridge(Game, Components);
 
 fn tmpPath(tmp_dir: *std.testing.TmpDir, sub: []const u8) ![]const u8 {
     var buf: [std.fs.max_path_bytes]u8 = undefined;
-    const dir_path = try tmp_dir.dir.realpath(".", &buf);
-    return std.fmt.allocPrint(testing.allocator, "{s}/{s}", .{ dir_path, sub });
+    const len = try tmp_dir.dir.realPath(std.testing.io, &buf);
+    return std.fmt.allocPrint(testing.allocator, "{s}/{s}", .{ buf[0..len], sub });
 }
 
 fn loadSource(game: *Game, source: []const u8) !void {
@@ -208,7 +208,7 @@ test "nested prefab-only postLoad fires exactly once" {
     defer tmp_dir.cleanup();
     try tmp_dir.dir.createDir(std.testing.io, "prefabs", .default_dir);
 
-    try tmp_dir.dir.writeFile(.{
+    try tmp_dir.dir.writeFile(std.testing.io, .{
         .sub_path = "prefabs/slot.jsonc",
         .data =
         \\{
@@ -254,7 +254,7 @@ test "nested scene override + prefab definition fires postLoad exactly once (no 
     defer tmp_dir.cleanup();
     try tmp_dir.dir.createDir(std.testing.io, "prefabs", .default_dir);
 
-    try tmp_dir.dir.writeFile(.{
+    try tmp_dir.dir.writeFile(std.testing.io, .{
         .sub_path = "prefabs/overridable.jsonc",
         .data =
         \\{
@@ -304,7 +304,7 @@ test "nested scene override + prefab definition fires onReady exactly once" {
     defer tmp_dir.cleanup();
     try tmp_dir.dir.createDir(std.testing.io, "prefabs", .default_dir);
 
-    try tmp_dir.dir.writeFile(.{
+    try tmp_dir.dir.writeFile(std.testing.io, .{
         .sub_path = "prefabs/overridable_ready.jsonc",
         .data =
         \\{

@@ -146,10 +146,10 @@ const Fixture = struct {
 
 fn boot(tmp_dir: *std.testing.TmpDir) !Fixture {
     try tmp_dir.dir.createDir(std.testing.io, "prefabs", .default_dir);
-    try tmp_dir.dir.writeFile(.{ .sub_path = "prefabs/plant.jsonc", .data = PLANT_PREFAB });
+    try tmp_dir.dir.writeFile(std.testing.io, .{ .sub_path = "prefabs/plant.jsonc", .data = PLANT_PREFAB });
 
     var buf: [std.fs.max_path_bytes]u8 = undefined;
-    const dir_path = try tmp_dir.dir.realpath(".", &buf);
+    const _len = try tmp_dir.dir.realPath(std.testing.io, &buf); const dir_path = buf[0.._len];
     const prefab_dir = try std.fmt.allocPrint(testing.allocator, "{s}/prefabs", .{dir_path});
     errdefer testing.allocator.free(prefab_dir);
 

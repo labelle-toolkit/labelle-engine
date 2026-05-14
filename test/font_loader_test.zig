@@ -127,7 +127,7 @@ fn spinForResults(catalog: *engine.AssetCatalog, at_least: u32) !void {
             total += head -% tail;
         }
         if (total >= at_least) return;
-        std.Thread.sleep(step_ns);
+        { var _req: std.c.timespec = .{ .sec = (step_ns / std.time.ns_per_s), .nsec = (step_ns % std.time.ns_per_s) }; var _rem: std.c.timespec = undefined; _ = std.c.nanosleep(&_req, &_rem); }
     }
     return error.WorkerDidNotRespond;
 }

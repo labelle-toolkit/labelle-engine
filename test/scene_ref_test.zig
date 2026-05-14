@@ -62,8 +62,8 @@ const Bridge = engine.JsoncSceneBridge(Game, Components);
 
 fn tmpPath(tmp_dir: *std.testing.TmpDir, sub: []const u8) ![]const u8 {
     var buf: [std.fs.max_path_bytes]u8 = undefined;
-    const dir_path = try tmp_dir.dir.realpath(".", &buf);
-    return std.fmt.allocPrint(testing.allocator, "{s}/{s}", .{ dir_path, sub });
+    const len = try tmp_dir.dir.realPath(std.testing.io, &buf);
+    return std.fmt.allocPrint(testing.allocator, "{s}/{s}", .{ buf[0..len], sub });
 }
 
 fn loadSource(game: *Game, source: []const u8) !void {
@@ -323,7 +323,7 @@ test "@ref: refs inside prefab with children" {
     try tmp_dir.dir.createDir(std.testing.io, "prefabs", .default_dir);
 
     // Prefab: container with a stored item as a child
-    try tmp_dir.dir.writeFile(.{
+    try tmp_dir.dir.writeFile(std.testing.io, .{
         .sub_path = "prefabs/box_with_item.jsonc",
         .data =
         \\{
@@ -345,7 +345,7 @@ test "@ref: refs inside prefab with children" {
         ,
     });
 
-    try tmp_dir.dir.writeFile(.{
+    try tmp_dir.dir.writeFile(std.testing.io, .{
         .sub_path = "scene.jsonc",
         .data =
         \\{
@@ -398,7 +398,7 @@ test "@ref: cross-reference between prefab and scene entity" {
 
     try tmp_dir.dir.createDir(std.testing.io, "prefabs", .default_dir);
 
-    try tmp_dir.dir.writeFile(.{
+    try tmp_dir.dir.writeFile(std.testing.io, .{
         .sub_path = "prefabs/container.jsonc",
         .data =
         \\{
@@ -409,7 +409,7 @@ test "@ref: cross-reference between prefab and scene entity" {
         ,
     });
 
-    try tmp_dir.dir.writeFile(.{
+    try tmp_dir.dir.writeFile(std.testing.io, .{
         .sub_path = "scene.jsonc",
         .data =
         \\{
@@ -461,7 +461,7 @@ test "@ref: position offset applied correctly with refs" {
 
     try tmp_dir.dir.createDir(std.testing.io, "prefabs", .default_dir);
 
-    try tmp_dir.dir.writeFile(.{
+    try tmp_dir.dir.writeFile(std.testing.io, .{
         .sub_path = "prefabs/parent_with_child.jsonc",
         .data =
         \\{
@@ -484,7 +484,7 @@ test "@ref: position offset applied correctly with refs" {
         ,
     });
 
-    try tmp_dir.dir.writeFile(.{
+    try tmp_dir.dir.writeFile(std.testing.io, .{
         .sub_path = "scene.jsonc",
         .data =
         \\{
@@ -602,7 +602,7 @@ test "@ref: nested entities with children and cross-refs (#415)" {
     try tmp_dir.dir.createDir(std.testing.io, "prefabs", .default_dir);
 
     // Prefab: storage with a child item, cross-referenced
-    try tmp_dir.dir.writeFile(.{
+    try tmp_dir.dir.writeFile(std.testing.io, .{
         .sub_path = "prefabs/filled_slot.jsonc",
         .data =
         \\{
@@ -624,7 +624,7 @@ test "@ref: nested entities with children and cross-refs (#415)" {
         ,
     });
 
-    try tmp_dir.dir.writeFile(.{
+    try tmp_dir.dir.writeFile(std.testing.io, .{
         .sub_path = "scene.jsonc",
         .data =
         \\{
@@ -701,7 +701,7 @@ test "children with Sprite render at correct position (#417)" {
     try tmp_dir.dir.createDir(std.testing.io, "prefabs", .default_dir);
 
     // Parent prefab with a sprite child
-    try tmp_dir.dir.writeFile(.{
+    try tmp_dir.dir.writeFile(std.testing.io, .{
         .sub_path = "prefabs/room_with_decor.jsonc",
         .data =
         \\{
@@ -720,7 +720,7 @@ test "children with Sprite render at correct position (#417)" {
         ,
     });
 
-    try tmp_dir.dir.writeFile(.{
+    try tmp_dir.dir.writeFile(std.testing.io, .{
         .sub_path = "scene.jsonc",
         .data =
         \\{
@@ -777,7 +777,7 @@ test "destroying parent also destroys children (#417)" {
 
     try tmp_dir.dir.createDir(std.testing.io, "prefabs", .default_dir);
 
-    try tmp_dir.dir.writeFile(.{
+    try tmp_dir.dir.writeFile(std.testing.io, .{
         .sub_path = "prefabs/parent_with_child.jsonc",
         .data =
         \\{
@@ -796,7 +796,7 @@ test "destroying parent also destroys children (#417)" {
         ,
     });
 
-    try tmp_dir.dir.writeFile(.{
+    try tmp_dir.dir.writeFile(std.testing.io, .{
         .sub_path = "scene.jsonc",
         .data =
         \\{

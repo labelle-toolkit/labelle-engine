@@ -72,11 +72,11 @@ fn setupFixture(
     inline for (std.meta.fields(@TypeOf(prefab_files))) |field| {
         const path = try std.fmt.allocPrint(testing.allocator, "prefabs/{s}.jsonc", .{field.name});
         defer testing.allocator.free(path);
-        try tmp_dir.dir.writeFile(.{ .sub_path = path, .data = @field(prefab_files, field.name) });
+        try tmp_dir.dir.writeFile(std.testing.io, .{ .sub_path = path, .data = @field(prefab_files, field.name) });
     }
 
     var buf: [std.fs.max_path_bytes]u8 = undefined;
-    const dir_path = try tmp_dir.dir.realpath(".", &buf);
+    const _len = try tmp_dir.dir.realPath(std.testing.io, &buf); const dir_path = buf[0.._len];
     const prefab_dir = try std.fmt.allocPrint(testing.allocator, "{s}/prefabs", .{dir_path});
     errdefer testing.allocator.free(prefab_dir);
 
@@ -255,7 +255,7 @@ test "two-phase load: scene-loaded prefab with children round-trips end-to-end" 
 
     // Write the prefab file.
     try tmp_dir.dir.createDir(std.testing.io, "prefabs", .default_dir);
-    try tmp_dir.dir.writeFile(.{
+    try tmp_dir.dir.writeFile(std.testing.io, .{
         .sub_path = "prefabs/room.jsonc",
         .data =
         \\{
@@ -269,7 +269,7 @@ test "two-phase load: scene-loaded prefab with children round-trips end-to-end" 
     });
 
     var buf: [std.fs.max_path_bytes]u8 = undefined;
-    const dir_path = try tmp_dir.dir.realpath(".", &buf);
+    const _len = try tmp_dir.dir.realPath(std.testing.io, &buf); const dir_path = buf[0.._len];
     const prefab_dir = try std.fmt.allocPrint(testing.allocator, "{s}/prefabs", .{dir_path});
     defer testing.allocator.free(prefab_dir);
 
@@ -414,13 +414,13 @@ test "two-phase load: nested prefab doesn't duplicate into a ghost root" {
     defer tmp_dir.cleanup();
 
     try tmp_dir.dir.createDir(std.testing.io, "prefabs", .default_dir);
-    try tmp_dir.dir.writeFile(.{
+    try tmp_dir.dir.writeFile(std.testing.io, .{
         .sub_path = "prefabs/inner.jsonc",
         .data =
         \\{ "components": { "Health": { "current": 25, "max": 25 } } }
         ,
     });
-    try tmp_dir.dir.writeFile(.{
+    try tmp_dir.dir.writeFile(std.testing.io, .{
         .sub_path = "prefabs/outer.jsonc",
         .data =
         \\{
@@ -433,7 +433,7 @@ test "two-phase load: nested prefab doesn't duplicate into a ghost root" {
     });
 
     var buf: [std.fs.max_path_bytes]u8 = undefined;
-    const dir_path = try tmp_dir.dir.realpath(".", &buf);
+    const _len = try tmp_dir.dir.realPath(std.testing.io, &buf); const dir_path = buf[0.._len];
     const prefab_dir = try std.fmt.allocPrint(testing.allocator, "{s}/prefabs", .{dir_path});
     defer testing.allocator.free(prefab_dir);
 

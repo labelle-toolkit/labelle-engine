@@ -151,7 +151,7 @@ fn waitForSubscription(preview: *Preview, comp_name: []const u8, deadline_ms: u6
         if (preview.isComponentSubscribed(comp_name)) return;
         const now = std.time.milliTimestamp();
         if (now - start > @as(i64, @intCast(deadline_ms))) return error.SubscriptionDeadlineExceeded;
-        std.Thread.sleep(1 * std.time.ns_per_ms);
+        { var _req: std.c.timespec = .{ .sec = (1 * std.time.ns_per_ms / std.time.ns_per_s), .nsec = (1 * std.time.ns_per_ms % std.time.ns_per_s) }; var _rem: std.c.timespec = undefined; _ = std.c.nanosleep(&_req, &_rem); }
     }
 }
 
@@ -418,7 +418,7 @@ test "pollSubscription: decodes subscribe and unsubscribe from editor" {
     while (preview.isComponentSubscribed("Velocity")) {
         try preview.pollSubscription();
         if (std.time.milliTimestamp() - start > 1000) return error.UnsubscribeDeadlineExceeded;
-        std.Thread.sleep(1 * std.time.ns_per_ms);
+        { var _req: std.c.timespec = .{ .sec = (1 * std.time.ns_per_ms / std.time.ns_per_s), .nsec = (1 * std.time.ns_per_ms % std.time.ns_per_s) }; var _rem: std.c.timespec = undefined; _ = std.c.nanosleep(&_req, &_rem); }
     }
     try std.testing.expect(preview.isComponentSubscribed("Position"));
     try std.testing.expect(!preview.isComponentSubscribed("Velocity"));
@@ -517,7 +517,7 @@ test "pollSubscription: malformed JSON surfaces MalformedSubscription" {
         if (r) {
             // No bytes yet — try again.
             if (std.time.milliTimestamp() - start > 1000) return error.NoMalformedFrameSurfaced;
-            std.Thread.sleep(1 * std.time.ns_per_ms);
+            { var _req: std.c.timespec = .{ .sec = (1 * std.time.ns_per_ms / std.time.ns_per_s), .nsec = (1 * std.time.ns_per_ms % std.time.ns_per_s) }; var _rem: std.c.timespec = undefined; _ = std.c.nanosleep(&_req, &_rem); }
             continue;
         } else |err| {
             try std.testing.expectEqual(@as(anyerror, error.MalformedSubscription), err);
@@ -718,7 +718,7 @@ fn waitForFlowSubscription(preview: *Preview, flow_name: []const u8, deadline_ms
         if (preview.isFlowSubscribed(flow_name)) return;
         const now = std.time.milliTimestamp();
         if (now - start > @as(i64, @intCast(deadline_ms))) return error.SubscriptionDeadlineExceeded;
-        std.Thread.sleep(1 * std.time.ns_per_ms);
+        { var _req: std.c.timespec = .{ .sec = (1 * std.time.ns_per_ms / std.time.ns_per_s), .nsec = (1 * std.time.ns_per_ms % std.time.ns_per_s) }; var _rem: std.c.timespec = undefined; _ = std.c.nanosleep(&_req, &_rem); }
     }
 }
 
@@ -728,7 +728,7 @@ fn waitForFlowUnsubscribed(preview: *Preview, flow_name: []const u8, deadline_ms
         try preview.pollSubscription();
         const now = std.time.milliTimestamp();
         if (now - start > @as(i64, @intCast(deadline_ms))) return error.UnsubscribeDeadlineExceeded;
-        std.Thread.sleep(1 * std.time.ns_per_ms);
+        { var _req: std.c.timespec = .{ .sec = (1 * std.time.ns_per_ms / std.time.ns_per_s), .nsec = (1 * std.time.ns_per_ms % std.time.ns_per_s) }; var _rem: std.c.timespec = undefined; _ = std.c.nanosleep(&_req, &_rem); }
     }
 }
 
@@ -899,7 +899,7 @@ fn waitForWatchedEntity(preview: *Preview, id: u64, deadline_ms: u64) !void {
         if (std.time.milliTimestamp() - start > @as(i64, @intCast(deadline_ms))) {
             return error.WatchEntityDeadlineExceeded;
         }
-        std.Thread.sleep(1 * std.time.ns_per_ms);
+        { var _req: std.c.timespec = .{ .sec = (1 * std.time.ns_per_ms / std.time.ns_per_s), .nsec = (1 * std.time.ns_per_ms % std.time.ns_per_s) }; var _rem: std.c.timespec = undefined; _ = std.c.nanosleep(&_req, &_rem); }
     }
 }
 
@@ -910,7 +910,7 @@ fn waitForUnwatchedEntity(preview: *Preview, id: u64, deadline_ms: u64) !void {
         if (std.time.milliTimestamp() - start > @as(i64, @intCast(deadline_ms))) {
             return error.UnwatchEntityDeadlineExceeded;
         }
-        std.Thread.sleep(1 * std.time.ns_per_ms);
+        { var _req: std.c.timespec = .{ .sec = (1 * std.time.ns_per_ms / std.time.ns_per_s), .nsec = (1 * std.time.ns_per_ms % std.time.ns_per_s) }; var _rem: std.c.timespec = undefined; _ = std.c.nanosleep(&_req, &_rem); }
     }
 }
 

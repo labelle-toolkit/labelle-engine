@@ -584,7 +584,7 @@ test "Game: assets.register + acquire + pump round-trips to .ready via mock imag
             total += ring.head.load(.acquire) -% ring.tail.load(.acquire);
         }
         if (total >= 1) break;
-        std.Thread.sleep(step_ns);
+        { var _req: std.c.timespec = .{ .sec = (step_ns / std.time.ns_per_s), .nsec = (step_ns % std.time.ns_per_s) }; var _rem: std.c.timespec = undefined; _ = std.c.nanosleep(&_req, &_rem); }
     } else {
         return error.WorkerDidNotRespond;
     }
