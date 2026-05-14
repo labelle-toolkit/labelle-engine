@@ -67,7 +67,7 @@ var intern_mutex: std.Io.Mutex = .init;
 
 fn internString(s: []const u8) ?[]const u8 {
     intern_mutex.lock(io_helper.io()) catch return null;
-    defer intern_mutex.unlock();
+    defer intern_mutex.unlock(io_helper.io());
 
     if (intern_arena == null) {
         intern_arena = std.heap.ArenaAllocator.init(intern_backing_allocator);
