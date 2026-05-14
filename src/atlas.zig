@@ -538,10 +538,7 @@ fn parseTexturePackerJson(
     json_path: [:0]const u8,
     sprites: *std.StringHashMap(SpriteData),
 ) !AtlasMeta {
-    const file = try std.Io.Dir.cwd().openFile(io_helper.io(), json_path, .{});
-    defer file.close();
-
-    const content = try file.readToEndAlloc(allocator, 10 * 1024 * 1024);
+    const content = try std.Io.Dir.cwd().readFileAlloc(io_helper.io(), json_path, allocator, .limited(10 * 1024 * 1024));
     defer allocator.free(content);
 
     return parseTexturePackerJsonContent(allocator, content, sprites);

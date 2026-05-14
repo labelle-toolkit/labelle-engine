@@ -63,10 +63,7 @@ pub const PrefabCache = struct {
 
         const path = std.fmt.allocPrint(self.temp, "{s}/{s}.jsonc", .{ self.prefab_dir, name }) catch return null;
         defer self.temp.free(path);
-        const file = std.Io.Dir.cwd().openFile(io_helper.io(), path, .{}) catch return null;
-        defer file.close();
-
-        const src = file.readToEndAlloc(self.persistent, 1024 * 1024) catch return null;
+        const src = std.Io.Dir.cwd().readFileAlloc(io_helper.io(), path, self.persistent, .limited(1024 * 1024)) catch return null;
         var p = JsoncParser.init(self.persistent, src);
         const val = p.parse() catch return null;
         self.prefabs.put(self.persistent.dupe(u8, name) catch return null, val) catch return null;

@@ -185,7 +185,7 @@ pub fn ScriptRunner(
                                 var timer: ?usize = null; // Timer removed in 0.16; profiling stubbed
                                 dispatchTickCall(mod.tick, game, self, d.name, dt);
                                 if (timer) |*t| {
-                                    self.profile[profile_idx].tick_ns = t.read();
+                                    self.profile[profile_idx].tick_ns = 0;
                                 }
                             } else {
                                 dispatchTickCall(mod.tick, game, self, d.name, dt);
@@ -212,7 +212,7 @@ pub fn ScriptRunner(
                                 var timer: ?usize = null; // Timer removed in 0.16; profiling stubbed
                                 dispatchCall(mod.drawGui, game, self, d.name);
                                 if (timer) |*t| {
-                                    self.profile[profile_idx].draw_gui_ns = t.read();
+                                    self.profile[profile_idx].draw_gui_ns = 0;
                                 }
                             } else {
                                 dispatchCall(mod.drawGui, game, self, d.name);
