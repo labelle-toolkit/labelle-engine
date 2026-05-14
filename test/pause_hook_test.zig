@@ -14,7 +14,7 @@ const game_mod = engine.game_mod;
 // ── Hook recorder ───────────────────────────────────────────────────────
 
 const PauseRecorder = struct {
-    changes: std.ArrayListUnmanaged(bool) = .{},
+    changes: std.ArrayListUnmanaged(bool) = .empty,
     allocator: std.mem.Allocator,
 
     pub fn pause_changed(self: *PauseRecorder, info: anytype) void {

@@ -148,7 +148,7 @@ test "Saveable: marker with post_load_add" {
     try testing.expectEqual(@as(usize, 0), core.getEntityRefFields(Worker).len);
     const markers = core.getPostLoadMarkers(Worker);
     try testing.expectEqual(@as(usize, 1), markers.len);
-    try testing.expect(markers[0] == NeedsClosestNode);
+    try comptime testing.expect(markers[0] == NeedsClosestNode);
 }
 
 test "Saveable: simple saveable" {
@@ -373,9 +373,9 @@ test "full pipeline: save and load entire game state" {
 
     // ── Step 2: SAVE — serialize all entities to JSON ──────────────────
 
-    var json_buf: std.ArrayList(u8) = .empty;
-    defer json_buf.deinit(alloc);
-    const writer = json_buf.writer(alloc);
+    var json_buf: std.Io.Writer.Allocating = .init(alloc);
+    defer json_buf.deinit();
+    const writer = &json_buf.writer;
 
     try writer.writeAll("{\"version\":2,\"entities\":[\n");
     for (&world, 0..) |*entity, idx| {
@@ -447,7 +447,7 @@ test "full pipeline: save and load entire game state" {
 
     // ── Step 4: LOAD — parse JSON ──────────────────────────────────────
 
-    const parsed = try std.json.parseFromSlice(std.json.Value, alloc, json_buf.items, .{});
+    const parsed = try std.json.parseFromSlice(std.json.Value, alloc, json_buf.writer.buffered(), .{});
     defer parsed.deinit();
     const root = parsed.value.object;
     const version = root.get("version").?.integer;
