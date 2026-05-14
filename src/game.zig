@@ -206,7 +206,7 @@ pub fn GameConfig(
         /// design can be settled alongside scene-manifest auto-acquire.
         assets: assets_mod.AssetCatalog,
         hooks: HooksField = if (has_hooks) null else {},
-        event_buffer: EventBuffer = if (has_events) .{} else {},
+        event_buffer: EventBuffer = if (has_events) .empty else {},
 
         // Scene management
         scenes: std.StringHashMap(SceneEntry),
@@ -490,7 +490,7 @@ pub fn GameConfig(
         /// Deliver buffered game events to hooks. Called at end of frame.
         pub fn dispatchEvents(self: *Self) void {
             if (!has_events) return;
-            var dispatch_buf: EventBuffer = .{};
+            var dispatch_buf: EventBuffer = .empty;
             std.mem.swap(EventBuffer, &self.event_buffer, &dispatch_buf);
 
             for (dispatch_buf.items) |event| {

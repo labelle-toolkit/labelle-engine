@@ -20,6 +20,7 @@ const std = @import("std");
 // ── Public types (unchanged shape — re-exported via root.zig) ─────
 
 pub const ByeReason = enum {
+    normal,
     user_quit,
     crash,
     timeout,
@@ -28,6 +29,7 @@ pub const ByeReason = enum {
 
     pub fn asString(self: ByeReason) []const u8 {
         return switch (self) {
+            .normal => "normal",
             .user_quit => "user_quit",
             .crash => "crash",
             .timeout => "timeout",
