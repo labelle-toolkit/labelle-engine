@@ -160,10 +160,10 @@ test "save/load mixin: full round-trip" {
     // Save
     const filename = "test_save.json";
     try game.saveGameState(filename);
-    defer std.fs.cwd().deleteFile(filename) catch {};
+    defer std.Io.Dir.cwd().deleteFile(std.testing.io, filename) catch {};
 
     // Verify file was created
-    const stat = try std.fs.cwd().statFile(filename);
+    const stat = try std.Io.Dir.cwd().statFile(std.testing.io, filename);
     try testing.expect(stat.size > 0);
 
     // Destroy all state
@@ -254,7 +254,7 @@ test "save/load mixin: empty world round-trip" {
 
     const filename = "test_save_empty.json";
     try game.saveGameState(filename);
-    defer std.fs.cwd().deleteFile(filename) catch {};
+    defer std.Io.Dir.cwd().deleteFile(std.testing.io, filename) catch {};
 
     try game.loadGameState(filename);
 
@@ -295,10 +295,10 @@ test "save/load mixin: transient ref arrays are not saved" {
     // Save
     const filename = "test_save_transient.json";
     try game.saveGameState(filename);
-    defer std.fs.cwd().deleteFile(filename) catch {};
+    defer std.Io.Dir.cwd().deleteFile(std.testing.io, filename) catch {};
 
     // Verify transient ref arrays are NOT in the JSON
-    const json = try std.fs.cwd().readFileAlloc(testing.allocator, filename, 1024 * 1024);
+    const json = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, filename, testing.allocator, .limited(1024 * 1024));
     defer testing.allocator.free(json);
 
     // The JSON should not contain "targets" in ref_arrays
@@ -352,11 +352,11 @@ test "save/load mixin: Parent component round-trips and remaps entity ID" {
 
     const filename = "test_save_parent.json";
     try game.saveGameState(filename);
-    defer std.fs.cwd().deleteFile(filename) catch {};
+    defer std.Io.Dir.cwd().deleteFile(std.testing.io, filename) catch {};
 
     // Save output should carry a Parent block (built-in, alongside Position).
     {
-        const json = try std.fs.cwd().readFileAlloc(testing.allocator, filename, 1024 * 1024);
+        const json = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, filename, testing.allocator, .limited(1024 * 1024));
         defer testing.allocator.free(json);
         try testing.expect(std.mem.indexOf(u8, json, "\"Parent\"") != null);
     }
@@ -429,11 +429,11 @@ test "save/load mixin: Parent restore skips when id_map lookup misses" {
     ;
     const filename = "test_save_parent_miss.json";
     {
-        const file = try std.fs.cwd().createFile(filename, .{});
+        const file = try std.Io.Dir.cwd().createFile(std.testing.io, filename, .{});
         defer file.close();
         try file.writeAll(crafted_json);
     }
-    defer std.fs.cwd().deleteFile(filename) catch {};
+    defer std.Io.Dir.cwd().deleteFile(std.testing.io, filename) catch {};
 
     try game.loadGameState(filename);
 
@@ -506,11 +506,11 @@ test "save/load mixin: marker-driven re-hydration of non-saveable render compone
 
     const filename = "test_save_decor.json";
     try game.saveGameState(filename);
-    defer std.fs.cwd().deleteFile(filename) catch {};
+    defer std.Io.Dir.cwd().deleteFile(std.testing.io, filename) catch {};
 
     // Verify VisualMock did NOT end up in the save file — it isn't
     // registered in ComponentRegistry, so the save mixin shouldn't see it.
-    const json = try std.fs.cwd().readFileAlloc(testing.allocator, filename, 1024 * 1024);
+    const json = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, filename, testing.allocator, .limited(1024 * 1024));
     defer testing.allocator.free(json);
     try testing.expect(std.mem.indexOf(u8, json, "VisualMock") == null);
     try testing.expect(std.mem.indexOf(u8, json, "sprite_name") == null);
@@ -622,12 +622,12 @@ test "save/load mixin: PrefabInstance + PrefabChild round-trip with id_map remap
     // Save.
     const filename = "test_save_prefab.json";
     try game.saveGameState(filename);
-    defer std.fs.cwd().deleteFile(filename) catch {};
+    defer std.Io.Dir.cwd().deleteFile(std.testing.io, filename) catch {};
 
     // Inspect the save file: the path + escaped overrides + local_path
     // should be present as JSON strings. Guards against a regression
     // where writeJsonString stops escaping quotes / backslashes.
-    const json = try std.fs.cwd().readFileAlloc(testing.allocator, filename, 1024 * 1024);
+    const json = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, filename, testing.allocator, .limited(1024 * 1024));
     defer testing.allocator.free(json);
     try testing.expect(std.mem.indexOf(u8, json, "\"path\": \"hydroponics\"") != null);
     try testing.expect(std.mem.indexOf(u8, json, "\\\"components\\\"") != null); // escaped quote
@@ -698,8 +698,8 @@ test "save/load mixin: malformed PrefabInstance JSON value is skipped, not panic
         \\  ]
         \\}
     ;
-    try std.fs.cwd().writeFile(.{ .sub_path = filename, .data = malformed });
-    defer std.fs.cwd().deleteFile(filename) catch {};
+    try std.Io.Dir.cwd().writeFile(std.testing.io, .{ .sub_path = filename, .data = malformed });
+    defer std.Io.Dir.cwd().deleteFile(std.testing.io, filename) catch {};
 
     // Load must succeed — the malformed PrefabInstance is silently
     // skipped, the rest of the entity loads normally.
@@ -755,8 +755,8 @@ test "save/load mixin: PrefabChild with unresolvable root is skipped, not attach
         \\  ]
         \\}
     ;
-    try std.fs.cwd().writeFile(.{ .sub_path = filename, .data = malformed });
-    defer std.fs.cwd().deleteFile(filename) catch {};
+    try std.Io.Dir.cwd().writeFile(std.testing.io, .{ .sub_path = filename, .data = malformed });
+    defer std.Io.Dir.cwd().deleteFile(std.testing.io, filename) catch {};
 
     try game.loadGameState(filename);
 
@@ -793,7 +793,7 @@ test "save/load mixin: PrefabInstance overrides round-trips with control-char es
 
     const filename = "test_save_escapes.json";
     try game.saveGameState(filename);
-    defer std.fs.cwd().deleteFile(filename) catch {};
+    defer std.Io.Dir.cwd().deleteFile(std.testing.io, filename) catch {};
 
     game.resetEcsBackend();
     try game.loadGameState(filename);

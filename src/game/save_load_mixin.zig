@@ -180,7 +180,7 @@ pub fn Mixin(comptime Game: type) type {
                     '\t' => try writer.writeAll("\\t"),
                     0x08 => try writer.writeAll("\\b"),
                     0x0c => try writer.writeAll("\\f"),
-                    0...0x07, 0x0b, 0x0e...0x1f => try std.fmt.format(writer, "\\u{x:0>4}", .{c}),
+                    0...0x07, 0x0b, 0x0e...0x1f => try writer.print("\\u{x:0>4}", .{c}),
                     else => try writer.writeByte(c),
                 }
             }
@@ -286,14 +286,14 @@ pub fn Mixin(comptime Game: type) type {
             defer alloc_writer.deinit();
             const writer = &alloc_writer.writer;
 
-            try std.fmt.format(writer, "{{\n  \"version\": {d},\n  \"entities\": [\n", .{SAVE_VERSION});
+            try writer.print("{{\n  \"version\": {d},\n  \"entities\": [\n", .{SAVE_VERSION});
 
             for (entity_list.items, 0..) |id, idx| {
                 const entity: Entity = @intCast(id);
 
                 if (idx > 0) try writer.writeAll(",\n");
                 try writer.writeAll("    {\n");
-                try std.fmt.format(writer, "      \"id\": {d}", .{id});
+                try writer.print("      \"id\": {d}", .{id});
 
                 // Components (saveable + marker from registry + built-in Position)
                 try writer.writeAll(",\n      \"components\": {");
@@ -305,9 +305,9 @@ pub fn Mixin(comptime Game: type) type {
                     const pos = self.getPosition(entity);
                     if (!first_comp) try writer.writeAll(",");
                     try writer.writeAll("\n        \"Position\": {\"x\": ");
-                    try std.fmt.format(writer, "{d}", .{pos.x});
+                    try writer.print("{d}", .{pos.x});
                     try writer.writeAll(", \"y\": ");
-                    try std.fmt.format(writer, "{d}", .{pos.y});
+                    try writer.print("{d}", .{pos.y});
                     try writer.writeAll("}");
                     first_comp = false;
                 }
@@ -335,7 +335,7 @@ pub fn Mixin(comptime Game: type) type {
                     if (self.active_world.ecs_backend.getComponent(entity, Parent)) |parent| {
                         if (!first_comp) try writer.writeAll(",");
                         try writer.writeAll("\n        \"Parent\": {\"entity\": ");
-                        try std.fmt.format(writer, "{d}", .{entityToU64(parent.entity)});
+                        try writer.print("{d}", .{entityToU64(parent.entity)});
                         try writer.writeAll(", \"inherit_rotation\": ");
                         try writer.writeAll(if (parent.inherit_rotation) "true" else "false");
                         try writer.writeAll(", \"inherit_scale\": ");
@@ -380,7 +380,7 @@ pub fn Mixin(comptime Game: type) type {
                     if (self.active_world.ecs_backend.getComponent(entity, PrefabChildT)) |pc| {
                         if (!first_comp) try writer.writeAll(",");
                         try writer.writeAll("\n        \"PrefabChild\": {\"root\": ");
-                        try std.fmt.format(writer, "{d}", .{entityToU64(pc.root)});
+                        try writer.print("{d}", .{entityToU64(pc.root)});
                         try writer.writeAll(", \"local_path\": ");
                         try writeJsonString(writer, pc.local_path);
                         try writer.writeAll("}");
