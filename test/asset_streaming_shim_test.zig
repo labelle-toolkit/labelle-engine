@@ -305,7 +305,7 @@ test "shim: deadlock regression — decode error surfaces within 200ms, no hang"
     const step_ns: u64 = 1 * std.time.ns_per_ms;
     while (waited_ns < deadline_ns) : (waited_ns += step_ns) {
         if (runner.done.load(.acquire)) break;
-        std.Thread.sleep(step_ns);
+        { var _req: std.c.timespec = .{ .sec = (step_ns / std.time.ns_per_s), .nsec = (step_ns % std.time.ns_per_s) }; var _rem: std.c.timespec = undefined; _ = std.c.nanosleep(&_req, &_rem); }
     }
     const terminated = runner.done.load(.acquire);
     handle.join();

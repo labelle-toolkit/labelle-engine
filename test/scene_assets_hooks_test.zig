@@ -31,7 +31,7 @@ const HookEvent = struct {
 };
 
 const RecordingHooks = struct {
-    events: std.ArrayList(HookEvent) = .{},
+    events: std.ArrayList(HookEvent) = .empty,
     allocator: std.mem.Allocator,
 
     fn deinit(self: *RecordingHooks) void {

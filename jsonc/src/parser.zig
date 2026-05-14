@@ -74,7 +74,7 @@ pub const JsoncParser = struct {
             return Value{ .object = .{ .entries = &.{} } };
         }
 
-        var entries: std.ArrayList(Value.Object.Entry) = .{};
+        var entries: std.ArrayList(Value.Object.Entry) = .empty;
 
         while (true) {
             self.skipWhitespaceAndComments();
@@ -122,7 +122,7 @@ pub const JsoncParser = struct {
             return Value{ .array = .{ .items = &.{} } };
         }
 
-        var items: std.ArrayList(Value) = .{};
+        var items: std.ArrayList(Value) = .empty;
 
         while (true) {
             self.skipWhitespaceAndComments();
@@ -150,7 +150,7 @@ pub const JsoncParser = struct {
     fn parseString(self: *JsoncParser) ParseError!Value {
         self.pos += 1; // consume opening '"'
 
-        var result: std.ArrayList(u8) = .{};
+        var result: std.ArrayList(u8) = .empty;
 
         while (self.pos < self.source.len) {
             const c = self.source[self.pos];

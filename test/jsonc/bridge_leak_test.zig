@@ -34,8 +34,8 @@ const Bridge = engine.JsoncSceneBridge(engine.Game, Components);
 
 fn tmpPath(tmp_dir: *std.testing.TmpDir, sub: []const u8) ![]const u8 {
     var buf: [std.fs.max_path_bytes]u8 = undefined;
-    const dir_path = try tmp_dir.dir.realpath(".", &buf);
-    return std.fmt.allocPrint(testing.allocator, "{s}/{s}", .{ dir_path, sub });
+    const len = try tmp_dir.dir.realPath(std.testing.io, &buf);
+    return std.fmt.allocPrint(testing.allocator, "{s}/{s}", .{ buf[0..len], sub });
 }
 
 // ── Leak regression tests ───────────────────────────────────────────
@@ -44,7 +44,7 @@ test "loadScene: simple scene with components does not leak" {
     var tmp_dir = testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
-    try tmp_dir.dir.writeFile(.{
+    try tmp_dir.dir.writeFile(std.testing.io, .{
         .sub_path = "scene.jsonc",
         .data =
         \\{
@@ -55,7 +55,7 @@ test "loadScene: simple scene with components does not leak" {
         \\}
         ,
     });
-    try tmp_dir.dir.makeDir("prefabs");
+    try tmp_dir.dir.createDir(std.testing.io, "prefabs", .default_dir);
 
     const scene_path = try tmpPath(&tmp_dir, "scene.jsonc");
     defer testing.allocator.free(scene_path);
@@ -72,7 +72,7 @@ test "loadSceneFromSource: simple scene with components does not leak" {
     var tmp_dir = testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
-    try tmp_dir.dir.makeDir("prefabs");
+    try tmp_dir.dir.createDir(std.testing.io, "prefabs", .default_dir);
     const prefab_path = try tmpPath(&tmp_dir, "prefabs");
     defer testing.allocator.free(prefab_path);
 
@@ -95,8 +95,8 @@ test "loadScene: scene with prefabs does not leak" {
     var tmp_dir = testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
-    try tmp_dir.dir.makeDir("prefabs");
-    try tmp_dir.dir.writeFile(.{
+    try tmp_dir.dir.createDir(std.testing.io, "prefabs", .default_dir);
+    try tmp_dir.dir.writeFile(std.testing.io, .{
         .sub_path = "prefabs/enemy.jsonc",
         .data =
         \\{
@@ -108,7 +108,7 @@ test "loadScene: scene with prefabs does not leak" {
         ,
     });
 
-    try tmp_dir.dir.writeFile(.{
+    try tmp_dir.dir.writeFile(std.testing.io, .{
         .sub_path = "scene.jsonc",
         .data =
         \\{
@@ -136,10 +136,10 @@ test "loadScene: nested entity arrays (spawnAndLinkNestedEntities) do not leak" 
     var tmp_dir = testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
-    try tmp_dir.dir.makeDir("prefabs");
+    try tmp_dir.dir.createDir(std.testing.io, "prefabs", .default_dir);
 
     // Scene with a Squad component containing nested entity array
-    try tmp_dir.dir.writeFile(.{
+    try tmp_dir.dir.writeFile(std.testing.io, .{
         .sub_path = "scene.jsonc",
         .data =
         \\{
@@ -175,9 +175,9 @@ test "loadScene: children entities do not leak" {
     var tmp_dir = testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
-    try tmp_dir.dir.makeDir("prefabs");
+    try tmp_dir.dir.createDir(std.testing.io, "prefabs", .default_dir);
 
-    try tmp_dir.dir.writeFile(.{
+    try tmp_dir.dir.writeFile(std.testing.io, .{
         .sub_path = "scene.jsonc",
         .data =
         \\{

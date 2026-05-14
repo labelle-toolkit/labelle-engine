@@ -46,36 +46,30 @@ pub fn AnimationDef(comptime zon: anytype) type {
     }
 
     // Build Clip enum fields
-    const ClipEnumFields = blk: {
-        var fields: [clip_count]std.builtin.Type.EnumField = undefined;
+    const ClipNames = blk: {
+        var names: [clip_count][]const u8 = undefined;
+        var values: [clip_count]u8 = undefined;
         for (clip_fields, 0..) |f, i| {
-            fields[i] = .{ .name = f.name, .value = i };
+            names[i] = f.name;
+            values[i] = i;
         }
-        break :blk fields;
+        break :blk .{ .names = names, .values = values };
     };
 
-    const Clip = @Type(.{ .@"enum" = .{
-        .tag_type = u8,
-        .fields = &ClipEnumFields,
-        .decls = &.{},
-        .is_exhaustive = true,
-    } });
+    const Clip = @Enum(u8, .exhaustive, &ClipNames.names, &ClipNames.values);
 
     // Build Variant enum fields
-    const VariantEnumFields = blk: {
-        var fields: [variant_count]std.builtin.Type.EnumField = undefined;
+    const VariantNames = blk: {
+        var names: [variant_count][]const u8 = undefined;
+        var values: [variant_count]u8 = undefined;
         for (0..variant_count) |i| {
-            fields[i] = .{ .name = variant_list[i], .value = i };
+            names[i] = variant_list[i];
+            values[i] = i;
         }
-        break :blk fields;
+        break :blk .{ .names = names, .values = values };
     };
 
-    const Variant = @Type(.{ .@"enum" = .{
-        .tag_type = u8,
-        .fields = &VariantEnumFields,
-        .decls = &.{},
-        .is_exhaustive = true,
-    } });
+    const Variant = @Enum(u8, .exhaustive, &VariantNames.names, &VariantNames.values);
 
     // Build ClipMeta table
     const clip_meta_table: [clip_count]ClipMeta = blk: {

@@ -57,7 +57,7 @@ pub fn RefResolver(comptime GameType: type, comptime Components: type) type {
             pub fn init(allocator: std.mem.Allocator, parent: ?*RefContext) RefContext {
                 return .{
                     .ref_map = std.StringHashMap(u64).init(allocator),
-                    .deferred = .{},
+                    .deferred = .empty,
                     .allocator = allocator,
                     .parent = parent,
                 };

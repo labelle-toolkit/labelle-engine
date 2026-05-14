@@ -58,16 +58,16 @@ fn setupFixture(
     prefab_files: anytype,
     scene_source: []const u8,
 ) !TestFixture {
-    try tmp_dir.dir.makeDir("prefabs");
+    try tmp_dir.dir.createDir(std.testing.io, "prefabs", .default_dir);
 
     inline for (std.meta.fields(@TypeOf(prefab_files))) |field| {
         const path = try std.fmt.allocPrint(testing.allocator, "prefabs/{s}.jsonc", .{field.name});
         defer testing.allocator.free(path);
-        try tmp_dir.dir.writeFile(.{ .sub_path = path, .data = @field(prefab_files, field.name) });
+        try tmp_dir.dir.writeFile(std.testing.io, .{ .sub_path = path, .data = @field(prefab_files, field.name) });
     }
 
     var buf: [std.fs.max_path_bytes]u8 = undefined;
-    const dir_path = try tmp_dir.dir.realpath(".", &buf);
+    const _len = try tmp_dir.dir.realPath(std.testing.io, &buf); const dir_path = buf[0.._len];
     const prefab_dir = try std.fmt.allocPrint(testing.allocator, "{s}/prefabs", .{dir_path});
     errdefer testing.allocator.free(prefab_dir);
 
@@ -314,9 +314,9 @@ test "jsonc_scene_bridge: PrefabInstance.path survives save/load round-trip" {
 
     const save_path = "test_save_bridge_prefab.json";
     try fixture.game.saveGameState(save_path);
-    defer std.fs.cwd().deleteFile(save_path) catch {};
+    defer std.Io.Dir.cwd().deleteFile(std.testing.io, save_path) catch {};
 
-    const json = try std.fs.cwd().readFileAlloc(testing.allocator, save_path, 1024 * 1024);
+    const json = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, save_path, testing.allocator, .limited(1024 * 1024));
     defer testing.allocator.free(json);
     try testing.expect(std.mem.indexOf(u8, json, "\"PrefabInstance\"") != null);
     try testing.expect(std.mem.indexOf(u8, json, "\"path\": \"unit\"") != null);

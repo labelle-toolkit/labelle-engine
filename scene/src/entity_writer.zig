@@ -358,7 +358,7 @@ pub fn EntityWriter(
                     if (fields.len == 1) {
                         const src_field = fields[0];
                         const payload = @field(zon_val, src_field.name);
-                        const UnionPayload = std.meta.TagPayload(T, @field(std.meta.FieldEnum(T), src_field.name));
+                        const UnionPayload = @FieldType(T, src_field.name);
                         return @unionInit(T, src_field.name, coerce(UnionPayload, payload));
                     }
                 }

@@ -6,7 +6,7 @@
 const std = @import("std");
 
 /// Separates component types into data components (non-zero-sized) and tag components (zero-sized)
-pub fn separateComponents(comptime components: anytype) struct {
+pub inline fn separateComponents(comptime components: anytype) struct {
     data: []const type,
     tags: []const type,
 } {
@@ -35,30 +35,12 @@ pub fn CallbackType(comptime EntityType: type, comptime components: anytype) typ
     const separated = separateComponents(components);
     const data_types = separated.data;
 
-    var params: [data_types.len + 1]std.builtin.Type.Fn.Param = undefined;
-
-    params[0] = .{
-        .is_generic = false,
-        .is_noalias = false,
-        .type = EntityType,
-    };
-
+    var param_types: [data_types.len + 1]type = undefined;
+    param_types[0] = EntityType;
     for (data_types, 0..) |T, i| {
-        params[i + 1] = .{
-            .is_generic = false,
-            .is_noalias = false,
-            .type = *T,
-        };
+        param_types[i + 1] = *T;
     }
 
-    return @Type(.{
-        .@"fn" = .{
-            .calling_convention = .auto,
-            .is_generic = false,
-            .is_var_args = false,
-            .return_type = void,
-            .params = &params,
-        },
-    });
+    return @Fn(&param_types, &@splat(.{}), void, .{});
 }
 

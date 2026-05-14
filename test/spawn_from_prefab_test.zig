@@ -41,14 +41,14 @@ fn bootGameWithPrefab(
     prefab_name: []const u8,
     prefab_source: []const u8,
 ) !TestFixture {
-    try tmp_dir.dir.makeDir("prefabs");
+    try tmp_dir.dir.createDir(std.testing.io, "prefabs", .default_dir);
 
     const prefab_sub = try std.fmt.allocPrint(testing.allocator, "prefabs/{s}.jsonc", .{prefab_name});
     defer testing.allocator.free(prefab_sub);
-    try tmp_dir.dir.writeFile(.{ .sub_path = prefab_sub, .data = prefab_source });
+    try tmp_dir.dir.writeFile(std.testing.io, .{ .sub_path = prefab_sub, .data = prefab_source });
 
     var buf: [std.fs.max_path_bytes]u8 = undefined;
-    const dir_path = try tmp_dir.dir.realpath(".", &buf);
+    const _len = try tmp_dir.dir.realPath(std.testing.io, &buf); const dir_path = buf[0.._len];
     const prefab_dir = try std.fmt.allocPrint(testing.allocator, "{s}/prefabs", .{dir_path});
     errdefer testing.allocator.free(prefab_dir);
 

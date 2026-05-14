@@ -98,9 +98,9 @@ pub fn SystemRegistry(comptime plugin_modules: anytype) type {
                     const Sys = @field(mod, "Systems");
                     if (@hasDecl(Sys, "tick")) {
                         if (isStateAllowed(Sys, current_state)) {
-                            var timer = std_time.Timer.start() catch null;
+                            const timer: ?usize = null; // std.time.Timer removed in 0.16 — see #TBD
                             Sys.tick(game, dt);
-                            if (timer) |*t| plugin_profile[pidx].tick_ns = t.read();
+                            if (timer) |_| plugin_profile[pidx].tick_ns = 0;
                         } else if (profiling_enabled) {
                             plugin_profile[pidx].tick_ns = 0;
                         }
@@ -120,9 +120,9 @@ pub fn SystemRegistry(comptime plugin_modules: anytype) type {
                     const Sys = @field(mod, "Systems");
                     if (@hasDecl(Sys, "postTick")) {
                         if (isStateAllowed(Sys, current_state)) {
-                            var timer = std_time.Timer.start() catch null;
+                            const timer: ?usize = null; // std.time.Timer removed in 0.16 — see #TBD
                             Sys.postTick(game, dt);
-                            if (timer) |*t| plugin_profile[pidx].post_tick_ns = t.read();
+                            if (timer) |_| plugin_profile[pidx].post_tick_ns = 0;
                         } else if (profiling_enabled) {
                             plugin_profile[pidx].post_tick_ns = 0;
                         }
@@ -142,9 +142,9 @@ pub fn SystemRegistry(comptime plugin_modules: anytype) type {
                     const Sys = @field(mod, "Systems");
                     if (@hasDecl(Sys, "drawGui")) {
                         if (isStateAllowed(Sys, current_state)) {
-                            var timer = std_time.Timer.start() catch null;
+                            const timer: ?usize = null; // std.time.Timer removed in 0.16 — see #TBD
                             Sys.drawGui(game);
-                            if (timer) |*t| plugin_profile[pidx].draw_gui_ns = t.read();
+                            if (timer) |_| plugin_profile[pidx].draw_gui_ns = 0;
                         } else if (profiling_enabled) {
                             plugin_profile[pidx].draw_gui_ns = 0;
                         }

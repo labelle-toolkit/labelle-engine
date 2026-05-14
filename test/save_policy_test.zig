@@ -146,9 +146,11 @@ test "Saveable: marker with post_load_add" {
     try testing.expectEqual(SavePolicy.marker, core.getSavePolicy(Worker).?);
     try testing.expect(core.hasSavePolicy(Worker));
     try testing.expectEqual(@as(usize, 0), core.getEntityRefFields(Worker).len);
-    const markers = core.getPostLoadMarkers(Worker);
+    const markers = comptime core.getPostLoadMarkers(Worker);
     try testing.expectEqual(@as(usize, 1), markers.len);
-    try testing.expect(markers[0] == NeedsClosestNode);
+    comptime {
+        if (markers[0] != NeedsClosestNode) @compileError("markers[0] mismatch");
+    }
 }
 
 test "Saveable: simple saveable" {
@@ -373,14 +375,14 @@ test "full pipeline: save and load entire game state" {
 
     // ── Step 2: SAVE — serialize all entities to JSON ──────────────────
 
-    var json_buf: std.ArrayList(u8) = .{};
-    defer json_buf.deinit(alloc);
-    const writer = json_buf.writer(alloc);
+    var json_buf: std.Io.Writer.Allocating = .init(alloc);
+    defer json_buf.deinit();
+    const writer = &json_buf.writer;
 
     try writer.writeAll("{\"version\":2,\"entities\":[\n");
     for (&world, 0..) |*entity, idx| {
         if (idx > 0) try writer.writeAll(",\n");
-        try std.fmt.format(writer, "{{\"id\":{d},\"x\":{d:.4},\"y\":{d:.4},\"components\":{{", .{ entity.id, entity.x, entity.y });
+        try writer.print("{{\"id\":{d},\"x\":{d:.4},\"y\":{d:.4},\"components\":{{", .{ entity.id, entity.x, entity.y });
 
         var first = true;
 
@@ -447,7 +449,7 @@ test "full pipeline: save and load entire game state" {
 
     // ── Step 4: LOAD — parse JSON ──────────────────────────────────────
 
-    const parsed = try std.json.parseFromSlice(std.json.Value, alloc, json_buf.items, .{});
+    const parsed = try std.json.parseFromSlice(std.json.Value, alloc, json_buf.writer.buffered(), .{});
     defer parsed.deinit();
     const root = parsed.value.object;
     const version = root.get("version").?.integer;

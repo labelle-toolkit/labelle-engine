@@ -206,7 +206,7 @@ pub fn GameConfig(
         /// design can be settled alongside scene-manifest auto-acquire.
         assets: assets_mod.AssetCatalog,
         hooks: HooksField = if (has_hooks) null else {},
-        event_buffer: EventBuffer = if (has_events) .{} else {},
+        event_buffer: EventBuffer = if (has_events) .empty else {},
 
         // Scene management
         scenes: std.StringHashMap(SceneEntry),
@@ -227,7 +227,7 @@ pub fn GameConfig(
         /// on scene swap so entities from the outgoing scene don't leak
         /// into the incoming one. Loaders MUST call `trackSceneEntity`
         /// for every entity they create.
-        scene_entities: std.ArrayList(Entity) = .{},
+        scene_entities: std.ArrayList(Entity) = .empty,
         current_scene_name: ?[]const u8 = null,
         pending_scene_change: ?[]const u8 = null,
         pending_scene_atomic: bool = false,
@@ -490,7 +490,7 @@ pub fn GameConfig(
         /// Deliver buffered game events to hooks. Called at end of frame.
         pub fn dispatchEvents(self: *Self) void {
             if (!has_events) return;
-            var dispatch_buf: EventBuffer = .{};
+            var dispatch_buf: EventBuffer = .empty;
             std.mem.swap(EventBuffer, &self.event_buffer, &dispatch_buf);
 
             for (dispatch_buf.items) |event| {
@@ -769,7 +769,7 @@ pub fn GameConfig(
             comptime exclude: anytype,
             allocator: std.mem.Allocator,
         ) !std.ArrayList(Entity) {
-            var buf: std.ArrayList(Entity) = .{};
+            var buf: std.ArrayList(Entity) = .empty;
             errdefer buf.deinit(allocator);
             var view = self.ecs_backend.view(include, exclude);
             defer view.deinit();
@@ -835,7 +835,7 @@ pub fn GameConfig(
             allocator: std.mem.Allocator,
             predicate: *const fn (*Self, Entity) bool,
         ) !std.ArrayList(Entity) {
-            var buf: std.ArrayList(Entity) = .{};
+            var buf: std.ArrayList(Entity) = .empty;
             errdefer buf.deinit(allocator);
             var view = self.ecs_backend.view(include, exclude);
             defer view.deinit();

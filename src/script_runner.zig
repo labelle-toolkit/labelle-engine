@@ -67,18 +67,20 @@ pub fn ScriptRunner(
 
         fn buildStatesType() type {
             const decls = @typeInfo(AllScripts).@"struct".decls;
-            var fields: [decls.len]std.builtin.Type.StructField = undefined;
+            var names: [decls.len][]const u8 = undefined;
+            var types: [decls.len]type = undefined;
+            var attrs: [decls.len]std.builtin.Type.StructField.Attributes = undefined;
             var count: usize = 0;
             for (decls) |d| {
                 const mod = @field(AllScripts, d.name);
                 if (comptime isGameScript(mod) and hasStateDecl(mod)) {
                     const ST = resolveState(mod);
-                    fields[count] = .{
-                        .name = d.name,
-                        .type = ST,
+                    names[count] = d.name;
+                    types[count] = ST;
+                    attrs[count] = .{
                         .default_value_ptr = null,
-                        .is_comptime = false,
-                        .alignment = @alignOf(ST),
+                        .@"comptime" = false,
+                        .@"align" = @alignOf(ST),
                     };
                     count += 1;
                 }
@@ -86,14 +88,7 @@ pub fn ScriptRunner(
             if (count == 0) {
                 return struct {};
             }
-            return @Type(.{
-                .@"struct" = .{
-                    .layout = .auto,
-                    .fields = fields[0..count],
-                    .decls = &.{},
-                    .is_tuple = false,
-                },
-            });
+            return @Struct(.auto, null, names[0..count], types[0..count], attrs[0..count]);
         }
 
         /// Resolve a script's State type. Handles both:
@@ -187,10 +182,10 @@ pub fn ScriptRunner(
                     if (comptime isFnDecl(mod, "tick")) {
                         if (isStateAllowedCached(mod, current_state)) {
                             if (profiling_enabled) {
-                                var timer = std.time.Timer.start() catch null;
+                                const timer: ?usize = null; // Timer removed in 0.16; profiling stubbed
                                 dispatchTickCall(mod.tick, game, self, d.name, dt);
-                                if (timer) |*t| {
-                                    self.profile[profile_idx].tick_ns = t.read();
+                                if (timer != null) {
+                                    self.profile[profile_idx].tick_ns = 0;
                                 }
                             } else {
                                 dispatchTickCall(mod.tick, game, self, d.name, dt);
@@ -214,10 +209,10 @@ pub fn ScriptRunner(
                     if (comptime isFnDecl(mod, "drawGui")) {
                         if (isStateAllowedCached(mod, current_state)) {
                             if (profiling_enabled) {
-                                var timer = std.time.Timer.start() catch null;
+                                const timer: ?usize = null; // Timer removed in 0.16; profiling stubbed
                                 dispatchCall(mod.drawGui, game, self, d.name);
-                                if (timer) |*t| {
-                                    self.profile[profile_idx].draw_gui_ns = t.read();
+                                if (timer != null) {
+                                    self.profile[profile_idx].draw_gui_ns = 0;
                                 }
                             } else {
                                 dispatchCall(mod.drawGui, game, self, d.name);

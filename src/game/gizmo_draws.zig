@@ -11,7 +11,7 @@ pub fn GizmoState(comptime Entity: type) type {
     return struct {
         const Self = @This();
 
-        draws: std.ArrayListUnmanaged(GizmoDraw) = .{},
+        draws: std.ArrayListUnmanaged(GizmoDraw) = .empty,
         selected: std.AutoHashMap(Entity, void),
         /// Per-category enable/disable. Index 0 = "all" (always enabled by default).
         category_enabled: [MAX_GIZMO_CATEGORIES]bool = [_]bool{true} ** MAX_GIZMO_CATEGORIES,
