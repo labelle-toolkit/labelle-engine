@@ -430,8 +430,8 @@ test "save/load mixin: Parent restore skips when id_map lookup misses" {
     const filename = "test_save_parent_miss.json";
     {
         const file = try std.Io.Dir.cwd().createFile(std.testing.io, filename, .{});
-        defer file.close();
-        try file.writeAll(crafted_json);
+        defer file.close(std.testing.io);
+        try file.writeStreamingAll(std.testing.io, crafted_json);
     }
     defer std.Io.Dir.cwd().deleteFile(std.testing.io, filename) catch {};
 

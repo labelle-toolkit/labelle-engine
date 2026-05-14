@@ -96,6 +96,7 @@ pub fn build(b: *std.Build) void {
                 .root_source_file = b.path(test_file),
                 .target = target,
                 .optimize = optimize,
+                .link_libc = true,
                 .imports = &.{
                     .{ .name = "labelle-core", .module = core_module },
                     .{ .name = "engine", .module = engine_module },
@@ -119,6 +120,7 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/assets/mod.zig"),
         .target = target,
         .optimize = optimize,
+        .link_libc = true,
     });
     assets_tests_module.addImport("audio_types", audio_types_module);
     assets_tests_module.addImport("font_types", font_types_module);
@@ -138,6 +140,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
         .single_threaded = true,
+        .link_libc = true,
     });
     assets_single_threaded_module.addImport("audio_types", audio_types_module);
     assets_single_threaded_module.addImport("font_types", font_types_module);
