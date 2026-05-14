@@ -16,7 +16,7 @@ jobs:
 
       - name: Checkout sibling dependencies
         run: |
-          git clone --depth 1 https://github.com/labelle-toolkit/labelle-core.git ../labelle-core
+          git clone --depth 1 --branch feat/zig-0.16-migration https://github.com/labelle-toolkit/labelle-core.git ../labelle-core
 
       - name: Install Zig
         uses: mlugg/setup-zig@v2
