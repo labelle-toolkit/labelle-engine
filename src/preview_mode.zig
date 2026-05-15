@@ -33,6 +33,11 @@
 ///        {"kind":"unsubscribe","components":["Velocity"]}\n             (editor → engine)
 ///        {"kind":"watch_entity","id":42}\n                               (editor → engine, Phase 3)
 ///        {"kind":"unwatch_entity","id":42}\n                             (editor → engine, Phase 3)
+///        {"kind":"frame_offer","shm_name":"/labelle-preview-<pid>","width":1280,"height":720,
+///                  "format":"rgba8","ring_size":3,"slot_size_bytes":3686464}\n            (engine → editor, viewport)
+///        {"kind":"frame_published","frame_idx":42,"produce_ns":12345}\n                   (engine → editor, viewport)
+///        {"kind":"frame_accept"}\n                                                         (editor → engine, viewport)
+///        {"kind":"frame_resize","width":1920,"height":1080}\n                              (editor → engine, viewport)
 ///
 /// 2. **Binary telemetry plane** (Phase 2) — length-prefixed records
 ///    led by an `ESC` (0x1B) magic byte:
@@ -84,7 +89,14 @@ const std = @import("std");
 extern "c" fn close(fd: c_int) c_int;
 extern "c" fn write(fd: c_int, buf: [*]const u8, len: usize) isize;
 extern "c" fn read(fd: c_int, buf: [*]u8, len: usize) isize;
-extern "c" fn fcntl(fd: c_int, cmd: c_int, arg: c_int) c_int;
+// `fcntl` is variadic in libc (`int fcntl(int, int, ...)`). On
+// aarch64-darwin (and other ABIs that put variadic args on the stack
+// rather than in registers), declaring it as non-variadic with
+// `arg: c_int` is a calling-convention mismatch — F_SETFL receives
+// stack garbage instead of the flag value, O_NONBLOCK never gets set,
+// and the next `read` blocks. Use the stdlib's correctly-declared
+// `std.c.fcntl` instead (see `lib/std/c.zig`).
+const c_fcntl = std.c.fcntl;
 extern "c" fn __error() *c_int; // macOS errno location
 extern "c" fn __errno_location() *c_int; // glibc errno location
 
@@ -150,6 +162,57 @@ pub const heartbeat_interval_ms: u64 = 250;
 pub const SnapshotComponent = struct {
     name: []const u8,
     bytes: []const u8,
+};
+
+// ── PIE viewport handshake (#543) ───────────────────────────────────
+
+/// Pixel format identifiers carried over the wire. Plain enum to keep
+/// the JSON-serializer side trivial. Add new entries when the producer
+/// gains support; consumers compare by string.
+pub const FramePixelFormat = enum {
+    rgba8,
+
+    pub fn asString(self: FramePixelFormat) []const u8 {
+        return switch (self) {
+            .rgba8 => "rgba8",
+        };
+    }
+};
+
+/// `frame_offer` payload. `shm_name` is the POSIX shm name (`/labelle-…`)
+/// the engine has bound; the editor will `shm_open` it and map
+/// `header_bytes + ring_size * slot_size_bytes`. All fields borrowed —
+/// only need to outlive the `sendFrameOffer` call.
+pub const FrameOffer = struct {
+    shm_name: []const u8,
+    width: u32,
+    height: u32,
+    format: FramePixelFormat = .rgba8,
+    ring_size: u32 = 3,
+    slot_size_bytes: u64,
+};
+
+/// Three-state handshake. Producer transitions:
+///
+///   not_offered  ── sendFrameOffer ──▶  offered
+///   offered      ── (editor sends frame_accept) ──▶  accepted
+///
+/// A `frame_resize` from the editor does **not** kick us out of
+/// `.accepted`; it just sets `pending_resize`. The caller decides
+/// whether/when to honour it (typically: tear down the current ring,
+/// send a new `frame_offer`, wait for `frame_accept` again).
+pub const FrameHandshakeState = enum {
+    not_offered,
+    offered,
+    accepted,
+};
+
+/// Pending resize requested by the editor. Producer polls
+/// `Preview.takeResize` once per frame; nil result means no resize
+/// requested since last poll.
+pub const PendingResize = struct {
+    width: u32,
+    height: u32,
 };
 
 pub const ParseError = error{
@@ -225,6 +288,13 @@ pub const Preview = struct {
     /// initial capacity if a very long subscribe list arrives.
     inbox: std.ArrayListUnmanaged(u8) = .empty,
     inbox_alloc: std.mem.Allocator,
+    /// PIE viewport handshake state (#543). The producer-side render
+    /// loop is expected to gate `frame_published` on
+    /// `frame_state == .accepted`.
+    frame_state: FrameHandshakeState = .not_offered,
+    /// Set by the editor's `frame_resize`; cleared by `takeResize`.
+    /// `null` means "no resize pending."
+    pending_resize: ?PendingResize = null,
 
     /// Dial the editor's listener. `host_port` is the literal string
     /// pulled from `--preview-mode <host:port>` — `127.0.0.1:54321`
@@ -313,6 +383,66 @@ pub const Preview = struct {
             reason: []const u8,
         };
         try self.writeFrame(Msg{ .reason = reason.asString() });
+    }
+
+    // ── PIE viewport handshake (#543) ──────────────────────────────
+
+    /// Offer the editor a SHM pixel ring. Call once the producer has
+    /// bound the region; transitions `frame_state` to `.offered`.
+    /// The producer should withhold any `frame_published` notifications
+    /// until the editor responds with `frame_accept`.
+    pub fn sendFrameOffer(self: *Preview, offer: FrameOffer) WriteError!void {
+        const Msg = struct {
+            kind: []const u8 = "frame_offer",
+            shm_name: []const u8,
+            width: u32,
+            height: u32,
+            format: []const u8,
+            ring_size: u32,
+            slot_size_bytes: u64,
+        };
+        try self.writeFrame(Msg{
+            .shm_name = offer.shm_name,
+            .width = offer.width,
+            .height = offer.height,
+            .format = offer.format.asString(),
+            .ring_size = offer.ring_size,
+            .slot_size_bytes = offer.slot_size_bytes,
+        });
+        self.frame_state = .offered;
+    }
+
+    /// Optional sidecar to wake the editor on a new frame. The wire
+    /// contract is "editor polls `Header.latest` to find the freshest
+    /// slot" — this frame is informational (and useful for editors that
+    /// want to throttle frame uploads to actual publishes rather than
+    /// every render tick). Cheap when the editor doesn't care: a
+    /// roughly 60-byte JSON line per produced frame.
+    pub fn sendFramePublished(self: *Preview, frame_idx: u64, produce_ns: u64) WriteError!void {
+        const Msg = struct {
+            kind: []const u8 = "frame_published",
+            frame_idx: u64,
+            produce_ns: u64,
+        };
+        try self.writeFrame(Msg{ .frame_idx = frame_idx, .produce_ns = produce_ns });
+    }
+
+    /// True once the editor has acknowledged the offer. Producer uses
+    /// this as the gate on writing pixels into the SHM ring (no point
+    /// rendering into a region nobody is reading from).
+    pub fn isFrameAccepted(self: *const Preview) bool {
+        return self.frame_state == .accepted;
+    }
+
+    /// Pop the pending resize request, if any. Clears the state so a
+    /// second call returns `null` until the editor sends another
+    /// `frame_resize`. Producer responds by tearing down the current
+    /// ring and re-issuing `sendFrameOffer` at the new dimensions.
+    pub fn takeResize(self: *Preview) ?PendingResize {
+        const pending = self.pending_resize;
+        self.pending_resize = null;
+        if (pending != null) self.frame_state = .not_offered;
+        return pending;
     }
 
     // ── Binary telemetry frames (Phase 2 / #518) ────────────────────
@@ -629,18 +759,22 @@ pub const Preview = struct {
         // read until EAGAIN, restore flags. The socket stays blocking
         // for writes so partial sends aren't a concern.
         const fd = self.fd;
-        const orig_flags = fcntl(fd, F_GETFL, 0);        if (orig_flags < 0) return;
-        const set_rc = fcntl(fd, F_SETFL, orig_flags | O_NONBLOCK);        if (set_rc < 0) return;
-        defer _ = fcntl(fd, F_SETFL, orig_flags);
+        const orig_flags = c_fcntl(fd, F_GETFL, @as(c_int, 0));
+        if (orig_flags < 0) return;
+        const set_rc = c_fcntl(fd, F_SETFL, @as(c_int, orig_flags | O_NONBLOCK));
+        if (set_rc < 0) return;
+        defer _ = c_fcntl(fd, F_SETFL, @as(c_int, orig_flags));
 
         var scratch: [1024]u8 = undefined;
         while (true) {
-            const n = read(fd, @ptrCast(&scratch[0]), scratch.len);            if (n < 0) {
+            const n = read(fd, @ptrCast(&scratch[0]), scratch.len);
+            if (n < 0) {
                 if (libcErrno() == EAGAIN) return;
                 return error.InputOutput;
             }
             if (n == 0) return; // EOF — caller infers from subsequent write failures.
-            try self.inbox.appendSlice(self.inbox_alloc, scratch[0..@intCast(n)]);        }
+            try self.inbox.appendSlice(self.inbox_alloc, scratch[0..@intCast(n)]);
+        }
     }
 
     fn applySubscriptionFrame(self: *Preview, line: []const u8) error{ OutOfMemory, MalformedSubscription }!void {
@@ -730,6 +864,20 @@ pub const Preview = struct {
                 .ignore_unknown_fields = true,
             }) catch return error.MalformedSubscription;
             _ = self.watched_entities.remove(parsed.id);
+        } else if (std.mem.eql(u8, kind_only.kind, "frame_accept")) {
+            // Editor acknowledges a prior `frame_offer`. The transition
+            // is `.offered → .accepted`; from any other state we ignore
+            // (an editor that ACKs a stale offer after a resize won't
+            // tip us back into the wrong state).
+            if (self.frame_state == .offered) {
+                self.frame_state = .accepted;
+            }
+        } else if (std.mem.eql(u8, kind_only.kind, "frame_resize")) {
+            const Parsed = struct { kind: []const u8, width: u32, height: u32 };
+            const parsed = std.json.parseFromSliceLeaky(Parsed, alloc, line, .{
+                .ignore_unknown_fields = true,
+            }) catch return error.MalformedSubscription;
+            self.pending_resize = .{ .width = parsed.width, .height = parsed.height };
         } else {
             return error.MalformedSubscription;
         }
