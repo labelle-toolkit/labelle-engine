@@ -802,13 +802,19 @@ pub const Preview = struct {
     }
 
     /// Tear down the IOSurface ring + control-plane shm region.
-    /// Safe to call when no iosurface stream is active. Does NOT
-    /// send a `bye` — caller owns the connection lifecycle.
+    /// Safe to call when no iosurface stream is active — no-ops in
+    /// that case. Critically, also a no-op when an SHM-mode stream
+    /// is active: that path's `frame_shm_name` is owned in parallel
+    /// by `beginFrameStream`'s producer (which holds a reference to
+    /// the same `[:0]u8`), so freeing it here would land a
+    /// use-after-free at the SHM producer's later `shm_unlink`.
+    /// Caller owns mode selection. Does NOT send a `bye` — caller
+    /// owns the connection lifecycle.
     pub fn endFrameStreamIOSurface(self: *Preview) void {
-        if (self.frame_iosurface_producer) |*p| {
-            p.deinit();
-            self.frame_iosurface_producer = null;
-        }
+        if (self.frame_iosurface_producer == null) return;
+        var p = self.frame_iosurface_producer.?;
+        p.deinit();
+        self.frame_iosurface_producer = null;
         if (self.frame_shm_name) |old| {
             self.inbox_alloc.free(old);
             self.frame_shm_name = null;

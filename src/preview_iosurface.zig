@@ -48,6 +48,11 @@ pub const Error = error{
     AlreadyLocked,
     NotLocked,
     InvalidFrameSize,
+    /// CoreFoundation allocator returned null — `CFNumberCreate` or
+    /// `CFDictionaryCreateMutable` failed (typically under memory
+    /// pressure). Surfacing as a distinct variant rather than
+    /// OutOfMemory keeps the source of the failure obvious in logs.
+    CFAllocationFailed,
 } || shm.Error;
 
 // ── CoreFoundation / IOSurface externs ─────────────────────────────
@@ -159,10 +164,12 @@ comptime {
 
 // ── BGRA8 property dict (macOS only) ───────────────────────────────
 
-fn cfNumberU32(v: u32) CFNumberRef {
+fn cfNumberU32(v: u32) Error!CFNumberRef {
     if (!macos) unreachable;
     const sv: i32 = @bitCast(v);
-    return CFNumberCreate(kCFAllocatorDefault, kCFNumberSInt32Type, &sv);
+    const n = CFNumberCreate(kCFAllocatorDefault, kCFNumberSInt32Type, &sv);
+    if (n == null) return error.CFAllocationFailed;
+    return n;
 }
 
 /// Build a BGRA8 property dict with `kIOSurfaceIsGlobal = true`.
@@ -172,7 +179,7 @@ fn cfNumberU32(v: u32) CFNumberRef {
 /// but the kernel may pad up for alignment — always query
 /// `IOSurfaceGetBytesPerRow` after creation rather than assuming
 /// `width * 4` (PoC bit us with this; see ticket macOS specifics).
-pub fn makeBGRA8Properties(width: u32, height: u32) CFDictionaryRef {
+pub fn makeBGRA8Properties(width: u32, height: u32) Error!CFDictionaryRef {
     if (!macos) unreachable;
     const dict = CFDictionaryCreateMutable(
         kCFAllocatorDefault,
@@ -180,11 +187,24 @@ pub fn makeBGRA8Properties(width: u32, height: u32) CFDictionaryRef {
         kCFTypeDictionaryKeyCallBacks,
         kCFTypeDictionaryValueCallBacks,
     );
-    const w = cfNumberU32(width);
-    const h = cfNumberU32(height);
-    const bpe = cfNumberU32(4);
-    const bpr = cfNumberU32(width * 4);
-    const fmt = cfNumberU32(kPixelFormat_BGRA8);
+    if (dict == null) return error.CFAllocationFailed;
+    errdefer CFRelease(dict);
+
+    // Build each CFNumber with its own errdefer so a partial failure
+    // mid-list doesn't leak earlier ones. errdefers run LIFO so we
+    // release the most-recent first — matching the manual CFRelease
+    // chain at the end of the happy path.
+    const w = try cfNumberU32(width);
+    errdefer CFRelease(w);
+    const h = try cfNumberU32(height);
+    errdefer CFRelease(h);
+    const bpe = try cfNumberU32(4);
+    errdefer CFRelease(bpe);
+    const bpr = try cfNumberU32(width * 4);
+    errdefer CFRelease(bpr);
+    const fmt = try cfNumberU32(kPixelFormat_BGRA8);
+    errdefer CFRelease(fmt);
+
     CFDictionarySetValue(dict, kIOSurfaceWidth, w);
     CFDictionarySetValue(dict, kIOSurfaceHeight, h);
     CFDictionarySetValue(dict, kIOSurfaceBytesPerElement, bpe);
@@ -302,7 +322,7 @@ pub const Producer = struct {
 
         // One property dict reused for every surface — all N share
         // dims/format.
-        const props = makeBGRA8Properties(opts.width, opts.height);
+        const props = try makeBGRA8Properties(opts.width, opts.height);
         defer CFRelease(props);
 
         while (created < opts.ring_size) : (created += 1) {
