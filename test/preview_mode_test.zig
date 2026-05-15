@@ -39,29 +39,74 @@ test "parseArgs: bare flag at end of argv returns null" {
 
 test "Preview: connect rejects malformed host:port" {
     const allocator = std.testing.allocator;
-    try std.testing.expectError(error.InvalidAddress, Preview.connect(allocator, "not-a-host-port"));
+    try std.testing.expectError(error.InvalidAddress, Preview.connect(std.testing.io, allocator, "not-a-host-port"));
 }
 
 // ── Loopback round-trip ─────────────────────────────────────────────
 
+// Raw libc bindings — the harness mirrors `src/preview_mode.zig`'s
+// approach: thread `io` only where `std.Io.net.Server` needs it
+// (listen, accept, deinit, stream.close), do bulk read/write via
+// libc on the socket fd. Tests are POSIX-only anyway (real loopback
+// TCP, fcntl-based non-blocking polling inside Preview itself).
+extern "c" fn read(fd: c_int, buf: [*]u8, len: usize) isize;
+extern "c" fn write(fd: c_int, buf: [*]const u8, len: usize) isize;
+const Timespec = extern struct {
+    sec: isize,
+    nsec: isize,
+};
+extern "c" fn clock_gettime(clk_id: c_int, tp: *Timespec) c_int;
+
+/// Monotonic millisecond clock — replaces 0.15's `std.time.milliTimestamp`,
+/// which was removed in 0.16. Uses `CLOCK_MONOTONIC` directly via libc
+/// (POSIX-only, same constraint as everything else in this test).
+fn monotonicMs() i64 {
+    const CLOCK_MONOTONIC: c_int = if (@import("builtin").os.tag == .macos) 6 else 1;
+    var ts: Timespec = undefined;
+    _ = clock_gettime(CLOCK_MONOTONIC, &ts);
+    return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+}
+
+extern "c" fn nanosleep(req: *const Timespec, rem: ?*Timespec) c_int;
+
+/// Sleep for `ms` milliseconds. Replaces 0.15's `std.Thread.sleep`,
+/// which was removed in 0.16 (lib now demands an `Io` parameter for
+/// cooperative cancellation we don't need in a tight test loop).
+fn sleepMs(ms: u64) void {
+    const ts: Timespec = .{
+        .sec = @intCast(ms / 1000),
+        .nsec = @intCast((ms % 1000) * 1_000_000),
+    };
+    _ = nanosleep(&ts, null);
+}
+
 const LoopbackHarness = struct {
-    server: std.net.Server,
+    server: std.Io.net.Server,
     port: u16,
-    conn: ?std.net.Server.Connection = null,
+    /// Pre-0.16 stored a `std.net.Server.Connection`; in 0.16,
+    /// `Server.accept` returns a bare `Stream`. The stream owns the
+    /// accepted-socket fd we read/write through.
+    conn_fd: ?std.posix.fd_t = null,
     /// Newline-framing buffer.
     read_buf: [4096]u8 = undefined,
     read_len: usize = 0,
 
     fn init() !LoopbackHarness {
-        const addr = std.net.Address.initIp4(.{ 127, 0, 0, 1 }, 0);
-        var server = try addr.listen(.{ .reuse_address = true });
-        const port = server.listen_address.getPort();
+        const addr = std.Io.net.IpAddress.parse("127.0.0.1", 0) catch unreachable;
+        const server = try addr.listen(std.testing.io, .{ .reuse_address = true });
+        // `addr` had port 0 — read the OS-assigned port off the socket.
+        var sa: std.posix.sockaddr.in = undefined;
+        var sa_len: std.posix.socklen_t = @sizeOf(@TypeOf(sa));
+        if (std.posix.system.getsockname(server.socket.handle, @ptrCast(&sa), &sa_len) != 0) return error.GetSockNameFailed;
+        const port = std.mem.bigToNative(u16, sa.port);
         return .{ .server = server, .port = port };
     }
 
     fn deinit(self: *LoopbackHarness) void {
-        if (self.conn) |c| c.stream.close();
-        self.server.deinit();
+        if (self.conn_fd) |fd| {
+            _ = std.posix.system.close(fd);
+        }
+        self.server.deinit(std.testing.io);
     }
 
     fn hostPort(self: *LoopbackHarness, buf: []u8) ![]const u8 {
@@ -69,14 +114,15 @@ const LoopbackHarness = struct {
     }
 
     fn accept(self: *LoopbackHarness) !void {
-        self.conn = try self.server.accept();
+        const stream = try self.server.accept(std.testing.io);
+        self.conn_fd = stream.socket.handle;
     }
 
     /// Read one `\n`-terminated frame into `out`. Blocks until a
     /// newline arrives. Returns the JSON body without the trailing
     /// `\n`.
     fn readFrame(self: *LoopbackHarness, out: []u8) ![]const u8 {
-        const stream = self.conn.?.stream;
+        const fd = self.conn_fd.?;
         while (true) {
             if (std.mem.indexOfScalar(u8, self.read_buf[0..self.read_len], '\n')) |nl| {
                 if (nl > out.len) return error.FrameTooLarge;
@@ -86,20 +132,22 @@ const LoopbackHarness = struct {
                 self.read_len = remaining;
                 return out[0..nl];
             }
-            const n = try stream.read(self.read_buf[self.read_len..]);
+            const n = read(fd, self.read_buf[self.read_len..].ptr, self.read_buf.len - self.read_len);
+            if (n < 0) return error.ReadFailed;
             if (n == 0) return error.EndOfStream;
-            self.read_len += n;
+            self.read_len += @intCast(n);
         }
     }
 
     /// Read exactly `n` bytes from the inbound buffer, blocking on
     /// the socket if more is needed. Used by binary-frame readers.
     fn readExact(self: *LoopbackHarness, out: []u8) !void {
-        const stream = self.conn.?.stream;
+        const fd = self.conn_fd.?;
         while (self.read_len < out.len) {
-            const n = try stream.read(self.read_buf[self.read_len..]);
+            const n = read(fd, self.read_buf[self.read_len..].ptr, self.read_buf.len - self.read_len);
+            if (n < 0) return error.ReadFailed;
             if (n == 0) return error.EndOfStream;
-            self.read_len += n;
+            self.read_len += @intCast(n);
         }
         @memcpy(out, self.read_buf[0..out.len]);
         const remaining = self.read_len - out.len;
@@ -124,11 +172,12 @@ const LoopbackHarness = struct {
     /// Peek the next byte without consuming. Blocks until at least
     /// one byte is available.
     fn peekByte(self: *LoopbackHarness) !u8 {
-        const stream = self.conn.?.stream;
+        const fd = self.conn_fd.?;
         while (self.read_len == 0) {
-            const n = try stream.read(self.read_buf[self.read_len..]);
+            const n = read(fd, self.read_buf[self.read_len..].ptr, self.read_buf.len - self.read_len);
+            if (n < 0) return error.ReadFailed;
             if (n == 0) return error.EndOfStream;
-            self.read_len += n;
+            self.read_len += @intCast(n);
         }
         return self.read_buf[0];
     }
@@ -136,22 +185,28 @@ const LoopbackHarness = struct {
     /// Editor → engine direction: write a newline-terminated JSON
     /// frame to the accepted connection.
     fn writeJsonLine(self: *LoopbackHarness, line: []const u8) !void {
-        const stream = self.conn.?.stream;
-        try stream.writeAll(line);
-        try stream.writeAll("\n");
+        const fd = self.conn_fd.?;
+        var off: usize = 0;
+        while (off < line.len) {
+            const n = write(fd, line.ptr + off, line.len - off);
+            if (n <= 0) return error.WriteFailed;
+            off += @intCast(n);
+        }
+        const nl: [1]u8 = .{'\n'};
+        if (write(fd, &nl, 1) != 1) return error.WriteFailed;
     }
 };
 
 /// Spin until `preview.pollSubscription` reports a non-empty filter
 /// set. Bounded so a broken implementation can't hang the test runner.
 fn waitForSubscription(preview: *Preview, comp_name: []const u8, deadline_ms: u64) !void {
-    const start = std.time.milliTimestamp();
+    const start = monotonicMs();
     while (true) {
         try preview.pollSubscription();
         if (preview.isComponentSubscribed(comp_name)) return;
-        const now = std.time.milliTimestamp();
+        const now = monotonicMs();
         if (now - start > @as(i64, @intCast(deadline_ms))) return error.SubscriptionDeadlineExceeded;
-        { var _req: std.c.timespec = .{ .sec = (1 * std.time.ns_per_ms / std.time.ns_per_s), .nsec = (1 * std.time.ns_per_ms % std.time.ns_per_s) }; var _rem: std.c.timespec = undefined; _ = std.c.nanosleep(&_req, &_rem); }
+        sleepMs(1);
     }
 }
 
@@ -164,7 +219,7 @@ test "Preview: hello round-trip over loopback TCP" {
     var host_port_buf: [32]u8 = undefined;
     const host_port = try harness.hostPort(&host_port_buf);
 
-    var preview = try Preview.connect(allocator, host_port);
+    var preview = try Preview.connect(std.testing.io, allocator, host_port);
     defer preview.deinit();
     try harness.accept();
 
@@ -196,7 +251,7 @@ test "Preview: heartbeats arrive at the listener in order" {
     var host_port_buf: [32]u8 = undefined;
     const host_port = try harness.hostPort(&host_port_buf);
 
-    var preview = try Preview.connect(allocator, host_port);
+    var preview = try Preview.connect(std.testing.io, allocator, host_port);
     defer preview.deinit();
     try harness.accept();
 
@@ -231,7 +286,7 @@ test "Preview: tickHeartbeat respects the rate limit" {
     var host_port_buf: [32]u8 = undefined;
     const host_port = try harness.hostPort(&host_port_buf);
 
-    var preview = try Preview.connect(allocator, host_port);
+    var preview = try Preview.connect(std.testing.io, allocator, host_port);
     defer preview.deinit();
     try harness.accept();
 
@@ -266,7 +321,7 @@ test "Preview: full lifecycle — hello, heartbeats, bye, EOF" {
     var host_port_buf: [32]u8 = undefined;
     const host_port = try harness.hostPort(&host_port_buf);
 
-    var preview = try Preview.connect(allocator, host_port);
+    var preview = try Preview.connect(std.testing.io, allocator, host_port);
     try harness.accept();
 
     try preview.sendHello("test", 42);
@@ -301,8 +356,9 @@ test "Preview: full lifecycle — hello, heartbeats, bye, EOF" {
     // After bye + deinit, the server side must observe a clean EOF.
     harness.read_len = 0;
     var eof_buf: [16]u8 = undefined;
-    const n = try harness.conn.?.stream.read(&eof_buf);
-    try std.testing.expectEqual(@as(usize, 0), n);
+    const n = read(harness.conn_fd.?, &eof_buf, eof_buf.len);
+    try std.testing.expect(n >= 0);
+    try std.testing.expectEqual(@as(isize, 0), n);
 }
 
 // ── Phase 2 / #518 — binary state telemetry ─────────────────────────
@@ -314,7 +370,7 @@ test "emitEntityCreated: writes magic+kind+length+payload with optional prefab n
 
     var host_port_buf: [32]u8 = undefined;
     const host_port = try harness.hostPort(&host_port_buf);
-    var preview = try Preview.connect(allocator, host_port);
+    var preview = try Preview.connect(std.testing.io, allocator, host_port);
     defer preview.deinit();
     try harness.accept();
 
@@ -343,7 +399,7 @@ test "emitEntityDestroyed: writes magic+kind+length+entity_id" {
 
     var host_port_buf: [32]u8 = undefined;
     const host_port = try harness.hostPort(&host_port_buf);
-    var preview = try Preview.connect(allocator, host_port);
+    var preview = try Preview.connect(std.testing.io, allocator, host_port);
     defer preview.deinit();
     try harness.accept();
 
@@ -363,7 +419,7 @@ test "emitComponentChanged: only emits when component is subscribed" {
 
     var host_port_buf: [32]u8 = undefined;
     const host_port = try harness.hostPort(&host_port_buf);
-    var preview = try Preview.connect(allocator, host_port);
+    var preview = try Preview.connect(std.testing.io, allocator, host_port);
     defer preview.deinit();
     try harness.accept();
 
@@ -401,7 +457,7 @@ test "pollSubscription: decodes subscribe and unsubscribe from editor" {
 
     var host_port_buf: [32]u8 = undefined;
     const host_port = try harness.hostPort(&host_port_buf);
-    var preview = try Preview.connect(allocator, host_port);
+    var preview = try Preview.connect(std.testing.io, allocator, host_port);
     defer preview.deinit();
     try harness.accept();
 
@@ -414,11 +470,11 @@ test "pollSubscription: decodes subscribe and unsubscribe from editor" {
 
     try harness.writeJsonLine("{\"kind\":\"unsubscribe\",\"components\":[\"Velocity\"]}");
     // Wait until Velocity drops out of the filter set.
-    const start = std.time.milliTimestamp();
+    const start = monotonicMs();
     while (preview.isComponentSubscribed("Velocity")) {
         try preview.pollSubscription();
-        if (std.time.milliTimestamp() - start > 1000) return error.UnsubscribeDeadlineExceeded;
-        { var _req: std.c.timespec = .{ .sec = (1 * std.time.ns_per_ms / std.time.ns_per_s), .nsec = (1 * std.time.ns_per_ms % std.time.ns_per_s) }; var _rem: std.c.timespec = undefined; _ = std.c.nanosleep(&_req, &_rem); }
+        if (monotonicMs() - start > 1000) return error.UnsubscribeDeadlineExceeded;
+        sleepMs(1);
     }
     try std.testing.expect(preview.isComponentSubscribed("Position"));
     try std.testing.expect(!preview.isComponentSubscribed("Velocity"));
@@ -436,7 +492,7 @@ test "Preview: JSON heartbeats and binary frames multiplex on one socket" {
 
     var host_port_buf: [32]u8 = undefined;
     const host_port = try harness.hostPort(&host_port_buf);
-    var preview = try Preview.connect(allocator, host_port);
+    var preview = try Preview.connect(std.testing.io, allocator, host_port);
     defer preview.deinit();
     try harness.accept();
 
@@ -503,7 +559,7 @@ test "pollSubscription: malformed JSON surfaces MalformedSubscription" {
 
     var host_port_buf: [32]u8 = undefined;
     const host_port = try harness.hostPort(&host_port_buf);
-    var preview = try Preview.connect(allocator, host_port);
+    var preview = try Preview.connect(std.testing.io, allocator, host_port);
     defer preview.deinit();
     try harness.accept();
 
@@ -511,13 +567,13 @@ test "pollSubscription: malformed JSON surfaces MalformedSubscription" {
 
     // Spin until the bytes have arrived in the engine's inbox and we
     // can decode them.
-    const start = std.time.milliTimestamp();
+    const start = monotonicMs();
     while (true) {
         const r = preview.pollSubscription();
         if (r) {
             // No bytes yet — try again.
-            if (std.time.milliTimestamp() - start > 1000) return error.NoMalformedFrameSurfaced;
-            { var _req: std.c.timespec = .{ .sec = (1 * std.time.ns_per_ms / std.time.ns_per_s), .nsec = (1 * std.time.ns_per_ms % std.time.ns_per_s) }; var _rem: std.c.timespec = undefined; _ = std.c.nanosleep(&_req, &_rem); }
+            if (monotonicMs() - start > 1000) return error.NoMalformedFrameSurfaced;
+            sleepMs(1);
             continue;
         } else |err| {
             try std.testing.expectEqual(@as(anyerror, error.MalformedSubscription), err);
@@ -591,7 +647,7 @@ test "Game lifecycle: createEntity + addComponent emit telemetry; destroy + filt
     var game = Game.init(allocator);
     defer game.deinit();
 
-    game.preview = try Preview.connect(allocator, host_port);
+    game.preview = try Preview.connect(std.testing.io, allocator, host_port);
     // Game.deinit cleans up `preview` — no manual deinit here.
     try harness.accept();
 
@@ -712,23 +768,23 @@ test "Game lifecycle: createEntity + addComponent emit telemetry; destroy + filt
 /// Spin until the engine reports the given flow as subscribed. Mirror
 /// of `waitForSubscription` for the flow opt-in set.
 fn waitForFlowSubscription(preview: *Preview, flow_name: []const u8, deadline_ms: u64) !void {
-    const start = std.time.milliTimestamp();
+    const start = monotonicMs();
     while (true) {
         try preview.pollSubscription();
         if (preview.isFlowSubscribed(flow_name)) return;
-        const now = std.time.milliTimestamp();
+        const now = monotonicMs();
         if (now - start > @as(i64, @intCast(deadline_ms))) return error.SubscriptionDeadlineExceeded;
-        { var _req: std.c.timespec = .{ .sec = (1 * std.time.ns_per_ms / std.time.ns_per_s), .nsec = (1 * std.time.ns_per_ms % std.time.ns_per_s) }; var _rem: std.c.timespec = undefined; _ = std.c.nanosleep(&_req, &_rem); }
+        sleepMs(1);
     }
 }
 
 fn waitForFlowUnsubscribed(preview: *Preview, flow_name: []const u8, deadline_ms: u64) !void {
-    const start = std.time.milliTimestamp();
+    const start = monotonicMs();
     while (preview.isFlowSubscribed(flow_name)) {
         try preview.pollSubscription();
-        const now = std.time.milliTimestamp();
+        const now = monotonicMs();
         if (now - start > @as(i64, @intCast(deadline_ms))) return error.UnsubscribeDeadlineExceeded;
-        { var _req: std.c.timespec = .{ .sec = (1 * std.time.ns_per_ms / std.time.ns_per_s), .nsec = (1 * std.time.ns_per_ms % std.time.ns_per_s) }; var _rem: std.c.timespec = undefined; _ = std.c.nanosleep(&_req, &_rem); }
+        sleepMs(1);
     }
 }
 
@@ -739,7 +795,7 @@ test "emitNodeEntered: emits one binary frame when flow is subscribed" {
 
     var host_port_buf: [32]u8 = undefined;
     const host_port = try harness.hostPort(&host_port_buf);
-    var preview = try Preview.connect(allocator, host_port);
+    var preview = try Preview.connect(std.testing.io, allocator, host_port);
     defer preview.deinit();
     try harness.accept();
 
@@ -769,7 +825,7 @@ test "emitNodeEntered: no-op when flow is not subscribed" {
 
     var host_port_buf: [32]u8 = undefined;
     const host_port = try harness.hostPort(&host_port_buf);
-    var preview = try Preview.connect(allocator, host_port);
+    var preview = try Preview.connect(std.testing.io, allocator, host_port);
     defer preview.deinit();
     try harness.accept();
 
@@ -793,7 +849,7 @@ test "emitNodeEntered: stops firing after unsubscribe_flow" {
 
     var host_port_buf: [32]u8 = undefined;
     const host_port = try harness.hostPort(&host_port_buf);
-    var preview = try Preview.connect(allocator, host_port);
+    var preview = try Preview.connect(std.testing.io, allocator, host_port);
     defer preview.deinit();
     try harness.accept();
 
@@ -830,7 +886,7 @@ test "emitNodeEntered: exact wire-format guard against drift" {
 
     var host_port_buf: [32]u8 = undefined;
     const host_port = try harness.hostPort(&host_port_buf);
-    var preview = try Preview.connect(allocator, host_port);
+    var preview = try Preview.connect(std.testing.io, allocator, host_port);
     defer preview.deinit();
     try harness.accept();
 
@@ -862,7 +918,7 @@ test "pollSubscription: subscribe_flow / unsubscribe_flow update subscribed_flow
 
     var host_port_buf: [32]u8 = undefined;
     const host_port = try harness.hostPort(&host_port_buf);
-    var preview = try Preview.connect(allocator, host_port);
+    var preview = try Preview.connect(std.testing.io, allocator, host_port);
     defer preview.deinit();
     try harness.accept();
 
@@ -891,23 +947,23 @@ test "pollSubscription: subscribe_flow / unsubscribe_flow update subscribed_flow
 /// Spin until the engine reports the given flow as pin-value
 /// subscribed. Mirror of `waitForFlowSubscription`.
 fn waitForPinFlowSubscription(preview: *Preview, flow_name: []const u8, deadline_ms: u64) !void {
-    const start = std.time.milliTimestamp();
+    const start = monotonicMs();
     while (true) {
         try preview.pollSubscription();
         if (preview.isPinFlowSubscribed(flow_name)) return;
-        const now = std.time.milliTimestamp();
+        const now = monotonicMs();
         if (now - start > @as(i64, @intCast(deadline_ms))) return error.SubscriptionDeadlineExceeded;
-        std.Thread.sleep(1 * std.time.ns_per_ms);
+        sleepMs(1);
     }
 }
 
 fn waitForPinFlowUnsubscribed(preview: *Preview, flow_name: []const u8, deadline_ms: u64) !void {
-    const start = std.time.milliTimestamp();
+    const start = monotonicMs();
     while (preview.isPinFlowSubscribed(flow_name)) {
         try preview.pollSubscription();
-        const now = std.time.milliTimestamp();
+        const now = monotonicMs();
         if (now - start > @as(i64, @intCast(deadline_ms))) return error.UnsubscribeDeadlineExceeded;
-        std.Thread.sleep(1 * std.time.ns_per_ms);
+        sleepMs(1);
     }
 }
 
@@ -955,7 +1011,7 @@ test "emitPinValue: no-op when flow is not pin-subscribed" {
 
     var host_port_buf: [32]u8 = undefined;
     const host_port = try harness.hostPort(&host_port_buf);
-    var preview = try Preview.connect(allocator, host_port);
+    var preview = try Preview.connect(std.testing.io, allocator, host_port);
     defer preview.deinit();
     try harness.accept();
 
@@ -979,7 +1035,7 @@ test "emitPinValue: subscribed flow emits a frame with the expected layout" {
 
     var host_port_buf: [32]u8 = undefined;
     const host_port = try harness.hostPort(&host_port_buf);
-    var preview = try Preview.connect(allocator, host_port);
+    var preview = try Preview.connect(std.testing.io, allocator, host_port);
     defer preview.deinit();
     try harness.accept();
 
@@ -1009,7 +1065,7 @@ test "emitPinValue: unsubscribe_pin_values stops emission" {
 
     var host_port_buf: [32]u8 = undefined;
     const host_port = try harness.hostPort(&host_port_buf);
-    var preview = try Preview.connect(allocator, host_port);
+    var preview = try Preview.connect(std.testing.io, allocator, host_port);
     defer preview.deinit();
     try harness.accept();
 
@@ -1042,7 +1098,7 @@ test "emitPinValue: subscribing to flow A doesn't enable emission for flow B" {
 
     var host_port_buf: [32]u8 = undefined;
     const host_port = try harness.hostPort(&host_port_buf);
-    var preview = try Preview.connect(allocator, host_port);
+    var preview = try Preview.connect(std.testing.io, allocator, host_port);
     defer preview.deinit();
     try harness.accept();
 
@@ -1078,7 +1134,7 @@ test "emitPinValue: pin_name with non-ASCII and quotes round-trips through the w
 
     var host_port_buf: [32]u8 = undefined;
     const host_port = try harness.hostPort(&host_port_buf);
-    var preview = try Preview.connect(allocator, host_port);
+    var preview = try Preview.connect(std.testing.io, allocator, host_port);
     defer preview.deinit();
     try harness.accept();
 
@@ -1115,7 +1171,7 @@ test "emitPinValue: f64 value preserves precision through encode/decode" {
 
     var host_port_buf: [32]u8 = undefined;
     const host_port = try harness.hostPort(&host_port_buf);
-    var preview = try Preview.connect(allocator, host_port);
+    var preview = try Preview.connect(std.testing.io, allocator, host_port);
     defer preview.deinit();
     try harness.accept();
 
@@ -1161,7 +1217,7 @@ test "emitPinValue: exact wire-format guard against drift" {
 
     var host_port_buf: [32]u8 = undefined;
     const host_port = try harness.hostPort(&host_port_buf);
-    var preview = try Preview.connect(allocator, host_port);
+    var preview = try Preview.connect(std.testing.io, allocator, host_port);
     defer preview.deinit();
     try harness.accept();
 
@@ -1203,7 +1259,7 @@ test "pollSubscription: subscribe_pin_values / unsubscribe_pin_values update sub
 
     var host_port_buf: [32]u8 = undefined;
     const host_port = try harness.hostPort(&host_port_buf);
-    var preview = try Preview.connect(allocator, host_port);
+    var preview = try Preview.connect(std.testing.io, allocator, host_port);
     defer preview.deinit();
     try harness.accept();
 
@@ -1234,25 +1290,25 @@ test "pollSubscription: subscribe_pin_values / unsubscribe_pin_values update sub
 /// in the watched set. Bounded so a broken implementation can't hang
 /// the test runner.
 fn waitForWatchedEntity(preview: *Preview, id: u64, deadline_ms: u64) !void {
-    const start = std.time.milliTimestamp();
+    const start = monotonicMs();
     while (true) {
         try preview.pollSubscription();
         if (preview.watched_entities.contains(id)) return;
-        if (std.time.milliTimestamp() - start > @as(i64, @intCast(deadline_ms))) {
+        if (monotonicMs() - start > @as(i64, @intCast(deadline_ms))) {
             return error.WatchEntityDeadlineExceeded;
         }
-        { var _req: std.c.timespec = .{ .sec = (1 * std.time.ns_per_ms / std.time.ns_per_s), .nsec = (1 * std.time.ns_per_ms % std.time.ns_per_s) }; var _rem: std.c.timespec = undefined; _ = std.c.nanosleep(&_req, &_rem); }
+        sleepMs(1);
     }
 }
 
 fn waitForUnwatchedEntity(preview: *Preview, id: u64, deadline_ms: u64) !void {
-    const start = std.time.milliTimestamp();
+    const start = monotonicMs();
     while (preview.watched_entities.contains(id)) {
         try preview.pollSubscription();
-        if (std.time.milliTimestamp() - start > @as(i64, @intCast(deadline_ms))) {
+        if (monotonicMs() - start > @as(i64, @intCast(deadline_ms))) {
             return error.UnwatchEntityDeadlineExceeded;
         }
-        { var _req: std.c.timespec = .{ .sec = (1 * std.time.ns_per_ms / std.time.ns_per_s), .nsec = (1 * std.time.ns_per_ms % std.time.ns_per_s) }; var _rem: std.c.timespec = undefined; _ = std.c.nanosleep(&_req, &_rem); }
+        sleepMs(1);
     }
 }
 
@@ -1263,7 +1319,7 @@ test "watch_entity: adds id to watched_entities and filters subsequent emits" {
 
     var host_port_buf: [32]u8 = undefined;
     const host_port = try harness.hostPort(&host_port_buf);
-    var preview = try Preview.connect(allocator, host_port);
+    var preview = try Preview.connect(std.testing.io, allocator, host_port);
     defer preview.deinit();
     try harness.accept();
 
@@ -1326,7 +1382,7 @@ test "unwatch_entity: empty set restores Phase 2 'watch everything' behaviour" {
 
     var host_port_buf: [32]u8 = undefined;
     const host_port = try harness.hostPort(&host_port_buf);
-    var preview = try Preview.connect(allocator, host_port);
+    var preview = try Preview.connect(std.testing.io, allocator, host_port);
     defer preview.deinit();
     try harness.accept();
 
@@ -1372,7 +1428,7 @@ test "emitEntitySnapshot: writes one component_changed frame per (entity, compon
 
     var host_port_buf: [32]u8 = undefined;
     const host_port = try harness.hostPort(&host_port_buf);
-    var preview = try Preview.connect(allocator, host_port);
+    var preview = try Preview.connect(std.testing.io, allocator, host_port);
     defer preview.deinit();
     try harness.accept();
 
@@ -1423,7 +1479,7 @@ test "emitEntitySnapshot: skips components the editor did not subscribe to" {
 
     var host_port_buf: [32]u8 = undefined;
     const host_port = try harness.hostPort(&host_port_buf);
-    var preview = try Preview.connect(allocator, host_port);
+    var preview = try Preview.connect(std.testing.io, allocator, host_port);
     defer preview.deinit();
     try harness.accept();
 
@@ -1469,7 +1525,7 @@ test "emitEntitySnapshot: bypasses watched_entities filter for unwatched ids" {
 
     var host_port_buf: [32]u8 = undefined;
     const host_port = try harness.hostPort(&host_port_buf);
-    var preview = try Preview.connect(allocator, host_port);
+    var preview = try Preview.connect(std.testing.io, allocator, host_port);
     defer preview.deinit();
     try harness.accept();
 

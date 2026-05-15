@@ -80,13 +80,15 @@ pub fn build(b: *std.Build) void {
         "test/jsonc_bridge_gizmo_visibility_test.zig",
         "test/collect_entities_test.zig",
         "test/set_sprite_flip_test.zig",
-        // preview_mode_test + flows_game_api_test disabled — both use
-        // `std.net.Server` for loopback harnesses, which was reshaped
-        // into `std.Io.net.Server` requiring an `io` thread-through.
-        // The `src/preview_mode.zig` module itself is fully migrated
-        // (libc-direct transport for read/write/close). Restore both
-        // tests after porting their loopback harnesses to
-        // `std.Io.net.Server`.
+        // preview_mode_test + flows_game_api_test: harnesses migrated to
+        // std.Io.net.Server + libc r/w; basic lifecycle tests (1–11, 16) pass
+        // but 21 subscription-flow tests still fail with a parse/state-update
+        // glitch that the migration didn't unblock. Bytes arrive on the wire
+        // (read() returns the full frame) but applySubscriptionFrame's effect
+        // doesn't land in subscribed_components — needs another debugging pass.
+        // Disabled in CI for now; tests are migrated source-wise so the
+        // re-enable is just flipping these two lines back on once the bug is
+        // pinned.
         // "test/preview_mode_test.zig",
         // "test/flows_game_api_test.zig",
     };

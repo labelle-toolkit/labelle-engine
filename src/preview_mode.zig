@@ -83,6 +83,21 @@ const std = @import("std");
 // path), so going straight to libc is the smallest restoration.
 extern "c" fn close(fd: c_int) c_int;
 extern "c" fn write(fd: c_int, buf: [*]const u8, len: usize) isize;
+extern "c" fn read(fd: c_int, buf: [*]u8, len: usize) isize;
+extern "c" fn fcntl(fd: c_int, cmd: c_int, arg: c_int) c_int;
+extern "c" fn __error() *c_int; // macOS errno location
+extern "c" fn __errno_location() *c_int; // glibc errno location
+
+fn libcErrno() c_int {
+    return if (@import("builtin").os.tag == .macos) __error().* else __errno_location().*;
+}
+
+// POSIX constants we need for the non-blocking-poll path. Match
+// the Linux/macOS values that libc's <fcntl.h> ships.
+const F_GETFL: c_int = 3;
+const F_SETFL: c_int = 4;
+const O_NONBLOCK: c_int = if (@import("builtin").os.tag == .macos) 4 else 2048;
+const EAGAIN: c_int = if (@import("builtin").os.tag == .macos) 35 else 11;
 const builtin = @import("builtin");
 
 /// Reason emitted in the trailing `bye` frame. Spike only ever sends
@@ -226,11 +241,8 @@ pub const Preview = struct {
         else
             host_text;
         const port = std.fmt.parseInt(u16, port_text, 10) catch return error.InvalidPort;
-        const addr = std.Io.net.IpAddress.parse(host_clean, port) catch |err| switch (err) {
-            error.InvalidIp4Address, error.InvalidIp6Address => return error.InvalidAddress,
-            else => return error.InvalidAddress,
-        };
-        const stream = addr.connect(io, .{}) catch return error.ConnectFailed;
+        const addr = std.Io.net.IpAddress.parse(host_clean, port) catch return error.InvalidAddress;
+        const stream = addr.connect(io, .{ .mode = .stream }) catch return error.ConnectFailed;
         return .{
             .fd = stream.socket.handle,
             .arena = std.heap.ArenaAllocator.init(parent_alloc),
@@ -610,26 +622,25 @@ pub const Preview = struct {
     }
 
     fn fillInboxNonBlocking(self: *Preview) PollError!void {
-        // POSIX-only fast path. Set non-blocking, read until `EAGAIN`,
-        // restore flags. The stream stays in blocking mode for write
-        // calls so we don't have to worry about partial sends.
-        if (!@hasDecl(std.posix, "fcntl")) return;
+        // POSIX-only fast path via libc directly. Zig 0.16's
+        // `std.posix.fcntl` is gone; we already bypass `std.posix.read`
+        // / `close` / `write` to avoid `io: std.Io` threading, so the
+        // non-blocking poll uses the same libc shim. Set non-blocking,
+        // read until EAGAIN, restore flags. The socket stays blocking
+        // for writes so partial sends aren't a concern.
         const fd = self.fd;
-        const F = std.posix.F;
-        const orig_flags = std.posix.fcntl(fd, F.GETFL, 0) catch return;
-        const nonblock_flag: usize = @as(usize, 1) << @bitOffsetOf(std.posix.O, "NONBLOCK");
-        _ = std.posix.fcntl(fd, F.SETFL, orig_flags | nonblock_flag) catch return;
-        defer _ = std.posix.fcntl(fd, F.SETFL, orig_flags) catch {};
+        const orig_flags = fcntl(fd, F_GETFL, 0);        if (orig_flags < 0) return;
+        const set_rc = fcntl(fd, F_SETFL, orig_flags | O_NONBLOCK);        if (set_rc < 0) return;
+        defer _ = fcntl(fd, F_SETFL, orig_flags);
 
         var scratch: [1024]u8 = undefined;
         while (true) {
-            const n = std.posix.read(fd, &scratch) catch |err| switch (err) {
-                error.WouldBlock => return,
-                else => return err,
-            };
+            const n = read(fd, @ptrCast(&scratch[0]), scratch.len);            if (n < 0) {
+                if (libcErrno() == EAGAIN) return;
+                return error.InputOutput;
+            }
             if (n == 0) return; // EOF — caller infers from subsequent write failures.
-            try self.inbox.appendSlice(self.inbox_alloc, scratch[0..n]);
-        }
+            try self.inbox.appendSlice(self.inbox_alloc, scratch[0..@intCast(n)]);        }
     }
 
     fn applySubscriptionFrame(self: *Preview, line: []const u8) error{ OutOfMemory, MalformedSubscription }!void {
@@ -650,14 +661,13 @@ pub const Preview = struct {
             .ignore_unknown_fields = true,
         }) catch return error.MalformedSubscription;
 
-        if (std.mem.eql(u8, kind_only.kind, "subscribe")) {
-            const Parsed = struct { kind: []const u8, components: []const []const u8 };
+        if (std.mem.eql(u8, kind_only.kind, "subscribe")) {            const Parsed = struct { kind: []const u8, components: []const []const u8 };
             const parsed = std.json.parseFromSliceLeaky(Parsed, alloc, line, .{
                 .ignore_unknown_fields = true,
-            }) catch return error.MalformedSubscription;
+            }) catch |err| {                return error.MalformedSubscription;
+            };
             const subs_alloc = self.subs_arena.allocator();
-            for (parsed.components) |name| {
-                if (self.subscribed_components.contains(name)) continue;
+            for (parsed.components) |name| {                if (self.subscribed_components.contains(name)) continue;
                 const owned = try subs_alloc.dupe(u8, name);
                 try self.subscribed_components.put(subs_alloc, owned, {});
             }

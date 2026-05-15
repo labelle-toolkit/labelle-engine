@@ -26,21 +26,25 @@ const Preview = engine.preview_mode_mod.Preview;
 
 // Loopback harness — minimal echo of what `preview_mode_test.zig`
 // uses, kept private here so this test file is self-contained.
+// 0.16: `std.net` → `std.Io.net`; needs `io: std.Io` threaded.
 const LoopbackHarness = struct {
-    server: std.net.Server,
+    server: std.Io.net.Server,
     port: u16,
-    conn: ?std.net.Server.Connection = null,
+    conn_fd: ?std.posix.fd_t = null,
 
     fn init() !LoopbackHarness {
-        const addr = std.net.Address.initIp4(.{ 127, 0, 0, 1 }, 0);
-        var server = try addr.listen(.{ .reuse_address = true });
-        const port = server.listen_address.getPort();
+        const addr = std.Io.net.IpAddress.parse("127.0.0.1", 0) catch unreachable;
+        const server = try addr.listen(std.testing.io, .{ .reuse_address = true });
+        var sa: std.posix.sockaddr.in = undefined;
+        var sa_len: std.posix.socklen_t = @sizeOf(@TypeOf(sa));
+        if (std.posix.system.getsockname(server.socket.handle, @ptrCast(&sa), &sa_len) != 0) return error.GetSockNameFailed;
+        const port = std.mem.bigToNative(u16, sa.port);
         return .{ .server = server, .port = port };
     }
 
     fn deinit(self: *LoopbackHarness) void {
-        if (self.conn) |*c| c.stream.close();
-        self.server.deinit();
+        if (self.conn_fd) |fd| _ = std.posix.system.close(fd);
+        self.server.deinit(std.testing.io);
     }
 
     fn hostPort(self: *LoopbackHarness, buf: []u8) ![]const u8 {
@@ -48,7 +52,8 @@ const LoopbackHarness = struct {
     }
 
     fn accept(self: *LoopbackHarness) !void {
-        self.conn = try self.server.accept();
+        const stream = try self.server.accept(std.testing.io);
+        self.conn_fd = stream.socket.handle;
     }
 };
 
@@ -157,7 +162,7 @@ test "preview: codegen pattern `if (game.preview) |*_p| _p.emitNodeEntered(...)`
 
     // The repo's convention is direct field assignment — `Game.deinit`
     // owns the channel by value once set (see `preview_mode_test.zig`).
-    game.preview = try Preview.connect(testing.allocator, host_port);
+    game.preview = try Preview.connect(testing.io, testing.allocator, host_port);
     try harness.accept();
 
     try testing.expect(game.preview != null);
