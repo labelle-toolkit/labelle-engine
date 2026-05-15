@@ -306,6 +306,13 @@ pub const Preview = struct {
     /// SHM ring writer for #544. `null` until `beginFrameStream` runs;
     /// `endFrameStream` deallocates and resets to `null`.
     frame_producer: ?preview_shm.Producer = null,
+    /// Owned shm_name backing `frame_producer`. Allocated per
+    /// `beginFrameStream` and freed at the start of the next call
+    /// (or in `endFrameStream` / `deinit`). Previously dupe'd into
+    /// `subs_arena`, which is only freed at full `Preview` deinit —
+    /// resize-driven re-offer cycles would otherwise leak names
+    /// proportional to the resize count (#546 review).
+    frame_shm_name: ?[:0]u8 = null,
     /// Monotonic frame counter — bumped by `publishFrame`.
     frame_index: u64 = 0,
 
@@ -344,6 +351,10 @@ pub const Preview = struct {
         if (self.frame_producer) |*p| {
             p.deinit();
             self.frame_producer = null;
+        }
+        if (self.frame_shm_name) |old| {
+            self.inbox_alloc.free(old);
+            self.frame_shm_name = null;
         }
         self.subscribed_components.deinit(self.subs_arena.allocator());
         self.subscribed_flows.deinit(self.subs_arena.allocator());
@@ -519,26 +530,35 @@ pub const Preview = struct {
             p.deinit();
             self.frame_producer = null;
         }
+        if (self.frame_shm_name) |old| {
+            self.inbox_alloc.free(old);
+            self.frame_shm_name = null;
+        }
         self.frame_state = .not_offered;
         self.frame_index = 0;
 
-        // Per-process unique SHM name (PID + counter). Keep it short
-        // for macOS (PSHMNAMLEN ~ 31 chars). Counter increment uses
-        // an atomic RMW so concurrent Preview instances on different
-        // threads (e.g. parallel test fixtures) don't collide on the
-        // shm_open namespace (#546 review).
+        // Per-process unique SHM name (PID + counter). Atomic RMW on
+        // the counter so concurrent Preview instances on different
+        // threads can't collide. **Full** 32-bit PID and counter in
+        // hex — truncating to 16 bits is small enough that two
+        // engine processes whose PIDs share the low 16 bits collide
+        // on the same name and `Producer.init`'s pre-`shm_unlink`
+        // would yank each other's regions (#546 review). Name math:
+        // "/lbl-prv-" (9) + 8 hex + "-" (1) + 8 hex + "\0" = 27 ≤
+        // macOS PSHMNAMLEN (31).
         const pid: i32 = @intCast(std.c.getpid());
         const stream_id = @atomicRmw(u32, &next_stream_id, .Add, 1, .monotonic) +% 1;
         var name_buf: [32]u8 = undefined;
         const name = std.fmt.bufPrintZ(&name_buf, "/lbl-prv-{x}-{x}", .{
-            @as(u32, @bitCast(pid)) & 0xffff,
-            stream_id & 0xffff,
+            @as(u32, @bitCast(pid)),
+            stream_id,
         }) catch return error.OutOfMemory;
-        // Persist the name into the arena so the lifetime outlasts
-        // the local stack buffer for the producer's eventual
-        // shm_unlink at deinit.
-        const name_owned = self.subs_arena.allocator().dupeZ(u8, name) catch
+        // Heap-owned copy so the producer's eventual `shm_unlink`
+        // gets a stable pointer; freed in `endFrameStream` / the
+        // next `beginFrameStream` teardown / `deinit`.
+        const name_owned = self.inbox_alloc.dupeZ(u8, name) catch
             return error.OutOfMemory;
+        errdefer self.inbox_alloc.free(name_owned);
 
         const opts: preview_shm.Options = .{
             .width = width,
@@ -558,6 +578,7 @@ pub const Preview = struct {
         });
 
         self.frame_producer = producer;
+        self.frame_shm_name = name_owned;
     }
 
     /// Publish a CPU-side RGBA8 frame into the SHM ring and emit an
@@ -601,6 +622,10 @@ pub const Preview = struct {
         if (self.frame_producer) |*p| {
             p.deinit();
             self.frame_producer = null;
+        }
+        if (self.frame_shm_name) |old| {
+            self.inbox_alloc.free(old);
+            self.frame_shm_name = null;
         }
         self.frame_state = .not_offered;
         self.frame_index = 0;

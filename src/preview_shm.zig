@@ -42,6 +42,10 @@ pub const Error = error{
     BadMagic,
     BadVersion,
     TooSmall,
+    /// Options failed `validateOptions` — zero / overflowing dims or
+    /// `ring_size == 0`. Producer side only; the consumer mirrors the
+    /// producer's header.
+    InvalidOptions,
 };
 
 /// Cacheline-aligned header. Field layout is a stable ABI across the
@@ -102,13 +106,32 @@ pub const Options = struct {
 };
 
 /// Path used for `shm_open`. On macOS this must start with `/` and be
-/// ≤ `PSHMNAMLEN` (typically 31 chars).
-pub const default_name: [:0]const u8 = "/imgui-preview-poc";
+/// ≤ `PSHMNAMLEN` (typically 31 chars). Engine-specific namespace so
+/// `Producer.init`'s pre-unlink can't clobber a stale PoC region.
+pub const default_name: [:0]const u8 = "/labelle-preview-default";
+
+/// Upper bound on each dimension to keep `width * height * 4` from
+/// overflowing `u64`. At 4 bytes/pixel a 16384×16384 buffer is 1 GiB,
+/// already well past anything the editor would sanely display; the
+/// hard cap is the `u32 stride = width * 4` headroom.
+pub const max_dim: u32 = std.math.maxInt(u32) / 4;
 
 /// Compute the slot size (pixel bytes + trailer, padded to cacheline).
+/// Returns 0 if either dimension is out of range — callers gate on
+/// `validateOptions` before using this.
 pub fn slotSize(width: u32, height: u32) u64 {
+    if (width == 0 or height == 0 or width > max_dim or height > max_dim) return 0;
     const raw: u64 = @as(u64, width) * @as(u64, height) * 4 + @sizeOf(SlotTrailer);
     return std.mem.alignForward(u64, raw, 64);
+}
+
+/// Reject malformed `Options` before we hand them to `shm_open` /
+/// `ftruncate`. The producer surfaces these as `Error.InvalidOptions`.
+pub fn validateOptions(opts: Options) bool {
+    if (opts.ring_size == 0) return false;
+    if (opts.width == 0 or opts.height == 0) return false;
+    if (opts.width > max_dim or opts.height > max_dim) return false;
+    return true;
 }
 
 pub fn totalSize(opts: Options) u64 {
@@ -171,6 +194,13 @@ pub const Producer = struct {
     /// to write into the current slot, then `publish` to advance
     /// `latest` and bump `frame_count`.
     pub fn init(name: [:0]const u8, opts: Options) !Producer {
+        // Reject malformed options up-front so we don't `mmap` a
+        // zero-sized region or wrap arithmetic into an undersized
+        // mapping. `pixelsPtr` assumes at least one slot; `publish`
+        // mods by `ring_size`; `slotSize` would silently overflow on
+        // huge dims (#546 review).
+        if (!validateOptions(opts)) return Error.InvalidOptions;
+
         const total = totalSize(opts);
 
         // Best-effort cleanup of any stale region from a previous run.
