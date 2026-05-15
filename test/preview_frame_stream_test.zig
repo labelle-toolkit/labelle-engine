@@ -373,3 +373,32 @@ test "endFrameStream tears down ring, subsequent publishFrame is StreamNotActive
     @memset(&pixels, 0);
     try std.testing.expectError(error.StreamNotActive, p.publishFrame(&pixels));
 }
+
+// Regression: PR #548 review (cursor "endFrameStreamIOSurface
+// unconditionally corrupts shared state"). The IOSurface tear-down
+// must no-op when no IOSurface stream is active. Previously it freed
+// `frame_shm_name` from under an active SHM-mode stream, landing a
+// use-after-free at the SHM producer's later `shm_unlink`. Caller
+// owns mode selection.
+test "endFrameStreamIOSurface is a no-op when SHM mode is active" {
+    var h = try LoopbackHarness.init();
+    defer h.deinit();
+    var p = try connectPair(&h);
+    defer p.deinit();
+
+    try p.beginFrameStream(8, 8);
+    var drop_buf: [512]u8 = undefined;
+    _ = try h.readLine(&drop_buf);
+
+    // Snapshot the SHM name pointer so we can verify it survives
+    // intact across the cross-mode end call.
+    const name_before = p.frame_shm_name.?;
+
+    p.endFrameStreamIOSurface();
+
+    // SHM stream still active; cross-mode end was a no-op.
+    try std.testing.expect(p.frame_producer != null);
+    try std.testing.expect(p.frame_shm_name != null);
+    try std.testing.expectEqual(name_before.ptr, p.frame_shm_name.?.ptr);
+    try std.testing.expect(p.frame_state != .not_offered);
+}
