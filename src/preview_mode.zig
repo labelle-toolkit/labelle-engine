@@ -506,10 +506,20 @@ pub const Preview = struct {
         // Tear down any prior ring so a resize-driven re-offer is
         // idempotent — the protocol allows multiple frame_offer cycles
         // over the same connection.
+        //
+        // Reset `frame_state` *before* allocating the new ring so a
+        // failure in `Producer.init` / `sendFrameOffer` leaves us in a
+        // clean `.not_offered` state, not stuck at `.accepted` with a
+        // null producer. (#546 review: backends gating on
+        // `isFrameAccepted` would otherwise run their expensive PBO
+        // readback only to fail at `publishFrame` with
+        // `StreamNotActive`.) On success, `sendFrameOffer` below
+        // lifts us back to `.offered`.
         if (self.frame_producer) |*p| {
             p.deinit();
             self.frame_producer = null;
         }
+        self.frame_state = .not_offered;
         self.frame_index = 0;
 
         // Per-process unique SHM name (PID + counter). Keep it short

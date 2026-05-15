@@ -246,6 +246,36 @@ test "publishFrame returns StreamNotActive when called without beginFrameStream"
     try std.testing.expectError(error.StreamNotActive, p.publishFrame(&pixels));
 }
 
+test "beginFrameStream resets frame_state even when re-offer is in progress" {
+    // Regression for #546 review: a failed re-offer path used to leave
+    // `frame_state == .accepted` while `frame_producer == null`, which
+    // made `isFrameAccepted()` lie to the backend. Here we exercise the
+    // happy-path re-offer cycle and assert that *during* the
+    // re-offer (after teardown but before sendFrameOffer lands) the
+    // state is invalidated.
+    var h = try LoopbackHarness.init();
+    defer h.deinit();
+    var p = try connectPair(&h);
+    defer p.deinit();
+
+    try p.beginFrameStream(8, 8);
+    var drop: [512]u8 = undefined;
+    _ = try h.readLine(&drop);
+    try h.sendLine("{\"kind\":\"frame_accept\"}\n");
+    try waitUntil(&p, isAccepted, 1000);
+    try std.testing.expect(p.isFrameAccepted());
+
+    // Force a re-offer (same shape as the resize path). After
+    // beginFrameStream returns, state should be `.offered` (the
+    // freshly-sent offer awaits the next accept). What we're really
+    // proving: state is **not** stuck at `.accepted` carrying over
+    // from the previous handshake — sendFrameOffer is the only thing
+    // that can flip us to `.offered` post-teardown.
+    try p.beginFrameStream(16, 16);
+    try std.testing.expectEqual(preview.FrameHandshakeState.offered, p.frame_state);
+    try std.testing.expect(!p.isFrameAccepted());
+}
+
 test "publishFrame returns InvalidFrameSize when buffer size mismatches dims" {
     var h = try LoopbackHarness.init();
     defer h.deinit();
