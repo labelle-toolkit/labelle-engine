@@ -79,6 +79,7 @@
 ///    socket. On abnormal exit the OS closes the FD and the editor
 ///    infers the crash from the EOF without a `bye`.
 const std = @import("std");
+pub const preview_shm = @import("preview_shm.zig");
 
 // Raw libc bindings: std.posix in 0.16 dropped top-level `close` and
 // `write` wrappers and routed file IO through `std.Io.File` which
@@ -133,6 +134,13 @@ pub const ByeReason = enum {
 /// `hello` frame. Bump every time the message shapes change in an
 /// incompatible way.
 pub const protocol_version: u32 = 1;
+
+/// Process-wide monotonic suffix for SHM names. Each
+/// `beginFrameStream` call increments this; combined with the PID
+/// it keeps concurrent previews (e.g. test loopback fixtures and a
+/// real game running in parallel) from colliding on the shm_open
+/// namespace.
+var next_stream_id: u32 = 0;
 
 /// Magic byte that flags a binary telemetry frame on the multiplexed
 /// socket. Chosen as `ESC` (0x1B) because no valid JSON document or
@@ -295,6 +303,11 @@ pub const Preview = struct {
     /// Set by the editor's `frame_resize`; cleared by `takeResize`.
     /// `null` means "no resize pending."
     pending_resize: ?PendingResize = null,
+    /// SHM ring writer for #544. `null` until `beginFrameStream` runs;
+    /// `endFrameStream` deallocates and resets to `null`.
+    frame_producer: ?preview_shm.Producer = null,
+    /// Monotonic frame counter — bumped by `publishFrame`.
+    frame_index: u64 = 0,
 
     /// Dial the editor's listener. `host_port` is the literal string
     /// pulled from `--preview-mode <host:port>` — `127.0.0.1:54321`
@@ -326,6 +339,12 @@ pub const Preview = struct {
         // so the caller can still observe write failures; we always
         // close here.
         _ = close(self.fd);
+        // Tear down the SHM ring if a stream was started; safe no-op
+        // when never started.
+        if (self.frame_producer) |*p| {
+            p.deinit();
+            self.frame_producer = null;
+        }
         self.subscribed_components.deinit(self.subs_arena.allocator());
         self.subscribed_flows.deinit(self.subs_arena.allocator());
         self.subscribed_pin_flows.deinit(self.subs_arena.allocator());
@@ -448,6 +467,121 @@ pub const Preview = struct {
         const pending = self.pending_resize;
         self.pending_resize = null;
         return pending;
+    }
+
+    // ── #544: PBO/SHM publish (producer side) ──────────────────────
+
+    /// Errors specific to `beginFrameStream` / `publishFrame`.
+    /// Augments `WriteError` (control-channel write failure) with
+    /// the SHM-allocation failure modes from `preview_shm.Error`.
+    pub const PublishError = WriteError || preview_shm.Error || error{StreamNotActive};
+
+    /// Allocate a SHM ring sized for `width x height` RGBA8 frames and
+    /// emit a `frame_offer` over the control channel.
+    ///
+    /// Caller (typically the backend's render-loop init code) calls
+    /// this once preview is connected and after the first render
+    /// surface dimensions are known. The producer state transitions
+    /// to `.offered`; subsequent `publishFrame` calls are gated on
+    /// the editor's `frame_accept` lifting state to `.accepted` (see
+    /// `isFrameAccepted`).
+    ///
+    /// SHM name is derived from PID and a monotonic counter so concurrent
+    /// previews (e.g. unit-test loopback fixtures) don't collide. The
+    /// name is bounded at ~31 chars to satisfy macOS' PSHMNAMLEN.
+    pub fn beginFrameStream(
+        self: *Preview,
+        width: u32,
+        height: u32,
+    ) PublishError!void {
+        // Tear down any prior ring so a resize-driven re-offer is
+        // idempotent — the protocol allows multiple frame_offer cycles
+        // over the same connection.
+        if (self.frame_producer) |*p| {
+            p.deinit();
+            self.frame_producer = null;
+        }
+        self.frame_index = 0;
+
+        // Per-process unique SHM name (PID + counter). Keep it short
+        // for macOS (PSHMNAMLEN ~ 31 chars).
+        const pid: i32 = @intCast(std.c.getpid());
+        next_stream_id +%= 1;
+        var name_buf: [32]u8 = undefined;
+        const name = std.fmt.bufPrintZ(&name_buf, "/lbl-prv-{x}-{x}", .{
+            @as(u32, @bitCast(pid)) & 0xffff,
+            next_stream_id & 0xffff,
+        }) catch return error.OutOfMemory;
+        // Persist the name into the arena so the lifetime outlasts
+        // the local stack buffer for the producer's eventual
+        // shm_unlink at deinit.
+        const name_owned = self.subs_arena.allocator().dupeZ(u8, name) catch
+            return error.OutOfMemory;
+
+        const opts: preview_shm.Options = .{
+            .width = width,
+            .height = height,
+            .ring_size = 3,
+        };
+        var producer = try preview_shm.Producer.init(name_owned, opts);
+        errdefer producer.deinit();
+
+        try self.sendFrameOffer(.{
+            .shm_name = name_owned,
+            .width = width,
+            .height = height,
+            .format = .rgba8,
+            .ring_size = opts.ring_size,
+            .slot_size_bytes = preview_shm.slotSize(width, height),
+        });
+
+        self.frame_producer = producer;
+    }
+
+    /// Publish a CPU-side RGBA8 frame into the SHM ring and emit an
+    /// optional `frame_published` JSON sidecar.
+    ///
+    /// `pixels` must be exactly `width * height * 4` bytes — the
+    /// dimensions agreed in `beginFrameStream` / the last accepted
+    /// `frame_offer`. Caller (typically the backend) is responsible
+    /// for the GPU → CPU readback (PBO async readback is the
+    /// recommended shape — see `imgui-preview-poc/src/game.zig`).
+    ///
+    /// No-op (returns `error.StreamNotActive`) when the editor hasn't
+    /// yet acknowledged the offer (`frame_state != .accepted`). The
+    /// backend's render loop is expected to early-out via
+    /// `isFrameAccepted` to avoid the readback cost when no editor is
+    /// attached.
+    pub fn publishFrame(self: *Preview, pixels: []const u8) PublishError!void {
+        const producer = if (self.frame_producer != null) &self.frame_producer.? else return error.StreamNotActive;
+        if (!self.isFrameAccepted()) return error.StreamNotActive;
+
+        const expected_len: usize = @intCast(@as(u64, producer.opts.width) * @as(u64, producer.opts.height) * 4);
+        if (pixels.len != expected_len) return error.StreamNotActive;
+
+        // Single memcpy into the next slot; stamp + publish.
+        const slot_pixels = producer.pixelsPtr();
+        @memcpy(slot_pixels[0..expected_len], pixels);
+        producer.publish(true);
+
+        self.frame_index +%= 1;
+        // The control-channel sidecar is optional — emit best-effort
+        // and swallow broken-pipe so an editor that drops mid-stream
+        // doesn't tear down the render loop. The SHM publish above
+        // is the authoritative signal; the editor can poll
+        // `Header.latest` without seeing this frame.
+        self.sendFramePublished(self.frame_index, preview_shm.nowNs()) catch {};
+    }
+
+    /// Tear down the SHM ring. Safe to call when no stream is active.
+    /// Does **not** send a `bye` — caller still owns that lifecycle.
+    pub fn endFrameStream(self: *Preview) void {
+        if (self.frame_producer) |*p| {
+            p.deinit();
+            self.frame_producer = null;
+        }
+        self.frame_state = .not_offered;
+        self.frame_index = 0;
     }
 
     // ── Binary telemetry frames (Phase 2 / #518) ────────────────────
