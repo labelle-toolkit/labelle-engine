@@ -661,13 +661,14 @@ pub const Preview = struct {
             .ignore_unknown_fields = true,
         }) catch return error.MalformedSubscription;
 
-        if (std.mem.eql(u8, kind_only.kind, "subscribe")) {            const Parsed = struct { kind: []const u8, components: []const []const u8 };
+        if (std.mem.eql(u8, kind_only.kind, "subscribe")) {
+            const Parsed = struct { kind: []const u8, components: []const []const u8 };
             const parsed = std.json.parseFromSliceLeaky(Parsed, alloc, line, .{
                 .ignore_unknown_fields = true,
-            }) catch |err| {                return error.MalformedSubscription;
-            };
+            }) catch return error.MalformedSubscription;
             const subs_alloc = self.subs_arena.allocator();
-            for (parsed.components) |name| {                if (self.subscribed_components.contains(name)) continue;
+            for (parsed.components) |name| {
+                if (self.subscribed_components.contains(name)) continue;
                 const owned = try subs_alloc.dupe(u8, name);
                 try self.subscribed_components.put(subs_alloc, owned, {});
             }
