@@ -474,7 +474,16 @@ pub const Preview = struct {
     /// Errors specific to `beginFrameStream` / `publishFrame`.
     /// Augments `WriteError` (control-channel write failure) with
     /// the SHM-allocation failure modes from `preview_shm.Error`.
-    pub const PublishError = WriteError || preview_shm.Error || error{StreamNotActive};
+    ///
+    /// `StreamNotActive` and `InvalidFrameSize` are split on purpose
+    /// — the former is "no editor attached / not yet accepted /
+    /// stream torn down," the latter is "you handed me the wrong
+    /// number of pixel bytes for the negotiated dims." Conflating
+    /// them was the #546 review feedback.
+    pub const PublishError = WriteError || preview_shm.Error || error{
+        StreamNotActive,
+        InvalidFrameSize,
+    };
 
     /// Allocate a SHM ring sized for `width x height` RGBA8 frames and
     /// emit a `frame_offer` over the control channel.
@@ -504,13 +513,16 @@ pub const Preview = struct {
         self.frame_index = 0;
 
         // Per-process unique SHM name (PID + counter). Keep it short
-        // for macOS (PSHMNAMLEN ~ 31 chars).
+        // for macOS (PSHMNAMLEN ~ 31 chars). Counter increment uses
+        // an atomic RMW so concurrent Preview instances on different
+        // threads (e.g. parallel test fixtures) don't collide on the
+        // shm_open namespace (#546 review).
         const pid: i32 = @intCast(std.c.getpid());
-        next_stream_id +%= 1;
+        const stream_id = @atomicRmw(u32, &next_stream_id, .Add, 1, .monotonic) +% 1;
         var name_buf: [32]u8 = undefined;
         const name = std.fmt.bufPrintZ(&name_buf, "/lbl-prv-{x}-{x}", .{
             @as(u32, @bitCast(pid)) & 0xffff,
-            next_stream_id & 0xffff,
+            stream_id & 0xffff,
         }) catch return error.OutOfMemory;
         // Persist the name into the arena so the lifetime outlasts
         // the local stack buffer for the producer's eventual
@@ -557,7 +569,7 @@ pub const Preview = struct {
         if (!self.isFrameAccepted()) return error.StreamNotActive;
 
         const expected_len: usize = @intCast(@as(u64, producer.opts.width) * @as(u64, producer.opts.height) * 4);
-        if (pixels.len != expected_len) return error.StreamNotActive;
+        if (pixels.len != expected_len) return error.InvalidFrameSize;
 
         // Single memcpy into the next slot; stamp + publish.
         const slot_pixels = producer.pixelsPtr();

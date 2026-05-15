@@ -246,6 +246,26 @@ test "publishFrame returns StreamNotActive when called without beginFrameStream"
     try std.testing.expectError(error.StreamNotActive, p.publishFrame(&pixels));
 }
 
+test "publishFrame returns InvalidFrameSize when buffer size mismatches dims" {
+    var h = try LoopbackHarness.init();
+    defer h.deinit();
+    var p = try connectPair(&h);
+    defer p.deinit();
+
+    try p.beginFrameStream(8, 8);
+    var drop_buf: [512]u8 = undefined;
+    _ = try h.readLine(&drop_buf);
+    try h.sendLine("{\"kind\":\"frame_accept\"}\n");
+    try waitUntil(&p, isAccepted, 1000);
+
+    // Negotiated dims are 8×8×4 = 256 bytes — pass 100 to provoke
+    // the size guard. Distinct from StreamNotActive so callers can
+    // tell "no editor attached" from "wrong number of bytes."
+    var pixels: [100]u8 = undefined;
+    @memset(&pixels, 0);
+    try std.testing.expectError(error.InvalidFrameSize, p.publishFrame(&pixels));
+}
+
 test "publishFrame increments frame_idx monotonically across multiple publishes" {
     var h = try LoopbackHarness.init();
     defer h.deinit();

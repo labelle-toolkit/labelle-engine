@@ -116,9 +116,15 @@ pub fn totalSize(opts: Options) u64 {
 }
 
 /// Wall-clock monotonic nanoseconds — used for the latency stamp.
+/// On the vanishingly-rare `clock_gettime(CLOCK_MONOTONIC)` failure
+/// (per POSIX, EINVAL only — and CLOCK_MONOTONIC is mandatory) we
+/// return `0` rather than reading uninitialized `timespec` memory.
+/// A zero timestamp shows up as a giant negative latency on the
+/// editor side, which is the right signal: "this frame's timing
+/// is unreliable" (#546 review).
 pub fn nowNs() u64 {
     var ts: std.posix.timespec = undefined;
-    _ = std.posix.system.clock_gettime(.MONOTONIC, &ts);
+    if (std.posix.system.clock_gettime(.MONOTONIC, &ts) != 0) return 0;
     const sec: u64 = @intCast(ts.sec);
     const nsec: u64 = @intCast(ts.nsec);
     return sec * std.time.ns_per_s + nsec;
