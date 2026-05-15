@@ -129,6 +129,11 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/assets/mod.zig"),
         .target = target,
         .optimize = optimize,
+        // catalog.zig / worker.zig call `std.c.nanosleep`, which resolves to
+        // an `extern "c"` decl — same libc-linkage requirement as the engine
+        // module above. This standalone test binary doesn't go through the
+        // `engine` import so it has to declare the link itself.
+        .link_libc = true,
     });
     assets_tests_module.addImport("audio_types", audio_types_module);
     assets_tests_module.addImport("font_types", font_types_module);
@@ -148,6 +153,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
         .single_threaded = true,
+        .link_libc = true,
     });
     assets_single_threaded_module.addImport("audio_types", audio_types_module);
     assets_single_threaded_module.addImport("font_types", font_types_module);
