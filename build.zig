@@ -91,6 +91,11 @@ pub fn build(b: *std.Build) void {
         // preview_mode_test.zig so the new coverage isn't gated on
         // that file's pre-existing 21-test subscription bug.
         "test/preview_handshake_test.zig",
+        // PIE viewport frame stream (#544) — producer-side SHM
+        // lifecycle + publishFrame. Companion to the handshake tests
+        // above; spins up an in-test `preview_shm.Consumer` to read
+        // back what the engine wrote.
+        "test/preview_frame_stream_test.zig",
         // preview_mode_test + flows_game_api_test: re-enabled after #543
         // fixed the variadic-`fcntl` ABI bug (declared non-variadic on
         // a function libc declares variadic — mismatched on
