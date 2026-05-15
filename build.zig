@@ -32,6 +32,13 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/root.zig"),
         .target = target,
         .optimize = optimize,
+        // src/preview_mode.zig needs libc for its raw `close`/`write`/`fcntl`
+        // bindings — 0.16 dropped `std.posix.fcntl`/`std.posix.close` and
+        // routed file IO through `std.Io.File` (which would force an
+        // `io: std.Io` thread-through), so going straight to libc is the
+        // smallest restoration. Downstream consumers inherit libc linkage
+        // automatically because the engine module declares it here.
+        .link_libc = true,
     });
     engine_module.addImport("labelle-core", core_module);
     engine_module.addImport("scene", scene_module);
