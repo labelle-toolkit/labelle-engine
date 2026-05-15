@@ -160,6 +160,7 @@ comptime {
 // ── BGRA8 property dict (macOS only) ───────────────────────────────
 
 fn cfNumberU32(v: u32) CFNumberRef {
+    if (!macos) unreachable;
     const sv: i32 = @bitCast(v);
     return CFNumberCreate(kCFAllocatorDefault, kCFNumberSInt32Type, &sv);
 }
@@ -172,6 +173,7 @@ fn cfNumberU32(v: u32) CFNumberRef {
 /// `IOSurfaceGetBytesPerRow` after creation rather than assuming
 /// `width * 4` (PoC bit us with this; see ticket macOS specifics).
 pub fn makeBGRA8Properties(width: u32, height: u32) CFDictionaryRef {
+    if (!macos) unreachable;
     const dict = CFDictionaryCreateMutable(
         kCFAllocatorDefault,
         0,
@@ -353,6 +355,7 @@ pub const Producer = struct {
     }
 
     pub fn deinit(self: *Producer) void {
+        if (!macos) return;
         // Best-effort unlock if caller bailed mid-write.
         if (self.locked_slot) |slot| {
             if (self.surfaces[slot]) |s| {
@@ -372,6 +375,7 @@ pub const Producer = struct {
     /// `Locked.base` honouring `Locked.bytes_per_row`, then calls
     /// `publish`.
     pub fn pixelsPtr(self: *Producer) Error!Locked {
+        if (!macos) return error.PlatformUnsupported;
         if (self.locked_slot != null) return error.AlreadyLocked;
         const slot = self.next_slot;
         const surf = self.surfaces[slot];
@@ -390,6 +394,7 @@ pub const Producer = struct {
     /// header. Mirrors `preview_shm.Producer.publish` for the
     /// timestamp + frame-count release-store dance.
     pub fn publish(self: *Producer, stamp_now: bool) Error!void {
+        if (!macos) return error.PlatformUnsupported;
         const slot = self.locked_slot orelse return error.NotLocked;
         const ul = IOSurfaceUnlock(self.surfaces[slot], 0, null);
         if (ul != 0) return error.IOSurfaceUnlockFailed;
