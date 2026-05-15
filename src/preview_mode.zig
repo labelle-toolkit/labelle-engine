@@ -434,14 +434,19 @@ pub const Preview = struct {
         return self.frame_state == .accepted;
     }
 
-    /// Pop the pending resize request, if any. Clears the state so a
+    /// Pop the pending resize request, if any. Clears the slot so a
     /// second call returns `null` until the editor sends another
     /// `frame_resize`. Producer responds by tearing down the current
     /// ring and re-issuing `sendFrameOffer` at the new dimensions.
+    ///
+    /// State invalidation (`.accepted → .not_offered`) happens
+    /// *eagerly* in the `frame_resize` parser, not here — so
+    /// producers gating publishes on `isFrameAccepted` see the
+    /// stream go inactive the moment the editor sends the resize
+    /// (#545 review).
     pub fn takeResize(self: *Preview) ?PendingResize {
         const pending = self.pending_resize;
         self.pending_resize = null;
-        if (pending != null) self.frame_state = .not_offered;
         return pending;
     }
 
@@ -759,10 +764,15 @@ pub const Preview = struct {
         // read until EAGAIN, restore flags. The socket stays blocking
         // for writes so partial sends aren't a concern.
         const fd = self.fd;
+        // Both fcntl failures propagate as `InputOutput`. Silently
+        // returning here would leave the socket blocking, and the
+        // first `read` below would stall the entire frame loop — the
+        // exact bug the variadic-fcntl ABI fix uncovered (#545
+        // review).
         const orig_flags = c_fcntl(fd, F_GETFL, @as(c_int, 0));
-        if (orig_flags < 0) return;
+        if (orig_flags < 0) return error.InputOutput;
         const set_rc = c_fcntl(fd, F_SETFL, @as(c_int, orig_flags | O_NONBLOCK));
-        if (set_rc < 0) return;
+        if (set_rc < 0) return error.InputOutput;
         defer _ = c_fcntl(fd, F_SETFL, @as(c_int, orig_flags));
 
         var scratch: [1024]u8 = undefined;
@@ -878,6 +888,13 @@ pub const Preview = struct {
                 .ignore_unknown_fields = true,
             }) catch return error.MalformedSubscription;
             self.pending_resize = .{ .width = parsed.width, .height = parsed.height };
+            // Invalidate the handshake *immediately* — between the
+            // editor's resize request and the backend's
+            // `takeResize`/`beginFrameStream` re-offer cycle, the
+            // current ring is stale. Producers gating publishes on
+            // `isFrameAccepted` must see false in that window
+            // (#545 review).
+            self.frame_state = .not_offered;
         } else {
             return error.MalformedSubscription;
         }

@@ -2,9 +2,12 @@
 //! `frame_accept`, `frame_resize`, `frame_published` shape +
 //! state-machine transitions on the `Preview` struct.
 //!
-//! Lives in its own file (separate from `preview_mode_test.zig`,
-//! which is parked while the subscription-flow tests are debugged)
-//! so the handshake coverage isn't gated on that work.
+//! Lives in its own file (separate from `preview_mode_test.zig`)
+//! to keep handshake coverage cohesive. preview_mode_test.zig is
+//! re-enabled in this PR — the same variadic-fcntl ABI fix that
+//! unblocked the handshake tests also unblocked its 21 previously-
+//! disabled subscription-flow tests, so the split is now purely
+//! organisational, not a gate.
 
 const std = @import("std");
 const engine = @import("engine");
@@ -229,13 +232,16 @@ test "frame_accept from not_offered is ignored (no spurious transition)" {
     defer p.deinit();
 
     try h.sendLine("{\"kind\":\"frame_accept\"}\n");
-    // Drain the inbox — but state must still be .not_offered.
-    var i: u32 = 0;
-    while (i < 50) : (i += 1) {
+    // Drain the inbox: poll until the bytes have been consumed (the
+    // frame_accept handler is a no-op in this state, so we can't
+    // observe a state change — wait for the inbox to drain instead).
+    const start = nowMs();
+    while (nowMs() - start <= 200) {
         try p.pollSubscription();
-        if (p.inbox.items.len == 0 and p.frame_state != .not_offered) break;
+        if (p.inbox.items.len == 0) break;
         sleepMs(1);
     }
+    try std.testing.expectEqual(@as(usize, 0), p.inbox.items.len);
     try std.testing.expectEqual(preview.FrameHandshakeState.not_offered, p.frame_state);
 }
 
