@@ -46,6 +46,20 @@ pub fn build(b: *std.Build) void {
     engine_module.addImport("audio_types", audio_types_module);
     engine_module.addImport("font_types", font_types_module);
 
+    // #547: src/preview_iosurface.zig declares `extern "c"` bindings
+    // for IOSurface + CoreFoundation. Even when no caller exercises
+    // those code paths, Zig's analyzer reaches the function bodies
+    // (e.g. `Producer.deinit`) for every test binary that imports
+    // `engine`, and the linker then refuses to leave those symbols
+    // unresolved. Linking the system frameworks at the module level
+    // satisfies every downstream test binary in one place; non-macOS
+    // builds skip them and the macOS-only code is unreachable behind
+    // a `builtin.os.tag == .macos` gate at every entry point.
+    if (target.result.os.tag == .macos) {
+        engine_module.linkFramework("IOSurface", .{});
+        engine_module.linkFramework("CoreFoundation", .{});
+    }
+
     const test_step = b.step("test", "Run engine tests");
 
     // Test files in test/ directory
@@ -123,6 +137,38 @@ pub fn build(b: *std.Build) void {
         });
         test_step.dependOn(&b.addRunArtifact(t).step);
     }
+
+    // PIE viewport macOS IOSurface frame stream (#547). The test
+    // binary itself is cross-platform — on non-macOS hosts every
+    // `test` block early-returns — so we always wire it into the
+    // step. On macOS we additionally link the system frameworks the
+    // test uses to look up surfaces by ID and inspect pixels:
+    //   - IOSurface for `IOSurfaceLookup`/`IOSurfaceLock`/etc.
+    //   - CoreFoundation for `CFRelease` (and the property-dict
+    //     helpers the producer side reaches through the engine module).
+    //   - OpenGL is **not** required by these tests — they read
+    //     pixels via `IOSurfaceGetBaseAddress` rather than going
+    //     through `CGLTexImageIOSurface2D`. It's still listed in the
+    //     ticket's "link these frameworks" callout for completeness
+    //     and so a future test that does want GL interop doesn't
+    //     have to re-touch build.zig.
+    const iosurface_test_module = b.createModule(.{
+        .root_source_file = b.path("test/preview_iosurface_test.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "labelle-core", .module = core_module },
+            .{ .name = "engine", .module = engine_module },
+            .{ .name = "scene", .module = scene_module },
+        },
+    });
+    if (target.result.os.tag == .macos) {
+        iosurface_test_module.linkFramework("IOSurface", .{});
+        iosurface_test_module.linkFramework("CoreFoundation", .{});
+        iosurface_test_module.linkFramework("OpenGL", .{});
+    }
+    const iosurface_test = b.addTest(.{ .root_module = iosurface_test_module });
+    test_step.dependOn(&b.addRunArtifact(iosurface_test).step);
 
     // In-source tests under `src/assets/` (catalog, worker, loader,
     // loaders/*) cannot be dragged into a `test/*` binary through the

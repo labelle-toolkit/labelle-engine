@@ -80,6 +80,7 @@
 ///    infers the crash from the EOF without a `bye`.
 const std = @import("std");
 pub const preview_shm = @import("preview_shm.zig");
+pub const preview_iosurface = @import("preview_iosurface.zig");
 
 // Raw libc bindings: std.posix in 0.16 dropped top-level `close` and
 // `write` wrappers and routed file IO through `std.Io.File` which
@@ -177,12 +178,20 @@ pub const SnapshotComponent = struct {
 /// Pixel format identifiers carried over the wire. Plain enum to keep
 /// the JSON-serializer side trivial. Add new entries when the producer
 /// gains support; consumers compare by string.
+///
+/// `iosurface_bgra8` is the macOS zero-copy path (#547): the shm
+/// region carries only a `ControlBlock` + `Header.latest` slot
+/// pointer; the pixel bytes live in `IOSurfaceRef` objects whose IDs
+/// the editor looks up via `IOSurfaceLookup`. The consumer side of
+/// this lives in `labelle-gui/src/iosurface.zig`.
 pub const FramePixelFormat = enum {
     rgba8,
+    iosurface_bgra8,
 
     pub fn asString(self: FramePixelFormat) []const u8 {
         return switch (self) {
             .rgba8 => "rgba8",
+            .iosurface_bgra8 => "iosurface_bgra8",
         };
     }
 };
@@ -306,6 +315,13 @@ pub const Preview = struct {
     /// SHM ring writer for #544. `null` until `beginFrameStream` runs;
     /// `endFrameStream` deallocates and resets to `null`.
     frame_producer: ?preview_shm.Producer = null,
+    /// macOS IOSurface ring writer for #547. `null` until
+    /// `beginFrameStreamIOSurface` runs; `endFrameStreamIOSurface`
+    /// deallocates and resets to `null`. Mutually exclusive with
+    /// `frame_producer` on the same `Preview` instance — the two
+    /// `begin*` entry points reject if the other mode is already
+    /// active.
+    frame_iosurface_producer: ?preview_iosurface.Producer = null,
     /// Owned shm_name backing `frame_producer`. Allocated per
     /// `beginFrameStream` and freed at the start of the next call
     /// (or in `endFrameStream` / `deinit`). Previously dupe'd into
@@ -313,7 +329,8 @@ pub const Preview = struct {
     /// resize-driven re-offer cycles would otherwise leak names
     /// proportional to the resize count (#546 review).
     frame_shm_name: ?[:0]u8 = null,
-    /// Monotonic frame counter — bumped by `publishFrame`.
+    /// Monotonic frame counter — bumped by `publishFrame` (or
+    /// `publishFrameIOSurface`).
     frame_index: u64 = 0,
 
     /// Dial the editor's listener. `host_port` is the literal string
@@ -351,6 +368,14 @@ pub const Preview = struct {
         if (self.frame_producer) |*p| {
             p.deinit();
             self.frame_producer = null;
+        }
+        // Same for the IOSurface ring (mutually exclusive with the
+        // SHM ring at runtime — only one of the two should be non-
+        // null at any point — but `deinit` defensively cleans both
+        // so a half-initialised state can't leak).
+        if (self.frame_iosurface_producer) |*p| {
+            p.deinit();
+            self.frame_iosurface_producer = null;
         }
         if (self.frame_shm_name) |old| {
             self.inbox_alloc.free(old);
@@ -491,9 +516,17 @@ pub const Preview = struct {
     /// stream torn down," the latter is "you handed me the wrong
     /// number of pixel bytes for the negotiated dims." Conflating
     /// them was the #546 review feedback.
-    pub const PublishError = WriteError || preview_shm.Error || error{
+    ///
+    /// `WrongFrameMode` (#547) is raised by `beginFrameStream` when
+    /// the iosurface mode is already active on the same `Preview`
+    /// (and vice versa). The two modes are mutually exclusive on a
+    /// single instance — the editor offer carries the format once
+    /// and the producer doesn't try to multiplex.
+    pub const PublishError = WriteError || preview_shm.Error ||
+        preview_iosurface.Error || error{
         StreamNotActive,
         InvalidFrameSize,
+        WrongFrameMode,
     };
 
     /// Allocate a SHM ring sized for `width x height` RGBA8 frames and
@@ -514,6 +547,14 @@ pub const Preview = struct {
         width: u32,
         height: u32,
     ) PublishError!void {
+        // Reject if the iosurface mode is already active on this
+        // `Preview`. The two modes are mutually exclusive — the
+        // editor's `frame_offer` carries a single format, and
+        // multiplexing them would force the editor's consumer to
+        // pick a side mid-stream. The caller is expected to call
+        // `endFrameStreamIOSurface` before switching modes (#547).
+        if (self.frame_iosurface_producer != null) return error.WrongFrameMode;
+
         // Tear down any prior ring so a resize-driven re-offer is
         // idempotent — the protocol allows multiple frame_offer cycles
         // over the same connection.
@@ -622,6 +663,151 @@ pub const Preview = struct {
         if (self.frame_producer) |*p| {
             p.deinit();
             self.frame_producer = null;
+        }
+        if (self.frame_shm_name) |old| {
+            self.inbox_alloc.free(old);
+            self.frame_shm_name = null;
+        }
+        self.frame_state = .not_offered;
+        self.frame_index = 0;
+    }
+
+    // ── #547: macOS IOSurface publish (producer side) ──────────────
+
+    /// Allocate an IOSurface ring sized for `width x height` BGRA8
+    /// frames + the control-plane shm region, then emit a
+    /// `frame_offer` with `format = "iosurface_bgra8"`.
+    ///
+    /// Mutually exclusive with `beginFrameStream` (SHM mode) on the
+    /// same `Preview` instance — see `PublishError.WrongFrameMode`.
+    ///
+    /// macOS-only. On other platforms returns
+    /// `error.PlatformUnsupported` before allocating anything; the
+    /// caller (typically a backend's macOS-gated init path) is
+    /// expected to fall back to `beginFrameStream` everywhere else.
+    pub fn beginFrameStreamIOSurface(
+        self: *Preview,
+        width: u32,
+        height: u32,
+    ) PublishError!void {
+        if (builtin.os.tag != .macos) return error.PlatformUnsupported;
+        // Reject if SHM mode is already active. See the mirror guard
+        // in `beginFrameStream`.
+        if (self.frame_producer != null) return error.WrongFrameMode;
+
+        // Tear down any prior iosurface ring so a resize-driven
+        // re-offer cycle is idempotent. Reset state pre-allocation
+        // so a failure in `Producer.init` / `sendFrameOffer` leaves
+        // us cleanly at `.not_offered` (#546 review carries over to
+        // this path verbatim).
+        if (self.frame_iosurface_producer) |*p| {
+            p.deinit();
+            self.frame_iosurface_producer = null;
+        }
+        if (self.frame_shm_name) |old| {
+            self.inbox_alloc.free(old);
+            self.frame_shm_name = null;
+        }
+        self.frame_state = .not_offered;
+        self.frame_index = 0;
+
+        // Same per-process unique name shape as the SHM path —
+        // PID + monotonic counter, hex-formatted, ≤ macOS
+        // PSHMNAMLEN (31). Reuses `next_stream_id` so SHM and
+        // iosurface mode allocations within the same process don't
+        // collide on the name space (each begin* bumps it).
+        const pid: i32 = @intCast(std.c.getpid());
+        const stream_id = @atomicRmw(u32, &next_stream_id, .Add, 1, .monotonic) +% 1;
+        var name_buf: [32]u8 = undefined;
+        const name = std.fmt.bufPrintZ(&name_buf, "/lbl-prv-{x}-{x}", .{
+            @as(u32, @bitCast(pid)),
+            stream_id,
+        }) catch return error.OutOfMemory;
+        const name_owned = self.inbox_alloc.dupeZ(u8, name) catch
+            return error.OutOfMemory;
+        errdefer self.inbox_alloc.free(name_owned);
+
+        const opts: preview_iosurface.Options = .{
+            .width = width,
+            .height = height,
+            .ring_size = 3,
+        };
+        var producer = try preview_iosurface.Producer.init(name_owned, opts);
+        errdefer producer.deinit();
+
+        try self.sendFrameOffer(.{
+            .shm_name = name_owned,
+            .width = width,
+            .height = height,
+            .format = .iosurface_bgra8,
+            .ring_size = opts.ring_size,
+            // `slot_size_bytes` describes the underlying shm slot
+            // layout (the consumer uses it to walk to the trailer
+            // for the produce_ns timestamp). The IOSurface pixel
+            // bytes live elsewhere — the editor side already knows
+            // to ignore the shm pixel area when format ==
+            // `iosurface_bgra8` (see labelle-gui#115).
+            .slot_size_bytes = preview_shm.slotSize(width, height),
+        });
+
+        self.frame_iosurface_producer = producer;
+        self.frame_shm_name = name_owned;
+    }
+
+    /// Publish a CPU-side RGBA8 frame into the next IOSurface slot.
+    /// The producer-side swizzles into BGRA8 (the IOSurface pixel
+    /// format) while copying; the editor samples BGRA8 directly via
+    /// `CGLTexImageIOSurface2D` on a `GL_TEXTURE_RECTANGLE` (the
+    /// consumer side).
+    ///
+    /// `pixels` is RGBA8 because that's what GL readback produces;
+    /// asking the caller to pre-swizzle would just push the same
+    /// per-byte work up the stack. The eventual render-to-IOSurface
+    /// FBO path would skip this and is the documented stretch goal
+    /// (deferred — separate ticket).
+    ///
+    /// Length MUST be exactly `width * height * 4` — same shape as
+    /// `publishFrame`. The IOSurface's `bytes_per_row` may be padded
+    /// past `width * 4` (Apple alignment), so we copy row-by-row
+    /// rather than a single memcpy.
+    pub fn publishFrameIOSurface(self: *Preview, pixels: []const u8) PublishError!void {
+        if (builtin.os.tag != .macos) return error.PlatformUnsupported;
+        const producer = if (self.frame_iosurface_producer != null)
+            &self.frame_iosurface_producer.?
+        else
+            return error.StreamNotActive;
+        if (!self.isFrameAccepted()) return error.StreamNotActive;
+
+        const expected_len: usize = @intCast(@as(u64, producer.width) * @as(u64, producer.height) * 4);
+        if (pixels.len != expected_len) return error.InvalidFrameSize;
+
+        const locked = try producer.pixelsPtr();
+        // Row-by-row swizzle copy — `bytes_per_row` may exceed
+        // `width * 4` on macOS due to alignment padding. The kernel
+        // owns the per-row stride; we honour whatever it reported.
+        const row_bytes: usize = producer.width * 4;
+        var y: u32 = 0;
+        while (y < producer.height) : (y += 1) {
+            const src_row = pixels[y * row_bytes ..][0..row_bytes];
+            const dst_row = locked.base[y * locked.bytes_per_row ..][0..row_bytes];
+            preview_iosurface.copySwizzleRgbaToBgra(dst_row, src_row);
+        }
+        try producer.publish(true);
+
+        self.frame_index +%= 1;
+        // Optional sidecar — best-effort, same shape as the SHM
+        // `publishFrame`. The IOSurface publish above is the
+        // authoritative signal.
+        self.sendFramePublished(self.frame_index, preview_shm.nowNs()) catch {};
+    }
+
+    /// Tear down the IOSurface ring + control-plane shm region.
+    /// Safe to call when no iosurface stream is active. Does NOT
+    /// send a `bye` — caller owns the connection lifecycle.
+    pub fn endFrameStreamIOSurface(self: *Preview) void {
+        if (self.frame_iosurface_producer) |*p| {
+            p.deinit();
+            self.frame_iosurface_producer = null;
         }
         if (self.frame_shm_name) |old| {
             self.inbox_alloc.free(old);

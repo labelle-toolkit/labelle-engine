@@ -205,6 +205,12 @@ pub const parsePreviewArgs = preview_mode_mod.parseArgs;
 // Phase 2 / #518 — binary state telemetry frame types.
 pub const PreviewBinaryFrameKind = preview_mode_mod.BinaryFrameKind;
 pub const preview_binary_magic = preview_mode_mod.binary_magic;
+// #547 — macOS IOSurface producer module. Surfaced for tests +
+// downstream code that wants the `ControlBlock` shape; the runtime
+// API the assembler-generated `main.zig` cares about is the
+// `Preview.beginFrameStreamIOSurface` / `publishFrameIOSurface` /
+// `endFrameStreamIOSurface` triple.
+pub const preview_iosurface_mod = preview_mode_mod.preview_iosurface;
 
 // ── JSONC Scene Bridge ──
 pub const JsoncSceneBridge = @import("jsonc_scene_bridge.zig").JsoncSceneBridge;
