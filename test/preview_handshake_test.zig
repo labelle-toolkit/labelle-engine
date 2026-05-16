@@ -13,9 +13,42 @@ const std = @import("std");
 const engine = @import("engine");
 const preview = engine.preview_mode_mod;
 
-extern "c" fn close(fd: c_int) c_int;
-extern "c" fn write(fd: c_int, buf: [*]const u8, len: usize) isize;
-extern "c" fn read(fd: c_int, buf: [*]u8, len: usize) isize;
+// POSIX-only harness — Windows port (#551) skips every test in this
+// file via `skipIfWindows()`. The externs are still declared as libc
+// bindings on POSIX; on Windows we provide no-op stubs so the
+// cross-compile doesn't try to resolve `read`/`write`/`close` against
+// the wrong fd type.
+const is_windows = @import("builtin").os.tag == .windows;
+
+fn skipIfWindows() !void {
+    if (is_windows) return error.SkipZigTest;
+}
+
+const posix_externs = if (!is_windows) struct {
+    pub extern "c" fn close(fd: std.posix.fd_t) c_int;
+    pub extern "c" fn write(fd: std.posix.fd_t, buf: [*]const u8, len: usize) isize;
+    pub extern "c" fn read(fd: std.posix.fd_t, buf: [*]u8, len: usize) isize;
+} else struct {
+    pub fn close(fd: std.posix.fd_t) c_int {
+        _ = fd;
+        return 0;
+    }
+    pub fn write(fd: std.posix.fd_t, buf: [*]const u8, len: usize) isize {
+        _ = fd;
+        _ = buf;
+        _ = len;
+        return 0;
+    }
+    pub fn read(fd: std.posix.fd_t, buf: [*]u8, len: usize) isize {
+        _ = fd;
+        _ = buf;
+        _ = len;
+        return 0;
+    }
+};
+const close = posix_externs.close;
+const write = posix_externs.write;
+const read = posix_externs.read;
 
 // ── Loopback harness ───────────────────────────────────────────────
 //
@@ -42,7 +75,7 @@ const LoopbackHarness = struct {
     }
 
     fn deinit(self: *LoopbackHarness) void {
-        if (self.conn_fd) |fd| _ = close(@intCast(fd));
+        if (self.conn_fd) |fd| _ = close(fd);
         self.server.deinit(std.testing.io);
     }
 
@@ -70,7 +103,7 @@ const LoopbackHarness = struct {
             }
             if (self.read_len == self.read_buf.len) return error.LineTooLong;
             const fd = self.conn_fd orelse return error.NotConnected;
-            const n = read(@intCast(fd), self.read_buf[self.read_len..].ptr, self.read_buf.len - self.read_len);
+            const n = read(fd, self.read_buf[self.read_len..].ptr, self.read_buf.len - self.read_len);
             if (n <= 0) return error.UnexpectedEof;
             self.read_len += @intCast(n);
         }
@@ -81,7 +114,7 @@ const LoopbackHarness = struct {
         const fd = self.conn_fd orelse return error.NotConnected;
         var off: usize = 0;
         while (off < body.len) {
-            const n = write(@intCast(fd), body.ptr + off, body.len - off);
+            const n = write(fd, body.ptr + off, body.len - off);
             if (n <= 0) return error.WriteFailed;
             off += @intCast(n);
         }

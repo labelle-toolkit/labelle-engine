@@ -79,40 +79,185 @@
 ///    socket. On abnormal exit the OS closes the FD and the editor
 ///    infers the crash from the EOF without a `bye`.
 const std = @import("std");
+const builtin = @import("builtin");
 pub const preview_shm = @import("preview_shm.zig");
 pub const preview_iosurface = @import("preview_iosurface.zig");
 
-// Raw libc bindings: std.posix in 0.16 dropped top-level `close` and
-// `write` wrappers and routed file IO through `std.Io.File` which
-// needs an `io: std.Io` reference we'd otherwise have to thread
-// through every call site. The control channel is POSIX-only by
-// design (the fcntl-based non-blocking poll already had no Windows
-// path), so going straight to libc is the smallest restoration.
-extern "c" fn close(fd: c_int) c_int;
-extern "c" fn write(fd: c_int, buf: [*]const u8, len: usize) isize;
-extern "c" fn read(fd: c_int, buf: [*]u8, len: usize) isize;
-// `fcntl` is variadic in libc (`int fcntl(int, int, ...)`). On
-// aarch64-darwin (and other ABIs that put variadic args on the stack
-// rather than in registers), declaring it as non-variadic with
-// `arg: c_int` is a calling-convention mismatch — F_SETFL receives
-// stack garbage instead of the flag value, O_NONBLOCK never gets set,
-// and the next `read` blocks. Use the stdlib's correctly-declared
-// `std.c.fcntl` instead (see `lib/std/c.zig`).
-const c_fcntl = std.c.fcntl;
-extern "c" fn __error() *c_int; // macOS errno location
-extern "c" fn __errno_location() *c_int; // glibc errno location
+// ── Platform-specific socket I/O shims (#551 Windows port) ─────────
+//
+// std.posix in 0.16 dropped top-level `close` and `write` wrappers
+// and routed file IO through `std.Io.File` (which needs an `io:
+// std.Io` reference we'd otherwise have to thread through every call
+// site). On POSIX we bind libc's read / write / close / fcntl
+// directly. On Windows we bind the ws2_32 socket-only variants
+// (recv / send / closesocket / ioctlsocket) — Win32's plain `read` /
+// `write` don't accept SOCKET handles, and the fcntl-based
+// non-blocking path is replaced by ioctlsocket(FIONBIO, …).
+const socket_io = if (builtin.os.tag == .windows) struct {
+    const win = std.os.windows;
+    pub const SOCKET = win.HANDLE;
 
-fn libcErrno() c_int {
-    return if (@import("builtin").os.tag == .macos) __error().* else __errno_location().*;
+    pub extern "ws2_32" fn recv(
+        s: SOCKET,
+        buf: [*]u8,
+        len: c_int,
+        flags: c_int,
+    ) callconv(.winapi) c_int;
+
+    pub extern "ws2_32" fn send(
+        s: SOCKET,
+        buf: [*]const u8,
+        len: c_int,
+        flags: c_int,
+    ) callconv(.winapi) c_int;
+
+    pub extern "ws2_32" fn closesocket(s: SOCKET) callconv(.winapi) c_int;
+
+    pub extern "ws2_32" fn ioctlsocket(
+        s: SOCKET,
+        cmd: i32,
+        argp: *u_long,
+    ) callconv(.winapi) c_int;
+
+    pub extern "ws2_32" fn WSAGetLastError() callconv(.winapi) c_int;
+
+    pub const FIONBIO: i32 = @bitCast(@as(u32, 0x8004667e));
+    pub const WSAEWOULDBLOCK: c_int = 10035;
+    pub const SOCKET_ERROR: c_int = -1;
+    // `unsigned long` in Win32 is always 32-bit (LLP64); spell it out
+    // explicitly so we don't depend on whether `c_ulong` resolves to
+    // 32 or 64 bits under cross-compilation toolchains.
+    pub const u_long = u32;
+} else struct {
+    extern "c" fn close(fd: c_int) c_int;
+    extern "c" fn write(fd: c_int, buf: [*]const u8, len: usize) isize;
+    extern "c" fn read(fd: c_int, buf: [*]u8, len: usize) isize;
+    // `fcntl` is variadic in libc (`int fcntl(int, int, ...)`). On
+    // aarch64-darwin (and other ABIs that put variadic args on the
+    // stack rather than in registers), declaring it as non-variadic
+    // with `arg: c_int` is a calling-convention mismatch — F_SETFL
+    // receives stack garbage instead of the flag value, O_NONBLOCK
+    // never gets set, and the next `read` blocks. Use the stdlib's
+    // correctly-declared `std.c.fcntl` instead (see `lib/std/c.zig`).
+    pub const c_fcntl = std.c.fcntl;
+    extern "c" fn __error() *c_int; // macOS errno location
+    extern "c" fn __errno_location() *c_int; // glibc errno location
+
+    pub fn errno() c_int {
+        return if (builtin.os.tag == .macos) __error().* else __errno_location().*;
+    }
+
+    pub const F_GETFL: c_int = 3;
+    pub const F_SETFL: c_int = 4;
+    pub const O_NONBLOCK: c_int = if (builtin.os.tag == .macos) 4 else 2048;
+    pub const EAGAIN: c_int = if (builtin.os.tag == .macos) 35 else 11;
+
+    pub fn raw_close(fd: c_int) c_int {
+        return close(fd);
+    }
+    pub fn raw_write(fd: c_int, buf: [*]const u8, len: usize) isize {
+        return write(fd, buf, len);
+    }
+    pub fn raw_read(fd: c_int, buf: [*]u8, len: usize) isize {
+        return read(fd, buf, len);
+    }
+};
+
+/// Write up to `len` bytes from `buf` to the socket. Returns the
+/// number of bytes written, or a negative value on error. Mirrors
+/// libc's `write` shape on POSIX and `send` on Windows (mapping
+/// `SOCKET_ERROR` to -1).
+fn socketWrite(fd: std.posix.fd_t, buf: [*]const u8, len: usize) isize {
+    if (builtin.os.tag == .windows) {
+        // ws2_32 send caps at INT_MAX; downstream callers always
+        // loop until len bytes are consumed, so capping per-call is
+        // safe.
+        const chunk: c_int = @intCast(@min(len, @as(usize, @intCast(std.math.maxInt(c_int)))));
+        const n = socket_io.send(fd, buf, chunk, 0);
+        if (n == socket_io.SOCKET_ERROR) return -1;
+        return @intCast(n);
+    } else {
+        return socket_io.raw_write(fd, buf, len);
+    }
 }
 
-// POSIX constants we need for the non-blocking-poll path. Match
-// the Linux/macOS values that libc's <fcntl.h> ships.
-const F_GETFL: c_int = 3;
-const F_SETFL: c_int = 4;
-const O_NONBLOCK: c_int = if (@import("builtin").os.tag == .macos) 4 else 2048;
-const EAGAIN: c_int = if (@import("builtin").os.tag == .macos) 35 else 11;
-const builtin = @import("builtin");
+fn socketRead(fd: std.posix.fd_t, buf: [*]u8, len: usize) isize {
+    if (builtin.os.tag == .windows) {
+        const chunk: c_int = @intCast(@min(len, @as(usize, @intCast(std.math.maxInt(c_int)))));
+        const n = socket_io.recv(fd, buf, chunk, 0);
+        if (n == socket_io.SOCKET_ERROR) return -1;
+        return @intCast(n);
+    } else {
+        return socket_io.raw_read(fd, buf, len);
+    }
+}
+
+fn socketClose(fd: std.posix.fd_t) void {
+    if (builtin.os.tag == .windows) {
+        _ = socket_io.closesocket(fd);
+    } else {
+        _ = socket_io.raw_close(fd);
+    }
+}
+
+/// Switch the socket into non-blocking mode. Returns null on failure.
+/// POSIX: read-modify-write via `fcntl(F_GETFL/F_SETFL)`. The caller
+/// stashes the original flags so the defer can restore them. Windows:
+/// `ioctlsocket(FIONBIO, 1)` is a single idempotent toggle — the
+/// original "state" is just "blocking" and `restoreBlocking` flips
+/// back to 0.
+fn setNonBlocking(fd: std.posix.fd_t) ?BlockingState {
+    if (builtin.os.tag == .windows) {
+        var nb: socket_io.u_long = 1;
+        if (socket_io.ioctlsocket(fd, socket_io.FIONBIO, &nb) != 0) return null;
+        return .{ .windows = {} };
+    } else {
+        const orig = socket_io.c_fcntl(fd, socket_io.F_GETFL, @as(c_int, 0));
+        if (orig < 0) return null;
+        const set_rc = socket_io.c_fcntl(fd, socket_io.F_SETFL, @as(c_int, orig | socket_io.O_NONBLOCK));
+        if (set_rc < 0) return null;
+        return .{ .posix = orig };
+    }
+}
+
+fn restoreBlocking(fd: std.posix.fd_t, state: BlockingState) void {
+    if (builtin.os.tag == .windows) {
+        // state is `union(enum) { windows }` here — single variant,
+        // no inner data. We don't need to inspect it; the side effect
+        // is "ioctlsocket back to blocking".
+        var nb: socket_io.u_long = 0;
+        _ = socket_io.ioctlsocket(fd, socket_io.FIONBIO, &nb);
+        switch (state) {
+            .windows => {},
+        }
+    } else {
+        _ = socket_io.c_fcntl(fd, socket_io.F_SETFL, @as(c_int, state.posix));
+    }
+}
+
+const BlockingState = if (builtin.os.tag == .windows)
+    union(enum) { windows }
+else
+    union(enum) { posix: c_int };
+
+/// True when the last `socketRead` / `socketWrite` failed because the
+/// socket would have blocked. POSIX: `errno == EAGAIN`. Windows:
+/// `WSAGetLastError() == WSAEWOULDBLOCK`.
+fn wouldBlock() bool {
+    if (builtin.os.tag == .windows) {
+        return socket_io.WSAGetLastError() == socket_io.WSAEWOULDBLOCK;
+    } else {
+        return socket_io.errno() == socket_io.EAGAIN;
+    }
+}
+
+/// Windows `GetCurrentProcessId` — used by `allocShmName` so the shm
+/// fingerprint is a real PID (not a HANDLE, which is what
+/// `std.c.getpid()` becomes on Windows).
+extern "kernel32" fn GetCurrentProcessId() callconv(.winapi) u32;
+fn getCurrentProcessId() u32 {
+    return GetCurrentProcessId();
+}
 
 /// Reason emitted in the trailing `bye` frame. Spike only ever sends
 /// `.normal`; `.crashed` / `.killed` are reserved for richer shutdown
@@ -362,7 +507,7 @@ pub const Preview = struct {
         // Closing the socket is idempotent — `sendBye` does NOT close
         // so the caller can still observe write failures; we always
         // close here.
-        _ = close(self.fd);
+        socketClose(self.fd);
         // Tear down the SHM ring if a stream was started; safe no-op
         // when never started.
         if (self.frame_producer) |*p| {
@@ -670,12 +815,21 @@ pub const Preview = struct {
     /// `beginFrameStreamIOSurface` so PID-truncation-style fixes stay
     /// in one place).
     fn allocShmName(self: *Preview) error{OutOfMemory}![:0]u8 {
-        const pid: i32 = @intCast(std.c.getpid());
+        // POSIX `getpid` returns pid_t (i32). On Windows `std.c.pid_t`
+        // resolves to HANDLE (a pointer type) so the libc `getpid`
+        // binding can't be reused; we go through kernel32's
+        // `GetCurrentProcessId` (returns DWORD = u32). Either way the
+        // shm-name fingerprint just needs 32 bits to disambiguate
+        // per-process.
+        const pid: u32 = if (builtin.os.tag == .windows)
+            getCurrentProcessId()
+        else
+            @bitCast(@as(i32, @intCast(std.c.getpid())));
         const stream_id = @atomicRmw(u32, &next_stream_id, .Add, 1, .monotonic) +% 1;
         // `std.fmt.allocPrintZ` was removed pre-0.16 — use the
         // explicit-sentinel form. `0` is `\0`.
         return std.fmt.allocPrintSentinel(self.inbox_alloc, "/lbl-prv-{x}-{x}", .{
-            @as(u32, @bitCast(pid)),
+            pid,
             stream_id,
         }, 0);
     }
@@ -1194,7 +1348,7 @@ pub const Preview = struct {
         @memcpy(framed[6..total], payload);
         var off: usize = 0;
         while (off < framed.len) {
-            const n = write(self.fd, framed.ptr + off, framed.len - off);
+            const n = socketWrite(self.fd, framed.ptr + off, framed.len - off);
             if (n < 0) return error.WriteFailed;
             if (n == 0) return error.BrokenPipe;
             off += @intCast(n);
@@ -1202,29 +1356,28 @@ pub const Preview = struct {
     }
 
     fn fillInboxNonBlocking(self: *Preview) PollError!void {
-        // POSIX-only fast path via libc directly. Zig 0.16's
-        // `std.posix.fcntl` is gone; we already bypass `std.posix.read`
-        // / `close` / `write` to avoid `io: std.Io` threading, so the
-        // non-blocking poll uses the same libc shim. Set non-blocking,
-        // read until EAGAIN, restore flags. The socket stays blocking
-        // for writes so partial sends aren't a concern.
+        // Cross-platform non-blocking drain. POSIX: fcntl(F_GETFL/F_SETFL)
+        // toggles O_NONBLOCK around a tight read loop (#545 fixed the
+        // variadic-fcntl ABI bug that made the toggle silently no-op on
+        // aarch64-darwin). Windows: `ioctlsocket(FIONBIO, 1)` is the
+        // equivalent toggle — see `setNonBlocking`. We restore the
+        // original mode on exit so subsequent blocking writes aren't
+        // surprised. The socket stays blocking for writes elsewhere so
+        // partial sends aren't a concern.
         const fd = self.fd;
-        // Both fcntl failures propagate as `InputOutput`. Silently
+        // setNonBlocking failure propagates as `InputOutput`. Silently
         // returning here would leave the socket blocking, and the
         // first `read` below would stall the entire frame loop — the
         // exact bug the variadic-fcntl ABI fix uncovered (#545
         // review).
-        const orig_flags = c_fcntl(fd, F_GETFL, @as(c_int, 0));
-        if (orig_flags < 0) return error.InputOutput;
-        const set_rc = c_fcntl(fd, F_SETFL, @as(c_int, orig_flags | O_NONBLOCK));
-        if (set_rc < 0) return error.InputOutput;
-        defer _ = c_fcntl(fd, F_SETFL, @as(c_int, orig_flags));
+        const state = setNonBlocking(fd) orelse return error.InputOutput;
+        defer restoreBlocking(fd, state);
 
         var scratch: [1024]u8 = undefined;
         while (true) {
-            const n = read(fd, @ptrCast(&scratch[0]), scratch.len);
+            const n = socketRead(fd, @ptrCast(&scratch[0]), scratch.len);
             if (n < 0) {
-                if (libcErrno() == EAGAIN) return;
+                if (wouldBlock()) return;
                 return error.InputOutput;
             }
             if (n == 0) return; // EOF — caller infers from subsequent write failures.
@@ -1361,7 +1514,7 @@ pub const Preview = struct {
         framed[body.len] = '\n';
         var off: usize = 0;
         while (off < framed.len) {
-            const n = write(self.fd, framed.ptr + off, framed.len - off);
+            const n = socketWrite(self.fd, framed.ptr + off, framed.len - off);
             if (n < 0) return error.WriteFailed;
             if (n == 0) return error.BrokenPipe;
             off += @intCast(n);

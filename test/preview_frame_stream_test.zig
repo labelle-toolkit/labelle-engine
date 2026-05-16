@@ -14,13 +14,56 @@ const engine = @import("engine");
 const preview = engine.preview_mode_mod;
 const shm = engine.preview_mode_mod.preview_shm;
 
-extern "c" fn close(fd: c_int) c_int;
-extern "c" fn write(fd: c_int, buf: [*]const u8, len: usize) isize;
-extern "c" fn read(fd: c_int, buf: [*]u8, len: usize) isize;
-extern "c" fn nanosleep(req: *const Timespec, rem: ?*Timespec) c_int;
-extern "c" fn clock_gettime(clk: c_int, tp: *Timespec) c_int;
+// POSIX-only harness — Windows port (#551) skips every test in this
+// file via `skipIfWindows()`. Same shim shape as
+// preview_handshake_test / preview_mode_test.
+const is_windows = @import("builtin").os.tag == .windows;
+
+fn skipIfWindows() !void {
+    if (is_windows) return error.SkipZigTest;
+}
 
 const Timespec = extern struct { sec: isize, nsec: isize };
+
+const posix_externs = if (!is_windows) struct {
+    pub extern "c" fn close(fd: std.posix.fd_t) c_int;
+    pub extern "c" fn write(fd: std.posix.fd_t, buf: [*]const u8, len: usize) isize;
+    pub extern "c" fn read(fd: std.posix.fd_t, buf: [*]u8, len: usize) isize;
+    pub extern "c" fn nanosleep(req: *const Timespec, rem: ?*Timespec) c_int;
+    pub extern "c" fn clock_gettime(clk: c_int, tp: *Timespec) c_int;
+} else struct {
+    pub fn close(fd: std.posix.fd_t) c_int {
+        _ = fd;
+        return 0;
+    }
+    pub fn write(fd: std.posix.fd_t, buf: [*]const u8, len: usize) isize {
+        _ = fd;
+        _ = buf;
+        _ = len;
+        return 0;
+    }
+    pub fn read(fd: std.posix.fd_t, buf: [*]u8, len: usize) isize {
+        _ = fd;
+        _ = buf;
+        _ = len;
+        return 0;
+    }
+    pub fn nanosleep(req: *const Timespec, rem: ?*Timespec) c_int {
+        _ = req;
+        _ = rem;
+        return 0;
+    }
+    pub fn clock_gettime(clk: c_int, tp: *Timespec) c_int {
+        _ = clk;
+        tp.* = .{ .sec = 0, .nsec = 0 };
+        return 0;
+    }
+};
+const close = posix_externs.close;
+const write = posix_externs.write;
+const read = posix_externs.read;
+const nanosleep = posix_externs.nanosleep;
+const clock_gettime = posix_externs.clock_gettime;
 
 fn nowMs() i64 {
     const CLOCK_MONOTONIC: c_int = if (@import("builtin").os.tag == .macos) 6 else 1;
@@ -58,7 +101,7 @@ const LoopbackHarness = struct {
     }
 
     fn deinit(self: *LoopbackHarness) void {
-        if (self.conn_fd) |fd| _ = close(@intCast(fd));
+        if (self.conn_fd) |fd| _ = close(fd);
         self.server.deinit(std.testing.io);
     }
 
@@ -83,7 +126,7 @@ const LoopbackHarness = struct {
             }
             if (self.read_len == self.read_buf.len) return error.LineTooLong;
             const fd = self.conn_fd orelse return error.NotConnected;
-            const n = read(@intCast(fd), self.read_buf[self.read_len..].ptr, self.read_buf.len - self.read_len);
+            const n = read(fd, self.read_buf[self.read_len..].ptr, self.read_buf.len - self.read_len);
             if (n <= 0) return error.UnexpectedEof;
             self.read_len += @intCast(n);
         }
@@ -93,7 +136,7 @@ const LoopbackHarness = struct {
         const fd = self.conn_fd orelse return error.NotConnected;
         var off: usize = 0;
         while (off < body.len) {
-            const n = write(@intCast(fd), body.ptr + off, body.len - off);
+            const n = write(fd, body.ptr + off, body.len - off);
             if (n <= 0) return error.WriteFailed;
             off += @intCast(n);
         }

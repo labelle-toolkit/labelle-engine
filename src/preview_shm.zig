@@ -1,6 +1,7 @@
-//! Cross-process pixel ring backed by POSIX shared memory.
+//! Cross-process pixel ring backed by POSIX shared memory (macOS / Linux)
+//! or Win32 file-mapping objects (Windows).
 //!
-//! Layout: a single `shm_open`-d region containing
+//! Layout: a single mapped region containing
 //!
 //!     [ Header (cacheline-aligned) ]
 //!     [ Slot 0 pixel bytes (stride * height) ]
@@ -24,8 +25,24 @@
 //! `Preview.beginFrameStream` / `publishFrame` / `endFrameStream`
 //! (this file is the implementation; that file is the protocol API).
 //!
-//! Targets macOS and linux. Windows would use `CreateFileMappingW` —
-//! out of scope; see labelle-gui#110 for the cross-platform follow-up.
+//! ## Windows port (#551)
+//!
+//! The on-the-wire layout and the `Header` / `SlotTrailer` ABI are
+//! identical across platforms — only the alloc/map/free paths fork.
+//! POSIX uses `shm_open` + `ftruncate` + `mmap`; Windows uses
+//! `CreateFileMappingW` + `MapViewOfFile`. Naming:
+//!
+//!     POSIX:   /lbl-prv-<pid_hex>-<id_hex>
+//!     Windows: Local\lbl-prv-<pid_hex>-<id_hex>
+//!
+//! Windows `Local\` namespace works for unprivileged processes within
+//! a single user session — fine for an editor + game scenario. Using
+//! `Global\` would require `SeCreateGlobalPrivilege` which the editor
+//! generally doesn't have.
+//!
+//! `shm_unlink` doesn't exist on Windows; section objects are
+//! reference-counted on the kernel handle and disappear when the last
+//! handle closes (`CloseHandle`). We no-op the unlink there.
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -105,9 +122,11 @@ pub const Options = struct {
     ring_size: u32 = 3,
 };
 
-/// Path used for `shm_open`. On macOS this must start with `/` and be
-/// ≤ `PSHMNAMLEN` (typically 31 chars). Engine-specific namespace so
-/// `Producer.init`'s pre-unlink can't clobber a stale PoC region.
+/// Path used for `shm_open` on POSIX (must start with `/` and be
+/// ≤ `PSHMNAMLEN`, typically 31 chars on macOS). On Windows the
+/// caller is expected to pass a `Local\…` or `Global\…` name; the
+/// helpers below adapt the leading `/` automatically (see
+/// `windowsMappingNameFromPosix`).
 pub const default_name: [:0]const u8 = "/labelle-preview-default";
 
 /// Upper bound on each dimension to keep `width * height * 4` from
@@ -139,70 +158,174 @@ pub fn totalSize(opts: Options) u64 {
 }
 
 /// Wall-clock monotonic nanoseconds — used for the latency stamp.
-/// On the vanishingly-rare `clock_gettime(CLOCK_MONOTONIC)` failure
-/// (per POSIX, EINVAL only — and CLOCK_MONOTONIC is mandatory) we
-/// return `0` rather than reading uninitialized `timespec` memory.
-/// A zero timestamp shows up as a giant negative latency on the
-/// editor side, which is the right signal: "this frame's timing
-/// is unreliable" (#546 review).
-pub fn nowNs() u64 {
-    var ts: std.posix.timespec = undefined;
-    if (std.posix.system.clock_gettime(.MONOTONIC, &ts) != 0) return 0;
-    const sec: u64 = @intCast(ts.sec);
-    const nsec: u64 = @intCast(ts.nsec);
-    return sec * std.time.ns_per_s + nsec;
-}
-
-/// Cross-platform `fstat`-equivalent that just returns the file size in bytes.
 ///
-/// macOS exposes `std.c.fstat` as a real libc binding; on Linux 0.16 the
-/// `std.c.fstat` slot is `void` (the libc binding was removed in favour of
-/// `statx`), so we route through the raw syscall there. The consumer only
-/// needs the byte size to size its mmap, hence this narrow shim rather than
-/// porting the full `Stat` struct.
-fn fdSize(fd: std.c.fd_t) !u64 {
-    if (builtin.os.tag == .linux) {
-        const linux = std.os.linux;
-        var sx: linux.Statx = undefined;
-        const empty: [*:0]const u8 = "";
-        const mask: linux.STATX = .{ .SIZE = true };
-        const rc = linux.statx(@intCast(fd), empty, linux.AT.EMPTY_PATH, mask, &sx);
-        // `usize` syscall return: errors are -4096..-1 (i.e. very large usize).
-        if (@as(isize, @bitCast(rc)) < 0) return Error.FstatFailed;
-        return sx.size;
+/// POSIX: `clock_gettime(CLOCK_MONOTONIC)`. On the vanishingly-rare
+/// failure (per POSIX, EINVAL only — and CLOCK_MONOTONIC is mandatory)
+/// we return `0` rather than reading uninitialized `timespec` memory.
+/// A zero timestamp shows up as a giant negative latency on the editor
+/// side, which is the right signal: "this frame's timing is unreliable"
+/// (#546 review).
+///
+/// Windows: `QueryPerformanceCounter` + `QueryPerformanceFrequency`.
+/// Both are documented infallible on Windows XP+ (return BOOL but
+/// always succeed on supported platforms — same "return 0 on
+/// theoretical failure" pattern).
+pub fn nowNs() u64 {
+    if (builtin.os.tag == .windows) {
+        var freq: i64 = 0;
+        var counter: i64 = 0;
+        if (windows.QueryPerformanceFrequency(&freq) == 0) return 0;
+        if (windows.QueryPerformanceCounter(&counter) == 0) return 0;
+        if (freq <= 0) return 0;
+        // ns = counter * 1e9 / freq, computed as (counter / freq) * 1e9 +
+        // (counter % freq) * 1e9 / freq to avoid overflow on counter * 1e9.
+        const c: u64 = @intCast(counter);
+        const f: u64 = @intCast(freq);
+        return (c / f) * std.time.ns_per_s + (c % f) * std.time.ns_per_s / f;
     } else {
-        var st: std.c.Stat = undefined;
-        if (std.c.fstat(fd, &st) != 0) return Error.FstatFailed;
-        return @intCast(st.size);
+        var ts: std.posix.timespec = undefined;
+        if (std.posix.system.clock_gettime(.MONOTONIC, &ts) != 0) return 0;
+        const sec: u64 = @intCast(ts.sec);
+        const nsec: u64 = @intCast(ts.nsec);
+        return sec * std.time.ns_per_s + nsec;
     }
 }
 
-// ── Producer ───────────────────────────────────────────────────────
+// ── Platform-specific bindings ────────────────────────────────────
 
-pub const Producer = struct {
+/// Backing handle for a mapped region. POSIX file descriptor on
+/// macOS / Linux; Win32 section-object handle on Windows. Kept
+/// in the public API only as the producer's / consumer's stored
+/// field — callers don't touch it.
+pub const Handle = if (builtin.os.tag == .windows) std.os.windows.HANDLE else std.c.fd_t;
+
+const windows = if (builtin.os.tag == .windows) struct {
+    const win = std.os.windows;
+
+    // Win32 file-mapping protection / access constants
+    pub const PAGE_READWRITE: u32 = 0x04;
+    pub const SECTION_QUERY: u32 = 0x0001;
+    pub const SECTION_MAP_WRITE: u32 = 0x0002;
+    pub const SECTION_MAP_READ: u32 = 0x0004;
+    pub const FILE_MAP_READ: u32 = SECTION_MAP_READ;
+    pub const FILE_MAP_WRITE: u32 = SECTION_MAP_WRITE;
+    pub const FILE_MAP_ALL_ACCESS: u32 = 0xF001F;
+    pub const INVALID_HANDLE_VALUE: win.HANDLE = @ptrFromInt(@as(usize, @bitCast(@as(isize, -1))));
+
+    pub extern "kernel32" fn CreateFileMappingW(
+        hFile: win.HANDLE,
+        lpAttributes: ?*anyopaque,
+        flProtect: u32,
+        dwMaximumSizeHigh: u32,
+        dwMaximumSizeLow: u32,
+        lpName: ?[*:0]const u16,
+    ) callconv(.winapi) ?win.HANDLE;
+
+    pub extern "kernel32" fn OpenFileMappingW(
+        dwDesiredAccess: u32,
+        bInheritHandle: i32,
+        lpName: ?[*:0]const u16,
+    ) callconv(.winapi) ?win.HANDLE;
+
+    pub extern "kernel32" fn MapViewOfFile(
+        hFileMappingObject: win.HANDLE,
+        dwDesiredAccess: u32,
+        dwFileOffsetHigh: u32,
+        dwFileOffsetLow: u32,
+        dwNumberOfBytesToMap: usize,
+    ) callconv(.winapi) ?*anyopaque;
+
+    pub extern "kernel32" fn UnmapViewOfFile(
+        lpBaseAddress: *const anyopaque,
+    ) callconv(.winapi) i32;
+
+    pub extern "kernel32" fn GetCurrentProcessId() callconv(.winapi) u32;
+
+    pub extern "kernel32" fn QueryPerformanceCounter(
+        lpPerformanceCount: *i64,
+    ) callconv(.winapi) i32;
+
+    pub extern "kernel32" fn QueryPerformanceFrequency(
+        lpFrequency: *i64,
+    ) callconv(.winapi) i32;
+
+    /// Convert a POSIX-style `/foo` shm name into a Win32 file-mapping
+    /// name in the user-session namespace. We strip the leading `/`
+    /// (Windows treats it as a path separator inside object names) and
+    /// prefix `Local\`. The result is UTF-16 since `CreateFileMappingW`
+    /// is the wide-char variant.
+    ///
+    /// Caller frees the returned slice with the same allocator.
+    pub fn mappingNameFromPosix(alloc: std.mem.Allocator, posix_name: []const u8) ![:0]u16 {
+        const stripped = if (posix_name.len > 0 and posix_name[0] == '/')
+            posix_name[1..]
+        else
+            posix_name;
+        // "Local\" prefix = 6 chars. Build the UTF-8 form first, then
+        // convert to UTF-16 with a NUL terminator.
+        var utf8 = std.array_list.Managed(u8).init(alloc);
+        defer utf8.deinit();
+        try utf8.appendSlice("Local\\");
+        try utf8.appendSlice(stripped);
+        return std.unicode.utf8ToUtf16LeAllocZ(alloc, utf8.items);
+    }
+} else struct {};
+
+// ── Cross-platform map / unmap helpers ─────────────────────────────
+
+const MappedRegion = struct {
     base: [*]u8,
     total_size: usize,
-    header: *Header,
-    opts: Options,
-    fd: std.c.fd_t,
-    name: [:0]const u8,
-    /// Slot the producer is currently writing into. Rotates 0 → ring-1.
-    next_slot: u32 = 0,
+    handle: Handle,
+};
 
-    /// Create + truncate + map the shm region. Sets `Header.magic`,
-    /// dimensions, ring_size, slot_size. Caller can call `pixelsPtr`
-    /// to write into the current slot, then `publish` to advance
-    /// `latest` and bump `frame_count`.
-    pub fn init(name: [:0]const u8, opts: Options) !Producer {
-        // Reject malformed options up-front so we don't `mmap` a
-        // zero-sized region or wrap arithmetic into an undersized
-        // mapping. `pixelsPtr` assumes at least one slot; `publish`
-        // mods by `ring_size`; `slotSize` would silently overflow on
-        // huge dims (#546 review).
-        if (!validateOptions(opts)) return Error.InvalidOptions;
+/// Create a new mapping (or open + resize an existing one on POSIX —
+/// the producer's create-or-reattach idiom).
+fn createMapping(name: [:0]const u8, total: u64) Error!MappedRegion {
+    if (builtin.os.tag == .windows) {
+        // The producer side. CreateFileMappingW with hFile=INVALID_HANDLE_VALUE
+        // creates a section backed by the system paging file (i.e. shared
+        // memory). Same name → existing section is reopened with the same
+        // permissions; on subsequent runs we map the existing region rather
+        // than allocating a new one. The kernel handle is refcounted, so
+        // "leftover from a crashed run" still works: once the original
+        // process exits its handles are released and the section is
+        // garbage-collected.
+        //
+        // Mapping name is wide-char + Local\ prefix per
+        // `mappingNameFromPosix`. We allocate via the page allocator to
+        // avoid threading an allocator through the function signature.
+        const wname = windows.mappingNameFromPosix(std.heap.page_allocator, name) catch
+            return Error.ShmOpenFailed;
+        defer std.heap.page_allocator.free(wname);
 
-        const total = totalSize(opts);
+        const size_high: u32 = @intCast(total >> 32);
+        const size_low: u32 = @intCast(total & 0xFFFFFFFF);
+        const hMap_opt = windows.CreateFileMappingW(
+            windows.INVALID_HANDLE_VALUE,
+            null,
+            windows.PAGE_READWRITE,
+            size_high,
+            size_low,
+            wname.ptr,
+        );
+        const hMap = hMap_opt orelse return Error.ShmOpenFailed;
+        errdefer _ = std.os.windows.CloseHandle(hMap);
 
+        const raw = windows.MapViewOfFile(
+            hMap,
+            windows.FILE_MAP_ALL_ACCESS,
+            0,
+            0,
+            @intCast(total),
+        ) orelse return Error.MmapFailed;
+
+        return .{
+            .base = @ptrCast(@alignCast(raw)),
+            .total_size = @intCast(total),
+            .handle = hMap,
+        };
+    } else {
         // Best-effort cleanup of any stale region from a previous run.
         // On macOS, `ftruncate` on a POSIX shm object only succeeds once
         // (at creation). A leftover from a crashed run will refuse to
@@ -229,10 +352,165 @@ pub const Producer = struct {
         const map_flags: std.c.MAP = .{ .TYPE = .SHARED };
         const raw = std.c.mmap(null, @intCast(total), prot, map_flags, fd, 0);
         if (raw == std.c.MAP_FAILED) return Error.MmapFailed;
-        const base: [*]u8 = @ptrCast(@alignCast(raw));
-        errdefer _ = std.c.munmap(@ptrCast(@alignCast(base)), @intCast(total));
 
-        const header: *Header = @ptrCast(@alignCast(base));
+        return .{
+            .base = @ptrCast(@alignCast(raw)),
+            .total_size = @intCast(total),
+            .handle = fd,
+        };
+    }
+}
+
+/// Open an existing mapping (consumer side).
+fn openMapping(name: [:0]const u8) Error!MappedRegion {
+    if (builtin.os.tag == .windows) {
+        const wname = windows.mappingNameFromPosix(std.heap.page_allocator, name) catch
+            return Error.ShmOpenFailed;
+        defer std.heap.page_allocator.free(wname);
+
+        const hMap_opt = windows.OpenFileMappingW(
+            windows.FILE_MAP_READ | windows.FILE_MAP_WRITE,
+            0,
+            wname.ptr,
+        );
+        const hMap = hMap_opt orelse return Error.ShmOpenFailed;
+        errdefer _ = std.os.windows.CloseHandle(hMap);
+
+        // First map the header alone to discover the total size, then
+        // remap. `MapViewOfFile(hMap, ..., 0)` would map the whole
+        // section, but we'd then have to `VirtualQuery` to discover its
+        // actual extent — going through the header is shorter and uses
+        // only well-supported APIs.
+        const hdr_raw = windows.MapViewOfFile(
+            hMap,
+            windows.FILE_MAP_READ | windows.FILE_MAP_WRITE,
+            0,
+            0,
+            @sizeOf(Header),
+        ) orelse return Error.MmapFailed;
+        const hdr_view: *Header = @ptrCast(@alignCast(hdr_raw));
+        if (hdr_view.magic != MAGIC) {
+            _ = windows.UnmapViewOfFile(hdr_raw);
+            return Error.BadMagic;
+        }
+        if (hdr_view.version != PROTOCOL_VERSION) {
+            _ = windows.UnmapViewOfFile(hdr_raw);
+            return Error.BadVersion;
+        }
+        const total: u64 = @sizeOf(Header) + @as(u64, hdr_view.ring_size) * hdr_view.slot_size;
+        if (total < @sizeOf(Header)) {
+            _ = windows.UnmapViewOfFile(hdr_raw);
+            return Error.TooSmall;
+        }
+        _ = windows.UnmapViewOfFile(hdr_raw);
+
+        const raw = windows.MapViewOfFile(
+            hMap,
+            windows.FILE_MAP_READ | windows.FILE_MAP_WRITE,
+            0,
+            0,
+            @intCast(total),
+        ) orelse return Error.MmapFailed;
+        return .{
+            .base = @ptrCast(@alignCast(raw)),
+            .total_size = @intCast(total),
+            .handle = hMap,
+        };
+    } else {
+        const flags: std.c.O = .{ .ACCMODE = .RDWR };
+        const flags_int: c_int = @bitCast(flags);
+        const fd: std.c.fd_t = @intCast(std.c.shm_open(name.ptr, flags_int, @as(std.c.mode_t, 0)));
+        if (fd < 0) return Error.ShmOpenFailed;
+        errdefer _ = std.c.close(fd);
+
+        const size_bytes = try fdSize(fd);
+        if (size_bytes < @sizeOf(Header)) return Error.TooSmall;
+        const total: usize = @intCast(size_bytes);
+
+        const prot: std.c.PROT = .{ .READ = true, .WRITE = true };
+        const map_flags: std.c.MAP = .{ .TYPE = .SHARED };
+        const raw = std.c.mmap(null, total, prot, map_flags, fd, 0);
+        if (raw == std.c.MAP_FAILED) return Error.MmapFailed;
+        return .{
+            .base = @ptrCast(@alignCast(raw)),
+            .total_size = total,
+            .handle = fd,
+        };
+    }
+}
+
+fn unmapRegion(region: *const MappedRegion) void {
+    if (builtin.os.tag == .windows) {
+        _ = windows.UnmapViewOfFile(@ptrCast(region.base));
+        _ = std.os.windows.CloseHandle(region.handle);
+    } else {
+        _ = std.c.munmap(@ptrCast(@alignCast(region.base)), region.total_size);
+        _ = std.c.close(region.handle);
+    }
+}
+
+/// Best-effort unlink (POSIX only — `shm_unlink` doesn't exist on
+/// Windows where section objects are reference-counted on the handle).
+fn unlinkName(name: [:0]const u8) void {
+    if (builtin.os.tag == .windows) return;
+    _ = std.c.shm_unlink(name.ptr);
+}
+
+/// Cross-platform `fstat`-equivalent that just returns the file size in bytes.
+///
+/// macOS exposes `std.c.fstat` as a real libc binding; on Linux 0.16 the
+/// `std.c.fstat` slot is `void` (the libc binding was removed in favour of
+/// `statx`), so we route through the raw syscall there. The consumer only
+/// needs the byte size to size its mmap, hence this narrow shim rather than
+/// porting the full `Stat` struct. Windows takes a different path entirely
+/// (the header carries enough information to size the view), so this helper
+/// is POSIX-only.
+fn fdSize(fd: std.c.fd_t) !u64 {
+    if (builtin.os.tag == .linux) {
+        const linux = std.os.linux;
+        var sx: linux.Statx = undefined;
+        const empty: [*:0]const u8 = "";
+        const mask: linux.STATX = .{ .SIZE = true };
+        const rc = linux.statx(@intCast(fd), empty, linux.AT.EMPTY_PATH, mask, &sx);
+        // `usize` syscall return: errors are -4096..-1 (i.e. very large usize).
+        if (@as(isize, @bitCast(rc)) < 0) return Error.FstatFailed;
+        return sx.size;
+    } else {
+        var st: std.c.Stat = undefined;
+        if (std.c.fstat(fd, &st) != 0) return Error.FstatFailed;
+        return @intCast(st.size);
+    }
+}
+
+// ── Producer ───────────────────────────────────────────────────────
+
+pub const Producer = struct {
+    base: [*]u8,
+    total_size: usize,
+    header: *Header,
+    opts: Options,
+    handle: Handle,
+    name: [:0]const u8,
+    /// Slot the producer is currently writing into. Rotates 0 → ring-1.
+    next_slot: u32 = 0,
+
+    /// Create + truncate + map the shm region. Sets `Header.magic`,
+    /// dimensions, ring_size, slot_size. Caller can call `pixelsPtr`
+    /// to write into the current slot, then `publish` to advance
+    /// `latest` and bump `frame_count`.
+    pub fn init(name: [:0]const u8, opts: Options) !Producer {
+        // Reject malformed options up-front so we don't `mmap` a
+        // zero-sized region or wrap arithmetic into an undersized
+        // mapping. `pixelsPtr` assumes at least one slot; `publish`
+        // mods by `ring_size`; `slotSize` would silently overflow on
+        // huge dims (#546 review).
+        if (!validateOptions(opts)) return Error.InvalidOptions;
+
+        const total = totalSize(opts);
+        const region = try createMapping(name, total);
+        errdefer unmapRegion(&region);
+
+        const header: *Header = @ptrCast(@alignCast(region.base));
         header.* = .{
             .magic = MAGIC,
             .version = PROTOCOL_VERSION,
@@ -251,21 +529,26 @@ pub const Producer = struct {
         };
 
         return .{
-            .base = base,
-            .total_size = @intCast(total),
+            .base = region.base,
+            .total_size = region.total_size,
             .header = header,
             .opts = opts,
-            .fd = fd,
+            .handle = region.handle,
             .name = name,
             .next_slot = 0,
         };
     }
 
     pub fn deinit(self: *Producer) void {
-        _ = std.c.munmap(@ptrCast(@alignCast(self.base)), self.total_size);
-        _ = std.c.close(self.fd);
+        const region: MappedRegion = .{
+            .base = self.base,
+            .total_size = self.total_size,
+            .handle = self.handle,
+        };
+        unmapRegion(&region);
         // Best-effort: producer owns the lifecycle; remove the name.
-        _ = std.c.shm_unlink(self.name.ptr);
+        // No-op on Windows (section is reference-counted).
+        unlinkName(self.name);
         self.base = undefined;
         self.header = undefined;
     }
@@ -318,47 +601,42 @@ pub const Consumer = struct {
     total_size: usize,
     header: *Header,
     name: [:0]const u8,
-    fd: std.c.fd_t,
+    handle: Handle,
     last_seen_frame: u64 = 0,
 
     /// Open + map an existing shm region created by the producer.
     /// Validates `Header.magic` and `version`.
     pub fn init(name: [:0]const u8) !Consumer {
-        const flags: std.c.O = .{ .ACCMODE = .RDWR };
-        const flags_int: c_int = @bitCast(flags);
-        const fd: std.c.fd_t = @intCast(std.c.shm_open(name.ptr, flags_int, @as(std.c.mode_t, 0)));
-        if (fd < 0) return Error.ShmOpenFailed;
-        errdefer _ = std.c.close(fd);
+        const region = try openMapping(name);
+        errdefer unmapRegion(&region);
 
-        const size_bytes = try fdSize(fd);
-        if (size_bytes < @sizeOf(Header)) return Error.TooSmall;
-        const total: usize = @intCast(size_bytes);
-
-        const prot: std.c.PROT = .{ .READ = true, .WRITE = true };
-        const map_flags: std.c.MAP = .{ .TYPE = .SHARED };
-        const raw = std.c.mmap(null, total, prot, map_flags, fd, 0);
-        if (raw == std.c.MAP_FAILED) return Error.MmapFailed;
-        const base: [*]u8 = @ptrCast(@alignCast(raw));
-        errdefer _ = std.c.munmap(@ptrCast(@alignCast(base)), total);
-
-        const header: *Header = @ptrCast(@alignCast(base));
+        const header: *Header = @ptrCast(@alignCast(region.base));
+        // POSIX `openMapping` doesn't validate magic/version (the size
+        // discovery happens via `fstat`, no header peek required); the
+        // Windows path *does* validate so it can size the second map.
+        // Keep the post-map check here so both platforms surface a
+        // consistent error vocabulary.
         if (header.magic != MAGIC) return Error.BadMagic;
         if (header.version != PROTOCOL_VERSION) return Error.BadVersion;
 
         return .{
-            .base = base,
-            .total_size = total,
+            .base = region.base,
+            .total_size = region.total_size,
             .header = header,
             .name = name,
-            .fd = fd,
+            .handle = region.handle,
             .last_seen_frame = 0,
         };
     }
 
     pub fn deinit(self: *Consumer) void {
-        _ = std.c.munmap(@ptrCast(@alignCast(self.base)), self.total_size);
-        _ = std.c.close(self.fd);
-        // Do NOT shm_unlink — producer owns the lifecycle.
+        const region: MappedRegion = .{
+            .base = self.base,
+            .total_size = self.total_size,
+            .handle = self.handle,
+        };
+        unmapRegion(&region);
+        // Do NOT unlink — producer owns the lifecycle.
         self.base = undefined;
         self.header = undefined;
     }
@@ -443,7 +721,7 @@ test "producer/consumer round-trip" {
     // Use a test-only name so we don't collide with a running game.
     const name: [:0]const u8 = "/imgui-preview-poc-test";
     // Best-effort cleanup from any prior aborted run.
-    _ = std.c.shm_unlink(name.ptr);
+    unlinkName(name);
 
     var producer = try Producer.init(name, .{ .width = 4, .height = 4, .ring_size = 2 });
     defer producer.deinit();
@@ -481,4 +759,16 @@ test "producer/consumer round-trip" {
     try std.testing.expect(!isShuttingDown(producer.header));
     signalShutdown(producer.header);
     try std.testing.expect(isShuttingDown(producer.header));
+}
+
+test "windows mapping name conversion strips leading slash" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    const w = try windows.mappingNameFromPosix(std.testing.allocator, "/lbl-prv-1234-5678");
+    defer std.testing.allocator.free(w);
+    // "Local\lbl-prv-1234-5678" = 22 UTF-16 code units (no NUL terminator
+    // counted by the slice length; the trailing NUL is past `.len`).
+    try std.testing.expectEqual(@as(usize, 22), w.len);
+    // First two code units are 'L' (0x4C), 'o' (0x6F).
+    try std.testing.expectEqual(@as(u16, 'L'), w[0]);
+    try std.testing.expectEqual(@as(u16, 'o'), w[1]);
 }
