@@ -456,6 +456,169 @@ test "endFrameStreamIOSurface tears down ring; subsequent publish is StreamNotAc
     try std.testing.expectError(error.StreamNotActive, p.publishFrameIOSurface(&pixels));
 }
 
+// ── Path-A producer API (#553) ─────────────────────────────────────
+
+test "getIOSurfaceAt returns non-null for valid slots and null for out-of-range" {
+    if (builtin.os.tag != .macos) return;
+    var h = try LoopbackHarness.init();
+    defer h.deinit();
+    var p = try connectPair(&h);
+    defer p.deinit();
+
+    try p.beginFrameStreamIOSurface(16, 16);
+    var drop: [512]u8 = undefined;
+    _ = try h.readLine(&drop);
+
+    // Default ring_size is 3 — slots 0..2 must yield non-null refs;
+    // slot 3 (== ring_size) and beyond must yield null.
+    try std.testing.expect(p.getIOSurfaceAt(0) != null);
+    try std.testing.expect(p.getIOSurfaceAt(1) != null);
+    try std.testing.expect(p.getIOSurfaceAt(2) != null);
+    try std.testing.expectEqual(@as(?iosurface.IOSurfaceRef, null), p.getIOSurfaceAt(3));
+    try std.testing.expectEqual(@as(?iosurface.IOSurfaceRef, null), p.getIOSurfaceAt(99));
+}
+
+test "getIOSurfaceAt returns null when no iosurface stream is active" {
+    if (builtin.os.tag != .macos) return;
+    var h = try LoopbackHarness.init();
+    defer h.deinit();
+    var p = try connectPair(&h);
+    defer p.deinit();
+
+    // No `beginFrameStreamIOSurface` call — producer is nil.
+    try std.testing.expectEqual(@as(?iosurface.IOSurfaceRef, null), p.getIOSurfaceAt(0));
+}
+
+test "signalSlotReady advances frame_index and bumps header.latest to the slot" {
+    if (builtin.os.tag != .macos) return;
+    var h = try LoopbackHarness.init();
+    defer h.deinit();
+    var p = try connectPair(&h);
+    defer p.deinit();
+
+    try p.beginFrameStreamIOSurface(8, 8);
+    const offer = try readOffer(&h);
+    defer freeOffer(offer);
+    var consumer = try TestConsumer.init(offer.shm_name);
+    defer consumer.deinit();
+    try h.sendLine("{\"kind\":\"frame_accept\"}\n");
+    try waitUntil(&p, isAccepted, 1000);
+
+    // Signal slot 2 ready. No pixel writes — the IOSurface bytes are
+    // whatever IOSurfaceCreate left there (zero-filled in practice).
+    // Editor side just sees `header.latest = 2`, `frame_count = 1`.
+    try p.signalSlotReady(2);
+    try std.testing.expectEqual(@as(u64, 1), p.frame_index);
+    const frame = consumer.latest() orelse return error.NoFrameFound;
+    try std.testing.expectEqual(@as(u32, 2), frame.slot);
+    try std.testing.expectEqual(@as(u64, 1), frame.frame_idx);
+
+    // Second signal at slot 0 — index advances, latest follows.
+    try p.signalSlotReady(0);
+    try std.testing.expectEqual(@as(u64, 2), p.frame_index);
+    const frame2 = consumer.latest() orelse return error.NoFrameFound;
+    try std.testing.expectEqual(@as(u32, 0), frame2.slot);
+    try std.testing.expectEqual(@as(u64, 2), frame2.frame_idx);
+}
+
+test "signalSlotReady returns StreamNotActive without an active iosurface stream" {
+    if (builtin.os.tag != .macos) return;
+    var h = try LoopbackHarness.init();
+    defer h.deinit();
+    var p = try connectPair(&h);
+    defer p.deinit();
+
+    // No `beginFrameStreamIOSurface` — `frame_iosurface_producer` is
+    // nil; signalSlotReady must reject before touching anything.
+    try std.testing.expectError(error.StreamNotActive, p.signalSlotReady(0));
+}
+
+test "signalSlotReady returns StreamNotActive before the editor accepts" {
+    if (builtin.os.tag != .macos) return;
+    var h = try LoopbackHarness.init();
+    defer h.deinit();
+    var p = try connectPair(&h);
+    defer p.deinit();
+
+    try p.beginFrameStreamIOSurface(8, 8);
+    var drop: [512]u8 = undefined;
+    _ = try h.readLine(&drop);
+
+    // Offer was sent but editor hasn't ACKed yet — state == .offered.
+    try std.testing.expectError(error.StreamNotActive, p.signalSlotReady(0));
+}
+
+test "signalSlotReady returns InvalidFrameSize for slot >= ring_size" {
+    if (builtin.os.tag != .macos) return;
+    var h = try LoopbackHarness.init();
+    defer h.deinit();
+    var p = try connectPair(&h);
+    defer p.deinit();
+
+    try p.beginFrameStreamIOSurface(8, 8);
+    var drop: [512]u8 = undefined;
+    _ = try h.readLine(&drop);
+    try h.sendLine("{\"kind\":\"frame_accept\"}\n");
+    try waitUntil(&p, isAccepted, 1000);
+
+    // ring_size defaults to 3 — slot 3 and beyond are out of range.
+    try std.testing.expectError(error.InvalidFrameSize, p.signalSlotReady(3));
+    try std.testing.expectError(error.InvalidFrameSize, p.signalSlotReady(99));
+}
+
+test "signalSlotReady: consumer reads back content pre-populated via getIOSurfaceAt (no-copy round-trip)" {
+    if (builtin.os.tag != .macos) return;
+    var h = try LoopbackHarness.init();
+    defer h.deinit();
+    var p = try connectPair(&h);
+    defer p.deinit();
+
+    try p.beginFrameStreamIOSurface(8, 8);
+    const offer = try readOffer(&h);
+    defer freeOffer(offer);
+    var consumer = try TestConsumer.init(offer.shm_name);
+    defer consumer.deinit();
+    try h.sendLine("{\"kind\":\"frame_accept\"}\n");
+    try waitUntil(&p, isAccepted, 1000);
+
+    // Pre-populate slot 1 directly through the borrowed IOSurfaceRef —
+    // simulates what a Metal render target would write into the
+    // surface. The producer never touches the pixels in this path.
+    const slot: u32 = 1;
+    const surf = p.getIOSurfaceAt(slot) orelse return error.NoSurface;
+    const lr = IOSurfaceLock(surf, 0, null);
+    try std.testing.expectEqual(@as(c_int, 0), lr);
+    {
+        const base_opt = IOSurfaceGetBaseAddress(surf);
+        const base: [*]u8 = @ptrCast(base_opt orelse return error.BaseAddressNull);
+        // First pixel BGRA = (0x11, 0x22, 0x33, 0x44).
+        base[0] = 0x11;
+        base[1] = 0x22;
+        base[2] = 0x33;
+        base[3] = 0x44;
+    }
+    const ul = IOSurfaceUnlock(surf, 0, null);
+    try std.testing.expectEqual(@as(c_int, 0), ul);
+
+    // Signal — no pixel copy happens producer-side.
+    try p.signalSlotReady(slot);
+
+    // Consumer attaches to the same IOSurface (looked up by ID) and
+    // sees the exact bytes we wrote above — proof of the zero-copy
+    // round-trip.
+    const frame = consumer.latest() orelse return error.NoFrameFound;
+    try std.testing.expectEqual(slot, frame.slot);
+    const lr2 = IOSurfaceLock(frame.surface, 0x1, null);
+    try std.testing.expectEqual(@as(c_int, 0), lr2);
+    defer _ = IOSurfaceUnlock(frame.surface, 0x1, null);
+    const base_opt = IOSurfaceGetBaseAddress(frame.surface);
+    const base: [*]const u8 = @ptrCast(base_opt orelse return error.BaseAddressNull);
+    try std.testing.expectEqual(@as(u8, 0x11), base[0]);
+    try std.testing.expectEqual(@as(u8, 0x22), base[1]);
+    try std.testing.expectEqual(@as(u8, 0x33), base[2]);
+    try std.testing.expectEqual(@as(u8, 0x44), base[3]);
+}
+
 test "SHM and IOSurface modes are mutually exclusive on the same Preview" {
     if (builtin.os.tag != .macos) return;
 
