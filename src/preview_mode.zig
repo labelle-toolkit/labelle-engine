@@ -800,6 +800,79 @@ pub const Preview = struct {
         self.sendFramePublished(self.frame_index, preview_shm.nowNs()) catch {};
     }
 
+    /// Borrow the underlying `IOSurfaceRef` for slot N. Caller wraps
+    /// the surface as an `MTLTexture` (via
+    /// `MTLDevice.newTextureWithDescriptor:iosurface:plane:`), an
+    /// `IOSurface`-backed `CVPixelBuffer`, or any other API that
+    /// consumes IOSurfaces, then renders directly into it. The
+    /// returned ref is borrowed — do NOT `CFRelease` it; the producer
+    /// owns lifetime for the duration of the stream.
+    ///
+    /// Slot indexing matches the `ControlBlock.ids[]` layout the
+    /// consumer side reads (so a producer that picks slot N here and
+    /// then calls `signalSlotReady(N)` lines up with the consumer's
+    /// `surfaces[N]` lookup verbatim). Stable for the lifetime of
+    /// `beginFrameStreamIOSurface` — `endFrameStreamIOSurface` /
+    /// `deinit` invalidate every slot's surface.
+    ///
+    /// Returns `null` for an out-of-range slot, when the iosurface
+    /// stream is not active, or on non-macOS platforms (the producer
+    /// is macOS-only by construction). Pair with
+    /// `signalSlotReady` to publish a slot the caller rendered into.
+    pub fn getIOSurfaceAt(self: *const Preview, slot: u32) ?preview_iosurface.IOSurfaceRef {
+        if (builtin.os.tag != .macos) return null;
+        const p = if (self.frame_iosurface_producer) |*pp| pp else return null;
+        // `surfaceAt` already returns null (the inner `?*opaque` null)
+        // for out-of-range slots; collapse that into the outer
+        // optional so callers get a single `null` regardless of the
+        // failure shape (slot OOB vs. stream-not-active vs. wrong
+        // platform). The `?IOSurfaceRef` ergonomics is purely for the
+        // caller — `surfaceAt`'s `IOSurfaceRef` is already itself
+        // optional and we'd otherwise force two layers of `if (… |s| …)`
+        // at every Path-A call site.
+        if (slot >= p.ring_size) return null;
+        return p.surfaceAt(slot);
+    }
+
+    /// Signal the editor that slot N's IOSurface has freshly-rendered
+    /// content. This is the Path-A counterpart to `publishFrameIOSurface`:
+    /// the caller has already rendered into the IOSurface itself
+    /// (typically via an `MTLTexture` wrapper that uses the surface as
+    /// a render-target backing store), so we don't touch pixel memory.
+    /// We just stamp the shm slot's trailer + bump `header.latest` to
+    /// `slot`, advance `frame_index`, and emit a best-effort
+    /// `frame_published` JSON sidecar.
+    ///
+    /// Equivalent to the publish half of `publishFrameIOSurface` minus
+    /// the lock / row-by-row swizzle copy. Same handshake gating —
+    /// returns `error.StreamNotActive` when the editor hasn't ACKed
+    /// the offer yet — and the same slot-bounds check as the SHM
+    /// publish path (`error.InvalidFrameSize` when
+    /// `slot >= ring_size`; the name keeps parity with the existing
+    /// `publishFrame` error vocabulary, even though no pixel
+    /// dimensions are involved).
+    pub fn signalSlotReady(self: *Preview, slot: u32) PublishError!void {
+        if (builtin.os.tag != .macos) return error.PlatformUnsupported;
+        const p = if (self.frame_iosurface_producer != null)
+            &self.frame_iosurface_producer.?
+        else
+            return error.StreamNotActive;
+        if (!self.isFrameAccepted()) return error.StreamNotActive;
+        if (slot >= p.ring_size) return error.InvalidFrameSize;
+
+        // Mirror the publish dance from `publishFrameIOSurface` without
+        // the lock + swizzle copy. The IOSurface contents are already
+        // current (the caller rendered into them via Metal); all we
+        // owe the consumer is the slot-pointer bump + the trailer
+        // stamp the shm-side reader expects to find.
+        p.shm_producer.next_slot = slot;
+        p.shm_producer.publish(true);
+        p.next_slot = (slot + 1) % p.ring_size;
+
+        self.frame_index +%= 1;
+        self.sendFramePublished(self.frame_index, preview_shm.nowNs()) catch {};
+    }
+
     /// Tear down the IOSurface ring + control-plane shm region.
     /// Safe to call when no iosurface stream is active — no-ops in
     /// that case. Critically, also a no-op when an SHM-mode stream
