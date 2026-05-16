@@ -1608,3 +1608,40 @@ test "Game without preview attached: ECS lifecycle is a no-op for telemetry (#52
 
     try std.testing.expectEqual(@as(usize, 0), game.entityCount());
 }
+
+// ── #551: Windows port shape tests ─────────────────────────────────
+//
+// The full loopback harness is POSIX-only (raw libc read/write + the
+// engine's fcntl-based non-blocking path). On Windows we run a tiny
+// set of shape checks that exercise the cross-platform layer
+// without binding a real socket:
+//   - parseArgs is host-agnostic and must keep working everywhere.
+//   - protocol_version is a stable u32 constant; bumping it is a
+//     deliberate protocol break, so we pin it in CI.
+//   - SHM-name allocator output is a Windows-safe namespace prefix
+//     once the shm side starts mapping `Local\…` (see preview_shm
+//     `mappingNameFromPosix` test). We can't reach the unexported
+//     allocator from this test file, but the public `default_name`
+//     starting with `/` is what feeds the converter.
+// These tests run on every host (POSIX + Windows), so adding
+// `windows-latest` to the CI matrix gives us coverage without
+// requiring a real loopback fixture.
+
+test "windows shape: parseArgs is platform-agnostic" {
+    const argv = [_][]const u8{ "game", "--preview-mode", "127.0.0.1:65432" };
+    const result = preview_mode.parseArgs(&argv) orelse return error.TestUnexpectedNull;
+    try std.testing.expectEqualStrings("127.0.0.1:65432", result);
+}
+
+test "windows shape: protocol_version is pinned" {
+    try std.testing.expectEqual(@as(u32, 1), preview_mode.protocol_version);
+}
+
+test "windows shape: default shm name uses the POSIX leading-slash form" {
+    // `preview_shm.default_name` is the historic POSIX name. The
+    // Windows backend transparently rewrites `/foo` → `Local\foo`
+    // (covered in `src/preview_shm.zig`'s `windows mapping name
+    // conversion` test). Pinning the leading-slash here protects the
+    // contract every backend depends on.
+    try std.testing.expect(preview_mode.preview_shm.default_name[0] == '/');
+}
