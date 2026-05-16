@@ -47,15 +47,62 @@ test "Preview: connect rejects malformed host:port" {
 // Raw libc bindings — the harness mirrors `src/preview_mode.zig`'s
 // approach: thread `io` only where `std.Io.net.Server` needs it
 // (listen, accept, deinit, stream.close), do bulk read/write via
-// libc on the socket fd. Tests are POSIX-only anyway (real loopback
-// TCP, fcntl-based non-blocking polling inside Preview itself).
-extern "c" fn read(fd: c_int, buf: [*]u8, len: usize) isize;
-extern "c" fn write(fd: c_int, buf: [*]const u8, len: usize) isize;
+// libc on the socket fd. POSIX-only — on Windows the file descriptor
+// type is `*anyopaque` (HANDLE) so the `c_int` extern signature
+// doesn't match and the corresponding socket calls would need ws2_32
+// recv/send instead. Every test that uses the harness early-returns
+// with `error.SkipZigTest` on Windows (see `skipIfWindows` below);
+// the harness itself is wrapped in a `comptime` switch so the
+// POSIX-only externs don't get instantiated for the Windows build.
+const is_windows = @import("builtin").os.tag == .windows;
+
+fn skipIfWindows() !void {
+    if (is_windows) return error.SkipZigTest;
+}
+
 const Timespec = extern struct {
     sec: isize,
     nsec: isize,
 };
-extern "c" fn clock_gettime(clk_id: c_int, tp: *Timespec) c_int;
+
+const posix_externs = if (!is_windows) struct {
+    pub extern "c" fn read(fd: std.posix.fd_t, buf: [*]u8, len: usize) isize;
+    pub extern "c" fn write(fd: std.posix.fd_t, buf: [*]const u8, len: usize) isize;
+    pub extern "c" fn clock_gettime(clk_id: c_int, tp: *Timespec) c_int;
+    pub extern "c" fn nanosleep(req: *const Timespec, rem: ?*Timespec) c_int;
+} else struct {
+    // Stub bodies for the Windows compile path. These are never
+    // reached at runtime: every test that uses them gates on
+    // `skipIfWindows()` before constructing the harness. We provide
+    // bodies (not `extern`s) so cross-compile linkage doesn't try to
+    // resolve POSIX symbols against the Windows libc.
+    pub fn read(fd: std.posix.fd_t, buf: [*]u8, len: usize) isize {
+        _ = fd;
+        _ = buf;
+        _ = len;
+        return 0;
+    }
+    pub fn write(fd: std.posix.fd_t, buf: [*]const u8, len: usize) isize {
+        _ = fd;
+        _ = buf;
+        _ = len;
+        return 0;
+    }
+    pub fn clock_gettime(clk_id: c_int, tp: *Timespec) c_int {
+        _ = clk_id;
+        tp.* = .{ .sec = 0, .nsec = 0 };
+        return 0;
+    }
+    pub fn nanosleep(req: *const Timespec, rem: ?*Timespec) c_int {
+        _ = req;
+        _ = rem;
+        return 0;
+    }
+};
+const read = posix_externs.read;
+const write = posix_externs.write;
+const clock_gettime = posix_externs.clock_gettime;
+const nanosleep = posix_externs.nanosleep;
 
 /// Monotonic millisecond clock — replaces 0.15's `std.time.milliTimestamp`,
 /// which was removed in 0.16. Uses `CLOCK_MONOTONIC` directly via libc
@@ -66,8 +113,6 @@ fn monotonicMs() i64 {
     _ = clock_gettime(CLOCK_MONOTONIC, &ts);
     return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
 }
-
-extern "c" fn nanosleep(req: *const Timespec, rem: ?*Timespec) c_int;
 
 /// Sleep for `ms` milliseconds. Replaces 0.15's `std.Thread.sleep`,
 /// which was removed in 0.16 (lib now demands an `Io` parameter for
