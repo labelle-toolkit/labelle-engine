@@ -578,27 +578,10 @@ pub const Preview = struct {
         self.frame_state = .not_offered;
         self.frame_index = 0;
 
-        // Per-process unique SHM name (PID + counter). Atomic RMW on
-        // the counter so concurrent Preview instances on different
-        // threads can't collide. **Full** 32-bit PID and counter in
-        // hex — truncating to 16 bits is small enough that two
-        // engine processes whose PIDs share the low 16 bits collide
-        // on the same name and `Producer.init`'s pre-`shm_unlink`
-        // would yank each other's regions (#546 review). Name math:
-        // "/lbl-prv-" (9) + 8 hex + "-" (1) + 8 hex + "\0" = 27 ≤
-        // macOS PSHMNAMLEN (31).
-        const pid: i32 = @intCast(std.c.getpid());
-        const stream_id = @atomicRmw(u32, &next_stream_id, .Add, 1, .monotonic) +% 1;
-        var name_buf: [32]u8 = undefined;
-        const name = std.fmt.bufPrintZ(&name_buf, "/lbl-prv-{x}-{x}", .{
-            @as(u32, @bitCast(pid)),
-            stream_id,
-        }) catch return error.OutOfMemory;
-        // Heap-owned copy so the producer's eventual `shm_unlink`
-        // gets a stable pointer; freed in `endFrameStream` / the
-        // next `beginFrameStream` teardown / `deinit`.
-        const name_owned = self.inbox_alloc.dupeZ(u8, name) catch
-            return error.OutOfMemory;
+        // Heap-owned name (PID + counter, ≤ PSHMNAMLEN). Freed in
+        // `endFrameStream` / the next `beginFrameStream` teardown /
+        // `deinit`. See `allocShmName` for the format + rationale.
+        const name_owned = try self.allocShmName();
         errdefer self.inbox_alloc.free(name_owned);
 
         const opts: preview_shm.Options = .{
@@ -672,6 +655,31 @@ pub const Preview = struct {
         self.frame_index = 0;
     }
 
+    /// Allocate a per-process-unique SHM name for the next stream.
+    /// Format: `/lbl-prv-{pid_hex}-{stream_id_hex}` — 27 bytes max
+    /// (`/lbl-prv-` 9 + 8 hex + `-` 1 + 8 hex + NUL = 27), comfortably
+    /// under macOS' `PSHMNAMLEN` of 31. The **full** 32-bit PID
+    /// matters — truncating to 16 bits is small enough that two engine
+    /// processes whose PIDs share the low 16 bits collide on the same
+    /// name, and `Producer.init`'s pre-`shm_unlink` would then yank
+    /// each other's regions (#546 review). Concurrent calls from
+    /// different threads/Previews are race-free via an atomic RMW on
+    /// `next_stream_id`. Returns a heap-owned, NUL-terminated slice;
+    /// caller frees via `inbox_alloc.free` once the producer is
+    /// torn down (#549 — extracted from `beginFrameStream` and
+    /// `beginFrameStreamIOSurface` so PID-truncation-style fixes stay
+    /// in one place).
+    fn allocShmName(self: *Preview) error{OutOfMemory}![:0]u8 {
+        const pid: i32 = @intCast(std.c.getpid());
+        const stream_id = @atomicRmw(u32, &next_stream_id, .Add, 1, .monotonic) +% 1;
+        var name_buf: [32]u8 = undefined;
+        const name = std.fmt.bufPrintZ(&name_buf, "/lbl-prv-{x}-{x}", .{
+            @as(u32, @bitCast(pid)),
+            stream_id,
+        }) catch return error.OutOfMemory;
+        return self.inbox_alloc.dupeZ(u8, name);
+    }
+
     // ── #547: macOS IOSurface publish (producer side) ──────────────
 
     /// Allocate an IOSurface ring sized for `width x height` BGRA8
@@ -712,19 +720,10 @@ pub const Preview = struct {
         self.frame_index = 0;
 
         // Same per-process unique name shape as the SHM path —
-        // PID + monotonic counter, hex-formatted, ≤ macOS
-        // PSHMNAMLEN (31). Reuses `next_stream_id` so SHM and
-        // iosurface mode allocations within the same process don't
-        // collide on the name space (each begin* bumps it).
-        const pid: i32 = @intCast(std.c.getpid());
-        const stream_id = @atomicRmw(u32, &next_stream_id, .Add, 1, .monotonic) +% 1;
-        var name_buf: [32]u8 = undefined;
-        const name = std.fmt.bufPrintZ(&name_buf, "/lbl-prv-{x}-{x}", .{
-            @as(u32, @bitCast(pid)),
-            stream_id,
-        }) catch return error.OutOfMemory;
-        const name_owned = self.inbox_alloc.dupeZ(u8, name) catch
-            return error.OutOfMemory;
+        // shared via `allocShmName`, which advances the common
+        // `next_stream_id` counter so SHM and iosurface allocations
+        // within the same process never collide on the namespace.
+        const name_owned = try self.allocShmName();
         errdefer self.inbox_alloc.free(name_owned);
 
         const opts: preview_iosurface.Options = .{
