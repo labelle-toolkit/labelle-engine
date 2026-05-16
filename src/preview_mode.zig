@@ -672,12 +672,12 @@ pub const Preview = struct {
     fn allocShmName(self: *Preview) error{OutOfMemory}![:0]u8 {
         const pid: i32 = @intCast(std.c.getpid());
         const stream_id = @atomicRmw(u32, &next_stream_id, .Add, 1, .monotonic) +% 1;
-        var name_buf: [32]u8 = undefined;
-        const name = std.fmt.bufPrintZ(&name_buf, "/lbl-prv-{x}-{x}", .{
+        // `std.fmt.allocPrintZ` was removed pre-0.16 — use the
+        // explicit-sentinel form. `0` is `\0`.
+        return std.fmt.allocPrintSentinel(self.inbox_alloc, "/lbl-prv-{x}-{x}", .{
             @as(u32, @bitCast(pid)),
             stream_id,
-        }) catch return error.OutOfMemory;
-        return self.inbox_alloc.dupeZ(u8, name);
+        }, 0);
     }
 
     // ── #547: macOS IOSurface publish (producer side) ──────────────
