@@ -27,6 +27,7 @@ pub const sprite_by_field_tick_mod = @import("sprite_by_field_tick.zig");
 pub const atlas_mod = @import("atlas.zig");
 pub const assets_mod = @import("assets/mod.zig");
 pub const preview_mode_mod = @import("preview_mode.zig");
+pub const preview_capture_mod = @import("preview_capture.zig");
 pub const jsonc_mod = @import("jsonc");
 
 // ── Game ──
