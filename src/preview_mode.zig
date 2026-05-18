@@ -311,6 +311,20 @@ pub const BinaryFrameKind = enum(u8) {
 /// wire traffic at ~4 Hz regardless of frame rate.
 pub const heartbeat_interval_ms: u64 = 250;
 
+/// Input event delivered from the editor's Game View tab to the
+/// headless game (labelle-assembler#143). The editor captures mouse
+/// activity over the IOSurface texture, converts to surface-space
+/// coords, and ships these as JSON over the existing control channel.
+/// The game's frame loop drains them via `popInputEvent` and forwards
+/// to whatever input sink it has (sokol_imgui's `add_*_event` for the
+/// imgui plugin; the engine's `backend_input` for game-side input).
+pub const InputEvent = union(enum) {
+    mouse_pos: struct { x: f32, y: f32 },
+    mouse_button: struct { button: i32, down: bool },
+};
+
+const input_queue_capacity: usize = 256;
+
 /// A (component_name, raw_bytes) pair for `emitEntitySnapshot`. Both
 /// slices are borrowed — they only need to outlive the snapshot call.
 pub const SnapshotComponent = struct {
@@ -477,6 +491,15 @@ pub const Preview = struct {
     /// Monotonic frame counter — bumped by `publishFrame` (or
     /// `publishFrameIOSurface`).
     frame_index: u64 = 0,
+    /// Fixed-capacity ring of input events parsed from editor → game
+    /// JSON frames (`mouse_pos`, `mouse_button`). The game drains via
+    /// `popInputEvent` each frame and forwards to its input sinks.
+    /// Overflow drops the oldest event — input lag is preferable to
+    /// allocator pressure on the producer hot path (#143).
+    input_buf: [input_queue_capacity]InputEvent = undefined,
+    input_head: usize = 0,
+    input_tail: usize = 0,
+    input_count: usize = 0,
 
     /// Dial the editor's listener. `host_port` is the literal string
     /// pulled from `--preview-mode <host:port>` — `127.0.0.1:54321`
@@ -1320,6 +1343,30 @@ pub const Preview = struct {
         return self.subscribed_pin_flows.contains(flow_name);
     }
 
+    /// Pop the next pending input event from the editor, or `null` when
+    /// the queue is empty. Game frame loops drain in a `while (...) |ev|`
+    /// loop after `pollSubscription` and forward each event to their
+    /// input sinks (e.g. sokol_imgui's `add_*_event` family). #143.
+    pub fn popInputEvent(self: *Preview) ?InputEvent {
+        if (self.input_count == 0) return null;
+        const ev = self.input_buf[self.input_head];
+        self.input_head = (self.input_head + 1) % input_queue_capacity;
+        self.input_count -= 1;
+        return ev;
+    }
+
+    fn pushInputEvent(self: *Preview, ev: InputEvent) void {
+        // Overflow policy: drop the oldest. Editors that hammer mouse_pos
+        // shouldn't be able to stall the producer by filling the ring.
+        if (self.input_count == input_queue_capacity) {
+            self.input_head = (self.input_head + 1) % input_queue_capacity;
+            self.input_count -= 1;
+        }
+        self.input_buf[self.input_tail] = ev;
+        self.input_tail = (self.input_tail + 1) % input_queue_capacity;
+        self.input_count += 1;
+    }
+
     /// Phase 3 (#534) entity-scope check. Returns `true` when the
     /// caller should emit for `entity_id`. The "empty set means watch
     /// everything" rule lives here so call sites stay free of policy.
@@ -1480,6 +1527,18 @@ pub const Preview = struct {
             if (self.frame_state == .offered) {
                 self.frame_state = .accepted;
             }
+        } else if (std.mem.eql(u8, kind_only.kind, "mouse_pos")) {
+            const Parsed = struct { kind: []const u8, x: f32, y: f32 };
+            const parsed = std.json.parseFromSliceLeaky(Parsed, alloc, line, .{
+                .ignore_unknown_fields = true,
+            }) catch return error.MalformedSubscription;
+            self.pushInputEvent(.{ .mouse_pos = .{ .x = parsed.x, .y = parsed.y } });
+        } else if (std.mem.eql(u8, kind_only.kind, "mouse_button")) {
+            const Parsed = struct { kind: []const u8, button: i32, down: bool };
+            const parsed = std.json.parseFromSliceLeaky(Parsed, alloc, line, .{
+                .ignore_unknown_fields = true,
+            }) catch return error.MalformedSubscription;
+            self.pushInputEvent(.{ .mouse_button = .{ .button = parsed.button, .down = parsed.down } });
         } else if (std.mem.eql(u8, kind_only.kind, "frame_resize")) {
             const Parsed = struct { kind: []const u8, width: u32, height: u32 };
             const parsed = std.json.parseFromSliceLeaky(Parsed, alloc, line, .{
