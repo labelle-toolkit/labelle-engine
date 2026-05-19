@@ -17,7 +17,6 @@
 //! length before invoking; backend impls don't have to defend against
 //! `dst` shorter than expected.
 
-const std = @import("std");
 const preview_shm = @import("preview_shm.zig");
 
 /// A backend's contribution to the preview pipeline. One function
@@ -37,25 +36,47 @@ pub const FrameCapture = struct {
     ctx: *anyopaque,
 };
 
+/// Engine-side errors that `publishFrame` may emit in addition to any
+/// `anyerror` propagated from the backend's `capture_fn`. Listed here
+/// so backend authors can reason about what they have to handle on top
+/// of their own failure modes.
+pub const PublishError = error{
+    /// The producer's configured `width * height * 4` doesn't fit inside
+    /// the SHM slot's pixel region (slot bytes minus the trailing
+    /// `SlotTrailer`). This is a programmer error in producer setup —
+    /// either `opts` was mutated post-`Producer.init` or the header
+    /// was crafted externally. `Producer.init` validates options and
+    /// allocates an exactly-fitting slot, so a freshly initialised
+    /// producer cannot trip this.
+    SizeMismatch,
+};
+
 /// Orchestrate one frame: grab the next SHM slot, ask the backend to
 /// fill it via `capture`, then publish. The producer's slot dimensions
-/// must match the FrameCapture's expected output (this is enforced via
-/// the SHM header `width`/`height` set at `Producer.init` time).
+/// are set at `Producer.init` time via `opts.width`/`opts.height` and
+/// govern the pixel-region length the backend must write.
 ///
-/// Returns `Error.SizeMismatch` if the slot can't hold a full frame
-/// (programmer error in producer setup), otherwise propagates the
-/// backend's capture error or `Error.PublishFailed`.
-pub const PublishError = error{
-    SizeMismatch,
-    PublishFailed,
-} || std.mem.Allocator.Error;
-
+/// Returns `PublishError.SizeMismatch` if the slot's pixel region is
+/// too small to hold a full `w*h*4` frame (see `PublishError` doc for
+/// when that can happen). Otherwise propagates the backend's capture
+/// error verbatim. The return type is `anyerror!void` because the
+/// backend's `capture_fn` is itself `anyerror!void` — narrowing here
+/// would force every backend to remap its errors.
 pub fn publishFrame(producer: *preview_shm.Producer, capture: FrameCapture, stamp_now: bool) anyerror!void {
     const w = producer.opts.width;
     const h = producer.opts.height;
     // The shm Header.slot_size includes padding for trailer bytes; the
     // pixel region is exactly w*h*4. Backend writes only into that.
     const pixel_bytes: usize = @as(usize, w) * @as(usize, h) * 4;
+
+    // Defence-in-depth: confirm the slot the producer is about to hand
+    // us actually has room for `pixel_bytes` of pixel data on top of
+    // the trailing `SlotTrailer`. `Producer.init` derives slot_size
+    // from the same opts, so under normal use this is a no-op — but
+    // it catches header tampering and post-init opts mutation.
+    const slot_pixel_capacity: usize = @as(usize, @intCast(producer.header.slot_size)) - @sizeOf(preview_shm.SlotTrailer);
+    if (pixel_bytes > slot_pixel_capacity) return PublishError.SizeMismatch;
+
     const slot_ptr = producer.pixelsPtr();
     const dst = slot_ptr[0..pixel_bytes];
 

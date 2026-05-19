@@ -104,3 +104,37 @@ test "publishFrame propagates capture errors" {
 
     try testing.expectError(error.SimulatedBackendFailure, preview_capture.publishFrame(&producer, fc, true));
 }
+
+test "publishFrame returns SizeMismatch when slot capacity shrinks below pixel bytes" {
+    const pid = std.c.getpid();
+    var name_buf: [64]u8 = undefined;
+    const name = try std.fmt.bufPrintZ(&name_buf, "/lbl-fctD-{d}", .{pid});
+
+    var producer = try preview_shm.Producer.init(name, .{
+        .width = 8,
+        .height = 4,
+        .ring_size = 2,
+    });
+    defer producer.deinit();
+
+    // Simulate header tampering / post-init opts drift: pretend the
+    // producer was reconfigured to a larger frame after the slot was
+    // already allocated for an 8x4 layout. publishFrame should refuse
+    // before invoking the backend.
+    producer.opts.width = 32;
+    producer.opts.height = 32;
+
+    // A capture that, if ever invoked, would let the test know we
+    // failed to short-circuit before reaching the backend.
+    const Tripwire = struct {
+        fn captureImpl(_: *anyopaque, _: []u8, _: u32, _: u32) anyerror!void {
+            return error.BackendShouldNotHaveBeenCalled;
+        }
+    };
+    const fc: preview_capture.FrameCapture = .{
+        .capture_fn = Tripwire.captureImpl,
+        .ctx = undefined,
+    };
+
+    try testing.expectError(preview_capture.PublishError.SizeMismatch, preview_capture.publishFrame(&producer, fc, true));
+}
