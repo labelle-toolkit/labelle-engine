@@ -110,6 +110,10 @@ pub fn build(b: *std.Build) void {
         // above; spins up an in-test `preview_shm.Consumer` to read
         // back what the engine wrote.
         "test/preview_frame_stream_test.zig",
+        // Backend-agnostic FrameCapture trait (#140 architecture rethink).
+        // Validates the producer-side trait + publishFrame orchestration
+        // without involving any real graphics backend — pure CPU mock.
+        "test/preview_capture_test.zig",
         // preview_mode_test + flows_game_api_test: re-enabled after #543
         // fixed the variadic-`fcntl` ABI bug (declared non-variadic on
         // a function libc declares variadic — mismatched on
