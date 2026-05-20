@@ -30,6 +30,12 @@ pub const preview_mode_mod = @import("preview_mode.zig");
 pub const preview_capture_mod = @import("preview_capture.zig");
 pub const jsonc_mod = @import("jsonc");
 
+// ── Android runtime helpers ──
+// Immersive-mode (hide system bars) lives here; see src/android.zig
+// for the JNI / UI-thread rationale. Reached from the assembler-
+// generated Android `main.zig` as `engine.android.enableImmersiveMode`.
+pub const android = @import("android.zig");
+
 // ── Game ──
 pub const GameConfig = game_mod.GameConfig;
 pub const GameLog = game_log_mod.GameLog;
