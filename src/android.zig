@@ -22,17 +22,23 @@
 //! an `extern "c"` symbol), which exposes a `JavaVM*`, a main-thread
 //! `JNIEnv*`, and the activity `jobject`.
 //!
-//! We use the **legacy `View.setSystemUiVisibility`** API with the
-//! `IMMERSIVE_STICKY | HIDE_NAVIGATION | FULLSCREEN | LAYOUT_*` flag
-//! set. Rationale:
-//!   - It works unchanged on API 19..34. It is deprecated at API 30+
-//!     but still fully functional at target SDK 34 (the device under
-//!     test). The newer `WindowInsetsController` needs many more JNI
-//!     object hops (`getInsetsController` → `WindowInsets.Type` static
-//!     → two method calls) for no on-device behaviour difference here.
-//!   - Immersive-*sticky* is exactly the requested behaviour: the bars
-//!     slide away, a swipe from the edge brings them back transiently,
-//!     and they auto-hide again.
+//! We use the **`WindowInsetsController`** API (API 30+). Rationale:
+//!   - The legacy `View.setSystemUiVisibility` is deprecated since API
+//!     30 and on API 34 it NO LONGER reliably hides the navigation bar
+//!     — verified on-device on Android 14: `setSystemUiVisibility` with
+//!     the immersive-sticky flag set hid only the status bar (and that
+//!     was really the manifest `Theme.NoTitleBar.Fullscreen` doing it),
+//!     leaving the nav bar's 72px strip reserved. Google's replacement,
+//!     `WindowInsetsController`, is the only API that still hides the
+//!     nav bar at target SDK 34.
+//!   - `WindowInsetsController.hide(WindowInsets.Type.systemBars())`
+//!     hides BOTH the status and navigation bars in one call.
+//!   - `setSystemBarsBehavior(BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE)`
+//!     reproduces immersive-*sticky*: the bars slide away, a swipe from
+//!     the edge brings them back transiently, then they auto-hide.
+//!   - `WindowInsetsController` is API 30+. Project min SDK is 28, so
+//!     the call path is guarded: on API <30 (no `getInsetsController`
+//!     method) it cleanly no-ops instead of crashing.
 //!
 //! ## The UI-thread problem
 //!
@@ -166,9 +172,26 @@ const JNINativeInterface = extern struct {
     CallVoidMethod: *const anyopaque,
     CallVoidMethodV: *const anyopaque,
     CallVoidMethodA: *const fn (*JNIEnv, jobject, jmethodID, ?[*]const jvalue) callconv(.c) void,
-    // Remaining ~160 slots are unused. Represent the tail as an opaque
+    // Between `CallVoidMethodA` and `GetStaticMethodID` jni.h has 49
+    // unused slots: 30 `CallNonvirtual*Method{,V,A}`, then `GetFieldID`,
+    // then 9 `Get*Field` + 9 `Set*Field`. Kept opaque — slot ORDER is
+    // ABI-load-bearing, so the count must be exact.
+    _nonvirtual_and_fields: [49]?*anyopaque,
+    GetStaticMethodID: *const fn (*JNIEnv, jclass, [*:0]const u8, [*:0]const u8) callconv(.c) jmethodID,
+    // `CallStatic*Method` family — same variadic hazard as the instance
+    // calls, so only the `...A` (jvalue-array) variants are typed; the
+    // variadic / `va_list` slots stay opaque.
+    CallStaticObjectMethod: *const anyopaque,
+    CallStaticObjectMethodV: *const anyopaque,
+    CallStaticObjectMethodA: *const anyopaque,
+    // `CallStaticBoolean/Byte/Char/Short Method{,V,A}` — 12 slots.
+    _call_static_b_to_s: [12]?*anyopaque,
+    CallStaticIntMethod: *const anyopaque,
+    CallStaticIntMethodV: *const anyopaque,
+    CallStaticIntMethodA: *const fn (*JNIEnv, jclass, jmethodID, ?[*]const jvalue) callconv(.c) jint,
+    // Remaining ~140 slots are unused. Represent the tail as an opaque
     // blob so the struct size is irrelevant (we only ever index slots
-    // at or before `CallVoidMethodA` and reach the table by pointer).
+    // at or before `CallStaticIntMethodA` and reach the table by ptr).
     _tail: [200]?*anyopaque,
 };
 
@@ -216,23 +239,13 @@ const ANativeActivity = extern struct {
     _tail: [8]?*anyopaque,
 };
 
-// `View.setSystemUiVisibility` flag bits (from `android.view.View`).
-// Combined they give immersive-STICKY: bars hidden, a swipe brings
-// them back transiently, then they auto-hide again.
-const SYSTEM_UI_FLAG_FULLSCREEN: jint = 0x00000004; // hide status bar
-const SYSTEM_UI_FLAG_HIDE_NAVIGATION: jint = 0x00000002; // hide nav bar
-const SYSTEM_UI_FLAG_IMMERSIVE_STICKY: jint = 0x00001000; // sticky behaviour
-const SYSTEM_UI_FLAG_LAYOUT_STABLE: jint = 0x00000100;
-const SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION: jint = 0x00000200;
-const SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN: jint = 0x00000400;
-
-const IMMERSIVE_FLAGS: jint =
-    SYSTEM_UI_FLAG_FULLSCREEN |
-    SYSTEM_UI_FLAG_HIDE_NAVIGATION |
-    SYSTEM_UI_FLAG_IMMERSIVE_STICKY |
-    SYSTEM_UI_FLAG_LAYOUT_STABLE |
-    SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION |
-    SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN;
+// `WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE` — the
+// immersive-sticky behaviour: hidden bars slide back transiently on an
+// edge swipe, then auto-hide again. It is a `public static final int`
+// on `android.view.WindowInsetsController` with the stable value `2`
+// (API 30+). Using the literal avoids one more static-field JNI hop;
+// the value is part of the public API contract and will not change.
+const BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE: jint = 2;
 
 // ── Android logging (so failures are visible in logcat) ───────────
 
@@ -313,20 +326,30 @@ fn applyImmersive(activity: *ANativeActivity) void {
     const env: *JNIEnv = env_ptr;
     const jni = env_ptr.*.*;
 
-    // Equivalent Java:
-    //   activity.getWindow().getDecorView().setSystemUiVisibility(FLAGS)
+    // Equivalent Java (API 30+):
+    //   WindowInsetsController c = activity.getWindow().getInsetsController();
+    //   c.hide(WindowInsets.Type.systemBars());
+    //   c.setSystemBarsBehavior(BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
     //
-    // JNI hops (all method invocations use the `...A` jvalue-array
-    // variants — no C-variadic calls; see the JNINativeInterface decl):
+    // All method invocations use the `...A` jvalue-array variants — no
+    // C-variadic calls; see the JNINativeInterface decl.
+    //
+    // JNI hops:
     //   1. GetObjectClass(activity)               -> Activity class
     //   2. GetMethodID(Activity, "getWindow", "()Landroid/view/Window;")
     //   3. CallObjectMethodA(.., null)            -> Window object
     //   4. GetObjectClass(window)                 -> Window class
-    //   5. GetMethodID(Window, "getDecorView", "()Landroid/view/View;")
-    //   6. CallObjectMethodA(.., null)            -> decorView object
-    //   7. GetObjectClass(decorView)              -> View class
-    //   8. GetMethodID(View, "setSystemUiVisibility", "(I)V")
-    //   9. CallVoidMethodA(decorView, .., &[FLAGS])
+    //   5. GetMethodID(Window, "getInsetsController",
+    //                  "()Landroid/view/WindowInsetsController;")
+    //      -- null on API <30: clean no-op (no crash).
+    //   6. CallObjectMethodA(.., null)            -> WindowInsetsController
+    //   7. FindClass("android/view/WindowInsets$Type")
+    //   8. GetStaticMethodID(.., "systemBars", "()I")
+    //   9. CallStaticIntMethodA(..)               -> systemBars type mask
+    //  10. GetObjectClass(controller)             -> controller class
+    //  11. GetMethodID(.., "hide", "(I)V"); CallVoidMethodA(.., mask)
+    //  12. GetMethodID(.., "setSystemBarsBehavior", "(I)V");
+    //      CallVoidMethodA(.., BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE)
 
     const activity_class = jni.GetObjectClass(env, activity.clazz) orelse {
         _ = clearException(env);
@@ -354,39 +377,78 @@ fn applyImmersive(activity: *ANativeActivity) void {
     };
     defer jni.DeleteLocalRef(env, window_class);
 
-    const get_decor = jni.GetMethodID(env, window_class, "getDecorView", "()Landroid/view/View;") orelse {
+    // `Window.getInsetsController()` exists only on API 30+. On API
+    // 28/29 the lookup fails: clear the pending `NoSuchMethodError` and
+    // no-op cleanly rather than crash. (The supported device is API 34,
+    // so this is a graceful-degradation path, not the primary one.)
+    const get_controller = jni.GetMethodID(env, window_class, "getInsetsController", "()Landroid/view/WindowInsetsController;") orelse {
         _ = clearException(env);
-        logWarn("immersive: getDecorView methodID lookup failed");
+        logWarn("immersive: getInsetsController unavailable (API <30) — skipping");
         return;
     };
-    const decor = jni.CallObjectMethodA(env, window, get_decor, null) orelse {
+    const controller = jni.CallObjectMethodA(env, window, get_controller, null) orelse {
         _ = clearException(env);
-        logWarn("immersive: getDecorView() returned null");
+        logWarn("immersive: getInsetsController() returned null");
         return;
     };
-    defer jni.DeleteLocalRef(env, decor);
+    defer jni.DeleteLocalRef(env, controller);
 
-    const view_class = jni.GetObjectClass(env, decor) orelse {
+    // `WindowInsets.Type.systemBars()` — a static method on the nested
+    // class `android.view.WindowInsets$Type` returning the int mask
+    // that covers BOTH the status and the navigation bars.
+    const type_class = jni.FindClass(env, "android/view/WindowInsets$Type") orelse {
         _ = clearException(env);
-        logWarn("immersive: GetObjectClass(decorView) failed");
+        logWarn("immersive: FindClass(WindowInsets$Type) failed");
         return;
     };
-    defer jni.DeleteLocalRef(env, view_class);
+    defer jni.DeleteLocalRef(env, type_class);
 
-    const set_visibility = jni.GetMethodID(env, view_class, "setSystemUiVisibility", "(I)V") orelse {
+    const system_bars_mid = jni.GetStaticMethodID(env, type_class, "systemBars", "()I") orelse {
         _ = clearException(env);
-        logWarn("immersive: setSystemUiVisibility methodID lookup failed");
+        logWarn("immersive: systemBars() static methodID lookup failed");
         return;
     };
-
-    const args = [_]jvalue{.{ .i = IMMERSIVE_FLAGS }};
-    jni.CallVoidMethodA(env, decor, set_visibility, &args);
+    const system_bars: jint = jni.CallStaticIntMethodA(env, type_class, system_bars_mid, null);
     if (clearException(env)) {
-        logWarn("immersive: setSystemUiVisibility() threw");
+        logWarn("immersive: systemBars() threw");
         return;
     }
 
-    logInfo("immersive: system bars hidden (immersive-sticky)");
+    const controller_class = jni.GetObjectClass(env, controller) orelse {
+        _ = clearException(env);
+        logWarn("immersive: GetObjectClass(controller) failed");
+        return;
+    };
+    defer jni.DeleteLocalRef(env, controller_class);
+
+    // controller.hide(systemBars) — hides status + navigation bars.
+    const hide_mid = jni.GetMethodID(env, controller_class, "hide", "(I)V") orelse {
+        _ = clearException(env);
+        logWarn("immersive: hide(I)V methodID lookup failed");
+        return;
+    };
+    const hide_args = [_]jvalue{.{ .i = system_bars }};
+    jni.CallVoidMethodA(env, controller, hide_mid, &hide_args);
+    if (clearException(env)) {
+        logWarn("immersive: WindowInsetsController.hide() threw");
+        return;
+    }
+
+    // controller.setSystemBarsBehavior(BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE)
+    // — immersive-sticky: bars reappear transiently on an edge swipe.
+    const set_behavior_mid = jni.GetMethodID(env, controller_class, "setSystemBarsBehavior", "(I)V") orelse {
+        _ = clearException(env);
+        logWarn("immersive: setSystemBarsBehavior(I)V methodID lookup failed");
+        return;
+    };
+    const behavior_args = [_]jvalue{.{ .i = BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE }};
+    jni.CallVoidMethodA(env, controller, set_behavior_mid, &behavior_args);
+    if (clearException(env)) {
+        logWarn("immersive: setSystemBarsBehavior() threw");
+        return;
+    }
+
+    logInfo("immersive: system bars hidden (WindowInsetsController, sticky)");
 }
 
 /// If a JNI exception is pending, describe + clear it. Returns true
