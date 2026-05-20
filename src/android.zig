@@ -373,9 +373,10 @@ var installed: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
 
 /// Install guard for the `onWindowFocusChanged` chain, set the first
 /// time `contentRectHook` runs (it deferred-installs the focus chain).
-/// `contentRectHook` always runs on the one UI thread, but a guard
-/// keeps the focus-chain install idempotent regardless.
-var focus_chain_installed: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
+/// Plain `bool`, not atomic: `installFocusChain` is only ever reached
+/// from `contentRectHook`, which the framework invokes exclusively on
+/// the one UI thread — no cross-thread access, so no atomic needed.
+var focus_chain_installed: bool = false;
 
 /// Our replacement `onWindowFocusChanged`. Runs on the UI thread, so
 /// `activity.env` is a valid `JNIEnv*` for decor-view mutation.
@@ -411,7 +412,8 @@ fn focusChangedHook(activity: *ANativeActivity, has_focus: c_int) callconv(.c) v
 /// `focusChangedHook` into the callbacks struct, so the hook never
 /// reads a `saved_focus_cb` that has not been written yet.
 fn installFocusChain(activity: *ANativeActivity) void {
-    if (focus_chain_installed.swap(true, .seq_cst)) return;
+    if (focus_chain_installed) return;
+    focus_chain_installed = true;
     const orig_bits: usize = if (activity.callbacks.onWindowFocusChanged) |cb|
         @intFromPtr(cb)
     else
