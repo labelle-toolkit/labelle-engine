@@ -22,17 +22,31 @@
 //! an `extern "c"` symbol), which exposes a `JavaVM*`, a main-thread
 //! `JNIEnv*`, and the activity `jobject`.
 //!
-//! We use the **legacy `View.setSystemUiVisibility`** API with the
-//! `IMMERSIVE_STICKY | HIDE_NAVIGATION | FULLSCREEN | LAYOUT_*` flag
-//! set. Rationale:
-//!   - It works unchanged on API 19..34. It is deprecated at API 30+
-//!     but still fully functional at target SDK 34 (the device under
-//!     test). The newer `WindowInsetsController` needs many more JNI
-//!     object hops (`getInsetsController` → `WindowInsets.Type` static
-//!     → two method calls) for no on-device behaviour difference here.
-//!   - Immersive-*sticky* is exactly the requested behaviour: the bars
-//!     slide away, a swipe from the edge brings them back transiently,
-//!     and they auto-hide again.
+//! We use **two paths**, picked at runtime by API level:
+//!
+//!   - **API 30+ (primary):** `WindowInsetsController`.
+//!     - The legacy `View.setSystemUiVisibility` is deprecated since
+//!       API 30 and on API 34 it NO LONGER reliably hides the
+//!       navigation bar — verified on-device on Android 14:
+//!       `setSystemUiVisibility` with the immersive-sticky flag set hid
+//!       only the status bar (and that was really the manifest
+//!       `Theme.NoTitleBar.Fullscreen` doing it), leaving the nav bar's
+//!       72px strip reserved. Google's replacement,
+//!       `WindowInsetsController`, is the only API that still hides the
+//!       nav bar at target SDK 34.
+//!     - `WindowInsetsController.hide(WindowInsets.Type.systemBars())`
+//!       hides BOTH the status and navigation bars in one call.
+//!     - `setSystemBarsBehavior(BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE)`
+//!       reproduces immersive-*sticky*: the bars slide away, a swipe
+//!       from the edge brings them back transiently, then auto-hide.
+//!
+//!   - **API 28/29 (fallback):** legacy `View.setSystemUiVisibility`
+//!     with the `IMMERSIVE_STICKY | HIDE_NAVIGATION | FULLSCREEN |
+//!     LAYOUT_*` flag set. `WindowInsetsController` is API 30+, but the
+//!     project's `min_sdk` is 28, so Android 9/10 has no
+//!     `getInsetsController`. Rather than no-op there, `applyImmersive`
+//!     detects the missing method and falls back to the legacy call,
+//!     which still works on API 28/29.
 //!
 //! ## The UI-thread problem
 //!
@@ -91,44 +105,51 @@ const jvalue = extern union {
 };
 
 /// JNI function table — only the entries we actually call. The slot
-/// ordering matches `struct JNINativeInterface` in `jni.h`; unused
-/// slots are typed `*const anyopaque` so we never depend on their
-/// signatures. `JNIEnv` is a pointer to a pointer to this table.
+/// ordering matches `struct JNINativeInterface_` in the NDK `jni.h`;
+/// unused slots are typed `*const anyopaque` so we never depend on
+/// their signatures. `JNIEnv` is a pointer to a pointer to this table.
+///
+/// Zero-based slot indices (per `jni.h`) are cited inline at every
+/// named field so the layout is auditable against the header. The
+/// table has 232 entries total: slot 0 = `reserved0`, slot 231 =
+/// `GetObjectRefType` (the last). We only ever index slots at or
+/// before `CallStaticIntMethodA` (slot 131); the rest is an opaque
+/// `_tail` and is reached only by pointer, never read.
 const JNINativeInterface = extern struct {
-    reserved0: ?*anyopaque,
-    reserved1: ?*anyopaque,
-    reserved2: ?*anyopaque,
-    reserved3: ?*anyopaque,
-    GetVersion: *const anyopaque,
-    DefineClass: *const anyopaque,
-    FindClass: *const fn (*JNIEnv, [*:0]const u8) callconv(.c) jclass,
-    FromReflectedMethod: *const anyopaque,
-    FromReflectedField: *const anyopaque,
-    ToReflectedMethod: *const anyopaque,
-    GetSuperclass: *const anyopaque,
-    IsAssignableFrom: *const anyopaque,
-    ToReflectedField: *const anyopaque,
-    Throw: *const anyopaque,
-    ThrowNew: *const anyopaque,
-    ExceptionOccurred: *const fn (*JNIEnv) callconv(.c) jobject,
-    ExceptionDescribe: *const fn (*JNIEnv) callconv(.c) void,
-    ExceptionClear: *const fn (*JNIEnv) callconv(.c) void,
-    FatalError: *const anyopaque,
-    PushLocalFrame: *const anyopaque,
-    PopLocalFrame: *const anyopaque,
-    NewGlobalRef: *const anyopaque,
-    DeleteGlobalRef: *const anyopaque,
-    DeleteLocalRef: *const fn (*JNIEnv, jobject) callconv(.c) void,
-    IsSameObject: *const anyopaque,
-    NewLocalRef: *const anyopaque,
-    EnsureLocalCapacity: *const anyopaque,
-    AllocObject: *const anyopaque,
-    NewObject: *const anyopaque,
-    NewObjectV: *const anyopaque,
-    NewObjectA: *const anyopaque,
-    GetObjectClass: *const fn (*JNIEnv, jobject) callconv(.c) jclass,
-    IsInstanceOf: *const anyopaque,
-    GetMethodID: *const fn (*JNIEnv, jclass, [*:0]const u8, [*:0]const u8) callconv(.c) jmethodID,
+    reserved0: ?*anyopaque, // slot 0
+    reserved1: ?*anyopaque, // slot 1
+    reserved2: ?*anyopaque, // slot 2
+    reserved3: ?*anyopaque, // slot 3
+    GetVersion: *const anyopaque, // slot 4
+    DefineClass: *const anyopaque, // slot 5
+    FindClass: *const fn (*JNIEnv, [*:0]const u8) callconv(.c) jclass, // slot 6
+    FromReflectedMethod: *const anyopaque, // slot 7
+    FromReflectedField: *const anyopaque, // slot 8
+    ToReflectedMethod: *const anyopaque, // slot 9
+    GetSuperclass: *const anyopaque, // slot 10
+    IsAssignableFrom: *const anyopaque, // slot 11
+    ToReflectedField: *const anyopaque, // slot 12
+    Throw: *const anyopaque, // slot 13
+    ThrowNew: *const anyopaque, // slot 14
+    ExceptionOccurred: *const fn (*JNIEnv) callconv(.c) jobject, // slot 15
+    ExceptionDescribe: *const fn (*JNIEnv) callconv(.c) void, // slot 16
+    ExceptionClear: *const fn (*JNIEnv) callconv(.c) void, // slot 17
+    FatalError: *const anyopaque, // slot 18
+    PushLocalFrame: *const anyopaque, // slot 19
+    PopLocalFrame: *const anyopaque, // slot 20
+    NewGlobalRef: *const anyopaque, // slot 21
+    DeleteGlobalRef: *const anyopaque, // slot 22
+    DeleteLocalRef: *const fn (*JNIEnv, jobject) callconv(.c) void, // slot 23
+    IsSameObject: *const anyopaque, // slot 24
+    NewLocalRef: *const anyopaque, // slot 25
+    EnsureLocalCapacity: *const anyopaque, // slot 26
+    AllocObject: *const anyopaque, // slot 27
+    NewObject: *const anyopaque, // slot 28
+    NewObjectV: *const anyopaque, // slot 29
+    NewObjectA: *const anyopaque, // slot 30
+    GetObjectClass: *const fn (*JNIEnv, jobject) callconv(.c) jclass, // slot 31
+    IsInstanceOf: *const anyopaque, // slot 32
+    GetMethodID: *const fn (*JNIEnv, jclass, [*:0]const u8, [*:0]const u8) callconv(.c) jmethodID, // slot 33
     // The `Call*Method` slots are C-variadic (`...`) in jni.h. Calling
     // a C-variadic function from Zig on AArch64 has a fragile ABI (the
     // JVM mis-reads the vararg registers/stack), which crashes the
@@ -136,40 +157,66 @@ const JNINativeInterface = extern struct {
     // `const jvalue*` argument array — a fixed, non-variadic signature
     // with a rock-solid ABI. The plain variadic slots stay opaque so
     // we can never accidentally call them.
-    CallObjectMethod: *const anyopaque,
-    CallObjectMethodV: *const anyopaque,
-    CallObjectMethodA: *const fn (*JNIEnv, jobject, jmethodID, ?[*]const jvalue) callconv(.c) jobject,
-    CallBooleanMethod: *const anyopaque,
-    CallBooleanMethodV: *const anyopaque,
-    CallBooleanMethodA: *const anyopaque,
-    CallByteMethod: *const anyopaque,
-    CallByteMethodV: *const anyopaque,
-    CallByteMethodA: *const anyopaque,
-    CallCharMethod: *const anyopaque,
-    CallCharMethodV: *const anyopaque,
-    CallCharMethodA: *const anyopaque,
-    CallShortMethod: *const anyopaque,
-    CallShortMethodV: *const anyopaque,
-    CallShortMethodA: *const anyopaque,
-    CallIntMethod: *const anyopaque,
-    CallIntMethodV: *const anyopaque,
-    CallIntMethodA: *const anyopaque,
-    CallLongMethod: *const anyopaque,
-    CallLongMethodV: *const anyopaque,
-    CallLongMethodA: *const anyopaque,
-    CallFloatMethod: *const anyopaque,
-    CallFloatMethodV: *const anyopaque,
-    CallFloatMethodA: *const anyopaque,
-    CallDoubleMethod: *const anyopaque,
-    CallDoubleMethodV: *const anyopaque,
-    CallDoubleMethodA: *const anyopaque,
-    CallVoidMethod: *const anyopaque,
-    CallVoidMethodV: *const anyopaque,
-    CallVoidMethodA: *const fn (*JNIEnv, jobject, jmethodID, ?[*]const jvalue) callconv(.c) void,
-    // Remaining ~160 slots are unused. Represent the tail as an opaque
-    // blob so the struct size is irrelevant (we only ever index slots
-    // at or before `CallVoidMethodA` and reach the table by pointer).
-    _tail: [200]?*anyopaque,
+    // `Call<Type>Method{,V,A}` for the 10 return types (Object, Boolean,
+    // Byte, Char, Short, Int, Long, Float, Double, Void) — 30 slots,
+    // indices 34..63. `CallObjectMethodA` = slot 36, `CallVoidMethodA`
+    // = slot 63.
+    CallObjectMethod: *const anyopaque, // slot 34
+    CallObjectMethodV: *const anyopaque, // slot 35
+    CallObjectMethodA: *const fn (*JNIEnv, jobject, jmethodID, ?[*]const jvalue) callconv(.c) jobject, // slot 36
+    CallBooleanMethod: *const anyopaque, // slot 37
+    CallBooleanMethodV: *const anyopaque, // slot 38
+    CallBooleanMethodA: *const anyopaque, // slot 39
+    CallByteMethod: *const anyopaque, // slot 40
+    CallByteMethodV: *const anyopaque, // slot 41
+    CallByteMethodA: *const anyopaque, // slot 42
+    CallCharMethod: *const anyopaque, // slot 43
+    CallCharMethodV: *const anyopaque, // slot 44
+    CallCharMethodA: *const anyopaque, // slot 45
+    CallShortMethod: *const anyopaque, // slot 46
+    CallShortMethodV: *const anyopaque, // slot 47
+    CallShortMethodA: *const anyopaque, // slot 48
+    CallIntMethod: *const anyopaque, // slot 49
+    CallIntMethodV: *const anyopaque, // slot 50
+    CallIntMethodA: *const anyopaque, // slot 51
+    CallLongMethod: *const anyopaque, // slot 52
+    CallLongMethodV: *const anyopaque, // slot 53
+    CallLongMethodA: *const anyopaque, // slot 54
+    CallFloatMethod: *const anyopaque, // slot 55
+    CallFloatMethodV: *const anyopaque, // slot 56
+    CallFloatMethodA: *const anyopaque, // slot 57
+    CallDoubleMethod: *const anyopaque, // slot 58
+    CallDoubleMethodV: *const anyopaque, // slot 59
+    CallDoubleMethodA: *const anyopaque, // slot 60
+    CallVoidMethod: *const anyopaque, // slot 61
+    CallVoidMethodV: *const anyopaque, // slot 62
+    CallVoidMethodA: *const fn (*JNIEnv, jobject, jmethodID, ?[*]const jvalue) callconv(.c) void, // slot 63
+    // Between `CallVoidMethodA` (slot 63) and `GetStaticMethodID` (slot
+    // 113) jni.h has 49 unused slots, indices 64..112: 30
+    // `CallNonvirtual*Method{,V,A}` (64..93), then `GetFieldID` (94),
+    // then 9 `Get*Field` (95..103) + 9 `Set*Field` (104..112). Kept
+    // opaque — slot ORDER is ABI-load-bearing, so the count must be exact.
+    _nonvirtual_and_fields: [49]?*anyopaque, // slots 64..112
+    GetStaticMethodID: *const fn (*JNIEnv, jclass, [*:0]const u8, [*:0]const u8) callconv(.c) jmethodID, // slot 113
+    // `CallStatic*Method` family — same variadic hazard as the instance
+    // calls, so only the `...A` (jvalue-array) variants are typed; the
+    // variadic / `va_list` slots stay opaque.
+    CallStaticObjectMethod: *const anyopaque, // slot 114
+    CallStaticObjectMethodV: *const anyopaque, // slot 115
+    CallStaticObjectMethodA: *const anyopaque, // slot 116
+    // `CallStatic{Boolean,Byte,Char,Short}Method{,V,A}` — 4 types ×
+    // 3 = 12 slots, indices 117..128.
+    _call_static_b_to_s: [12]?*anyopaque, // slots 117..128
+    CallStaticIntMethod: *const anyopaque, // slot 129
+    CallStaticIntMethodV: *const anyopaque, // slot 130
+    CallStaticIntMethodA: *const fn (*JNIEnv, jclass, jmethodID, ?[*]const jvalue) callconv(.c) jint, // slot 131
+    // Slots 132..231 (100 entries) are unused: the rest of
+    // `CallStatic*Method` (Long/Float/Double/Void), all `GetStatic*Field`
+    // / `SetStatic*Field`, the string/array/ref/monitor families, and
+    // `GetObjectRefType` (slot 231, the last). Kept opaque — we only
+    // index slots at or before `CallStaticIntMethodA` and reach the
+    // table by pointer, so the tail is never read.
+    _tail: [100]?*anyopaque, // slots 132..231
 };
 
 /// `JNIEnv` — in C this is a typedef for `const struct JNINativeInterface*`
@@ -216,9 +263,21 @@ const ANativeActivity = extern struct {
     _tail: [8]?*anyopaque,
 };
 
+// `WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE` — the
+// immersive-sticky behaviour: hidden bars slide back transiently on an
+// edge swipe, then auto-hide again. It is a `public static final int`
+// on `android.view.WindowInsetsController` with the stable value `2`
+// (API 30+). Using the literal avoids one more static-field JNI hop;
+// the value is part of the public API contract and will not change.
+const BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE: jint = 2;
+
 // `View.setSystemUiVisibility` flag bits (from `android.view.View`).
 // Combined they give immersive-STICKY: bars hidden, a swipe brings
-// them back transiently, then they auto-hide again.
+// them back transiently, then they auto-hide again. This is the
+// API 28/29 fallback path — `WindowInsetsController` is API 30+, but
+// the project's `min_sdk` is 28, so Android 9/10 devices have no
+// `getInsetsController` and must use this legacy call instead.
+// Deprecated at API 30+ but still functional on API 28/29.
 const SYSTEM_UI_FLAG_FULLSCREEN: jint = 0x00000004; // hide status bar
 const SYSTEM_UI_FLAG_HIDE_NAVIGATION: jint = 0x00000002; // hide nav bar
 const SYSTEM_UI_FLAG_IMMERSIVE_STICKY: jint = 0x00001000; // sticky behaviour
@@ -313,20 +372,41 @@ fn applyImmersive(activity: *ANativeActivity) void {
     const env: *JNIEnv = env_ptr;
     const jni = env_ptr.*.*;
 
-    // Equivalent Java:
-    //   activity.getWindow().getDecorView().setSystemUiVisibility(FLAGS)
+    // Two paths, picked at runtime by API level:
     //
-    // JNI hops (all method invocations use the `...A` jvalue-array
-    // variants — no C-variadic calls; see the JNINativeInterface decl):
+    //   API 30+ (primary, verified on API 34) — Equivalent Java:
+    //     WindowInsetsController c = activity.getWindow().getInsetsController();
+    //     c.hide(WindowInsets.Type.systemBars());
+    //     c.setSystemBarsBehavior(BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
+    //
+    //   API 28/29 (fallback — `WindowInsetsController` does not exist
+    //   there, project `min_sdk` is 28) — Equivalent Java:
+    //     activity.getWindow().getDecorView()
+    //             .setSystemUiVisibility(IMMERSIVE_FLAGS);
+    //
+    // The branch point is the `getInsetsController` method lookup: when
+    // it succeeds we are on API 30+; when it is absent we are on API
+    // 28/29 and fall through to `applyLegacyImmersive`.
+    //
+    // All method invocations use the `...A` jvalue-array variants — no
+    // C-variadic calls; see the JNINativeInterface decl.
+    //
+    // JNI hops (API 30+ path):
     //   1. GetObjectClass(activity)               -> Activity class
     //   2. GetMethodID(Activity, "getWindow", "()Landroid/view/Window;")
     //   3. CallObjectMethodA(.., null)            -> Window object
     //   4. GetObjectClass(window)                 -> Window class
-    //   5. GetMethodID(Window, "getDecorView", "()Landroid/view/View;")
-    //   6. CallObjectMethodA(.., null)            -> decorView object
-    //   7. GetObjectClass(decorView)              -> View class
-    //   8. GetMethodID(View, "setSystemUiVisibility", "(I)V")
-    //   9. CallVoidMethodA(decorView, .., &[FLAGS])
+    //   5. GetMethodID(Window, "getInsetsController",
+    //                  "()Landroid/view/WindowInsetsController;")
+    //      -- null on API <30: fall back to the legacy path.
+    //   6. CallObjectMethodA(.., null)            -> WindowInsetsController
+    //   7. FindClass("android/view/WindowInsets$Type")
+    //   8. GetStaticMethodID(.., "systemBars", "()I")
+    //   9. CallStaticIntMethodA(..)               -> systemBars type mask
+    //  10. GetObjectClass(controller)             -> controller class
+    //  11. GetMethodID(.., "hide", "(I)V"); CallVoidMethodA(.., mask)
+    //  12. GetMethodID(.., "setSystemBarsBehavior", "(I)V");
+    //      CallVoidMethodA(.., BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE)
 
     const activity_class = jni.GetObjectClass(env, activity.clazz) orelse {
         _ = clearException(env);
@@ -354,39 +434,134 @@ fn applyImmersive(activity: *ANativeActivity) void {
     };
     defer jni.DeleteLocalRef(env, window_class);
 
+    // `Window.getInsetsController()` exists only on API 30+. On API
+    // 28/29 the lookup fails: clear the pending `NoSuchMethodError` and
+    // fall back to the legacy `View.setSystemUiVisibility` path so those
+    // devices still get immersive mode. (The supported device is API
+    // 34, which takes the `WindowInsetsController` branch below.)
+    const get_controller = jni.GetMethodID(env, window_class, "getInsetsController", "()Landroid/view/WindowInsetsController;") orelse {
+        _ = clearException(env);
+        logInfo("immersive: getInsetsController unavailable (API <30) — using legacy setSystemUiVisibility");
+        applyLegacyImmersive(env, window, window_class);
+        return;
+    };
+    const controller = jni.CallObjectMethodA(env, window, get_controller, null) orelse {
+        _ = clearException(env);
+        logWarn("immersive: getInsetsController() returned null");
+        return;
+    };
+    defer jni.DeleteLocalRef(env, controller);
+
+    // `WindowInsets.Type.systemBars()` — a static method on the nested
+    // class `android.view.WindowInsets$Type` returning the int mask
+    // that covers BOTH the status and the navigation bars.
+    const type_class = jni.FindClass(env, "android/view/WindowInsets$Type") orelse {
+        _ = clearException(env);
+        logWarn("immersive: FindClass(WindowInsets$Type) failed");
+        return;
+    };
+    defer jni.DeleteLocalRef(env, type_class);
+
+    const system_bars_mid = jni.GetStaticMethodID(env, type_class, "systemBars", "()I") orelse {
+        _ = clearException(env);
+        logWarn("immersive: systemBars() static methodID lookup failed");
+        return;
+    };
+    const system_bars: jint = jni.CallStaticIntMethodA(env, type_class, system_bars_mid, null);
+    if (clearException(env)) {
+        logWarn("immersive: systemBars() threw");
+        return;
+    }
+
+    const controller_class = jni.GetObjectClass(env, controller) orelse {
+        _ = clearException(env);
+        logWarn("immersive: GetObjectClass(controller) failed");
+        return;
+    };
+    defer jni.DeleteLocalRef(env, controller_class);
+
+    // controller.hide(systemBars) — hides status + navigation bars.
+    const hide_mid = jni.GetMethodID(env, controller_class, "hide", "(I)V") orelse {
+        _ = clearException(env);
+        logWarn("immersive: hide(I)V methodID lookup failed");
+        return;
+    };
+    const hide_args = [_]jvalue{.{ .i = system_bars }};
+    jni.CallVoidMethodA(env, controller, hide_mid, &hide_args);
+    if (clearException(env)) {
+        logWarn("immersive: WindowInsetsController.hide() threw");
+        return;
+    }
+
+    // controller.setSystemBarsBehavior(BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE)
+    // — immersive-sticky: bars reappear transiently on an edge swipe.
+    const set_behavior_mid = jni.GetMethodID(env, controller_class, "setSystemBarsBehavior", "(I)V") orelse {
+        _ = clearException(env);
+        logWarn("immersive: setSystemBarsBehavior(I)V methodID lookup failed");
+        return;
+    };
+    const behavior_args = [_]jvalue{.{ .i = BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE }};
+    jni.CallVoidMethodA(env, controller, set_behavior_mid, &behavior_args);
+    if (clearException(env)) {
+        logWarn("immersive: setSystemBarsBehavior() threw");
+        return;
+    }
+
+    logInfo("immersive: system bars hidden (WindowInsetsController, sticky)");
+}
+
+/// API 28/29 fallback: hide the system bars via the legacy
+/// `View.setSystemUiVisibility(IMMERSIVE_FLAGS)`. Called by
+/// `applyImmersive` only when `Window.getInsetsController` is absent
+/// (i.e. the device is below API 30, where `WindowInsetsController`
+/// does not exist). `WindowInsetsController` is preferred on API 30+;
+/// this keeps Android 9/10 (the project's `min_sdk` floor of 28)
+/// working instead of silently no-opping.
+///
+/// `window` / `window_class` are passed in already resolved by
+/// `applyImmersive` so this path reuses the first four JNI hops.
+/// Like the caller, runs on the UI thread and uses only the `...A`
+/// jvalue-array call variants.
+///
+/// Equivalent Java:
+///   activity.getWindow().getDecorView()
+///           .setSystemUiVisibility(IMMERSIVE_FLAGS);
+fn applyLegacyImmersive(env: *JNIEnv, window: jobject, window_class: jclass) void {
+    const jni = env.*.*;
+
     const get_decor = jni.GetMethodID(env, window_class, "getDecorView", "()Landroid/view/View;") orelse {
         _ = clearException(env);
-        logWarn("immersive: getDecorView methodID lookup failed");
+        logWarn("immersive(legacy): getDecorView methodID lookup failed");
         return;
     };
     const decor = jni.CallObjectMethodA(env, window, get_decor, null) orelse {
         _ = clearException(env);
-        logWarn("immersive: getDecorView() returned null");
+        logWarn("immersive(legacy): getDecorView() returned null");
         return;
     };
     defer jni.DeleteLocalRef(env, decor);
 
     const view_class = jni.GetObjectClass(env, decor) orelse {
         _ = clearException(env);
-        logWarn("immersive: GetObjectClass(decorView) failed");
+        logWarn("immersive(legacy): GetObjectClass(decorView) failed");
         return;
     };
     defer jni.DeleteLocalRef(env, view_class);
 
     const set_visibility = jni.GetMethodID(env, view_class, "setSystemUiVisibility", "(I)V") orelse {
         _ = clearException(env);
-        logWarn("immersive: setSystemUiVisibility methodID lookup failed");
+        logWarn("immersive(legacy): setSystemUiVisibility methodID lookup failed");
         return;
     };
 
     const args = [_]jvalue{.{ .i = IMMERSIVE_FLAGS }};
     jni.CallVoidMethodA(env, decor, set_visibility, &args);
     if (clearException(env)) {
-        logWarn("immersive: setSystemUiVisibility() threw");
+        logWarn("immersive(legacy): setSystemUiVisibility() threw");
         return;
     }
 
-    logInfo("immersive: system bars hidden (immersive-sticky)");
+    logInfo("immersive: system bars hidden (legacy setSystemUiVisibility, sticky)");
 }
 
 /// If a JNI exception is pending, describe + clear it. Returns true
