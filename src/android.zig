@@ -59,19 +59,46 @@
 //!
 //! Rather than attach the render thread to the JVM and post a Java
 //! `Runnable` (which would mean fabricating a `Runnable` subclass from
-//! JNI — painful with no Java code), we **chain the
-//! `ANativeActivityCallbacks.onWindowFocusChanged` callback**. The
-//! framework invokes that callback *on the UI thread*, and the
-//! `ANativeActivity.env` field is the valid UI-thread `JNIEnv*` while
-//! it runs. We save sokol's original callback pointer, install our own
-//! that calls the original and then applies the immersive flags. No
-//! thread attach, no `Runnable`, no wrong-thread exception.
+//! JNI — painful with no Java code, and impossible on Android where
+//! `DefineClass` needs dex, not JVM `.class` bytecode), we **chain
+//! `ANativeActivityCallbacks` entries**. The framework invokes those
+//! callbacks *on the UI thread*, and the `ANativeActivity.env` field is
+//! a valid UI-thread `JNIEnv*` while one runs. No thread attach, no
+//! `Runnable`, no wrong-thread exception.
 //!
-//! `onWindowFocusChanged(hasFocus=true)` also fires every time the app
+//! ## Hiding the bars *at launch* — why two chained callbacks
+//!
+//! `enableImmersiveMode()` is emitted by the assembler into the
+//! generated `main.zig`'s `sokol_main()`. sokol's
+//! `ANativeActivity_onCreate` calls `sokol_main()` **on the UI thread**
+//! *before* it registers its own `ANativeActivityCallbacks` entries —
+//! so `enableImmersiveMode()` runs UI-thread-side, early, with the
+//! `ANativeActivity*` already available.
+//!
+//! It would be tempting to chain `onWindowFocusChanged` right there,
+//! but sokol *overwrites* that slot moments later in `onCreate` — our
+//! pointer would not survive. The Android launch sequence then delivers
+//! the window's **first** `onWindowFocusChanged(true)` to sokol's
+//! handler, and a hook installed only from the render-thread `init`
+//! callback (which runs *after* that first focus event) misses it: the
+//! bars stay visible until the player happens to background+foreground
+//! the app. "Hidden at launch" is the behaviour that actually matters.
+//!
+//! The fix uses a slot sokol leaves **unset**: `onContentRectChanged`
+//! (its registration line in `ANativeActivity_onCreate` is commented
+//! out). We install `contentRectHook` there from `sokol_main()`; sokol
+//! never clobbers it. The framework fires `onContentRectChanged` on the
+//! UI thread once the activity's content rect is established at launch
+//! — late enough that `getWindow()/getInsetsController()` resolve, so
+//! the very first invocation hides the bars at launch.
+//!
+//! `contentRectHook`, on its first run, also chains
+//! `onWindowFocusChanged` — by then sokol *has* registered its own
+//! handler, so our chain forwards to sokol's and survives.
+//! `onWindowFocusChanged(hasFocus=true)` fires every time the app
 //! regains focus (returning from the notification shade, the recents
 //! switcher, etc.), which is precisely when immersive-sticky flags can
-//! get cleared — so the same hook doubles as the re-apply hook for
-//! free. The first invocation at startup performs the initial apply.
+//! get cleared — so it serves as the ongoing re-apply hook.
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -245,7 +272,12 @@ const ANativeActivityCallbacks = extern struct {
     onNativeWindowDestroyed: ?*const anyopaque,
     onInputQueueCreated: ?*const anyopaque,
     onInputQueueDestroyed: ?*const anyopaque,
-    onContentRectChanged: ?*const anyopaque,
+    // `void (*)(ANativeActivity*, const ARect*)`. The `ARect*` is opaque
+    // here — `contentRectHook` never reads it. sokol leaves this slot
+    // UNSET (its `ANativeActivity_onCreate` has the registration line
+    // commented out), which is exactly why we install our launch hook
+    // here: sokol never overwrites it.
+    onContentRectChanged: ?*const fn (*ANativeActivity, ?*const anyopaque) callconv(.c) void,
     onConfigurationChanged: ?*const fn (*ANativeActivity) callconv(.c) void,
     onLowMemory: ?*const fn (*ANativeActivity) callconv(.c) void,
 };
@@ -334,9 +366,16 @@ const FocusCb = *const fn (*ANativeActivity, c_int) callconv(.c) void;
 /// `0` == none.
 var saved_focus_cb: std.atomic.Value(usize) = std.atomic.Value(usize).init(0);
 
-/// Install guard. `swap(true)` makes the install an atomic
-/// test-and-set so a double `enableImmersiveMode()` can't double-chain.
+/// Install guard for the `onContentRectChanged` chain. `swap(true)`
+/// makes the install an atomic test-and-set so a double
+/// `enableImmersiveMode()` can't double-chain.
 var installed: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
+
+/// Install guard for the `onWindowFocusChanged` chain, set the first
+/// time `contentRectHook` runs (it deferred-installs the focus chain).
+/// `contentRectHook` always runs on the one UI thread, but a guard
+/// keeps the focus-chain install idempotent regardless.
+var focus_chain_installed: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
 
 /// Our replacement `onWindowFocusChanged`. Runs on the UI thread, so
 /// `activity.env` is a valid `JNIEnv*` for decor-view mutation.
@@ -356,6 +395,50 @@ fn focusChangedHook(activity: *ANativeActivity, has_focus: c_int) callconv(.c) v
     // system shows the bars anyway; re-applying on the next focus gain
     // is the correct immersive-sticky lifecycle.
     if (has_focus != 0) applyImmersive(activity);
+}
+
+/// Chain sokol's `onWindowFocusChanged` so immersive is re-applied on
+/// every focus regain (notification shade, recents switcher, …).
+///
+/// Called from `contentRectHook` — i.e. on the UI thread, *after*
+/// sokol's `ANativeActivity_onCreate` has registered its own
+/// `onWindowFocusChanged` handler — so the saved pointer is sokol's
+/// real handler and our chain survives. (`enableImmersiveMode()` runs
+/// too early to do this itself: sokol overwrites the slot right after
+/// `sokol_main()` returns.)
+///
+/// Ordering is load-bearing: publish `saved_focus_cb` *before* writing
+/// `focusChangedHook` into the callbacks struct, so the hook never
+/// reads a `saved_focus_cb` that has not been written yet.
+fn installFocusChain(activity: *ANativeActivity) void {
+    if (focus_chain_installed.swap(true, .seq_cst)) return;
+    const orig_bits: usize = if (activity.callbacks.onWindowFocusChanged) |cb|
+        @intFromPtr(cb)
+    else
+        0;
+    saved_focus_cb.store(orig_bits, .seq_cst);
+    activity.callbacks.onWindowFocusChanged = &focusChangedHook;
+    logInfo("immersive: focus-callback hook installed");
+}
+
+/// Our chained `onContentRectChanged`. The framework fires this on the
+/// UI thread once the activity's content rect is established at launch
+/// (and on later content-rect changes), so `activity.env` is a valid
+/// UI-thread `JNIEnv*` and the decor-view / `WindowInsetsController`
+/// JNI calls are thread-legal here.
+///
+/// This is the hook that hides the bars **at launch**: its first
+/// invocation runs early enough that a normal launch never shows the
+/// system bars to the player. On that first run it also installs the
+/// `onWindowFocusChanged` chain for the ongoing focus-regain re-apply.
+fn contentRectHook(activity: *ANativeActivity, rect: ?*const anyopaque) callconv(.c) void {
+    _ = rect; // unused — we re-apply immersive regardless of the rect
+    // Install the focus-regain re-apply chain on the first run. Done
+    // here (not in `enableImmersiveMode`) because by now sokol has
+    // registered its own `onWindowFocusChanged`, so the chain forwards
+    // correctly instead of being overwritten.
+    installFocusChain(activity);
+    applyImmersive(activity);
 }
 
 /// Perform the JNI calls that hide the system bars. MUST be called on
@@ -583,12 +666,19 @@ fn clearException(env: *JNIEnv) bool {
 /// `sapp_android_get_native_activity()`, so the caller (the assembler-
 /// generated `main.zig`) only needs a single argument-free call.
 ///
-/// Call this once from the generated `main.zig`'s `init` callback when
-/// the project's `immersive_mode` flag is set. It is safe to call from
-/// the sokol render thread: this function does NOT touch the decor
-/// view itself — it only installs a UI-thread callback hook. The
-/// actual bar-hiding runs later inside `onWindowFocusChanged` on the
-/// UI thread, which also re-applies the flags on every focus regain.
+/// **Call site:** the assembler emits this in the generated
+/// `main.zig`'s `sokol_main()`. sokol's `ANativeActivity_onCreate`
+/// invokes `sokol_main()` **on the UI thread**, *before* it registers
+/// its own `ANativeActivityCallbacks` — so this runs UI-thread-side and
+/// early, with the `ANativeActivity*` already populated.
+///
+/// It does NOT touch the decor view itself (that would need the window
+/// to exist and is deferred). It only installs `contentRectHook` into
+/// the `onContentRectChanged` slot — a slot sokol leaves unset, so it
+/// is not clobbered. The framework fires `onContentRectChanged` on the
+/// UI thread once the content rect is established at launch; that first
+/// invocation hides the bars **at launch**, and also chains
+/// `onWindowFocusChanged` for the ongoing focus-regain re-apply.
 ///
 /// On non-Android targets this is a no-op (the whole body is gated on
 /// `is_android`), so the generated `main.zig` can call it
@@ -606,20 +696,14 @@ pub fn enableImmersiveMode() void {
     // another caller (or an earlier call) already installed the hook.
     if (installed.swap(true, .seq_cst)) return;
 
-    // Chain the focus callback. Saving the original keeps sokol's own
-    // RESUMED/SUSPENDED lifecycle handling intact.
-    //
-    // Ordering is load-bearing: publish `saved_focus_cb` *before*
-    // writing `focusChangedHook` into the callbacks struct. The hook
-    // can only fire once the framework sees the new callback pointer,
-    // so storing the original first guarantees `focusChangedHook`
-    // never reads a `saved_focus_cb` that hasn't been written yet.
-    const orig_bits: usize = if (na.callbacks.onWindowFocusChanged) |cb|
-        @intFromPtr(cb)
-    else
-        0;
-    saved_focus_cb.store(orig_bits, .seq_cst);
-    na.callbacks.onWindowFocusChanged = &focusChangedHook;
+    // Install our hook into `onContentRectChanged`. sokol's
+    // `ANativeActivity_onCreate` leaves this slot unset (its
+    // registration line is commented out), so — unlike
+    // `onWindowFocusChanged`, which sokol overwrites moments after
+    // `sokol_main()` returns — our pointer survives. The framework
+    // fires it on the UI thread at launch; `contentRectHook` performs
+    // the launch apply and chains the focus callback from there.
+    na.callbacks.onContentRectChanged = &contentRectHook;
 
-    logInfo("immersive: focus-callback hook installed");
+    logInfo("immersive: content-rect hook installed");
 }
