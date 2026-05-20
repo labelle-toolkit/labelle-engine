@@ -142,8 +142,14 @@ const socket_io = if (builtin.os.tag == .windows) struct {
     pub const c_fcntl = std.c.fcntl;
     extern "c" fn __error() *c_int; // macOS errno location
     extern "c" fn __errno_location() *c_int; // glibc errno location
+    extern "c" fn __errno() *c_int; // Bionic errno location (Android)
 
     pub fn errno() c_int {
+        // Bionic (Android) ships `__errno`, not `__errno_location`.
+        // Compile-time pick by ABI so the dead branch's extern ref is
+        // dropped by Zig's linker on each target.
+        const is_android = builtin.target.abi == .android or builtin.target.abi == .androideabi;
+        if (comptime is_android) return __errno().*;
         return if (builtin.os.tag == .macos) __error().* else __errno_location().*;
     }
 

@@ -47,6 +47,16 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
+/// Bionic doesn't ship `shm_open` / `shm_unlink` — Android uses ashmem
+/// instead. `libgame.so` would otherwise fail to `dlopen` at runtime
+/// with `cannot locate symbol "shm_unlink"` on `NativeActivity.onCreate`.
+/// The preview pipeline (POSIX shm producer/consumer) is editor-side
+/// only — there is no in-process preview consumer on-device — so on
+/// Android we return `error.ShmOpenFailed` from every entry point and
+/// rely on Zig's comptime dead-code elimination to drop the linker
+/// references to `std.c.shm_*` entirely.
+const is_android_abi = builtin.target.abi == .android or builtin.target.abi == .androideabi;
+
 pub const PIXEL_FORMAT_RGBA8: u32 = 0x52474241; // 'RGBA'
 pub const MAGIC: u64 = 0x4C424C5052564653; // 'LBLPRVFS' — labelle preview frame stream
 pub const PROTOCOL_VERSION: u32 = 1;
@@ -282,7 +292,10 @@ const MappedRegion = struct {
 /// Create a new mapping (or open + resize an existing one on POSIX —
 /// the producer's create-or-reattach idiom).
 fn createMapping(name: [:0]const u8, total: u64) Error!MappedRegion {
-    if (builtin.os.tag == .windows) {
+    if (is_android_abi) {
+        // See top-of-file note on Bionic. Preview pipeline isn't reachable on-device.
+        return Error.ShmOpenFailed;
+    } else if (builtin.os.tag == .windows) {
         // The producer side. CreateFileMappingW with hFile=INVALID_HANDLE_VALUE
         // creates a section backed by the system paging file (i.e. shared
         // memory). Same name → existing section is reopened with the same
@@ -363,7 +376,9 @@ fn createMapping(name: [:0]const u8, total: u64) Error!MappedRegion {
 
 /// Open an existing mapping (consumer side).
 fn openMapping(name: [:0]const u8) Error!MappedRegion {
-    if (builtin.os.tag == .windows) {
+    if (is_android_abi) {
+        return Error.ShmOpenFailed;
+    } else if (builtin.os.tag == .windows) {
         const wname = windows.mappingNameFromPosix(std.heap.page_allocator, name) catch
             return Error.ShmOpenFailed;
         defer std.heap.page_allocator.free(wname);
@@ -452,6 +467,7 @@ fn unmapRegion(region: *const MappedRegion) void {
 /// Best-effort unlink (POSIX only — `shm_unlink` doesn't exist on
 /// Windows where section objects are reference-counted on the handle).
 fn unlinkName(name: [:0]const u8) void {
+    if (is_android_abi) return;
     if (builtin.os.tag == .windows) return;
     _ = std.c.shm_unlink(name.ptr);
 }
