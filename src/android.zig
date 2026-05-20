@@ -258,18 +258,40 @@ extern "c" fn sapp_android_get_native_activity() ?*anyopaque;
 
 // ── Module state ──────────────────────────────────────────────────
 //
-// The original `onWindowFocusChanged` pointer sokol installed, saved
-// so our chained callback can still forward to it. Single global is
-// fine: there is exactly one `NativeActivity` per process.
-var saved_focus_cb: ?*const fn (*ANativeActivity, c_int) callconv(.c) void = null;
-var installed: bool = false;
+// Both globals are written on the sokol render thread (in
+// `enableImmersiveMode`) and read on the Android UI thread (in
+// `focusChangedHook`), so they MUST be atomic — a plain `var` is a
+// data race. Single globals are fine: there is exactly one
+// `NativeActivity` per process.
+//
+// `FocusCb` is the callback function-pointer type; we store the
+// original pointer as a `usize` in an `std.atomic.Value` (an optional
+// function pointer is not a valid atomic payload type, but its raw
+// address bits are). `0` means "no original callback".
+const FocusCb = *const fn (*ANativeActivity, c_int) callconv(.c) void;
+
+/// The original `onWindowFocusChanged` pointer sokol installed, saved
+/// so our chained callback can still forward to it. Raw address bits;
+/// `0` == none.
+var saved_focus_cb: std.atomic.Value(usize) = std.atomic.Value(usize).init(0);
+
+/// Install guard. `swap(true)` makes the install an atomic
+/// test-and-set so a double `enableImmersiveMode()` can't double-chain.
+var installed: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
 
 /// Our replacement `onWindowFocusChanged`. Runs on the UI thread, so
 /// `activity.env` is a valid `JNIEnv*` for decor-view mutation.
 fn focusChangedHook(activity: *ANativeActivity, has_focus: c_int) callconv(.c) void {
     // Forward to sokol's original handler first so its lifecycle
     // bookkeeping (RESUMED/SUSPENDED, frame-callback gating) is intact.
-    if (saved_focus_cb) |orig| orig(activity, has_focus);
+    // `enableImmersiveMode` publishes `saved_focus_cb` *before* it
+    // installs `focusChangedHook` into the callbacks struct, so by the
+    // time this hook can fire the load below always sees the real bits.
+    const saved_bits = saved_focus_cb.load(.seq_cst);
+    if (saved_bits != 0) {
+        const orig: FocusCb = @ptrFromInt(saved_bits);
+        orig(activity, has_focus);
+    }
 
     // Only (re)apply when the window has focus. On focus loss the
     // system shows the bars anyway; re-applying on the next focus gain
@@ -405,12 +427,23 @@ pub fn enableImmersiveMode() void {
         return;
     }));
 
-    if (installed) return;
-    installed = true;
+    // Atomic test-and-set install guard: if it was already `true`,
+    // another caller (or an earlier call) already installed the hook.
+    if (installed.swap(true, .seq_cst)) return;
 
     // Chain the focus callback. Saving the original keeps sokol's own
     // RESUMED/SUSPENDED lifecycle handling intact.
-    saved_focus_cb = na.callbacks.onWindowFocusChanged;
+    //
+    // Ordering is load-bearing: publish `saved_focus_cb` *before*
+    // writing `focusChangedHook` into the callbacks struct. The hook
+    // can only fire once the framework sees the new callback pointer,
+    // so storing the original first guarantees `focusChangedHook`
+    // never reads a `saved_focus_cb` that hasn't been written yet.
+    const orig_bits: usize = if (na.callbacks.onWindowFocusChanged) |cb|
+        @intFromPtr(cb)
+    else
+        0;
+    saved_focus_cb.store(orig_bits, .seq_cst);
     na.callbacks.onWindowFocusChanged = &focusChangedHook;
 
     logInfo("immersive: focus-callback hook installed");
