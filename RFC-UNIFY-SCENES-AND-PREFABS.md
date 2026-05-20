@@ -139,27 +139,161 @@ Recommend in docs that when `"name"` is set, its value equal the file's basename
 
 Scene-today behaviors that don't belong in the prefab format itself find new homes — each chosen to fit labelle's existing ECS / convention-based patterns.
 
-### Assets — inferred, with a component escape hatch
+### Assets — inference + lazy fallback over `AssetCatalog`
 
-Today scenes declare `"assets": ["background", "cloud", ...]` — a list of named resource bundles from `project.labelle`. Under unification:
+Today scenes declare `"assets": ["background", "cloud", ...]` — a list of named resource bundles from `project.labelle`. Under unification the field is dropped; loading is driven by inference, with an explicit-declaration escape hatch and a lazy-on-miss safety net.
 
-- **Primary path: inference.** The engine walks the prefab tree at instantiation, collects all `Sprite.sprite_name` references (and prefab-reference-inside-component values like `Room.movement_nodes` and `Room.workstations`), and maps each to its declaring resource bundle via the project's `.resources` declarations. Required bundles are loaded before instantiation.
-- **Escape hatch: `AssetManifest` component.** When inference can't see an asset — sounds, atlases referenced only by scripts, atlases lazily attached via runtime overlays — declare it explicitly:
+The mechanism builds on `AssetCatalog` (`labelle-engine/src/assets/`, introduced by RFC-ASSET-STREAMING), which already provides:
 
-  ```jsonc
-  {
-      "root": {
-          "components": {
-              "AssetManifest": { "load": ["intro_audio", "cinematic_overlay"] }
-          },
-          "children": [ ... ]
-      }
-  }
-  ```
+- A registry of declared assets keyed by name; each entry has a state (`registered → queued → decoding → ready/failed`) and a refcount.
+- Worker-thread decode (3 workers, SPSC ring buffers).
+- Main-thread upload with a per-frame budget.
+- Refcounted unload — assets drop back to `registered` when refcount hits zero, GPU memory freed.
 
-  Any prefab can carry an `AssetManifest`, and nested manifests are unioned with the parent's at instantiation. This composes cleanly: a "test harness" prefab can wrap a real scene and add fixtures' asset deps without touching the scene file.
+The unification adds two things on top: a **reverse index** mapping sprite/image names to their containing assets, and a **walker** that pre-computes per-prefab required-resources at engine startup. Acquire/release calls into `AssetCatalog` are made at top-level spawn / destroy.
 
-The `"assets"` field is dropped from every scene file during migration.
+#### Reverse index (built once at engine startup)
+
+```zig
+const ResourceRef = union(enum) {
+    atlas: []const u8,   // bundle name (the atlas that contains this sprite)
+    image: []const u8,   // asset name (the standalone image itself)
+};
+const reverse_index: std.StringHashMap(ResourceRef);
+```
+
+Built by parsing every entry in `project.labelle`'s `.resources`:
+
+- An entry with `.json` (atlas + JSON metadata): parse the JSON, extract every sprite path, insert `(sprite_path → .{ .atlas = bundle_name })`.
+- An entry without `.json` (standalone image): insert `(asset_name → .{ .image = asset_name })`.
+
+**Collisions** (two atlases declaring the same sprite path, or any other name conflict): **load-time error at engine startup**. Exact-match comparison, case-sensitive. The cost of being strict is "rename a duplicate sprite"; the cost of being lenient is silent shadowing bugs that only manifest under specific atlas-load orders.
+
+#### Walker (runs once per prefab at engine startup)
+
+For every prefab in the registry, walk the static tree once and produce `prefab_name → required_resources[]`:
+
+- Recurse through `children` array entries.
+- Recurse through nested prefab references inside entity-bearing component fields (the preserved C1 pattern — `Room.movement_nodes`, `Room.workstations`, etc.).
+- For every component value, walk every nested struct/array/string field. For each string, look it up in the reverse index. Hits add the resource to the prefab's required set.
+- Union with `AssetManifest.load` declarations found on any entity in the tree.
+
+The walker treats false positives (a string that happens to match a sprite name but isn't a visual reference) as harmless — they pre-load an unneeded resource. The alternative (per-component declaration of which fields are visual refs) would force every component author to remember to declare, and missed declarations would cause silent missing-texture bugs at runtime.
+
+#### Acquire / spawn / release lifecycle
+
+Every top-level prefab instantiation (a state transition or `game.spawn(prefab_name)` from a script):
+
+```
+required = prefab_required_resources[name]   // pre-computed
+for each r in required:
+    assets.acquire(r)
+wait until assets.allReady(required)         // loading scene masks this
+spawn entity tree
+remember `required` on the spawned root entity
+```
+
+Children spawned as part of the tree do NOT acquire — the top-level spawn's recursive `required` set already includes their resources.
+
+On root destruction:
+
+```
+for each r in remembered:
+    assets.release(r)
+```
+
+#### Lazy on-miss (async pop-in)
+
+When `findSprite` / `findImage` misses (sprite or image name not in any currently-loaded resource):
+
+```
+r = reverse_index[name]
+if r != null and assets state != .failed:
+    assets.acquire(r)        // attribute to active state's world root
+    return null this frame   // renderer skips
+else:
+    log "unknown sprite/image: <name>" once per name
+    return null permanently
+```
+
+The renderer treats a null lookup as "skip this entity's visual this frame." When the load completes (`assets.isReady(r)`), subsequent frames render normally. The sprite or image pops in.
+
+Lazy acquires are tracked on the **active state's world root**, not per-entity. They're released at the next state transition. This keeps bookkeeping simple at the cost of holding lazy-loaded resources slightly longer than strictly needed.
+
+#### State transition ordering
+
+State A → State B:
+
+```
+new_required = prefab_required_resources[B]
+for each r in new_required:
+    assets.acquire(r)          // *** acquire NEW first ***
+wait until assets.allReady(new_required)
+spawn B's tree
+for each r in (A's tracked set ∪ A's lazy set):
+    assets.release(r)          // *** release OLD after ***
+destroy A's tree
+```
+
+Acquire-new-first means resources shared between A and B never see refcount zero — no thrashing reload. Resources only-in-A unload after the swap; resources only-in-B load fresh.
+
+#### Loading scene pattern
+
+The wait between acquire-new and spawn-B is masked by the existing loading-scene pattern: the old (loading) state stays alive and rendering until the new state is ready. Nothing new — `AssetCatalog` already exposes:
+
+- `assets.progress(slice) → ratio` for the loading bar.
+- `assets.allReady(slice) → bool` for the transition trigger.
+- `assets.lastError(name)` for failure surfaces.
+
+The engine adds an API for the loading script to discover which resources are in flight (proposed: `game.pendingTransitionResources() → []const []const u8`). The loading script polls `assets.progress(...)` on that slice each frame and renders accordingly.
+
+#### `AssetManifest` component (eager escape hatch)
+
+When the walker can't see an asset — script-computed sprite names, runtime overlays, audio banks, raw bytes loaded by scripts — declare it explicitly on the prefab that needs it eagerly:
+
+```jsonc
+{
+    "root": {
+        "components": {
+            "AssetManifest": { "load": ["intro_audio", "cinematic_overlay"] }
+        },
+        "children": [ ... ]
+    }
+}
+```
+
+`AssetManifest` declarations are merged into the prefab's `required_resources` set by the walker (at engine startup). Any prefab can carry one, anywhere in the tree — nested manifests are unioned with the root's set. This composes cleanly: a "test harness" prefab can wrap a real scene and add fixture asset deps without touching the scene file.
+
+Lifetime semantics for manifest-declared resources match inference-derived ones: acquired at top-level spawn, released at root destruction.
+
+#### Standalone `Image` component
+
+Today entities can only display images via atlas-sprites (`Sprite.sprite_name` → `TextureManager.findSprite`). The unification adds an `Image` component for entities that need a standalone PNG (no atlas, no sub-rect):
+
+```jsonc
+"Image": {
+    "name": "logo_splash",       // AssetCatalog asset key
+    "pivot": "bottom_left",      // same enum as Sprite
+    "layer": "ui",               // same layering as Sprite
+    "z_index": 10,               // same
+    "visible": true              // optional
+}
+```
+
+The walker treats `Image.name` references the same as `Sprite.sprite_name` references — both resolve through the unified reverse index above. `AssetCatalog.acquire` / `isReady` / `getTexture` drive the load.
+
+V1 scope is deliberately narrow: no animation, no dynamic name swapping, no sub-rect cropping. If those are needed, use `Sprite` + an atlas. The `Image` component is for single static PNG entities only.
+
+`.resources` declarations in `project.labelle` accept both shapes by making `.json` optional — presence selects the atlas loader, absence selects the catalog `image` loader:
+
+```
+.resources = .{
+    .{ .name = "rooms",        .json = "assets/rooms.json", .texture = "assets/rooms.png" },  // atlas
+    .{ .name = "logo_splash",  .texture = "assets/logo.png" },                                  // standalone
+}
+```
+
+A naming caveat: there's already a `gui_types.Image` in the imgui layer. The ECS `Image` component is distinct (different module, different render path). Worth a docs callout to avoid confusion.
 
 ### Camera — default inserted by the engine
 
@@ -335,6 +469,16 @@ Child entries within the tree never gain a `"root"` wrapper — only the file's 
 
 3. **`overrides` merge semantics.** With `overrides` as its own keyword (separate from `components`), the merge rules need to be specified precisely in one place: shallow vs deep merge, list-replace vs list-append, what happens to components in the referenced prefab that the override does not mention (kept), how to *remove* a component the referenced prefab has (probably an explicit syntax like `"Position": null`, but worth deciding). The unification doesn't change today's behavior; it just renames the keyword. This is the moment to write the rules down.
 
-4. **Asset inference completeness audit.** Are there atlases or audio banks today that are loaded from scripts, never from a Sprite component? Walk the project before removing the `"assets"` field to make sure inference + `AssetManifest` cover every case. If significant gaps exist, the migration plan grows a "add `AssetManifest` to scenes X, Y, Z" step.
+4. **Asset inference completeness audit.** Are there atlases or audio banks today that are loaded from scripts, never from a Sprite/Image component reference or in a static prefab field the walker can see? Walk the project before removing the `"assets"` field to make sure inference + `AssetManifest` + lazy-on-miss cover every case in practice. If significant gaps exist, the migration plan grows a "add `AssetManifest` to scenes X, Y, Z" step.
 
-5. **`AssetManifest` lifetime.** When a prefab carrying `AssetManifest` is destroyed, should the listed bundles be reference-counted / unloaded? Probably yes (so a finished cinematic scene releases its audio bank), but the bookkeeping needs to be specified — multiple instantiations of the same prefab should not double-count, and bundles referenced by multiple manifests should only unload when the last manifest is gone.
+5. **Engine API for pending-transition resources.** The loading scene needs to know which resources are in flight for the next state to drive its progress bar. Proposed shape: `game.pendingTransitionResources() → []const []const u8`. Alternative: a callback API on `game.transitionToRoot(name, .{ .on_progress = fn(ratio: f32) {} })`. Decide whichever feels more idiomatic.
+
+### Resolved during RFC discussion (not blocking)
+
+- **`AssetCatalog` foundation.** The unification reuses `AssetCatalog`'s existing refcount, async decode, and frame-budgeted upload. No new async infrastructure introduced by this RFC.
+- **Walker scope.** Walks every string in component data against the reverse index; false positives load an unneeded asset (cheap) rather than miss a needed one (a bug). Resolves Q1.
+- **When inference runs.** Two phases — Phase A builds the reverse index + per-prefab required-resources at startup; Phase B looks up and acquires at top-level spawn. Resolves Q2.
+- **Reverse-index collisions.** Load-time error at engine startup, case-sensitive exact match. Resolves Q3.
+- **Late spawns / lazy fallback.** Lazy async pop-in via `findSprite` / `findImage` miss → `assets.acquire` attributed to the active state's world root, released at next state transition. Resolves Q4.
+- **Acquire/release lifecycle.** Per-top-level-spawn, with acquire-new-first / release-old-after ordering on state transitions to avoid thrashing shared resources. Resolves Q5.
+- **Image vs Sprite.** Two distinct components, each with one job. Image is for standalone PNGs via `AssetCatalog`; v1 scope explicitly excludes animation, dynamic name swapping, and sub-rect cropping.
