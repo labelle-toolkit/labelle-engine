@@ -25,8 +25,11 @@
 //!
 //!   1. prefab-defined children (`prefab.root.children`),
 //!   2. entity entries nested inside component fields, in component
-//!      declaration order then array order — prefab components
-//!      first, then the entry's own `components`/`overrides`,
+//!      declaration order then array order — walked over the
+//!      **effective** component set (the prefab components with the
+//!      reference entry's `overrides` deep-merged in and `null`
+//!      removals applied, RFC #562), so the traversal matches the
+//!      tree the loader actually instantiates,
 //!   3. the entry's own `children` array.
 //!
 //! This order is the contract the hook-order spec (#561) builds on:
@@ -51,6 +54,14 @@ const std = @import("std");
 const jsonc = @import("jsonc");
 const Value = jsonc.Value;
 const uf = @import("unified_format.zig");
+
+/// Per-walk scratch allocations — the merged effective-component
+/// trees built while reasoning about `overrides` (RFC #562). Owned by
+/// the walk; freed when the walk finishes. Kept separate from
+/// `WalkContext` (which lives on a caller's stack and is read for
+/// `cycle_chain` after the walk returns) so a single arena reset
+/// frees every merge without touching the diagnostic buffers.
+const MergeArena = std.heap.ArenaAllocator;
 
 /// Error set for a tree walk. `PrefabCycle` carries no payload —
 /// the offending chain is reported through `WalkContext.cycle_chain`
@@ -178,11 +189,14 @@ pub fn walk(
     root_value: Value,
     visitor: anytype,
 ) (WalkError || @TypeOf(visitor).VisitError)!void {
-    try walkEntry(ctx, resolver, root_value, .root, 0, null, visitor);
+    var merge_arena = MergeArena.init(ctx.allocator);
+    defer merge_arena.deinit();
+    try walkEntry(ctx, &merge_arena, resolver, root_value, .root, 0, null, visitor);
 }
 
 fn walkEntry(
     ctx: *WalkContext,
+    merge_arena: *MergeArena,
     resolver: Resolver,
     entity_value: Value,
     origin: Origin,
@@ -236,37 +250,116 @@ fn walkEntry(
     if (prefab_root) |proot| {
         if (proot.getArray("children")) |children| {
             for (children.items) |child_val| {
-                try walkEntry(ctx, resolver, child_val, .prefab_child, depth + 1, null, visitor);
+                try walkEntry(ctx, merge_arena, resolver, child_val, .prefab_child, depth + 1, null, visitor);
             }
         }
     }
 
     // ── 2. entity entries nested in component fields ────────────
-    // Prefab components first, then the entry's own patch — the
-    // entry-side patch is walked too because an `overrides` block
-    // can introduce nested entities of its own.
-    if (prefab_root) |proot| {
-        if (proot.getObject("components")) |pc| {
-            try walkComponentFields(ctx, resolver, pc, depth, visitor);
+    // The walker must reason about the **effective** component tree
+    // — the post-#562-merge result the loader actually instantiates,
+    // not the raw prefab components. A reference entry's `overrides`
+    // can replace an entity-bearing field with a non-cyclic value,
+    // or a `null` override can remove a whole component; in either
+    // case the entity-bearing fields the prefab declared no longer
+    // exist, so walking the raw prefab components would chase a
+    // cycle through a field the merged tree has dropped.
+    //
+    // `effectiveComponents` mirrors `loadEntityInternal`: it deep-
+    // merges each override onto the prefab's same-named component
+    // (RFC #562, `uf.mergedOverride`), drops `null`-removed
+    // components, and carries through override-only components.
+    {
+        const prefab_components: ?Value.Object =
+            if (prefab_root) |proot| proot.getObject("components") else null;
+        const patch = uf.entityPatch(obj, NoopLog{});
+        if (try effectiveComponents(merge_arena, prefab_components, patch)) |eff| {
+            try walkComponentFields(ctx, merge_arena, resolver, eff, depth, visitor);
         }
-    }
-    if (uf.entityPatch(obj, NoopLog{})) |patch| {
-        try walkComponentFields(ctx, resolver, patch, depth, visitor);
     }
 
     // ── 3. the entry's own children array ───────────────────────
     if (obj.getArray("children")) |children| {
         for (children.items) |child_val| {
-            try walkEntry(ctx, resolver, child_val, .child, depth + 1, null, visitor);
+            try walkEntry(ctx, merge_arena, resolver, child_val, .child, depth + 1, null, visitor);
         }
     }
 }
 
+/// Build the **effective** component object for an entity entry:
+/// the prefab's components with the reference entry's `overrides`
+/// applied (RFC #562 deep-merge / `null` removal). This is the same
+/// component set `SceneLoader.loadEntityInternal` instantiates, so
+/// the walker's nested-entity traversal sees exactly the fields the
+/// runtime will spawn — no false `PrefabCycle` on a field an
+/// override replaced or removed.
+///
+/// Returns `null` only when neither side carries components. The
+/// merged tree lives in `merge_arena`; leaf values are shared with
+/// the inputs (same contract as `uf.mergeValues`).
+fn effectiveComponents(
+    merge_arena: *MergeArena,
+    prefab_components: ?Value.Object,
+    patch: ?Value.Object,
+) error{OutOfMemory}!?Value.Object {
+    // Inline entry (no prefab) — its `components` ARE the effective
+    // set; nothing to merge.
+    const pc = prefab_components orelse return patch;
+    // Reference entry with no `overrides` — the prefab components
+    // are the effective set unchanged.
+    const ov = patch orelse return pc;
+
+    const a = merge_arena.allocator();
+    var entries: std.ArrayListUnmanaged(Value.Object.Entry) = .empty;
+
+    // Start from the prefab components, dropping any the override
+    // removes via a JSONC `null` (component-level removal, #562).
+    for (pc.entries) |pe| {
+        const removed = blk: {
+            for (ov.entries) |oe| {
+                if (std.mem.eql(u8, oe.key, pe.key))
+                    break :blk oe.value == .null_value;
+            }
+            break :blk false;
+        };
+        if (removed) continue;
+        // Deep-merge the override onto this prefab component when
+        // the override names it; otherwise keep the prefab value.
+        var value = pe.value;
+        for (ov.entries) |oe| {
+            if (std.mem.eql(u8, oe.key, pe.key) and oe.value != .null_value) {
+                value = uf.mergeValues(pe.value, oe.value, a);
+                break;
+            }
+        }
+        try entries.append(a, .{ .key = pe.key, .value = value });
+    }
+
+    // Add override-only components (present in `overrides` but not
+    // the prefab), skipping `null` removals of nonexistent keys.
+    for (ov.entries) |oe| {
+        if (oe.value == .null_value) continue;
+        const in_prefab = blk: {
+            for (pc.entries) |pe| {
+                if (std.mem.eql(u8, pe.key, oe.key)) break :blk true;
+            }
+            break :blk false;
+        };
+        if (!in_prefab) try entries.append(a, .{ .key = oe.key, .value = oe.value });
+    }
+
+    return Value.Object{ .entries = try entries.toOwnedSlice(a) };
+}
+
 /// Walk every entity entry nested inside a component object's array
-/// fields. A field is "entity-bearing" when its first array element
-/// looks like an entity entry (`isEntityLike`).
+/// fields. A field is "entity-bearing" when ANY array element looks
+/// like an entity entry (`isEntityLike`) — consistent with the
+/// loader's `spawnAndLinkNestedEntities`, which scans every item.
+/// Checking only `[0]` would miss a cycle reached through an
+/// entity-like item that is not first in the array.
 fn walkComponentFields(
     ctx: *WalkContext,
+    merge_arena: *MergeArena,
     resolver: Resolver,
     components: Value.Object,
     depth: usize,
@@ -277,10 +370,9 @@ fn walkComponentFields(
         for (comp_obj.entries) |field| {
             const arr = field.value.asArray() orelse continue;
             if (arr.items.len == 0) continue;
-            if (!isEntityLike(arr.items[0])) continue;
             for (arr.items) |item| {
                 if (!isEntityLike(item)) continue;
-                try walkEntry(ctx, resolver, item, .component_field, depth + 1, entry.key, visitor);
+                try walkEntry(ctx, merge_arena, resolver, item, .component_field, depth + 1, entry.key, visitor);
             }
         }
     }

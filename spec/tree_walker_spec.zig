@@ -125,6 +125,14 @@ const Sources = struct {
     /// Two prefabs forming a `chain_a -> chain_b -> chain_a` cycle.
     chain_a_prefab: []const u8,
     chain_b_prefab: []const u8,
+    /// A prefab whose `Room.movement_nodes` component field embeds a
+    /// reference back to itself — a cycle that lives purely inside a
+    /// component field, not in `children`.
+    room_cycle_prefab: []const u8,
+    /// A prefab whose `Room.movement_nodes` has an entity-like item
+    /// only at index 1 (a non-entity scalar at index 0). Pins the
+    /// "scan ALL items" fix — a `[0]`-only probe would miss it.
+    room_nonfirst_prefab: []const u8,
 };
 
 const Corpus = Fixture.define(Sources, .{
@@ -153,17 +161,31 @@ const Corpus = Fixture.define(Sources, .{
     .chain_b_prefab =
     \\{ "root": { "children": [ { "prefab": "chain_a" } ] } }
     ,
+    .room_cycle_prefab =
+    \\{ "root": { "components": { "Room": { "movement_nodes": [
+    \\  { "prefab": "room_cycle" }
+    \\] } } } }
+    ,
+    .room_nonfirst_prefab =
+    \\{ "root": { "components": { "Room": { "movement_nodes": [
+    \\  42,
+    \\  { "prefab": "room_nonfirst" }
+    \\] } } } }
+    ,
 });
 
-/// A resolver that knows no prefabs — for inline-only walks.
+/// A resolver that knows no prefabs — for inline-only walks. `ctx`
+/// points at a process-lifetime static (the `get` fn ignores it
+/// anyway) so the resolver never carries a dangling stack pointer.
+const Empty = struct {
+    var anchor: u8 = 0;
+    fn get(_: *anyopaque, _: []const u8) ?Value {
+        return null;
+    }
+};
+
 fn emptyResolver() tw.Resolver {
-    const Empty = struct {
-        fn get(_: *anyopaque, _: []const u8) ?Value {
-            return null;
-        }
-    };
-    var dummy: u8 = 0;
-    return .{ .ctx = &dummy, .getFn = &Empty.get };
+    return .{ .ctx = &Empty.anchor, .getFn = &Empty.get };
 }
 
 pub const TreeWalkerSpec = struct {
@@ -317,6 +339,135 @@ pub const TreeWalkerSpec = struct {
             // One visit: the reference entry, with its prefab resolved.
             try expect.equal(visits.items.len, 1);
             try expect.toBeTrue(visits.items[0].has_prefab_root);
+        }
+    };
+
+    // ── cycle through a non-first component-array item ──────────
+    //
+    // The runtime nested-entity spawn scans EVERY item of a
+    // component array; the walker must too. A cycle reachable only
+    // through an entity-like item that is not `[0]` (here index 0
+    // is the scalar `42`) would be missed by a `[0]`-only probe.
+
+    pub const @"a cycle via a non-first component-array item" = struct {
+        test "is still detected (walker scans all items)" {
+            const a = arena.allocator();
+            const src = Corpus.create(.{});
+
+            var table = PrefabTable.init(a);
+            defer table.deinit();
+            try table.add("room_nonfirst", src.room_nonfirst_prefab);
+
+            var ref_entries = [_]Value.Object.Entry{
+                .{ .key = "prefab", .value = .{ .string = "room_nonfirst" } },
+            };
+            const ref = Value{ .object = .{ .entries = &ref_entries } };
+
+            var visits: std.ArrayList(Visit) = .empty;
+            var ctx = tw.WalkContext.init(a);
+            defer ctx.deinit();
+
+            const result = tw.walk(&ctx, table.resolver(), ref, Recorder{ .list = &visits, .allocator = a });
+            try expect.toReturnError(result, error.PrefabCycle);
+
+            const chain = try ctx.formatCycleChain(a);
+            try expect.equal(chain, @as([]const u8, "room_nonfirst -> room_nonfirst"));
+        }
+    };
+
+    // ── effective (post-#562-merge) component traversal ─────────
+    //
+    // The walker reasons about the MERGED component tree: an
+    // `overrides` entry that replaces or removes an entity-bearing
+    // component changes which nested entities actually exist, so a
+    // valid scene that overrides away a cyclic field must NOT be
+    // rejected with `error.PrefabCycle`.
+
+    pub const @"an override replacing a cyclic component field" = struct {
+        test "does not raise a false PrefabCycle" {
+            const a = arena.allocator();
+            const src = Corpus.create(.{});
+
+            var table = PrefabTable.init(a);
+            defer table.deinit();
+            // `room_cycle`'s prefab body has a self-referential
+            // `Room.movement_nodes`.
+            try table.add("room_cycle", src.room_cycle_prefab);
+
+            // A reference to `room_cycle` whose `overrides` replaces
+            // the whole `Room` component with a non-cyclic value —
+            // the effective tree has no cycle.
+            const ref = try parse(a,
+                \\{ "prefab": "room_cycle", "overrides": {
+                \\  "Room": { "movement_nodes": [] }
+                \\} }
+            );
+
+            var visits: std.ArrayList(Visit) = .empty;
+            var ctx = tw.WalkContext.init(a);
+            defer ctx.deinit();
+
+            // Must walk to completion — the override emptied the
+            // cyclic field, so there is no cycle to find.
+            try tw.walk(&ctx, table.resolver(), ref, Recorder{ .list = &visits, .allocator = a });
+            try expect.equal(visits.items.len, 1);
+            try expect.toBeTrue(visits.items[0].has_prefab_root);
+        }
+    };
+
+    pub const @"an override removing a cyclic component" = struct {
+        test "does not raise a false PrefabCycle" {
+            const a = arena.allocator();
+            const src = Corpus.create(.{});
+
+            var table = PrefabTable.init(a);
+            defer table.deinit();
+            try table.add("room_cycle", src.room_cycle_prefab);
+
+            // A `null` override removes the whole `Room` component
+            // (RFC #562 component removal) — the cyclic field is
+            // gone from the effective tree.
+            const ref = try parse(a,
+                \\{ "prefab": "room_cycle", "overrides": { "Room": null } }
+            );
+
+            var visits: std.ArrayList(Visit) = .empty;
+            var ctx = tw.WalkContext.init(a);
+            defer ctx.deinit();
+
+            try tw.walk(&ctx, table.resolver(), ref, Recorder{ .list = &visits, .allocator = a });
+            try expect.equal(visits.items.len, 1);
+            try expect.toBeTrue(visits.items[0].has_prefab_root);
+        }
+    };
+
+    pub const @"an override leaving a cyclic component field intact" = struct {
+        test "still detects the cycle" {
+            const a = arena.allocator();
+            const src = Corpus.create(.{});
+
+            var table = PrefabTable.init(a);
+            defer table.deinit();
+            try table.add("room_cycle", src.room_cycle_prefab);
+
+            // An override that touches an UNRELATED component must
+            // not mask the still-present cyclic `Room.movement_nodes`
+            // — the deep-merge keeps it.
+            const ref = try parse(a,
+                \\{ "prefab": "room_cycle", "overrides": {
+                \\  "Marker": { "id": 7 }
+                \\} }
+            );
+
+            var visits: std.ArrayList(Visit) = .empty;
+            var ctx = tw.WalkContext.init(a);
+            defer ctx.deinit();
+
+            const result = tw.walk(&ctx, table.resolver(), ref, Recorder{ .list = &visits, .allocator = a });
+            try expect.toReturnError(result, error.PrefabCycle);
+
+            const chain = try ctx.formatCycleChain(a);
+            try expect.equal(chain, @as([]const u8, "room_cycle -> room_cycle"));
         }
     };
 };

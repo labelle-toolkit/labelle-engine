@@ -231,7 +231,6 @@ pub fn SceneLoader(comptime GameType: type, comptime Components: type) type {
             };
             const prefab_obj = prefab_val.asObject() orelse return null;
             const prefab_root = uf.rootObject(prefab_obj);
-            const prefab_components = prefab_root.getObject("components") orelse return null;
 
             // Cycle gate. Walk a synthetic reference entry so the
             // shared walker pushes `name` onto its expansion stack
@@ -239,6 +238,12 @@ pub fn SceneLoader(comptime GameType: type, comptime Components: type) type {
             // or via a child / nested component field) is caught
             // (RFC #569). On a cycle the chain is logged and the
             // spawn fails (`null`) rather than recursing forever.
+            //
+            // Run UNCONDITIONALLY, before the `components` lookup
+            // below: a cyclic prefab whose `root` has no `components`
+            // (the cycle lives purely in `root.children`) would
+            // otherwise bypass the diagnostic via the early `return
+            // null` and just silently fail to spawn.
             {
                 var ref_entries = [_]Value.Object.Entry{
                     .{ .key = "prefab", .value = .{ .string = name } },
@@ -249,6 +254,8 @@ pub fn SceneLoader(comptime GameType: type, comptime Components: type) type {
                     return null;
                 };
             }
+
+            const prefab_components = prefab_root.getObject("components") orelse return null;
 
             const entity = game.createEntity();
             game.trackSceneEntity(entity);
