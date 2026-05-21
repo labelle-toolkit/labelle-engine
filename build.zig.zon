@@ -16,6 +16,10 @@
         .audio_backend = .{
             .path = "audio_backend",
         },
+        .zspec = .{
+            .url = "https://github.com/apotema/zspec/archive/v0.9.1.tar.gz",
+            .hash = "zspec-0.9.1-jaKLbbX4AwBKANdetxzzWc3UTO0UY0lcJJzTagQHlt5K",
+        },
     },
     .paths = .{
         "build.zig",
@@ -25,5 +29,6 @@
         "jsonc",
         "codegen",
         "audio_backend",
+        "spec",
     },
 }
