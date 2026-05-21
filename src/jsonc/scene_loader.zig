@@ -129,13 +129,32 @@ pub fn SceneLoader(comptime GameType: type, comptime Components: type) type {
         /// Pre-load a prefab from in-memory JSONC source into the
         /// persistent cache. Call before `loadSceneFromSource` so
         /// the prefab is available without file I/O.
+        ///
+        /// The cache key is the prefab's *effective name* — its
+        /// `"name"` field when present, else the `name` argument
+        /// (which the assembler passes as the file basename). This
+        /// is the flat name-keyed registry of RFC #561: a prefab
+        /// resolves by the same name regardless of its filename or
+        /// which directory it lives in.
+        ///
+        /// A duplicate effective name is a load-time error
+        /// (`error.DuplicatePrefabName`) — there is no precedence
+        /// rule; the author renames a file or sets a distinct
+        /// `"name"`. The assembler emits one call per prefab, so a
+        /// collision here means two source files genuinely clash.
         pub fn addEmbeddedPrefab(game: *GameType, name: []const u8, source: []const u8, prefab_dir: []const u8) !void {
             const prefab_cache = try prefab_cache_mod.getOrCreatePrefabCache(game, prefab_dir);
 
             const persistent = prefab_cache.persistent;
             var parser = JsoncParser.init(persistent, source);
             const val = try parser.parse();
-            try prefab_cache.prefabs.put(try persistent.dupe(u8, name), val);
+
+            const key = if (val.asObject()) |obj| uf.effectiveName(obj, name) else name;
+            if (prefab_cache.prefabs.contains(key)) {
+                game.log.err("[registry] duplicate prefab name '{s}': rename the file or give one a distinct \"name\" (RFC #561)", .{key});
+                return error.DuplicatePrefabName;
+            }
+            try prefab_cache.prefabs.put(try persistent.dupe(u8, key), val);
         }
 
         // ── Runtime prefab spawn ───────────────────────────────

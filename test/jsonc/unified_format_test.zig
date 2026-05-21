@@ -226,3 +226,48 @@ test "overrides leave un-mentioned prefab components intact" {
     try testing.expectEqual(@as(i32, 3), game.ecs_backend.getComponent(e, Marker).?.id);
     try testing.expectEqual(@as(f32, 80), game.ecs_backend.getComponent(e, Health).?.current);
 }
+
+// ── Registry: effective name + collision detection (RFC #561) ───
+
+test "registry: prefab resolves by its name field, not the file basename" {
+    var game = TestGame.init(testing.allocator);
+    defer game.deinit();
+
+    // Embedded as basename "widget_file", but the file declares
+    // its own registry name — references must use that name.
+    try Bridge.addEmbeddedPrefab(&game, "widget_file",
+        \\{ "name": "fancy_widget",
+        \\  "root": { "components": { "Marker": { "id": 42 } } } }
+    , PREFAB_DIR);
+    try Bridge.loadSceneFromSource(&game,
+        \\{ "root": { "children": [ { "prefab": "fancy_widget" } ] } }
+    , PREFAB_DIR);
+
+    try testing.expectEqual(@as(i32, 42), soleMarker(&game).id);
+}
+
+test "registry: duplicate name field is a load-time error" {
+    var game = TestGame.init(testing.allocator);
+    defer game.deinit();
+
+    try Bridge.addEmbeddedPrefab(&game, "first_file",
+        \\{ "name": "shared", "root": { "components": { "Marker": { "id": 1 } } } }
+    , PREFAB_DIR);
+    try testing.expectError(error.DuplicatePrefabName, Bridge.addEmbeddedPrefab(&game, "second_file",
+        \\{ "name": "shared", "root": { "components": { "Marker": { "id": 2 } } } }
+    , PREFAB_DIR));
+}
+
+test "registry: a name field colliding with another file's basename errors" {
+    var game = TestGame.init(testing.allocator);
+    defer game.deinit();
+
+    // First file has no "name" — effective name is its basename "alpha".
+    try Bridge.addEmbeddedPrefab(&game, "alpha",
+        \\{ "root": { "components": { "Marker": { "id": 1 } } } }
+    , PREFAB_DIR);
+    // Second file's "name" collides with that basename.
+    try testing.expectError(error.DuplicatePrefabName, Bridge.addEmbeddedPrefab(&game, "beta",
+        \\{ "name": "alpha", "root": { "components": { "Marker": { "id": 2 } } } }
+    , PREFAB_DIR));
+}

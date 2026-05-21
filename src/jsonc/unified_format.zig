@@ -81,6 +81,15 @@ pub fn entityPatch(entity_obj: Value.Object, log: anytype) ?Value.Object {
     return null;
 }
 
+/// The registry key for a prefab/scene file: its `"name"` field
+/// when present, otherwise the caller-supplied filename basename.
+/// Lets a file be referenced by a name that diverges from its
+/// path — and is the value collisions are checked against
+/// (RFC #560, #561).
+pub fn effectiveName(file_obj: Value.Object, basename: []const u8) []const u8 {
+    return file_obj.getString("name") orelse basename;
+}
+
 /// Warn once if a scene file still declares the dropped `"assets"`
 /// field. Under the unified format assets are inferred from sprite
 /// references (RFC #563); the field is ignored.
