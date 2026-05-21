@@ -42,6 +42,10 @@ pub fn OnReady(comptime GameType: type, comptime Components: type) type {
         ) void {
             if (scene_components) |sc| {
                 for (sc.entries) |entry| {
+                    // A `null` override removes the component
+                    // (RFC #562) — nothing was applied, so fire no
+                    // hook for it.
+                    if (entry.value == .null_value) continue;
                     fireOnReadyByName(game, entity, entry.key);
                 }
             }

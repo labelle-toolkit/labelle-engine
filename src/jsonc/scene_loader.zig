@@ -363,22 +363,36 @@ pub fn SceneLoader(comptime GameType: type, comptime Components: type) type {
                 }
             }
 
-            // Build merged component map: prefab defaults, then
-            // scene overrides.
+            // Build the entity's component set: prefab defaults
+            // patched by the reference entry's `overrides`. An
+            // override deep-merges onto the prefab's same-named
+            // component — patching only the fields it names — and a
+            // `null` override removes the component (RFC #562).
+            //
+            // The merge tree lives in `merge_arena`; its leaf
+            // strings are shared with the prefab/override inputs, so
+            // `@ref` names collected from a merged component stay
+            // valid into the pass-2 patch even after the arena frees.
+            var merge_arena = std.heap.ArenaAllocator.init(game.allocator);
+            defer merge_arena.deinit();
+
+            // `applied` records every override key — including
+            // `null` removals — so the prefab blocks below skip them.
             var applied = std.StringHashMap(void).init(game.allocator);
             defer applied.deinit();
 
-            // Apply scene components (these override prefab
-            // defaults).
+            // Apply scene/override components, each deep-merged over
+            // the prefab's matching component.
             if (scene_components) |sc| {
                 for (sc.entries) |entry| {
-                    try ApplyHelpers.applyComponentWithRefs(game, entity, entry.key, entry.value, parent_offset, ref_ctx);
                     try applied.put(entry.key, {});
+                    if (entry.value == .null_value) continue; // removal
+                    const effective = uf.mergedOverride(prefab_components, entry.key, entry.value, merge_arena.allocator());
+                    try ApplyHelpers.applyComponentWithRefs(game, entity, entry.key, effective, parent_offset, ref_ctx);
                 }
             }
 
-            // Apply prefab components (skip if already overridden
-            // by scene).
+            // Apply prefab components the override did not touch.
             if (prefab_components) |pc| {
                 for (pc.entries) |entry| {
                     if (!applied.contains(entry.key)) {
@@ -392,10 +406,15 @@ pub fn SceneLoader(comptime GameType: type, comptime Components: type) type {
             const entity_pos = game.getPosition(entity);
 
             // Spawn nested entity arrays and collect IDs to patch
-            // back into components.
+            // back into components. Override components use the same
+            // merged value as the apply pass — a deep-merged
+            // component keeps the prefab's entity-bearing fields, so
+            // their nested entities must still spawn.
             if (scene_components) |sc| {
                 for (sc.entries) |entry| {
-                    spawnAndLinkNestedEntities(game, entity, entry.key, entry.value, entity_pos, prefab_cache, depth, ref_ctx);
+                    if (entry.value == .null_value) continue;
+                    const effective = uf.mergedOverride(prefab_components, entry.key, entry.value, merge_arena.allocator());
+                    spawnAndLinkNestedEntities(game, entity, entry.key, effective, entity_pos, prefab_cache, depth, ref_ctx);
                 }
             }
             if (prefab_components) |pc| {
@@ -561,6 +580,11 @@ pub fn SceneLoader(comptime GameType: type, comptime Components: type) type {
         ) void {
             const obj = comp_value.asObject() orelse return;
 
+            // Arena for deep-merged override component values
+            // (RFC #562) — mirrors the block in `loadEntityInternal`.
+            var merge_arena = std.heap.ArenaAllocator.init(game.allocator);
+            defer merge_arena.deinit();
+
             for (obj.entries) |entry| {
                 const arr = entry.value.asArray() orelse continue;
 
@@ -661,10 +685,14 @@ pub fn SceneLoader(comptime GameType: type, comptime Components: type) type {
                             // Reference entry → `overrides`; inline → `components`.
                             const child_scene_comps = uf.entityPatch(child_obj, game.log);
 
-                            // Scene overrides first.
+                            // Override components first, each
+                            // deep-merged over the prefab's match;
+                            // a `null` override removes it (#562).
                             if (child_scene_comps) |sc| {
                                 for (sc.entries) |e| {
-                                    ApplyHelpers.applyComponentWithRefs(game, child, e.key, e.value, parent_world_pos, nested_ref_ctx) catch |err| {
+                                    if (e.value == .null_value) continue;
+                                    const effective = uf.mergedOverride(child_prefab_comps, e.key, e.value, merge_arena.allocator());
+                                    ApplyHelpers.applyComponentWithRefs(game, child, e.key, effective, parent_world_pos, nested_ref_ctx) catch |err| {
                                         game.log.err("[NestedEntity] Failed to apply {s}: {s}", .{ e.key, @errorName(err) });
                                     };
                                 }
@@ -691,7 +719,9 @@ pub fn SceneLoader(comptime GameType: type, comptime Components: type) type {
                             const child_pos = game.getPosition(child);
                             if (child_scene_comps) |sc| {
                                 for (sc.entries) |e| {
-                                    spawnAndLinkNestedEntities(game, child, e.key, e.value, child_pos, prefab_cache, depth + 1, nested_ref_ctx);
+                                    if (e.value == .null_value) continue;
+                                    const effective = uf.mergedOverride(child_prefab_comps, e.key, e.value, merge_arena.allocator());
+                                    spawnAndLinkNestedEntities(game, child, e.key, effective, child_pos, prefab_cache, depth + 1, nested_ref_ctx);
                                 }
                             }
                             if (child_prefab_comps) |pc| {
