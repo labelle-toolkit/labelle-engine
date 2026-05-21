@@ -120,3 +120,101 @@ pub fn getOrCreatePrefabCache(game: anytype, prefab_dir: []const u8) !*PrefabCac
     }
     return try initPersistentCache(game, prefab_dir);
 }
+
+// ── Eager filesystem registry scan (RFC #560, ticket #561) ──────────
+//
+// On desktop, the flat name-keyed registry is populated up-front by
+// recursively walking the project's `prefabs/` and `scenes/`
+// directories. This is what makes a file resolvable by an effective
+// name (its `"name"` field) that diverges from its filename basename,
+// and what lets cross-file effective-name collisions be caught as a
+// hard load-time error instead of silently shadowing.
+//
+// It is the filesystem counterpart of `addEmbeddedPrefab`, which the
+// assembler emits for WASM/mobile builds (no filesystem). WASM/mobile
+// must NOT run this scan — `std.Io` is `failing` there (see
+// `io_helper.zig`) and prefabs arrive exclusively via the embedded
+// path. The scan is therefore gated on a non-emscripten target, and
+// additionally skips any directory it cannot open (a desktop project
+// may legitimately ship only one of `prefabs/`/`scenes/`).
+
+const is_wasm_emscripten = builtin.target.os.tag == .emscripten;
+
+/// Recursively scan a project's `prefabs/` and `scenes/` directories
+/// into the flat name-keyed registry held by `cache`.
+///
+/// `prefab_dir` is the project's prefab directory (the same value
+/// passed to `loadScene`); the sibling `scenes/` directory is derived
+/// by convention — `<dirname(prefab_dir)>/scenes`. Either directory
+/// may be absent; a missing directory is skipped, not an error.
+///
+/// Each `.jsonc` file is parsed and keyed by its *effective name*
+/// (`unified_format.effectiveName` — its `"name"` field if present,
+/// else the filename basename without the extension). A duplicate
+/// effective name across any two scanned files raises
+/// `error.DuplicatePrefabName` — mirrors `addEmbeddedPrefab`; there
+/// is no precedence rule, the author renames a file or sets a
+/// distinct `"name"`.
+///
+/// No-op on WASM/mobile (`wasm32-emscripten`) — those builds rely on
+/// the assembler-emitted embedded prefab/scene sources and have no
+/// filesystem.
+pub fn scanRegistry(cache: *PrefabCache, log: anytype, prefab_dir: []const u8) !void {
+    if (is_wasm_emscripten) return;
+
+    try scanDir(cache, log, prefab_dir);
+
+    // Derive the sibling `scenes/` directory by convention. The
+    // project layout is `<project>/prefabs` + `<project>/scenes`, so
+    // replace the prefab dir's last path component with `scenes`.
+    const parent = std.fs.path.dirname(prefab_dir);
+    const scenes_dir = if (parent) |p|
+        try std.fs.path.join(cache.temp, &.{ p, "scenes" })
+    else
+        try cache.temp.dupe(u8, "scenes");
+    defer cache.temp.free(scenes_dir);
+
+    try scanDir(cache, log, scenes_dir);
+}
+
+/// Recursively walk one directory, parsing every `.jsonc` file into
+/// the cache keyed by effective name. A directory that cannot be
+/// opened (typically absent) is silently skipped.
+fn scanDir(cache: *PrefabCache, log: anytype, dir_path: []const u8) !void {
+    const io = io_helper.io();
+
+    var dir = std.Io.Dir.cwd().openDir(io, dir_path, .{ .iterate = true }) catch return;
+    defer dir.close(io);
+
+    var walker = try dir.walk(cache.temp);
+    defer walker.deinit();
+
+    while (try walker.next(io)) |entry| {
+        if (entry.kind != .file) continue;
+        if (!std.mem.endsWith(u8, entry.basename, ".jsonc")) continue;
+
+        // Read + parse into the persistent allocator: the parsed
+        // `Value` tree is game-lifetime data (deserialized components
+        // hold slices into it), the same contract as `get`.
+        const src = entry.dir.readFileAlloc(io, entry.basename, cache.persistent, .limited(1024 * 1024)) catch |err| {
+            log.warn("[registry] failed to read '{s}': {s}", .{ entry.path, @errorName(err) });
+            continue;
+        };
+        var parser = JsoncParser.init(cache.persistent, src);
+        const val = parser.parse() catch |err| {
+            log.warn("[registry] failed to parse '{s}': {s}", .{ entry.path, @errorName(err) });
+            continue;
+        };
+
+        // Effective name = `"name"` field, else filename basename
+        // without the `.jsonc` extension.
+        const basename = entry.basename[0 .. entry.basename.len - ".jsonc".len];
+        const key = if (val.asObject()) |obj| uf.effectiveName(obj, basename) else basename;
+
+        if (cache.prefabs.contains(key)) {
+            log.err("[registry] duplicate name '{s}' (from '{s}'): rename the file or give one a distinct \"name\" (RFC #561)", .{ key, entry.path });
+            return error.DuplicatePrefabName;
+        }
+        try cache.prefabs.put(try cache.persistent.dupe(u8, key), val);
+    }
+}
