@@ -9,11 +9,13 @@ const zspec = @import("zspec");
 pub const unified_format_spec = @import("unified_format_spec.zig");
 pub const override_merge_spec = @import("override_merge_spec.zig");
 pub const registry_scan_spec = @import("registry_scan_spec.zig");
+pub const tree_walker_spec = @import("tree_walker_spec.zig");
 
 // Re-export the spec structs so zspec discovers them.
 pub const UnifiedFormatSpec = unified_format_spec.UnifiedFormatSpec;
 pub const OverrideMergeSpec = override_merge_spec.OverrideMergeSpec;
 pub const RegistryScanSpec = registry_scan_spec.RegistryScanSpec;
+pub const TreeWalkerSpec = tree_walker_spec.TreeWalkerSpec;
 
 test {
     zspec.runAll(@This());
