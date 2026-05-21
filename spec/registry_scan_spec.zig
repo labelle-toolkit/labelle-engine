@@ -210,4 +210,61 @@ pub const RegistryScanSpec = struct {
             try std.testing.expectError(error.DuplicatePrefabName, result);
         }
     };
+
+    // ── idempotent scan across a scene reload ───────────────────────
+
+    pub const @"loadScene called twice on the same game" = struct {
+        var tmp_dir: std.testing.TmpDir = undefined;
+        var game: Game = undefined;
+
+        test "tests:before" {
+            tmp_dir = std.testing.tmpDir(.{});
+            try tmp_dir.dir.createDir(std.testing.io, "prefabs", .default_dir);
+            try tmp_dir.dir.createDir(std.testing.io, "scenes", .default_dir);
+
+            try tmp_dir.dir.writeFile(std.testing.io, .{
+                .sub_path = "prefabs/widget.jsonc",
+                .data =
+                \\{ "name": "super_widget",
+                \\  "root": { "components": { "Marker": { "id": 99 } } } }
+                ,
+            });
+            try tmp_dir.dir.writeFile(std.testing.io, .{
+                .sub_path = "scenes/main.jsonc",
+                .data =
+                \\{ "root": { "children": [
+                \\  { "prefab": "super_widget" }
+                \\] } }
+                ,
+            });
+
+            game = Game.init(zspec.allocator);
+        }
+
+        test "tests:after" {
+            game.deinit();
+            tmp_dir.cleanup();
+        }
+
+        // A scene reload (e.g. F9 in the games) calls `loadScene`
+        // again on the same game-lifetime `PrefabCache`. The eager
+        // registry scan re-runs; without an idempotency guard it
+        // would re-encounter every file the first scan registered and
+        // wrongly raise `error.DuplicatePrefabName`. The scan tracks
+        // already-walked directories, so the second call is a no-op
+        // for the scan and must succeed.
+        test "the second loadScene does not raise DuplicatePrefabName" {
+            const scene_path = try tmpPath(&tmp_dir, "scenes/main.jsonc");
+            defer zspec.allocator.free(scene_path);
+            const prefab_dir = try tmpPath(&tmp_dir, "prefabs");
+            defer zspec.allocator.free(prefab_dir);
+
+            try Bridge.loadScene(&game, scene_path, prefab_dir);
+            // Second load — must not error on the re-scan.
+            try Bridge.loadScene(&game, scene_path, prefab_dir);
+
+            // The prefab still resolves after the reload.
+            try expect.notToBeNull(findMarker(&game, 99));
+        }
+    };
 };

@@ -43,6 +43,17 @@ pub const PrefabCache = struct {
     persistent: std.mem.Allocator,
     temp: std.mem.Allocator,
     prefab_dir: []const u8,
+    /// Directories already walked by `scanRegistry`/`scanDir`, keyed
+    /// by the (trailing-slash-normalized) path. The eager scan is
+    /// idempotent: a second `loadScene` (a normal scene reload —
+    /// e.g. F9 in the games) re-runs the scan into this same
+    /// game-lifetime cache, and a directory already in this set is
+    /// skipped rather than re-walked. Without this, the second scan
+    /// would re-encounter every already-registered file and wrongly
+    /// raise `error.DuplicatePrefabName`. A genuine collision between
+    /// two *distinct* files in a not-yet-scanned directory still
+    /// errors. Keys are duped into `persistent` (game-lifetime).
+    scanned_dirs: std.StringHashMap(void),
 
     pub fn init(allocator: std.mem.Allocator, prefab_dir: []const u8) PrefabCache {
         const persistent = persistent_allocator;
@@ -51,6 +62,7 @@ pub const PrefabCache = struct {
             .persistent = persistent,
             .temp = allocator,
             .prefab_dir = prefab_dir,
+            .scanned_dirs = std.StringHashMap(void).init(persistent),
         };
     }
 
@@ -167,7 +179,12 @@ pub fn scanRegistry(cache: *PrefabCache, log: anytype, prefab_dir: []const u8) !
     // Derive the sibling `scenes/` directory by convention. The
     // project layout is `<project>/prefabs` + `<project>/scenes`, so
     // replace the prefab dir's last path component with `scenes`.
-    const parent = std.fs.path.dirname(prefab_dir);
+    //
+    // Strip a trailing slash first: `dirname("foo/prefabs/")` returns
+    // `"foo/prefabs"`, which would derive `foo/prefabs/scenes` instead
+    // of the intended sibling `foo/scenes`.
+    const normalized = std.mem.trimEnd(u8, prefab_dir, "/");
+    const parent = std.fs.path.dirname(normalized);
     const scenes_dir = if (parent) |p|
         try std.fs.path.join(cache.temp, &.{ p, "scenes" })
     else
@@ -180,11 +197,26 @@ pub fn scanRegistry(cache: *PrefabCache, log: anytype, prefab_dir: []const u8) !
 /// Recursively walk one directory, parsing every `.jsonc` file into
 /// the cache keyed by effective name. A directory that cannot be
 /// opened (typically absent) is silently skipped.
+///
+/// Idempotent: a directory already recorded in `cache.scanned_dirs`
+/// (from an earlier `loadScene` on this game-lifetime cache) is
+/// skipped, so a scene reload does not re-register — and thus does
+/// not falsely collide on — files the first scan already cached.
 fn scanDir(cache: *PrefabCache, log: anytype, dir_path: []const u8) !void {
     const io = io_helper.io();
 
+    // Skip directories already walked by a previous scan. Normalize a
+    // trailing slash so `prefabs` and `prefabs/` map to one key.
+    const dir_key = std.mem.trimEnd(u8, dir_path, "/");
+    if (cache.scanned_dirs.contains(dir_key)) return;
+
     var dir = std.Io.Dir.cwd().openDir(io, dir_path, .{ .iterate = true }) catch return;
     defer dir.close(io);
+
+    // Record the directory as scanned. Done after a successful open so
+    // a directory that does not exist yet (skipped above) can still be
+    // picked up by a later scan once it is created.
+    try cache.scanned_dirs.put(try cache.persistent.dupe(u8, dir_key), {});
 
     var walker = try dir.walk(cache.temp);
     defer walker.deinit();
