@@ -98,6 +98,7 @@ pub fn build(b: *std.Build) void {
         "test/example_prefab_animation_walkthrough_test.zig",
         "test/jsonc/bridge_deserialize_test.zig",
         "test/jsonc/deserializer_test.zig",
+        "test/jsonc/unified_format_test.zig",
         "test/jsonc_bridge_gizmo_visibility_test.zig",
         "test/collect_entities_test.zig",
         "test/set_sprite_flip_test.zig",
