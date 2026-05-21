@@ -16,9 +16,13 @@
         .audio_backend = .{
             .path = "audio_backend",
         },
+        // Test-only BDD spec runner. `lazy` so downstream consumers of
+        // the engine module never fetch it — it is reached only by the
+        // `spec`/`test` steps via `b.lazyDependency` in build.zig.
         .zspec = .{
             .url = "https://github.com/apotema/zspec/archive/v0.9.1.tar.gz",
             .hash = "zspec-0.9.1-jaKLbbX4AwBKANdetxzzWc3UTO0UY0lcJJzTagQHlt5K",
+            .lazy = true,
         },
     },
     .paths = .{

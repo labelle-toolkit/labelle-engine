@@ -14,8 +14,23 @@
 //! See RFC-UNIFY-SCENES-AND-PREFABS.md.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const jsonc = @import("jsonc");
 const Value = jsonc.Value;
+
+// Persistent allocator for the process-lifetime `warned` set. On
+// `wasm32-emscripten` `std.heap.page_allocator` resolves to
+// `WasmAllocator` and bypasses emscripten's `_emscripten_resize_heap`
+// / `updateMemoryViews()`, reintroducing the stale-`HEAPU32`
+// memory-growth hazard this codebase deliberately avoids. Use
+// `c_allocator` on emscripten (libc malloc routes through emscripten's
+// resize path), keep `page_allocator` on desktop. Mirrors the
+// `persistent_allocator` / `intern_backing_allocator` convention in
+// `prefab_cache.zig` and `deserializer.zig`.
+const warned_allocator: std.mem.Allocator = if (builtin.target.os.tag == .emscripten)
+    std.heap.c_allocator
+else
+    std.heap.page_allocator;
 
 // One-time deprecation-warning dedup, keyed by the comptime message
 // literal. A legacy prefab spawned N times — or a scene with N
@@ -27,7 +42,7 @@ var warned: ?std.StringHashMap(void) = null;
 
 fn warnOnce(log: anytype, comptime msg: []const u8) void {
     if (warned == null) {
-        warned = std.StringHashMap(void).init(std.heap.page_allocator);
+        warned = std.StringHashMap(void).init(warned_allocator);
     }
     const gop = warned.?.getOrPut(msg) catch return;
     if (gop.found_existing) return;
