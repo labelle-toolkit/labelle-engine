@@ -112,14 +112,16 @@ pub fn warnLegacyAssets(file_obj: Value.Object, log: anytype) void {
 ///
 /// The returned tree's entry arrays come from `arena`; leaf values
 /// (strings, numbers) are shared with `base`/`patch`, so the result
-/// must not outlive either input. On allocation failure it degrades
-/// to `patch` (whole-component replacement — the pre-#562 behavior).
-pub fn mergeValues(base: Value, patch: Value, arena: std.mem.Allocator) Value {
+/// must not outlive either input. Allocation failure is propagated
+/// as `error.OutOfMemory` — silently degrading to whole-component
+/// replacement would drop the prefab's inherited fields and violate
+/// the accepted deep-merge semantics (RFC #562).
+pub fn mergeValues(base: Value, patch: Value, arena: std.mem.Allocator) error{OutOfMemory}!Value {
     const base_obj = base.asObject() orelse return patch;
     const patch_obj = patch.asObject() orelse return patch;
 
     var entries: std.ArrayListUnmanaged(Value.Object.Entry) = .empty;
-    entries.appendSlice(arena, base_obj.entries) catch return patch;
+    try entries.appendSlice(arena, base_obj.entries);
 
     for (patch_obj.entries) |pe| {
         for (entries.items) |*existing| {
@@ -127,13 +129,13 @@ pub fn mergeValues(base: Value, patch: Value, arena: std.mem.Allocator) Value {
                 const both_objects =
                     existing.value.asObject() != null and pe.value.asObject() != null;
                 existing.value = if (both_objects)
-                    mergeValues(existing.value, pe.value, arena)
+                    try mergeValues(existing.value, pe.value, arena)
                 else
                     pe.value;
                 break;
             }
         } else {
-            entries.append(arena, pe) catch return patch;
+            try entries.append(arena, pe);
         }
     }
     return .{ .object = .{ .entries = entries.items } };
@@ -143,12 +145,15 @@ pub fn mergeValues(base: Value, patch: Value, arena: std.mem.Allocator) Value {
 /// override deep-merged onto the prefab's same-named component when
 /// the prefab declares one, otherwise the override value as-is.
 /// Callers handle a `null` override (component removal) first.
+///
+/// Propagates `error.OutOfMemory` from the underlying merge — the
+/// caller must not fall back to whole-component replacement.
 pub fn mergedOverride(
     prefab_components: ?Value.Object,
     key: []const u8,
     override_value: Value,
     arena: std.mem.Allocator,
-) Value {
+) error{OutOfMemory}!Value {
     const pc = prefab_components orelse return override_value;
     const base = pc.get(key) orelse return override_value;
     return mergeValues(base, override_value, arena);

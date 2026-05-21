@@ -206,6 +206,31 @@ pub const OverrideMergeSpec = struct {
         }
     };
 
+    // ── `null` is removal only for a reference's overrides ──────
+
+    pub const @"a null in an inline entity's components is not a removal" = struct {
+        // No prefab registered — these are pure inline entities
+        // (no `prefab` key), so their `components` block is not an
+        // `overrides` block and carries no removal semantics.
+
+        test "a null component does not suppress sibling inline components" {
+            // RFC #562 scopes `null`-as-removal to a reference
+            // entry's `overrides`. An inline `components` `null` is
+            // just a (malformed) value — it must not delete the
+            // entity or silence its other components.
+            try Bridge.loadSceneFromSource(&game,
+                \\{ "root": { "children": [
+                \\  { "components": { "Marker": null, "Health": { "current": 7, "max": 9 } } }
+                \\] } }
+            , PREFAB_DIR);
+            // The sibling Health component still applies normally.
+            try std.testing.expectEqual(
+                HealthFactory.build(.{ .current = 7, .max = 9 }),
+                sole(&game, Health).*,
+            );
+        }
+    };
+
     // ── Merged component keeps its prefab's entity fields ───────
 
     pub const @"deep-merging a component preserves its entity-bearing fields" = struct {
