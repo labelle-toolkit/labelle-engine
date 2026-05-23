@@ -29,12 +29,7 @@ const AssembledGame = engine.GameConfig(
     LogSink,
     Components,
     DiscoveredGizmoCategories,
-    // `MergedGameEvents` is `GameEvents` merged with `PluginEvents`
-    // (RFC-PLUGIN-EVENTS phase 3) when plugins declare `Events`. The
-    // assembler emits it next to `GameEvents` / `PluginEvents` in
-    // `game_events_block` — see `writePluginEventsBlock` and the
-    // `MergedGameEvents` resolution in `main_zig.zig`.
-    MergedGameEvents,
+    GameEvents,
 );
 pub const Game = AssembledGame;
 {{prefab_registry_block}}{{component_registry_block}}{{system_registry_block}}{{all_scripts_block}}const Scripts = engine.ScriptRegistry(AllScripts);
