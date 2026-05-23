@@ -122,6 +122,138 @@ pub const SparseSet = sparse_set_mod.SparseSet;
 pub const separateComponents = query_mod.separateComponents;
 pub const CallbackType = query_mod.CallbackType;
 
+// ── Engine Lifecycle Events (RFC-FLOW-VOCABULARY phase 6, #578) ──
+//
+// `pub const Events` is the assembler-discoverable side of the
+// engine's lifecycle hooks — same `Events` convention plugins use
+// (RFC-PLUGIN-EVENTS phase 1), but on the engine itself so flows can
+// listen to `engine.tick`, `engine.entity_created`, etc. as Event-node
+// variants under one model.
+//
+// Each variant mirrors a variant on the closed `HookPayload` union
+// (the in-process lifecycle dispatch that's been live since
+// labelle-engine#422). The assembler folds these into the project's
+// merged `PluginEvents` union with qualified tags `engine__<event>`,
+// alongside true plugin events like `box2d__collision_begin`.
+//
+// Payload shapes:
+//   - Entity-typed fields use `u32` — same convention as box2d's
+//     `Events.collision_begin`. The `entity_id` matches the
+//     `Game.EntityType` of `u32`-backed ECS backends (the toolkit
+//     default); games that override the entity type are responsible
+//     for the cast at the emit site (the engine's tolerant
+//     `emit` helper widens through `@intCast`).
+//   - Scene-name strings use `[]const u8`, borrowed from the engine
+//     scene registry (program-lifetime for assembler-generated
+//     entries, allocator-owned for runtime registrations).
+//   - `dt` mirrors `FrameInfo.dt` — scaled by `time_scale`, in seconds.
+//
+// Variant set kept in lockstep with `HookPayload` in
+// `hooks_types.zig`; reference comments below point at the source
+// hook for each.
+pub const Events = struct {
+    /// Fired when `Game.init` completes and hooks have been wired
+    /// (mirrors `HookPayload.game_init`). `Allocator` is not threaded
+    /// through because the on-disk Event-node form doesn't carry
+    /// non-POD payload types — listeners that need an allocator should
+    /// reach `game.allocator` directly.
+    pub const game_init = struct {};
+
+    /// Fired at `Game.deinit` start (mirrors `HookPayload.game_deinit`).
+    pub const game_deinit = struct {};
+
+    /// Fired at the top of `Game.tick`, before active-scene + script
+    /// `tick`s run. Equivalent to `HookPayload.frame_start`. `dt` is
+    /// already scaled by `time_scale`.
+    pub const tick = struct {
+        frame_number: u64 = 0,
+        dt: f32 = 0,
+    };
+
+    /// Fired at the bottom of `Game.tick`, after active-scene + script
+    /// `tick`s. Mirrors `HookPayload.frame_end`. Same `dt` value the
+    /// matching `tick` event fired with.
+    pub const post_tick = struct {
+        frame_number: u64 = 0,
+        dt: f32 = 0,
+    };
+
+    /// Fired when the ECS façade creates an entity. Mirrors
+    /// `HookPayload.entity_created`. Entity IDs above the u32 range
+    /// are clipped — the engine's on-disk catalog convention assumes
+    /// u32-backed entity IDs (see RFC-PLUGIN-EVENTS phase 3 resolver).
+    pub const entity_created = struct {
+        entity: u32,
+    };
+
+    /// Fired when the ECS façade destroys an entity (or when an
+    /// entity is uprooted via `destroyEntityOnly`). Mirrors
+    /// `HookPayload.entity_destroyed`.
+    pub const entity_destroyed = struct {
+        entity: u32,
+    };
+
+    /// Fired just before a scene's loader runs (assets are already
+    /// `.ready` by the manifest gate). Mirrors
+    /// `HookPayload.scene_before_load`. `Allocator` is omitted here
+    /// for the same reason as `game_init`.
+    pub const scene_loading = struct {
+        name: []const u8,
+    };
+
+    /// Fired after the new scene's loader returns and the scene is
+    /// active. Mirrors `HookPayload.scene_load`.
+    pub const scene_loaded = struct {
+        name: []const u8,
+    };
+
+    /// Fired during `unloadCurrentScene`, just before the outgoing
+    /// scene's entities are destroyed. Mirrors
+    /// `HookPayload.scene_unload`.
+    pub const scene_unloaded = struct {
+        name: []const u8,
+    };
+
+    /// Fired before a `setSceneAtomic` wipes the world clean.
+    /// Mirrors `HookPayload.scene_before_reset`. Carries the
+    /// outgoing scene's name (game-supplied or `"unknown"` when the
+    /// previous scene was unnamed).
+    pub const scene_before_reset = struct {
+        name: []const u8,
+    };
+
+    /// Fired when an `asset_manifest`-bearing scene's assets are
+    /// acquired by `setScene` / `setSceneAtomic`. Mirrors
+    /// `HookPayload.scene_assets_acquire`. The `assets` slice is the
+    /// scene-entry manifest (program-lifetime for assembler-emitted
+    /// scenes); listeners must not retain a pointer past the next
+    /// scene swap.
+    pub const scene_assets_acquire = struct {
+        name: []const u8,
+    };
+
+    /// Fired when the engine drops its acquire on the outgoing
+    /// scene's manifest. Mirrors `HookPayload.scene_assets_release`.
+    pub const scene_assets_release = struct {
+        name: []const u8,
+    };
+
+    /// Fired by `Game.setState` after a real state transition.
+    /// Mirrors `HookPayload.state_after_change`. `old_state` is the
+    /// value before the swap; `new_state` is the value `getState`
+    /// will read after this event.
+    pub const state_changed = struct {
+        old_state: []const u8,
+        new_state: []const u8,
+    };
+
+    /// Fired by `Game.setPaused` when the flag transitions. Mirrors
+    /// `HookPayload.pause_changed`.
+    pub const pause_changed = struct {
+        paused: bool,
+    };
+};
+
 // ── Hook Types ──
 pub const HookPayload = hooks_types_mod.HookPayload;
 pub const GameInitInfo = hooks_types_mod.GameInitInfo;

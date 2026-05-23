@@ -92,6 +92,10 @@ pub fn build(b: *std.Build) void {
         "test/sprite_by_field_tick_test.zig",
         "test/scene_assets_hooks_test.zig",
         "test/pause_hook_test.zig",
+        // #578 — `pub const Events` on the engine, dual-emit through
+        // the buffered event path so flows can listen to lifecycle
+        // hooks as Event-node variants.
+        "test/engine_events_test.zig",
         "test/spawn_from_prefab_test.zig",
         "test/jsonc/bridge_prefab_tags_test.zig",
         "test/save_load_two_phase_test.zig",
