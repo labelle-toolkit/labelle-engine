@@ -90,6 +90,8 @@ Put plainly: **authoring lets you nest; instantiating doesn't.** Inside a file i
 
 If a use site needs an authored variant ("the door from `door.jsonc`, but with a pressure-plate child"), the variant gets its own file. That file *is* the authoring; the wrapper prefab is not a workaround for a missing feature, it is the place the new contract lives. Reviewers see a named variant, scripts can spawn it by name, and the original prefab's contract is unchanged for every other use.
 
+**Behavior change from the current loader.** Today's `jsonc/scene_loader.zig:683-704` explicitly accepts both prefab children and appended call-site children at a reference site (the second `if` branch under the "Process children (prefab children + inline children)" comment). The unified loader (#561/#573) must reject this shape at load time, not silently accept it. A scan of `flying-platform-labelle` at the time of writing shows zero existing files use the pattern, so no content migration is required — but the pre-flight audit from #570/#575 should be extended to flag any occurrences before #573 lands, so a stray case can't sneak in through a branch that wasn't surveyed.
+
 Every JSON block in the tree corresponds to one entity. The word `"entities"` no longer appears in any file.
 
 ### Examples
