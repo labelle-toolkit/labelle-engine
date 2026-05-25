@@ -354,6 +354,16 @@ pub fn GameConfig(
 
         pub fn deinit(self: *Self) void {
             self.emitHook(.{ .game_deinit = {} });
+            // Engine `Events` dual-emit (#578). Fires before the actual
+            // teardown so flow listeners that read game state from a
+            // `game_deinit` handler still see the live world. Folds
+            // away when `GameEvents` doesn't carry the variant.
+            self.emitEngineEvent("engine__game_deinit", .{});
+            // Drain the buffered event so a `game_deinit` listener
+            // actually receives it before the event-buffer arena tears
+            // down below. The normal frame loop does this at
+            // `dispatchEvents`; on shutdown there is no next frame.
+            if (has_events) self.dispatchEvents();
             // `Game` owns the preview channel by value when set, so we
             // release it here. The generated `main.zig` is expected to
             // call `game.preview.?.sendBye(...)` before `game.deinit()`
@@ -429,6 +439,11 @@ pub fn GameConfig(
                     }
                 }
                 self.emitHook(.{ .game_init = .{ .allocator = self.allocator } });
+                // Engine `Events` dual-emit (#578). `engine.game_init`
+                // is empty by design — the on-disk Event-node form
+                // doesn't carry `Allocator`. Listeners that need an
+                // allocator should reach `game.allocator` directly.
+                self.emitEngineEvent("engine__game_init", .{});
             }
         }
 
@@ -447,6 +462,77 @@ pub fn GameConfig(
                     self.log.err("Failed to emit game event: {s}", .{@errorName(err)});
                 };
             }
+        }
+
+        /// Engine-side tolerant emit for the `engine__<event>` variants
+        /// declared on `engine.Events` (RFC-FLOW-VOCABULARY phase 6,
+        /// #578). The assembler folds the engine's `Events` block into
+        /// `PluginEvents`, which is itself merged into `GameEvents`. So
+        /// in any project where the assembler ran, `GameEvents` has the
+        /// `engine__<event>` variants. But unit tests build `Game`
+        /// directly with `GameEvents = void` (the `GameWith(Hooks)`
+        /// path), so the engine's own lifecycle code can't blindly call
+        /// `self.emit(.{ .engine__game_init = .{} })` — there would be
+        /// no such field in the union.
+        ///
+        /// This helper does the comptime gate: when `GameEvents` is a
+        /// union *and* declares the variant tag, the dispatch goes
+        /// through `emit`; otherwise the call folds away to a no-op.
+        ///
+        /// The variant must be passed as `comptime`-known struct
+        /// literal — e.g. `self.emitEngineEvent("engine__game_init", .{})`
+        /// — so the field-presence check resolves at compile time. The
+        /// payload type is inferred against
+        /// `@FieldType(GameEvents, tag)`, mirroring how
+        /// `dispatchEvents` reconstructs the union variant.
+        pub inline fn emitEngineEvent(
+            self: *Self,
+            comptime tag: []const u8,
+            payload: anytype,
+        ) void {
+            // Comptime gate: when the project's `GameEvents` doesn't
+            // carry the requested variant — e.g. unit-test games using
+            // `GameWith(Hooks)` with `GameEvents = void`, or any
+            // project the assembler hasn't yet been re-run against —
+            // the entire body folds to a no-op. Returning the early
+            // empty body via comptime branching avoids semantic
+            // analysis on a `@unionInit` against `void`/missing field.
+            const should_emit = comptime blk: {
+                if (!has_events) break :blk false;
+                const ev_info = @typeInfo(GameEvents);
+                if (ev_info != .@"union") break :blk false;
+                break :blk @hasField(GameEvents, tag);
+            };
+            if (comptime !should_emit) return;
+            // From here on `GameEvents` is known to be a union with
+            // the variant. Build the payload by copying fields from
+            // the caller's anonymous struct literal into a value of
+            // the merged union's declared payload type — Zig 0.16
+            // does not auto-coerce anonymous struct literals to a
+            // *different* named struct even when fields match, so we
+            // do it field-by-field. This also lets the caller pass
+            // the engine's `Entity` type for entity-typed fields:
+            // the @intCast widens to `u32` here without forcing the
+            // call site to spell it out.
+            const Payload_t = @FieldType(GameEvents, tag);
+            var typed: Payload_t = undefined;
+            const fields = comptime std.meta.fields(Payload_t);
+            inline for (fields) |f| {
+                if (comptime @hasField(@TypeOf(payload), f.name)) {
+                    const src_val = @field(payload, f.name);
+                    const SrcT = @TypeOf(src_val);
+                    if (comptime @typeInfo(f.type) == .int and @typeInfo(SrcT) == .int) {
+                        @field(typed, f.name) = @intCast(src_val);
+                    } else {
+                        @field(typed, f.name) = src_val;
+                    }
+                } else if (comptime f.default_value_ptr != null) {
+                    @field(typed, f.name) = @as(*const f.type, @ptrCast(@alignCast(f.default_value_ptr.?))).*;
+                } else {
+                    @compileError("emitEngineEvent: missing field '" ++ f.name ++ "' for variant '" ++ tag ++ "'");
+                }
+            }
+            self.emit(@unionInit(GameEvents, tag, typed));
         }
 
         /// Emit a game event synchronously — dispatch to registered hooks
@@ -554,6 +640,9 @@ pub fn GameConfig(
         pub fn createEntity(self: *Self) Entity {
             const entity = self.ecs_backend.createEntity();
             self.emitHook(.{ .entity_created = .{ .entity_id = entity } });
+            // Engine `Events` dual-emit (#578). `entity` is widened to
+            // u32 — same convention as box2d's `Events.collision_begin`.
+            self.emitEngineEvent("engine__entity_created", .{ .entity = @as(u32, @intCast(entity)) });
             // Preview telemetry: the prefab path tags `PrefabInstance`
             // *after* createEntity returns (see `tagAsPrefabInstance`),
             // so we can't carry the prefab name here. Emit null; a
@@ -718,6 +807,8 @@ pub fn GameConfig(
             self.ecs_backend.destroyEntity(entity);
             self.recordTombstone(entity);
             self.emitHook(.{ .entity_destroyed = .{ .entity_id = entity } });
+            // Engine `Events` dual-emit (#578).
+            self.emitEngineEvent("engine__entity_destroyed", .{ .entity = @as(u32, @intCast(entity)) });
         }
 
         pub fn destroyEntityOnly(self: *Self, entity: Entity) void {
@@ -728,6 +819,8 @@ pub fn GameConfig(
             self.ecs_backend.destroyEntity(entity);
             self.recordTombstone(entity);
             self.emitHook(.{ .entity_destroyed = .{ .entity_id = entity } });
+            // Engine `Events` dual-emit (#578).
+            self.emitEngineEvent("engine__entity_destroyed", .{ .entity = @as(u32, @intCast(entity)) });
         }
 
         // ── Visuals (mixin) ──────────────────────────────────────
@@ -1242,6 +1335,8 @@ pub fn GameConfig(
             if (self.paused == paused) return;
             self.paused = paused;
             self.emitHook(.{ .pause_changed = .{ .paused = paused } });
+            // Engine `Events` dual-emit (#578).
+            self.emitEngineEvent("engine__pause_changed", .{ .paused = paused });
         }
 
         /// Read the engine-level pause predicate. Returns true if
@@ -1261,6 +1356,8 @@ pub fn GameConfig(
             if (has_events) self.event_buffer.clearRetainingCapacity();
             if (self.current_scene_name) |name| {
                 self.emitHook(.{ .scene_unload = .{ .name = name } });
+                // Engine `Events` dual-emit (#578).
+                self.emitEngineEvent("engine__scene_unloaded", .{ .name = name });
                 if (self.scenes.get(name)) |entry| {
                     if (entry.hooks.onUnload) |onUnload| {
                         onUnload(self);
@@ -1581,8 +1678,12 @@ pub fn GameConfig(
                     if (self.scenes.get(name)) |entry| {
                         self.unloadCurrentScene();
                         self.emitHook(.{ .scene_before_load = .{ .name = name, .allocator = self.allocator } });
+                        // Engine `Events` dual-emit (#578).
+                        self.emitEngineEvent("engine__scene_loading", .{ .name = name });
                         entry.loader_fn(self) catch {};
                         self.emitHook(.{ .scene_load = .{ .name = name } });
+                        // Engine `Events` dual-emit (#578).
+                        self.emitEngineEvent("engine__scene_loaded", .{ .name = name });
                     }
                 }
             }
@@ -1597,6 +1698,10 @@ pub fn GameConfig(
             }
 
             self.emitHook(.{ .frame_start = .{ .frame_number = self.frame_number, .dt = scaled_dt } });
+            // Engine `Events` dual-emit (#578) — fires every active
+            // frame at the top of the tick. Folds away in unit-test
+            // games (`GameEvents = void`).
+            self.emitEngineEvent("engine__tick", .{ .frame_number = self.frame_number, .dt = scaled_dt });
 
             if (self.active_scene_ptr) |scene_ptr| {
                 if (self.active_scene_update_fn) |update_fn| {
@@ -1605,6 +1710,8 @@ pub fn GameConfig(
             }
 
             self.emitHook(.{ .frame_end = .{ .frame_number = self.frame_number, .dt = scaled_dt } });
+            // Engine `Events` dual-emit (#578).
+            self.emitEngineEvent("engine__post_tick", .{ .frame_number = self.frame_number, .dt = scaled_dt });
             self.frame_number += 1;
         }
 

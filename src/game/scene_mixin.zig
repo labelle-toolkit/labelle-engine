@@ -418,6 +418,8 @@ pub fn Mixin(comptime Game: type) type {
             // gives listeners a chance to cache the manifest and
             // react before `scene_before_load` fires.
             self.emitHook(.{ .scene_assets_acquire = .{ .name = name, .assets = target_assets } });
+            // Engine `Events` dual-emit (#578).
+            self.emitEngineEvent("engine__scene_assets_acquire", .{ .name = name });
 
             self.unloadCurrentScene();
 
@@ -427,12 +429,16 @@ pub fn Mixin(comptime Game: type) type {
             }
 
             self.emitHook(.{ .scene_before_load = .{ .name = name, .allocator = self.allocator } });
+            // Engine `Events` dual-emit (#578).
+            self.emitEngineEvent("engine__scene_loading", .{ .name = name });
 
             if (self.scenes.get(name)) |entry| {
                 // Comptime-registered scene
                 try entry.loader_fn(self);
                 self.current_scene_name = self.allocator.dupe(u8, name) catch null;
                 self.emitHook(.{ .scene_load = .{ .name = name } });
+                // Engine `Events` dual-emit (#578).
+                self.emitEngineEvent("engine__scene_loaded", .{ .name = name });
                 if (entry.hooks.onLoad) |onLoad| {
                     onLoad(self);
                 }
@@ -442,6 +448,8 @@ pub fn Mixin(comptime Game: type) type {
                 // handles parsing the JSONC file and creating entities.
                 self.current_scene_name = self.allocator.dupe(u8, name) catch null;
                 self.emitHook(.{ .scene_load = .{ .name = name } });
+                // Engine `Events` dual-emit (#578).
+                self.emitEngineEvent("engine__scene_loaded", .{ .name = name });
             } else {
                 rollbackPendingAssets(self);
                 return error.SceneNotFound;
@@ -458,6 +466,8 @@ pub fn Mixin(comptime Game: type) type {
             if (previous_name) |p| {
                 const prev_assets: []const []const u8 = if (self.scenes.get(p)) |e| e.assets else &.{};
                 self.emitHook(.{ .scene_assets_release = .{ .name = p, .assets = prev_assets } });
+                // Engine `Events` dual-emit (#578).
+                self.emitEngineEvent("engine__scene_assets_release", .{ .name = p });
                 releasePreviousAssets(self, prev_assets);
             }
             if (self.pending_scene_assets) |p| {
@@ -521,6 +531,8 @@ pub fn Mixin(comptime Game: type) type {
             defer if (previous_name) |p| self.allocator.free(p);
 
             self.emitHook(.{ .scene_assets_acquire = .{ .name = name, .assets = target_assets } });
+            // Engine `Events` dual-emit (#578).
+            self.emitEngineEvent("engine__scene_assets_acquire", .{ .name = name });
 
             // `scene_before_reset` fires BEFORE any entity
             // destruction — plugin controllers with per-world heap
@@ -553,6 +565,8 @@ pub fn Mixin(comptime Game: type) type {
             // ordering in `save_load_mixin.zig::loadGameState`.
             if (self.current_scene_name) |outgoing| {
                 self.emitHook(.{ .scene_before_reset = .{ .name = outgoing } });
+                // Engine `Events` dual-emit (#578).
+                self.emitEngineEvent("engine__scene_before_reset", .{ .name = outgoing });
             }
 
             // Clear both entity-tracking lists BEFORE
@@ -584,9 +598,13 @@ pub fn Mixin(comptime Game: type) type {
 
             // Load the new scene into the fresh ECS
             self.emitHook(.{ .scene_before_load = .{ .name = name, .allocator = self.allocator } });
+            // Engine `Events` dual-emit (#578).
+            self.emitEngineEvent("engine__scene_loading", .{ .name = name });
             try entry.loader_fn(self);
             self.current_scene_name = self.allocator.dupe(u8, name) catch null;
             self.emitHook(.{ .scene_load = .{ .name = name } });
+            // Engine `Events` dual-emit (#578).
+            self.emitEngineEvent("engine__scene_loaded", .{ .name = name });
 
             if (entry.hooks.onLoad) |onLoad| {
                 onLoad(self);
@@ -595,6 +613,8 @@ pub fn Mixin(comptime Game: type) type {
             if (previous_name) |p| {
                 const prev_assets: []const []const u8 = if (self.scenes.get(p)) |e| e.assets else &.{};
                 self.emitHook(.{ .scene_assets_release = .{ .name = p, .assets = prev_assets } });
+                // Engine `Events` dual-emit (#578).
+                self.emitEngineEvent("engine__scene_assets_release", .{ .name = p });
                 releasePreviousAssets(self, prev_assets);
             }
             if (self.pending_scene_assets) |p| {

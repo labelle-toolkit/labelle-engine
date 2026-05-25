@@ -21,6 +21,10 @@ pub fn Mixin(comptime Game: type) type {
             self.state_change_count += 1;
 
             self.emitHook(.{ .state_after_change = .{ .old_state = old_state, .new_state = new_state } });
+            // Engine `Events` dual-emit (#578) — the on-disk
+            // `engine.state_changed` event fires on the post-transition
+            // edge so flow listeners observe `game_state == new_state`.
+            self.emitEngineEvent("engine__state_changed", .{ .old_state = old_state, .new_state = new_state });
         }
 
         /// Queue a state change for next tick. The transition happens at
