@@ -39,6 +39,7 @@ else
 
 const prefab_cache_mod = @import("prefab_cache.zig");
 const PrefabCache = prefab_cache_mod.PrefabCache;
+const uf = @import("unified_format.zig");
 const ref_resolver_mod = @import("ref_resolver.zig");
 const component_apply_mod = @import("component_apply.zig");
 const on_ready_mod = @import("on_ready.zig");
@@ -128,13 +129,34 @@ pub fn SceneLoader(comptime GameType: type, comptime Components: type) type {
         /// Pre-load a prefab from in-memory JSONC source into the
         /// persistent cache. Call before `loadSceneFromSource` so
         /// the prefab is available without file I/O.
+        ///
+        /// The cache key is the prefab's *effective name* — its
+        /// `"name"` field when present, else the `name` argument
+        /// (which the assembler passes as the file basename). This
+        /// is the flat name-keyed registry of RFC #561: a prefab
+        /// resolves by the same name regardless of its filename or
+        /// which directory it lives in.
+        ///
+        /// A duplicate effective name is a load-time error
+        /// (`error.DuplicatePrefabName`) — there is no precedence
+        /// rule; the author renames a file or sets a distinct
+        /// `"name"`. The assembler emits one call per prefab, so a
+        /// collision here means two source files genuinely clash.
         pub fn addEmbeddedPrefab(game: *GameType, name: []const u8, source: []const u8, prefab_dir: []const u8) !void {
             const prefab_cache = try prefab_cache_mod.getOrCreatePrefabCache(game, prefab_dir);
 
             const persistent = prefab_cache.persistent;
             var parser = JsoncParser.init(persistent, source);
             const val = try parser.parse();
-            try prefab_cache.prefabs.put(try persistent.dupe(u8, name), val);
+
+            const key = if (val.asObject()) |obj| uf.effectiveName(obj, name) else name;
+            if (prefab_cache.prefabs.contains(key)) {
+                game.log.err("[registry] duplicate prefab name '{s}': rename the file or give one a distinct \"name\" (RFC #561)", .{key});
+                return error.DuplicatePrefabName;
+            }
+            const duped_key = try persistent.dupe(u8, key);
+            errdefer persistent.free(duped_key);
+            try prefab_cache.prefabs.put(duped_key, val);
         }
 
         // ── Runtime prefab spawn ───────────────────────────────
@@ -151,7 +173,8 @@ pub fn SceneLoader(comptime GameType: type, comptime Components: type) type {
                 return null;
             };
             const prefab_obj = prefab_val.asObject() orelse return null;
-            const prefab_components = prefab_obj.getObject("components") orelse return null;
+            const prefab_root = uf.rootObject(prefab_obj);
+            const prefab_components = prefab_root.getObject("components") orelse return null;
 
             const entity = game.createEntity();
             game.trackSceneEntity(entity);
@@ -176,7 +199,7 @@ pub fn SceneLoader(comptime GameType: type, comptime Components: type) type {
             OnReadyHelpers.fireOnReadyAll(game, entity, null, prefab_components, &applied);
 
             // Process children — save world pos, set parent, restore (#417).
-            if (prefab_obj.getArray("children")) |children| {
+            if (prefab_root.getArray("children")) |children| {
                 for (children.items) |child_val| {
                     const child = loadEntityInternal(game, child_val, prefab_cache, 1, entity_pos, null) catch continue;
                     const world_pos = game.getPosition(child);
@@ -246,7 +269,10 @@ pub fn SceneLoader(comptime GameType: type, comptime Components: type) type {
             }
 
             // Process this file's entities with ref support.
-            if (scene_obj.getArray("entities")) |entities_arr| {
+            // `fileChildren` accepts the unified `root.children`
+            // shape and the legacy top-level `entities` array.
+            uf.warnLegacyAssets(scene_obj, game.log);
+            if (uf.fileChildren(scene_obj, game.log)) |entities_arr| {
                 var ref_ctx = RefContext.init(game.allocator, null);
                 defer ref_ctx.deinit();
                 try processEntities(game, entities_arr, prefab_cache, &ref_ctx);
@@ -275,7 +301,8 @@ pub fn SceneLoader(comptime GameType: type, comptime Components: type) type {
                 }
             }
 
-            if (scene_obj.getArray("entities")) |entities_arr| {
+            uf.warnLegacyAssets(scene_obj, game.log);
+            if (uf.fileChildren(scene_obj, game.log)) |entities_arr| {
                 var ref_ctx = RefContext.init(game.allocator, null);
                 defer ref_ctx.deinit();
                 try processEntities(game, entities_arr, prefab_cache, &ref_ctx);
@@ -304,13 +331,18 @@ pub fn SceneLoader(comptime GameType: type, comptime Components: type) type {
                 if (prefab_cache.get(prefab_name)) |prefab_val| {
                     if (prefab_val.asObject()) |pobj| {
                         prefab_obj_opt = pobj;
-                        prefab_components = pobj.getObject("components");
-                        prefab_children = pobj.getArray("children");
+                        // Unwrap the unified `root` block (a no-op
+                        // on legacy prefabs that lack it).
+                        const proot = uf.rootObject(pobj);
+                        prefab_components = proot.getObject("components");
+                        prefab_children = proot.getArray("children");
                     }
                 }
             }
 
-            const scene_components = entity_obj.getObject("components");
+            // For a reference entry this is the `overrides` patch;
+            // for an inline entry, its own `components`.
+            const scene_components = uf.entityPatch(entity_obj, game.log);
 
             // Create entity — destroy on error to prevent orphans.
             const entity = game.createEntity();
@@ -325,7 +357,7 @@ pub fn SceneLoader(comptime GameType: type, comptime Components: type) type {
             if (ref_ctx) |rctx| {
                 const entity_id: u64 = @intCast(entity);
                 const ref_name = entity_obj.getString("ref") orelse
-                    if (prefab_obj_opt) |pobj| pobj.getString("ref") else null;
+                    if (prefab_obj_opt) |pobj| uf.rootObject(pobj).getString("ref") else null;
                 if (ref_name) |rn| {
                     if (try rctx.ref_map.fetchPut(rn, entity_id)) |existing| {
                         game.log.warn("[SceneRef] Duplicate ref '{s}' (entities {d} and {d})", .{ rn, existing.value, entity_id });
@@ -560,8 +592,9 @@ pub fn SceneLoader(comptime GameType: type, comptime Components: type) type {
                             if (child_obj.getString("prefab")) |pname| {
                                 if (prefab_cache.get(pname)) |pval| {
                                     if (pval.asObject()) |pobj| {
-                                        child_prefab_comps = pobj.getObject("components");
-                                        child_prefab_children = pobj.getArray("children");
+                                        const proot = uf.rootObject(pobj);
+                                        child_prefab_comps = proot.getObject("components");
+                                        child_prefab_children = proot.getArray("children");
                                     }
                                 }
                             }
@@ -612,7 +645,7 @@ pub fn SceneLoader(comptime GameType: type, comptime Components: type) type {
                                 if (child_obj.getString("prefab")) |pname| {
                                     if (prefab_cache.get(pname)) |pval| {
                                         if (pval.asObject()) |pobj| {
-                                            prefab_ref = pobj.getString("ref");
+                                            prefab_ref = uf.rootObject(pobj).getString("ref");
                                         }
                                     }
                                 }
@@ -627,7 +660,8 @@ pub fn SceneLoader(comptime GameType: type, comptime Components: type) type {
                                 }
                             }
 
-                            const child_scene_comps = child_obj.getObject("components");
+                            // Reference entry → `overrides`; inline → `components`.
+                            const child_scene_comps = uf.entityPatch(child_obj, game.log);
 
                             // Scene overrides first.
                             if (child_scene_comps) |sc| {

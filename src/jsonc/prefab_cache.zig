@@ -19,6 +19,7 @@ const builtin = @import("builtin");
 const jsonc = @import("jsonc");
 const Value = jsonc.Value;
 const JsoncParser = jsonc.JsoncParser;
+const uf = @import("unified_format.zig");
 
 // Persistent allocator for game-lifetime data. On `wasm32-emscripten`
 // we MUST go through libc (emscripten's malloc), because libc's
@@ -58,6 +59,13 @@ pub const PrefabCache = struct {
     /// and caches the parse result. Filesystem fallback is desktop-
     /// only — mobile builds rely on `addEmbeddedPrefab` having
     /// pre-populated every prefab the project uses.
+    ///
+    /// The cache is keyed by *effective name* (RFC #561): a file
+    /// `widget.jsonc` with `"name": "foo"` resolves and stores under
+    /// `"foo"`. Matches `addEmbeddedPrefab`'s contract so the two
+    /// registration paths share one flat registry — a disk load and
+    /// an embedded source that both claim the same effective name
+    /// collide rather than co-existing under different keys (#573).
     pub fn get(self: *PrefabCache, name: []const u8) ?Value {
         if (self.prefabs.get(name)) |val| return val;
 
@@ -66,7 +74,16 @@ pub const PrefabCache = struct {
         const src = std.Io.Dir.cwd().readFileAlloc(io_helper.io(), path, self.persistent, .limited(1024 * 1024)) catch return null;
         var p = JsoncParser.init(self.persistent, src);
         const val = p.parse() catch return null;
-        self.prefabs.put(self.persistent.dupe(u8, name) catch return null, val) catch return null;
+
+        // Resolve to the effective name (the file's `"name"` field
+        // when present, else the lookup string) and reject a
+        // collision with an already-cached entry. Keeps disk and
+        // embedded registrations on the same flat registry.
+        const key = if (val.asObject()) |obj| uf.effectiveName(obj, name) else name;
+        if (self.prefabs.contains(key)) return null;
+        const duped_key = self.persistent.dupe(u8, key) catch return null;
+        errdefer self.persistent.free(duped_key);
+        self.prefabs.put(duped_key, val) catch return null;
         return val;
     }
 };
