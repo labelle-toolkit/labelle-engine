@@ -121,7 +121,10 @@ pub fn mergeValues(base: Value, patch: Value, arena: std.mem.Allocator) error{Ou
     const patch_obj = patch.asObject() orelse return patch;
 
     var entries: std.ArrayListUnmanaged(Value.Object.Entry) = .empty;
-    try entries.appendSlice(arena, base_obj.entries);
+    // Pre-size for the worst case (every patch key is new) so the
+    // hot loop below appends without reallocating mid-merge.
+    try entries.ensureTotalCapacity(arena, base_obj.entries.len + patch_obj.entries.len);
+    entries.appendSliceAssumeCapacity(base_obj.entries);
 
     for (patch_obj.entries) |pe| {
         for (entries.items) |*existing| {
@@ -135,7 +138,7 @@ pub fn mergeValues(base: Value, patch: Value, arena: std.mem.Allocator) error{Ou
                 break;
             }
         } else {
-            try entries.append(arena, pe);
+            entries.appendAssumeCapacity(pe);
         }
     }
     return .{ .object = .{ .entries = entries.items } };
