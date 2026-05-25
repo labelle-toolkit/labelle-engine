@@ -140,3 +140,66 @@ pub fn warnLegacyAssets(file_obj: Value.Object, log: anytype) void {
         warnOnce(log, "[unified-format] legacy \"assets\" key is ignored — assets are inferred from sprite references (RFC #560, #563)");
     }
 }
+
+// ── Override merge (RFC #562) ───────────────────────────────────
+
+/// Deep-merge `patch` onto `base`, returning a new `Value`.
+///
+/// Objects merge recursively — keys only in `base` are kept, keys
+/// only in `patch` are added, and a key in both recurses when both
+/// sides are objects. Arrays and scalars in `patch` replace
+/// outright (no element-wise list merge). A JSONC `null` in `patch`
+/// is carried through as a value — component-level removal is
+/// handled by the caller before this is reached.
+///
+/// The returned tree's entry arrays come from `arena`; leaf values
+/// (strings, numbers) are shared with `base`/`patch`, so the result
+/// must not outlive either input. Allocation failure is propagated
+/// as `error.OutOfMemory` — silently degrading to whole-component
+/// replacement would drop the prefab's inherited fields and violate
+/// the accepted deep-merge semantics (RFC #562).
+pub fn mergeValues(base: Value, patch: Value, arena: std.mem.Allocator) error{OutOfMemory}!Value {
+    const base_obj = base.asObject() orelse return patch;
+    const patch_obj = patch.asObject() orelse return patch;
+
+    var entries: std.ArrayListUnmanaged(Value.Object.Entry) = .empty;
+    // Pre-size for the worst case (every patch key is new) so the
+    // hot loop below appends without reallocating mid-merge.
+    try entries.ensureTotalCapacity(arena, base_obj.entries.len + patch_obj.entries.len);
+    entries.appendSliceAssumeCapacity(base_obj.entries);
+
+    for (patch_obj.entries) |pe| {
+        for (entries.items) |*existing| {
+            if (std.mem.eql(u8, existing.key, pe.key)) {
+                const both_objects =
+                    existing.value.asObject() != null and pe.value.asObject() != null;
+                existing.value = if (both_objects)
+                    try mergeValues(existing.value, pe.value, arena)
+                else
+                    pe.value;
+                break;
+            }
+        } else {
+            entries.appendAssumeCapacity(pe);
+        }
+    }
+    return .{ .object = .{ .entries = entries.items } };
+}
+
+/// The effective value to apply for an overridden component: the
+/// override deep-merged onto the prefab's same-named component when
+/// the prefab declares one, otherwise the override value as-is.
+/// Callers handle a `null` override (component removal) first.
+///
+/// Propagates `error.OutOfMemory` from the underlying merge — the
+/// caller must not fall back to whole-component replacement.
+pub fn mergedOverride(
+    prefab_components: ?Value.Object,
+    key: []const u8,
+    override_value: Value,
+    arena: std.mem.Allocator,
+) error{OutOfMemory}!Value {
+    const pc = prefab_components orelse return override_value;
+    const base = pc.get(key) orelse return override_value;
+    return mergeValues(base, override_value, arena);
+}
