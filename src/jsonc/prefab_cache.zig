@@ -43,6 +43,23 @@ pub const PrefabCache = struct {
     persistent: std.mem.Allocator,
     temp: std.mem.Allocator,
     prefab_dir: []const u8,
+    /// Directories already walked by `scanRegistry`/`scanDir`, keyed
+    /// by the (trailing-slash-normalized) path. The eager scan is
+    /// idempotent: a second `loadScene` (a normal scene reload —
+    /// e.g. F9 in the games) re-runs the scan into this same
+    /// game-lifetime cache, and a directory already in this set is
+    /// skipped rather than re-walked. Without this, the second scan
+    /// would re-encounter every already-registered file and wrongly
+    /// raise `error.DuplicatePrefabName`. A genuine collision between
+    /// two *distinct* files in a not-yet-scanned directory still
+    /// errors. Keys are duped into `persistent` (game-lifetime).
+    ///
+    /// An entry is added *only after* a directory's walk completes
+    /// successfully — a walk aborted by `error.DuplicatePrefabName`
+    /// (or any other mid-walk failure) leaves the directory un-marked
+    /// so a later reload (after the user fixes the collision) can
+    /// retry the scan instead of being permanently locked out.
+    scanned_dirs: std.StringHashMap(void),
 
     pub fn init(allocator: std.mem.Allocator, prefab_dir: []const u8) PrefabCache {
         const persistent = persistent_allocator;
@@ -51,6 +68,7 @@ pub const PrefabCache = struct {
             .persistent = persistent,
             .temp = allocator,
             .prefab_dir = prefab_dir,
+            .scanned_dirs = std.StringHashMap(void).init(persistent),
         };
     }
 
@@ -119,4 +137,154 @@ pub fn getOrCreatePrefabCache(game: anytype, prefab_dir: []const u8) !*PrefabCac
         return cache;
     }
     return try initPersistentCache(game, prefab_dir);
+}
+
+// ── Eager filesystem registry scan (RFC #560, ticket #561) ──────────
+//
+// On desktop, the flat name-keyed registry is populated up-front by
+// recursively walking the project's `prefabs/` and `scenes/`
+// directories. This is what makes a file resolvable by an effective
+// name (its `"name"` field) that diverges from its filename basename,
+// and what lets cross-file effective-name collisions be caught as a
+// hard load-time error instead of silently shadowing.
+//
+// It is the filesystem counterpart of `addEmbeddedPrefab`, which the
+// assembler emits for WASM/mobile builds (no filesystem). WASM/mobile
+// must NOT run this scan — `std.Io` is `failing` there (see
+// `io_helper.zig`) and prefabs arrive exclusively via the embedded
+// path. The scan is therefore gated on a non-emscripten target, and
+// additionally skips any directory it cannot open (a desktop project
+// may legitimately ship only one of `prefabs/`/`scenes/`).
+
+const is_wasm_emscripten = builtin.target.os.tag == .emscripten;
+
+/// Recursively scan a project's `prefabs/` and `scenes/` directories
+/// into the flat name-keyed registry held by `cache`.
+///
+/// `prefab_dir` is the project's prefab directory (the same value
+/// passed to `loadScene`); the sibling `scenes/` directory is derived
+/// by convention — `<dirname(prefab_dir)>/scenes`. Either directory
+/// may be absent; a missing directory is skipped, not an error.
+///
+/// Each `.jsonc` file is parsed and keyed by its *effective name*
+/// (`unified_format.effectiveName` — its `"name"` field if present,
+/// else the filename basename without the extension). A duplicate
+/// effective name across any two scanned files raises
+/// `error.DuplicatePrefabName` — mirrors `addEmbeddedPrefab`; there
+/// is no precedence rule, the author renames a file or sets a
+/// distinct `"name"`.
+///
+/// No-op on WASM/mobile (`wasm32-emscripten`) — those builds rely on
+/// the assembler-emitted embedded prefab/scene sources and have no
+/// filesystem.
+pub fn scanRegistry(cache: *PrefabCache, log: anytype, prefab_dir: []const u8) !void {
+    if (is_wasm_emscripten) return;
+
+    try scanDir(cache, log, prefab_dir);
+
+    // Derive the sibling `scenes/` directory by convention. The
+    // project layout is `<project>/prefabs` + `<project>/scenes`, so
+    // replace the prefab dir's last path component with `scenes`.
+    //
+    // Strip a trailing slash first: `dirname("foo/prefabs/")` returns
+    // `"foo/prefabs"`, which would derive `foo/prefabs/scenes` instead
+    // of the intended sibling `foo/scenes`.
+    const normalized = std.mem.trimEnd(u8, prefab_dir, "/");
+    const parent = std.fs.path.dirname(normalized);
+    const scenes_dir = if (parent) |p|
+        try std.fs.path.join(cache.temp, &.{ p, "scenes" })
+    else
+        try cache.temp.dupe(u8, "scenes");
+    defer cache.temp.free(scenes_dir);
+
+    try scanDir(cache, log, scenes_dir);
+}
+
+/// Recursively walk one directory, parsing every `.jsonc` file into
+/// the cache keyed by effective name. A directory that cannot be
+/// opened (typically absent) is silently skipped.
+///
+/// Transactional: parsed entries are staged in a local map and
+/// committed into `cache.prefabs` only after the *entire* walk
+/// completes without error. A walk aborted partway (e.g. by
+/// `error.DuplicatePrefabName` on a collision the user is about to
+/// fix) leaves `cache.prefabs` and `cache.scanned_dirs` untouched, so
+/// a subsequent reload — after the user removes one of the colliding
+/// files — re-runs the walk and succeeds. Without staging, a partial
+/// first walk would leave half-populated cache entries that either
+/// shadow the now-canonical file or self-collide on the retry.
+///
+/// Idempotent across normal reloads: a directory recorded in
+/// `cache.scanned_dirs` (from a previous *successful* walk on this
+/// game-lifetime cache) is skipped entirely, so a normal scene reload
+/// (e.g. F9) does not re-register — and thus does not falsely collide
+/// on — files the first scan already cached.
+fn scanDir(cache: *PrefabCache, log: anytype, dir_path: []const u8) !void {
+    const io = io_helper.io();
+
+    // Skip directories already walked by a previous successful scan.
+    // Normalize a trailing slash so `prefabs` and `prefabs/` map to
+    // one key.
+    const dir_key = std.mem.trimEnd(u8, dir_path, "/");
+    if (cache.scanned_dirs.contains(dir_key)) return;
+
+    var dir = std.Io.Dir.cwd().openDir(io, dir_path, .{ .iterate = true }) catch return;
+    defer dir.close(io);
+
+    var walker = try dir.walk(cache.temp);
+    defer walker.deinit();
+
+    // Stage this walk's inserts in a temp-allocator map. We commit
+    // them into `cache.prefabs` only after the loop completes without
+    // error. If the loop returns early (e.g. duplicate-name), the
+    // staging map is discarded by `deinit`, leaving the persistent
+    // cache untouched. The parsed `Value` trees and their backing
+    // `src` buffers are themselves in `cache.persistent` (game-
+    // lifetime, page-allocator) and harmlessly leaked on the error
+    // path — same property the rest of the cache relies on.
+    var staged = std.StringHashMap(Value).init(cache.temp);
+    defer staged.deinit();
+
+    while (try walker.next(io)) |entry| {
+        if (entry.kind != .file) continue;
+        if (!std.mem.endsWith(u8, entry.basename, ".jsonc")) continue;
+
+        // Read + parse into the persistent allocator: the parsed
+        // `Value` tree is game-lifetime data (deserialized components
+        // hold slices into it), the same contract as `get`.
+        const src = entry.dir.readFileAlloc(io, entry.basename, cache.persistent, .limited(1024 * 1024)) catch |err| {
+            log.warn("[registry] failed to read '{s}': {s}", .{ entry.path, @errorName(err) });
+            continue;
+        };
+        var parser = JsoncParser.init(cache.persistent, src);
+        const val = parser.parse() catch |err| {
+            log.warn("[registry] failed to parse '{s}': {s}", .{ entry.path, @errorName(err) });
+            continue;
+        };
+
+        // Effective name = `"name"` field, else filename basename
+        // without the `.jsonc` extension.
+        const basename = entry.basename[0 .. entry.basename.len - ".jsonc".len];
+        const key = if (val.asObject()) |obj| uf.effectiveName(obj, basename) else basename;
+
+        // Collisions are checked against both the already-committed
+        // cache and the current walk's staging map — two distinct
+        // files in this walk that share an effective name must error
+        // even though neither is in `cache.prefabs` yet.
+        if (cache.prefabs.contains(key) or staged.contains(key)) {
+            log.err("[registry] duplicate name '{s}' (from '{s}'): rename the file or give one a distinct \"name\" (RFC #561)", .{ key, entry.path });
+            return error.DuplicatePrefabName;
+        }
+        // Stage with a persistent-allocator key: it will be moved into
+        // `cache.prefabs` (which uses `cache.persistent`) on commit.
+        try staged.put(try cache.persistent.dupe(u8, key), val);
+    }
+
+    // Commit: walk succeeded, fold the staged entries into the
+    // permanent cache and mark the directory done.
+    var it = staged.iterator();
+    while (it.next()) |kv| {
+        try cache.prefabs.put(kv.key_ptr.*, kv.value_ptr.*);
+    }
+    try cache.scanned_dirs.put(try cache.persistent.dupe(u8, dir_key), {});
 }

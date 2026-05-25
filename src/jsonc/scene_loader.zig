@@ -66,6 +66,17 @@ pub fn SceneLoader(comptime GameType: type, comptime Components: type) type {
             // `loadScene` is a desktop path.
             const prefab_cache = try prefab_cache_mod.getOrCreatePrefabCache(game, prefab_dir);
 
+            // Eagerly populate the flat name-keyed registry from the
+            // filesystem (RFC #560, #561): recursively scan the
+            // project's `prefabs/` and sibling `scenes/` directories
+            // up-front. This resolves files whose `"name"` diverges
+            // from their basename and catches cross-file effective-
+            // name collisions as a hard load-time error. Desktop-only
+            // — no-op on WASM/mobile, where there is no filesystem
+            // and prefabs/scenes arrive via the assembler-emitted
+            // embedded sources / `addEmbeddedPrefab`.
+            try prefab_cache_mod.scanRegistry(prefab_cache, game.log, prefab_dir);
+
             try loadSceneFile(game, scene_path, prefab_cache, 0);
 
             // Enable runtime prefab spawning.
