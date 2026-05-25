@@ -81,9 +81,109 @@ A **child entry** follows a slightly different grammar — children are entity d
 
 A child entry MUST be one mode or the other. `"components"` is only valid in inline mode; `"overrides"` is only valid in reference mode. Mixing the two is a load-time error.
 
-Reference mode today supports overrides only — it does not append children to the referenced prefab. Authors who need "an existing prefab plus extra children" define a wrapper prefab; this keeps the reuse model explicit and avoids drift from the original prefab's contract.
+Reference mode supports `overrides` and disallows `children`. The two halves of the grammar partition by intent, not by accident:
+
+- **Inline mode is authoring.** You are describing a fresh entity at this point in the file. `children` belongs here because you are building something — nesting is part of the description.
+- **Reference mode is instantiating.** You are calling out to an existing recipe. `overrides` belongs here because instantiation legitimately needs to tune the call site (a different position, a different label). Appending `children` would not be tuning the call — it would be quietly re-authoring the recipe at the use site.
+
+If a use site needs an authored variant ("the door from `door.jsonc`, but with a pressure-plate child"), the variant gets its own file. That file *is* the authoring; the wrapper prefab is not a workaround for a missing feature, it is the place the new contract lives. Reviewers see a named variant, scripts can spawn it by name, and the original prefab's contract is unchanged for every other use.
 
 Every JSON block in the tree corresponds to one entity. The word `"entities"` no longer appears in any file.
+
+### Examples
+
+Four shapes cover the patterns you'll see in practice. Each is a complete file under `<project>/prefabs/`.
+
+**1. Single semantic entity.** One root entity with its own components, no children. The simplest possible prefab.
+
+```jsonc
+// prefabs/furniture/bed.jsonc
+{
+    "root": {
+        "components": {
+            "Position": { "x": 0, "y": 0 },
+            "Sprite":   { "name": "bed" },
+            "Bed":      { "occupancy": 1 }
+        }
+    }
+}
+```
+
+**2. Collection prefab (aggregator root).** The root has no semantic role beyond `Position`; its job is identity and parenting. The children are prefab references — this prefab composes other prefabs.
+
+```jsonc
+// prefabs/rooms/kitchen.jsonc
+{
+    "root": {
+        "components": {
+            "Position": { "x": 0, "y": 0 },
+            "Room":     { "name": "kitchen" }
+        },
+        "children": [
+            { "prefab": "stove",   "overrides": { "Position": { "x": -32, "y": 0 } } },
+            { "prefab": "fridge",  "overrides": { "Position": { "x":  32, "y": 0 } } },
+            { "prefab": "counter", "overrides": { "Position": { "x":   0, "y": 24 } } }
+        ]
+    }
+}
+```
+
+The kitchen's root is the parent of all three appliances. Each appliance brings whatever children *its own file* declared — nothing is appended here. Overrides only tune call-site fields (`Position` here).
+
+**3. Authored variant (the "wrapper prefab").** When a use site needs to grow a prefab's content, the growth becomes a new authored entity in its own file. Inline children — full authoring at this level — express "the storage from `eis.jsonc`, plus a starting water item."
+
+```jsonc
+// prefabs/storage/eis_with_water.jsonc
+{
+    "root": {
+        "components": {
+            "Position": { "x": 0, "y": 0 },
+            "Sprite":   { "name": "eis" },
+            "Storage":  { "capacity": 8 }
+        },
+        "children": [
+            {
+                "components": {
+                    "Position": { "x": 0, "y": -4 },  // parent-rooted
+                    "Sprite":   { "name": "water_packet" },
+                    "Item":     { "kind": "water" }
+                }
+            }
+        ]
+    }
+}
+```
+
+This is a separate, named contract. Scenes referencing `eis_with_water` get the storage *and* the starting item every time; scenes referencing `eis` get a bare storage. Both names show up in code review and in `game.spawn(...)` call sites.
+
+**4. Scene (which is just a prefab used as an entry point).** Same grammar as anything else. Typically an aggregator root that mixes references and inline entities to lay out a level.
+
+```jsonc
+// prefabs/scenes/bandit_raid.jsonc
+{
+    "root": {
+        "children": [
+            { "prefab": "ship_carcase" },
+            { "prefab": "kitchen",         "overrides": { "Position": { "x": 240, "y": 120 } } },
+            { "prefab": "eis_with_water",  "overrides": { "Position": { "x": 180, "y":  80 } } },
+            {
+                "components": {
+                    "Position": { "x": 0, "y": 0 },
+                    "GameMode": { "kind": "raid" }
+                }
+            }
+        ]
+    }
+}
+```
+
+Three things to notice:
+
+- The scene's root carries no components — `Position` defaults to `{0, 0}` (§"Explicit root entity"), and a default `Camera` is inserted by the engine for state-bound prefabs (§"Camera — default inserted by the engine"). Pure aggregator.
+- The `kitchen` reference brings its full sub-tree (stove + fridge + counter); the scene doesn't see them individually.
+- The last child is inline — a one-off `GameMode` entity authored directly here because it isn't reused elsewhere. Inline vs. reference is a judgment call: anything reused goes in its own file.
+
+"Scene" is now shorthand for "a prefab the game enters as a top-level state" (§"State binding"). The grammar makes no distinction.
 
 ### Preserved capability: prefab references inside component data
 
@@ -92,7 +192,9 @@ Today, fields on a component typed `[]const u64` or `[]const Entity` can hold tu
 The unified format **preserves this capability unchanged**. Components can continue to hold entity-bearing fields and the same comptime detection runs against them. There are two side-effects of this choice:
 
 - A reference inside a component field uses the reference-mode grammar — `prefab` + `overrides` (B2 applies everywhere prefab refs appear, not just under `children`).
-- There remain two structural places where an entity can be born in a file: the `children` array, and inside an entity-bearing component field. Walkers that need to enumerate spawned entities (asset inference, save/load, post-load hook firing, gizmo registration) must traverse both. This asymmetry is a known cost of preserving today's ergonomics; revisiting it is out of scope for this RFC.
+- There remain two structural places where an entity can be born in a file: the `children` array, and inside an entity-bearing component field. This asymmetry is a known cost of preserving today's ergonomics; revisiting it is out of scope for this RFC.
+
+To avoid recreating the same bug class at a smaller scale, #561 must introduce one shared entity-tree walker utility. Asset inference, save/load enumeration, post-load hook dispatch, gizmo registration, and any future "visit every spawned entity" consumer call that utility rather than each writing its own traversal. The utility is responsible for visiting both `children` and entity-bearing component fields in file order, following referenced prefabs with cycle detection, and surfacing a single callback shape for "inline entity" vs "prefab reference + overrides". Consumers can layer their own behavior on top, but they do not get to choose a traversal subset by accident.
 
 ### Explicit root entity
 
@@ -130,6 +232,20 @@ If two files resolve to the same effective name, the engine **errors at load tim
 - Add `"name": "..."` to one of them with a different value.
 
 Both are visible in code review. A precedence rule (e.g., "scenes win") would quietly paper over collisions and create hard-to-debug bugs when a feature branch happens to introduce one.
+
+Because #561 merges two previously separate namespaces, the implementation must start with a pre-flight audit command/check that scans current `scenes/` and `prefabs/` using the same effective-name rule and reports collisions before enabling the merged registry by default. A project can plausibly have both `scenes/foo.jsonc` and `prefabs/foo.jsonc` today; that pair must be identified as a migration item, not discovered only after the loader path flips.
+
+### Override merge semantics
+
+The `components` -> `overrides` rename preserves the existing prefab-reference behavior:
+
+- The referenced prefab's root components are created first.
+- An override for an existing component is a **shallow struct-field overlay**: start from the prefab-authored component value, then replace each field named by the override. Nested structs and lists are replaced as whole field values, not deep-merged or appended.
+- An override that names a component absent from the referenced prefab adds that component to the instantiated root.
+- Components omitted from `overrides` are kept unchanged.
+- Nested entity-array fields inside an override keep today's special case: the merge skips them because the loader expands those definitions into entity IDs separately.
+
+Component removal is the only new surface area and stays with #562: decide whether a syntax like `"Position": null` is supported, and if so whether removal can affect required engine components.
 
 ### Convention (non-enforced)
 
@@ -180,9 +296,11 @@ For every prefab in the registry, walk the static tree once and produce `prefab_
 
 The walker treats false positives (a string that happens to match a sprite name but isn't a visual reference) as harmless — they pre-load an unneeded resource. The alternative (per-component declaration of which fields are visual refs) would force every component author to remember to declare, and missed declarations would cause silent missing-texture bugs at runtime.
 
-#### Acquire / spawn / release lifecycle
+"Harmless" here means correctness-harmless, not cost-free. A false positive can load an unneeded atlas, which matters on memory-constrained Android targets. The #566 audit must measure this risk in real projects and either accept it explicitly for v1 or narrow the inference rule (for example, by preferring known visual component fields and falling back to `AssetManifest` for script-only assets). Lazy-on-miss already makes false negatives recoverable via pop-in, so mobile memory pressure is allowed to bias the final rule toward less eagerness if the audit finds large over-loads.
 
-Every top-level prefab instantiation (a state transition or `game.spawn(prefab_name)` from a script):
+#### Asset acquire / spawn / release lifecycle
+
+Every asset-owning prefab instantiation (a state transition or `game.spawn(prefab_name)` from a script):
 
 ```
 required = prefab_required_resources[name]   // pre-computed
@@ -193,7 +311,7 @@ spawn entity tree
 remember `required` on the spawned root entity
 ```
 
-Children spawned as part of the tree do NOT acquire — the top-level spawn's recursive `required` set already includes their resources.
+Children spawned as part of the tree do NOT acquire — the asset-owning spawn's recursive `required` set already includes their resources. This notion of "asset-owning spawn" is broader than "state root": script calls to `game.spawn(prefab_name)` acquire and release their own resources, but they are not state entry points and do not receive state-only behavior such as default camera insertion.
 
 On root destruction:
 
@@ -300,7 +418,7 @@ A naming caveat: there's already a `gui_types.Image` in the imgui layer. The ECS
 Today scenes own a camera. Under unification:
 
 - If the instantiated tree contains a `Camera` component anywhere, the engine uses it as-is.
-- If not, the engine inserts a default `Camera` entity at world root **only when the prefab is being instantiated as a root** (i.e., via the state-binding entry point). Nested prefabs don't get a default camera — that prevents "two cameras when I instance a scene inside a scene."
+- If not, the engine inserts a default `Camera` entity at world root **only through the state-binding entry path** (`project.labelle` initial state / state transition). Nested prefabs and script-driven `game.spawn(prefab_name)` calls do not get a default camera — that prevents "two cameras when I instance a scene inside a scene" and avoids conflating asset-owning script spawns with state roots.
 
 Explicit override stays available via a `Camera` component on the root entity:
 
@@ -448,6 +566,7 @@ Child entries within the tree never gain a `"root"` wrapper — only the file's 
 
 ### Loader migration
 
+- Before enabling the merged registry, run the effective-name collision audit across both directories and resolve any duplicates (`scenes/foo.jsonc` + `prefabs/foo.jsonc`, explicit `"name"` duplicates, or basename duplicates in nested folders).
 - Add the `scenes/` directory to the registry scan.
 - Detect the legacy keys `"entities"`, `"assets"`, and `"components"` on reference entries; emit a deprecation warning. Treat `"entities"` as a synonym for `"children"`, and treat `"components"` on a reference entry (one with a `"prefab"` field) as a synonym for `"overrides"`. This lets the codebase migrate file-by-file without a single atomic switch. Plan to remove the legacy synonyms after all in-tree files are migrated.
 
@@ -461,24 +580,29 @@ Child entries within the tree never gain a `"root"` wrapper — only the file's 
 - Editor / authoring tool changes beyond pointing at the unified registry.
 - Hot-reload semantics for the implicit root entity (likely simplified — the same destroy-and-reinstantiate path scenes use today still applies, just on the root).
 
+## Save-file compatibility
+
+Inventing a root entity for scenes changes the persisted tree shape for any save format that records scene-rooted entities directly. #561 should not silently reinterpret old saves as already-rooted trees. The migration plan needs an explicit save-version gate: either old saves are declared unsupported across this RFC boundary, or the loader recognizes the previous scene-rooted format and wraps those entities under the new synthetic root during load. The choice is project policy, but the break must be visible rather than accidental.
+
 ## Open questions
 
 1. **Rename of `project.labelle`'s `.initial_scene`.** Candidates: `.initial_prefab`, `.entry`, `.entry_prefab`, `.root`, `.initial_root`. Lean toward `.initial_prefab` for symmetry with the unified vocabulary. Keep `.initial_scene` as a legacy alias for one or two release cycles.
 
 2. **Soft convention enforcement.** Should the engine emit a load-time warning when `"name"` is set and doesn't match the filename basename, or stay silent? The doc-only convention is the least intrusive; a lint-style warning catches accidental divergence; an error would be heavy-handed.
 
-3. **`overrides` merge semantics.** With `overrides` as its own keyword (separate from `components`), the merge rules need to be specified precisely in one place: shallow vs deep merge, list-replace vs list-append, what happens to components in the referenced prefab that the override does not mention (kept), how to *remove* a component the referenced prefab has (probably an explicit syntax like `"Position": null`, but worth deciding). The unification doesn't change today's behavior; it just renames the keyword. This is the moment to write the rules down.
+3. **Component removal in `overrides`.** The behavior-preserving merge rules are specified above: shallow component-field overlay, list/struct field replacement, omitted components kept, new components added. The remaining new decision is whether to support removing a component from the referenced prefab (probably an explicit syntax like `"Position": null`, but worth deciding), and whether some engine-required components are protected from removal.
 
-4. **Asset inference completeness audit.** Are there atlases or audio banks today that are loaded from scripts, never from a Sprite/Image component reference or in a static prefab field the walker can see? Walk the project before removing the `"assets"` field to make sure inference + `AssetManifest` + lazy-on-miss cover every case in practice. If significant gaps exist, the migration plan grows a "add `AssetManifest` to scenes X, Y, Z" step.
+4. **Asset inference completeness and over-load audit.** Are there atlases or audio banks today that are loaded from scripts, never from a Sprite/Image component reference or in a static prefab field the walker can see? Conversely, does the every-string rule pull in large false-positive atlases on Android/mobile targets? Walk the project before removing the `"assets"` field to make sure inference + `AssetManifest` + lazy-on-miss cover every case in practice without unacceptable memory over-load. If significant gaps exist, the migration plan grows a "add `AssetManifest` to scenes X, Y, Z" step; if significant false positives exist, the inference rule narrows before shipping.
 
 5. **Engine API for pending-transition resources.** The loading scene needs to know which resources are in flight for the next state to drive its progress bar. Proposed shape: `game.pendingTransitionResources() → []const []const u8`. Alternative: a callback API on `game.transitionToRoot(name, .{ .on_progress = fn(ratio: f32) {} })`. Decide whichever feels more idiomatic.
 
 ### Resolved during RFC discussion (not blocking)
 
 - **`AssetCatalog` foundation.** The unification reuses `AssetCatalog`'s existing refcount, async decode, and frame-budgeted upload. No new async infrastructure introduced by this RFC.
-- **Walker scope.** Walks every string in component data against the reverse index; false positives load an unneeded asset (cheap) rather than miss a needed one (a bug). Resolves Q1.
+- **Walker scope.** A single shared entity-tree walker visits `children` and entity-bearing component fields; asset inference currently walks every string in component data against the reverse index, with #566 auditing mobile over-load risk before finalizing the rule. Resolves Q1's traversal-shape concern without pretending false positives are free.
 - **When inference runs.** Two phases — Phase A builds the reverse index + per-prefab required-resources at startup; Phase B looks up and acquires at top-level spawn. Resolves Q2.
 - **Reverse-index collisions.** Load-time error at engine startup, case-sensitive exact match. Resolves Q3.
 - **Late spawns / lazy fallback.** Lazy async pop-in via `findSprite` / `findImage` miss → `assets.acquire` attributed to the active state's world root, released at next state transition. Resolves Q4.
 - **Acquire/release lifecycle.** Per-top-level-spawn, with acquire-new-first / release-old-after ordering on state transitions to avoid thrashing shared resources. Resolves Q5.
 - **Image vs Sprite.** Two distinct components, each with one job. Image is for standalone PNGs via `AssetCatalog`; v1 scope explicitly excludes animation, dynamic name swapping, and sub-rect cropping.
+- **Flat-list sugar for aggregator scenes (rejected).** Considered allowing pure-aggregator files to be authored as a top-level list (`[ {prefab:...}, ... ]`) with the loader synthesizing an empty root. Saves ~4 lines per file. Rejected because: (a) the moment a file needs a root component, a `name` override, or any future file-level metadata it must be rewritten into the rooted form — a cliff that's invisible until you hit it and forces a full-file diff; (b) the cases where the sugar helps (no root components, no metadata) are already the simplest files, where authoring time isn't the bottleneck; (c) two surface shapes for the same runtime forces every tool that *writes* files (migrator, editor save path, sidecar JSON) to pick a canonical form, eroding any "I authored it this way" benefit. The rooted form is canonical everywhere.
