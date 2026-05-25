@@ -26,9 +26,20 @@ const font_types_mod = engine.font_types_mod;
 /// double-free. `upload` returns a sentinel `FontId` so the round-
 /// trip can assert on a known value.
 const MockBackend = struct {
-    var decode_calls: u32 = 0;
+    // `decodeFn` runs on any of the catalog's worker threads (3 of them,
+    // round-robin), so its counters must be atomic — the second test
+    // dispatches two registrations that can land on different workers
+    // and race a non-atomic `+= 1`, which is what caused the
+    // intermittent `decode_calls == 1` failure on macOS (issue #583).
+    // `uploadFn` / `unloadFn` run on the main thread inside `pump()` /
+    // `release()`, so plain `var` is fine for those.
+    var decode_calls: std.atomic.Value(u32) = std.atomic.Value(u32).init(0);
     var upload_calls: u32 = 0;
     var unload_calls: u32 = 0;
+    /// Last `pixel_height` seen by `decodeFn`. Only the first test
+    /// reads this, and that test issues a single registration → single
+    /// decode call, so a plain `var` is race-free for the asserting
+    /// thread. Kept non-atomic to match the type the caller asserts on.
     var last_pixel_height: f32 = 0;
     /// One slot per upload so the second round-trip can assert that
     /// the catalog handed back the second sentinel, not the first.
@@ -40,7 +51,7 @@ const MockBackend = struct {
     const sentinel_b: engine.FontId = .{ .index = 22, .generation = 5 };
 
     fn reset() void {
-        decode_calls = 0;
+        decode_calls.store(0, .seq_cst);
         upload_calls = 0;
         unload_calls = 0;
         last_pixel_height = 0;
@@ -56,7 +67,7 @@ const MockBackend = struct {
     ) anyerror!engine.DecodedFont {
         _ = file_type;
         _ = data;
-        decode_calls += 1;
+        _ = decode_calls.fetchAdd(1, .seq_cst);
         last_pixel_height = params.pixel_height;
 
         const bitmap = try allocator.alloc(u8, 1);
@@ -165,7 +176,7 @@ test "font loader: registerFont → acquire → pump → ready → release round
     try testing.expectEqual(engine.AssetState.ready, entry.state);
     try testing.expect(entry.resource != null);
     try testing.expectEqual(MockBackend.sentinel_a, entry.resource.?.font);
-    try testing.expectEqual(@as(u32, 1), MockBackend.decode_calls);
+    try testing.expectEqual(@as(u32, 1), MockBackend.decode_calls.load(.seq_cst));
     try testing.expectEqual(@as(u32, 1), MockBackend.upload_calls);
     try testing.expectEqual(@as(f32, 18.0), MockBackend.last_pixel_height);
     try testing.expect(catalog.isReady("title"));
@@ -224,7 +235,7 @@ test "font loader: two registrations with different pixel_height keep params ind
 
     try testing.expect(catalog.isReady("body"));
     try testing.expect(catalog.isReady("display"));
-    try testing.expectEqual(@as(u32, 2), MockBackend.decode_calls);
+    try testing.expectEqual(@as(u32, 2), MockBackend.decode_calls.load(.seq_cst));
     try testing.expectEqual(@as(u32, 2), MockBackend.upload_calls);
 
     // The two entries carry distinct `FontId`s — the catalog produced
