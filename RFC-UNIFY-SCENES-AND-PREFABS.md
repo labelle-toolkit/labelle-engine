@@ -51,17 +51,29 @@ Adopt one unified file format — the **prefab** — that every `.jsonc` under `
 
 ### Unified shape
 
-File-level metadata sits at the top of the file. The entity tree lives inside an explicit `"root"` block:
+File-level metadata sits at the top of the file. The entity tree lives inside an explicit `"root"` block. The `"root"` block follows the same two-mode grammar as child entries (§Child entries below) — inline (authoring) or reference (instantiating a base prefab):
 
 ```jsonc
+// Mode A — inline root (authoring)
 {
     "name"?: "...",             // file-level — registry key, defaults to the filename basename
-    "root": {                   // required — the prefab's root entity
-        "components"?: { ... }, // optional — components on the root entity
-        "children"?:   [ ... ]  // optional — sub-entities (see Child entries)
+    "root": {
+        "components"?: { ... }, // components on the root entity
+        "children"?:   [ ... ]  // sub-entities (see Child entries)
+    }
+}
+
+// Mode B — reference root (instantiating a base, for component-only variants)
+{
+    "name"?: "...",
+    "root": {
+        "prefab":     "base_name",   // required — the prefab this one extends
+        "overrides"?: { ... }        // optional — root-component patches over the base
     }
 }
 ```
+
+Reference-mode root is the natural way to express component-only variants without duplicating the base's inline tree — e.g., `red_box.jsonc` says `{ "root": { "prefab": "box", "overrides": { "Color": "red" } } }` and inherits box's children automatically. The same §B2 rule applies here as at child entries: reference-mode root cannot declare `children` — instantiating doesn't author. If a variant needs to *add* children (not just tune components), use inline mode at the root and accept the inline duplication (§Examples below).
 
 A **child entry** follows a slightly different grammar — children are entity descriptors, not whole files, so they don't carry file-level metadata or a `"root"` wrapper. Two disjoint modes:
 
@@ -247,7 +259,7 @@ The `components` -> `overrides` rename preserves the existing prefab-reference b
 - An override for an existing component is a **shallow struct-field overlay**: start from the prefab-authored component value, then replace each field named by the override. Nested structs and lists are replaced as whole field values, not deep-merged or appended.
 - An override that names a component absent from the referenced prefab adds that component to the instantiated root.
 - Components omitted from `overrides` are kept unchanged.
-- Nested entity-array fields inside an override keep today's special case: the merge skips them because the loader expands those definitions into entity IDs separately.
+- Nested entity-array fields inside an override keep today's special case: the *deep-merge step* skips them because the loader expands those definitions into entity IDs separately. The override can still replace the whole array — supplying a list at the call site causes the loader to spawn that list instead of the base's list, exactly as today. The "skip" only means we don't element-by-element merge two arrays; the whole-field-replacement semantics from the rest of the merge still apply. Omitting the field at the call site keeps the base's spawned entities.
 
 Component removal is the only new surface area and stays with #562: decide whether a syntax like `"Position": null` is supported, and if so whether removal can affect required engine components.
 
@@ -352,12 +364,15 @@ for each r in new_required:
     assets.acquire(r)          // *** acquire NEW first ***
 wait until assets.allReady(new_required)
 spawn B's tree
-for each r in (A's tracked set ∪ A's lazy set):
-    assets.release(r)          // *** release OLD after ***
-destroy A's tree
+destroy A's tree               // releases A's tracked + lazy refs via the
+                               // root-destruction cascade defined above —
+                               // no separate release loop here
 ```
 
-Acquire-new-first means resources shared between A and B never see refcount zero — no thrashing reload. Resources only-in-A unload after the swap; resources only-in-B load fresh.
+Two ordering properties matter:
+
+1. **Acquire-new-first** means resources shared between A and B never see refcount zero between releases — no thrashing reload. The shared resource refcount goes `1 → 2` (B acquires while A still holds), then `2 → 1` (A's tree destruction releases). Resources only-in-A go `1 → 0` and unload; only-in-B go `0 → 1` and load fresh.
+2. **Destruction-drives-release** means there is *exactly one* path through which A's resources are released: the `for each r in remembered: assets.release(r)` step that runs when A's root is destroyed. The transition algorithm doesn't emit a separate release loop — that would double-release every handle. It also means no system or render pass touches A's entities after their resources have been released: the entities and the resources disappear together in the destruction cascade.
 
 #### Loading scene pattern
 
@@ -422,7 +437,7 @@ A naming caveat: there's already a `gui_types.Image` in the imgui layer. The ECS
 Today scenes own a camera. Under unification:
 
 - If the instantiated tree contains a `Camera` component anywhere, the engine uses it as-is.
-- If not, the engine inserts a default `Camera` entity at world root **only through the state-binding entry path** (`project.labelle` initial state / state transition). Nested prefabs and script-driven `game.spawn(prefab_name)` calls do not get a default camera — that prevents "two cameras when I instance a scene inside a scene" and avoids conflating asset-owning script spawns with state roots.
+- If not, the engine inserts a default `Camera` entity **as a child of the state-bound prefab's root entity** — *not* at world root — **only through the state-binding entry path** (`project.labelle` initial state / state transition). Parenting the default camera under the state root is what makes the lifecycle work: destroying the state root cascades through `Parent` and tears the camera down with it, no orphan. Nested prefabs and script-driven `game.spawn(prefab_name)` calls do not get a default camera — that prevents "two cameras when I instance a scene inside a scene" and avoids conflating asset-owning script spawns with state roots.
 
 Explicit override stays available via a `Camera` component on the root entity:
 
