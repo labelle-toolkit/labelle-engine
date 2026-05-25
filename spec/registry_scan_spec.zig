@@ -267,4 +267,78 @@ pub const RegistryScanSpec = struct {
             try expect.notToBeNull(findMarker(&game, 99));
         }
     };
+
+    // ── failure-recovery: retry succeeds after the collision is fixed ──
+
+    pub const @"a reload after a DuplicatePrefabName is fixed" = struct {
+        var tmp_dir: std.testing.TmpDir = undefined;
+        var game: Game = undefined;
+
+        test "tests:before" {
+            tmp_dir = std.testing.tmpDir(.{});
+            try tmp_dir.dir.createDir(std.testing.io, "prefabs", .default_dir);
+            try tmp_dir.dir.createDir(std.testing.io, "scenes", .default_dir);
+
+            // Two prefabs intentionally collide on the effective name
+            // `"widget"` — `widget.jsonc` keyed by basename and
+            // `dup.jsonc` whose `"name"` field is also `"widget"`.
+            try tmp_dir.dir.writeFile(std.testing.io, .{
+                .sub_path = "prefabs/widget.jsonc",
+                .data =
+                \\{ "root": { "components": { "Marker": { "id": 11 } } } }
+                ,
+            });
+            try tmp_dir.dir.writeFile(std.testing.io, .{
+                .sub_path = "prefabs/dup.jsonc",
+                .data =
+                \\{ "name": "widget",
+                \\  "root": { "components": { "Marker": { "id": 22 } } } }
+                ,
+            });
+            try tmp_dir.dir.writeFile(std.testing.io, .{
+                .sub_path = "scenes/main.jsonc",
+                .data =
+                \\{ "root": { "children": [
+                \\  { "prefab": "widget" }
+                \\] } }
+                ,
+            });
+
+            game = Game.init(zspec.allocator);
+        }
+
+        test "tests:after" {
+            game.deinit();
+            tmp_dir.cleanup();
+        }
+
+        // First `loadScene` aborts mid-walk with
+        // `error.DuplicatePrefabName`. Without the fix in
+        // `scanDir`, `scanned_dirs` would have already recorded
+        // `prefabs/` before the walk, so a retry — even after the
+        // collision is gone — would early-return and leave the
+        // half-populated cache permanently stale. The fix records
+        // the directory only after the walk succeeds, so retry
+        // re-walks and finishes cleanly.
+        test "the retry resolves the prefab cleanly" {
+            const scene_path = try tmpPath(&tmp_dir, "scenes/main.jsonc");
+            defer zspec.allocator.free(scene_path);
+            const prefab_dir = try tmpPath(&tmp_dir, "prefabs");
+            defer zspec.allocator.free(prefab_dir);
+
+            // First load: the collision fires.
+            try std.testing.expectError(
+                error.DuplicatePrefabName,
+                Bridge.loadScene(&game, scene_path, prefab_dir),
+            );
+
+            // User "fixes" the project by removing the offending file.
+            try tmp_dir.dir.deleteFile(std.testing.io, "prefabs/dup.jsonc");
+
+            // Retry now succeeds — and resolves `widget` to the
+            // surviving prefab (Marker id 11).
+            try Bridge.loadScene(&game, scene_path, prefab_dir);
+            try expect.notToBeNull(findMarker(&game, 11));
+        }
+    };
 };
