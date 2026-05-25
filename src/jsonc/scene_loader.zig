@@ -39,9 +39,32 @@ else
 
 const prefab_cache_mod = @import("prefab_cache.zig");
 const PrefabCache = prefab_cache_mod.PrefabCache;
+const uf = @import("unified_format.zig");
 const ref_resolver_mod = @import("ref_resolver.zig");
 const component_apply_mod = @import("component_apply.zig");
 const on_ready_mod = @import("on_ready.zig");
+const tree_walker = @import("tree_walker.zig");
+
+/// Adapt a `PrefabCache` into a `tree_walker.Resolver`. The walker
+/// expands `prefab` references through this so its cycle detector
+/// sees the same reference graph the instantiation pass does.
+fn prefabResolver(cache: *PrefabCache) tree_walker.Resolver {
+    const Wrap = struct {
+        fn get(ctx: *anyopaque, name: []const u8) ?Value {
+            const c: *PrefabCache = @ptrCast(@alignCast(ctx));
+            return c.get(name);
+        }
+    };
+    return .{ .ctx = cache, .getFn = &Wrap.get };
+}
+
+/// A walker visitor that does nothing — used when the only thing a
+/// walk needs to surface is cycle detection (the walker raises
+/// `error.PrefabCycle` on its own; the visitor never has to act).
+const CycleCheckVisitor = struct {
+    pub const VisitError = error{};
+    pub fn visit(_: CycleCheckVisitor, _: tree_walker.Node(VisitError)) VisitError!void {}
+};
 
 pub fn SceneLoader(comptime GameType: type, comptime Components: type) type {
     const Entity = GameType.EntityType;
@@ -51,8 +74,49 @@ pub fn SceneLoader(comptime GameType: type, comptime Components: type) type {
     const OnReadyHelpers = on_ready_mod.OnReady(GameType, Components);
 
     return struct {
-        pub const LoadEntityError = error{ IncludeDepthExceeded, OutOfMemory, InvalidFormat };
+        pub const LoadEntityError = error{ IncludeDepthExceeded, OutOfMemory, InvalidFormat, PrefabCycle };
         pub const MAX_DEPTH: usize = 16;
+
+        // ── Cycle detection (RFC #569) ─────────────────────────
+
+        /// Run the shared entity-tree walker over `entity_value`
+        /// purely for its cycle detector. A referenced-prefab cycle
+        /// (`A -> B -> A`) is a load-time error: the full chain is
+        /// logged and `error.PrefabCycle` propagates so the loader
+        /// aborts before instantiating a tree that would recurse
+        /// forever. Both inference (static) and instantiation
+        /// (runtime) gate on this shared check.
+        fn checkEntityTreeCycles(
+            game: *GameType,
+            entity_value: Value,
+            prefab_cache: *PrefabCache,
+            ctx: *tree_walker.WalkContext,
+        ) LoadEntityError!void {
+            // Track the loader's recursion limit so the walk fails
+            // with the same depth ceiling `loadEntityInternal` does
+            // — a tree the loader would reject as too deep is
+            // surfaced here as `IncludeDepthExceeded`, not silently
+            // walked.
+            ctx.max_depth = MAX_DEPTH;
+            tree_walker.walk(ctx, prefabResolver(prefab_cache), entity_value, CycleCheckVisitor{}) catch |err| switch (err) {
+                error.PrefabCycle => {
+                    // `formatCycleChain` either returns an
+                    // allocator-owned slice (success) or raises
+                    // `OutOfMemory`. Use an optional to signal which
+                    // one, rather than a literal-string fallback —
+                    // a string-equality probe to decide whether to
+                    // free is brittle (and just happens to work
+                    // because no real chain is "<unknown>").
+                    const chain_opt: ?[]const u8 = ctx.formatCycleChain(game.allocator) catch null;
+                    defer if (chain_opt) |c| game.allocator.free(c);
+                    const chain = chain_opt orelse "<unknown>";
+                    game.log.err("[scene] prefab reference cycle: {s} (RFC #560, #569)", .{chain});
+                    return error.PrefabCycle;
+                },
+                error.DepthExceeded => return error.IncludeDepthExceeded,
+                error.OutOfMemory => return error.OutOfMemory,
+            };
+        }
 
         // ── Public entry points ────────────────────────────────
 
@@ -64,6 +128,17 @@ pub fn SceneLoader(comptime GameType: type, comptime Components: type) type {
             // less commonly hit because filesystem-based
             // `loadScene` is a desktop path.
             const prefab_cache = try prefab_cache_mod.getOrCreatePrefabCache(game, prefab_dir);
+
+            // Eagerly populate the flat name-keyed registry from the
+            // filesystem (RFC #560, #561): recursively scan the
+            // project's `prefabs/` and sibling `scenes/` directories
+            // up-front. This resolves files whose `"name"` diverges
+            // from their basename and catches cross-file effective-
+            // name collisions as a hard load-time error. Desktop-only
+            // — no-op on WASM/mobile, where there is no filesystem
+            // and prefabs/scenes arrive via the assembler-emitted
+            // embedded sources / `addEmbeddedPrefab`.
+            try prefab_cache_mod.scanRegistry(prefab_cache, game.log, prefab_dir);
 
             try loadSceneFile(game, scene_path, prefab_cache, 0);
 
@@ -128,13 +203,34 @@ pub fn SceneLoader(comptime GameType: type, comptime Components: type) type {
         /// Pre-load a prefab from in-memory JSONC source into the
         /// persistent cache. Call before `loadSceneFromSource` so
         /// the prefab is available without file I/O.
+        ///
+        /// The cache key is the prefab's *effective name* — its
+        /// `"name"` field when present, else the `name` argument
+        /// (which the assembler passes as the file basename). This
+        /// is the flat name-keyed registry of RFC #561: a prefab
+        /// resolves by the same name regardless of its filename or
+        /// which directory it lives in.
+        ///
+        /// A duplicate effective name is a load-time error
+        /// (`error.DuplicatePrefabName`) — there is no precedence
+        /// rule; the author renames a file or sets a distinct
+        /// `"name"`. The assembler emits one call per prefab, so a
+        /// collision here means two source files genuinely clash.
         pub fn addEmbeddedPrefab(game: *GameType, name: []const u8, source: []const u8, prefab_dir: []const u8) !void {
             const prefab_cache = try prefab_cache_mod.getOrCreatePrefabCache(game, prefab_dir);
 
             const persistent = prefab_cache.persistent;
             var parser = JsoncParser.init(persistent, source);
             const val = try parser.parse();
-            try prefab_cache.prefabs.put(try persistent.dupe(u8, name), val);
+
+            const key = if (val.asObject()) |obj| uf.effectiveName(obj, name) else name;
+            if (prefab_cache.prefabs.contains(key)) {
+                game.log.err("[registry] duplicate prefab name '{s}': rename the file or give one a distinct \"name\" (RFC #561)", .{key});
+                return error.DuplicatePrefabName;
+            }
+            const duped_key = try persistent.dupe(u8, key);
+            errdefer persistent.free(duped_key);
+            try prefab_cache.prefabs.put(duped_key, val);
         }
 
         // ── Runtime prefab spawn ───────────────────────────────
@@ -151,7 +247,34 @@ pub fn SceneLoader(comptime GameType: type, comptime Components: type) type {
                 return null;
             };
             const prefab_obj = prefab_val.asObject() orelse return null;
-            const prefab_components = prefab_obj.getObject("components") orelse return null;
+            const prefab_root = uf.rootObject(prefab_obj);
+
+            // Cycle gate. Walk a synthetic reference entry so the
+            // shared walker pushes `name` onto its expansion stack
+            // — that way a prefab that references itself (directly
+            // or via a child / nested component field) is caught
+            // (RFC #569). On a cycle the chain is logged and the
+            // spawn fails (`null`) rather than recursing forever.
+            //
+            // Run UNCONDITIONALLY, before the `components` lookup
+            // below: a cyclic prefab whose `root` has no `components`
+            // (the cycle lives purely in `root.children`) would
+            // otherwise bypass the diagnostic via the early `return
+            // null` and just silently fail to spawn.
+            {
+                var ref_entries = [_]Value.Object.Entry{
+                    .{ .key = "prefab", .value = .{ .string = name } },
+                };
+                const ref_entry = Value{ .object = .{ .entries = &ref_entries } };
+                var cycle_ctx = tree_walker.WalkContext.init(game.allocator);
+                defer cycle_ctx.deinit();
+                checkEntityTreeCycles(game, ref_entry, prefab_cache, &cycle_ctx) catch |err| {
+                    game.log.err("[spawnPrefab] '{s}' not spawned: {s}", .{ name, @errorName(err) });
+                    return null;
+                };
+            }
+
+            const prefab_components = prefab_root.getObject("components") orelse return null;
 
             const entity = game.createEntity();
             game.trackSceneEntity(entity);
@@ -173,10 +296,12 @@ pub fn SceneLoader(comptime GameType: type, comptime Components: type) type {
             // Fire onReady hooks.
             var applied = std.StringHashMap(void).init(game.allocator);
             defer applied.deinit();
-            OnReadyHelpers.fireOnReadyAll(game, entity, null, prefab_components, &applied);
+            // No scene/override components here — `is_reference` is
+            // moot (the scene loop is skipped on a null block).
+            OnReadyHelpers.fireOnReadyAll(game, entity, null, prefab_components, &applied, false);
 
             // Process children — save world pos, set parent, restore (#417).
-            if (prefab_obj.getArray("children")) |children| {
+            if (prefab_root.getArray("children")) |children| {
                 for (children.items) |child_val| {
                     const child = loadEntityInternal(game, child_val, prefab_cache, 1, entity_pos, null) catch continue;
                     const world_pos = game.getPosition(child);
@@ -193,6 +318,23 @@ pub fn SceneLoader(comptime GameType: type, comptime Components: type) type {
         /// Process entities from a parsed scene, with two-pass ref
         /// resolution.
         fn processEntities(game: *GameType, entities_arr: Value.Array, prefab_cache: *PrefabCache, ref_ctx: *RefContext) LoadEntityError!void {
+            // Pass 0: cycle gate. The shared tree-walker crosses
+            // both `children` and prefab refs nested in component
+            // fields, so a cycle hidden in either path is caught
+            // before any entity is created (RFC #569).
+            //
+            // One `WalkContext` for the whole scene: its expansion
+            // stack and diagnostic buffer keep their capacity across
+            // entries, so a scene with N top-level entities does N
+            // walks but only one set of ArrayList growths.
+            var cycle_ctx = tree_walker.WalkContext.init(game.allocator);
+            defer cycle_ctx.deinit();
+            for (entities_arr.items) |entity_val| {
+                cycle_ctx.stack.clearRetainingCapacity();
+                cycle_ctx.cycle_chain.clearRetainingCapacity();
+                try checkEntityTreeCycles(game, entity_val, prefab_cache, &cycle_ctx);
+            }
+
             // Pass 1: create entities, apply components (with
             // `@ref` → 0), collect refs.
             for (entities_arr.items) |entity_val| {
@@ -246,7 +388,10 @@ pub fn SceneLoader(comptime GameType: type, comptime Components: type) type {
             }
 
             // Process this file's entities with ref support.
-            if (scene_obj.getArray("entities")) |entities_arr| {
+            // `fileChildren` accepts the unified `root.children`
+            // shape and the legacy top-level `entities` array.
+            uf.warnLegacyAssets(scene_obj, game.log);
+            if (uf.fileChildren(scene_obj, game.log)) |entities_arr| {
                 var ref_ctx = RefContext.init(game.allocator, null);
                 defer ref_ctx.deinit();
                 try processEntities(game, entities_arr, prefab_cache, &ref_ctx);
@@ -275,7 +420,8 @@ pub fn SceneLoader(comptime GameType: type, comptime Components: type) type {
                 }
             }
 
-            if (scene_obj.getArray("entities")) |entities_arr| {
+            uf.warnLegacyAssets(scene_obj, game.log);
+            if (uf.fileChildren(scene_obj, game.log)) |entities_arr| {
                 var ref_ctx = RefContext.init(game.allocator, null);
                 defer ref_ctx.deinit();
                 try processEntities(game, entities_arr, prefab_cache, &ref_ctx);
@@ -304,13 +450,23 @@ pub fn SceneLoader(comptime GameType: type, comptime Components: type) type {
                 if (prefab_cache.get(prefab_name)) |prefab_val| {
                     if (prefab_val.asObject()) |pobj| {
                         prefab_obj_opt = pobj;
-                        prefab_components = pobj.getObject("components");
-                        prefab_children = pobj.getArray("children");
+                        // Unwrap the unified `root` block (a no-op
+                        // on legacy prefabs that lack it).
+                        const proot = uf.rootObject(pobj);
+                        prefab_components = proot.getObject("components");
+                        prefab_children = proot.getArray("children");
                     }
                 }
             }
 
-            const scene_components = entity_obj.getObject("components");
+            // For a reference entry this is the `overrides` patch;
+            // for an inline entry, its own `components`.
+            const scene_components = uf.entityPatch(entity_obj, game.log);
+
+            // `null`-as-removal is scoped to reference entries'
+            // `overrides` (RFC #562) — an inline entity's
+            // `components` have no removal semantics.
+            const is_reference = entity_obj.getString("prefab") != null;
 
             // Create entity — destroy on error to prevent orphans.
             const entity = game.createEntity();
@@ -325,7 +481,7 @@ pub fn SceneLoader(comptime GameType: type, comptime Components: type) type {
             if (ref_ctx) |rctx| {
                 const entity_id: u64 = @intCast(entity);
                 const ref_name = entity_obj.getString("ref") orelse
-                    if (prefab_obj_opt) |pobj| pobj.getString("ref") else null;
+                    if (prefab_obj_opt) |pobj| uf.rootObject(pobj).getString("ref") else null;
                 if (ref_name) |rn| {
                     if (try rctx.ref_map.fetchPut(rn, entity_id)) |existing| {
                         game.log.warn("[SceneRef] Duplicate ref '{s}' (entities {d} and {d})", .{ rn, existing.value, entity_id });
@@ -333,22 +489,58 @@ pub fn SceneLoader(comptime GameType: type, comptime Components: type) type {
                 }
             }
 
-            // Build merged component map: prefab defaults, then
-            // scene overrides.
+            // Build the entity's component set: prefab defaults
+            // patched by the reference entry's `overrides`. An
+            // override deep-merges onto the prefab's same-named
+            // component — patching only the fields it names — and a
+            // `null` override removes the component (RFC #562).
+            //
+            // The merge tree lives in `merge_arena`; its leaf
+            // strings are shared with the prefab/override inputs, so
+            // `@ref` names collected from a merged component stay
+            // valid into the pass-2 patch even after the arena frees.
+            var merge_arena = std.heap.ArenaAllocator.init(game.allocator);
+            defer merge_arena.deinit();
+
+            // `applied` records every override key — including
+            // `null` removals — so the prefab blocks below skip them.
             var applied = std.StringHashMap(void).init(game.allocator);
             defer applied.deinit();
 
-            // Apply scene components (these override prefab
-            // defaults).
+            // Precompute the effective (merged) value for each override
+            // entry once, in `merge_arena`, so the apply-component and
+            // spawn-nested-entity passes share the same merged tree
+            // instead of redoing the deep-merge per pass. `null`
+            // entries here mark removals that both passes must skip
+            // in lockstep.
+            const effective_overrides: ?[]?Value = if (scene_components) |sc| blk: {
+                const slice = try merge_arena.allocator().alloc(?Value, sc.entries.len);
+                for (sc.entries, 0..) |entry, i| {
+                    if (is_reference and entry.value == .null_value) {
+                        slice[i] = null;
+                    } else {
+                        slice[i] = try uf.mergedOverride(prefab_components, entry.key, entry.value, merge_arena.allocator());
+                    }
+                }
+                break :blk slice;
+            } else null;
+
+            // Apply scene/override components, each deep-merged over
+            // the prefab's matching component.
             if (scene_components) |sc| {
-                for (sc.entries) |entry| {
-                    try ApplyHelpers.applyComponentWithRefs(game, entity, entry.key, entry.value, parent_offset, ref_ctx);
+                for (sc.entries, 0..) |entry, i| {
                     try applied.put(entry.key, {});
+                    // A `null` override removes a component, but only
+                    // for a reference entry's `overrides`. An inline
+                    // entity's `components` carry no removal meaning
+                    // — a `null` there is just a (likely malformed)
+                    // value, not a deletion.
+                    const effective = effective_overrides.?[i] orelse continue; // removal
+                    try ApplyHelpers.applyComponentWithRefs(game, entity, entry.key, effective, parent_offset, ref_ctx);
                 }
             }
 
-            // Apply prefab components (skip if already overridden
-            // by scene).
+            // Apply prefab components the override did not touch.
             if (prefab_components) |pc| {
                 for (pc.entries) |entry| {
                     if (!applied.contains(entry.key)) {
@@ -362,10 +554,14 @@ pub fn SceneLoader(comptime GameType: type, comptime Components: type) type {
             const entity_pos = game.getPosition(entity);
 
             // Spawn nested entity arrays and collect IDs to patch
-            // back into components.
+            // back into components. Reuses `effective_overrides`
+            // computed above — a deep-merged component keeps the
+            // prefab's entity-bearing fields, so their nested
+            // entities must still spawn.
             if (scene_components) |sc| {
-                for (sc.entries) |entry| {
-                    spawnAndLinkNestedEntities(game, entity, entry.key, entry.value, entity_pos, prefab_cache, depth, ref_ctx);
+                for (sc.entries, 0..) |entry, i| {
+                    const effective = effective_overrides.?[i] orelse continue;
+                    spawnAndLinkNestedEntities(game, entity, entry.key, effective, entity_pos, prefab_cache, depth, ref_ctx);
                 }
             }
             if (prefab_components) |pc| {
@@ -378,7 +574,7 @@ pub fn SceneLoader(comptime GameType: type, comptime Components: type) type {
 
             // Fire onReady for all applied components (after entity
             // is fully assembled).
-            OnReadyHelpers.fireOnReadyAll(game, entity, scene_components, prefab_components, &applied);
+            OnReadyHelpers.fireOnReadyAll(game, entity, scene_components, prefab_components, &applied, is_reference);
 
             // Process children recursively (prefab children +
             // entity-level children).
@@ -531,6 +727,11 @@ pub fn SceneLoader(comptime GameType: type, comptime Components: type) type {
         ) void {
             const obj = comp_value.asObject() orelse return;
 
+            // Arena for deep-merged override component values
+            // (RFC #562) — mirrors the block in `loadEntityInternal`.
+            var merge_arena = std.heap.ArenaAllocator.init(game.allocator);
+            defer merge_arena.deinit();
+
             for (obj.entries) |entry| {
                 const arr = entry.value.asArray() orelse continue;
 
@@ -560,8 +761,9 @@ pub fn SceneLoader(comptime GameType: type, comptime Components: type) type {
                             if (child_obj.getString("prefab")) |pname| {
                                 if (prefab_cache.get(pname)) |pval| {
                                     if (pval.asObject()) |pobj| {
-                                        child_prefab_comps = pobj.getObject("components");
-                                        child_prefab_children = pobj.getArray("children");
+                                        const proot = uf.rootObject(pobj);
+                                        child_prefab_comps = proot.getObject("components");
+                                        child_prefab_children = proot.getArray("children");
                                     }
                                 }
                             }
@@ -612,7 +814,7 @@ pub fn SceneLoader(comptime GameType: type, comptime Components: type) type {
                                 if (child_obj.getString("prefab")) |pname| {
                                     if (prefab_cache.get(pname)) |pval| {
                                         if (pval.asObject()) |pobj| {
-                                            prefab_ref = pobj.getString("ref");
+                                            prefab_ref = uf.rootObject(pobj).getString("ref");
                                         }
                                     }
                                 }
@@ -627,12 +829,47 @@ pub fn SceneLoader(comptime GameType: type, comptime Components: type) type {
                                 }
                             }
 
-                            const child_scene_comps = child_obj.getObject("components");
+                            // Reference entry → `overrides`; inline → `components`.
+                            const child_scene_comps = uf.entityPatch(child_obj, game.log);
 
-                            // Scene overrides first.
+                            // `null`-as-removal is scoped to a
+                            // reference entry's `overrides` (RFC #562).
+                            const child_is_reference = child_obj.getString("prefab") != null;
+
+                            // Precompute the effective (merged) value
+                            // for each override entry once, in
+                            // `merge_arena`, so the apply-component
+                            // and recurse-nested-entity passes share
+                            // the same merged tree. `null` slots mark
+                            // removals or merge failures both passes
+                            // must skip in lockstep.
+                            const child_effective: ?[]?Value = if (child_scene_comps) |sc| blk: {
+                                const slice = merge_arena.allocator().alloc(?Value, sc.entries.len) catch break :blk null;
+                                for (sc.entries, 0..) |e, i| {
+                                    if (child_is_reference and e.value == .null_value) {
+                                        slice[i] = null;
+                                    } else if (uf.mergedOverride(child_prefab_comps, e.key, e.value, merge_arena.allocator())) |eff| {
+                                        slice[i] = eff;
+                                    } else |err| {
+                                        game.log.err("[NestedEntity] Failed to merge override {s}: {s}", .{ e.key, @errorName(err) });
+                                        slice[i] = null;
+                                    }
+                                }
+                                break :blk slice;
+                            } else null;
+
+                            // Override components first, each
+                            // deep-merged over the prefab's match;
+                            // a `null` override removes it (#562).
                             if (child_scene_comps) |sc| {
-                                for (sc.entries) |e| {
-                                    ApplyHelpers.applyComponentWithRefs(game, child, e.key, e.value, parent_world_pos, nested_ref_ctx) catch |err| {
+                                for (sc.entries, 0..) |e, i| {
+                                    // `null`-as-removal applies only
+                                    // to a reference entry's
+                                    // `overrides` (RFC #562). A null
+                                    // slot here also covers merge
+                                    // failures already logged above.
+                                    const effective = (child_effective orelse break)[i] orelse continue;
+                                    ApplyHelpers.applyComponentWithRefs(game, child, e.key, effective, parent_world_pos, nested_ref_ctx) catch |err| {
                                         game.log.err("[NestedEntity] Failed to apply {s}: {s}", .{ e.key, @errorName(err) });
                                     };
                                 }
@@ -655,11 +892,13 @@ pub fn SceneLoader(comptime GameType: type, comptime Components: type) type {
                             }
 
                             // Recursively spawn nested entities
-                            // inside this child's components.
+                            // inside this child's components. Reuses
+                            // `child_effective` from the apply pass.
                             const child_pos = game.getPosition(child);
                             if (child_scene_comps) |sc| {
-                                for (sc.entries) |e| {
-                                    spawnAndLinkNestedEntities(game, child, e.key, e.value, child_pos, prefab_cache, depth + 1, nested_ref_ctx);
+                                for (sc.entries, 0..) |e, i| {
+                                    const effective = (child_effective orelse break)[i] orelse continue;
+                                    spawnAndLinkNestedEntities(game, child, e.key, effective, child_pos, prefab_cache, depth + 1, nested_ref_ctx);
                                 }
                             }
                             if (child_prefab_comps) |pc| {
@@ -738,7 +977,7 @@ pub fn SceneLoader(comptime GameType: type, comptime Components: type) type {
                                     nested_applied.put(e.key, {}) catch {};
                                 }
                             }
-                            OnReadyHelpers.fireOnReadyAll(game, child, child_scene_comps, child_prefab_comps, &nested_applied);
+                            OnReadyHelpers.fireOnReadyAll(game, child, child_scene_comps, child_prefab_comps, &nested_applied, child_is_reference);
                         }
 
                         ids[idx] = @intCast(child);

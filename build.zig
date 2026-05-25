@@ -102,6 +102,7 @@ pub fn build(b: *std.Build) void {
         "test/example_prefab_animation_walkthrough_test.zig",
         "test/jsonc/bridge_deserialize_test.zig",
         "test/jsonc/deserializer_test.zig",
+        "test/jsonc/unified_format_test.zig",
         "test/jsonc_bridge_gizmo_visibility_test.zig",
         "test/collect_entities_test.zig",
         "test/set_sprite_flip_test.zig",
@@ -221,4 +222,37 @@ pub fn build(b: *std.Build) void {
     assets_single_threaded_module.addImport("font_types", font_types_module);
     const assets_single_threaded = b.addTest(.{ .root_module = assets_single_threaded_module });
     test_step.dependOn(&assets_single_threaded.step);
+
+    // zspec BDD specs — mirrors the `spec` step in labelle-pathfinding.
+    // Uses zspec's own test runner; the spec files declare
+    // `describe`-style nested structs rather than flat `test` blocks.
+    // Wired into `test_step` as well so `zig build test` (what CI
+    // runs) stays the single command that exercises everything.
+    //
+    // zspec is a `lazy` dependency: `b.lazyDependency` only resolves
+    // (and fetches) it when a step that needs it is in the build graph,
+    // so downstream consumers that just import the engine module never
+    // pull this test-only dep. On the first run without the package in
+    // cache it returns null and Zig re-invokes the build after fetching.
+    if (b.lazyDependency("zspec", .{ .target = target, .optimize = optimize })) |zspec_dep| {
+        const spec_module = b.createModule(.{
+            .root_source_file = b.path("spec/spec_tests.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "zspec", .module = zspec_dep.module("zspec") },
+                .{ .name = "labelle-core", .module = core_module },
+                .{ .name = "engine", .module = engine_module },
+                .{ .name = "scene", .module = scene_module },
+            },
+        });
+        const spec_tests = b.addTest(.{
+            .root_module = spec_module,
+            .test_runner = .{ .path = zspec_dep.path("src/runner.zig"), .mode = .simple },
+        });
+        const run_spec_tests = b.addRunArtifact(spec_tests);
+        const spec_step = b.step("spec", "Run zspec BDD specs");
+        spec_step.dependOn(&run_spec_tests.step);
+        test_step.dependOn(&run_spec_tests.step);
+    }
 }

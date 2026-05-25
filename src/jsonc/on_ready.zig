@@ -14,7 +14,7 @@
 //! Callers instantiate once per bridge type:
 //!
 //!     const Hooks = OnReady(GameType, Components);
-//!     Hooks.fireOnReadyAll(game, entity, scene_components, prefab_components, &applied);
+//!     Hooks.fireOnReadyAll(game, entity, scene_components, prefab_components, &applied, is_reference);
 //!     Hooks.patchEntityIdField(game, parent, "Workstation", "storages", ids);
 
 const std = @import("std");
@@ -33,15 +33,28 @@ pub fn OnReady(comptime GameType: type, comptime Components: type) type {
         /// then the prefab block skips anything already handled) so
         /// hooks see exactly one fire per component, regardless of
         /// where the component originated.
+        ///
+        /// `is_reference` is true when `scene_components` is a
+        /// prefab reference's `overrides` block. Only then does a
+        /// `null` value mean component removal (RFC #562). For an
+        /// inline entity's `components` a `null` has no removal
+        /// semantics, so its hook must still fire.
         pub fn fireOnReadyAll(
             game: *GameType,
             entity: Entity,
             scene_components: ?Value.Object,
             prefab_components: ?Value.Object,
             applied: *std.StringHashMap(void),
+            is_reference: bool,
         ) void {
             if (scene_components) |sc| {
                 for (sc.entries) |entry| {
+                    // A `null` override removes the component
+                    // (RFC #562) — nothing was applied, so fire no
+                    // hook for it. Removal is scoped to reference
+                    // entries' `overrides`; an inline `components`
+                    // `null` is not a removal and still fires.
+                    if (is_reference and entry.value == .null_value) continue;
                     fireOnReadyByName(game, entity, entry.key);
                 }
             }

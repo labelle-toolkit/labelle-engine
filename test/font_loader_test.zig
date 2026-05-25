@@ -26,10 +26,23 @@ const font_types_mod = engine.font_types_mod;
 /// double-free. `upload` returns a sentinel `FontId` so the round-
 /// trip can assert on a known value.
 const MockBackend = struct {
-    var decode_calls: u32 = 0;
+    // `decodeFn` runs on any of the catalog's worker threads (3 of them,
+    // round-robin), so its counters must be atomic — the second test
+    // dispatches two registrations that can land on different workers
+    // and race a non-atomic `+= 1`, which is what caused the
+    // intermittent `decode_calls == 1` failure on macOS (issue #583).
+    // `uploadFn` / `unloadFn` run on the main thread inside `pump()` /
+    // `release()`, so plain `var` is fine for those.
+    var decode_calls: std.atomic.Value(u32) = std.atomic.Value(u32).init(0);
     var upload_calls: u32 = 0;
     var unload_calls: u32 = 0;
-    var last_pixel_height: f32 = 0;
+    /// Last `pixel_height` seen by `decodeFn`. The second test
+    /// dispatches two registrations whose `decodeFn` invocations can
+    /// land on different worker threads and write this concurrently,
+    /// so the slot must be atomic — even though only the first test
+    /// reads it. Zig has no built-in atomic float, so the `f32` bits
+    /// are carried inside an atomic `u32` via `@bitCast`.
+    var last_pixel_height: std.atomic.Value(u32) = std.atomic.Value(u32).init(@bitCast(@as(f32, 0.0)));
     /// One slot per upload so the second round-trip can assert that
     /// the catalog handed back the second sentinel, not the first.
     var last_uploaded_id: engine.FontId = engine.FontId.invalid;
@@ -40,10 +53,10 @@ const MockBackend = struct {
     const sentinel_b: engine.FontId = .{ .index = 22, .generation = 5 };
 
     fn reset() void {
-        decode_calls = 0;
+        decode_calls.store(0, .seq_cst);
         upload_calls = 0;
         unload_calls = 0;
-        last_pixel_height = 0;
+        last_pixel_height.store(@bitCast(@as(f32, 0.0)), .seq_cst);
         last_uploaded_id = engine.FontId.invalid;
         last_unloaded_id = engine.FontId.invalid;
     }
@@ -56,8 +69,8 @@ const MockBackend = struct {
     ) anyerror!engine.DecodedFont {
         _ = file_type;
         _ = data;
-        decode_calls += 1;
-        last_pixel_height = params.pixel_height;
+        _ = decode_calls.fetchAdd(1, .seq_cst);
+        last_pixel_height.store(@bitCast(params.pixel_height), .seq_cst);
 
         const bitmap = try allocator.alloc(u8, 1);
         bitmap[0] = 0xFF;
@@ -165,9 +178,9 @@ test "font loader: registerFont → acquire → pump → ready → release round
     try testing.expectEqual(engine.AssetState.ready, entry.state);
     try testing.expect(entry.resource != null);
     try testing.expectEqual(MockBackend.sentinel_a, entry.resource.?.font);
-    try testing.expectEqual(@as(u32, 1), MockBackend.decode_calls);
+    try testing.expectEqual(@as(u32, 1), MockBackend.decode_calls.load(.seq_cst));
     try testing.expectEqual(@as(u32, 1), MockBackend.upload_calls);
-    try testing.expectEqual(@as(f32, 18.0), MockBackend.last_pixel_height);
+    try testing.expectEqual(@as(f32, 18.0), @as(f32, @bitCast(MockBackend.last_pixel_height.load(.seq_cst))));
     try testing.expect(catalog.isReady("title"));
 
     // release on a `.ready` entry triggers `vtable.free`, which calls
@@ -224,7 +237,7 @@ test "font loader: two registrations with different pixel_height keep params ind
 
     try testing.expect(catalog.isReady("body"));
     try testing.expect(catalog.isReady("display"));
-    try testing.expectEqual(@as(u32, 2), MockBackend.decode_calls);
+    try testing.expectEqual(@as(u32, 2), MockBackend.decode_calls.load(.seq_cst));
     try testing.expectEqual(@as(u32, 2), MockBackend.upload_calls);
 
     // The two entries carry distinct `FontId`s — the catalog produced

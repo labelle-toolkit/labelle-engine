@@ -359,6 +359,13 @@ pub const JsoncSceneBridgeWithGizmos = @import("jsonc_scene_bridge.zig").JsoncSc
 // the piece they need without going through the full bridge.
 pub const jsonc_deserializer = @import("jsonc/deserializer.zig");
 
+// ── Entity-tree walker (RFC #569) ──
+// The single shared traversal for every entity-tree consumer —
+// crosses both `children` and prefab refs nested in component
+// fields, with prefab-cycle detection. Re-exported so specs and
+// downstream tooling (asset inference, editors) use one walker.
+pub const tree_walker = @import("jsonc/tree_walker.zig");
+
 // ── Scene Value & JSONC Parser ──
 pub const SceneValue = jsonc_mod.Value;
 pub const JsoncParser = jsonc_mod.JsoncParser;
