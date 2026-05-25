@@ -34,10 +34,29 @@ else
 
 // One-time deprecation-warning dedup, keyed by the comptime message
 // literal. A legacy prefab spawned N times — or a scene with N
-// legacy references — then warns once, not N times. Unguarded on
-// purpose: scene loading is single-threaded and the worst case of a
-// race is one duplicate warning line. Never freed (process-lifetime
-// set); keys are string literals so there is nothing to dupe.
+// legacy references — then warns once, not N times. Never freed
+// (process-lifetime set); keys are string literals so there is
+// nothing to dupe.
+//
+// Unguarded on purpose. Gemini-review on #573 asked why this isn't
+// behind a `std.Thread.Mutex` — the answer is two-fold:
+//
+//  1. Scene loading runs on the main thread on every supported
+//     platform (desktop, mobile, wasm). `warnOnce` has no other
+//     callers, so there is no concurrent reader/writer to race
+//     against today.
+//  2. The dedup set's *capacity* is bounded by the number of
+//     distinct comptime message literals in this file (currently
+//     three). `StringHashMap` only rehashes when crossing a load
+//     factor on `put`, and three entries never reach the initial
+//     allocation's threshold — so the table's backing buffer is
+//     written once and then only read. Even a hypothetical second
+//     thread emitting one of those same three messages would observe
+//     a stable buffer and at worst produce one duplicate log line.
+//
+// If a future change adds a parallel asset pipeline, or adds many
+// more distinct deprecation messages (re-introducing the rehash
+// case), add a `std.Thread.Mutex` here before flipping that switch.
 var warned: ?std.StringHashMap(void) = null;
 
 fn warnOnce(log: anytype, comptime msg: []const u8) void {
@@ -61,9 +80,17 @@ pub fn rootObject(file_obj: Value.Object) Value.Object {
 /// `root.children`. Legacy: a top-level `"entities"` array (warned).
 /// A legacy file already using a top-level `"children"` is honored
 /// too, so a half-migrated file still loads.
+///
+/// Partial-migration safety: if `"root"` is present but carries no
+/// `"children"` array, we still consult the legacy top-level
+/// `"entities"` / `"children"` keys before giving up — otherwise a
+/// scene that adds the `"root"` wrapper before moving its entity
+/// list silently loads as empty (#573).
 pub fn fileChildren(file_obj: Value.Object, log: anytype) ?Value.Array {
     if (file_obj.getObject("root")) |root| {
-        return root.getArray("children");
+        if (root.getArray("children")) |children| return children;
+        // `root` is present but empty — fall through to legacy keys
+        // (warned) so a half-migrated file still loads its entities.
     }
     if (file_obj.getArray("entities")) |entities| {
         warnOnce(log, "[unified-format] legacy \"entities\" key: wrap the entity array in a \"root\" block and rename it to \"children\" (RFC #560)");

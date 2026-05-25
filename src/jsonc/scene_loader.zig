@@ -154,7 +154,9 @@ pub fn SceneLoader(comptime GameType: type, comptime Components: type) type {
                 game.log.err("[registry] duplicate prefab name '{s}': rename the file or give one a distinct \"name\" (RFC #561)", .{key});
                 return error.DuplicatePrefabName;
             }
-            try prefab_cache.prefabs.put(try persistent.dupe(u8, key), val);
+            const duped_key = try persistent.dupe(u8, key);
+            errdefer persistent.free(duped_key);
+            try prefab_cache.prefabs.put(duped_key, val);
         }
 
         // ── Runtime prefab spawn ───────────────────────────────

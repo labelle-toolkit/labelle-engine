@@ -148,7 +148,10 @@ pub const UnifiedFormatSpec = struct {
 
         test "instantiates the prefab's root.children subtree" {
             _ = game.spawnFromPrefab("parent", .{ .x = 0, .y = 0 }).?;
-            // Root (Marker 1) plus its one child (Marker 2).
+            // Root (Marker 1) plus its one child (Marker 2). The
+            // outer `tests:before` re-initializes `game` per test,
+            // so the widget spawned in the preceding test in this
+            // group does NOT leak in — the assertion stays at 2.
             try expect.notToBeNull(findMarker(&game, 1));
             try expect.notToBeNull(findMarker(&game, 2));
             try expect.equal(countMarkers(&game), 2);
