@@ -43,6 +43,28 @@ const uf = @import("unified_format.zig");
 const ref_resolver_mod = @import("ref_resolver.zig");
 const component_apply_mod = @import("component_apply.zig");
 const on_ready_mod = @import("on_ready.zig");
+const tree_walker = @import("tree_walker.zig");
+
+/// Adapt a `PrefabCache` into a `tree_walker.Resolver`. The walker
+/// expands `prefab` references through this so its cycle detector
+/// sees the same reference graph the instantiation pass does.
+fn prefabResolver(cache: *PrefabCache) tree_walker.Resolver {
+    const Wrap = struct {
+        fn get(ctx: *anyopaque, name: []const u8) ?Value {
+            const c: *PrefabCache = @ptrCast(@alignCast(ctx));
+            return c.get(name);
+        }
+    };
+    return .{ .ctx = cache, .getFn = &Wrap.get };
+}
+
+/// A walker visitor that does nothing — used when the only thing a
+/// walk needs to surface is cycle detection (the walker raises
+/// `error.PrefabCycle` on its own; the visitor never has to act).
+const CycleCheckVisitor = struct {
+    pub const VisitError = error{};
+    pub fn visit(_: CycleCheckVisitor, _: tree_walker.Node(VisitError)) VisitError!void {}
+};
 
 pub fn SceneLoader(comptime GameType: type, comptime Components: type) type {
     const Entity = GameType.EntityType;
@@ -52,8 +74,49 @@ pub fn SceneLoader(comptime GameType: type, comptime Components: type) type {
     const OnReadyHelpers = on_ready_mod.OnReady(GameType, Components);
 
     return struct {
-        pub const LoadEntityError = error{ IncludeDepthExceeded, OutOfMemory, InvalidFormat };
+        pub const LoadEntityError = error{ IncludeDepthExceeded, OutOfMemory, InvalidFormat, PrefabCycle };
         pub const MAX_DEPTH: usize = 16;
+
+        // ── Cycle detection (RFC #569) ─────────────────────────
+
+        /// Run the shared entity-tree walker over `entity_value`
+        /// purely for its cycle detector. A referenced-prefab cycle
+        /// (`A -> B -> A`) is a load-time error: the full chain is
+        /// logged and `error.PrefabCycle` propagates so the loader
+        /// aborts before instantiating a tree that would recurse
+        /// forever. Both inference (static) and instantiation
+        /// (runtime) gate on this shared check.
+        fn checkEntityTreeCycles(
+            game: *GameType,
+            entity_value: Value,
+            prefab_cache: *PrefabCache,
+            ctx: *tree_walker.WalkContext,
+        ) LoadEntityError!void {
+            // Track the loader's recursion limit so the walk fails
+            // with the same depth ceiling `loadEntityInternal` does
+            // — a tree the loader would reject as too deep is
+            // surfaced here as `IncludeDepthExceeded`, not silently
+            // walked.
+            ctx.max_depth = MAX_DEPTH;
+            tree_walker.walk(ctx, prefabResolver(prefab_cache), entity_value, CycleCheckVisitor{}) catch |err| switch (err) {
+                error.PrefabCycle => {
+                    // `formatCycleChain` either returns an
+                    // allocator-owned slice (success) or raises
+                    // `OutOfMemory`. Use an optional to signal which
+                    // one, rather than a literal-string fallback —
+                    // a string-equality probe to decide whether to
+                    // free is brittle (and just happens to work
+                    // because no real chain is "<unknown>").
+                    const chain_opt: ?[]const u8 = ctx.formatCycleChain(game.allocator) catch null;
+                    defer if (chain_opt) |c| game.allocator.free(c);
+                    const chain = chain_opt orelse "<unknown>";
+                    game.log.err("[scene] prefab reference cycle: {s} (RFC #560, #569)", .{chain});
+                    return error.PrefabCycle;
+                },
+                error.DepthExceeded => return error.IncludeDepthExceeded,
+                error.OutOfMemory => return error.OutOfMemory,
+            };
+        }
 
         // ── Public entry points ────────────────────────────────
 
@@ -185,6 +248,32 @@ pub fn SceneLoader(comptime GameType: type, comptime Components: type) type {
             };
             const prefab_obj = prefab_val.asObject() orelse return null;
             const prefab_root = uf.rootObject(prefab_obj);
+
+            // Cycle gate. Walk a synthetic reference entry so the
+            // shared walker pushes `name` onto its expansion stack
+            // — that way a prefab that references itself (directly
+            // or via a child / nested component field) is caught
+            // (RFC #569). On a cycle the chain is logged and the
+            // spawn fails (`null`) rather than recursing forever.
+            //
+            // Run UNCONDITIONALLY, before the `components` lookup
+            // below: a cyclic prefab whose `root` has no `components`
+            // (the cycle lives purely in `root.children`) would
+            // otherwise bypass the diagnostic via the early `return
+            // null` and just silently fail to spawn.
+            {
+                var ref_entries = [_]Value.Object.Entry{
+                    .{ .key = "prefab", .value = .{ .string = name } },
+                };
+                const ref_entry = Value{ .object = .{ .entries = &ref_entries } };
+                var cycle_ctx = tree_walker.WalkContext.init(game.allocator);
+                defer cycle_ctx.deinit();
+                checkEntityTreeCycles(game, ref_entry, prefab_cache, &cycle_ctx) catch |err| {
+                    game.log.err("[spawnPrefab] '{s}' not spawned: {s}", .{ name, @errorName(err) });
+                    return null;
+                };
+            }
+
             const prefab_components = prefab_root.getObject("components") orelse return null;
 
             const entity = game.createEntity();
@@ -229,6 +318,23 @@ pub fn SceneLoader(comptime GameType: type, comptime Components: type) type {
         /// Process entities from a parsed scene, with two-pass ref
         /// resolution.
         fn processEntities(game: *GameType, entities_arr: Value.Array, prefab_cache: *PrefabCache, ref_ctx: *RefContext) LoadEntityError!void {
+            // Pass 0: cycle gate. The shared tree-walker crosses
+            // both `children` and prefab refs nested in component
+            // fields, so a cycle hidden in either path is caught
+            // before any entity is created (RFC #569).
+            //
+            // One `WalkContext` for the whole scene: its expansion
+            // stack and diagnostic buffer keep their capacity across
+            // entries, so a scene with N top-level entities does N
+            // walks but only one set of ArrayList growths.
+            var cycle_ctx = tree_walker.WalkContext.init(game.allocator);
+            defer cycle_ctx.deinit();
+            for (entities_arr.items) |entity_val| {
+                cycle_ctx.stack.clearRetainingCapacity();
+                cycle_ctx.cycle_chain.clearRetainingCapacity();
+                try checkEntityTreeCycles(game, entity_val, prefab_cache, &cycle_ctx);
+            }
+
             // Pass 1: create entities, apply components (with
             // `@ref` → 0), collect refs.
             for (entities_arr.items) |entity_val| {
