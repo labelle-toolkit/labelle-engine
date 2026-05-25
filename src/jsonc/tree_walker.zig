@@ -231,7 +231,20 @@ fn walkEntry(
             }
         }
     }
-    defer if (pushed_prefab) {
+    // The expansion stack only guards against *reference-chain*
+    // cycles (A's body references B's body references A's body).
+    // Steps 1 and 2 walk content that belongs to this prefab's body,
+    // so the stack must include this prefab while they recurse. Step
+    // 3 walks the entry's own scene-declared `children`, which are a
+    // SEPARATE entity tree the scene attached — a child there that
+    // references this same prefab is a new finite expansion, not a
+    // recursive one. So pop the stack between step 2 and step 3 to
+    // avoid a false `error.PrefabCycle` on a legitimate scene entry
+    // like `{ "prefab": "A", "children": [{ "prefab": "A" }] }`.
+    // `errdefer` covers an early return from steps 1 or 2; the
+    // happy-path pop below clears `pushed_prefab` so it does not
+    // double-pop.
+    errdefer if (pushed_prefab) {
         _ = ctx.stack.pop();
     };
 
@@ -276,6 +289,14 @@ fn walkEntry(
         if (try effectiveComponents(merge_arena, prefab_components, patch)) |eff| {
             try walkComponentFields(ctx, merge_arena, resolver, eff, depth, visitor);
         }
+    }
+
+    // The prefab's body (steps 1 and 2) is fully expanded — pop
+    // before walking scene-declared children so a child that
+    // references the same prefab is not mistaken for a cycle.
+    if (pushed_prefab) {
+        _ = ctx.stack.pop();
+        pushed_prefab = false;
     }
 
     // ── 3. the entry's own children array ───────────────────────

@@ -441,6 +441,50 @@ pub const TreeWalkerSpec = struct {
         }
     };
 
+    // ── scene-declared repetition of a prefab is not a cycle ────
+    //
+    // A reference-chain cycle (A's body references B's body
+    // references A's body) is what `error.PrefabCycle` exists to
+    // catch — NOT a scene that legitimately spawns two instances of
+    // the same prefab in a `children` array. The expansion stack
+    // must release the parent's prefab name before recursing into
+    // the parent's scene-declared `children`; otherwise a sibling /
+    // child reference to the same prefab is falsely flagged.
+
+    pub const @"a scene child re-referencing the parent's prefab" = struct {
+        test "is not a cycle (scene-declared, not reference-chain)" {
+            const a = arena.allocator();
+            const src = Corpus.create(.{});
+
+            var table = PrefabTable.init(a);
+            defer table.deinit();
+            // `leaf` is a plain prefab with no children — two
+            // instances are independent finite trees.
+            try table.add("leaf", src.leaf_prefab);
+
+            // Parent references `leaf`; one of its scene-declared
+            // children also references `leaf`. This is a tree with
+            // two `leaf` instances, not a reference cycle.
+            const root = try parse(a,
+                \\{ "prefab": "leaf", "children": [
+                \\  { "prefab": "leaf" }
+                \\] }
+            );
+
+            var visits: std.ArrayList(Visit) = .empty;
+            var ctx = tw.WalkContext.init(a);
+            defer ctx.deinit();
+
+            try tw.walk(&ctx, table.resolver(), root, Recorder{ .list = &visits, .allocator = a });
+            // Parent + one scene child.
+            try expect.equal(visits.items.len, 2);
+            try expect.equal(visits.items[0].origin, tw.Origin.root);
+            try expect.toBeTrue(visits.items[0].has_prefab_root);
+            try expect.equal(visits.items[1].origin, tw.Origin.child);
+            try expect.toBeTrue(visits.items[1].has_prefab_root);
+        }
+    };
+
     pub const @"an override leaving a cyclic component field intact" = struct {
         test "still detects the cycle" {
             const a = arena.allocator();

@@ -86,13 +86,30 @@ pub fn SceneLoader(comptime GameType: type, comptime Components: type) type {
         /// aborts before instantiating a tree that would recurse
         /// forever. Both inference (static) and instantiation
         /// (runtime) gate on this shared check.
-        fn checkEntityTreeCycles(game: *GameType, entity_value: Value, prefab_cache: *PrefabCache) LoadEntityError!void {
-            var ctx = tree_walker.WalkContext.init(game.allocator);
-            defer ctx.deinit();
-            tree_walker.walk(&ctx, prefabResolver(prefab_cache), entity_value, CycleCheckVisitor{}) catch |err| switch (err) {
+        fn checkEntityTreeCycles(
+            game: *GameType,
+            entity_value: Value,
+            prefab_cache: *PrefabCache,
+            ctx: *tree_walker.WalkContext,
+        ) LoadEntityError!void {
+            // Track the loader's recursion limit so the walk fails
+            // with the same depth ceiling `loadEntityInternal` does
+            // — a tree the loader would reject as too deep is
+            // surfaced here as `IncludeDepthExceeded`, not silently
+            // walked.
+            ctx.max_depth = MAX_DEPTH;
+            tree_walker.walk(ctx, prefabResolver(prefab_cache), entity_value, CycleCheckVisitor{}) catch |err| switch (err) {
                 error.PrefabCycle => {
-                    const chain = ctx.formatCycleChain(game.allocator) catch "<unknown>";
-                    defer if (!std.mem.eql(u8, chain, "<unknown>")) game.allocator.free(chain);
+                    // `formatCycleChain` either returns an
+                    // allocator-owned slice (success) or raises
+                    // `OutOfMemory`. Use an optional to signal which
+                    // one, rather than a literal-string fallback —
+                    // a string-equality probe to decide whether to
+                    // free is brittle (and just happens to work
+                    // because no real chain is "<unknown>").
+                    const chain_opt: ?[]const u8 = ctx.formatCycleChain(game.allocator) catch null;
+                    defer if (chain_opt) |c| game.allocator.free(c);
+                    const chain = chain_opt orelse "<unknown>";
                     game.log.err("[scene] prefab reference cycle: {s} (RFC #560, #569)", .{chain});
                     return error.PrefabCycle;
                 },
@@ -249,7 +266,9 @@ pub fn SceneLoader(comptime GameType: type, comptime Components: type) type {
                     .{ .key = "prefab", .value = .{ .string = name } },
                 };
                 const ref_entry = Value{ .object = .{ .entries = &ref_entries } };
-                checkEntityTreeCycles(game, ref_entry, prefab_cache) catch |err| {
+                var cycle_ctx = tree_walker.WalkContext.init(game.allocator);
+                defer cycle_ctx.deinit();
+                checkEntityTreeCycles(game, ref_entry, prefab_cache, &cycle_ctx) catch |err| {
                     game.log.err("[spawnPrefab] '{s}' not spawned: {s}", .{ name, @errorName(err) });
                     return null;
                 };
@@ -303,8 +322,17 @@ pub fn SceneLoader(comptime GameType: type, comptime Components: type) type {
             // both `children` and prefab refs nested in component
             // fields, so a cycle hidden in either path is caught
             // before any entity is created (RFC #569).
+            //
+            // One `WalkContext` for the whole scene: its expansion
+            // stack and diagnostic buffer keep their capacity across
+            // entries, so a scene with N top-level entities does N
+            // walks but only one set of ArrayList growths.
+            var cycle_ctx = tree_walker.WalkContext.init(game.allocator);
+            defer cycle_ctx.deinit();
             for (entities_arr.items) |entity_val| {
-                try checkEntityTreeCycles(game, entity_val, prefab_cache);
+                cycle_ctx.stack.clearRetainingCapacity();
+                cycle_ctx.cycle_chain.clearRetainingCapacity();
+                try checkEntityTreeCycles(game, entity_val, prefab_cache, &cycle_ctx);
             }
 
             // Pass 1: create entities, apply components (with
