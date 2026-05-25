@@ -349,7 +349,7 @@ fn effectiveComponents(
         var value = pe.value;
         for (ov.entries) |oe| {
             if (std.mem.eql(u8, oe.key, pe.key) and oe.value != .null_value) {
-                value = uf.mergeValues(pe.value, oe.value, a);
+                value = try uf.mergeValues(pe.value, oe.value, a);
                 break;
             }
         }
