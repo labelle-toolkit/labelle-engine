@@ -86,6 +86,8 @@ Reference mode supports `overrides` and disallows `children`. The two halves of 
 - **Inline mode is authoring.** You are describing a fresh entity at this point in the file. `children` belongs here because you are building something — nesting is part of the description.
 - **Reference mode is instantiating.** You are calling out to an existing recipe. `overrides` belongs here because instantiation legitimately needs to tune the call site (a different position, a different label). Appending `children` would not be tuning the call — it would be quietly re-authoring the recipe at the use site.
 
+Put plainly: **authoring lets you nest; instantiating doesn't.** Inside a file is authoring, so `children` is freely allowed (a prefab's own file can declare any tree it wants). Pointing at someone else's file is instantiating, so only `overrides` is allowed at that site — no `children` appended.
+
 If a use site needs an authored variant ("the door from `door.jsonc`, but with a pressure-plate child"), the variant gets its own file. That file *is* the authoring; the wrapper prefab is not a workaround for a missing feature, it is the place the new contract lives. Reviewers see a named variant, scripts can spawn it by name, and the original prefab's contract is unchanged for every other use.
 
 Every JSON block in the tree corresponds to one entity. The word `"entities"` no longer appears in any file.
