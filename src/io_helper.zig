@@ -19,7 +19,11 @@ const is_wasm_emscripten = builtin.target.os.tag == .emscripten;
 var _threaded: if (is_wasm_emscripten) void else std.Io.Threaded = if (is_wasm_emscripten) {} else undefined;
 var _io: std.Io = undefined;
 var _initialized: bool = false;
-var _init_lock: std.Thread.Mutex = .{};
+// std.Thread.Mutex was removed in Zig 0.16. std.Io.Mutex requires an
+// Io param to lock/unlock, but here we're guarding Io's own init —
+// chicken-and-egg. std.atomic.Mutex is the right primitive: a one-shot
+// init runs once per process, contention is brief, spin is fine.
+var _init_lock: std.atomic.Mutex = .unlocked;
 
 pub fn io() std.Io {
     if (is_wasm_emscripten) {
@@ -42,7 +46,7 @@ pub fn io() std.Io {
         return std.testing.io_instance.io();
     }
     if (@atomicLoad(bool, &_initialized, .acquire)) return _io;
-    _init_lock.lock();
+    while (!_init_lock.tryLock()) {}
     defer _init_lock.unlock();
     if (!_initialized) {
         _threaded = std.Io.Threaded.init(std.heap.page_allocator, .{});
