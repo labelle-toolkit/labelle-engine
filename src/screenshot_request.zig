@@ -47,17 +47,16 @@ pub fn nowNs() i128 {
         .windows => 1, // unused — Windows path below
         else => 1,
     };
-    if (comptime builtin.os.tag == .windows) {
-        // QueryPerformanceCounter would be the right call here, but
-        // Windows already provides `std.posix.clock_gettime`-equivalent
-        // wiring through MSVCRT for libc-linked builds — and the
-        // assembler-generated game always links libc. Fall through.
-        var ts: Timespec = undefined;
-        _ = clock_gettime(clk_id, &ts);
-        return @as(i128, ts.sec) * std.time.ns_per_s + @as(i128, ts.nsec);
+    // Zero-initialize so a `clock_gettime` failure can't yield garbage
+    // ns (uninitialized stack would let the assembler frame loop's
+    // `after_sec` check fire at random times — never, or immediately).
+    // Per spec, 0 is a valid CLOCK_MONOTONIC reading, so falling back
+    // to 0 just means the elapsed-time delta is conservative until the
+    // clock starts ticking, which beats undefined behavior.
+    var ts: Timespec = .{ .sec = 0, .nsec = 0 };
+    if (clock_gettime(clk_id, &ts) != 0) {
+        return 0;
     }
-    var ts: Timespec = undefined;
-    _ = clock_gettime(clk_id, &ts);
     return @as(i128, ts.sec) * std.time.ns_per_s + @as(i128, ts.nsec);
 }
 
