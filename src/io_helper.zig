@@ -26,18 +26,16 @@ pub fn io() std.Io {
         return std.Io.failing;
     }
     // Inside a test binary, reuse the test runner's `std.testing.io_instance`
-    // rather than spinning up a second `Io.Threaded` pool. Two pools in the
-    // same process meant two `sigaction(.IO, ...)` installs racing on the
-    // same global signal slot — the second wins, leaving the first pool's
-    // worker threads unable to be interrupted out of blocking syscalls.
-    // On a constrained Linux runner (e.g. GitHub Actions ubuntu-latest,
-    // 2 CPUs → 1 worker per pool) that manifested as a hard deadlock
-    // the first time a test exercised both `std.testing.io` (e.g.
-    // `tmpDir().createDir(io, ...)`) and an engine codepath that calls
-    // `loadScene` → `prefab_cache.scanDir` → `io_helper.io()`. The CI
-    // hang reproduced exactly there (registry_scan_spec, post-#577).
-    // Sharing one pool also removes the non-atomic lazy-init race that
-    // was sitting in this file regardless.
+    // rather than spinning up a second `Io.Threaded` pool. This keeps engine
+    // codepaths that hit `io_helper.io()` (e.g. `loadScene` ->
+    // `prefab_cache.scanDir`) on the same pool the test-side `std.testing.io`
+    // calls use, sidestepping a second `sigaction(.IO, ...)` install and the
+    // non-atomic lazy-init race that was sitting in this file regardless.
+    // The CI hang investigated under #583 turned out to be unrelated to the
+    // dual-pool concern (the zspec v0.9.1 runner never initialized
+    // `std.testing.io_instance`, so the first `std.testing.io.*` call
+    // deadlocked on an `0xaaaaaaaa` mutex); the upgrade to v0.9.2 fixes it.
+    // This shared-pool path remains as defence-in-depth.
     if (builtin.is_test) {
         return std.testing.io_instance.io();
     }
