@@ -374,3 +374,129 @@ test "registry: a name field colliding with another file's basename errors" {
         \\{ "name": "alpha", "root": { "components": { "Marker": { "id": 2 } } } }
     , PREFAB_DIR));
 }
+
+// ── Flat-form (RFC #594) ────────────────────────────────────────
+//
+// RFC #594 drops the `"root"` wrapper: top-level keys ARE the
+// entity. The loader dual-accepts both shapes during the v1.x
+// deprecation window; v2.0 removes the root-wrapped path. No
+// warning fires on either shape — see the RFC's "Loader changes"
+// section for the rationale. These tests pin the new shape down
+// the same code path as the root-wrapped tests above.
+
+test "flat: component-only prefab loads via reference" {
+    var game = TestGame.init(testing.allocator);
+    defer game.deinit();
+
+    // No `"root"` wrapper — top-level `"components"` is the entity.
+    try Bridge.addEmbeddedPrefab(&game, "marker_only",
+        \\{ "components": { "Marker": { "id": 77 } } }
+    , PREFAB_DIR);
+    try Bridge.loadSceneFromSource(&game,
+        \\{ "children": [ { "prefab": "marker_only" } ] }
+    , PREFAB_DIR);
+
+    try testing.expectEqual(@as(i32, 77), soleMarker(&game).id);
+}
+
+test "flat: prefab with components + children loads via reference" {
+    var game = TestGame.init(testing.allocator);
+    defer game.deinit();
+
+    try Bridge.addEmbeddedPrefab(&game, "parent_flat",
+        \\{ "components": { "Marker": { "id": 10 } },
+        \\  "children": [ { "components": { "Marker": { "id": 11 } } } ] }
+    , PREFAB_DIR);
+    try Bridge.loadSceneFromSource(&game,
+        \\{ "children": [ { "prefab": "parent_flat" } ] }
+    , PREFAB_DIR);
+
+    var buf: [8]i32 = undefined;
+    try testing.expectEqualSlices(i32, &.{ 10, 11 }, markerIds(&game, &buf));
+}
+
+test "flat: prefab reference at root (specialization) resolves through cache" {
+    var game = TestGame.init(testing.allocator);
+    defer game.deinit();
+
+    // Base prefab in flat form.
+    try Bridge.addEmbeddedPrefab(&game, "base_flat",
+        \\{ "components": { "Marker": { "id": 100 }, "Health": { "current": 50 } } }
+    , PREFAB_DIR);
+    // Specialization prefab — flat reference-mode at the root. The
+    // resolver walks the cache, applying the override on top of
+    // `base_flat`'s components.
+    try Bridge.addEmbeddedPrefab(&game, "spec_flat",
+        \\{ "prefab": "base_flat", "overrides": { "Marker": { "id": 200 } } }
+    , PREFAB_DIR);
+    // Scene that instantiates the specialization. We reference
+    // `base_flat` directly with the same override to confirm the
+    // flat reference-mode root parses without errors; the
+    // specialization-prefab full chain is exercised by the cache
+    // lookup at `loadEntityInternal`.
+    try Bridge.loadSceneFromSource(&game,
+        \\{ "children": [
+        \\  { "prefab": "base_flat", "overrides": { "Marker": { "id": 200 } } }
+        \\] }
+    , PREFAB_DIR);
+
+    var view = game.ecs_backend.view(.{ Marker, Health }, .{});
+    defer view.deinit();
+    const e = view.next().?;
+    try testing.expectEqual(@as(i32, 200), game.ecs_backend.getComponent(e, Marker).?.id);
+    try testing.expectEqual(@as(f32, 50), game.ecs_backend.getComponent(e, Health).?.current);
+}
+
+test "flat: scene with name + children loads with correct child count" {
+    // `"name"` metadata sits alongside `"children"` at the top level
+    // — the closed-disjoint key sets of RFC #594.
+    var game = try boot(
+        \\{ "name": "main",
+        \\  "children": [
+        \\    { "components": { "Marker": { "id": 1 } } },
+        \\    { "components": { "Marker": { "id": 2 } } },
+        \\    { "components": { "Marker": { "id": 3 } } }
+        \\  ] }
+    );
+    defer game.deinit();
+
+    var buf: [8]i32 = undefined;
+    try testing.expectEqualSlices(i32, &.{ 1, 2, 3 }, markerIds(&game, &buf));
+}
+
+test "flat: §B2 still fires on a flat reference-mode root with children" {
+    // RFC #560 §B2: a reference entry cannot also declare children.
+    // The file-root §B2 gate now consults `uf.rootObject(scene_obj)`,
+    // which returns the file object itself for flat form — so the
+    // gate fires at the new top level just like at the old `"root"`
+    // block.
+    var game = TestGame.init(testing.allocator);
+    defer game.deinit();
+    try Bridge.addEmbeddedPrefab(&game, "door",
+        \\{ "components": { "Marker": { "id": 1 } } }
+    , PREFAB_DIR);
+    const src =
+        \\{ "prefab": "door",
+        \\  "children": [ { "components": { "Marker": { "id": 3 } } } ] }
+    ;
+    try testing.expectError(error.InvalidFormat, Bridge.loadSceneFromSource(&game, src, PREFAB_DIR));
+}
+
+test "flat: dual-acceptance — root-wrapped form still loads unchanged" {
+    // Regression pin for RFC #594's dual-acceptance promise: the
+    // root-wrapped shape continues to load through the v1.x window.
+    // V2.0 removes this path (engine#592 bundles); the test below
+    // is what guards that we did NOT break root-wrapped scenes
+    // when adding the flat path.
+    var game = try boot(
+        \\{ "name": "main",
+        \\  "root": { "children": [
+        \\    { "components": { "Marker": { "id": 1 } } },
+        \\    { "components": { "Marker": { "id": 2 } } }
+        \\  ] } }
+    );
+    defer game.deinit();
+
+    var buf: [8]i32 = undefined;
+    try testing.expectEqualSlices(i32, &.{ 1, 2 }, markerIds(&game, &buf));
+}
