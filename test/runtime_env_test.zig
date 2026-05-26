@@ -21,13 +21,16 @@ const engine = @import("engine");
 
 test "requestedScene returns null when LABELLE_SCENE is unset" {
     const builtin = @import("builtin");
-    if (!builtin.link_libc) {
+    // `comptime` so the no-libc branch fully replaces the libc one
+    // before sema — otherwise `std.c.getenv` would be analyzed on
+    // freestanding/WASI builds and fail to resolve.
+    if (comptime !builtin.link_libc) {
         // Without libc the helper short-circuits to null unconditionally.
         try testing.expectEqual(@as(?[]const u8, null), engine.requestedScene());
-        return;
+    } else {
+        if (std.c.getenv("LABELLE_SCENE") != null) return error.SkipZigTest;
+        try testing.expectEqual(@as(?[]const u8, null), engine.requestedScene());
     }
-    if (std.c.getenv("LABELLE_SCENE") != null) return error.SkipZigTest;
-    try testing.expectEqual(@as(?[]const u8, null), engine.requestedScene());
 }
 
 test "runtime_env exposes the canonical env-var key" {

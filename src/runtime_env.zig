@@ -36,8 +36,10 @@ const SCENE_ENV_VAR_Z: [*:0]const u8 = SCENE_ENV_VAR;
 /// cli spawns links libc, so this is portable in practice for the
 /// channels we ship today.
 pub fn requestedScene() ?[]const u8 {
-    if (builtin.os.tag == .wasi) return null;
-    if (!builtin.link_libc) return null;
+    // `comptime` so the inactive branch is discarded before semantic
+    // analysis — referencing `std.c.getenv` on a target without libc
+    // (e.g. WASI, freestanding) would otherwise error at compile time.
+    if (comptime builtin.os.tag == .wasi or !builtin.link_libc) return null;
 
     const raw = std.c.getenv(SCENE_ENV_VAR_Z) orelse return null;
     const val = std.mem.span(raw);
