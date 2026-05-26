@@ -258,6 +258,65 @@ test "registry: duplicate name field is a load-time error" {
     , PREFAB_DIR));
 }
 
+// ── §B2 rejection: {prefab + children} at a reference site ─────────
+//
+// RFC #560 §B2: a reference entry (`prefab` set) cannot also
+// declare `children`. Inline mode authors; reference mode
+// instantiates — appending children at a use site would silently
+// re-author the recipe. The assembler rejects this shape pre-parse
+// (labelle-assembler#182), but the engine loader does NOT currently
+// enforce it directly — the existing `bridge_prefab_tags_test.zig`
+// regression guard explicitly exercises the violating shape, so
+// landing the engine-side gate is a separate contract change.
+//
+// See #586 for the loader gate + contract reconciliation. These
+// tests are kept skipped (not deleted) so they land alongside the
+// follow-up PR and start asserting once the gate is in.
+
+test "unified: prefab reference with children is a load-time error" {
+    // TODO(#586): unskip once the loader gates `{prefab + children}`
+    // at child reference sites with `error.InvalidFormat`.
+    // The body below is the assertion the loader gate will satisfy;
+    // it is gated on a `comptime` flag so it doesn't dead-code-warn
+    // and so flipping the flag is the only edit needed on unskip.
+    const loader_enforces_b2 = false;
+    if (!loader_enforces_b2) return error.SkipZigTest;
+
+    var game = TestGame.init(testing.allocator);
+    defer game.deinit();
+    try Bridge.addEmbeddedPrefab(&game, "door",
+        \\{ "root": { "components": { "Marker": { "id": 1 } } } }
+    , PREFAB_DIR);
+    const src =
+        \\{ "root": { "children": [
+        \\  { "prefab": "door",
+        \\    "overrides": { "Marker": { "id": 2 } },
+        \\    "children": [ { "components": { "Marker": { "id": 3 } } } ] }
+        \\] } }
+    ;
+    try testing.expectError(error.InvalidFormat, Bridge.loadSceneFromSource(&game, src, PREFAB_DIR));
+}
+
+test "unified: prefab root with children is a load-time error" {
+    // TODO(#586): unskip once the loader gates `{root: {prefab +
+    // children}}` at the file root with `error.InvalidFormat`.
+    const loader_enforces_b2 = false;
+    if (!loader_enforces_b2) return error.SkipZigTest;
+
+    var game = TestGame.init(testing.allocator);
+    defer game.deinit();
+    try Bridge.addEmbeddedPrefab(&game, "door",
+        \\{ "root": { "components": { "Marker": { "id": 1 } } } }
+    , PREFAB_DIR);
+    const src =
+        \\{ "root": {
+        \\  "prefab": "door",
+        \\  "children": [ { "components": { "Marker": { "id": 3 } } } ]
+        \\} }
+    ;
+    try testing.expectError(error.InvalidFormat, Bridge.loadSceneFromSource(&game, src, PREFAB_DIR));
+}
+
 test "registry: a name field colliding with another file's basename errors" {
     var game = TestGame.init(testing.allocator);
     defer game.deinit();
