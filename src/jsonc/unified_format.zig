@@ -141,6 +141,37 @@ pub fn warnLegacyAssets(file_obj: Value.Object, log: anytype) void {
     }
 }
 
+/// RFC §B2 gate: a reference-mode entry (one that carries a
+/// `"prefab"` field) is *instantiating*, not *authoring*. Appending a
+/// `"children"` array at the call site would silently re-author the
+/// referenced recipe — exactly the surprise §B2 forbids. Inline mode
+/// (`"components"` + `"children"`) is the place that legitimately
+/// nests; if a use site needs to grow a prefab's content, the growth
+/// becomes a wrapper prefab in its own file (RFC §Examples #3).
+///
+/// Returns `error.InvalidFormat` if `entry_obj` has both `"prefab"`
+/// and `"children"` set. The error message names RFC §B2 explicitly
+/// so a reader landing on a load-time failure can find the spec.
+///
+/// `site_label` is the human-readable site name — currently
+/// `"reference-mode root"` (file-root violation) or
+/// `"child entry"` (nested violation). Callers pre-classify so the
+/// log line tells the author *where* in the file to look.
+///
+/// The assembler rejects this shape pre-build at `codegen/scan.zig`
+/// (labelle-assembler#182); this gate is the engine-side complement,
+/// catching content that bypassed the assembler (embedded sources in
+/// tests, hand-edited save files, third-party tools).
+pub fn rejectB2Violation(entry_obj: Value.Object, log: anytype, site_label: []const u8) error{InvalidFormat}!void {
+    if (entry_obj.getString("prefab") == null) return;
+    if (entry_obj.getArray("children") == null) return;
+    log.err(
+        "[unified-format] RFC §B2 violation at {s}: a prefab reference cannot also declare \"children\" — references instantiate, they do not author. Move the extra entities into a wrapper prefab (RFC #560 §B2).",
+        .{site_label},
+    );
+    return error.InvalidFormat;
+}
+
 // ── Override merge (RFC #562) ───────────────────────────────────
 
 /// Deep-merge `patch` onto `base`, returning a new `Value`.

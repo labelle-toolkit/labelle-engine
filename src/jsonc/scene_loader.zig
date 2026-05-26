@@ -249,6 +249,19 @@ pub fn SceneLoader(comptime GameType: type, comptime Components: type) type {
             const prefab_obj = prefab_val.asObject() orelse return null;
             const prefab_root = uf.rootObject(prefab_obj);
 
+            // RFC #560 §B2: the resolved prefab's own root may not
+            // itself be a `{prefab + children}` shape. If the prefab
+            // file was authored as a reference-mode root carrying
+            // `"children"`, the file-root gates in
+            // `loadSceneFile`/`loadSceneSource` would have caught it
+            // for scenes, but `addEmbeddedPrefab` (and any third-party
+            // prefab source) parses without that gate — so re-check
+            // here at every use site rather than rely on the
+            // ingestion path. `spawnPrefabImpl` returns `?Entity`, so
+            // surface the violation as a logged error + null spawn
+            // (the helper already logged the diagnostic).
+            uf.rejectB2Violation(prefab_root, game.log, "resolved prefab root") catch return null;
+
             // Cycle gate. Walk a synthetic reference entry so the
             // shared walker pushes `name` onto its expansion stack
             // — that way a prefab that references itself (directly
@@ -288,9 +301,17 @@ pub fn SceneLoader(comptime GameType: type, comptime Components: type) type {
             }
 
             // Handle nested entities (e.g. workstation storages).
+            // `spawnAndLinkNestedEntities` now propagates §B2
+            // violations; `spawnPrefabImpl` has no error channel, so
+            // log and bail (returning the partially-built entity is
+            // worse than returning null — the prefab content is
+            // malformed and shouldn't appear in the world).
             const entity_pos = game.getPosition(entity);
             for (prefab_components.entries) |entry| {
-                spawnAndLinkNestedEntities(game, entity, entry.key, entry.value, entity_pos, prefab_cache, 0, null);
+                spawnAndLinkNestedEntities(game, entity, entry.key, entry.value, entity_pos, prefab_cache, 0, null) catch |err| {
+                    game.log.err("[spawnPrefab] '{s}' nested-entity load failed: {s}", .{ name, @errorName(err) });
+                    return null;
+                };
             }
 
             // Fire onReady hooks.
@@ -391,6 +412,13 @@ pub fn SceneLoader(comptime GameType: type, comptime Components: type) type {
             // `fileChildren` accepts the unified `root.children`
             // shape and the legacy top-level `entities` array.
             uf.warnLegacyAssets(scene_obj, game.log);
+            // RFC #560 §B2 at the file root: a reference-mode root
+            // (`"root": { "prefab": ..., ... }`) may not declare
+            // `"children"` — instantiating doesn't author. See
+            // RFC-UNIFY-SCENES-AND-PREFABS.md §Unified shape.
+            if (scene_obj.getObject("root")) |root_obj| {
+                try uf.rejectB2Violation(root_obj, game.log, "reference-mode root");
+            }
             if (uf.fileChildren(scene_obj, game.log)) |entities_arr| {
                 var ref_ctx = RefContext.init(game.allocator, null);
                 defer ref_ctx.deinit();
@@ -421,6 +449,13 @@ pub fn SceneLoader(comptime GameType: type, comptime Components: type) type {
             }
 
             uf.warnLegacyAssets(scene_obj, game.log);
+            // RFC #560 §B2 at the file root: a reference-mode root
+            // (`"root": { "prefab": ..., ... }`) may not declare
+            // `"children"` — instantiating doesn't author. See
+            // RFC-UNIFY-SCENES-AND-PREFABS.md §Unified shape.
+            if (scene_obj.getObject("root")) |root_obj| {
+                try uf.rejectB2Violation(root_obj, game.log, "reference-mode root");
+            }
             if (uf.fileChildren(scene_obj, game.log)) |entities_arr| {
                 var ref_ctx = RefContext.init(game.allocator, null);
                 defer ref_ctx.deinit();
@@ -442,6 +477,17 @@ pub fn SceneLoader(comptime GameType: type, comptime Components: type) type {
             if (depth > MAX_DEPTH) return error.IncludeDepthExceeded;
             const entity_obj = entity_val.asObject() orelse return error.InvalidFormat;
 
+            // RFC #560 §B2: reference-mode entries (those carrying a
+            // `"prefab"` field) may not also declare a `"children"`
+            // array — references instantiate, they do not author.
+            // Reject at every child-entry visit so a violation deep
+            // in a nested tree still surfaces as a load-time error
+            // rather than silent acceptance with the children
+            // ignored. See labelle-assembler#182 for the pre-build
+            // companion check (this is defense-in-depth for embedded
+            // sources, hand-edited save files, and third-party tools).
+            try uf.rejectB2Violation(entity_obj, game.log, "child entry");
+
             // Resolve prefab.
             var prefab_components: ?Value.Object = null;
             var prefab_children: ?Value.Array = null;
@@ -453,6 +499,14 @@ pub fn SceneLoader(comptime GameType: type, comptime Components: type) type {
                         // Unwrap the unified `root` block (a no-op
                         // on legacy prefabs that lack it).
                         const proot = uf.rootObject(pobj);
+                        // RFC #560 §B2: the resolved prefab's own
+                        // root may not itself be `{prefab + children}`.
+                        // The file-root gate only fires for scenes
+                        // loaded via `loadSceneFile`/`loadSceneSource`
+                        // — `addEmbeddedPrefab` and third-party
+                        // prefab sources land in the cache unchecked,
+                        // so re-validate here at every resolution.
+                        try uf.rejectB2Violation(proot, game.log, "resolved prefab root");
                         prefab_components = proot.getObject("components");
                         prefab_children = proot.getArray("children");
                     }
@@ -561,13 +615,13 @@ pub fn SceneLoader(comptime GameType: type, comptime Components: type) type {
             if (scene_components) |sc| {
                 for (sc.entries, 0..) |entry, i| {
                     const effective = effective_overrides.?[i] orelse continue;
-                    spawnAndLinkNestedEntities(game, entity, entry.key, effective, entity_pos, prefab_cache, depth, ref_ctx);
+                    try spawnAndLinkNestedEntities(game, entity, entry.key, effective, entity_pos, prefab_cache, depth, ref_ctx);
                 }
             }
             if (prefab_components) |pc| {
                 for (pc.entries) |entry| {
                     if (!applied.contains(entry.key)) {
-                        spawnAndLinkNestedEntities(game, entity, entry.key, entry.value, entity_pos, prefab_cache, depth, ref_ctx);
+                        try spawnAndLinkNestedEntities(game, entity, entry.key, entry.value, entity_pos, prefab_cache, depth, ref_ctx);
                     }
                 }
             }
@@ -724,7 +778,7 @@ pub fn SceneLoader(comptime GameType: type, comptime Components: type) type {
             prefab_cache: *PrefabCache,
             depth: usize,
             ref_ctx: ?*RefContext,
-        ) void {
+        ) LoadEntityError!void {
             const obj = comp_value.asObject() orelse return;
 
             // Arena for deep-merged override component values
@@ -734,6 +788,20 @@ pub fn SceneLoader(comptime GameType: type, comptime Components: type) type {
 
             for (obj.entries) |entry| {
                 const arr = entry.value.asArray() orelse continue;
+
+                // RFC #560 §B2: pre-scan for component-nested
+                // entries that smuggle `{prefab + children}` through
+                // a component array — the visit-time gate in
+                // `loadEntityInternal` doesn't fire on this walk
+                // path, so without this check a violation here loads
+                // silently. Propagate `error.InvalidFormat` so the
+                // top-level load returns the failure (matches the
+                // file-root and child-entry gates).
+                for (arr.items) |item| {
+                    if (!ApplyHelpers.isEntityLike(item)) continue;
+                    const item_obj = item.asObject() orelse continue;
+                    try uf.rejectB2Violation(item_obj, game.log, "component-nested entity");
+                }
 
                 // Count entity-like items.
                 var entity_count: usize = 0;
@@ -762,6 +830,22 @@ pub fn SceneLoader(comptime GameType: type, comptime Components: type) type {
                                 if (prefab_cache.get(pname)) |pval| {
                                     if (pval.asObject()) |pobj| {
                                         const proot = uf.rootObject(pobj);
+                                        // RFC #560 §B2: re-validate
+                                        // the resolved prefab's own
+                                        // root for the
+                                        // `{prefab + children}` shape
+                                        // (mirrors the matching block
+                                        // in `loadEntityInternal`).
+                                        // Propagate the error so the
+                                        // top-level load fails — the
+                                        // child entity already exists,
+                                        // so an `errdefer` on the
+                                        // caller path would normally
+                                        // clean it up, but here we
+                                        // rely on the scene load's
+                                        // overall failure to surface
+                                        // the diagnostic.
+                                        try uf.rejectB2Violation(proot, game.log, "resolved prefab root");
                                         child_prefab_comps = proot.getObject("components");
                                         child_prefab_children = proot.getArray("children");
                                     }
@@ -898,7 +982,7 @@ pub fn SceneLoader(comptime GameType: type, comptime Components: type) type {
                             if (child_scene_comps) |sc| {
                                 for (sc.entries, 0..) |e, i| {
                                     const effective = (child_effective orelse break)[i] orelse continue;
-                                    spawnAndLinkNestedEntities(game, child, e.key, effective, child_pos, prefab_cache, depth + 1, nested_ref_ctx);
+                                    try spawnAndLinkNestedEntities(game, child, e.key, effective, child_pos, prefab_cache, depth + 1, nested_ref_ctx);
                                 }
                             }
                             if (child_prefab_comps) |pc| {
@@ -910,7 +994,7 @@ pub fn SceneLoader(comptime GameType: type, comptime Components: type) type {
                                         break :blk false;
                                     } else false;
                                     if (!already_set) {
-                                        spawnAndLinkNestedEntities(game, child, e.key, e.value, child_pos, prefab_cache, depth + 1, nested_ref_ctx);
+                                        try spawnAndLinkNestedEntities(game, child, e.key, e.value, child_pos, prefab_cache, depth + 1, nested_ref_ctx);
                                     }
                                 }
                             }

@@ -264,24 +264,12 @@ test "registry: duplicate name field is a load-time error" {
 // declare `children`. Inline mode authors; reference mode
 // instantiates — appending children at a use site would silently
 // re-author the recipe. The assembler rejects this shape pre-parse
-// (labelle-assembler#182), but the engine loader does NOT currently
-// enforce it directly — the existing `bridge_prefab_tags_test.zig`
-// regression guard explicitly exercises the violating shape, so
-// landing the engine-side gate is a separate contract change.
-//
-// See #586 for the loader gate + contract reconciliation. These
-// tests are kept skipped (not deleted) so they land alongside the
-// follow-up PR and start asserting once the gate is in.
+// (labelle-assembler#182); the engine loader enforces the same rule
+// at load time (#586) as defense-in-depth for content that bypassed
+// the assembler — embedded sources in tests, hand-edited save
+// files, third-party tools.
 
 test "unified: prefab reference with children is a load-time error" {
-    // TODO(#586): unskip once the loader gates `{prefab + children}`
-    // at child reference sites with `error.InvalidFormat`.
-    // The body below is the assertion the loader gate will satisfy;
-    // it is gated on a `comptime` flag so it doesn't dead-code-warn
-    // and so flipping the flag is the only edit needed on unskip.
-    const loader_enforces_b2 = false;
-    if (!loader_enforces_b2) return error.SkipZigTest;
-
     var game = TestGame.init(testing.allocator);
     defer game.deinit();
     try Bridge.addEmbeddedPrefab(&game, "door",
@@ -298,11 +286,6 @@ test "unified: prefab reference with children is a load-time error" {
 }
 
 test "unified: prefab root with children is a load-time error" {
-    // TODO(#586): unskip once the loader gates `{root: {prefab +
-    // children}}` at the file root with `error.InvalidFormat`.
-    const loader_enforces_b2 = false;
-    if (!loader_enforces_b2) return error.SkipZigTest;
-
     var game = TestGame.init(testing.allocator);
     defer game.deinit();
     try Bridge.addEmbeddedPrefab(&game, "door",
@@ -313,6 +296,67 @@ test "unified: prefab root with children is a load-time error" {
         \\  "prefab": "door",
         \\  "children": [ { "components": { "Marker": { "id": 3 } } } ]
         \\} }
+    ;
+    try testing.expectError(error.InvalidFormat, Bridge.loadSceneFromSource(&game, src, PREFAB_DIR));
+}
+
+// Defense-in-depth for content the file-root gate can't see: a
+// prefab parsed through `addEmbeddedPrefab` (or any third-party
+// source that lands in the prefab cache without traversing
+// `loadSceneFile`/`loadSceneSource`) whose own root is itself a
+// reference-mode `{prefab + children}` block. The scene-side
+// reference looks innocent, but the resolved prefab root is the
+// §B2 violation. The loader re-validates at every prefab
+// resolution site, so the scene-load fails even though the
+// scene file is well-formed.
+test "unified: resolved prefab root with {prefab + children} is a load-time error" {
+    var game = TestGame.init(testing.allocator);
+    defer game.deinit();
+    try Bridge.addEmbeddedPrefab(&game, "base",
+        \\{ "root": { "components": { "Marker": { "id": 1 } } } }
+    , PREFAB_DIR);
+    // `door` is itself reference-mode AND declares children — this
+    // is the shape the file-root gate would normally catch when the
+    // prefab is loaded as a scene, but `addEmbeddedPrefab` doesn't
+    // gate. The violation must surface at use-site instead.
+    try Bridge.addEmbeddedPrefab(&game, "door",
+        \\{ "root": {
+        \\  "prefab": "base",
+        \\  "children": [ { "components": { "Marker": { "id": 2 } } } ]
+        \\} }
+    , PREFAB_DIR);
+    const src =
+        \\{ "root": { "children": [ { "prefab": "door" } ] } }
+    ;
+    try testing.expectError(error.InvalidFormat, Bridge.loadSceneFromSource(&game, src, PREFAB_DIR));
+}
+
+// Defense-in-depth for entity-like objects smuggled into a
+// component array: the visit-time §B2 gate in `loadEntityInternal`
+// only fires when the walker traverses the `children` path, but
+// component-nested entities (e.g. a workstation's storages,
+// a room's furniture array) are spawned by
+// `spawnAndLinkNestedEntities` — a separate walk that also has
+// to reject `{prefab + children}` or the violation loads silently.
+test "unified: {prefab + children} in a component-nested entity array is a load-time error" {
+    var game = TestGame.init(testing.allocator);
+    defer game.deinit();
+    try Bridge.addEmbeddedPrefab(&game, "item",
+        \\{ "root": { "components": { "Marker": { "id": 1 } } } }
+    , PREFAB_DIR);
+    // The outer entity inlines a component whose value is an array
+    // of entity-like objects. One of them is reference-mode AND
+    // declares children — the §B2 violation we want to catch.
+    const src =
+        \\{ "root": { "children": [
+        \\  { "components": {
+        \\      "Marker": { "id": 0 },
+        \\      "Container": { "items": [
+        \\        { "prefab": "item",
+        \\          "children": [ { "components": { "Marker": { "id": 99 } } } ] }
+        \\      ] }
+        \\  } }
+        \\] } }
     ;
     try testing.expectError(error.InvalidFormat, Bridge.loadSceneFromSource(&game, src, PREFAB_DIR));
 }

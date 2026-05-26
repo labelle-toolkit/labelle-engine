@@ -238,26 +238,31 @@ test "jsonc_scene_bridge: prefab children get PrefabChild tags on scene load" {
     try testing.expect(found_c1_gc0);
 }
 
-test "jsonc_scene_bridge: scene-declared children on a prefab do NOT get PrefabChild" {
-    // Regression guard for copilot L531/L608 on #485. A scene may
-    // over-declare children on top of a prefab (e.g. the scene adds
-    // decorations around a prefab-sourced room). Those scene-only
-    // children must NOT be tagged with `PrefabChild`, because the
-    // prefab definition doesn't own them — if the prefab later grows
-    // a new child at the same `children[N]` slot, Phase 1b on load
-    // would mis-map the saved scene-only child onto the new prefab
-    // child.
+test "jsonc_scene_bridge: scene-declared children on a prefab reference are a §B2 load-time error" {
+    // Reframed for RFC #560 §B2 enforcement (#586). The earlier
+    // regression — a scene "over-declaring" children on top of a
+    // prefab reference, and the bridge tagging only the prefab-owned
+    // ones with `PrefabChild` — described an *accepted* but
+    // ambiguous shape. RFC §B2 now forbids that shape outright:
+    // reference-mode entries instantiate, they do not author, so
+    // appending `children` at the call site is a load-time error.
     //
-    // Fix: the scene bridge calls `tagAsPrefabInstance` BETWEEN the
-    // prefab-declared children loop and the scene-declared children
-    // loop, so only prefab-owned children are within reach of the
-    // tagger's `getChildren` walk.
+    // The PrefabChild-vs-scene-child tagging distinction is moot
+    // because the violating scene can no longer load. The wrapper
+    // prefab pattern (RFC §Examples #3) is the supported way to
+    // grow a prefab's content at a use site: author a new file with
+    // inline `components` + `children`, and reference *that* by name.
+    //
+    // This test now pins the rejection so a future regression that
+    // re-accepts `{prefab + children}` would surface here as well as
+    // in `unified_format_test.zig`'s §B2 cases.
     var tmp_dir = testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
-    var fixture = try setupFixture(&tmp_dir, .{
-        // Prefab with one own child.
-        .room =
+    try tmp_dir.dir.createDir(std.testing.io, "prefabs", .default_dir);
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "prefabs/room.jsonc",
+        .data =
         \\{
         \\  "components": { "Health": { "current": 100, "max": 100 } },
         \\  "children": [
@@ -265,8 +270,20 @@ test "jsonc_scene_bridge: scene-declared children on a prefab do NOT get PrefabC
         \\  ]
         \\}
         ,
-    },
-        // Scene adds TWO extra children on top of the prefab instance.
+    });
+
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    const _len = try tmp_dir.dir.realPath(std.testing.io, &buf);
+    const dir_path = buf[0.._len];
+    const prefab_dir = try std.fmt.allocPrint(testing.allocator, "{s}/prefabs", .{dir_path});
+    defer testing.allocator.free(prefab_dir);
+
+    var game = TestGame.init(testing.allocator);
+    defer game.deinit();
+
+    // Scene with the §B2-violating shape: a prefab reference that
+    // also declares `children`.
+    const scene_source =
         \\{
         \\  "entities": [
         \\    {
@@ -278,18 +295,11 @@ test "jsonc_scene_bridge: scene-declared children on a prefab do NOT get PrefabC
         \\    }
         \\  ]
         \\}
+    ;
+    try testing.expectError(
+        error.InvalidFormat,
+        Bridge.loadSceneFromSource(&game, scene_source, prefab_dir),
     );
-    defer fixture.deinit();
-
-    const PrefabChild = TestGame.PrefabChildComp;
-    var tagged_count: usize = 0;
-    var view = fixture.game.active_world.ecs_backend.view(.{PrefabChild}, .{});
-    defer view.deinit();
-    while (view.next()) |_| tagged_count += 1;
-
-    // Only the single prefab-declared child should carry PrefabChild;
-    // the two scene-added children must not.
-    try testing.expectEqual(@as(usize, 1), tagged_count);
 }
 
 test "jsonc_scene_bridge: PrefabInstance.path survives save/load round-trip" {
