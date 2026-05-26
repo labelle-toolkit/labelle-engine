@@ -18,6 +18,27 @@
 /// is one runtime branch.
 
 const std = @import("std");
+const builtin = @import("builtin");
+
+// libc `getenv` — works on every target the assembler-generated game
+// links against (raylib, sokol, sdl all pull libc in). Zig 0.16 removed
+// `std.posix.getenv` and the `std.process.Environ.getPosix` replacement
+// needs a pre-constructed `Environ` value the game's `main.zig` doesn't
+// have on hand. Calling libc directly keeps the helper self-contained.
+//
+// On freestanding / no-libc targets this falls back to returning null —
+// `LABELLE_SCREENSHOT_PATH` isn't a thing in those environments anyway.
+extern "c" fn getenv(name: [*:0]const u8) ?[*:0]const u8;
+
+fn getEnv(comptime name: [:0]const u8) ?[:0]const u8 {
+    if (comptime !builtin.link_libc and builtin.os.tag != .linux and
+        builtin.os.tag != .macos and builtin.os.tag != .windows)
+    {
+        return null;
+    }
+    const raw = getenv(name.ptr) orelse return null;
+    return std.mem.span(raw);
+}
 
 pub const Request = struct {
     /// Output path the backend writes to. Raylib's `TakeScreenshot`
@@ -45,18 +66,11 @@ pub const Request = struct {
 /// degrade to `after_sec = 0` rather than crashing the game — the user
 /// asked for a screenshot, not a hard failure.
 pub fn parse() ?Request {
-    const path_z = std.posix.getenv("LABELLE_SCREENSHOT_PATH") orelse return null;
-    if (path_z.len == 0) return null;
-
-    // `getenv` returns `[]const u8` without the sentinel. The libc
-    // env block IS NUL-terminated though — the slice just trims the
-    // NUL. Re-attach the sentinel via `ptrCast` so callers that need
-    // a `[*:0]const u8` (raylib) don't have to re-allocate.
-    const path_ptr: [*:0]const u8 = @ptrCast(path_z.ptr);
-    const path: [:0]const u8 = path_ptr[0..path_z.len :0];
+    const path = getEnv("LABELLE_SCREENSHOT_PATH") orelse return null;
+    if (path.len == 0) return null;
 
     var after_sec: f32 = 0.0;
-    if (std.posix.getenv("LABELLE_SCREENSHOT_AFTER_SEC")) |after_str| {
+    if (getEnv("LABELLE_SCREENSHOT_AFTER_SEC")) |after_str| {
         if (after_str.len > 0) {
             after_sec = std.fmt.parseFloat(f32, after_str) catch 0.0;
             if (after_sec < 0) after_sec = 0;
