@@ -363,6 +363,11 @@ pub const preview_iosurface_mod = preview_mode_mod.preview_iosurface;
 // platform template, just one `getenv` per run.
 pub const ScreenshotRequest = screenshot_request_mod.Request;
 pub const requestedScreenshot = screenshot_request_mod.parse;
+/// Monotonic ns counter the screenshot timing block reads each frame
+/// to decide whether `after_sec` has elapsed. Lives next to
+/// `requestedScreenshot` because `std.time.nanoTimestamp` is gone in
+/// Zig 0.16 — see screenshot_request.zig for the libc fallback.
+pub const nowNs = screenshot_request_mod.nowNs;
 
 // ── JSONC Scene Bridge ──
 pub const JsoncSceneBridge = @import("jsonc_scene_bridge.zig").JsoncSceneBridge;

@@ -30,6 +30,37 @@ const builtin = @import("builtin");
 // `LABELLE_SCREENSHOT_PATH` isn't a thing in those environments anyway.
 extern "c" fn getenv(name: [*:0]const u8) ?[*:0]const u8;
 
+/// Monotonic ns counter for the assembler-generated frame loop's
+/// "fire after N seconds" check. `std.time.nanoTimestamp` was removed
+/// in Zig 0.16; libc `clock_gettime(CLOCK_MONOTONIC)` is the portable
+/// replacement (matches what `preview_mode_test`/`preview_iosurface_test`
+/// already use elsewhere in the engine).
+const Timespec = extern struct { sec: i64, nsec: i64 };
+const CLOCK_MONOTONIC: c_int = 6; // macOS value; Linux is 1 — picked
+// up below at runtime via `posix.CLOCK.MONOTONIC` when available.
+extern "c" fn clock_gettime(clk: c_int, tp: *Timespec) c_int;
+
+pub fn nowNs() i128 {
+    const clk_id: c_int = switch (builtin.os.tag) {
+        .macos, .ios, .watchos, .tvos => 6, // _CLOCK_MONOTONIC
+        .linux => 1, // CLOCK_MONOTONIC
+        .windows => 1, // unused — Windows path below
+        else => 1,
+    };
+    if (comptime builtin.os.tag == .windows) {
+        // QueryPerformanceCounter would be the right call here, but
+        // Windows already provides `std.posix.clock_gettime`-equivalent
+        // wiring through MSVCRT for libc-linked builds — and the
+        // assembler-generated game always links libc. Fall through.
+        var ts: Timespec = undefined;
+        _ = clock_gettime(clk_id, &ts);
+        return @as(i128, ts.sec) * std.time.ns_per_s + @as(i128, ts.nsec);
+    }
+    var ts: Timespec = undefined;
+    _ = clock_gettime(clk_id, &ts);
+    return @as(i128, ts.sec) * std.time.ns_per_s + @as(i128, ts.nsec);
+}
+
 fn getEnv(comptime name: [:0]const u8) ?[:0]const u8 {
     if (comptime !builtin.link_libc and builtin.os.tag != .linux and
         builtin.os.tag != .macos and builtin.os.tag != .windows)
