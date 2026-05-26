@@ -47,7 +47,11 @@ jobs:
         shell: bash
         run: |
           set +e
-          zig build test --summary all 2>&1 | tee test_output.txt
+          # `-j1` serialises the test runners so the first hang yields a
+          # readable "stopped after binary X" — under the default parallel
+          # scheduler the broken binary is masked behind whichever other
+          # one was still emitting output (#582 ubuntu hang investigation).
+          zig build test --summary all -j1 --verbose 2>&1 | tee test_output.txt
           TEST_EXIT_CODE=${PIPESTATUS[0]}
           set -e
 
