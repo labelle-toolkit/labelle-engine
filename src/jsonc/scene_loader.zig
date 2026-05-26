@@ -413,12 +413,12 @@ pub fn SceneLoader(comptime GameType: type, comptime Components: type) type {
             // shape and the legacy top-level `entities` array.
             uf.warnLegacyAssets(scene_obj, game.log);
             // RFC #560 §B2 at the file root: a reference-mode root
-            // (`"root": { "prefab": ..., ... }`) may not declare
-            // `"children"` — instantiating doesn't author. See
-            // RFC-UNIFY-SCENES-AND-PREFABS.md §Unified shape.
-            if (scene_obj.getObject("root")) |root_obj| {
-                try uf.rejectB2Violation(root_obj, game.log, "reference-mode root");
-            }
+            // may not declare `"children"` — instantiating doesn't
+            // author. `uf.rootObject` returns the explicit `"root"`
+            // block when present (root-wrapped legacy v1.x shape)
+            // and the file object itself otherwise (flat top-level
+            // entity, RFC #594), so the gate fires for either shape.
+            try uf.rejectB2Violation(uf.rootObject(scene_obj), game.log, "reference-mode root");
             if (uf.fileChildren(scene_obj, game.log)) |entities_arr| {
                 var ref_ctx = RefContext.init(game.allocator, null);
                 defer ref_ctx.deinit();
@@ -449,13 +449,10 @@ pub fn SceneLoader(comptime GameType: type, comptime Components: type) type {
             }
 
             uf.warnLegacyAssets(scene_obj, game.log);
-            // RFC #560 §B2 at the file root: a reference-mode root
-            // (`"root": { "prefab": ..., ... }`) may not declare
-            // `"children"` — instantiating doesn't author. See
-            // RFC-UNIFY-SCENES-AND-PREFABS.md §Unified shape.
-            if (scene_obj.getObject("root")) |root_obj| {
-                try uf.rejectB2Violation(root_obj, game.log, "reference-mode root");
-            }
+            // RFC #560 §B2 at the file root — see `loadSceneFile`
+            // for the dual-shape rationale (root-wrapped vs flat,
+            // RFC #594).
+            try uf.rejectB2Violation(uf.rootObject(scene_obj), game.log, "reference-mode root");
             if (uf.fileChildren(scene_obj, game.log)) |entities_arr| {
                 var ref_ctx = RefContext.init(game.allocator, null);
                 defer ref_ctx.deinit();

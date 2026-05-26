@@ -1,17 +1,22 @@
-//! Unified scene/prefab format accessors (RFC #560, ticket #561).
+//! Unified scene/prefab format accessors (RFC #560 + RFC #594).
 //!
-//! The unified format wraps a file's entity content in an explicit
-//! `"root"` block, lists file-level entities under `"children"`
-//! (not `"entities"`), and names a prefab reference's patch data
-//! `"overrides"` (not `"components"`). Legacy spellings are still
-//! accepted during the migration window; each logs a one-time
-//! deprecation warning so the #572 migrator has a checklist.
+//! The unified format lists file-level entities under `"children"`
+//! (not `"entities"`) and names a prefab reference's patch data
+//! `"overrides"` (not `"components"`). The file's entity content
+//! lives either inside an explicit `"root"` wrapper (v1.0 — v1.x)
+//! or directly at the file top level (RFC #594, recommended from
+//! v1.47 onward, only shape in v2.0). Pre-#560 legacy spellings
+//! are still accepted during the migration window and each logs a
+//! one-time deprecation warning so the #572 migrator has a checklist.
 //!
-//! These accessors are the single place that bridges the two
-//! shapes — the loader calls them instead of reading raw keys, so
-//! `"root"`-wrapped and legacy files walk the exact same code path.
+//! These accessors are the single place that bridges the shapes —
+//! the loader calls them instead of reading raw keys, so flat,
+//! `"root"`-wrapped, and legacy files all walk the exact same code
+//! path. Per RFC #594 "Loader changes", during v1.x both the
+//! root-wrapped and flat shapes are first-class and warning-free;
+//! v2.0 drops the root-wrapped path alongside the other legacy paths.
 //!
-//! See RFC-UNIFY-SCENES-AND-PREFABS.md.
+//! See RFC-UNIFY-SCENES-AND-PREFABS.md and RFC-FLATTEN-ROOT.md.
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -68,18 +73,38 @@ fn warnOnce(log: anytype, comptime msg: []const u8) void {
     log.warn(msg, .{});
 }
 
-/// Unwrap the explicit `"root"` block. Unified files put the root
-/// entity's `components`/`children`/`ref` inside `"root"`; legacy
-/// files keep them at the file's top level. Returns the object that
-/// carries the root entity content either way.
+/// Unwrap the explicit `"root"` block. The unified format ships two
+/// shapes during the v1.x deprecation window (RFC #594):
+///
+///  - **Root-wrapped (v1.0 — v1.x):** the root entity's
+///    `components`/`children`/`prefab`/`overrides` sit inside a
+///    top-level `"root"` object. This is the original shape from
+///    RFC #560.
+///  - **Flat (v1.47+ recommended, v2.0 only):** the top-level keys
+///    of the file ARE the root entity. Metadata keys (`name`,
+///    future `version`) coexist at the same level because the key
+///    sets are closed and disjoint (RFC #594 §"Key sets are closed
+///    and disjoint").
+///
+/// Pre-#594 legacy scenes (those without any `"root"` wrapper and
+/// still using a top-level `"entities"` array) ride the same flat
+/// path here — `entityPatch`/`fileChildren` continue to honor the
+/// legacy keys at top level, warning once.
+///
+/// Returns the object that carries the root entity content either
+/// way: the explicit `"root"` block when present, the file object
+/// itself otherwise.
 pub fn rootObject(file_obj: Value.Object) Value.Object {
     return file_obj.getObject("root") orelse file_obj;
 }
 
-/// The file-level entity list for a scene file. Unified:
-/// `root.children`. Legacy: a top-level `"entities"` array (warned).
-/// A legacy file already using a top-level `"children"` is honored
-/// too, so a half-migrated file still loads.
+/// The file-level entity list for a scene file. Three shapes ride
+/// the same accessor:
+///
+///  - **Root-wrapped (v1.0 — v1.x):** `root.children`.
+///  - **Flat (RFC #594, v1.47+):** top-level `"children"` array
+///    sitting alongside `"name"` / future metadata.
+///  - **Legacy pre-RFC-#560:** a top-level `"entities"` array (warned).
 ///
 /// Partial-migration safety: if `"root"` is present but carries no
 /// `"children"` array, we still consult the legacy top-level
