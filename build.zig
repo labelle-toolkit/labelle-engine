@@ -129,6 +129,10 @@ pub fn build(b: *std.Build) void {
         // hanging subscription-flow tests run to completion.
         "test/preview_mode_test.zig",
         "test/flows_game_api_test.zig",
+        // cli#229: `engine.requestedScene()` reads `LABELLE_SCENE` so
+        // loading-scene controllers can honour `--scene=<name>` after
+        // `assets.allReady` instead of racing the boot swap.
+        "test/runtime_env_test.zig",
     };
 
     for (test_files) |test_file| {

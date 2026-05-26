@@ -37,6 +37,14 @@ pub const jsonc_mod = @import("jsonc");
 // generated Android `main.zig` as `engine.android.enableImmersiveMode`.
 pub const android = @import("android.zig");
 
+// ── Runtime-env hooks (cli#229) ──
+// `engine.requestedScene()` reads the `LABELLE_SCENE` env var the cli
+// sets when invoked with `labelle run --scene=<name>`. Loading
+// controllers should consume this AFTER `assets.allReady` succeeds, so
+// asset streaming for large scenes doesn't race the boot swap.
+pub const runtime_env = @import("runtime_env.zig");
+pub const requestedScene = runtime_env.requestedScene;
+
 // ── Game ──
 pub const GameConfig = game_mod.GameConfig;
 pub const GameLog = game_log_mod.GameLog;
