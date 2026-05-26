@@ -391,6 +391,13 @@ pub fn SceneLoader(comptime GameType: type, comptime Components: type) type {
             // `fileChildren` accepts the unified `root.children`
             // shape and the legacy top-level `entities` array.
             uf.warnLegacyAssets(scene_obj, game.log);
+            // RFC #560 §B2 at the file root: a reference-mode root
+            // (`"root": { "prefab": ..., ... }`) may not declare
+            // `"children"` — instantiating doesn't author. See
+            // RFC-UNIFY-SCENES-AND-PREFABS.md §Unified shape.
+            if (scene_obj.getObject("root")) |root_obj| {
+                try uf.rejectB2Violation(root_obj, game.log, "reference-mode root");
+            }
             if (uf.fileChildren(scene_obj, game.log)) |entities_arr| {
                 var ref_ctx = RefContext.init(game.allocator, null);
                 defer ref_ctx.deinit();
@@ -421,6 +428,13 @@ pub fn SceneLoader(comptime GameType: type, comptime Components: type) type {
             }
 
             uf.warnLegacyAssets(scene_obj, game.log);
+            // RFC #560 §B2 at the file root: a reference-mode root
+            // (`"root": { "prefab": ..., ... }`) may not declare
+            // `"children"` — instantiating doesn't author. See
+            // RFC-UNIFY-SCENES-AND-PREFABS.md §Unified shape.
+            if (scene_obj.getObject("root")) |root_obj| {
+                try uf.rejectB2Violation(root_obj, game.log, "reference-mode root");
+            }
             if (uf.fileChildren(scene_obj, game.log)) |entities_arr| {
                 var ref_ctx = RefContext.init(game.allocator, null);
                 defer ref_ctx.deinit();
@@ -441,6 +455,17 @@ pub fn SceneLoader(comptime GameType: type, comptime Components: type) type {
         fn loadEntityInternal(game: *GameType, entity_val: Value, prefab_cache: *PrefabCache, depth: usize, parent_offset: Position, ref_ctx: ?*RefContext) LoadEntityError!Entity {
             if (depth > MAX_DEPTH) return error.IncludeDepthExceeded;
             const entity_obj = entity_val.asObject() orelse return error.InvalidFormat;
+
+            // RFC #560 §B2: reference-mode entries (those carrying a
+            // `"prefab"` field) may not also declare a `"children"`
+            // array — references instantiate, they do not author.
+            // Reject at every child-entry visit so a violation deep
+            // in a nested tree still surfaces as a load-time error
+            // rather than silent acceptance with the children
+            // ignored. See labelle-assembler#182 for the pre-build
+            // companion check (this is defense-in-depth for embedded
+            // sources, hand-edited save files, and third-party tools).
+            try uf.rejectB2Violation(entity_obj, game.log, "child entry");
 
             // Resolve prefab.
             var prefab_components: ?Value.Object = null;
