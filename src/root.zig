@@ -28,6 +28,7 @@ pub const atlas_mod = @import("atlas.zig");
 pub const assets_mod = @import("assets/mod.zig");
 pub const preview_mode_mod = @import("preview_mode.zig");
 pub const preview_capture_mod = @import("preview_capture.zig");
+pub const screenshot_request_mod = @import("screenshot_request.zig");
 pub const jsonc_mod = @import("jsonc");
 
 // ── Android runtime helpers ──
@@ -350,6 +351,23 @@ pub const preview_binary_magic = preview_mode_mod.binary_magic;
 // `Preview.beginFrameStreamIOSurface` / `publishFrameIOSurface` /
 // `endFrameStreamIOSurface` triple.
 pub const preview_iosurface_mod = preview_mode_mod.preview_iosurface;
+
+// ── Out-of-band screenshot request (labelle-cli#227) ──
+// Read by the assembler-generated `main.zig`'s frame loop after the
+// game enters its main loop — when `LABELLE_SCREENSHOT_PATH` is set
+// (by `labelle run --screenshot=<path>`), the loop fires
+// `window.takeScreenshot(req.path)` once after `req.after_sec`.
+//
+// The helper itself is environment-driven so the assembler template
+// stays argv-agnostic — no new pass-through wiring through every
+// platform template, just one `getenv` per run.
+pub const ScreenshotRequest = screenshot_request_mod.Request;
+pub const requestedScreenshot = screenshot_request_mod.parse;
+/// Monotonic ns counter the screenshot timing block reads each frame
+/// to decide whether `after_sec` has elapsed. Lives next to
+/// `requestedScreenshot` because `std.time.nanoTimestamp` is gone in
+/// Zig 0.16 — see screenshot_request.zig for the libc fallback.
+pub const nowNs = screenshot_request_mod.nowNs;
 
 // ── JSONC Scene Bridge ──
 pub const JsoncSceneBridge = @import("jsonc_scene_bridge.zig").JsoncSceneBridge;
