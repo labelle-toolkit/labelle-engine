@@ -284,6 +284,14 @@ pub fn GameConfig(
         game_state: []const u8 = "running",
         pending_state_change: ?[]const u8 = null,
         state_change_count: usize = 0,
+        /// Game-allocator-owned backing for `game_state` when the state
+        /// name came from a runtime-parsed source whose backing storage
+        /// has a shorter lifetime than the game (RFC #596 `meta.initial_state`
+        /// reads through the loader's `parse_arena`, which is freed before
+        /// the load returns). When set, `game_state` aliases this slice.
+        /// Freed on `deinit` and replaced (with the previous slice freed)
+        /// each time the loader applies a new `meta.initial_state`.
+        owned_initial_state: ?[]u8 = null,
         /// Time scale factor: 0 = paused, 0.5 = slow-mo, 1.0 = normal, 2.0 = fast.
         /// When paused (0), rendering and GUI continue but tick logic stops.
         time_scale: f32 = 1.0,
@@ -390,6 +398,9 @@ pub fn GameConfig(
                 self.allocator.free(name);
             }
             if (self.pending_scene_assets) |name| {
+                self.allocator.free(name);
+            }
+            if (self.owned_initial_state) |name| {
                 self.allocator.free(name);
             }
             // Clean up inactive worlds

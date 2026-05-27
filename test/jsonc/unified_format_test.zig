@@ -844,3 +844,400 @@ test "rfc596: flat-inline entity as a children[] item still works after tighteni
     try testing.expectEqual(@as(i32, 2), game.ecs_backend.getComponent(child, Marker).?.id);
     try testing.expectEqual(@as(f32, 50), game.ecs_backend.getComponent(child, Health).?.current);
 }
+
+// ── RFC #596 update: file-header meta carries engine directives ──
+//
+// The bundle file-header `meta:` block is no longer a pure dump —
+// engine-known keys (`initial_state`, plus reserved `scripts` /
+// `include`) are applied to the load context BEFORE entities spawn.
+// Unknown lowercase keys (`name`, `author`, `draft`, …) remain
+// authoring-only and never reach the runtime. Entity-level `meta:`
+// is still stripped unchanged (regression pin).
+
+test "rfc596: bundle header with initial_state directive transitions game_state" {
+    // `meta.initial_state: "playing"` switches the game to "playing"
+    // before any entity spawns. `TestGame` defaults to "running"
+    // (set in `game.zig:284`), so any change here came from the
+    // file-header meta dispatch — not from a script, not from
+    // SceneEntry.initial_state (no SceneEntry exists at this code
+    // path: scenes loaded through `loadSceneFromSource` bypass the
+    // scene registry).
+    var game = try boot(
+        \\[
+        \\  { "meta": { "initial_state": "playing" } },
+        \\  { "Marker": { "id": 1 } }
+        \\]
+    );
+    defer game.deinit();
+
+    try testing.expectEqualStrings("playing", game.getState());
+    // Entity still spawned (directive runs alongside the entity load).
+    try testing.expectEqual(@as(i32, 1), soleMarker(&game).id);
+}
+
+test "rfc596: bundle header with free-form meta keys is ignored (no state change)" {
+    // `author`, `draft`, and other lowercase non-engine keys are
+    // valid free-form authoring metadata. They MUST NOT affect the
+    // engine — the loader ignores them silently (no warn, no error).
+    var game = try boot(
+        \\[
+        \\  { "meta": { "author": "alexandre", "draft": true, "version": 3 } },
+        \\  { "Marker": { "id": 7 } }
+        \\]
+    );
+    defer game.deinit();
+
+    // Default game_state untouched.
+    try testing.expectEqualStrings("running", game.getState());
+    try testing.expectEqual(@as(i32, 7), soleMarker(&game).id);
+}
+
+test "rfc596: bundle header with mixed engine + free-form meta applies engine key only" {
+    // `meta.initial_state` is consumed; `meta.author` is ignored.
+    // Both coexisting in the same header is the documented shape.
+    var game = try boot(
+        \\[
+        \\  { "meta": { "initial_state": "playing", "author": "A", "name": "Demo" } },
+        \\  { "Marker": { "id": 42 } }
+        \\]
+    );
+    defer game.deinit();
+
+    try testing.expectEqualStrings("playing", game.getState());
+    try testing.expectEqual(@as(i32, 42), soleMarker(&game).id);
+}
+
+test "rfc596: bundle without header leaves game_state at default (regression)" {
+    // Pin the no-header path: a bundle whose first element is an
+    // entity (no `meta:`-only file header) MUST NOT trigger the
+    // directive dispatch. The default game_state ("running") is
+    // preserved.
+    var game = try boot(
+        \\[
+        \\  { "Marker": { "id": 1 } },
+        \\  { "Marker": { "id": 2 } }
+        \\]
+    );
+    defer game.deinit();
+
+    try testing.expectEqualStrings("running", game.getState());
+    var buf: [8]i32 = undefined;
+    try testing.expectEqualSlices(i32, &.{ 1, 2 }, markerIds(&game, &buf));
+}
+
+test "rfc596: entity-level meta with initial_state does NOT change game_state" {
+    // Entity-scope `meta:` is authoring-only — it's stripped at
+    // load and never consulted for engine directives. The asymmetric
+    // semantics rationale: only the file-header `meta:` carries
+    // engine directives; per-entity `meta:` is opaque label data.
+    var game = TestGame.init(testing.allocator);
+    defer game.deinit();
+
+    try Bridge.addEmbeddedPrefab(&game, "widget",
+        \\{ "root": { "components": { "Marker": { "id": 100 } } } }
+    , PREFAB_DIR);
+    try Bridge.loadSceneFromSource(&game,
+        \\{ "children": [
+        \\  { "prefab": "widget", "meta": { "initial_state": "playing" } }
+        \\] }
+    , PREFAB_DIR);
+
+    // Game stayed at the default — entity-meta is opaque to the engine.
+    try testing.expectEqualStrings("running", game.getState());
+    try testing.expectEqual(@as(i32, 100), soleMarker(&game).id);
+}
+
+// A poisoning allocator wrapper: stamps freed regions with `0xDE`
+// before forwarding to the inner allocator. Used to force the
+// `meta.initial_state` UAF below to surface deterministically —
+// without it, freed arena memory still spells "playing" by accident
+// (GPA does not actively scribble on free) and the regression test
+// is a no-op.
+const PoisonAllocator = struct {
+    inner: std.mem.Allocator,
+
+    fn alloc(ctx: *anyopaque, len: usize, alignment: std.mem.Alignment, ra: usize) ?[*]u8 {
+        const self: *PoisonAllocator = @ptrCast(@alignCast(ctx));
+        return self.inner.rawAlloc(len, alignment, ra);
+    }
+
+    fn resize(ctx: *anyopaque, buf: []u8, alignment: std.mem.Alignment, new_len: usize, ra: usize) bool {
+        const self: *PoisonAllocator = @ptrCast(@alignCast(ctx));
+        return self.inner.rawResize(buf, alignment, new_len, ra);
+    }
+
+    fn remap(ctx: *anyopaque, buf: []u8, alignment: std.mem.Alignment, new_len: usize, ra: usize) ?[*]u8 {
+        const self: *PoisonAllocator = @ptrCast(@alignCast(ctx));
+        return self.inner.rawRemap(buf, alignment, new_len, ra);
+    }
+
+    fn free(ctx: *anyopaque, buf: []u8, alignment: std.mem.Alignment, ra: usize) void {
+        const self: *PoisonAllocator = @ptrCast(@alignCast(ctx));
+        @memset(buf, 0xDE);
+        self.inner.rawFree(buf, alignment, ra);
+    }
+
+    fn allocator(self: *PoisonAllocator) std.mem.Allocator {
+        return .{
+            .ptr = self,
+            .vtable = &.{
+                .alloc = alloc,
+                .resize = resize,
+                .remap = remap,
+                .free = free,
+            },
+        };
+    }
+};
+
+test "rfc596: bundle meta.initial_state survives parse_arena.deinit (UAF regression)" {
+    // Regression for a real use-after-free caught on PR #599:
+    // `applyFileMetaDirectives` (scene_loader.zig) reads `state_name`
+    // from the bundle header (`meta.initial_state`) — a slice into the
+    // loader's `parse_arena` — and passes it straight to `setState`,
+    // which stores by reference (`state_mixin.zig`: `self.game_state = new_state`).
+    // The arena is `defer`-freed before `loadSceneFile` /
+    // `loadSceneSource` returns, so `game.game_state` ended up
+    // dangling for any subsequent read.
+    //
+    // The happy-path tests above read `getState()` after `boot()`
+    // returns and happen to see the right bytes because freed memory
+    // still contains the original string — the UAF is latent. This
+    // test wraps the game allocator in `PoisonAllocator`, which
+    // stamps `0xDE` over every freed region. A slice into freed
+    // arena memory then observes poison, not "playing".
+    //
+    // Pre-fix: the assertion sees 0xDE bytes and fails.
+    // Post-fix: `applyFileMetaDirectives` dupes onto `game.allocator`
+    // and stores the owned backing on `game.owned_initial_state`,
+    // so the value survives the arena teardown.
+    var poison = PoisonAllocator{ .inner = testing.allocator };
+    var game = TestGame.init(poison.allocator());
+    defer game.deinit();
+    try Bridge.loadSceneFromSource(&game,
+        \\[
+        \\  { "meta": { "initial_state": "playing" } },
+        \\  { "Marker": { "id": 1 } }
+        \\]
+    , PREFAB_DIR);
+
+    // After load, the parse_arena has been freed and `PoisonAllocator`
+    // has overwritten its bytes with 0xDE. If `game.game_state` still
+    // aliased into the arena (pre-fix), this read would see poison.
+    try testing.expectEqualStrings("playing", game.getState());
+    try testing.expectEqual(@as(i32, 1), soleMarker(&game).id);
+}
+
+test "rfc596: two consecutive meta.initial_state loads with different names — no second-order UAF" {
+    // Second-order UAF caught on PR #599's first fix:
+    //
+    //   const owned = dupe(state_name);
+    //   if (old) |o| free(o);          // game.game_state still aliases `o`
+    //   game.owned_initial_state = owned;
+    //   game.setState(owned);          // setState reads game.game_state in eql — UAF
+    //
+    // The first call leaves `game.game_state` aliasing the first
+    // owned slot. The second call frees that slot *before* setState,
+    // and PoisonAllocator stamps it with 0xDE. setState's
+    // `std.mem.eql(self.game_state, new_state)` then probes freed
+    // memory.
+    //
+    // Pre-fix on a debug build: a `[]const u8` comparison against a
+    // 0xDE-stamped buffer may early-mismatch (no crash) or read
+    // freed bytes (UB, potentially crash under sanitizers). The
+    // assertion below — that game.game_state reads back as "paused"
+    // — would also fail, because under poison the second setState
+    // can mis-decide and the field can end up pointing wherever the
+    // poison left it.
+    //
+    // Post-fix the eql probe runs against the still-live old slot
+    // (or default literal), setState assigns game.game_state =
+    // new_owned, and we free old_owned afterwards.
+    var poison = PoisonAllocator{ .inner = testing.allocator };
+    var game = TestGame.init(poison.allocator());
+    defer game.deinit();
+
+    try Bridge.loadSceneFromSource(&game,
+        \\[
+        \\  { "meta": { "initial_state": "playing" } },
+        \\  { "Marker": { "id": 1 } }
+        \\]
+    , PREFAB_DIR);
+    try testing.expectEqualStrings("playing", game.getState());
+
+    try Bridge.loadSceneFromSource(&game,
+        \\[
+        \\  { "meta": { "initial_state": "paused" } },
+        \\  { "Marker": { "id": 2 } }
+        \\]
+    , PREFAB_DIR);
+    try testing.expectEqualStrings("paused", game.getState());
+}
+
+test "rfc596: two consecutive meta.initial_state loads with SAME name — no dangle, no churn" {
+    // If the same state name is applied twice in a row, the
+    // owned-slot short-circuit should fire (post-fix). Pre-fix's
+    // ordering would still free + dupe + setState — and even if
+    // the dupe happens to land at the same address (it won't under
+    // PoisonAllocator + testing.allocator), the early-return inside
+    // setState (eql with freed-then-poisoned bytes) leaves
+    // game.game_state permanently aliasing the freed slot.
+    //
+    // Post-fix: second call short-circuits at the eql probe of
+    // `existing` (the still-live owned slot from the first call)
+    // against `state_name` — no free, no dupe, no setState. The
+    // value read back is still "playing".
+    var poison = PoisonAllocator{ .inner = testing.allocator };
+    var game = TestGame.init(poison.allocator());
+    defer game.deinit();
+
+    try Bridge.loadSceneFromSource(&game,
+        \\[
+        \\  { "meta": { "initial_state": "playing" } },
+        \\  { "Marker": { "id": 1 } }
+        \\]
+    , PREFAB_DIR);
+
+    try Bridge.loadSceneFromSource(&game,
+        \\[
+        \\  { "meta": { "initial_state": "playing" } },
+        \\  { "Marker": { "id": 2 } }
+        \\]
+    , PREFAB_DIR);
+
+    // game.game_state must still read "playing" — not poison.
+    try testing.expectEqualStrings("playing", game.getState());
+}
+
+test "rfc596: same-name reapply moves the backing pointer (post fix #3 contract)" {
+    // Pointer-identity probe of the NEW contract introduced by PR
+    // #599 fix #3: `applyFileMetaDirectives` always dupes a fresh
+    // backing slot and always frees the prior one, even when the
+    // state name is unchanged.
+    //
+    // Historical note — pre-fix-#3 this test asserted the OPPOSITE
+    // (pointer identity stable across same-name reapply), which was
+    // the documented contract of fix #2's no-churn short-circuit.
+    // That short-circuit was dropped in fix #3 because cursor
+    // surfaced a MEDIUM correctness bug: the short-circuit only
+    // probed `owned_initial_state == state_name`, not whether
+    // `game.game_state` was still in sync. An external `setState`
+    // between two loads with the same `meta.initial_state` would be
+    // silently ignored — game stuck at the external state. See the
+    // "recovers state after external setState" regression test
+    // below.
+    //
+    // The dupe+free churn per scene load is negligible compared to
+    // the bug surface of the prior short-circuit. We now positively
+    // assert the new behavior: pointer MOVES on every call.
+    var game = TestGame.init(testing.allocator);
+    defer game.deinit();
+
+    try Bridge.loadSceneFromSource(&game,
+        \\[
+        \\  { "meta": { "initial_state": "playing" } },
+        \\  { "Marker": { "id": 1 } }
+        \\]
+    , PREFAB_DIR);
+    const ptr_before = game.getState().ptr;
+
+    try Bridge.loadSceneFromSource(&game,
+        \\[
+        \\  { "meta": { "initial_state": "playing" } },
+        \\  { "Marker": { "id": 2 } }
+        \\]
+    , PREFAB_DIR);
+    const ptr_after = game.getState().ptr;
+
+    // New contract: dupe+free churn means a fresh backing slot every
+    // time. Allocator MAY hand back the same address by coincidence
+    // (testing.allocator's GPA generally doesn't immediately reuse
+    // freed slots at the same size, but it's not a hard guarantee).
+    // We assert *inequality* as the documented contract; if the
+    // allocator ever does coincidentally reuse, this test will need
+    // a PoisonAllocator-backed value check instead. For now testing
+    // .allocator reliably hands back a different address.
+    try testing.expect(ptr_before != ptr_after);
+    try testing.expectEqualStrings("playing", game.getState());
+}
+
+test "rfc596: applyFileMetaDirectives recovers state after external setState (cursor MEDIUM regression)" {
+    // PR #599 fix #3 regression test. Pre-fix-#3 sequence:
+    //
+    //   1. Load bundle with meta.initial_state="playing"
+    //      → game.game_state = owned_initial_state = "playing"
+    //   2. game.setState("debug")
+    //      → game.game_state aliases the literal "debug"
+    //      → owned_initial_state still backs "playing"
+    //   3. Load same bundle again (meta.initial_state="playing")
+    //      → fix #2's short-circuit fires (owned == "playing")
+    //      → applyFileMetaDirectives returns immediately
+    //      → game.game_state STAYS as "debug" — directive silently
+    //        ignored.
+    //
+    // Post-fix-#3: no short-circuit. The dupe + setState path runs,
+    // and setState's eql("debug", "playing") fails, so setState
+    // reassigns and game.game_state ends up at "playing" as the
+    // directive demands.
+    var game = TestGame.init(testing.allocator);
+    defer game.deinit();
+
+    try Bridge.loadSceneFromSource(&game,
+        \\[
+        \\  { "meta": { "initial_state": "playing" } },
+        \\  { "Marker": { "id": 1 } }
+        \\]
+    , PREFAB_DIR);
+    try testing.expectEqualStrings("playing", game.getState());
+
+    // External state mutation between loads.
+    game.setState("debug");
+    try testing.expectEqualStrings("debug", game.getState());
+
+    // Re-apply the same meta directive — must recover the demanded
+    // state, NOT silently leave the game in "debug".
+    try Bridge.loadSceneFromSource(&game,
+        \\[
+        \\  { "meta": { "initial_state": "playing" } },
+        \\  { "Marker": { "id": 2 } }
+        \\]
+    , PREFAB_DIR);
+
+    try testing.expectEqualStrings("playing", game.getState());
+}
+
+test "rfc596: meta.initial_state matching pre-set non-owned literal — no free of literal" {
+    // If a prior code path (comptime codegen, manual `setState`)
+    // left `game.game_state` aliasing a string literal whose value
+    // happens to equal the bundle's `meta.initial_state`, the
+    // loader must not attempt to free the literal — and the field
+    // must still read back correctly after the call.
+    //
+    // Post-fix walk:
+    //   - `owned_initial_state` is null on entry → short-circuit
+    //     does NOT fire.
+    //   - We dupe `new_owned`.
+    //   - `owned_initial_state = new_owned`.
+    //   - `setState(new_owned)`: eql(literal, new_owned) → true →
+    //     early-return. `game.game_state` keeps aliasing the literal.
+    //   - `old_owned` is null → no free attempt.
+    //
+    // No literal is freed, no UAF, value reads correctly.
+    var poison = PoisonAllocator{ .inner = testing.allocator };
+    var game = TestGame.init(poison.allocator());
+    defer game.deinit();
+
+    // Force game.game_state to a literal "playing" *before* the
+    // meta-directive load. This mimics the comptime-codegen path
+    // (and is also what a script could do).
+    game.setState("playing");
+
+    try Bridge.loadSceneFromSource(&game,
+        \\[
+        \\  { "meta": { "initial_state": "playing" } },
+        \\  { "Marker": { "id": 1 } }
+        \\]
+    , PREFAB_DIR);
+
+    try testing.expectEqualStrings("playing", game.getState());
+}
