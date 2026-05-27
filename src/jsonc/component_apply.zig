@@ -172,18 +172,27 @@ pub fn ComponentApply(comptime GameType: type, comptime Components: type) type {
             return Value{ .object = .{ .entries = filtered.toOwnedSlice(allocator) catch obj.entries } };
         }
 
-        /// Check if a `Value` looks like an entity definition. An
-        /// entity carries one of: a `prefab` string (reference
-        /// mode), a `components` object (wrapped inline form), or
-        /// any PascalCase key (flat form, RFC #596 Axis 2). Mirrors
-        /// `tree_walker.isEntityLike`.
+        /// Check if a `Value` looks like an entity definition.
+        /// Recognized by STRUCTURAL keys only:
+        ///   - `prefab` string → reference-mode entity,
+        ///   - `children` array → entity with nested children,
+        ///   - `components` object → wrapped inline entity.
+        ///
+        /// PascalCase keys alone are NOT sufficient: arbitrary
+        /// component-value data can carry PascalCase fields (e.g.
+        /// `FireConfig: [{ Type: "magic" }]`), and the flat-inline
+        /// RFC #596 entity shape is only loaded from contexts where
+        /// the caller already knows the value is an entity (file
+        /// top-level, `children:` array items, bundle items). Here
+        /// — called from `stripEntityArrayFields` and
+        /// `spawnAndLinkNestedEntities` on COMPONENT VALUE arrays —
+        /// only structural keys can disambiguate entities from data.
+        /// Mirrors `tree_walker.isEntityLike`.
         pub fn isEntityLike(value: Value) bool {
             const obj = value.asObject() orelse return false;
             if (obj.getString("prefab") != null) return true;
+            if (obj.getArray("children") != null) return true;
             if (obj.getObject("components") != null) return true;
-            for (obj.entries) |e| {
-                if (uf.isPascalCase(e.key)) return true;
-            }
             return false;
         }
     };

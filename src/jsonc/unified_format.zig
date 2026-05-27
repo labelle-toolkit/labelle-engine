@@ -402,8 +402,18 @@ fn synthesizeFlatComponents(entity_obj: Value.Object, allocator: std.mem.Allocat
 /// per RFC #596; the loader spawns its children with no inherited
 /// components. `allocator` is used only to synthesize the flat
 /// view; mirrors `entityPatch`'s arena contract.
-pub fn prefabComponents(prefab_root: Value.Object, allocator: std.mem.Allocator) error{OutOfMemory}!?Value.Object {
-    if (prefab_root.getObject("components")) |c| return c;
+///
+/// If both an explicit `"components"` wrapper AND flat PascalCase
+/// keys appear at `prefab_root`, the wrapper wins (back-compat) and
+/// we warn once — same dual-shape rule `entityPatch` enforces on
+/// inline entries.
+pub fn prefabComponents(prefab_root: Value.Object, allocator: std.mem.Allocator, log: anytype) error{OutOfMemory}!?Value.Object {
+    if (prefab_root.getObject("components")) |c| {
+        if (hasPascalCaseKey(prefab_root)) {
+            warnOnce(log, "[unified-format] prefab root has both a \"components\" wrapper and flat PascalCase keys — wrapper wins. Drop one shape (RFC #596).");
+        }
+        return c;
+    }
     return try synthesizeFlatComponents(prefab_root, allocator);
 }
 

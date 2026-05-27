@@ -289,7 +289,7 @@ fn walkEntry(
         // views into `merge_arena` so the cycle walk sees the same
         // effective component tree the loader will instantiate.
         const prefab_components: ?Value.Object =
-            if (prefab_root) |proot| try uf.prefabComponents(proot, merge_arena.allocator()) else null;
+            if (prefab_root) |proot| try uf.prefabComponents(proot, merge_arena.allocator(), NoopLog{}) else null;
         const patch = try uf.entityPatch(obj, merge_arena.allocator(), NoopLog{});
         if (try effectiveComponents(merge_arena, prefab_components, patch)) |eff| {
             try walkComponentFields(ctx, merge_arena, resolver, eff, depth, visitor);
@@ -404,19 +404,23 @@ fn walkComponentFields(
     }
 }
 
-/// Whether a `Value` looks like an entity definition — it has a
-/// `prefab` string, a `components` object (wrapped form), or any
-/// PascalCase key (flat form, RFC #596 Axis 2). Mirrors
+/// Whether a `Value` looks like an entity definition — recognized
+/// by STRUCTURAL keys only (`prefab`, `children`, `components`).
+/// PascalCase content alone is NOT sufficient (component-value
+/// arrays may carry data objects with PascalCase keys); the
+/// flat-inline RFC #596 entity shape is only valid at sites where
+/// the caller already treats items as entities (`children:`
+/// arrays, bundle items). Used here from `walkComponentFields`
+/// over component-value arrays, where only structural keys can
+/// disambiguate entities from data. Mirrors
 /// `component_apply.isEntityLike`; kept here so the walker has no
 /// dependency on the component-apply machinery (which is generic
 /// over `GameType`).
 pub fn isEntityLike(value: Value) bool {
     const obj = value.asObject() orelse return false;
     if (obj.getString("prefab") != null) return true;
+    if (obj.getArray("children") != null) return true;
     if (obj.getObject("components") != null) return true;
-    for (obj.entries) |e| {
-        if (uf.isPascalCase(e.key)) return true;
-    }
     return false;
 }
 

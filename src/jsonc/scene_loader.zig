@@ -296,7 +296,7 @@ pub fn SceneLoader(comptime GameType: type, comptime Components: type) type {
             // prefab tree, so the prefab itself outlives `pc_arena`.
             var pc_arena = std.heap.ArenaAllocator.init(game.allocator);
             defer pc_arena.deinit();
-            const prefab_components = (uf.prefabComponents(prefab_root, pc_arena.allocator()) catch null) orelse return null;
+            const prefab_components = (uf.prefabComponents(prefab_root, pc_arena.allocator(), game.log) catch null) orelse return null;
 
             const entity = game.createEntity();
             game.trackSceneEntity(entity);
@@ -412,7 +412,7 @@ pub fn SceneLoader(comptime GameType: type, comptime Components: type) type {
             // tools can re-parse the file for `meta`, the runtime
             // never reads it. Object top-level rides the existing
             // single-root pipeline.
-            const top = uf.classifyTopLevel(scene_value) orelse return;
+            const top = uf.classifyTopLevel(scene_value) orelse return error.InvalidFormat;
             switch (top) {
                 .single_root => |scene_obj| {
                     if (scene_obj.getArray("include")) |include_arr| {
@@ -461,7 +461,7 @@ pub fn SceneLoader(comptime GameType: type, comptime Components: type) type {
 
             // Mirrors `loadSceneFile`'s post-parse dispatch — see
             // the RFC #596 comments there.
-            const top = uf.classifyTopLevel(scene_value) orelse return;
+            const top = uf.classifyTopLevel(scene_value) orelse return error.InvalidFormat;
             switch (top) {
                 .single_root => |scene_obj| {
                     if (scene_obj.getArray("include")) |include_arr| {
@@ -556,7 +556,7 @@ pub fn SceneLoader(comptime GameType: type, comptime Components: type) type {
                         // prefab sources land in the cache unchecked,
                         // so re-validate here at every resolution.
                         try uf.rejectB2Violation(proot, game.log, "resolved prefab root");
-                        prefab_components = try uf.prefabComponents(proot, merge_arena.allocator());
+                        prefab_components = try uf.prefabComponents(proot, merge_arena.allocator(), game.log);
                         prefab_children = proot.getArray("children");
                     }
                 }
@@ -898,7 +898,7 @@ pub fn SceneLoader(comptime GameType: type, comptime Components: type) type {
                                         // lives in `merge_arena` (above)
                                         // so it shares the apply / merge
                                         // pipeline's lifetime.
-                                        child_prefab_comps = try uf.prefabComponents(proot, merge_arena.allocator());
+                                        child_prefab_comps = try uf.prefabComponents(proot, merge_arena.allocator(), game.log);
                                         child_prefab_children = proot.getArray("children");
                                     }
                                 }

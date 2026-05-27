@@ -30,9 +30,25 @@ const Health = struct {
     current: f32 = 0,
 };
 
+// A component whose data field is an array of structs that themselves
+// use PascalCase keys. Pins that `isEntityLike` does NOT classify
+// these inner data objects as entities — they're component-value
+// data, not entity definitions (RFC #596 cursor MED).
+const FireSpellEntry = struct {
+    pub const save = core.Saveable(.saveable, @This(), .{});
+    Type: i32 = 0,
+    DamageMultiplier: i32 = 0,
+};
+
+const FireSpell = struct {
+    pub const save = core.Saveable(.saveable, @This(), .{});
+    entries: []const FireSpellEntry = &.{},
+};
+
 const TestComponents = engine.ComponentRegistry(.{
     .Marker = Marker,
     .Health = Health,
+    .FireSpell = FireSpell,
 });
 
 const MockEcs = core.MockEcsBackend(u32);
@@ -731,4 +747,100 @@ test "rfc596: flat prefab with PascalCase components resolves via reference" {
     const e = view.next().?;
     try testing.expectEqual(@as(i32, 5), game.ecs_backend.getComponent(e, Marker).?.id);
     try testing.expectEqual(@as(f32, 75), game.ecs_backend.getComponent(e, Health).?.current);
+}
+
+// ── Regression tests for PR #597 review findings ───────────────
+
+test "rfc596: malformed top-level value (string) returns error.InvalidFormat" {
+    // Gemini HIGH (#597): `classifyTopLevel` returns null for any
+    // scalar at the file top level; the loader must surface
+    // `error.InvalidFormat` instead of silently succeeding.
+    var game = TestGame.init(testing.allocator);
+    defer game.deinit();
+    try testing.expectError(error.InvalidFormat, Bridge.loadSceneFromSource(&game, "\"malformed\"", PREFAB_DIR));
+}
+
+test "rfc596: malformed top-level value (number) returns error.InvalidFormat" {
+    var game = TestGame.init(testing.allocator);
+    defer game.deinit();
+    try testing.expectError(error.InvalidFormat, Bridge.loadSceneFromSource(&game, "42", PREFAB_DIR));
+}
+
+test "rfc596: malformed top-level value (bool) returns error.InvalidFormat" {
+    var game = TestGame.init(testing.allocator);
+    defer game.deinit();
+    try testing.expectError(error.InvalidFormat, Bridge.loadSceneFromSource(&game, "true", PREFAB_DIR));
+}
+
+test "rfc596: malformed top-level value (null) returns error.InvalidFormat" {
+    var game = TestGame.init(testing.allocator);
+    defer game.deinit();
+    try testing.expectError(error.InvalidFormat, Bridge.loadSceneFromSource(&game, "null", PREFAB_DIR));
+}
+
+test "rfc596: component-value data with PascalCase keys does NOT spawn phantom entities" {
+    // Cursor MED (#597): `isEntityLike` was broadened to recognize
+    // any object with a PascalCase key as an entity, but it's
+    // called from `stripEntityArrayFields` and
+    // `spawnAndLinkNestedEntities` on COMPONENT VALUE arrays —
+    // component data that happens to carry PascalCase fields (e.g.
+    // `{ Type: 1, DamageMultiplier: 2 }`) would be falsely tagged
+    // as entities → stripped from component data → spawned as
+    // phantom entities.
+    //
+    // The fix tightens `isEntityLike` to recognize entities by
+    // structural keys only (`prefab` / `children` / `components`).
+    var game = try boot(
+        \\{ "children": [
+        \\  { "Marker": { "id": 1 },
+        \\    "FireSpell": { "entries": [
+        \\      { "Type": 11, "DamageMultiplier": 22 },
+        \\      { "Type": 33, "DamageMultiplier": 44 }
+        \\    ] } }
+        \\] }
+    );
+    defer game.deinit();
+
+    // Exactly ONE entity — no phantoms spawned from FireSpell.entries.
+    var buf: [8]i32 = undefined;
+    try testing.expectEqualSlices(i32, &.{1}, markerIds(&game, &buf));
+
+    // FireSpell component preserved intact: both entries present.
+    var view = game.ecs_backend.view(.{FireSpell}, .{});
+    defer view.deinit();
+    const e = view.next().?;
+    const fs = game.ecs_backend.getComponent(e, FireSpell).?.*;
+    try testing.expectEqual(@as(usize, 2), fs.entries.len);
+    try testing.expectEqual(@as(i32, 11), fs.entries[0].Type);
+    try testing.expectEqual(@as(i32, 22), fs.entries[0].DamageMultiplier);
+    try testing.expectEqual(@as(i32, 33), fs.entries[1].Type);
+    try testing.expectEqual(@as(i32, 44), fs.entries[1].DamageMultiplier);
+}
+
+test "rfc596: flat-inline entity as a children[] item still works after tightening isEntityLike" {
+    // Sanity gate for the cursor MED fix: tightening `isEntityLike`
+    // to structural-keys-only must NOT break the legitimate flat-
+    // inline RFC #596 shape — flat-inline entities are still
+    // spawned via `children:` array items (where the caller knows
+    // every item is an entity by definition, no `isEntityLike`
+    // filter required).
+    var game = try boot(
+        \\{ "children": [
+        \\  { "Marker": { "id": 2 }, "Health": { "current": 50 } }
+        \\] }
+    );
+    defer game.deinit();
+
+    // The flat-inline child spawns with BOTH components — proving
+    // the tightened predicate still admits the RFC #596 Axis 2
+    // shape when reached through a `children:` array (no
+    // `isEntityLike` filter on that path).
+    var buf: [8]i32 = undefined;
+    try testing.expectEqualSlices(i32, &.{2}, markerIds(&game, &buf));
+
+    var view = game.ecs_backend.view(.{ Marker, Health }, .{});
+    defer view.deinit();
+    const child = view.next().?;
+    try testing.expectEqual(@as(i32, 2), game.ecs_backend.getComponent(child, Marker).?.id);
+    try testing.expectEqual(@as(f32, 50), game.ecs_backend.getComponent(child, Health).?.current);
 }
