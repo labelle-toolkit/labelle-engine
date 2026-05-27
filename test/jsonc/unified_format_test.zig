@@ -1109,26 +1109,27 @@ test "rfc596: two consecutive meta.initial_state loads with SAME name — no dan
     try testing.expectEqualStrings("playing", game.getState());
 }
 
-test "rfc596: same-name reapply is a no-op (stable backing ptr)" {
-    // Pointer-identity probe that catches the pre-fix path
-    // deterministically. Pre-fix on the second call:
-    //   - dupe a fresh "playing" → owned2
-    //   - free owned1 (which game.game_state aliased — that's the
-    //     UAF read in setState's eql)
-    //   - assign game.game_state = owned2
-    //   → game.getState().ptr CHANGES across the two calls.
+test "rfc596: same-name reapply moves the backing pointer (post fix #3 contract)" {
+    // Pointer-identity probe of the NEW contract introduced by PR
+    // #599 fix #3: `applyFileMetaDirectives` always dupes a fresh
+    // backing slot and always frees the prior one, even when the
+    // state name is unchanged.
     //
-    // Post-fix:
-    //   - short-circuit at the `existing` eql probe — no allocation,
-    //     no free, no setState
-    //   → game.getState().ptr is STABLE across the two calls.
+    // Historical note — pre-fix-#3 this test asserted the OPPOSITE
+    // (pointer identity stable across same-name reapply), which was
+    // the documented contract of fix #2's no-churn short-circuit.
+    // That short-circuit was dropped in fix #3 because cursor
+    // surfaced a MEDIUM correctness bug: the short-circuit only
+    // probed `owned_initial_state == state_name`, not whether
+    // `game.game_state` was still in sync. An external `setState`
+    // between two loads with the same `meta.initial_state` would be
+    // silently ignored — game stuck at the external state. See the
+    // "recovers state after external setState" regression test
+    // below.
     //
-    // Asserting ptr identity is an implementation-detail check, but
-    // it's the exact property the no-churn short-circuit guarantees,
-    // and it surfaces the pre-fix's spurious realloc/free without
-    // needing sanitizer support (Zig's stock GPA does not actively
-    // trap reads on freed slots, so the eql probe's UAF read is
-    // silent on functional assertions alone).
+    // The dupe+free churn per scene load is negligible compared to
+    // the bug surface of the prior short-circuit. We now positively
+    // assert the new behavior: pointer MOVES on every call.
     var game = TestGame.init(testing.allocator);
     defer game.deinit();
 
@@ -1148,7 +1149,60 @@ test "rfc596: same-name reapply is a no-op (stable backing ptr)" {
     , PREFAB_DIR);
     const ptr_after = game.getState().ptr;
 
-    try testing.expectEqual(ptr_before, ptr_after);
+    // New contract: dupe+free churn means a fresh backing slot every
+    // time. Allocator MAY hand back the same address by coincidence
+    // (testing.allocator's GPA generally doesn't immediately reuse
+    // freed slots at the same size, but it's not a hard guarantee).
+    // We assert *inequality* as the documented contract; if the
+    // allocator ever does coincidentally reuse, this test will need
+    // a PoisonAllocator-backed value check instead. For now testing
+    // .allocator reliably hands back a different address.
+    try testing.expect(ptr_before != ptr_after);
+    try testing.expectEqualStrings("playing", game.getState());
+}
+
+test "rfc596: applyFileMetaDirectives recovers state after external setState (cursor MEDIUM regression)" {
+    // PR #599 fix #3 regression test. Pre-fix-#3 sequence:
+    //
+    //   1. Load bundle with meta.initial_state="playing"
+    //      → game.game_state = owned_initial_state = "playing"
+    //   2. game.setState("debug")
+    //      → game.game_state aliases the literal "debug"
+    //      → owned_initial_state still backs "playing"
+    //   3. Load same bundle again (meta.initial_state="playing")
+    //      → fix #2's short-circuit fires (owned == "playing")
+    //      → applyFileMetaDirectives returns immediately
+    //      → game.game_state STAYS as "debug" — directive silently
+    //        ignored.
+    //
+    // Post-fix-#3: no short-circuit. The dupe + setState path runs,
+    // and setState's eql("debug", "playing") fails, so setState
+    // reassigns and game.game_state ends up at "playing" as the
+    // directive demands.
+    var game = TestGame.init(testing.allocator);
+    defer game.deinit();
+
+    try Bridge.loadSceneFromSource(&game,
+        \\[
+        \\  { "meta": { "initial_state": "playing" } },
+        \\  { "Marker": { "id": 1 } }
+        \\]
+    , PREFAB_DIR);
+    try testing.expectEqualStrings("playing", game.getState());
+
+    // External state mutation between loads.
+    game.setState("debug");
+    try testing.expectEqualStrings("debug", game.getState());
+
+    // Re-apply the same meta directive — must recover the demanded
+    // state, NOT silently leave the game in "debug".
+    try Bridge.loadSceneFromSource(&game,
+        \\[
+        \\  { "meta": { "initial_state": "playing" } },
+        \\  { "Marker": { "id": 2 } }
+        \\]
+    , PREFAB_DIR);
+
     try testing.expectEqualStrings("playing", game.getState());
 }
 
