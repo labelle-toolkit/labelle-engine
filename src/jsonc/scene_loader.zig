@@ -345,6 +345,36 @@ pub fn SceneLoader(comptime GameType: type, comptime Components: type) type {
 
         // ── Top-level scene processing ─────────────────────────
 
+        /// Apply engine-known directives from a bundle file-header
+        /// `meta:` block (RFC #596). Today the only consumed key is
+        /// `initial_state` — `meta.initial_state: "<state>"` switches
+        /// the game's state machine to `<state>` BEFORE entities are
+        /// spawned, so state-gated scripts see the right state on the
+        /// first tick after the load.
+        ///
+        /// All other lowercase keys (`name`, `author`, `draft`, …) are
+        /// authoring-only and ignored silently — they're free-form
+        /// metadata for tools, not engine directives. `meta.scripts`
+        /// and `meta.include` are reserved by the RFC but currently
+        /// unused; once a consumer lands they'd join this dispatch.
+        ///
+        /// A non-object `meta:` value (e.g. `meta: "label"`) is also
+        /// ignored — the RFC documents `meta:` as a structured block,
+        /// but the loader doesn't error on malformed shapes here
+        /// because audit/tooling has a clearer error surface.
+        fn applyFileMetaDirectives(game: *GameType, file_meta: ?Value) void {
+            const meta_val = file_meta orelse return;
+            const meta_obj = meta_val.asObject() orelse return;
+            if (meta_obj.getString("initial_state")) |state_name| {
+                if (!std.mem.eql(u8, game.game_state, state_name)) {
+                    game.log.info("[scene] file-header meta.initial_state '{s}' → '{s}' (RFC #596)", .{ game.game_state, state_name });
+                }
+                game.setState(state_name);
+            }
+            // Future engine-known keys (`scripts`, `include`) dispatch here.
+            // `name` and any other lowercase keys are authoring-only.
+        }
+
         /// Process entities from a parsed scene, with two-pass ref
         /// resolution.
         fn processEntities(game: *GameType, entities_arr: Value.Array, prefab_cache: *PrefabCache, ref_ctx: *RefContext) LoadEntityError!void {
@@ -437,7 +467,11 @@ pub fn SceneLoader(comptime GameType: type, comptime Components: type) type {
                     }
                 },
                 .bundle => |bundle| {
-                    _ = bundle.file_meta;
+                    // RFC #596: consume engine-known directives from
+                    // the bundle's file-header `meta:` block BEFORE
+                    // spawning entities, so state-gated scripts see
+                    // the requested initial state on their first tick.
+                    applyFileMetaDirectives(game, bundle.file_meta);
                     if (bundle.entities.len == 0) return;
                     var ref_ctx = RefContext.init(game.allocator, null);
                     defer ref_ctx.deinit();
@@ -479,7 +513,11 @@ pub fn SceneLoader(comptime GameType: type, comptime Components: type) type {
                     }
                 },
                 .bundle => |bundle| {
-                    _ = bundle.file_meta;
+                    // Mirrors `loadSceneFile`'s bundle arm — file-
+                    // header meta directives (RFC #596) apply equally
+                    // to in-memory sources so embedded tests and hot-
+                    // reload paths see the same state-machine effect.
+                    applyFileMetaDirectives(game, bundle.file_meta);
                     if (bundle.entities.len == 0) return;
                     var ref_ctx = RefContext.init(game.allocator, null);
                     defer ref_ctx.deinit();

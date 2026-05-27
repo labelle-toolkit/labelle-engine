@@ -844,3 +844,105 @@ test "rfc596: flat-inline entity as a children[] item still works after tighteni
     try testing.expectEqual(@as(i32, 2), game.ecs_backend.getComponent(child, Marker).?.id);
     try testing.expectEqual(@as(f32, 50), game.ecs_backend.getComponent(child, Health).?.current);
 }
+
+// ── RFC #596 update: file-header meta carries engine directives ──
+//
+// The bundle file-header `meta:` block is no longer a pure dump —
+// engine-known keys (`initial_state`, plus reserved `scripts` /
+// `include`) are applied to the load context BEFORE entities spawn.
+// Unknown lowercase keys (`name`, `author`, `draft`, …) remain
+// authoring-only and never reach the runtime. Entity-level `meta:`
+// is still stripped unchanged (regression pin).
+
+test "rfc596: bundle header with initial_state directive transitions game_state" {
+    // `meta.initial_state: "playing"` switches the game to "playing"
+    // before any entity spawns. `TestGame` defaults to "running"
+    // (set in `game.zig:284`), so any change here came from the
+    // file-header meta dispatch — not from a script, not from
+    // SceneEntry.initial_state (no SceneEntry exists at this code
+    // path: scenes loaded through `loadSceneFromSource` bypass the
+    // scene registry).
+    var game = try boot(
+        \\[
+        \\  { "meta": { "initial_state": "playing" } },
+        \\  { "Marker": { "id": 1 } }
+        \\]
+    );
+    defer game.deinit();
+
+    try testing.expectEqualStrings("playing", game.getState());
+    // Entity still spawned (directive runs alongside the entity load).
+    try testing.expectEqual(@as(i32, 1), soleMarker(&game).id);
+}
+
+test "rfc596: bundle header with free-form meta keys is ignored (no state change)" {
+    // `author`, `draft`, and other lowercase non-engine keys are
+    // valid free-form authoring metadata. They MUST NOT affect the
+    // engine — the loader ignores them silently (no warn, no error).
+    var game = try boot(
+        \\[
+        \\  { "meta": { "author": "alexandre", "draft": true, "version": 3 } },
+        \\  { "Marker": { "id": 7 } }
+        \\]
+    );
+    defer game.deinit();
+
+    // Default game_state untouched.
+    try testing.expectEqualStrings("running", game.getState());
+    try testing.expectEqual(@as(i32, 7), soleMarker(&game).id);
+}
+
+test "rfc596: bundle header with mixed engine + free-form meta applies engine key only" {
+    // `meta.initial_state` is consumed; `meta.author` is ignored.
+    // Both coexisting in the same header is the documented shape.
+    var game = try boot(
+        \\[
+        \\  { "meta": { "initial_state": "playing", "author": "A", "name": "Demo" } },
+        \\  { "Marker": { "id": 42 } }
+        \\]
+    );
+    defer game.deinit();
+
+    try testing.expectEqualStrings("playing", game.getState());
+    try testing.expectEqual(@as(i32, 42), soleMarker(&game).id);
+}
+
+test "rfc596: bundle without header leaves game_state at default (regression)" {
+    // Pin the no-header path: a bundle whose first element is an
+    // entity (no `meta:`-only file header) MUST NOT trigger the
+    // directive dispatch. The default game_state ("running") is
+    // preserved.
+    var game = try boot(
+        \\[
+        \\  { "Marker": { "id": 1 } },
+        \\  { "Marker": { "id": 2 } }
+        \\]
+    );
+    defer game.deinit();
+
+    try testing.expectEqualStrings("running", game.getState());
+    var buf: [8]i32 = undefined;
+    try testing.expectEqualSlices(i32, &.{ 1, 2 }, markerIds(&game, &buf));
+}
+
+test "rfc596: entity-level meta with initial_state does NOT change game_state" {
+    // Entity-scope `meta:` is authoring-only — it's stripped at
+    // load and never consulted for engine directives. The asymmetric
+    // semantics rationale: only the file-header `meta:` carries
+    // engine directives; per-entity `meta:` is opaque label data.
+    var game = TestGame.init(testing.allocator);
+    defer game.deinit();
+
+    try Bridge.addEmbeddedPrefab(&game, "widget",
+        \\{ "root": { "components": { "Marker": { "id": 100 } } } }
+    , PREFAB_DIR);
+    try Bridge.loadSceneFromSource(&game,
+        \\{ "children": [
+        \\  { "prefab": "widget", "meta": { "initial_state": "playing" } }
+        \\] }
+    , PREFAB_DIR);
+
+    // Game stayed at the default — entity-meta is opaque to the engine.
+    try testing.expectEqualStrings("running", game.getState());
+    try testing.expectEqual(@as(i32, 100), soleMarker(&game).id);
+}
