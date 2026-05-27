@@ -379,16 +379,44 @@ pub fn SceneLoader(comptime GameType: type, comptime Components: type) type {
                 //
                 // Dupe onto `game.allocator` and stash the owned backing
                 // on `game.owned_initial_state` so it lives as long as
-                // `game_state` itself. Free any prior owned slice first
-                // (a second `meta.initial_state` load supersedes it).
-                const owned = game.allocator.dupe(u8, state_name) catch {
+                // `game_state` itself.
+                //
+                // Ordering matters — `game.game_state` may alias the
+                // prior owned slot (set by an earlier `setState(owned)`
+                // call below). If we freed the old slot *before*
+                // `setState`, then `setState`'s `std.mem.eql(self.game_state, …)`
+                // probe would read freed memory (second-order UAF first
+                // caught on PR #599's first fix).
+                //
+                // So:
+                //   1. Short-circuit if we already own this exact state
+                //      name — no allocation, no free, no setState churn.
+                //   2. Dupe onto the game allocator.
+                //   3. Swap `owned_initial_state` to the fresh dupe
+                //      *before* `setState`. This way the field is
+                //      consistent even if `setState` early-returns.
+                //   4. Call `setState(new_owned)` — its `eql` probe reads
+                //      `game.game_state`, which still aliases the prior
+                //      owned slot (still live) or a default literal.
+                //      Safe either way.
+                //   5. *Now* free the previous owned slot. By this point
+                //      `game.game_state` has been reassigned to
+                //      `new_owned` (or unchanged if `setState`
+                //      early-returned because it equaled a literal — in
+                //      which case the old slot was null anyway, since a
+                //      live owned slot would have been caught by step 1).
+                if (game.owned_initial_state) |existing| {
+                    if (std.mem.eql(u8, existing, state_name)) return;
+                }
+                const new_owned = game.allocator.dupe(u8, state_name) catch {
                     // Out of memory — keep the previous state rather than
                     // crash the load. The directive is best-effort.
                     return;
                 };
-                if (game.owned_initial_state) |old| game.allocator.free(old);
-                game.owned_initial_state = owned;
-                game.setState(owned);
+                const old_owned = game.owned_initial_state;
+                game.owned_initial_state = new_owned;
+                game.setState(new_owned);
+                if (old_owned) |s| game.allocator.free(s);
             }
             // Future engine-known keys (`scripts`, `include`) dispatch here.
             // `name` and any other lowercase keys are authoring-only.

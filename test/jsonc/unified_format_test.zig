@@ -1027,3 +1027,163 @@ test "rfc596: bundle meta.initial_state survives parse_arena.deinit (UAF regress
     try testing.expectEqualStrings("playing", game.getState());
     try testing.expectEqual(@as(i32, 1), soleMarker(&game).id);
 }
+
+test "rfc596: two consecutive meta.initial_state loads with different names — no second-order UAF" {
+    // Second-order UAF caught on PR #599's first fix:
+    //
+    //   const owned = dupe(state_name);
+    //   if (old) |o| free(o);          // game.game_state still aliases `o`
+    //   game.owned_initial_state = owned;
+    //   game.setState(owned);          // setState reads game.game_state in eql — UAF
+    //
+    // The first call leaves `game.game_state` aliasing the first
+    // owned slot. The second call frees that slot *before* setState,
+    // and PoisonAllocator stamps it with 0xDE. setState's
+    // `std.mem.eql(self.game_state, new_state)` then probes freed
+    // memory.
+    //
+    // Pre-fix on a debug build: a `[]const u8` comparison against a
+    // 0xDE-stamped buffer may early-mismatch (no crash) or read
+    // freed bytes (UB, potentially crash under sanitizers). The
+    // assertion below — that game.game_state reads back as "paused"
+    // — would also fail, because under poison the second setState
+    // can mis-decide and the field can end up pointing wherever the
+    // poison left it.
+    //
+    // Post-fix the eql probe runs against the still-live old slot
+    // (or default literal), setState assigns game.game_state =
+    // new_owned, and we free old_owned afterwards.
+    var poison = PoisonAllocator{ .inner = testing.allocator };
+    var game = TestGame.init(poison.allocator());
+    defer game.deinit();
+
+    try Bridge.loadSceneFromSource(&game,
+        \\[
+        \\  { "meta": { "initial_state": "playing" } },
+        \\  { "Marker": { "id": 1 } }
+        \\]
+    , PREFAB_DIR);
+    try testing.expectEqualStrings("playing", game.getState());
+
+    try Bridge.loadSceneFromSource(&game,
+        \\[
+        \\  { "meta": { "initial_state": "paused" } },
+        \\  { "Marker": { "id": 2 } }
+        \\]
+    , PREFAB_DIR);
+    try testing.expectEqualStrings("paused", game.getState());
+}
+
+test "rfc596: two consecutive meta.initial_state loads with SAME name — no dangle, no churn" {
+    // If the same state name is applied twice in a row, the
+    // owned-slot short-circuit should fire (post-fix). Pre-fix's
+    // ordering would still free + dupe + setState — and even if
+    // the dupe happens to land at the same address (it won't under
+    // PoisonAllocator + testing.allocator), the early-return inside
+    // setState (eql with freed-then-poisoned bytes) leaves
+    // game.game_state permanently aliasing the freed slot.
+    //
+    // Post-fix: second call short-circuits at the eql probe of
+    // `existing` (the still-live owned slot from the first call)
+    // against `state_name` — no free, no dupe, no setState. The
+    // value read back is still "playing".
+    var poison = PoisonAllocator{ .inner = testing.allocator };
+    var game = TestGame.init(poison.allocator());
+    defer game.deinit();
+
+    try Bridge.loadSceneFromSource(&game,
+        \\[
+        \\  { "meta": { "initial_state": "playing" } },
+        \\  { "Marker": { "id": 1 } }
+        \\]
+    , PREFAB_DIR);
+
+    try Bridge.loadSceneFromSource(&game,
+        \\[
+        \\  { "meta": { "initial_state": "playing" } },
+        \\  { "Marker": { "id": 2 } }
+        \\]
+    , PREFAB_DIR);
+
+    // game.game_state must still read "playing" — not poison.
+    try testing.expectEqualStrings("playing", game.getState());
+}
+
+test "rfc596: same-name reapply is a no-op (stable backing ptr)" {
+    // Pointer-identity probe that catches the pre-fix path
+    // deterministically. Pre-fix on the second call:
+    //   - dupe a fresh "playing" → owned2
+    //   - free owned1 (which game.game_state aliased — that's the
+    //     UAF read in setState's eql)
+    //   - assign game.game_state = owned2
+    //   → game.getState().ptr CHANGES across the two calls.
+    //
+    // Post-fix:
+    //   - short-circuit at the `existing` eql probe — no allocation,
+    //     no free, no setState
+    //   → game.getState().ptr is STABLE across the two calls.
+    //
+    // Asserting ptr identity is an implementation-detail check, but
+    // it's the exact property the no-churn short-circuit guarantees,
+    // and it surfaces the pre-fix's spurious realloc/free without
+    // needing sanitizer support (Zig's stock GPA does not actively
+    // trap reads on freed slots, so the eql probe's UAF read is
+    // silent on functional assertions alone).
+    var game = TestGame.init(testing.allocator);
+    defer game.deinit();
+
+    try Bridge.loadSceneFromSource(&game,
+        \\[
+        \\  { "meta": { "initial_state": "playing" } },
+        \\  { "Marker": { "id": 1 } }
+        \\]
+    , PREFAB_DIR);
+    const ptr_before = game.getState().ptr;
+
+    try Bridge.loadSceneFromSource(&game,
+        \\[
+        \\  { "meta": { "initial_state": "playing" } },
+        \\  { "Marker": { "id": 2 } }
+        \\]
+    , PREFAB_DIR);
+    const ptr_after = game.getState().ptr;
+
+    try testing.expectEqual(ptr_before, ptr_after);
+    try testing.expectEqualStrings("playing", game.getState());
+}
+
+test "rfc596: meta.initial_state matching pre-set non-owned literal — no free of literal" {
+    // If a prior code path (comptime codegen, manual `setState`)
+    // left `game.game_state` aliasing a string literal whose value
+    // happens to equal the bundle's `meta.initial_state`, the
+    // loader must not attempt to free the literal — and the field
+    // must still read back correctly after the call.
+    //
+    // Post-fix walk:
+    //   - `owned_initial_state` is null on entry → short-circuit
+    //     does NOT fire.
+    //   - We dupe `new_owned`.
+    //   - `owned_initial_state = new_owned`.
+    //   - `setState(new_owned)`: eql(literal, new_owned) → true →
+    //     early-return. `game.game_state` keeps aliasing the literal.
+    //   - `old_owned` is null → no free attempt.
+    //
+    // No literal is freed, no UAF, value reads correctly.
+    var poison = PoisonAllocator{ .inner = testing.allocator };
+    var game = TestGame.init(poison.allocator());
+    defer game.deinit();
+
+    // Force game.game_state to a literal "playing" *before* the
+    // meta-directive load. This mimics the comptime-codegen path
+    // (and is also what a script could do).
+    game.setState("playing");
+
+    try Bridge.loadSceneFromSource(&game,
+        \\[
+        \\  { "meta": { "initial_state": "playing" } },
+        \\  { "Marker": { "id": 1 } }
+        \\]
+    , PREFAB_DIR);
+
+    try testing.expectEqualStrings("playing", game.getState());
+}
