@@ -118,10 +118,31 @@ The file's own friendly label (at the bundle header) also lives in `meta`:
 This collapses what used to be a separate top-level `name:` key into `meta`. The structural surface stays minimal — three keys total at entity scope (`prefab`, `children`, `meta`).
 
 **Rules:**
-- **Authoring-only:** the engine strips `meta:` at load. Never reaches gameplay code. If your game needs the data at runtime, model it as a component instead.
+
+`meta:` semantics depend on **where** the key sits — entity-level vs file-header-level:
+
+| Scope | Engine behavior | Use cases |
+|---|---|---|
+| **Entity-level** | Strip at load. Never reaches gameplay code. If you need the data at runtime, model it as a component instead. | Tooltips, debug labels, editor hints, per-entity display names. |
+| **File-header-level** | Mixed. Documented "engine-known" keys are read at load and applied to the file's load context. Unknown lowercase keys are author-free-form and ignored by the engine. | Engine directives like `initial_state` AND author-free-form like `name`, `description`, `author`. |
+
+The asymmetry reflects a real difference between the two scopes: entities have the **component escape hatch** for runtime-needed data (model it as a component), but file headers have no such hatch — there's no entity to attach a component to. File-header `meta` carries documented engine directives by necessity.
+
+**Engine-known meta keys at file-header level** (the documented set the engine reads):
+
+| Key | Today's location | Behavior |
+|---|---|---|
+| `name` | `meta.name` (per Axis 4) | Friendly display label. Non-unique. Tool-visible, engine-stripped at load. |
+| `initial_state` | `meta.initial_state` | Scene-loading directive: sets the engine's initial state when this scene loads (overrides project-level default). |
+| `scripts` *(if used)* | `meta.scripts` | Per-scene script overrides. Mostly auto-discovered today; reserved. |
+| `include` *(if used)* | `meta.include` | Sub-scene includes (assembler-side composition). |
+
+Any other key inside file-header `meta` is author-free-form. The audit may warn on potential typos (e.g., `meta.initial_satte`) but doesn't error.
+
+**Other rules unchanged:**
 - **No propagation:** `meta:` is local to the entry it sits on. A scene reference's meta does NOT merge with the referenced prefab's file-level meta. Each is its own bag.
-- **No schema:** arbitrary JSON nesting/types/keys. The loader doesn't validate contents.
-- **Tools-visible:** the audit, the editor, and any future linter can read `meta:` blocks. They're authoritative for tooling-side decisions.
+- **No schema for free-form keys:** arbitrary JSON nesting/types/keys. The loader doesn't validate contents of unknown keys.
+- **Tools-visible everywhere:** the audit, the editor, and any future linter can read `meta:` blocks at every scope.
 - **Identity vs label:** the file basename is the identifier (used by `{prefab: "..."}` references, `--scene=` CLI flag, audit collision checks). `meta.name` is a free-form display label, doesn't need to be unique, never affects resolution.
 
 ### Closed key set (final after all axes)
@@ -226,6 +247,13 @@ Mechanical, idempotent transforms — same shape as `labelle migrate unified` al
 4. **`name:` → `meta.name` or drop:** the loader's identity rule is now "basename always wins."
    - `name:` matches basename → **drop** (redundant).
    - `name:` differs from basename → **move into `meta.name`** as a friendly label. If `meta:` already exists, merge `name` into it. **Flag for human review** any case where other files reference this one via `{prefab: "<declared-name>"}` — those references must update to use the basename, OR the file should be renamed to match the declared name. The audit's cross-reference check catches these.
+
+5. **File-level directives (`initial_state`, `scripts`, `include`) → `meta`:** any file-top-level engine-known directive moves into a bundle-header `meta` element. If the file also has `children:` (or legacy `entities:`) at top level, the bundle-conversion transform (#3) produces a header-element-first bundle:
+   - Source: `{ "initial_state": "playing", "children": [...] }`
+   - Target: `[ { "meta": { "initial_state": "playing" } }, ...children ]`
+   - If `meta:` already exists at file-level (post-Axis 4 step), merge: `meta` becomes `{ ...existing meta, initial_state: "..." }`.
+   - If the file has ONLY directives + no `children:` (rare edge case), produce `[ { "meta": { "initial_state": "..." } } ]` — a bundle with just the header.
+   - The set of recognized engine directives matches the engine-known meta keys: `initial_state`, `scripts`, `include`. Unknown lowercase top-level keys (custom author keys at the file level) also flow into `meta` since they have no other home post-bundle.
 
 All four are byte-offset positional edits with comment preservation (same Strategy B the existing migrator uses).
 
