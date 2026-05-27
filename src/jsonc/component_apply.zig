@@ -23,6 +23,7 @@ const core = @import("labelle-core");
 const Position = core.Position;
 const deserializer = @import("deserializer.zig");
 const ref_resolver_mod = @import("ref_resolver.zig");
+const uf = @import("unified_format.zig");
 
 pub fn ComponentApply(comptime GameType: type, comptime Components: type) type {
     const Entity = GameType.EntityType;
@@ -135,6 +136,19 @@ pub fn ComponentApply(comptime GameType: type, comptime Components: type) type {
                     return;
                 }
             }
+
+            // RFC #596 Axis 4: unknown PascalCase keys on an entity
+            // are treated as components, but we warn-once so typos
+            // (`Posiiton`) surface visibly. Lowercase names that
+            // reach here (e.g. legacy embedded structural keys that
+            // bypassed the structural / component split) are
+            // silently ignored — they're not authoring mistakes the
+            // RFC catches. Position / Sprite / Shape are handled
+            // above and returned before reaching this gate, so the
+            // built-in components don't false-warn.
+            if (uf.isPascalCase(name)) {
+                uf.warnUnknownComponent(game.log, name);
+            }
         }
 
         /// Strip fields that contain entity-like arrays from a
@@ -158,11 +172,28 @@ pub fn ComponentApply(comptime GameType: type, comptime Components: type) type {
             return Value{ .object = .{ .entries = filtered.toOwnedSlice(allocator) catch obj.entries } };
         }
 
-        /// Check if a `Value` looks like an entity definition (has
-        /// either a `prefab` string or a `components` object).
+        /// Check if a `Value` looks like an entity definition.
+        /// Recognized by STRUCTURAL keys only:
+        ///   - `prefab` string → reference-mode entity,
+        ///   - `children` array → entity with nested children,
+        ///   - `components` object → wrapped inline entity.
+        ///
+        /// PascalCase keys alone are NOT sufficient: arbitrary
+        /// component-value data can carry PascalCase fields (e.g.
+        /// `FireConfig: [{ Type: "magic" }]`), and the flat-inline
+        /// RFC #596 entity shape is only loaded from contexts where
+        /// the caller already knows the value is an entity (file
+        /// top-level, `children:` array items, bundle items). Here
+        /// — called from `stripEntityArrayFields` and
+        /// `spawnAndLinkNestedEntities` on COMPONENT VALUE arrays —
+        /// only structural keys can disambiguate entities from data.
+        /// Mirrors `tree_walker.isEntityLike`.
         pub fn isEntityLike(value: Value) bool {
             const obj = value.asObject() orelse return false;
-            return obj.getString("prefab") != null or obj.getObject("components") != null;
+            if (obj.getString("prefab") != null) return true;
+            if (obj.getArray("children") != null) return true;
+            if (obj.getObject("components") != null) return true;
+            return false;
         }
     };
 }

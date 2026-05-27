@@ -287,7 +287,16 @@ pub fn SceneLoader(comptime GameType: type, comptime Components: type) type {
                 };
             }
 
-            const prefab_components = prefab_root.getObject("components") orelse return null;
+            // RFC #596: prefab components may sit in the explicit
+            // `"components"` wrapper or as flat PascalCase keys at
+            // the root. The synthesized view (flat case) lives in a
+            // local arena bound to this spawn — its entries slice is
+            // walked twice (apply + nested-spawn) but never escapes
+            // the function. Leaf values are shared with the cache's
+            // prefab tree, so the prefab itself outlives `pc_arena`.
+            var pc_arena = std.heap.ArenaAllocator.init(game.allocator);
+            defer pc_arena.deinit();
+            const prefab_components = (uf.prefabComponents(prefab_root, pc_arena.allocator(), game.log) catch null) orelse return null;
 
             const entity = game.createEntity();
             game.trackSceneEntity(entity);
@@ -397,32 +406,43 @@ pub fn SceneLoader(comptime GameType: type, comptime Components: type) type {
             var parser = JsoncParser.init(parse_alloc, source);
             const scene_value = try parser.parse();
 
-            const scene_obj = scene_value.asObject() orelse return;
-
-            // Process includes first — their entities are created
-            // before this file's own entities.
-            if (scene_obj.getArray("include")) |include_arr| {
-                for (include_arr.items) |include_val| {
-                    const include_path = include_val.asString() orelse continue;
-                    try loadSceneFile(game, include_path, prefab_cache, include_depth + 1);
-                }
-            }
-
-            // Process this file's entities with ref support.
-            // `fileChildren` accepts the unified `root.children`
-            // shape and the legacy top-level `entities` array.
-            uf.warnLegacyAssets(scene_obj, game.log);
-            // RFC #560 §B2 at the file root: a reference-mode root
-            // may not declare `"children"` — instantiating doesn't
-            // author. `uf.rootObject` returns the explicit `"root"`
-            // block when present (root-wrapped legacy v1.x shape)
-            // and the file object itself otherwise (flat top-level
-            // entity, RFC #594), so the gate fires for either shape.
-            try uf.rejectB2Violation(uf.rootObject(scene_obj), game.log, "reference-mode root");
-            if (uf.fileChildren(scene_obj, game.log)) |entities_arr| {
-                var ref_ctx = RefContext.init(game.allocator, null);
-                defer ref_ctx.deinit();
-                try processEntities(game, entities_arr, prefab_cache, &ref_ctx);
+            // RFC #596 Axis 3: a top-level Array is a bundle of
+            // sibling entities (no implicit root). The optional
+            // header (`{ meta: ... }` at index 0) is dropped here —
+            // tools can re-parse the file for `meta`, the runtime
+            // never reads it. Object top-level rides the existing
+            // single-root pipeline.
+            const top = uf.classifyTopLevel(scene_value) orelse return error.InvalidFormat;
+            switch (top) {
+                .single_root => |scene_obj| {
+                    if (scene_obj.getArray("include")) |include_arr| {
+                        for (include_arr.items) |include_val| {
+                            const include_path = include_val.asString() orelse continue;
+                            try loadSceneFile(game, include_path, prefab_cache, include_depth + 1);
+                        }
+                    }
+                    uf.warnLegacyAssets(scene_obj, game.log);
+                    // RFC #560 §B2 at the file root: a reference-mode
+                    // root may not declare `"children"`.
+                    // `uf.rootObject` returns the explicit `"root"`
+                    // block when present (root-wrapped legacy v1.x
+                    // shape) and the file object itself otherwise
+                    // (flat top-level entity, RFC #594), so the
+                    // gate fires for either shape.
+                    try uf.rejectB2Violation(uf.rootObject(scene_obj), game.log, "reference-mode root");
+                    if (uf.fileChildren(scene_obj, game.log)) |entities_arr| {
+                        var ref_ctx = RefContext.init(game.allocator, null);
+                        defer ref_ctx.deinit();
+                        try processEntities(game, entities_arr, prefab_cache, &ref_ctx);
+                    }
+                },
+                .bundle => |bundle| {
+                    _ = bundle.file_meta;
+                    if (bundle.entities.len == 0) return;
+                    var ref_ctx = RefContext.init(game.allocator, null);
+                    defer ref_ctx.deinit();
+                    try processEntities(game, .{ .items = bundle.entities }, prefab_cache, &ref_ctx);
+                },
             }
         }
 
@@ -439,24 +459,32 @@ pub fn SceneLoader(comptime GameType: type, comptime Components: type) type {
             var parser = JsoncParser.init(parse_alloc, source);
             const scene_value = try parser.parse();
 
-            const scene_obj = scene_value.asObject() orelse return;
-
-            if (scene_obj.getArray("include")) |include_arr| {
-                for (include_arr.items) |include_val| {
-                    const include_path = include_val.asString() orelse continue;
-                    try loadSceneFile(game, include_path, prefab_cache, 1);
-                }
-            }
-
-            uf.warnLegacyAssets(scene_obj, game.log);
-            // RFC #560 §B2 at the file root — see `loadSceneFile`
-            // for the dual-shape rationale (root-wrapped vs flat,
-            // RFC #594).
-            try uf.rejectB2Violation(uf.rootObject(scene_obj), game.log, "reference-mode root");
-            if (uf.fileChildren(scene_obj, game.log)) |entities_arr| {
-                var ref_ctx = RefContext.init(game.allocator, null);
-                defer ref_ctx.deinit();
-                try processEntities(game, entities_arr, prefab_cache, &ref_ctx);
+            // Mirrors `loadSceneFile`'s post-parse dispatch — see
+            // the RFC #596 comments there.
+            const top = uf.classifyTopLevel(scene_value) orelse return error.InvalidFormat;
+            switch (top) {
+                .single_root => |scene_obj| {
+                    if (scene_obj.getArray("include")) |include_arr| {
+                        for (include_arr.items) |include_val| {
+                            const include_path = include_val.asString() orelse continue;
+                            try loadSceneFile(game, include_path, prefab_cache, 1);
+                        }
+                    }
+                    uf.warnLegacyAssets(scene_obj, game.log);
+                    try uf.rejectB2Violation(uf.rootObject(scene_obj), game.log, "reference-mode root");
+                    if (uf.fileChildren(scene_obj, game.log)) |entities_arr| {
+                        var ref_ctx = RefContext.init(game.allocator, null);
+                        defer ref_ctx.deinit();
+                        try processEntities(game, entities_arr, prefab_cache, &ref_ctx);
+                    }
+                },
+                .bundle => |bundle| {
+                    _ = bundle.file_meta;
+                    if (bundle.entities.len == 0) return;
+                    var ref_ctx = RefContext.init(game.allocator, null);
+                    defer ref_ctx.deinit();
+                    try processEntities(game, .{ .items = bundle.entities }, prefab_cache, &ref_ctx);
+                },
             }
         }
 
@@ -485,7 +513,31 @@ pub fn SceneLoader(comptime GameType: type, comptime Components: type) type {
             // sources, hand-edited save files, and third-party tools).
             try uf.rejectB2Violation(entity_obj, game.log, "child entry");
 
-            // Resolve prefab.
+            // Merge / synthesized-view arena. `merge_arena` holds:
+            //   - the synthesized flat-form components view for both
+            //     the entity (RFC #596 Axis 2, `entityPatch`) and the
+            //     resolved prefab root (`prefabComponents`) when
+            //     neither carries an `overrides:` / `components:`
+            //     wrapper;
+            //   - the deep-merged override component values (RFC #562).
+            // Leaf values are shared with `entity_obj` / the prefab,
+            // so the arena's lifetime only needs to span this
+            // function's body.
+            var merge_arena = std.heap.ArenaAllocator.init(game.allocator);
+            defer merge_arena.deinit();
+
+            // `null`-as-removal is scoped to reference entries'
+            // `overrides` (RFC #562) — an inline entity's
+            // `components` have no removal semantics. Hoisted above
+            // `entityPatch` so the `is_reference` branch is
+            // already known when we classify the patch shape.
+            const is_reference = entity_obj.getString("prefab") != null;
+
+            // Resolve prefab. After RFC #596, a prefab's components
+            // may sit either inside an explicit `"components"`
+            // wrapper or as flat PascalCase keys at the root —
+            // `uf.prefabComponents` handles both, allocating the
+            // synthesized view into `merge_arena` in the flat case.
             var prefab_components: ?Value.Object = null;
             var prefab_children: ?Value.Array = null;
             var prefab_obj_opt: ?Value.Object = null;
@@ -504,20 +556,18 @@ pub fn SceneLoader(comptime GameType: type, comptime Components: type) type {
                         // prefab sources land in the cache unchecked,
                         // so re-validate here at every resolution.
                         try uf.rejectB2Violation(proot, game.log, "resolved prefab root");
-                        prefab_components = proot.getObject("components");
+                        prefab_components = try uf.prefabComponents(proot, merge_arena.allocator(), game.log);
                         prefab_children = proot.getArray("children");
                     }
                 }
             }
 
             // For a reference entry this is the `overrides` patch;
-            // for an inline entry, its own `components`.
-            const scene_components = uf.entityPatch(entity_obj, game.log);
-
-            // `null`-as-removal is scoped to reference entries'
-            // `overrides` (RFC #562) — an inline entity's
-            // `components` have no removal semantics.
-            const is_reference = entity_obj.getString("prefab") != null;
+            // for an inline entry, its own `components`. The flat
+            // form (RFC #596) synthesizes the view from the entity's
+            // PascalCase keys; the wrapped form returns the existing
+            // Object verbatim.
+            const scene_components = try uf.entityPatch(entity_obj, merge_arena.allocator(), game.log);
 
             // Create entity — destroy on error to prevent orphans.
             const entity = game.createEntity();
@@ -546,12 +596,11 @@ pub fn SceneLoader(comptime GameType: type, comptime Components: type) type {
             // component — patching only the fields it names — and a
             // `null` override removes the component (RFC #562).
             //
-            // The merge tree lives in `merge_arena`; its leaf
-            // strings are shared with the prefab/override inputs, so
-            // `@ref` names collected from a merged component stay
-            // valid into the pass-2 patch even after the arena frees.
-            var merge_arena = std.heap.ArenaAllocator.init(game.allocator);
-            defer merge_arena.deinit();
+            // The merge tree lives in `merge_arena` (declared above);
+            // its leaf strings are shared with the prefab/override
+            // inputs, so `@ref` names collected from a merged
+            // component stay valid into the pass-2 patch even after
+            // the arena frees.
 
             // `applied` records every override key — including
             // `null` removals — so the prefab blocks below skip them.
@@ -843,7 +892,13 @@ pub fn SceneLoader(comptime GameType: type, comptime Components: type) type {
                                         // overall failure to surface
                                         // the diagnostic.
                                         try uf.rejectB2Violation(proot, game.log, "resolved prefab root");
-                                        child_prefab_comps = proot.getObject("components");
+                                        // RFC #596: flat prefab root has
+                                        // its components as PascalCase
+                                        // keys; the synthesized view
+                                        // lives in `merge_arena` (above)
+                                        // so it shares the apply / merge
+                                        // pipeline's lifetime.
+                                        child_prefab_comps = try uf.prefabComponents(proot, merge_arena.allocator(), game.log);
                                         child_prefab_children = proot.getArray("children");
                                     }
                                 }
@@ -911,7 +966,11 @@ pub fn SceneLoader(comptime GameType: type, comptime Components: type) type {
                             }
 
                             // Reference entry → `overrides`; inline → `components`.
-                            const child_scene_comps = uf.entityPatch(child_obj, game.log);
+                            // Flat shape (RFC #596) synthesizes the
+                            // view from PascalCase keys; the entries
+                            // slice lives in `merge_arena` (declared
+                            // at the top of `spawnAndLinkNestedEntities`).
+                            const child_scene_comps = try uf.entityPatch(child_obj, merge_arena.allocator(), game.log);
 
                             // `null`-as-removal is scoped to a
                             // reference entry's `overrides` (RFC #562).
