@@ -283,9 +283,14 @@ fn walkEntry(
     // (RFC #562, `uf.mergedOverride`), drops `null`-removed
     // components, and carries through override-only components.
     {
+        // RFC #596: both the prefab root and the entity entry may
+        // expose their components as flat PascalCase keys (no
+        // `"components"` / `"overrides"` wrapper). Synthesize the
+        // views into `merge_arena` so the cycle walk sees the same
+        // effective component tree the loader will instantiate.
         const prefab_components: ?Value.Object =
-            if (prefab_root) |proot| proot.getObject("components") else null;
-        const patch = uf.entityPatch(obj, NoopLog{});
+            if (prefab_root) |proot| try uf.prefabComponents(proot, merge_arena.allocator()) else null;
+        const patch = try uf.entityPatch(obj, merge_arena.allocator(), NoopLog{});
         if (try effectiveComponents(merge_arena, prefab_components, patch)) |eff| {
             try walkComponentFields(ctx, merge_arena, resolver, eff, depth, visitor);
         }
@@ -400,13 +405,19 @@ fn walkComponentFields(
 }
 
 /// Whether a `Value` looks like an entity definition — it has a
-/// `prefab` string or a `components` object. Mirrors
+/// `prefab` string, a `components` object (wrapped form), or any
+/// PascalCase key (flat form, RFC #596 Axis 2). Mirrors
 /// `component_apply.isEntityLike`; kept here so the walker has no
 /// dependency on the component-apply machinery (which is generic
 /// over `GameType`).
 pub fn isEntityLike(value: Value) bool {
     const obj = value.asObject() orelse return false;
-    return obj.getString("prefab") != null or obj.getObject("components") != null;
+    if (obj.getString("prefab") != null) return true;
+    if (obj.getObject("components") != null) return true;
+    for (obj.entries) |e| {
+        if (uf.isPascalCase(e.key)) return true;
+    }
+    return false;
 }
 
 /// A `log`-shaped no-op — `uf.entityPatch` takes a logger to emit

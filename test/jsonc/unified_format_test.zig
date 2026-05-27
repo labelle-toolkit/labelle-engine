@@ -500,3 +500,235 @@ test "flat: dual-acceptance — root-wrapped form still loads unchanged" {
     var buf: [8]i32 = undefined;
     try testing.expectEqualSlices(i32, &.{ 1, 2 }, markerIds(&game, &buf));
 }
+
+// ── RFC #596: wrapper-flat + bundle + meta forms ────────────────
+//
+// RFC #596 extends the dual-accept matrix with three more axes:
+//
+//   1. Wrapper-flat components — PascalCase keys at the entity
+//      scope ARE components, no `overrides:` / `components:`
+//      wrapper required.
+//   2. File-as-array bundles — top-level Array is a list of sibling
+//      entities (no implicit root), with an optional `{ meta: ... }`
+//      file-header element at index 0.
+//   3. `meta:` field at entity and file-header scope — stripped at
+//      load, never reaches runtime, never propagates.
+//   4. Unknown PascalCase keys warn-once (forward-compat with
+//      cross-repo plugin authoring; typos still surface).
+//
+// All axes are dual-accept during v1.x; wrapped forms keep working
+// throughout. The §B2 gate fires at every shape.
+
+test "rfc596: flat reference — PascalCase override sibling of prefab key" {
+    // `{ "prefab": "x", "Marker": { ... } }` — no `overrides`
+    // wrapper. The PascalCase key IS the override (RFC #596 Axis 2).
+    var game = TestGame.init(testing.allocator);
+    defer game.deinit();
+
+    try Bridge.addEmbeddedPrefab(&game, "widget",
+        \\{ "root": { "components": { "Marker": { "id": 100 } } } }
+    , PREFAB_DIR);
+    try Bridge.loadSceneFromSource(&game,
+        \\{ "children": [
+        \\  { "prefab": "widget", "Marker": { "id": 42 } }
+        \\] }
+    , PREFAB_DIR);
+
+    try testing.expectEqual(@as(i32, 42), soleMarker(&game).id);
+}
+
+test "rfc596: flat inline — PascalCase keys declare an inline entity" {
+    // `{ "Marker": { ... } }` — no `components` wrapper. The
+    // PascalCase key IS the inline component (RFC #596 Axis 2).
+    var game = try boot(
+        \\{ "children": [
+        \\  { "Marker": { "id": 7 } },
+        \\  { "Marker": { "id": 8 } }
+        \\] }
+    );
+    defer game.deinit();
+
+    var buf: [8]i32 = undefined;
+    try testing.expectEqualSlices(i32, &.{ 7, 8 }, markerIds(&game, &buf));
+}
+
+test "rfc596: bundle scene — top-level Array spawns N siblings" {
+    // RFC #596 Axis 3: file-as-array. No implicit root entity, no
+    // shared parent — every array element is a sibling.
+    var game = try boot(
+        \\[
+        \\  { "Marker": { "id": 1 } },
+        \\  { "Marker": { "id": 2 } },
+        \\  { "Marker": { "id": 3 } }
+        \\]
+    );
+    defer game.deinit();
+
+    var buf: [8]i32 = undefined;
+    try testing.expectEqualSlices(i32, &.{ 1, 2, 3 }, markerIds(&game, &buf));
+}
+
+test "rfc596: bundle header — only-meta object at index 0 is file-meta, not entity" {
+    // The first array element with ONLY `meta:` (no entity-shape
+    // keys) is the file header — treated as authoring metadata, not
+    // an entity. The other elements spawn normally.
+    var game = try boot(
+        \\[
+        \\  { "meta": { "name": "Production Colony Demo", "author": "alexandre" } },
+        \\  { "Marker": { "id": 10 } },
+        \\  { "Marker": { "id": 11 } }
+        \\]
+    );
+    defer game.deinit();
+
+    var buf: [8]i32 = undefined;
+    try testing.expectEqualSlices(i32, &.{ 10, 11 }, markerIds(&game, &buf));
+}
+
+test "rfc596: empty bundle [] is valid, zero entities" {
+    // Empty bundles are valid per the RFC's Q2 resolution —
+    // authoring workflows benefit (new file → `[]` → add entities).
+    var game = try boot("[]");
+    defer game.deinit();
+
+    var buf: [8]i32 = undefined;
+    try testing.expectEqualSlices(i32, &.{}, markerIds(&game, &buf));
+}
+
+test "rfc596: meta on an entity is stripped — never reaches runtime" {
+    // The `meta:` key is dropped at load. The entity spawns with
+    // its components; `meta` is not a component, not attached to
+    // the entity, not visible to gameplay code. The test passes if
+    // (a) loading succeeds, and (b) `Marker` is applied normally —
+    // no spurious warning, no extra entity.
+    var game = TestGame.init(testing.allocator);
+    defer game.deinit();
+
+    try Bridge.addEmbeddedPrefab(&game, "widget",
+        \\{ "root": { "components": { "Marker": { "id": 100 } } } }
+    , PREFAB_DIR);
+    try Bridge.loadSceneFromSource(&game,
+        \\{ "children": [
+        \\  { "prefab": "widget", "meta": { "label": "main kitchen", "tags": ["debug"] } }
+        \\] }
+    , PREFAB_DIR);
+
+    // The widget spawned with the prefab's default Marker.id=100;
+    // `meta` is gone, no second entity was created from it.
+    try testing.expectEqual(@as(i32, 100), soleMarker(&game).id);
+}
+
+test "rfc596: meta does NOT propagate from prefab file to scene reference" {
+    // RFC §"Authoring-only / No propagation": a prefab file's
+    // file-level meta is local to the prefab. A scene that
+    // references it without its own `meta:` gets no meta on the
+    // spawned entity (and the prefab's meta is NOT silently
+    // attached as a component).
+    var game = TestGame.init(testing.allocator);
+    defer game.deinit();
+
+    // Prefab in flat shape with its own meta block.
+    try Bridge.addEmbeddedPrefab(&game, "labeled",
+        \\{ "Marker": { "id": 50 },
+        \\  "meta": { "author": "A", "version": 3 } }
+    , PREFAB_DIR);
+    // Scene reference has no `meta:` of its own.
+    try Bridge.loadSceneFromSource(&game,
+        \\[ { "prefab": "labeled" } ]
+    , PREFAB_DIR);
+
+    // Spawn succeeded with the prefab's Marker only. If `meta`
+    // were applied as a component, the apply-component pipeline
+    // would have warned (`uf.warnUnknownComponent` only fires for
+    // PascalCase keys, but `meta` is lowercase — it's structural)
+    // — but more importantly, only ONE marker exists at id=50, no
+    // second entity, no error.
+    try testing.expectEqual(@as(i32, 50), soleMarker(&game).id);
+}
+
+test "rfc596: unknown PascalCase component (typo) warns but does not crash" {
+    // RFC #596 Axis 4: unknown PascalCase keys are treated as
+    // components, but the loader warns-once instead of erroring.
+    // Forward-compat: write the prefab before the plugin lands.
+    // Catches typos like `Posiiton` visibly.
+    //
+    // The test asserts behavior — load succeeds and the known
+    // sibling component still applies. The warning is observed
+    // out-of-band (StubLogSink swallows it, but the warn-once dedup
+    // set in `unified_format.zig` is the truthful signal — exercised
+    // by the load path).
+    var game = try boot(
+        \\{ "children": [
+        \\  { "Marker": { "id": 42 }, "Posiiton": { "x": 0, "y": 0 } }
+        \\] }
+    );
+    defer game.deinit();
+
+    // `Marker` applied normally; the typo'd component was ignored
+    // (no entity-side effect, no crash).
+    try testing.expectEqual(@as(i32, 42), soleMarker(&game).id);
+}
+
+test "rfc596: wrapped 'overrides' form still works (dual-accept regression)" {
+    // The RFC promises dual-accept during v1.x — adding the flat
+    // path MUST NOT break wrapped scenes. This test is the
+    // regression pin for that promise: the same scene shape as
+    // pre-RFC-596 keeps resolving cleanly.
+    var game = TestGame.init(testing.allocator);
+    defer game.deinit();
+
+    try Bridge.addEmbeddedPrefab(&game, "widget",
+        \\{ "root": { "components": { "Marker": { "id": 100 } } } }
+    , PREFAB_DIR);
+    try Bridge.loadSceneFromSource(&game,
+        \\{ "children": [
+        \\  { "prefab": "widget", "overrides": { "Marker": { "id": 9 } } }
+        \\] }
+    , PREFAB_DIR);
+
+    try testing.expectEqual(@as(i32, 9), soleMarker(&game).id);
+}
+
+test "rfc596: §B2 still fires on a flat bundle element with {prefab + children}" {
+    // The §B2 gate (RFC #560: no `children` on a reference) must
+    // catch the violation in the bundle shape too. The file-root
+    // gate doesn't apply (a bundle has no root), but the per-entry
+    // gate inside `loadEntityInternal` fires on every visit.
+    var game = TestGame.init(testing.allocator);
+    defer game.deinit();
+    try Bridge.addEmbeddedPrefab(&game, "door",
+        \\{ "components": { "Marker": { "id": 1 } } }
+    , PREFAB_DIR);
+
+    const src =
+        \\[
+        \\  { "prefab": "door",
+        \\    "children": [ { "Marker": { "id": 99 } } ] }
+        \\]
+    ;
+    try testing.expectError(error.InvalidFormat, Bridge.loadSceneFromSource(&game, src, PREFAB_DIR));
+}
+
+test "rfc596: flat prefab with PascalCase components resolves via reference" {
+    // RFC #596 Axis 2 applied to prefabs: a prefab file can drop
+    // its `components:` wrapper too. The flat references resolve
+    // through the cache identically.
+    var game = TestGame.init(testing.allocator);
+    defer game.deinit();
+
+    // Prefab in fully flat form — no `root`, no `components`.
+    try Bridge.addEmbeddedPrefab(&game, "flat_widget",
+        \\{ "Marker": { "id": 200 }, "Health": { "current": 75 } }
+    , PREFAB_DIR);
+    try Bridge.loadSceneFromSource(&game,
+        \\[
+        \\  { "prefab": "flat_widget", "Marker": { "id": 5 } }
+        \\]
+    , PREFAB_DIR);
+
+    var view = game.ecs_backend.view(.{ Marker, Health }, .{});
+    defer view.deinit();
+    const e = view.next().?;
+    try testing.expectEqual(@as(i32, 5), game.ecs_backend.getComponent(e, Marker).?.id);
+    try testing.expectEqual(@as(f32, 75), game.ecs_backend.getComponent(e, Health).?.current);
+}
