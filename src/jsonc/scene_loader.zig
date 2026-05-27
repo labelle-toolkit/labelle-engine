@@ -369,7 +369,26 @@ pub fn SceneLoader(comptime GameType: type, comptime Components: type) type {
                 if (!std.mem.eql(u8, game.game_state, state_name)) {
                     game.log.info("[scene] file-header meta.initial_state '{s}' → '{s}' (RFC #596)", .{ game.game_state, state_name });
                 }
-                game.setState(state_name);
+                // `state_name` aliases into the loader's `parse_arena`,
+                // which is freed in the `defer` at the top of
+                // `loadSceneFile` / `loadSceneSource` before the load
+                // function returns. `setState` (see `state_mixin.zig`)
+                // stores its argument by reference into `game.game_state`,
+                // so handing the arena-slice in directly would leave
+                // `game_state` dangling after the arena teardown.
+                //
+                // Dupe onto `game.allocator` and stash the owned backing
+                // on `game.owned_initial_state` so it lives as long as
+                // `game_state` itself. Free any prior owned slice first
+                // (a second `meta.initial_state` load supersedes it).
+                const owned = game.allocator.dupe(u8, state_name) catch {
+                    // Out of memory — keep the previous state rather than
+                    // crash the load. The directive is best-effort.
+                    return;
+                };
+                if (game.owned_initial_state) |old| game.allocator.free(old);
+                game.owned_initial_state = owned;
+                game.setState(owned);
             }
             // Future engine-known keys (`scripts`, `include`) dispatch here.
             // `name` and any other lowercase keys are authoring-only.

@@ -946,3 +946,84 @@ test "rfc596: entity-level meta with initial_state does NOT change game_state" {
     try testing.expectEqualStrings("running", game.getState());
     try testing.expectEqual(@as(i32, 100), soleMarker(&game).id);
 }
+
+// A poisoning allocator wrapper: stamps freed regions with `0xDE`
+// before forwarding to the inner allocator. Used to force the
+// `meta.initial_state` UAF below to surface deterministically —
+// without it, freed arena memory still spells "playing" by accident
+// (GPA does not actively scribble on free) and the regression test
+// is a no-op.
+const PoisonAllocator = struct {
+    inner: std.mem.Allocator,
+
+    fn alloc(ctx: *anyopaque, len: usize, alignment: std.mem.Alignment, ra: usize) ?[*]u8 {
+        const self: *PoisonAllocator = @ptrCast(@alignCast(ctx));
+        return self.inner.rawAlloc(len, alignment, ra);
+    }
+
+    fn resize(ctx: *anyopaque, buf: []u8, alignment: std.mem.Alignment, new_len: usize, ra: usize) bool {
+        const self: *PoisonAllocator = @ptrCast(@alignCast(ctx));
+        return self.inner.rawResize(buf, alignment, new_len, ra);
+    }
+
+    fn remap(ctx: *anyopaque, buf: []u8, alignment: std.mem.Alignment, new_len: usize, ra: usize) ?[*]u8 {
+        const self: *PoisonAllocator = @ptrCast(@alignCast(ctx));
+        return self.inner.rawRemap(buf, alignment, new_len, ra);
+    }
+
+    fn free(ctx: *anyopaque, buf: []u8, alignment: std.mem.Alignment, ra: usize) void {
+        const self: *PoisonAllocator = @ptrCast(@alignCast(ctx));
+        @memset(buf, 0xDE);
+        self.inner.rawFree(buf, alignment, ra);
+    }
+
+    fn allocator(self: *PoisonAllocator) std.mem.Allocator {
+        return .{
+            .ptr = self,
+            .vtable = &.{
+                .alloc = alloc,
+                .resize = resize,
+                .remap = remap,
+                .free = free,
+            },
+        };
+    }
+};
+
+test "rfc596: bundle meta.initial_state survives parse_arena.deinit (UAF regression)" {
+    // Regression for a real use-after-free caught on PR #599:
+    // `applyFileMetaDirectives` (scene_loader.zig) reads `state_name`
+    // from the bundle header (`meta.initial_state`) — a slice into the
+    // loader's `parse_arena` — and passes it straight to `setState`,
+    // which stores by reference (`state_mixin.zig`: `self.game_state = new_state`).
+    // The arena is `defer`-freed before `loadSceneFile` /
+    // `loadSceneSource` returns, so `game.game_state` ended up
+    // dangling for any subsequent read.
+    //
+    // The happy-path tests above read `getState()` after `boot()`
+    // returns and happen to see the right bytes because freed memory
+    // still contains the original string — the UAF is latent. This
+    // test wraps the game allocator in `PoisonAllocator`, which
+    // stamps `0xDE` over every freed region. A slice into freed
+    // arena memory then observes poison, not "playing".
+    //
+    // Pre-fix: the assertion sees 0xDE bytes and fails.
+    // Post-fix: `applyFileMetaDirectives` dupes onto `game.allocator`
+    // and stores the owned backing on `game.owned_initial_state`,
+    // so the value survives the arena teardown.
+    var poison = PoisonAllocator{ .inner = testing.allocator };
+    var game = TestGame.init(poison.allocator());
+    defer game.deinit();
+    try Bridge.loadSceneFromSource(&game,
+        \\[
+        \\  { "meta": { "initial_state": "playing" } },
+        \\  { "Marker": { "id": 1 } }
+        \\]
+    , PREFAB_DIR);
+
+    // After load, the parse_arena has been freed and `PoisonAllocator`
+    // has overwritten its bytes with 0xDE. If `game.game_state` still
+    // aliased into the arena (pre-fix), this read would see poison.
+    try testing.expectEqualStrings("playing", game.getState());
+    try testing.expectEqual(@as(i32, 1), soleMarker(&game).id);
+}
