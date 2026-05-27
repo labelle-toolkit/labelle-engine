@@ -93,20 +93,36 @@ Three sibling top-level entities; the middle one has its own children-of-it via 
 
 ### Axis 4 — `meta:` field for authoring-only side data
 
-Add a `meta:` structural key for free-form documentation/tooling data that the engine never reads at runtime. Useful for tooltips, editor labels, build-tool tags, debug hints — anything that exists to help humans or tools and isn't needed by gameplay.
+Add a `meta:` structural key for free-form documentation/tooling data that the engine never reads at runtime. Tooltips, editor labels, build-tool tags, debug hints, friendly display names — anything that exists to help humans or tools and isn't needed by gameplay.
+
+Including **friendly display labels via `meta.name`**:
 
 ```jsonc
 [
-    { "prefab": "kitchen", "Position": { "x": 0, "y": 93 }, "meta": { "label": "main kitchen" } },
-    { "prefab": "kitchen", "Position": { "x": 156, "y": 93 }, "meta": { "label": "secondary kitchen" } }
+    { "prefab": "kitchen", "Position": { "x": 0,   "y": 93 }, "meta": { "name": "Main Kitchen" } },
+    { "prefab": "kitchen", "Position": { "x": 156, "y": 93 }, "meta": { "name": "Secondary Kitchen" } }
 ]
 ```
+
+The file's own friendly label (at the bundle header) also lives in `meta`:
+
+```jsonc
+// scenes/colony.jsonc
+[
+    { "meta": { "name": "Production Colony Demo", "author": "alexandre" } },
+    { "prefab": "ship_carcase", "Position": { "x": 0, "y": 0 } },
+    ...
+]
+```
+
+This collapses what used to be a separate top-level `name:` key into `meta`. The structural surface stays minimal — three keys total at entity scope (`prefab`, `children`, `meta`).
 
 **Rules:**
 - **Authoring-only:** the engine strips `meta:` at load. Never reaches gameplay code. If your game needs the data at runtime, model it as a component instead.
 - **No propagation:** `meta:` is local to the entry it sits on. A scene reference's meta does NOT merge with the referenced prefab's file-level meta. Each is its own bag.
 - **No schema:** arbitrary JSON nesting/types/keys. The loader doesn't validate contents.
 - **Tools-visible:** the audit, the editor, and any future linter can read `meta:` blocks. They're authoritative for tooling-side decisions.
+- **Identity vs label:** the file basename is the identifier (used by `{prefab: "..."}` references, `--scene=` CLI flag, audit collision checks). `meta.name` is a free-form display label, doesn't need to be unique, never affects resolution.
 
 ### Closed key set (final after all axes)
 
@@ -124,7 +140,22 @@ File top-level:
 | `[ ... ]` | Bundle: each element a sibling entity, no implicit root |
 | `{ ... }` | Single root entity (optionally with `children:`) |
 
-`name` drops as an entity-level field — file basename is the identifier (already the prefab convention; extends to scenes).
+`name` drops as a top-level structural key. **Identity** comes from the file basename (already the prefab convention; extends to scenes). **Friendly display labels** live in `meta.name` — see Axis 4. Three structural keys total at entity scope, one (`meta`) at file-header scope. Anything not gameplay-relevant goes in `meta`; the rule has no exceptions.
+
+### Unknown component handling
+
+PascalCase keys are interpreted as components. The loader cross-checks each PascalCase key against the registered component registry:
+
+- **Known component** — applied normally.
+- **Unknown component** — **warn-once** at load with file/line, but proceed. Audit promotes the warning to a finding. Lets you author a prefab against a plugin that hasn't loaded yet (forward-compat) without silently swallowing typos like `Posiiton`.
+
+Rationale over the strict-error alternative: write-the-prefab-before-plugin-lands is a legitimate workflow (cross-repo prefab authoring, plugin order during init); breaking it at parse time hurts more than the typo it catches. v2.0+ may promote unknown-component to a strict error if the ecosystem warn-rate stays low — out of scope for this RFC.
+
+### Empty bundles
+
+`[]` at file top level is a valid zero-entity bundle. No warning. Authoring workflows benefit (new file → `[]` → add entities), and the "empty file checked in by mistake" case is symmetric to other half-written files (a prefab with only `{ "Position": {...} }` is similarly partial) which the loader also accepts. Tooling layers may add diagnostics; the format itself stays permissive.
+
+Object shape `{}` (empty entity, no `prefab` / no components / no `children`) stays rejected — an entity with no content is malformed regardless of array vs object file shape.
 
 ## Before / after on real FP scenes
 
@@ -191,8 +222,10 @@ Mechanical, idempotent transforms — same shape as `labelle migrate unified` al
 
 1. **Lift `overrides` block:** `{prefab, overrides: {X, Y}}` → `{prefab, X, Y}`. PascalCase keys at the entry level.
 2. **Lift `components` block:** `{components: {X, Y}, ...}` → `{X, Y, ...}`. Same shape.
-3. **File-as-array for no-root scenes/prefabs:** when the file's top-level is `{name?, children: [...]}` with no entity-shape keys (no `prefab`, no PascalCase), collapse to array `[...]`. The `name:` field drops; filename becomes the identifier.
-4. **`name:` to filename:** the loader's effective-name rule already handles this (filename is the default identifier). Migrator drops the `name:` field unless it diverges from the filename.
+3. **File-as-array for no-root scenes/prefabs:** when the file's top-level is `{name?, children: [...]}` with no entity-shape keys (no `prefab`, no PascalCase), collapse to array `[...]`. If the wrapping object had a `name:` field, transform 4 handles it (it lands on the bundle header as `{meta: {name: "..."}}` or drops if redundant).
+4. **`name:` → `meta.name` or drop:** the loader's identity rule is now "basename always wins."
+   - `name:` matches basename → **drop** (redundant).
+   - `name:` differs from basename → **move into `meta.name`** as a friendly label. If `meta:` already exists, merge `name` into it. **Flag for human review** any case where other files reference this one via `{prefab: "<declared-name>"}` — those references must update to use the basename, OR the file should be renamed to match the declared name. The audit's cross-reference check catches these.
 
 All four are byte-offset positional edits with comment preservation (same Strategy B the existing migrator uses).
 
@@ -201,7 +234,11 @@ The audit gains four new finding types:
 - `legacy_overrides_wrapper`
 - `legacy_components_wrapper`
 - `legacy_file_object_no_root` (file is `{name?, children}` with no entity-shape — should be array)
-- `legacy_redundant_name_field` (file declares `name:` that matches the filename — can drop)
+- `legacy_name_field` (any top-level `name:` field — must move to `meta.name` if differs from basename, or drop if redundant)
+
+Plus a 5th warn-only diagnostic (per Q5 resolution):
+
+- `unknown_component` — PascalCase key on an entity that doesn't match any registered component. Warn at load, surfaced by audit as a finding.
 
 ## Sequence with v2.0
 
@@ -215,21 +252,19 @@ This RFC bundles into the same v2.0 release as #594 and engine#592 (legacy unifi
 
 `labelle init` scaffolds in the new shape from day one (step-1 PR), so new projects start clean.
 
-## Open questions
+## Resolved decisions (originally open questions)
 
-1. **Does the `name:` field still have a use?** Today it lets a file claim an identifier different from its basename. Under this RFC, file identity = basename, full stop. Cases where the override is useful:
-   - Two folders contain `main.jsonc` — basename collision, today disambiguated by name fields. After the RFC: hard collision, or use folder-prefixed identifiers (`debug/main`, `colony/main`)?
-   - Friendly display names for tools. Could move into `meta: { "label": "..." }`.
+All five resolved during RFC discussion:
 
-   My read: drop `name:` entirely. Folder prefix handles collisions; display labels go in meta.
+1. ✅ **`name:` drops as a structural key.** Identity = filename basename, full stop. Friendly display labels live in `meta.name` instead. Folder-prefixed identifiers handle basename collisions across folders (`debug/main`, `colony/main`). Audit detects + migrator handles the few "name differs from basename" cases (move to meta unless cross-references force a rename).
 
-2. **What about the empty-bundle case?** An empty array `[]` is a valid bundle of zero entities. Useful? Or should empty bundles be rejected as probably-a-mistake?
+2. ✅ **Empty bundles `[]` are valid.** Loader accepts silently. Authoring workflows benefit; tooling layers can add diagnostics. Object-shape `{}` (empty entity) stays rejected — symmetric with other malformed entity shapes.
 
-3. **§B2 enforcement on bundle reference**. A bundle prefab CAN be referenced from a scene by name: `{ "prefab": "colony_layout" }`. Per §B2, that reference can't have `children:` — but does it inherit-meta or override-meta from the bundle's file-level meta? Per Axis 4's "no propagation" rule, no. Each bag is local. Confirmed in the RFC body.
+3. ✅ **§B2 + bundle references — no propagation.** A bundle prefab's file-level `meta` does NOT merge into scenes that reference it. Each `meta` bag is local to its entry. Already codified in Axis 4's rules.
 
-4. **Scene `name:` interaction with the `--scene` CLI flag.** `labelle run --scene=colony` resolves "colony" to a scene file. Today: matches the scene's `name:` field OR the file basename. After dropping `name:`: only matches the file basename. Behaviorally compatible for any project where `name:` matches basename (the conventional case).
+4. ✅ **`--scene=` CLI flag matches basename only.** Behaviorally compatible for any project where `name:` matched basename today (the conventional case). The migrator's transform 4 handles the rare divergent case.
 
-5. **Component name validation.** Today the loader doesn't validate that a PascalCase top-level key is a registered component type — it just attempts the override and fails late. After dropping the `overrides:` wrapper, any unknown PascalCase key is silently treated as an override of a nonexistent component, which deep-merge will accept and ignore. Worth tightening: the loader could reject unknown-component overrides at parse time (a 1-line check against the registered component registry).
+5. ✅ **Unknown PascalCase keys → warn, don't error.** Forward-compat with cross-repo plugin authoring; typos like `Posiiton` still surface visibly. Audit promotes warning to a finding. v2.0+ may promote to strict if ecosystem warn-rate stays low.
 
 ## Non-goals
 
