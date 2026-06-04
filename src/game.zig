@@ -44,7 +44,7 @@ pub fn GameConfig(
     comptime LogSinkImpl: type,
     comptime ComponentsType: type,
     comptime GizmoCategoriesSlice: anytype,
-    comptime GameEvents: type,
+    comptime GameEventsParam: type,
 ) type {
     // Validate renderer satisfies the contract
     _ = core.RenderInterface(RenderImpl);
@@ -58,8 +58,8 @@ pub fn GameConfig(
     const Children = ChildrenComponent(Entity);
     const PrefabChildT = PrefabChild(Entity);
     const EnginePayload = hooks_types.HookPayload(Entity);
-    const has_events = GameEvents != void;
-    const Payload = if (has_events) core.MergeHookPayloads(.{ EnginePayload, GameEvents }) else EnginePayload;
+    const has_events = GameEventsParam != void;
+    const Payload = if (has_events) core.MergeHookPayloads(.{ EnginePayload, GameEventsParam }) else EnginePayload;
     const has_hooks = Hooks != void;
     const HooksIsMerged = has_hooks and @typeInfo(Hooks) == .pointer and @hasDecl(@typeInfo(Hooks).pointer.child, "emit");
     const HooksField = if (!has_hooks)
@@ -68,7 +68,7 @@ pub fn GameConfig(
         ?Hooks
     else
         ?HookDispatcher(Payload, Hooks, .{});
-    const EventBuffer = if (has_events) std.ArrayList(GameEvents) else void;
+    const EventBuffer = if (has_events) std.ArrayList(GameEventsParam) else void;
 
     return struct {
         const Self = @This();
@@ -79,6 +79,12 @@ pub fn GameConfig(
         pub const TombstoneEntry = struct { entity: Entity, frame: u64 };
 
         pub const EntityType = Entity;
+        /// Re-export the game-event union so plugins can gate their
+        /// dual-emit on `@hasDecl(Game, "GameEvents")` + reflect against
+        /// `Game.GameEvents` (e.g. labelle-box2d's `emitGameEvent`).
+        /// Without this, plugin events compile to a silent no-op in every
+        /// assembled game (labelle-engine#601).
+        pub const GameEvents = GameEventsParam;
         pub const EcsBackend = EcsImpl;
         pub const SpriteComp = Sprite;
         pub const ShapeComp = Shape;
