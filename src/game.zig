@@ -79,11 +79,18 @@ pub fn GameConfig(
         pub const TombstoneEntry = struct { entity: Entity, frame: u64 };
 
         pub const EntityType = Entity;
-        /// Re-export the game-event union so plugins can gate their
-        /// dual-emit on `@hasDecl(Game, "GameEvents")` + reflect against
+        /// Re-export the game-event type so plugins can reflect against
         /// `Game.GameEvents` (e.g. labelle-box2d's `emitGameEvent`).
         /// Without this, plugin events compile to a silent no-op in every
         /// assembled game (labelle-engine#601).
+        ///
+        /// Contract: this is the *union* for games that declare events, but
+        /// **`void`** for event-less games (`GameWith(Hooks)`). So consumers
+        /// MUST gate on `@hasDecl(Game, "GameEvents") and
+        /// @typeInfo(Game.GameEvents) == .@"union"` — not `@hasDecl` alone,
+        /// which is now always true. (`usingnamespace` would let us omit the
+        /// decl for `void`, but it's removed in Zig 0.16.) labelle-box2d
+        /// already does the union check.
         pub const GameEvents = GameEventsParam;
         pub const EcsBackend = EcsImpl;
         pub const SpriteComp = Sprite;
