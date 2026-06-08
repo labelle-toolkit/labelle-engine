@@ -318,6 +318,15 @@ pub fn GameConfig(
         /// just stores + dispatches the bool.
         paused: bool = false,
 
+        /// Monotonic gameplay clock in seconds, accumulated from the
+        /// *time-scaled* dt each `tick()` — so it freezes while paused
+        /// (`time_scale == 0`) and slows under slow-mo. Read via
+        /// `elapsedSeconds()`; flow `Cooldown`/`Delay` nodes (#25) time
+        /// against it so gameplay timers don't advance on a pause menu.
+        /// Distinct from `game_log.elapsed_s`, which stays wall-time for
+        /// log stamps.
+        clock_s: f64 = 0,
+
         /// Connect-out preview channel to the labelle-gui editor
         /// (`--preview-mode <host:port>`). `null` in normal runs — the
         /// generated `main.zig` constructs a `Preview` and assigns it
@@ -1640,8 +1649,19 @@ pub fn GameConfig(
             self.setPaused(false);
         }
 
+        /// Seconds of gameplay time elapsed (time-scaled, pause-aware) —
+        /// the clock flow `Cooldown`/`Delay` nodes (#25) measure against.
+        pub fn elapsedSeconds(self: *const Self) f64 {
+            return self.clock_s;
+        }
+
         pub fn tick(self: *Self, dt: f32) void {
             const scaled_dt = dt * self.time_scale;
+            // Freeze the gameplay clock under EITHER pause path — the
+            // `paused` flag (#465) doesn't zero `time_scale`, so guarding
+            // on `isPaused()` (paused OR time_scale==0) is what makes a
+            // Cooldown/Delay hold behind a pause menu (bugbot/gemini #603).
+            if (!self.isPaused()) self.clock_s += @as(f64, scaled_dt);
 
             // Drain any worker-decoded asset uploads onto the GPU.
             // Without this no acquired asset ever reaches `.ready`,
