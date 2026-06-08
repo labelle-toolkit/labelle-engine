@@ -16,6 +16,7 @@ const atlas_mod = @import("atlas.zig");
 const assets_mod = @import("assets/mod.zig");
 const game_log_mod = @import("game_log.zig");
 const preview_mode_mod = @import("preview_mode.zig");
+const scheduler_mod = @import("scheduler.zig");
 
 const hierarchy = @import("game/hierarchy.zig");
 const gizmo_draws_mod = @import("game/gizmo_draws.zig");
@@ -79,6 +80,11 @@ pub fn GameConfig(
         pub const TombstoneEntry = struct { entity: Entity, frame: u64 };
 
         pub const EntityType = Entity;
+
+        /// Runtime timer wheel for flow `Delay` nodes (#25 Stage 2). Keyed
+        /// on the engine `Entity` type; fires pause-aware callbacks against
+        /// the gameplay clock. See `src/scheduler.zig`.
+        pub const SchedulerType = scheduler_mod.Scheduler(Entity);
         /// Re-export the game-event type so plugins can reflect against
         /// `Game.GameEvents` (e.g. labelle-box2d's `emitGameEvent`).
         /// Without this, plugin events compile to a silent no-op in every
@@ -327,6 +333,14 @@ pub fn GameConfig(
         /// log stamps.
         clock_s: f64 = 0,
 
+        /// Runtime timer wheel (#25 Stage 2). Owns its pending list on the
+        /// game allocator; initialized in `init`, drained in `deinit`. Flow
+        /// `Delay` codegen emits `game.scheduler.after(seconds, entity, ctx,
+        /// func)`. Ticked from `tick()` against `elapsedSeconds()`, so timers
+        /// inherit pause + slow-mo for free. `undefined` until `init` wires
+        /// the type-erased game pointer + clock/liveness trampolines.
+        scheduler: SchedulerType = undefined,
+
         /// Connect-out preview channel to the labelle-gui editor
         /// (`--preview-mode <host:port>`). `null` in normal runs — the
         /// generated `main.zig` constructs a `Preview` and assigns it
@@ -364,6 +378,31 @@ pub fn GameConfig(
         tombstone_cursor: if (is_debug) usize else void =
             if (is_debug) 0 else {},
 
+        // ── Scheduler trampolines (#25 Stage 2) ──────────────────
+        // Type-erased shims so `Scheduler` reads the gameplay clock and
+        // checks entity liveness without importing `*Self` (which would be
+        // a circular comptime dependency). `game_ctx` is `@ptrCast(self)`,
+        // re-cast back to `*Self` here.
+
+        fn schedulerNow(game_ctx: *anyopaque) f64 {
+            const self: *Self = @ptrCast(@alignCast(game_ctx));
+            return self.elapsedSeconds();
+        }
+
+        fn schedulerIsAlive(game_ctx: *anyopaque, entity: Entity) bool {
+            const self: *Self = @ptrCast(@alignCast(game_ctx));
+            return self.ecs_backend.entityExists(entity);
+        }
+
+        /// Point the scheduler's type-erased `game_ctx` at this game's stable
+        /// address. `Game.init` returns by value, so `game_ctx` can only be
+        /// fixed once the game lands at its final location. Idempotent — safe
+        /// to call from `setHooks` and at the top of every `tick`, and the
+        /// codegen-generated main can call it explicitly after `init`.
+        pub fn bindScheduler(self: *Self) void {
+            self.scheduler.game_ctx = @ptrCast(self);
+        }
+
         pub fn init(allocator: std.mem.Allocator) Self {
             const world = allocator.create(World) catch @panic("failed to allocate default world");
             world.* = World.init(allocator);
@@ -379,6 +418,10 @@ pub fn GameConfig(
                 .jsonc_scenes = std.StringHashMap(JsoncSceneInfo).init(allocator),
                 .embedded_scene_sources = std.StringHashMap([]const u8).init(allocator),
                 .gizmo_state = gizmo_draws_mod.GizmoState(Entity).init(allocator),
+                // `game_ctx` is a placeholder here (the not-yet-stable world
+                // pointer); `bindScheduler` fixes it once `self` is stable.
+                // The trampolines are address-stable comptime fn pointers.
+                .scheduler = SchedulerType.init(allocator, world, schedulerNow, schedulerIsAlive),
             };
         }
 
@@ -400,6 +443,10 @@ pub fn GameConfig(
             // for a graceful shutdown; the socket close + arena tear-down
             // happens here regardless.
             if (self.preview) |*p| p.deinit();
+            // Drop any timers still in flight (#25 Stage 2). A game can
+            // exit mid-Delay; this frees each entry's owned `ctx` and the
+            // pending list without firing — no leaks under testing.allocator.
+            self.scheduler.deinit();
             // Tear down the active scene FIRST. Scene teardown runs
             // user-provided `deinit_fn`s that may call `game.assets.*`
             // (release on unload is the natural pattern for the very
@@ -451,6 +498,11 @@ pub fn GameConfig(
         }
 
         pub fn setHooks(self: *Self, receiver: Hooks) void {
+            // `self` is at its final, stable address by the time the game
+            // wires hooks (see generated main: `init` then `setHooks`), so
+            // pin the scheduler's type-erased game pointer here too — covers
+            // any `game.scheduler.after(...)` issued before the first tick.
+            self.bindScheduler();
             if (has_hooks) {
                 if (HooksIsMerged) {
                     self.hooks = receiver;
@@ -1662,6 +1714,16 @@ pub fn GameConfig(
             // on `isPaused()` (paused OR time_scale==0) is what makes a
             // Cooldown/Delay hold behind a pause menu (bugbot/gemini #603).
             if (!self.isPaused()) self.clock_s += @as(f64, scaled_dt);
+
+            // Fire any flow `Delay` timers that have come due (#25 Stage 2).
+            // Run this every tick AFTER the clock update. `bindScheduler`
+            // keeps the type-erased `game_ctx` pointed at our stable address
+            // (idempotent). When paused, `elapsedSeconds()` is frozen, so no
+            // timer is ever due — pause-freeze falls out of the clock reuse
+            // for free, with no separate accumulator. A firing callback may
+            // re-entrantly `after()`; the scheduler iterates defensively.
+            self.bindScheduler();
+            self.scheduler.tick();
 
             // Drain any worker-decoded asset uploads onto the GPU.
             // Without this no acquired asset ever reaches `.ready`,
