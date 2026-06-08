@@ -398,6 +398,9 @@ pub const JsoncParser = jsonc_mod.JsoncParser;
 pub const JsoncParseError = jsonc_mod.ParseError;
 pub const HotReloader = jsonc_mod.HotReloader;
 
+// ── Scheduler (flow Delay timers, #25 Stage 2) ──
+pub const Scheduler = @import("scheduler.zig").Scheduler;
+
 // ── Core Re-exports ──
 pub const Position = core.Position;
 pub const Ecs = core.Ecs;

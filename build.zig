@@ -133,6 +133,9 @@ pub fn build(b: *std.Build) void {
         // loading-scene controllers can honour `--scene=<name>` after
         // `assets.allReady` instead of racing the boot swap.
         "test/runtime_env_test.zig",
+        // Runtime Scheduler for flow `Delay` nodes (#48 / #25 Stage 2).
+        // Pause-aware timer wheel reusing the gameplay clock.
+        "test/scheduler_test.zig",
     };
 
     for (test_files) |test_file| {
