@@ -105,3 +105,34 @@ test "setPaused(false) when already false is a no-op" {
     try testing.expectEqual(@as(usize, 0), recorder.changes.items.len);
     try testing.expect(!game.isPaused());
 }
+
+// ── Gameplay clock (#25) ─────────────────────────────────────────────────
+
+test "elapsedSeconds starts at zero" {
+    var game = TestGame.init(testing.allocator);
+    defer game.deinit();
+    try testing.expectEqual(@as(f64, 0), game.elapsedSeconds());
+}
+
+test "elapsedSeconds accumulates time-scaled dt and freezes while paused" {
+    var game = TestGame.init(testing.allocator);
+    defer game.deinit();
+
+    // Running at normal scale: the clock tracks dt.
+    game.tick(0.5);
+    try testing.expectApproxEqAbs(@as(f64, 0.5), game.elapsedSeconds(), 1e-6);
+    game.tick(0.25);
+    try testing.expectApproxEqAbs(@as(f64, 0.75), game.elapsedSeconds(), 1e-6);
+
+    // Paused (time_scale == 0): scaled dt is 0, so the clock holds —
+    // a Cooldown/Delay must not advance behind a pause menu.
+    game.pause();
+    game.tick(1.0);
+    try testing.expectApproxEqAbs(@as(f64, 0.75), game.elapsedSeconds(), 1e-6);
+
+    // Slow-mo (0.5×): the clock advances at half rate.
+    game.resume_();
+    game.setTimeScale(0.5);
+    game.tick(1.0);
+    try testing.expectApproxEqAbs(@as(f64, 1.25), game.elapsedSeconds(), 1e-6);
+}
