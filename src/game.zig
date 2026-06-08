@@ -1657,7 +1657,11 @@ pub fn GameConfig(
 
         pub fn tick(self: *Self, dt: f32) void {
             const scaled_dt = dt * self.time_scale;
-            self.clock_s += @as(f64, scaled_dt);
+            // Freeze the gameplay clock under EITHER pause path — the
+            // `paused` flag (#465) doesn't zero `time_scale`, so guarding
+            // on `isPaused()` (paused OR time_scale==0) is what makes a
+            // Cooldown/Delay hold behind a pause menu (bugbot/gemini #603).
+            if (!self.isPaused()) self.clock_s += @as(f64, scaled_dt);
 
             // Drain any worker-decoded asset uploads onto the GPU.
             // Without this no acquired asset ever reaches `.ready`,

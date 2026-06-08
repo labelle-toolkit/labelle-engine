@@ -136,3 +136,24 @@ test "elapsedSeconds accumulates time-scaled dt and freezes while paused" {
     game.tick(1.0);
     try testing.expectApproxEqAbs(@as(f64, 1.25), game.elapsedSeconds(), 1e-6);
 }
+
+test "elapsedSeconds freezes under the paused flag even at full time_scale" {
+    // The `paused` flag (#465) is independent of `time_scale` — pausing
+    // through it leaves time_scale at 1.0, so the clock must gate on
+    // isPaused(), not just a zero scale (bugbot/gemini #603).
+    var game = TestGame.init(testing.allocator);
+    defer game.deinit();
+
+    game.tick(0.5);
+    try testing.expectApproxEqAbs(@as(f64, 0.5), game.elapsedSeconds(), 1e-6);
+
+    game.setPaused(true); // does NOT touch time_scale (stays 1.0)
+    try testing.expect(game.isPaused());
+    try testing.expectEqual(@as(f32, 1.0), game.getTimeScale());
+    game.tick(1.0);
+    try testing.expectApproxEqAbs(@as(f64, 0.5), game.elapsedSeconds(), 1e-6); // frozen
+
+    game.setPaused(false);
+    game.tick(0.25);
+    try testing.expectApproxEqAbs(@as(f64, 0.75), game.elapsedSeconds(), 1e-6);
+}
