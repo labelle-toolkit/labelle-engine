@@ -1756,65 +1756,62 @@ pub fn GameConfig(
         /// state is still current; buffered events drain via
         /// `dispatchEvents` the same frame.
         fn scanInputEvents(self: *Self) void {
-            // The keyboard scan unrolls `emitEngineEvent` (itself an
-            // `inline for` over the payload fields) across the full
-            // `KeyboardKey` enum (~100 keys), which blows past the
-            // default 1000-branch comptime budget. Raise it.
-            @setEvalBranchQuota(20_000);
+            // Each category's emit calls are gated at comptime (so an
+            // unused one folds away), but the per-element scans are plain
+            // RUNTIME `for`s over the comptime enum-value slices — NOT
+            // `inline for`. Unrolling ~114 keys would inline
+            // `emitEngineEvent` (itself an `inline for` over payload
+            // fields) once per key, bloating the binary and needing a big
+            // `@setEvalBranchQuota`; a runtime loop has one call site per
+            // category (gemini #606).
 
             // ── Keyboard ──
             if (comptime keyboard_events_wanted) {
-                inline for (comptime std.enums.values(input_types.KeyboardKey)) |k| {
-                    // Skip the `key_null = 0` sentinel — not a real key.
-                    if (comptime k != .key_null) {
-                        const code: u32 = @intCast(@intFromEnum(k));
-                        if (comptime engineEventWanted("engine__key_pressed")) {
-                            if (Self.Input.isKeyPressed(code))
-                                self.emitEngineEvent("engine__key_pressed", .{ .key = code });
-                        }
-                        if (comptime engineEventWanted("engine__key_released")) {
-                            if (Self.Input.isKeyReleased(code))
-                                self.emitEngineEvent("engine__key_released", .{ .key = code });
-                        }
-                    }
+                const pressed_wanted = comptime engineEventWanted("engine__key_pressed");
+                const released_wanted = comptime engineEventWanted("engine__key_released");
+                for (std.enums.values(input_types.KeyboardKey)) |k| {
+                    if (k == .key_null) continue; // sentinel, not a real key
+                    const code: u32 = @intCast(@intFromEnum(k));
+                    if (pressed_wanted and Self.Input.isKeyPressed(code))
+                        self.emitEngineEvent("engine__key_pressed", .{ .key = code });
+                    if (released_wanted and Self.Input.isKeyReleased(code))
+                        self.emitEngineEvent("engine__key_released", .{ .key = code });
                 }
             }
 
             // ── Mouse buttons ──
             if (comptime mouse_events_wanted) {
-                inline for (comptime std.enums.values(input_types.MouseButton)) |b| {
+                const pressed_wanted = comptime engineEventWanted("engine__mouse_button_pressed");
+                const released_wanted = comptime engineEventWanted("engine__mouse_button_released");
+                for (std.enums.values(input_types.MouseButton)) |b| {
                     const code: u32 = @intCast(@intFromEnum(b));
-                    if (comptime engineEventWanted("engine__mouse_button_pressed")) {
-                        if (Self.Input.isMouseButtonPressed(code))
-                            self.emitEngineEvent("engine__mouse_button_pressed", .{
-                                .button = code,
-                                .x = Self.Input.getMouseX(),
-                                .y = Self.Input.getMouseY(),
-                            });
-                    }
-                    if (comptime engineEventWanted("engine__mouse_button_released")) {
-                        if (Self.Input.isMouseButtonReleased(code))
-                            self.emitEngineEvent("engine__mouse_button_released", .{
-                                .button = code,
-                                .x = Self.Input.getMouseX(),
-                                .y = Self.Input.getMouseY(),
-                            });
-                    }
+                    if (pressed_wanted and Self.Input.isMouseButtonPressed(code))
+                        self.emitEngineEvent("engine__mouse_button_pressed", .{
+                            .button = code,
+                            .x = Self.Input.getMouseX(),
+                            .y = Self.Input.getMouseY(),
+                        });
+                    if (released_wanted and Self.Input.isMouseButtonReleased(code))
+                        self.emitEngineEvent("engine__mouse_button_released", .{
+                            .button = code,
+                            .x = Self.Input.getMouseX(),
+                            .y = Self.Input.getMouseY(),
+                        });
                 }
             }
 
             // ── Gamepad connect / disconnect (engine-side edge diff) ──
             if (comptime gamepad_events_wanted) {
-                comptime var gi: u32 = 0;
-                inline while (gi < max_tracked_gamepads) : (gi += 1) {
+                const conn_wanted = comptime engineEventWanted("engine__gamepad_connected");
+                const disc_wanted = comptime engineEventWanted("engine__gamepad_disconnected");
+                var gi: u32 = 0;
+                while (gi < max_tracked_gamepads) : (gi += 1) {
                     const now = Self.Input.isGamepadAvailable(gi);
                     const was = self.prev_gamepad_connected[gi];
                     if (now and !was) {
-                        if (comptime engineEventWanted("engine__gamepad_connected"))
-                            self.emitEngineEvent("engine__gamepad_connected", .{ .id = gi });
+                        if (conn_wanted) self.emitEngineEvent("engine__gamepad_connected", .{ .id = gi });
                     } else if (!now and was) {
-                        if (comptime engineEventWanted("engine__gamepad_disconnected"))
-                            self.emitEngineEvent("engine__gamepad_disconnected", .{ .id = gi });
+                        if (disc_wanted) self.emitEngineEvent("engine__gamepad_disconnected", .{ .id = gi });
                     }
                     self.prev_gamepad_connected[gi] = now;
                 }
