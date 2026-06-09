@@ -261,6 +261,54 @@ pub const Events = struct {
     pub const pause_changed = struct {
         paused: bool,
     };
+
+    // ── Input events (labelle-gui#208, Option B) ─────────────────
+    // Engine-hosted input events scanned in `Game.tick` through the
+    // unified `InputInterface`. Flows handle them via
+    // `OnEvent { name: "engine.key_pressed" }` etc. `key`/`button` are
+    // backend-compatible raylib codes (see `input_types.zig`).
+
+    /// Fired when a key transitioned to down THIS frame (down-edge).
+    /// `key` is the raylib-compatible `KeyboardKey` code.
+    pub const key_pressed = struct {
+        key: u32,
+    };
+
+    /// Fired when a key transitioned to up this frame (up-edge).
+    /// `key` is the raylib-compatible `KeyboardKey` code.
+    pub const key_released = struct {
+        key: u32,
+    };
+
+    /// Fired on a mouse-button down-edge, carrying the cursor position
+    /// (screen coordinates, Y-down) at the moment of the press.
+    /// `button` is the raylib-compatible `MouseButton` code.
+    pub const mouse_button_pressed = struct {
+        button: u32,
+        x: f32,
+        y: f32,
+    };
+
+    /// Fired on a mouse-button up-edge, carrying the cursor position
+    /// (screen coordinates, Y-down) at the moment of the release.
+    /// `button` is the raylib-compatible `MouseButton` code.
+    pub const mouse_button_released = struct {
+        button: u32,
+        x: f32,
+        y: f32,
+    };
+
+    /// Fired the frame a gamepad slot became available (transitioned
+    /// from unavailable to available). `id` is the gamepad slot index.
+    pub const gamepad_connected = struct {
+        id: u32,
+    };
+
+    /// Fired the frame a gamepad slot became unavailable (transitioned
+    /// from available to unavailable). `id` is the gamepad slot index.
+    pub const gamepad_disconnected = struct {
+        id: u32,
+    };
 };
 
 // ── Hook Types ──

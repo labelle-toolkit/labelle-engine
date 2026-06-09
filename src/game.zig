@@ -20,7 +20,15 @@ const scheduler_mod = @import("scheduler.zig");
 
 const hierarchy = @import("game/hierarchy.zig");
 const gizmo_draws_mod = @import("game/gizmo_draws.zig");
+const input_types = @import("input_types.zig");
 const builtin = @import("builtin");
+
+/// Number of gamepad slots the engine diffs for connect/disconnect
+/// events each frame. Matches raylib's typical `MAX_GAMEPADS` cap (4);
+/// the unified `InputInterface.isGamepadAvailable` is polled for slots
+/// `0..max_tracked_gamepads`. The per-slot previous-availability state
+/// lives in `Game.prev_gamepad_connected`.
+const max_tracked_gamepads = 4;
 
 // Mixin modules — domain-specific method groups
 const visuals_mixin = @import("game/visuals.zig");
@@ -323,6 +331,16 @@ pub fn GameConfig(
         /// `GamePaused` component into `setPaused` — and the engine
         /// just stores + dispatches the bool.
         paused: bool = false,
+
+        /// Per-slot gamepad availability as observed on the PREVIOUS
+        /// `tick`. There is no "connected-this-frame" edge query in the
+        /// input backends, so `tick`'s gamepad scan diffs the current
+        /// `Input.isGamepadAvailable(id)` against this to synthesize
+        /// `engine.gamepad_connected` / `engine.gamepad_disconnected`
+        /// edges. Tiny ([max_tracked_gamepads]bool), so it stays
+        /// unconditionally even when no flow listens — only the scan
+        /// loop is comptime-gated. labelle-gui#208.
+        prev_gamepad_connected: [max_tracked_gamepads]bool = .{false} ** max_tracked_gamepads,
 
         /// Monotonic gameplay clock in seconds, accumulated from the
         /// *time-scaled* dt each `tick()` — so it freezes while paused
@@ -1707,6 +1725,99 @@ pub fn GameConfig(
             return self.clock_s;
         }
 
+        // ── Input events (labelle-gui#208) ───────────────────────
+        //
+        // Comptime gates mirroring `emitEngineEvent`'s `@hasField`
+        // check, grouped per input category. When the project's
+        // `GameEvents` doesn't carry a category's variants, the whole
+        // scan loop for that category folds away — an unused game pays
+        // NOTHING per frame (no enum iteration, no backend polling).
+
+        /// True when `GameEvents` declares `field` (the qualified
+        /// `engine__<name>` tag). Same gate `emitEngineEvent` uses.
+        inline fn engineEventWanted(comptime field: []const u8) bool {
+            if (!has_events) return false;
+            if (@typeInfo(GameEvents) != .@"union") return false;
+            return @hasField(GameEvents, field);
+        }
+
+        const keyboard_events_wanted = engineEventWanted("engine__key_pressed") or
+            engineEventWanted("engine__key_released");
+        const mouse_events_wanted = engineEventWanted("engine__mouse_button_pressed") or
+            engineEventWanted("engine__mouse_button_released");
+        const gamepad_events_wanted = engineEventWanted("engine__gamepad_connected") or
+            engineEventWanted("engine__gamepad_disconnected");
+
+        /// Scan the unified `InputInterface` for input edges and emit
+        /// the matching engine events into the buffer. Every query goes
+        /// through `Self.Input` (the backend-agnostic wrapper) — never a
+        /// backend's native API — which is what keeps this portable
+        /// across raylib / sokol / SDL. Called from `tick` while input
+        /// state is still current; buffered events drain via
+        /// `dispatchEvents` the same frame.
+        fn scanInputEvents(self: *Self) void {
+            // Each category's emit calls are gated at comptime (so an
+            // unused one folds away), but the per-element scans are plain
+            // RUNTIME `for`s over the comptime enum-value slices — NOT
+            // `inline for`. Unrolling ~114 keys would inline
+            // `emitEngineEvent` (itself an `inline for` over payload
+            // fields) once per key, bloating the binary and needing a big
+            // `@setEvalBranchQuota`; a runtime loop has one call site per
+            // category (gemini #606).
+
+            // ── Keyboard ──
+            if (comptime keyboard_events_wanted) {
+                const pressed_wanted = comptime engineEventWanted("engine__key_pressed");
+                const released_wanted = comptime engineEventWanted("engine__key_released");
+                for (std.enums.values(input_types.KeyboardKey)) |k| {
+                    if (k == .key_null) continue; // sentinel, not a real key
+                    const code: u32 = @intCast(@intFromEnum(k));
+                    if (pressed_wanted and Self.Input.isKeyPressed(code))
+                        self.emitEngineEvent("engine__key_pressed", .{ .key = code });
+                    if (released_wanted and Self.Input.isKeyReleased(code))
+                        self.emitEngineEvent("engine__key_released", .{ .key = code });
+                }
+            }
+
+            // ── Mouse buttons ──
+            if (comptime mouse_events_wanted) {
+                const pressed_wanted = comptime engineEventWanted("engine__mouse_button_pressed");
+                const released_wanted = comptime engineEventWanted("engine__mouse_button_released");
+                for (std.enums.values(input_types.MouseButton)) |b| {
+                    const code: u32 = @intCast(@intFromEnum(b));
+                    if (pressed_wanted and Self.Input.isMouseButtonPressed(code))
+                        self.emitEngineEvent("engine__mouse_button_pressed", .{
+                            .button = code,
+                            .x = Self.Input.getMouseX(),
+                            .y = Self.Input.getMouseY(),
+                        });
+                    if (released_wanted and Self.Input.isMouseButtonReleased(code))
+                        self.emitEngineEvent("engine__mouse_button_released", .{
+                            .button = code,
+                            .x = Self.Input.getMouseX(),
+                            .y = Self.Input.getMouseY(),
+                        });
+                }
+            }
+
+            // ── Gamepad connect / disconnect (engine-side edge diff) ──
+            if (comptime gamepad_events_wanted) {
+                const conn_wanted = comptime engineEventWanted("engine__gamepad_connected");
+                const disc_wanted = comptime engineEventWanted("engine__gamepad_disconnected");
+                var gi: u32 = 0;
+                while (gi < max_tracked_gamepads) : (gi += 1) {
+                    const now = Self.Input.isGamepadAvailable(gi);
+                    const was = self.prev_gamepad_connected[gi];
+                    if (now and !was) {
+                        if (conn_wanted) self.emitEngineEvent("engine__gamepad_connected", .{ .id = gi });
+                    } else if (!now and was) {
+                        if (disc_wanted) self.emitEngineEvent("engine__gamepad_disconnected", .{ .id = gi });
+                    }
+                    self.prev_gamepad_connected[gi] = now;
+                }
+            }
+        }
+
         pub fn tick(self: *Self, dt: f32) void {
             const scaled_dt = dt * self.time_scale;
             // Freeze the gameplay clock under EITHER pause path — the
@@ -1818,6 +1929,19 @@ pub fn GameConfig(
             self.emitHook(.{ .frame_end = .{ .frame_number = self.frame_number, .dt = scaled_dt } });
             // Engine `Events` dual-emit (#578).
             self.emitEngineEvent("engine__post_tick", .{ .frame_number = self.frame_number, .dt = scaled_dt });
+
+            // Input events (labelle-gui#208). Scan the unified
+            // `InputInterface` and buffer matching engine events. Placed
+            // here, at the tail of the active-frame body, so the events
+            // land in `event_buffer` alongside this frame's lifecycle
+            // events and drain together on the next `dispatchEvents`
+            // (called by the generated main loop right after `tick`) —
+            // i.e. they dispatch the SAME frame. Input state is current
+            // during `tick` (scripts already read it here). Each scan
+            // loop is comptime-gated, so an event-less game runs none of
+            // this.
+            self.scanInputEvents();
+
             self.frame_number += 1;
         }
 
