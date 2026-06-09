@@ -3,6 +3,7 @@ const core = @import("labelle-core");
 const Position = core.Position;
 const input_types = @import("../input_types.zig");
 const KeyboardKey = input_types.KeyboardKey;
+const MouseButton = input_types.MouseButton;
 
 /// Returns the input forwarding mixin for a given Game type.
 pub fn Mixin(comptime Game: type) type {
@@ -15,6 +16,12 @@ pub fn Mixin(comptime Game: type) type {
 
         pub fn isKeyPressed(_: *Game, key: KeyboardKey) bool {
             return Input.isKeyPressed(@intCast(@intFromEnum(key)));
+        }
+
+        /// True on the frame `key` transitions from down to up.
+        /// Returns false if the backend doesn't report key-release edges.
+        pub fn isKeyReleased(_: *Game, key: KeyboardKey) bool {
+            return Input.isKeyReleased(@intCast(@intFromEnum(key)));
         }
 
         pub fn getMouseX(_: *Game) f32 {
@@ -31,6 +38,24 @@ pub fn Mixin(comptime Game: type) type {
 
         pub fn getMouseWheelMove(_: *Game) f32 {
             return Input.getMouseWheelMove();
+        }
+
+        /// True while `button` is held down this frame.
+        /// Returns false if the backend doesn't report mouse-button state.
+        pub fn isMouseButtonDown(_: *Game, button: MouseButton) bool {
+            return Input.isMouseButtonDown(@intCast(@intFromEnum(button)));
+        }
+
+        /// True on the frame `button` transitions from up to down.
+        /// Returns false if the backend doesn't report mouse-button edges.
+        pub fn isMouseButtonPressed(_: *Game, button: MouseButton) bool {
+            return Input.isMouseButtonPressed(@intCast(@intFromEnum(button)));
+        }
+
+        /// True on the frame `button` transitions from down to up.
+        /// Returns false if the backend doesn't report mouse-button edges.
+        pub fn isMouseButtonReleased(_: *Game, button: MouseButton) bool {
+            return Input.isMouseButtonReleased(@intCast(@intFromEnum(button)));
         }
 
         // ── Touch ────────────────────────────────────────────────
