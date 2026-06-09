@@ -96,6 +96,10 @@ pub fn build(b: *std.Build) void {
         // the buffered event path so flows can listen to lifecycle
         // hooks as Event-node variants.
         "test/engine_events_test.zig",
+        // labelle-gui#208 — engine-hosted input events scanned in
+        // `Game.tick` through the unified `InputInterface`, dual-emitted
+        // on the buffered event path so flows can listen via `OnEvent`.
+        "test/input_events_test.zig",
         "test/spawn_from_prefab_test.zig",
         "test/jsonc/bridge_prefab_tags_test.zig",
         "test/save_load_two_phase_test.zig",

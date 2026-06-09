@@ -133,6 +133,13 @@ test "engine.Events declares the expected variant set" {
     _ = engine.Events.scene_assets_release;
     _ = engine.Events.state_changed;
     _ = engine.Events.pause_changed;
+    // Input events (labelle-gui#208).
+    _ = engine.Events.key_pressed;
+    _ = engine.Events.key_released;
+    _ = engine.Events.mouse_button_pressed;
+    _ = engine.Events.mouse_button_released;
+    _ = engine.Events.gamepad_connected;
+    _ = engine.Events.gamepad_disconnected;
 }
 
 // ── Buffered-emit tests ────────────────────────────────────────────────
