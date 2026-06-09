@@ -1308,10 +1308,14 @@ pub fn GameConfig(
         // ── Input (mixin) ────────────────────────────────────────
         pub const isKeyDown = InputMixin.isKeyDown;
         pub const isKeyPressed = InputMixin.isKeyPressed;
+        pub const isKeyReleased = InputMixin.isKeyReleased;
         pub const getMouseX = InputMixin.getMouseX;
         pub const getMouseY = InputMixin.getMouseY;
         pub const getMouse = InputMixin.getMouse;
         pub const getMouseWheelMove = InputMixin.getMouseWheelMove;
+        pub const isMouseButtonDown = InputMixin.isMouseButtonDown;
+        pub const isMouseButtonPressed = InputMixin.isMouseButtonPressed;
+        pub const isMouseButtonReleased = InputMixin.isMouseButtonReleased;
         pub const getTouchCount = InputMixin.getTouchCount;
         pub const getTouchX = InputMixin.getTouchX;
         pub const getTouchY = InputMixin.getTouchY;

@@ -100,6 +100,9 @@ pub fn build(b: *std.Build) void {
         // `Game.tick` through the unified `InputInterface`, dual-emitted
         // on the buffered event path so flows can listen via `OnEvent`.
         "test/input_events_test.zig",
+        // Accessor methods on the game handle wrapping the unified
+        // `InputInterface` for key-release / mouse-button polling (#208).
+        "test/input_mixin_test.zig",
         "test/spawn_from_prefab_test.zig",
         "test/jsonc/bridge_prefab_tags_test.zig",
         "test/save_load_two_phase_test.zig",

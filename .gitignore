@@ -12,3 +12,6 @@ usage/*/.labelle/
 
 # Screenshots from CI tests
 screenshot_*.png
+
+# Zig fetched package cache
+zig-pkg/
