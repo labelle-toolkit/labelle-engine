@@ -23,12 +23,12 @@ const gizmo_draws_mod = @import("game/gizmo_draws.zig");
 const input_types = @import("input_types.zig");
 const builtin = @import("builtin");
 
-/// Number of gamepad slots the engine diffs for connect/disconnect
-/// events each frame. Matches raylib's typical `MAX_GAMEPADS` cap (4);
-/// the unified `InputInterface.isGamepadAvailable` is polled for slots
-/// `0..max_tracked_gamepads`. The per-slot previous-availability state
-/// lives in `Game.prev_gamepad_connected`.
-const max_tracked_gamepads = 4;
+/// Fixed scratch capacity for draining gamepad hotplug events per tick
+/// (core#18). The drain source writes at most this many `GamepadEvent`s
+/// into a stack buffer; any surplus stays queued and is picked up on the
+/// next tick. 16 comfortably covers a frame's worth of connect/disconnect
+/// churn without a heap allocation.
+const gamepad_drain_capacity = 16;
 
 // Mixin modules — domain-specific method groups
 const visuals_mixin = @import("game/visuals.zig");
@@ -116,6 +116,26 @@ pub fn GameConfig(
         pub const PrefabInstanceComp = PrefabInstance;
         pub const PrefabChildComp = PrefabChildT;
         pub const Input = @import("input.zig").InputInterface(InputImpl);
+
+        /// True when the active input backend itself declares
+        /// `pollGamepadEvents` (core#18). We probe `InputImpl` — the raw
+        /// backend — NOT `Self.Input`, whose wrapper method always exists
+        /// (it just falls back to returning 0). This single comptime flag
+        /// picks the gamepad hotplug source and guarantees we never run
+        /// BOTH the backend and the per-OS `gamepad_source` (no
+        /// double-source / duplicate events):
+        ///   - backend declares it  → drain `Self.Input.pollGamepadEvents`
+        ///   - backend does NOT     → drain `core.gamepad_source.pollEvents`
+        ///                            (and run its `init`/`deinit`)
+        const backend_polls_gamepads = @hasDecl(InputImpl, "pollGamepadEvents");
+
+        /// True only when we actually need the per-OS `gamepad_source`:
+        /// the backend doesn't poll AND a flow listens for gamepad events.
+        /// Gates the source's `init`/`deinit` lifecycle calls so an
+        /// event-less game (or one on a backend that polls natively) never
+        /// touches the OS source — keeping the feature zero-cost.
+        const uses_os_gamepad_source = !backend_polls_gamepads and gamepad_events_wanted;
+
         pub const Audio = @import("audio.zig").AudioInterface(AudioImpl);
         pub const Gui = @import("gui.zig").GuiInterface(GuiImpl);
         pub const GizmoDraw = gizmo_draws_mod.GizmoDraw;
@@ -332,16 +352,6 @@ pub fn GameConfig(
         /// just stores + dispatches the bool.
         paused: bool = false,
 
-        /// Per-slot gamepad availability as observed on the PREVIOUS
-        /// `tick`. There is no "connected-this-frame" edge query in the
-        /// input backends, so `tick`'s gamepad scan diffs the current
-        /// `Input.isGamepadAvailable(id)` against this to synthesize
-        /// `engine.gamepad_connected` / `engine.gamepad_disconnected`
-        /// edges. Tiny ([max_tracked_gamepads]bool), so it stays
-        /// unconditionally even when no flow listens — only the scan
-        /// loop is comptime-gated. labelle-gui#208.
-        prev_gamepad_connected: [max_tracked_gamepads]bool = .{false} ** max_tracked_gamepads,
-
         /// Monotonic gameplay clock in seconds, accumulated from the
         /// *time-scaled* dt each `tick()` — so it freezes while paused
         /// (`time_scale == 0`) and slows under slow-mo. Read via
@@ -424,6 +434,11 @@ pub fn GameConfig(
         pub fn init(allocator: std.mem.Allocator) Self {
             const world = allocator.create(World) catch @panic("failed to allocate default world");
             world.* = World.init(allocator);
+            // One-time setup for the per-OS gamepad hotplug source on the
+            // fallback path (core#18). No-op when a backend polls natively
+            // or no flow listens (`uses_os_gamepad_source` folds it away),
+            // and the source's own `init` is `@hasDecl`-guarded per platform.
+            if (comptime uses_os_gamepad_source) core.gamepad_source.init();
             return .{
                 .allocator = allocator,
                 .active_world = world,
@@ -461,6 +476,10 @@ pub fn GameConfig(
             // for a graceful shutdown; the socket close + arena tear-down
             // happens here regardless.
             if (self.preview) |*p| p.deinit();
+            // Tear down the per-OS gamepad source iff we initialized it
+            // (core#18). Symmetric with the `init` call above and gated by
+            // the same comptime flag.
+            if (comptime uses_os_gamepad_source) core.gamepad_source.deinit();
             // Drop any timers still in flight (#25 Stage 2). A game can
             // exit mid-Delay; this frees each entry's owned `ctx` and the
             // pending list without firing — no leaks under testing.allocator.
@@ -1804,20 +1823,45 @@ pub fn GameConfig(
                 }
             }
 
-            // ── Gamepad connect / disconnect (engine-side edge diff) ──
+            // ── Gamepad connect / disconnect (drained queue, core#18) ──
+            //
+            // Drain hotplug events from a single source — picked at
+            // comptime by `backend_polls_gamepads` so the backend and the
+            // per-OS `gamepad_source` never both run — and emit one engine
+            // event per drained `GamepadEvent`. No fixed 4-slot cap and no
+            // engine-side prev-state diff: edge detection now belongs to
+            // the source. The whole block folds away when no flow listens
+            // (the `comptime gamepad_events_wanted` gate), so it stays
+            // zero-cost — and on the fallback path that also means
+            // `gamepad_source.pollEvents` is never called.
             if (comptime gamepad_events_wanted) {
                 const conn_wanted = comptime engineEventWanted("engine__gamepad_connected");
                 const disc_wanted = comptime engineEventWanted("engine__gamepad_disconnected");
-                var gi: u32 = 0;
-                while (gi < max_tracked_gamepads) : (gi += 1) {
-                    const now = Self.Input.isGamepadAvailable(gi);
-                    const was = self.prev_gamepad_connected[gi];
-                    if (now and !was) {
-                        if (conn_wanted) self.emitEngineEvent("engine__gamepad_connected", .{ .id = gi });
-                    } else if (!now and was) {
-                        if (disc_wanted) self.emitEngineEvent("engine__gamepad_disconnected", .{ .id = gi });
+
+                var buf: [gamepad_drain_capacity]core.gamepad.GamepadEvent = undefined;
+                const n = if (comptime backend_polls_gamepads)
+                    Self.Input.pollGamepadEvents(&buf)
+                else
+                    core.gamepad_source.pollEvents(&buf);
+
+                for (buf[0..n]) |ev| {
+                    switch (ev.kind) {
+                        .connected => if (conn_wanted) self.emitEngineEvent(
+                            "engine__gamepad_connected",
+                            .{
+                                .id = ev.slot,
+                                .name = ev.name,
+                                .name_len = ev.name_len,
+                                .guid = ev.guid,
+                                .source_class = ev.source_class,
+                                .type_hint = ev.type_hint,
+                            },
+                        ),
+                        .disconnected => if (disc_wanted) self.emitEngineEvent(
+                            "engine__gamepad_disconnected",
+                            .{ .id = ev.slot },
+                        ),
                     }
-                    self.prev_gamepad_connected[gi] = now;
                 }
             }
         }

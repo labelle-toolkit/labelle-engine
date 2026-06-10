@@ -37,7 +37,14 @@ const TestInput = struct {
     var released_button: ?u32 = null;
     var mouse_x: f32 = 0;
     var mouse_y: f32 = 0;
-    var gamepad_available: [4]bool = .{ false, false, false, false };
+
+    // Gamepad hotplug events the backend will hand to the engine on the
+    // NEXT `pollGamepadEvents` drain (core#18). The engine no longer diffs
+    // availability per slot; it drains whatever the backend queues. Each
+    // drain consumes (clears) the pending events, mirroring a real backend
+    // that reports an edge once.
+    var pending_events: [16]core.GamepadEvent = undefined;
+    var pending_len: usize = 0;
 
     fn reset() void {
         pressed_key = null;
@@ -46,7 +53,16 @@ const TestInput = struct {
         released_button = null;
         mouse_x = 0;
         mouse_y = 0;
-        gamepad_available = .{ false, false, false, false };
+        pending_len = 0;
+    }
+
+    /// Queue an event to be drained on the next tick's `pollGamepadEvents`.
+    fn queue(ev: core.GamepadEvent) void {
+        // Guard against a test queueing more than the fixed buffer holds;
+        // an unchecked write would silently corrupt memory past the array.
+        std.debug.assert(pending_len < pending_events.len);
+        pending_events[pending_len] = ev;
+        pending_len += 1;
     }
 
     // Required by InputInterface.
@@ -73,9 +89,23 @@ const TestInput = struct {
     pub fn isMouseButtonReleased(button: u32) bool {
         return released_button != null and released_button.? == button;
     }
-    pub fn isGamepadAvailable(gamepad: u32) bool {
-        if (gamepad >= gamepad_available.len) return false;
-        return gamepad_available[gamepad];
+
+    /// Backend gamepad-event drain (core#18). Declaring this makes the
+    /// engine select the BACKEND source (not the per-OS `gamepad_source`).
+    /// Copies up to `out.len` queued events and clears the queue.
+    pub fn pollGamepadEvents(out: []core.GamepadEvent) usize {
+        const n = @min(out.len, pending_len);
+        for (0..n) |i| out[i] = pending_events[i];
+        // Drain like a real FIFO backend: if the caller's buffer was smaller
+        // than the queue, keep the undrained tail for the next poll instead
+        // of dropping it (which would make multi-drain tests misbehave).
+        if (n < pending_len) {
+            std.mem.copyForwards(core.GamepadEvent, pending_events[0..(pending_len - n)], pending_events[n..pending_len]);
+            pending_len -= n;
+        } else {
+            pending_len = 0;
+        }
+        return n;
     }
 };
 
@@ -105,6 +135,16 @@ const InputRecorder = struct {
     last_y: f32 = 0,
     last_gamepad_connected: u32 = 0,
     last_gamepad_disconnected: u32 = 0,
+    // Enriched connect-payload capture (core#18).
+    last_gamepad_name_buf: [core.gamepad.NAME_CAPACITY]u8 = undefined,
+    last_gamepad_name_len: usize = 0,
+    last_gamepad_guid: ?[16]u8 = null,
+    last_gamepad_source_class: core.GamepadSourceClass = .unknown,
+    last_gamepad_type_hint: core.GamepadTypeHint = .unknown,
+
+    fn lastConnectedName(self: *const InputRecorder) []const u8 {
+        return self.last_gamepad_name_buf[0..self.last_gamepad_name_len];
+    }
 
     pub fn engine__key_pressed(self: *InputRecorder, info: anytype) void {
         self.key_pressed_count += 1;
@@ -129,6 +169,15 @@ const InputRecorder = struct {
     pub fn engine__gamepad_connected(self: *InputRecorder, info: anytype) void {
         self.gamepad_connected_count += 1;
         self.last_gamepad_connected = info.id;
+        // Copy the enriched fields out of the payload. `info.name` is an
+        // inline buffer (not a borrowed slice) so this stays valid past
+        // the buffered-dispatch window.
+        const name = info.nameSlice();
+        @memcpy(self.last_gamepad_name_buf[0..name.len], name);
+        self.last_gamepad_name_len = name.len;
+        self.last_gamepad_guid = info.guid;
+        self.last_gamepad_source_class = info.source_class;
+        self.last_gamepad_type_hint = info.type_hint;
     }
     pub fn engine__gamepad_disconnected(self: *InputRecorder, info: anytype) void {
         self.gamepad_disconnected_count += 1;
@@ -263,16 +312,16 @@ test "mouse button up-edge emits mouse_button_released with x/y" {
 
 // ── Gamepad ────────────────────────────────────────────────────────────
 
-test "gamepad false->true emits gamepad_connected once, not while held" {
+test "a drained connect event emits gamepad_connected once (no repeat)" {
     TestInput.reset();
     var recorder = InputRecorder{};
     var game = newGame(&recorder);
     defer game.deinit();
 
-    // First tick with slot 0 available: connect edge.
-    TestInput.gamepad_available[0] = true;
+    // Queue one connect for slot 0; the drain consumes it on this tick.
+    TestInput.queue(core.GamepadEvent.connected(0, "Test Pad"));
     game.tick(0.016);
-    // Still available next tick: NO repeat.
+    // Nothing queued next tick: the source reports no edge, so NO repeat.
     game.tick(0.016);
     game.dispatchEvents();
 
@@ -281,21 +330,65 @@ test "gamepad false->true emits gamepad_connected once, not while held" {
     try testing.expectEqual(@as(usize, 0), recorder.gamepad_disconnected_count);
 }
 
-test "gamepad true->false emits gamepad_disconnected" {
+test "a drained disconnect event emits gamepad_disconnected with its slot" {
     TestInput.reset();
     var recorder = InputRecorder{};
     var game = newGame(&recorder);
     defer game.deinit();
 
-    TestInput.gamepad_available[1] = true;
-    game.tick(0.016); // connect edge for slot 1
-    TestInput.gamepad_available[1] = false;
-    game.tick(0.016); // disconnect edge for slot 1
+    TestInput.queue(core.GamepadEvent.connected(1, "Pad One"));
+    game.tick(0.016); // connect for slot 1
+    TestInput.queue(core.GamepadEvent.disconnected(1));
+    game.tick(0.016); // disconnect for slot 1
     game.dispatchEvents();
 
     try testing.expectEqual(@as(usize, 1), recorder.gamepad_connected_count);
     try testing.expectEqual(@as(usize, 1), recorder.gamepad_disconnected_count);
     try testing.expectEqual(@as(u32, 1), recorder.last_gamepad_disconnected);
+}
+
+test "multiple events in one drain each emit, per-slot, in order" {
+    TestInput.reset();
+    var recorder = InputRecorder{};
+    var game = newGame(&recorder);
+    defer game.deinit();
+
+    // Beyond the old 4-slot cap to prove the fixed-slot limit is gone.
+    TestInput.queue(core.GamepadEvent.connected(0, "P0"));
+    TestInput.queue(core.GamepadEvent.connected(7, "P7"));
+    TestInput.queue(core.GamepadEvent.disconnected(0));
+    game.tick(0.016);
+    game.dispatchEvents();
+
+    try testing.expectEqual(@as(usize, 2), recorder.gamepad_connected_count);
+    try testing.expectEqual(@as(usize, 1), recorder.gamepad_disconnected_count);
+    // Last connect drained was slot 7; last disconnect was slot 0.
+    try testing.expectEqual(@as(u32, 7), recorder.last_gamepad_connected);
+    try testing.expectEqual(@as(u32, 0), recorder.last_gamepad_disconnected);
+}
+
+test "enriched connect payload propagates name/guid/source_class/type_hint" {
+    TestInput.reset();
+    var recorder = InputRecorder{};
+    var game = newGame(&recorder);
+    defer game.deinit();
+
+    var ev = core.GamepadEvent.connected(3, "Xbox Wireless Controller");
+    ev.guid = .{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16 };
+    ev.source_class = .gamepad;
+    ev.type_hint = .xbox;
+    TestInput.queue(ev);
+
+    game.tick(0.016);
+    game.dispatchEvents();
+
+    try testing.expectEqual(@as(usize, 1), recorder.gamepad_connected_count);
+    try testing.expectEqual(@as(u32, 3), recorder.last_gamepad_connected);
+    try testing.expectEqualStrings("Xbox Wireless Controller", recorder.lastConnectedName());
+    try testing.expect(recorder.last_gamepad_guid != null);
+    try testing.expectEqualSlices(u8, &ev.guid.?, &recorder.last_gamepad_guid.?);
+    try testing.expectEqual(core.GamepadSourceClass.gamepad, recorder.last_gamepad_source_class);
+    try testing.expectEqual(core.GamepadTypeHint.xbox, recorder.last_gamepad_type_hint);
 }
 
 // ── Zero-cost / comptime-gate safety ───────────────────────────────────
@@ -312,4 +405,44 @@ test "GameEvents = void emits no input events and compiles" {
     game.tick(0.016);
     game.tick(0.016);
     // No assertion: passing == compiles + runs with the scans gated out.
+}
+
+// ── Fallback (per-OS `gamepad_source`) path ────────────────────────────
+//
+// A game on a backend that does NOT declare `pollGamepadEvents`
+// (`StubInput`) but whose `GameEvents` carries the gamepad variants must
+// take the comptime fallback branch: the engine drains
+// `core.gamepad_source.pollEvents` and runs the source's `init`/`deinit`.
+// This forces that branch to type-check and run. On hosts whose per-OS
+// source is a stub (e.g. macOS → `unsupported.zig`), `pollEvents` returns
+// 0, so no events fire — the point is that the fallback path compiles and
+// the lifecycle is exercised without a backend `pollGamepadEvents`.
+const FallbackGame = game_mod.GameConfig(
+    core.StubRender(core.MockEcsBackend(u32).Entity),
+    core.MockEcsBackend(u32),
+    core.StubInput, // no pollGamepadEvents → engine uses gamepad_source
+    engine.StubAudio,
+    engine.StubGui,
+    *InputRecorder,
+    core.StubLogSink,
+    EmptyComponents,
+    &.{},
+    InputGameEvents,
+);
+
+test "no-poll backend routes to gamepad_source fallback (compiles + zero events on stub host)" {
+    var recorder = InputRecorder{};
+    var game = FallbackGame.init(testing.allocator);
+    game.setHooks(&recorder);
+    game.dispatchEvents();
+    recorder = .{};
+    defer game.deinit();
+
+    game.tick(0.016);
+    game.dispatchEvents();
+
+    // Stub OS source has nothing to drain — but the fallback branch and
+    // the source's init/deinit lifecycle were exercised.
+    try testing.expectEqual(@as(usize, 0), recorder.gamepad_connected_count);
+    try testing.expectEqual(@as(usize, 0), recorder.gamepad_disconnected_count);
 }
