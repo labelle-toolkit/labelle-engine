@@ -325,7 +325,11 @@ pub const Events = struct {
         /// Borrow the device name as a slice (valid for the lifetime of
         /// the payload value).
         pub fn nameSlice(self: *const gamepad_connected) []const u8 {
-            return self.name[0..self.name_len];
+            // Defensively cap to the buffer length: `name_len` is a backend-
+            // reported value, and a misbehaving backend reporting a length
+            // greater than NAME_CAPACITY would otherwise slice out of bounds.
+            const len = @min(self.name_len, core.gamepad.NAME_CAPACITY);
+            return self.name[0..len];
         }
     };
 

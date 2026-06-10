@@ -5,7 +5,10 @@
     .minimum_zig_version = "0.15.2",
     .dependencies = .{
         .labelle_core = .{
-            .path = "../../labelle-core",
+            // Pinned to the core#19 git ref (commit 8fcf676); see the matching
+            // note in ../build.zig.zon. Bump to a release tag once core#19 merges.
+            .url = "https://github.com/labelle-toolkit/labelle-core/archive/8fcf67641a1d6e021bc305ee62092944456f8f69.tar.gz",
+            .hash = "labelle_core-1.14.1-OauRcH-BAgDVjH3gOO534hhVb1n8Ey9uMjK5dRFaMazj",
         },
     },
     .paths = .{

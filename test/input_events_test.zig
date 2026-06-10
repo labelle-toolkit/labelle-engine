@@ -58,6 +58,9 @@ const TestInput = struct {
 
     /// Queue an event to be drained on the next tick's `pollGamepadEvents`.
     fn queue(ev: core.GamepadEvent) void {
+        // Guard against a test queueing more than the fixed buffer holds;
+        // an unchecked write would silently corrupt memory past the array.
+        std.debug.assert(pending_len < pending_events.len);
         pending_events[pending_len] = ev;
         pending_len += 1;
     }
@@ -93,7 +96,15 @@ const TestInput = struct {
     pub fn pollGamepadEvents(out: []core.GamepadEvent) usize {
         const n = @min(out.len, pending_len);
         for (0..n) |i| out[i] = pending_events[i];
-        pending_len = 0;
+        // Drain like a real FIFO backend: if the caller's buffer was smaller
+        // than the queue, keep the undrained tail for the next poll instead
+        // of dropping it (which would make multi-drain tests misbehave).
+        if (n < pending_len) {
+            std.mem.copyForwards(core.GamepadEvent, pending_events[0..(pending_len - n)], pending_events[n..pending_len]);
+            pending_len -= n;
+        } else {
+            pending_len = 0;
+        }
         return n;
     }
 };
