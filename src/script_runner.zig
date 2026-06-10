@@ -223,6 +223,7 @@ pub fn ScriptRunner(
             for (&self.profile, 0..) |*e, i| {
                 rows[i] = .{ .name = e.name, .worst_ns = e.tick.worst_ns, .avg_ns = e.tick.avgNs() };
                 e.tick.resetWindow();
+                e.draw_gui.resetWindow();
             }
             profiler.report("script", &rows);
         }

@@ -22,22 +22,55 @@ const std = @import("std");
 const builtin = @import("builtin");
 
 const is_wasm = builtin.cpu.arch == .wasm32 or builtin.os.tag == .emscripten;
+const is_windows = builtin.os.tag == .windows;
 
 const Timespec = extern struct { sec: i64, nsec: i64 };
 extern "c" fn clock_gettime(clk: c_int, tp: *Timespec) c_int;
-extern "c" fn getenv(name: [*:0]const u8) ?[*:0]const u8;
 
 /// Monotonic time in nanoseconds. Desktop only — returns 0 on wasm
 /// (profiling is not wired for the browser build).
 pub fn nowNs() u64 {
-    if (is_wasm) return 0;
-    const clk: c_int = switch (builtin.os.tag) {
-        .macos, .ios, .watchos, .tvos => 6, // _CLOCK_MONOTONIC
-        else => 1, // CLOCK_MONOTONIC (linux et al.)
-    };
-    var ts: Timespec = .{ .sec = 0, .nsec = 0 };
-    _ = clock_gettime(clk, &ts);
-    return @as(u64, @intCast(ts.sec)) * std.time.ns_per_s + @as(u64, @intCast(ts.nsec));
+    if (comptime is_wasm) return 0;
+    // Windows has no `clock_gettime` to link against (MSVC/UCRT don't
+    // export it), so use the QueryPerformanceCounter path via ntdll —
+    // the same primitive `std.Io` uses internally.
+    if (comptime is_windows) {
+        const w = std.os.windows;
+        var qpf: w.LARGE_INTEGER = undefined;
+        var qpc: w.LARGE_INTEGER = undefined;
+        _ = w.ntdll.RtlQueryPerformanceFrequency(&qpf);
+        _ = w.ntdll.RtlQueryPerformanceCounter(&qpc);
+        const freq: u64 = @bitCast(qpf);
+        const count: u64 = @bitCast(qpc);
+        if (freq == 0) return 0;
+        // Split into whole-seconds + remainder to avoid overflow when
+        // multiplying the raw counter by ns_per_s.
+        const secs = count / freq;
+        const rem = count % freq;
+        return secs * std.time.ns_per_s + (rem * std.time.ns_per_s) / freq;
+    }
+    // POSIX with libc: use the libc `clock_gettime`. The `extern "c"`
+    // symbol is only referenced on this comptime branch, so non-libc
+    // targets never force an unresolved libc dependency.
+    if (comptime builtin.link_libc) {
+        const clk: c_int = switch (builtin.os.tag) {
+            .macos, .ios, .watchos, .tvos => 6, // _CLOCK_MONOTONIC
+            else => 1, // CLOCK_MONOTONIC (linux et al.)
+        };
+        var ts: Timespec = .{ .sec = 0, .nsec = 0 };
+        _ = clock_gettime(clk, &ts);
+        return @as(u64, @intCast(ts.sec)) * std.time.ns_per_s + @as(u64, @intCast(ts.nsec));
+    }
+    // No libc: on Linux the monotonic clock is reachable via the raw
+    // syscall (vDSO-accelerated in std). Other no-libc POSIX targets
+    // have no portable clock here, so profiling stays off (0 disables
+    // recording downstream).
+    if (comptime builtin.os.tag == .linux) {
+        var ts: std.os.linux.timespec = undefined;
+        _ = std.os.linux.clock_gettime(.MONOTONIC, &ts);
+        return @as(u64, @intCast(ts.sec)) * std.time.ns_per_s + @as(u64, @intCast(ts.nsec));
+    }
+    return 0;
 }
 
 /// Frames between log dumps while recording.
@@ -45,14 +78,24 @@ pub const dump_interval_frames: u64 = 120;
 /// Entries with a worst frame below this are omitted from the log dump.
 const report_threshold_ns: u64 = 100_000; // 0.1 ms
 
+extern "c" fn getenv(name: [*:0]const u8) ?[*:0]const u8;
+
 var _recording: ?bool = null;
 
 /// True when `LABELLE_PROFILE` is set and non-empty. The env read is
 /// cached so this is a cheap branch in the per-frame hot path.
+///
+/// The env lookup goes through libc `getenv` when libc is linked (the
+/// case for every shipped desktop build — raylib pulls in libc). Without
+/// libc there is no library-accessible environ block in Zig 0.16
+/// (`std.os.environ` was removed and the block is threaded through
+/// `main` only), so the profiler stays off rather than forcing an
+/// unresolved `getenv` symbol at link time on no-libc builds.
 pub fn recording() bool {
     if (_recording) |v| return v;
     const v = blk: {
-        if (is_wasm) break :blk false;
+        if (comptime is_wasm) break :blk false;
+        if (comptime !builtin.link_libc) break :blk false;
         if (getenv("LABELLE_PROFILE")) |raw| break :blk std.mem.span(raw).len > 0;
         break :blk false;
     };
