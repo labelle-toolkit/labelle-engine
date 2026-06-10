@@ -1356,6 +1356,10 @@ pub fn GameConfig(
         pub const isMouseButtonDown = InputMixin.isMouseButtonDown;
         pub const isMouseButtonPressed = InputMixin.isMouseButtonPressed;
         pub const isMouseButtonReleased = InputMixin.isMouseButtonReleased;
+        pub const isGamepadAvailable = InputMixin.isGamepadAvailable;
+        pub const isGamepadButtonDown = InputMixin.isGamepadButtonDown;
+        pub const isGamepadButtonPressed = InputMixin.isGamepadButtonPressed;
+        pub const getGamepadAxisValue = InputMixin.getGamepadAxisValue;
         pub const getTouchCount = InputMixin.getTouchCount;
         pub const getTouchX = InputMixin.getTouchX;
         pub const getTouchY = InputMixin.getTouchY;
