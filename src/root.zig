@@ -298,14 +298,40 @@ pub const Events = struct {
         y: f32,
     };
 
-    /// Fired the frame a gamepad slot became available (transitioned
-    /// from unavailable to available). `id` is the gamepad slot index.
+    /// Fired the frame a gamepad connect event was drained from the
+    /// backend / per-OS source (core#18 contract). Payload mirrors the
+    /// fields of `core.GamepadEvent`:
+    ///
+    /// - `id` — the device slot/index. Kept (and listed first) for
+    ///   backward-compat: flows / hooks that only read `.id` still
+    ///   compile against the enriched payload.
+    /// - `name` / `name_len` — inline, NUL-terminated device name buffer.
+    ///   Stored INLINE (not as a `[]const u8`) on purpose: engine events
+    ///   are COPIED into `event_buffer` and dispatched on a later frame,
+    ///   so a borrowed slice into the transient drain buffer would dangle.
+    ///   Read it via `nameSlice()`.
+    /// - `guid` — stable per-device reconnection key when the backend
+    ///   exposes one (else `null`).
+    /// - `source_class` — real gamepad vs. TV/d-pad remote vs. unknown.
+    /// - `type_hint` — best-guess vendor family for glyph/prompt choice.
     pub const gamepad_connected = struct {
         id: u32,
+        name: [core.gamepad.NAME_CAPACITY:0]u8 = [_:0]u8{0} ** core.gamepad.NAME_CAPACITY,
+        name_len: u8 = 0,
+        guid: ?[16]u8 = null,
+        source_class: core.GamepadSourceClass = .unknown,
+        type_hint: core.GamepadTypeHint = .unknown,
+
+        /// Borrow the device name as a slice (valid for the lifetime of
+        /// the payload value).
+        pub fn nameSlice(self: *const gamepad_connected) []const u8 {
+            return self.name[0..self.name_len];
+        }
     };
 
-    /// Fired the frame a gamepad slot became unavailable (transitioned
-    /// from available to unavailable). `id` is the gamepad slot index.
+    /// Fired the frame a gamepad disconnect event was drained (core#18).
+    /// Only `id` (the device slot) is carried — a disconnect needs no name
+    /// or capability metadata. Kept identical to the legacy payload.
     pub const gamepad_disconnected = struct {
         id: u32,
     };
