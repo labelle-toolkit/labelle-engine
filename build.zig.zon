@@ -5,16 +5,7 @@
     .minimum_zig_version = "0.16.0",
     .dependencies = .{
         .labelle_core = .{
-            // Pinned to the core#19 git ref (branch feat/gamepad-event-contract,
-            // commit 8fcf676) because the gamepad-event contract — core.gamepad
-            // / core.GamepadEvent / GamepadSourceClass / GamepadTypeHint — that
-            // this PR's enriched payloads depend on is not yet on a release. CI
-            // clones labelle-core's `main` as a sibling, which lacks the contract,
-            // so a plain `../labelle-core` path pin fails to compile on CI.
-            // TODO: bump this to the next labelle-core release tag once core#19
-            // merges to main.
-            .url = "https://github.com/labelle-toolkit/labelle-core/archive/8fcf67641a1d6e021bc305ee62092944456f8f69.tar.gz",
-            .hash = "labelle_core-1.14.1-OauRcH-BAgDVjH3gOO534hhVb1n8Ey9uMjK5dRFaMazj",
+            .path = "../labelle-core",
         },
         .scene = .{
             .path = "scene",
