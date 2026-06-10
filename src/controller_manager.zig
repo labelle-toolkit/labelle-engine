@@ -539,9 +539,13 @@ pub fn ControllerManager(comptime max_controllers: usize, comptime max_players: 
         /// Reconstruct a `ControllerInfo` from a binding for pool re-entry.
         fn bindingInfo(self: *const Self, b: Binding) ControllerInfo {
             _ = self;
-            var info = b.bound_info;
-            info.controller_id = if (b.controller_id != NO_CONTROLLER) b.controller_id else b.bound_info.controller_id;
-            return info;
+            // Invariant: whenever `b.controller_id` is live (!= NO_CONTROLLER)
+            // it equals `b.bound_info.controller_id` — both are written
+            // together in `assign` and `restoreBinding`, and the only other
+            // writer (`onDisconnected`) clears `controller_id` to
+            // NO_CONTROLLER without touching `bound_info`. So `bound_info`
+            // already carries the right live id in every reachable state.
+            return b.bound_info;
         }
     };
 }
