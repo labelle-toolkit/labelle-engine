@@ -103,6 +103,10 @@ pub fn build(b: *std.Build) void {
         // Accessor methods on the game handle wrapping the unified
         // `InputInterface` for key-release / mouse-button polling (#208).
         "test/input_mixin_test.zig",
+        // #611 — ControllerManager player↔controller mapping: unassigned
+        // pool, assignment API, debounced-lost, guid/heuristic resume,
+        // opt-in policy helpers, and the auto-pause integration.
+        "test/controller_manager_test.zig",
         "test/spawn_from_prefab_test.zig",
         "test/jsonc/bridge_prefab_tags_test.zig",
         "test/save_load_two_phase_test.zig",

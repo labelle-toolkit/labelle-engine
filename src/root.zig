@@ -339,6 +339,64 @@ pub const Events = struct {
     pub const gamepad_disconnected = struct {
         id: u32,
     };
+
+    // ── ControllerManager player↔controller events (#611) ─────────────
+    //
+    // Higher-altitude than the raw `gamepad_*` events above. The engine's
+    // `ControllerManager` (src/controller_manager.zig) consumes the drained
+    // gamepad events and emits these — the game listens to *players*, not
+    // hardware slots. `controller_available`/`controller_removed` surface
+    // the unassigned pool (the cue to decide); the `player_*` trio fires
+    // only *after* the game assigns. All four are flow-listenable via
+    // `OnEvent { name: "engine.<event>" }`. See the issue for the
+    // mechanism-not-policy rationale.
+
+    /// Fired when a connected-but-unbound controller enters the unassigned
+    /// pool — the game's cue to decide whether/how it becomes a player.
+    /// Carries the same identity fields as `gamepad_connected` (read the
+    /// name via `nameSlice()`).
+    pub const controller_available = struct {
+        controller_id: u32,
+        name: [core.gamepad.NAME_CAPACITY:0]u8 = [_:0]u8{0} ** core.gamepad.NAME_CAPACITY,
+        name_len: u8 = 0,
+        guid: ?[16]u8 = null,
+        source_class: core.GamepadSourceClass = .unknown,
+        type_hint: core.GamepadTypeHint = .unknown,
+
+        pub fn nameSlice(self: *const controller_available) []const u8 {
+            return self.name[0..self.name_len];
+        }
+    };
+
+    /// Fired when an unassigned controller leaves the pool (unplugged while
+    /// it was never bound to a player).
+    pub const controller_removed = struct {
+        controller_id: u32,
+    };
+
+    /// Fired when the game assigns a controller to a player (via the
+    /// `ControllerManager` assignment API or an opt-in policy helper).
+    /// Emitted only *after* the game decides — never auto-imposed.
+    pub const player_joined = struct {
+        player: u32,
+        controller_id: u32,
+    };
+
+    /// Fired when a player's assigned controller has been absent longer
+    /// than the configurable debounce window — a real loss, not a blip. A
+    /// transient drop that reconnects inside the window NEVER fires this.
+    /// Gate `Controller.advance` / raise a "reconnect Player N" prompt here.
+    pub const player_controller_lost = struct {
+        player: u32,
+    };
+
+    /// Fired when a previously-lost (or debouncing) player gets their
+    /// controller back — a same-`guid` replug, or the raylib resume
+    /// heuristic. `controller_id` is the (possibly new) backing controller.
+    pub const player_controller_restored = struct {
+        player: u32,
+        controller_id: u32,
+    };
 };
 
 // ── Hook Types ──
@@ -478,6 +536,20 @@ pub const HotReloader = jsonc_mod.HotReloader;
 
 // ── Scheduler (flow Delay timers, #25 Stage 2) ──
 pub const Scheduler = @import("scheduler.zig").Scheduler;
+
+// ── ControllerManager (player↔controller mapping, #611) ──
+// Game-facing layer over the raw gamepad events: unassigned pool +
+// assignment API + player-level events, with engine-owned debounced-lost
+// and identity-based resume. Mechanism, not policy — the two common
+// policies ship as opt-in helpers. See src/controller_manager.zig.
+pub const controller_manager_mod = @import("controller_manager.zig");
+pub const ControllerManager = controller_manager_mod.ControllerManager;
+pub const DefaultControllerManager = controller_manager_mod.DefaultControllerManager;
+pub const ControllerManagerConfig = controller_manager_mod.Config;
+pub const ControllerInfo = controller_manager_mod.ControllerInfo;
+pub const ControllerManagerEvent = controller_manager_mod.ManagerEvent;
+pub const NO_PLAYER = controller_manager_mod.NO_PLAYER;
+pub const NO_CONTROLLER = controller_manager_mod.NO_CONTROLLER;
 
 // ── Core Re-exports ──
 pub const Position = core.Position;
