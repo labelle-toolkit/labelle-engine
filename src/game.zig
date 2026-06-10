@@ -17,6 +17,7 @@ const assets_mod = @import("assets/mod.zig");
 const game_log_mod = @import("game_log.zig");
 const preview_mode_mod = @import("preview_mode.zig");
 const scheduler_mod = @import("scheduler.zig");
+const controller_manager_mod = @import("controller_manager.zig");
 
 const hierarchy = @import("game/hierarchy.zig");
 const gizmo_draws_mod = @import("game/gizmo_draws.zig");
@@ -368,6 +369,26 @@ pub fn GameConfig(
         /// inherit pause + slow-mo for free. `undefined` until `init` wires
         /// the type-erased game pointer + clock/liveness trampolines.
         scheduler: SchedulerType = undefined,
+
+        /// Player↔controller mapping layer (#611). `void` (zero-size,
+        /// elided) unless the project's `GameEvents` carries a player-level
+        /// controller variant — then it's a `DefaultControllerManager` the
+        /// engine feeds drained gamepad events and drains player-level
+        /// events out of, each tick (see `scanInputEvents` / `tick`). The
+        /// game reaches the assignment API via `game.controllerManager()`.
+        controller_manager: ControllerManagerType = if (controller_events_wanted)
+            ControllerManagerType.init(.{})
+        else {},
+
+        /// Opt-in: when `true`, an active player losing its controller (a
+        /// real `player_controller_lost`, past the debounce window) drives
+        /// `setPaused(true)` so plugin-gated work (`Controller.advance`,
+        /// #465) halts and the game can raise a "reconnect Player N"
+        /// prompt. Cleared back to running when every player is whole again
+        /// (a `player_controller_restored` leaves nobody waiting). OFF by
+        /// default — the engine never forces a pause. Toggle with
+        /// `setAutoPauseOnControllerLost`.
+        auto_pause_on_controller_lost: bool = false,
 
         /// Connect-out preview channel to the labelle-gui editor
         /// (`--preview-mode <host:port>`). `null` in normal runs — the
@@ -1478,6 +1499,67 @@ pub fn GameConfig(
             return self.paused or self.time_scale == 0;
         }
 
+        // ── ControllerManager game-facing API (#611) ─────────────────
+        //
+        // Thin forwarders over the embedded `controller_manager` so game
+        // scripts and plugins reach the assignment/query API without poking
+        // the field directly. Available only when the project's
+        // `GameEvents` carries a player-level controller variant — calling
+        // any of these in a game that doesn't is a compile error (the
+        // manager field is `void`), which is the intended guard rail.
+
+        /// Mutable handle to the embedded `ControllerManager`. Use for the
+        /// full API (iteration, `availableControllers`, opt-in helpers like
+        /// `autoBindFreeSlots` / `joinOnButton`). Requires a controller
+        /// event in `GameEvents`.
+        pub fn controllerManager(self: *Self) *ControllerManagerType {
+            comptime if (!controller_events_wanted)
+                @compileError("controllerManager() requires a player-level controller event " ++
+                    "(engine.player_joined / controller_available / ...) in GameEvents");
+            return &self.controller_manager;
+        }
+
+        /// Assign an unassigned `controller` to `player`. Emits
+        /// `player_joined` on the next `dispatchEvents`. Errors if the
+        /// player id is out of range or the controller isn't in the pool.
+        pub fn assignController(self: *Self, controller: u32, player: u32) !void {
+            comptime if (!controller_events_wanted)
+                @compileError("assignController() requires a player-level controller event in GameEvents");
+            try self.controller_manager.assign(controller, player);
+            self.drainControllerManagerEvents();
+        }
+
+        /// Release a player's controller binding, returning the controller
+        /// (if still present) to the unassigned pool.
+        pub fn unassignPlayer(self: *Self, player: u32) void {
+            comptime if (!controller_events_wanted)
+                @compileError("unassignPlayer() requires a player-level controller event in GameEvents");
+            self.controller_manager.unassign(player);
+            self.drainControllerManagerEvents();
+        }
+
+        /// The player a controller is bound to, or `NO_PLAYER`.
+        pub fn playerForController(self: *Self, controller: u32) u32 {
+            comptime if (!controller_events_wanted)
+                @compileError("playerForController() requires a player-level controller event in GameEvents");
+            return self.controller_manager.playerFor(controller);
+        }
+
+        /// The controller currently backing a player, or `NO_CONTROLLER`.
+        pub fn controllerForPlayer(self: *Self, player: u32) u32 {
+            comptime if (!controller_events_wanted)
+                @compileError("controllerForPlayer() requires a player-level controller event in GameEvents");
+            return self.controller_manager.controllerFor(player);
+        }
+
+        /// Toggle the opt-in auto-pause policy (#465 precedent): when on, a
+        /// real `player_controller_lost` drives `setPaused(true)`, and the
+        /// game resumes once every player is whole again. OFF by default —
+        /// the engine never forces a pause.
+        pub fn setAutoPauseOnControllerLost(self: *Self, enabled: bool) void {
+            self.auto_pause_on_controller_lost = enabled;
+        }
+
         pub fn unloadCurrentScene(self: *Self) void {
             if (has_events) self.event_buffer.clearRetainingCapacity();
             if (self.current_scene_name) |name| {
@@ -1769,7 +1851,31 @@ pub fn GameConfig(
         const mouse_events_wanted = engineEventWanted("engine__mouse_button_pressed") or
             engineEventWanted("engine__mouse_button_released");
         const gamepad_events_wanted = engineEventWanted("engine__gamepad_connected") or
-            engineEventWanted("engine__gamepad_disconnected");
+            engineEventWanted("engine__gamepad_disconnected") or
+            // The ControllerManager consumes the SAME drained gamepad
+            // events, so any project that listens to a player-level event
+            // forces the drain on too — even if it never listens to the raw
+            // `gamepad_*` pair (#611).
+            controller_events_wanted;
+
+        /// True when the project's `GameEvents` carries any
+        /// `ControllerManager` player-level variant. Gates the manager's
+        /// state machine + output drain so an unused game pays nothing
+        /// (the whole `controller_manager` field + per-tick work folds
+        /// away). Mirrors the `gamepad_events_wanted` gate.
+        const controller_events_wanted = engineEventWanted("engine__controller_available") or
+            engineEventWanted("engine__controller_removed") or
+            engineEventWanted("engine__player_joined") or
+            engineEventWanted("engine__player_controller_lost") or
+            engineEventWanted("engine__player_controller_restored");
+
+        /// The concrete `ControllerManager` type for this game (toolkit
+        /// default capacities). `void` when no controller event is wanted —
+        /// the field then has zero size and all wiring folds away.
+        pub const ControllerManagerType = if (controller_events_wanted)
+            controller_manager_mod.DefaultControllerManager
+        else
+            void;
 
         /// Scan the unified `InputInterface` for input edges and emit
         /// the matching engine events into the buffer. Every query goes
@@ -1823,6 +1929,17 @@ pub fn GameConfig(
                 }
             }
 
+        }
+
+        /// Drain gamepad hotplug events (core#18) and the
+        /// `ControllerManager` (#611). Split OUT of `scanInputEvents`
+        /// because it MUST run every frame, INCLUDING while paused: when
+        /// the opt-in auto-pause gates the game on a lost controller, the
+        /// reconnect that lifts the pause arrives as a gamepad event — if we
+        /// only scanned in the active-frame body (past the pause gate) the
+        /// game would deadlock paused forever. Keyboard/mouse scanning stays
+        /// gameplay-only in `scanInputEvents`.
+        fn scanGamepadEvents(self: *Self) void {
             // ── Gamepad connect / disconnect (drained queue, core#18) ──
             //
             // Drain hotplug events from a single source — picked at
@@ -1862,8 +1979,86 @@ pub fn GameConfig(
                             .{ .id = ev.slot },
                         ),
                     }
+                    // The ControllerManager consumes the SAME drained
+                    // events (#611). Feed it here so a project listening to
+                    // a player-level event but NOT the raw `gamepad_*` pair
+                    // still drives the mapping layer.
+                    if (comptime controller_events_wanted) {
+                        switch (ev.kind) {
+                            .connected => self.controller_manager.onConnected(ev),
+                            .disconnected => self.controller_manager.onDisconnected(ev.slot),
+                        }
+                    }
                 }
             }
+
+            // Advance the manager's debounce clock and drain its
+            // player-level output into engine events (#611). The clock is
+            // the pause-aware gameplay clock, so a debounce window measured
+            // in seconds holds correctly behind a pause menu. Runs after the
+            // feed above so a connect+expire within one tick is consistent.
+            if (comptime controller_events_wanted) {
+                self.controller_manager.advance(self.elapsedSeconds());
+                self.drainControllerManagerEvents();
+            }
+        }
+
+        /// Pull the `ControllerManager`'s pending player-level events and
+        /// re-emit each as the matching engine event, applying the opt-in
+        /// auto-pause policy (#611). Folds away unless a controller event is
+        /// wanted.
+        fn drainControllerManagerEvents(self: *Self) void {
+            if (comptime !controller_events_wanted) return;
+            var evbuf: [ControllerManagerType.event_capacity]controller_manager_mod.ManagerEvent = undefined;
+            const m = self.controller_manager.drainEvents(&evbuf);
+            for (evbuf[0..m]) |mev| {
+                switch (mev) {
+                    .controller_available => |c| self.emitEngineEvent("engine__controller_available", .{
+                        .controller_id = c.controller_id,
+                        .name = c.name,
+                        .name_len = c.name_len,
+                        .guid = c.guid,
+                        .source_class = c.source_class,
+                        .type_hint = c.type_hint,
+                    }),
+                    .controller_removed => |c| self.emitEngineEvent("engine__controller_removed", .{
+                        .controller_id = c.controller_id,
+                    }),
+                    .player_joined => |p| self.emitEngineEvent("engine__player_joined", .{
+                        .player = p.player,
+                        .controller_id = p.controller_id,
+                    }),
+                    .player_controller_lost => |p| {
+                        self.emitEngineEvent("engine__player_controller_lost", .{ .player = p.player });
+                        // Opt-in auto-pause (#465 precedent): a real loss
+                        // gates the game until the controller is back.
+                        if (self.auto_pause_on_controller_lost) self.setPaused(true);
+                    },
+                    .player_controller_restored => |p| {
+                        self.emitEngineEvent("engine__player_controller_restored", .{
+                            .player = p.player,
+                            .controller_id = p.controller_id,
+                        });
+                        // Resume only once NO player is still waiting — with
+                        // multiple lost pads we stay paused until the last
+                        // one reconnects.
+                        if (self.auto_pause_on_controller_lost and !self.anyPlayerWaiting()) {
+                            self.setPaused(false);
+                        }
+                    },
+                }
+            }
+        }
+
+        /// `true` when any active player's controller is currently absent
+        /// (debouncing or lost). Drives the auto-pause resume gate.
+        fn anyPlayerWaiting(self: *const Self) bool {
+            if (comptime !controller_events_wanted) return false;
+            var p: u32 = 0;
+            while (p < ControllerManagerType.capacity_players) : (p += 1) {
+                if (self.controller_manager.isPlayerWaiting(p)) return true;
+            }
+            return false;
         }
 
         pub fn tick(self: *Self, dt: f32) void {
@@ -1908,6 +2103,13 @@ pub fn GameConfig(
             Input.updateGestures(dt);
             self.resolveAtlasSprites();
             self.renderer.sync(EcsImpl, self.ecs_backend);
+
+            // Gamepad hotplug + ControllerManager drain (core#18 / #611).
+            // Runs in the ALWAYS-RUN section, BEFORE the pause gate below,
+            // so a controller reconnect that should lift an opt-in
+            // auto-pause is still seen while the game is paused. Folds away
+            // entirely when no gamepad/controller event is wanted.
+            self.scanGamepadEvents();
 
             // Reconcile gizmos for runtime-created entities
             if (self.gizmo_reconcile_fn) |reconcile_fn| {
