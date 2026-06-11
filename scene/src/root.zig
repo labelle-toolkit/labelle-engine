@@ -14,6 +14,7 @@ pub const component = @import("component.zig");
 pub const script = @import("script.zig");
 pub const gizmo = @import("gizmo.zig");
 pub const system = @import("system.zig");
+pub const profiler = @import("profiler.zig");
 
 // ── Types ──
 pub const RefInfo = types.RefInfo;

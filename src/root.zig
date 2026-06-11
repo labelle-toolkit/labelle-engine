@@ -414,6 +414,12 @@ pub const ComponentPayload = hooks_types_mod.ComponentPayload;
 pub const MergeHooks = core.MergeHooks;
 pub const MergeHookPayloads = core.MergeHookPayloads;
 
+// ── Profiler ──
+/// Per-script / per-plugin frame profiler (lives in the scene module so
+/// both the ScriptRunner and the SystemRegistry can reach it). Enable at
+/// runtime with `LABELLE_PROFILE=1`; ranks tick costs to the log.
+pub const profiler = scene_mod.profiler;
+
 // ── Scene System ──
 pub const Scene = scene_mod.Scene;
 pub const PrefabRegistry = scene_mod.PrefabRegistry;
