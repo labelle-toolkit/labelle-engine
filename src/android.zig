@@ -18,9 +18,12 @@
 //! The game is a pure `NativeActivity` (`android:hasCode="false"`), so
 //! there is no Java code to call into directly — every framework call
 //! has to go through JNI from C/Zig. We obtain the `ANativeActivity*`
-//! from sokol_app's `sapp_android_get_native_activity()` (bound here as
-//! an `extern "c"` symbol), which exposes a `JavaVM*`, a main-thread
-//! `JNIEnv*`, and the activity `jobject`.
+//! from labelle-core's backend-agnostic Android seam
+//! (`core.android_backend`, labelle-core#310): the active backend
+//! registers an `AndroidBackendContext` whose `get_native_activity`
+//! returns the activity, which exposes a `JavaVM*`, a main-thread
+//! `JNIEnv*`, and the activity `jobject`. The engine therefore links no
+//! backend-specific (`sapp_*`/sokol) symbol of its own.
 //!
 //! We use **two paths**, picked at runtime by API level:
 //!
@@ -102,6 +105,12 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
+
+/// labelle-core, consumed for its backend-agnostic Android JNI seam
+/// (`core.android_backend`, labelle-core#310). We read the active
+/// backend's registered `AndroidBackendContext` to obtain the
+/// `ANativeActivity*` instead of linking a backend-specific symbol.
+const core = @import("labelle-core");
 
 /// True when compiling for an Android target (covers arm64/x86_64 via
 /// `.android` and arm/x86 via `.androideabi`). All the JNI machinery
@@ -338,14 +347,14 @@ fn logWarn(comptime msg: [:0]const u8) void {
     if (comptime is_android) _ = __android_log_write(ANDROID_LOG_WARN, "labelle", msg);
 }
 
-// ── sokol_app native-activity accessor ────────────────────────────
+// ── native-activity accessor ──────────────────────────────────────
 //
-// sokol_app's Android backend exposes the `ANativeActivity*` via this
-// C entry point (`SOKOL_API_IMPL`, i.e. an exported symbol). We bind
-// it as an `extern "c"` function so the engine never has to
-// `@import("sokol")` — the symbol resolves at link time against the
-// `sokol_clib` static library every sokol-Android build links anyway.
-extern "c" fn sapp_android_get_native_activity() ?*anyopaque;
+// The `ANativeActivity*` is obtained through labelle-core's
+// backend-agnostic seam (`core.android_backend`, labelle-core#310):
+// the active backend adapter registers an `AndroidBackendContext` at
+// startup, and we read its `get_native_activity` pointer. This keeps
+// the engine free of any backend-specific (`sapp_*`/sokol) symbol — if
+// no backend registered a context, immersive mode is a graceful no-op.
 
 // ── Module state ──────────────────────────────────────────────────
 //
@@ -664,9 +673,11 @@ fn clearException(env: *JNIEnv) bool {
 /// Enable Android immersive mode for the running game: hide the status
 /// bar and the navigation bar in immersive-sticky mode.
 ///
-/// Obtains the `ANativeActivity*` itself from sokol_app via
-/// `sapp_android_get_native_activity()`, so the caller (the assembler-
-/// generated `main.zig`) only needs a single argument-free call.
+/// Obtains the `ANativeActivity*` itself from labelle-core's
+/// backend-agnostic Android seam (`core.android_backend.get()`), so the
+/// caller (the assembler-generated `main.zig`) only needs a single
+/// argument-free call. If no backend has registered an
+/// `AndroidBackendContext`, this is a graceful no-op.
 ///
 /// **Call site:** the assembler emits this in the generated
 /// `main.zig`'s `sokol_main()`. sokol's `ANativeActivity_onCreate`
@@ -689,8 +700,15 @@ fn clearException(env: *JNIEnv) bool {
 pub fn enableImmersiveMode() void {
     if (comptime !is_android) return;
 
-    const na: *ANativeActivity = @ptrCast(@alignCast(sapp_android_get_native_activity() orelse {
-        logWarn("immersive: sapp_android_get_native_activity() returned null");
+    // Reach the running `ANativeActivity*` through core's backend seam.
+    // No context registered → no backend ships Android JNI glue → there
+    // is nothing to enable, so immersive mode is a graceful no-op.
+    const ctx = core.android_backend.get() orelse {
+        logWarn("immersive: no AndroidBackendContext registered");
+        return;
+    };
+    const na: *ANativeActivity = @ptrCast(@alignCast(ctx.get_native_activity() orelse {
+        logWarn("immersive: get_native_activity() returned null");
         return;
     }));
 
