@@ -326,6 +326,16 @@ pub fn GameConfig(
 
         // Game state
         running: bool = true,
+        /// Desired fullscreen state, owned by the engine. Scripts flip it
+        /// via `setFullscreen`/`toggleFullscreen`; the generated frame
+        /// loop drains `takeFullscreenRequest()` and applies the value to
+        /// the window backend. The engine never imports a window module —
+        /// same cooperative split as `running`/`isRunning`/`requestQuit`.
+        fullscreen: bool = false,
+        /// Set whenever `fullscreen` changes; cleared by the one-shot
+        /// `takeFullscreenRequest()` drain so the backend toggle fires
+        /// exactly once per change instead of every frame.
+        fullscreen_dirty: bool = false,
         frame_number: u64 = 0,
         /// Current game state (e.g. "menu", "playing", "paused").
         /// Set via setState() or queueStateChange(). Default is "running".
@@ -1806,6 +1816,47 @@ pub fn GameConfig(
 
         pub fn isRunning(self: *const Self) bool {
             return self.running;
+        }
+
+        // ── Fullscreen ──
+        //
+        // The engine owns the *desired* fullscreen flag; the actual
+        // platform window call (sokol `sapp.toggleFullscreen`, raylib
+        // `ToggleFullscreen`, …) lives in the generated `main.zig` frame
+        // loop, which polls `takeFullscreenRequest()` and forwards the
+        // value to `window.setFullscreen`. Keeping the call out of the
+        // library is what lets the engine stay backend-agnostic — the
+        // same reason `quit()` only flips `running` and lets the frame
+        // loop call `window.requestQuit()`.
+
+        /// Request a fullscreen / windowed switch. No-op if already in the
+        /// requested mode. Takes effect on the next frame, when the
+        /// generated main drains `takeFullscreenRequest()`.
+        pub fn setFullscreen(self: *Self, on: bool) void {
+            if (self.fullscreen == on) return;
+            self.fullscreen = on;
+            self.fullscreen_dirty = true;
+        }
+
+        /// Flip between fullscreen and windowed.
+        pub fn toggleFullscreen(self: *Self) void {
+            self.setFullscreen(!self.fullscreen);
+        }
+
+        /// The engine's desired fullscreen state. This is the value a
+        /// settings UI should bind a checkbox to — it reflects the latest
+        /// `setFullscreen`/`toggleFullscreen` call, not a backend query.
+        pub fn isFullscreen(self: *const Self) bool {
+            return self.fullscreen;
+        }
+
+        /// Frame-loop drain (generated main only): returns the new
+        /// fullscreen value exactly once after it changes, else `null`.
+        /// The caller forwards a non-null result to the window backend.
+        pub fn takeFullscreenRequest(self: *Self) ?bool {
+            if (!self.fullscreen_dirty) return null;
+            self.fullscreen_dirty = false;
+            return self.fullscreen;
         }
 
         // ── Time scale ──
