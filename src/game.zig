@@ -336,6 +336,18 @@ pub fn GameConfig(
         /// `takeFullscreenRequest()` drain so the backend toggle fires
         /// exactly once per change instead of every frame.
         fullscreen_dirty: bool = false,
+        /// Opt-in: when true the engine advances every `SpriteAnimation`
+        /// component itself each tick (on the time-scaled dt), so a game
+        /// no longer needs a `sprite_animation_tick` script of its own.
+        /// Off by default so existing projects that still drive animation
+        /// from a script don't double-advance. Set via
+        /// `setDriveSpriteAnimations`.
+        drive_sprite_animations: bool = false,
+        /// Freezes the engine-driven sprite-animation advance while set —
+        /// the hook a pause menu toggles so sprite cycling stops without
+        /// halting the rest of the script loop. Only meaningful alongside
+        /// `drive_sprite_animations`. Set via `setSpriteAnimationsPaused`.
+        sprite_animations_paused: bool = false,
         frame_number: u64 = 0,
         /// Current game state (e.g. "menu", "playing", "paused").
         /// Set via setState() or queueStateChange(). Default is "running".
@@ -1859,6 +1871,34 @@ pub fn GameConfig(
             return self.fullscreen;
         }
 
+        // ── Engine-driven sprite animation ──
+        //
+        // Opt-in: instead of the game shipping a `sprite_animation_tick`
+        // script that calls `spriteAnimationTick(game, dt)`, the engine
+        // can advance every `SpriteAnimation` itself in `tick()` on the
+        // time-scaled clock (see the always-run block). A game enables it
+        // once at startup and deletes its script; a pause menu freezes
+        // sprite cycling via `setSpriteAnimationsPaused` without having to
+        // gate a per-frame script.
+
+        /// Turn engine-driven sprite-animation advancement on/off. When on,
+        /// the game must NOT also run a `sprite_animation_tick` script, or
+        /// animations advance twice per frame.
+        pub fn setDriveSpriteAnimations(self: *Self, on: bool) void {
+            self.drive_sprite_animations = on;
+        }
+
+        /// Freeze (`true`) or resume (`false`) the engine-driven sprite
+        /// animation advance. No-op unless `drive_sprite_animations` is on.
+        pub fn setSpriteAnimationsPaused(self: *Self, paused: bool) void {
+            self.sprite_animations_paused = paused;
+        }
+
+        /// Whether engine-driven sprite animation is currently frozen.
+        pub fn spriteAnimationsPaused(self: *const Self) bool {
+            return self.sprite_animations_paused;
+        }
+
         // ── Time scale ──
 
         pub fn setTimeScale(self: *Self, scale: f32) void {
@@ -2156,6 +2196,22 @@ pub fn GameConfig(
             self.log.update(dt);
             Audio.update();
             Input.updateGestures(dt);
+            // Engine-driven sprite animation (opt-in via
+            // `drive_sprite_animations`). Advance every `SpriteAnimation`
+            // on the time-scaled dt BEFORE `resolveAtlasSprites` so the
+            // new frame's `sprite_name` is resolved to a `source_rect` the
+            // same frame. Frozen when `sprite_animations_paused` — that's
+            // how a pause menu stops sprite cycling without gating a
+            // per-frame game script. Lives in the always-run block (not the
+            // gameplay-skip section) so it advances on `scaled_dt`, which a
+            // `time_scale==0` hard pause already zeroes.
+            // `scaled_dt != 0` skips the ECS walk entirely when time is
+            // frozen (a `time_scale==0` hard pause, which still runs this
+            // always-run block) — no frame can advance on a zero dt anyway.
+            // Slow-mo keeps a tiny non-zero dt, so it still animates.
+            if (self.drive_sprite_animations and !self.sprite_animations_paused and scaled_dt != 0) {
+                @import("sprite_animation_tick.zig").tick(self, scaled_dt);
+            }
             self.resolveAtlasSprites();
             self.renderer.sync(EcsImpl, self.ecs_backend);
 
