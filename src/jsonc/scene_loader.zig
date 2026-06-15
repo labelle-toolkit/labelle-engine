@@ -340,6 +340,17 @@ pub fn SceneLoader(comptime GameType: type, comptime Components: type) type {
                 }
             }
 
+            // Tag the root (+ children) as a prefab instance so save/load
+            // Phase 1 can reinstantiate it — same step the scene-load path
+            // (`loadEntityInternal`) performs via `tagAsPrefabInstance`.
+            // Without this, a runtime-`spawnPrefab`'d entity carries no
+            // `PrefabInstance`, so on load only its saveable game components
+            // come back and its non-saveable prefab visuals (Sprite, etc.)
+            // are lost — `spawnPrefab`'s own docstring promises this tagging.
+            game.tagAsPrefabInstance(entity, name) catch |err| {
+                game.log.err("[spawnPrefab] tagAsPrefabInstance('{s}') failed: {s}", .{ name, @errorName(err) });
+            };
+
             return entity;
         }
 
