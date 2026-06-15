@@ -2205,7 +2205,11 @@ pub fn GameConfig(
             // per-frame game script. Lives in the always-run block (not the
             // gameplay-skip section) so it advances on `scaled_dt`, which a
             // `time_scale==0` hard pause already zeroes.
-            if (self.drive_sprite_animations and !self.sprite_animations_paused) {
+            // `scaled_dt != 0` skips the ECS walk entirely when time is
+            // frozen (a `time_scale==0` hard pause, which still runs this
+            // always-run block) — no frame can advance on a zero dt anyway.
+            // Slow-mo keeps a tiny non-zero dt, so it still animates.
+            if (self.drive_sprite_animations and !self.sprite_animations_paused and scaled_dt != 0) {
                 @import("sprite_animation_tick.zig").tick(self, scaled_dt);
             }
             self.resolveAtlasSprites();
