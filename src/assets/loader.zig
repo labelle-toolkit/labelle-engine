@@ -53,9 +53,11 @@ pub const Texture = u32;
 /// stubbed until those PRs ship.
 pub const DecodedPayload = union(LoaderKind) {
     image: struct {
-        pixels: []u8, // RGBA8, allocator-owned
+        pixels: []u8, // RGBA8, allocator-owned — OR a raw GPU-compressed
+        // (ASTC) blob when `compressed` is set (uploaded verbatim, no decode).
         width: u32,
         height: u32,
+        compressed: bool = false,
     },
     audio: struct {
         samples: []i16, // interleaved PCM, allocator-owned
