@@ -311,6 +311,14 @@ pub fn GameConfig(
         /// into the incoming one. Loaders MUST call `trackSceneEntity`
         /// for every entity they create.
         scene_entities: std.ArrayList(Entity) = .empty,
+        /// Set for the duration of a full scene-entity drain
+        /// (`unloadCurrentScene`). While true, `untrackSceneEntity`
+        /// skips its O(N) swap-remove scan: the drain already owns the
+        /// list and removes each entry as it goes, so the per-entity
+        /// `destroyEntityOnly → untrackSceneEntity` self-scan would be
+        /// pure O(N²) waste (the entity is no longer in the list). See
+        /// `unloadCurrentScene` (#630).
+        tearing_down_scene: bool = false,
         current_scene_name: ?[]const u8 = null,
         pending_scene_change: ?[]const u8 = null,
         pending_scene_atomic: bool = false,

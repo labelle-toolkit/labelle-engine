@@ -127,6 +127,21 @@ pub fn Mixin(comptime Game: type) type {
                 self.tombstones = [_]?TombstoneEntry{null} ** tombstone_size;
                 self.tombstone_cursor = 0;
             }
+
+            // Drop the scene-entity tracking lists. The ECS was just
+            // wiped, so every ID those lists held is now a dangling
+            // handle. Today's callers (`setSceneAtomic`, `loadGameState`)
+            // already `clearRetainingCapacity()` these before calling us,
+            // so this is normally a no-op — but a *direct* `resetEcsBackend`
+            // would otherwise leave stale IDs that a later
+            // `unloadCurrentScene` would feed to `destroyEntityOnly` as
+            // invalid handles. Clearing here makes the reset
+            // self-consistent and idempotent w.r.t. the callers that
+            // already clear (clearing an empty list is fine). Mirrors the
+            // atomic path, which clears both the Game-level list and the
+            // active scene's own list. (#630)
+            self.scene_entities.clearRetainingCapacity();
+            self.clearActiveSceneEntities();
         }
 
         pub fn teardownActiveScene(self: *Game) void {

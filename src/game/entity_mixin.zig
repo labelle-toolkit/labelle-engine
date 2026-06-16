@@ -411,7 +411,16 @@ pub fn Mixin(comptime Game: type) type {
         /// scene that churns through short-lived entities. O(N) scan +
         /// swap-remove — fine for scenes with hundreds of entities;
         /// revisit if a project pushes tens of thousands.
+        ///
+        /// During a full scene-entity drain (`unloadCurrentScene`) the
+        /// `tearing_down_scene` guard short-circuits the scan: that path
+        /// pops each entity off `scene_entities` itself before calling
+        /// `destroyEntityOnly`, so the entity is already gone from the
+        /// list and the scan would walk the whole remaining list finding
+        /// nothing — N destroys × O(N) = O(N²). Skipping it keeps the
+        /// drain O(N) without changing which entities get destroyed (#630).
         pub fn untrackSceneEntity(self: *Game, entity: Entity) void {
+            if (self.tearing_down_scene) return;
             var i: usize = 0;
             while (i < self.scene_entities.items.len) : (i += 1) {
                 if (self.scene_entities.items[i] == entity) {

@@ -61,9 +61,19 @@ pub fn Mixin(comptime Game: type) type {
             // Destroy every entity the outgoing scene's loader created.
             // `destroyEntityOnly` skips the children-recursion so a parent
             // destroy doesn't double-free an already-listed child, and it
-            // calls `untrackSceneEntity` which swap-removes from this same
-            // list — so we pop from the end instead of iterating by index
-            // (which would skip entries).
+            // calls `untrackSceneEntity` which would swap-remove from this
+            // same list. We `pop()` each entry off the end ourselves, so
+            // the per-entity untrack has nothing left to find — its scan
+            // would walk the whole remaining list every call, making the
+            // drain O(N²). The `tearing_down_scene` guard makes that scan
+            // a no-op for the duration of the loop, so the drain is O(N).
+            // Behaviour is unchanged: every tracked entity is still popped
+            // and passed to `destroyEntityOnly` exactly once, so the
+            // `entity_destroyed` hooks fire identically — we only skip a
+            // redundant search that was guaranteed to find nothing. The
+            // `defer` restores the flag even if a hook panics. (#630)
+            self.tearing_down_scene = true;
+            defer self.tearing_down_scene = false;
             while (self.scene_entities.pop()) |entity| {
                 self.destroyEntityOnly(entity);
             }
