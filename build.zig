@@ -32,7 +32,7 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/root.zig"),
         .target = target,
         .optimize = optimize,
-        // src/preview_mode.zig needs libc for its raw `close`/`write`/`fcntl`
+        // src/preview/socket.zig needs libc for its raw `close`/`write`/`fcntl`
         // bindings — 0.16 dropped `std.posix.fcntl`/`std.posix.close` and
         // routed file IO through `std.Io.File` (which would force an
         // `io: std.Io` thread-through), so going straight to libc is the
