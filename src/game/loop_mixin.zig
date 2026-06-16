@@ -1,0 +1,177 @@
+/// Loop mixin — the per-frame `tick` (clock, scheduler, asset pump,
+/// always-run sync block, pause gate, scene/state/hot-reload transitions,
+/// lifecycle hooks) and `render`.
+///
+/// Extracted verbatim from `game.zig`; behaviour is identical. The atlas
+/// sprite resolve and input-event scans are reached through their own
+/// mixins (`AtlasMixin` / `InputEventsMixin`) instantiated against the same
+/// `Game`, matching how `game.zig` invoked them.
+const atlas_mixin = @import("atlas_mixin.zig");
+const input_events_mixin = @import("input_events_mixin.zig");
+
+/// Returns the per-frame loop mixin for a given Game type.
+pub fn Mixin(comptime Game: type) type {
+    const Audio = Game.Audio;
+    const Input = Game.Input;
+    const EcsImpl = Game.EcsBackend;
+    const AtlasMixin = atlas_mixin.Mixin(Game);
+    const InputEventsMixin = input_events_mixin.Mixin(Game);
+
+    return struct {
+        pub fn tick(self: *Game, dt: f32) void {
+            const scaled_dt = dt * self.time_scale;
+            // Freeze the gameplay clock under EITHER pause path — the
+            // `paused` flag (#465) doesn't zero `time_scale`, so guarding
+            // on `isPaused()` (paused OR time_scale==0) is what makes a
+            // Cooldown/Delay hold behind a pause menu (bugbot/gemini #603).
+            if (!self.isPaused()) self.clock_s += @as(f64, scaled_dt);
+
+            // Fire any flow `Delay` timers that have come due (#25 Stage 2).
+            // Run this every tick AFTER the clock update. `bindScheduler`
+            // keeps the type-erased `game_ctx` pointed at our stable address
+            // (idempotent). When paused, `elapsedSeconds()` is frozen, so no
+            // timer is ever due — pause-freeze falls out of the clock reuse
+            // for free, with no separate accumulator. A firing callback may
+            // re-entrantly `after()`; the scheduler iterates defensively.
+            self.bindScheduler();
+            self.scheduler.tick();
+
+            // Drain any worker-decoded asset uploads onto the GPU.
+            // Without this no acquired asset ever reaches `.ready`,
+            // and the Phase 2 setScene gate (#458) spins forever in
+            // its `not_ready` branch. Pump runs every frame even
+            // when paused so loading screens keep filling the bar
+            // through pause states.
+            self.assets.pump();
+
+            // Wire late-uploaded atlases into atlas_manager (#508). The
+            // setScene-time bridge is a no-op for any asset that wasn't
+            // .ready yet (eager-fallback path completes setScene before
+            // assets reach .ready). Without this per-tick walk those
+            // atlases keep texture_id=0, every sprite samples from
+            // texture 0, and rendering looks wrong. Idempotent — already-
+            // bridged atlases are silently skipped.
+            self.bridgeAllReadyImageAssets();
+
+            // Always run: logging, audio, input, renderer sync, gizmo reconciliation.
+            // These must run even when paused so the game remains responsive.
+            self.log.update(dt);
+            Audio.update();
+            Input.updateGestures(dt);
+            // Engine-driven sprite animation (opt-in via
+            // `drive_sprite_animations`). Advance every `SpriteAnimation`
+            // on the time-scaled dt BEFORE `resolveAtlasSprites` so the
+            // new frame's `sprite_name` is resolved to a `source_rect` the
+            // same frame. Frozen when `sprite_animations_paused` — that's
+            // how a pause menu stops sprite cycling without gating a
+            // per-frame game script. Lives in the always-run block (not the
+            // gameplay-skip section) so it advances on `scaled_dt`, which a
+            // `time_scale==0` hard pause already zeroes.
+            // `scaled_dt != 0` skips the ECS walk entirely when time is
+            // frozen (a `time_scale==0` hard pause, which still runs this
+            // always-run block) — no frame can advance on a zero dt anyway.
+            // Slow-mo keeps a tiny non-zero dt, so it still animates.
+            if (self.drive_sprite_animations and !self.sprite_animations_paused and scaled_dt != 0) {
+                @import("../sprite_animation_tick.zig").tick(self, scaled_dt);
+            }
+            AtlasMixin.resolveAtlasSprites(self);
+            self.renderer.sync(EcsImpl, self.ecs_backend);
+
+            // Gamepad hotplug + ControllerManager drain (core#18 / #611).
+            // Runs in the ALWAYS-RUN section, BEFORE the pause gate below,
+            // so a controller reconnect that should lift an opt-in
+            // auto-pause is still seen while the game is paused. Folds away
+            // entirely when no gamepad/controller event is wanted.
+            InputEventsMixin.scanGamepadEvents(self);
+
+            // Reconcile gizmos for runtime-created entities
+            if (self.gizmo_reconcile_fn) |reconcile_fn| {
+                reconcile_fn(self);
+            }
+
+            // State changes must process even when paused (e.g. pause → menu).
+            // Clear pending BEFORE setState so hooks can re-queue without being overwritten.
+            if (self.pending_state_change) |new_state| {
+                self.pending_state_change = null;
+                self.setState(new_state);
+            }
+
+            // Scene changes must process even when paused (e.g. pause menu → new scene)
+            if (self.pending_scene_change) |next_scene| {
+                const atomic = self.pending_scene_atomic;
+                defer {
+                    self.allocator.free(next_scene);
+                    self.pending_scene_change = null;
+                    self.pending_scene_atomic = false;
+                }
+                if (atomic) {
+                    self.setSceneAtomic(next_scene) catch {};
+                } else {
+                    self.setScene(next_scene) catch {};
+                }
+            }
+
+            // Hot reload: re-trigger the current scene's loader
+            if (self.hot_reload_dirty) {
+                self.hot_reload_dirty = false;
+                if (self.current_scene_name) |name| {
+                    if (self.scenes.get(name)) |entry| {
+                        self.unloadCurrentScene();
+                        self.emitHook(.{ .scene_before_load = .{ .name = name, .allocator = self.allocator } });
+                        // Engine `Events` dual-emit (#578).
+                        self.emitEngineEvent("engine__scene_loading", .{ .name = name });
+                        entry.loader_fn(self) catch {};
+                        self.emitHook(.{ .scene_load = .{ .name = name } });
+                        // Engine `Events` dual-emit (#578).
+                        self.emitEngineEvent("engine__scene_loaded", .{ .name = name });
+                    }
+                }
+            }
+
+            // Paused: skip game logic but keep frame counter advancing.
+            // Gates on the unified `isPaused()` so an explicit
+            // `setPaused(true)` halts the tick even when time_scale is
+            // still 1.0 — not just the `scaled_dt == 0` variant below.
+            if (self.isPaused()) {
+                self.frame_number += 1;
+                return;
+            }
+
+            self.emitHook(.{ .frame_start = .{ .frame_number = self.frame_number, .dt = scaled_dt } });
+            // Engine `Events` dual-emit (#578) — fires every active
+            // frame at the top of the tick. Folds away in unit-test
+            // games (`GameEvents = void`).
+            self.emitEngineEvent("engine__tick", .{ .frame_number = self.frame_number, .dt = scaled_dt });
+
+            if (self.active_scene_ptr) |scene_ptr| {
+                if (self.active_scene_update_fn) |update_fn| {
+                    update_fn(scene_ptr, scaled_dt);
+                }
+            }
+
+            self.emitHook(.{ .frame_end = .{ .frame_number = self.frame_number, .dt = scaled_dt } });
+            // Engine `Events` dual-emit (#578).
+            self.emitEngineEvent("engine__post_tick", .{ .frame_number = self.frame_number, .dt = scaled_dt });
+
+            // Input events (labelle-gui#208). Scan the unified
+            // `InputInterface` and buffer matching engine events. Placed
+            // here, at the tail of the active-frame body, so the events
+            // land in `event_buffer` alongside this frame's lifecycle
+            // events and drain together on the next `dispatchEvents`
+            // (called by the generated main loop right after `tick`) —
+            // i.e. they dispatch the SAME frame. Input state is current
+            // during `tick` (scripts already read it here). Each scan
+            // loop is comptime-gated, so an event-less game runs none of
+            // this.
+            InputEventsMixin.scanInputEvents(self);
+
+            self.frame_number += 1;
+        }
+
+        pub fn render(self: *Game) void {
+            self.renderer.render();
+            self.renderGizmos();
+            self.clearGizmos();
+        }
+    };
+}
