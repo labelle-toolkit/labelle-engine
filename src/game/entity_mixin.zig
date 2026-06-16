@@ -420,7 +420,14 @@ pub fn Mixin(comptime Game: type) type {
         /// nothing — N destroys × O(N) = O(N²). Skipping it keeps the
         /// drain O(N) without changing which entities get destroyed (#630).
         pub fn untrackSceneEntity(self: *Game, entity: Entity) void {
-            if (self.tearing_down_scene) return;
+            // Skip the scan ONLY for the entity the drain is currently
+            // popping (already off the list — scanning is the O(N²) waste
+            // #630 fixes). Any OTHER tracked entity (e.g. a sibling
+            // destroyed by this one's `entity_destroyed` hook) must still
+            // untrack, or the drain would pop it again and double-destroy it.
+            if (self.current_teardown_entity) |cur| {
+                if (cur == entity) return;
+            }
             var i: usize = 0;
             while (i < self.scene_entities.items.len) : (i += 1) {
                 if (self.scene_entities.items[i] == entity) {

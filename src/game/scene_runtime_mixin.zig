@@ -65,16 +65,19 @@ pub fn Mixin(comptime Game: type) type {
             // same list. We `pop()` each entry off the end ourselves, so
             // the per-entity untrack has nothing left to find — its scan
             // would walk the whole remaining list every call, making the
-            // drain O(N²). The `tearing_down_scene` guard makes that scan
-            // a no-op for the duration of the loop, so the drain is O(N).
-            // Behaviour is unchanged: every tracked entity is still popped
-            // and passed to `destroyEntityOnly` exactly once, so the
-            // `entity_destroyed` hooks fire identically — we only skip a
-            // redundant search that was guaranteed to find nothing. The
-            // `defer` restores the flag even if a hook panics. (#630)
-            self.tearing_down_scene = true;
-            defer self.tearing_down_scene = false;
+            // drain O(N²). Marking the entity currently being popped makes
+            // that scan a no-op for it (it's already off the list), so the
+            // drain is O(N). Behaviour is unchanged: every tracked entity is
+            // still popped and passed to `destroyEntityOnly` exactly once,
+            // so the `entity_destroyed` hooks fire identically — we only
+            // skip a redundant search guaranteed to find nothing. Crucially,
+            // a hook that destroys a DIFFERENT tracked entity still untracks
+            // it (only `current_teardown_entity` is skipped), so it isn't
+            // popped+destroyed twice. The `defer` clears the marker even if
+            // a hook panics. (#630)
+            defer self.current_teardown_entity = null;
             while (self.scene_entities.pop()) |entity| {
+                self.current_teardown_entity = entity;
                 self.destroyEntityOnly(entity);
             }
 

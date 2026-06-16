@@ -312,13 +312,16 @@ pub fn GameConfig(
         /// for every entity they create.
         scene_entities: std.ArrayList(Entity) = .empty,
         /// Set for the duration of a full scene-entity drain
-        /// (`unloadCurrentScene`). While true, `untrackSceneEntity`
-        /// skips its O(N) swap-remove scan: the drain already owns the
-        /// list and removes each entry as it goes, so the per-entity
-        /// `destroyEntityOnly → untrackSceneEntity` self-scan would be
-        /// pure O(N²) waste (the entity is no longer in the list). See
-        /// `unloadCurrentScene` (#630).
-        tearing_down_scene: bool = false,
+        /// The entity currently being drained by `unloadCurrentScene`.
+        /// `untrackSceneEntity` skips its O(N) swap-remove scan ONLY for
+        /// this exact entity: the drain already `pop()`-ed it off the
+        /// list, so the per-entity `destroyEntityOnly → untrackSceneEntity`
+        /// self-scan would be pure O(N²) waste. A destroy-hook that
+        /// destroys a *different* tracked entity (a sibling) still untracks
+        /// it normally — so the drain won't pop an already-destroyed
+        /// sibling a second time (double-destroy). See `unloadCurrentScene`
+        /// (#630).
+        current_teardown_entity: ?Entity = null,
         current_scene_name: ?[]const u8 = null,
         pending_scene_change: ?[]const u8 = null,
         pending_scene_atomic: bool = false,

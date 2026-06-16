@@ -1,11 +1,13 @@
 //! Tests for the scene-teardown fixes (labelle-engine#630):
 //!
 //!   1. `unloadCurrentScene` drains `scene_entities` in O(N), not
-//!      O(N²): the `tearing_down_scene` guard makes the per-entity
-//!      `untrackSceneEntity` swap-remove scan a no-op while the drain
-//!      pops each entity off the list itself. Behaviour is unchanged —
-//!      every tracked entity is still destroyed exactly once and the
-//!      `entity_destroyed` hook fires once per entity.
+//!      O(N²): `untrackSceneEntity` skips its swap-remove scan only for
+//!      the one entity currently being popped (`current_teardown_entity`),
+//!      while the drain pops each off the list itself. Behaviour is
+//!      unchanged — every tracked entity is still destroyed exactly once
+//!      and the hook fires once per entity — AND a hook that destroys a
+//!      *sibling* tracked entity still untracks it, so it is never
+//!      popped+destroyed twice.
 //!
 //!   2. `resetEcsBackend` clears `scene_entities` (and the active
 //!      scene's own list) so a *direct* call leaves no dangling IDs for
@@ -75,7 +77,7 @@ test "unloadCurrentScene destroys all tracked entities and empties scene_entitie
     // The tracking list is fully drained.
     try testing.expectEqual(@as(usize, 0), game.scene_entities.items.len);
     // The teardown guard is restored (not left stuck on).
-    try testing.expect(!game.tearing_down_scene);
+    try testing.expect(game.current_teardown_entity == null);
 
     // Every tracked entity fired its `entity_destroyed` hook EXACTLY once
     // — the O(N) fix must not drop or double-fire any destroy.
@@ -97,13 +99,13 @@ test "unloadCurrentScene on an empty scene is a no-op" {
 
     try testing.expectEqual(@as(usize, 0), game.scene_entities.items.len);
     try testing.expectEqual(@as(usize, 0), recorder.destroyed.items.len);
-    try testing.expect(!game.tearing_down_scene);
+    try testing.expect(game.current_teardown_entity == null);
 }
 
-// The `tearing_down_scene` guard must not leak into normal (non-drain)
+// The teardown marker must not leak into normal (non-drain)
 // `destroyEntityOnly` calls: a manual destroy still removes the entity
 // from `scene_entities` via the O(N) swap-remove path. This pins down
-// that the guard is scoped to the drain loop only.
+// that the skip is scoped to the drain loop only.
 test "manual destroyEntityOnly still untracks the entity (guard is drain-scoped)" {
     var recorder = DestroyRecorder{ .allocator = testing.allocator };
     defer recorder.deinit();
@@ -120,7 +122,7 @@ test "manual destroyEntityOnly still untracks the entity (guard is drain-scoped)
 
     // Outside a drain, the guard is false, so untrackSceneEntity runs its
     // scan and removes `a` from the list.
-    try testing.expect(!game.tearing_down_scene);
+    try testing.expect(game.current_teardown_entity == null);
     game.destroyEntityOnly(a);
     try testing.expectEqual(@as(usize, 1), game.scene_entities.items.len);
     try testing.expectEqual(@as(u32, b), game.scene_entities.items[0]);
@@ -131,6 +133,43 @@ test "manual destroyEntityOnly still untracks the entity (guard is drain-scoped)
     try testing.expectEqual(@as(usize, 0), game.scene_entities.items.len);
     try testing.expectEqual(@as(usize, 1), recorder.count(a));
     try testing.expectEqual(@as(usize, 1), recorder.count(b));
+}
+
+// The crux of the per-entity (not global) skip: during a drain, only the
+// entity currently being popped skips its untrack scan. A DIFFERENT tracked
+// entity — e.g. a sibling destroyed re-entrantly by the current entity's
+// `entity_destroyed` hook — must STILL untrack, or the drain would pop it a
+// second time and `destroyEntityOnly` it as an invalid handle (the bug a
+// global flag would reintroduce).
+test "untrackSceneEntity skips only the drained entity, not siblings" {
+    var recorder = DestroyRecorder{ .allocator = testing.allocator };
+    defer recorder.deinit();
+
+    var game = TestGame.init(testing.allocator);
+    defer game.deinit();
+    game.setHooks(&recorder);
+
+    const a = game.createEntity();
+    const b = game.createEntity();
+    const c = game.createEntity();
+    game.trackSceneEntity(a);
+    game.trackSceneEntity(b);
+    game.trackSceneEntity(c);
+
+    // Simulate being mid-drain of `a` (what the drain loop sets).
+    game.current_teardown_entity = a;
+
+    // Untracking `a` is the wasteful self-scan the fix skips — `a` stays.
+    game.untrackSceneEntity(a);
+    try testing.expectEqual(@as(usize, 3), game.scene_entities.items.len);
+
+    // Untracking a sibling (`b`) MUST still remove it, so the drain won't
+    // pop+destroy it again.
+    game.untrackSceneEntity(b);
+    try testing.expectEqual(@as(usize, 2), game.scene_entities.items.len);
+    for (game.scene_entities.items) |e| try testing.expect(e != b);
+
+    game.current_teardown_entity = null;
 }
 
 // ── Issue 2: resetEcsBackend clears scene_entities ──────────────────────
