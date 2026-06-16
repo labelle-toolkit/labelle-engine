@@ -1,7 +1,7 @@
 .{
     .fingerprint = 0xe8a81a8dc7f48c87,
     .name = .engine,
-    .version = "1.53.0",
+    .version = "1.53.1",
     .minimum_zig_version = "0.16.0",
     .dependencies = .{
         .labelle_core = .{
