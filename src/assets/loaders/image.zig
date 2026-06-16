@@ -68,9 +68,16 @@ const Texture = loader.Texture;
 /// whatever `DecodedImage` shape labelle-gfx uses on its side of the
 /// dependency boundary without a nominal-type conflict.
 pub const DecodedImage = struct {
-    pixels: []u8, // RGBA8, allocator-owned
+    pixels: []u8, // RGBA8, allocator-owned — OR, when `compressed`, the raw
+    // GPU-compressed blob (e.g. ASTC) to upload verbatim, no CPU decode.
     width: u32,
     height: u32,
+    /// True when `pixels` holds a GPU-compressed blob (ASTC) rather than RGBA8.
+    /// The adapter's `upload` routes these to the backend's `uploadCompressed`
+    /// instead of `uploadTexture` (the worker-thread `decode` did no CPU work —
+    /// it just duped the blob and read dims from the header). Backends without
+    /// compressed support never set this, so the RGBA path is unchanged.
+    compressed: bool = false,
 };
 
 /// Runtime backend hook. The assembler fills this in at `Game.init`
@@ -135,6 +142,7 @@ fn decode(
         .pixels = decoded.pixels,
         .width = decoded.width,
         .height = decoded.height,
+        .compressed = decoded.compressed,
     } };
 }
 
@@ -156,6 +164,7 @@ fn upload(
         .pixels = image.pixels,
         .width = image.width,
         .height = image.height,
+        .compressed = image.compressed,
     });
 
     // Upload succeeded: the GPU has its own copy, so we can release
