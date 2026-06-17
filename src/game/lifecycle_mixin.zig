@@ -184,6 +184,45 @@ pub fn Mixin(comptime Game: type) type {
             return self.fullscreen;
         }
 
+        // ── Vsync ──
+        //
+        // Mirrors the Fullscreen split: the engine owns the *desired* vsync
+        // flag; the actual swap-interval change (bgfx `reset` with/without
+        // `BGFX_RESET_VSYNC`, sokol's per-platform swap-interval call, …)
+        // lives in the generated `main.zig` frame loop, which polls
+        // `takeVsyncRequest()` and forwards the value to `window.setVsync`.
+        // Defaults ON — every backend previously hardcoded vsync on.
+
+        /// Request a vsync on/off switch. No-op if already in the requested
+        /// mode. Takes effect on the next frame, when the generated main
+        /// drains `takeVsyncRequest()`.
+        pub fn setVsync(self: *Game, on: bool) void {
+            if (self.vsync == on) return;
+            self.vsync = on;
+            self.vsync_dirty = true;
+        }
+
+        /// Flip vsync on/off.
+        pub fn toggleVsync(self: *Game) void {
+            setVsync(self, !self.vsync);
+        }
+
+        /// The engine's desired vsync state. This is the value a settings UI
+        /// should bind a checkbox to — it reflects the latest
+        /// `setVsync`/`toggleVsync` call, not a backend query.
+        pub fn isVsync(self: *const Game) bool {
+            return self.vsync;
+        }
+
+        /// Frame-loop drain (generated main only): returns the new vsync
+        /// value exactly once after it changes, else `null`. The caller
+        /// forwards a non-null result to the window backend.
+        pub fn takeVsyncRequest(self: *Game) ?bool {
+            if (!self.vsync_dirty) return null;
+            self.vsync_dirty = false;
+            return self.vsync;
+        }
+
         // ── Engine-driven sprite animation ──
         //
         // Opt-in: instead of the game shipping a `sprite_animation_tick`

@@ -382,6 +382,16 @@ pub fn GameConfig(
         /// `takeFullscreenRequest()` drain so the backend toggle fires
         /// exactly once per change instead of every frame.
         fullscreen_dirty: bool = false,
+        /// Desired vsync state, owned by the engine (same cooperative split
+        /// as `fullscreen`). Scripts flip it via `setVsync`/`toggleVsync`;
+        /// the generated frame loop drains `takeVsyncRequest()` and applies
+        /// the value to the window backend (`window.setVsync`). Defaults ON
+        /// to match every backend's prior hardcoded behaviour.
+        vsync: bool = true,
+        /// Set whenever `vsync` changes; cleared by the one-shot
+        /// `takeVsyncRequest()` drain so the backend swap-interval change
+        /// fires exactly once per change instead of every frame.
+        vsync_dirty: bool = false,
         /// Opt-in: when true the engine advances every `SpriteAnimation`
         /// component itself each tick (on the time-scaled dt), so a game
         /// no longer needs a `sprite_animation_tick` script of its own.
@@ -837,6 +847,10 @@ pub fn GameConfig(
         pub const toggleFullscreen = LifecycleMixin.toggleFullscreen;
         pub const isFullscreen = LifecycleMixin.isFullscreen;
         pub const takeFullscreenRequest = LifecycleMixin.takeFullscreenRequest;
+        pub const setVsync = LifecycleMixin.setVsync;
+        pub const toggleVsync = LifecycleMixin.toggleVsync;
+        pub const isVsync = LifecycleMixin.isVsync;
+        pub const takeVsyncRequest = LifecycleMixin.takeVsyncRequest;
         pub const setDriveSpriteAnimations = LifecycleMixin.setDriveSpriteAnimations;
         pub const setSpriteAnimationsPaused = LifecycleMixin.setSpriteAnimationsPaused;
         pub const spriteAnimationsPaused = LifecycleMixin.spriteAnimationsPaused;
