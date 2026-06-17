@@ -452,13 +452,30 @@ fn contentRectHook(activity: *ANativeActivity, rect: ?*const anyopaque) callconv
     applyImmersive(activity);
 }
 
-/// Perform the JNI calls that hide the system bars. MUST be called on
-/// the Android UI thread (the `onWindowFocusChanged` callback is).
+/// Perform the JNI calls that hide the system bars, using the
+/// `ANativeActivity`'s own `env`. MUST be called on the Android UI/main
+/// thread — the only thread where `activity.env` is the valid `JNIEnv*`
+/// AND where `WindowInsetsController.hide()` is legal. Both immersive
+/// entry points satisfy that:
+///   * sokol's `onWindowFocusChanged` / `onContentRectChanged` hooks (the
+///     framework invokes them on the UI thread), and
+///   * `applyImmersiveUiThread`, which the bgfx shell calls from its
+///     chained `onWindowFocusChanged` (also a UI-thread framework callback).
 fn applyImmersive(activity: *ANativeActivity) void {
     const env_ptr = activity.env orelse {
         logWarn("immersive: ANativeActivity.env is null, skipping");
         return;
     };
+    applyImmersiveWithEnv(env_ptr, activity.clazz);
+}
+
+/// Perform the JNI calls that hide the system bars with an **explicit**
+/// `JNIEnv*` and the activity `jobject`. Split out from `applyImmersive`
+/// to keep the env/object plumbing in one place; both callers pass the
+/// UI-thread `activity.env`. `env_ptr` MUST be valid for the calling
+/// (UI) thread; `activity_obj` is the activity instance
+/// (`ANativeActivity.clazz`).
+fn applyImmersiveWithEnv(env_ptr: *JNIEnv, activity_obj: jobject) void {
     // `env_ptr` is the `JNIEnv*` (a `*JNIEnv`). JNI functions take that
     // pointer as their first argument. `env_ptr.*` is the `JNIEnv`
     // (the table pointer); dereferencing again yields the interface
@@ -502,7 +519,7 @@ fn applyImmersive(activity: *ANativeActivity) void {
     //  12. GetMethodID(.., "setSystemBarsBehavior", "(I)V");
     //      CallVoidMethodA(.., BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE)
 
-    const activity_class = jni.GetObjectClass(env, activity.clazz) orelse {
+    const activity_class = jni.GetObjectClass(env, activity_obj) orelse {
         _ = clearException(env);
         logWarn("immersive: GetObjectClass(activity) failed");
         return;
@@ -514,7 +531,7 @@ fn applyImmersive(activity: *ANativeActivity) void {
         logWarn("immersive: getWindow methodID lookup failed");
         return;
     };
-    const window = jni.CallObjectMethodA(env, activity.clazz, get_window, null) orelse {
+    const window = jni.CallObjectMethodA(env, activity_obj, get_window, null) orelse {
         _ = clearException(env);
         logWarn("immersive: getWindow() returned null");
         return;
@@ -726,4 +743,54 @@ pub fn enableImmersiveMode() void {
     na.callbacks.onContentRectChanged = &contentRectHook;
 
     logInfo("immersive: content-rect hook installed");
+}
+
+/// Hide the system bars from a **UI-thread** caller — the immersive entry
+/// point for backends whose app shell owns the `ANativeActivityCallbacks`
+/// (the bgfx backend, built on `native_app_glue`).
+///
+/// **Why a UI-thread entry, and why the hook-based `enableImmersiveMode()`
+/// can't be used here.** native_app_glue OWNS `onContentRectChanged` (it
+/// posts `APP_CMD_CONTENT_RECT_CHANGED`), so the engine's launch hook in
+/// `enableImmersiveMode()` installs too late / clobbers the glue and never
+/// fires. And the bars cannot be hidden from the glue's app thread (where
+/// the game's frame loop runs): `WindowInsetsController.hide()` MUST run on
+/// the Android UI/main thread — Android throws `CalledFromWrongThread`-style
+/// exceptions otherwise, even from a thread freshly attached to the JVM
+/// (verified on-device: a frame-loop call attached the thread fine but the
+/// `hide()` JNI call still threw).
+///
+/// So the bgfx shell instead chains `onWindowFocusChanged` — a framework
+/// callback the OS invokes ON THE UI THREAD, at launch (first focus gain)
+/// and on every focus regain — and calls THIS function from there (via the
+/// shell's `setImmersiveCallback`). Running on the UI thread, the activity's
+/// own `ANativeActivity.env` is the correct `JNIEnv*`, so `applyImmersive`
+/// works exactly as it does on the sokol callback path.
+///
+/// `callconv(.c)` so the shell can store it as a bare C function pointer
+/// without importing the engine (the shell must not depend on the engine;
+/// the generated `main.zig`, which owns both, wires them together).
+///
+/// Idempotent — safe to call on every focus gain. The activity is resolved
+/// through the same backend-agnostic seam (`core.android_backend.get()`) as
+/// `enableImmersiveMode`, so the engine still links no backend symbol. A
+/// graceful no-op on non-Android targets, when no `AndroidBackendContext`
+/// is registered, or before the activity exists.
+pub fn applyImmersiveUiThread() callconv(.c) void {
+    if (comptime !is_android) return;
+
+    // Same backend-agnostic activity lookup as `enableImmersiveMode`.
+    const ctx = core.android_backend.get() orelse {
+        logWarn("immersive: no AndroidBackendContext registered");
+        return;
+    };
+    const na: *ANativeActivity = @ptrCast(@alignCast(ctx.get_native_activity() orelse {
+        logWarn("immersive: get_native_activity() returned null");
+        return;
+    }));
+
+    // Called on the UI thread (from the shell's chained
+    // `onWindowFocusChanged`), so `na.env` is the correct `JNIEnv*` and the
+    // decor-view / WindowInsetsController JNI calls are thread-legal.
+    applyImmersive(na);
 }
