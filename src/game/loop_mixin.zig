@@ -6,6 +6,7 @@
 /// sprite resolve and input-event scans are reached through their own
 /// mixins (`AtlasMixin` / `InputEventsMixin`) instantiated against the same
 /// `Game`, matching how `game.zig` invoked them.
+const std = @import("std");
 const atlas_mixin = @import("atlas_mixin.zig");
 const input_events_mixin = @import("input_events_mixin.zig");
 
@@ -99,15 +100,36 @@ pub fn Mixin(comptime Game: type) type {
             // Scene changes must process even when paused (e.g. pause menu → new scene)
             if (self.pending_scene_change) |next_scene| {
                 const atomic = self.pending_scene_atomic;
-                defer {
+                var failed = false;
+                if (atomic) {
+                    self.setSceneAtomic(next_scene) catch {
+                        failed = true;
+                    };
+                } else {
+                    self.setScene(next_scene) catch {
+                        failed = true;
+                    };
+                }
+                // Consume the request only once the swap actually COMMITTED
+                // (or hard-errored). `setScene`/`setSceneAtomic` DEFER —
+                // returning without swapping — while the target scene's asset
+                // manifest is still loading; the asset gate runs BEFORE any
+                // teardown, so on a deferral `current_scene_name` is unchanged.
+                // Previously the request was cleared unconditionally, dropping
+                // the scene change forever (there is no separate retry path) —
+                // which left a menu→colony transition stuck on the menu
+                // rendering only the background (the target's atlases hadn't
+                // been acquired yet). Keep it pending across deferrals so a
+                // later frame — by which point the gate's acquire has driven
+                // the atlases to `.ready` — commits the swap.
+                const committed = if (self.current_scene_name) |cur|
+                    std.mem.eql(u8, cur, next_scene)
+                else
+                    false;
+                if (failed or committed) {
                     self.allocator.free(next_scene);
                     self.pending_scene_change = null;
                     self.pending_scene_atomic = false;
-                }
-                if (atomic) {
-                    self.setSceneAtomic(next_scene) catch {};
-                } else {
-                    self.setScene(next_scene) catch {};
                 }
             }
 
