@@ -954,6 +954,13 @@ pub fn Mixin(comptime Game: type) type {
         pub fn armPostLoadRenderGate(self: *Game, saved_scene: ?[]const u8) void {
             self.post_load_render_gate = null;
             self.post_load_render_gate_bridged = false;
+            // Release the manifest the PREVIOUS load pinned — on EVERY
+            // load, before resolving the new one (engine#638). Done here
+            // (not only on the acquire path) so a load onto a scene with no
+            // image manifest, an unregistered scene, or the early
+            // no-manifest returns below still drops the prior pin. The
+            // matching re-acquire happens in `armPostLoadRenderGateFromEntry`.
+            releaseLoadAcquired(self);
             // Prefer the scene recorded IN the save (engine#638) — that's
             // the manifest the restored sprites actually sample from. Fall
             // back to the currently-active scene for legacy saves that
@@ -999,14 +1006,13 @@ pub fn Mixin(comptime Game: type) type {
             //
             // Refcount discipline: a load does NOT swap scenes
             // (`current_scene_name` is unchanged), so the scene-swap
-            // `releasePreviousAssets` never balances this acquire. We
-            // balance it ourselves — release the manifest the PREVIOUS
-            // load pinned before acquiring this one — so repeated loads
-            // (save A → save B) and in-game same-scene reloads can't leak
-            // / double-pin the catalog refcount. `releaseLoadAcquired`
-            // is a no-op on the first load. Idempotent per atlas: an
-            // already-`.ready` atlas just bumps refcount (no re-decode).
-            releaseLoadAcquired(self);
+            // `releasePreviousAssets` never balances this acquire. The
+            // PREVIOUS load's pin was already dropped by the
+            // `releaseLoadAcquired` at the top of `armPostLoadRenderGate`
+            // (runs on every load), so repeated loads (save A → save B) and
+            // in-game same-scene reloads can't leak / double-pin the catalog
+            // refcount. Idempotent per atlas: an already-`.ready` atlas just
+            // bumps refcount (no re-decode).
             for (assets) |name| {
                 const e = self.assets.entries.getPtr(name) orelse continue;
                 if (e.loader_kind != .image) continue;
