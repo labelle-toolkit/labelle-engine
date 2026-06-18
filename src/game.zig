@@ -394,6 +394,20 @@ pub fn GameConfig(
         /// gate is `null`.
         post_load_render_gate_deadline: u64 = 0,
 
+        /// The image-atlas manifest the most recent `loadGameState`
+        /// acquired (engine#638), so a SUBSEQUENT load can release it
+        /// before acquiring the next one. Without this, loading save A
+        /// then save B would acquire each manifest's atlases and never
+        /// release A's — a slow refcount leak across repeated loads (and a
+        /// double-pin when an in-game Load re-acquires the active scene's
+        /// already-held manifest). The acquire/release is balanced here
+        /// rather than via the scene-swap path because a load does NOT
+        /// swap scenes (`current_scene_name` is unchanged), so
+        /// `releasePreviousAssets` never sees it. Borrows the
+        /// program-lifetime `SceneEntry.assets` slice; `null` when no load
+        /// has pinned a manifest. Released in full on `deinit`.
+        post_load_acquired_assets: ?[]const []const u8 = null,
+
         /// Whether the post-load gate's manifest has been bridged into
         /// `atlas_manager` yet (engine#638). The load path binds the whole
         /// manifest in ONE deterministic pass — the moment every atlas is
@@ -842,6 +856,7 @@ pub fn GameConfig(
         pub const loadGameState = SaveLoadMixin.loadGameState;
         pub const armPostLoadRenderGate = SaveLoadMixin.armPostLoadRenderGate;
         pub const updatePostLoadRenderGate = SaveLoadMixin.updatePostLoadRenderGate;
+        pub const releaseLoadAcquired = SaveLoadMixin.releaseLoadAcquired;
 
         // ── Game State Machine (mixin) ──────────────────────────────
         pub const setState = StateMixin.setState;

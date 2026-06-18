@@ -23,6 +23,10 @@ pub fn Mixin(comptime Game: type) type {
         // ── Teardown / hook wiring ────────────────────────────────
 
         pub fn deinit(self: *Game) void {
+            // Release any atlas manifest a `loadGameState` pinned but the
+            // game never released via a subsequent load (engine#638), so a
+            // game torn down after a load doesn't leak catalog refcounts.
+            self.releaseLoadAcquired();
             self.emitHook(.{ .game_deinit = {} });
             // Engine `Events` dual-emit (#578). Fires before the actual
             // teardown so flow listeners that read game state from a

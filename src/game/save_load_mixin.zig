@@ -936,6 +936,21 @@ pub fn Mixin(comptime Game: type) type {
         /// the world forever (see `post_load_render_gate_deadline`).
         const POST_LOAD_GATE_MAX_FRAMES: u64 = 180;
 
+        /// Release the image atlases a previous `loadGameState` acquired
+        /// via `armPostLoadRenderGateFromEntry` (engine#638), balancing
+        /// that acquire so repeated loads don't leak catalog refcounts.
+        /// No-op when no load has pinned a manifest. Also called from
+        /// `Game.deinit` so a game torn down after a load doesn't leak.
+        pub fn releaseLoadAcquired(self: *Game) void {
+            const prev = self.post_load_acquired_assets orelse return;
+            self.post_load_acquired_assets = null;
+            for (prev) |name| {
+                const e = self.assets.entries.getPtr(name) orelse continue;
+                if (e.loader_kind != .image) continue;
+                self.assets.release(name);
+            }
+        }
+
         pub fn armPostLoadRenderGate(self: *Game, saved_scene: ?[]const u8) void {
             self.post_load_render_gate = null;
             self.post_load_render_gate_bridged = false;
@@ -982,18 +997,22 @@ pub fn Mixin(comptime Game: type) type {
             // `assets.acquire(...)` loop in its Load handler (FP#542).
             // Acquiring here makes loadGameState self-contained.
             //
-            // Refcount note: this is the load counterpart of the acquire
-            // the original scene-change gate did. Each acquire is balanced
-            // by the `release` the next scene swap performs when it drops
-            // this scene's manifest (`releasePreviousAssets`). On a load
-            // that stays in the same scene the refcount simply stays
-            // pinned, exactly as a normal scene's atlases do. Idempotent:
-            // an already-acquired atlas just bumps refcount (no re-decode).
+            // Refcount discipline: a load does NOT swap scenes
+            // (`current_scene_name` is unchanged), so the scene-swap
+            // `releasePreviousAssets` never balances this acquire. We
+            // balance it ourselves — release the manifest the PREVIOUS
+            // load pinned before acquiring this one — so repeated loads
+            // (save A → save B) and in-game same-scene reloads can't leak
+            // / double-pin the catalog refcount. `releaseLoadAcquired`
+            // is a no-op on the first load. Idempotent per atlas: an
+            // already-`.ready` atlas just bumps refcount (no re-decode).
+            releaseLoadAcquired(self);
             for (assets) |name| {
                 const e = self.assets.entries.getPtr(name) orelse continue;
                 if (e.loader_kind != .image) continue;
                 _ = self.assets.acquire(name) catch {};
             }
+            self.post_load_acquired_assets = assets;
 
             self.post_load_render_gate = assets;
             self.post_load_render_gate_deadline = self.frame_number + POST_LOAD_GATE_MAX_FRAMES;

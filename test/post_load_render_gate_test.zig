@@ -303,3 +303,38 @@ test "gate acquires the manifest's atlases so the load triggers decode (#638)" {
     // The gate acquired it — refcount bumped to 1.
     try testing.expectEqual(@as(u32, 1), game.assets.entries.getPtr("characters").?.refcount);
 }
+
+test "repeated loads release the prior manifest — no refcount leak (#638)" {
+    // Load save A's scene, then save B's scene. The acquire from the
+    // first arm must be released before the second arm acquires, so each
+    // atlas's refcount reflects only the manifest currently pinned.
+    var game = Game.init(testing.allocator);
+    defer game.deinit();
+
+    try game.assets.register("a_only", .image, "png", "stub");
+    try game.atlas_manager.registerPendingAtlas("a_only", "{\"frames\":{}}", "img", "png");
+    try game.assets.register("shared", .image, "png", "stub");
+    try game.atlas_manager.registerPendingAtlas("shared", "{\"frames\":{}}", "img", "png");
+    try game.assets.register("b_only", .image, "png", "stub");
+    try game.atlas_manager.registerPendingAtlas("b_only", "{\"frames\":{}}", "img", "png");
+
+    game.registerSceneWithAssets("scene_a", emptyLoader, &.{ "a_only", "shared" });
+    game.registerSceneWithAssets("scene_b", emptyLoader, &.{ "shared", "b_only" });
+
+    // Load A.
+    game.armPostLoadRenderGate("scene_a");
+    try testing.expectEqual(@as(u32, 1), game.assets.entries.getPtr("a_only").?.refcount);
+    try testing.expectEqual(@as(u32, 1), game.assets.entries.getPtr("shared").?.refcount);
+
+    // Load B — A's `a_only` is released, B's `b_only` acquired, and
+    // `shared` (in both) ends at refcount 1, NOT 2 (released then re-acquired).
+    game.armPostLoadRenderGate("scene_b");
+    try testing.expectEqual(@as(u32, 0), game.assets.entries.getPtr("a_only").?.refcount);
+    try testing.expectEqual(@as(u32, 1), game.assets.entries.getPtr("shared").?.refcount);
+    try testing.expectEqual(@as(u32, 1), game.assets.entries.getPtr("b_only").?.refcount);
+
+    // Tearing the game down releases B's manifest too (deinit hook).
+    game.releaseLoadAcquired();
+    try testing.expectEqual(@as(u32, 0), game.assets.entries.getPtr("shared").?.refcount);
+    try testing.expectEqual(@as(u32, 0), game.assets.entries.getPtr("b_only").?.refcount);
+}
