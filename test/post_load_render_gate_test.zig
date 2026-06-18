@@ -57,7 +57,7 @@ test "gate arms when the loaded scene declares a still-pending image atlas" {
     try registerPendingImage(&game, "cloud");
     enterScene(&game, "main", manifest);
 
-    game.armPostLoadRenderGate();
+    game.armPostLoadRenderGate(null);
 
     // Gate is armed — render must be suppressed.
     try testing.expect(game.post_load_render_gate != null);
@@ -72,7 +72,7 @@ test "gate clears once every gated atlas has re-bound" {
     try registerPendingImage(&game, "cloud");
     enterScene(&game, "main", manifest);
 
-    game.armPostLoadRenderGate();
+    game.armPostLoadRenderGate(null);
     try testing.expect(game.post_load_render_gate != null);
 
     // Only one atlas bound — gate must STILL hold (the other is unbound,
@@ -92,7 +92,7 @@ test "gate does not arm for an empty manifest" {
     defer game.deinit();
 
     enterScene(&game, "main", &.{});
-    game.armPostLoadRenderGate();
+    game.armPostLoadRenderGate(null);
     try testing.expect(game.post_load_render_gate == null);
 }
 
@@ -105,7 +105,7 @@ test "gate does not arm for a non-image (audio-only) manifest" {
     game.assets.entries.getPtr("theme").?.state = .ready;
     enterScene(&game, "main", manifest);
 
-    game.armPostLoadRenderGate();
+    game.armPostLoadRenderGate(null);
     try testing.expect(game.post_load_render_gate == null);
 }
 
@@ -123,7 +123,7 @@ test "a .failed atlas is terminal — gate does not wedge on it" {
     broken.last_error = error.TestInjectedFailure;
     enterScene(&game, "main", manifest);
 
-    game.armPostLoadRenderGate();
+    game.armPostLoadRenderGate(null);
     try testing.expect(game.post_load_render_gate != null);
 
     // `broken` is `.failed` (skipped); once `characters` binds the gate
@@ -141,7 +141,7 @@ test "gate clears at the frame deadline even if an atlas never binds" {
     try registerPendingImage(&game, "characters");
     enterScene(&game, "main", manifest);
 
-    game.armPostLoadRenderGate();
+    game.armPostLoadRenderGate(null);
     try testing.expect(game.post_load_render_gate != null);
 
     // Atlas never binds. Before the deadline the gate holds.
@@ -169,7 +169,7 @@ test "an atlas bound at texture_id 0 is ready (bgfx valid-handle case)" {
     try registerPendingImage(&game, "characters");
     enterScene(&game, "main", manifest);
 
-    game.armPostLoadRenderGate();
+    game.armPostLoadRenderGate(null);
     try testing.expect(game.post_load_render_gate != null);
 
     // Decode lands and the atlas binds at handle 0 — a valid, ready
@@ -189,7 +189,7 @@ test "a catalog image still decoding holds the gate" {
     try game.atlas_manager.registerPendingAtlas("characters", "{\"frames\":{}}", "img", "png");
     enterScene(&game, "main", manifest);
 
-    game.armPostLoadRenderGate();
+    game.armPostLoadRenderGate(null);
     // Still decoding → not ready → gate holds.
     game.updatePostLoadRenderGate();
     try testing.expect(game.post_load_render_gate != null);
@@ -199,4 +199,107 @@ test "a catalog image still decoding holds the gate" {
     try bindAtlas(&game, "characters", 3);
     game.updatePostLoadRenderGate();
     try testing.expect(game.post_load_render_gate == null);
+}
+
+// ── engine#638: saved-scene manifest + atomic, acquire-and-bridge ──────
+
+/// Register `name` as a fully-uploaded image: `.ready` catalog entry
+/// carrying a real `resource` handle (so the gate's atomic bridge can
+/// read it) AND a still-pending atlas_manager atlas (texture_id 0). This
+/// is the post-decode state the load gate is meant to bind in one pass.
+fn registerUploadedImage(game: *Game, name: []const u8, handle: u32) !void {
+    try game.assets.register(name, .image, "png", "stub-bytes");
+    const entry = game.assets.entries.getPtr(name).?;
+    entry.state = .ready;
+    entry.refcount = 1;
+    entry.resource = .{ .image = handle };
+    try game.atlas_manager.registerPendingAtlas(name, "{\"frames\":{}}", "img", "png");
+}
+
+test "gate prefers the SAVED scene's manifest over the active scene (#638)" {
+    // A menu→Load restores a colony save while the active scene is still
+    // `menu`. The gate must arm on the SAVED scene's manifest (the atlases
+    // the restored sprites sample from), not the menu's.
+    var game = Game.init(testing.allocator);
+    defer game.deinit();
+
+    // Active scene = menu (one atlas, already bound — nothing to wait on).
+    try registerUploadedImage(&game, "background", 0);
+    try bindAtlas(&game, "background", 0);
+    enterScene(&game, "menu", &.{"background"});
+
+    // Saved (colony) scene declares two atlases that are still decoding
+    // (so the gate holds and we can inspect which manifest it armed on).
+    try registerUploadedImage(&game, "characters", 5);
+    try registerUploadedImage(&game, "rooms", 6);
+    game.assets.entries.getPtr("characters").?.state = .decoding;
+    game.assets.entries.getPtr("rooms").?.state = .decoding;
+    game.registerSceneWithAssets("colony", emptyLoader, &.{ "characters", "rooms" });
+
+    // Arm against the SAVED scene name — the gate must pick the colony
+    // manifest, see two still-unbound atlases, and hold.
+    game.armPostLoadRenderGate("colony");
+    try testing.expect(game.post_load_render_gate != null);
+    // It armed on the colony manifest, not menu's single `background`.
+    try testing.expectEqual(@as(usize, 2), game.post_load_render_gate.?.len);
+}
+
+test "gate binds the whole manifest atomically in one pass (#638)" {
+    // The defining property of the deterministic load gate: it does NOT
+    // bind any atlas until EVERY atlas in the manifest is `.ready`, then
+    // binds them all in a single `bridgeManifest` pass. A half-ready
+    // manifest leaves NOTHING bound (no incremental half-bound window).
+    var game = Game.init(testing.allocator);
+    defer game.deinit();
+
+    try registerUploadedImage(&game, "characters", 5);
+    try registerUploadedImage(&game, "rooms", 6);
+    // Start both still decoding so the immediate settle in
+    // `armPostLoadRenderGate` can't clear the gate before we test it.
+    game.assets.entries.getPtr("characters").?.state = .decoding;
+    game.assets.entries.getPtr("rooms").?.state = .decoding;
+    game.registerSceneWithAssets("colony", emptyLoader, &.{ "characters", "rooms" });
+    game.current_scene_name = game.allocator.dupe(u8, "colony") catch unreachable;
+
+    game.armPostLoadRenderGate("colony");
+    try testing.expect(game.post_load_render_gate != null);
+
+    // Make only ONE atlas ready; the other is still decoding.
+    game.assets.entries.getPtr("characters").?.state = .ready;
+    game.updatePostLoadRenderGate();
+    // Nothing should be bound yet — the manifest is bound all-at-once or
+    // not at all. `characters` (ready) must still be pending in the
+    // manager because the gate refused to bind a half-ready manifest.
+    try testing.expect(!game.post_load_render_gate_bridged);
+    try testing.expect(!game.atlas_manager.getAtlas("characters").?.isLoaded());
+    try testing.expect(game.post_load_render_gate != null);
+
+    // Now the second atlas finishes — the gate binds BOTH in one pass and
+    // clears. Each atlas takes the handle its own catalog `resource` holds.
+    game.assets.entries.getPtr("rooms").?.state = .ready;
+    game.updatePostLoadRenderGate();
+    try testing.expect(game.post_load_render_gate_bridged);
+    try testing.expect(game.atlas_manager.getAtlas("characters").?.isLoaded());
+    try testing.expect(game.atlas_manager.getAtlas("rooms").?.isLoaded());
+    try testing.expectEqual(@as(u32, 5), game.atlas_manager.getAtlas("characters").?.texture_id);
+    try testing.expectEqual(@as(u32, 6), game.atlas_manager.getAtlas("rooms").?.texture_id);
+    try testing.expect(game.post_load_render_gate == null);
+}
+
+test "gate acquires the manifest's atlases so the load triggers decode (#638)" {
+    // loadGameState must be self-contained: arming the gate acquires the
+    // manifest's image atlases (0→1 refcount) so their decode is enqueued
+    // by the engine — no external `assets.acquire(...)` workaround needed.
+    var game = Game.init(testing.allocator);
+    defer game.deinit();
+
+    // A fresh, never-acquired atlas (refcount 0, registered).
+    try game.assets.register("characters", .image, "png", "stub");
+    try game.atlas_manager.registerPendingAtlas("characters", "{\"frames\":{}}", "img", "png");
+    game.registerSceneWithAssets("colony", emptyLoader, &.{"characters"});
+
+    try testing.expectEqual(@as(u32, 0), game.assets.entries.getPtr("characters").?.refcount);
+    game.armPostLoadRenderGate("colony");
+    // The gate acquired it — refcount bumped to 1.
+    try testing.expectEqual(@as(u32, 1), game.assets.entries.getPtr("characters").?.refcount);
 }
