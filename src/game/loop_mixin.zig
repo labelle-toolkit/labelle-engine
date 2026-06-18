@@ -53,6 +53,14 @@ pub fn Mixin(comptime Game: type) type {
             // bridged atlases are silently skipped.
             self.bridgeAllReadyImageAssets();
 
+            // Post-load render gate (#637). Runs RIGHT AFTER the bridge
+            // so any atlas that re-bound this frame clears the gate the
+            // same frame — no extra hidden frame. No-op unless a recent
+            // `loadGameState` armed the gate. See `render` below for the
+            // suppression side, and the `post_load_render_gate` field doc
+            // for the full corruption-flash rationale.
+            self.updatePostLoadRenderGate();
+
             // Always run: logging, audio, input, renderer sync, gizmo reconciliation.
             // These must run even when paused so the game remains responsive.
             self.log.update(dt);
@@ -198,7 +206,21 @@ pub fn Mixin(comptime Game: type) type {
         }
 
         pub fn render(self: *Game) void {
-            self.renderer.render();
+            // Post-load render gate (#637). A `loadGameState` restored
+            // every saved sprite synchronously, but the atlases they
+            // sample re-decode/re-upload asynchronously over the next
+            // ~1–2 s; during that window some sit at `texture_id == 0`
+            // and the restored sprites would flash with an unbound /
+            // wrong texture. Hold the world draw until every gated atlas
+            // has re-bound (the gate is cleared in `tick` by
+            // `updatePostLoadRenderGate` the first frame they're all
+            // ready). We still draw gizmos so debug overlays / the
+            // generated frame's clear stay live — only the textured world
+            // is suppressed, and only for the few frames the re-decode
+            // takes. The common path (no gate armed) is unchanged.
+            if (self.post_load_render_gate == null) {
+                self.renderer.render();
+            }
             self.renderGizmos();
             self.clearGizmos();
         }

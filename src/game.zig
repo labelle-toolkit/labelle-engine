@@ -351,6 +351,49 @@ pub fn GameConfig(
         /// at startup.
         asset_failure_policy: AssetFailurePolicy = .fatal,
 
+        /// Post-load render gate (#637). `loadGameState` resets the ECS
+        /// and restores every saved entity *synchronously*, but the
+        /// atlases those sprites reference get re-registered through the
+        /// streaming catalog and re-decode/re-upload *asynchronously*
+        /// over the next 1–2 seconds. During that window the
+        /// re-registered atlases sit at `texture_id == 0` (the pending
+        /// sentinel `registerPendingAtlas` writes), so `findSprite`
+        /// returns 0 for them, `resolveAtlasSprites` stamps texture 0
+        /// onto the restored sprites, and the draw path
+        /// (`drawSpriteEntry`) — which has no entry for handle 0 —
+        /// renders them with a bogus/last-bound backend texture. The
+        /// visible result is the corruption flash the parent saw
+        /// (workers briefly wearing the cloud atlas, or an unbound
+        /// texture) until each atlas finishes re-binding via
+        /// `markPendingLoaded`.
+        ///
+        /// This is the load-path counterpart to the scene-change
+        /// readiness gate (`gateOnManifest` in `scene_mixin.zig`). When
+        /// set, `render()` suppresses the world draw so no restored
+        /// sprite is shown with an unbound atlas. It is cleared the
+        /// first tick on which every gated atlas has re-bound (see
+        /// `updatePostLoadRenderGate`). `null` means "no load gate
+        /// active" (the common steady-state — zero cost per frame).
+        ///
+        /// Holds the loaded scene's declared `assets:` manifest slice
+        /// (image entries are the ones we actually wait on; non-image
+        /// entries are skipped by the readiness check). This borrows the
+        /// program-lifetime slice off the `SceneEntry` — the same one
+        /// `setScene`/`gateOnManifest` use — so it never needs freeing;
+        /// scenes are registered once at startup and never unregistered
+        /// at runtime. `null` means no gate is active.
+        post_load_render_gate: ?[]const []const u8 = null,
+
+        /// Hard deadline (frame number) at which the post-load render
+        /// gate is force-cleared even if some atlas never reports bound.
+        /// Belt-and-suspenders so a missing/renamed atlas, a failed
+        /// decode under a `.warn`/`.silent` policy, or a backend that
+        /// reuses handle 0 can NEVER wedge the world render permanently
+        /// (a few frames of corruption is strictly better than a frozen
+        /// black world). Set when the gate is armed; ignored while the
+        /// gate is `null`.
+        post_load_render_gate_deadline: u64 = 0,
+
         // Active scene (type-erased) — managed by sceneLoaderFn / setActiveScene
         active_scene_ptr: ?*anyopaque = null,
         active_scene_update_fn: ?*const fn (*anyopaque, f32) void = null,
@@ -783,6 +826,8 @@ pub fn GameConfig(
         // ── Save/Load (mixin) ───────────────────────────────────────
         pub const saveGameState = SaveLoadMixin.saveGameState;
         pub const loadGameState = SaveLoadMixin.loadGameState;
+        pub const armPostLoadRenderGate = SaveLoadMixin.armPostLoadRenderGate;
+        pub const updatePostLoadRenderGate = SaveLoadMixin.updatePostLoadRenderGate;
 
         // ── Game State Machine (mixin) ──────────────────────────────
         pub const setState = StateMixin.setState;

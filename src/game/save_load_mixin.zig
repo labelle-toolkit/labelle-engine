@@ -853,6 +853,162 @@ pub fn Mixin(comptime Game: type) type {
                     self.addEntityToActiveScene(ent);
                 }
             }
+
+            // Step 7: Arm the post-load render gate (#637).
+            //
+            // Phases 1–6 restored every saved entity synchronously, but
+            // a prefab re-spawned in Phase 1a re-registers its atlas
+            // through the streaming catalog (`registerAtlasFromMemory`
+            // → `registerPendingAtlas`), which resets that atlas to
+            // `texture_id == 0` and re-queues an async PNG decode/upload.
+            // Until each atlas re-binds (the per-tick
+            // `bridgeAllReadyImageAssets` calls `markPendingLoaded` once
+            // its catalog upload lands), `findSprite` returns 0 for it
+            // and the restored sprites would render with an unbound /
+            // wrong texture — the corruption flash this fix targets.
+            //
+            // Mirror the scene-change readiness gate: hold the world
+            // render until every `.image` atlas the loaded scene declares
+            // has re-bound. We gate on the *scene's declared manifest*
+            // (the same slice `setScene`/`gateOnManifest` use) because
+            // those are exactly the atlases the restored sprites sample
+            // from — and they're already acquired (refcount held since
+            // the original scene load), so we only need to wait for the
+            // re-decode, not re-acquire. `tick` clears the gate the first
+            // frame `updatePostLoadRenderGate` finds them all bound.
+            //
+            // Scenes with no declared manifest (or a load fired before
+            // any scene loaded) get no gate — there's nothing to wait on
+            // and a never-clearing gate would freeze the world render.
+            self.armPostLoadRenderGate();
+        }
+
+        /// Arm the post-load render gate from the current scene's
+        /// declared asset manifest. No-op when there's no current scene
+        /// or the scene declares no assets (nothing to wait on). See the
+        /// `post_load_render_gate` field doc + Step 7 in `loadGameState`.
+        /// Upper bound on how many frames the post-load render gate may
+        /// hold the world hidden. At 60 fps this is ~2 s — comfortably
+        /// longer than the observed 1–2 s re-decode window, so a normal
+        /// load always clears via the readiness path well before the
+        /// deadline, yet a pathological never-binds atlas can't freeze
+        /// the world forever (see `post_load_render_gate_deadline`).
+        const POST_LOAD_GATE_MAX_FRAMES: u64 = 180;
+
+        pub fn armPostLoadRenderGate(self: *Game) void {
+            self.post_load_render_gate = null;
+            const scene_name = self.current_scene_name orelse return;
+            const entry = self.scenes.get(scene_name) orelse return;
+            if (entry.assets.len == 0) return;
+            // Only gate when at least one declared asset is an image
+            // atlas — a manifest of pure audio/font entries has nothing
+            // to re-bind and would otherwise wedge the gate open until
+            // the next `updatePostLoadRenderGate` no-ops it (cheap, but
+            // we skip arming to keep the steady state truly zero-cost).
+            if (!postLoadGateHasImage(self, entry.assets)) return;
+            self.post_load_render_gate = entry.assets;
+            self.post_load_render_gate_deadline = self.frame_number + POST_LOAD_GATE_MAX_FRAMES;
+
+            // Settle the gate immediately. `loadGameState` is typically
+            // called from a script's `tick`, which runs AFTER the
+            // per-frame `updatePostLoadRenderGate` in `tick`. Without
+            // this, even a load whose atlases are all already bound (the
+            // common case — `resetEcsBackend` preserves GPU textures)
+            // would suppress this frame's `render` and only un-gate next
+            // frame. Re-running the check here clears the gate in the
+            // same frame when there's nothing unbound to hide, so the
+            // no-corruption path is truly zero-frame. When a re-decode
+            // *is* in flight, the gate stays armed and holds as intended.
+            self.updatePostLoadRenderGate();
+        }
+
+        /// `true` when at least one entry in `assets` is a registered
+        /// `.image` catalog asset — i.e. an atlas that has a `texture_id`
+        /// to re-bind after a load.
+        fn postLoadGateHasImage(self: *Game, assets: []const []const u8) bool {
+            for (assets) |name| {
+                const e = self.assets.entries.getPtr(name) orelse continue;
+                if (e.loader_kind == .image) return true;
+            }
+            return false;
+        }
+
+        /// Per-tick gate check (#637). While the post-load render gate is
+        /// armed, clear it the first frame every gated `.image` atlas has
+        /// finished (re-)binding. We require BOTH:
+        ///
+        ///   1. the catalog entry to be `.ready` (the PNG decode + GPU
+        ///      upload landed), and
+        ///   2. — when the atlas_manager tracks an atlas under the same
+        ///      name (FP and the assembler key both sides identically) —
+        ///      that atlas to report `isLoaded()` (its `pending` decode
+        ///      slot is cleared, i.e. `markPendingLoaded` has run and a
+        ///      real texture handle is installed).
+        ///
+        /// IMPORTANT — readiness is `isLoaded()`, NOT `texture_id != 0`.
+        /// `texture_id == 0` is the *pending* sentinel only while an
+        /// atlas is registered-but-not-decoded; once decoded, 0 is a
+        /// perfectly valid backend handle. bgfx (and any backend whose
+        /// first-allocated texture/slot handle is 0) legitimately binds
+        /// an atlas at handle 0 — the FP `characters` atlas renders
+        /// correctly at `texture_id == 0` in steady-state play. Gating
+        /// on `texture_id != 0` would therefore treat a correctly-bound
+        /// atlas as "never ready" and hold the gate open until the
+        /// deadline on every load. `isLoaded()` is the cross-backend-safe
+        /// predicate: it tracks the decode/upload lifecycle, not the GPU
+        /// handle value.
+        ///
+        /// Wedge-safety — the gate can NEVER hold the world hidden
+        /// indefinitely:
+        ///   * A `.failed` catalog entry is treated as terminal (the
+        ///     scene gate already ships failed assets under
+        ///     `asset_failure_policy`; blocking forever on one would be
+        ///     worse than the flash this fix removes).
+        ///   * An atlas the manager doesn't track by the catalog name is
+        ///     satisfied on catalog `.ready` alone — there's no per-atlas
+        ///     decode state to wait on, and waiting would wedge.
+        ///   * A hard frame deadline force-clears the gate regardless
+        ///     (see `post_load_render_gate_deadline`).
+        ///
+        /// Called from `tick` right after `bridgeAllReadyImageAssets`, so
+        /// any atlas that finished binding this frame clears the gate the
+        /// same frame (no extra hidden frame). No-op when the gate isn't
+        /// armed (the steady-state cost is a single optional check). When
+        /// the loaded scene's atlases were never invalidated (the common
+        /// case — `resetEcsBackend` preserves GPU textures, and the
+        /// assembler eager-loads atlases once at startup), every gated
+        /// atlas is already `.ready` + `isLoaded()` on the first
+        /// post-load tick, so the gate arms and clears in a single frame
+        /// — correct, since there's nothing unbound to hide.
+        pub fn updatePostLoadRenderGate(self: *Game) void {
+            const gated = self.post_load_render_gate orelse return;
+
+            // Hard deadline — force-clear so a never-binding atlas (a
+            // failed decode, a renamed/missing atlas, a stuck re-decode)
+            // can't freeze the world.
+            if (self.frame_number >= self.post_load_render_gate_deadline) {
+                self.post_load_render_gate = null;
+                return;
+            }
+
+            for (gated) |name| {
+                const e = self.assets.entries.getPtr(name) orelse continue;
+                if (e.loader_kind != .image) continue;
+                // `.failed` is terminal — don't block on a broken asset
+                // (mirrors the scene gate's `asset_failure_policy` intent).
+                if (e.state == .failed) continue;
+                // Still decoding/uploading — the (re-)decode is in flight.
+                if (e.state != .ready) return;
+                // Catalog is `.ready`; require the manager-tracked atlas
+                // (if any) to have its decode bridged in. `isLoaded()`
+                // (not `texture_id != 0`) — see the readiness note above.
+                if (self.atlas_manager.getAtlas(name)) |atlas| {
+                    if (!atlas.isLoaded()) return;
+                }
+            }
+            // Every gated atlas is bound — release the gate so `render`
+            // shows the fully-textured restored world from this frame on.
+            self.post_load_render_gate = null;
         }
     };
 }
