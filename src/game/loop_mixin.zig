@@ -99,15 +99,44 @@ pub fn Mixin(comptime Game: type) type {
             // Scene changes must process even when paused (e.g. pause menu → new scene)
             if (self.pending_scene_change) |next_scene| {
                 const atomic = self.pending_scene_atomic;
-                defer {
+                var failed = false;
+                if (atomic) {
+                    self.setSceneAtomic(next_scene) catch {
+                        failed = true;
+                    };
+                } else {
+                    self.setScene(next_scene) catch {
+                        failed = true;
+                    };
+                }
+                // Consume the request only once the swap actually COMMITTED
+                // (or hard-errored). `setScene`/`setSceneAtomic` DEFER —
+                // returning without swapping — while the target scene's asset
+                // manifest is still loading. Previously the request was cleared
+                // unconditionally, dropping the scene change forever (there is
+                // no separate retry path) — which left a menu→colony transition
+                // stuck on the menu rendering only the background (the target's
+                // atlases hadn't been acquired yet). Keep it pending across
+                // deferrals so a later frame — by which point the gate's
+                // acquire has driven the atlases to `.ready` — commits.
+                //
+                // Commit signal: `pending_scene_assets` is set when the gate
+                // defers (acquireBatch) and cleared only when the swap
+                // commits, so `== null` means committed. (Using
+                // `current_scene_name == target` would falsely read as
+                // committed when RELOADING the current scene and the reload
+                // defers — the name already matches. See review on #635.)
+                // A scene with no declared assets never gates, so it always
+                // commits in one shot.
+                const has_assets = if (self.scenes.get(next_scene)) |entry|
+                    entry.assets.len > 0
+                else
+                    false;
+                const committed = !has_assets or self.pending_scene_assets == null;
+                if (failed or committed) {
                     self.allocator.free(next_scene);
                     self.pending_scene_change = null;
                     self.pending_scene_atomic = false;
-                }
-                if (atomic) {
-                    self.setSceneAtomic(next_scene) catch {};
-                } else {
-                    self.setScene(next_scene) catch {};
                 }
             }
 
