@@ -6,7 +6,6 @@
 /// sprite resolve and input-event scans are reached through their own
 /// mixins (`AtlasMixin` / `InputEventsMixin`) instantiated against the same
 /// `Game`, matching how `game.zig` invoked them.
-const std = @import("std");
 const atlas_mixin = @import("atlas_mixin.zig");
 const input_events_mixin = @import("input_events_mixin.zig");
 
@@ -113,19 +112,27 @@ pub fn Mixin(comptime Game: type) type {
                 // Consume the request only once the swap actually COMMITTED
                 // (or hard-errored). `setScene`/`setSceneAtomic` DEFER —
                 // returning without swapping — while the target scene's asset
-                // manifest is still loading; the asset gate runs BEFORE any
-                // teardown, so on a deferral `current_scene_name` is unchanged.
-                // Previously the request was cleared unconditionally, dropping
-                // the scene change forever (there is no separate retry path) —
-                // which left a menu→colony transition stuck on the menu
-                // rendering only the background (the target's atlases hadn't
-                // been acquired yet). Keep it pending across deferrals so a
-                // later frame — by which point the gate's acquire has driven
-                // the atlases to `.ready` — commits the swap.
-                const committed = if (self.current_scene_name) |cur|
-                    std.mem.eql(u8, cur, next_scene)
+                // manifest is still loading. Previously the request was cleared
+                // unconditionally, dropping the scene change forever (there is
+                // no separate retry path) — which left a menu→colony transition
+                // stuck on the menu rendering only the background (the target's
+                // atlases hadn't been acquired yet). Keep it pending across
+                // deferrals so a later frame — by which point the gate's
+                // acquire has driven the atlases to `.ready` — commits.
+                //
+                // Commit signal: `pending_scene_assets` is set when the gate
+                // defers (acquireBatch) and cleared only when the swap
+                // commits, so `== null` means committed. (Using
+                // `current_scene_name == target` would falsely read as
+                // committed when RELOADING the current scene and the reload
+                // defers — the name already matches. See review on #635.)
+                // A scene with no declared assets never gates, so it always
+                // commits in one shot.
+                const has_assets = if (self.scenes.get(next_scene)) |entry|
+                    entry.assets.len > 0
                 else
                     false;
+                const committed = !has_assets or self.pending_scene_assets == null;
                 if (failed or committed) {
                     self.allocator.free(next_scene);
                     self.pending_scene_change = null;
