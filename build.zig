@@ -113,6 +113,7 @@ pub fn build(b: *std.Build) void {
         "test/spawn_from_prefab_test.zig",
         "test/jsonc/bridge_prefab_tags_test.zig",
         "test/save_load_two_phase_test.zig",
+        "test/post_load_render_gate_test.zig",
         "test/example_prefab_animation_walkthrough_test.zig",
         "test/jsonc/bridge_deserialize_test.zig",
         "test/jsonc/deserializer_test.zig",
