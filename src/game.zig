@@ -394,6 +394,33 @@ pub fn GameConfig(
         /// gate is `null`.
         post_load_render_gate_deadline: u64 = 0,
 
+        /// The image-atlas manifest the most recent `loadGameState`
+        /// acquired (engine#638), so a SUBSEQUENT load can release it
+        /// before acquiring the next one. Without this, loading save A
+        /// then save B would acquire each manifest's atlases and never
+        /// release A's — a slow refcount leak across repeated loads (and a
+        /// double-pin when an in-game Load re-acquires the active scene's
+        /// already-held manifest). The acquire/release is balanced here
+        /// rather than via the scene-swap path because a load does NOT
+        /// swap scenes (`current_scene_name` is unchanged), so
+        /// `releasePreviousAssets` never sees it. Borrows the
+        /// program-lifetime `SceneEntry.assets` slice; `null` when no load
+        /// has pinned a manifest. Released in full on `deinit`.
+        post_load_acquired_assets: ?[]const []const u8 = null,
+
+        /// Whether the post-load gate's manifest has been bridged into
+        /// `atlas_manager` yet (engine#638). The load path binds the whole
+        /// manifest in ONE deterministic pass — the moment every atlas is
+        /// `.ready` — mirroring the scene-change gate
+        /// (`bridgeImageAssetsToAtlasManager`) instead of letting the
+        /// per-tick incremental `bridgeAllReadyImageAssets` walk bind them
+        /// one at a time as each upload lands. The all-at-once bind is the
+        /// scene-change path's defining property and the reason it never
+        /// exhibited the load path's intermittent mis-binding: a half-bound
+        /// manifest is never observable. Reset to `false` when the gate
+        /// arms; set `true` the frame the atomic bridge runs.
+        post_load_render_gate_bridged: bool = false,
+
         // Active scene (type-erased) — managed by sceneLoaderFn / setActiveScene
         active_scene_ptr: ?*anyopaque = null,
         active_scene_update_fn: ?*const fn (*anyopaque, f32) void = null,
@@ -813,6 +840,7 @@ pub fn GameConfig(
         pub const getCurrentSceneName = SceneMixin.getCurrentSceneName;
         pub const pendingSceneName = SceneMixin.pendingSceneName;
         pub const bridgeAllReadyImageAssets = SceneMixin.bridgeAllReadyImageAssets;
+        pub const bridgeManifest = SceneMixin.bridgeManifest;
 
         /// Register a runtime JSONC scene by name.
         /// The scene file is loaded from disk when setScene() is called.
@@ -828,6 +856,7 @@ pub fn GameConfig(
         pub const loadGameState = SaveLoadMixin.loadGameState;
         pub const armPostLoadRenderGate = SaveLoadMixin.armPostLoadRenderGate;
         pub const updatePostLoadRenderGate = SaveLoadMixin.updatePostLoadRenderGate;
+        pub const releaseLoadAcquired = SaveLoadMixin.releaseLoadAcquired;
 
         // ── Game State Machine (mixin) ──────────────────────────────
         pub const setState = StateMixin.setState;

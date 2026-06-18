@@ -286,7 +286,26 @@ pub fn Mixin(comptime Game: type) type {
             defer alloc_writer.deinit();
             const writer = &alloc_writer.writer;
 
-            try writer.print("{{\n  \"version\": {d},\n  \"entities\": [\n", .{SAVE_VERSION});
+            try writer.print("{{\n  \"version\": {d},\n", .{SAVE_VERSION});
+
+            // Record the active scene name so `loadGameState` can
+            // re-acquire and bind THAT scene's atlas manifest through the
+            // deterministic catalog gate — even when the load is issued
+            // from a different scene (the menu→Load case, where
+            // `current_scene_name` is still "menu" at load time). Without
+            // this the loader has no way to know which atlas packs the
+            // restored colony references, which is exactly why
+            // flying-platform shipped a manual `assets.acquire(...)` loop
+            // in its Load handler (FP#542). Optional + back-compat: older
+            // saves simply omit the key and `loadGameState` falls back to
+            // the current scene's manifest (the pre-#638 behaviour).
+            if (self.current_scene_name) |scene_name| {
+                try writer.writeAll("  \"scene\": ");
+                try writeJsonString(writer, scene_name);
+                try writer.writeAll(",\n");
+            }
+
+            try writer.writeAll("  \"entities\": [\n");
 
             for (entity_list.items, 0..) |id, idx| {
                 const entity: Entity = @intCast(id);
@@ -461,6 +480,18 @@ pub fn Mixin(comptime Game: type) type {
             }
 
             const entities_json = (root.get("entities") orelse return error.MissingField).array;
+
+            // Optional saved scene name (engine#638). Saves written before
+            // this field omit it — fall back to the current scene's
+            // manifest (the pre-#638 gate behaviour). Borrowed from the
+            // parsed JSON, so it's only valid for the duration of this
+            // call; `armPostLoadRenderGate` resolves it to the
+            // program-lifetime `SceneEntry.assets` slice before it's used
+            // beyond this stack frame.
+            const saved_scene: ?[]const u8 = if (root.get("scene")) |v| switch (v) {
+                .string => |s| s,
+                else => null,
+            } else null;
 
             // Step 1: Clear scene tracking and destroy all entities atomically.
             //
@@ -880,7 +911,17 @@ pub fn Mixin(comptime Game: type) type {
             // Scenes with no declared manifest (or a load fired before
             // any scene loaded) get no gate — there's nothing to wait on
             // and a never-clearing gate would freeze the world render.
-            self.armPostLoadRenderGate();
+            //
+            // engine#638: arm against the SAVED scene's manifest, not the
+            // currently-active scene. A menu→Load restores a colony save
+            // while `current_scene_name` is still "menu" (load never swaps
+            // scenes), so the menu's one-atlas manifest would gate nothing
+            // useful. The saved manifest is the set the restored sprites
+            // actually sample from. `armPostLoadRenderGate` also ACQUIRES
+            // that manifest so the (re-)decode is triggered by the engine
+            // itself — making loadGameState self-contained and retiring
+            // the manual `assets.acquire(...)` loop games shipped (FP#542).
+            self.armPostLoadRenderGate(saved_scene);
         }
 
         /// Arm the post-load render gate from the current scene's
@@ -895,18 +936,91 @@ pub fn Mixin(comptime Game: type) type {
         /// the world forever (see `post_load_render_gate_deadline`).
         const POST_LOAD_GATE_MAX_FRAMES: u64 = 180;
 
-        pub fn armPostLoadRenderGate(self: *Game) void {
+        /// Release the image atlases a previous `loadGameState` acquired
+        /// via `armPostLoadRenderGateFromEntry` (engine#638), balancing
+        /// that acquire so repeated loads don't leak catalog refcounts.
+        /// No-op when no load has pinned a manifest. Also called from
+        /// `Game.deinit` so a game torn down after a load doesn't leak.
+        pub fn releaseLoadAcquired(self: *Game) void {
+            const prev = self.post_load_acquired_assets orelse return;
+            self.post_load_acquired_assets = null;
+            for (prev) |name| {
+                const e = self.assets.entries.getPtr(name) orelse continue;
+                if (e.loader_kind != .image) continue;
+                self.assets.release(name);
+            }
+        }
+
+        pub fn armPostLoadRenderGate(self: *Game, saved_scene: ?[]const u8) void {
             self.post_load_render_gate = null;
-            const scene_name = self.current_scene_name orelse return;
-            const entry = self.scenes.get(scene_name) orelse return;
-            if (entry.assets.len == 0) return;
+            self.post_load_render_gate_bridged = false;
+            // Release the manifest the PREVIOUS load pinned — on EVERY
+            // load, before resolving the new one (engine#638). Done here
+            // (not only on the acquire path) so a load onto a scene with no
+            // image manifest, an unregistered scene, or the early
+            // no-manifest returns below still drops the prior pin. The
+            // matching re-acquire happens in `armPostLoadRenderGateFromEntry`.
+            releaseLoadAcquired(self);
+            // Prefer the scene recorded IN the save (engine#638) — that's
+            // the manifest the restored sprites actually sample from. Fall
+            // back to the currently-active scene for legacy saves that
+            // predate the `"scene"` field. Resolve to the program-lifetime
+            // `SceneEntry.assets` slice so the gate can hold it across
+            // frames without dangling on the parsed-JSON string.
+            // Resolve the manifest slice: prefer the saved scene, then the
+            // active scene as a fallback (legacy saves, or a saved scene
+            // name that no longer resolves to a registered scene).
+            const assets: []const []const u8 = blk: {
+                if (saved_scene) |sn| {
+                    if (self.scenes.get(sn)) |e| break :blk e.assets;
+                }
+                if (self.current_scene_name) |cn| {
+                    if (self.scenes.get(cn)) |e| break :blk e.assets;
+                }
+                return;
+            };
+            armPostLoadRenderGateFromEntry(self, assets);
+        }
+
+        /// Shared body of `armPostLoadRenderGate` once the manifest slice
+        /// is resolved. Acquires the manifest's image atlases (so the
+        /// load triggers their decode itself — see #638), arms the gate,
+        /// and settles it immediately.
+        fn armPostLoadRenderGateFromEntry(self: *Game, assets: []const []const u8) void {
+            if (assets.len == 0) return;
             // Only gate when at least one declared asset is an image
             // atlas — a manifest of pure audio/font entries has nothing
             // to re-bind and would otherwise wedge the gate open until
             // the next `updatePostLoadRenderGate` no-ops it (cheap, but
             // we skip arming to keep the steady state truly zero-cost).
-            if (!postLoadGateHasImage(self, entry.assets)) return;
-            self.post_load_render_gate = entry.assets;
+            if (!postLoadGateHasImage(self, assets)) return;
+
+            // Acquire the manifest's image atlases through the SAME catalog
+            // path the scene-change gate uses (#638). A menu→Load lands on
+            // a colony save whose packs the menu scene never acquired
+            // (`menu` only pins `background`); without this nothing
+            // triggers their (re-)decode and the world loads invisible —
+            // which is exactly why flying-platform shipped a manual
+            // `assets.acquire(...)` loop in its Load handler (FP#542).
+            // Acquiring here makes loadGameState self-contained.
+            //
+            // Refcount discipline: a load does NOT swap scenes
+            // (`current_scene_name` is unchanged), so the scene-swap
+            // `releasePreviousAssets` never balances this acquire. The
+            // PREVIOUS load's pin was already dropped by the
+            // `releaseLoadAcquired` at the top of `armPostLoadRenderGate`
+            // (runs on every load), so repeated loads (save A → save B) and
+            // in-game same-scene reloads can't leak / double-pin the catalog
+            // refcount. Idempotent per atlas: an already-`.ready` atlas just
+            // bumps refcount (no re-decode).
+            for (assets) |name| {
+                const e = self.assets.entries.getPtr(name) orelse continue;
+                if (e.loader_kind != .image) continue;
+                _ = self.assets.acquire(name) catch {};
+            }
+            self.post_load_acquired_assets = assets;
+
+            self.post_load_render_gate = assets;
             self.post_load_render_gate_deadline = self.frame_number + POST_LOAD_GATE_MAX_FRAMES;
 
             // Settle the gate immediately. `loadGameState` is typically
@@ -991,6 +1105,16 @@ pub fn Mixin(comptime Game: type) type {
                 return;
             }
 
+            // Pass 1: wait until EVERY gated image atlas's catalog entry
+            // has reached a terminal state (`.ready` or `.failed`). We do
+            // NOT bind any atlas until they're ALL ready — that all-at-once
+            // bind is what makes this path deterministic (#638). Binding
+            // incrementally, atlas-by-atlas as each upload lands (the old
+            // per-tick `bridgeAllReadyImageAssets` behaviour for the load
+            // path), is the asymmetry that let a menu→Load occasionally
+            // show a half-bound manifest; the scene-change gate never does
+            // because it bridges the whole manifest in one pass after
+            // `allReady`.
             for (gated) |name| {
                 const e = self.assets.entries.getPtr(name) orelse continue;
                 if (e.loader_kind != .image) continue;
@@ -999,9 +1123,27 @@ pub fn Mixin(comptime Game: type) type {
                 if (e.state == .failed) continue;
                 // Still decoding/uploading — the (re-)decode is in flight.
                 if (e.state != .ready) return;
-                // Catalog is `.ready`; require the manager-tracked atlas
-                // (if any) to have its decode bridged in. `isLoaded()`
-                // (not `texture_id != 0`) — see the readiness note above.
+            }
+
+            // Pass 2: every gated atlas is `.ready`. Bind the WHOLE manifest
+            // in a single deterministic pass — the same call the
+            // scene-change gate makes (`bridgeManifest` →
+            // `bridgeImageAssetsToAtlasManager`). Idempotent + done once
+            // (guarded by `post_load_render_gate_bridged`) so a manifest
+            // shared with an already-bound scene doesn't re-bind. After
+            // this, every atlas the restored sprites sample from points at
+            // its own freshly-uploaded handle, atomically.
+            if (!self.post_load_render_gate_bridged) {
+                self.bridgeManifest(gated);
+                self.post_load_render_gate_bridged = true;
+            }
+
+            // Pass 3: confirm the manager-tracked atlases actually took the
+            // binding (`isLoaded()`, not `texture_id != 0` — see the
+            // readiness note above). Normally true the same frame as the
+            // bridge; the loop guards against an atlas the manager doesn't
+            // track by the catalog name (satisfied on catalog `.ready`).
+            for (gated) |name| {
                 if (self.atlas_manager.getAtlas(name)) |atlas| {
                     if (!atlas.isLoaded()) return;
                 }
