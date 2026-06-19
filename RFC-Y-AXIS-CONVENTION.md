@@ -1,6 +1,6 @@
 # RFC: Project-configurable Y-axis convention
 
-**Status:** Draft (revision 2 — default is now `.down`; existing games opt into `.up`)
+**Status:** Draft (revision 3 — adds labelle-core as the convention home + a Repos & rollout-order section)
 
 **Tracking:** labelle-gfx#274
 
@@ -112,36 +112,71 @@ instead of flipping `position` and then adding a logical offset on top.
 
 ## Per-layer changes
 
-### 1. `project.labelle` + labelle-assembler
+### 1. labelle-core — the convention's home
 
-- Parse `.y_axis: enum { up, down } = .up` in the project config; surface it on
-  the generated config so the engine/gfx can read it at comptime (it is a
-  build-time constant, like `.backend`).
-- Emit a compile error for an unknown value; default `.up` when the key is
-  absent (back-compat).
+- `labelle-core` owns `position.zig` + `coordinates.zig` and is the shared base
+  both engine and gfx depend on. Define `YAxis = enum { up, down }` and the
+  canonical vertical transform **here**, so there is exactly one definition of
+  "which way is +Y" that every layer routes through (this is what keeps the
+  camera and no-camera paths from diverging — Q2).
 
 ### 2. labelle-gfx — renderer flip + Shape composition (the core change)
 
-- Thread the convention into the renderer (a comptime `y_axis` on the render
-  config, mirroring how the backend is parameterized).
-- The single vertical flip (`toNdcY` / `screen_height - y`) becomes conditional
-  on `y_axis`: applied for `.up`, identity for `.down`.
-- Shape sub-offsets are composed in logical space **before** the flip. For the
-  `.line` case, compute the logical endpoint `(pos.x + end.x, pos.y + end.y)`
-  and run *that* through the same position→screen transform as `pos`, rather
-  than `flip(pos) + end`. Same treatment for any current/future offset-bearing
-  Shape (`triangle` vertices are already relative offsets — audit them here).
+- Thread the convention into the renderer (a comptime `y_axis`, mirroring how
+  the backend is parameterized) and route the one vertical flip through the
+  core transform: applied for `.up`, identity for `.down`.
+- `worldToScreen`/`screenToWorld` (camera) must use the **same** core transform
+  so a camera layer and a no-camera layer can never disagree (Q2).
+- Shape sub-offsets are composed in logical space **before** the flip: for
+  `.line`, transform the logical endpoint `(pos.x + end.x, pos.y + end.y)`
+  through the same position→screen path as `pos`, not `flip(pos) + end`. Audit
+  every offset-bearing Shape — `triangle` p2/p3 for sure, `rectangle` extent to
+  verify, `circle` (scalar radius) exempt (Q5).
 
-### 3. labelle-engine — `screenToDesign` + an accessor
+### 3. labelle-engine — picking + accessor
 
-- `screenToDesign` returns coordinates in the logical convention: for `.up` it
-  flips the raw window Y (`design_h - y`) so the result is directly comparable
-  to `Position`; for `.down` it returns the raw value (today's behavior).
-- Expose the active convention (e.g. `game.yAxis()` / a comptime constant) so
-  game code and tools can branch if they must.
-- `setPosition` is unchanged — `Position` is *already* the logical space; this
-  RFC only changes what "logical" means relative to the screen and makes the
-  consumers agree.
+- Keep `screenToDesign` **raw** (window space, y-down) so existing games are
+  untouched; add `screenToLogical` that applies `.y_axis` for axis-aware
+  picking (Q1 → (b)). Gizmo hit-testing routes through `screenToLogical`, not a
+  raw-mouse-vs-logical-position comparison (Q3).
+- Expose the active convention (`game.yAxis()` / a comptime constant).
+- `setPosition` is unchanged — `Position` is *already* the logical space; the
+  RFC only changes what "logical" means relative to the screen.
+
+### 4. `project.labelle` + labelle-assembler
+
+- `src/config.zig` parses `.y_axis: YAxis` from `project.labelle` and emits it
+  onto the generated game config (comptime, like `.backend`).
+- **Unset-`.y_axis` build guard** (the safety net — see Migration): during the
+  transition release, an absent key is a hard error naming both choices.
+- Update the bundled example projects.
+
+### 5. labelle-cli — `labelle init` scaffold
+
+- `src/cli/init.zig` writes `.y_axis = .down` into the generated
+  `project.labelle` so new projects get the default convention explicitly.
+
+## Repos & rollout order
+
+Five framework repos + two game repos (plus the assembler's bundled examples).
+This is a **"core diamond"** change — release strictly in dependency order so
+no consumer ever sees an unbuildable intermediate:
+
+| Stage | Repo | Role |
+|---|---|---|
+| 1 | **labelle-core** | `YAxis` enum + canonical flip transform (single source of truth) |
+| 2 | **labelle-gfx** | renderer flip-conditional, Shape compose, camera transform |
+| 2 | **labelle-engine** | `screenToLogical` + `yAxis()` accessor; thread the config |
+| 3 | **labelle-assembler** | parse/emit `.y_axis`, the unset-guard, bundled examples |
+| 3 | **labelle-cli** | `labelle init` scaffolds `.down` |
+| 4 | **flying-platform-labelle** | add `.y_axis = .up` (a pure declaration under Q1→(b)) |
+| 4 | **ricochet** | add `.y_axis = .up` |
+
+Order: **core → (gfx, engine) → (assembler, cli) → game pin-bumps + `.y_axis`
+declarations.** gfx and engine both consume core and can go in parallel once
+core ships; assembler + cli both consume engine/gfx; the games are last. The
+unset-guard means a game that bumps the assembler *before* declaring `.y_axis`
+gets a build error, not a silent flip — so each game can adopt at its own pace.
 
 ## Migration plan
 
