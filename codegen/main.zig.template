@@ -17,9 +17,16 @@ const gfx = @import("labelle-gfx");
 
 {{game_layers_block}}
 {{resource_registry_block}}{{game_events_block}}{{all_hook_payloads_block}}
-{{game_hooks_block}}const Renderer = gfx.GfxRenderer(BackendGfx, GameLayers, EcsBackend.Entity);
+{{game_hooks_block}}// Project Y-axis convention (engine#642). Single source of truth so the gfx
+// renderer/camera flip (output) and the engine's `screenToLogical` picking
+// (input) read the same axis — they can never diverge. `.up` is today's
+// historical default (y = 0 at the BOTTOM, renderer flips on the way out); the
+// assembler overrides this to the project's `.y_axis` once it parses
+// `project.labelle` (#370).
+const project_y_axis: engine.core.YAxis = .up;
+const Renderer = gfx.GfxRendererWith(BackendGfx, GameLayers, EcsBackend.Entity, project_y_axis);
 
-const AssembledGame = engine.GameConfig(
+const AssembledGame = engine.GameConfigWithYAxis(
     Renderer,
     EcsBackend,
     BackendInput,
@@ -30,6 +37,7 @@ const AssembledGame = engine.GameConfig(
     Components,
     DiscoveredGizmoCategories,
     GameEvents,
+    project_y_axis,
 );
 pub const Game = AssembledGame;
 {{prefab_registry_block}}{{component_registry_block}}{{system_registry_block}}{{all_scripts_block}}const Scripts = engine.ScriptRegistry(AllScripts);
