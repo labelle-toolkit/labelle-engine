@@ -154,6 +154,10 @@ pub fn build(b: *std.Build) void {
         // #630 — scene-teardown: O(N) `unloadCurrentScene` drain (guarded
         // untrack) + `resetEcsBackend` clears `scene_entities`.
         "test/scene_teardown_test.zig",
+        // #639 — project Y-axis convention: `Game.y_axis` constant +
+        // `yAxis()` accessor + additive `screenToLogical` picking path
+        // (RFC §3, Q1→(b), Q3). Raw `screenToDesign` stays unchanged.
+        "test/y_axis_test.zig",
     };
 
     for (test_files) |test_file| {

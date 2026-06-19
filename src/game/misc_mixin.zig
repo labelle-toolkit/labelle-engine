@@ -8,6 +8,8 @@
 /// shells stay on `Game` — they fold to `void` on cameraless renderers —
 /// and forward here for the impl bodies.
 
+const core = @import("labelle-core");
+
 /// Returns the misc-accessors mixin for a given Game type.
 pub fn Mixin(comptime Game: type) type {
     const RenderImpl = @typeInfo(@FieldType(Game, "renderer")).pointer.child;
@@ -26,6 +28,37 @@ pub fn Mixin(comptime Game: type) type {
         /// a passthrough — the input is returned unchanged.
         pub fn screenToDesign(self: *Game, px: f32, py: f32) RenderImpl.ScreenPoint {
             return self.renderer.screenToDesign(px, py);
+        }
+
+        /// The project's logical Y-axis convention as a runtime value
+        /// (mirrors the comptime `Game.y_axis`). See RFC §3.
+        pub fn yAxis(_: *Game) core.YAxis {
+            return Game.y_axis;
+        }
+
+        /// Convert a physical-pixel screen coordinate into the project's
+        /// **logical** space (the `Position` space). Maps through the raw
+        /// `screenToDesign` first, then applies `Game.y_axis` to the Y
+        /// component via core's canonical `screenToLogicalY`. For `.down`
+        /// this is the identity (== `screenToDesign`); for `.up` it flips Y
+        /// (`height - design_y`). See RFC §3 (Q1→(b), Q3).
+        pub fn screenToLogical(self: *Game, px: f32, py: f32) RenderImpl.ScreenPoint {
+            var p = self.renderer.screenToDesign(px, py);
+            p.y = core.screenToLogicalY(Game.y_axis, p.y, renderScreenHeight(self));
+            return p;
+        }
+
+        /// The screen height the renderer flips against. The renderer owns
+        /// the authoritative value (set via `setScreenHeight`); we read its
+        /// `screen_height` field when present. Renderers without that field
+        /// (e.g. the engine-test `StubRender`) only ever run under `.down`
+        /// in practice, where the height is unused (identity flip), so a
+        /// `0` fallback is harmless.
+        fn renderScreenHeight(self: *Game) f32 {
+            if (comptime @hasField(RenderImpl, "screen_height")) {
+                return self.renderer.screen_height;
+            }
+            return 0;
         }
 
         /// Register an embedded JSONC scene source so `"include"`
