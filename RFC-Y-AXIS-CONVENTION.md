@@ -1,6 +1,6 @@
 # RFC: Project-configurable Y-axis convention
 
-**Status:** Draft (revision 3 — adds labelle-core as the convention home + a Repos & rollout-order section)
+**Status:** Draft (revision 4 — adds Q6 sprite-pivot direction, Q7 fix-independence, + a pre-migration scene audit)
 
 **Tracking:** labelle-gfx#274
 
@@ -277,3 +277,36 @@ explicit, default-compatible.
 5. **Shape audit.** Beyond `line.end`, which Shapes carry logical sub-offsets
    that need the same pre-flip composition (`triangle` p2/p3, any future
    `polygon`/`arrow`)? Enumerate so the gfx change is complete, not just `.line`.
+   Verify `rectangle` extent under the flip; `circle` (scalar radius) is exempt.
+   (Extends into Q6 — sprite pivots are the same class of problem.)
+
+6. **Sprite pivot composition *and direction*.** `syncPosition`
+   (`renderer.zig:629`) flips `pos.y → toScreenY(pos.y)` and hands *screen*
+   coordinates to the backend, which then applies the **pivot** (`bottom_center`
+   etc.) in screen space. Two things to settle: (a) the pivot offset must
+   compose with the flip the same way the Shape offsets do (audit alongside Q5);
+   and (b) the pivot's vertical *extension is axis-dependent* — a `bottom_center`
+   sprite at the same logical position extends its body **up** under `.up` and
+   **down** under `.down`. Since pivots are the most common Y-anchor in the
+   engine, this needs an explicit answer, not just "it works today under `.up`."
+
+7. **Should the Shape/pivot offset fix ship *independently* of `.y_axis`?** The
+   `line.end`-in-flipped-space bug (#274 part 2) is wrong under **both**
+   conventions — it's a plain bug, not a convention choice. It could land as a
+   **standalone gfx fix now** (compose offsets pre-flip), fixing #274 part 2 for
+   existing games immediately and de-risking the 7-repo `.y_axis` rollout, which
+   then only carries the *convention* change. Sequencing decision: bundle, or
+   split the bug-fix out ahead?
+
+**Lighter / forward-looking:**
+
+- **PIE editor (labelle-gui).** When in-editor drag-to-place lands, it will need
+  `screenToLogical` too — it's literally where #274 was found. Out of scope for
+  this RFC, noted so it isn't forgotten when the editor grows placement.
+- **Pre-migration scene audit (pre-work, not an open question).** The migration
+  assumes every existing game is *uniformly* y-up. But FP's `scenes/main.jsonc`
+  authors the "second floor (below corridor)" at `y=93` with `y=0` as the first
+  floor — under a pure y-up renderer that should render *above*, not below.
+  Either a camera re-flip is in play or the authored convention differs from the
+  assumption. **Audit the actual authored convention in FP + ricochet before
+  declaring `.y_axis = .up` a clean no-op for them.**
