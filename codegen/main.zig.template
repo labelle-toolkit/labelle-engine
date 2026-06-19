@@ -22,7 +22,8 @@ const gfx = @import("labelle-gfx");
 // (input) read the same axis — they can never diverge. `.up` is today's
 // historical default (y = 0 at the BOTTOM, renderer flips on the way out); the
 // assembler overrides this to the project's `.y_axis` once it parses
-// `project.labelle` (#370).
+// `project.labelle` (#370). Requires labelle-gfx >= v1.16.0 (the first
+// release that exposes `GfxRendererWith`).
 const project_y_axis: engine.core.YAxis = .up;
 const Renderer = gfx.GfxRendererWith(BackendGfx, GameLayers, EcsBackend.Entity, project_y_axis);
 
