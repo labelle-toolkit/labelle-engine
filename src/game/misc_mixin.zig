@@ -8,6 +8,8 @@
 /// shells stay on `Game` — they fold to `void` on cameraless renderers —
 /// and forward here for the impl bodies.
 
+const core = @import("labelle-core");
+
 /// Returns the misc-accessors mixin for a given Game type.
 pub fn Mixin(comptime Game: type) type {
     const RenderImpl = @typeInfo(@FieldType(Game, "renderer")).pointer.child;
@@ -26,6 +28,46 @@ pub fn Mixin(comptime Game: type) type {
         /// a passthrough — the input is returned unchanged.
         pub fn screenToDesign(self: *Game, px: f32, py: f32) RenderImpl.ScreenPoint {
             return self.renderer.screenToDesign(px, py);
+        }
+
+        /// The project's logical Y-axis convention as a runtime value
+        /// (mirrors the comptime `Game.y_axis`). See RFC §3.
+        pub fn yAxis(_: *const Game) core.YAxis {
+            return Game.y_axis;
+        }
+
+        /// Convert a physical-pixel screen coordinate into the project's
+        /// **logical** space (the `Position` space). Maps through the raw
+        /// `screenToDesign` first, then applies `Game.y_axis` to the Y
+        /// component via core's canonical `screenToLogicalY`. For `.down`
+        /// this is the identity (== `screenToDesign`); for `.up` it flips Y
+        /// (`height - design_y`). See RFC §3 (Q1→(b), Q3).
+        pub fn screenToLogical(self: *Game, px: f32, py: f32) RenderImpl.ScreenPoint {
+            var p = self.renderer.screenToDesign(px, py);
+            p.y = core.screenToLogicalY(Game.y_axis, p.y, renderScreenHeight(self));
+            return p;
+        }
+
+        /// The screen height the renderer flips against. The renderer owns
+        /// the authoritative value (set via `setScreenHeight`); we read its
+        /// `screen_height` field when present.
+        ///
+        /// Under `.up`, the flip (`height - y`) genuinely needs the height,
+        /// so a renderer without a `screen_height` field is a build error
+        /// rather than a silent `0` that would yield negative logical Y.
+        /// Under `.down` the height is unused (identity), so a `0` fallback
+        /// is harmless — this is the path the engine-test `StubRender`
+        /// (no `screen_height` field) takes.
+        fn renderScreenHeight(self: *Game) f32 {
+            if (comptime @hasField(RenderImpl, "screen_height")) {
+                return self.renderer.screen_height;
+            }
+            if (comptime Game.y_axis == .up) {
+                @compileError("Renderer " ++ @typeName(RenderImpl) ++
+                    " must expose a 'screen_height' field to be used with Game.y_axis == .up" ++
+                    " (the y-up flip `height - y` needs it).");
+            }
+            return 0;
         }
 
         /// Register an embedded JSONC scene source so `"include"`

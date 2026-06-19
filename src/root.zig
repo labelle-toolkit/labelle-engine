@@ -47,6 +47,10 @@ pub const requestedScene = runtime_env.requestedScene;
 
 // ── Game ──
 pub const GameConfig = game_mod.GameConfig;
+/// Y-axis-aware game configuration — `GameConfig` plus an explicit trailing
+/// `core.YAxis` slot. The assembler adopts this once it parses `.y_axis`
+/// from `project.labelle` (labelle-engine#639 / #370). See `game.zig`.
+pub const GameConfigWithYAxis = game_mod.GameConfigWithYAxis;
 pub const GameLog = game_log_mod.GameLog;
 pub const StubLogSink = core.StubLogSink;
 pub const StderrLogSink = core.StderrLogSink;

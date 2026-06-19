@@ -54,6 +54,16 @@ const misc_mixin = @import("game/misc_mixin.zig");
 /// Full game configuration — the assembler fills ALL comptime slots.
 /// RenderImpl is a renderer plugin (e.g. gfx.GfxRenderer) satisfying RenderInterface.
 /// The engine does NOT depend on labelle-gfx — it accesses component types through RenderImpl.
+///
+/// **Y-axis convention.** This entry point keeps the historical positional
+/// signature (the assembler's `engine.GameConfig(...)` call ends at
+/// `GameEvents,`) and defaults the project's logical Y-axis to `.down` — the
+/// RFC's framework-native default (labelle-engine#639, RFC §3, Q1→(b)). A
+/// project that wants the math-/platformer-natural `.up` convention (today's
+/// behavior) goes through `GameConfigWithYAxis`, which the assembler (#370)
+/// will switch to once it parses `.y_axis` from `project.labelle`. Threading a
+/// new convention this way is purely additive: existing generated games (and
+/// every bundled assembler example) keep calling `GameConfig` unchanged.
 pub fn GameConfig(
     comptime RenderImpl: type,
     comptime EcsImpl: type,
@@ -65,6 +75,45 @@ pub fn GameConfig(
     comptime ComponentsType: type,
     comptime GizmoCategoriesSlice: anytype,
     comptime GameEventsParam: type,
+) type {
+    return GameConfigWithYAxis(
+        RenderImpl,
+        EcsImpl,
+        InputImpl,
+        AudioImpl,
+        GuiImpl,
+        Hooks,
+        LogSinkImpl,
+        ComponentsType,
+        GizmoCategoriesSlice,
+        GameEventsParam,
+        // RFC default — `y = 0` at the TOP, +Y down (screen-native).
+        .down,
+    );
+}
+
+/// Y-axis-aware game configuration — identical to `GameConfig` but with an
+/// explicit project Y-axis convention as the trailing comptime slot. The
+/// assembler emits this entry point once it parses `.y_axis` from
+/// `project.labelle` (labelle-engine#639 / assembler #370); until then
+/// `GameConfig` delegates here with the `.down` default so the threading is
+/// already in place and only the assembler's emitted call needs to change.
+///
+/// `y_axis_param` is surfaced as the comptime constant `Game.y_axis` (and the
+/// `game.yAxis()` accessor), and is consumed by `screenToLogical` — the
+/// axis-aware picking path — via core's canonical `screenToLogicalY` transform.
+pub fn GameConfigWithYAxis(
+    comptime RenderImpl: type,
+    comptime EcsImpl: type,
+    comptime InputImpl: type,
+    comptime AudioImpl: type,
+    comptime GuiImpl: type,
+    comptime Hooks: type,
+    comptime LogSinkImpl: type,
+    comptime ComponentsType: type,
+    comptime GizmoCategoriesSlice: anytype,
+    comptime GameEventsParam: type,
+    comptime y_axis_param: core.YAxis,
 ) type {
     // Validate renderer satisfies the contract
     _ = core.RenderInterface(RenderImpl);
@@ -170,6 +219,14 @@ pub fn GameConfig(
         pub const ComponentRegistry = ComponentsType;
         /// Gizmo categories discovered from plugins at comptime.
         pub const gizmo_categories = GizmoCategoriesSlice;
+
+        /// The project's logical Y-axis convention (labelle-engine#639,
+        /// RFC §3). `.down` (default) means `y = 0` is the TOP and +Y grows
+        /// downward — screen-native, the renderer flip is identity. `.up`
+        /// means `y = 0` is the BOTTOM and +Y grows upward — today's behavior,
+        /// the renderer flips on the way out. Consumed by `screenToLogical`
+        /// (axis-aware picking) and exposed at runtime via `yAxis()`.
+        pub const y_axis: core.YAxis = y_axis_param;
 
         // ── Mixin types ──────────────────────────────────────────
         const Visuals = visuals_mixin.Mixin(Self);
@@ -775,6 +832,30 @@ pub fn GameConfig(
         /// Backends without a design/physical distinction (raylib) get
         /// a passthrough — the input is returned unchanged.
         pub const screenToDesign = MiscMixin.screenToDesign;
+
+        /// Convert a physical-pixel screen coordinate into the project's
+        /// **logical** coordinate space — the same space as `Position` and
+        /// `setPosition`. This first maps through `screenToDesign` (raw,
+        /// y-down design pixels, unchanged) and then applies the project's
+        /// `.y_axis` convention to the Y component via core's canonical
+        /// `screenToLogicalY` transform.
+        ///
+        /// Under `.up` (today's default behavior) this flips Y
+        /// (`logical_y = height - design_y`) so a click at the top of the
+        /// window yields a *large* logical `y` — matching where an entity
+        /// placed there needs to sit. Under `.down` it's the identity, so
+        /// `screenToLogical` == `screenToDesign`.
+        ///
+        /// Use this for axis-aware picking / drag-to-place / gizmo
+        /// hit-testing (RFC Q1→(b), Q3). Code that wants raw window-space
+        /// coordinates (e.g. forwarding to imgui, or `cam.screenToWorld`,
+        /// which applies its own flip) keeps using `screenToDesign`.
+        pub const screenToLogical = MiscMixin.screenToLogical;
+
+        /// The project's logical Y-axis convention as a runtime value. Mirrors
+        /// the comptime `Game.y_axis` constant for callers that prefer an
+        /// accessor (RFC §3).
+        pub const yAxis = MiscMixin.yAxis;
 
         // ── Audio (mixin) ────────────────────────────────────────
         pub const playSound = AudioMixin.playSound;
