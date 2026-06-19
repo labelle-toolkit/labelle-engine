@@ -53,7 +53,9 @@ matches how it authors content.
   coordinate-consuming surface agrees on: entity positions, `screenToDesign`,
   the renderer flip, and Shape sub-offsets (`line.end`, future shapes).
 - Make the convention **explicit and configurable** per project via
-  `project.labelle`, defaulting to today's behavior so no existing game moves.
+  `project.labelle`, defaulting to the screen-native `.down`; existing games
+  declare `.y_axis = .up` (a no-op declaration under Q1→(b)), and the rollout
+  prevents any *silent* flip (see Migration).
 - Fix #274 part 2: a Shape authored entirely in logical coordinates (position
   **and** `end`) must compose without a manual per-axis flip.
 
@@ -61,9 +63,10 @@ matches how it authors content.
 
 - **Per-layer** Y conventions. The convention is project-global. (Screen-space
   vs world-space layers already differ in *origin/camera*, not in +Y meaning.)
-- Changing **camera/world-space** picking. `cam.screenToWorld` already maps
-  screen → world correctly for camera layers; this RFC is about the
-  no-camera / direct screen-space path and the logical↔render flip.
+- Changing what **camera/world-space** picking *means*. `cam.screenToWorld`
+  keeps mapping screen → world; this RFC only routes its vertical flip through
+  the same single core transform as the no-camera path so the two can't diverge
+  (Q2). World coordinates remain the logical convention.
 - Changing the wire/storage meaning of `Position` for existing saves (see
   Migration).
 
