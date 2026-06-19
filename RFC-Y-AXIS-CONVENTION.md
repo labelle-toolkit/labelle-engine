@@ -69,6 +69,14 @@ matches how it authors content.
   (Q2). World coordinates remain the logical convention.
 - Changing the wire/storage meaning of `Position` for existing saves (see
   Migration).
+- Changing **labelle-imgui** or imgui's coordinate space. The bridge forwards
+  raw window-space (y-down) mouse coordinates **unchanged**
+  (`addMousePosEvent(mouse_x, mouse_y)` / `imgui_bridge_mouse_pos`), and imgui
+  is intrinsically y-down (top-left origin) — both are correct under *any*
+  `.y_axis`, so the bridge needs no change (it's the Q3 rule: raw input stays
+  y-down). imgui-based *tools* that manipulate the world (drag-to-place, gizmo
+  hit-testing, an inspector) convert imgui's screen-space mouse to logical via
+  the engine's `screenToLogical` — that's game/engine code, not the bridge.
 
 ## Proposal
 
@@ -180,6 +188,11 @@ declarations.** gfx and engine both consume core and can go in parallel once
 core ships; assembler + cli both consume engine/gfx; the games are last. The
 unset-guard means a game that bumps the assembler *before* declaring `.y_axis`
 gets a build error, not a silent flip — so each game can adopt at its own pace.
+
+**Explicitly *not* involved:** `labelle-imgui` (forwards raw y-down mouse
+unchanged; imgui is intrinsically y-down — see Non-goals) and `zig-utils`
+(convention-free vector math). The convention lives in `labelle-core` and is
+consumed upward; these two sit outside that path.
 
 ## Migration plan
 
