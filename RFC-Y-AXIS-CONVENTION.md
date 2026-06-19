@@ -1,6 +1,6 @@
 # RFC: Project-configurable Y-axis convention
 
-**Status:** Draft (revision 1)
+**Status:** Draft (revision 2 — default is now `.down`; existing games opt into `.up`)
 
 **Tracking:** labelle-gfx#274
 
@@ -72,9 +72,11 @@ matches how it authors content.
 Add a top-level enum to `project.labelle`:
 
 ```zig
-.y_axis = .up,   // default — y=0 at the BOTTOM, +Y goes up (today's behavior)
+.y_axis = .down, // DEFAULT — y=0 at the TOP, +Y goes down (matches the mouse,
+                 //           the screen, and the renderer's native space)
 // or
-.y_axis = .down, // y=0 at the TOP, +Y goes down (matches mouse / typical UI)
+.y_axis = .up,   // y=0 at the BOTTOM, +Y goes up (today's behavior; math-/
+                 //           platformer-natural — every existing game must set this)
 ```
 
 `.y_axis` defines the **logical** coordinate convention — the space in which
@@ -83,17 +85,26 @@ is the *only* layer that knows about screen/NDC space, and it applies (or
 skips) the vertical flip based on `.y_axis` so that everything above it shares
 one convention:
 
-| Surface | `.y_axis = .up` (default) | `.y_axis = .down` |
+| Surface | `.y_axis = .down` (DEFAULT) | `.y_axis = .up` |
 |---|---|---|
-| `Position.y` author space | y-up (0 = bottom) | y-down (0 = top) |
-| Renderer Position→screen | flip (`h - y`) | **no flip** (identity) |
-| `screenToDesign` returns | y-up (flip the raw mouse Y) | y-down (raw) |
-| `line.end` / Shape offsets | logical, composed pre-flip | logical, no flip |
+| `Position.y` author space | y-down (0 = top) | y-up (0 = bottom) |
+| Renderer Position→screen | **no flip** (identity) | flip (`h - y`) |
+| `screenToDesign` returns | y-down (raw) | y-up *or* raw — see Q1 |
+| `line.end` / Shape offsets | logical, no flip | logical, composed pre-flip |
 
-Net effect: with `.up`, the framework now flips mouse Y for you so picking
-agrees with placement; with `.down`, nothing flips and the whole pipeline is
-natively y-down (the natural choice for UI / screen-space games, which is where
-#274 was found).
+**Why `.down` is the default.** The renderer's internal/NDC space is *already*
+y-down (`renderer.zig` flips `Position.y` via `screen_height - y` on the way
+out, and a comment there documents the internal space as y-down); the mouse and
+the whole screen are y-down. So `.down` is the framework's *native* space — it
+makes the default pipeline **flip-free and internally consistent**: positions,
+mouse, and rendering all agree with zero reconciliation, which is exactly what
+the #274 screen-space case wanted. `.up` then becomes the explicit, opt-in
+"math-natural" convention (bottom-origin, +Y up) that physics/platformer games
+— and **every game produced before this RFC** — must now declare.
+
+This inverts the prior draft (which defaulted `.up` for zero migration). The
+trade is deliberate: new games get the consistent, footgun-free convention by
+default, and the (small, known) set of existing games each add one line.
 
 The Shape fix (#274 part 2) falls out for **both** settings: the renderer
 composes `position + end` in logical space and flips the *final* endpoint once,
@@ -134,21 +145,37 @@ instead of flipping `position` and then adding a logical offset on top.
 
 ## Migration plan
 
-- **Default `.up` = exact current behavior for positions + rendering.** No
-  existing game's entities move.
-- **`screenToDesign` for `.up` becomes flipped** — this is the one behavior
-  change for existing projects, and it is the *fix*: today callers who fed
-  `screenToDesign` straight into placement were already wrong (or hand-flipping)
-  for screen-space layers. We should (a) gate this behind an engine version
-  bump and call it out loudly, and (b) provide a `screenToDesignRaw` escape
-  hatch for anyone who genuinely wants window coordinates.
-- **The `.line` `end` fix is technically breaking** for any game that worked
-  around the bug by negating `end.y`. Such games render a mirrored line *after*
-  the fix. Enumerate these in the release notes; they are rare (the bug is
-  recent) and the fix direction is "stop negating."
-- Roll out as: gfx (renderer + Shape compose) → engine (`screenToDesign` +
-  accessor) → assembler (`project.labelle` key) → consumers opt into `.down`
-  where it helps (FP's screen-space UI/menus are candidates).
+Defaulting to `.down` is a **breaking change for every existing game**: a
+project that bumps to the introducing engine version *without* setting
+`.y_axis` would have all of its y-up positions silently flipped (the whole game
+renders upside-down). The rollout must make that impossible to hit silently.
+
+- **Transition window — require an explicit `.y_axis`.** In the introducing
+  assembler/engine version, treat an *unset* `.y_axis` as a hard error (or a
+  loud, build-failing warning) whose message names both choices: "set
+  `.y_axis = .up` to keep current behavior, or `.y_axis = .down` for the new
+  screen-native convention." No project flips by accident.
+- **`labelle init` scaffolds `.down`** so new projects get the default from day
+  one.
+- **Existing games each add `.y_axis = .up`.** With Q1 resolved as **(b)** —
+  keep `screenToDesign` raw and add a `screenToLogical` for callers who want
+  axis-aware picking — adding `.up` is a **pure one-line declaration with no
+  behavior change**: positions stay y-up, the renderer flip stays, the mouse
+  stays raw exactly as today. Known set to patch: **flying-platform-labelle**,
+  **ricochet**, and the in-repo example projects. (This is the main reason to
+  prefer (b) over (a): it lets every existing game opt into `.up` without
+  touching a line of game code.)
+- **After the transition**, an unset `.y_axis` may quietly default to `.down`
+  — only brand-new projects reach that path, and `labelle init` writes it
+  explicitly anyway.
+- **The `.line` `end` fix is independently breaking** for any game (under
+  either axis) that worked around the bug by negating `end.y` — it renders
+  mirrored *after* the fix. Enumerate in release notes; the bug is recent and
+  the fix direction is "stop negating."
+- Roll out order: gfx (renderer flip-conditional + Shape compose) → engine
+  (`screenToLogical`/accessor + the unset-`.y_axis` guard) → assembler
+  (`project.labelle` key + `labelle init` template) → patch the known existing
+  games with `.y_axis = .up`.
 
 ## Alternatives considered
 
@@ -172,12 +199,18 @@ explicit, default-compatible.
 
 ## Open questions
 
-1. **Should `.up` really change `screenToDesign`?** It's the correct fix, but
-   it's a silent behavior change for existing `.up` (default) projects. Options:
-   (a) change it + version-gate + `screenToDesignRaw` escape hatch (this RFC's
-   lean); (b) leave `screenToDesign` raw and add a new
-   `screenToLogical`/`pickPoint` that respects `.y_axis`, so nothing existing
-   moves. (b) is safer but adds a second picking API.
+1. **`screenToDesign` under `.up`: flip it, or leave it raw + add
+   `screenToLogical`?** With `.down` as the default this is no longer about the
+   default path (default `.down` returns raw, which already agrees with y-down
+   positions). It's purely about opt-in `.up` projects — i.e. every existing
+   game. (a) flip `screenToDesign` for `.up` so picking matches placement, but
+   that changes behavior for every game that adopts `.up`; (b) keep
+   `screenToDesign` raw and add a `screenToLogical` that respects `.y_axis`, so
+   an existing game adopting `.up` is a **pure no-op declaration**. The Migration
+   plan now assumes **(b)** for exactly that reason — please confirm. (Trade-off:
+   (b) means `.up` games still see a y-up-position / y-down-`screenToDesign`
+   split unless they call `screenToLogical` — but that split is *intrinsic* to
+   choosing a bottom-origin convention on a top-origin screen.)
 2. **Interaction with camera layers.** For world-space layers, `screenToWorld`
    already does the right thing; does `.y_axis` need to feed the camera math, or
    is it strictly the no-camera/logical-flip knob? (Believed strictly the
