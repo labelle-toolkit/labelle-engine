@@ -1,6 +1,6 @@
 # RFC: Project-configurable Y-axis convention
 
-**Status:** Draft (revision 4 — adds Q6 sprite-pivot direction, Q7 fix-independence, + a pre-migration scene audit)
+**Status:** Draft (revision 5 — scene audit done: FP + ricochet both y-up; Q2 promoted to load-bearing)
 
 **Tracking:** labelle-gfx#274
 
@@ -262,10 +262,16 @@ explicit, default-compatible.
    (b) means `.up` games still see a y-up-position / y-down-`screenToDesign`
    split unless they call `screenToLogical` — but that split is *intrinsic* to
    choosing a bottom-origin convention on a top-origin screen.)
-2. **Interaction with camera layers.** For world-space layers, `screenToWorld`
-   already does the right thing; does `.y_axis` need to feed the camera math, or
-   is it strictly the no-camera/logical-flip knob? (Believed strictly the
-   latter — confirm against `Camera2D`.)
+2. **Interaction with camera layers — NOW LOAD-BEARING.** The scene audit
+   (below) found that **flying-platform, the primary existing game, is
+   camera-based** (`game.getCamera()` zoom/pan; input via
+   `screenToDesign` → `cam.screenToWorld`). So `.y_axis` is *not* "strictly the
+   no-camera knob" — the camera path is exactly what the main existing game
+   uses, and `worldToScreen`/`screenToWorld` must route through the same single
+   core transform as the renderer flip (and `.up` must reproduce today's camera
+   behavior exactly, or FP regresses). This makes Q2 the **critical** path to
+   nail, not a corner case. Trace how the `Camera2D` transform composes with the
+   renderer flip today before implementing.
 3. **Touch / gizmo / gui input.** `screenToDesign` has siblings
    (`getTouchX/Y`, gizmo hit-testing, imgui bridge mouse). Which of these are in
    "logical" space and must follow `.y_axis`, vs. raw window space that
@@ -303,10 +309,22 @@ explicit, default-compatible.
 - **PIE editor (labelle-gui).** When in-editor drag-to-place lands, it will need
   `screenToLogical` too — it's literally where #274 was found. Out of scope for
   this RFC, noted so it isn't forgotten when the editor grows placement.
-- **Pre-migration scene audit (pre-work, not an open question).** The migration
-  assumes every existing game is *uniformly* y-up. But FP's `scenes/main.jsonc`
-  authors the "second floor (below corridor)" at `y=93` with `y=0` as the first
-  floor — under a pure y-up renderer that should render *above*, not below.
-  Either a camera re-flip is in play or the authored convention differs from the
-  assumption. **Audit the actual authored convention in FP + ricochet before
-  declaring `.y_axis = .up` a clean no-op for them.**
+- **Pre-migration scene audit — DONE.** Verified both existing games author
+  **y-up**, so `.y_axis = .up` is a clean declaration for each:
+  - **flying-platform (bgfx, camera-based):** the `main.jsonc` "second floor
+    (below corridor)" comment is *narrative, not the convention* — the
+    construction math is `f = floor(pos.y / SLOT_HEIGHT)` with "next floor up" =
+    higher `f` = higher `y`, i.e. **y-up** (floor 1 at `y=93` renders *above*
+    floor 0, and the transport ship "floating above" at `y=186` is highest). No
+    manual Y inversion anywhere; input is `screenToDesign` → `cam.screenToWorld`.
+    The catch is that FP is **camera-based**, which is what promoted Q2 to
+    load-bearing — its `.up` adoption hinges on the camera path, not the
+    no-camera flip.
+  - **ricochet (raylib, no-camera / screen-space):** y-up via the engine
+    default, no manual flip. It's the screen-space path #274 is about, but its
+    aiming is **entity-to-entity** (`combat.aimAt`, convention-agnostic) with
+    **no mouse→world picking**, so it never hits the #274 mismatch. Clean no-op.
+  - **Takeaway:** the picking mismatch in #274 bit a *new* drag-to-place tool,
+    not either shipped game — both are safely y-up. The real implementation risk
+    for existing games is **Q2 (FP's camera)**, not the picking/`screenToDesign`
+    change.
