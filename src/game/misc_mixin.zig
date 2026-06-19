@@ -32,7 +32,7 @@ pub fn Mixin(comptime Game: type) type {
 
         /// The project's logical Y-axis convention as a runtime value
         /// (mirrors the comptime `Game.y_axis`). See RFC §3.
-        pub fn yAxis(_: *Game) core.YAxis {
+        pub fn yAxis(_: *const Game) core.YAxis {
             return Game.y_axis;
         }
 
@@ -50,13 +50,22 @@ pub fn Mixin(comptime Game: type) type {
 
         /// The screen height the renderer flips against. The renderer owns
         /// the authoritative value (set via `setScreenHeight`); we read its
-        /// `screen_height` field when present. Renderers without that field
-        /// (e.g. the engine-test `StubRender`) only ever run under `.down`
-        /// in practice, where the height is unused (identity flip), so a
-        /// `0` fallback is harmless.
+        /// `screen_height` field when present.
+        ///
+        /// Under `.up`, the flip (`height - y`) genuinely needs the height,
+        /// so a renderer without a `screen_height` field is a build error
+        /// rather than a silent `0` that would yield negative logical Y.
+        /// Under `.down` the height is unused (identity), so a `0` fallback
+        /// is harmless — this is the path the engine-test `StubRender`
+        /// (no `screen_height` field) takes.
         fn renderScreenHeight(self: *Game) f32 {
             if (comptime @hasField(RenderImpl, "screen_height")) {
                 return self.renderer.screen_height;
+            }
+            if (comptime Game.y_axis == .up) {
+                @compileError("Renderer " ++ @typeName(RenderImpl) ++
+                    " must expose a 'screen_height' field to be used with Game.y_axis == .up" ++
+                    " (the y-up flip `height - y` needs it).");
             }
             return 0;
         }
