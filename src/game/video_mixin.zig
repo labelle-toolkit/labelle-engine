@@ -88,8 +88,9 @@ pub fn Mixin(comptime Game: type) type {
 
                 if (vc.fullscreen) {
                     // Background/backdrop — the backend fills the framebuffer
-                    // edge-to-edge, so Position + size are ignored.
-                    Video.drawFullscreen(vc.handle);
+                    // using vc.fit (cover/contain/stretch), so Position + size
+                    // are ignored.
+                    Video.drawFullscreen(vc.handle, vc.fit);
                     continue;
                 }
 

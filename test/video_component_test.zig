@@ -48,7 +48,7 @@ const FakeVideo = struct {
             draw_n += 1;
         }
     }
-    pub fn drawVideoFullscreen(_: u32) void {
+    pub fn drawVideoFullscreen(_: u32, _: u8) void {
         fullscreen_n += 1;
     }
     pub fn isVideoPlaying(_: u32) bool {
