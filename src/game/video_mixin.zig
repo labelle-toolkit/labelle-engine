@@ -24,9 +24,9 @@ pub fn Mixin(comptime Game: type) type {
             return Video.supported();
         }
 
-        /// Open a video by resource path/name. Returns a handle (0 = failure or
+        /// Open a video by resource name/path. Returns a handle (0 = failure or
         /// unsupported); call `closeVideo` to release it.
-        pub fn openVideo(_: *Game, path: [:0]const u8) u32 {
+        pub fn openVideo(_: *Game, path: []const u8) u32 {
             return Video.open(path);
         }
 
@@ -80,7 +80,7 @@ pub fn Mixin(comptime Game: type) type {
             while (v.next()) |entity| {
                 const vc = self.ecs_backend.getComponent(entity, VideoComponent) orelse continue;
                 if (vc.handle == 0) {
-                    vc.handle = Video.open(vc.pathZ());
+                    vc.handle = Video.open(vc.path);
                     if (vc.handle == 0) continue; // open failed; retry next frame
                 }
                 Video.update(vc.handle, dt);

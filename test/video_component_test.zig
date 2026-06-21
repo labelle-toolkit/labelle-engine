@@ -32,7 +32,7 @@ const FakeVideo = struct {
         draw_n = 0;
     }
 
-    pub fn openVideo(_: [:0]const u8) u32 {
+    pub fn openVideo(_: []const u8) u32 {
         open_count += 1;
         const id = next_id;
         next_id += 1;
