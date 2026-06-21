@@ -81,6 +81,8 @@ pub const Rotation = input_mod.Rotation;
 // ── Audio ──
 pub const AudioInterface = audio_mod.AudioInterface;
 pub const StubAudio = audio_mod.StubAudio;
+pub const VideoInterface = core.VideoInterface;
+pub const StubVideo = core.StubVideo;
 pub const SoundId = audio_mod.SoundId;
 pub const MusicId = audio_mod.MusicId;
 pub const AudioError = audio_mod.AudioError;
@@ -204,6 +206,16 @@ pub const Events = struct {
     /// `HookPayload.entity_destroyed`.
     pub const entity_destroyed = struct {
         entity: u32,
+    };
+
+    /// Fired once when a play-once `VideoComponent` (loop = false) reaches the
+    /// end of its clip — emitted by the engine's video system (FP#549), not the
+    /// in-process hook path. Wire a flow/script to `engine__video_finished` to
+    /// transition the scene when an intro ends. `entity` is the video entity;
+    /// `path` is its (borrowed, scene-lifetime) resource name.
+    pub const video_finished = struct {
+        entity: u32,
+        path: []const u8,
     };
 
     /// Fired just before a scene's loader runs (assets are already

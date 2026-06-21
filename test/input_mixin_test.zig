@@ -116,6 +116,7 @@ fn GameWith(comptime Input: type) type {
         core.MockEcsBackend(u32),
         Input,
         engine.StubAudio,
+        engine.StubVideo,
         engine.StubGui,
         void,
         core.StubLogSink,
