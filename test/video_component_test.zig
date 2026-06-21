@@ -25,6 +25,7 @@ const FakeVideo = struct {
     var draw_n: usize = 0;
     var draw_x: [16]f32 = undefined;
     var draw_w: [16]f32 = undefined;
+    var draw_h: [16]f32 = undefined;
     var fullscreen_n: usize = 0;
     var playing: bool = true; // toggled to simulate end-of-stream
     var replay_n: usize = 0;
@@ -45,10 +46,11 @@ const FakeVideo = struct {
         return id;
     }
     pub fn updateVideo(_: u32, _: f32) void {}
-    pub fn drawVideo(_: u32, x: f32, _: f32, w: f32, _: f32) void {
+    pub fn drawVideo(_: u32, x: f32, _: f32, w: f32, h: f32) void {
         if (draw_n < 16) {
             draw_x[draw_n] = x;
             draw_w[draw_n] = w;
+            draw_h[draw_n] = h;
             draw_n += 1;
         }
     }
@@ -174,6 +176,23 @@ test "renderVideos: a play-once video finishes once at end (no replay)" {
     // Fires once: a second frame doesn't reset the flag.
     game.renderVideos(0.016);
     try testing.expect(vc.finished);
+}
+
+test "renderVideos: a zero on one axis takes native only for that axis" {
+    FakeVideo.reset();
+    var game = TestGame.init(testing.allocator);
+    defer game.deinit();
+
+    const e = game.createEntity();
+    game.setPosition(e, .{ .x = 0, .y = 0 });
+    // width fixed at 320, height = 0 → native height (48), width preserved.
+    game.addVideo(e, core.VideoComponent.init("x.mp4", 320, 0));
+
+    game.renderVideos(0.016);
+
+    try testing.expectEqual(@as(usize, 1), FakeVideo.draw_n);
+    try testing.expectEqual(@as(f32, 320), FakeVideo.draw_w[0]); // not clobbered to native 64
+    try testing.expectEqual(@as(f32, 48), FakeVideo.draw_h[0]); // native height
 }
 
 test "removeVideo: detaches the component" {
