@@ -113,10 +113,13 @@ pub fn Mixin(comptime Game: type) type {
                 const pos = self.getPosition(entity);
                 var w = vc.width;
                 var h = vc.height;
+                // 0 means "native size" — per dimension, so a component can fix
+                // one axis (e.g. width=320, height=0) without the other being
+                // clobbered to native too.
                 if (w == 0 or h == 0) {
                     const d = Video.dimensions(vc.handle);
-                    w = @floatFromInt(d.w);
-                    h = @floatFromInt(d.h);
+                    if (w == 0) w = @floatFromInt(d.w);
+                    if (h == 0) h = @floatFromInt(d.h);
                 }
                 Video.draw(vc.handle, pos.x, pos.y, w, h);
             }
