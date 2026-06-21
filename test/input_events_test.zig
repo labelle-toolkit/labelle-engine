@@ -199,6 +199,7 @@ const InputGame = game_mod.GameConfig(
     core.MockEcsBackend(u32),
     TestInput,
     engine.StubAudio,
+    engine.StubVideo,
     engine.StubGui,
     *InputRecorder,
     core.StubLogSink,
@@ -422,6 +423,7 @@ const FallbackGame = game_mod.GameConfig(
     core.MockEcsBackend(u32),
     core.StubInput, // no pollGamepadEvents → engine uses gamepad_source
     engine.StubAudio,
+    engine.StubVideo,
     engine.StubGui,
     *InputRecorder,
     core.StubLogSink,

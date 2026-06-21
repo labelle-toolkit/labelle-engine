@@ -406,6 +406,7 @@ const ControllerGame = game_mod.GameConfig(
     core.MockEcsBackend(u32),
     TestInput,
     engine.StubAudio,
+    engine.StubVideo,
     engine.StubGui,
     *Recorder,
     core.StubLogSink,

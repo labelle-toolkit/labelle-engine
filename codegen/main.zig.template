@@ -26,11 +26,17 @@ const gfx = @import("labelle-gfx");
 const project_y_axis: engine.core.YAxis = .up;
 const Renderer = gfx.GfxRendererWith(BackendGfx, GameLayers, EcsBackend.Entity, project_y_axis);
 
+// Video capability (#549): the bgfx backend exposes `VideoBackend` (decode →
+// dynamic texture player pool); backends without video fall back to the no-op
+// stub so the engine's VideoImpl slot is always satisfied.
+const BackendVideo = if (@hasDecl(BackendGfx, "VideoBackend")) BackendGfx.VideoBackend else engine.StubVideo;
+
 const AssembledGame = engine.GameConfigWithYAxis(
     Renderer,
     EcsBackend,
     BackendInput,
     BackendAudio,
+    BackendVideo,
     GuiBackend,
     *GameHooks,
     LogSink,

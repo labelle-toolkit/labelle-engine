@@ -83,6 +83,7 @@ fn GameOn(comptime y_axis: core.YAxis) type {
         MockEcs,
         engine.StubInput,
         engine.StubAudio,
+        engine.StubVideo,
         engine.StubGui,
         void,
         engine.StubLogSink,

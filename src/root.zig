@@ -81,6 +81,8 @@ pub const Rotation = input_mod.Rotation;
 // ── Audio ──
 pub const AudioInterface = audio_mod.AudioInterface;
 pub const StubAudio = audio_mod.StubAudio;
+pub const VideoInterface = core.VideoInterface;
+pub const StubVideo = core.StubVideo;
 pub const SoundId = audio_mod.SoundId;
 pub const MusicId = audio_mod.MusicId;
 pub const AudioError = audio_mod.AudioError;

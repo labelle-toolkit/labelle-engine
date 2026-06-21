@@ -35,6 +35,7 @@ const gamepad_drain_capacity = 16;
 const visuals_mixin = @import("game/visuals.zig");
 const input_mixin = @import("game/input_mixin.zig");
 const audio_mixin = @import("game/audio_mixin.zig");
+const video_mixin = @import("game/video_mixin.zig");
 const gui_mixin = @import("game/gui_mixin.zig");
 const gizmo_mixin = @import("game/gizmo_mixin.zig");
 const scene_mixin = @import("game/scene_mixin.zig");
@@ -77,6 +78,7 @@ pub fn GameConfig(
     comptime EcsImpl: type,
     comptime InputImpl: type,
     comptime AudioImpl: type,
+    comptime VideoImpl: type,
     comptime GuiImpl: type,
     comptime Hooks: type,
     comptime LogSinkImpl: type,
@@ -89,6 +91,7 @@ pub fn GameConfig(
         EcsImpl,
         InputImpl,
         AudioImpl,
+        VideoImpl,
         GuiImpl,
         Hooks,
         LogSinkImpl,
@@ -118,6 +121,7 @@ pub fn GameConfigWithYAxis(
     comptime EcsImpl: type,
     comptime InputImpl: type,
     comptime AudioImpl: type,
+    comptime VideoImpl: type,
     comptime GuiImpl: type,
     comptime Hooks: type,
     comptime LogSinkImpl: type,
@@ -223,6 +227,7 @@ pub fn GameConfigWithYAxis(
         pub const uses_os_gamepad_source = !backend_polls_gamepads and gamepad_events_wanted;
 
         pub const Audio = @import("audio.zig").AudioInterface(AudioImpl);
+        pub const Video = core.VideoInterface(VideoImpl);
         pub const Gui = @import("gui.zig").GuiInterface(GuiImpl);
         pub const GizmoDraw = gizmo_draws_mod.GizmoDraw;
         pub const Log = game_log_mod.GameLog(LogSinkImpl, core.log.default_min_level);
@@ -246,6 +251,7 @@ pub fn GameConfigWithYAxis(
         const Visuals = visuals_mixin.Mixin(Self);
         const InputMixin = input_mixin.Mixin(Self);
         const AudioMixin = audio_mixin.Mixin(Self);
+        const VideoMixin = video_mixin.Mixin(Self);
         const GuiMixin = gui_mixin.Mixin(Self);
         const GizmoMixin = gizmo_mixin.Mixin(Self);
         const SceneMixin = scene_mixin.Mixin(Self);
@@ -875,6 +881,15 @@ pub fn GameConfigWithYAxis(
         pub const playSound = AudioMixin.playSound;
         pub const stopSound = AudioMixin.stopSound;
         pub const setVolume = AudioMixin.setVolume;
+        pub const videoSupported = VideoMixin.videoSupported;
+        pub const openVideo = VideoMixin.openVideo;
+        pub const updateVideo = VideoMixin.updateVideo;
+        pub const drawVideo = VideoMixin.drawVideo;
+        pub const videoPlaying = VideoMixin.videoPlaying;
+        pub const closeVideo = VideoMixin.closeVideo;
+        pub const addVideo = VideoMixin.addVideo;
+        pub const removeVideo = VideoMixin.removeVideo;
+        pub const renderVideos = VideoMixin.renderVideos;
 
         // ── GUI (mixin) ──────────────────────────────────────────
         pub const guiBegin = GuiMixin.guiBegin;
@@ -1149,6 +1164,7 @@ pub fn GameWith(comptime Hooks: type) type {
         MockEcsBackend(u32),
         @import("input.zig").StubInput,
         @import("audio.zig").StubAudio,
+        core.StubVideo,
         @import("gui.zig").StubGui,
         Hooks,
         core.StubLogSink,
