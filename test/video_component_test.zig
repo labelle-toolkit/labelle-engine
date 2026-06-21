@@ -26,12 +26,16 @@ const FakeVideo = struct {
     var draw_x: [16]f32 = undefined;
     var draw_w: [16]f32 = undefined;
     var fullscreen_n: usize = 0;
+    var playing: bool = true; // toggled to simulate end-of-stream
+    var replay_n: usize = 0;
 
     fn reset() void {
         next_id = 1;
         open_count = 0;
         draw_n = 0;
         fullscreen_n = 0;
+        playing = true;
+        replay_n = 0;
     }
 
     pub fn openVideo(_: []const u8) u32 {
@@ -52,7 +56,10 @@ const FakeVideo = struct {
         fullscreen_n += 1;
     }
     pub fn isVideoPlaying(_: u32) bool {
-        return true;
+        return playing;
+    }
+    pub fn replayVideo(_: u32) void {
+        replay_n += 1;
     }
     pub fn videoDimensions(_: u32) struct { w: u32, h: u32 } {
         return .{ .w = 64, .h = 48 };
@@ -127,6 +134,46 @@ test "renderVideos: fullscreen background uses the fill path, not positioned dra
 
     try testing.expectEqual(@as(usize, 1), FakeVideo.fullscreen_n);
     try testing.expectEqual(@as(usize, 0), FakeVideo.draw_n); // not the positioned path
+}
+
+test "renderVideos: a looping video restarts at end (no finish)" {
+    FakeVideo.reset();
+    var game = TestGame.init(testing.allocator);
+    defer game.deinit();
+
+    const e = game.createEntity();
+    game.setPosition(e, .{ .x = 0, .y = 0 });
+    game.addVideo(e, core.VideoComponent.init("loop.mp4", 100, 100)); // loop = true default
+
+    FakeVideo.playing = false; // simulate end-of-stream
+    game.renderVideos(0.016);
+
+    try testing.expectEqual(@as(usize, 1), FakeVideo.replay_n); // restarted
+    const vc = game.getComponent(e, core.VideoComponent).?;
+    try testing.expect(!vc.finished); // a loop never "finishes"
+}
+
+test "renderVideos: a play-once video finishes once at end (no replay)" {
+    FakeVideo.reset();
+    var game = TestGame.init(testing.allocator);
+    defer game.deinit();
+
+    const e = game.createEntity();
+    game.setPosition(e, .{ .x = 0, .y = 0 });
+    var v = core.VideoComponent.init("intro.mp4", 100, 100);
+    v.loop = false;
+    game.addVideo(e, v);
+
+    FakeVideo.playing = false; // simulate end-of-stream
+    game.renderVideos(0.016);
+
+    const vc = game.getComponent(e, core.VideoComponent).?;
+    try testing.expect(vc.finished); // play-once → finished
+    try testing.expectEqual(@as(usize, 0), FakeVideo.replay_n); // not restarted
+
+    // Fires once: a second frame doesn't reset the flag.
+    game.renderVideos(0.016);
+    try testing.expect(vc.finished);
 }
 
 test "removeVideo: detaches the component" {

@@ -84,6 +84,22 @@ pub fn Mixin(comptime Game: type) type {
                     if (vc.handle == 0) continue; // open failed; retry next frame
                 }
                 Video.update(vc.handle, dt);
+
+                // End-of-stream handling: loop restarts; play-once fires the
+                // finished event exactly once (the last frame stays on screen
+                // until a listener transitions the scene).
+                if (!Video.isPlaying(vc.handle)) {
+                    if (vc.loop) {
+                        Video.replay(vc.handle);
+                    } else if (!vc.finished) {
+                        vc.finished = true;
+                        self.emitEngineEvent("engine__video_finished", .{
+                            .entity = entity,
+                            .path = vc.path,
+                        });
+                    }
+                }
+
                 if (!vc.visible) continue;
 
                 if (vc.fullscreen) {
