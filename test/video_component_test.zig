@@ -25,11 +25,13 @@ const FakeVideo = struct {
     var draw_n: usize = 0;
     var draw_x: [16]f32 = undefined;
     var draw_w: [16]f32 = undefined;
+    var fullscreen_n: usize = 0;
 
     fn reset() void {
         next_id = 1;
         open_count = 0;
         draw_n = 0;
+        fullscreen_n = 0;
     }
 
     pub fn openVideo(_: []const u8) u32 {
@@ -45,6 +47,9 @@ const FakeVideo = struct {
             draw_w[draw_n] = w;
             draw_n += 1;
         }
+    }
+    pub fn drawVideoFullscreen(_: u32) void {
+        fullscreen_n += 1;
     }
     pub fn isVideoPlaying(_: u32) bool {
         return true;
@@ -107,6 +112,21 @@ test "renderVideos: multiple videos play at their entity positions" {
     // Handles cache: a second frame opens nothing new.
     game.renderVideos(0.016);
     try testing.expectEqual(@as(u32, 2), FakeVideo.open_count);
+}
+
+test "renderVideos: fullscreen background uses the fill path, not positioned draw" {
+    FakeVideo.reset();
+    var game = TestGame.init(testing.allocator);
+    defer game.deinit();
+
+    const e = game.createEntity();
+    game.setPosition(e, .{ .x = 123, .y = 456 }); // ignored for a background
+    game.addVideo(e, core.VideoComponent.background("bg"));
+
+    game.renderVideos(0.016);
+
+    try testing.expectEqual(@as(usize, 1), FakeVideo.fullscreen_n);
+    try testing.expectEqual(@as(usize, 0), FakeVideo.draw_n); // not the positioned path
 }
 
 test "removeVideo: detaches the component" {

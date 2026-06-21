@@ -86,6 +86,13 @@ pub fn Mixin(comptime Game: type) type {
                 Video.update(vc.handle, dt);
                 if (!vc.visible) continue;
 
+                if (vc.fullscreen) {
+                    // Background/backdrop — the backend fills the framebuffer
+                    // edge-to-edge, so Position + size are ignored.
+                    Video.drawFullscreen(vc.handle);
+                    continue;
+                }
+
                 const pos = self.getPosition(entity);
                 var w = vc.width;
                 var h = vc.height;
