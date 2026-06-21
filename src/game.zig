@@ -685,6 +685,23 @@ pub fn GameConfigWithYAxis(
             // or no flow listens (`uses_os_gamepad_source` folds it away),
             // and the source's own `init` is `@hasDecl`-guarded per platform.
             if (comptime uses_os_gamepad_source) core.gamepad_source.init();
+            // Wire the audio backend into a video backend that supports it (e.g.
+            // the bgfx VideoBackend), so opened videos play their audio track in
+            // A/V sync — the player's master clock is the audio position
+            // (#549/#306). Comptime-gated: stub video, or an audio backend
+            // without the mixer API, folds this away. The VideoBackend can't
+            // import the audio module (one mixer), so the engine — which holds
+            // both impls — injects the raw audio fns as function pointers.
+            if (comptime @hasDecl(VideoImpl, "setAudioBackend") and @hasDecl(AudioImpl, "loadMusicFromPcm")) {
+                VideoImpl.setAudioBackend(.{
+                    .loadPcm = &AudioImpl.loadMusicFromPcm,
+                    .play = &AudioImpl.playMusic,
+                    .update = &AudioImpl.updateMusic,
+                    .stop = &AudioImpl.stopMusic,
+                    .clock = &AudioImpl.musicPositionSeconds,
+                    .unload = &AudioImpl.unloadMusic,
+                });
+            }
             return .{
                 .allocator = allocator,
                 .active_world = world,
