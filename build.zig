@@ -27,6 +27,10 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+    // font_types now aliases the canonical Glyph/CodepointEntry/KernPair from
+    // labelle-core (labelle-assembler#647) instead of redefining them, so it
+    // needs core in its own module graph (it used to be a dependency-free leaf).
+    font_types_module.addImport("labelle-core", core_module);
 
     const engine_module = b.addModule("engine", .{
         .root_source_file = b.path("src/root.zig"),

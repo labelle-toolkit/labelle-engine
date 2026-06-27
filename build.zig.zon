@@ -4,10 +4,12 @@
     .version = "1.63.0",
     .minimum_zig_version = "0.16.0",
     .dependencies = .{
-        // Requires labelle-core >= v1.18.0 — the YAxis enum + canonical
-        // `toScreenY`/`screenToLogicalY` transforms the engine's
-        // `screenToLogical` picking path routes through (labelle-engine#639).
-        // A path dependency, so CI clones core `main` (>= v1.18.0) as the
+        // Requires labelle-core >= v1.20.0 — font_types aliases core's
+        // canonical Glyph/CodepointEntry/KernPair value types
+        // (labelle-engine#647), which supersede the earlier >= v1.18.0 YAxis
+        // floor (the YAxis enum + `toScreenY`/`screenToLogicalY` transforms the
+        // `screenToLogical` picking path routes through, labelle-engine#639).
+        // A path dependency, so CI clones core `main` (>= v1.20.0) as the
         // sibling `../labelle-core`.
         .labelle_core = .{
             .path = "../labelle-core",
