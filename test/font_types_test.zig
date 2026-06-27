@@ -1,5 +1,6 @@
 const std = @import("std");
 const engine = @import("engine");
+const core = @import("labelle-core");
 
 test "FontId.invalid fails isValid" {
     const id = engine.FontId.invalid;
@@ -18,4 +19,14 @@ test "Glyph / CodepointEntry / KernPair sizes are stable PODs" {
     try std.testing.expectEqual(@as(usize, 20), @sizeOf(engine.Glyph));
     try std.testing.expectEqual(@as(usize, 8), @sizeOf(engine.CodepointEntry));
     try std.testing.expectEqual(@as(usize, 12), @sizeOf(engine.KernPair));
+}
+
+test "font value types are the canonical labelle-core types" {
+    // The point of #647 is *nominal* identity, not just matching layout: the
+    // size test above would still pass if engine reintroduced a structurally-
+    // identical-but-distinct `extern struct`. Lock the alias so the assembler's
+    // codegen-marshal `@ptrCast` stays a genuine identity cast.
+    try std.testing.expect(engine.Glyph == core.Glyph);
+    try std.testing.expect(engine.CodepointEntry == core.CodepointEntry);
+    try std.testing.expect(engine.KernPair == core.KernPair);
 }
