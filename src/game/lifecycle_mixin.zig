@@ -275,6 +275,80 @@ pub fn Mixin(comptime Game: type) type {
             self.setPaused(false);
         }
 
+        // ── GPU surface lifecycle (Android context loss, epic #386 Phase 4) ──
+
+        /// Backend entry point for GPU surface loss (Android TERM_WINDOW).
+        ///
+        /// TERM_WINDOW destroys every GPU texture but leaves game state
+        /// and the CPU allocator intact. We:
+        ///   1. Drop the catalog's stale GPU handles WITHOUT calling the
+        ///      loader `free` vtable (the context is dead — destroying a
+        ///      handle on it is UB). Refcounts are preserved so the
+        ///      asset's holders stay valid.
+        ///   2. Re-arm every atlas's `texture_id` so the idempotent
+        ///      per-tick bridge re-wires fresh handles after restore.
+        ///   3. Emit `engine__surface_lost` for flow/script listeners.
+        ///
+        /// `reenqueueGpuResident` + `surfaceRestored` do the inverse once
+        /// INIT_WINDOW recreates the surface.
+        pub fn surfaceLost(self: *Game) void {
+            self.assets.invalidateGpuResources();
+            self.atlas_manager.invalidateUploadedTextures();
+            std.log.info("surface_lost: invalidated gpu-resident assets, refcounts preserved", .{});
+            // Engine `Events` dual-emit (#578); folds away when the game
+            // doesn't subscribe.
+            self.emitEngineEvent("engine__surface_lost", .{});
+        }
+
+        /// Backend entry point for GPU surface restore (Android
+        /// INIT_WINDOW). Re-fires the decode → upload pipeline for every
+        /// GPU-resident asset (refcounts untouched) and then FORCE-PUMPS
+        /// synchronously so the first restored frame isn't black — the
+        /// catalog freed the decoded CPU bitmap after the original
+        /// upload, so the re-upload requires a re-decode round-trip the
+        /// async per-tick pump would otherwise spread across several
+        /// frames. Bounded so a wedged decode can't hang the restore.
+        pub fn surfaceRestored(self: *Game) void {
+            self.assets.reenqueueGpuResident();
+            forcePumpCurrentScene(self);
+            std.log.info("surface_restored: re-enqueued + pumped to ready", .{});
+            // Engine `Events` dual-emit (#578).
+            self.emitEngineEvent("engine__surface_restored", .{});
+        }
+
+        /// Synchronously pump the catalog until the current scene's
+        /// manifest assets are all `.ready`, or a bounded iteration cap
+        /// elapses (so a failed/wedged decode can't spin forever). Mirrors
+        /// the busy-pump pattern in `loadAtlasIfNeededImpl` /
+        /// `acquireImmediately`: `pump()` + `bridgeAllReadyImageAssets()`
+        /// + `Thread.yield()` per spin. When the current scene has no
+        /// declared manifest, falls through to the bounded cap after one
+        /// drain so any re-enqueued asset still gets a chance to upload.
+        fn forcePumpCurrentScene(self: *Game) void {
+            // Cap matches a generous worst case: a handful of atlases each
+            // taking a few pump cycles to decode + upload. Past this the
+            // restore returns and the normal per-tick pump finishes the
+            // tail — never a hang.
+            const max_spins: usize = 4096;
+            const manifest: []const []const u8 = blk: {
+                const name = self.current_scene_name orelse break :blk &.{};
+                const entry = self.scenes.get(name) orelse break :blk &.{};
+                break :blk entry.assets;
+            };
+
+            var spins: usize = 0;
+            while (spins < max_spins) : (spins += 1) {
+                self.assets.pump();
+                self.bridgeAllReadyImageAssets();
+                // Done once every manifest asset is ready. `allReady`
+                // over an empty manifest is trivially true, so a
+                // scene with no declared assets exits after the first
+                // drain+bridge — exactly the single-pass we want.
+                if (self.assets.allReady(manifest)) break;
+                std.Thread.yield() catch {};
+            }
+        }
+
         /// Seconds of gameplay time elapsed (time-scaled, pause-aware) —
         /// the clock flow `Cooldown`/`Delay` nodes (#25) measure against.
         pub fn elapsedSeconds(self: *const Game) f64 {
