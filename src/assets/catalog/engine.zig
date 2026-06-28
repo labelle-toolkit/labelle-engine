@@ -83,6 +83,14 @@ pub const AssetCatalog = struct {
     /// frames pass without new work, the next `pump` still starts
     /// where the last one left off.
     pump_cursor: u8,
+    /// `true` while the GPU surface is alive. Cleared by
+    /// `invalidateGpuResources` (Android TERM_WINDOW) and restored by
+    /// `reenqueueGpuResident` (INIT_WINDOW). While `false`, `pump`'s
+    /// happy-path upload branch must not run — uploading into a dead
+    /// context would `destroyTexture` a stale handle / crash the
+    /// backend. See the GPU-context-loss design notes on
+    /// `invalidateGpuResources` below (epic #386 Phase 4).
+    gpu_alive: bool,
 
     /// Builds the catalog. The worker thread is spawned lazily on
     /// the first `acquire` — this keeps `init`'s signature infallible
@@ -108,6 +116,7 @@ pub const AssetCatalog = struct {
             .workers_started = false,
             .dispatch_counter = 0,
             .pump_cursor = 0,
+            .gpu_alive = true,
         };
     }
 
@@ -269,45 +278,61 @@ pub const AssetCatalog = struct {
         const needs_enqueue = entry.refcount == 0 and entry.state == .registered;
 
         if (needs_enqueue) {
-            // Spawn the worker pool BEFORE touching the refcount. If
-            // thread spawn fails, `try` bubbles the error with the
-            // catalog state unchanged — no leaked refcount that would
-            // trap the entry at `.registered` with `refcount > 0` forever.
-            try self.ensureWorker();
-            const request: WorkRequest = .{
-                .entry_name = kv.key_ptr.*,
-                .vtable = entry.loader,
-                .file_type = entry.file_type,
-                .bytes = entry.raw_bytes,
-                .params = entry.params,
-            };
-            // Round-robin across the worker pool so decode load is
-            // spread. If the picked ring is full (shouldn't happen in
-            // practice — 64-slot capacity vs. typical 6–30 atlases —
-            // but the contract tolerates it), fall through to
-            // `.registered` and let pump() retry via a future acquire.
-            const idx = self.dispatch_counter % NUM_WORKERS;
-            self.dispatch_counter +%= 1;
-            if (self.requests[idx].tryEnqueue(request)) |_| {
-                entry.state = .queued;
-
-                // `single_threaded` (WASM) has no worker thread
-                // running — `start()` is a no-op there (issue #461).
-                // Drain the request we just enqueued on the main
-                // thread so the result lands in the result ring
-                // before the next `pump()`.
-                if (builtin.single_threaded) {
-                    self.workers[idx].runOnce();
-                }
-            } else |err| switch (err) {
-                error.QueueFull => std.log.debug(
-                    "assets: request ring {d} full, deferring acquire of '{s}'",
-                    .{ idx, kv.key_ptr.* },
-                ),
-            }
+            try self.enqueueDecode(kv.key_ptr.*, entry);
         }
         entry.refcount += 1;
         return entry;
+    }
+
+    /// Enqueues a decode `WorkRequest` for `entry` and flips its state
+    /// to `.queued`. Factored out of `acquire` so the GPU-context-loss
+    /// re-enqueue path (`reenqueueGpuResident`) can re-fire a decode
+    /// without going through `acquire`'s refcount/needs-enqueue logic.
+    ///
+    /// `key` is the stable hashmap-owned key slice (program-lifetime per
+    /// the `@embedFile` invariant) — never a caller-supplied temporary,
+    /// since the worker borrows it on the request ring.
+    ///
+    /// Spawns the worker pool first; on `ensureWorker` failure the error
+    /// bubbles with the entry's state unchanged. If the picked request
+    /// ring is full, logs and leaves the state at `.registered` — a
+    /// later acquire / re-enqueue retries.
+    fn enqueueDecode(self: *AssetCatalog, key: []const u8, entry: *AssetEntry) !void {
+        // Spawn the worker pool BEFORE touching state. If thread spawn
+        // fails, `try` bubbles the error with the catalog state
+        // unchanged — no entry left trapped mid-transition.
+        try self.ensureWorker();
+        const request: WorkRequest = .{
+            .entry_name = key,
+            .vtable = entry.loader,
+            .file_type = entry.file_type,
+            .bytes = entry.raw_bytes,
+            .params = entry.params,
+        };
+        // Round-robin across the worker pool so decode load is
+        // spread. If the picked ring is full (shouldn't happen in
+        // practice — 64-slot capacity vs. typical 6–30 atlases —
+        // but the contract tolerates it), fall through to
+        // `.registered` and let a future enqueue retry.
+        const idx = self.dispatch_counter % NUM_WORKERS;
+        self.dispatch_counter +%= 1;
+        if (self.requests[idx].tryEnqueue(request)) |_| {
+            entry.state = .queued;
+
+            // `single_threaded` (WASM) has no worker thread
+            // running — `start()` is a no-op there (issue #461).
+            // Drain the request we just enqueued on the main
+            // thread so the result lands in the result ring
+            // before the next `pump()`.
+            if (builtin.single_threaded) {
+                self.workers[idx].runOnce();
+            }
+        } else |err| switch (err) {
+            error.QueueFull => std.log.debug(
+                "assets: request ring {d} full, deferring decode of '{s}'",
+                .{ idx, key },
+            ),
+        }
     }
 
     /// Drops the refcount. When it hits zero on a `.ready` entry, the
@@ -469,12 +494,25 @@ pub const AssetCatalog = struct {
                 var tried: u8 = 0;
                 while (tried < NUM_WORKERS) : (tried += 1) {
                     const idx: u8 = @intCast((@as(usize, self.pump_cursor) + tried) % NUM_WORKERS);
+                    // GPU context loss (Android TERM_WINDOW): leave any
+                    // happy-path upload result PARKED on the ring so an
+                    // in-flight decode landing mid-TERM doesn't upload
+                    // into a dead context. Peek first; only consume the
+                    // result if it's a cheap drain path (removed entry,
+                    // zombie, or decode error — none of which touch the
+                    // GPU). `reenqueueGpuResident` flips `gpu_alive` back
+                    // on and the parked results upload then. The peek
+                    // never advances `tail`, so the parked slot survives.
+                    if (!self.gpu_alive) {
+                        const peeked = self.results[idx].peek() orelse continue;
+                        if (self.isGpuUploadResult(peeked)) continue;
+                    }
                     if (self.results[idx].tryDequeue()) |r| {
                         self.pump_cursor = @intCast((@as(usize, idx) + 1) % NUM_WORKERS);
                         break :blk r;
                     }
                 }
-                return; // all rings empty
+                return; // all rings empty (or all remaining are GPU-parked)
             };
 
             // (1) Entry was removed between enqueue and dequeue. No
@@ -532,6 +570,92 @@ pub const AssetCatalog = struct {
             // resource handle is parked on `entry.resource`.
             entry.decoded = null;
             entry.state = .ready;
+        }
+    }
+
+    /// `true` if draining `result` from the ring would run the
+    /// GPU-touching happy-path upload (branch 4 of `pump`) for a
+    /// GPU-resident asset. Used by `pump` while `gpu_alive == false` to
+    /// leave such results parked on the ring rather than uploading into
+    /// a dead context.
+    ///
+    /// A result is GPU-bound only when it would reach branch (4) *and*
+    /// its payload is an image:
+    ///   * the entry still exists (else branch 1 — removed, GPU-free),
+    ///   * refcount > 0 (else branch 2 — zombie, GPU-free),
+    ///   * `err == null` (else branch 3 — decode error, GPU-free),
+    ///   * `decoded` is an `.image` (audio/font uploads don't touch the
+    ///     GPU surface that TERM_WINDOW destroyed, so they may drain).
+    fn isGpuUploadResult(self: *AssetCatalog, result: WorkResult) bool {
+        const entry = self.entries.getPtr(result.entry_name) orelse return false;
+        if (entry.refcount == 0) return false;
+        if (result.err != null) return false;
+        const payload = result.decoded orelse return false;
+        return payload == .image;
+    }
+
+    /// GPU surface lost (Android TERM_WINDOW / `surfaceLost`).
+    ///
+    /// TERM_WINDOW destroys every GPU texture but leaves game state and
+    /// the CPU-side allocator intact. For each GPU-resident, `.ready`
+    /// asset we drop the *stale* backend handle WITHOUT calling the
+    /// loader's `free` vtable: `free` would `destroyTexture` a handle
+    /// the driver has already invalidated, which is undefined behaviour
+    /// on a dead context. Instead we null `entry.resource` directly and
+    /// rewind state to `.registered`, leaving `refcount` untouched so
+    /// the asset's holders stay valid. `reenqueueGpuResident` re-fires
+    /// the decode → upload pipeline once the surface returns.
+    ///
+    /// Only `.image` assets are invalidated — `.audio` resources are
+    /// not GPU-resident and survive context loss. Entries that are
+    /// mid-flight (`.queued` / `.decoding`) or not yet uploaded
+    /// (`.registered` / `.failed`) are left alone; the `gpu_alive` gate
+    /// in `pump` handles an in-flight decode that lands during TERM.
+    pub fn invalidateGpuResources(self: *AssetCatalog) void {
+        self.gpu_alive = false;
+        var it = self.entries.valueIterator();
+        while (it.next()) |entry| {
+            if (entry.loader_kind != .image) continue;
+            if (entry.state != .ready) continue;
+            // Stale handle — the GPU context is gone. Do NOT call
+            // `entry.loader.free`: that destroys a now-invalid texture
+            // handle. Drop the slot directly.
+            entry.resource = null;
+            // `decoded` is already null on a `.ready` entry (pump nulls
+            // it after a successful upload); kept explicit for clarity.
+            entry.decoded = null;
+            entry.state = .registered;
+        }
+    }
+
+    /// GPU surface restored (Android INIT_WINDOW / `surfaceRestored`).
+    ///
+    /// Re-fires the decode → upload pipeline for every GPU-resident
+    /// asset that `invalidateGpuResources` rewound to `.registered`
+    /// while still referenced (`refcount > 0`). Goes through the shared
+    /// `enqueueDecode` so the worker re-decodes the CPU bitmap (which
+    /// `pump` freed after the original upload) and `pump` re-uploads
+    /// into the fresh context — `acquire` would not re-enqueue here
+    /// because refcount is already non-zero. Refcounts are never
+    /// touched. Clears the `gpu_alive` gate first so the resulting
+    /// uploads are no longer parked.
+    pub fn reenqueueGpuResident(self: *AssetCatalog) void {
+        self.gpu_alive = true;
+        var it = self.entries.iterator();
+        while (it.next()) |kv| {
+            const entry = kv.value_ptr;
+            if (entry.loader_kind != .image) continue;
+            if (entry.refcount == 0) continue;
+            if (entry.state != .registered) continue;
+            // Best-effort: a transient ring-full / worker-spawn failure
+            // leaves the entry at `.registered` for a later retry; a
+            // restored surface must not be able to fail the frame loop.
+            self.enqueueDecode(kv.key_ptr.*, entry) catch |err| {
+                std.log.warn(
+                    "assets: re-enqueue after surface restore failed for '{s}': {s}",
+                    .{ kv.key_ptr.*, @errorName(err) },
+                );
+            };
         }
     }
 };

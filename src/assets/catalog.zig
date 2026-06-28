@@ -14,6 +14,7 @@
 //!   * `catalog/tests_lifecycle.zig`— register/acquire/release/query tests
 //!   * `catalog/tests_pump.zig`     — pump() state-machine tests (#442)
 //!   * `catalog/tests_release.zig`  — release() backend-free tests (#446)
+//!   * `catalog/tests_surface_loss.zig` — GPU context-loss tests (#386)
 
 const engine = @import("catalog/engine.zig");
 
@@ -40,4 +41,5 @@ test {
     _ = @import("catalog/tests_lifecycle.zig");
     _ = @import("catalog/tests_pump.zig");
     _ = @import("catalog/tests_release.zig");
+    _ = @import("catalog/tests_surface_loss.zig");
 }

@@ -153,6 +153,18 @@ pub const RuntimeAtlas = struct {
     /// `pending`. After that point the atlas is indistinguishable from
     /// one loaded eagerly. `is_loaded()` is the predicate.
     pending: ?PendingImage = null,
+    /// Retained copy of the `PendingImage` that `markPendingLoaded`
+    /// promoted. Survives the `pending = null` clear so the
+    /// GPU-context-loss path (`invalidateUploadedTextures`, Android
+    /// TERM_WINDOW) can re-arm `pending` and let the idempotent per-tick
+    /// `bridgeAllReadyImageAssets` re-wire a fresh `texture_id` once the
+    /// surface returns. The borrowed `bytes` / `file_type` slices are
+    /// program-lifetime (`@embedFile`), so retaining them is free. `null`
+    /// for atlases never loaded via the pending path (eager
+    /// `loadAtlasFromJson` / `loadAtlasComptime`), which therefore don't
+    /// participate in GPU re-upload — they hold a renderer-owned texture
+    /// the catalog re-decode path doesn't manage. (epic #386 Phase 4)
+    loaded_image: ?PendingImage = null,
 
     pub fn init(allocator: std.mem.Allocator) RuntimeAtlas {
         return .{ .sprites = std.StringHashMap(SpriteData).init(allocator) };
@@ -373,7 +385,36 @@ pub const TextureManager = struct {
         const pending = atlas.pending orelse return error.AtlasNotPending;
         atlas.texture_id = texture_id;
         applyTextureScale(atlas, pending.meta, actual_dims);
+        // Retain the pending descriptor so a GPU context loss can re-arm
+        // it (`invalidateUploadedTextures`). The slices it holds are
+        // program-lifetime, so this is just a value copy.
+        atlas.loaded_image = pending;
         atlas.pending = null;
+        self.version += 1;
+    }
+
+    /// GPU surface lost (Android TERM_WINDOW / `Game.surfaceLost`).
+    ///
+    /// TERM_WINDOW destroys every GPU texture; the `texture_id` each
+    /// atlas holds is now stale. For every atlas that was loaded via the
+    /// pending path (`loaded_image != null`), reset `texture_id = 0` and
+    /// re-arm `pending` from the retained descriptor so the idempotent
+    /// per-tick `bridgeAllReadyImageAssets` → `markPendingLoaded` walk
+    /// re-wires a FRESH handle once the catalog re-uploads. Without the
+    /// re-arm, `markPendingLoaded` would early-return `AtlasNotPending`
+    /// and the atlas would keep its dead `texture_id`.
+    ///
+    /// Atlases loaded eagerly (`loaded_image == null`) are left alone —
+    /// they don't go through the catalog re-decode pipeline, so there is
+    /// nothing here to re-wire them to. Bumps `version` so the sprite
+    /// cache re-resolves against the reset `texture_id`.
+    pub fn invalidateUploadedTextures(self: *TextureManager) void {
+        var it = self.atlases.valueIterator();
+        while (it.next()) |atlas| {
+            const retained = atlas.loaded_image orelse continue;
+            atlas.texture_id = 0;
+            atlas.pending = retained;
+        }
         self.version += 1;
     }
 

@@ -413,6 +413,27 @@ pub const Events = struct {
         player: u32,
         controller_id: u32,
     };
+
+    // ── GPU surface lifecycle (Android context loss, epic #386 Phase 4) ──
+    //
+    // On Android, TERM_WINDOW destroys every GPU texture (game state and
+    // the CPU allocator survive); INIT_WINDOW recreates the surface. The
+    // backend calls `Game.surfaceLost` / `Game.surfaceRestored`, which
+    // invalidate + re-upload the GPU-resident asset catalog and emit
+    // these events so flows/scripts can pause/resume rendering-dependent
+    // work across the gap. Both carry no payload — the transition itself
+    // is the signal. Zero-cost when no listener subscribes (same gate
+    // `emitEngineEvent` uses for every other engine event).
+
+    /// Fired when the GPU surface is lost and the catalog has dropped its
+    /// stale texture handles (refcounts preserved). No new GPU work
+    /// should run until `surface_restored`.
+    pub const surface_lost = struct {};
+
+    /// Fired after the GPU surface is restored, the catalog has
+    /// re-enqueued its GPU-resident assets, and the first frame has been
+    /// pumped back to `.ready`.
+    pub const surface_restored = struct {};
 };
 
 // ── Hook Types ──

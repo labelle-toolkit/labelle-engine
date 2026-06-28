@@ -1059,6 +1059,11 @@ pub fn GameConfigWithYAxis(
         pub const getTimeScale = LifecycleMixin.getTimeScale;
         pub const pause = LifecycleMixin.pause;
         pub const resume_ = LifecycleMixin.resume_;
+        // GPU surface lifecycle (Android context loss, epic #386 Phase 4).
+        // The bgfx-Android backend calls these on TERM_WINDOW /
+        // INIT_WINDOW to invalidate + re-upload GPU-resident assets.
+        pub const surfaceLost = LifecycleMixin.surfaceLost;
+        pub const surfaceRestored = LifecycleMixin.surfaceRestored;
         pub const elapsedSeconds = LifecycleMixin.elapsedSeconds;
 
         // ── Input events (labelle-gui#208) ───────────────────────

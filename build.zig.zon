@@ -1,7 +1,7 @@
 .{
     .fingerprint = 0xe8a81a8dc7f48c87,
     .name = .engine,
-    .version = "1.64.0",
+    .version = "1.65.0",
     .minimum_zig_version = "0.16.0",
     .dependencies = .{
         // Requires labelle-core >= v1.20.0 — font_types aliases core's
