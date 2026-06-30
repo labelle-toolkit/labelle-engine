@@ -332,6 +332,13 @@ pub const PrefabRegistry = scene_mod.PrefabRegistry;
 pub const ComponentRegistry = scene_mod.ComponentRegistry;
 pub const ComponentRegistryMulti = scene_mod.ComponentRegistryMulti;
 pub const ComponentRegistryWithPlugins = scene_mod.ComponentRegistryWithPlugins;
+// Two-tier component visibility + per-pack registry partition (Packs · #652)
+pub const Visibility = scene_mod.Visibility;
+pub const getVisibility = scene_mod.getVisibility;
+pub const isGlobalComponent = scene_mod.isGlobal;
+pub const ComponentView = scene_mod.ComponentView;
+pub const PackView = scene_mod.PackView;
+pub const globalComponentNames = scene_mod.globalNames;
 pub const ScriptRegistry = scene_mod.ScriptRegistry;
 pub const ScriptFns = scene_mod.ScriptFns;
 pub const GizmoRegistry = scene_mod.GizmoRegistry;

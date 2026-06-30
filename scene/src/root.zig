@@ -44,6 +44,13 @@ pub const PrefabRegistry = prefab.PrefabRegistry;
 pub const ComponentRegistry = component.ComponentRegistry;
 pub const ComponentRegistryMulti = component.ComponentRegistryMulti;
 pub const ComponentRegistryWithPlugins = component.ComponentRegistryWithPlugins;
+// Two-tier visibility + per-pack partition (Packs · #652)
+pub const Visibility = component.Visibility;
+pub const getVisibility = component.getVisibility;
+pub const isGlobal = component.isGlobal;
+pub const ComponentView = component.ComponentView;
+pub const PackView = component.PackView;
+pub const globalNames = component.globalNames;
 
 // ── Gizmo ──
 pub const GizmoComponent = gizmo.GizmoComponent;

@@ -143,6 +143,8 @@ pub fn build(b: *std.Build) void {
         // Runtime Scheduler for flow `Delay` nodes (#48 / #25 Stage 2).
         // Pause-aware timer wheel reusing the gameplay clock.
         "test/scheduler_test.zig",
+        // Two-tier component visibility + per-pack registry partition (#652).
+        "test/component_visibility_test.zig",
     };
 
     for (test_files) |test_file| {
