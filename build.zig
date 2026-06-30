@@ -112,6 +112,7 @@ pub fn build(b: *std.Build) void {
         "test/jsonc/unified_format_test.zig",
         "test/jsonc_bridge_gizmo_visibility_test.zig",
         "test/collect_entities_test.zig",
+        "test/entities_with_roster_test.zig",
         "test/set_sprite_flip_test.zig",
         // PIE viewport handshake (#543) — kept separate from
         // preview_mode_test.zig so the new coverage isn't gated on

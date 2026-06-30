@@ -89,6 +89,34 @@ pub fn GameConfig(
 
         pub const EntityType = Entity;
 
+        // ── Roster cache (#653, Packs Phase 2) ────────────────────
+        // `entitiesWith(Tag)` hands back a slice borrowed from one of
+        // these slots — engine-owned, valid only until the next
+        // structural mutation (component add/remove, entity
+        // create/destroy, world switch). A monotonic
+        // `roster_generation` is bumped on every such mutation; a slot
+        // whose stored `gen` no longer matches is stale and gets
+        // re-queried lazily on the next read.
+        //
+        // v1 keeps a small fixed map of slots keyed by a comptime hash
+        // of the tag-set's component type names. Up to
+        // `roster_cache_slots` distinct tag-sets cache concurrently;
+        // beyond that the least-recently-keyed victim is evicted
+        // (key-indexed) and refilled on demand. Single-cache or a
+        // small fixed map is explicitly acceptable for v1 — caching
+        // every distinct tag-set with zero eviction is a follow-up.
+        pub const roster_cache_slots = 8;
+        const RosterSlot = struct {
+            /// Comptime hash of the tag-set this slot caches.
+            key: u64 = 0,
+            /// `roster_generation` value at which `list` was filled.
+            gen: u64 = 0,
+            /// False until first filled (or after an OOM during refill).
+            valid: bool = false,
+            /// Borrowed-out collection; owned by `Game`, freed in `deinit`.
+            list: std.ArrayList(Entity) = .empty,
+        };
+
         /// Runtime timer wheel for flow `Delay` nodes (#25 Stage 2). Keyed
         /// on the engine `Entity` type; fires pause-aware callbacks against
         /// the gameplay clock. See `src/scheduler.zig`.
@@ -386,6 +414,15 @@ pub fn GameConfig(
         // Hot reload
         hot_reload_dirty: bool = false,
 
+        // ── Roster cache state (#653) ─────────────────────────────
+        /// Monotonic epoch bumped on every structural mutation. Read
+        /// slots compare their stored `gen` against this to detect
+        /// staleness. Wraps with `+%=`; collisions across a full u64
+        /// wrap are not a practical concern.
+        roster_generation: u64 = 0,
+        /// Fixed map of cached `entitiesWith` rosters. See `RosterSlot`.
+        roster_cache: [roster_cache_slots]RosterSlot = [_]RosterSlot{.{}} ** roster_cache_slots,
+
         // Gizmos
         gizmos_enabled: bool = true,
         gizmo_state: gizmo_draws_mod.GizmoState(Entity),
@@ -513,6 +550,8 @@ pub fn GameConfig(
             while (emb_iter.next()) |entry| self.allocator.free(entry.key_ptr.*);
             self.embedded_scene_sources.deinit();
             self.atlas_manager.deinit();
+            // Free the borrowed-slice roster cache (#653).
+            for (&self.roster_cache) |*slot| slot.list.deinit(self.allocator);
         }
 
         pub fn setHooks(self: *Self, receiver: Hooks) void {
@@ -742,6 +781,7 @@ pub fn GameConfig(
 
         pub fn createEntity(self: *Self) Entity {
             const entity = self.ecs_backend.createEntity();
+            self.bumpRoster();
             self.emitHook(.{ .entity_created = .{ .entity_id = entity } });
             // Engine `Events` dual-emit (#578). `entity` is widened to
             // u32 — same convention as box2d's `Events.collision_begin`.
@@ -908,6 +948,7 @@ pub fn GameConfig(
             self.active_world.sprite_cache.invalidate(@intCast(entity));
             self.renderer.untrackEntity(entity);
             self.ecs_backend.destroyEntity(entity);
+            self.bumpRoster();
             self.recordTombstone(entity);
             self.emitHook(.{ .entity_destroyed = .{ .entity_id = entity } });
             // Engine `Events` dual-emit (#578).
@@ -920,6 +961,7 @@ pub fn GameConfig(
             self.active_world.sprite_cache.invalidate(@intCast(entity));
             self.renderer.untrackEntity(entity);
             self.ecs_backend.destroyEntity(entity);
+            self.bumpRoster();
             self.recordTombstone(entity);
             self.emitHook(.{ .entity_destroyed = .{ .entity_id = entity } });
             // Engine `Events` dual-emit (#578).
@@ -1086,6 +1128,91 @@ pub fn GameConfig(
             return count;
         }
 
+        // ── Roster cache (#653) ───────────────────────────────────
+        //
+        // `entitiesWith(includes)` returns a slice **borrowed from an
+        // engine-owned cache**. The slice is valid only until the next
+        // structural mutation (component add/remove, entity
+        // create/destroy, world switch / ECS reset) — callers must NOT
+        // free it, and must **copy** it if they need to retain it past
+        // such a mutation. Repeated reads of the same tag-set within a
+        // mutation-free window return the cached slice without
+        // re-scanning the ECS; the first read after a mutation lazily
+        // re-queries.
+        //
+        // This backs the Packs query-surface caching (e.g.
+        // `citizens.idleWorkers()` borrows from here) and the
+        // "borrowed-slice" lifetime contract for list-returning
+        // queries — they hand back this cached slice rather than a
+        // caller-owned `collectEntities` allocation.
+        //
+        // `includes` mirrors the include tuple of `collectEntities`
+        // (e.g. `.{Health}` or `.{Health, Velocity}`); the exclude set
+        // is always empty for rosters. Distinct tag-sets are cached in
+        // separate slots up to `roster_cache_slots`; see `RosterSlot`.
+        pub fn entitiesWith(self: *Self, comptime includes: anytype) []const Entity {
+            const key = comptime rosterKey(includes);
+            const slot = self.rosterSlotFor(key);
+            // Cache hit: same tag-set, filled at the current epoch.
+            if (slot.valid and slot.key == key and slot.gen == self.roster_generation) {
+                return slot.list.items;
+            }
+            // Stale, freshly evicted, or never filled — re-query.
+            slot.list.clearRetainingCapacity();
+            slot.valid = false;
+            var view = self.ecs_backend.view(includes, .{});
+            defer view.deinit();
+            while (view.next()) |ent| {
+                slot.list.append(self.allocator, ent) catch {
+                    // OOM mid-fill: leave the slot invalid so the next
+                    // read retries the full query rather than handing
+                    // back a truncated roster as if it were fresh.
+                    return slot.list.items;
+                };
+            }
+            slot.key = key;
+            slot.gen = self.roster_generation;
+            slot.valid = true;
+            return slot.list.items;
+        }
+
+        /// Comptime hash identifying a tag-set by the concatenation of
+        /// its component type names. Two `entitiesWith` calls with the
+        /// same component types in the same order share a slot;
+        /// different orderings hash differently and simply occupy
+        /// separate slots (still correct, just less sharing).
+        fn rosterKey(comptime includes: anytype) u64 {
+            comptime {
+                var h = std.hash.Wyhash.init(0);
+                for (includes) |T| {
+                    h.update(@typeName(T));
+                    h.update("\x00");
+                }
+                return h.final();
+            }
+        }
+
+        /// Pick the cache slot for `key`: the existing slot if one
+        /// holds this tag-set, else a free slot, else a key-indexed
+        /// eviction victim (whose capacity is reused on refill).
+        fn rosterSlotFor(self: *Self, key: u64) *RosterSlot {
+            for (&self.roster_cache) |*s| {
+                if (s.valid and s.key == key) return s;
+            }
+            for (&self.roster_cache) |*s| {
+                if (!s.valid) return s;
+            }
+            return &self.roster_cache[key % roster_cache_slots];
+        }
+
+        /// Invalidate every cached roster by advancing the epoch. Cheap
+        /// (one add); called from every structural-mutation path so the
+        /// next `entitiesWith` read re-queries. Capacity in each slot's
+        /// list is retained for reuse.
+        inline fn bumpRoster(self: *Self) void {
+            self.roster_generation +%= 1;
+        }
+
         // ── Position & Hierarchy ──────────────────────────────────
 
         pub fn setPosition(self: *Self, entity: Entity, pos: Position) void {
@@ -1226,6 +1353,10 @@ pub fn GameConfig(
 
         pub fn addComponent(self: *Self, entity: Entity, component: anytype) void {
             self.ecs_backend.addComponent(entity, component);
+            // Tag-set membership may have changed — invalidate rosters
+            // (#653). Over-invalidation on a re-add is safe: it just
+            // forces the next `entitiesWith` read to re-query.
+            self.bumpRoster();
             const T = @TypeOf(component);
             if (@typeInfo(T) == .@"struct" and @hasDecl(T, "onAdd")) {
                 T.onAdd(ComponentPayload{ .entity_id = @intCast(entity), .game_ptr = @ptrCast(self) });
@@ -1237,6 +1368,11 @@ pub fn GameConfig(
             const T = @TypeOf(component);
             const is_update = self.ecs_backend.hasComponent(entity, T);
             self.ecs_backend.addComponent(entity, component);
+            // A genuine add changes tag-set membership; an in-place
+            // update does not — only invalidate rosters in the former
+            // case so per-field updates via `setComponent` don't thrash
+            // the cache (#653).
+            if (!is_update) self.bumpRoster();
             if (@typeInfo(T) == .@"struct") {
                 if (is_update and @hasDecl(T, "onSet")) {
                     T.onSet(ComponentPayload{ .entity_id = @intCast(entity), .game_ptr = @ptrCast(self) });
@@ -1294,6 +1430,8 @@ pub fn GameConfig(
                 T.onRemove(ComponentPayload{ .entity_id = @intCast(entity), .game_ptr = @ptrCast(self) });
             }
             self.ecs_backend.removeComponent(entity, T);
+            // Tag-set membership changed — invalidate rosters (#653).
+            self.bumpRoster();
         }
 
         /// Fire onReady for a component type on a given entity.
@@ -1611,6 +1749,8 @@ pub fn GameConfig(
             self.ecs_backend = &kv.value.ecs_backend;
             self.renderer = &kv.value.renderer;
             self.active_world_name = kv.key;
+            // Different world → different entity set; invalidate rosters (#653).
+            self.bumpRoster();
         }
 
         /// Rename an inactive world in the map.
@@ -1667,6 +1807,8 @@ pub fn GameConfig(
             self.gizmo_state = gizmo_draws_mod.GizmoState(Entity).init(self.allocator);
             // Re-sync backward-compatible pointers
             self.ecs_backend = &self.active_world.ecs_backend;
+            // The ECS was torn down and rebuilt — invalidate rosters (#653).
+            self.bumpRoster();
             // Clear tombstones — old entity IDs are meaningless after ECS reset
             if (comptime is_debug) {
                 self.tombstones = [_]?TombstoneEntry{null} ** tombstone_size;
