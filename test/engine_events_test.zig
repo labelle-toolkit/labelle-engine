@@ -104,6 +104,7 @@ const TestGame = game_mod.GameConfig(
     core.MockEcsBackend(u32),
     @import("engine").StubInput,
     @import("engine").StubAudio,
+    @import("engine").StubVideo,
     @import("engine").StubGui,
     *EventRecorder,
     core.StubLogSink,

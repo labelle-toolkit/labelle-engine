@@ -27,12 +27,16 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+    // font_types now aliases the canonical Glyph/CodepointEntry/KernPair from
+    // labelle-core (labelle-assembler#647) instead of redefining them, so it
+    // needs core in its own module graph (it used to be a dependency-free leaf).
+    font_types_module.addImport("labelle-core", core_module);
 
     const engine_module = b.addModule("engine", .{
         .root_source_file = b.path("src/root.zig"),
         .target = target,
         .optimize = optimize,
-        // src/preview_mode.zig needs libc for its raw `close`/`write`/`fcntl`
+        // src/preview/socket.zig needs libc for its raw `close`/`write`/`fcntl`
         // bindings — 0.16 dropped `std.posix.fcntl`/`std.posix.close` and
         // routed file IO through `std.Io.File` (which would force an
         // `io: std.Io` thread-through), so going straight to libc is the
@@ -75,6 +79,9 @@ pub fn build(b: *std.Build) void {
         "test/form_binder_test.zig",
         "test/script_runner_test.zig",
         "test/game_log_test.zig",
+        "test/fullscreen_api_test.zig",
+        "test/vsync_api_test.zig",
+        "test/engine_sprite_anim_test.zig",
         "test/save_policy_test.zig",
         "test/save_load_mixin_test.zig",
         "test/jsonc/bridge_leak_test.zig",
@@ -103,9 +110,14 @@ pub fn build(b: *std.Build) void {
         // Accessor methods on the game handle wrapping the unified
         // `InputInterface` for key-release / mouse-button polling (#208).
         "test/input_mixin_test.zig",
+        // #611 — ControllerManager player↔controller mapping: unassigned
+        // pool, assignment API, debounced-lost, guid/heuristic resume,
+        // opt-in policy helpers, and the auto-pause integration.
+        "test/controller_manager_test.zig",
         "test/spawn_from_prefab_test.zig",
         "test/jsonc/bridge_prefab_tags_test.zig",
         "test/save_load_two_phase_test.zig",
+        "test/post_load_render_gate_test.zig",
         "test/example_prefab_animation_walkthrough_test.zig",
         "test/jsonc/bridge_deserialize_test.zig",
         "test/jsonc/deserializer_test.zig",
@@ -113,6 +125,7 @@ pub fn build(b: *std.Build) void {
         "test/jsonc_bridge_gizmo_visibility_test.zig",
         "test/collect_entities_test.zig",
         "test/set_sprite_flip_test.zig",
+        "test/video_component_test.zig",
         // PIE viewport handshake (#543) — kept separate from
         // preview_mode_test.zig so the new coverage isn't gated on
         // that file's pre-existing 21-test subscription bug.
@@ -145,6 +158,13 @@ pub fn build(b: *std.Build) void {
         "test/scheduler_test.zig",
         // Two-tier component visibility + per-pack registry partition (#652).
         "test/component_visibility_test.zig",
+        // #630 — scene-teardown: O(N) `unloadCurrentScene` drain (guarded
+        // untrack) + `resetEcsBackend` clears `scene_entities`.
+        "test/scene_teardown_test.zig",
+        // #639 — project Y-axis convention: `Game.y_axis` constant +
+        // `yAxis()` accessor + additive `screenToLogical` picking path
+        // (RFC §3, Q1→(b), Q3). Raw `screenToDesign` stays unchanged.
+        "test/y_axis_test.zig",
     };
 
     for (test_files) |test_file| {

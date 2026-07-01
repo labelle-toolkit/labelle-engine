@@ -68,9 +68,16 @@ const Texture = loader.Texture;
 /// whatever `DecodedImage` shape labelle-gfx uses on its side of the
 /// dependency boundary without a nominal-type conflict.
 pub const DecodedImage = struct {
-    pixels: []u8, // RGBA8, allocator-owned
+    pixels: []u8, // RGBA8, allocator-owned — OR, when `compressed`, the raw
+    // GPU-compressed blob (e.g. ASTC) to upload verbatim, no CPU decode.
     width: u32,
     height: u32,
+    /// True when `pixels` holds a GPU-compressed blob (ASTC) rather than RGBA8.
+    /// The adapter's `upload` routes these to the backend's `uploadCompressed`
+    /// instead of `uploadTexture` (the worker-thread `decode` did no CPU work —
+    /// it just duped the blob and read dims from the header). Backends without
+    /// compressed support never set this, so the RGBA path is unchanged.
+    compressed: bool = false,
 };
 
 /// Runtime backend hook. The assembler fills this in at `Game.init`
@@ -135,6 +142,7 @@ fn decode(
         .pixels = decoded.pixels,
         .width = decoded.width,
         .height = decoded.height,
+        .compressed = decoded.compressed,
     } };
 }
 
@@ -156,6 +164,7 @@ fn upload(
         .pixels = image.pixels,
         .width = image.width,
         .height = image.height,
+        .compressed = image.compressed,
     });
 
     // Upload succeeded: the GPU has its own copy, so we can release
@@ -221,6 +230,7 @@ const MockBackend = struct {
     var upload_fails: bool = false;
     var decode_width: u32 = 2;
     var decode_height: u32 = 2;
+    var decode_compressed: bool = false;
 
     fn reset() void {
         decode_calls = 0;
@@ -233,6 +243,7 @@ const MockBackend = struct {
         upload_fails = false;
         decode_width = 2;
         decode_height = 2;
+        decode_compressed = false;
     }
 
     fn decodeFn(
@@ -249,7 +260,7 @@ const MockBackend = struct {
         // Fill with a recognisable byte so the upload mock can assert
         // it was called with the same bytes the decode produced.
         @memset(pixels, 0xAB);
-        return .{ .pixels = pixels, .width = decode_width, .height = decode_height };
+        return .{ .pixels = pixels, .width = decode_width, .height = decode_height, .compressed = decode_compressed };
     }
 
     fn uploadFn(decoded: DecodedImage) anyerror!Texture {
@@ -326,6 +337,46 @@ test "image loader: mock backend decode→upload→free round-trip" {
     // `testing.allocator` would flag a leak of the pixel buffer here
     // if upload had failed to free it. It is a GPA under the hood,
     // so a double-free would also trip.
+}
+
+test "image loader: compressed decode→upload round-trip" {
+    MockBackend.reset();
+    MockBackend.decode_compressed = true;
+    setBackend(MockBackend.backend_value);
+    defer clearBackend();
+
+    // 1. decode produces a GPU-compressed blob — the `compressed` flag
+    //    must survive the marshal into the loader's DecodedPayload.image.
+    const payload = try decode("astc", "fake-astc-blob", null, testing.allocator);
+    try testing.expectEqual(@as(u32, 1), MockBackend.decode_calls);
+    try testing.expect(payload.image.compressed);
+
+    // 2. upload still succeeds and the backend observes the same flag,
+    //    confirming the compressed bit is threaded all the way through.
+    var entry: AssetEntry = .{
+        .state = .decoding,
+        .refcount = 1,
+        .loader = &vtable,
+        .loader_kind = .image,
+        .raw_bytes = "fake-astc-blob",
+        .file_type = "astc",
+        .decoded = payload,
+        .resource = null,
+        .params = null,
+        .last_error = null,
+    };
+    try upload(&entry, payload, testing.allocator);
+    try testing.expectEqual(@as(u32, 1), MockBackend.upload_calls);
+    try testing.expect(entry.resource != null);
+    try testing.expectEqual(@as(Texture, 1), entry.resource.?.image);
+    try testing.expect(MockBackend.last_uploaded != null);
+    try testing.expect(MockBackend.last_uploaded.?.compressed);
+
+    // 3. free releases the texture, and `testing.allocator` confirms the
+    //    compressed CPU blob was freed by the successful upload path.
+    free(&entry);
+    try testing.expectEqual(@as(u32, 1), MockBackend.unload_calls);
+    try testing.expectEqual(@as(?UploadedResource, null), entry.resource);
 }
 
 test "image loader: drop path frees pixels without touching GPU" {

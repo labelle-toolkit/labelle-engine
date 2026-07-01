@@ -313,6 +313,13 @@ pub fn ComponentView(comptime FullRegistry: type, comptime allowed_names: []cons
 /// Iterates `FullRegistry.names()` and keeps the ones whose type declares
 /// `visibility == .global`. These are the names visible to *every* pack.
 pub fn globalNames(comptime FullRegistry: type) []const []const u8 {
+    comptime {
+        if (!@hasDecl(FullRegistry, "names")) {
+            @compileError("PackView/globalNames require a registry type that exposes " ++
+                "names() (e.g. ComponentRegistry or ComponentRegistryWithPlugins). " ++
+                "ComponentRegistryMulti does not enumerate its names and is unsupported here.");
+        }
+    }
     // A struct nested in a generic fn is memoized per `FullRegistry`, giving
     // the computed list static storage so the slice survives a runtime call.
     const Holder = struct {
@@ -343,23 +350,28 @@ pub fn globalNames(comptime FullRegistry: type) []const []const u8 {
 ///   _ = Citizens.getType("Locked");  // ok (global facet)
 ///   _ = Citizens.getType("Ship");    // compile error (foreign-private)
 pub fn PackView(comptime FullRegistry: type, comptime own_names: []const []const u8) type {
-    const allowed = comptime blk: {
-        const globals = globalNames(FullRegistry);
-        var buf: [globals.len + own_names.len][]const u8 = undefined;
-        var n: usize = 0;
-        for (globals) |name| {
-            buf[n] = name;
-            n += 1;
-        }
-        for (own_names) |name| {
-            // Skip a duplicate if the pack lists a name that is already global.
-            if (!nameAllowed(globals, name)) {
+    // A struct nested in a generic fn is memoized per (FullRegistry, own_names),
+    // giving the allow-list static storage — never return `&local` from a
+    // comptime block, whose temporary array goes out of scope with the block.
+    const Holder = struct {
+        const allowed = blk: {
+            const globals = globalNames(FullRegistry);
+            var buf: [globals.len + own_names.len][]const u8 = undefined;
+            var n: usize = 0;
+            for (globals) |name| {
                 buf[n] = name;
                 n += 1;
             }
-        }
-        const result = buf[0..n].*;
-        break :blk &result;
+            for (own_names) |name| {
+                // Skip a duplicate if the pack lists a name that is already global.
+                if (!nameAllowed(globals, name)) {
+                    buf[n] = name;
+                    n += 1;
+                }
+            }
+            const result = buf[0..n].*;
+            break :blk result;
+        };
     };
-    return ComponentView(FullRegistry, allowed);
+    return ComponentView(FullRegistry, &Holder.allowed);
 }
