@@ -1,6 +1,6 @@
 # RFC: Project-configurable Y-axis convention
 
-**Status:** Draft (revision 5 — scene audit done: FP + ricochet both y-up; Q2 promoted to load-bearing)
+**Status:** Implemented (revision 6 — ratifies the design as landed across core/gfx/engine; rollout tracked in labelle-engine#640. Q1 resolved as (b): `screenToDesign` stays raw, `screenToLogical` is the axis-aware surface.)
 
 **Tracking:** labelle-gfx#274
 
@@ -50,7 +50,8 @@ matches how it authors content.
 ## Goals
 
 - Give a project **one** Y-axis convention that every coordinate-producing and
-  coordinate-consuming surface agrees on: entity positions, `screenToDesign`,
+  coordinate-consuming surface agrees on: entity positions, axis-aware picking
+  via `screenToLogical` (`screenToDesign` stays raw window space — Q1→(b)),
   the renderer flip, and Shape sub-offsets (`line.end`, future shapes).
 - Make the convention **explicit and configurable** per project via
   `project.labelle`, defaulting to the screen-native `.down`; existing games
@@ -100,7 +101,8 @@ one convention:
 |---|---|---|
 | `Position.y` author space | y-down (0 = top) | y-up (0 = bottom) |
 | Renderer Position→screen | **no flip** (identity) | flip (`h - y`) |
-| `screenToDesign` returns | y-down (raw) | y-up *or* raw — see Q1 |
+| `screenToDesign` returns | y-down (raw) | y-down (raw) — Q1→(b) |
+| `screenToLogical` returns | y-down (= raw) | y-up |
 | `line.end` / Shape offsets | logical, no flip | logical, composed pre-flip |
 
 **Why `.down` is the default.** The renderer's internal/NDC space is *already*
@@ -257,8 +259,8 @@ explicit, default-compatible.
    game. (a) flip `screenToDesign` for `.up` so picking matches placement, but
    that changes behavior for every game that adopts `.up`; (b) keep
    `screenToDesign` raw and add a `screenToLogical` that respects `.y_axis`, so
-   an existing game adopting `.up` is a **pure no-op declaration**. The Migration
-   plan now assumes **(b)** for exactly that reason — please confirm. (Trade-off:
+   an existing game adopting `.up` is a **pure no-op declaration**. **Resolved:
+   (b)** — implemented as `screenToLogical` + raw `screenToDesign`. (Trade-off:
    (b) means `.up` games still see a y-up-position / y-down-`screenToDesign`
    split unless they call `screenToLogical` — but that split is *intrinsic* to
    choosing a bottom-origin convention on a top-origin screen.)
