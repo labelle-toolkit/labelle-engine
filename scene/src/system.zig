@@ -33,15 +33,21 @@ pub fn SystemRegistry(comptime plugin_modules: anytype) type {
         const std = @import("std");
         const std_time = std.time;
         const builtin = @import("builtin");
-        pub const profiling_enabled = builtin.mode == .Debug;
+        const profiler = @import("profiler.zig");
+        // Compiled into every build (incl. ReleaseFast); recording is gated
+        // at runtime by `profiler.recording()` (`LABELLE_PROFILE`). Public
+        // because the generated `main.zig` reads it to expose the array.
+        pub const profiling_enabled = true;
 
-        /// Plugin system profiling entry.
+        /// Plugin system timing (tick + postTick), rolling over the dump
+        /// window. Exposed via `Game.plugin_profile_ptr` for a live overlay.
         pub const PluginProfileEntry = struct {
             name: []const u8,
-            tick_ns: u64 = 0,
-            post_tick_ns: u64 = 0,
-            draw_gui_ns: u64 = 0,
+            tick: profiler.Stat = .{},
+            post_tick: profiler.Stat = .{},
         };
+        /// Frames since the last profiler log dump (advances only while recording).
+        var prof_frame_counter: u64 = 0;
 
         pub const plugin_system_count: usize = countPluginSystems();
 
@@ -91,6 +97,7 @@ pub fn SystemRegistry(comptime plugin_modules: anytype) type {
         /// Respects game_states — skips plugins not active in the current state.
         pub fn tick(game: anytype, dt: f32) void {
             const current_state = getGameState(game);
+            const rec = profiler.recording();
             comptime var pidx: usize = 0;
             inline for (info.@"struct".fields) |field| {
                 const mod = @field(plugin_modules, field.name);
@@ -98,21 +105,44 @@ pub fn SystemRegistry(comptime plugin_modules: anytype) type {
                     const Sys = @field(mod, "Systems");
                     if (@hasDecl(Sys, "tick")) {
                         if (isStateAllowed(Sys, current_state)) {
-                            const timer: ?usize = null; // std.time.Timer removed in 0.16 — see #TBD
-                            Sys.tick(game, dt);
-                            if (timer) |_| plugin_profile[pidx].tick_ns = 0;
-                        } else if (profiling_enabled) {
-                            plugin_profile[pidx].tick_ns = 0;
+                            if (rec) {
+                                const t0 = profiler.nowNs();
+                                Sys.tick(game, dt);
+                                plugin_profile[pidx].tick.record(profiler.nowNs() - t0);
+                            } else {
+                                Sys.tick(game, dt);
+                            }
                         }
                     }
                     pidx += 1;
                 }
             }
+            // tick() runs once per frame before postTick(): drive the dump here.
+            if (rec) {
+                prof_frame_counter += 1;
+                if (prof_frame_counter >= profiler.dump_interval_frames) {
+                    dumpProfile();
+                    prof_frame_counter = 0;
+                }
+            }
+        }
+
+        /// Log a worst-first ranking of per-plugin tick times over the
+        /// window, then reset. Called from `tick` while recording.
+        fn dumpProfile() void {
+            var rows: [plugin_system_count]profiler.Row = undefined;
+            for (&plugin_profile, 0..) |*e, i| {
+                rows[i] = .{ .name = e.name, .worst_ns = e.tick.worst_ns, .avg_ns = e.tick.avgNs() };
+                e.tick.resetWindow();
+                e.post_tick.resetWindow();
+            }
+            profiler.report("plugin", &rows);
         }
 
         /// Call postTick() on all plugin systems that declare it.
         pub fn postTick(game: anytype, dt: f32) void {
             const current_state = getGameState(game);
+            const rec = profiler.recording();
             comptime var pidx: usize = 0;
             inline for (info.@"struct".fields) |field| {
                 const mod = @field(plugin_modules, field.name);
@@ -120,11 +150,13 @@ pub fn SystemRegistry(comptime plugin_modules: anytype) type {
                     const Sys = @field(mod, "Systems");
                     if (@hasDecl(Sys, "postTick")) {
                         if (isStateAllowed(Sys, current_state)) {
-                            const timer: ?usize = null; // std.time.Timer removed in 0.16 — see #TBD
-                            Sys.postTick(game, dt);
-                            if (timer) |_| plugin_profile[pidx].post_tick_ns = 0;
-                        } else if (profiling_enabled) {
-                            plugin_profile[pidx].post_tick_ns = 0;
+                            if (rec) {
+                                const t0 = profiler.nowNs();
+                                Sys.postTick(game, dt);
+                                plugin_profile[pidx].post_tick.record(profiler.nowNs() - t0);
+                            } else {
+                                Sys.postTick(game, dt);
+                            }
                         }
                     }
                     pidx += 1;
@@ -142,11 +174,7 @@ pub fn SystemRegistry(comptime plugin_modules: anytype) type {
                     const Sys = @field(mod, "Systems");
                     if (@hasDecl(Sys, "drawGui")) {
                         if (isStateAllowed(Sys, current_state)) {
-                            const timer: ?usize = null; // std.time.Timer removed in 0.16 — see #TBD
                             Sys.drawGui(game);
-                            if (timer) |_| plugin_profile[pidx].draw_gui_ns = 0;
-                        } else if (profiling_enabled) {
-                            plugin_profile[pidx].draw_gui_ns = 0;
                         }
                     }
                     pidx += 1;

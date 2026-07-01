@@ -19,6 +19,8 @@ const core = engine.core;
 const game_mod = engine.game_mod;
 const KeyboardKey = engine.KeyboardKey;
 const MouseButton = engine.MouseButton;
+const GamepadButton = engine.GamepadButton;
+const GamepadAxis = engine.GamepadAxis;
 
 // ── Full controllable input stub ───────────────────────────────────────
 //
@@ -30,12 +32,20 @@ const FullInput = struct {
     var down_button: ?u32 = null;
     var pressed_button: ?u32 = null;
     var released_button: ?u32 = null;
+    var gamepad_available_id: ?u32 = null;
+    var gamepad_down: ?struct { id: u32, button: u32 } = null;
+    var gamepad_pressed: ?struct { id: u32, button: u32 } = null;
+    var gamepad_axis: ?struct { id: u32, axis: u32, value: f32 } = null;
 
     fn reset() void {
         released_key = null;
         down_button = null;
         pressed_button = null;
         released_button = null;
+        gamepad_available_id = null;
+        gamepad_down = null;
+        gamepad_pressed = null;
+        gamepad_axis = null;
     }
 
     // Required by InputInterface.
@@ -58,6 +68,23 @@ const FullInput = struct {
     }
     pub fn isMouseButtonReleased(button: u32) bool {
         return released_button != null and released_button.? == button;
+    }
+
+    // Gamepad wrappers the new accessors surface.
+    pub fn isGamepadAvailable(id: u32) bool {
+        return gamepad_available_id != null and gamepad_available_id.? == id;
+    }
+    pub fn isGamepadButtonDown(id: u32, button: u32) bool {
+        return gamepad_down != null and gamepad_down.?.id == id and gamepad_down.?.button == button;
+    }
+    pub fn isGamepadButtonPressed(id: u32, button: u32) bool {
+        return gamepad_pressed != null and gamepad_pressed.?.id == id and gamepad_pressed.?.button == button;
+    }
+    pub fn getGamepadAxisValue(id: u32, axis: u32) f32 {
+        if (gamepad_axis) |a| {
+            if (a.id == id and a.axis == axis) return a.value;
+        }
+        return 0;
     }
 };
 
@@ -89,6 +116,7 @@ fn GameWith(comptime Input: type) type {
         core.MockEcsBackend(u32),
         Input,
         engine.StubAudio,
+        engine.StubVideo,
         engine.StubGui,
         void,
         core.StubLogSink,
@@ -143,6 +171,49 @@ test "isMouseButtonReleased reflects a release-edge, false otherwise" {
     try testing.expect(!game.isMouseButtonReleased(.left));
 }
 
+// ── Gamepad accessors reflect reported state ────────────────────────────
+
+test "isGamepadAvailable reflects a connected pad, false otherwise" {
+    FullInput.reset();
+    var game = FullGame.init(testing.allocator);
+    defer game.deinit();
+
+    FullInput.gamepad_available_id = 0;
+    try testing.expect(game.isGamepadAvailable(0));
+    try testing.expect(!game.isGamepadAvailable(1));
+}
+
+test "isGamepadButtonDown reflects a held face button, false otherwise" {
+    FullInput.reset();
+    var game = FullGame.init(testing.allocator);
+    defer game.deinit();
+
+    FullInput.gamepad_down = .{ .id = 0, .button = @intCast(@intFromEnum(GamepadButton.right_face_down)) };
+    try testing.expect(game.isGamepadButtonDown(0, .right_face_down));
+    try testing.expect(!game.isGamepadButtonDown(0, .right_face_up));
+    try testing.expect(!game.isGamepadButtonDown(1, .right_face_down));
+}
+
+test "isGamepadButtonPressed reflects a press-edge, false otherwise" {
+    FullInput.reset();
+    var game = FullGame.init(testing.allocator);
+    defer game.deinit();
+
+    FullInput.gamepad_pressed = .{ .id = 0, .button = @intCast(@intFromEnum(GamepadButton.left_trigger_1)) };
+    try testing.expect(game.isGamepadButtonPressed(0, .left_trigger_1));
+    try testing.expect(!game.isGamepadButtonPressed(0, .right_trigger_1));
+}
+
+test "getGamepadAxisValue reflects a reported axis, 0 otherwise" {
+    FullInput.reset();
+    var game = FullGame.init(testing.allocator);
+    defer game.deinit();
+
+    FullInput.gamepad_axis = .{ .id = 0, .axis = @intCast(@intFromEnum(GamepadAxis.left_x)), .value = 0.75 };
+    try testing.expectApproxEqAbs(@as(f32, 0.75), game.getGamepadAxisValue(0, .left_x), 0.0001);
+    try testing.expectApproxEqAbs(@as(f32, 0.0), game.getGamepadAxisValue(0, .left_y), 0.0001);
+}
+
 // ── Minimal backend → graceful false fallback ──────────────────────────
 
 test "accessors return false when the backend omits the optional methods" {
@@ -153,4 +224,8 @@ test "accessors return false when the backend omits the optional methods" {
     try testing.expect(!game.isMouseButtonDown(.left));
     try testing.expect(!game.isMouseButtonPressed(.left));
     try testing.expect(!game.isMouseButtonReleased(.left));
+    try testing.expect(!game.isGamepadAvailable(0));
+    try testing.expect(!game.isGamepadButtonDown(0, .right_face_down));
+    try testing.expect(!game.isGamepadButtonPressed(0, .right_face_down));
+    try testing.expectApproxEqAbs(@as(f32, 0.0), game.getGamepadAxisValue(0, .left_x), 0.0001);
 }

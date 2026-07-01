@@ -13,6 +13,7 @@
 /// Scene scripts (init/update/deinit with opaque ptrs) are not processed here —
 /// they go through ScriptRegistry and SceneLoader as before.
 const std = @import("std");
+const profiler = @import("scene").profiler;
 
 pub fn ScriptRunner(
     comptime AllScripts: type,
@@ -22,13 +23,20 @@ pub fn ScriptRunner(
     return struct {
         const Self = @This();
         const builtin = @import("builtin");
-        pub const profiling_enabled = builtin.mode == .Debug;
+        // Compiled into every build (incl. ReleaseFast — that's where perf
+        // matters); recording is gated at runtime by `profiler.recording()`
+        // (the `LABELLE_PROFILE` env var), so the off-path is one branch.
+        // Kept as a public decl because the generated `main.zig` reads it to
+        // decide whether to expose the profile array to the Game.
+        pub const profiling_enabled = true;
 
-        /// Profiling data — timing per script per phase. Only in debug builds.
+        /// Per-script timing (tick + drawGui), rolling over the current
+        /// dump window. Exposed via `Game.script_profile_ptr` for a live
+        /// overlay; ranked + logged by `dumpProfile`.
         pub const ProfileEntry = struct {
             name: []const u8,
-            tick_ns: u64 = 0,
-            draw_gui_ns: u64 = 0,
+            tick: profiler.Stat = .{},
+            draw_gui: profiler.Stat = .{},
         };
 
         pub const script_count: usize = blk: {
@@ -46,6 +54,9 @@ pub fn ScriptRunner(
         allocator: std.mem.Allocator,
         profile: if (profiling_enabled) [script_count]ProfileEntry else void =
             if (profiling_enabled) initProfile() else {},
+        /// Frames since the last profiler log dump (only advances while
+        /// recording). See `tick`.
+        prof_frame_counter: u64 = 0,
 
         fn initProfile() [script_count]ProfileEntry {
             comptime {
@@ -175,50 +186,65 @@ pub fn ScriptRunner(
         pub fn tick(self: *Self, game: anytype, dt: f32) void {
             const current_state = getGameState(game);
             const decls = @typeInfo(AllScripts).@"struct".decls;
+            // Read the runtime profiling flag once per frame (cached env).
+            const rec = profiler.recording();
             comptime var profile_idx: usize = 0;
             inline for (decls) |d| {
                 const mod = @field(AllScripts, d.name);
                 if (comptime isGameScript(mod)) {
                     if (comptime isFnDecl(mod, "tick")) {
                         if (isStateAllowedCached(mod, current_state)) {
-                            if (profiling_enabled) {
-                                const timer: ?usize = null; // Timer removed in 0.16; profiling stubbed
+                            if (rec) {
+                                const t0 = profiler.nowNs();
                                 dispatchTickCall(mod.tick, game, self, d.name, dt);
-                                if (timer != null) {
-                                    self.profile[profile_idx].tick_ns = 0;
-                                }
+                                self.profile[profile_idx].tick.record(profiler.nowNs() - t0);
                             } else {
                                 dispatchTickCall(mod.tick, game, self, d.name, dt);
                             }
-                        } else if (profiling_enabled) {
-                            self.profile[profile_idx].tick_ns = 0;
                         }
                     }
                     profile_idx += 1;
                 }
             }
+            if (rec) {
+                self.prof_frame_counter += 1;
+                if (self.prof_frame_counter >= profiler.dump_interval_frames) {
+                    self.dumpProfile();
+                    self.prof_frame_counter = 0;
+                }
+            }
+        }
+
+        /// Log a worst-first ranking of per-script tick times over the
+        /// window, then reset the window. Called from `tick` every
+        /// `profiler.dump_interval_frames` while recording.
+        fn dumpProfile(self: *Self) void {
+            var rows: [script_count]profiler.Row = undefined;
+            for (&self.profile, 0..) |*e, i| {
+                rows[i] = .{ .name = e.name, .worst_ns = e.tick.worst_ns, .avg_ns = e.tick.avgNs() };
+                e.tick.resetWindow();
+                e.draw_gui.resetWindow();
+            }
+            profiler.report("script", &rows);
         }
 
         pub fn drawGui(self: *Self, game: anytype) void {
             const current_state = getGameState(game);
             const decls = @typeInfo(AllScripts).@"struct".decls;
+            const rec = profiler.recording();
             comptime var profile_idx: usize = 0;
             inline for (decls) |d| {
                 const mod = @field(AllScripts, d.name);
                 if (comptime isGameScript(mod)) {
                     if (comptime isFnDecl(mod, "drawGui")) {
                         if (isStateAllowedCached(mod, current_state)) {
-                            if (profiling_enabled) {
-                                const timer: ?usize = null; // Timer removed in 0.16; profiling stubbed
+                            if (rec) {
+                                const t0 = profiler.nowNs();
                                 dispatchCall(mod.drawGui, game, self, d.name);
-                                if (timer != null) {
-                                    self.profile[profile_idx].draw_gui_ns = 0;
-                                }
+                                self.profile[profile_idx].draw_gui.record(profiler.nowNs() - t0);
                             } else {
                                 dispatchCall(mod.drawGui, game, self, d.name);
                             }
-                        } else if (profiling_enabled) {
-                            self.profile[profile_idx].draw_gui_ns = 0;
                         }
                     }
                     profile_idx += 1;

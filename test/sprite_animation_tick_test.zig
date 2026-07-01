@@ -35,6 +35,7 @@ const TestGame = game_mod.GameConfig(
     MockEcs,
     engine.input_mod.StubInput,
     engine.audio_mod.StubAudio,
+    engine.StubVideo,
     engine.gui_mod.StubGui,
     void,
     core.StubLogSink,

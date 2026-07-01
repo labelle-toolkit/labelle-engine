@@ -165,3 +165,24 @@ test "entitiesWith: distinct tag-sets cache independently" {
     // Separate slots → separate backing storage.
     try testing.expect(health_roster.ptr != velocity_roster.ptr);
 }
+
+test "entitiesWith: tag-set order does not matter — same slot for .{A,B} and .{B,A}" {
+    var game = TestGame.init(testing.allocator);
+    defer game.deinit();
+
+    const e1 = game.createEntity();
+    game.addComponent(e1, Health{});
+    game.addComponent(e1, Velocity{});
+
+    // The cache key sorts component type names before hashing, so both
+    // orderings resolve to the SAME slot and share backing storage —
+    // no duplicate slot, no thrash between two orderings of one query.
+    const ab = game.entitiesWith(.{ Health, Velocity });
+    const ba = game.entitiesWith(.{ Velocity, Health });
+
+    try testing.expectEqual(@as(usize, 1), ab.len);
+    try testing.expectEqual(@as(usize, 1), ba.len);
+    // Same engine-owned slot → identical backing pointer.
+    try testing.expectEqual(ab.ptr, ba.ptr);
+    try testing.expect(contains(ba, e1));
+}

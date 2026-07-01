@@ -231,11 +231,28 @@ fn bridgeImageAssetsToAtlasManager(game: anytype, assets: []const []const u8) vo
 /// one HashMap iteration per frame; the catalog typically holds
 /// <20 entries.
 fn bridgeAllReadyImageAssets_impl(game: anytype) void {
+    // While a post-load gate is armed but not yet bridged (#638), DON'T
+    // bind any atlas in its manifest here. The gate (`updatePostLoadRenderGate`)
+    // binds that whole manifest atomically, all-at-once, the moment every
+    // atlas is `.ready` — mirroring the scene-change gate. Letting this
+    // per-tick walk bind a gated atlas the instant ITS upload lands would
+    // reintroduce the incremental, half-bound-manifest window the gate
+    // exists to eliminate (atlas X bound while atlas Y is still in flight).
+    // Atlases outside the gated manifest (and all atlases once the gate
+    // has bridged / cleared) bind here as before — the eager-fallback and
+    // late-upload paths (#508) are untouched.
+    const gated: []const []const u8 =
+        if (game.post_load_render_gate != null and !game.post_load_render_gate_bridged)
+            game.post_load_render_gate.?
+        else
+            &.{};
+
     var iter = game.assets.entries.iterator();
     while (iter.next()) |kv| {
         const entry = kv.value_ptr;
         if (entry.loader_kind != .image) continue;
         if (entry.state != .ready) continue;
+        if (isInManifest(gated, kv.key_ptr.*)) continue;
         const resource = entry.resource orelse continue;
         const handle = switch (resource) {
             .image => |t| t,
@@ -243,6 +260,15 @@ fn bridgeAllReadyImageAssets_impl(game: anytype) void {
         };
         game.atlas_manager.markPendingLoaded(kv.key_ptr.*, handle, null) catch {};
     }
+}
+
+/// `true` if `name` is one of the entries in `manifest`. Linear scan —
+/// manifests are single-digit-length atlas-name lists.
+fn isInManifest(manifest: []const []const u8, name: []const u8) bool {
+    for (manifest) |m| {
+        if (std.mem.eql(u8, m, name)) return true;
+    }
+    return false;
 }
 
 /// Returns the scene management mixin for a given Game type.
@@ -279,6 +305,23 @@ pub fn Mixin(comptime Game: type) type {
         /// `resolveAtlasSprites` runs. See the free fn for details.
         pub fn bridgeAllReadyImageAssets(self: *Game) void {
             bridgeAllReadyImageAssets_impl(self);
+        }
+
+        /// Bridge a specific atlas manifest into `atlas_manager` in one
+        /// pass — the exact `bridgeImageAssetsToAtlasManager` call the
+        /// scene-change path uses after `gateOnManifest` proves every
+        /// atlas `.ready`. Exposed so the save/load path
+        /// (`updatePostLoadRenderGate`) can bind the loaded scene's
+        /// manifest atomically, all-at-once, the same way a scene swap
+        /// does — instead of relying on the per-tick incremental
+        /// `bridgeAllReadyImageAssets` walk. See the load-binding race
+        /// fix (engine#638): incremental binding is the asymmetry that
+        /// let a menu→Load occasionally bind an atlas under the wrong
+        /// freshly-uploaded handle; the scene-change path never does
+        /// because it binds the whole manifest in a single deterministic
+        /// pass after all uploads land.
+        pub fn bridgeManifest(self: *Game, assets: []const []const u8) void {
+            bridgeImageAssetsToAtlasManager(self, assets);
         }
 
         /// Register a scene together with its declared asset manifest.

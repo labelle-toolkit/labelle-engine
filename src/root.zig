@@ -47,6 +47,10 @@ pub const requestedScene = runtime_env.requestedScene;
 
 // ── Game ──
 pub const GameConfig = game_mod.GameConfig;
+/// Y-axis-aware game configuration — `GameConfig` plus an explicit trailing
+/// `core.YAxis` slot. The assembler adopts this once it parses `.y_axis`
+/// from `project.labelle` (labelle-engine#639 / #370). See `game.zig`.
+pub const GameConfigWithYAxis = game_mod.GameConfigWithYAxis;
 pub const GameLog = game_log_mod.GameLog;
 pub const StubLogSink = core.StubLogSink;
 pub const StderrLogSink = core.StderrLogSink;
@@ -77,6 +81,8 @@ pub const Rotation = input_mod.Rotation;
 // ── Audio ──
 pub const AudioInterface = audio_mod.AudioInterface;
 pub const StubAudio = audio_mod.StubAudio;
+pub const VideoInterface = core.VideoInterface;
+pub const StubVideo = core.StubVideo;
 pub const SoundId = audio_mod.SoundId;
 pub const MusicId = audio_mod.MusicId;
 pub const AudioError = audio_mod.AudioError;
@@ -202,6 +208,16 @@ pub const Events = struct {
         entity: u32,
     };
 
+    /// Fired once when a play-once `VideoComponent` (loop = false) reaches the
+    /// end of its clip — emitted by the engine's video system (FP#549), not the
+    /// in-process hook path. Wire a flow/script to `engine__video_finished` to
+    /// transition the scene when an intro ends. `entity` is the video entity;
+    /// `path` is its (borrowed, scene-lifetime) resource name.
+    pub const video_finished = struct {
+        entity: u32,
+        path: []const u8,
+    };
+
     /// Fired just before a scene's loader runs (assets are already
     /// `.ready` by the manifest gate). Mirrors
     /// `HookPayload.scene_before_load`. `Allocator` is omitted here
@@ -298,17 +314,126 @@ pub const Events = struct {
         y: f32,
     };
 
-    /// Fired the frame a gamepad slot became available (transitioned
-    /// from unavailable to available). `id` is the gamepad slot index.
+    /// Fired the frame a gamepad connect event was drained from the
+    /// backend / per-OS source (core#18 contract). Payload mirrors the
+    /// fields of `core.GamepadEvent`:
+    ///
+    /// - `id` — the device slot/index. Kept (and listed first) for
+    ///   backward-compat: flows / hooks that only read `.id` still
+    ///   compile against the enriched payload.
+    /// - `name` / `name_len` — inline, NUL-terminated device name buffer.
+    ///   Stored INLINE (not as a `[]const u8`) on purpose: engine events
+    ///   are COPIED into `event_buffer` and dispatched on a later frame,
+    ///   so a borrowed slice into the transient drain buffer would dangle.
+    ///   Read it via `nameSlice()`.
+    /// - `guid` — stable per-device reconnection key when the backend
+    ///   exposes one (else `null`).
+    /// - `source_class` — real gamepad vs. TV/d-pad remote vs. unknown.
+    /// - `type_hint` — best-guess vendor family for glyph/prompt choice.
     pub const gamepad_connected = struct {
         id: u32,
+        name: [core.gamepad.NAME_CAPACITY:0]u8 = [_:0]u8{0} ** core.gamepad.NAME_CAPACITY,
+        name_len: u8 = 0,
+        guid: ?[16]u8 = null,
+        source_class: core.GamepadSourceClass = .unknown,
+        type_hint: core.GamepadTypeHint = .unknown,
+
+        /// Borrow the device name as a slice (valid for the lifetime of
+        /// the payload value).
+        pub fn nameSlice(self: *const gamepad_connected) []const u8 {
+            // Defensively cap to the buffer length: `name_len` is a backend-
+            // reported value, and a misbehaving backend reporting a length
+            // greater than NAME_CAPACITY would otherwise slice out of bounds.
+            const len = @min(self.name_len, core.gamepad.NAME_CAPACITY);
+            return self.name[0..len];
+        }
     };
 
-    /// Fired the frame a gamepad slot became unavailable (transitioned
-    /// from available to unavailable). `id` is the gamepad slot index.
+    /// Fired the frame a gamepad disconnect event was drained (core#18).
+    /// Only `id` (the device slot) is carried — a disconnect needs no name
+    /// or capability metadata. Kept identical to the legacy payload.
     pub const gamepad_disconnected = struct {
         id: u32,
     };
+
+    // ── ControllerManager player↔controller events (#611) ─────────────
+    //
+    // Higher-altitude than the raw `gamepad_*` events above. The engine's
+    // `ControllerManager` (src/controller_manager.zig) consumes the drained
+    // gamepad events and emits these — the game listens to *players*, not
+    // hardware slots. `controller_available`/`controller_removed` surface
+    // the unassigned pool (the cue to decide); the `player_*` trio fires
+    // only *after* the game assigns. All four are flow-listenable via
+    // `OnEvent { name: "engine.<event>" }`. See the issue for the
+    // mechanism-not-policy rationale.
+
+    /// Fired when a connected-but-unbound controller enters the unassigned
+    /// pool — the game's cue to decide whether/how it becomes a player.
+    /// Carries the same identity fields as `gamepad_connected` (read the
+    /// name via `nameSlice()`).
+    pub const controller_available = struct {
+        controller_id: u32,
+        name: [core.gamepad.NAME_CAPACITY:0]u8 = [_:0]u8{0} ** core.gamepad.NAME_CAPACITY,
+        name_len: u8 = 0,
+        guid: ?[16]u8 = null,
+        source_class: core.GamepadSourceClass = .unknown,
+        type_hint: core.GamepadTypeHint = .unknown,
+
+        pub fn nameSlice(self: *const controller_available) []const u8 {
+            return self.name[0..self.name_len];
+        }
+    };
+
+    /// Fired when an unassigned controller leaves the pool (unplugged while
+    /// it was never bound to a player).
+    pub const controller_removed = struct {
+        controller_id: u32,
+    };
+
+    /// Fired when the game assigns a controller to a player (via the
+    /// `ControllerManager` assignment API or an opt-in policy helper).
+    /// Emitted only *after* the game decides — never auto-imposed.
+    pub const player_joined = struct {
+        player: u32,
+        controller_id: u32,
+    };
+
+    /// Fired when a player's assigned controller has been absent longer
+    /// than the configurable debounce window — a real loss, not a blip. A
+    /// transient drop that reconnects inside the window NEVER fires this.
+    /// Gate `Controller.advance` / raise a "reconnect Player N" prompt here.
+    pub const player_controller_lost = struct {
+        player: u32,
+    };
+
+    /// Fired when a previously-lost (or debouncing) player gets their
+    /// controller back — a same-`guid` replug, or the raylib resume
+    /// heuristic. `controller_id` is the (possibly new) backing controller.
+    pub const player_controller_restored = struct {
+        player: u32,
+        controller_id: u32,
+    };
+
+    // ── GPU surface lifecycle (Android context loss, epic #386 Phase 4) ──
+    //
+    // On Android, TERM_WINDOW destroys every GPU texture (game state and
+    // the CPU allocator survive); INIT_WINDOW recreates the surface. The
+    // backend calls `Game.surfaceLost` / `Game.surfaceRestored`, which
+    // invalidate + re-upload the GPU-resident asset catalog and emit
+    // these events so flows/scripts can pause/resume rendering-dependent
+    // work across the gap. Both carry no payload — the transition itself
+    // is the signal. Zero-cost when no listener subscribes (same gate
+    // `emitEngineEvent` uses for every other engine event).
+
+    /// Fired when the GPU surface is lost and the catalog has dropped its
+    /// stale texture handles (refcounts preserved). No new GPU work
+    /// should run until `surface_restored`.
+    pub const surface_lost = struct {};
+
+    /// Fired after the GPU surface is restored, the catalog has
+    /// re-enqueued its GPU-resident assets, and the first frame has been
+    /// pumped back to `.ready`.
+    pub const surface_restored = struct {};
 };
 
 // ── Hook Types ──
@@ -325,6 +450,12 @@ pub const ComponentPayload = hooks_types_mod.ComponentPayload;
 // ── Hook Dispatcher ──
 pub const MergeHooks = core.MergeHooks;
 pub const MergeHookPayloads = core.MergeHookPayloads;
+
+// ── Profiler ──
+/// Per-script / per-plugin frame profiler (lives in the scene module so
+/// both the ScriptRunner and the SystemRegistry can reach it). Enable at
+/// runtime with `LABELLE_PROFILE=1`; ranks tick costs to the log.
+pub const profiler = scene_mod.profiler;
 
 // ── Scene System ──
 pub const Scene = scene_mod.Scene;
@@ -448,6 +579,20 @@ pub const HotReloader = jsonc_mod.HotReloader;
 
 // ── Scheduler (flow Delay timers, #25 Stage 2) ──
 pub const Scheduler = @import("scheduler.zig").Scheduler;
+
+// ── ControllerManager (player↔controller mapping, #611) ──
+// Game-facing layer over the raw gamepad events: unassigned pool +
+// assignment API + player-level events, with engine-owned debounced-lost
+// and identity-based resume. Mechanism, not policy — the two common
+// policies ship as opt-in helpers. See src/controller_manager.zig.
+pub const controller_manager_mod = @import("controller_manager.zig");
+pub const ControllerManager = controller_manager_mod.ControllerManager;
+pub const DefaultControllerManager = controller_manager_mod.DefaultControllerManager;
+pub const ControllerManagerConfig = controller_manager_mod.Config;
+pub const ControllerInfo = controller_manager_mod.ControllerInfo;
+pub const ControllerManagerEvent = controller_manager_mod.ManagerEvent;
+pub const NO_PLAYER = controller_manager_mod.NO_PLAYER;
+pub const NO_CONTROLLER = controller_manager_mod.NO_CONTROLLER;
 
 // ── Core Re-exports ──
 pub const Position = core.Position;

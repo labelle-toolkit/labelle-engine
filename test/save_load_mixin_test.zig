@@ -118,6 +118,7 @@ const TestGame = game_mod.GameConfig(
     MockEcs,
     @import("engine").input_mod.StubInput,
     @import("engine").audio_mod.StubAudio,
+    engine.StubVideo,
     @import("engine").gui_mod.StubGui,
     void, // no hooks
     core.StubLogSink,
