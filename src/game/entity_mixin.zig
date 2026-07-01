@@ -69,6 +69,7 @@ pub fn Mixin(comptime Game: type) type {
 
         pub fn createEntity(self: *Game) Entity {
             const entity = self.ecs_backend.createEntity();
+            self.bumpRoster();
             self.emitHook(.{ .entity_created = .{ .entity_id = entity } });
             // Engine `Events` dual-emit (#578). `entity` is widened to
             // u32 — same convention as box2d's `Events.collision_begin`.
@@ -173,6 +174,11 @@ pub fn Mixin(comptime Game: type) type {
             });
 
             try tagPrefabChildren(self, entity, entity, "children", arena);
+            // PrefabInstance / PrefabChild membership was written through
+            // the ecs_backend directly for the whole tree; one bump
+            // invalidates every roster (generation-based), so rosters
+            // keyed on those tags don't go stale (#653).
+            self.bumpRoster();
         }
 
         /// Recursively tag every descendant of `root` with `PrefabChild`.
@@ -235,6 +241,7 @@ pub fn Mixin(comptime Game: type) type {
             self.active_world.sprite_cache.invalidate(@intCast(entity));
             self.renderer.untrackEntity(entity);
             self.ecs_backend.destroyEntity(entity);
+            self.bumpRoster();
             recordTombstone(self, entity);
             self.emitHook(.{ .entity_destroyed = .{ .entity_id = entity } });
             // Engine `Events` dual-emit (#578).
@@ -247,6 +254,7 @@ pub fn Mixin(comptime Game: type) type {
             self.active_world.sprite_cache.invalidate(@intCast(entity));
             self.renderer.untrackEntity(entity);
             self.ecs_backend.destroyEntity(entity);
+            self.bumpRoster();
             recordTombstone(self, entity);
             self.emitHook(.{ .entity_destroyed = .{ .entity_id = entity } });
             // Engine `Events` dual-emit (#578).

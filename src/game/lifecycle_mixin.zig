@@ -100,6 +100,8 @@ pub fn Mixin(comptime Game: type) type {
             while (emb_iter.next()) |entry| self.allocator.free(entry.key_ptr.*);
             self.embedded_scene_sources.deinit();
             self.atlas_manager.deinit();
+            // Free the borrowed-slice roster cache (#653).
+            for (&self.roster_cache) |*slot| slot.list.deinit(self.allocator);
         }
 
         pub fn setHooks(self: *Game, receiver: Hooks) void {

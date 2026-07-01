@@ -66,6 +66,8 @@ pub fn Mixin(comptime Game: type) type {
             self.ecs_backend = &kv.value.ecs_backend;
             self.renderer = &kv.value.renderer;
             self.active_world_name = kv.key;
+            // Different world → different entity set; invalidate rosters (#653).
+            self.bumpRoster();
         }
 
         /// Rename an inactive world in the map.
@@ -122,6 +124,8 @@ pub fn Mixin(comptime Game: type) type {
             self.gizmo_state = gizmo_draws_mod.GizmoState(Entity).init(self.allocator);
             // Re-sync backward-compatible pointers
             self.ecs_backend = &self.active_world.ecs_backend;
+            // The ECS was torn down and rebuilt — invalidate rosters (#653).
+            self.bumpRoster();
             // Clear tombstones — old entity IDs are meaningless after ECS reset
             if (comptime is_debug) {
                 self.tombstones = [_]?TombstoneEntry{null} ** tombstone_size;

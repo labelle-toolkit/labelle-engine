@@ -14,21 +14,25 @@ pub fn Mixin(comptime Game: type) type {
     return struct {
         pub fn addSprite(self: *Game, entity: Entity, sprite: Sprite) void {
             self.ecs_backend.addComponent(entity, sprite);
+            self.bumpRoster(); // membership changed (#653)
             self.renderer.trackEntity(entity, .sprite);
         }
 
         pub fn addShape(self: *Game, entity: Entity, shape: Shape) void {
             self.ecs_backend.addComponent(entity, shape);
+            self.bumpRoster(); // membership changed (#653)
             self.renderer.trackEntity(entity, .shape);
         }
 
         pub fn addText(self: *Game, entity: Entity, text: Text) void {
             self.ecs_backend.addComponent(entity, text);
+            self.bumpRoster(); // membership changed (#653)
             self.renderer.trackEntity(entity, .text);
         }
 
         pub fn addIcon(self: *Game, entity: Entity, icon: Icon) void {
             self.ecs_backend.addComponent(entity, icon);
+            self.bumpRoster(); // membership changed (#653)
             self.renderer.trackEntity(entity, .sprite);
         }
 
@@ -44,6 +48,7 @@ pub fn Mixin(comptime Game: type) type {
                 .offset_x = offset_x,
                 .offset_y = offset_y,
             });
+            self.bumpRoster(); // Gizmo membership changed (#653)
             self.setPosition(gizmo_entity, .{
                 .x = parent_pos.x + offset_x,
                 .y = parent_pos.y + offset_y,
@@ -56,16 +61,19 @@ pub fn Mixin(comptime Game: type) type {
         pub fn removeSprite(self: *Game, entity: Entity) void {
             self.renderer.untrackEntity(entity);
             self.ecs_backend.removeComponent(entity, Sprite);
+            self.bumpRoster(); // membership changed (#653)
         }
 
         pub fn removeShape(self: *Game, entity: Entity) void {
             self.renderer.untrackEntity(entity);
             self.ecs_backend.removeComponent(entity, Shape);
+            self.bumpRoster(); // membership changed (#653)
         }
 
         pub fn removeText(self: *Game, entity: Entity) void {
             self.renderer.untrackEntity(entity);
             self.ecs_backend.removeComponent(entity, Text);
+            self.bumpRoster(); // membership changed (#653)
         }
 
         pub fn setZIndex(self: *Game, entity: Entity, z_index: i16) void {

@@ -58,6 +58,7 @@ pub fn Mixin(comptime Game: type) type {
         /// `renderVideos`. The entity's `Position` anchors the draw rect.
         pub fn addVideo(self: *Game, entity: Entity, video: VideoComponent) void {
             self.ecs_backend.addComponent(entity, video);
+            self.bumpRoster(); // membership changed (#653)
         }
 
         /// Detach + close an entity's video.
@@ -66,6 +67,7 @@ pub fn Mixin(comptime Game: type) type {
                 if (vc.handle != 0) Video.close(vc.handle);
             }
             self.ecs_backend.removeComponent(entity, VideoComponent);
+            self.bumpRoster(); // membership changed (#653)
         }
 
         /// Play every `VideoComponent` entity: lazily open, advance, and draw at

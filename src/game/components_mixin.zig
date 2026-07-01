@@ -23,6 +23,11 @@ pub fn Mixin(comptime Game: type) type {
 
     return struct {
         pub fn setPosition(self: *Game, entity: Entity, pos: Position) void {
+            // Only a first-time add changes tag-set membership; the
+            // common per-frame move is an in-place update, so guard the
+            // roster invalidation to avoid thrashing the cache every
+            // time an entity moves (#653).
+            if (!self.ecs_backend.hasComponent(entity, Position)) self.bumpRoster();
             self.ecs_backend.addComponent(entity, pos);
             self.renderer.markPositionDirtyWithChildren(EcsImpl, self.ecs_backend, entity);
             notifyComponentChanged(self, entity, pos);
@@ -106,6 +111,9 @@ pub fn Mixin(comptime Game: type) type {
                 self.ecs_backend.addComponent(parent_entity, new_children);
             }
 
+            // Parent (and possibly Children) membership changed via the
+            // ecs_backend directly, so invalidate rosters (#653).
+            self.bumpRoster();
             self.renderer.updateHierarchyFlag(child, true);
             self.renderer.markPositionDirty(child);
         }
@@ -127,6 +135,9 @@ pub fn Mixin(comptime Game: type) type {
                 }
             }
             self.ecs_backend.removeComponent(child, Parent);
+            // Parent membership changed via the ecs_backend directly, so
+            // invalidate rosters (#653).
+            self.bumpRoster();
             self.renderer.updateHierarchyFlag(child, false);
             self.renderer.markPositionDirty(child);
         }
@@ -160,6 +171,10 @@ pub fn Mixin(comptime Game: type) type {
 
         pub fn addComponent(self: *Game, entity: Entity, component: anytype) void {
             self.ecs_backend.addComponent(entity, component);
+            // Tag-set membership may have changed — invalidate rosters
+            // (#653). Over-invalidation on a re-add is safe: it just
+            // forces the next `entitiesWith` read to re-query.
+            self.bumpRoster();
             const T = @TypeOf(component);
             if (@typeInfo(T) == .@"struct" and @hasDecl(T, "onAdd")) {
                 T.onAdd(ComponentPayload{ .entity_id = @intCast(entity), .game_ptr = @ptrCast(self) });
@@ -171,6 +186,11 @@ pub fn Mixin(comptime Game: type) type {
             const T = @TypeOf(component);
             const is_update = self.ecs_backend.hasComponent(entity, T);
             self.ecs_backend.addComponent(entity, component);
+            // A genuine add changes tag-set membership; an in-place
+            // update does not — only invalidate rosters in the former
+            // case so per-field updates via `setComponent` don't thrash
+            // the cache (#653).
+            if (!is_update) self.bumpRoster();
             if (@typeInfo(T) == .@"struct") {
                 if (is_update and @hasDecl(T, "onSet")) {
                     T.onSet(ComponentPayload{ .entity_id = @intCast(entity), .game_ptr = @ptrCast(self) });
@@ -228,6 +248,8 @@ pub fn Mixin(comptime Game: type) type {
                 T.onRemove(ComponentPayload{ .entity_id = @intCast(entity), .game_ptr = @ptrCast(self) });
             }
             self.ecs_backend.removeComponent(entity, T);
+            // Tag-set membership changed — invalidate rosters (#653).
+            self.bumpRoster();
         }
 
         /// Fire onReady for a component type on a given entity.
