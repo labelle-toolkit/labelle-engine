@@ -172,3 +172,66 @@ test "view over the full registry with an empty allow-list resolves nothing" {
     try testing.expect(!Empty.has("Locked"));
     try testing.expectEqual(@as(usize, 0), Empty.names().len);
 }
+
+// ─── ComponentRegistryMulti.names() (#657 follow-up) ────────────────────────
+//
+// The multi-source registry composes several maps (one per pack, typically),
+// with field names namespaced as `<pack>__<Pascal>`. `names()` returns the
+// deduplicated union of every map's field names, in map order (first
+// occurrence wins — matching `getType`'s resolution), matching the flat name
+// list a single-source `ComponentRegistry.names()` provides. That flat list is
+// what makes `PackView` / `globalNames` usable over the multi registry.
+
+const ComponentRegistryMulti = engine.ComponentRegistryMulti;
+
+/// Two notional packs contributing namespaced maps, plus shared global facets
+/// (`Locked` in map 0, `Position` in map 1).
+const MultiRegistry = ComponentRegistryMulti(.{
+    .{ .Locked = Locked, .citizens__Worker = Worker, .citizens__Home = Home },
+    .{ .ships__Ship = Ship, .Position = Position },
+});
+
+test "ComponentRegistryMulti.names lists every composed map's names in order" {
+    const names = MultiRegistry.names();
+    try testing.expectEqual(@as(usize, 5), names.len);
+    // Map order, then field order within each map.
+    try testing.expectEqualStrings("Locked", names[0]);
+    try testing.expectEqualStrings("citizens__Worker", names[1]);
+    try testing.expectEqualStrings("citizens__Home", names[2]);
+    try testing.expectEqualStrings("ships__Ship", names[3]);
+    try testing.expectEqualStrings("Position", names[4]);
+}
+
+test "ComponentRegistryMulti.names deduplicates, first map wins" {
+    const DupRegistry = ComponentRegistryMulti(.{
+        .{ .Position = Position, .Worker = Worker },
+        .{ .Worker = Ship, .Home = Home }, // Worker duplicated → first map wins
+    });
+    const names = DupRegistry.names();
+    try testing.expectEqual(@as(usize, 3), names.len);
+    try testing.expectEqualStrings("Position", names[0]);
+    try testing.expectEqualStrings("Worker", names[1]);
+    try testing.expectEqualStrings("Home", names[2]);
+    // The deduped name resolves to the FIRST map's type, matching getType order.
+    try testing.expect(Worker == DupRegistry.getType("Worker"));
+}
+
+test "globalNames works over a ComponentRegistryMulti" {
+    const globals = engine.globalComponentNames(MultiRegistry);
+    // Only Locked (map 0) and Position (map 1) are `.global`.
+    try testing.expectEqual(@as(usize, 2), globals.len);
+    try testing.expectEqualStrings("Locked", globals[0]);
+    try testing.expectEqualStrings("Position", globals[1]);
+}
+
+test "PackView composes over a ComponentRegistryMulti" {
+    const CitizensMulti = PackView(MultiRegistry, &.{ "citizens__Worker", "citizens__Home" });
+    // Own private components + all globals resolve...
+    try testing.expect(CitizensMulti.has("citizens__Worker"));
+    try testing.expect(CitizensMulti.has("citizens__Home"));
+    try testing.expect(CitizensMulti.has("Locked"));
+    try testing.expect(CitizensMulti.has("Position"));
+    // ...the foreign pack's private component does not.
+    try testing.expect(!CitizensMulti.has("ships__Ship"));
+    try testing.expect(!CitizensMulti.isAllowed("ships__Ship"));
+}
