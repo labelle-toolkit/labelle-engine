@@ -45,6 +45,18 @@ pub fn Mixin(comptime Game: type) type {
             _ = try self.loadAtlasIfNeeded(name);
         }
 
+        /// Upload a standalone texture from an in-memory image blob, returning
+        /// its renderer texture id as a plain `u32` (render-mesh seam companion,
+        /// labelle-gfx#290). Forwards straight to the renderer's
+        /// `loadTextureFromMemory` (the gfx `GfxRenderer` → `RetainedEngine` →
+        /// backend decode+upload path) and normalises the returned `TextureId`
+        /// enum/int to `u32` so the caller can hand it back to `game.drawMesh`.
+        /// Same `TextureId` → `u32` conversion the atlas loaders use.
+        pub fn loadTextureFromMemoryU32(self: *Game, file_type: [:0]const u8, data: []const u8) !u32 {
+            const tex_id = try self.renderer.loadTextureFromMemory(file_type, data);
+            return if (@typeInfo(@TypeOf(tex_id)) == .@"enum") @intFromEnum(tex_id) else tex_id;
+        }
+
         pub fn registerAtlasFromMemoryImpl(self: *Game, name: []const u8, json_content: []const u8, image_data: []const u8, file_type: [:0]const u8) !void {
             // Keep the legacy TextureManager side-effects: parse JSON
             // eagerly so `findSprite` works after the catalog finishes

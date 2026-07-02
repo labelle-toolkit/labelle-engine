@@ -82,12 +82,15 @@ fn MockRenderer(comptime Entity: type) type {
             return false;
         }
 
-        // Present only so the atlas shim's `has_load_from_memory`
-        // gate flips to `true`. The shim no longer invokes it — the
-        // catalog owns the upload — but removing it would disable the
-        // shim entirely on this Game type.
+        // Flips the atlas shim's `has_load_from_memory` gate to `true`.
+        // The atlas shim no longer invokes it (the catalog owns the
+        // upload), but `Game.loadTextureFromMemory` — the standalone
+        // in-memory texture uploader (render-mesh seam, gfx#290) — does
+        // forward straight to it, so return a recognisable non-invalid
+        // id the round-trip test can assert against.
+        pub const mock_tex_id: u32 = 77;
         pub fn loadTextureFromMemory(_: *Self, _: [:0]const u8, _: []const u8) !TextureId {
-            return .invalid;
+            return @enumFromInt(mock_tex_id);
         }
 
         // Not used on the catalog path (the catalog-managed upload
@@ -370,6 +373,31 @@ test "shim: double register through the shim is tolerated" {
 
     _ = try game.loadAtlasIfNeeded("shared");
     try testing.expect(game.isAtlasLoaded("shared"));
+}
+
+// ── Standalone in-memory texture upload (render-mesh seam, gfx#290) ──
+//
+// `Game.loadTextureFromMemory(file_type, data) → u32` is the plugin
+// entry point (labelle-spine uploads an atlas PNG and hands the numeric
+// id to `game.drawMesh`). Unlike the atlas shim it does NOT go through
+// the catalog — it forwards straight to `renderer.loadTextureFromMemory`
+// and normalises the returned `TextureId` enum to a plain `u32`.
+
+test "texture: loadTextureFromMemory forwards to renderer and returns u32 id" {
+    var game = TestGame.init(testing.allocator);
+    defer game.deinit();
+
+    const png_bytes: []const u8 = "fake-atlas-png";
+    const id: u32 = try game.loadTextureFromMemory(file_type, png_bytes);
+
+    // The mock renderer hands back `TextureId(77)`; the wrapper must
+    // normalise the enum to the raw u32 `drawMesh` expects.
+    try testing.expectEqual(
+        MockRenderer(MockEcs.Entity).mock_tex_id,
+        id,
+    );
+    // Sanity: the returned handle is a valid (non-`invalid`) id.
+    try testing.expect(id != 0);
 }
 
 // ── Audio shim (Phase 4, #447) ──

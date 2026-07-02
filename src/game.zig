@@ -1329,6 +1329,13 @@ pub fn GameConfigWithYAxis(
         pub const registerAtlasFromMemory = if (has_load_from_memory) AtlasMixin.registerAtlasFromMemoryImpl else @compileError("Renderer does not support loadTextureFromMemory");
         pub const loadAtlasIfNeeded = if (has_load_from_memory) AtlasMixin.loadAtlasIfNeededImpl else @compileError("Renderer does not support loadTextureFromMemory");
 
+        /// Upload a standalone in-memory texture (e.g. a plugin's atlas PNG)
+        /// and get back its renderer texture id as a plain `u32` — the numeric
+        /// handle `drawMesh` expects. Forwards to `renderer.loadTextureFromMemory`
+        /// and normalises the returned `TextureId`. Gated on the renderer
+        /// exposing `loadTextureFromMemory` (render-mesh seam, labelle-gfx#290).
+        pub const loadTextureFromMemory = if (has_load_from_memory) AtlasMixin.loadTextureFromMemoryU32 else @compileError("Renderer does not support loadTextureFromMemory");
+
         // ── Audio asset shims (Phase 4 of Asset Streaming RFC, #447) ──
         pub const registerSoundFromMemory = AtlasMixin.registerSoundFromMemory;
         pub const loadSoundFromMemory = AtlasMixin.loadSoundFromMemory;
