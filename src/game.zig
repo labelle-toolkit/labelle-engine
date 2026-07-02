@@ -38,6 +38,7 @@ const audio_mixin = @import("game/audio_mixin.zig");
 const video_mixin = @import("game/video_mixin.zig");
 const gui_mixin = @import("game/gui_mixin.zig");
 const gizmo_mixin = @import("game/gizmo_mixin.zig");
+const mesh_mixin = @import("game/mesh_mixin.zig");
 const scene_mixin = @import("game/scene_mixin.zig");
 const save_load_mixin = @import("game/save_load_mixin.zig");
 const state_mixin = @import("game/state_mixin.zig");
@@ -262,6 +263,10 @@ pub fn GameConfigWithYAxis(
         pub const Video = core.VideoInterface(VideoImpl);
         pub const Gui = @import("gui.zig").GuiInterface(GuiImpl);
         pub const GizmoDraw = gizmo_draws_mod.GizmoDraw;
+        /// Blend mode for `drawMesh` — re-exported from labelle-core's backend
+        /// contract (labelle-gfx#290). `labelle-spine` maps `spBlendMode`
+        /// straight onto this enum.
+        pub const BlendMode = core.BlendMode;
         pub const Log = game_log_mod.GameLog(LogSinkImpl, core.log.default_min_level);
         /// Component registry — for debug introspection by plugins.
         pub const ComponentRegistry = ComponentsType;
@@ -286,6 +291,7 @@ pub fn GameConfigWithYAxis(
         const VideoMixin = video_mixin.Mixin(Self);
         const GuiMixin = gui_mixin.Mixin(Self);
         const GizmoMixin = gizmo_mixin.Mixin(Self);
+        const MeshMixin = mesh_mixin.Mixin(Self);
         const SceneMixin = scene_mixin.Mixin(Self);
         const SaveLoadMixin = save_load_mixin.Mixin(Self);
         const StateMixin = state_mixin.Mixin(Self);
@@ -1105,6 +1111,14 @@ pub fn GameConfigWithYAxis(
         pub const isEntitySelected = GizmoMixin.isEntitySelected;
         pub const clearSelection = GizmoMixin.clearSelection;
         pub const renderGizmos = GizmoMixin.renderGizmos;
+
+        // ── Render-phase custom meshes (mixin) ───────────────────
+        /// Immediate textured-mesh submission for the render phase — the seam
+        /// `labelle-spine` submits skinned meshes through (labelle-gfx#290
+        /// Stage 4). Forwards to the renderer's optional `drawMesh`; a no-op
+        /// on renderers/backends that don't declare it. Plugins call this from
+        /// a `Systems.renderMeshes(game)` callback (see `SystemRegistry`).
+        pub const drawMesh = MeshMixin.drawMesh;
 
         // ── Scene Management (mixin) ─────────────────────────────
         pub const registerScene = SceneMixin.registerScene;

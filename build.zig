@@ -166,6 +166,11 @@ pub fn build(b: *std.Build) void {
         // `yAxis()` accessor + additive `screenToLogical` picking path
         // (RFC §3, Q1→(b), Q3). Raw `screenToDesign` stays unchanged.
         "test/y_axis_test.zig",
+        // labelle-gfx#290 Stage 4 — render-phase custom-mesh seam:
+        // `game.drawMesh(...)` forwarding + `SystemRegistry.renderMeshes`
+        // plugin render callback (the seam `labelle-spine` submits skinned
+        // meshes through).
+        "test/render_mesh_test.zig",
     };
 
     for (test_files) |test_file| {

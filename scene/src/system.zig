@@ -10,6 +10,7 @@
 ///       pub fn tick(game: anytype, dt: f32) void { ... }
 ///       pub fn postTick(game: anytype, dt: f32) void { ... }
 ///       pub fn drawGui(game: anytype) void { ... }
+///       pub fn renderMeshes(game: anytype) void { ... }
 ///       pub fn deinit() void { ... }
 ///   };
 ///
@@ -178,6 +179,34 @@ pub fn SystemRegistry(comptime plugin_modules: anytype) type {
                         }
                     }
                     pidx += 1;
+                }
+            }
+        }
+
+        /// Call renderMeshes() on all plugin systems that declare it — the
+        /// render-phase custom-mesh seam (labelle-gfx#290 Stage 4). Invoked
+        /// during the render phase AFTER the world sprite pass (`g.render()`),
+        /// so plugin-submitted textured meshes composite over sprites; a
+        /// plugin's callback iterates its own components and calls
+        /// `game.drawMesh(...)` (see `mesh_mixin`). This is the immediate
+        /// sibling of `drawGui` for world-space textured geometry — e.g. the
+        /// future `labelle-spine` plugin's `SpineSkeleton` system submits its
+        /// per-frame skinned meshes here.
+        ///
+        /// Respects game_states like the other lifecycle phases, and is
+        /// zero-cost when no plugin declares `renderMeshes` (the `@hasDecl`
+        /// branch folds away at comptime, leaving an empty `inline for`).
+        pub fn renderMeshes(game: anytype) void {
+            const current_state = getGameState(game);
+            inline for (info.@"struct".fields) |field| {
+                const mod = @field(plugin_modules, field.name);
+                if (@hasDecl(mod, "Systems")) {
+                    const Sys = @field(mod, "Systems");
+                    if (@hasDecl(Sys, "renderMeshes")) {
+                        if (isStateAllowed(Sys, current_state)) {
+                            Sys.renderMeshes(game);
+                        }
+                    }
                 }
             }
         }
