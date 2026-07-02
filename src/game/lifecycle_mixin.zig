@@ -100,8 +100,12 @@ pub fn Mixin(comptime Game: type) type {
             while (emb_iter.next()) |entry| self.allocator.free(entry.key_ptr.*);
             self.embedded_scene_sources.deinit();
             self.atlas_manager.deinit();
-            // Free the borrowed-slice roster cache (#653).
-            for (&self.roster_cache) |*slot| slot.list.deinit(self.allocator);
+            // Free the borrowed-slice roster cache (#653, #657). The map
+            // owns every slot's list buffer (managed map `deinit()` takes
+            // no allocator; the lists do).
+            var roster_it = self.roster_cache.valueIterator();
+            while (roster_it.next()) |slot| slot.list.deinit(self.allocator);
+            self.roster_cache.deinit();
         }
 
         pub fn setHooks(self: *Game, receiver: Hooks) void {

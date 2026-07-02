@@ -100,6 +100,12 @@ pub fn ComponentRegistry(comptime component_map: anytype) type {
 ///       .{ .Health = Health, .Speed = Speed },
 ///       plugin_foo.Components,
 ///   });
+///
+/// NOTE: this registry does not expose a `names()` decl, so it cannot be
+/// used with `PackView` / `globalNames` (those need the flat name list a
+/// single-source registry provides). Producing a deduplicated name list
+/// across the multiple maps is a follow-up (#657 ride-along); until then
+/// route Packs queries through a single-source `ComponentRegistry*`.
 pub fn ComponentRegistryMulti(comptime component_maps: anytype) type {
     const maps_info = @typeInfo(@TypeOf(component_maps));
 

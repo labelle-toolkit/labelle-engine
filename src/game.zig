@@ -164,7 +164,7 @@ pub fn GameConfigWithYAxis(
 
         pub const EntityType = Entity;
 
-        // ── Roster cache (#653, Packs Phase 2) ────────────────────
+        // ── Roster cache (#653, Packs Phase 2 / #657) ─────────────
         // `entitiesWith(Tag)` hands back a slice borrowed from one of
         // these slots — engine-owned, valid only until the next
         // structural mutation (component add/remove, entity
@@ -173,17 +173,21 @@ pub fn GameConfigWithYAxis(
         // whose stored `gen` no longer matches is stale and gets
         // re-queried lazily on the next read.
         //
-        // v1 keeps a small fixed map of slots keyed by a comptime hash
-        // of the tag-set's (alphabetically sorted) component type
-        // names. Up to `roster_cache_slots` distinct tag-sets cache
-        // concurrently; beyond that a round-robin cursor picks the
-        // eviction victim and refills it on demand. Single-cache or a
-        // small fixed map is explicitly acceptable for v1 — caching
-        // every distinct tag-set with zero eviction is a follow-up.
-        pub const roster_cache_slots = 8;
+        // Slots live in a hash map (`roster_cache`) keyed by a comptime
+        // hash of the tag-set's (alphabetically sorted) component type
+        // names (`rosterKey`). Because every key is a comptime constant
+        // — there is no runtime-constructed key — the key space is
+        // *statically bounded* by the distinct `entitiesWith` tag-sets
+        // in the compiled game. That bound is what lets the map cache
+        // every tag-set with **zero eviction**: a slot's buffer is only
+        // ever rewritten for the SAME tag-set after a generation bump,
+        // so a borrowed slice can never be silently clobbered by a read
+        // of a *different* tag-set (#657). The prior v1 design used a
+        // fixed 8-slot array with round-robin eviction, which mutated a
+        // still-borrowed buffer during an unrelated read once more than
+        // 8 tag-sets were live — a lifetime-contract violation this
+        // follow-up removes.
         const RosterSlot = struct {
-            /// Comptime hash of the tag-set this slot caches.
-            key: u64 = 0,
             /// `roster_generation` value at which `list` was filled.
             gen: u64 = 0,
             /// False until first filled (or after an OOM during refill).
@@ -676,12 +680,12 @@ pub fn GameConfigWithYAxis(
         /// staleness. Wraps with `+%=`; collisions across a full u64
         /// wrap are not a practical concern.
         roster_generation: u64 = 0,
-        /// Fixed map of cached `entitiesWith` rosters. See `RosterSlot`.
-        roster_cache: [roster_cache_slots]RosterSlot = [_]RosterSlot{.{}} ** roster_cache_slots,
-        /// Round-robin cursor for slot eviction once every slot is in
-        /// use — cycles the victim so two colliding hot tag-sets don't
-        /// evict each other every read (see `rosterSlotFor`).
-        roster_evict_cursor: usize = 0,
+        /// Cached `entitiesWith` rosters, keyed by the comptime tag-set
+        /// hash (`rosterKey`). Never evicts — the key space is
+        /// statically bounded by the compiled game's tag-sets — so a
+        /// borrowed slice is never clobbered by a read of another
+        /// tag-set (#657). See `RosterSlot`.
+        roster_cache: std.AutoHashMap(u64, RosterSlot) = undefined,
 
         // Gizmos
         gizmos_enabled: bool = true,
@@ -749,6 +753,7 @@ pub fn GameConfigWithYAxis(
                 .ecs_backend = &world.ecs_backend,
                 .renderer = &world.renderer,
                 .worlds = std.StringHashMap(*World).init(allocator),
+                .roster_cache = std.AutoHashMap(u64, RosterSlot).init(allocator),
                 .atlas_manager = atlas_mod.TextureManager.init(allocator),
                 .assets = assets_mod.AssetCatalog.init(allocator),
                 .scenes = std.StringHashMap(SceneEntry).init(allocator),
@@ -857,7 +862,7 @@ pub fn GameConfigWithYAxis(
         pub const setZIndex = Visuals.setZIndex;
         pub const setSpriteFlip = Visuals.setSpriteFlip;
 
-        // ── Roster cache (#653) ───────────────────────────────────
+        // ── Roster cache (#653, #657) ─────────────────────────────
         //
         // `entitiesWith(includes)` returns a slice **borrowed from an
         // engine-owned cache**. The slice is valid only until the next
@@ -869,6 +874,20 @@ pub fn GameConfigWithYAxis(
         // re-scanning the ECS; the first read after a mutation lazily
         // re-queries.
         //
+        // Slots live in a hash map keyed by the comptime tag-set hash
+        // (`rosterKey`). The key space is statically bounded (every key
+        // is a comptime constant), so the map **never evicts**: a
+        // slot's buffer is only ever rewritten for the SAME tag-set
+        // after a generation bump. That is precisely what makes the
+        // borrowed-slice contract sound — within a mutation-free window
+        // the slice is stable **no matter how many other tag-sets are
+        // queried** (the #657 fix; the old fixed-slot design could evict
+        // and clobber a still-borrowed buffer during an unrelated read).
+        //
+        // On OOM the read logs and returns a truncated roster, leaving
+        // the entry `valid = false` so the next read retries the full
+        // query rather than treating the partial result as fresh.
+        //
         // This backs the Packs query-surface caching (e.g.
         // `citizens.idleWorkers()` borrows from here) and the
         // "borrowed-slice" lifetime contract for list-returning
@@ -877,16 +896,28 @@ pub fn GameConfigWithYAxis(
         //
         // `includes` mirrors the include tuple of `collectEntities`
         // (e.g. `.{Health}` or `.{Health, Velocity}`); the exclude set
-        // is always empty for rosters. Distinct tag-sets are cached in
-        // separate slots up to `roster_cache_slots`; see `RosterSlot`.
+        // is always empty for rosters. See `RosterSlot`.
         pub fn entitiesWith(self: *Self, comptime includes: anytype) []const Entity {
             const key = comptime rosterKey(includes);
-            const slot = self.rosterSlotFor(key);
-            // Cache hit: same tag-set, filled at the current epoch.
-            if (slot.valid and slot.key == key and slot.gen == self.roster_generation) {
+            // A rehash while inserting a new key moves `RosterSlot`
+            // *values*, but borrowed slices point at each list's heap
+            // buffer, not the slot struct — so never hold `value_ptr`
+            // across another `roster_cache` operation (this fn doesn't).
+            const gop = self.roster_cache.getOrPut(key) catch |err| {
+                // OOM growing the map itself: there is no slot to fill,
+                // so hand back a static empty roster (not borrowed).
+                self.log.err("[Game] entitiesWith: roster cache OOM for key {d}: {s}", .{ key, @errorName(err) });
+                return &[_]Entity{};
+            };
+            if (!gop.found_existing) gop.value_ptr.* = .{};
+            const slot = gop.value_ptr;
+            // Cache hit: this tag-set's slot, filled at the current epoch.
+            if (slot.valid and slot.gen == self.roster_generation) {
                 return slot.list.items;
             }
-            // Stale, freshly evicted, or never filled — re-query.
+            // Stale or never filled — re-query. This slot belongs to
+            // `key` forever, so its buffer is never rewritten on behalf
+            // of a different tag-set.
             slot.list.clearRetainingCapacity();
             slot.valid = false;
             var view = self.ecs_backend.view(includes, .{});
@@ -904,7 +935,6 @@ pub fn GameConfigWithYAxis(
                     return slot.list.items;
                 };
             }
-            slot.key = key;
             slot.gen = self.roster_generation;
             slot.valid = true;
             return slot.list.items;
@@ -938,25 +968,6 @@ pub fn GameConfigWithYAxis(
                 }
                 return h.final();
             }
-        }
-
-        /// Pick the cache slot for `key`: the existing slot if one
-        /// holds this tag-set, else a free/invalid slot, else a
-        /// round-robin eviction victim (whose capacity is reused on
-        /// refill). Round-robin avoids the conflict-miss thrashing a
-        /// direct-mapped `key % slots` policy suffers when two hot
-        /// tag-sets collide modulo the slot count while other slots
-        /// sit empty.
-        fn rosterSlotFor(self: *Self, key: u64) *RosterSlot {
-            for (&self.roster_cache) |*s| {
-                if (s.valid and s.key == key) return s;
-            }
-            for (&self.roster_cache) |*s| {
-                if (!s.valid) return s;
-            }
-            const slot = &self.roster_cache[self.roster_evict_cursor];
-            self.roster_evict_cursor = (self.roster_evict_cursor + 1) % roster_cache_slots;
-            return slot;
         }
 
         /// Invalidate every cached roster by advancing the epoch. Cheap
