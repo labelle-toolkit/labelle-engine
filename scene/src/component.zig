@@ -101,11 +101,12 @@ pub fn ComponentRegistry(comptime component_map: anytype) type {
 ///       plugin_foo.Components,
 ///   });
 ///
-/// NOTE: this registry does not expose a `names()` decl, so it cannot be
-/// used with `PackView` / `globalNames` (those need the flat name list a
-/// single-source registry provides). Producing a deduplicated name list
-/// across the multiple maps is a follow-up (#657 ride-along); until then
-/// route Packs queries through a single-source `ComponentRegistry*`.
+/// Field names are the component names, so pack-composed games namespace
+/// them as `<pack>__<Pascal>` (e.g. `citizens__Worker`). `names()` returns
+/// the deduplicated union of every map's field names in map order (first
+/// occurrence wins, matching `getType`'s resolution), giving the same flat
+/// name list a single-source registry provides — so `PackView` / `globalNames`
+/// work on the multi-registry too.
 pub fn ComponentRegistryMulti(comptime component_maps: anytype) type {
     const maps_info = @typeInfo(@TypeOf(component_maps));
 
@@ -126,6 +127,62 @@ pub fn ComponentRegistryMulti(comptime component_maps: anytype) type {
                 }
             }
             @compileError("Unknown component: " ++ name);
+        }
+
+        /// True when `name` is a field of a map that comes *before* map index
+        /// `up_to` — i.e. an earlier map already owns this name. Field names are
+        /// unique within a single map, so an earlier hit is the only way a name
+        /// can be a duplicate.
+        fn nameInEarlierMap(comptime up_to: usize, comptime name: []const u8) bool {
+            inline for (maps_info.@"struct".fields, 0..) |field, mi| {
+                if (mi >= up_to) break;
+                const Map = @field(component_maps, field.name);
+                if (@hasField(@TypeOf(Map), name)) return true;
+            }
+            return false;
+        }
+
+        /// The deduplicated union of every map's field names, in map order
+        /// (first occurrence wins — the same order `getType` resolves). Backed
+        /// by a container-scoped const so the slice has static storage and is
+        /// valid when `names()` is called at runtime.
+        const _names = blk: {
+            // First pass: count the unique names.
+            var count: usize = 0;
+            for (maps_info.@"struct".fields, 0..) |field, mi| {
+                const Map = @field(component_maps, field.name);
+                for (@typeInfo(@TypeOf(Map)).@"struct".fields) |f| {
+                    if (!nameInEarlierMap(mi, f.name)) count += 1;
+                }
+            }
+
+            // Second pass: collect them.
+            var buf: [count][]const u8 = undefined;
+            var idx: usize = 0;
+            for (maps_info.@"struct".fields, 0..) |field, mi| {
+                const Map = @field(component_maps, field.name);
+                for (@typeInfo(@TypeOf(Map)).@"struct".fields) |f| {
+                    if (!nameInEarlierMap(mi, f.name)) {
+                        buf[idx] = f.name;
+                        idx += 1;
+                    }
+                }
+            }
+
+            const final = buf;
+            break :blk final;
+        };
+
+        /// Returns a comptime-built slice of every registered component name
+        /// across all composed maps, deduplicated, in map order.
+        pub fn names() []const []const u8 {
+            return &_names;
+        }
+
+        /// Check if an entity has a named component (runtime name, comptime dispatch).
+        pub fn entityHasNamed(ecs: anytype, entity: anytype, comptime name: []const u8) bool {
+            const T = getType(name);
+            return ecs.hasComponent(entity, T);
         }
     };
 }
@@ -322,8 +379,8 @@ pub fn globalNames(comptime FullRegistry: type) []const []const u8 {
     comptime {
         if (!@hasDecl(FullRegistry, "names")) {
             @compileError("PackView/globalNames require a registry type that exposes " ++
-                "names() (e.g. ComponentRegistry or ComponentRegistryWithPlugins). " ++
-                "ComponentRegistryMulti does not enumerate its names and is unsupported here.");
+                "names() — every built-in registry (ComponentRegistry, " ++
+                "ComponentRegistryMulti, ComponentRegistryWithPlugins) does.");
         }
     }
     // A struct nested in a generic fn is memoized per `FullRegistry`, giving
