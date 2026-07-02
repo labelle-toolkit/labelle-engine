@@ -11,6 +11,13 @@
         // `screenToLogical` picking path routes through, labelle-engine#639).
         // A path dependency, so CI clones core `main` (>= v1.20.0) as the
         // sibling `../labelle-core`.
+        //
+        // The render-phase `drawMesh` seam (labelle-gfx#290 Stage 4) re-exports
+        // core's `BlendMode` and rides core's optional backend `drawMesh`
+        // contract, both of which landed in core >= v1.24.0 — the effective
+        // floor for this engine version. (The engine takes no direct
+        // labelle-gfx dependency; the textured-mesh primitive reaches it
+        // through the `RenderImpl` renderer via `@hasDecl`.)
         .labelle_core = .{
             .path = "../labelle-core",
         },
