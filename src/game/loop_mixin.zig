@@ -157,7 +157,11 @@ pub fn Mixin(comptime Game: type) type {
                         self.emitHook(.{ .scene_before_load = .{ .name = name, .allocator = self.allocator } });
                         // Engine `Events` dual-emit (#578).
                         self.emitEngineEvent("engine__scene_loading", .{ .name = name });
+                        // Scene-source override resolution (Play mode /
+                        // editor_api) — same pattern as `setScene`.
+                        self.loading_scene_name = name;
                         entry.loader_fn(self) catch {};
+                        self.loading_scene_name = null;
                         self.emitHook(.{ .scene_load = .{ .name = name } });
                         // Engine `Events` dual-emit (#578).
                         self.emitEngineEvent("engine__scene_loaded", .{ .name = name });

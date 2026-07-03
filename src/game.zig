@@ -420,6 +420,25 @@ pub fn GameConfigWithYAxis(
         /// program-lifetime borrows of `@embedFile` slices and are NOT
         /// freed by the map.
         embedded_scene_sources: std.StringHashMap([]const u8),
+        /// Runtime scene-source overrides (labelle-studio Play mode /
+        /// `editor_api`). Keyed by scene NAME (e.g. `"main"`); the JSONC
+        /// loader consults this map BEFORE the embedded/compiled source
+        /// on every load — `loadSceneFromSource` matches the name of the
+        /// scene currently being loaded (`loading_scene_name`),
+        /// `loadSceneFile` matches the include path exactly and then by
+        /// stem (so an override for `"frag"` also replaces
+        /// `"scenes/frag.jsonc"`). Unlike `embedded_scene_sources`, BOTH
+        /// keys and values are owned copies (dupe'd via `self.allocator`);
+        /// replacing an entry frees the previous source. See
+        /// `setSceneSourceOverride` / `sceneSourceOverride`.
+        scene_source_overrides: std.StringHashMap([]const u8),
+        /// Name of the scene whose registered `loader_fn` is currently
+        /// executing. Set by `setScene` / `setSceneAtomic` / the
+        /// hot-reload path around the loader call ONLY — a borrow of the
+        /// caller's name slice, valid strictly for the duration of the
+        /// load. Lets `loadSceneFromSource` (which receives bytes, not a
+        /// name) resolve the scene-source override for the right scene.
+        loading_scene_name: ?[]const u8 = null,
         /// Entities created by the active scene's loader (e.g. the JSONC
         /// bridge). `unloadCurrentScene` destroys everything in this list
         /// on scene swap so entities from the outgoing scene don't leak
@@ -765,6 +784,7 @@ pub fn GameConfigWithYAxis(
                 .scenes = std.StringHashMap(SceneEntry).init(allocator),
                 .jsonc_scenes = std.StringHashMap(JsoncSceneInfo).init(allocator),
                 .embedded_scene_sources = std.StringHashMap([]const u8).init(allocator),
+                .scene_source_overrides = std.StringHashMap([]const u8).init(allocator),
                 .gizmo_state = gizmo_draws_mod.GizmoState(Entity).init(allocator),
                 // `game_ctx` is a placeholder here (the not-yet-stable world
                 // pointer); `bindScheduler` fixes it once `self` is stable.
@@ -1136,6 +1156,12 @@ pub fn GameConfigWithYAxis(
         /// retains no ownership — the map dupes the key and borrows
         /// the source's program-lifetime slice.
         pub const addEmbeddedSceneSource = MiscMixin.addEmbeddedSceneSource;
+
+        /// Runtime scene-source override map (labelle-studio Play mode /
+        /// `editor_api`) — see `game/misc_mixin.zig` for the ownership
+        /// and lookup rules.
+        pub const setSceneSourceOverride = MiscMixin.setSceneSourceOverride;
+        pub const sceneSourceOverride = MiscMixin.sceneSourceOverride;
         pub const setSceneAssets = SceneMixin.setSceneAssets;
         pub const setSceneInitialState = SceneMixin.setSceneInitialState;
         pub const setScene = SceneMixin.setScene;

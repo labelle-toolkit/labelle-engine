@@ -546,6 +546,16 @@ pub const preview_binary_magic = preview_mode_mod.binary_magic;
 // `endFrameStreamIOSurface` triple.
 pub const preview_iosurface_mod = preview_mode_mod.preview_iosurface;
 
+// ── Editor API (labelle-studio Play mode, Phase 3) ──
+// Wasm editor control surface: plain `export fn editor_*` symbols the
+// studio drives through emcc `-sEXPORTED_FUNCTIONS`, plus the three
+// touchpoints the assembler-generated main splices in under its
+// preview flag (`bind` / `shouldTick` / `frame`). Deliberately a lazy
+// `pub const` and NOT referenced anywhere else in the engine: a build
+// that never references `engine.editor_api` never analyzes the file,
+// so non-preview builds emit no `editor_*` symbols.
+pub const editor_api = @import("editor_api.zig");
+
 // ── Out-of-band screenshot request (labelle-cli#227) ──
 // Read by the assembler-generated `main.zig`'s frame loop after the
 // game enters its main loop — when `LABELLE_SCREENSHOT_PATH` is set

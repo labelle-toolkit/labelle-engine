@@ -8,6 +8,7 @@
 /// shells stay on `Game` — they fold to `void` on cameraless renderers —
 /// and forward here for the impl bodies.
 
+const std = @import("std");
 const core = @import("labelle-core");
 
 /// Returns the misc-accessors mixin for a given Game type.
@@ -86,6 +87,48 @@ pub fn Mixin(comptime Game: type) type {
                 gop.key_ptr.* = try self.allocator.dupe(u8, path);
             }
             gop.value_ptr.* = source;
+        }
+
+        /// Store (or replace) a runtime scene-source override
+        /// (labelle-studio Play mode / `editor_api.editor_load_scene`).
+        /// `name` is the scene name (e.g. `"main"`). Both key and value
+        /// are copied with `self.allocator`; replacing an existing entry
+        /// frees the previous source. The JSONC loader consults this map
+        /// before the embedded/compiled source on every subsequent load
+        /// — see `sceneSourceOverride` for the lookup rules.
+        pub fn setSceneSourceOverride(self: *Game, name: []const u8, source: []const u8) !void {
+            const value = try self.allocator.dupe(u8, source);
+            errdefer self.allocator.free(value);
+            const gop = try self.scene_source_overrides.getOrPut(name);
+            if (gop.found_existing) {
+                self.allocator.free(gop.value_ptr.*);
+            } else {
+                gop.key_ptr.* = self.allocator.dupe(u8, name) catch |err| {
+                    // Undo the half-inserted entry (its key is still the
+                    // caller's transient slice) before propagating.
+                    self.scene_source_overrides.removeByPtr(gop.key_ptr);
+                    return err;
+                };
+            }
+            gop.value_ptr.* = value;
+        }
+
+        /// Resolve a scene-source override for `key`, which may be either
+        /// a scene name (`"main"`, the `loadSceneFromSource` path) or an
+        /// include-relative path (`"scenes/frag.jsonc"`, the
+        /// `loadSceneFile` path). Exact key match first; otherwise the
+        /// path's stem (basename minus extension) is tried, so an
+        /// override stored under the scene name also replaces the
+        /// same-named include fragment. Returns a borrow of the stored
+        /// source — valid until the entry is replaced or the game
+        /// deinitializes.
+        pub fn sceneSourceOverride(self: *const Game, key: []const u8) ?[]const u8 {
+            if (self.scene_source_overrides.count() == 0) return null;
+            if (self.scene_source_overrides.get(key)) |src| return src;
+            const base = std.fs.path.basename(key);
+            const stem = if (std.mem.lastIndexOfScalar(u8, base, '.')) |i| base[0..i] else base;
+            if (stem.len == 0 or std.mem.eql(u8, stem, key)) return null;
+            return self.scene_source_overrides.get(stem);
         }
 
         /// Register a runtime JSONC scene by name.
