@@ -181,86 +181,14 @@ pub fn SceneProcess(comptime GameType: type, comptime Components: type, comptime
                 // `state_name` aliases into the loader's `parse_arena`,
                 // which is freed in the `defer` at the top of
                 // `loadSceneFile` / `loadSceneSource` before the load
-                // function returns. `setState` (see `state_mixin.zig`)
-                // stores its argument by reference into `game.game_state`,
-                // so handing the arena-slice in directly would leave
-                // `game_state` dangling after the arena teardown.
-                //
-                // Dupe onto `game.allocator` and stash the owned backing
-                // on `game.owned_initial_state` so it lives as long as
-                // `game_state` itself.
-                //
-                // PR #599 history (three fixes):
-                //
-                //  Fix #1: dupe meta.initial_state so the slice survives
-                //          parse_arena.deinit (first-order UAF).
-                //
-                //  Fix #2: reorder dupe/setState/free so the prior owned
-                //          slot is still live while setState's
-                //          `std.mem.eql(self.game_state, …)` probe runs
-                //          (second-order UAF when game.game_state aliased
-                //          the slot we'd just freed).
-                //
-                //  Fix #3 (here): drop the no-churn short-circuit that
-                //          fix #2 added. The short-circuit
-                //          `if (existing == state_name content) return;`
-                //          assumed `game.game_state` still aliased the
-                //          owned slot — but an external `setState(...)`
-                //          call between two `applyFileMetaDirectives`
-                //          invocations could have re-pointed
-                //          `game.game_state` elsewhere, leaving the
-                //          directive silently ignored (cursor MEDIUM:
-                //          game stayed in the wrong state).
-                //
-                // The new contract: always dupe, always free the prior.
-                // The dupe + free churn per scene load is negligible
-                // compared to the bug surface of a clever short-circuit.
-                //
-                // Ordering (preserves fix #2's UAF guarantee):
-                //
-                //   1. Dupe onto the game allocator — `new_owned`.
-                //   2. Swap `owned_initial_state` to the fresh dupe
-                //      *before* `setState`. The field is consistent even
-                //      if `setState` early-returns.
-                //   3. `setState(new_owned)`. Its `eql` probe reads
-                //      `game.game_state`, which still aliases the prior
-                //      owned slot (still live) or a default literal.
-                //      Safe either way.
-                //   4. If `setState` short-circuited (because
-                //      `game.game_state` already content-equalled
-                //      `state_name`), `game.game_state` may still alias
-                //      the about-to-be-freed `old_owned`. Detect that
-                //      via pointer identity against `new_owned` and
-                //      explicitly re-point. Doing this only when the
-                //      pointer doesn't already match `new_owned` skips
-                //      the safe re-assign in the literal-aliasing case
-                //      where re-pointing to `new_owned` is also fine
-                //      (we just don't need to bother).
-                //
-                //      We do NOT re-fire state-change hooks here —
-                //      that's correct: the visible state value is
-                //      unchanged, we're only refreshing the backing
-                //      pointer.
-                //   5. Free the previous owned slot (no-op if null).
-                const new_owned = game.allocator.dupe(u8, state_name) catch {
-                    // Out of memory — keep the previous state rather than
-                    // crash the load. The directive is best-effort.
-                    return;
-                };
-                const old_owned = game.owned_initial_state;
-                game.owned_initial_state = new_owned;
-                game.setState(new_owned);
-                if (game.game_state.ptr != new_owned.ptr) {
-                    // setState short-circuited: game.game_state still
-                    // points at whatever it pointed at before (a literal
-                    // or, critically, `old_owned`). Re-point to
-                    // `new_owned` so the upcoming `free(old_owned)`
-                    // doesn't dangle game.game_state. Safe in the
-                    // literal-alias case too — the literal stays valid,
-                    // we just stop referencing it.
-                    game.game_state = new_owned;
-                }
-                if (old_owned) |s| game.allocator.free(s);
+                // function returns, while `setState` stores its argument
+                // by reference into `game.game_state`. `setStateOwned`
+                // (state_mixin.zig) encodes the dupe-swap-repoint-free
+                // ordering that PR #599's three UAF fixes converged on —
+                // see its doc comment for the full history. OOM keeps the
+                // previous state rather than crash the load; the
+                // directive is best-effort.
+                game.setStateOwned(state_name) catch return;
             }
             // Future engine-known keys (`scripts`, `include`) dispatch here.
             // `name` and any other lowercase keys are authoring-only.

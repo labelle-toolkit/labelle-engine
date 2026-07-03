@@ -71,9 +71,10 @@ test "pre-bind: every export is a safe no-op" {
     editor_api.unbind();
     defer editor_api.unbind();
 
-    // Scene ops report failure (no game to act on).
+    // Scene/state ops report failure (no game to act on).
     try testing.expectEqual(@as(i32, -1), editor_api.editor_set_scene("main", 4));
     try testing.expectEqual(@as(i32, -1), editor_api.editor_load_scene("main", 4, "{}", 2));
+    try testing.expectEqual(@as(i32, -1), editor_api.editor_set_state("playing", 7));
 
     // Void setters silently ignore.
     editor_api.editor_set_entity_position(42, 1.0, 2.0);
@@ -139,6 +140,7 @@ test "digest: JSON shape with scene name, paused flag, sprites, and positions" {
     const root = parsed.value.object;
 
     try testing.expectEqualStrings("arena", root.get("scene").?.string);
+    try testing.expectEqualStrings("running", root.get("state").?.string);
     try testing.expectEqual(@as(i64, 1), root.get("paused").?.integer);
     try testing.expectEqual(@as(i64, 2), root.get("entity_count").?.integer);
 
@@ -165,12 +167,15 @@ test "digest: JSON shape with scene name, paused flag, sprites, and positions" {
     try testing.expect(saw_sprite);
     try testing.expect(saw_bare);
 
-    // Resuming flips the reported paused flag.
+    // Resuming flips the reported paused flag; a state switch shows
+    // up in the same digest (v1.1).
     editor_api.editor_pause(0);
+    try testing.expectEqual(@as(i32, 0), editor_api.editor_set_state("playing", 7));
     const json2 = digestInto(&buf);
     var parsed2 = try std.json.parseFromSlice(std.json.Value, testing.allocator, json2, .{});
     defer parsed2.deinit();
     try testing.expectEqual(@as(i64, 0), parsed2.value.object.get("paused").?.integer);
+    try testing.expectEqualStrings("playing", parsed2.value.object.get("state").?.string);
 }
 
 test "digest: truncation keeps valid JSON and the full entity_count" {
@@ -316,6 +321,41 @@ test "editor_set_scene: 0 on known scene, -1 on unknown" {
     try testing.expectEqual(@as(i32, -1), editor_api.editor_set_scene("nope", 4));
     try testing.expectEqualStrings("level1", game.getCurrentSceneName().?);
     try testing.expectEqual(@as(usize, 1), game.entityCount());
+}
+
+test "editor_set_state: switches the state machine, copies the name, rejects only empty" {
+    editor_api.unbind();
+    defer editor_api.unbind();
+
+    var game = Game.init(testing.allocator);
+    defer game.deinit();
+
+    var runner = DummyRunner{};
+    editor_api.bind(&game, &runner);
+
+    // Happy path: default "running" -> "playing".
+    try testing.expectEqualStrings("running", game.getState());
+    try testing.expectEqual(@as(i32, 0), editor_api.editor_set_state("playing", 7));
+    try testing.expectEqualStrings("playing", game.getState());
+
+    // The name is copied into game-owned memory: hand in a transient
+    // buffer (the studio frees its wasm buffer right after the call).
+    const buf = try testing.allocator.dupe(u8, "combat");
+    try testing.expectEqual(@as(i32, 0), editor_api.editor_set_state(buf.ptr, buf.len));
+    testing.allocator.free(buf);
+    try testing.expectEqualStrings("combat", game.getState());
+    try testing.expect(game.getState().ptr != buf.ptr);
+
+    // Unknown states are VALID by construction — the engine has no
+    // state registry (free-form strings scripts gate on), so unlike
+    // editor_set_scene there is nothing to pre-validate against and
+    // nothing gets torn down; a typo is recoverable in place.
+    try testing.expectEqual(@as(i32, 0), editor_api.editor_set_state("no_script_listens_here", 22));
+    try testing.expectEqualStrings("no_script_listens_here", game.getState());
+
+    // Empty name: the one rejected input; state unchanged.
+    try testing.expectEqual(@as(i32, -1), editor_api.editor_set_state("x", 0));
+    try testing.expectEqualStrings("no_script_listens_here", game.getState());
 }
 
 // ── Camera override state machine ───────────────────────────────────
