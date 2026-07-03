@@ -618,9 +618,11 @@ pub fn GameConfigWithYAxis(
         /// name came from a runtime-parsed source whose backing storage
         /// has a shorter lifetime than the game (RFC #596 `meta.initial_state`
         /// reads through the loader's `parse_arena`, which is freed before
-        /// the load returns). When set, `game_state` aliases this slice.
-        /// Freed on `deinit` and replaced (with the previous slice freed)
-        /// each time the loader applies a new `meta.initial_state`.
+        /// the load returns; `editor_api.editor_set_state` hands in a
+        /// studio-owned wasm buffer freed right after the call). When
+        /// set, `game_state` aliases this slice. Freed on `deinit` and
+        /// replaced (with the previous slice freed) on every
+        /// `setStateOwned` call.
         owned_initial_state: ?[]u8 = null,
         /// Time scale factor: 0 = paused, 0.5 = slow-mo, 1.0 = normal, 2.0 = fast.
         /// When paused (0), rendering and GUI continue but tick logic stops.
@@ -1192,6 +1194,7 @@ pub fn GameConfigWithYAxis(
 
         // ── Game State Machine (mixin) ──────────────────────────────
         pub const setState = StateMixin.setState;
+        pub const setStateOwned = StateMixin.setStateOwned;
         pub const queueStateChange = StateMixin.queueStateChange;
         pub const getState = StateMixin.getState;
 

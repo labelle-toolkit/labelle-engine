@@ -16,8 +16,8 @@
 //! they carry no comptime type information themselves.
 //!
 //! Before `bind` runs, every export is a safe no-op: `editor_scene_digest`
-//! writes `{}`, the i32-returning scene ops return -1, and the void
-//! setters silently ignore. `editor_pause` / `editor_step` are pure
+//! writes `{}`, the i32-returning scene/state ops return -1, and the
+//! void setters silently ignore. `editor_pause` / `editor_step` are pure
 //! editor-side state and work even before `bind`.
 //!
 //! ## No symbols in non-preview builds
@@ -68,6 +68,7 @@ var camera_override: ?CameraOverride = null;
 const VTable = struct {
     set_scene: *const fn (name: []const u8) i32,
     load_scene: *const fn (name: []const u8, src: []const u8) i32,
+    set_state: *const fn (name: []const u8) i32,
     set_entity_position: *const fn (id: u64, x: f32, y: f32) void,
     scene_digest: *const fn (out: []u8) usize,
     apply_camera: *const fn (x: f32, y: f32, zoom: f32) void,
@@ -189,6 +190,25 @@ pub export fn editor_load_scene(name: [*]const u8, nlen: usize, src: [*]const u8
     return vt.load_scene(name[0..nlen], src[0..slen]);
 }
 
+/// Switch the game STATE machine to `name` (v1.1) — the axis
+/// `editor_set_scene` does not touch: scenes swap entities, states gate
+/// which scripts tick (e.g. FP's sky director / production / needs run
+/// only in "playing"). Without this, Play mode edits a scene whose
+/// state-gated systems are all frozen in "menu".
+///
+/// States are user-defined free-form strings (see `state_mixin.zig`);
+/// the engine has NO state registry to validate against — an unknown
+/// name is simply a state no script listens to, and it is trivially
+/// recoverable by another `editor_set_state` (unlike a scene typo,
+/// nothing is torn down). Only the empty name is rejected. The name is
+/// copied into game-owned memory (`setStateOwned`), so the caller may
+/// free the buffer immediately. 0 = ok; -1 = empty name / OOM / not
+/// bound.
+pub export fn editor_set_state(name: [*]const u8, len: usize) i32 {
+    const vt = vtable orelse return -1;
+    return vt.set_state(name[0..len]);
+}
+
 /// Move entity `id` to world coordinates (x, y). Marks the position
 /// dirty so the render pipeline re-syncs. Unknown/positionless ids are
 /// ignored.
@@ -206,7 +226,7 @@ pub export fn editor_pick(x: f32, y: f32) i64 {
 
 /// Write a JSON digest of the current scene into `out` (capacity
 /// `cap`) and return the number of bytes written. Shape:
-/// `{"scene":"...","paused":0|1,"entity_count":N,
+/// `{"scene":"...","state":"...","paused":0|1,"entity_count":N,
 ///   "entities":[{"id":<u64>,"prefab":"?","sprite":"?","x":f,"y":f},...]}`
 /// `prefab`/`sprite` appear only when known; `x`/`y` are WORLD
 /// coordinates (the same space `editor_set_entity_position` consumes).
@@ -271,6 +291,7 @@ fn Holder(comptime GP: type, comptime RP: type) type {
         const vtable_impl = VTable{
             .set_scene = &setSceneImpl,
             .load_scene = &loadSceneImpl,
+            .set_state = &setStateImpl,
             .set_entity_position = &setEntityPositionImpl,
             .scene_digest = &sceneDigestImpl,
             .apply_camera = &applyCameraImpl,
@@ -291,6 +312,23 @@ fn Holder(comptime GP: type, comptime RP: type) type {
             // are ready — mirrors the pending-scene commit detection
             // from #635.
             if (game.pending_scene_assets != null) game.queueSceneChange(name);
+            return 0;
+        }
+
+        fn setStateImpl(name: []const u8) i32 {
+            // No pre-validation registry exists for states (unlike
+            // scenes): they're free-form strings scripts gate on, so
+            // every non-empty name is "valid" by construction and a
+            // typo is recoverable in place. Reject only the empty name
+            // — never a meaningful state, most likely a host-side
+            // length bug.
+            if (name.len == 0) return -1;
+            // The name lives in a studio-owned wasm buffer that is
+            // freed right after this call, while `setState` stores its
+            // argument by reference — `setStateOwned` copies onto the
+            // game allocator (see state_mixin.zig for the UAF-ordering
+            // history it encodes).
+            game.setStateOwned(name) catch return -1;
             return 0;
         }
 
@@ -376,6 +414,8 @@ fn Holder(comptime GP: type, comptime RP: type) type {
 
             try appendLit(body, &cur, "{\"scene\":");
             try appendJsonString(body, &cur, game.getCurrentSceneName() orelse "");
+            try appendLit(body, &cur, ",\"state\":");
+            try appendJsonString(body, &cur, game.getState());
             try appendFmt(body, &cur, ",\"paused\":{d},\"entity_count\":{d},\"entities\":[", .{
                 @intFromBool(editor_paused), count,
             });

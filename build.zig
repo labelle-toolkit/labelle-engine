@@ -181,6 +181,10 @@ pub fn build(b: *std.Build) void {
         // name, loadSceneFile includes by path stem); replace frees the
         // previous source.
         "test/scene_source_override_test.zig",
+        // editor_api v1.1 — `Game.setStateOwned`: game-owned copy of
+        // runtime-sourced state names (loader meta.initial_state +
+        // editor_set_state share the PR #599 UAF-safe ordering).
+        "test/set_state_owned_test.zig",
     };
 
     for (test_files) |test_file| {

@@ -27,6 +27,44 @@ pub fn Mixin(comptime Game: type) type {
             self.emitEngineEvent("engine__state_changed", .{ .old_state = old_state, .new_state = new_state });
         }
 
+        /// Set the game state from a RUNTIME-sourced name whose backing
+        /// storage may not outlive the game — loader parse arenas
+        /// (RFC #596 `meta.initial_state`) and the studio editor's wasm
+        /// buffers (`editor_api.editor_set_state`) both hand in slices
+        /// that are freed right after the call, while `setState` stores
+        /// its argument BY REFERENCE into `game.game_state`.
+        ///
+        /// Dupes onto the game allocator and stashes the owned backing
+        /// on `game.owned_initial_state` (freed on `deinit`, replaced —
+        /// with the previous slice freed — on every call). Extracted
+        /// from the scene loader's `applyFileMetaDirectives`, which
+        /// accumulated three UAF fixes (PR #599) this ordering encodes:
+        ///
+        ///   1. Dupe onto the game allocator — `new_owned`.
+        ///   2. Swap `owned_initial_state` to the fresh dupe BEFORE
+        ///      `setState`, so the field is consistent even if
+        ///      `setState` early-returns.
+        ///   3. `setState(new_owned)`. Its `eql` probe reads
+        ///      `game.game_state`, which still aliases the prior owned
+        ///      slot (still live at this point) or a default literal —
+        ///      safe either way.
+        ///   4. If `setState` short-circuited (state name unchanged),
+        ///      `game.game_state` may still alias the about-to-be-freed
+        ///      previous slot. Detect via pointer identity and re-point
+        ///      to `new_owned`. No state-change hooks re-fire — the
+        ///      visible value is unchanged, only the backing moves.
+        ///   5. Free the previous owned slot (no-op if null).
+        pub fn setStateOwned(self: *Game, state_name: []const u8) error{OutOfMemory}!void {
+            const new_owned = try self.allocator.dupe(u8, state_name);
+            const old_owned = self.owned_initial_state;
+            self.owned_initial_state = new_owned;
+            self.setState(new_owned);
+            if (self.game_state.ptr != new_owned.ptr) {
+                self.game_state = new_owned;
+            }
+            if (old_owned) |s| self.allocator.free(s);
+        }
+
         /// Queue a state change for next tick. The transition happens at
         /// the start of the next tick, before scripts run.
         pub fn queueStateChange(self: *Game, new_state: []const u8) void {
