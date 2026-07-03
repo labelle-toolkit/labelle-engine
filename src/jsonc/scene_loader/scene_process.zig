@@ -102,7 +102,18 @@ pub fn SceneProcess(comptime GameType: type, comptime Components: type, comptime
             // ================================================================
             const prefab_cache = try prefab_cache_mod.getOrCreatePrefabCache(game, prefab_dir);
 
-            try loadSceneSource(game, source, prefab_cache);
+            // Runtime scene-source override (labelle-studio Play mode /
+            // editor_api). This entry point receives bytes, not a name,
+            // so the scene identity comes from `game.loading_scene_name`
+            // — set by `setScene`/`setSceneAtomic`/hot-reload around the
+            // registered loader call. When the editor has stored an
+            // override for that scene, it replaces the embedded source.
+            const effective_source: []const u8 = if (game.loading_scene_name) |scene_name|
+                (game.sceneSourceOverride(scene_name) orelse source)
+            else
+                source;
+
+            try loadSceneSource(game, effective_source, prefab_cache);
 
             game.prefab_dir = prefab_dir;
             game.spawn_prefab_fn = &Self.spawnPrefabImpl;
@@ -290,11 +301,14 @@ pub fn SceneProcess(comptime GameType: type, comptime Components: type, comptime
         /// Load a single scene/fragment file, processing includes
         /// recursively then its own entities.
         ///
-        /// Source resolution: check `game.embedded_scene_sources` first
-        /// (populated by the assembler-generated `addEmbeddedSceneSource`
-        /// calls — the only mechanism that works on WASM/Android where
-        /// the project directory isn't reachable from cwd), then fall
-        /// back to `std.fs.cwd().openFile(path)` for desktop dev runs.
+        /// Source resolution: check `game.scene_source_overrides` first
+        /// (runtime overrides stored by the labelle-studio editor via
+        /// `editor_api.editor_load_scene`), then
+        /// `game.embedded_scene_sources` (populated by the
+        /// assembler-generated `addEmbeddedSceneSource` calls — the only
+        /// mechanism that works on WASM/Android where the project
+        /// directory isn't reachable from cwd), then fall back to
+        /// `std.fs.cwd().openFile(path)` for desktop dev runs.
         /// Mirrors the embedded-first ordering established by
         /// `PrefabCache.get` for prefabs.
         fn loadSceneFile(game: *GameType, path: []const u8, prefab_cache: *PrefabCache, include_depth: usize) !void {
@@ -308,7 +322,14 @@ pub fn SceneProcess(comptime GameType: type, comptime Components: type, comptime
             defer parse_arena.deinit();
             const parse_alloc = parse_arena.allocator();
 
-            const source: []const u8 = if (game.embedded_scene_sources.get(path)) |embedded|
+            const source: []const u8 = if (game.sceneSourceOverride(path)) |override|
+                // Runtime override (labelle-studio Play mode / editor_api)
+                // outranks both the embedded source and the filesystem —
+                // matched by exact path first, then by the path's stem
+                // (an override stored under `"frag"` replaces
+                // `"scenes/frag.jsonc"`).
+                override
+            else if (game.embedded_scene_sources.get(path)) |embedded|
                 embedded
             else
                 try std.Io.Dir.cwd().readFileAlloc(io_helper.io(), path, parse_alloc, .limited(1024 * 1024));

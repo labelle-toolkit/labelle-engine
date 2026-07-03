@@ -99,6 +99,14 @@ pub fn Mixin(comptime Game: type) type {
             var emb_iter = self.embedded_scene_sources.iterator();
             while (emb_iter.next()) |entry| self.allocator.free(entry.key_ptr.*);
             self.embedded_scene_sources.deinit();
+            // Scene-source overrides own BOTH keys and values (runtime
+            // copies from `setSceneSourceOverride`) — free them all.
+            var ovr_iter = self.scene_source_overrides.iterator();
+            while (ovr_iter.next()) |entry| {
+                self.allocator.free(entry.key_ptr.*);
+                self.allocator.free(entry.value_ptr.*);
+            }
+            self.scene_source_overrides.deinit();
             self.atlas_manager.deinit();
             // Free the borrowed-slice roster cache (#653, #657). The map
             // owns every slot's list buffer (managed map `deinit()` takes

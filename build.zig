@@ -171,6 +171,16 @@ pub fn build(b: *std.Build) void {
         // plugin render callback (the seam `labelle-spine` submits skinned
         // meshes through).
         "test/render_mesh_test.zig",
+        // labelle-studio Play mode (Phase 3) — wasm editor control
+        // surface: bind/dispatch vtable, pause/step tick gating, scene
+        // digest JSON (+ truncation validity), camera override state
+        // machine, pre-bind no-op safety.
+        "test/editor_api_test.zig",
+        // Runtime scene-source override map (editor_load_scene): set →
+        // load consults override (loadSceneFromSource by loading scene
+        // name, loadSceneFile includes by path stem); replace frees the
+        // previous source.
+        "test/scene_source_override_test.zig",
     };
 
     for (test_files) |test_file| {

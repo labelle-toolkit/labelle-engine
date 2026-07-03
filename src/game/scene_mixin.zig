@@ -476,8 +476,15 @@ pub fn Mixin(comptime Game: type) type {
             self.emitEngineEvent("engine__scene_loading", .{ .name = name });
 
             if (self.scenes.get(name)) |entry| {
-                // Comptime-registered scene
-                try entry.loader_fn(self);
+                // Comptime-registered scene. `loading_scene_name` is set
+                // for the duration of the loader so the JSONC bridge can
+                // resolve scene-source overrides by scene name (Play
+                // mode / editor_api).
+                {
+                    self.loading_scene_name = name;
+                    defer self.loading_scene_name = null;
+                    try entry.loader_fn(self);
+                }
                 self.current_scene_name = self.allocator.dupe(u8, name) catch null;
                 self.emitHook(.{ .scene_load = .{ .name = name } });
                 // Engine `Events` dual-emit (#578).
@@ -643,7 +650,13 @@ pub fn Mixin(comptime Game: type) type {
             self.emitHook(.{ .scene_before_load = .{ .name = name, .allocator = self.allocator } });
             // Engine `Events` dual-emit (#578).
             self.emitEngineEvent("engine__scene_loading", .{ .name = name });
-            try entry.loader_fn(self);
+            // Scene-source override resolution — same rationale as the
+            // `setScene` loader block above.
+            {
+                self.loading_scene_name = name;
+                defer self.loading_scene_name = null;
+                try entry.loader_fn(self);
+            }
             self.current_scene_name = self.allocator.dupe(u8, name) catch null;
             self.emitHook(.{ .scene_load = .{ .name = name } });
             // Engine `Events` dual-emit (#578).
