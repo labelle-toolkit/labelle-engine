@@ -185,3 +185,50 @@ test "editor_load_scene: stores the override and reloads the current scene now" 
     try testing.expectEqualStrings("main", game.getCurrentSceneName().?);
     try testing.expectEqual(@as(usize, 2), game.entityCount());
 }
+
+// Not JSONC at all — the bridge's parser must reject it.
+const malformed_src = "{ this is definitely not a scene";
+
+test "editor_load_scene: malformed source for the current scene rolls back instead of blanking" {
+    editor_api.unbind();
+    defer editor_api.unbind();
+
+    var game = Game.init(testing.allocator);
+    defer game.deinit();
+    game.registerSceneSimple("main", mainLoader);
+    try game.setScene("main");
+    try testing.expectEqual(@as(usize, 1), game.entityCount());
+
+    var runner: u32 = 0;
+    editor_api.bind(&game, &runner);
+
+    // Case 1: no previous override. A bad reload must report failure,
+    // remove the bad override, and restore the scene from the embedded
+    // source — NOT leave a blank preview with no current scene.
+    try testing.expectEqual(
+        @as(i32, -1),
+        editor_api.editor_load_scene("main", 4, malformed_src, malformed_src.len),
+    );
+    try testing.expectEqualStrings("main", game.getCurrentSceneName().?);
+    try testing.expectEqual(@as(usize, 1), game.entityCount());
+    try testing.expect(game.sceneSourceOverride("main") == null);
+
+    // The corrected follow-up must auto-reload again (there IS still a
+    // current scene to match).
+    try testing.expectEqual(
+        @as(i32, 0),
+        editor_api.editor_load_scene("main", 4, override_src, override_src.len),
+    );
+    try testing.expectEqual(@as(usize, 2), game.entityCount());
+
+    // Case 2: a good override was already installed. A bad reload must
+    // restore BOTH the map entry and the loaded scene to the last-good
+    // override.
+    try testing.expectEqual(
+        @as(i32, -1),
+        editor_api.editor_load_scene("main", 4, malformed_src, malformed_src.len),
+    );
+    try testing.expectEqualStrings("main", game.getCurrentSceneName().?);
+    try testing.expectEqual(@as(usize, 2), game.entityCount());
+    try testing.expectEqualStrings(override_src, game.sceneSourceOverride("main").?);
+}

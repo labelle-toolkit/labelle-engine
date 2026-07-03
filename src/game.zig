@@ -1161,6 +1161,7 @@ pub fn GameConfigWithYAxis(
         /// `editor_api`) — see `game/misc_mixin.zig` for the ownership
         /// and lookup rules.
         pub const setSceneSourceOverride = MiscMixin.setSceneSourceOverride;
+        pub const removeSceneSourceOverride = MiscMixin.removeSceneSourceOverride;
         pub const sceneSourceOverride = MiscMixin.sceneSourceOverride;
         pub const setSceneAssets = SceneMixin.setSceneAssets;
         pub const setSceneInitialState = SceneMixin.setSceneInitialState;

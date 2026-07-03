@@ -113,6 +113,18 @@ pub fn Mixin(comptime Game: type) type {
             gop.value_ptr.* = value;
         }
 
+        /// Remove a scene-source override previously stored under `name`
+        /// (exact key only — no stem fallback), freeing both the owned
+        /// key and source copies. No-op when absent. Used by
+        /// `editor_api`'s transactional current-scene reload to roll a
+        /// freshly-installed bad override back out.
+        pub fn removeSceneSourceOverride(self: *Game, name: []const u8) void {
+            if (self.scene_source_overrides.fetchRemove(name)) |kv| {
+                self.allocator.free(kv.key);
+                self.allocator.free(kv.value);
+            }
+        }
+
         /// Resolve a scene-source override for `key`, which may be either
         /// a scene name (`"main"`, the `loadSceneFromSource` path) or an
         /// include-relative path (`"scenes/frag.jsonc"`, the

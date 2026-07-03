@@ -219,6 +219,47 @@ test "digest: truncation keeps valid JSON and the full entity_count" {
     }
 }
 
+test "digest: parented entities report WORLD positions (the space editor_set_entity_position consumes)" {
+    editor_api.unbind();
+    defer editor_api.unbind();
+
+    var game = Game.init(testing.allocator);
+    defer game.deinit();
+
+    const parent = game.createEntity();
+    game.setPosition(parent, .{ .x = 100, .y = 200 });
+    const child = game.createEntity();
+    game.setPosition(child, .{ .x = 10, .y = 20 }); // local to parent
+    game.setParent(child, parent, .{});
+
+    var runner = DummyRunner{};
+    editor_api.bind(&game, &runner);
+
+    var buf: [1024]u8 = undefined;
+    const json = digestInto(&buf);
+    var parsed = try std.json.parseFromSlice(std.json.Value, testing.allocator, json, .{});
+    defer parsed.deinit();
+
+    var saw_child = false;
+    for (parsed.value.object.get("entities").?.array.items) |item| {
+        const obj = item.object;
+        if (obj.get("id").?.integer == @as(i64, @intCast(child))) {
+            // 100+10 / 200+20 — world, not the raw local Position.
+            try testing.expectEqual(@as(i64, 110), obj.get("x").?.integer);
+            try testing.expectEqual(@as(i64, 220), obj.get("y").?.integer);
+            saw_child = true;
+        }
+    }
+    try testing.expect(saw_child);
+
+    // Round-trip: what the digest reports is exactly what
+    // editor_set_entity_position accepts back.
+    editor_api.editor_set_entity_position(@intCast(child), 110, 220);
+    const local = game.getComponent(child, core.Position).?;
+    try testing.expectEqual(@as(f32, 10), local.x);
+    try testing.expectEqual(@as(f32, 20), local.y);
+}
+
 // ── Entity ops through the bound vtable ─────────────────────────────
 
 test "editor_set_entity_position: moves the entity and ignores bad ids" {
@@ -341,6 +382,33 @@ test "camera override: engage → re-assert after tick → release" {
     editor_api.frame(&cg);
     try testing.expectEqual(@as(f32, 7), cg.cam.x);
     try testing.expectEqual(@as(f32, 8), cg.cam.y);
+}
+
+test "camera override: documented loop order (tick → frame → render) shows the override on every rendered frame" {
+    editor_api.unbind();
+    defer editor_api.unbind();
+
+    var cg = CameraGame{};
+    editor_api.editor_set_camera(100, 200, 2.0);
+
+    // Simulate the generated main's UNPAUSED loop: each tick a
+    // camera_control-style script re-asserts the gameplay camera, then
+    // editor_api.frame runs, then render reads the camera. Because
+    // frame() runs after the tick but BEFORE render, the override must
+    // be what every rendered frame observes — not just while paused.
+    var i: usize = 0;
+    while (i < 3) : (i += 1) {
+        try testing.expect(editor_api.shouldTick());
+        // tick: the script writes the gameplay camera.
+        cg.cam.setPosition(0, 0);
+        cg.cam.setZoom(1);
+        // frame: the editor writes last…
+        editor_api.frame(&cg);
+        // render: …so this is what reaches the screen.
+        try testing.expectEqual(@as(f32, 100), cg.cam.x);
+        try testing.expectEqual(@as(f32, 200), cg.cam.y);
+        try testing.expectEqual(@as(f32, 2.0), cg.cam.zoom);
+    }
 }
 
 test "camera override: comptime no-op for camera-less games (StubRender)" {

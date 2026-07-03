@@ -34,13 +34,21 @@
 //! ```zig
 //! editor_api.bind(&g, &runner);            // once, after Game init
 //! if (editor_api.shouldTick()) g.tick(dt); // gate the SIM half only
+//! editor_api.frame(&g);                    // AFTER the tick, BEFORE render
 //! g.render();
-//! editor_api.frame(&g);                    // AFTER the tick: re-assert camera
 //! ```
 //!
 //! `frame` re-asserts the editor camera override every frame because
 //! game scripts (e.g. FP's `camera_control`) re-assert the gameplay
-//! camera on every tick — the editor must win by writing last.
+//! camera on every tick — the editor must win by writing last. The
+//! tick → frame → render ordering is load-bearing: `frame` must run
+//! after the tick (so the script's camera write is already down) but
+//! BEFORE `g.render()`. If it ran after render, every unpaused frame
+//! would render the script's camera — the override would land
+//! post-render only to be overwritten by the next tick before the next
+//! render, so studio camera control would only work while paused.
+//! Call `frame` unconditionally (gated ticks included) so the override
+//! also holds while paused.
 //!
 //! Single-threaded by design (the wasm main thread); no atomics.
 
@@ -112,9 +120,10 @@ pub fn shouldTick() bool {
 }
 
 /// Per-frame editor pass, called by the generated main AFTER the sim
-/// tick (and its camera-writing scripts): re-asserts the editor camera
-/// while the override is engaged; a no-op otherwise, and a comptime
-/// no-op for games whose renderer has no camera.
+/// tick (and its camera-writing scripts) and BEFORE `g.render()`:
+/// re-asserts the editor camera while the override is engaged so the
+/// frame about to be rendered uses it; a no-op otherwise, and a
+/// comptime no-op for games whose renderer has no camera.
 pub fn frame(g: anytype) void {
     if (camera_override) |c| applyCameraTo(g, c);
 }
@@ -171,7 +180,10 @@ pub export fn editor_set_scene(name: [*]const u8, len: usize) i32 {
 /// Store `src` as the runtime source override for scene `name` (the
 /// override map is consulted before the embedded/compiled source on
 /// every subsequent load). If `name` is the current scene, it is
-/// reloaded immediately. 0 = ok.
+/// reloaded immediately — transactionally: when the new source fails
+/// to load, the override map is rolled back to its previous state and
+/// the scene is reloaded from the last-good source, so a malformed
+/// edit never blanks the preview. 0 = ok.
 pub export fn editor_load_scene(name: [*]const u8, nlen: usize, src: [*]const u8, slen: usize) i32 {
     const vt = vtable orelse return -1;
     return vt.load_scene(name[0..nlen], src[0..slen]);
@@ -196,7 +208,9 @@ pub export fn editor_pick(x: f32, y: f32) i64 {
 /// `cap`) and return the number of bytes written. Shape:
 /// `{"scene":"...","paused":0|1,"entity_count":N,
 ///   "entities":[{"id":<u64>,"prefab":"?","sprite":"?","x":f,"y":f},...]}`
-/// `prefab`/`sprite` appear only when known. The entity list is
+/// `prefab`/`sprite` appear only when known; `x`/`y` are WORLD
+/// coordinates (the same space `editor_set_entity_position` consumes).
+/// The entity list is
 /// truncated to fit `cap` while `entity_count` keeps the full count —
 /// the output is always valid JSON (worst case `{}`; 0 bytes only when
 /// `cap < 2`).
@@ -281,11 +295,47 @@ fn Holder(comptime GP: type, comptime RP: type) type {
         }
 
         fn loadSceneImpl(name: []const u8, src: []const u8) i32 {
-            game.setSceneSourceOverride(name, src) catch return -1;
-            if (game.getCurrentSceneName()) |cur| {
-                if (std.mem.eql(u8, cur, name)) return setSceneImpl(name);
+            const is_current = if (game.getCurrentSceneName()) |cur|
+                std.mem.eql(u8, cur, name)
+            else
+                false;
+
+            if (!is_current) {
+                // Not the running scene: just store; the override is
+                // picked up on the next load of `name`.
+                game.setSceneSourceOverride(name, src) catch return -1;
+                return 0;
             }
-            return 0;
+
+            // Reloading the RUNNING scene must be transactional: the
+            // engine unloads the current scene before the loader can
+            // fail, so a malformed/partially-typed source would blank
+            // the preview AND leave the bad override installed (a later
+            // corrected editor_load_scene would no longer auto-reload —
+            // there'd be no current scene to match). Snapshot the
+            // previous override (exact-key, ownership stays with the
+            // map — we copy), install the new source, and on reload
+            // failure roll the map back and reload the last-good source.
+            const prev: ?[]const u8 = if (game.scene_source_overrides.get(name)) |old|
+                (game.allocator.dupe(u8, old) catch return -1)
+            else
+                null;
+            defer if (prev) |p| game.allocator.free(p);
+
+            game.setSceneSourceOverride(name, src) catch return -1;
+            if (setSceneImpl(name) == 0) return 0;
+
+            // Bad source — restore the previous override state…
+            if (prev) |p| {
+                game.setSceneSourceOverride(name, p) catch {};
+            } else {
+                game.removeSceneSourceOverride(name);
+            }
+            // …and reload the scene from the last-good source so the
+            // preview doesn't stay blank. If even that fails we're no
+            // worse off than before this rollback existed.
+            _ = setSceneImpl(name);
+            return -1;
         }
 
         fn setEntityPositionImpl(id: u64, x: f32, y: f32) void {
@@ -365,10 +415,15 @@ fn Holder(comptime GP: type, comptime RP: type) type {
                     try appendJsonString(buf, cur, sp.sprite_name);
                 }
             }
-            const pos = game.getComponent(ent, core.Position);
-            const x: f32 = if (pos) |p| jsonSafeFloat(p.x) else 0;
-            const y: f32 = if (pos) |p| jsonSafeFloat(p.y) else 0;
-            try appendFmt(buf, cur, ",\"x\":{d},\"y\":{d}}}", .{ x, y });
+            // WORLD coordinates, not the raw (parent-relative) Position
+            // component — `editor_set_entity_position` consumes world
+            // coords, so the digest must publish the same space or the
+            // studio would draw/drag nested prefab children at their
+            // local offsets and write them back wrong.
+            const wp = game.getWorldPosition(ent);
+            try appendFmt(buf, cur, ",\"x\":{d},\"y\":{d}}}", .{
+                jsonSafeFloat(wp.x), jsonSafeFloat(wp.y),
+            });
         }
 
         fn entityId(ent: G.EntityType) u64 {
