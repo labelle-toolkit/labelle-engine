@@ -359,14 +359,24 @@ pub const AnimDefSource = union(enum) {
 /// re-resolves. `state` is duck-typed (reads/writes `.clip/.variant/
 /// .frame/.frame_count/.speed/.mode/.dirty`) to dodge the
 /// animation_state ↔ animation_def import cycle.
+///
+/// `.clip`/`.variant` may be plain `u8` (the engine `AnimationState`) OR
+/// enums (game-typed wrappers like FP's, whose `Clip`/`Variant` come from
+/// the comptime `AnimationDef`). Enum writes only ever happen on a
+/// SHRINKING clamp — the new value `count - 1` is strictly below the old
+/// (in-range) value, so `@enumFromInt` can never manufacture a tag the
+/// enum doesn't have, even when the runtime def has MORE entries than the
+/// comptime enum (a grown def leaves the fields untouched).
 pub fn refreshState(state: anytype, def: *const RuntimeAnimationDef) void {
     const clip_count = def.clip_meta.len;
     if (clip_count == 0) return;
-    if (state.clip >= clip_count) state.clip = @intCast(clip_count - 1);
-    if (def.variant_names.len > 0 and state.variant >= def.variant_names.len) {
-        state.variant = @intCast(def.variant_names.len - 1);
+    if (rawIndex(state.clip) >= clip_count) {
+        setIndex(&state.clip, @intCast(clip_count - 1));
     }
-    const meta = def.clip_meta[state.clip];
+    if (def.variant_names.len > 0 and rawIndex(state.variant) >= def.variant_names.len) {
+        setIndex(&state.variant, @intCast(def.variant_names.len - 1));
+    }
+    const meta = def.clip_meta[rawIndex(state.clip)];
     state.frame_count = meta.frame_count;
     state.speed = meta.speed;
     state.mode = meta.mode;
@@ -374,6 +384,29 @@ pub fn refreshState(state: anytype, def: *const RuntimeAnimationDef) void {
         state.frame = meta.frame_count - 1;
     }
     state.dirty = true;
+}
+
+/// Read a clip/variant index field as its raw `u8` regardless of whether
+/// the game types it as an int or an enum.
+fn rawIndex(v: anytype) u8 {
+    return switch (@typeInfo(@TypeOf(v))) {
+        .int => @intCast(v),
+        .@"enum" => @intCast(@intFromEnum(v)),
+        else => @compileError("animation clip/variant fields must be u8 or enum, got " ++
+            @typeName(@TypeOf(v))),
+    };
+}
+
+/// Write a clamped index back into an int- or enum-typed field. Callers
+/// guarantee `idx` is below the field's current (valid) value — see
+/// `refreshState`'s shrink-only invariant.
+fn setIndex(ptr: anytype, idx: u8) void {
+    const T = @typeInfo(@TypeOf(ptr)).pointer.child;
+    ptr.* = switch (@typeInfo(T)) {
+        .int => idx,
+        .@"enum" => @enumFromInt(idx),
+        else => unreachable, // rawIndex already rejected other types
+    };
 }
 
 /// Owns the live def plus at most one prior generation, and tracks the
@@ -444,5 +477,94 @@ pub const ReloadWatcher = struct {
         if (self.previous) |*p| p.deinit();
         self.current.deinit();
         self.* = undefined;
+    }
+};
+
+// ── Named runtime-def store (editor hot-reload) ───────────────
+
+/// Runtime animation-def store for a running game — the map behind
+/// `Game.loadAnimationDefSource` / `editor_api.editor_load_animation_def`.
+/// Keys are def NAMES (the `.zon` stem, `"worker"` for
+/// `animations/worker.zon`); values are the latest parsed generation.
+///
+/// **Replaced generations are RETIRED, not freed.** A def's sprite-name
+/// slices may be held by live `Sprite.sprite_name` fields, and game code
+/// may hold `get()` borrows across frames; unlike `ReloadWatcher`'s
+/// host-loop protocol there is no "everyone re-resolved by end-of-frame"
+/// guarantee here — the editor can push while the sim is PAUSED
+/// (`editor_pause`), when no tick will re-resolve anything for an
+/// arbitrary number of rendered frames. Retired generations go to a
+/// graveyard freed only in `deinit`: each is a few KB of name strings and
+/// the count is bounded by editor saves per session, which buys zero
+/// use-after-free risk for a negligible ceiling. Release builds never
+/// construct one of these (the surface is only reached via `editor_api`
+/// / explicit host calls), so shipped games pay nothing.
+pub const RuntimeAnimDefs = struct {
+    allocator: std.mem.Allocator,
+    /// name → live generation. Keys are owned dupes; values are
+    /// heap-boxed so `get()` borrows stay pointer-stable across `put`s
+    /// of OTHER names (StringHashMap moves values on rehash).
+    map: std.StringHashMap(*RuntimeAnimationDef),
+    /// Retired generations, kept alive until `deinit` (see above).
+    graveyard: std.ArrayList(*RuntimeAnimationDef) = .empty,
+
+    pub fn init(allocator: std.mem.Allocator) RuntimeAnimDefs {
+        return .{
+            .allocator = allocator,
+            .map = std.StringHashMap(*RuntimeAnimationDef).init(allocator),
+        };
+    }
+
+    pub fn deinit(self: *RuntimeAnimDefs) void {
+        var it = self.map.iterator();
+        while (it.next()) |entry| {
+            self.allocator.free(entry.key_ptr.*);
+            entry.value_ptr.*.deinit();
+            self.allocator.destroy(entry.value_ptr.*);
+        }
+        self.map.deinit();
+        for (self.graveyard.items) |old| {
+            old.deinit();
+            self.allocator.destroy(old);
+        }
+        self.graveyard.deinit(self.allocator);
+        self.* = undefined;
+    }
+
+    /// Install `def` as the live generation for `name`, retiring any
+    /// previous one to the graveyard. Takes ownership of `def` on
+    /// success; on error (OOM) ownership stays with the caller and the
+    /// store is unchanged.
+    pub fn put(self: *RuntimeAnimDefs, name: []const u8, def: RuntimeAnimationDef) !void {
+        // Reserve the graveyard slot BEFORE any mutation so a failed
+        // append can never strand the outgoing generation.
+        try self.graveyard.ensureUnusedCapacity(self.allocator, 1);
+        const boxed = try self.allocator.create(RuntimeAnimationDef);
+        errdefer self.allocator.destroy(boxed);
+        const gop = try self.map.getOrPut(name);
+        if (gop.found_existing) {
+            self.graveyard.appendAssumeCapacity(gop.value_ptr.*);
+        } else {
+            gop.key_ptr.* = self.allocator.dupe(u8, name) catch |err| {
+                // Undo the half-inserted entry (its key is still the
+                // caller's transient slice) before propagating.
+                self.map.removeByPtr(gop.key_ptr);
+                return err;
+            };
+        }
+        boxed.* = def;
+        gop.value_ptr.* = boxed;
+    }
+
+    /// The live generation for `name`, or null when nothing was pushed.
+    /// The borrow stays valid for the store's lifetime (generations are
+    /// never freed before `deinit` — see the graveyard note).
+    pub fn get(self: *const RuntimeAnimDefs, name: []const u8) ?*const RuntimeAnimationDef {
+        return self.map.get(name);
+    }
+
+    /// Number of def names currently overridden.
+    pub fn count(self: *const RuntimeAnimDefs) usize {
+        return self.map.count();
     }
 };

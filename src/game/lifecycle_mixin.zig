@@ -107,6 +107,9 @@ pub fn Mixin(comptime Game: type) type {
                 self.allocator.free(entry.value_ptr.*);
             }
             self.scene_source_overrides.deinit();
+            // Runtime animation-def overrides: frees live generations,
+            // owned keys, AND the retired-generation graveyard.
+            self.runtime_anim_defs.deinit();
             self.atlas_manager.deinit();
             // Free the borrowed-slice roster cache (#653, #657). The map
             // owns every slot's list buffer (managed map `deinit()` takes
