@@ -68,6 +68,14 @@ pub const ClipMeta = struct {
     folder: []const u8,
 };
 
+/// Comptime clip-name → ordinal lookup over the `.clips` struct fields.
+fn clipIdxByName(comptime clip_fields: anytype, comptime name: []const u8) ?u8 {
+    inline for (clip_fields, 0..) |f, i| {
+        if (std.mem.eql(u8, f.name, name)) return @intCast(i);
+    }
+    return null;
+}
+
 /// Normalize any of the three `.frames` forms into a slot list. Pure
 /// comptime; the returned slice points at comptime memory. Rejects
 /// malformed data with a clear message (empty, run 0, f out of the
@@ -118,6 +126,35 @@ fn checkedF(comptime f: anytype) u16 {
     return @intCast(f);
 }
 
+/// A `.variants` element is either a string (`"m_bald"`) or a struct
+/// `.{ .name = "w_ginger", .overrides = .{ ... } }` (#666). Resolve its
+/// display name either way.
+fn variantNameOf(comptime elem: anytype) []const u8 {
+    const info = @typeInfo(@TypeOf(elem));
+    if (info == .pointer) return elem; // string literal (*const [N:0]u8)
+    if (info == .@"struct") {
+        if (!@hasField(@TypeOf(elem), "name")) @compileError("variant struct needs a `.name` field");
+        return elem.name;
+    }
+    @compileError("variant must be a string or a `.{ .name, .overrides }` struct");
+}
+
+/// Reject any override field that isn't `frames`/`speed`/`mode`/`folder`
+/// — overrides may change clip content, never its identity (#666).
+fn validateOverrideFields(comptime T: type, comptime clip_name: []const u8, comptime variant_name: []const u8) void {
+    if (@typeInfo(T) != .@"struct")
+        @compileError("variant '" ++ variant_name ++ "' override for clip '" ++ clip_name ++
+            "' must be a struct like `.{ .frames = 4 }`");
+    inline for (@typeInfo(T).@"struct".fields) |f| {
+        const ok = std.mem.eql(u8, f.name, "frames") or
+            std.mem.eql(u8, f.name, "speed") or
+            std.mem.eql(u8, f.name, "mode") or
+            std.mem.eql(u8, f.name, "folder");
+        if (!ok) @compileError("variant '" ++ variant_name ++ "' override for clip '" ++ clip_name ++
+            "' has unknown field '" ++ f.name ++ "' (only frames/speed/mode/folder allowed)");
+    }
+}
+
 pub fn AnimationDef(comptime zon: anytype) type {
     if (!@hasField(@TypeOf(zon), "clips")) @compileError("animation .zon must have a .clips field");
     if (!@hasField(@TypeOf(zon), "variants")) @compileError("animation .zon must have a .variants field");
@@ -145,12 +182,12 @@ pub fn AnimationDef(comptime zon: anytype) type {
 
     const Clip = @Enum(u8, .exhaustive, &ClipNames.names, &ClipNames.values);
 
-    // Build Variant enum fields
+    // Build Variant enum fields (name from a string element or its `.name`).
     const VariantNames = blk: {
         var names: [variant_count][]const u8 = undefined;
         var values: [variant_count]u8 = undefined;
-        for (0..variant_count) |i| {
-            names[i] = variant_list[i];
+        inline for (variant_list, 0..) |velem, i| {
+            names[i] = variantNameOf(velem);
             values[i] = i;
         }
         break :blk .{ .names = names, .values = values };
@@ -207,11 +244,72 @@ pub fn AnimationDef(comptime zon: anytype) type {
         break :blk table;
     };
 
-    // Max slots (name-table depth) and max beats (beat-table depth).
+    // Per-variant ClipMeta (#666): start from the base, then patch each
+    // variant's `.overrides` block. Overrides change clip CONTENT (frames/
+    // speed/mode/folder) only — never structure — so the single Clip/
+    // Variant enum pair still drives every skin (Unity Sprite Library
+    // Variant's structural-consistency rule).
+    //
+    // #664 reconciliation: a `.frames` override accepts the COUNT form
+    // only (an entry-list override would need per-variant beat/marker
+    // tables — a follow-up), and is rejected when the BASE clip declares
+    // per-slot holds or markers (the base beat table would no longer
+    // describe the overridden variant). Overridden variants play through
+    // the state-carried path: `transitionFromMeta(clip, clipMetaFor(clip,
+    // variant))` snapshots the right counts into AnimationState.
+    const clip_meta_2d: [clip_count][variant_count]ClipMeta = blk: {
+        var table: [clip_count][variant_count]ClipMeta = undefined;
+        for (0..clip_count) |ci| {
+            for (0..variant_count) |vi| table[ci][vi] = clip_meta_table[ci];
+        }
+        inline for (variant_list, 0..) |velem, vi| {
+            const vinfo = @typeInfo(@TypeOf(velem));
+            if (vinfo == .@"struct" and @hasField(@TypeOf(velem), "overrides")) {
+                const ov = velem.overrides;
+                if (@typeInfo(@TypeOf(ov)) != .@"struct")
+                    @compileError("variant '" ++ variantNameOf(velem) ++
+                        "' `.overrides` must be a struct of clip overrides");
+                inline for (@typeInfo(@TypeOf(ov)).@"struct".fields) |of| {
+                    const cidx = clipIdxByName(clip_fields, of.name) orelse
+                        @compileError("variant '" ++ variantNameOf(velem) ++
+                        "' overrides unknown clip '" ++ of.name ++ "'");
+                    const override = @field(ov, of.name);
+                    validateOverrideFields(@TypeOf(override), of.name, variantNameOf(velem));
+                    var m = clip_meta_table[cidx];
+                    if (@hasField(@TypeOf(override), "frames")) {
+                        const finfo = @typeInfo(@TypeOf(override.frames));
+                        if (!(finfo == .comptime_int or finfo == .int))
+                            @compileError("variant '" ++ variantNameOf(velem) ++ "' override for clip '" ++
+                                of.name ++ "': `.frames` must be a count — per-variant frame-entry overrides are a follow-up (#664 × #666)");
+                        for (clip_entries[cidx], 0..) |e, ei| {
+                            if (e.run != 1 or e.marker != null or e.f != ei + 1)
+                                @compileError("variant '" ++ variantNameOf(velem) ++ "' cannot override `.frames` of clip '" ++
+                                    of.name ++ "': the base clip declares holds/markers/reordering, which are per-clip (#664 × #666 follow-up)");
+                        }
+                        if (override.frames < 1 or override.frames > 255)
+                            @compileError("override .frames must be 1..255");
+                        m.frame_count = override.frames;
+                        m.entry_count = override.frames;
+                        m.beat_count = override.frames; // count form: 1 beat per slot
+                    }
+                    if (@hasField(@TypeOf(override), "speed")) m.speed = override.speed;
+                    if (@hasField(@TypeOf(override), "mode")) m.mode = override.mode;
+                    if (@hasField(@TypeOf(override), "folder")) m.folder = override.folder;
+                    table[cidx][vi] = m;
+                }
+            }
+        }
+        break :blk table;
+    };
+
+    // Max slots (name-table depth; spans base AND overridden counts) and
+    // max beats (beat-table depth; base only — see clip_meta_2d note).
     const max_slots: usize = blk: {
         var mx: usize = 1;
-        for (&clip_meta_table) |meta| {
-            if (meta.entry_count > mx) mx = meta.entry_count;
+        for (0..clip_count) |ci| {
+            for (0..variant_count) |vi| {
+                if (clip_meta_2d[ci][vi].entry_count > mx) mx = clip_meta_2d[ci][vi].entry_count;
+            }
         }
         break :blk mx;
     };
@@ -231,13 +329,24 @@ pub fn AnimationDef(comptime zon: anytype) type {
         @setEvalBranchQuota(clip_count * variant_count * max_slots * 2000);
         var table: SpriteNameTable = undefined;
         for (0..clip_count) |ci| {
-            const folder = clip_meta_table[ci].folder;
             const entries = clip_entries[ci];
             for (0..variant_count) |vi| {
-                const vname: []const u8 = variant_list[vi];
+                // Per-variant folder + slot count (honors overrides). A
+                // frames-overridden variant uses count-form files 1..N
+                // (guarded above: only legal when the base has no
+                // reorders/holds to preserve).
+                const meta_v = clip_meta_2d[ci][vi];
+                const folder = meta_v.folder;
+                const overridden = meta_v.entry_count != clip_meta_table[ci].entry_count;
+                const slot_count: usize = meta_v.entry_count;
+                const vname: []const u8 = VariantNames.names[vi];
                 for (0..max_slots) |si| {
-                    if (si < entries.len) {
-                        table[ci][vi][si] = std.fmt.comptimePrint("{s}/{s}_{d:0>4}.png", .{ folder, vname, entries[si].f });
+                    if (si < slot_count) {
+                        const file_idx: u16 = if (overridden or si >= entries.len)
+                            @intCast(si + 1)
+                        else
+                            entries[si].f;
+                        table[ci][vi][si] = std.fmt.comptimePrint("{s}/{s}_{d:0>4}.png", .{ folder, vname, file_idx });
                     } else {
                         table[ci][vi][si] = "";
                     }
@@ -296,9 +405,23 @@ pub fn AnimationDef(comptime zon: anytype) type {
         pub const max_slots_val = max_slots;
         pub const max_beats_val = max_beats;
 
-        /// Get metadata for a clip (counts, speed, mode, folder).
+        /// Base (variant-independent) metadata for a clip.
+        ///
+        /// Deprecated for entities with per-variant overrides (#666): a
+        /// variant that overrides this clip plays a DIFFERENT frame count/
+        /// speed/folder, and reading the base row would drive the base
+        /// count into empty sprite-name slots. Use `clipMetaFor(clip,
+        /// variant)` in `transitionClip`-style call sites; `clipMeta` stays
+        /// for callers with no overrides (it equals `clipMetaFor(clip, v)`
+        /// for every non-overriding variant).
         pub fn clipMeta(clip: Clip) ClipMeta {
             return clip_meta_table[@intFromEnum(clip)];
+        }
+
+        /// Metadata for a clip AS SEEN BY a specific variant (#666) —
+        /// the base patched by that variant's `.overrides`, if any.
+        pub fn clipMetaFor(clip: Clip, variant: Variant) ClipMeta {
+            return clip_meta_2d[@intFromEnum(clip)][@intFromEnum(variant)];
         }
 
         /// Look up the precomputed sprite name for a clip/variant/SLOT.
@@ -346,11 +469,9 @@ pub fn AnimationDef(comptime zon: anytype) type {
         /// Resolve a variant NAME to its `Variant`, or `null` when no
         /// variant carries that name (renamed or deleted). This is the
         /// stable-identity persistence path (#665): unlike an index, a
-        /// name survives reordering the `.variants` list. Comptime-
-        /// unrolled string compare — one branch per variant, no
-        /// allocation. Callers translate `null` into their own fallback
-        /// (e.g. variant 0 + a warning) since the engine can't know the
-        /// game's default skin.
+        /// name survives reordering the `.variants` list. Callers
+        /// translate `null` into their own fallback (e.g. variant 0 + a
+        /// warning) since the engine can't know the game's default skin.
         pub fn variantFromName(name: []const u8) ?Variant {
             return std.meta.stringToEnum(Variant, name);
         }
@@ -390,6 +511,7 @@ pub fn AnimationDef(comptime zon: anytype) type {
                 },
             }
         }
+
 
         /// The marker name at a beat of a clip, or "" if none (#670).
         /// Markers fire at a slot's FIRST beat only.
