@@ -188,10 +188,7 @@ pub fn AnimationDef(comptime zon: anytype) type {
         /// (e.g. variant 0 + a warning) since the engine can't know the
         /// game's default skin.
         pub fn variantFromName(name: []const u8) ?Variant {
-            inline for (@typeInfo(Variant).@"enum".fields) |field| {
-                if (std.mem.eql(u8, field.name, name)) return @field(Variant, field.name);
-            }
-            return null;
+            return std.meta.stringToEnum(Variant, name);
         }
     };
 }
