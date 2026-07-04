@@ -69,6 +69,7 @@ pub fn build(b: *std.Build) void {
     // Test files in test/ directory
     const test_files = [_][]const u8{
         "test/root_test.zig",
+        "test/easing_test.zig",
         "test/scene_test.zig",
         "test/gestures_test.zig",
         "test/sparse_set_test.zig",
