@@ -55,6 +55,9 @@ fn clipIdxByName(comptime clip_fields: anytype, comptime name: []const u8) ?usiz
 /// Reject any override field that isn't `frames`/`speed`/`mode`/`folder`
 /// — overrides may change clip content, never its identity (#666).
 fn validateOverrideFields(comptime T: type, comptime clip_name: []const u8, comptime variant_name: []const u8) void {
+    if (@typeInfo(T) != .@"struct")
+        @compileError("variant '" ++ variant_name ++ "' override for clip '" ++ clip_name ++
+            "' must be a struct like `.{ .frames = 4 }`");
     inline for (@typeInfo(T).@"struct".fields) |f| {
         const ok = std.mem.eql(u8, f.name, "frames") or
             std.mem.eql(u8, f.name, "speed") or
@@ -148,6 +151,9 @@ pub fn AnimationDef(comptime zon: anytype) type {
             const vinfo = @typeInfo(@TypeOf(velem));
             if (vinfo == .@"struct" and @hasField(@TypeOf(velem), "overrides")) {
                 const ov = velem.overrides;
+                if (@typeInfo(@TypeOf(ov)) != .@"struct")
+                    @compileError("variant '" ++ variantNameOf(velem) ++
+                        "' `.overrides` must be a struct of clip overrides");
                 inline for (@typeInfo(@TypeOf(ov)).@"struct".fields) |of| {
                     const cidx = clipIdxByName(clip_fields, of.name) orelse
                         @compileError("variant '" ++ variantNameOf(velem) ++
