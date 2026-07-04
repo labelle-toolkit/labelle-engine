@@ -157,6 +157,85 @@ test "AnimationState: advance in distance mode uses timer directly" {
     try testing.expectEqual(@as(u8, 2), state.frame);
 }
 
+// ── Explicit frame entries (#664) ─────────────────────────
+
+// Exercises all three `.frames` forms: bare count, explicit index list
+// (reorder + reuse), and per-slot runs (holds).
+const frames_zon = .{
+    .variants = .{"hero"},
+    .clips = .{
+        // Count shorthand — every slot runs one beat, so beat_count ==
+        // entry_count and playback is bit-identical to pre-#664.
+        .plain = .{ .frames = 4, .mode = .time, .speed = 1.0 },
+        // Explicit list — reorders and REUSES a file: slot 3 points back
+        // at file 2 (a 1-2-3-2 ping-pong).
+        .bounce = .{ .frames = .{ 1, 2, 3, 2 }, .mode = .time, .speed = 1.0 },
+        // Per-slot holds — slot 0 (file 1) shows for 2 beats, then slot 1
+        // (bare int → file 2, run 1) for 1 beat. beat_count 3, entry_count 2.
+        .hold = .{ .frames = .{ .{ .f = 1, .run = 2 }, 2 }, .mode = .time, .speed = 1.0 },
+    },
+};
+
+const FramesAnim = AnimationDef(frames_zon);
+
+test "AnimationDef: count shorthand yields unit-run beats (#664)" {
+    const m = FramesAnim.clipMeta(.plain);
+    try testing.expectEqual(@as(u8, 4), m.entry_count);
+    try testing.expectEqual(@as(u16, 4), m.beat_count);
+    // frame_count stays a back-compat alias of entry_count.
+    try testing.expectEqual(@as(u8, 4), m.frame_count);
+    // Slot i resolves to file i+1, exactly as the old count path did.
+    try testing.expectEqualStrings("plain/hero_0001.png", FramesAnim.spriteName(.plain, .hero, 0));
+    try testing.expectEqualStrings("plain/hero_0004.png", FramesAnim.spriteName(.plain, .hero, 3));
+    // Identity beat→slot mapping.
+    try testing.expectEqual(@as(u8, 0), FramesAnim.slotForBeat(.plain, 0));
+    try testing.expectEqual(@as(u8, 3), FramesAnim.slotForBeat(.plain, 3));
+}
+
+test "AnimationDef: explicit list reorders and reuses files (#664)" {
+    const m = FramesAnim.clipMeta(.bounce);
+    try testing.expectEqual(@as(u8, 4), m.entry_count);
+    try testing.expectEqual(@as(u16, 4), m.beat_count);
+    // .{ 1, 2, 3, 2 } — the name for each slot uses that slot's `f`, so
+    // slot 3 renders file 2 again (not file 4).
+    try testing.expectEqualStrings("bounce/hero_0001.png", FramesAnim.spriteName(.bounce, .hero, 0));
+    try testing.expectEqualStrings("bounce/hero_0002.png", FramesAnim.spriteName(.bounce, .hero, 1));
+    try testing.expectEqualStrings("bounce/hero_0003.png", FramesAnim.spriteName(.bounce, .hero, 2));
+    try testing.expectEqualStrings("bounce/hero_0002.png", FramesAnim.spriteName(.bounce, .hero, 3));
+}
+
+test "AnimationDef: per-slot runs expand the beat table (#664)" {
+    const m = FramesAnim.clipMeta(.hold);
+    try testing.expectEqual(@as(u8, 2), m.entry_count);
+    try testing.expectEqual(@as(u16, 3), m.beat_count);
+    // beat_to_slot == { 0, 0, 1 }: slot 0 held two beats, then slot 1.
+    try testing.expectEqual(@as(u8, 0), FramesAnim.slotForBeat(.hold, 0));
+    try testing.expectEqual(@as(u8, 0), FramesAnim.slotForBeat(.hold, 1));
+    try testing.expectEqual(@as(u8, 1), FramesAnim.slotForBeat(.hold, 2));
+    // slotForBeat wraps past beat_count.
+    try testing.expectEqual(@as(u8, 0), FramesAnim.slotForBeat(.hold, 3));
+    // The bare int 2 became slot 1 pointing at file 2.
+    try testing.expectEqualStrings("hold/hero_0001.png", FramesAnim.spriteName(.hold, .hero, 0));
+    try testing.expectEqualStrings("hold/hero_0002.png", FramesAnim.spriteName(.hold, .hero, 1));
+}
+
+test "AnimationDef: advanceState maps beats to held slots (#664)" {
+    var state = AnimationState{};
+    state.transitionFromMeta(@intFromEnum(FramesAnim.clips.hold), FramesAnim.clipMeta(.hold));
+
+    // beat_count 3, speed 1 → timer accumulates beats; the held slot 0
+    // spans beats 0 and 1, slot 1 is beat 2, then it wraps.
+    try testing.expectEqual(@as(u8, 0), state.frame);
+    FramesAnim.advanceState(&state, 0.5); // timer 0.5 → beat 0 → slot 0
+    try testing.expectEqual(@as(u8, 0), state.frame);
+    FramesAnim.advanceState(&state, 0.7); // timer 1.2 → beat 1 → slot 0 (still held)
+    try testing.expectEqual(@as(u8, 0), state.frame);
+    FramesAnim.advanceState(&state, 1.0); // timer 2.2 → beat 2 → slot 1
+    try testing.expectEqual(@as(u8, 1), state.frame);
+    FramesAnim.advanceState(&state, 1.0); // timer 3.2 → mod 3 = 0.2 → beat 0 → slot 0 (wrap)
+    try testing.expectEqual(@as(u8, 0), state.frame);
+}
+
 // ── Per-variant clip overrides (#666) ─────────────────────
 
 const override_zon = .{

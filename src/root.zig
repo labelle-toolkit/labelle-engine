@@ -487,12 +487,44 @@ pub const AnimationDef = animation_def_mod.AnimationDef;
 pub const AnimationState = animation_state_mod.AnimationState;
 pub const AnimMode = animation_def_mod.Mode;
 pub const AnimClipMeta = animation_def_mod.ClipMeta;
+pub const AnimFrameEntry = animation_def_mod.FrameEntry;
+// Per-frame animation events (#670): marker/clip-end/loop-end payloads +
+// the entity-less `PendingBuf` the pure advance methods append to.
+pub const animation_events_mod = @import("animation_events.zig");
+pub const AnimMarkerHit = animation_events_mod.AnimMarkerHit;
+pub const AnimClipEnd = animation_events_mod.AnimClipEnd;
+pub const AnimLoopEnd = animation_events_mod.AnimLoopEnd;
+pub const PendingAnimEvent = animation_events_mod.PendingAnimEvent;
+pub const AnimPendingBuf = animation_events_mod.PendingBuf;
+pub const AnimEventKind = animation_events_mod.PendingKind;
+pub const anim_pending_cap = animation_events_mod.max_pending;
 pub const SpriteAnimation = sprite_animation_mod.SpriteAnimation;
 pub const SpriteAnimationMode = sprite_animation_mod.AnimationMode;
 pub const spriteAnimationTick = sprite_animation_tick_mod.tick;
 pub const SpriteByField = sprite_by_field_mod.SpriteByField;
 pub const SpriteByFieldSource = sprite_by_field_mod.SpriteByFieldSource;
 pub const spriteByFieldTick = sprite_by_field_tick_mod.tick;
+
+// ── Easing ──
+// Pure (curve × placement) interpolation catalog — `engine.easing.ease`,
+// `.interpolate`, `.expApproach`, plus the `Curve`/`Placement` enums.
+// Zero deps; the future tween system + scripts consume it (#668).
+pub const easing = @import("easing.zig");
+
+// ── Tween ──
+// Central fire-and-forget motion records stepped once per frame (#669).
+// `TweenSystem.create()` returns a chainable builder; `tweenTick` advances
+// them. Pass `TweenAlwaysAlive{}` as the liveness backend when no tween is
+// entity-bound.
+pub const tween_mod = @import("tween.zig");
+pub const tween_tick_mod = @import("tween_tick.zig");
+pub const Tween = tween_mod.Tween;
+pub const TweenStep = tween_mod.Step;
+pub const TweenHandle = tween_mod.TweenHandle;
+pub const TweenSystem = tween_mod.TweenSystem;
+pub const TweenBuilder = tween_mod.TweenBuilder;
+pub const tweenTick = tween_tick_mod.tick;
+pub const TweenAlwaysAlive = tween_tick_mod.AlwaysAlive;
 
 // ── Atlas ──
 pub const SpriteData = atlas_mod.SpriteData;
