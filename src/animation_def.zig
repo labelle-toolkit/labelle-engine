@@ -156,6 +156,14 @@ fn validateOverrideFields(comptime T: type, comptime clip_name: []const u8, comp
     }
 }
 
+/// Clip index of a duck-typed state: game wrappers carry a typed `Clip`
+/// enum where the engine component carries a `u8` — accept both (#686),
+/// so `advanceState`/`advanceStateEvents` drop into either.
+fn clipIndexOf(state: anytype) u8 {
+    const T = @TypeOf(state.clip);
+    return if (@typeInfo(T) == .@"enum") @intFromEnum(state.clip) else state.clip;
+}
+
 pub fn AnimationDef(comptime zon: anytype) type {
     if (!@hasField(@TypeOf(zon), "clips")) @compileError("animation .zon must have a .clips field");
     if (!@hasField(@TypeOf(zon), "variants")) @compileError("animation .zon must have a .variants field");
@@ -529,7 +537,7 @@ pub fn AnimationDef(comptime zon: anytype) type {
         /// can switch to it wholesale; only clips that declare runs
         /// *need* it. Full advance-dedup is #667.
         pub fn advanceState(state: anytype, dt: f32) void {
-            const ci = state.clip;
+            const ci = clipIndexOf(state);
             const meta = clip_meta_table[ci];
             switch (meta.mode) {
                 .time => {
@@ -593,7 +601,7 @@ pub fn AnimationDef(comptime zon: anytype) type {
         /// `advanceState` reads. The driver adds the entity and forwards
         /// `out` to `game.emit`.
         pub fn advanceStateEvents(state: anytype, dt: f32, out: *anim_events.PendingBuf) void {
-            const ci = state.clip;
+            const ci = clipIndexOf(state);
             const meta = clip_meta_table[ci];
             if (meta.mode == .static) {
                 state.frame = 0;

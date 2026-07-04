@@ -491,6 +491,11 @@ pub const BoundaryMode = anim_timing_mod.BoundaryMode;
 pub const AnimationDef = animation_def_mod.AnimationDef;
 pub const AnimationState = animation_state_mod.AnimationState;
 pub const advanceAny = animation_state_mod.advanceAny;
+// #686: duck-typed transition/queue — game wrappers with typed Clip
+// enums drop in without copying engine logic.
+pub const transitionAny = animation_state_mod.transitionAny;
+pub const requestTransitionAny = animation_state_mod.requestTransitionAny;
+pub const applyPendingAny = animation_state_mod.applyPendingAny;
 pub const AnimMode = animation_def_mod.Mode; // deprecated alias of AdvanceMode
 pub const AnimClipMeta = animation_def_mod.ClipMeta;
 // #671 transition semantics: explicit switch modes + data-driven via clips.

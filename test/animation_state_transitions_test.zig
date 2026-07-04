@@ -142,3 +142,79 @@ test "AnimationDef without a .transitions block has an empty table (#671)" {
 //   - `.{ .to = "x", .via = "x" }`            → "via must differ from to"
 //   - `.{ .to = "nope", .via = "walk" }`      → "unknown clip: nope"
 //   - two rules with identical (from, to)     → "duplicate transition rule"
+
+// ── #686: game-wrapper drop-in (typed Clip enum, not u8) ──
+
+// Mirrors flying-platform's components/animation_state.zig: a wrapper
+// carrying typed enums plus the #670 event and #671 queue fields.
+const WClip = enum(u8) { idle, walk, enter_combat, idle_combat };
+const WrapperState = struct {
+    clip: WClip = .idle,
+    variant: u8 = 0,
+    frame_count: u8 = 1,
+    speed: f32 = 1.0,
+    mode: engine.AnimMode = .static,
+    frame: u8 = 0,
+    timer: f32 = 0,
+    event_pos: f32 = 0,
+    repetition: u16 = 0,
+    dirty: bool = true,
+    pending_clip: WClip = .idle,
+    pending_frame_count: u8 = 1,
+    pending_speed: f32 = 1.0,
+    pending_mode: engine.AnimMode = .static,
+    pending_at: f32 = 0,
+    pending_set: bool = false,
+};
+
+test "requestTransitionAny/applyPendingAny drive a typed-enum wrapper (#686)" {
+    var st = WrapperState{};
+    // enter combat: hard cut, then queue idle_combat for the cycle end.
+    engine.transitionAny(&st, WClip.enter_combat, 4, 1.0, .time);
+    engine.requestTransitionAny(&st, WClip.idle_combat, Def.clipMeta(.idle_combat), .at_end);
+    try testing.expectEqual(WClip.enter_combat, st.clip);
+    try testing.expect(st.pending_set);
+
+    st.timer = 3.9;
+    try testing.expect(!engine.applyPendingAny(&st));
+    st.timer = 4.0;
+    try testing.expect(engine.applyPendingAny(&st)); // boundary → cut
+    try testing.expectEqual(WClip.idle_combat, st.clip);
+    try testing.expectEqual(@as(u8, 2), st.frame_count); // idle_combat meta
+    try testing.expect(!st.pending_set);
+}
+
+test "advanceState/advanceStateEvents accept a typed-enum clip (#686)" {
+    // The marker def's punch clip is index 0 in its own enum — build a
+    // wrapper whose clip enum ORDINALS match the def's clip ordinals.
+    const MClip = enum(u8) { punch, idle };
+    var st = struct {
+        clip: MClip = .punch,
+        frame_count: u8 = 4,
+        speed: f32 = 1.0,
+        mode: engine.AnimMode = .time,
+        frame: u8 = 0,
+        timer: f32 = 0,
+        event_pos: f32 = 0,
+        repetition: u16 = 0,
+        dirty: bool = true,
+    }{};
+    const MDef = AnimationDef(.{
+        .variants = .{"h"},
+        .clips = .{
+            .punch = .{ .frames = .{ 1, 2, .{ .f = 3, .marker = "contact" }, 4 }, .mode = .time, .speed = 1.0 },
+            .idle = .{ .frames = 1, .mode = .static },
+        },
+    });
+    var buf = engine.AnimPendingBuf{};
+    MDef.advanceStateEvents(&st, 3.5, &buf); // crosses the marked beat
+    try testing.expectEqual(@as(u8, 3), st.frame);
+    try testing.expectEqual(@as(usize, 1), buf.len);
+    try testing.expectEqualStrings("contact", buf.slice()[0].marker);
+
+    // advanceState too (no events).
+    st.timer = 0;
+    st.frame = 0;
+    MDef.advanceState(&st, 1.5);
+    try testing.expectEqual(@as(u8, 1), st.frame);
+}
