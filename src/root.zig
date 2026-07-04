@@ -488,6 +488,16 @@ pub const AnimationState = animation_state_mod.AnimationState;
 pub const AnimMode = animation_def_mod.Mode;
 pub const AnimClipMeta = animation_def_mod.ClipMeta;
 pub const AnimFrameEntry = animation_def_mod.FrameEntry;
+// Per-frame animation events (#670): marker/clip-end/loop-end payloads +
+// the entity-less `PendingBuf` the pure advance methods append to.
+pub const animation_events_mod = @import("animation_events.zig");
+pub const AnimMarkerHit = animation_events_mod.AnimMarkerHit;
+pub const AnimClipEnd = animation_events_mod.AnimClipEnd;
+pub const AnimLoopEnd = animation_events_mod.AnimLoopEnd;
+pub const PendingAnimEvent = animation_events_mod.PendingAnimEvent;
+pub const AnimPendingBuf = animation_events_mod.PendingBuf;
+pub const AnimEventKind = animation_events_mod.PendingKind;
+pub const anim_pending_cap = animation_events_mod.max_pending;
 pub const SpriteAnimation = sprite_animation_mod.SpriteAnimation;
 pub const SpriteAnimationMode = sprite_animation_mod.AnimationMode;
 pub const spriteAnimationTick = sprite_animation_tick_mod.tick;
