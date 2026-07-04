@@ -67,6 +67,22 @@ test "AnimationDef: variantFromIndex with valid and out-of-range" {
     try testing.expectEqual(TestAnim.variants.w_india, TestAnim.variantFromIndex(99));
 }
 
+test "AnimationDef: variantFromName hit, miss, round-trip (#665)" {
+    const V = TestAnim.variants;
+    // Hit — resolves each name to its variant regardless of position.
+    try testing.expectEqual(@as(?V, V.m_bald), TestAnim.variantFromName("m_bald"));
+    try testing.expectEqual(@as(?V, V.m_beard), TestAnim.variantFromName("m_beard"));
+    try testing.expectEqual(@as(?V, V.w_india), TestAnim.variantFromName("w_india"));
+    // Miss — a renamed/deleted variant resolves to null (caller falls back).
+    try testing.expectEqual(@as(?V, null), TestAnim.variantFromName("does_not_exist"));
+    try testing.expectEqual(@as(?V, null), TestAnim.variantFromName(""));
+    // Round-trip: name → variant → name is the identity for every variant.
+    inline for (.{ "m_bald", "m_beard", "w_india" }) |nm| {
+        const v = TestAnim.variantFromName(nm).?;
+        try testing.expectEqualStrings(nm, TestAnim.variantName(v));
+    }
+}
+
 test "AnimationDef: clipName and variantName" {
     try testing.expectEqualStrings("walk", TestAnim.clipName(.walk));
     try testing.expectEqualStrings("m_beard", TestAnim.variantName(.m_beard));
@@ -140,3 +156,144 @@ test "AnimationState: advance in distance mode uses timer directly" {
     // mod(2.5, 4.0) = 2.5, frame = min(2, 3) = 2
     try testing.expectEqual(@as(u8, 2), state.frame);
 }
+
+// ── Explicit frame entries (#664) ─────────────────────────
+
+// Exercises all three `.frames` forms: bare count, explicit index list
+// (reorder + reuse), and per-slot runs (holds).
+const frames_zon = .{
+    .variants = .{"hero"},
+    .clips = .{
+        // Count shorthand — every slot runs one beat, so beat_count ==
+        // entry_count and playback is bit-identical to pre-#664.
+        .plain = .{ .frames = 4, .mode = .time, .speed = 1.0 },
+        // Explicit list — reorders and REUSES a file: slot 3 points back
+        // at file 2 (a 1-2-3-2 ping-pong).
+        .bounce = .{ .frames = .{ 1, 2, 3, 2 }, .mode = .time, .speed = 1.0 },
+        // Per-slot holds — slot 0 (file 1) shows for 2 beats, then slot 1
+        // (bare int → file 2, run 1) for 1 beat. beat_count 3, entry_count 2.
+        .hold = .{ .frames = .{ .{ .f = 1, .run = 2 }, 2 }, .mode = .time, .speed = 1.0 },
+    },
+};
+
+const FramesAnim = AnimationDef(frames_zon);
+
+test "AnimationDef: count shorthand yields unit-run beats (#664)" {
+    const m = FramesAnim.clipMeta(.plain);
+    try testing.expectEqual(@as(u8, 4), m.entry_count);
+    try testing.expectEqual(@as(u16, 4), m.beat_count);
+    // frame_count stays a back-compat alias of entry_count.
+    try testing.expectEqual(@as(u8, 4), m.frame_count);
+    // Slot i resolves to file i+1, exactly as the old count path did.
+    try testing.expectEqualStrings("plain/hero_0001.png", FramesAnim.spriteName(.plain, .hero, 0));
+    try testing.expectEqualStrings("plain/hero_0004.png", FramesAnim.spriteName(.plain, .hero, 3));
+    // Identity beat→slot mapping.
+    try testing.expectEqual(@as(u8, 0), FramesAnim.slotForBeat(.plain, 0));
+    try testing.expectEqual(@as(u8, 3), FramesAnim.slotForBeat(.plain, 3));
+}
+
+test "AnimationDef: explicit list reorders and reuses files (#664)" {
+    const m = FramesAnim.clipMeta(.bounce);
+    try testing.expectEqual(@as(u8, 4), m.entry_count);
+    try testing.expectEqual(@as(u16, 4), m.beat_count);
+    // .{ 1, 2, 3, 2 } — the name for each slot uses that slot's `f`, so
+    // slot 3 renders file 2 again (not file 4).
+    try testing.expectEqualStrings("bounce/hero_0001.png", FramesAnim.spriteName(.bounce, .hero, 0));
+    try testing.expectEqualStrings("bounce/hero_0002.png", FramesAnim.spriteName(.bounce, .hero, 1));
+    try testing.expectEqualStrings("bounce/hero_0003.png", FramesAnim.spriteName(.bounce, .hero, 2));
+    try testing.expectEqualStrings("bounce/hero_0002.png", FramesAnim.spriteName(.bounce, .hero, 3));
+}
+
+test "AnimationDef: per-slot runs expand the beat table (#664)" {
+    const m = FramesAnim.clipMeta(.hold);
+    try testing.expectEqual(@as(u8, 2), m.entry_count);
+    try testing.expectEqual(@as(u16, 3), m.beat_count);
+    // beat_to_slot == { 0, 0, 1 }: slot 0 held two beats, then slot 1.
+    try testing.expectEqual(@as(u8, 0), FramesAnim.slotForBeat(.hold, 0));
+    try testing.expectEqual(@as(u8, 0), FramesAnim.slotForBeat(.hold, 1));
+    try testing.expectEqual(@as(u8, 1), FramesAnim.slotForBeat(.hold, 2));
+    // slotForBeat wraps past beat_count.
+    try testing.expectEqual(@as(u8, 0), FramesAnim.slotForBeat(.hold, 3));
+    // The bare int 2 became slot 1 pointing at file 2.
+    try testing.expectEqualStrings("hold/hero_0001.png", FramesAnim.spriteName(.hold, .hero, 0));
+    try testing.expectEqualStrings("hold/hero_0002.png", FramesAnim.spriteName(.hold, .hero, 1));
+}
+
+test "AnimationDef: advanceState maps beats to held slots (#664)" {
+    var state = AnimationState{};
+    state.transitionFromMeta(@intFromEnum(FramesAnim.clips.hold), FramesAnim.clipMeta(.hold));
+
+    // beat_count 3, speed 1 → timer accumulates beats; the held slot 0
+    // spans beats 0 and 1, slot 1 is beat 2, then it wraps.
+    try testing.expectEqual(@as(u8, 0), state.frame);
+    FramesAnim.advanceState(&state, 0.5); // timer 0.5 → beat 0 → slot 0
+    try testing.expectEqual(@as(u8, 0), state.frame);
+    FramesAnim.advanceState(&state, 0.7); // timer 1.2 → beat 1 → slot 0 (still held)
+    try testing.expectEqual(@as(u8, 0), state.frame);
+    FramesAnim.advanceState(&state, 1.0); // timer 2.2 → beat 2 → slot 1
+    try testing.expectEqual(@as(u8, 1), state.frame);
+    FramesAnim.advanceState(&state, 1.0); // timer 3.2 → mod 3 = 0.2 → beat 0 → slot 0 (wrap)
+    try testing.expectEqual(@as(u8, 0), state.frame);
+}
+
+// ── Per-variant clip overrides (#666) ─────────────────────
+
+const override_zon = .{
+    .variants = .{
+        "m_bald",
+        "m_beard",
+        .{ .name = "w_ginger", .overrides = .{
+            .drink = .{ .frames = 8, .speed = 4.0 }, // fewer frames, slower
+            .carry = .{ .folder = "take_ginger" }, // different sprite folder
+        } },
+    },
+    .clips = .{
+        .idle = .{ .frames = 1, .mode = .static },
+        .drink = .{ .frames = 10, .mode = .time, .speed = 5.0 },
+        .carry = .{ .frames = 4, .mode = .distance, .speed = 15.0, .folder = "take" },
+    },
+};
+const OverrideAnim = AnimationDef(override_zon);
+
+test "AnimationDef: mixed string/struct variants keep enum order and names (#666)" {
+    try testing.expectEqual(@as(u8, 0), @intFromEnum(OverrideAnim.variants.m_bald));
+    try testing.expectEqual(@as(u8, 1), @intFromEnum(OverrideAnim.variants.m_beard));
+    try testing.expectEqual(@as(u8, 2), @intFromEnum(OverrideAnim.variants.w_ginger));
+    try testing.expectEqualStrings("w_ginger", OverrideAnim.variantName(.w_ginger));
+    // #665 name resolution still works for a struct-declared variant.
+    const V = OverrideAnim.variants;
+    try testing.expectEqual(@as(?V, V.w_ginger), OverrideAnim.variantFromName("w_ginger"));
+}
+
+test "AnimationDef: clipMetaFor patches overridden variants, base for others (#666)" {
+    // Base row (what clipMeta and non-overriding variants see).
+    const base = OverrideAnim.clipMeta(.drink);
+    try testing.expectEqual(@as(u8, 10), base.frame_count);
+    try testing.expectEqual(@as(f32, 5.0), base.speed);
+    try testing.expectEqual(@as(u8, 10), OverrideAnim.clipMetaFor(.drink, .m_bald).frame_count);
+
+    // w_ginger overrides drink: 8 frames @ speed 4.
+    const ginger = OverrideAnim.clipMetaFor(.drink, .w_ginger);
+    try testing.expectEqual(@as(u8, 8), ginger.frame_count);
+    try testing.expectEqual(@as(f32, 4.0), ginger.speed);
+
+    // A clip w_ginger does NOT override inherits the base.
+    try testing.expectEqual(@as(u8, 1), OverrideAnim.clipMetaFor(.idle, .w_ginger).frame_count);
+}
+
+test "AnimationDef: spriteName honors overridden folder and frame count (#666)" {
+    // carry base folder is "take"; w_ginger overrides it to "take_ginger".
+    try testing.expectEqualStrings("take/m_bald_0001.png", OverrideAnim.spriteName(.carry, .m_bald, 0));
+    try testing.expectEqualStrings("take_ginger/w_ginger_0001.png", OverrideAnim.spriteName(.carry, .w_ginger, 0));
+
+    // drink base has 10 frames (m_bald frame 9 valid); w_ginger has 8.
+    try testing.expectEqualStrings("drink/m_bald_0010.png", OverrideAnim.spriteName(.drink, .m_bald, 9));
+    try testing.expectEqualStrings("drink/w_ginger_0008.png", OverrideAnim.spriteName(.drink, .w_ginger, 7));
+    // Beyond the override's frame count → empty (even though < base max).
+    try testing.expectEqualStrings("", OverrideAnim.spriteName(.drink, .w_ginger, 8));
+}
+
+// Comptime-error cases (verified by construction; the repo has no
+// compile-failure harness, so these stay documented rather than run):
+//   - override key naming a nonexistent clip → "overrides unknown clip '…'"
+//   - override field other than frames/speed/mode/folder → "unknown field '…'"

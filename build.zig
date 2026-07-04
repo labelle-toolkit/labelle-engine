@@ -69,6 +69,7 @@ pub fn build(b: *std.Build) void {
     // Test files in test/ directory
     const test_files = [_][]const u8{
         "test/root_test.zig",
+        "test/easing_test.zig",
         "test/scene_test.zig",
         "test/gestures_test.zig",
         "test/sparse_set_test.zig",
@@ -94,6 +95,9 @@ pub fn build(b: *std.Build) void {
         "test/asset_streaming_shim_test.zig",
         "test/animation_def_test.zig",
         "test/animation_state_transitions_test.zig",
+        "test/animation_def_runtime_test.zig",
+        "test/animation_events_test.zig",
+        "test/tween_test.zig",
         "test/sprite_animation_test.zig",
         "test/sprite_animation_tick_test.zig",
         "test/sprite_by_field_test.zig",
