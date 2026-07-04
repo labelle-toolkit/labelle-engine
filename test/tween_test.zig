@@ -271,3 +271,43 @@ test "Tween: killing self inside a callback finalizes cleanly (#669)" {
     tweenTick(&sys, dt60, AlwaysAlive{}); // must not touch the freed slot
     try testing.expectEqual(@as(usize, 0), sys.aliveCount());
 }
+
+const KillAndRespawn = struct {
+    sys: *TweenSystem,
+    rec: *Recorder,
+    handle: TweenHandle = undefined,
+    new_handle: ?TweenHandle = null,
+    fn cb(ctx: *anyopaque) void {
+        const self: *KillAndRespawn = @ptrCast(@alignCast(ctx));
+        // Kill our own tween, then immediately create a new one — the
+        // freed slot is REUSED for it (same index, bumped generation).
+        self.sys.kill(self.handle);
+        self.new_handle = self.sys.create()
+            .property(@ptrCast(self.rec), Recorder.applyFn, 0, 7, 0.5).handle;
+    }
+};
+
+test "Tween: slot reuse inside a callback does not corrupt the new tween (#669)" {
+    var sys = TweenSystem.init(testing.allocator);
+    defer sys.deinit();
+    var rec = Recorder{};
+    var kr = KillAndRespawn{ .sys = &sys, .rec = &rec };
+    const b = sys.create().callback(asCtx(&kr), KillAndRespawn.cb).interval(1.0);
+    kr.handle = b.handle;
+
+    tweenTick(&sys, dt60, AlwaysAlive{});
+    // The new tween took the SAME slot with a bumped generation — the
+    // tick must not have clobbered its fired bits or finalized it.
+    const nh = kr.new_handle.?;
+    try testing.expectEqual(b.handle.index, nh.index);
+    try testing.expect(b.handle.generation != nh.generation);
+    try testing.expect(sys.get(nh) != null); // alive, untouched
+    try testing.expectEqual(@as(usize, 1), sys.aliveCount());
+
+    // And it plays to completion with an exact endpoint.
+    var ticks: u32 = 0;
+    while (sys.aliveCount() > 0 and ticks < 100) : (ticks += 1) {
+        tweenTick(&sys, dt60, AlwaysAlive{});
+    }
+    try testing.expectEqual(@as(f32, 7.0), rec.last);
+}

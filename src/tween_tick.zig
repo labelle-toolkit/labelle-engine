@@ -48,8 +48,7 @@ pub fn tick(system: *TweenSystem, dt: f32, backend: anytype) void {
             if (!t.alive) continue;
             if (t.bound_entity) |ent| {
                 if (!backend.tweenEntityAlive(ent)) {
-                    t.alive = false;
-                    system.free_list.append(system.allocator, @intCast(i)) catch {};
+                    system.freeSlot(@intCast(i));
                     continue;
                 }
             }
@@ -61,10 +60,12 @@ pub fn tick(system: *TweenSystem, dt: f32, backend: anytype) void {
         var fired: [tween.max_steps]bool = undefined;
         var step_count: usize = undefined;
         var elapsed: f32 = undefined;
+        var expected_gen: u32 = undefined;
         {
             const t = &system.tweens.items[i];
             step_count = t.step_count;
             elapsed = t.elapsed;
+            expected_gen = t.generation;
             @memcpy(steps[0..step_count], t.steps[0..step_count]);
             @memcpy(fired[0..step_count], t.fired[0..step_count]);
         }
@@ -99,16 +100,18 @@ pub fn tick(system: *TweenSystem, dt: f32, backend: anytype) void {
             }
         }
 
-        // ── re-fetch; a callback may have killed or reallocated us ──
+        // ── re-fetch; a callback may have killed, reallocated, or even
+        // REUSED our slot (kill self + create → same index, new tween).
+        // The generation check is load-bearing: without it we would
+        // clobber the new occupant's fired bits and finalize it early.
         const t = &system.tweens.items[i];
-        if (!t.alive) continue; // killed inside a callback — do not finalize/loop
+        if (!t.alive or t.generation != expected_gen) continue;
         @memcpy(t.fired[0..step_count], fired[0..step_count]);
 
         if (t.total_duration <= 0) {
             // Zero-length tween (only callbacks/instant steps): fired this
             // frame, so it is done. Loops are meaningless with no duration.
-            t.alive = false;
-            system.free_list.append(system.allocator, @intCast(i)) catch {};
+            system.freeSlot(@intCast(i));
             continue;
         }
 
@@ -120,8 +123,7 @@ pub fn tick(system: *TweenSystem, dt: f32, backend: anytype) void {
             } else {
                 t.loops_done += 1;
                 if (t.loops_done >= t.loops) {
-                    t.alive = false;
-                    system.free_list.append(system.allocator, @intCast(i)) catch {};
+                    system.freeSlot(@intCast(i));
                 } else {
                     t.elapsed -= t.total_duration;
                     @memset(t.fired[0..t.step_count], false);

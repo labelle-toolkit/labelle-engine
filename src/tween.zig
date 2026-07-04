@@ -86,14 +86,21 @@ pub const Tween = struct {
     loops_done: u16 = 0,
     alive: bool = false,
     generation: u32 = 0,
+    /// Embedded free-list link: next free slot below this one, or null.
+    /// Valid only while `!alive`. Makes freeing allocation-free and
+    /// infallible (no side ArrayList that could fail to append and leak
+    /// the slot).
+    next_free: ?u32 = null,
 };
 
 pub const TweenSystem = struct {
     allocator: std.mem.Allocator,
-    /// Dense slot storage; slots are reused via `free_list`, never removed,
-    /// so live `TweenHandle` indices stay valid (generation guards reuse).
+    /// Dense slot storage; slots are reused via the embedded free list,
+    /// never removed, so live `TweenHandle` indices stay valid
+    /// (generation guards reuse).
     tweens: std.ArrayList(Tween) = .empty,
-    free_list: std.ArrayList(u32) = .empty,
+    /// Head of the embedded free list (see `Tween.next_free`).
+    first_free: ?u32 = null,
 
     pub fn init(allocator: std.mem.Allocator) TweenSystem {
         return .{ .allocator = allocator };
@@ -101,7 +108,6 @@ pub const TweenSystem = struct {
 
     pub fn deinit(self: *TweenSystem) void {
         self.tweens.deinit(self.allocator);
-        self.free_list.deinit(self.allocator);
         self.* = undefined;
     }
 
@@ -110,7 +116,6 @@ pub const TweenSystem = struct {
     /// running N simultaneous tweens is allocation-free.
     pub fn ensureCapacity(self: *TweenSystem, n: usize) !void {
         try self.tweens.ensureTotalCapacity(self.allocator, n);
-        try self.free_list.ensureTotalCapacity(self.allocator, n);
     }
 
     /// Number of currently-alive tweens (O(n); for tests/telemetry).
@@ -134,37 +139,48 @@ pub const TweenSystem = struct {
     /// Begin a fire-and-forget tween. Reuses a free slot or appends one.
     /// Returns a value-semantics builder; chain steps then let it drop —
     /// the tween is live from this frame. On the (rare, pre-`ensureCapacity`)
-    /// OOM path the returned builder is inert (its methods no-op), so a
-    /// dropped tween simply never runs — fire-and-forget stays infallible.
+    /// OOM path the returned builder is inert (its methods no-op) and its
+    /// handle index is a maxInt sentinel that can never resolve to a live
+    /// slot — fire-and-forget stays infallible.
     pub fn create(self: *TweenSystem) TweenBuilder {
-        if (self.free_list.pop()) |slot| {
+        if (self.first_free) |slot| {
             const t = &self.tweens.items[slot];
+            self.first_free = t.next_free;
             const gen = t.generation +% 1;
             t.* = .{ .generation = gen, .alive = true };
             return .{ .system = self, .handle = .{ .index = slot, .generation = gen } };
         }
         const index: u32 = @intCast(self.tweens.items.len);
         self.tweens.append(self.allocator, .{ .generation = 0, .alive = true }) catch {
-            return .{ .system = self, .handle = .{ .index = 0, .generation = 0 }, .valid = false };
+            return .{
+                .system = self,
+                .handle = .{ .index = std.math.maxInt(u32), .generation = 0 },
+                .valid = false,
+            };
         };
         return .{ .system = self, .handle = .{ .index = index, .generation = 0 } };
+    }
+
+    /// Mark a slot dead and push it onto the embedded free list.
+    /// Infallible (no allocation). Internal + used by `tween_tick`.
+    pub fn freeSlot(self: *TweenSystem, index: u32) void {
+        const t = &self.tweens.items[index];
+        t.alive = false;
+        t.next_free = self.first_free;
+        self.first_free = index;
     }
 
     /// Stop a tween now. Stale/already-dead handles are silently ignored.
     /// Its remaining callbacks never fire.
     pub fn kill(self: *TweenSystem, handle: TweenHandle) void {
-        const t = self.get(handle) orelse return;
-        t.alive = false;
-        self.free_list.append(self.allocator, handle.index) catch {};
+        _ = self.get(handle) orelse return;
+        self.freeSlot(handle.index);
     }
 
     /// Kill every live tween (e.g. on scene teardown).
     pub fn killAll(self: *TweenSystem) void {
         for (self.tweens.items, 0..) |*t, i| {
-            if (t.alive) {
-                t.alive = false;
-                self.free_list.append(self.allocator, @intCast(i)) catch {};
-            }
+            if (t.alive) self.freeSlot(@intCast(i));
         }
     }
 };
