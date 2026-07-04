@@ -422,6 +422,18 @@ pub fn AnimationDef(comptime zon: anytype) type {
                 const wraps_full: i64 = @divFloor(new_lin, bc_i) - @divFloor(old_lin, bc_i);
                 const base_rep = state.repetition;
 
+                // Beat 0 of the FIRST play-through: the traversal below
+                // walks beats old_lin+1..new_lin, so the clip's entry beat
+                // (displayed the moment the clip started) would never fire
+                // its marker on the first cycle — only on wraps. Fire it
+                // here exactly once, on the first forward advance.
+                if (old_pos == 0 and old_lin == 0) {
+                    const entry_name = marker_beats[ci][0];
+                    if (entry_name.len > 0) {
+                        _ = out.append(.{ .kind = .marker, .clip = ci, .frame = beat_to_slot[ci][0], .marker = entry_name, .repetition = base_rep });
+                    }
+                }
+
                 var rep = base_rep;
                 var b = old_lin + 1;
                 var guard: u32 = 0;

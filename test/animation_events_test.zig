@@ -108,6 +108,60 @@ test "advanceStateEvents: transition resets tracking — no stale marker catch-u
     try testing.expectEqual(@as(usize, 0), buf.len);
 }
 
+test "advanceStateEvents: a marker on slot 0 fires on the FIRST play-through (#670)" {
+    // Marker on the clip's entry slot — displayed the moment the clip
+    // starts. The linear traversal starts at beat 1, so without the
+    // explicit entry-beat emit this marker would only fire on wraps.
+    const zon = .{
+        .variants = .{"h"},
+        .clips = .{
+            .kick = .{ .frames = .{ .{ .f = 1, .marker = "windup" }, 2, 3 }, .mode = .time, .speed = 1.0 },
+        },
+    };
+    const D = AnimationDef(zon);
+    const meta = D.clipMeta(.kick);
+    var state = AnimationState{ .clip = 0, .frame_count = meta.frame_count, .speed = meta.speed, .mode = .time };
+    var buf = PendingBuf{};
+
+    // First advance (mid-beat): the entry marker fires once, rep 0.
+    D.advanceStateEvents(&state, 0.5, &buf);
+    try testing.expectEqual(@as(usize, 1), buf.len);
+    try testing.expectEqualStrings("windup", buf.slice()[0].marker);
+    try testing.expectEqual(@as(u16, 0), buf.slice()[0].repetition);
+
+    // Second advance, still inside the first cycle: no re-fire.
+    buf.clear();
+    D.advanceStateEvents(&state, 1.0, &buf); // timer 1.5, beat 1
+    try testing.expectEqual(@as(usize, 0), buf.len);
+
+    // Crossing the wrap fires loop_end + the entry marker again (rep 1).
+    buf.clear();
+    D.advanceStateEvents(&state, 2.0, &buf); // timer 3.5 → beats 2,3(wrap→0)
+    try testing.expectEqual(@as(usize, 2), buf.len);
+    try testing.expectEqual(@as(@TypeOf(buf.slice()[0].kind), .loop_end), buf.slice()[0].kind);
+    try testing.expectEqualStrings("windup", buf.slice()[1].marker);
+    try testing.expectEqual(@as(u16, 1), buf.slice()[1].repetition);
+}
+
+test "advanceStateEvents: transition re-arms the entry marker (#670)" {
+    const zon = .{
+        .variants = .{"h"},
+        .clips = .{ .kick = .{ .frames = .{ .{ .f = 1, .marker = "windup" }, 2 }, .mode = .time, .speed = 1.0 } },
+    };
+    const D = AnimationDef(zon);
+    const meta = D.clipMeta(.kick);
+    var state = AnimationState{ .clip = 0, .frame_count = meta.frame_count, .speed = meta.speed, .mode = .time };
+    var buf = PendingBuf{};
+    D.advanceStateEvents(&state, 0.5, &buf);
+    try testing.expectEqual(@as(usize, 1), buf.len); // fired
+
+    state.transitionFromMeta(0, meta); // re-enter the clip
+    buf.clear();
+    D.advanceStateEvents(&state, 0.5, &buf);
+    try testing.expectEqual(@as(usize, 1), buf.len); // fires again after re-entry
+    try testing.expectEqual(@as(u16, 0), buf.slice()[0].repetition);
+}
+
 test "advanceStateEvents: a static clip emits nothing and holds frame 0 (#670)" {
     const meta = Def.clipMeta(.idle);
     var state = AnimationState{ .clip = @intFromEnum(Def.clips.idle), .frame_count = meta.frame_count, .mode = .static };

@@ -149,9 +149,12 @@ pub const SpriteAnimation = struct {
                 const total: usize = @as(usize, self.frame) + steps;
                 self.frame = @intCast(total % self.frames.len);
                 if (out) |o| {
-                    // One AnimLoopEnd per boundary crossed this tick.
+                    // One AnimLoopEnd per boundary crossed this tick. The
+                    // repetition counter advances for EVERY wrap even when
+                    // the buffer caps emission — it must stay arithmetically
+                    // accurate across the full span.
                     var wraps: usize = total / self.frames.len;
-                    while (wraps > 0 and !o.isFull()) : (wraps -= 1) {
+                    while (wraps > 0) : (wraps -= 1) {
                         self.repetition = anim_events.satAddU16(self.repetition, 1);
                         _ = o.append(.{ .kind = .loop_end, .repetition = self.repetition });
                     }
@@ -215,7 +218,8 @@ pub const SpriteAnimation = struct {
 
     fn emitReversal(self: *SpriteAnimation, out: ?*anim_events.PendingBuf) void {
         if (out) |o| {
-            if (o.isFull()) return;
+            // Count the reversal even when the buffer is full — the
+            // repetition counter must not lag actual playback.
             self.repetition = anim_events.satAddU16(self.repetition, 1);
             _ = o.append(.{ .kind = .loop_end, .repetition = self.repetition });
         }
