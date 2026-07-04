@@ -85,17 +85,7 @@ pub const AnimationState = struct {
 
     /// Reset timer and frame for a new clip transition.
     pub fn transition(self: *AnimationState, clip: u8, frame_count: u8, speed: f32, mode: Mode) void {
-        self.clip = clip;
-        self.frame_count = frame_count;
-        self.speed = speed;
-        self.mode = mode;
-        self.frame = 0;
-        self.timer = 0;
-        self.pending_set = false; // a hard cut clears any queued switch
-        // Reset #670 event tracking — no marker catch-up across a cut clip.
-        self.event_pos = 0;
-        self.repetition = 0;
-        self.dirty = true;
+        transitionAny(self, clip, frame_count, speed, mode);
     }
 
     /// Transition using metadata from an AnimationDef.
@@ -108,60 +98,14 @@ pub const AnimationState = struct {
     /// switch for the current clip's next cycle boundary (a second
     /// `.at_end` overwrites the slot — last-wins).
     pub fn requestTransition(self: *AnimationState, clip: u8, meta: ClipMeta, switch_mode: SwitchMode) void {
-        switch (switch_mode) {
-            .immediate => self.transition(clip, meta.frame_count, meta.speed, meta.mode),
-            .sync => {
-                const old_clip = self.clip;
-                const old_fc = self.frame_count;
-                self.clip = clip;
-                self.frame_count = meta.frame_count;
-                self.speed = meta.speed;
-                self.mode = meta.mode;
-                if (clip != old_clip) {
-                    // Carry the normalized phase into the new timeline.
-                    if (old_fc <= 1) {
-                        self.timer = 0;
-                    } else {
-                        const new_fc: f32 = @floatFromInt(meta.frame_count);
-                        const of: f32 = @floatFromInt(old_fc);
-                        self.timer = self.timer * (new_fc / of);
-                    }
-                }
-                // Same clip → leave timer untouched (skin swap keeps phase).
-                self.pending_set = false;
-                self.dirty = true;
-            },
-            .at_end => {
-                if (self.mode == .static) {
-                    // No cycle exists to wait for → apply immediately.
-                    self.transition(clip, meta.frame_count, meta.speed, meta.mode);
-                    return;
-                }
-                self.pending_clip = clip;
-                self.pending_frame_count = meta.frame_count;
-                self.pending_speed = meta.speed;
-                self.pending_mode = meta.mode;
-                // Fire at the current clip's NEXT cycle boundary (linear
-                // timer units). Recomputed on every request → last-wins.
-                const fc: f32 = @floatFromInt(self.frame_count);
-                self.pending_at = if (fc > 0)
-                    (@floor(self.timer / fc) + 1.0) * fc
-                else
-                    self.timer;
-                self.pending_set = true;
-            },
-        }
+        requestTransitionAny(self, clip, meta, switch_mode);
     }
 
     /// Apply a queued `at_end` switch if the current clip has reached its
     /// cycle boundary. Call once per tick from the animation driver, after
     /// `advance`. Returns true when a pending switch was applied this tick.
     pub fn applyPending(self: *AnimationState) bool {
-        if (!self.pending_set) return false;
-        if (self.timer < self.pending_at) return false;
-        self.transition(self.pending_clip, self.pending_frame_count, self.pending_speed, self.pending_mode);
-        // `transition` already cleared `pending_set`.
-        return true;
+        return applyPendingAny(self);
     }
 };
 
@@ -187,4 +131,90 @@ pub fn advanceAny(state: anytype, dt: f32) void {
         const cycle = @mod(state.timer, fc);
         state.frame = @min(@as(u8, @intFromFloat(cycle)), state.frame_count - 1);
     }
+}
+
+
+/// Duck-typed hard-cut transition (#686): sets the core clip fields on
+/// any state-shaped struct — the wrapper's `clip` may be a typed enum
+/// (the engine component's is `u8`; both type-check at instantiation).
+/// The #670 event fields and the #671 queue are reset only when the
+/// struct HAS them, so minimal wrappers work unchanged.
+pub fn transitionAny(state: anytype, clip: anytype, frame_count: u8, speed: f32, mode: Mode) void {
+    const S = @TypeOf(state.*);
+    state.clip = clip;
+    state.frame_count = frame_count;
+    state.speed = speed;
+    state.mode = mode;
+    state.frame = 0;
+    state.timer = 0;
+    // A hard cut clears any queued switch.
+    if (@hasField(S, "pending_set")) state.pending_set = false;
+    // Reset #670 event tracking — no marker catch-up across a cut clip.
+    if (@hasField(S, "event_pos")) state.event_pos = 0;
+    if (@hasField(S, "repetition")) state.repetition = 0;
+    state.dirty = true;
+}
+
+/// Duck-typed `requestTransition` (#671 semantics, #686 wrapper drop-in).
+/// `.immediate`/`.sync` need only the core fields; `.at_end` additionally
+/// requires the queue fields (`pending_clip` of the same type as `clip`,
+/// `pending_frame_count`, `pending_speed`, `pending_mode`, `pending_at`,
+/// `pending_set`) — using it without them is a compile error, which is
+/// the correct failure mode.
+pub fn requestTransitionAny(state: anytype, clip: anytype, meta: ClipMeta, switch_mode: SwitchMode) void {
+    const S = @TypeOf(state.*);
+    switch (switch_mode) {
+        .immediate => transitionAny(state, clip, meta.frame_count, meta.speed, meta.mode),
+        .sync => {
+            const old_clip = state.clip;
+            const old_fc = state.frame_count;
+            state.clip = clip;
+            state.frame_count = meta.frame_count;
+            state.speed = meta.speed;
+            state.mode = meta.mode;
+            if (clip != old_clip) {
+                // Carry the normalized phase into the new timeline.
+                if (old_fc <= 1) {
+                    state.timer = 0;
+                } else {
+                    const new_fc: f32 = @floatFromInt(meta.frame_count);
+                    const of: f32 = @floatFromInt(old_fc);
+                    state.timer = state.timer * (new_fc / of);
+                }
+            }
+            // Same clip → leave timer untouched (skin swap keeps phase).
+            if (@hasField(S, "pending_set")) state.pending_set = false;
+            state.dirty = true;
+        },
+        .at_end => {
+            if (state.mode == .static) {
+                // No cycle exists to wait for → apply immediately.
+                transitionAny(state, clip, meta.frame_count, meta.speed, meta.mode);
+                return;
+            }
+            state.pending_clip = clip;
+            state.pending_frame_count = meta.frame_count;
+            state.pending_speed = meta.speed;
+            state.pending_mode = meta.mode;
+            // Fire at the current clip's NEXT cycle boundary (linear
+            // timer units). Recomputed on every request → last-wins.
+            const fc: f32 = @floatFromInt(state.frame_count);
+            state.pending_at = if (fc > 0)
+                (@floor(state.timer / fc) + 1.0) * fc
+            else
+                state.timer;
+            state.pending_set = true;
+        },
+    }
+}
+
+/// Duck-typed `applyPending` (#686): apply a queued `at_end` switch once
+/// the linear timer crosses the recorded boundary. Call once per tick
+/// after the advance. Returns true when the switch applied.
+pub fn applyPendingAny(state: anytype) bool {
+    if (!state.pending_set) return false;
+    if (state.timer < state.pending_at) return false;
+    transitionAny(state, state.pending_clip, state.pending_frame_count, state.pending_speed, state.pending_mode);
+    // `transitionAny` already cleared `pending_set`.
+    return true;
 }
