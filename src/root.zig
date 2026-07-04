@@ -488,6 +488,9 @@ pub const AnimationDef = animation_def_mod.AnimationDef;
 pub const AnimationState = animation_state_mod.AnimationState;
 pub const AnimMode = animation_def_mod.Mode;
 pub const AnimClipMeta = animation_def_mod.ClipMeta;
+// #671 transition semantics: explicit switch modes + data-driven via clips.
+pub const AnimSwitchMode = animation_state_mod.SwitchMode;
+pub const AnimTransitionRule = animation_def_mod.TransitionRule;
 pub const RuntimeAnimationDef = animation_def_runtime_mod.RuntimeAnimationDef;
 pub const AnimDefSource = animation_def_runtime_mod.AnimDefSource;
 pub const refreshState = animation_def_runtime_mod.refreshState;

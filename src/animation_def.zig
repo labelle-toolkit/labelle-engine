@@ -68,6 +68,10 @@ pub const ClipMeta = struct {
     folder: []const u8,
 };
 
+/// A resolved transitional-clip rule (#671): when switching to `to`
+/// (optionally only from `from`), play `via` once first.
+pub const TransitionRule = struct { from: ?u8, to: u8, via: u8 };
+
 /// Comptime clip-name → ordinal lookup over the `.clips` struct fields.
 fn clipIdxByName(comptime clip_fields: anytype, comptime name: []const u8) ?u8 {
     inline for (clip_fields, 0..) |f, i| {
@@ -377,6 +381,45 @@ pub fn AnimationDef(comptime zon: anytype) type {
         break :blk table;
     };
 
+    // Optional transitional-clip table (#671). When switching to `to`
+    // (optionally only from a specific `from`), the driver plays `via`
+    // once first. Comptime-validated: names resolve, `via != to` (no
+    // self-loop), no duplicate (from, to) pair.
+    const transition_table: []const TransitionRule = blk: {
+        if (!@hasField(@TypeOf(zon), "transitions")) break :blk &[_]TransitionRule{};
+        const trs = zon.transitions;
+        const tinfo = @typeInfo(@TypeOf(trs));
+        if (!(tinfo == .@"struct" and tinfo.@"struct".is_tuple))
+            @compileError("animation .zon `.transitions` must be a tuple of rules");
+        const tfields = tinfo.@"struct".fields;
+        var rules: [tfields.len]TransitionRule = undefined;
+        inline for (tfields, 0..) |tf, i| {
+            const rule = @field(trs, tf.name);
+            if (!@hasField(@TypeOf(rule), "to")) @compileError("transition rule needs a `.to` clip name");
+            if (!@hasField(@TypeOf(rule), "via")) @compileError("transition rule needs a `.via` clip name");
+            const to_idx = clipIdxByName(clip_fields, rule.to) orelse
+                @compileError("transition `.to` names an unknown clip: " ++ rule.to);
+            const via_idx = clipIdxByName(clip_fields, rule.via) orelse
+                @compileError("transition `.via` names an unknown clip: " ++ rule.via);
+            if (to_idx == via_idx)
+                @compileError("transition `.via` must differ from `.to` (would loop): " ++ rule.to);
+            const from_idx: ?u8 = if (@hasField(@TypeOf(rule), "from"))
+                (clipIdxByName(clip_fields, rule.from) orelse
+                    @compileError("transition `.from` names an unknown clip: " ++ rule.from))
+            else
+                null;
+            rules[i] = .{ .from = from_idx, .to = to_idx, .via = via_idx };
+        }
+        for (rules, 0..) |a, ai| {
+            for (rules[0..ai]) |b| {
+                if (a.to == b.to and a.from == b.from)
+                    @compileError("duplicate transition rule for the same (from, to) pair");
+            }
+        }
+        const out = rules;
+        break :blk &out;
+    };
+
     // Marker → beat table (#670): the marker name at each beat that is a
     // slot's FIRST beat and carries a marker, else "". A held slot (run>1)
     // fires its marker once, at entry. Padded to `max_beats` with "".
@@ -404,6 +447,7 @@ pub fn AnimationDef(comptime zon: anytype) type {
         pub const max_frames_val = max_slots;
         pub const max_slots_val = max_slots;
         pub const max_beats_val = max_beats;
+        pub const transition_count_val = transition_table.len;
 
         /// Base (variant-independent) metadata for a clip.
         ///
@@ -512,6 +556,22 @@ pub fn AnimationDef(comptime zon: anytype) type {
             }
         }
 
+        /// Resolve a transitional (`.via`) clip for a `from → to` switch,
+        /// or null if no rule matches (#671). A `from`-specific rule wins
+        /// over a wildcard (`from == null`) rule for the same `to`, so the
+        /// driver can play e.g. `enter_combat` before any → `idle_combat`.
+        pub fn transitionVia(from: u8, to: u8) ?u8 {
+            var wildcard: ?u8 = null;
+            for (transition_table) |r| {
+                if (r.to != to) continue;
+                if (r.from) |f| {
+                    if (f == from) return r.via;
+                } else {
+                    wildcard = r.via;
+                }
+            }
+            return wildcard;
+        }
 
         /// The marker name at a beat of a clip, or "" if none (#670).
         /// Markers fire at a slot's FIRST beat only.
