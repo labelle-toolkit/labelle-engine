@@ -99,9 +99,11 @@ pub const RuntimeAnimationDef = struct {
             .struct_literal => |s| s,
             else => return error.BadClips,
         };
+        // Guard BEFORE the u32 cast (a pathological >4G-entry file must
+        // error, not trap); u32 itself is required by Zoir's Range.at.
+        if (cstruct.names.len == 0) return error.EmptyClips;
+        if (cstruct.names.len > 255) return error.TooManyClips;
         const ccount: u32 = @intCast(cstruct.names.len);
-        if (ccount == 0) return error.EmptyClips;
-        if (ccount > 255) return error.TooManyClips;
 
         const clip_names = try allocator.alloc([]const u8, ccount);
         var cn_filled: usize = 0;
@@ -391,8 +393,11 @@ pub const ReloadWatcher = struct {
     last_mtime_ns: i128 = 0,
     mtime_seen: bool = false,
 
-    pub fn init(initial: RuntimeAnimationDef) ReloadWatcher {
-        return .{ .current = initial };
+    /// `initial_mtime_ns` is the mtime of the file `initial` was parsed
+    /// from — the first poll with an unchanged file then returns false
+    /// instead of triggering a redundant startup reload.
+    pub fn init(initial: RuntimeAnimationDef, initial_mtime_ns: i128) ReloadWatcher {
+        return .{ .current = initial, .last_mtime_ns = initial_mtime_ns, .mtime_seen = true };
     }
 
     /// The def sprites should resolve against right now.

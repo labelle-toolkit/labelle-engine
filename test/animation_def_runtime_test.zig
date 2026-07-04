@@ -170,14 +170,14 @@ test "AnimDefSource: both variants answer the same query (#672)" {
 // ── ReloadWatcher: mtime diff + one-generation deferred free ──
 
 test "ReloadWatcher: mtimeChanged coalesces repeats (#672)" {
-    var w = ReloadWatcher.init(try RuntimeAnimationDef.load(testing.allocator, worker_src));
+    var w = ReloadWatcher.init(try RuntimeAnimationDef.load(testing.allocator, worker_src), 100);
     defer w.deinit();
 
-    try testing.expect(w.mtimeChanged(100)); // first observation
-    try testing.expect(!w.mtimeChanged(100)); // unchanged
+    try testing.expect(!w.mtimeChanged(100)); // unchanged since init — no startup reload
     try testing.expect(!w.mtimeChanged(100));
     try testing.expect(w.mtimeChanged(250)); // changed
     try testing.expect(!w.mtimeChanged(250));
+    try testing.expect(w.mtimeChanged(300)); // changed again
 }
 
 test "ReloadWatcher: holds exactly one previous generation, frees on swap (#672)" {
@@ -185,7 +185,7 @@ test "ReloadWatcher: holds exactly one previous generation, frees on swap (#672)
     const src =
         \\.{ .variants = .{ "v" }, .clips = .{ .c = .{ .frames = 2, .mode = .time, .speed = 1.0 } } }
     ;
-    var w = ReloadWatcher.init(try RuntimeAnimationDef.load(a, src));
+    var w = ReloadWatcher.init(try RuntimeAnimationDef.load(a, src), 0);
     defer w.deinit();
 
     // Swap in gen1 — gen0 retained as previous, still resolvable.
