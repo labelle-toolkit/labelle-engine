@@ -494,6 +494,12 @@ pub const SpriteByField = sprite_by_field_mod.SpriteByField;
 pub const SpriteByFieldSource = sprite_by_field_mod.SpriteByFieldSource;
 pub const spriteByFieldTick = sprite_by_field_tick_mod.tick;
 
+// ── Easing ──
+// Pure (curve × placement) interpolation catalog — `engine.easing.ease`,
+// `.interpolate`, `.expApproach`, plus the `Curve`/`Placement` enums.
+// Zero deps; the future tween system + scripts consume it (#668).
+pub const easing = @import("easing.zig");
+
 // ── Atlas ──
 pub const SpriteData = atlas_mod.SpriteData;
 pub const FindSpriteResult = atlas_mod.FindSpriteResult;
