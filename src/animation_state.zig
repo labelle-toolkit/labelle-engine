@@ -35,6 +35,15 @@ pub const AnimationState = struct {
     /// Accumulated time/distance for cycling.
     timer: f32 = 0.0,
 
+    /// Last beat position processed by `advanceStateEvents` (#670). Transient
+    /// event-tracking state — never serialized; resets to 0 on transition so
+    /// a new clip never fires stale markers from the abandoned one.
+    event_pos: f32 = 0.0,
+
+    /// Saturating loop count for `AnimLoopEnd` (#670). Transient; resets on
+    /// transition.
+    repetition: u16 = 0,
+
     /// Whether the sprite should be flipped horizontally.
     flip_x: bool = false,
 
@@ -73,6 +82,9 @@ pub const AnimationState = struct {
         self.mode = mode;
         self.frame = 0;
         self.timer = 0;
+        // Reset #670 event tracking — no marker catch-up across a cut clip.
+        self.event_pos = 0;
+        self.repetition = 0;
         self.dirty = true;
     }
 

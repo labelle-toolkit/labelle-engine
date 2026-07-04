@@ -147,8 +147,14 @@ pub const RuntimeAnimationDef = struct {
                 else
                     cname;
                 const folder_dup = try allocator.dupe(u8, folder_src);
+                // Runtime parser reads the count form only, so the #664
+                // beat vocabulary degenerates: entry_count == beat_count
+                // == frame_count (every slot runs one beat). Entry-list
+                // parsing at runtime is a follow-up (#664 × #672).
                 clip_meta[i] = .{
                     .frame_count = frame_count,
+                    .entry_count = frame_count,
+                    .beat_count = frame_count,
                     .speed = speed,
                     .mode = mode,
                     .folder = folder_dup,
@@ -252,7 +258,7 @@ pub const RuntimeAnimationDef = struct {
     /// Metadata for a clip index, clamped to the last clip if out of range
     /// (a reload may have shrunk the clip count under a live index).
     pub fn clipMeta(self: *const RuntimeAnimationDef, clip: u8) ClipMeta {
-        if (self.clip_meta.len == 0) return .{ .frame_count = 1, .speed = 1.0, .mode = .static, .folder = "" };
+        if (self.clip_meta.len == 0) return .{ .frame_count = 1, .entry_count = 1, .beat_count = 1, .speed = 1.0, .mode = .static, .folder = "" };
         const idx = if (clip >= self.clip_meta.len) self.clip_meta.len - 1 else clip;
         return self.clip_meta[idx];
     }
