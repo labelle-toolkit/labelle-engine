@@ -31,6 +31,18 @@ pub const ClipMeta = struct {
     folder: []const u8,
 };
 
+/// A resolved transitional-clip rule (#671): when switching to `to`
+/// (optionally only from `from`), play `via` once first.
+pub const TransitionRule = struct { from: ?u8, to: u8, via: u8 };
+
+/// Comptime clip-name → ordinal lookup over the `.clips` struct fields.
+fn clipIdxByName(comptime clip_fields: anytype, comptime name: []const u8) ?u8 {
+    inline for (clip_fields, 0..) |f, i| {
+        if (std.mem.eql(u8, f.name, name)) return @intCast(i);
+    }
+    return null;
+}
+
 pub fn AnimationDef(comptime zon: anytype) type {
     if (!@hasField(@TypeOf(zon), "clips")) @compileError("animation .zon must have a .clips field");
     if (!@hasField(@TypeOf(zon), "variants")) @compileError("animation .zon must have a .variants field");
@@ -135,12 +147,52 @@ pub fn AnimationDef(comptime zon: anytype) type {
         break :blk table;
     };
 
+    // Optional transitional-clip table (#671). When switching to `to`
+    // (optionally only from a specific `from`), the driver plays `via`
+    // once first. Comptime-validated: names resolve, `via != to` (no
+    // self-loop), no duplicate (from, to) pair.
+    const transition_table: []const TransitionRule = blk: {
+        if (!@hasField(@TypeOf(zon), "transitions")) break :blk &[_]TransitionRule{};
+        const trs = zon.transitions;
+        const tinfo = @typeInfo(@TypeOf(trs));
+        if (!(tinfo == .@"struct" and tinfo.@"struct".is_tuple))
+            @compileError("animation .zon `.transitions` must be a tuple of rules");
+        const tfields = tinfo.@"struct".fields;
+        var rules: [tfields.len]TransitionRule = undefined;
+        inline for (tfields, 0..) |tf, i| {
+            const rule = @field(trs, tf.name);
+            if (!@hasField(@TypeOf(rule), "to")) @compileError("transition rule needs a `.to` clip name");
+            if (!@hasField(@TypeOf(rule), "via")) @compileError("transition rule needs a `.via` clip name");
+            const to_idx = clipIdxByName(clip_fields, rule.to) orelse
+                @compileError("transition `.to` names an unknown clip: " ++ rule.to);
+            const via_idx = clipIdxByName(clip_fields, rule.via) orelse
+                @compileError("transition `.via` names an unknown clip: " ++ rule.via);
+            if (to_idx == via_idx)
+                @compileError("transition `.via` must differ from `.to` (would loop): " ++ rule.to);
+            const from_idx: ?u8 = if (@hasField(@TypeOf(rule), "from"))
+                (clipIdxByName(clip_fields, rule.from) orelse
+                    @compileError("transition `.from` names an unknown clip: " ++ rule.from))
+            else
+                null;
+            rules[i] = .{ .from = from_idx, .to = to_idx, .via = via_idx };
+        }
+        for (rules, 0..) |a, ai| {
+            for (rules[0..ai]) |b| {
+                if (a.to == b.to and a.from == b.from)
+                    @compileError("duplicate transition rule for the same (from, to) pair");
+            }
+        }
+        const out = rules;
+        break :blk &out;
+    };
+
     return struct {
         pub const clips = Clip;
         pub const variants = Variant;
         pub const clip_count_val = clip_count;
         pub const variant_count_val = variant_count;
         pub const max_frames_val = max_frames;
+        pub const transition_count_val = transition_table.len;
 
         /// Get metadata for a clip (frame_count, speed, mode, folder).
         pub fn clipMeta(clip: Clip) ClipMeta {
@@ -170,6 +222,23 @@ pub fn AnimationDef(comptime zon: anytype) type {
                 return @enumFromInt(idx);
             }
             return @enumFromInt(variant_count - 1);
+        }
+
+        /// Resolve a transitional (`.via`) clip for a `from → to` switch,
+        /// or null if no rule matches (#671). A `from`-specific rule wins
+        /// over a wildcard (`from == null`) rule for the same `to`, so the
+        /// driver can play e.g. `enter_combat` before any → `idle_combat`.
+        pub fn transitionVia(from: u8, to: u8) ?u8 {
+            var wildcard: ?u8 = null;
+            for (transition_table) |r| {
+                if (r.to != to) continue;
+                if (r.from) |f| {
+                    if (f == from) return r.via;
+                } else {
+                    wildcard = r.via;
+                }
+            }
+            return wildcard;
         }
     };
 }
