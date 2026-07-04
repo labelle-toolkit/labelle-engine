@@ -1,0 +1,20 @@
+.{
+    // Order is load-bearing: variant index is persisted as a raw u8.
+    // Fixture mirrors flying-platform-labelle/animations/worker.zon so the
+    // runtime parser is exercised against real game data (#672).
+    .variants = .{ "m_bald", "m_beard", "m_black", "m_tuft", "w_india", "w_brown", "w_blonde", "w_ginger" },
+    .clips = .{
+        .idle = .{ .frames = 1, .mode = .static },
+        .walk = .{ .frames = 4, .mode = .distance, .speed = 15.0 },
+        .carry = .{ .frames = 4, .mode = .distance, .speed = 15.0, .folder = "take" },
+        .ladder = .{ .frames = 2, .mode = .distance, .speed = 15.0, .folder = "latter_up" },
+        .job1 = .{ .frames = 8, .mode = .time, .speed = 4.0 },
+        .eat = .{ .frames = 4, .mode = .time, .speed = 3.0 },
+        .drink = .{ .frames = 10, .mode = .time, .speed = 5.0 },
+        .sleep = .{ .frames = 1, .mode = .static },
+        .panic = .{ .frames = 4, .mode = .distance, .speed = 8.0 },
+        .enter_combat = .{ .frames = 4, .mode = .time, .speed = 8.0 },
+        .idle_combat = .{ .frames = 2, .mode = .time, .speed = 3.0 },
+        .punch = .{ .frames = 6, .mode = .time, .speed = 12.0 },
+    },
+}
