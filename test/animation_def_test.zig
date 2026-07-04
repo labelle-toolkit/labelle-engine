@@ -67,6 +67,22 @@ test "AnimationDef: variantFromIndex with valid and out-of-range" {
     try testing.expectEqual(TestAnim.variants.w_india, TestAnim.variantFromIndex(99));
 }
 
+test "AnimationDef: variantFromName hit, miss, round-trip (#665)" {
+    const V = TestAnim.variants;
+    // Hit — resolves each name to its variant regardless of position.
+    try testing.expectEqual(@as(?V, V.m_bald), TestAnim.variantFromName("m_bald"));
+    try testing.expectEqual(@as(?V, V.m_beard), TestAnim.variantFromName("m_beard"));
+    try testing.expectEqual(@as(?V, V.w_india), TestAnim.variantFromName("w_india"));
+    // Miss — a renamed/deleted variant resolves to null (caller falls back).
+    try testing.expectEqual(@as(?V, null), TestAnim.variantFromName("does_not_exist"));
+    try testing.expectEqual(@as(?V, null), TestAnim.variantFromName(""));
+    // Round-trip: name → variant → name is the identity for every variant.
+    inline for (.{ "m_bald", "m_beard", "w_india" }) |nm| {
+        const v = TestAnim.variantFromName(nm).?;
+        try testing.expectEqualStrings(nm, TestAnim.variantName(v));
+    }
+}
+
 test "AnimationDef: clipName and variantName" {
     try testing.expectEqualStrings("walk", TestAnim.clipName(.walk));
     try testing.expectEqualStrings("m_beard", TestAnim.variantName(.m_beard));

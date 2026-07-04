@@ -329,11 +329,30 @@ pub fn AnimationDef(comptime zon: anytype) type {
         }
 
         /// Map an index to a variant, with fallback to the last variant.
+        ///
+        /// Deprecated as a *persistence* path (#665): a raw index makes
+        /// the `.variants` order load-bearing, so any reorder/rename
+        /// silently corrupts saves. Persist the variant NAME and resolve
+        /// via `variantFromName` instead. `variantFromIndex` remains only
+        /// for migrating pre-manifest saves (translate a saved index
+        /// through the save-time name manifest, then re-resolve by name).
         pub fn variantFromIndex(idx: usize) Variant {
             if (idx < variant_count) {
                 return @enumFromInt(idx);
             }
             return @enumFromInt(variant_count - 1);
+        }
+
+        /// Resolve a variant NAME to its `Variant`, or `null` when no
+        /// variant carries that name (renamed or deleted). This is the
+        /// stable-identity persistence path (#665): unlike an index, a
+        /// name survives reordering the `.variants` list. Comptime-
+        /// unrolled string compare — one branch per variant, no
+        /// allocation. Callers translate `null` into their own fallback
+        /// (e.g. variant 0 + a warning) since the engine can't know the
+        /// game's default skin.
+        pub fn variantFromName(name: []const u8) ?Variant {
+            return std.meta.stringToEnum(Variant, name);
         }
 
         /// Beat-aware advance for clips with per-slot holds. Mirrors

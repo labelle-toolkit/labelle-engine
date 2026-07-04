@@ -505,6 +505,27 @@ pub const SpriteByField = sprite_by_field_mod.SpriteByField;
 pub const SpriteByFieldSource = sprite_by_field_mod.SpriteByFieldSource;
 pub const spriteByFieldTick = sprite_by_field_tick_mod.tick;
 
+// ── Easing ──
+// Pure (curve × placement) interpolation catalog — `engine.easing.ease`,
+// `.interpolate`, `.expApproach`, plus the `Curve`/`Placement` enums.
+// Zero deps; the future tween system + scripts consume it (#668).
+pub const easing = @import("easing.zig");
+
+// ── Tween ──
+// Central fire-and-forget motion records stepped once per frame (#669).
+// `TweenSystem.create()` returns a chainable builder; `tweenTick` advances
+// them. Pass `TweenAlwaysAlive{}` as the liveness backend when no tween is
+// entity-bound.
+pub const tween_mod = @import("tween.zig");
+pub const tween_tick_mod = @import("tween_tick.zig");
+pub const Tween = tween_mod.Tween;
+pub const TweenStep = tween_mod.Step;
+pub const TweenHandle = tween_mod.TweenHandle;
+pub const TweenSystem = tween_mod.TweenSystem;
+pub const TweenBuilder = tween_mod.TweenBuilder;
+pub const tweenTick = tween_tick_mod.tick;
+pub const TweenAlwaysAlive = tween_tick_mod.AlwaysAlive;
+
 // ── Atlas ──
 pub const SpriteData = atlas_mod.SpriteData;
 pub const FindSpriteResult = atlas_mod.FindSpriteResult;
