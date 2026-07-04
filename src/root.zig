@@ -17,7 +17,7 @@ pub const gestures_mod = @import("gestures.zig");
 pub const sparse_set_mod = @import("sparse_set.zig");
 pub const query_mod = @import("query.zig");
 pub const hooks_types_mod = @import("hooks_types.zig");
-pub const animation_mod = @import("animation.zig");
+pub const anim_timing_mod = @import("anim_timing.zig");
 pub const animation_def_mod = @import("animation_def.zig");
 pub const animation_def_runtime_mod = @import("animation_def_runtime.zig");
 pub const animation_state_mod = @import("animation_state.zig");
@@ -481,12 +481,17 @@ pub const SystemRegistry = scene_mod.SystemRegistry;
 pub const ReferenceContext = scene_mod.ReferenceContext;
 
 // ── Animation ──
-pub const Animation = animation_mod.Animation;
-pub const AnimConfig = animation_mod.AnimConfig;
-pub const DefaultAnimationType = animation_mod.DefaultAnimationType;
+// Shared timing vocabulary (#667): two orthogonal axes. `AdvanceMode` =
+// timer driver (time/distance/static); `BoundaryMode` = boundary behavior
+// (loop/once/ping_pong). The legacy `Animation(AnimType)` flipbook was
+// retired here — use `SpriteAnimation` (props) or `AnimationDef` +
+// `AnimationState` (characters).
+pub const AdvanceMode = anim_timing_mod.AdvanceMode;
+pub const BoundaryMode = anim_timing_mod.BoundaryMode;
 pub const AnimationDef = animation_def_mod.AnimationDef;
 pub const AnimationState = animation_state_mod.AnimationState;
-pub const AnimMode = animation_def_mod.Mode;
+pub const advanceAny = animation_state_mod.advanceAny;
+pub const AnimMode = animation_def_mod.Mode; // deprecated alias of AdvanceMode
 pub const AnimClipMeta = animation_def_mod.ClipMeta;
 // #671 transition semantics: explicit switch modes + data-driven via clips.
 pub const AnimSwitchMode = animation_state_mod.SwitchMode;
@@ -507,7 +512,7 @@ pub const AnimPendingBuf = animation_events_mod.PendingBuf;
 pub const AnimEventKind = animation_events_mod.PendingKind;
 pub const anim_pending_cap = animation_events_mod.max_pending;
 pub const SpriteAnimation = sprite_animation_mod.SpriteAnimation;
-pub const SpriteAnimationMode = sprite_animation_mod.AnimationMode;
+pub const SpriteAnimationMode = sprite_animation_mod.AnimationMode; // deprecated alias of BoundaryMode
 pub const spriteAnimationTick = sprite_animation_tick_mod.tick;
 pub const SpriteByField = sprite_by_field_mod.SpriteByField;
 pub const SpriteByFieldSource = sprite_by_field_mod.SpriteByFieldSource;

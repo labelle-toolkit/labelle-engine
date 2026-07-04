@@ -22,20 +22,13 @@
 
 const std = @import("std");
 const save_policy = @import("labelle-core").save_policy;
+const anim_timing = @import("anim_timing.zig");
 const anim_events = @import("animation_events.zig");
 
-/// How the frame index advances past `frames.len - 1`.
-pub const AnimationMode = enum {
-    /// Wrap back to 0 and continue cycling. Most animations.
-    loop,
-    /// Stop on the last frame and stay there. Set-and-forget transitions
-    /// (opening a curtain, a one-shot explosion). Game removes the
-    /// component to replay.
-    once,
-    /// Play forward to the last frame, then reverse back to 0, flipping
-    /// at each endpoint. Breathing, idle swaying.
-    ping_pong,
-};
+/// Deprecated alias (#667): the boundary-behavior axis now lives in
+/// `anim_timing.BoundaryMode` (`engine.BoundaryMode`). Kept so prefab
+/// data and downstream code keep compiling. `loop`/`once`/`ping_pong`.
+pub const AnimationMode = anim_timing.BoundaryMode;
 
 /// Animation component. Attach to any entity that also carries a
 /// sprite-like component whose `sprite_name` the engine tick system

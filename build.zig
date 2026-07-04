@@ -75,7 +75,7 @@ pub fn build(b: *std.Build) void {
         "test/sparse_set_test.zig",
         "test/query_test.zig",
         "test/gui_view_test.zig",
-        "test/animation_atlas_test.zig",
+        "test/anim_timing_test.zig",
         "test/gui_runtime_state_test.zig",
         "test/form_binder_test.zig",
         "test/script_runner_test.zig",

@@ -22,6 +22,7 @@
 /// `beat_count == slot_count` and playback is bit-identical to pre-#664.
 
 const std = @import("std");
+const anim_timing = @import("anim_timing.zig");
 const anim_events = @import("animation_events.zig");
 
 /// Cap on beats traversed per `advanceStateEvents` call. A normal tick
@@ -30,14 +31,10 @@ const anim_events = @import("animation_events.zig");
 /// counter stays accurate arithmetically), bounding per-tick work.
 const max_traverse: u32 = 512;
 
-pub const Mode = enum {
-    /// timer += dt * speed; frame cycles over time.
-    time,
-    /// Game writes timer from position delta; frame cycles over distance.
-    distance,
-    /// frame = 0 always.
-    static,
-};
+/// Deprecated alias (#667): the timer-driver axis now lives in
+/// `anim_timing.AdvanceMode` (`engine.AdvanceMode`). Kept so `.zon`
+/// `.mode` fields, `ClipMeta.mode`, and downstream code keep compiling.
+pub const Mode = anim_timing.AdvanceMode;
 
 /// One slot in a clip: file index `f` (rendered into
 /// `"{folder}/{variant}_{f:04}.png"`) shown for `run` beats. An optional

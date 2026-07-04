@@ -77,28 +77,10 @@ pub const AnimationState = struct {
     pending_at: f32 = 0,
     pending_set: bool = false,
 
-    /// Advance the frame timer. Call once per tick.
+    /// Advance the frame timer. Call once per tick. Delegates to the
+    /// single shared `advanceAny` implementation (#667).
     pub fn advance(self: *AnimationState, dt: f32) void {
-        switch (self.mode) {
-            .time => {
-                self.timer += dt * self.speed;
-                if (self.frame_count > 0) {
-                    const fc: f32 = @floatFromInt(self.frame_count);
-                    const cycle = @mod(self.timer, fc);
-                    self.frame = @min(@as(u8, @intFromFloat(cycle)), self.frame_count - 1);
-                }
-            },
-            .distance => {
-                if (self.frame_count > 0) {
-                    const fc: f32 = @floatFromInt(self.frame_count);
-                    const cycle = @mod(self.timer, fc);
-                    self.frame = @min(@as(u8, @intFromFloat(cycle)), self.frame_count - 1);
-                }
-            },
-            .static => {
-                self.frame = 0;
-            },
-        }
+        advanceAny(self, dt);
     }
 
     /// Reset timer and frame for a new clip transition.
@@ -182,3 +164,27 @@ pub const AnimationState = struct {
         return true;
     }
 };
+
+/// The single source of the flipbook advance math (#667). Advances any
+/// state-shaped struct with `.mode` (`AdvanceMode`) / `.speed` / `.timer`
+/// / `.frame` / `.frame_count`. Duck-typed via `anytype` so a game
+/// wrapper carrying its own typed `Clip`/`Variant` enum fields delegates
+/// here instead of copying the math — the extra fields are untouched,
+/// which sidesteps the enum-vs-u8 mismatch that motivated the copy.
+pub fn advanceAny(state: anytype, dt: f32) void {
+    switch (state.mode) {
+        .static => {
+            state.frame = 0;
+            return;
+        },
+        // .time drives the timer from dt; .distance has the game write
+        // the timer externally. The frame derivation is shared below.
+        .time => state.timer += dt * state.speed,
+        .distance => {},
+    }
+    if (state.frame_count > 0) {
+        const fc: f32 = @floatFromInt(state.frame_count);
+        const cycle = @mod(state.timer, fc);
+        state.frame = @min(@as(u8, @intFromFloat(cycle)), state.frame_count - 1);
+    }
+}
