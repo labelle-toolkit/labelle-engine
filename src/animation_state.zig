@@ -72,23 +72,18 @@ pub const AnimationState = struct {
 /// which sidesteps the enum-vs-u8 mismatch that motivated the copy.
 pub fn advanceAny(state: anytype, dt: f32) void {
     switch (state.mode) {
-        .time => {
-            state.timer += dt * state.speed;
-            if (state.frame_count > 0) {
-                const fc: f32 = @floatFromInt(state.frame_count);
-                const cycle = @mod(state.timer, fc);
-                state.frame = @min(@as(u8, @intFromFloat(cycle)), state.frame_count - 1);
-            }
-        },
-        .distance => {
-            if (state.frame_count > 0) {
-                const fc: f32 = @floatFromInt(state.frame_count);
-                const cycle = @mod(state.timer, fc);
-                state.frame = @min(@as(u8, @intFromFloat(cycle)), state.frame_count - 1);
-            }
-        },
         .static => {
             state.frame = 0;
+            return;
         },
+        // .time drives the timer from dt; .distance has the game write
+        // the timer externally. The frame derivation is shared below.
+        .time => state.timer += dt * state.speed,
+        .distance => {},
+    }
+    if (state.frame_count > 0) {
+        const fc: f32 = @floatFromInt(state.frame_count);
+        const cycle = @mod(state.timer, fc);
+        state.frame = @min(@as(u8, @intFromFloat(cycle)), state.frame_count - 1);
     }
 }
