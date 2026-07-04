@@ -13,15 +13,12 @@
 ///   const name = WorkerAnim.spriteName(.walk, .m_bald, 2); // "walk/m_bald_0003.png"
 
 const std = @import("std");
+const anim_timing = @import("anim_timing.zig");
 
-pub const Mode = enum {
-    /// timer += dt * speed; frame cycles over time.
-    time,
-    /// Game writes timer from position delta; frame cycles over distance.
-    distance,
-    /// frame = 0 always.
-    static,
-};
+/// Deprecated alias (#667): the timer-driver axis now lives in
+/// `anim_timing.AdvanceMode` (`engine.AdvanceMode`). Kept so `.zon`
+/// `.mode` fields, `ClipMeta.mode`, and downstream code keep compiling.
+pub const Mode = anim_timing.AdvanceMode;
 
 pub const ClipMeta = struct {
     frame_count: u8,
