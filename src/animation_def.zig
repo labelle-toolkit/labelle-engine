@@ -22,6 +22,13 @@
 /// `beat_count == slot_count` and playback is bit-identical to pre-#664.
 
 const std = @import("std");
+const anim_events = @import("animation_events.zig");
+
+/// Cap on beats traversed per `advanceStateEvents` call. A normal tick
+/// crosses 0–2 beats; only a pathological dt would exceed this. Beyond it,
+/// the tail of markers/loop-ends is dropped (the saturating repetition
+/// counter stays accurate arithmetically), bounding per-tick work.
+const max_traverse: u32 = 512;
 
 pub const Mode = enum {
     /// timer += dt * speed; frame cycles over time.
@@ -33,10 +40,13 @@ pub const Mode = enum {
 };
 
 /// One slot in a clip: file index `f` (rendered into
-/// `"{folder}/{variant}_{f:04}.png"`) shown for `run` beats.
+/// `"{folder}/{variant}_{f:04}.png"`) shown for `run` beats. An optional
+/// `marker` name (#670) fires an `AnimMarkerHit` when the slot becomes
+/// current — declared in `.zon` as `.{ .f = 4, .marker = "contact" }`.
 pub const FrameEntry = struct {
     f: u16,
     run: u8,
+    marker: ?[]const u8 = null,
 };
 
 pub const ClipMeta = struct {
@@ -90,7 +100,8 @@ fn normalizeFrames(comptime frames: anytype) []const FrameEntry {
                 const run = if (@hasField(@TypeOf(elem), "run")) elem.run else 1;
                 if (run < 1) @compileError("frame .run must be >= 1");
                 if (run > 255) @compileError("frame .run must be <= 255");
-                entries[i] = .{ .f = checkedF(elem.f), .run = @intCast(run) };
+                const marker: ?[]const u8 = if (@hasField(@TypeOf(elem), "marker")) elem.marker else null;
+                entries[i] = .{ .f = checkedF(elem.f), .run = @intCast(run), .marker = marker };
             } else {
                 @compileError("frame entry must be an int index or a `.{ .f, .run }` struct");
             }
@@ -257,6 +268,23 @@ pub fn AnimationDef(comptime zon: anytype) type {
         break :blk table;
     };
 
+    // Marker → beat table (#670): the marker name at each beat that is a
+    // slot's FIRST beat and carries a marker, else "". A held slot (run>1)
+    // fires its marker once, at entry. Padded to `max_beats` with "".
+    const marker_beats: [clip_count][max_beats][]const u8 = blk: {
+        var table: [clip_count][max_beats][]const u8 = undefined;
+        for (0..clip_count) |ci| {
+            for (0..max_beats) |bi| table[ci][bi] = "";
+            const entries = clip_entries[ci];
+            var b: usize = 0;
+            for (entries) |e| {
+                if (e.marker) |name| table[ci][b] = name;
+                b += e.run;
+            }
+        }
+        break :blk table;
+    };
+
     return struct {
         pub const clips = Clip;
         pub const variants = Variant;
@@ -342,6 +370,83 @@ pub fn AnimationDef(comptime zon: anytype) type {
                     state.frame = 0;
                 },
             }
+        }
+
+        /// The marker name at a beat of a clip, or "" if none (#670).
+        /// Markers fire at a slot's FIRST beat only.
+        pub fn markerAtBeat(clip: Clip, beat: u16) []const u8 {
+            const cci = @intFromEnum(clip);
+            const bc = clip_meta_table[cci].beat_count;
+            if (bc == 0) return "";
+            return marker_beats[cci][beat % bc];
+        }
+
+        /// Beat-aware advance that ALSO emits per-frame markers + loop-end
+        /// events (#670) into `out`. Superset of `advanceState`: use it for
+        /// entities whose clips carry markers or need lifecycle events; use
+        /// `advanceState` when events aren't wanted (the no-event overload).
+        ///
+        /// Traverses the beats crossed THIS tick in linear (unwrapped)
+        /// space, so a dt spike that skips frames still fires every skipped
+        /// marker — oldest first — and every loop boundary, never "latest
+        /// only" (a skipped `contact` marker is a silent punch). `state`
+        /// needs the transient `.event_pos` (last processed beat position)
+        /// and `.repetition` (saturating loop count) fields on top of what
+        /// `advanceState` reads. The driver adds the entity and forwards
+        /// `out` to `game.emit`.
+        pub fn advanceStateEvents(state: anytype, dt: f32, out: *anim_events.PendingBuf) void {
+            const ci = state.clip;
+            const meta = clip_meta_table[ci];
+            if (meta.mode == .static) {
+                state.frame = 0;
+                state.event_pos = 0;
+                return;
+            }
+            if (meta.mode == .time) state.timer += dt * state.speed;
+            // .distance: `state.timer` is written externally by the game.
+
+            const bc = meta.beat_count;
+            if (bc == 0) return;
+
+            var old_pos = state.event_pos;
+            if (old_pos < 0) old_pos = 0;
+            const new_pos = state.timer;
+
+            if (new_pos > old_pos) {
+                const bc_i: i64 = bc;
+                const old_lin: i64 = @intFromFloat(@floor(old_pos));
+                const new_lin: i64 = @intFromFloat(@floor(new_pos));
+
+                // Authoritative saturating repetition over the FULL span —
+                // stays correct even when per-beat emission is capped.
+                const wraps_full: i64 = @divFloor(new_lin, bc_i) - @divFloor(old_lin, bc_i);
+                const base_rep = state.repetition;
+
+                var rep = base_rep;
+                var b = old_lin + 1;
+                var guard: u32 = 0;
+                while (b <= new_lin and guard < max_traverse) : ({
+                    b += 1;
+                    guard += 1;
+                }) {
+                    const in_cycle: u16 = @intCast(@mod(b, bc_i));
+                    if (in_cycle == 0) {
+                        // Crossed a clip boundary — the prior cycle ended.
+                        rep = anim_events.satAddU16(rep, 1);
+                        _ = out.append(.{ .kind = .loop_end, .clip = ci, .repetition = rep });
+                    }
+                    const name = marker_beats[ci][in_cycle];
+                    if (name.len > 0) {
+                        _ = out.append(.{ .kind = .marker, .clip = ci, .frame = beat_to_slot[ci][in_cycle], .marker = name, .repetition = rep });
+                    }
+                }
+                const add: u16 = if (wraps_full > 0xFFFF) 0xFFFF else @intCast(@max(wraps_full, 0));
+                state.repetition = anim_events.satAddU16(base_rep, add);
+            }
+
+            state.event_pos = new_pos;
+            const final_beat: u16 = @intCast(@mod(@as(i64, @intFromFloat(@floor(new_pos))), @as(i64, bc)));
+            state.frame = beat_to_slot[ci][final_beat];
         }
     };
 }

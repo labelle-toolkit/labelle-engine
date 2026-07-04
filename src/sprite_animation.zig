@@ -22,6 +22,7 @@
 
 const std = @import("std");
 const save_policy = @import("labelle-core").save_policy;
+const anim_events = @import("animation_events.zig");
 
 /// How the frame index advances past `frames.len - 1`.
 pub const AnimationMode = enum {
@@ -79,6 +80,14 @@ pub const SpriteAnimation = struct {
     /// Direction of travel in `.ping_pong`. Unused for `.loop` / `.once`.
     forward: bool = true,
 
+    /// #670 lifecycle-event tracking. Transient (the whole component is
+    /// `.transient`, so these reset on respawn — never serialized).
+    /// `finished_emitted` makes `.once` fire `AnimClipEnd` exactly once;
+    /// `repetition` is the saturating `.loop`-wrap / `.ping_pong`-reversal
+    /// count carried on `AnimLoopEnd`.
+    finished_emitted: bool = false,
+    repetition: u16 = 0,
+
     /// Advance the animation by `dt` seconds. Pure state machine —
     /// does not touch the entity's Sprite. The caller (a tick system
     /// that walks `view(.{SpriteAnimation, Sprite}, .{})`) decides
@@ -90,6 +99,19 @@ pub const SpriteAnimation = struct {
     /// which is the common case for single-frame animations or ticks
     /// that fall within the same frame.
     pub fn advance(self: *SpriteAnimation, dt: f32) bool {
+        return self.advanceImpl(dt, null);
+    }
+
+    /// Like `advance`, but appends lifecycle events (#670) to `out`:
+    /// `AnimClipEnd` once when a `.once` clip finishes, `AnimLoopEnd` on
+    /// each `.loop` wrap and each `.ping_pong` endpoint reversal. The
+    /// driver adds the entity and forwards `out` to `game.emit`. Props
+    /// have no per-frame markers in v1 (lifecycle only).
+    pub fn advanceEvents(self: *SpriteAnimation, dt: f32, out: *anim_events.PendingBuf) bool {
+        return self.advanceImpl(dt, out);
+    }
+
+    fn advanceImpl(self: *SpriteAnimation, dt: f32, out: ?*anim_events.PendingBuf) bool {
         // Degenerate case: empty frames or zero/negative fps. No
         // advance, no mutation. Protects against malformed data
         // (e.g. a prefab with `"frames": []`) without a compile-time
@@ -124,16 +146,31 @@ pub const SpriteAnimation = struct {
         const len_u8: u8 = @intCast(self.frames.len);
         switch (self.mode) {
             .loop => {
-                const base: u32 = self.frame;
-                self.frame = @intCast((base + steps) % self.frames.len);
+                const total: usize = @as(usize, self.frame) + steps;
+                self.frame = @intCast(total % self.frames.len);
+                if (out) |o| {
+                    // One AnimLoopEnd per boundary crossed this tick.
+                    var wraps: usize = total / self.frames.len;
+                    while (wraps > 0 and !o.isFull()) : (wraps -= 1) {
+                        self.repetition = anim_events.satAddU16(self.repetition, 1);
+                        _ = o.append(.{ .kind = .loop_end, .repetition = self.repetition });
+                    }
+                }
             },
             .once => {
-                const base: u32 = self.frame;
-                const target = base + steps;
+                const target: usize = @as(usize, self.frame) + steps;
                 self.frame = if (target >= self.frames.len)
                     len_u8 - 1
                 else
                     @intCast(target);
+                if (out) |o| {
+                    // Fire AnimClipEnd exactly once, the tick it lands on
+                    // the final frame.
+                    if (self.frame + 1 >= len_u8 and !self.finished_emitted) {
+                        self.finished_emitted = true;
+                        _ = o.append(.{ .kind = .clip_end });
+                    }
+                }
             },
             .ping_pong => {
                 // Iterate per-step so the `forward` flag preserves the
@@ -156,6 +193,7 @@ pub const SpriteAnimation = struct {
                             if (self.frame + 1 >= len_u8) {
                                 self.forward = false;
                                 self.frame -= 1;
+                                self.emitReversal(out); // #670: endpoint reversal
                             } else {
                                 self.frame += 1;
                             }
@@ -163,6 +201,7 @@ pub const SpriteAnimation = struct {
                             if (self.frame == 0) {
                                 self.forward = true;
                                 self.frame += 1;
+                                self.emitReversal(out);
                             } else {
                                 self.frame -= 1;
                             }
@@ -172,6 +211,14 @@ pub const SpriteAnimation = struct {
             },
         }
         return self.frame != old_frame;
+    }
+
+    fn emitReversal(self: *SpriteAnimation, out: ?*anim_events.PendingBuf) void {
+        if (out) |o| {
+            if (o.isFull()) return;
+            self.repetition = anim_events.satAddU16(self.repetition, 1);
+            _ = o.append(.{ .kind = .loop_end, .repetition = self.repetition });
+        }
     }
 
     /// Current frame's sprite name. Returns `null` for a degenerate
