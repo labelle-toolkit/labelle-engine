@@ -156,3 +156,65 @@ test "AnimationState: advance in distance mode uses timer directly" {
     // mod(2.5, 4.0) = 2.5, frame = min(2, 3) = 2
     try testing.expectEqual(@as(u8, 2), state.frame);
 }
+
+// ── Per-variant clip overrides (#666) ─────────────────────
+
+const override_zon = .{
+    .variants = .{
+        "m_bald",
+        "m_beard",
+        .{ .name = "w_ginger", .overrides = .{
+            .drink = .{ .frames = 8, .speed = 4.0 }, // fewer frames, slower
+            .carry = .{ .folder = "take_ginger" }, // different sprite folder
+        } },
+    },
+    .clips = .{
+        .idle = .{ .frames = 1, .mode = .static },
+        .drink = .{ .frames = 10, .mode = .time, .speed = 5.0 },
+        .carry = .{ .frames = 4, .mode = .distance, .speed = 15.0, .folder = "take" },
+    },
+};
+const OverrideAnim = AnimationDef(override_zon);
+
+test "AnimationDef: mixed string/struct variants keep enum order and names (#666)" {
+    try testing.expectEqual(@as(u8, 0), @intFromEnum(OverrideAnim.variants.m_bald));
+    try testing.expectEqual(@as(u8, 1), @intFromEnum(OverrideAnim.variants.m_beard));
+    try testing.expectEqual(@as(u8, 2), @intFromEnum(OverrideAnim.variants.w_ginger));
+    try testing.expectEqualStrings("w_ginger", OverrideAnim.variantName(.w_ginger));
+    // #665 name resolution still works for a struct-declared variant.
+    const V = OverrideAnim.variants;
+    try testing.expectEqual(@as(?V, V.w_ginger), OverrideAnim.variantFromName("w_ginger"));
+}
+
+test "AnimationDef: clipMetaFor patches overridden variants, base for others (#666)" {
+    // Base row (what clipMeta and non-overriding variants see).
+    const base = OverrideAnim.clipMeta(.drink);
+    try testing.expectEqual(@as(u8, 10), base.frame_count);
+    try testing.expectEqual(@as(f32, 5.0), base.speed);
+    try testing.expectEqual(@as(u8, 10), OverrideAnim.clipMetaFor(.drink, .m_bald).frame_count);
+
+    // w_ginger overrides drink: 8 frames @ speed 4.
+    const ginger = OverrideAnim.clipMetaFor(.drink, .w_ginger);
+    try testing.expectEqual(@as(u8, 8), ginger.frame_count);
+    try testing.expectEqual(@as(f32, 4.0), ginger.speed);
+
+    // A clip w_ginger does NOT override inherits the base.
+    try testing.expectEqual(@as(u8, 1), OverrideAnim.clipMetaFor(.idle, .w_ginger).frame_count);
+}
+
+test "AnimationDef: spriteName honors overridden folder and frame count (#666)" {
+    // carry base folder is "take"; w_ginger overrides it to "take_ginger".
+    try testing.expectEqualStrings("take/m_bald_0001.png", OverrideAnim.spriteName(.carry, .m_bald, 0));
+    try testing.expectEqualStrings("take_ginger/w_ginger_0001.png", OverrideAnim.spriteName(.carry, .w_ginger, 0));
+
+    // drink base has 10 frames (m_bald frame 9 valid); w_ginger has 8.
+    try testing.expectEqualStrings("drink/m_bald_0010.png", OverrideAnim.spriteName(.drink, .m_bald, 9));
+    try testing.expectEqualStrings("drink/w_ginger_0008.png", OverrideAnim.spriteName(.drink, .w_ginger, 7));
+    // Beyond the override's frame count → empty (even though < base max).
+    try testing.expectEqualStrings("", OverrideAnim.spriteName(.drink, .w_ginger, 8));
+}
+
+// Comptime-error cases (verified by construction; the repo has no
+// compile-failure harness, so these stay documented rather than run):
+//   - override key naming a nonexistent clip → "overrides unknown clip '…'"
+//   - override field other than frames/speed/mode/folder → "unknown field '…'"
