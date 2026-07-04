@@ -19,6 +19,7 @@ pub const query_mod = @import("query.zig");
 pub const hooks_types_mod = @import("hooks_types.zig");
 pub const animation_mod = @import("animation.zig");
 pub const animation_def_mod = @import("animation_def.zig");
+pub const animation_def_runtime_mod = @import("animation_def_runtime.zig");
 pub const animation_state_mod = @import("animation_state.zig");
 pub const sprite_animation_mod = @import("sprite_animation.zig");
 pub const sprite_animation_tick_mod = @import("sprite_animation_tick.zig");
@@ -487,6 +488,10 @@ pub const AnimationDef = animation_def_mod.AnimationDef;
 pub const AnimationState = animation_state_mod.AnimationState;
 pub const AnimMode = animation_def_mod.Mode;
 pub const AnimClipMeta = animation_def_mod.ClipMeta;
+pub const RuntimeAnimationDef = animation_def_runtime_mod.RuntimeAnimationDef;
+pub const AnimDefSource = animation_def_runtime_mod.AnimDefSource;
+pub const refreshState = animation_def_runtime_mod.refreshState;
+pub const ReloadWatcher = animation_def_runtime_mod.ReloadWatcher;
 pub const AnimFrameEntry = animation_def_mod.FrameEntry;
 // Per-frame animation events (#670): marker/clip-end/loop-end payloads +
 // the entity-less `PendingBuf` the pure advance methods append to.
