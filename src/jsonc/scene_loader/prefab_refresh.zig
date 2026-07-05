@@ -354,8 +354,13 @@ pub fn PrefabRefresh(comptime GameType: type, comptime Components: type) type {
         /// component's entity-ref fields survive the re-deserialize
         /// (the spawn path patches those AFTER apply — see
         /// `patchEntityIdField` — so the JSON never carries live
-        /// ids). `onReady`/`postLoad` fire exactly like a Phase 1
-        /// respawn would.
+        /// ids). A component the new source INTRODUCES (no `prev`)
+        /// lands with empty ref fields by construction: the refresh
+        /// never spawns nested entities (scope contract), so there
+        /// are no ids to patch — a respawn/scene reload converges it,
+        /// same as every other structural addition.
+        /// `onReady`/`postLoad` fire exactly like a Phase 1 respawn
+        /// would.
         fn applyTransient(game: *GameType, entity: Entity, name: []const u8, value: Value) void {
             const comp_names = comptime Components.names();
             inline for (comp_names) |comp_name| {
