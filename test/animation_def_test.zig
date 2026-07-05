@@ -188,8 +188,8 @@ test "AnimationDef: count shorthand yields unit-run beats (#664)" {
     try testing.expectEqualStrings("plain/hero_0001.png", FramesAnim.spriteName(.plain, .hero, 0));
     try testing.expectEqualStrings("plain/hero_0004.png", FramesAnim.spriteName(.plain, .hero, 3));
     // Identity beat→slot mapping.
-    try testing.expectEqual(@as(u8, 0), FramesAnim.slotForBeat(.plain, 0));
-    try testing.expectEqual(@as(u8, 3), FramesAnim.slotForBeat(.plain, 3));
+    try testing.expectEqual(@as(u8, 0), FramesAnim.slotForBeat(.plain, .hero, 0));
+    try testing.expectEqual(@as(u8, 3), FramesAnim.slotForBeat(.plain, .hero, 3));
 }
 
 test "AnimationDef: explicit list reorders and reuses files (#664)" {
@@ -209,11 +209,11 @@ test "AnimationDef: per-slot runs expand the beat table (#664)" {
     try testing.expectEqual(@as(u8, 2), m.entry_count);
     try testing.expectEqual(@as(u16, 3), m.beat_count);
     // beat_to_slot == { 0, 0, 1 }: slot 0 held two beats, then slot 1.
-    try testing.expectEqual(@as(u8, 0), FramesAnim.slotForBeat(.hold, 0));
-    try testing.expectEqual(@as(u8, 0), FramesAnim.slotForBeat(.hold, 1));
-    try testing.expectEqual(@as(u8, 1), FramesAnim.slotForBeat(.hold, 2));
+    try testing.expectEqual(@as(u8, 0), FramesAnim.slotForBeat(.hold, .hero, 0));
+    try testing.expectEqual(@as(u8, 0), FramesAnim.slotForBeat(.hold, .hero, 1));
+    try testing.expectEqual(@as(u8, 1), FramesAnim.slotForBeat(.hold, .hero, 2));
     // slotForBeat wraps past beat_count.
-    try testing.expectEqual(@as(u8, 0), FramesAnim.slotForBeat(.hold, 3));
+    try testing.expectEqual(@as(u8, 0), FramesAnim.slotForBeat(.hold, .hero, 3));
     // The bare int 2 became slot 1 pointing at file 2.
     try testing.expectEqualStrings("hold/hero_0001.png", FramesAnim.spriteName(.hold, .hero, 0));
     try testing.expectEqualStrings("hold/hero_0002.png", FramesAnim.spriteName(.hold, .hero, 1));
@@ -293,7 +293,163 @@ test "AnimationDef: spriteName honors overridden folder and frame count (#666)" 
     try testing.expectEqualStrings("", OverrideAnim.spriteName(.drink, .w_ginger, 8));
 }
 
+// ── Per-variant frame-ENTRY overrides (#684) ──────────────
+
+const entry_override_zon = .{
+    .variants = .{
+        "base_gal",
+        // Entry-list override on a count-form base clip: hold + reorder
+        // + a marker the base doesn't have.
+        .{ .name = "heavy", .overrides = .{
+            .swing = .{ .frames = .{ .{ .f = 1, .run = 2 }, .{ .f = 3, .marker = "impact" }, 2 } },
+        } },
+        // Count-form override on an entry-list base clip (the "vice
+        // versa" direction): flattens holds/markers/reuse away.
+        .{ .name = "swift", .overrides = .{
+            .combo = .{ .frames = 2, .speed = 9.0 },
+        } },
+    },
+    .clips = .{
+        // Count-form base; `heavy` replaces it with an entry list.
+        .swing = .{ .frames = 4, .mode = .time, .speed = 1.0 },
+        // Entry-list base (hold + marker + file reuse); `swift` replaces
+        // it with a bare count.
+        .combo = .{ .frames = .{ .{ .f = 1, .run = 3, .marker = "windup" }, 2, .{ .f = 1 } }, .mode = .time, .speed = 1.0 },
+    },
+};
+const EntryOverrideAnim = AnimationDef(entry_override_zon);
+
+test "AnimationDef: entry-list override on a count-form base (#684)" {
+    // Base variant keeps the count-form identity row.
+    const base = EntryOverrideAnim.clipMetaFor(.swing, .base_gal);
+    try testing.expectEqual(@as(u8, 4), base.entry_count);
+    try testing.expectEqual(@as(u16, 4), base.beat_count);
+    try testing.expectEqual(@as(u8, 2), EntryOverrideAnim.slotForBeat(.swing, .base_gal, 2));
+    try testing.expectEqualStrings("", EntryOverrideAnim.markerAtBeat(.swing, .base_gal, 2));
+    try testing.expectEqualStrings("swing/base_gal_0003.png", EntryOverrideAnim.spriteName(.swing, .base_gal, 2));
+
+    // heavy's row: 3 slots over 4 beats (per-variant RUNS), marker on slot 1.
+    const heavy = EntryOverrideAnim.clipMetaFor(.swing, .heavy);
+    try testing.expectEqual(@as(u8, 3), heavy.entry_count);
+    try testing.expectEqual(@as(u8, 3), heavy.frame_count);
+    try testing.expectEqual(@as(u16, 4), heavy.beat_count);
+    // beat_to_slot row: { 0, 0, 1, 2 } — slot 0 held two beats.
+    try testing.expectEqual(@as(u8, 0), EntryOverrideAnim.slotForBeat(.swing, .heavy, 0));
+    try testing.expectEqual(@as(u8, 0), EntryOverrideAnim.slotForBeat(.swing, .heavy, 1));
+    try testing.expectEqual(@as(u8, 1), EntryOverrideAnim.slotForBeat(.swing, .heavy, 2));
+    try testing.expectEqual(@as(u8, 2), EntryOverrideAnim.slotForBeat(.swing, .heavy, 3));
+    // The marker sits on slot 1's first beat (beat 2) — heavy only.
+    try testing.expectEqualStrings("impact", EntryOverrideAnim.markerAtBeat(.swing, .heavy, 2));
+    try testing.expectEqualStrings("", EntryOverrideAnim.markerAtBeat(.swing, .heavy, 0));
+    // Names use the override's file indices (reorder: slot 2 → file 2).
+    try testing.expectEqualStrings("swing/heavy_0001.png", EntryOverrideAnim.spriteName(.swing, .heavy, 0));
+    try testing.expectEqualStrings("swing/heavy_0003.png", EntryOverrideAnim.spriteName(.swing, .heavy, 1));
+    try testing.expectEqualStrings("swing/heavy_0002.png", EntryOverrideAnim.spriteName(.swing, .heavy, 2));
+    // Past the override's slot count → empty (base still has a slot 3).
+    try testing.expectEqualStrings("", EntryOverrideAnim.spriteName(.swing, .heavy, 3));
+}
+
+test "AnimationDef: count-form override on an entry-list base (#684)" {
+    // Base variant keeps hold + marker + file reuse.
+    const base = EntryOverrideAnim.clipMetaFor(.combo, .base_gal);
+    try testing.expectEqual(@as(u8, 3), base.entry_count);
+    try testing.expectEqual(@as(u16, 5), base.beat_count);
+    try testing.expectEqualStrings("windup", EntryOverrideAnim.markerAtBeat(.combo, .base_gal, 0));
+    try testing.expectEqual(@as(u8, 0), EntryOverrideAnim.slotForBeat(.combo, .base_gal, 2)); // still held
+    try testing.expectEqualStrings("combo/base_gal_0001.png", EntryOverrideAnim.spriteName(.combo, .base_gal, 2)); // reused file 1
+
+    // swift's count row: 2 unit-run slots, no marker, own speed.
+    const swift = EntryOverrideAnim.clipMetaFor(.combo, .swift);
+    try testing.expectEqual(@as(u8, 2), swift.entry_count);
+    try testing.expectEqual(@as(u16, 2), swift.beat_count);
+    try testing.expectEqual(@as(f32, 9.0), swift.speed);
+    try testing.expectEqual(@as(u8, 1), EntryOverrideAnim.slotForBeat(.combo, .swift, 1));
+    try testing.expectEqualStrings("", EntryOverrideAnim.markerAtBeat(.combo, .swift, 0));
+    try testing.expectEqualStrings("combo/swift_0001.png", EntryOverrideAnim.spriteName(.combo, .swift, 0));
+    try testing.expectEqualStrings("combo/swift_0002.png", EntryOverrideAnim.spriteName(.combo, .swift, 1));
+    try testing.expectEqualStrings("", EntryOverrideAnim.spriteName(.combo, .swift, 2));
+}
+
+test "AnimationDef: advanceState follows the state's variant row (#684)" {
+    // heavy still holds slot 0 at beat 1 where base_gal has moved on.
+    var heavy_state = AnimationState{ .variant = @intFromEnum(EntryOverrideAnim.variants.heavy) };
+    heavy_state.transitionFromMeta(
+        @intFromEnum(EntryOverrideAnim.clips.swing),
+        EntryOverrideAnim.clipMetaFor(.swing, .heavy),
+    );
+    var base_state = AnimationState{ .variant = @intFromEnum(EntryOverrideAnim.variants.base_gal) };
+    base_state.transitionFromMeta(
+        @intFromEnum(EntryOverrideAnim.clips.swing),
+        EntryOverrideAnim.clipMetaFor(.swing, .base_gal),
+    );
+
+    EntryOverrideAnim.advanceState(&heavy_state, 1.5); // beat 1
+    EntryOverrideAnim.advanceState(&base_state, 1.5); // beat 1
+    try testing.expectEqual(@as(u8, 0), heavy_state.frame); // held
+    try testing.expectEqual(@as(u8, 1), base_state.frame); // identity
+
+    EntryOverrideAnim.advanceState(&heavy_state, 2.0); // timer 3.5 → beat 3
+    try testing.expectEqual(@as(u8, 2), heavy_state.frame);
+}
+
+test "AnimationDef: advanceStateEvents fires the variant's own markers (#684)" {
+    // `impact` exists only in heavy's override — base_gal's count-form
+    // row stays silent over the same beats.
+    var buf = engine.AnimPendingBuf{};
+    var heavy_state = AnimationState{ .variant = @intFromEnum(EntryOverrideAnim.variants.heavy) };
+    heavy_state.transitionFromMeta(
+        @intFromEnum(EntryOverrideAnim.clips.swing),
+        EntryOverrideAnim.clipMetaFor(.swing, .heavy),
+    );
+    EntryOverrideAnim.advanceStateEvents(&heavy_state, 3.5, &buf); // crosses beat 2
+    try testing.expectEqual(@as(usize, 1), buf.len);
+    try testing.expectEqualStrings("impact", buf.slice()[0].marker);
+    try testing.expectEqual(@as(u8, 1), buf.slice()[0].frame); // heavy's slot 1
+
+    buf.clear();
+    var base_state = AnimationState{ .variant = @intFromEnum(EntryOverrideAnim.variants.base_gal) };
+    base_state.transitionFromMeta(
+        @intFromEnum(EntryOverrideAnim.clips.swing),
+        EntryOverrideAnim.clipMetaFor(.swing, .base_gal),
+    );
+    EntryOverrideAnim.advanceStateEvents(&base_state, 3.5, &buf);
+    try testing.expectEqual(@as(usize, 0), buf.len);
+}
+
+test "AnimationDef: no-override defs keep base-identical per-variant rows (#684)" {
+    // Every per-variant row of a def WITHOUT overrides must equal the
+    // base row — meta, beat→slot, markers, and names all agree across
+    // variants (the #684 byte-identity guarantee, checked per lookup).
+    inline for (@typeInfo(TestAnim.clips).@"enum".fields) |cf| {
+        const clip: TestAnim.clips = @enumFromInt(cf.value);
+        const base = TestAnim.clipMeta(clip);
+        inline for (@typeInfo(TestAnim.variants).@"enum".fields) |vf| {
+            const variant: TestAnim.variants = @enumFromInt(vf.value);
+            const m = TestAnim.clipMetaFor(clip, variant);
+            try testing.expectEqual(base.frame_count, m.frame_count);
+            try testing.expectEqual(base.entry_count, m.entry_count);
+            try testing.expectEqual(base.beat_count, m.beat_count);
+            try testing.expectEqual(base.speed, m.speed);
+            try testing.expectEqual(base.mode, m.mode);
+            try testing.expectEqualStrings(base.folder, m.folder);
+            var b: u16 = 0;
+            while (b < base.beat_count) : (b += 1) {
+                try testing.expectEqual(
+                    TestAnim.slotForBeat(clip, @enumFromInt(0), b),
+                    TestAnim.slotForBeat(clip, variant, b),
+                );
+                try testing.expectEqualStrings(
+                    TestAnim.markerAtBeat(clip, @enumFromInt(0), b),
+                    TestAnim.markerAtBeat(clip, variant, b),
+                );
+            }
+        }
+    }
+}
+
 // Comptime-error cases (verified by construction; the repo has no
 // compile-failure harness, so these stay documented rather than run):
 //   - override key naming a nonexistent clip → "overrides unknown clip '…'"
 //   - override field other than frames/speed/mode/folder → "unknown field '…'"
+//   - a variant whose effective (mode, frames) pair is .static with a
+//     .run > 1 → "holds are meaningless when frame is always slot 0"

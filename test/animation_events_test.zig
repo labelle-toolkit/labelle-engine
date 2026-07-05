@@ -36,12 +36,12 @@ fn countKind(buf: *const PendingBuf, kind: Kind) usize {
 // ── Marker table (comptime) ───────────────────────────────
 
 test "AnimationDef.markerAtBeat: marker sits on its slot's beat (#670)" {
-    try testing.expectEqualStrings("", Def.markerAtBeat(.punch, 0));
-    try testing.expectEqualStrings("", Def.markerAtBeat(.punch, 1));
-    try testing.expectEqualStrings("contact", Def.markerAtBeat(.punch, 2));
-    try testing.expectEqualStrings("", Def.markerAtBeat(.punch, 3));
+    try testing.expectEqualStrings("", Def.markerAtBeat(.punch, .hero, 0));
+    try testing.expectEqualStrings("", Def.markerAtBeat(.punch, .hero, 1));
+    try testing.expectEqualStrings("contact", Def.markerAtBeat(.punch, .hero, 2));
+    try testing.expectEqualStrings("", Def.markerAtBeat(.punch, .hero, 3));
     // Wraps past beat_count.
-    try testing.expectEqualStrings("contact", Def.markerAtBeat(.punch, 6));
+    try testing.expectEqualStrings("contact", Def.markerAtBeat(.punch, .hero, 6));
 }
 
 // ── AnimationState marker + loop-end dispatch ─────────────

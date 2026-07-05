@@ -30,10 +30,12 @@ test "RuntimeAnimationDef: byte-equal sprite names + index compatibility (#672)"
         // Clip index must match the comptime ordinal — a live u8 means the
         // same clip on both paths.
         try testing.expectEqual(@as(?u8, ci), rt.clipIndex(cf.name));
-        // Metadata parity.
+        // Metadata parity — the #664 beat vocabulary included (#685).
         const cm = WorkerAnim.clipMeta(clip);
         const rm = rt.clipMeta(ci);
         try testing.expectEqual(cm.frame_count, rm.frame_count);
+        try testing.expectEqual(cm.entry_count, rm.entry_count);
+        try testing.expectEqual(cm.beat_count, rm.beat_count);
         try testing.expectEqual(cm.speed, rm.speed);
         try testing.expectEqual(cm.mode, rm.mode);
         try testing.expectEqualStrings(cm.folder, rm.folder);
@@ -42,12 +44,20 @@ test "RuntimeAnimationDef: byte-equal sprite names + index compatibility (#672)"
             const variant: WorkerAnim.variants = @enumFromInt(vf.value);
             const vi: u8 = vf.value;
             try testing.expectEqual(@as(?u8, vi), rt.variantIndex(vf.name));
-            // Byte-equal sprite names across every valid frame of the clip.
+            // Byte-equal sprite names across every valid slot of the clip.
             var f: u8 = 0;
             while (f < cm.frame_count) : (f += 1) {
                 try testing.expectEqualStrings(
                     WorkerAnim.spriteName(clip, variant, f),
                     rt.spriteName(ci, vi, f),
+                );
+            }
+            // Beat→slot parity across every beat (holds resolve alike).
+            var b: u16 = 0;
+            while (b < cm.beat_count) : (b += 1) {
+                try testing.expectEqual(
+                    WorkerAnim.slotForBeat(clip, variant, b),
+                    rt.slotForBeat(ci, b),
                 );
             }
         }
@@ -66,6 +76,32 @@ test "RuntimeAnimationDef: folder override + defaulting parity (#672)" {
     try testing.expectEqualStrings("idle", idle.folder);
     try testing.expectEqual(@as(f32, 1.0), idle.speed);
     try testing.expectEqual(engine.AnimMode.static, idle.mode);
+}
+
+test "RuntimeAnimationDef: entry-list frames parse holds/reuse/markers (#685)" {
+    var rt = try RuntimeAnimationDef.load(testing.allocator, worker_src);
+    defer rt.deinit();
+
+    // The fixture's swing clip: .{ 1, 2, .{ .f = 3, .run = 2, .marker = "contact" }, 2 }.
+    const ci = rt.clipIndex("swing").?;
+    const m = rt.clipMeta(ci);
+    try testing.expectEqual(@as(u8, 4), m.entry_count);
+    try testing.expectEqual(@as(u16, 5), m.beat_count); // 1+1+2+1
+
+    const entries = rt.clip_entries[ci];
+    try testing.expectEqual(@as(usize, 4), entries.len);
+    try testing.expectEqual(@as(u16, 3), entries[2].f);
+    try testing.expectEqual(@as(u8, 2), entries[2].run);
+    try testing.expectEqualStrings("contact", entries[2].marker.?);
+    try testing.expectEqual(@as(?[]const u8, null), entries[0].marker);
+    try testing.expectEqual(@as(u16, 2), entries[3].f); // file reuse
+
+    // Slot 3 renders file 2 again; the held slot spans beats 2 and 3.
+    try testing.expectEqualStrings("swing/m_bald_0002.png", rt.spriteName(ci, 0, 3));
+    try testing.expectEqual(@as(u8, 2), rt.slotForBeat(ci, 2));
+    try testing.expectEqual(@as(u8, 2), rt.slotForBeat(ci, 3));
+    try testing.expectEqual(@as(u8, 3), rt.slotForBeat(ci, 4));
+    try testing.expectEqual(@as(u8, 0), rt.slotForBeat(ci, 5)); // wraps
 }
 
 test "RuntimeAnimationDef: minimal clip gets the comptime defaults (#672)" {
@@ -145,6 +181,23 @@ test "RuntimeAnimationDef.load: malformed input errors cleanly (#672)" {
     try testing.expectError(error.FramesOutOfRange, RuntimeAnimationDef.load(a, ".{ .variants = .{\"a\"}, .clips = .{ .c = .{ .frames = 0 } } }"));
     // Unknown mode enum.
     try testing.expectError(error.UnknownMode, RuntimeAnimationDef.load(a, ".{ .variants = .{\"a\"}, .clips = .{ .c = .{ .frames = 1, .mode = .bogus } } }"));
+}
+
+test "RuntimeAnimationDef.load: malformed entry lists error cleanly (#685)" {
+    const a = testing.allocator;
+    // Every message mirrors a comptime normalizeFrames @compileError.
+    try testing.expectError(error.EmptyFrames, RuntimeAnimationDef.load(a, ".{ .variants = .{\"a\"}, .clips = .{ .c = .{ .frames = .{} } } }"));
+    try testing.expectError(error.FrameIndexOutOfRange, RuntimeAnimationDef.load(a, ".{ .variants = .{\"a\"}, .clips = .{ .c = .{ .frames = .{ 0 } } } }"));
+    try testing.expectError(error.FrameIndexOutOfRange, RuntimeAnimationDef.load(a, ".{ .variants = .{\"a\"}, .clips = .{ .c = .{ .frames = .{ .{ .f = 10000 } } } } }"));
+    try testing.expectError(error.MissingFrameIndex, RuntimeAnimationDef.load(a, ".{ .variants = .{\"a\"}, .clips = .{ .c = .{ .frames = .{ .{ .run = 2 } } } } }"));
+    try testing.expectError(error.RunOutOfRange, RuntimeAnimationDef.load(a, ".{ .variants = .{\"a\"}, .clips = .{ .c = .{ .frames = .{ .{ .f = 1, .run = 0 } } } } }"));
+    try testing.expectError(error.BadFrameEntry, RuntimeAnimationDef.load(a, ".{ .variants = .{\"a\"}, .clips = .{ .c = .{ .frames = .{ \"x\" } } } }"));
+    // A marker mid-list must not leak when a later entry fails.
+    try testing.expectError(error.RunOutOfRange, RuntimeAnimationDef.load(a,
+        ".{ .variants = .{\"a\"}, .clips = .{ .c = .{ .frames = .{ .{ .f = 1, .marker = \"hit\" }, .{ .f = 2, .run = 999 } } } } }"));
+    // Comptime parity: holds on a .static clip are rejected.
+    try testing.expectError(error.HoldOnStaticClip, RuntimeAnimationDef.load(a,
+        ".{ .variants = .{\"a\"}, .clips = .{ .c = .{ .frames = .{ .{ .f = 1, .run = 2 } } } } }"));
 }
 
 // ── AnimDefSource dispatch ──
