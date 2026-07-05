@@ -49,9 +49,18 @@ pub fn Mixin(comptime Game: type) type {
         ///      slot (still live at this point) or a default literal —
         ///      safe either way.
         ///   4. If `setState` short-circuited (state name unchanged),
-        ///      `game.game_state` may still alias the about-to-be-freed
-        ///      previous slot. Detect via pointer identity and re-point
-        ///      to `new_owned`. No state-change hooks re-fire — the
+        ///      `game.game_state` still aliases the about-to-be-freed
+        ///      previous owned slot. Re-point to `new_owned` — but ONLY
+        ///      when `game_state` is actually pointing at that slot. A
+        ///      broad `ptr != new_owned` check over-reaches (#600): a
+        ///      `state_after_change` hook fired by the inner `setState`
+        ///      may legitimately call `setState`/`setStateOwned` again
+        ///      and re-point `game_state` at a DIFFERENT state; the
+        ///      guard must leave that hook-installed value untouched
+        ///      rather than silently clobber it back to `new_owned`.
+        ///      Gate on `game_state.ptr == old_owned.ptr` so we only
+        ///      refresh the pointer when we're about to free the very
+        ///      slot it aliases. No state-change hooks re-fire — the
         ///      visible value is unchanged, only the backing moves.
         ///   5. Free the previous owned slot (no-op if null).
         pub fn setStateOwned(self: *Game, state_name: []const u8) error{OutOfMemory}!void {
@@ -59,8 +68,14 @@ pub fn Mixin(comptime Game: type) type {
             const old_owned = self.owned_initial_state;
             self.owned_initial_state = new_owned;
             self.setState(new_owned);
-            if (self.game_state.ptr != new_owned.ptr) {
-                self.game_state = new_owned;
+            // Only reclaim the pointer if it still aliases the slot we're
+            // about to free (setState short-circuited on eql). If a
+            // `state_after_change` hook re-pointed `game_state` elsewhere,
+            // leave its choice intact (#600).
+            if (old_owned) |old_slot| {
+                if (self.game_state.ptr == old_slot.ptr) {
+                    self.game_state = new_owned;
+                }
             }
             if (old_owned) |s| self.allocator.free(s);
         }
