@@ -557,7 +557,6 @@ pub fn GameConfigWithYAxis(
         active_scene_add_entity_fn: ?*const fn (*anyopaque, Entity) void = null,
         active_scene_clear_entities_fn: ?*const fn (*anyopaque) void = null,
 
-
         gizmo_reconcile_fn: ?*const fn (*Self) void = null,
 
         // Prefab spawning — set by JSONC scene bridge during loadScene.
@@ -1234,8 +1233,12 @@ pub fn GameConfigWithYAxis(
 /// Convenience: Game with custom hooks, StubRender + mock ECS
 pub fn GameWith(comptime Hooks: type) type {
     const EmptyComponents = struct {
-        pub fn has(comptime _: []const u8) bool { return false; }
-        pub fn names() []const []const u8 { return &.{}; }
+        pub fn has(comptime _: []const u8) bool {
+            return false;
+        }
+        pub fn names() []const []const u8 {
+            return &.{};
+        }
     };
     return GameConfig(
         core.StubRender(MockEcsBackend(u32).Entity),
