@@ -36,6 +36,7 @@ const scene_process_mod = @import("scene_loader/scene_process.zig");
 const entity_walker_mod = @import("scene_loader/entity_walker.zig");
 const nested_spawn_mod = @import("scene_loader/nested_spawn.zig");
 const prefab_spawn_mod = @import("scene_loader/prefab_spawn.zig");
+const prefab_refresh_mod = @import("scene_loader/prefab_refresh.zig");
 
 pub fn SceneLoader(comptime GameType: type, comptime Components: type) type {
     return struct {
@@ -52,6 +53,7 @@ pub fn SceneLoader(comptime GameType: type, comptime Components: type) type {
         const Walker = entity_walker_mod.EntityWalker(GameType, Components, Self);
         const Nested = nested_spawn_mod.NestedSpawn(GameType, Components, Self);
         const Prefab = prefab_spawn_mod.PrefabSpawn(GameType, Components, Self);
+        const Refresh = prefab_refresh_mod.PrefabRefresh(GameType, Components);
 
         // ── Cycle detection (RFC #569) ─────────────────────────
         pub const checkEntityTreeCycles = Cycle.checkEntityTreeCycles;
@@ -63,6 +65,9 @@ pub fn SceneLoader(comptime GameType: type, comptime Components: type) type {
 
         // ── Runtime prefab spawn ───────────────────────────────
         pub const spawnPrefabImpl = Prefab.spawnPrefabImpl;
+
+        // ── Live-instance prefab refresh (#691) ────────────────
+        pub const refreshPrefabInstancesImpl = Refresh.refreshPrefabInstancesImpl;
 
         // ── Entity-tree walker ─────────────────────────────────
         pub const loadEntityInternal = Walker.loadEntityInternal;

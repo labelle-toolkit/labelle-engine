@@ -11,11 +11,21 @@
 //! the current scene), and save/load Phase 1 re-spawns all resolve
 //! through the same registry.
 //!
-//! ## What this deliberately does NOT do
+//! ## Live instances: the bounded refresh (#691)
 //!
-//! Already-spawned instances keep the components they were built with.
-//! Re-instantiating them in place is not a registry concern and is not
-//! cleanly boundable today:
+//! After a successful swap, already-spawned instances get their
+//! **`.transient`-policy components** re-applied in place through
+//! `game.refresh_prefab_fn` (installed by the scene bridge next to
+//! `spawn_prefab_fn` — the refresh needs the bridge's `Components`
+//! registry). That is the exact component set save/load already
+//! resets from prefab data on every `loadGameState`, so the refresh
+//! adds no new state contract. See
+//! `jsonc/scene_loader/prefab_refresh.zig` for the full scope
+//! contract (declared-key diffing, child `local_path` resolution,
+//! entity-ref preservation, what deliberately stays untouched).
+//!
+//! Full re-instantiation stays out of scope, for the reasons that
+//! shaped the bounded design:
 //!
 //!   * destroy + respawn loses runtime component state unless the
 //!     save/load Phase 2 override pass is replayed, and dangles every
@@ -28,14 +38,9 @@
 //!     overrides could not be re-applied;
 //!   * destroy/spawn fire lifecycle hooks and engine events into a sim
 //!     the editor may have paused.
-//!
-//! The engine-side design for a bounded live refresh (re-applying
-//! `.transient`-policy components — the ones save/load already resets
-//! from prefab data by contract) is tracked in its own issue; hosts can
-//! see new data live today by re-spawning (or scene-reloading) affected
-//! entities.
 const prefab_cache_mod = @import("../jsonc/prefab_cache.zig");
 const PrefabCache = prefab_cache_mod.PrefabCache;
+const Value = @import("jsonc").Value;
 
 /// Returns the prefab-runtime mixin for a given Game type.
 pub fn Mixin(comptime Game: type) type {
@@ -60,7 +65,21 @@ pub fn Mixin(comptime Game: type) type {
             else
                 prefab_cache_mod.initPersistentCache(self, self.prefab_dir orelse "prefabs") catch
                     return error.OutOfMemory;
-            try cache.replaceFromSource(self.log, name, source);
+            const result = try cache.replaceFromSource(self.log, name, source);
+
+            // Bounded live refresh (#691): re-apply `.transient`
+            // components on already-spawned instances. Only when a
+            // bridge installed the hook (a pre-scene push has no
+            // instances to refresh) and a previous generation existed
+            // (an INSERT can't have live instances either). The swap
+            // above already succeeded — the refresh is best-effort by
+            // design and never fails the push.
+            if (self.refresh_prefab_fn) |refresh| {
+                if (result.retired) |retired| {
+                    const old: Value = retired;
+                    refresh(self, result.key, @ptrCast(&old));
+                }
+            }
         }
     };
 }

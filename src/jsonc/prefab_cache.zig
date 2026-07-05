@@ -148,12 +148,20 @@ pub const PrefabCache = struct {
     /// key as a collision). Unreachable from the studio — its wasm games
     /// never run the filesystem scan and always boot a scene (scan done)
     /// before any push.
+    ///
+    /// Returns what the live-refresh pass (#691) needs to diff
+    /// generations: the key the source landed under, and the RETIRED
+    /// value on a replace (`null` on an insert — nothing can be live).
+    /// `retired` stays valid forever (retire-don't-free, above);
+    /// `key` aliases either the new tree's `"name"` string or the
+    /// caller's `name` buffer, so it is only guaranteed for the
+    /// duration of the caller's frame — consume it immediately.
     pub fn replaceFromSource(
         self: *PrefabCache,
         log: anytype,
         name: []const u8,
         source: []const u8,
-    ) error{ OutOfMemory, InvalidFormat }!void {
+    ) error{ OutOfMemory, InvalidFormat }!ReplaceResult {
         const src = try self.persistent.dupe(u8, source);
         var parser = JsoncParser.init(self.persistent, src);
         const val = parser.parse() catch |err| switch (err) {
@@ -178,13 +186,32 @@ pub const PrefabCache = struct {
         if (self.prefabs.getPtr(key)) |existing| {
             // Replace in place — the map keeps its own key allocation;
             // the old Value tree is retired (never freed, see above).
+            const retired = existing.*;
             existing.* = val;
+            return .{ .key = key, .retired = retired };
         } else {
             // Insert. `key` may alias the caller's `name` buffer (freed
             // right after the call), so the map needs its own copy.
             const duped_key = try self.persistent.dupe(u8, key);
             try self.prefabs.put(duped_key, val);
+            return .{ .key = key, .retired = null };
         }
+    }
+
+    pub const ReplaceResult = struct {
+        /// Effective name the source was installed under.
+        key: []const u8,
+        /// The generation this push replaced (never freed), or null
+        /// when the push inserted a brand-new entry.
+        retired: ?Value,
+    };
+
+    /// Registry-map lookup ONLY — no disk fallback, no insertion, no
+    /// collision side effects. The live-refresh pass (#691) resolves
+    /// `PrefabInstance.path` through this so matching instances can
+    /// never trigger `get`'s desktop disk re-read of an aliased name.
+    pub fn getInstalled(self: *PrefabCache, name: []const u8) ?Value {
+        return self.prefabs.get(name);
     }
 };
 

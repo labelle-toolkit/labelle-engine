@@ -50,9 +50,12 @@ pub fn SceneProcess(comptime GameType: type, comptime Components: type, comptime
 
             try loadSceneFile(game, scene_path, prefab_cache, 0);
 
-            // Enable runtime prefab spawning.
+            // Enable runtime prefab spawning + hot-swap live refresh
+            // (#691) — the refresh must come from the bridge because it
+            // needs this bridge's `Components` registry.
             game.prefab_dir = prefab_dir;
             game.spawn_prefab_fn = &Self.spawnPrefabImpl;
+            game.refresh_prefab_fn = &Self.refreshPrefabInstancesImpl;
         }
 
         /// Load a scene from an in-memory JSONC source string (for
@@ -117,6 +120,7 @@ pub fn SceneProcess(comptime GameType: type, comptime Components: type, comptime
 
             game.prefab_dir = prefab_dir;
             game.spawn_prefab_fn = &Self.spawnPrefabImpl;
+            game.refresh_prefab_fn = &Self.refreshPrefabInstancesImpl;
         }
 
         /// Pre-load a prefab from in-memory JSONC source into the
