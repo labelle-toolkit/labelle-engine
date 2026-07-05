@@ -54,6 +54,7 @@ const loop_mixin = @import("game/loop_mixin.zig");
 const misc_mixin = @import("game/misc_mixin.zig");
 const animation_runtime_mixin = @import("game/animation_runtime_mixin.zig");
 const animation_def_runtime = @import("animation_def_runtime.zig");
+const prefab_runtime_mixin = @import("game/prefab_runtime_mixin.zig");
 
 /// Full game configuration — the assembler fills ALL comptime slots.
 /// RenderImpl is a renderer plugin (e.g. gfx.GfxRenderer) satisfying RenderInterface.
@@ -308,6 +309,7 @@ pub fn GameConfigWithYAxis(
         const LoopMixin = loop_mixin.Mixin(Self);
         const MiscMixin = misc_mixin.Mixin(Self);
         const AnimationRuntimeMixin = animation_runtime_mixin.Mixin(Self);
+        const PrefabRuntimeMixin = prefab_runtime_mixin.Mixin(Self);
 
         /// Scene lifecycle hooks
         pub const SceneHooks = struct {
@@ -1185,6 +1187,13 @@ pub fn GameConfigWithYAxis(
         pub const loadAnimationDefSource = AnimationRuntimeMixin.loadAnimationDefSource;
         pub const runtimeAnimDef = AnimationRuntimeMixin.runtimeAnimDef;
         pub const refreshAnimationStates = AnimationRuntimeMixin.refreshAnimationStates;
+
+        /// Runtime prefab-definition hot-swap (labelle-studio Play mode /
+        /// `editor_api.editor_reload_prefab`) — replace-or-insert the
+        /// prefab registry entry so FUTURE spawns use the new source;
+        /// existing instances keep their data. See
+        /// `game/prefab_runtime_mixin.zig` for the scope contract.
+        pub const reloadPrefabSource = PrefabRuntimeMixin.reloadPrefabSource;
         pub const setSceneAssets = SceneMixin.setSceneAssets;
         pub const setSceneInitialState = SceneMixin.setSceneInitialState;
         pub const setScene = SceneMixin.setScene;

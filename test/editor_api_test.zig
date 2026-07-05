@@ -71,11 +71,12 @@ test "pre-bind: every export is a safe no-op" {
     editor_api.unbind();
     defer editor_api.unbind();
 
-    // Scene/state/animation ops report failure (no game to act on).
+    // Scene/state/animation/prefab ops report failure (no game to act on).
     try testing.expectEqual(@as(i32, -1), editor_api.editor_set_scene("main", 4));
     try testing.expectEqual(@as(i32, -1), editor_api.editor_load_scene("main", 4, "{}", 2));
     try testing.expectEqual(@as(i32, -1), editor_api.editor_set_state("playing", 7));
     try testing.expectEqual(@as(i32, -1), editor_api.editor_load_animation_def("worker", 6, ".{}", 3));
+    try testing.expectEqual(@as(i32, -1), editor_api.editor_reload_prefab("condenser", 9, "{}", 2));
 
     // Void setters silently ignore.
     editor_api.editor_set_entity_position(42, 1.0, 2.0);
@@ -633,4 +634,169 @@ test "editor_load_animation_def: malformed source is rejected and the old def st
 
     // Empty name: host-side length bug — rejected without touching the game.
     try testing.expectEqual(@as(i32, -1), editor_api.editor_load_animation_def("x", 0, WORKER_V2, WORKER_V2.len));
+}
+
+// ── editor_reload_prefab (contract v1.3, studio issue #24) ──────────
+//
+// The prefab half of #24: replace-or-insert the prefab REGISTRY entry
+// so future spawns use the new source. Existing instances keep their
+// components — including `[]const u8` fields aliasing the replaced
+// (retired, never freed) parse tree, which the tests read back after
+// the swap to pin the graveyard contract.
+
+/// Carries a string field on purpose: deserialized `text` is a slice
+/// into the prefab's parsed source tree, so an instance spawned from v1
+/// still reading "v1-overlay" after a v2 push proves the old tree
+/// survives the registry swap.
+const PipeOverlay = struct {
+    text: []const u8 = "",
+    fps: f32 = 0,
+};
+
+const PrefabComponents = engine.ComponentRegistry(.{
+    .PipeOverlay = PipeOverlay,
+});
+
+const PrefabBridge = engine.JsoncSceneBridge(engine.Game, PrefabComponents);
+
+const CONDENSER_V1 =
+    \\{ "components": { "PipeOverlay": { "text": "v1-overlay", "fps": 6.0 } } }
+;
+const CONDENSER_V2 =
+    \\{ "components": { "PipeOverlay": { "text": "v2-overlay", "fps": 24.0 } } }
+;
+
+/// Boot the assembler's wasm sequence: embedded prefab registration,
+/// then a scene load (which attaches the prefab cache to the game and
+/// enables `spawnPrefab`).
+fn bootPrefabGame(game: *engine.Game) !void {
+    try PrefabBridge.addEmbeddedPrefab(game, "condenser", CONDENSER_V1, "prefabs");
+    try PrefabBridge.loadSceneFromSource(game,
+        \\{ "entities": [] }
+    , "prefabs");
+}
+
+test "editor_reload_prefab: future spawns use the pushed source; existing instances keep the retired data" {
+    editor_api.unbind();
+    defer editor_api.unbind();
+
+    var game = engine.Game.init(testing.allocator);
+    defer game.deinit();
+    try bootPrefabGame(&game);
+
+    // A live instance spawned from v1 — the shape of a condenser
+    // overlay already in the world when a studio save lands.
+    const before = game.spawnPrefab("condenser", .{ .x = 10, .y = 20 }).?;
+    {
+        const c = game.ecs_backend.getComponent(before, PipeOverlay).?;
+        try testing.expectEqualStrings("v1-overlay", c.text);
+        try testing.expectEqual(@as(f32, 6.0), c.fps);
+    }
+
+    var runner = DummyRunner{};
+    editor_api.bind(&game, &runner);
+
+    // Push v2 from a TRANSIENT buffer (the studio frees its wasm buffer
+    // right after the call — the engine must have copied what it keeps).
+    const src = try testing.allocator.dupe(u8, CONDENSER_V2);
+    try testing.expectEqual(@as(i32, 0), editor_api.editor_reload_prefab("condenser", 9, src.ptr, src.len));
+    testing.allocator.free(src);
+
+    // Future spawn: the new definition.
+    const after = game.spawnPrefab("condenser", .{ .x = 30, .y = 40 }).?;
+    const c2 = game.ecs_backend.getComponent(after, PipeOverlay).?;
+    try testing.expectEqualStrings("v2-overlay", c2.text);
+    try testing.expectEqual(@as(f32, 24.0), c2.fps);
+
+    // Existing instance: untouched, and its string still reads the OLD
+    // tree byte-for-byte — the replaced generation was retired, not
+    // freed (the sim may be paused; nothing will re-resolve the slice).
+    const c1 = game.ecs_backend.getComponent(before, PipeOverlay).?;
+    try testing.expectEqualStrings("v1-overlay", c1.text);
+    try testing.expectEqual(@as(f32, 6.0), c1.fps);
+}
+
+test "editor_reload_prefab: malformed/invalid sources are rejected and the old definition stays live" {
+    editor_api.unbind();
+    defer editor_api.unbind();
+
+    var game = engine.Game.init(testing.allocator);
+    defer game.deinit();
+    try bootPrefabGame(&game);
+
+    var runner = DummyRunner{};
+    editor_api.bind(&game, &runner);
+
+    // Half-saved file mid-edit: parse failure → -2.
+    const garbage = "{ \"components\": { \"PipeOverlay\": ";
+    try testing.expectEqual(@as(i32, -2), editor_api.editor_reload_prefab("condenser", 9, garbage, garbage.len));
+
+    // Parses, but a prefab must be a single entity OBJECT (an array top
+    // level is a scene-bundle shape) → -2.
+    const bundle = "[ { \"components\": {} } ]";
+    try testing.expectEqual(@as(i32, -2), editor_api.editor_reload_prefab("condenser", 9, bundle, bundle.len));
+
+    // RFC #560 §B2: a prefab REFERENCE root cannot also author
+    // children → -2 at push time (spawn would only fail later).
+    const b2 = "{ \"prefab\": \"other\", \"children\": [] }";
+    try testing.expectEqual(@as(i32, -2), editor_api.editor_reload_prefab("condenser", 9, b2, b2.len));
+
+    // Empty name: host-side length bug — rejected up front.
+    try testing.expectEqual(@as(i32, -1), editor_api.editor_reload_prefab("x", 0, CONDENSER_V2, CONDENSER_V2.len));
+
+    // After every rejection the registry still serves v1.
+    const e = game.spawnPrefab("condenser", .{ .x = 0, .y = 0 }).?;
+    const c = game.ecs_backend.getComponent(e, PipeOverlay).?;
+    try testing.expectEqualStrings("v1-overlay", c.text);
+    try testing.expectEqual(@as(f32, 6.0), c.fps);
+}
+
+test "editor_reload_prefab: inserts brand-new prefabs, keyed by the source's effective name" {
+    editor_api.unbind();
+    defer editor_api.unbind();
+
+    var game = engine.Game.init(testing.allocator);
+    defer game.deinit();
+    try bootPrefabGame(&game);
+
+    var runner = DummyRunner{};
+    editor_api.bind(&game, &runner);
+
+    // A prefab file created while Play mode runs: no previous entry —
+    // the push INSERTS and the name becomes spawnable immediately.
+    const vent =
+        \\{ "components": { "PipeOverlay": { "text": "vent", "fps": 12.0 } } }
+    ;
+    try testing.expectEqual(@as(i32, 0), editor_api.editor_reload_prefab("steam_vent", 10, vent, vent.len));
+    const e = game.spawnPrefab("steam_vent", .{ .x = 0, .y = 0 }).?;
+    try testing.expectEqualStrings("vent", game.ecs_backend.getComponent(e, PipeOverlay).?.text);
+
+    // Keying matches addEmbeddedPrefab/scanDir: an explicit `"name"`
+    // field outranks the pushed name (RFC #561 flat registry) — the
+    // entry registers under the EFFECTIVE name.
+    const named =
+        \\{ "name": "renamed_vent", "components": { "PipeOverlay": { "text": "renamed" } } }
+    ;
+    try testing.expectEqual(@as(i32, 0), editor_api.editor_reload_prefab("whatever", 8, named, named.len));
+    const r = game.spawnPrefab("renamed_vent", .{ .x = 0, .y = 0 }).?;
+    try testing.expectEqualStrings("renamed", game.ecs_backend.getComponent(r, PipeOverlay).?.text);
+}
+
+test "reloadPrefabSource: a push BEFORE any scene load creates the cache the boot then reuses" {
+    var game = engine.Game.init(testing.allocator);
+    defer game.deinit();
+
+    // No scene, no cache yet — the push must not require one (the
+    // studio parks pushes until boot, but the ENGINE side stays safe
+    // regardless of host ordering).
+    try game.reloadPrefabSource("early_bird", CONDENSER_V2);
+
+    // The boot sequence reuses the already-attached cache
+    // (`getOrCreatePrefabCache` contract), so both the pre-push prefab
+    // and the embedded one resolve.
+    try bootPrefabGame(&game);
+    const e = game.spawnPrefab("early_bird", .{ .x = 0, .y = 0 }).?;
+    try testing.expectEqualStrings("v2-overlay", game.ecs_backend.getComponent(e, PipeOverlay).?.text);
+    const c = game.spawnPrefab("condenser", .{ .x = 0, .y = 0 }).?;
+    try testing.expectEqualStrings("v1-overlay", game.ecs_backend.getComponent(c, PipeOverlay).?.text);
 }
