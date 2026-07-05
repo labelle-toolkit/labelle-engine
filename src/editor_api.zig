@@ -70,6 +70,7 @@ const VTable = struct {
     load_scene: *const fn (name: []const u8, src: []const u8) i32,
     set_state: *const fn (name: []const u8) i32,
     load_animation_def: *const fn (name: []const u8, src: []const u8) i32,
+    reload_prefab: *const fn (name: []const u8, src: []const u8) i32,
     set_entity_position: *const fn (id: u64, x: f32, y: f32) void,
     scene_digest: *const fn (out: []u8) usize,
     apply_camera: *const fn (x: f32, y: f32, zoom: f32) void,
@@ -230,6 +231,37 @@ pub export fn editor_load_animation_def(name: [*]const u8, nlen: usize, src: [*]
     return vt.load_animation_def(name[0..nlen], src[0..slen]);
 }
 
+/// Push a prefab JSONC SOURCE into the running game (contract v1.3,
+/// labelle-studio issue #24 — the prefab half). `name` is the prefab's
+/// registry name (`"condenser"` for `prefabs/condenser.jsonc`,
+/// `"<pack>__<stem>"` for pack prefabs); `src` is the full JSONC
+/// source. On success the source is parsed, shape-checked, and
+/// installed in the prefab registry under its effective name
+/// (replace-or-insert — see `PrefabCache.replaceFromSource`), so every
+/// FUTURE spawn resolves the new definition: runtime `spawnPrefab`
+/// calls, scene loads referencing the prefab (including an
+/// `editor_load_scene` reload of the current scene, which re-spawns its
+/// placed instances from the new data), and save/load Phase 1
+/// re-spawns.
+///
+/// Already-spawned instances keep their current components — the studio
+/// UI says "applies to new spawns" — and the replaced definition's
+/// memory is retired, never freed, so their borrowed slices stay valid
+/// even while the sim is paused. In-place live refresh is a documented
+/// follow-up (see `game/prefab_runtime_mixin.zig` for why it is not
+/// boundable today).
+///
+/// Returns 0 = ok; -1 = not bound / empty name; -2 = parse/shape
+/// failure (unparseable, non-object top level, RFC #560 §B2 violation);
+/// -3 = out of memory. On ANY nonzero return the registry is untouched
+/// — the previous definition stays live, so a half-saved file never
+/// corrupts the preview. The buffers are copied; the caller may free
+/// them right after the call.
+pub export fn editor_reload_prefab(name: [*]const u8, nlen: usize, src: [*]const u8, slen: usize) i32 {
+    const vt = vtable orelse return -1;
+    return vt.reload_prefab(name[0..nlen], src[0..slen]);
+}
+
 /// Move entity `id` to world coordinates (x, y). Marks the position
 /// dirty so the render pipeline re-syncs. Unknown/positionless ids are
 /// ignored.
@@ -314,6 +346,7 @@ fn Holder(comptime GP: type, comptime RP: type) type {
             .load_scene = &loadSceneImpl,
             .set_state = &setStateImpl,
             .load_animation_def = &loadAnimationDefImpl,
+            .reload_prefab = &reloadPrefabImpl,
             .set_entity_position = &setEntityPositionImpl,
             .scene_digest = &sceneDigestImpl,
             .apply_camera = &applyCameraImpl,
@@ -407,6 +440,19 @@ fn Holder(comptime GP: type, comptime RP: type) type {
             // component is touched, so unlike loadSceneImpl there is no
             // rollback dance here.
             game.loadAnimationDefSource(name, src) catch |err| {
+                return if (err == error.OutOfMemory) -3 else -2;
+            };
+            return 0;
+        }
+
+        fn reloadPrefabImpl(name: []const u8, src: []const u8) i32 {
+            // Empty name: never meaningful, most likely a host-side
+            // length bug (mirrors setStateImpl / loadAnimationDefImpl).
+            if (name.len == 0) return -1;
+            // `reloadPrefabSource` is transactional by construction:
+            // parse/shape failures error out BEFORE the registry is
+            // touched, so there is no rollback dance here either.
+            game.reloadPrefabSource(name, src) catch |err| {
                 return if (err == error.OutOfMemory) -3 else -2;
             };
             return 0;
