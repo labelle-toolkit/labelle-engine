@@ -32,6 +32,7 @@ const animation_def = @import("animation_def.zig");
 
 pub const Mode = animation_def.Mode;
 pub const ClipMeta = animation_def.ClipMeta;
+pub const FrameEntry = animation_def.FrameEntry;
 
 const Zoir = std.zig.Zoir;
 
@@ -44,9 +45,14 @@ pub const RuntimeAnimationDef = struct {
     /// Per-clip metadata (same `ClipMeta` as the comptime path). `folder`
     /// is heap-owned here (freed in `deinit`).
     clip_meta: []ClipMeta,
-    /// Precomputed sprite-name strings, `[clip][variant][frame]`. Jagged:
+    /// Per-clip normalized slot lists (#664 × #672): the same `FrameEntry`
+    /// rows the comptime `normalizeFrames` produces — count form expands
+    /// to slots 1..N with run 1. Heap-owned (marker strings included).
+    clip_entries: [][]FrameEntry,
+    /// Precomputed sprite-name strings, `[clip][variant][slot]`. Jagged:
     /// row length is that clip's `frame_count`. Byte-equal to the comptime
-    /// table's `"{folder}/{variant}_{frame:04}.png"`.
+    /// table's `"{folder}/{variant}_{f:04}.png"` (slot i names file
+    /// `entries[i].f`, so reorders/reuse resolve identically).
     sprite_names: [][][][]const u8,
 
     /// Parse a `.zon` animation definition. On any malformed input (parse
@@ -119,6 +125,13 @@ pub const RuntimeAnimationDef = struct {
             allocator.free(clip_meta);
         }
 
+        const clip_entries = try allocator.alloc([]FrameEntry, ccount);
+        var ce_filled: usize = 0;
+        errdefer {
+            for (clip_entries[0..ce_filled]) |es| freeEntries(allocator, es);
+            allocator.free(clip_entries);
+        }
+
         {
             var i: u32 = 0;
             while (i < ccount) : (i += 1) {
@@ -127,11 +140,16 @@ pub const RuntimeAnimationDef = struct {
                 cn_filled += 1;
 
                 const cnode = cstruct.vals.at(i);
-                // frames — required, 1..255 (mirrors the comptime u8 frame_count).
+                // frames — required. A bare int N (fast path) expands to
+                // slots 1..N with run 1; an entry list parses each element
+                // (#664 × #672). Stored before any further `try` so the
+                // errdefer above owns it on failure.
                 const frames_node = findField(zoir, cnode, "frames") orelse return error.MissingFrames;
-                const frames_i = try getSmallInt(zoir, frames_node);
-                if (frames_i < 1 or frames_i > 255) return error.FramesOutOfRange;
-                const frame_count: u8 = @intCast(frames_i);
+                clip_entries[i] = try parseFrames(allocator, zoir, frames_node);
+                ce_filled += 1;
+                const entries = clip_entries[i];
+                var beats: u16 = 0;
+                for (entries) |e| beats += e.run;
                 // Defaults replicate animation_def.zig exactly: folder = clip
                 // name, speed = 1.0, mode = .static.
                 const mode: Mode = if (findField(zoir, cnode, "mode")) |mn|
@@ -142,19 +160,22 @@ pub const RuntimeAnimationDef = struct {
                     try getFloat(zoir, sn)
                 else
                     1.0;
+                // Comptime parity: a .static clip only ever shows slot 0,
+                // so per-slot holds are meaningless — reject them.
+                if (mode == .static) {
+                    for (entries) |e| {
+                        if (e.run != 1) return error.HoldOnStaticClip;
+                    }
+                }
                 const folder_src: []const u8 = if (findField(zoir, cnode, "folder")) |fnode|
                     try getString(zoir, fnode)
                 else
                     cname;
                 const folder_dup = try allocator.dupe(u8, folder_src);
-                // Runtime parser reads the count form only, so the #664
-                // beat vocabulary degenerates: entry_count == beat_count
-                // == frame_count (every slot runs one beat). Entry-list
-                // parsing at runtime is a follow-up (#664 × #672).
                 clip_meta[i] = .{
-                    .frame_count = frame_count,
-                    .entry_count = frame_count,
-                    .beat_count = frame_count,
+                    .frame_count = @intCast(entries.len),
+                    .entry_count = @intCast(entries.len),
+                    .beat_count = beats,
                     .speed = speed,
                     .mode = mode,
                     .folder = folder_dup,
@@ -163,7 +184,7 @@ pub const RuntimeAnimationDef = struct {
             }
         }
 
-        // ── sprite-name table [clip][variant][frame] ──────────
+        // ── sprite-name table [clip][variant][slot] ───────────
         const sprite_names = try allocator.alloc([][][]const u8, ccount);
         var sn_clips: usize = 0;
         errdefer {
@@ -200,7 +221,9 @@ pub const RuntimeAnimationDef = struct {
                     }
                     var fi: usize = 0;
                     while (fi < fc) : (fi += 1) {
-                        row[fi] = try std.fmt.allocPrint(allocator, "{s}/{s}_{d:0>4}.png", .{ folder, variant_names[vi], fi + 1 });
+                        // Slot fi names file `entries[fi].f` (not fi+1),
+                        // matching the comptime table for reorders/reuse.
+                        row[fi] = try std.fmt.allocPrint(allocator, "{s}/{s}_{d:0>4}.png", .{ folder, variant_names[vi], clip_entries[ci][fi].f });
                         row_f += 1;
                     }
                     block[vi] = row;
@@ -216,6 +239,7 @@ pub const RuntimeAnimationDef = struct {
             .clip_names = clip_names,
             .variant_names = variant_names,
             .clip_meta = clip_meta,
+            .clip_entries = clip_entries,
             .sprite_names = sprite_names,
         };
     }
@@ -230,6 +254,8 @@ pub const RuntimeAnimationDef = struct {
             a.free(blk);
         }
         a.free(self.sprite_names);
+        for (self.clip_entries) |es| freeEntries(a, es);
+        a.free(self.clip_entries);
         for (self.clip_meta) |m| a.free(m.folder);
         a.free(self.clip_meta);
         for (self.clip_names) |n| a.free(n);
@@ -271,9 +297,104 @@ pub const RuntimeAnimationDef = struct {
         if (variant >= self.variant_names.len) return "";
         return self.sprite_names[clip][variant][frame];
     }
+
+    /// The slot shown at a given beat of a clip — the runtime mirror of
+    /// the comptime `slotForBeat`, computed on the fly by walking the
+    /// entry runs (no baked beat table; the runtime path is preview-only,
+    /// so O(entries) per lookup is inside budget). Returns 0 for any
+    /// out-of-range clip; wraps `beat` past the clip's beat_count.
+    pub fn slotForBeat(self: *const RuntimeAnimationDef, clip: u8, beat: u16) u8 {
+        if (clip >= self.clip_entries.len) return 0;
+        const bc = self.clip_meta[clip].beat_count;
+        if (bc == 0) return 0;
+        var b = beat % bc;
+        for (self.clip_entries[clip], 0..) |e, si| {
+            if (b < e.run) return @intCast(si);
+            b -= e.run;
+        }
+        return 0;
+    }
 };
 
+/// Free one clip's owned entry list, marker strings included.
+fn freeEntries(allocator: std.mem.Allocator, entries: []FrameEntry) void {
+    for (entries) |e| {
+        if (e.marker) |mk| allocator.free(mk);
+    }
+    allocator.free(entries);
+}
+
 // ── ZON node helpers (walk the dynamic Zoir tree) ─────────────
+
+/// Parse a clip's `frames` node into an owned entry list. Mirrors the
+/// comptime `normalizeFrames` (#664) forms and validation:
+///   .frames = 4                               // count: slots 1..4, run 1
+///   .frames = .{ 1, 2, 3, 2 }                 // explicit indices, run 1
+///   .frames = .{ .{ .f = 1, .run = 2 }, 2 }   // per-slot holds/markers
+/// The returned slice and any `marker` strings are owned by the caller
+/// (free via `freeEntries`); on error nothing is leaked.
+fn parseFrames(allocator: std.mem.Allocator, zoir: Zoir, node: Zoir.Node.Index) ![]FrameEntry {
+    switch (node.get(zoir)) {
+        // Count fast-path — a bare int N.
+        .int_literal => {
+            const n = try getSmallInt(zoir, node);
+            if (n < 1 or n > 255) return error.FramesOutOfRange;
+            const entries = try allocator.alloc(FrameEntry, @intCast(n));
+            for (entries, 0..) |*e, i| e.* = .{ .f = @intCast(i + 1), .run = 1 };
+            return entries;
+        },
+        // Entry list — ints and/or `.{ .f, .run, .marker }` structs.
+        .array_literal => |range| {
+            if (range.len == 0) return error.EmptyFrames; // defensive; `.{}` is empty_literal
+            if (range.len > 255) return error.FramesOutOfRange;
+            const entries = try allocator.alloc(FrameEntry, range.len);
+            var filled: usize = 0;
+            errdefer {
+                // Free the FULL allocation; only `filled` markers exist yet.
+                for (entries[0..filled]) |e| {
+                    if (e.marker) |mk| allocator.free(mk);
+                }
+                allocator.free(entries);
+            }
+            var i: u32 = 0;
+            while (i < range.len) : (i += 1) {
+                entries[filled] = try parseFrameEntry(allocator, zoir, range.at(i));
+                filled += 1;
+            }
+            return entries;
+        },
+        // `.{}` lowers to empty_literal, not a zero-length array.
+        .empty_literal => return error.EmptyFrames,
+        else => return error.ExpectedInt,
+    }
+}
+
+/// One element of an entry-list `frames`: a bare int index (run 1) or a
+/// struct literal with `f` (required), `run` (default 1), and an
+/// optional `marker` string (duped onto the heap).
+fn parseFrameEntry(allocator: std.mem.Allocator, zoir: Zoir, node: Zoir.Node.Index) !FrameEntry {
+    switch (node.get(zoir)) {
+        .int_literal => {
+            const f = try getSmallInt(zoir, node);
+            if (f < 1 or f > 9999) return error.FrameIndexOutOfRange;
+            return .{ .f = @intCast(f), .run = 1 };
+        },
+        .struct_literal => {
+            const f_node = findField(zoir, node, "f") orelse return error.MissingFrameIndex;
+            const f = try getSmallInt(zoir, f_node);
+            if (f < 1 or f > 9999) return error.FrameIndexOutOfRange;
+            var run: i32 = 1;
+            if (findField(zoir, node, "run")) |rn| run = try getSmallInt(zoir, rn);
+            if (run < 1 or run > 255) return error.RunOutOfRange;
+            var marker: ?[]const u8 = null;
+            if (findField(zoir, node, "marker")) |mn| {
+                marker = try allocator.dupe(u8, try getString(zoir, mn));
+            }
+            return .{ .f = @intCast(f), .run = @intCast(run), .marker = marker };
+        },
+        else => return error.BadFrameEntry,
+    }
+}
 
 fn findField(zoir: Zoir, node: Zoir.Node.Index, name: []const u8) ?Zoir.Node.Index {
     switch (node.get(zoir)) {

@@ -16,5 +16,9 @@
         .enter_combat = .{ .frames = 4, .mode = .time, .speed = 8.0 },
         .idle_combat = .{ .frames = 2, .mode = .time, .speed = 3.0 },
         .punch = .{ .frames = 6, .mode = .time, .speed = 12.0 },
+        // Entry-list clip (#664 forms): mixes a bare index, a struct with
+        // a hold + marker, and file reuse — exercises the runtime parser's
+        // array_literal path against the comptime normalizeFrames (#685).
+        .swing = .{ .frames = .{ 1, 2, .{ .f = 3, .run = 2, .marker = "contact" }, 2 }, .mode = .time, .speed = 12.0 },
     },
 }
