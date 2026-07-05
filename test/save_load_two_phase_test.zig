@@ -77,7 +77,8 @@ fn setupFixture(
     }
 
     var buf: [std.fs.max_path_bytes]u8 = undefined;
-    const _len = try tmp_dir.dir.realPath(std.testing.io, &buf); const dir_path = buf[0.._len];
+    const _len = try tmp_dir.dir.realPath(std.testing.io, &buf);
+    const dir_path = buf[0.._len];
     const prefab_dir = try std.fmt.allocPrint(testing.allocator, "{s}/prefabs", .{dir_path});
     errdefer testing.allocator.free(prefab_dir);
 
@@ -270,7 +271,8 @@ test "two-phase load: scene-loaded prefab with children round-trips end-to-end" 
     });
 
     var buf: [std.fs.max_path_bytes]u8 = undefined;
-    const _len = try tmp_dir.dir.realPath(std.testing.io, &buf); const dir_path = buf[0.._len];
+    const _len = try tmp_dir.dir.realPath(std.testing.io, &buf);
+    const dir_path = buf[0.._len];
     const prefab_dir = try std.fmt.allocPrint(testing.allocator, "{s}/prefabs", .{dir_path});
     defer testing.allocator.free(prefab_dir);
 
@@ -434,7 +436,8 @@ test "two-phase load: nested prefab doesn't duplicate into a ghost root" {
     });
 
     var buf: [std.fs.max_path_bytes]u8 = undefined;
-    const _len = try tmp_dir.dir.realPath(std.testing.io, &buf); const dir_path = buf[0.._len];
+    const _len = try tmp_dir.dir.realPath(std.testing.io, &buf);
+    const dir_path = buf[0.._len];
     const prefab_dir = try std.fmt.allocPrint(testing.allocator, "{s}/prefabs", .{dir_path});
     defer testing.allocator.free(prefab_dir);
 
@@ -479,7 +482,6 @@ test "two-phase load: nested prefab doesn't duplicate into a ghost root" {
     while (h_view.next()) |_| total += 1;
     try testing.expectEqual(@as(usize, 2), total);
 }
-
 
 test "save: entities with only PrefabInstance are collected (no game-owned saveable)" {
     // Regression guard for the "pure visual prefab" gap flagged in
@@ -549,4 +551,139 @@ test "save: entities with only PrefabInstance are collected (no game-owned savea
     // is purely "did the entity survive the collection step at
     // all").
     _ = fixture.game.getPosition(restored_entity);
+}
+
+// ── #696: malformed / hostile save hardening ────────────────────────
+//
+// Saves are engine-written (trusted producer), so none of these fire in
+// normal operation. The contract is a CLEAN failure — a returned error or
+// a gracefully-skipped entry — instead of a `.integer`/`.object` tag-cast
+// panic (debug) or memory corruption (release) on a corrupted / hand-edited
+// file. These tests feed loadGameState hand-crafted bad JSON and assert it
+// neither crashes nor misparses.
+
+/// Write raw bytes to a save file under cwd and attempt to load them into a
+/// bare TestGame. Returns whatever `loadGameState` returns (error or void).
+fn tryLoadRaw(save_path: []const u8, bytes: []const u8) !void {
+    var game = TestGame.init(testing.allocator);
+    defer game.deinit();
+    try std.Io.Dir.cwd().writeFile(std.testing.io, .{ .sub_path = save_path, .data = bytes });
+    defer std.Io.Dir.cwd().deleteFile(std.testing.io, save_path) catch {};
+    return game.loadGameState(save_path);
+}
+
+test "malformed save: non-object root → error.MalformedSave (no panic)" {
+    // A save whose top-level value is an array would panic on the
+    // `parsed.value.object` tag-cast before the fix.
+    try testing.expectError(
+        error.MalformedSave,
+        tryLoadRaw("test_bad_root.json", "[]"),
+    );
+}
+
+test "malformed save: wrong-typed version → error.MalformedSave (no panic)" {
+    // `version` as a string would panic on `.integer` before the fix.
+    try testing.expectError(
+        error.MalformedSave,
+        tryLoadRaw("test_bad_version.json",
+            \\{ "version": "2", "entities": [] }
+        ),
+    );
+}
+
+test "malformed save: wrong-typed entities → error.MalformedSave (no panic)" {
+    // `entities` as an object would panic on `.array` before the fix.
+    try testing.expectError(
+        error.MalformedSave,
+        tryLoadRaw("test_bad_entities.json",
+            \\{ "version": 2, "entities": {} }
+        ),
+    );
+}
+
+test "malformed save: non-integer entry id is skipped, not tag-cast (Step 4/5)" {
+    // Steps 4 and 5 previously did `(obj.get("id").?).integer` directly —
+    // a string `id` would panic there. With the shared `getSavedId` guard
+    // the entry is skipped and the load completes with no entities.
+    try tryLoadRaw("test_bad_id.json",
+        \\{ "version": 2, "entities": [ { "id": "not-a-number", "components": {} } ] }
+    );
+}
+
+test "malformed save: wrong-typed ref_arrays is skipped, not tag-cast (Step 4)" {
+    // Step 4 previously did `ref_arrays_val.object` directly — a scalar
+    // `ref_arrays` would panic. `getObjectField` skips it instead. The
+    // entry has a valid integer id so it survives to Step 4.
+    try tryLoadRaw("test_bad_refarrays.json",
+        \\{ "version": 2, "entities": [ { "id": 0, "components": {}, "ref_arrays": 42 } ] }
+    );
+}
+
+test "findChildByLocalPath: leading-dot separator is rejected (no misparse)" {
+    // `PrefabChild.local_path` is emitted as `children[0]` (no leading
+    // dot, single `.` between segments). A corrupted save carrying a
+    // LEADING dot (`.children[0]`) used to resolve anyway — the old code
+    // stripped the dot but never required its absence at the start. The
+    // hardened walk rejects it, so Phase 1b can't map the child onto the
+    // spawned prefab child; Phase 1c falls back to a fresh orphan entity.
+    // The load must still complete cleanly (no crash), and the malformed
+    // child override must NOT land on the prefab-spawned child.
+    var tmp_dir = testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    var fixture = try setupFixture(&tmp_dir, .{
+        .unit =
+        \\{
+        \\  "components": { "Health": { "current": 50, "max": 50 } },
+        \\  "children": [
+        \\    { "components": { "Health": { "current": 10, "max": 10 } } }
+        \\  ]
+        \\}
+        ,
+    });
+    defer fixture.deinit();
+
+    const root = fixture.game.spawnFromPrefab("unit", .{ .x = 0, .y = 0 }).?;
+    // Mutate the child so a correct mapping would apply Health 7 to the
+    // spawned child; a rejected path leaves it at the prefab default (10).
+    const child = fixture.game.getChildren(root)[0];
+    fixture.game.active_world.ecs_backend.getComponent(child, Health).?.current = 7;
+
+    const save_path = "test_bad_localpath.json";
+    try fixture.game.saveGameState(save_path);
+    defer std.Io.Dir.cwd().deleteFile(std.testing.io, save_path) catch {};
+
+    // Inject the malformed separator into the saved local_path.
+    const contents = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, save_path, testing.allocator, .limited(1024 * 1024));
+    defer testing.allocator.free(contents);
+    try testing.expect(std.mem.indexOf(u8, contents, "\"children[0]\"") != null);
+    const rewritten = try std.mem.replaceOwned(u8, testing.allocator, contents, "\"children[0]\"", "\".children[0]\"");
+    defer testing.allocator.free(rewritten);
+    try std.Io.Dir.cwd().writeFile(std.testing.io, .{ .sub_path = save_path, .data = rewritten });
+
+    // Load must not crash / error.
+    fixture.game.resetEcsBackend();
+    try fixture.game.loadGameState(save_path);
+
+    // The prefab-spawned child kept the prefab default (10) — the saved
+    // override (7) was diverted to a fresh orphan, proving the malformed
+    // path was rejected rather than silently resolved.
+    const loaded_root = blk: {
+        var view = fixture.game.active_world.ecs_backend.view(.{PrefabInstance}, .{});
+        defer view.deinit();
+        break :blk view.next().?;
+    };
+    const loaded_child = fixture.game.getChildren(loaded_root)[0];
+    try testing.expectApproxEqAbs(
+        @as(f32, 10),
+        fixture.game.active_world.ecs_backend.getComponent(loaded_child, Health).?.current,
+        0.01,
+    );
+
+    // 3 Health entities: root + spawned child (default) + orphan (override).
+    var total: usize = 0;
+    var view = fixture.game.active_world.ecs_backend.view(.{Health}, .{});
+    defer view.deinit();
+    while (view.next()) |_| total += 1;
+    try testing.expectEqual(@as(usize, 3), total);
 }

@@ -120,8 +120,25 @@ pub fn Mixin(comptime Game: type) type {
 
             var current: Entity = root;
             var rest = local_path;
+            // `first` distinguishes the leading segment (no separator) from
+            // subsequent ones (a single `.` separator is REQUIRED). This
+            // rejects malformed paths a hostile / corrupted save could carry:
+            //   * a leading `.` (`.children[0]`)
+            //   * missing separators between segments
+            //     (`children[0]children[1]`)
+            //   * doubled / stray separators (`children[0]..children[1]`)
+            // The old code stripped a `.` when present but never required
+            // one, so all of the above resolved as if well-formed — aliasing
+            // the wrong child's saved components onto the resolved entity.
+            var first = true;
             while (rest.len > 0) {
-                if (rest[0] == '.') rest = rest[1..];
+                if (first) {
+                    first = false;
+                } else {
+                    // Exactly one separator dot between segments.
+                    if (rest[0] != '.') return null;
+                    rest = rest[1..];
+                }
                 const prefix = "children[";
                 if (!std.mem.startsWith(u8, rest, prefix)) return null;
                 rest = rest[prefix.len..];
@@ -165,14 +182,34 @@ pub fn Mixin(comptime Game: type) type {
             const parsed = try std.json.parseFromSlice(std.json.Value, allocator, json, .{});
             defer parsed.deinit();
 
+            // Defensive: the top-level JSON must be an object. A malformed
+            // save whose root is an array / scalar / null would otherwise
+            // panic on the `.object` tag-cast in debug, or read garbage in
+            // release. Saves are engine-written (trusted producer), so this
+            // never fires normally — the value is a clean error instead of a
+            // panic on a corrupted / hand-edited file.
+            if (parsed.value != .object) return error.MalformedSave;
             const root = parsed.value.object;
 
-            const version = (root.get("version") orelse return error.MissingField).integer;
+            // `version` must be a non-negative integer. Tag-check before the
+            // `.integer` access so a string / object / null version fails
+            // cleanly rather than panicking.
+            const version_val = root.get("version") orelse return error.MissingField;
+            const version: i64 = switch (version_val) {
+                .integer => |i| i,
+                else => return error.MalformedSave,
+            };
             if (version != SAVE_VERSION) {
                 return error.UnsupportedVersion;
             }
 
-            const entities_json = (root.get("entities") orelse return error.MissingField).array;
+            // `entities` must be an array. Tag-check before the `.array`
+            // access for the same reason.
+            const entities_val = root.get("entities") orelse return error.MissingField;
+            const entities_json = switch (entities_val) {
+                .array => |a| a,
+                else => return error.MalformedSave,
+            };
 
             // Optional saved scene name (engine#638). Saves written before
             // this field omit it — fall back to the current scene's
@@ -492,13 +529,16 @@ pub fn Mixin(comptime Game: type) type {
             const arena = self.active_world.nested_entity_arena.allocator();
 
             for (entities_json.items) |entry| {
-                const obj = entry.object;
-                const saved_id: u64 = @intCast((obj.get("id") orelse continue).integer);
+                // Defensive: skip entries whose shape is wrong (non-object
+                // entry, missing/negative/non-integer id) instead of
+                // panicking on the `.object` / `.integer` tag-casts. Mirrors
+                // the Phase 1/2 treatment via the shared `getSavedId` helper,
+                // which also avoids `@intCast` trapping on a negative id.
+                const saved_id = getSavedId(entry) orelse continue;
                 const current_id = id_map.get(saved_id) orelse continue;
                 const entity: Entity = @intCast(current_id);
 
-                if (obj.get("ref_arrays")) |ref_arrays_val| {
-                    const ref_obj = ref_arrays_val.object;
+                if (getObjectField(entry.object, "ref_arrays")) |ref_obj| {
                     inline for (names) |name| {
                         const T = Reg.getType(name);
                         if (comptime serde.hasRefArrayFields(T)) {
@@ -514,8 +554,9 @@ pub fn Mixin(comptime Game: type) type {
             const Sprite = Game.SpriteComp;
             const Shape = Game.ShapeComp;
             for (entities_json.items) |entry| {
-                const obj = entry.object;
-                const saved_id: u64 = @intCast((obj.get("id") orelse continue).integer);
+                // Defensive: same shape guard as Step 4 — skip malformed
+                // entries via `getSavedId` rather than tag-casting.
+                const saved_id = getSavedId(entry) orelse continue;
                 const current_id = id_map.get(saved_id) orelse continue;
                 const entity: Entity = @intCast(current_id);
                 self.addEntityToActiveScene(entity);
