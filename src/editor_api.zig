@@ -69,6 +69,7 @@ const VTable = struct {
     set_scene: *const fn (name: []const u8) i32,
     load_scene: *const fn (name: []const u8, src: []const u8) i32,
     set_state: *const fn (name: []const u8) i32,
+    load_animation_def: *const fn (name: []const u8, src: []const u8) i32,
     set_entity_position: *const fn (id: u64, x: f32, y: f32) void,
     scene_digest: *const fn (out: []u8) usize,
     apply_camera: *const fn (x: f32, y: f32, zoom: f32) void,
@@ -209,6 +210,26 @@ pub export fn editor_set_state(name: [*]const u8, len: usize) i32 {
     return vt.set_state(name[0..len]);
 }
 
+/// Push a `.zon` animation-def SOURCE into the running game (contract
+/// v1.2, labelle-studio issue #24 — the animation analog of
+/// `editor_load_scene`). `name` is the def's stem (`"worker"` for
+/// `animations/worker.zon`); `src` is the full ZON source. On success
+/// the def is parsed (`RuntimeAnimationDef.load`), installed as the
+/// runtime override consulted by `Game.runtimeAnimDef`, and every live
+/// component that opted in via `anim_def_name` is `refreshState`-ed
+/// (stale speed/frame-count copies re-read, indices clamped, `dirty`
+/// set) — see `game/animation_runtime_mixin.zig`.
+///
+/// Returns 0 = ok; -1 = not bound / empty name; -2 = parse/validation
+/// failure; -3 = out of memory. On ANY nonzero return the running game
+/// is untouched — the previous override (or the comptime table) stays
+/// live, so a half-saved file never corrupts the preview. The buffers
+/// are copied; the caller may free them right after the call.
+pub export fn editor_load_animation_def(name: [*]const u8, nlen: usize, src: [*]const u8, slen: usize) i32 {
+    const vt = vtable orelse return -1;
+    return vt.load_animation_def(name[0..nlen], src[0..slen]);
+}
+
 /// Move entity `id` to world coordinates (x, y). Marks the position
 /// dirty so the render pipeline re-syncs. Unknown/positionless ids are
 /// ignored.
@@ -292,6 +313,7 @@ fn Holder(comptime GP: type, comptime RP: type) type {
             .set_scene = &setSceneImpl,
             .load_scene = &loadSceneImpl,
             .set_state = &setStateImpl,
+            .load_animation_def = &loadAnimationDefImpl,
             .set_entity_position = &setEntityPositionImpl,
             .scene_digest = &sceneDigestImpl,
             .apply_camera = &applyCameraImpl,
@@ -374,6 +396,20 @@ fn Holder(comptime GP: type, comptime RP: type) type {
             // worse off than before this rollback existed.
             _ = setSceneImpl(name);
             return -1;
+        }
+
+        fn loadAnimationDefImpl(name: []const u8, src: []const u8) i32 {
+            // Empty name: never meaningful, most likely a host-side
+            // length bug (mirrors setStateImpl).
+            if (name.len == 0) return -1;
+            // `loadAnimationDefSource` is transactional by construction:
+            // parse failures error out BEFORE the registry or any live
+            // component is touched, so unlike loadSceneImpl there is no
+            // rollback dance here.
+            game.loadAnimationDefSource(name, src) catch |err| {
+                return if (err == error.OutOfMemory) -3 else -2;
+            };
+            return 0;
         }
 
         fn setEntityPositionImpl(id: u64, x: f32, y: f32) void {

@@ -52,6 +52,8 @@ const input_events_mixin = @import("game/input_events_mixin.zig");
 const events_mixin = @import("game/events_mixin.zig");
 const loop_mixin = @import("game/loop_mixin.zig");
 const misc_mixin = @import("game/misc_mixin.zig");
+const animation_runtime_mixin = @import("game/animation_runtime_mixin.zig");
+const animation_def_runtime = @import("animation_def_runtime.zig");
 
 /// Full game configuration — the assembler fills ALL comptime slots.
 /// RenderImpl is a renderer plugin (e.g. gfx.GfxRenderer) satisfying RenderInterface.
@@ -305,6 +307,7 @@ pub fn GameConfigWithYAxis(
         const EventsMixin = events_mixin.Mixin(Self);
         const LoopMixin = loop_mixin.Mixin(Self);
         const MiscMixin = misc_mixin.Mixin(Self);
+        const AnimationRuntimeMixin = animation_runtime_mixin.Mixin(Self);
 
         /// Scene lifecycle hooks
         pub const SceneHooks = struct {
@@ -432,6 +435,14 @@ pub fn GameConfigWithYAxis(
         /// replacing an entry frees the previous source. See
         /// `setSceneSourceOverride` / `sceneSourceOverride`.
         scene_source_overrides: std.StringHashMap([]const u8),
+        /// Runtime animation-def overrides (labelle-studio Play mode /
+        /// `editor_api.editor_load_animation_def`, engine#672). Keyed by
+        /// def name (the `.zon` stem, `"worker"`); game code consults
+        /// `runtimeAnimDef` before its comptime table. See
+        /// `game/animation_runtime_mixin.zig` for the refresh convention
+        /// and `RuntimeAnimDefs` for the retire-don't-free ownership
+        /// story. Empty (and cost-free) outside editor-preview hosts.
+        runtime_anim_defs: animation_def_runtime.RuntimeAnimDefs,
         /// Name of the scene whose registered `loader_fn` is currently
         /// executing. Set by `setScene` / `setSceneAtomic` / the
         /// hot-reload path around the loader call ONLY — a borrow of the
@@ -787,6 +798,7 @@ pub fn GameConfigWithYAxis(
                 .jsonc_scenes = std.StringHashMap(JsoncSceneInfo).init(allocator),
                 .embedded_scene_sources = std.StringHashMap([]const u8).init(allocator),
                 .scene_source_overrides = std.StringHashMap([]const u8).init(allocator),
+                .runtime_anim_defs = animation_def_runtime.RuntimeAnimDefs.init(allocator),
                 .gizmo_state = gizmo_draws_mod.GizmoState(Entity).init(allocator),
                 // `game_ctx` is a placeholder here (the not-yet-stable world
                 // pointer); `bindScheduler` fixes it once `self` is stable.
@@ -1165,6 +1177,14 @@ pub fn GameConfigWithYAxis(
         pub const setSceneSourceOverride = MiscMixin.setSceneSourceOverride;
         pub const removeSceneSourceOverride = MiscMixin.removeSceneSourceOverride;
         pub const sceneSourceOverride = MiscMixin.sceneSourceOverride;
+
+        /// Runtime animation-def overrides (labelle-studio Play mode /
+        /// `editor_api.editor_load_animation_def`) — see
+        /// `game/animation_runtime_mixin.zig` for the `anim_def_name`
+        /// refresh convention and the fallback contract.
+        pub const loadAnimationDefSource = AnimationRuntimeMixin.loadAnimationDefSource;
+        pub const runtimeAnimDef = AnimationRuntimeMixin.runtimeAnimDef;
+        pub const refreshAnimationStates = AnimationRuntimeMixin.refreshAnimationStates;
         pub const setSceneAssets = SceneMixin.setSceneAssets;
         pub const setSceneInitialState = SceneMixin.setSceneInitialState;
         pub const setScene = SceneMixin.setScene;

@@ -71,10 +71,11 @@ test "pre-bind: every export is a safe no-op" {
     editor_api.unbind();
     defer editor_api.unbind();
 
-    // Scene/state ops report failure (no game to act on).
+    // Scene/state/animation ops report failure (no game to act on).
     try testing.expectEqual(@as(i32, -1), editor_api.editor_set_scene("main", 4));
     try testing.expectEqual(@as(i32, -1), editor_api.editor_load_scene("main", 4, "{}", 2));
     try testing.expectEqual(@as(i32, -1), editor_api.editor_set_state("playing", 7));
+    try testing.expectEqual(@as(i32, -1), editor_api.editor_load_animation_def("worker", 6, ".{}", 3));
 
     // Void setters silently ignore.
     editor_api.editor_set_entity_position(42, 1.0, 2.0);
@@ -466,4 +467,170 @@ test "camera override: comptime no-op for camera-less games (StubRender)" {
     editor_api.editor_set_camera(1, 2, 3);
     editor_api.frame(&game);
     editor_api.editor_release_camera();
+}
+
+// ── editor_load_animation_def (contract v1.2, studio issue #24) ─────
+
+/// FP-shaped, ENUM-typed animation component opted into hot reload via
+/// the `anim_def_name` decl (see `game/animation_runtime_mixin.zig`).
+const TypedAnimState = struct {
+    pub const anim_def_name = "worker";
+
+    const Clip = enum(u8) { idle, walk };
+    const Variant = enum(u8) { a, b };
+
+    clip: Clip = .idle,
+    variant: Variant = .a,
+    frame_count: u8 = 1,
+    speed: f32 = 1.0,
+    mode: engine.AnimMode = .static,
+    frame: u8 = 0,
+    dirty: bool = false,
+};
+
+/// Engine-shaped (raw u8) component bound to the SAME def — both must
+/// refresh from one push.
+const RawAnimState = struct {
+    pub const anim_def_name = "worker";
+
+    clip: u8 = 0,
+    variant: u8 = 0,
+    frame_count: u8 = 1,
+    speed: f32 = 1.0,
+    mode: engine.AnimMode = .static,
+    frame: u8 = 0,
+    dirty: bool = false,
+};
+
+/// Bound to a DIFFERENT def — a "worker" push must never touch it.
+const OtherAnimState = struct {
+    pub const anim_def_name = "bandit";
+
+    clip: u8 = 0,
+    variant: u8 = 0,
+    frame_count: u8 = 4,
+    speed: f32 = 8.0,
+    mode: engine.AnimMode = .time,
+    frame: u8 = 2,
+    dirty: bool = false,
+};
+
+const AnimComponents = engine.ComponentRegistry(.{
+    .TypedAnimState = TypedAnimState,
+    .RawAnimState = RawAnimState,
+    .OtherAnimState = OtherAnimState,
+});
+
+const AnimMockEcs = core.MockEcsBackend(u32);
+const AnimGame = engine.game_mod.GameConfig(
+    core.StubRender(AnimMockEcs.Entity),
+    AnimMockEcs,
+    engine.input_mod.StubInput,
+    engine.audio_mod.StubAudio,
+    engine.StubVideo,
+    engine.gui_mod.StubGui,
+    void,
+    core.StubLogSink,
+    AnimComponents,
+    &.{},
+    void,
+);
+
+const WORKER_V2 =
+    \\.{
+    \\    .variants = .{ "a", "b" },
+    \\    .clips = .{
+    \\        .idle = .{ .frames = 1 },
+    \\        .walk = .{ .frames = 2, .mode = .distance, .speed = 30.0 },
+    \\    },
+    \\}
+;
+
+test "editor_load_animation_def: parses, installs, and refreshes opted-in components" {
+    editor_api.unbind();
+    defer editor_api.unbind();
+
+    var game = AnimGame.init(testing.allocator);
+    defer game.deinit();
+
+    // Live entities mid-walk holding the STALE comptime numbers
+    // (4 frames @ 15.0), the shape of FP workers when a studio save
+    // lands: frame 3 will be out of range after the reload shrinks
+    // walk to 2 frames.
+    const typed_ent = game.createEntity();
+    game.active_world.ecs_backend.addComponent(typed_ent, TypedAnimState{
+        .clip = .walk,
+        .variant = .b,
+        .frame = 3,
+        .frame_count = 4,
+        .speed = 15.0,
+        .mode = .distance,
+    });
+    const raw_ent = game.createEntity();
+    game.active_world.ecs_backend.addComponent(raw_ent, RawAnimState{
+        .clip = 1,
+        .frame = 3,
+        .frame_count = 4,
+        .speed = 15.0,
+        .mode = .distance,
+    });
+    const other_ent = game.createEntity();
+    game.active_world.ecs_backend.addComponent(other_ent, OtherAnimState{});
+
+    var runner = DummyRunner{};
+    editor_api.bind(&game, &runner);
+
+    try testing.expectEqual(@as(i32, 0), editor_api.editor_load_animation_def("worker", 6, WORKER_V2, WORKER_V2.len));
+
+    // Installed and queryable through the game API (the AnimDefSource
+    // seam game code resolves through).
+    const def = game.runtimeAnimDef("worker").?;
+    try testing.expectEqualStrings("walk", def.clip_names[1]);
+    try testing.expectEqual(@as(f32, 30.0), def.clipMeta(1).speed);
+
+    // Enum-typed component: meta re-copied, frame clamped, dirty set.
+    const t = game.active_world.ecs_backend.getComponent(typed_ent, TypedAnimState).?;
+    try testing.expectEqual(TypedAnimState.Clip.walk, t.clip);
+    try testing.expectEqual(TypedAnimState.Variant.b, t.variant);
+    try testing.expectEqual(@as(f32, 30.0), t.speed);
+    try testing.expectEqual(@as(u8, 2), t.frame_count);
+    try testing.expectEqual(@as(u8, 1), t.frame); // 3 clamped to count-1
+    try testing.expect(t.dirty);
+
+    // Raw-u8 component refreshed from the same push.
+    const r = game.active_world.ecs_backend.getComponent(raw_ent, RawAnimState).?;
+    try testing.expectEqual(@as(f32, 30.0), r.speed);
+    try testing.expectEqual(@as(u8, 2), r.frame_count);
+    try testing.expect(r.dirty);
+
+    // Component bound to another def: byte-for-byte untouched.
+    const o = game.active_world.ecs_backend.getComponent(other_ent, OtherAnimState).?;
+    try testing.expectEqual(@as(f32, 8.0), o.speed);
+    try testing.expectEqual(@as(u8, 4), o.frame_count);
+    try testing.expect(!o.dirty);
+}
+
+test "editor_load_animation_def: malformed source is rejected and the old def stays live" {
+    editor_api.unbind();
+    defer editor_api.unbind();
+
+    var game = AnimGame.init(testing.allocator);
+    defer game.deinit();
+    var runner = DummyRunner{};
+    editor_api.bind(&game, &runner);
+
+    try testing.expectEqual(@as(i32, 0), editor_api.editor_load_animation_def("worker", 6, WORKER_V2, WORKER_V2.len));
+
+    // Half-saved file mid-edit: parse failure → -2, nothing changes.
+    const garbage = ".{ .variants = .{ \"a\" }, .clips = ";
+    try testing.expectEqual(@as(i32, -2), editor_api.editor_load_animation_def("worker", 6, garbage, garbage.len));
+    // Structurally valid ZON that fails def validation → also -2.
+    const no_clips = ".{ .variants = .{ \"a\" } }";
+    try testing.expectEqual(@as(i32, -2), editor_api.editor_load_animation_def("worker", 6, no_clips, no_clips.len));
+
+    // The previous generation is still the live one.
+    try testing.expectEqual(@as(f32, 30.0), game.runtimeAnimDef("worker").?.clipMeta(1).speed);
+
+    // Empty name: host-side length bug — rejected without touching the game.
+    try testing.expectEqual(@as(i32, -1), editor_api.editor_load_animation_def("x", 0, WORKER_V2, WORKER_V2.len));
 }

@@ -203,3 +203,120 @@ test "ReloadWatcher: holds exactly one previous generation, frees on swap (#672)
     try testing.expectEqualStrings("c/v_0002.png", w.def().spriteName(0, 0, 1));
     // w.deinit() frees gen2. testing.allocator asserts no leak / no double-free.
 }
+
+// ── refreshState over game-typed (enum) components (#24 hot reload) ──
+
+/// FP-shaped AnimationState: `clip`/`variant` are ENUMS generated from
+/// the comptime def, not raw u8s. `refreshState` must read them via
+/// `@intFromEnum` and clamp-write via `@enumFromInt`.
+const TypedState = struct {
+    const Clip = enum(u8) { idle, walk, eat };
+    const Variant = enum(u8) { a, b };
+
+    clip: Clip = .idle,
+    variant: Variant = .a,
+    frame_count: u8 = 1,
+    speed: f32 = 1.0,
+    mode: engine.AnimMode = .static,
+    frame: u8 = 0,
+    dirty: bool = false,
+};
+
+test "refreshState: enum-typed clip/variant — meta re-copy without a clamp write" {
+    // Def still has all three clips: the enum fields must be left
+    // untouched (no @enumFromInt write happens on the grow/steady path).
+    var state = TypedState{ .clip = .eat, .variant = .b, .frame_count = 8, .speed = 4.0, .mode = .time };
+    const src =
+        \\.{
+        \\    .variants = .{ "a", "b" },
+        \\    .clips = .{
+        \\        .idle = .{ .frames = 1 },
+        \\        .walk = .{ .frames = 4, .mode = .distance, .speed = 15.0 },
+        \\        .eat = .{ .frames = 6, .mode = .time, .speed = 3.0 },
+        \\    },
+        \\}
+    ;
+    var def = try RuntimeAnimationDef.load(testing.allocator, src);
+    defer def.deinit();
+
+    refreshState(&state, &def);
+    try testing.expectEqual(TypedState.Clip.eat, state.clip);
+    try testing.expectEqual(TypedState.Variant.b, state.variant);
+    try testing.expectEqual(@as(u8, 6), state.frame_count); // .eat's new count
+    try testing.expectEqual(@as(f32, 3.0), state.speed);
+    try testing.expectEqual(engine.AnimMode.time, state.mode);
+    try testing.expect(state.dirty);
+}
+
+test "refreshState: enum-typed clip/variant — shrink clamps stay inside the enum" {
+    // Def shrank to one clip / one variant: .eat (2) and .b (1) are out
+    // of range and must clamp to the last entry — indices 0 and 0, both
+    // valid enum tags (the clamp target is always below the old value).
+    var state = TypedState{ .clip = .eat, .variant = .b, .frame = 5, .frame_count = 6 };
+    const src =
+        \\.{
+        \\    .variants = .{ "a" },
+        \\    .clips = .{ .idle = .{ .frames = 2 } },
+        \\}
+    ;
+    var def = try RuntimeAnimationDef.load(testing.allocator, src);
+    defer def.deinit();
+
+    refreshState(&state, &def);
+    try testing.expectEqual(TypedState.Clip.idle, state.clip); // 2 → 0
+    try testing.expectEqual(TypedState.Variant.a, state.variant); // 1 → 0
+    try testing.expectEqual(@as(u8, 2), state.frame_count);
+    try testing.expectEqual(@as(u8, 1), state.frame); // 5 → count-1
+}
+
+// ── RuntimeAnimDefs: named store + retire-don't-free (#24 hot reload) ──
+
+test "RuntimeAnimDefs: put/get round-trip and count" {
+    var store = engine.RuntimeAnimDefs.init(testing.allocator);
+    defer store.deinit();
+
+    try testing.expectEqual(@as(usize, 0), store.count());
+    try testing.expect(store.get("worker") == null);
+
+    try store.put("worker", try RuntimeAnimationDef.load(testing.allocator,
+        \\.{ .variants = .{ "v" }, .clips = .{ .c = .{ .frames = 2 } } }
+    ));
+    try testing.expectEqual(@as(usize, 1), store.count());
+    const def = store.get("worker").?;
+    try testing.expectEqual(@as(usize, 1), def.clip_names.len);
+    try testing.expectEqualStrings("c/v_0001.png", def.spriteName(0, 0, 0));
+
+    // The key was duped — the caller's buffer can die.
+    const transient = try testing.allocator.dupe(u8, "bandit");
+    try store.put(transient, try RuntimeAnimationDef.load(testing.allocator,
+        \\.{ .variants = .{ "v" }, .clips = .{ .c = .{ .frames = 1 } } }
+    ));
+    testing.allocator.free(transient);
+    try testing.expectEqual(@as(usize, 2), store.count());
+    try testing.expect(store.get("bandit") != null);
+}
+
+test "RuntimeAnimDefs: replacing a def retires the old generation alive (no UAF)" {
+    var store = engine.RuntimeAnimDefs.init(testing.allocator);
+    defer store.deinit();
+
+    try store.put("worker", try RuntimeAnimationDef.load(testing.allocator,
+        \\.{ .variants = .{ "v" }, .clips = .{ .c = .{ .frames = 2, .speed = 1.0 } } }
+    ));
+    // Simulate a Sprite holding a name slice + game code holding a borrow
+    // across the swap (paused sim: nothing will re-resolve them).
+    const gen0 = store.get("worker").?;
+    const held_name = gen0.spriteName(0, 0, 1);
+
+    try store.put("worker", try RuntimeAnimationDef.load(testing.allocator,
+        \\.{ .variants = .{ "v" }, .clips = .{ .c = .{ .frames = 3, .speed = 9.0 } } }
+    ));
+    // New generation is live…
+    try testing.expectEqual(@as(usize, 1), store.count());
+    try testing.expectEqual(@as(f32, 9.0), store.get("worker").?.clipMeta(0).speed);
+    // …and the retired one is still readable (graveyard keeps it alive
+    // until deinit — testing.allocator would flag a UAF here otherwise).
+    try testing.expectEqualStrings("c/v_0002.png", held_name);
+    try testing.expectEqual(@as(f32, 1.0), gen0.clipMeta(0).speed);
+    // store.deinit() frees both generations; testing.allocator asserts no leak.
+}

@@ -505,6 +505,9 @@ pub const RuntimeAnimationDef = animation_def_runtime_mod.RuntimeAnimationDef;
 pub const AnimDefSource = animation_def_runtime_mod.AnimDefSource;
 pub const refreshState = animation_def_runtime_mod.refreshState;
 pub const ReloadWatcher = animation_def_runtime_mod.ReloadWatcher;
+// Named runtime-def store behind `Game.loadAnimationDefSource` /
+// `editor_api.editor_load_animation_def` (studio Play-mode hot reload).
+pub const RuntimeAnimDefs = animation_def_runtime_mod.RuntimeAnimDefs;
 pub const AnimFrameEntry = animation_def_mod.FrameEntry;
 // Per-frame animation events (#670): marker/clip-end/loop-end payloads +
 // the entity-less `PendingBuf` the pure advance methods append to.
