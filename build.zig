@@ -190,6 +190,11 @@ pub fn build(b: *std.Build) void {
         // runtime-sourced state names (loader meta.initial_state +
         // editor_set_state share the PR #599 UAF-safe ordering).
         "test/set_state_owned_test.zig",
+        // editor_reload_prefab v1.4 (#691) — bounded live-instance
+        // refresh: declared-transient diff on roots + local_path-matched
+        // children, runtime-attached survival, entity-ref preservation,
+        // reference-mode override re-merge, length-gated structural edits.
+        "test/prefab_refresh_test.zig",
     };
 
     for (test_files) |test_file| {

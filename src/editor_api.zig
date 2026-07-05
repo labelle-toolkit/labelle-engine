@@ -231,7 +231,7 @@ pub export fn editor_load_animation_def(name: [*]const u8, nlen: usize, src: [*]
     return vt.load_animation_def(name[0..nlen], src[0..slen]);
 }
 
-/// Push a prefab JSONC SOURCE into the running game (contract v1.3,
+/// Push a prefab JSONC SOURCE into the running game (contract v1.4,
 /// labelle-studio issue #24 — the prefab half). `name` is the prefab's
 /// registry name (`"condenser"` for `prefabs/condenser.jsonc`,
 /// `"<pack>__<stem>"` for pack prefabs); `src` is the full JSONC
@@ -244,19 +244,25 @@ pub export fn editor_load_animation_def(name: [*]const u8, nlen: usize, src: [*]
 /// placed instances from the new data), and save/load Phase 1
 /// re-spawns.
 ///
-/// Already-spawned instances keep their current components — the studio
-/// UI says "applies to new spawns" — and the replaced definition's
-/// memory is retired, never freed, so their borrowed slices stay valid
-/// even while the sim is paused. In-place live refresh is a documented
-/// follow-up (see `game/prefab_runtime_mixin.zig` for why it is not
-/// boundable today).
+/// v1.4 (engine#691): already-spawned instances additionally get the
+/// prefab's `.transient`-policy components re-applied in place — the
+/// exact set save/load already rebuilds from prefab data on every
+/// load. Runtime-attached transients, `.saveable` state, entity
+/// identity, `Position`/`Sprite`/`Shape`, and structural child edits
+/// stay untouched; see `jsonc/scene_loader/prefab_refresh.zig` for the
+/// scope contract. The change is visible on the next TICKED frame
+/// (under `editor_pause` that is the next `editor_step`/resume — same
+/// latency as `editor_load_animation_def`). The replaced definition's
+/// memory is retired, never freed, so components still borrowing
+/// slices from it stay valid even while the sim is paused.
 ///
 /// Returns 0 = ok; -1 = not bound / empty name; -2 = parse/shape
 /// failure (unparseable, non-object top level, RFC #560 §B2 violation);
 /// -3 = out of memory. On ANY nonzero return the registry is untouched
 /// — the previous definition stays live, so a half-saved file never
-/// corrupts the preview. The buffers are copied; the caller may free
-/// them right after the call.
+/// corrupts the preview. The rc values are unchanged from v1.3 — a
+/// v1.3-era studio keeps working, it just under-promises. The buffers
+/// are copied; the caller may free them right after the call.
 pub export fn editor_reload_prefab(name: [*]const u8, nlen: usize, src: [*]const u8, slen: usize) i32 {
     const vt = vtable orelse return -1;
     return vt.reload_prefab(name[0..nlen], src[0..slen]);
