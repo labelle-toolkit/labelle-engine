@@ -25,7 +25,10 @@ pub fn Mixin(comptime Game: type) type {
         pub const loadGameState = Restore.loadGameState;
         pub const releaseLoadAcquired = Restore.releaseLoadAcquired;
         pub const armPostLoadRenderGate = RenderGate.armPostLoadRenderGate;
-        pub const armPostLoadRenderGateFromEntry = RenderGate.armPostLoadRenderGateFromEntry;
+        // NOTE: `armPostLoadRenderGateFromEntry` stays PRIVATE to the gate
+        // module (it always was — gate-internal re-acquire step); lazy
+        // decl analysis would only surface a facade re-export of it as a
+        // compile error at first use (CodeRabbit, #695).
         pub const updatePostLoadRenderGate = RenderGate.updatePostLoadRenderGate;
     };
 }
