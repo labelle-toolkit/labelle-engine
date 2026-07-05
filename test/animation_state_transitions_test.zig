@@ -190,6 +190,7 @@ test "advanceState/advanceStateEvents accept a typed-enum clip (#686)" {
     const MClip = enum(u8) { punch, idle };
     var st = struct {
         clip: MClip = .punch,
+        variant: u8 = 0,
         frame_count: u8 = 4,
         speed: f32 = 1.0,
         mode: engine.AnimMode = .time,

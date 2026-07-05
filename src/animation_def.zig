@@ -20,6 +20,12 @@
 /// `speed` is beats/unit (seconds for `.time`, distance units for `.distance`);
 /// a slot showing for `run` beats. The count form has run 1 everywhere, so
 /// `beat_count == slot_count` and playback is bit-identical to pre-#664.
+///
+/// Entry lists are PER-VARIANT (#684): a variant's `.overrides` may replace
+/// a clip's `.frames` with any of the three forms, so every derived table
+/// (beat→slot, marker→beat, sprite names) is keyed `[clip][variant]`. A
+/// variant with no `.frames` override shares the base clip's entry list,
+/// so defs without overrides generate exactly the tables they always did.
 
 const std = @import("std");
 const anim_timing = @import("anim_timing.zig");
@@ -164,6 +170,14 @@ fn clipIndexOf(state: anytype) u8 {
     return if (@typeInfo(T) == .@"enum") @intFromEnum(state.clip) else state.clip;
 }
 
+/// Variant index of a duck-typed state — same enum-or-u8 coercion as
+/// `clipIndexOf`. Entry lists are per-variant (#684), so the advance
+/// paths need the state's variant to pick the right beat/marker row.
+fn variantIndexOf(state: anytype) u8 {
+    const T = @TypeOf(state.variant);
+    return if (@typeInfo(T) == .@"enum") @intFromEnum(state.variant) else state.variant;
+}
+
 pub fn AnimationDef(comptime zon: anytype) type {
     if (!@hasField(@TypeOf(zon), "clips")) @compileError("animation .zon must have a .clips field");
     if (!@hasField(@TypeOf(zon), "variants")) @compileError("animation .zon must have a .variants field");
@@ -204,12 +218,42 @@ pub fn AnimationDef(comptime zon: anytype) type {
 
     const Variant = @Enum(u8, .exhaustive, &VariantNames.names, &VariantNames.values);
 
-    // Per-clip normalized slot lists — the single source the meta table,
-    // name table, and beat table all derive from.
+    // Per-clip normalized slot lists (the BASE rows — what every variant
+    // without a `.frames` override plays).
     const clip_entries: [clip_count][]const FrameEntry = blk: {
         var arr: [clip_count][]const FrameEntry = undefined;
         for (clip_fields, 0..) |f, i| {
             arr[i] = normalizeFrames(@field(zon.clips, f.name).frames);
+        }
+        break :blk arr;
+    };
+
+    // Per-variant slot lists (#684) — the single source the meta, name,
+    // beat, and marker tables all derive from. Row [ci][vi] is the base
+    // list unless variant vi overrides that clip's `.frames` (any of the
+    // three #664 forms, through the same `normalizeFrames`). Non-
+    // overriding rows alias the base slice, so defs without overrides
+    // derive tables identical to the pre-#684 per-clip ones.
+    const clip_entries_2d: [clip_count][variant_count][]const FrameEntry = blk: {
+        @setEvalBranchQuota(clip_count * variant_count * 40 + 4000);
+        var arr: [clip_count][variant_count][]const FrameEntry = undefined;
+        for (0..clip_count) |ci| {
+            for (0..variant_count) |vi| arr[ci][vi] = clip_entries[ci];
+        }
+        inline for (variant_list, 0..) |velem, vi| {
+            const vinfo = @typeInfo(@TypeOf(velem));
+            if (vinfo == .@"struct" and @hasField(@TypeOf(velem), "overrides")) {
+                inline for (@typeInfo(@TypeOf(velem.overrides)).@"struct".fields) |of| {
+                    // Unknown clip names are reported by clip_meta_2d's
+                    // validation below — skip here to keep one error site.
+                    if (clipIdxByName(clip_fields, of.name)) |cidx| {
+                        const override = @field(velem.overrides, of.name);
+                        if (@hasField(@TypeOf(override), "frames")) {
+                            arr[cidx][vi] = normalizeFrames(override.frames);
+                        }
+                    }
+                }
+            }
         }
         break :blk arr;
     };
@@ -259,14 +303,12 @@ pub fn AnimationDef(comptime zon: anytype) type {
     // Variant enum pair still drives every skin (Unity Sprite Library
     // Variant's structural-consistency rule).
     //
-    // #664 reconciliation: a `.frames` override accepts the COUNT form
-    // only (an entry-list override would need per-variant beat/marker
-    // tables — a follow-up), and is rejected when the BASE clip declares
-    // per-slot holds or markers (the base beat table would no longer
-    // describe the overridden variant). Overridden variants play through
-    // the state-carried path: `transitionFromMeta(clip, clipMetaFor(clip,
-    // variant))` snapshots the right counts into AnimationState.
+    // A `.frames` override accepts any of the three #664 forms (#684):
+    // its counts are derived from the variant's own entry row in
+    // `clip_entries_2d`, and the beat/marker tables below are keyed
+    // `[clip][variant]` so holds/markers/reordering resolve per-variant.
     const clip_meta_2d: [clip_count][variant_count]ClipMeta = blk: {
+        @setEvalBranchQuota(clip_count * variant_count * 40 + 4000);
         var table: [clip_count][variant_count]ClipMeta = undefined;
         for (0..clip_count) |ci| {
             for (0..variant_count) |vi| table[ci][vi] = clip_meta_table[ci];
@@ -286,24 +328,26 @@ pub fn AnimationDef(comptime zon: anytype) type {
                     validateOverrideFields(@TypeOf(override), of.name, variantNameOf(velem));
                     var m = clip_meta_table[cidx];
                     if (@hasField(@TypeOf(override), "frames")) {
-                        const finfo = @typeInfo(@TypeOf(override.frames));
-                        if (!(finfo == .comptime_int or finfo == .int))
-                            @compileError("variant '" ++ variantNameOf(velem) ++ "' override for clip '" ++
-                                of.name ++ "': `.frames` must be a count — per-variant frame-entry overrides are a follow-up (#664 × #666)");
-                        for (clip_entries[cidx], 0..) |e, ei| {
-                            if (e.run != 1 or e.marker != null or e.f != ei + 1)
-                                @compileError("variant '" ++ variantNameOf(velem) ++ "' cannot override `.frames` of clip '" ++
-                                    of.name ++ "': the base clip declares holds/markers/reordering, which are per-clip (#664 × #666 follow-up)");
-                        }
-                        if (override.frames < 1 or override.frames > 255)
-                            @compileError("override .frames must be 1..255");
-                        m.frame_count = override.frames;
-                        m.entry_count = override.frames;
-                        m.beat_count = override.frames; // count form: 1 beat per slot
+                        const ventries = clip_entries_2d[cidx][vi];
+                        var beats: u16 = 0;
+                        for (ventries) |e| beats += e.run;
+                        m.frame_count = @intCast(ventries.len);
+                        m.entry_count = @intCast(ventries.len);
+                        m.beat_count = beats;
                     }
                     if (@hasField(@TypeOf(override), "speed")) m.speed = override.speed;
                     if (@hasField(@TypeOf(override), "mode")) m.mode = override.mode;
                     if (@hasField(@TypeOf(override), "folder")) m.folder = override.folder;
+                    // Same rule as the base table: a clip that is .static
+                    // FOR THIS VARIANT (inherited or overridden) only ever
+                    // shows slot 0, so holds in its effective entry list
+                    // are meaningless — reject the combination.
+                    if (m.mode == .static) {
+                        for (clip_entries_2d[cidx][vi]) |e| {
+                            if (e.run != 1) @compileError("variant '" ++ variantNameOf(velem) ++ "' makes clip '" ++
+                                of.name ++ "' .static with per-slot holds — holds are meaningless when frame is always slot 0");
+                        }
+                    }
                     table[cidx][vi] = m;
                 }
             }
@@ -311,9 +355,10 @@ pub fn AnimationDef(comptime zon: anytype) type {
         break :blk table;
     };
 
-    // Max slots (name-table depth; spans base AND overridden counts) and
-    // max beats (beat-table depth; base only — see clip_meta_2d note).
+    // Max slots (name-table depth) and max beats (beat-table depth) —
+    // both span every variant's rows, base and overridden (#684).
     const max_slots: usize = blk: {
+        @setEvalBranchQuota(clip_count * variant_count * 10 + 1000);
         var mx: usize = 1;
         for (0..clip_count) |ci| {
             for (0..variant_count) |vi| {
@@ -323,39 +368,33 @@ pub fn AnimationDef(comptime zon: anytype) type {
         break :blk mx;
     };
     const max_beats: usize = blk: {
+        @setEvalBranchQuota(clip_count * variant_count * 10 + 1000);
         var mx: usize = 1;
-        for (&clip_meta_table) |meta| {
-            if (meta.beat_count > mx) mx = meta.beat_count;
+        for (0..clip_count) |ci| {
+            for (0..variant_count) |vi| {
+                if (clip_meta_2d[ci][vi].beat_count > mx) mx = clip_meta_2d[ci][vi].beat_count;
+            }
         }
         break :blk mx;
     };
 
     // Precomputed sprite name table, keyed by SLOT. The name for slot i
     // uses `entries[i].f` (not i+1), so reordered/reused frames resolve
-    // to the right file. Format: "{folder}/{variant}_{f:04}.png".
+    // to the right file. Format: "{folder}/{variant}_{f:04}.png". Rows
+    // read the PER-VARIANT entry list (#684), so a `.frames` override in
+    // any form names exactly the files its own entries declare.
     const SpriteNameTable = [clip_count][variant_count][max_slots][]const u8;
     const sprite_names: SpriteNameTable = blk: {
         @setEvalBranchQuota(clip_count * variant_count * max_slots * 2000);
         var table: SpriteNameTable = undefined;
         for (0..clip_count) |ci| {
-            const entries = clip_entries[ci];
             for (0..variant_count) |vi| {
-                // Per-variant folder + slot count (honors overrides). A
-                // frames-overridden variant uses count-form files 1..N
-                // (guarded above: only legal when the base has no
-                // reorders/holds to preserve).
-                const meta_v = clip_meta_2d[ci][vi];
-                const folder = meta_v.folder;
-                const overridden = meta_v.entry_count != clip_meta_table[ci].entry_count;
-                const slot_count: usize = meta_v.entry_count;
+                const entries = clip_entries_2d[ci][vi];
+                const folder = clip_meta_2d[ci][vi].folder;
                 const vname: []const u8 = VariantNames.names[vi];
                 for (0..max_slots) |si| {
-                    if (si < slot_count) {
-                        const file_idx: u16 = if (overridden or si >= entries.len)
-                            @intCast(si + 1)
-                        else
-                            entries[si].f;
-                        table[ci][vi][si] = std.fmt.comptimePrint("{s}/{s}_{d:0>4}.png", .{ folder, vname, file_idx });
+                    if (si < entries.len) {
+                        table[ci][vi][si] = std.fmt.comptimePrint("{s}/{s}_{d:0>4}.png", .{ folder, vname, entries[si].f });
                     } else {
                         table[ci][vi][si] = "";
                     }
@@ -366,22 +405,27 @@ pub fn AnimationDef(comptime zon: anytype) type {
     };
 
     // Beat → slot table: slot j repeated `run_j` times, so a runtime
-    // `slot = beat_to_slot[clip][beat]` lookup is O(1) with no per-tick
-    // summation. Padded to `max_beats`; entries past a clip's beat_count
-    // are 0 (never read — `advanceState` mods by beat_count first).
-    const beat_to_slot: [clip_count][max_beats]u8 = blk: {
-        var table: [clip_count][max_beats]u8 = undefined;
+    // `slot = beat_to_slot[clip][variant][beat]` lookup is O(1) with no
+    // per-tick summation. Keyed per-variant (#684) because a `.frames`
+    // override changes the run structure. Padded to `max_beats`; entries
+    // past a row's beat_count are 0 (never read — `advanceState` mods by
+    // beat_count first).
+    const beat_to_slot: [clip_count][variant_count][max_beats]u8 = blk: {
+        @setEvalBranchQuota(clip_count * variant_count * (max_beats + 8) * 20 + 2000);
+        var table: [clip_count][variant_count][max_beats]u8 = undefined;
         for (0..clip_count) |ci| {
-            const entries = clip_entries[ci];
-            var b: usize = 0;
-            for (entries, 0..) |e, si| {
-                var r: usize = 0;
-                while (r < e.run) : (r += 1) {
-                    table[ci][b] = @intCast(si);
-                    b += 1;
+            for (0..variant_count) |vi| {
+                const entries = clip_entries_2d[ci][vi];
+                var b: usize = 0;
+                for (entries, 0..) |e, si| {
+                    var r: usize = 0;
+                    while (r < e.run) : (r += 1) {
+                        table[ci][vi][b] = @intCast(si);
+                        b += 1;
+                    }
                 }
+                while (b < max_beats) : (b += 1) table[ci][vi][b] = 0;
             }
-            while (b < max_beats) : (b += 1) table[ci][b] = 0;
         }
         break :blk table;
     };
@@ -427,16 +471,21 @@ pub fn AnimationDef(comptime zon: anytype) type {
 
     // Marker → beat table (#670): the marker name at each beat that is a
     // slot's FIRST beat and carries a marker, else "". A held slot (run>1)
-    // fires its marker once, at entry. Padded to `max_beats` with "".
-    const marker_beats: [clip_count][max_beats][]const u8 = blk: {
-        var table: [clip_count][max_beats][]const u8 = undefined;
+    // fires its marker once, at entry. Keyed per-variant (#684) — an
+    // overriding variant carries its own markers (or none). Padded to
+    // `max_beats` with "".
+    const marker_beats: [clip_count][variant_count][max_beats][]const u8 = blk: {
+        @setEvalBranchQuota(clip_count * variant_count * (max_beats + 8) * 20 + 2000);
+        var table: [clip_count][variant_count][max_beats][]const u8 = undefined;
         for (0..clip_count) |ci| {
-            for (0..max_beats) |bi| table[ci][bi] = "";
-            const entries = clip_entries[ci];
-            var b: usize = 0;
-            for (entries) |e| {
-                if (e.marker) |name| table[ci][b] = name;
-                b += e.run;
+            for (0..variant_count) |vi| {
+                for (0..max_beats) |bi| table[ci][vi][bi] = "";
+                const entries = clip_entries_2d[ci][vi];
+                var b: usize = 0;
+                for (entries) |e| {
+                    if (e.marker) |name| table[ci][vi][b] = name;
+                    b += e.run;
+                }
             }
         }
         break :blk table;
@@ -480,14 +529,16 @@ pub fn AnimationDef(comptime zon: anytype) type {
             return sprite_names[@intFromEnum(clip)][@intFromEnum(variant)][frame];
         }
 
-        /// The slot shown at a given beat of a clip (0-based beat). Beats
-        /// past the clip's `beat_count` wrap via the caller's mod; this
+        /// The slot shown at a given beat of a clip AS SEEN BY a variant
+        /// (0-based beat) — entry lists are per-variant (#684). Beats past
+        /// that variant's `beat_count` wrap via the caller's mod; this
         /// clamps defensively.
-        pub fn slotForBeat(clip: Clip, beat: u16) u8 {
+        pub fn slotForBeat(clip: Clip, variant: Variant, beat: u16) u8 {
             const ci = @intFromEnum(clip);
-            const bc = clip_meta_table[ci].beat_count;
+            const vi = @intFromEnum(variant);
+            const bc = clip_meta_2d[ci][vi].beat_count;
             if (bc == 0) return 0;
-            return beat_to_slot[ci][beat % bc];
+            return beat_to_slot[ci][vi][beat % bc];
         }
 
         /// Get variant name string.
@@ -529,8 +580,11 @@ pub fn AnimationDef(comptime zon: anytype) type {
         /// `AnimationState.advance` but cycles over BEATS (sum of runs)
         /// and maps the current beat to a slot via the comptime beat
         /// table, writing the slot into `state.frame`. `state` is
-        /// duck-typed (`.clip/.mode/.speed/.timer/.frame`) to avoid a
-        /// circular import with `animation_state.zig`.
+        /// duck-typed (`.clip/.variant/.mode/.speed/.timer/.frame`) to
+        /// avoid a circular import with `animation_state.zig`; `.clip`
+        /// and `.variant` may each be a `u8` or a typed enum (#686), and
+        /// the variant picks the entry row a `.frames` override installed
+        /// for it (#684).
         ///
         /// For count-shorthand clips (every run 1) `beat_count ==
         /// entry_count` and this is identical to `advance`, so a game
@@ -538,21 +592,22 @@ pub fn AnimationDef(comptime zon: anytype) type {
         /// *need* it. Full advance-dedup is #667.
         pub fn advanceState(state: anytype, dt: f32) void {
             const ci = clipIndexOf(state);
-            const meta = clip_meta_table[ci];
+            const vi = variantIndexOf(state);
+            const meta = clip_meta_2d[ci][vi];
             switch (meta.mode) {
                 .time => {
                     state.timer += dt * state.speed;
                     if (meta.beat_count > 0) {
                         const bc: f32 = @floatFromInt(meta.beat_count);
                         const beat: u16 = @intFromFloat(@mod(state.timer, bc));
-                        state.frame = beat_to_slot[ci][beat % meta.beat_count];
+                        state.frame = beat_to_slot[ci][vi][beat % meta.beat_count];
                     }
                 },
                 .distance => {
                     if (meta.beat_count > 0) {
                         const bc: f32 = @floatFromInt(meta.beat_count);
                         const beat: u16 = @intFromFloat(@mod(state.timer, bc));
-                        state.frame = beat_to_slot[ci][beat % meta.beat_count];
+                        state.frame = beat_to_slot[ci][vi][beat % meta.beat_count];
                     }
                 },
                 .static => {
@@ -578,13 +633,15 @@ pub fn AnimationDef(comptime zon: anytype) type {
             return wildcard;
         }
 
-        /// The marker name at a beat of a clip, or "" if none (#670).
-        /// Markers fire at a slot's FIRST beat only.
-        pub fn markerAtBeat(clip: Clip, beat: u16) []const u8 {
+        /// The marker name at a beat of a clip as seen by a variant, or ""
+        /// if none (#670; per-variant since #684). Markers fire at a
+        /// slot's FIRST beat only.
+        pub fn markerAtBeat(clip: Clip, variant: Variant, beat: u16) []const u8 {
             const cci = @intFromEnum(clip);
-            const bc = clip_meta_table[cci].beat_count;
+            const vi = @intFromEnum(variant);
+            const bc = clip_meta_2d[cci][vi].beat_count;
             if (bc == 0) return "";
-            return marker_beats[cci][beat % bc];
+            return marker_beats[cci][vi][beat % bc];
         }
 
         /// Beat-aware advance that ALSO emits per-frame markers + loop-end
@@ -602,7 +659,8 @@ pub fn AnimationDef(comptime zon: anytype) type {
         /// `out` to `game.emit`.
         pub fn advanceStateEvents(state: anytype, dt: f32, out: *anim_events.PendingBuf) void {
             const ci = clipIndexOf(state);
-            const meta = clip_meta_table[ci];
+            const vi = variantIndexOf(state);
+            const meta = clip_meta_2d[ci][vi];
             if (meta.mode == .static) {
                 state.frame = 0;
                 state.event_pos = 0;
@@ -634,9 +692,9 @@ pub fn AnimationDef(comptime zon: anytype) type {
                 // its marker on the first cycle — only on wraps. Fire it
                 // here exactly once, on the first forward advance.
                 if (old_pos == 0 and old_lin == 0) {
-                    const entry_name = marker_beats[ci][0];
+                    const entry_name = marker_beats[ci][vi][0];
                     if (entry_name.len > 0) {
-                        _ = out.append(.{ .kind = .marker, .clip = ci, .frame = beat_to_slot[ci][0], .marker = entry_name, .repetition = base_rep });
+                        _ = out.append(.{ .kind = .marker, .clip = ci, .frame = beat_to_slot[ci][vi][0], .marker = entry_name, .repetition = base_rep });
                     }
                 }
 
@@ -653,9 +711,9 @@ pub fn AnimationDef(comptime zon: anytype) type {
                         rep = anim_events.satAddU16(rep, 1);
                         _ = out.append(.{ .kind = .loop_end, .clip = ci, .repetition = rep });
                     }
-                    const name = marker_beats[ci][in_cycle];
+                    const name = marker_beats[ci][vi][in_cycle];
                     if (name.len > 0) {
-                        _ = out.append(.{ .kind = .marker, .clip = ci, .frame = beat_to_slot[ci][in_cycle], .marker = name, .repetition = rep });
+                        _ = out.append(.{ .kind = .marker, .clip = ci, .frame = beat_to_slot[ci][vi][in_cycle], .marker = name, .repetition = rep });
                     }
                 }
                 const add: u16 = if (wraps_full > 0xFFFF) 0xFFFF else @intCast(@max(wraps_full, 0));
@@ -664,7 +722,7 @@ pub fn AnimationDef(comptime zon: anytype) type {
 
             state.event_pos = new_pos;
             const final_beat: u16 = @intCast(@mod(@as(i64, @intFromFloat(@floor(new_pos))), @as(i64, bc)));
-            state.frame = beat_to_slot[ci][final_beat];
+            state.frame = beat_to_slot[ci][vi][final_beat];
         }
     };
 }
