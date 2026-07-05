@@ -687,3 +687,190 @@ test "findChildByLocalPath: leading-dot separator is rejected (no misparse)" {
     while (view.next()) |_| total += 1;
     try testing.expectEqual(@as(usize, 3), total);
 }
+
+test "malformed save: non-object entity entry is skipped, valid siblings load" {
+    // Every per-entry loop guards `entry != .object` through
+    // `getComponentsObject` / `getSavedId` — before the fix Steps 4/5
+    // tag-cast `entry.object` directly and a scalar entry panicked.
+    // Per-entry corruption is skip-with-log (only header corruption is
+    // fatal), so the valid sibling in the same file must still load.
+    var game = TestGame.init(testing.allocator);
+    defer game.deinit();
+
+    const save_path = "test_bad_entry_shape.json";
+    try std.Io.Dir.cwd().writeFile(std.testing.io, .{
+        .sub_path = save_path,
+        .data =
+        \\{ "version": 2, "entities": [
+        \\  42,
+        \\  { "id": 1, "components": { "Health": { "current": 5, "max": 5 } } }
+        \\] }
+        ,
+    });
+    defer std.Io.Dir.cwd().deleteFile(std.testing.io, save_path) catch {};
+
+    try game.loadGameState(save_path);
+
+    var count: usize = 0;
+    var loaded_current: f32 = 0;
+    var view = game.active_world.ecs_backend.view(.{Health}, .{});
+    defer view.deinit();
+    while (view.next()) |ent| {
+        count += 1;
+        loaded_current = game.active_world.ecs_backend.getComponent(ent, Health).?.current;
+    }
+    try testing.expectEqual(@as(usize, 1), count);
+    try testing.expectApproxEqAbs(@as(f32, 5), loaded_current, 0.01);
+}
+
+test "malformed save: negative id is skipped (no @intCast trap), valid siblings load" {
+    // Steps 4/5 previously did `@intCast((obj.get("id") orelse continue)
+    // .integer)` on the raw value — a negative saved id trapped the
+    // u64 cast in debug builds. `getSavedId`/`getU64Field` clamp
+    // negatives to null, so the entry is skipped end-to-end (Phase 1c
+    // never maps it, Phase 2 never applies it) and the valid sibling
+    // still loads.
+    var game = TestGame.init(testing.allocator);
+    defer game.deinit();
+
+    const save_path = "test_bad_negative_id.json";
+    try std.Io.Dir.cwd().writeFile(std.testing.io, .{
+        .sub_path = save_path,
+        .data =
+        \\{ "version": 2, "entities": [
+        \\  { "id": -5, "components": { "Health": { "current": 1, "max": 1 } } },
+        \\  { "id": 2, "components": { "Health": { "current": 9, "max": 9 } } }
+        \\] }
+        ,
+    });
+    defer std.Io.Dir.cwd().deleteFile(std.testing.io, save_path) catch {};
+
+    try game.loadGameState(save_path);
+
+    var count: usize = 0;
+    var loaded_current: f32 = 0;
+    var view = game.active_world.ecs_backend.view(.{Health}, .{});
+    defer view.deinit();
+    while (view.next()) |ent| {
+        count += 1;
+        loaded_current = game.active_world.ecs_backend.getComponent(ent, Health).?.current;
+    }
+    try testing.expectEqual(@as(usize, 1), count);
+    try testing.expectApproxEqAbs(@as(f32, 9), loaded_current, 0.01);
+}
+
+/// Shared body for the local_path separator cases (#696). Spawns a
+/// three-level prefab (root → child → grandchild), mutates the
+/// grandchild's Health to a sentinel (4), saves — the grandchild's
+/// `PrefabChild.local_path` is emitted as `children[0].children[0]` —
+/// optionally rewrites that path inside the save file, reloads, and
+/// asserts where the sentinel landed:
+///
+///   * resolved path → Phase 1b maps the saved grandchild onto the
+///     re-spawned one; it carries the sentinel; 3 Health entities total.
+///   * rejected path → the walk returns null, Phase 1c diverts the saved
+///     override to a fresh orphan; the re-spawned grandchild keeps the
+///     prefab default (30); 4 Health entities total.
+fn runLocalPathSeparatorCase(
+    save_path: []const u8,
+    rewrite_to: ?[]const u8,
+    expected_grandchild_health: f32,
+    expected_total: usize,
+) !void {
+    var tmp_dir = testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    var fixture = try setupFixture(&tmp_dir, .{
+        .tower =
+        \\{
+        \\  "components": { "Health": { "current": 50, "max": 50 } },
+        \\  "children": [
+        \\    {
+        \\      "components": { "Health": { "current": 40, "max": 40 } },
+        \\      "children": [
+        \\        { "components": { "Health": { "current": 30, "max": 30 } } }
+        \\      ]
+        \\    }
+        \\  ]
+        \\}
+        ,
+    });
+    defer fixture.deinit();
+
+    const root = fixture.game.spawnFromPrefab("tower", .{ .x = 0, .y = 0 }).?;
+    const child = fixture.game.getChildren(root)[0];
+    const grandchild = fixture.game.getChildren(child)[0];
+    fixture.game.active_world.ecs_backend.getComponent(grandchild, Health).?.current = 4;
+
+    try fixture.game.saveGameState(save_path);
+    defer std.Io.Dir.cwd().deleteFile(std.testing.io, save_path) catch {};
+
+    // The grandchild's path must have been emitted in the two-segment
+    // form — pins the emission format the strict walk parses
+    // (`tagAsPrefabInstance`: `children[i]`, then `.children[j]`
+    // appended). If the producer format ever drifts, this fails here
+    // rather than silently testing a path the engine never writes.
+    const contents = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, save_path, testing.allocator, .limited(1024 * 1024));
+    defer testing.allocator.free(contents);
+    const needle = "\"children[0].children[0]\"";
+    try testing.expect(std.mem.indexOf(u8, contents, needle) != null);
+
+    if (rewrite_to) |bad_path| {
+        const replacement = try std.fmt.allocPrint(testing.allocator, "\"{s}\"", .{bad_path});
+        defer testing.allocator.free(replacement);
+        const rewritten = try std.mem.replaceOwned(u8, testing.allocator, contents, needle, replacement);
+        defer testing.allocator.free(rewritten);
+        try std.Io.Dir.cwd().writeFile(std.testing.io, .{ .sub_path = save_path, .data = rewritten });
+    }
+
+    // Load must complete cleanly in every case — a rejected path is a
+    // skipped Phase 1b mapping, never an error.
+    fixture.game.resetEcsBackend();
+    try fixture.game.loadGameState(save_path);
+
+    const loaded_root = blk: {
+        var view = fixture.game.active_world.ecs_backend.view(.{PrefabInstance}, .{});
+        defer view.deinit();
+        break :blk view.next().?;
+    };
+    const loaded_child = fixture.game.getChildren(loaded_root)[0];
+    const loaded_grandchild = fixture.game.getChildren(loaded_child)[0];
+    try testing.expectApproxEqAbs(
+        expected_grandchild_health,
+        fixture.game.active_world.ecs_backend.getComponent(loaded_grandchild, Health).?.current,
+        0.01,
+    );
+
+    var total: usize = 0;
+    var view = fixture.game.active_world.ecs_backend.view(.{Health}, .{});
+    defer view.deinit();
+    while (view.next()) |_| total += 1;
+    try testing.expectEqual(expected_total, total);
+}
+
+test "findChildByLocalPath: valid multi-segment children[0].children[0] still resolves" {
+    // Positive control for the strict-separator walk: the exact format
+    // `tagAsPrefabInstance` emits must keep resolving byte-for-byte. No
+    // other test walks a two-segment path, so a regression in the
+    // first-segment bookkeeping (e.g. demanding a dot before the first
+    // segment, or not consuming the one before the second) would
+    // otherwise ship silently.
+    try runLocalPathSeparatorCase("test_localpath_valid.json", null, 4, 3);
+}
+
+test "findChildByLocalPath: missing separator children[0]children[0] is rejected" {
+    // The old walk stripped a dot when present but never required one,
+    // so this path resolved as if well-formed — aliasing the
+    // grandchild's saved components onto the walked entity. The strict
+    // walk rejects it: the override diverts to a fresh orphan and the
+    // re-spawned grandchild keeps the prefab default.
+    try runLocalPathSeparatorCase("test_localpath_nosep.json", "children[0]children[0]", 30, 4);
+}
+
+test "findChildByLocalPath: doubled separator children[0]..children[0] stays rejected" {
+    // The pre-#696 walk already rejected doubled dots (it stripped at
+    // most ONE dot, so the second broke the `children[` prefix match).
+    // Pin that contract so the strict walk can't regress into absorbing
+    // dot runs.
+    try runLocalPathSeparatorCase("test_localpath_doubledot.json", "children[0]..children[0]", 30, 4);
+}
