@@ -6,8 +6,8 @@
 /// helpers (`tagPrefabChildren`, `untrackSceneEntity`, `recordTombstone`)
 /// are called via lexical sibling-function syntax so they resolve inside
 /// this struct. Cross-cluster calls (`emitHook`, `emitEngineEvent`,
-/// `getChildren`, `hasChildren`, `tagAsPrefabInstance`, `destroyEntity`)
-/// route through the `Game` re-exports.
+/// `getChildren`, `hasChildren`, `tagAsPrefabInstance`, `destroyEntity`,
+/// `detachFromParent`) route through the `Game` re-exports.
 const std = @import("std");
 const builtin = @import("builtin");
 const core = @import("labelle-core");
@@ -229,7 +229,18 @@ pub fn Mixin(comptime Game: type) type {
 
         pub fn destroyEntity(self: *Game, entity: Entity) void {
             if (self.ecs_backend.getComponent(entity, Children)) |children_comp| {
-                for (children_comp.getChildren()) |child| {
+                // Cascade over a by-value snapshot of the children list.
+                // Each child's destroy unlinks it from THIS live list via
+                // `detachFromParent` (a swap-remove), so iterating the
+                // live slice would shrink and reorder it under the loop —
+                // skipping children and double-destroying swap remnants.
+                // The snapshot (a 16-slot inline array, cheap stack copy)
+                // also shields the walk from `entity_destroyed` hooks
+                // re-parenting into this list mid-cascade, and from the
+                // component pool reshuffling under the held pointer while
+                // descendants' own `Children` components are removed.
+                const children_snapshot = children_comp.*;
+                for (children_snapshot.getChildren()) |child| {
                     destroyEntity(self, child);
                 }
             }
@@ -237,6 +248,14 @@ pub fn Mixin(comptime Game: type) type {
             // editor-side consumer can still introspect the entity from
             // a `getComponent` style API while reacting to the frame.
             if (self.preview) |*p| p.emitEntityDestroyed(@intCast(entity)) catch {};
+            // #701 — unlink from the parent's `Children` before the
+            // backend destroy (after it, the `Parent` component is
+            // unreachable). A destroy-while-parented used to leave a
+            // permanently stale id in the parent's list; with index-only
+            // sparse-set lookups a recycled index later aliases that id
+            // onto an unrelated entity. List-unlink only: no renderer
+            // transform pokes for the dying entity.
+            self.detachFromParent(entity);
             untrackSceneEntity(self, entity);
             self.active_world.sprite_cache.invalidate(@intCast(entity));
             self.renderer.untrackEntity(entity);
@@ -250,6 +269,14 @@ pub fn Mixin(comptime Game: type) type {
 
         pub fn destroyEntityOnly(self: *Game, entity: Entity) void {
             if (self.preview) |*p| p.emitEntityDestroyed(@intCast(entity)) catch {};
+            // #701 — same parent-unlink as `destroyEntity`. This variant
+            // deliberately leaves the entity's own children alive (its
+            // contract — the scene drain destroys every tracked entity
+            // itself), but the destroyed entity must still vanish from
+            // its parent's `Children` list. During a drain the parent may
+            // already be destroyed — `detachFromParent` guards with
+            // `entityExists` before touching the parent's list.
+            self.detachFromParent(entity);
             untrackSceneEntity(self, entity);
             self.active_world.sprite_cache.invalidate(@intCast(entity));
             self.renderer.untrackEntity(entity);
