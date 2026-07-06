@@ -129,7 +129,31 @@ pub fn Mixin(comptime Game: type) type {
 
         pub fn removeParent(self: *Game, child: Entity) void {
             self.assertEntityAlive(child, "removeParent");
-            if (self.ecs_backend.getComponent(child, Parent)) |parent_comp| {
+            detachFromParent(self, child);
+            self.renderer.updateHierarchyFlag(child, false);
+            self.renderer.markPositionDirty(child);
+        }
+
+        /// List-unlink half of `removeParent` (#701): remove `child` from
+        /// its parent's `Children` list and drop the `Parent` component —
+        /// without the renderer hierarchy-flag / dirty-position pokes
+        /// `removeParent` adds for entities that keep living. Shared by
+        /// `removeParent` and the destroy paths (`destroyEntity` /
+        /// `destroyEntityOnly`), where transform bookkeeping for the dying
+        /// entity would be wasted work (the renderer untracks it right
+        /// after). No-op when `child` has no `Parent`.
+        ///
+        /// The `entityExists` guard on the parent matters on the destroy
+        /// paths: teardown order is arbitrary (the scene drain pops
+        /// tracked entities in reverse order; a cascade destroys children
+        /// while the parent is mid-destroy), so the recorded parent may
+        /// already be gone. Sparse-set lookups on the zig-ecs backend are
+        /// index-only, so a `getComponent` through a dead id can alias a
+        /// recycled entity — a `removeChild` write through that alias
+        /// would corrupt an unrelated live entity's list.
+        pub fn detachFromParent(self: *Game, child: Entity) void {
+            const parent_comp = self.ecs_backend.getComponent(child, Parent) orelse return;
+            if (self.ecs_backend.entityExists(parent_comp.entity)) {
                 if (self.ecs_backend.getComponent(parent_comp.entity, Children)) |children_comp| {
                     children_comp.removeChild(child);
                 }
@@ -138,8 +162,6 @@ pub fn Mixin(comptime Game: type) type {
             // Parent membership changed via the ecs_backend directly, so
             // invalidate rosters (#653).
             self.bumpRoster();
-            self.renderer.updateHierarchyFlag(child, false);
-            self.renderer.markPositionDirty(child);
         }
 
         pub fn removeParentKeepTransform(self: *Game, child: Entity) void {

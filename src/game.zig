@@ -843,6 +843,7 @@ pub fn GameConfigWithYAxis(
         pub const setParentKeepTransform = ComponentsMixin.setParentKeepTransform;
         pub const removeParent = ComponentsMixin.removeParent;
         pub const removeParentKeepTransform = ComponentsMixin.removeParentKeepTransform;
+        pub const detachFromParent = ComponentsMixin.detachFromParent;
         pub const getParent = ComponentsMixin.getParent;
         pub const getChildren = ComponentsMixin.getChildren;
         pub const hasChildren = ComponentsMixin.hasChildren;

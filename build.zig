@@ -195,6 +195,11 @@ pub fn build(b: *std.Build) void {
         // children, runtime-attached survival, entity-ref preservation,
         // reference-mode override re-merge, length-gated structural edits.
         "test/prefab_refresh_test.zig",
+        // #701 — destroyEntity/destroyEntityOnly unlink the destroyed
+        // entity from its parent's `Children` list (stale-id/alias hole).
+        // The cascade iterates a snapshot so the per-child unlink can't
+        // invalidate the walk.
+        "test/destroy_unlink_test.zig",
     };
 
     for (test_files) |test_file| {
