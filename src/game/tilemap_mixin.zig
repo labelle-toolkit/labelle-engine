@@ -153,9 +153,20 @@ pub fn Mixin(comptime Game: type) type {
         }
 
         /// Free + drop side-table runtimes whose entity no longer carries a
-        /// `Tilemap` in the active ECS (generic `removeComponent`, or a
-        /// stale id from another world). Restart-on-remove keeps it
-        /// iterator-safe and alloc-free; ghosts are rare so this stays ~O(n).
+        /// `Tilemap` in the active ECS (generic `removeComponent`).
+        /// Restart-on-remove keeps it iterator-safe and alloc-free; ghosts
+        /// are rare so this stays ~O(n).
+        ///
+        /// **Assumes a single active world (C1 / #704).** The table is
+        /// Game-global, so "not `Tilemap`-bearing in the active ECS" cannot
+        /// distinguish "component was removed" (correctly reaped) from
+        /// "entity belongs to a *shelved* world" (must be preserved). Under a
+        /// raw world swap this reap would DESTRUCT a shelved world's runtime,
+        /// and switching back would leave a `Tilemap` component with no
+        /// runtime (draws nothing). That aliasing is inherent to the
+        /// single-table design and the core motivation for per-world scoping;
+        /// it is safe for minimal-T2 (single world; `resetEcsBackend` clears
+        /// the table on scene swap / load). Tracked in #704.
         fn reapGhostTilemaps(self: *Game) void {
             reap: while (true) {
                 var it = self.tilemaps.iterator();
