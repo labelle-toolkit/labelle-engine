@@ -7,7 +7,6 @@
 /// just reads or writes a `Game` field — the actual platform effects
 /// (window fullscreen, animation advance) happen elsewhere, driven off
 /// these flags.
-
 const std = @import("std");
 const core = @import("labelle-core");
 
@@ -99,6 +98,13 @@ pub fn Mixin(comptime Game: type) type {
             var emb_iter = self.embedded_scene_sources.iterator();
             while (emb_iter.next()) |entry| self.allocator.free(entry.key_ptr.*);
             self.embedded_scene_sources.deinit();
+            // Tilemap runtimes (T2 Phase 2): free every decoded map +
+            // draw-pass renderer, then the embedded-source registry's
+            // owned keys (values are @embedFile borrows).
+            self.deinitTilemaps();
+            var tm_iter = self.embedded_tilemap_sources.iterator();
+            while (tm_iter.next()) |entry| self.allocator.free(entry.key_ptr.*);
+            self.embedded_tilemap_sources.deinit();
             // Scene-source overrides own BOTH keys and values (runtime
             // copies from `setSceneSourceOverride`) — free them all.
             var ovr_iter = self.scene_source_overrides.iterator();

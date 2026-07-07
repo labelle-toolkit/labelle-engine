@@ -57,6 +57,9 @@ const animation_def_runtime = @import("animation_def_runtime.zig");
 const prefab_runtime_mixin = @import("game/prefab_runtime_mixin.zig");
 const roster_mod = @import("game/roster.zig");
 const game_init_mod = @import("game/game_init.zig");
+const tilemap_mod = @import("tilemap.zig");
+const tilemap_runtime = @import("tilemap_runtime.zig");
+const tilemap_mixin = @import("game/tilemap_mixin.zig");
 
 /// Full game configuration — the assembler fills ALL comptime slots.
 /// RenderImpl is a renderer plugin (e.g. gfx.GfxRenderer) satisfying RenderInterface.
@@ -218,6 +221,24 @@ pub fn GameConfigWithYAxis(
         pub const ChildrenComp = Children;
         pub const PrefabInstanceComp = PrefabInstance;
         pub const PrefabChildComp = PrefabChildT;
+
+        // ── Tilemap (T2 Phase 2) ─────────────────────────────────
+        /// Engine built-in `Tilemap` component (references a `.tmx` asset
+        /// by name). Handled by dedicated built-in channels (scene loader,
+        /// save/load, digest) — NOT a `ComponentRegistry` component.
+        pub const TilemapComp = tilemap_mod.Tilemap;
+        /// True when the renderer plugin exposes gfx's tilemap seam
+        /// (`RenderImpl.TileMapRendererType` + the shared texture path).
+        /// Gates the decoded-map runtime + post-sprite pass; when false the
+        /// component still attaches but renders nothing (stub renderers).
+        pub const tilemap_supported = tilemap_runtime.supported(RenderImpl);
+        /// Per-entity decoded-map + draw-pass renderer (heap-owned by the
+        /// side table). `void` on renderers without the tilemap seam.
+        pub const TilemapRuntimeType = if (tilemap_supported)
+            tilemap_runtime.Runtime(RenderImpl)
+        else
+            void;
+
         pub const Input = @import("input.zig").InputInterface(InputImpl);
 
         /// True when the active input backend itself declares
@@ -288,6 +309,7 @@ pub fn GameConfigWithYAxis(
         const AnimationRuntimeMixin = animation_runtime_mixin.Mixin(Self);
         const PrefabRuntimeMixin = prefab_runtime_mixin.Mixin(Self);
         const RosterMixin = roster_mod.Mixin(Self);
+        const TilemapMixin = tilemap_mixin.Mixin(Self);
         // VideoImpl/AudioImpl are `GameConfig` fn params (not `Self`
         // decls), so the construction mixin takes them explicitly.
         const InitMixin = game_init_mod.Mixin(Self, VideoImpl, AudioImpl);
@@ -406,6 +428,18 @@ pub fn GameConfigWithYAxis(
         /// program-lifetime borrows of `@embedFile` slices and are NOT
         /// freed by the map.
         embedded_scene_sources: std.StringHashMap([]const u8),
+        /// Embedded tilemap-asset bytes (T2 Phase 2), keyed by asset name:
+        /// both the `.tmx` documents (looked up by `Tilemap.asset_name`)
+        /// and each tileset image (looked up by its `image_source`). Keys
+        /// are owned (dup'd); values are program-lifetime `@embedFile`
+        /// borrows, never freed by the map. The assembler emits registration
+        /// calls in `init()` (Phase 4); see `addEmbeddedTilemapAsset`.
+        embedded_tilemap_sources: std.StringHashMap([]const u8),
+        /// Per-entity decoded-map + draw-pass renderers (T2 Phase 2). Heap
+        /// pointers so the gfx tilemap renderer's `*const TileMap` into the
+        /// runtime stays stable. `void` on renderers without the tilemap
+        /// seam. Owned here; freed in `deinitTilemaps` / `releaseTilemap`.
+        tilemaps: if (tilemap_supported) std.AutoHashMap(Entity, *TilemapRuntimeType) else void,
         /// Runtime scene-source overrides (labelle-studio Play mode /
         /// `editor_api`). Keyed by scene NAME (e.g. `"main"`); the JSONC
         /// loader consults this map BEFORE the embedded/compiled source
@@ -826,6 +860,16 @@ pub fn GameConfigWithYAxis(
         pub const removeText = Visuals.removeText;
         pub const setZIndex = Visuals.setZIndex;
         pub const setSpriteFlip = Visuals.setSpriteFlip;
+
+        // ── Tilemap (mixin, T2 Phase 2) ──────────────────────────
+        pub const addTilemap = TilemapMixin.addTilemap;
+        pub const acquireTilemap = TilemapMixin.acquireTilemap;
+        pub const releaseTilemap = TilemapMixin.releaseTilemap;
+        pub const renderTilemaps = TilemapMixin.renderTilemaps;
+        pub const tilemapRuntime = TilemapMixin.tilemapRuntime;
+        pub const addEmbeddedTilemapAsset = TilemapMixin.addEmbeddedTilemapAsset;
+        pub const clearTilemaps = TilemapMixin.clearTilemaps;
+        pub const deinitTilemaps = TilemapMixin.deinitTilemaps;
 
         // ── Roster cache (#653, #657) — `game/roster.zig` ─────────
         // Borrowed-slice lifetime contract + design rationale live in

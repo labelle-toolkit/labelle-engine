@@ -259,6 +259,7 @@ pub fn Mixin(comptime Game: type) type {
             untrackSceneEntity(self, entity);
             self.active_world.sprite_cache.invalidate(@intCast(entity));
             self.renderer.untrackEntity(entity);
+            self.releaseTilemap(entity);
             self.ecs_backend.destroyEntity(entity);
             self.bumpRoster();
             recordTombstone(self, entity);
@@ -280,6 +281,7 @@ pub fn Mixin(comptime Game: type) type {
             untrackSceneEntity(self, entity);
             self.active_world.sprite_cache.invalidate(@intCast(entity));
             self.renderer.untrackEntity(entity);
+            self.releaseTilemap(entity);
             self.ecs_backend.destroyEntity(entity);
             self.bumpRoster();
             recordTombstone(self, entity);

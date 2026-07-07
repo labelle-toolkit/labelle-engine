@@ -543,6 +543,14 @@ fn Holder(comptime GP: type, comptime RP: type) type {
                     try appendJsonString(buf, cur, sp.sprite_name);
                 }
             }
+            // Tilemap presence (T2 Phase 2) — publishes the referenced
+            // `.tmx` asset name; no per-tile data (tilemaps are immutable).
+            if (comptime @hasDecl(G, "TilemapComp") and @hasField(G.TilemapComp, "asset_name")) {
+                if (game.getComponent(ent, G.TilemapComp)) |tm| {
+                    try appendLit(buf, cur, ",\"tilemap\":");
+                    try appendJsonString(buf, cur, tm.asset_name);
+                }
+            }
             // WORLD coordinates, not the raw (parent-relative) Position
             // component — `editor_set_entity_position` consumes world
             // coords, so the digest must publish the same space or the

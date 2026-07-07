@@ -115,6 +115,10 @@ pub fn Mixin(comptime Game: type) type {
             // Clear renderer entity tracking but keep GPU textures loaded.
             // Textures are expensive to reload (embedded atlas data parsed at startup).
             self.active_world.renderer.clear();
+            // Free per-entity tilemap runtimes — the ECS is about to be
+            // wiped, so every tilemap entity id becomes a dangling handle
+            // (T2 Phase 2). Rehydrated by the incoming scene / load path.
+            self.clearTilemaps();
             self.active_world.ecs_backend.deinit();
             _ = self.active_world.nested_entity_arena.reset(.retain_capacity);
 

@@ -112,6 +112,15 @@ pub fn ComponentApply(comptime GameType: type, comptime Components: type) type {
                 return;
             }
 
+            // Tilemap (T2 Phase 2) — built-in, uses addTilemap so the
+            // `.tmx` asset decodes + binds a draw-pass renderer at load.
+            if (std.mem.eql(u8, name, "Tilemap")) {
+                if (deserializer.deserialize(GameType.TilemapComp, value, comp_alloc)) |tilemap| {
+                    game.addTilemap(entity, tilemap);
+                }
+                return;
+            }
+
             // All other components — comptime dispatch via
             // Components registry.
             const filtered = stripEntityArrayFields(value, game.allocator);

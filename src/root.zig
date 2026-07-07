@@ -58,6 +58,12 @@ pub const StderrLogSink = core.StderrLogSink;
 pub const GameWith = game_mod.GameWith;
 pub const Game = game_mod.Game;
 
+// ── Tilemap (T2 Phase 2) ──
+/// Engine built-in `Tilemap` component — references an embedded `.tmx`
+/// asset by name. Reachable on a configured game as `Game.TilemapComp`.
+/// See `src/tilemap.zig` / `src/tilemap_runtime.zig`.
+pub const Tilemap = @import("tilemap.zig").Tilemap;
+
 // ── Input ──
 pub const InputInterface = input_mod.InputInterface;
 pub const StubInput = input_mod.StubInput;
@@ -678,4 +684,3 @@ pub const GizmoInterface = core.GizmoInterface;
 pub const StubGizmos = core.StubGizmos;
 pub const PhysicsInterface = core.PhysicsInterface;
 pub const StubPhysics = core.StubPhysics;
-
