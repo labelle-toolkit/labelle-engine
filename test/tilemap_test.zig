@@ -16,7 +16,14 @@
 //! that additionally exposes the gfx tilemap seam (`TileMapRendererType`
 //! bound to `core.MockBackend`, plus `loadTextureFromMemory`/`getTextureInfo`
 //! standing in for the shared sprite texture path). This mirrors how the
-//! production `GfxRendererWith` exposes those exact decls.
+//! production `GfxRendererWith` exposes those exact decls — INCLUDING that
+//! `getTextureInfo`'s return type references the `self` parameter
+//! (`?@TypeOf(self.inner).TextureInfo`), which makes the wrapper a GENERIC
+//! function. That generic seam is exactly what regressed on gfx 1.21.0 +
+//! the null backend (engine v1.75.1): `supported()` must still report the
+//! backend as supported, and `Runtime` must still compile, by keying its
+//! `Texture` type off the CONCRETE resolver seam rather than reflecting the
+//! generic wrapper's return type.
 
 const std = @import("std");
 const testing = std.testing;
@@ -85,8 +92,14 @@ const MockRender = struct {
 
     // ── gfx 1.21.0 tilemap seam (as GfxRendererWith exposes it) ──
     pub const TileMapRendererType = tilemap.TileMapRendererWith(MockBackend);
-    pub const TextureInfo = struct { backend_texture: MockBackend.Texture };
+    /// Stand-in for `GfxRendererWith`'s wrapped `RetainedEngine` (`self.inner`).
+    /// `getTextureInfo` names its `TextureInfo` off THIS, exactly as the
+    /// production wrapper does — which is what makes the wrapper generic.
+    pub const Inner = struct {
+        pub const TextureInfo = struct { backend_texture: MockBackend.Texture };
+    };
 
+    inner: Inner = .{},
     alloc: std.mem.Allocator = undefined,
     textures: std.AutoHashMapUnmanaged(u32, MockBackend.Texture) = .empty,
     next_id: u32 = 1,
@@ -111,7 +124,10 @@ const MockRender = struct {
         try self.textures.put(self.alloc, id, .{ .id = id, .width = 64, .height = 32 });
         return id;
     }
-    pub fn getTextureInfo(self: *const Self, id: u32) ?TextureInfo {
+    // Return type references `self` (`?@TypeOf(self.inner).TextureInfo`) →
+    // GENERIC function, byte-for-byte the shape of gfx `GfxRendererWith`. Its
+    // `@"fn".return_type` reflects as `null`; the fix must NOT reflect it.
+    pub fn getTextureInfo(self: *const Self, id: u32) ?@TypeOf(self.inner).TextureInfo {
         const tex = self.textures.get(id) orelse return null;
         return .{ .backend_texture = tex };
     }
@@ -190,6 +206,48 @@ fn registerFixture(game: anytype) !void {
 
 test "the renderer plugin exposes the gfx tilemap seam" {
     try testing.expect(TilemapGame().tilemap_supported);
+}
+
+test "regression: a GENERIC getTextureInfo seam is still supported (null-backend / gfx 1.21.0)" {
+    // Guard the reproduction itself: `MockRender.getTextureInfo` MUST be
+    // generic (return type references `self`), exactly like the production
+    // `GfxRendererWith.getTextureInfo`. If someone "simplifies" it back to a
+    // concrete return type this assertion fails and we'd stop covering the
+    // regression at all.
+    comptime {
+        const ret = @typeInfo(@TypeOf(MockRender.getTextureInfo)).@"fn".return_type;
+        std.debug.assert(ret == null); // null == generic == the broken shape
+    }
+    // Before v1.75.1 the whole `Game` type failed to COMPILE for this seam
+    // (`tilemap_runtime.zig` reflected the generic wrapper's return type →
+    // `error: unable to unwrap null`). It must now be supported so the null /
+    // headless / real gfx backends all build with tilemaps functional.
+    try testing.expect(engine.tilemapSupported(MockRender));
+    try testing.expect(TilemapGame().TilemapRuntimeType != void);
+}
+
+/// A renderer that SPELLS all four seam decls but whose `TileMapRendererType`
+/// carries no reflectable resolver/map — a bare or experimental backend.
+/// `supported()` must reject it so the feature degrades to a compile-time
+/// `void` no-op instead of failing inside `Runtime`.
+const NonReflectableRender = struct {
+    const Self = @This();
+    pub const TileMapRendererType = struct {}; // no `map`, no `TextureResolver`
+    pub fn loadTextureFromMemory(_: *Self, _: [:0]const u8, _: []const u8) !u32 {
+        return 0;
+    }
+    pub fn getTextureInfo(_: *const Self, _: u32) ?u32 {
+        return null;
+    }
+    pub fn unloadTexture(_: *Self, _: u32) void {}
+};
+
+test "supported() rejects a backend whose texture seam is not concretely reflectable" {
+    // All four decls present, so the old `@hasDecl`-only gate would have said
+    // true — but the seam can't be reflected into `Runtime`'s types.
+    try testing.expect(!engine.tilemapSupported(NonReflectableRender));
+    // A bare stub with none of the decls is likewise unsupported.
+    try testing.expect(!engine.tilemapSupported(struct {}));
 }
 
 test "addTilemap decodes the .tmx into a per-entity runtime" {
