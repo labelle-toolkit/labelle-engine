@@ -523,6 +523,29 @@ pub fn Mixin(comptime Game: type) type {
                         });
                     }
                 }
+
+                // Restore Tilemap (built-in, T2 Phase 2) — counterpart to
+                // the save block. `addTilemap` re-attaches the component AND
+                // rebuilds the decoded-map runtime from the (still-embedded)
+                // `.tmx` asset; runtime state itself is never saved.
+                // `asset_name` is duped into the world arena to outlive the
+                // parsed JSON deinit.
+                const TilemapT_load = Game.TilemapComp;
+                if (comptime !Common.isRegistered(TilemapT_load)) {
+                    if (components.get("Tilemap")) |tm_val| blk: {
+                        const tm_obj = switch (tm_val) {
+                            .object => |o| o,
+                            else => break :blk,
+                        };
+                        const name_str = switch (tm_obj.get("asset_name") orelse break :blk) {
+                            .string => |s| s,
+                            else => break :blk,
+                        };
+                        const tm_arena = self.active_world.nested_entity_arena.allocator();
+                        const name_dup = try tm_arena.dupe(u8, name_str);
+                        self.addTilemap(entity, .{ .asset_name = name_dup });
+                    }
+                }
             }
 
             // Step 4: Restore ref arrays ([]const u64 slices)

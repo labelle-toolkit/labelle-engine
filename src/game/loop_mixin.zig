@@ -224,6 +224,13 @@ pub fn Mixin(comptime Game: type) type {
             // takes. The common path (no gate armed) is unchanged.
             if (self.post_load_render_gate == null) {
                 self.renderer.render();
+                // Tilemap POST-SPRITE pass (T2 Phase 2): the engine owns
+                // pass ordering — entities first, tilemaps after. No-op
+                // when no Tilemap entities exist / renderer lacks the seam.
+                // Gated by the same post-load render gate as the world
+                // draw so restored tilemaps don't flash before their
+                // tileset textures re-bind.
+                self.renderTilemaps();
             }
             self.renderGizmos();
             self.clearGizmos();

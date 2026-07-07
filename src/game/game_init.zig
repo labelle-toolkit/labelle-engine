@@ -86,6 +86,10 @@ pub fn Mixin(comptime Game: type, comptime VideoImpl: type, comptime AudioImpl: 
                 .scenes = std.StringHashMap(Game.SceneEntry).init(allocator),
                 .jsonc_scenes = std.StringHashMap(Game.JsoncSceneInfo).init(allocator),
                 .embedded_scene_sources = std.StringHashMap([]const u8).init(allocator),
+                .embedded_tilemap_sources = std.StringHashMap([]const u8).init(allocator),
+                .tilemaps = if (Game.tilemap_supported)
+                    std.AutoHashMap(Entity, *Game.TilemapRuntimeType).init(allocator)
+                else {},
                 .scene_source_overrides = std.StringHashMap([]const u8).init(allocator),
                 .runtime_anim_defs = animation_def_runtime.RuntimeAnimDefs.init(allocator),
                 .gizmo_state = gizmo_draws_mod.GizmoState(Entity).init(allocator),

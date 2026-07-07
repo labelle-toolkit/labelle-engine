@@ -124,6 +124,24 @@ pub fn Mixin(comptime Game: type) type {
                 }
             }
 
+            // Auto-collect Tilemap entities (T2 Phase 2). Same rationale as
+            // the prefab-tag sweep above: the built-in `Tilemap` carries no
+            // registry component, so a tilemap-only entity would otherwise
+            // be missed by the registry-driven sweep and silently dropped
+            // from the save. Skipped when a game registers `Tilemap` in its
+            // own `ComponentRegistry` (then the registry sweep collected it).
+            if (comptime !Common.isRegistered(Game.TilemapComp)) {
+                var tm_view = self.active_world.ecs_backend.view(.{Game.TilemapComp}, .{});
+                defer tm_view.deinit();
+                while (tm_view.next()) |entity| {
+                    const id = Common.entityToU64(entity);
+                    if (!entity_set.contains(id)) {
+                        try entity_set.put(id, {});
+                        try entity_list.append(allocator, id);
+                    }
+                }
+            }
+
             var alloc_writer: std.Io.Writer.Allocating = .init(allocator);
             defer alloc_writer.deinit();
             const writer = &alloc_writer.writer;
@@ -244,6 +262,23 @@ pub fn Mixin(comptime Game: type) type {
                         try writer.print("{d}", .{Common.entityToU64(pc.root)});
                         try writer.writeAll(", \"local_path\": ");
                         try writeJsonString(writer, pc.local_path);
+                        try writer.writeAll("}");
+                        first_comp = false;
+                    }
+                }
+
+                // Save Tilemap (built-in, T2 Phase 2). `asset_name` is a
+                // `[]const u8` (serde can't round-trip it — same reason
+                // PrefabInstance lives here), and T2 tilemaps are immutable
+                // (deterministic from the asset), so ONLY the asset
+                // reference persists — the decoded map is never saved.
+                // Same registry-identity guard as the other built-ins.
+                const TilemapT = Game.TilemapComp;
+                if (comptime !Common.isRegistered(TilemapT)) {
+                    if (self.active_world.ecs_backend.getComponent(entity, TilemapT)) |tm| {
+                        if (!first_comp) try writer.writeAll(",");
+                        try writer.writeAll("\n        \"Tilemap\": {\"asset_name\": ");
+                        try writeJsonString(writer, tm.asset_name);
                         try writer.writeAll("}");
                         first_comp = false;
                     }

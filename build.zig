@@ -87,6 +87,9 @@ pub fn build(b: *std.Build) void {
         "test/save_load_mixin_test.zig",
         "test/jsonc/bridge_leak_test.zig",
         "test/jsonc/nested_lifecycle_test.zig",
+        // C2 — a project-registered component named `Tilemap` must win over
+        // the engine built-in in the scene loader (no silent shadowing).
+        "test/jsonc/tilemap_precedence_test.zig",
         "test/scene_ref_test.zig",
         "test/asset_catalog_test.zig",
         "test/audio_loader_test.zig",
@@ -293,6 +296,38 @@ pub fn build(b: *std.Build) void {
     assets_single_threaded_module.addImport("font_types", font_types_module);
     const assets_single_threaded = b.addTest(.{ .root_module = assets_single_threaded_module });
     test_step.dependOn(&assets_single_threaded.step);
+
+    // T2 tilemap test — proves the engine `Tilemap` component + `.tmx`
+    // decode + post-sprite render pass against the ACTUALLY-shipped gfx
+    // 1.21.0 API. The engine module takes no gfx dependency; this test
+    // reaches gfx's std-only `tilemap` sub-package (the `TileMap` decoder
+    // + `TileMapRendererWith`) through the lazy `labelle_gfx` pin and
+    // drives it over `core.mock_backend.MockBackend`. `lazyDependency`
+    // returns null on the first uncached run and Zig re-invokes after
+    // fetching, so downstream engine-module consumers never pull gfx.
+    if (b.lazyDependency("labelle_gfx", .{ .target = target, .optimize = optimize })) |gfx_dep| {
+        // gfx pins its `tilemap` sub-package in-tree (`.path = "tilemap"`);
+        // reach that module through gfx's own builder. The sub-package is
+        // std-only (no labelle-core), so there is no core-diamond to unify.
+        const tilemap_module = gfx_dep.builder.dependency("tilemap", .{
+            .target = target,
+            .optimize = optimize,
+        }).module("tilemap");
+        const tilemap_test = b.addTest(.{
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("test/tilemap_test.zig"),
+                .target = target,
+                .optimize = optimize,
+                .imports = &.{
+                    .{ .name = "labelle-core", .module = core_module },
+                    .{ .name = "engine", .module = engine_module },
+                    .{ .name = "scene", .module = scene_module },
+                    .{ .name = "tilemap", .module = tilemap_module },
+                },
+            }),
+        });
+        test_step.dependOn(&b.addRunArtifact(tilemap_test).step);
+    }
 
     // zspec BDD specs — mirrors the `spec` step in labelle-pathfinding.
     // Uses zspec's own test runner; the spec files declare

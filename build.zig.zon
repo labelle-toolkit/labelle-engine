@@ -47,6 +47,22 @@
             .hash = "zspec-0.9.1-jaKLbXgMBACFwbNjflhbMyP113leoYjboxn-1UOP-FGw",
             .lazy = true,
         },
+        // TEST-ONLY, lazy. The engine module itself takes NO labelle-gfx
+        // dependency — it reaches tilemap types through the renderer plugin
+        // (`RenderImpl.TileMapRendererType`), exactly as it reaches
+        // Sprite/Shape/`drawMesh`. This pin exists solely so the T2 tilemap
+        // test (`test/tilemap_test.zig`) can decode a real `.tmx` through
+        // gfx's std-only `tilemap` sub-package + drive gfx's
+        // `TileMapRendererWith(MockBackend)` post-sprite, proving the whole
+        // path against the actually-shipped gfx 1.21.0 API rather than a
+        // hand-rolled stand-in. `lazy` so downstream consumers of the engine
+        // module never fetch it — it is reached only by the `test` step via
+        // `b.lazyDependency`, mirroring `zspec`.
+        .labelle_gfx = .{
+            .url = "https://github.com/labelle-toolkit/labelle-gfx/archive/refs/tags/v1.21.0.tar.gz",
+            .hash = "labelle_gfx-1.21.0-nMpCPCWWBADjXOGmLAPU849pmoxipfIbvwefjhTVPzNn",
+            .lazy = true,
+        },
     },
     .paths = .{
         "build.zig",

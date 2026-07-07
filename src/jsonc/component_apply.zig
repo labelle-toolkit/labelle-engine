@@ -112,6 +112,26 @@ pub fn ComponentApply(comptime GameType: type, comptime Components: type) type {
                 return;
             }
 
+            // Tilemap (T2 Phase 2) — built-in, uses addTilemap so the
+            // `.tmx` asset decodes + binds a draw-pass renderer at load.
+            //
+            // A project-registered component named `Tilemap` WINS: the
+            // built-in branch is compiled out when the registry defines the
+            // name, so the generic `Components.names()` dispatch below routes
+            // it to the registered type. Without this guard the built-in
+            // would silently shadow the registered component (and because
+            // `TilemapComp.asset_name` defaults to `""`, even custom JSON
+            // lacking `asset_name` would deserialize as an empty engine
+            // tilemap) — silent scene-data loss (C2).
+            if (comptime !Components.has("Tilemap")) {
+                if (std.mem.eql(u8, name, "Tilemap")) {
+                    if (deserializer.deserialize(GameType.TilemapComp, value, comp_alloc)) |tilemap| {
+                        game.addTilemap(entity, tilemap);
+                    }
+                    return;
+                }
+            }
+
             // All other components — comptime dispatch via
             // Components registry.
             const filtered = stripEntityArrayFields(value, game.allocator);
