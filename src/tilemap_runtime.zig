@@ -29,7 +29,12 @@ const std = @import("std");
 pub fn supported(comptime RenderImpl: type) bool {
     return @hasDecl(RenderImpl, "TileMapRendererType") and
         @hasDecl(RenderImpl, "loadTextureFromMemory") and
-        @hasDecl(RenderImpl, "getTextureInfo");
+        @hasDecl(RenderImpl, "getTextureInfo") and
+        // `unloadTexture` is the counterpart to `loadTextureFromMemory` —
+        // the runtime OWNS the tileset textures it uploads (gfx receives
+        // them as unowned via the resolver) and must release them on
+        // teardown (F1). `GfxRendererWith` declares all four.
+        @hasDecl(RenderImpl, "unloadTexture");
 }
 
 /// Supplies raw image bytes for a tileset's `image_source` name. The
@@ -158,8 +163,34 @@ pub fn Runtime(comptime RenderImpl: type) type {
 
         pub fn deinit(self: *Self) void {
             self.tm.deinit();
+            // Release the tileset textures this runtime uploaded (F1). gfx
+            // received them through the resolver as UNOWNED, so `tm.deinit`
+            // does NOT free them — the runtime that uploaded them owns them.
+            // Dedup so a tileset id that (in a future engine that dedups
+            // uploads by content) backs two tilesets is never double-unloaded.
+            for (self.tileset_ids, 0..) |maybe_id, i| {
+                const id = maybe_id orelse continue;
+                var already = false;
+                for (self.tileset_ids[0..i]) |prev| {
+                    if (prev) |p| {
+                        if (p == id) {
+                            already = true;
+                            break;
+                        }
+                    }
+                }
+                if (!already) self.renderer.unloadTexture(id);
+            }
             self.map.deinit();
             self.allocator.free(self.tileset_ids);
+        }
+
+        /// The map's height in pixels (`tile_height * rows`). Used by the
+        /// engine's render pass to apply the project Y-axis flip to the
+        /// map's world offset so a tilemap and a sprite at the same
+        /// `Position.y` align (F3).
+        pub fn pixelHeight(self: *const Self) f32 {
+            return @floatFromInt(self.map.getPixelHeight());
         }
 
         /// The post-sprite draw pass for this entity. `offset_x/offset_y`

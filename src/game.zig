@@ -439,6 +439,17 @@ pub fn GameConfigWithYAxis(
         /// pointers so the gfx tilemap renderer's `*const TileMap` into the
         /// runtime stays stable. `void` on renderers without the tilemap
         /// seam. Owned here; freed in `deinitTilemaps` / `releaseTilemap`.
+        ///
+        /// **Single-world scope (T2 limitation, F2 / #704).** This table is
+        /// keyed on the Game and is NOT swapped with `active_world`, so its
+        /// entity ids belong to whichever world was active when
+        /// `addTilemap` ran. `resetEcsBackend` (scene swap / `loadGameState`)
+        /// clears it via `clearTilemaps`, so the common single-world path is
+        /// safe. A raw world *swap* (multiple live worlds) could leave a
+        /// shelved world's ids here; `renderTilemaps` guards against drawing
+        /// them by reaping any id that isn't `Tilemap`-bearing in the
+        /// CURRENTLY active ECS. Proper per-world scoping (own the table on
+        /// `World`, clean it in `destroyWorld`) is tracked in #704.
         tilemaps: if (tilemap_supported) std.AutoHashMap(Entity, *TilemapRuntimeType) else void,
         /// Runtime scene-source overrides (labelle-studio Play mode /
         /// `editor_api`). Keyed by scene NAME (e.g. `"main"`); the JSONC
@@ -865,6 +876,7 @@ pub fn GameConfigWithYAxis(
         pub const addTilemap = TilemapMixin.addTilemap;
         pub const acquireTilemap = TilemapMixin.acquireTilemap;
         pub const releaseTilemap = TilemapMixin.releaseTilemap;
+        pub const removeTilemap = TilemapMixin.removeTilemap;
         pub const renderTilemaps = TilemapMixin.renderTilemaps;
         pub const tilemapRuntime = TilemapMixin.tilemapRuntime;
         pub const addEmbeddedTilemapAsset = TilemapMixin.addEmbeddedTilemapAsset;

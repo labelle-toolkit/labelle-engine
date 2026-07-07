@@ -87,6 +87,12 @@ pub fn Mixin(comptime Game: type) type {
             if (self.active_world_name) |name| {
                 self.allocator.free(name);
             }
+            // Tilemap runtimes (T2 Phase 2) — MUST run before the active
+            // world's renderer is torn down: each runtime unloads the
+            // tileset textures it uploaded through `renderer.unloadTexture`
+            // (F1), so the renderer has to still be alive.
+            self.deinitTilemaps();
+
             // Clean up active world
             self.active_world.deinit();
             self.allocator.destroy(self.active_world);
@@ -98,10 +104,10 @@ pub fn Mixin(comptime Game: type) type {
             var emb_iter = self.embedded_scene_sources.iterator();
             while (emb_iter.next()) |entry| self.allocator.free(entry.key_ptr.*);
             self.embedded_scene_sources.deinit();
-            // Tilemap runtimes (T2 Phase 2): free every decoded map +
-            // draw-pass renderer, then the embedded-source registry's
-            // owned keys (values are @embedFile borrows).
-            self.deinitTilemaps();
+            // Tilemap embedded-source registry (T2 Phase 2): free the owned
+            // keys (values are program-lifetime @embedFile borrows). The
+            // runtimes themselves were already freed above, before the
+            // renderer teardown.
             var tm_iter = self.embedded_tilemap_sources.iterator();
             while (tm_iter.next()) |entry| self.allocator.free(entry.key_ptr.*);
             self.embedded_tilemap_sources.deinit();

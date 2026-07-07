@@ -9,6 +9,7 @@
 //! no-op — keeping the feature purely additive for stub renderers.
 
 const std = @import("std");
+const core = @import("labelle-core");
 const tilemap_runtime = @import("../tilemap_runtime.zig");
 
 pub fn Mixin(comptime Game: type) type {
@@ -92,23 +93,94 @@ pub fn Mixin(comptime Game: type) type {
             }
         }
 
+        /// Detach a `Tilemap` component AND free its decoded-map runtime —
+        /// the counterpart to `addTilemap` (F4). Prefer this over the
+        /// generic `removeComponent(entity, Tilemap)`, which would strip the
+        /// component but leave the side-table runtime alive; `renderTilemaps`
+        /// reaps such orphans defensively, but going through `removeTilemap`
+        /// frees the runtime immediately.
+        pub fn removeTilemap(self: *Game, entity: Entity) void {
+            releaseTilemap(self, entity);
+            self.removeComponent(entity, Tilemap);
+        }
+
         /// The post-sprite tilemap pass: after the entity render pass, draw
         /// every `Tilemap` entity's decoded map at its world `Position`.
         /// The engine owns pass ordering here (entities first, tilemaps
         /// after); gfx's `RetainedEngine` is untouched.
         ///
-        /// T2 runs the pass in screen space (`camera_* = 0`): tiles draw at
-        /// `world_pos - 0`. Aligning with a moving camera transform and
-        /// Z-interleaving with sprite layers are deferred to T3 — the gfx
-        /// `drawAllLayers` seam already accepts the camera offset for when
-        /// that lands.
+        /// **Y-axis (F3).** The map's world offset is flipped through the
+        /// SAME `core.toScreenY` transform sprites use, so a tilemap and a
+        /// sprite at the same `Position.y` align under `.up` (and are the
+        /// identity under `.down`). Since the map draws downward from its
+        /// top-left, under `.up` — where `Position.y` is the map's *bottom*
+        /// edge — the flipped screen offset is additionally raised by the
+        /// map's pixel height so the bottom edge lands at
+        /// `toScreenY(.up, pos.y, H)`.
+        ///
+        /// **Ghost guard (F4/F2).** Entities whose `Tilemap` component was
+        /// stripped via the generic `removeComponent` — or stale ids left
+        /// over from a world swap (F2) — are reaped from the side table and
+        /// never drawn: the table is keyed on the Game, not swapped with
+        /// `active_world`, so it's guarded against the CURRENTLY active ECS.
+        ///
+        /// T2 runs the pass in screen space (`camera_* = 0`). Camera-transform
+        /// alignment + Z-interleaving with sprite layers are deferred to T3.
         pub fn renderTilemaps(self: *Game) void {
             if (comptime !supported) return;
+
+            reapGhostTilemaps(self);
+
+            const y_axis = Game.y_axis;
+            const screen_h = tilemapScreenHeight(self);
             var it = self.tilemaps.iterator();
             while (it.next()) |e| {
-                const pos = self.getWorldPosition(e.key_ptr.*);
-                e.value_ptr.*.draw(0, 0, pos.x, pos.y, null, null);
+                const entity = e.key_ptr.*;
+                const rt = e.value_ptr.*;
+                const pos = self.getWorldPosition(entity);
+                const off_x = pos.x;
+                // Flip the map's world Y into screen space exactly as the
+                // renderer flips sprite Y, then (under `.up`) raise by the
+                // map height so the map's bottom edge sits at the flipped
+                // Position.y — identity under `.down`.
+                const off_y = core.toScreenY(y_axis, pos.y, screen_h) -
+                    switch (y_axis) {
+                        .up => rt.pixelHeight(),
+                        .down => @as(f32, 0),
+                    };
+                rt.draw(0, 0, off_x, off_y, null, null);
             }
+        }
+
+        /// Free + drop side-table runtimes whose entity no longer carries a
+        /// `Tilemap` in the active ECS (generic `removeComponent`, or a
+        /// stale id from another world). Restart-on-remove keeps it
+        /// iterator-safe and alloc-free; ghosts are rare so this stays ~O(n).
+        fn reapGhostTilemaps(self: *Game) void {
+            reap: while (true) {
+                var it = self.tilemaps.iterator();
+                while (it.next()) |e| {
+                    if (!self.ecs_backend.hasComponent(e.key_ptr.*, Tilemap)) {
+                        const rt = e.value_ptr.*;
+                        _ = self.tilemaps.remove(e.key_ptr.*);
+                        rt.deinit();
+                        self.allocator.destroy(rt);
+                        continue :reap;
+                    }
+                }
+                break;
+            }
+        }
+
+        /// The renderer's LOGICAL screen height — the same value sprites are
+        /// flipped against (`GfxRendererWith.screen_height`, set via
+        /// `setScreenHeight`). Only consulted for the `.up` flip; `.down` is
+        /// the identity so the value is unused there.
+        fn tilemapScreenHeight(self: *Game) f32 {
+            if (comptime @hasField(@TypeOf(self.renderer.*), "screen_height")) {
+                return self.renderer.screen_height;
+            }
+            return 0;
         }
 
         /// Test/introspection accessor: the decoded-map runtime for an

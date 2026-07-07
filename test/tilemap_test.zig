@@ -91,6 +91,9 @@ const MockRender = struct {
     textures: std.AutoHashMapUnmanaged(u32, MockBackend.Texture) = .empty,
     next_id: u32 = 1,
     render_count: usize = 0,
+    /// Logical screen height sprites (and the tilemap y-flip) flip against —
+    /// mirrors `GfxRendererWith.screen_height` (set via `setScreenHeight`).
+    screen_height: f32 = 600,
 
     pub fn init(allocator: std.mem.Allocator) Self {
         return .{ .alloc = allocator };
@@ -112,6 +115,11 @@ const MockRender = struct {
         const tex = self.textures.get(id) orelse return null;
         return .{ .backend_texture = tex };
     }
+    /// Release counterpart — the runtime unloads the tileset textures it
+    /// uploaded (F1). Idempotent: a stale id is a safe no-op.
+    pub fn unloadTexture(self: *Self, id: u32) void {
+        _ = self.textures.remove(id);
+    }
 
     // ── core.RenderInterface no-ops (mirror StubRender) ──
     pub fn trackEntity(_: *Self, _: u32, _: core.render.VisualType) void {}
@@ -121,7 +129,9 @@ const MockRender = struct {
     pub fn updateHierarchyFlag(_: *Self, _: u32, _: bool) void {}
     pub fn markVisualDirty(_: *Self, _: u32) void {}
     pub fn sync(_: *Self, comptime _: type, _: anytype) void {}
-    pub fn setScreenHeight(_: *Self, _: f32) void {}
+    pub fn setScreenHeight(self: *Self, h: f32) void {
+        self.screen_height = h;
+    }
     pub fn renderGizmoDraws(_: *Self, _: []const core.gizmos.GizmoDraw) void {}
     pub fn hasEntity(_: *const Self, _: u32) bool {
         return false;
@@ -238,10 +248,12 @@ test "tilemap renders as a POST-SPRITE pass at the entity's world offset" {
     }
     // 3×2 fully-populated layer → 6 tile draws.
     try testing.expectEqual(@as(usize, 6), tile_draws);
-    // Top-left tile (0,0): dest = tile*16 + offset - camera, centred (+8).
-    // offset = entity Position (100,50), camera 0 → 108 / 58.
+    // X is not flipped: tile (0,0) dest.x = 0*16 + offset_x(100) + 8 = 108.
     try testing.expectEqual(@as(f32, 108), min_x);
-    try testing.expectEqual(@as(f32, 58), min_y);
+    // Y IS flipped for the default `.up` project (F3): the map's top-left
+    // screen offset = toScreenY(.up, 50, 600) - pixelHeight(32) = 518, so the
+    // top row draws at 518 + 8 (centre) = 526.
+    try testing.expectEqual(@as(f32, 526), min_y);
 }
 
 test "save persists only asset_name; load rehydrates the runtime" {
@@ -317,4 +329,138 @@ test "scene digest reports the tilemap entity" {
     const digest = buf[0..n];
 
     try testing.expect(std.mem.indexOf(u8, digest, "\"tilemap\":\"level.tmx\"") != null);
+}
+
+// A `.down` (screen-native) project — the tilemap y-flip is the identity.
+fn TilemapGameDown() type {
+    return engine.GameConfigWithYAxis(
+        MockRender,
+        MockEcsBackend(u32),
+        StubInput,
+        StubAudio,
+        StubVideo,
+        StubGui,
+        void,
+        StubLogSink,
+        EmptyComponents,
+        &.{},
+        void,
+        .down,
+    );
+}
+
+test "F3: tilemap y-offset matches the sprite y-axis transform (.up)" {
+    const G = TilemapGame(); // default `.up`
+    var game = G.init(testing.allocator);
+    defer game.deinit();
+    try registerFixture(&game);
+
+    const pos_y: f32 = 50;
+    const e = game.createEntity();
+    game.setPosition(e, .{ .x = 0, .y = pos_y });
+    game.addTilemap(e, .{ .asset_name = "level.tmx" });
+
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+    game.render();
+
+    // Tiles are recorded with a CENTRED dest (gfx anchors at the tile
+    // centre), so the map's bottom edge = max centre-y + half a tile.
+    const half_tile: f32 = 8;
+    var max_center_y: f32 = -std.math.floatMax(f32);
+    for (MockBackend.getDrawCalls()[1..]) |c| {
+        if (c.dest.y > max_center_y) max_center_y = c.dest.y;
+    }
+    const map_bottom_edge = max_center_y + half_tile;
+
+    // The tilemap's bottom edge must land exactly where the renderer's own
+    // y-flip (the SAME path sprites use) places `Position.y`.
+    const sprite_screen_y = core.toScreenY(.up, pos_y, game.renderer.screen_height);
+    try testing.expectEqual(sprite_screen_y, map_bottom_edge);
+}
+
+test "F3: tilemap y-offset is the identity under .down" {
+    const G = TilemapGameDown();
+    var game = G.init(testing.allocator);
+    defer game.deinit();
+    try registerFixture(&game);
+
+    const e = game.createEntity();
+    game.setPosition(e, .{ .x = 0, .y = 50 });
+    game.addTilemap(e, .{ .asset_name = "level.tmx" });
+
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+    game.render();
+
+    // `.down`: offset_y = Position.y (identity, no height adjust). Top-left
+    // tile (0,0) centre = 0*16 + 50 + 8 = 58.
+    var min_y: f32 = std.math.floatMax(f32);
+    for (MockBackend.getDrawCalls()[1..]) |c| {
+        if (c.dest.y < min_y) min_y = c.dest.y;
+    }
+    try testing.expectEqual(@as(f32, 58), min_y);
+}
+
+test "F1: tileset textures are released on teardown (no GPU-texture leak)" {
+    const G = TilemapGame();
+    var game = G.init(testing.allocator);
+    defer game.deinit();
+    try registerFixture(&game);
+
+    const e = game.createEntity();
+    game.addTilemap(e, .{ .asset_name = "level.tmx" });
+    // One tileset image uploaded → one live backend texture.
+    try testing.expectEqual(@as(usize, 1), game.renderer.textures.count());
+
+    // Re-acquire must not grow the texture registry (old released first).
+    game.acquireTilemap(e, "level.tmx");
+    try testing.expectEqual(@as(usize, 1), game.renderer.textures.count());
+
+    // Release unloads the uploaded texture — no leak.
+    game.releaseTilemap(e);
+    try testing.expectEqual(@as(usize, 0), game.renderer.textures.count());
+}
+
+test "F4: removeTilemap frees the runtime and detaches the component" {
+    const G = TilemapGame();
+    var game = G.init(testing.allocator);
+    defer game.deinit();
+    try registerFixture(&game);
+
+    const e = game.createEntity();
+    game.addTilemap(e, .{ .asset_name = "level.tmx" });
+    try testing.expect(game.tilemapRuntime(e) != null);
+
+    game.removeTilemap(e);
+    try testing.expect(game.tilemapRuntime(e) == null);
+    try testing.expect(game.getComponent(e, G.TilemapComp) == null);
+    try testing.expectEqual(@as(usize, 0), game.renderer.textures.count());
+}
+
+test "F4: generic removeComponent leaves no drawing ghost (render reaps it)" {
+    const G = TilemapGame();
+    var game = G.init(testing.allocator);
+    defer game.deinit();
+    try registerFixture(&game);
+
+    const e = game.createEntity();
+    game.setPosition(e, .{ .x = 0, .y = 0 });
+    game.addTilemap(e, .{ .asset_name = "level.tmx" });
+    try testing.expect(game.tilemapRuntime(e) != null);
+
+    // Strip the component the "wrong" way (generic removeComponent) — the
+    // side-table runtime is now an orphan.
+    game.removeComponent(e, G.TilemapComp);
+
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+    game.render(); // reaps the ghost, draws only the sprite sentinel
+
+    // No tile draws — the ghost never rendered.
+    try testing.expectEqual(@as(usize, 1), MockBackend.getDrawCallCount());
+    try testing.expectEqual(sprite_sentinel_id, MockBackend.getDrawCalls()[0].texture_id);
+    // And the orphan runtime + its texture were reaped/freed.
+    try testing.expect(game.tilemapRuntime(e) == null);
+    try testing.expectEqual(@as(usize, 0), game.renderer.textures.count());
 }
