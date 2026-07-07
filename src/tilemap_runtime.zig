@@ -87,7 +87,9 @@ fn hasReflectableSeam(comptime RenderImpl: type) bool {
 
     // The shared upload path must expose a concrete (non-generic) error-union
     // return so `Runtime` can name the texture-id handle it threads around.
-    const load_ret = @typeInfo(@TypeOf(RenderImpl.loadTextureFromMemory)).@"fn".return_type orelse return false;
+    const LoadInfo = @typeInfo(@TypeOf(RenderImpl.loadTextureFromMemory));
+    if (LoadInfo != .@"fn") return false;
+    const load_ret = LoadInfo.@"fn".return_type orelse return false;
     if (@typeInfo(load_ret) != .error_union) return false;
 
     return true;
