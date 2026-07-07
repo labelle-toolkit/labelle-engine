@@ -85,6 +85,13 @@ pub fn Runtime(comptime RenderImpl: type) type {
         /// Per-tileset catalog texture id (null = image unresolved →
         /// that tileset draws nothing). Read by the resolver trampoline.
         tileset_ids: []?TextureId,
+        /// Resolver context, stored inline so its address is heap-stable
+        /// (matches the `Game`-heap-allocated `Runtime`). gfx resolves
+        /// textures eagerly inside `initWithOptions` today — but keeping
+        /// the context alongside the renderer keeps the code correct even
+        /// if gfx ever moves to lazy (draw-time) resolution, instead of
+        /// silently depending on that timing across the repo boundary.
+        resolver_ctx: ResolverCtx,
 
         const ResolverCtx = struct {
             renderer: *RenderImpl,
@@ -135,11 +142,14 @@ pub fn Runtime(comptime RenderImpl: type) type {
                 .map = map,
                 .tm = undefined,
                 .tileset_ids = ids,
+                .resolver_ctx = undefined,
             };
 
-            var ctx = ResolverCtx{ .renderer = renderer, .ids = self.tileset_ids };
+            // Point the resolver at the heap-stable field (not a stack local),
+            // so the context outlives `initInPlace` for any resolution timing.
+            self.resolver_ctx = .{ .renderer = renderer, .ids = self.tileset_ids };
             self.tm = try TmRenderer.initWithOptions(allocator, &self.map, .{
-                .resolver = Resolver{ .context = &ctx, .resolveFn = resolveTexture },
+                .resolver = Resolver{ .context = &self.resolver_ctx, .resolveFn = resolveTexture },
                 // Embedded env: never touch the filesystem for unresolved
                 // tilesets — the resolver is the only texture source.
                 .load_unresolved_from_filesystem = false,
@@ -183,5 +193,9 @@ fn fileTypeZ(allocator: std.mem.Allocator, image_source: []const u8) ![:0]const 
     const dot = std.mem.lastIndexOfScalar(u8, image_source, '.');
     const ext = if (dot) |d| image_source[d + 1 ..] else "";
     const chosen = if (ext.len == 0) "png" else ext;
-    return allocator.dupeZ(u8, chosen);
+    const out = try allocator.dupeZ(u8, chosen);
+    // Normalise to lowercase so a `.PNG` tileset resolves the same decoder
+    // as `.png` (the image loaders dispatch on a lowercase file type).
+    for (out) |*c| c.* = std.ascii.toLower(c.*);
+    return out;
 }
