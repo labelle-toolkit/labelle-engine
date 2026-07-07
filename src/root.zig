@@ -63,6 +63,11 @@ pub const Game = game_mod.Game;
 /// asset by name. Reachable on a configured game as `Game.TilemapComp`.
 /// See `src/tilemap.zig` / `src/tilemap_runtime.zig`.
 pub const Tilemap = @import("tilemap.zig").Tilemap;
+/// True when a renderer plugin exposes a CONCRETELY reflectable gfx tilemap
+/// seam. Gates `Game.tilemap_supported` / `Game.TilemapRuntimeType`; exposed
+/// so consumers (and tests) can probe a renderer without configuring a whole
+/// `Game`. See `src/tilemap_runtime.zig`.
+pub const tilemapSupported = @import("tilemap_runtime.zig").supported;
 
 // ── Input ──
 pub const InputInterface = input_mod.InputInterface;

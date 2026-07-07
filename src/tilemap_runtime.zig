@@ -25,7 +25,25 @@ const std = @import("std");
 
 /// True when `RenderImpl` exposes the gfx 1.21.0 tilemap seam: the
 /// per-backend `TileMapRenderer` type plus the shared texture path the
-/// resolver bridges through. `GfxRendererWith` satisfies all three.
+/// resolver bridges through. `GfxRendererWith` satisfies all of it.
+///
+/// Two gates, both required:
+///   1. NAME presence — the four decls that spell the seam exist.
+///   2. CONCRETE reflectability — the exact shapes `Runtime` derives its
+///      types from are present AND non-generic (`hasReflectableSeam`).
+///
+/// Gate 2 exists because `@hasDecl` alone is a trap: gfx 1.21.0's
+/// `GfxRendererWith.getTextureInfo` returns `?@TypeOf(self.inner).TextureInfo`,
+/// whose dependence on the `self` PARAMETER makes the wrapper a GENERIC
+/// function — so `@typeInfo(...).@"fn".return_type` is `null`. A `@hasDecl`
+/// pass therefore let `Runtime` be instantiated even though reflecting that
+/// return type fails to COMPILE (`error: unable to unwrap null`), which broke
+/// every headless/null-backend consumer on gfx 1.21.0. `Runtime` no longer
+/// reflects that generic wrapper (it keys `Texture` off the concrete resolver
+/// seam instead), and `supported()` verifies the concrete seam up front so
+/// the two can never disagree. A renderer without a reflectable seam (a bare
+/// test stub, a malformed backend) reports `false` → the feature compiles to
+/// a `void` side-table no-op instead of failing the whole build.
 pub fn supported(comptime RenderImpl: type) bool {
     return @hasDecl(RenderImpl, "TileMapRendererType") and
         @hasDecl(RenderImpl, "loadTextureFromMemory") and
@@ -34,7 +52,45 @@ pub fn supported(comptime RenderImpl: type) bool {
         // the runtime OWNS the tileset textures it uploads (gfx receives
         // them as unowned via the resolver) and must release them on
         // teardown (F1). `GfxRendererWith` declares all four.
-        @hasDecl(RenderImpl, "unloadTexture");
+        @hasDecl(RenderImpl, "unloadTexture") and
+        hasReflectableSeam(RenderImpl);
+}
+
+/// True when every type `Runtime` derives from `RenderImpl` is present and
+/// CONCRETELY reflectable. Each step is guarded by a tag/field check before
+/// it reflects, so a malformed seam returns `false` rather than triggering a
+/// compile error here. Callers must have already confirmed the four seam
+/// decls exist (see `supported`).
+fn hasReflectableSeam(comptime RenderImpl: type) bool {
+    if (!@hasDecl(RenderImpl, "TileMapRendererType")) return false;
+    const TmRenderer = RenderImpl.TileMapRendererType;
+    if (@typeInfo(TmRenderer) != .@"struct") return false;
+
+    // `Runtime` derives `TileMap` (and `Tileset`) from these concrete fields.
+    if (!@hasField(TmRenderer, "map")) return false;
+    if (@typeInfo(@FieldType(TmRenderer, "map")) != .pointer) return false;
+    const TileMap = @typeInfo(@FieldType(TmRenderer, "map")).pointer.child;
+    if (@typeInfo(TileMap) != .@"struct" or !@hasField(TileMap, "tilesets")) return false;
+    if (@typeInfo(@FieldType(TileMap, "tilesets")) != .pointer) return false;
+
+    // The backend texture handed to the tilemap renderer — derived from the
+    // CONCRETE resolver fn-pointer, never the generic `getTextureInfo` wrapper.
+    if (!@hasDecl(TmRenderer, "TextureResolver")) return false;
+    const Resolver = TmRenderer.TextureResolver;
+    if (@typeInfo(Resolver) != .@"struct" or !@hasField(Resolver, "resolveFn")) return false;
+    const ResolveFnPtr = @FieldType(Resolver, "resolveFn");
+    if (@typeInfo(ResolveFnPtr) != .pointer) return false;
+    const ResolveFn = @typeInfo(ResolveFnPtr).pointer.child;
+    if (@typeInfo(ResolveFn) != .@"fn") return false;
+    const resolve_ret = @typeInfo(ResolveFn).@"fn".return_type orelse return false;
+    if (@typeInfo(resolve_ret) != .optional) return false;
+
+    // The shared upload path must expose a concrete (non-generic) error-union
+    // return so `Runtime` can name the texture-id handle it threads around.
+    const load_ret = @typeInfo(@TypeOf(RenderImpl.loadTextureFromMemory)).@"fn".return_type orelse return false;
+    if (@typeInfo(load_ret) != .error_union) return false;
+
+    return true;
 }
 
 /// Supplies raw image bytes for a tileset's `image_source` name. The
@@ -68,12 +124,21 @@ pub fn Runtime(comptime RenderImpl: type) type {
     const LoadRet = @typeInfo(@TypeOf(RenderImpl.loadTextureFromMemory)).@"fn".return_type.?;
     const TextureId = @typeInfo(LoadRet).error_union.payload;
 
-    // Backend texture type the resolver must hand to the tilemap renderer.
-    const GetInfoRet = @typeInfo(@TypeOf(RenderImpl.getTextureInfo)).@"fn".return_type.?;
-    const TextureInfo = @typeInfo(GetInfoRet).optional.child;
-    const Texture = @FieldType(TextureInfo, "backend_texture");
-
     const Resolver = TmRenderer.TextureResolver;
+
+    // Backend texture type the resolver must hand to the tilemap renderer.
+    // Derived from the CONCRETE `TextureResolver.resolveFn` signature
+    // (`fn (…) ?Texture`) — NOT from `RenderImpl.getTextureInfo`'s return
+    // type. gfx 1.21.0's `GfxRendererWith.getTextureInfo` returns
+    // `?@TypeOf(self.inner).TextureInfo`, whose dependence on the `self`
+    // parameter makes the wrapper a GENERIC function, so its `return_type`
+    // reflects as `null` and `.?` would fail to compile on every backend
+    // (headless/null-backend regression fixed in v1.75.1). The resolver
+    // carries the same `Texture` concretely; we call `getTextureInfo` only
+    // at RUNTIME below, where its generic return type resolves fine.
+    const ResolveFnPtr = @FieldType(Resolver, "resolveFn");
+    const ResolveRet = @typeInfo(@typeInfo(ResolveFnPtr).pointer.child).@"fn".return_type.?;
+    const Texture = @typeInfo(ResolveRet).optional.child;
 
     return struct {
         const Self = @This();
