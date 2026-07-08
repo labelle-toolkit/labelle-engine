@@ -81,6 +81,9 @@ test "pre-bind: every export is a safe no-op" {
     // Void setters silently ignore.
     editor_api.editor_set_entity_position(42, 1.0, 2.0);
 
+    // Generic per-component edit (v1.5) reports "not bound" pre-bind.
+    try testing.expectEqual(@as(i32, -1), editor_api.editor_set_component(42, "Camera", 6, "{\"zoom\":1}", 10));
+
     // Pick is the documented v1 stub.
     try testing.expectEqual(@as(i64, -1), editor_api.editor_pick(10.0, 20.0));
 
@@ -799,4 +802,599 @@ test "reloadPrefabSource: a push BEFORE any scene load creates the cache the boo
     try testing.expectEqualStrings("v2-overlay", game.ecs_backend.getComponent(e, PipeOverlay).?.text);
     const c = game.spawnPrefab("condenser", .{ .x = 0, .y = 0 }).?;
     try testing.expectEqualStrings("v1-overlay", game.ecs_backend.getComponent(c, PipeOverlay).?.text);
+}
+
+// ── Camera prefabs (contract v1.5, #714) ────────────────────────────
+//
+// A camera-CAPABLE game: a stub renderer that additionally exposes the
+// camera seam (`CameraType` with setPosition/setZoom/getViewport +
+// getCamera), configured with a MockEcs so it can hold `Camera` entities.
+// This is the shape the seed / apply-while-paused / digest / set-component
+// paths need — the default `engine.Game` (StubRender) has no camera and
+// folds them all away at comptime.
+
+const EmptyComponents = struct {
+    pub fn has(comptime _: []const u8) bool {
+        return false;
+    }
+    pub fn getType(comptime _: []const u8) type {
+        return void;
+    }
+    pub fn names() []const []const u8 {
+        return &.{};
+    }
+};
+
+/// Camera stand-in exposing the full seam the camera-prefabs paths touch:
+/// setPosition/setZoom (the `gameHasCamera` gate) + getViewport (the digest
+/// `view`). `getViewport` returns the world rect centered on the camera,
+/// sized by an 800×600 design surface over `zoom` — the same math gfx's
+/// `CameraWith.getViewport` uses.
+const CamCamera = struct {
+    x: f32 = 0,
+    y: f32 = 0,
+    zoom: f32 = 1,
+
+    const ViewRect = struct { x: f32, y: f32, width: f32, height: f32 };
+
+    pub fn setPosition(self: *CamCamera, x: f32, y: f32) void {
+        self.x = x;
+        self.y = y;
+    }
+    pub fn setZoom(self: *CamCamera, level: f32) void {
+        self.zoom = level;
+    }
+    pub fn getViewport(self: *const CamCamera) ViewRect {
+        const w = 800.0 / self.zoom;
+        const h = 600.0 / self.zoom;
+        return .{ .x = self.x - w / 2.0, .y = self.y - h / 2.0, .width = w, .height = h };
+    }
+};
+
+/// Stub renderer mirroring `core.StubRender`'s no-op surface plus the camera
+/// seam (as `GfxRendererWith` exposes it: `CameraType`/`CameraManagerType` +
+/// `getCamera`/`getCameraManager`).
+fn CamRender(comptime Entity: type) type {
+    return struct {
+        const Self = @This();
+
+        pub const Sprite = struct {
+            sprite_name: []const u8 = "",
+            visible: bool = true,
+            z_index: i16 = 0,
+            layer: enum { default } = .default,
+        };
+        pub const Shape = struct {
+            shape: union(enum) {
+                rectangle: struct { width: f32 = 10, height: f32 = 10 },
+                circle: struct { radius: f32 = 10 },
+            } = .{ .rectangle = .{} },
+            color: struct { r: u8 = 255, g: u8 = 255, b: u8 = 255, a: u8 = 255 } = .{},
+            visible: bool = true,
+            z_index: i16 = 0,
+            layer: enum { default } = .default,
+        };
+        pub const Text = struct {
+            text: [:0]const u8 = "",
+            visible: bool = true,
+            z_index: i16 = 0,
+        };
+        pub const Icon = struct {
+            name: []const u8 = "",
+            visible: bool = true,
+        };
+
+        pub const CameraType = CamCamera;
+        pub const CameraManagerType = struct {};
+
+        camera: CamCamera = .{},
+        tracked_count: usize = 0,
+        render_count: usize = 0,
+
+        pub fn init(_: std.mem.Allocator) Self {
+            return .{};
+        }
+        pub fn deinit(_: *Self) void {}
+        pub fn trackEntity(self: *Self, _: Entity, _: core.render.VisualType) void {
+            self.tracked_count += 1;
+        }
+        pub fn untrackEntity(self: *Self, _: Entity) void {
+            if (self.tracked_count > 0) self.tracked_count -= 1;
+        }
+        pub fn markPositionDirty(_: *Self, _: Entity) void {}
+        pub fn markPositionDirtyWithChildren(_: *Self, comptime _: type, _: anytype, _: Entity) void {}
+        pub fn updateHierarchyFlag(_: *Self, _: Entity, _: bool) void {}
+        pub fn markVisualDirty(_: *Self, _: Entity) void {}
+        pub fn sync(_: *Self, comptime _: type, _: anytype) void {}
+        pub fn render(self: *Self) void {
+            self.render_count += 1;
+        }
+        pub fn setScreenHeight(_: *Self, _: f32) void {}
+        pub fn clear(self: *Self) void {
+            self.tracked_count = 0;
+        }
+        pub fn renderGizmoDraws(_: *Self, _: []const core.gizmos.GizmoDraw) void {}
+        pub fn hasEntity(_: *const Self, _: Entity) bool {
+            return false;
+        }
+        pub fn getCamera(self: *Self) *CamCamera {
+            return &self.camera;
+        }
+        pub fn getCameraManager(self: *Self) *CameraManagerType {
+            _ = self;
+            return undefined;
+        }
+    };
+}
+
+const CamMockEcs = core.MockEcsBackend(u32);
+const CameraTestGame = engine.GameConfig(
+    CamRender(CamMockEcs.Entity),
+    CamMockEcs,
+    engine.input_mod.StubInput,
+    engine.audio_mod.StubAudio,
+    engine.StubVideo,
+    engine.gui_mod.StubGui,
+    void,
+    core.StubLogSink,
+    EmptyComponents,
+    &.{},
+    void,
+);
+
+/// A project that registers its OWN `Camera` in its ComponentRegistry — the
+/// engine built-in Camera feature must DEFER to it (finding #1).
+const ProjectCamera = struct { zoom: f32 = 1.0, mode: u8 = 0 };
+const RegisteredCameraComponents = engine.ComponentRegistry(.{ .Camera = ProjectCamera });
+const RegisteredCameraGame = engine.GameConfig(
+    CamRender(CamMockEcs.Entity),
+    CamMockEcs,
+    engine.input_mod.StubInput,
+    engine.audio_mod.StubAudio,
+    engine.StubVideo,
+    engine.gui_mod.StubGui,
+    void,
+    core.StubLogSink,
+    RegisteredCameraComponents,
+    &.{},
+    void,
+);
+
+/// Read a JSON number as f64 regardless of whether it serialized as an
+/// integer (`{d}` on a whole f32 drops the fraction, e.g. `400`) or a float
+/// (`533.333…`).
+fn jsonNum(v: std.json.Value) f64 {
+    return switch (v) {
+        .integer => |i| @floatFromInt(i),
+        .float => |f| f,
+        else => unreachable,
+    };
+}
+
+test "camera seed: reads the WORLD position of the (parented) camera entity, not the raw local" {
+    editor_api.unbind();
+    defer editor_api.unbind();
+
+    var game = CameraTestGame.init(testing.allocator);
+    defer game.deinit();
+
+    const rig = game.createEntity();
+    game.setPosition(rig, .{ .x = 100, .y = 200 });
+    const cam_ent = game.createEntity();
+    game.setPosition(cam_ent, .{ .x = 10, .y = 20 }); // local to rig
+    game.setParent(cam_ent, rig, .{});
+    game.addComponent(cam_ent, engine.Camera{ .zoom = 2.0 });
+
+    // FLAG A: the seed reads getWorldPosition (100+10, 200+20), matching the
+    // digest / editor_set_entity_position — NOT the raw local Position.
+    game.seedCameraFromComponent();
+    const cam = game.getCamera();
+    try testing.expectEqual(@as(f32, 110), cam.x);
+    try testing.expectEqual(@as(f32, 220), cam.y);
+    try testing.expectEqual(@as(f32, 2.0), cam.zoom);
+}
+
+test "camera seed-on-load: setScene seeds the camera from a scene-loaded Camera entity" {
+    editor_api.unbind();
+    defer editor_api.unbind();
+
+    var game = CameraTestGame.init(testing.allocator);
+    defer game.deinit();
+
+    const loader = struct {
+        fn load(g: *CameraTestGame) anyerror!void {
+            const e = g.createEntity();
+            g.setPosition(e, .{ .x = 640, .y = 360 });
+            g.addComponent(e, engine.Camera{ .zoom = 2.5 });
+            g.trackSceneEntity(e);
+        }
+    }.load;
+    game.registerSceneSimple("cam_scene", loader);
+    try game.setScene("cam_scene");
+
+    // setScene ran seedCameraFromComponent after the loader instantiated
+    // the entities — the authored camera is live without a manual call.
+    try testing.expectEqual(@as(f32, 640), game.getCamera().x);
+    try testing.expectEqual(@as(f32, 360), game.getCamera().y);
+    try testing.expectEqual(@as(f32, 2.5), game.getCamera().zoom);
+}
+
+test "scene loader: a scene-authored \"Camera\" component attaches as the built-in and seeds" {
+    editor_api.unbind();
+    defer editor_api.unbind();
+
+    var game = CameraTestGame.init(testing.allocator);
+    defer game.deinit();
+
+    const Bridge = engine.JsoncSceneBridge(CameraTestGame, EmptyComponents);
+    try Bridge.loadSceneFromSource(&game,
+        \\{ "entities": [
+        \\   { "components": { "Position": { "x": 512, "y": 384 }, "Camera": { "zoom": 3.0 } } }
+        \\ ] }
+    , "prefabs");
+
+    // component_apply's built-in "Camera" branch attached the POD (rather
+    // than warning it as an unknown component).
+    var found: ?*engine.Camera = null;
+    var v = game.ecs_backend.view(.{ core.Position, engine.Camera }, .{});
+    defer v.deinit();
+    while (v.next()) |e| found = game.getComponent(e, engine.Camera);
+    try testing.expect(found != null);
+    try testing.expectEqual(@as(f32, 3.0), found.?.zoom);
+
+    // …and the built-in seed applies its world position + zoom.
+    game.seedCameraFromComponent();
+    try testing.expectEqual(@as(f32, 512), game.getCamera().x);
+    try testing.expectEqual(@as(f32, 3.0), game.getCamera().zoom);
+}
+
+test "camera apply-while-paused: paused frame re-seeds from the component; override wins; unpaused leaves it" {
+    editor_api.unbind();
+    defer editor_api.unbind();
+
+    var game = CameraTestGame.init(testing.allocator);
+    defer game.deinit();
+
+    const cam_ent = game.createEntity();
+    game.setPosition(cam_ent, .{ .x = 400, .y = 300 });
+    game.addComponent(cam_ent, engine.Camera{ .zoom = 1.5 });
+
+    var runner = DummyRunner{};
+    editor_api.bind(&game, &runner);
+
+    // UNPAUSED: frame does NOT apply the component — the gameplay script owns
+    // the camera on resume. A "script" write survives the frame.
+    game.getCamera().setPosition(0, 0);
+    game.getCamera().setZoom(1.0);
+    editor_api.frame(&game);
+    try testing.expectEqual(@as(f32, 0), game.getCamera().x);
+    try testing.expectEqual(@as(f32, 1.0), game.getCamera().zoom);
+
+    // PAUSED: frame re-seeds the camera from the authored component every
+    // frame, so a script write between frames is overwritten by the seed.
+    editor_api.editor_pause(1);
+    game.getCamera().setPosition(0, 0);
+    game.getCamera().setZoom(1.0);
+    editor_api.frame(&game);
+    try testing.expectEqual(@as(f32, 400), game.getCamera().x);
+    try testing.expectEqual(@as(f32, 300), game.getCamera().y);
+    try testing.expectEqual(@as(f32, 1.5), game.getCamera().zoom);
+
+    // A live inspector edit (component mutated in place) shows on the next
+    // paused frame — this is what makes editing feel live.
+    game.getComponent(cam_ent, engine.Camera).?.zoom = 2.0;
+    editor_api.frame(&game);
+    try testing.expectEqual(@as(f32, 2.0), game.getCamera().zoom);
+
+    // The look-around override still wins on top, applied last by frame().
+    editor_api.editor_set_camera(-50, 60, 0.5);
+    editor_api.frame(&game);
+    try testing.expectEqual(@as(f32, -50), game.getCamera().x);
+    try testing.expectEqual(@as(f32, 0.5), game.getCamera().zoom);
+
+    // Release → the paused frame hands back to the authored component.
+    editor_api.editor_release_camera();
+    editor_api.frame(&game);
+    try testing.expectEqual(@as(f32, 400), game.getCamera().x);
+    try testing.expectEqual(@as(f32, 2.0), game.getCamera().zoom);
+}
+
+test "camera apply-while-paused: comptime-folds away on a camera-less (stub) renderer" {
+    editor_api.unbind();
+    defer editor_api.unbind();
+
+    // Default engine.Game is StubRender — CameraType == void.
+    var game = Game.init(testing.allocator);
+    defer game.deinit();
+
+    const e = game.createEntity();
+    game.setPosition(e, .{ .x = 1, .y = 2 });
+    // A Camera component can still attach (inert POD); the seed/apply path
+    // that would consume it folds to nothing at comptime.
+    game.addComponent(e, engine.Camera{ .zoom = 3.0 });
+
+    var runner = DummyRunner{};
+    editor_api.bind(&game, &runner);
+
+    // Paused frame with a Camera present: nothing to apply, no crash, no
+    // getCamera() (which is `void` here) ever touched.
+    editor_api.editor_pause(1);
+    editor_api.frame(&game);
+    game.seedCameraFromComponent(); // also a comptime no-op
+}
+
+test "digest: camera entity publishes zoom, optional viewport, and the derived world view-rect" {
+    editor_api.unbind();
+    defer editor_api.unbind();
+
+    var game = CameraTestGame.init(testing.allocator);
+    defer game.deinit();
+
+    // Camera A — no authored viewport: digest emits zoom + derived view only.
+    const cam_a = game.createEntity();
+    game.setPosition(cam_a, .{ .x = 400, .y = 300 });
+    game.addComponent(cam_a, engine.Camera{ .zoom = 1.5 });
+    game.seedCameraFromComponent(); // so getCamera() (→ `view`) reflects it
+
+    var runner = DummyRunner{};
+    editor_api.bind(&game, &runner);
+
+    var buf: [4096]u8 = undefined;
+    {
+        const json = digestInto(&buf);
+        var parsed = try std.json.parseFromSlice(std.json.Value, testing.allocator, json, .{});
+        defer parsed.deinit();
+
+        var saw = false;
+        for (parsed.value.object.get("entities").?.array.items) |item| {
+            const obj = item.object;
+            if (obj.get("id").?.integer != @as(i64, @intCast(cam_a))) continue;
+            const cam = obj.get("camera").?.object;
+            try testing.expectEqual(@as(f64, 1.5), jsonNum(cam.get("zoom").?));
+            try testing.expect(cam.get("viewport") == null); // not authored
+            // Derived world view-rect from getViewport(): 800/1.5 × 600/1.5,
+            // centered on (400, 300).
+            const view = cam.get("view").?.object;
+            try testing.expectApproxEqAbs(@as(f64, 800.0 / 1.5), jsonNum(view.get("width").?), 0.01);
+            try testing.expectApproxEqAbs(@as(f64, 600.0 / 1.5), jsonNum(view.get("height").?), 0.01);
+            try testing.expectApproxEqAbs(@as(f64, 400.0 - (800.0 / 1.5) / 2.0), jsonNum(view.get("x").?), 0.01);
+            saw = true;
+        }
+        try testing.expect(saw);
+    }
+
+    // Camera B — authored viewport round-trips in the digest (FLAG C).
+    const cam_b = game.createEntity();
+    game.setPosition(cam_b, .{ .x = 0, .y = 0 });
+    game.addComponent(cam_b, engine.Camera{ .zoom = 1.0, .viewport = .{ .x = 10, .y = 20, .width = 30, .height = 40 } });
+    {
+        const json = digestInto(&buf);
+        var parsed = try std.json.parseFromSlice(std.json.Value, testing.allocator, json, .{});
+        defer parsed.deinit();
+        var saw_vp = false;
+        for (parsed.value.object.get("entities").?.array.items) |item| {
+            const obj = item.object;
+            if (obj.get("id").?.integer != @as(i64, @intCast(cam_b))) continue;
+            const vp = obj.get("camera").?.object.get("viewport").?.object;
+            try testing.expectEqual(@as(i64, 10), vp.get("x").?.integer);
+            try testing.expectEqual(@as(i64, 20), vp.get("y").?.integer);
+            try testing.expectEqual(@as(i64, 30), vp.get("width").?.integer);
+            try testing.expectEqual(@as(i64, 40), vp.get("height").?.integer);
+            saw_vp = true;
+        }
+        try testing.expect(saw_vp);
+    }
+}
+
+test "editor_set_component: Camera MERGES (a prior viewport survives a zoom-only patch), reseeds, and guards" {
+    editor_api.unbind();
+    defer editor_api.unbind();
+
+    var game = CameraTestGame.init(testing.allocator);
+    defer game.deinit();
+
+    const cam_ent = game.createEntity();
+    game.setPosition(cam_ent, .{ .x = 400, .y = 300 });
+    game.addComponent(cam_ent, engine.Camera{
+        .zoom = 1.0,
+        .viewport = .{ .x = 1, .y = 2, .width = 3, .height = 4 },
+    });
+
+    var runner = DummyRunner{};
+    editor_api.bind(&game, &runner);
+    editor_api.editor_pause(1);
+
+    // Patch ONLY zoom, from a transient buffer (the studio frees its wasm
+    // buffer immediately after the call).
+    const patch = try testing.allocator.dupe(u8, "{\"zoom\":2.0}");
+    try testing.expectEqual(@as(i32, 0), editor_api.editor_set_component(@intCast(cam_ent), "Camera", 6, patch.ptr, patch.len));
+    testing.allocator.free(patch);
+
+    // MERGE (FLAG C): zoom updated, the prior viewport SURVIVED — the patch
+    // did not whole-replace the component.
+    const comp = game.getComponent(cam_ent, engine.Camera).?;
+    try testing.expectEqual(@as(f32, 2.0), comp.zoom);
+    try testing.expect(comp.viewport != null);
+    try testing.expectEqual(@as(i32, 3), comp.viewport.?.width);
+    try testing.expectEqual(@as(i32, 4), comp.viewport.?.height);
+
+    // Re-seed on success → the live camera reflects the patched zoom.
+    try testing.expectEqual(@as(f32, 2.0), game.getCamera().zoom);
+
+    // Allowlist (FLAG B): a non-"Camera" name is refused with -1 (no blanket
+    // apply-any-component path), entity untouched.
+    try testing.expectEqual(@as(i32, -1), editor_api.editor_set_component(@intCast(cam_ent), "Sprite", 6, "{}", 2));
+    try testing.expectEqual(@as(f32, 2.0), game.getComponent(cam_ent, engine.Camera).?.zoom);
+
+    // Unknown/dead id → -1 (distinct from a parse failure).
+    try testing.expectEqual(@as(i32, -1), editor_api.editor_set_component(999_999, "Camera", 6, "{\"zoom\":9}", 10));
+
+    // Parse failure → -2, entity untouched (parse precedes any mutation).
+    try testing.expectEqual(@as(i32, -2), editor_api.editor_set_component(@intCast(cam_ent), "Camera", 6, "{\"zoom\":", 8));
+    try testing.expectEqual(@as(f32, 2.0), game.getComponent(cam_ent, engine.Camera).?.zoom);
+
+    // A subsequent viewport-only patch also merges: zoom (2.0) survives.
+    const vp_patch = try testing.allocator.dupe(u8, "{\"viewport\":{\"width\":99}}");
+    try testing.expectEqual(@as(i32, 0), editor_api.editor_set_component(@intCast(cam_ent), "Camera", 6, vp_patch.ptr, vp_patch.len));
+    testing.allocator.free(vp_patch);
+    const comp2 = game.getComponent(cam_ent, engine.Camera).?;
+    try testing.expectEqual(@as(f32, 2.0), comp2.zoom); // untouched by a viewport patch
+    try testing.expectEqual(@as(i32, 99), comp2.viewport.?.width);
+    try testing.expectEqual(@as(i32, 2), comp2.viewport.?.y); // prior sub-field survives
+
+    // Out-of-range viewport int → -2 (bounds-checked i32 narrowing, NOT a
+    // raw @intCast panic — gemini HIGH on #719); entity untouched.
+    // 3_000_000_000 parses as i64 but exceeds i32 max.
+    const oor = try testing.allocator.dupe(u8, "{\"viewport\":{\"width\":3000000000}}");
+    try testing.expectEqual(@as(i32, -2), editor_api.editor_set_component(@intCast(cam_ent), "Camera", 6, oor.ptr, oor.len));
+    testing.allocator.free(oor);
+    try testing.expectEqual(@as(i32, 99), game.getComponent(cam_ent, engine.Camera).?.viewport.?.width); // unchanged by the rejected patch
+
+    // An explicit `{"viewport":null}` CLEARS the viewport back to fullscreen —
+    // distinct from an ABSENT key, which leaves it alone (finding #4).
+    const null_patch = try testing.allocator.dupe(u8, "{\"viewport\":null}");
+    try testing.expectEqual(@as(i32, 0), editor_api.editor_set_component(@intCast(cam_ent), "Camera", 6, null_patch.ptr, null_patch.len));
+    testing.allocator.free(null_patch);
+    const comp3 = game.getComponent(cam_ent, engine.Camera).?;
+    try testing.expect(comp3.viewport == null);
+    try testing.expectEqual(@as(f32, 2.0), comp3.zoom); // an absent zoom key leaves zoom alone
+
+    // A present-but-wrong-TYPE `zoom` (`"2"` string) → -2, not a silent skip
+    // that would author a default zoom (codex on #719); entity untouched.
+    try testing.expectEqual(@as(i32, -2), editor_api.editor_set_component(@intCast(cam_ent), "Camera", 6, "{\"zoom\":\"2\"}", 12));
+    try testing.expectEqual(@as(f32, 2.0), game.getComponent(cam_ent, engine.Camera).?.zoom);
+
+    // Trailing junk after a valid object (`{...}garbage`) → -2 (parse must
+    // reach EOF), not a partial-parse success (codex on #719).
+    try testing.expectEqual(@as(i32, -2), editor_api.editor_set_component(@intCast(cam_ent), "Camera", 6, "{\"zoom\":5}garbage", 17));
+    try testing.expectEqual(@as(f32, 2.0), game.getComponent(cam_ent, engine.Camera).?.zoom);
+}
+
+test "camera built-in DEFERS to a project's own registered Camera (finding #1)" {
+    editor_api.unbind();
+    defer editor_api.unbind();
+
+    // The comptime gate flips off exactly when a project registers "Camera".
+    try testing.expect(CameraTestGame.camera_is_builtin);
+    try testing.expect(!RegisteredCameraGame.camera_is_builtin);
+
+    var game = RegisteredCameraGame.init(testing.allocator);
+    defer game.deinit();
+    const e = game.createEntity();
+    game.setPosition(e, .{ .x = 0, .y = 0 });
+
+    var runner = DummyRunner{};
+    editor_api.bind(&game, &runner);
+
+    // `editor_set_component("Camera", …)` REFUSES with -1 on such a project —
+    // the built-in bridge is off, so it won't materialize a conflicting second
+    // component (rather than silently corrupting the authoring model).
+    try testing.expectEqual(@as(i32, -1), editor_api.editor_set_component(@intCast(e), "Camera", 6, "{\"zoom\":2}", 10));
+    // The built-in Camera component was never attached.
+    try testing.expect(game.getComponent(e, engine.Camera) == null);
+}
+
+test "camera apply-while-paused: a STEPPED frame keeps the ticked camera (single-step debug, finding #2)" {
+    editor_api.unbind();
+    defer editor_api.unbind();
+
+    var game = CameraTestGame.init(testing.allocator);
+    defer game.deinit();
+    const cam_ent = game.createEntity();
+    game.setPosition(cam_ent, .{ .x = 400, .y = 300 });
+    game.addComponent(cam_ent, engine.Camera{ .zoom = 1.5 });
+
+    var runner = DummyRunner{};
+    editor_api.bind(&game, &runner);
+    editor_api.editor_pause(1);
+    editor_api.editor_step(1);
+
+    // The generated loop is `if (shouldTick()) g.tick(dt); frame();`. This frame
+    // TICKS (consumes the step): shouldTick returns true, a camera script moves
+    // the camera during the "tick", and frame() must NOT re-seed — single-step
+    // debugging must render the just-ticked camera, not the authored seed.
+    try testing.expect(editor_api.shouldTick());
+    game.getCamera().setPosition(999, 888); // "script" moved it during the tick
+    game.getCamera().setZoom(0.9);
+    editor_api.frame(&game);
+    try testing.expectEqual(@as(f32, 999), game.getCamera().x);
+    try testing.expectEqual(@as(f32, 0.9), game.getCamera().zoom);
+
+    // The next PAUSED frame does NOT tick (no pending step): shouldTick returns
+    // false and frame() re-seeds from the authored component again.
+    try testing.expect(!editor_api.shouldTick());
+    editor_api.frame(&game);
+    try testing.expectEqual(@as(f32, 400), game.getCamera().x);
+    try testing.expectEqual(@as(f32, 1.5), game.getCamera().zoom);
+}
+
+test "camera seed-on-load: seeds AFTER onLoad, reflecting a camera the hook finalizes (finding #3)" {
+    editor_api.unbind();
+    defer editor_api.unbind();
+
+    var game = CameraTestGame.init(testing.allocator);
+    defer game.deinit();
+
+    const loader = struct {
+        fn load(g: *CameraTestGame) anyerror!void {
+            const e = g.createEntity();
+            g.setPosition(e, .{ .x = 100, .y = 100 });
+            g.addComponent(e, engine.Camera{ .zoom = 1.0 });
+            g.trackSceneEntity(e);
+        }
+    }.load;
+    const hooks = struct {
+        fn onLoad(g: *CameraTestGame) void {
+            // The scene finalizes the camera in its onLoad hook.
+            var v = g.ecs_backend.view(.{ core.Position, engine.Camera }, .{});
+            defer v.deinit();
+            while (v.next()) |e| {
+                g.setPosition(e, .{ .x = 700, .y = 500 });
+                g.getComponent(e, engine.Camera).?.zoom = 3.0;
+            }
+        }
+    };
+    game.registerScene("cam_hook", loader, .{ .onLoad = hooks.onLoad });
+    try game.setScene("cam_hook");
+
+    // The seed ran AFTER onLoad → the live camera reflects the hook's values,
+    // not the loader's initial (100,100)/1.0.
+    try testing.expectEqual(@as(f32, 700), game.getCamera().x);
+    try testing.expectEqual(@as(f32, 500), game.getCamera().y);
+    try testing.expectEqual(@as(f32, 3.0), game.getCamera().zoom);
+}
+
+test "save/load: the built-in Camera round-trips zoom + viewport (finding #5)" {
+    editor_api.unbind();
+    defer editor_api.unbind();
+
+    var game = CameraTestGame.init(testing.allocator);
+    defer game.deinit();
+
+    const cam_ent = game.createEntity();
+    game.setPosition(cam_ent, .{ .x = 640, .y = 360 });
+    game.addComponent(cam_ent, engine.Camera{
+        .zoom = 2.5,
+        .viewport = .{ .x = 5, .y = 6, .width = 320, .height = 240 },
+    });
+
+    const save_path = "test_save_camera_714.json";
+    try game.saveGameState(save_path);
+    defer std.Io.Dir.cwd().deleteFile(std.testing.io, save_path) catch {};
+
+    // Wipe the ECS and reload from disk.
+    game.resetEcsBackend();
+    try game.loadGameState(save_path);
+
+    // The built-in Camera save/load channel restored zoom + viewport (Position
+    // persists via its own channel).
+    var restored: ?*engine.Camera = null;
+    var v = game.active_world.ecs_backend.view(.{ core.Position, engine.Camera }, .{});
+    defer v.deinit();
+    while (v.next()) |e| restored = game.active_world.ecs_backend.getComponent(e, engine.Camera);
+    try testing.expect(restored != null);
+    try testing.expectEqual(@as(f32, 2.5), restored.?.zoom);
+    try testing.expect(restored.?.viewport != null);
+    try testing.expectEqual(@as(i32, 320), restored.?.viewport.?.width);
+    try testing.expectEqual(@as(i32, 6), restored.?.viewport.?.y);
 }

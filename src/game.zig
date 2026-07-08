@@ -60,6 +60,8 @@ const game_init_mod = @import("game/game_init.zig");
 const tilemap_mod = @import("tilemap.zig");
 const tilemap_runtime = @import("tilemap_runtime.zig");
 const tilemap_mixin = @import("game/tilemap_mixin.zig");
+const camera_mod = @import("camera.zig");
+const camera_mixin = @import("game/camera_mixin.zig");
 
 /// Full game configuration — the assembler fills ALL comptime slots.
 /// RenderImpl is a renderer plugin (e.g. gfx.GfxRenderer) satisfying RenderInterface.
@@ -222,6 +224,24 @@ pub fn GameConfigWithYAxis(
         pub const PrefabInstanceComp = PrefabInstance;
         pub const PrefabChildComp = PrefabChildT;
 
+        // ── Camera (camera-prefabs MVP, #714) ────────────────────
+        /// Engine built-in `Camera` component — the authored / seed camera
+        /// state (`zoom` + optional inert `viewport`; the camera's world
+        /// center is its `Position`). Handled by dedicated built-in channels
+        /// (scene loader, seed/apply sync, digest, editor bridge) — NOT a
+        /// `ComponentRegistry` component. See `src/camera.zig`.
+        pub const CameraComp = camera_mod.Camera;
+        /// True when the engine's built-in `Camera` feature is ACTIVE — i.e.
+        /// the project did NOT register its own `Camera` in its
+        /// `ComponentRegistry`. When a project registers `Camera`, every
+        /// built-in Camera channel (seed / apply-while-paused / digest / the
+        /// `editor_set_component` bridge / save-load) DEFERS to the project's
+        /// component so the two never fight over the name — mirroring the
+        /// scene-loader `!Components.has("Camera")` guard in
+        /// `jsonc/component_apply.zig`. The `@hasDecl` guard keeps this sound
+        /// for any `ComponentRegistry` shape that predates a `has` decl.
+        pub const camera_is_builtin = !(@hasDecl(ComponentsType, "has") and ComponentsType.has("Camera"));
+
         // ── Tilemap (T2 Phase 2) ─────────────────────────────────
         /// Engine built-in `Tilemap` component (references a `.tmx` asset
         /// by name). Handled by dedicated built-in channels (scene loader,
@@ -358,6 +378,7 @@ pub fn GameConfigWithYAxis(
         const PrefabRuntimeMixin = prefab_runtime_mixin.Mixin(Self);
         const RosterMixin = roster_mod.Mixin(Self);
         const TilemapMixin = tilemap_mixin.Mixin(Self);
+        const CameraMixin = camera_mixin.Mixin(Self);
         // VideoImpl/AudioImpl are `GameConfig` fn params (not `Self`
         // decls), so the construction mixin takes them explicitly.
         const InitMixin = game_init_mod.Mixin(Self, VideoImpl, AudioImpl);
@@ -1287,6 +1308,16 @@ pub fn GameConfigWithYAxis(
 
         /// Get the camera manager (for multi-camera / split-screen).
         pub const getCameraManager = if (has_camera) MiscMixin.getCameraManagerImpl else void;
+
+        // ── Camera component seed / sync (#714) ───────────────────
+        /// Seed `getCamera()` from the authored `Camera` component (world
+        /// position + zoom). Called once after scene instantiation and every
+        /// paused frame from `editor_api.frame`. Comptime no-op on renderers
+        /// without a settable camera. See `game/camera_mixin.zig`.
+        pub const seedCameraFromComponent = CameraMixin.seedCameraFromComponent;
+        /// MERGE a JSON patch into an entity's `Camera` component and re-seed.
+        /// Backs the `editor_set_component("Camera", …)` bridge export.
+        pub const applyCameraComponentJson = CameraMixin.applyCameraComponentJson;
 
         // ── Atlas ─────────────────────────────────────────────────
 

@@ -525,6 +525,13 @@ pub fn Mixin(comptime Game: type) type {
                 if (entry.hooks.onLoad) |onLoad| {
                     onLoad(self);
                 }
+                // Seed the gfx camera from the authored `Camera` component
+                // (camera-prefabs #714) — the authored starting point before
+                // scripts take the wheel. Runs AFTER `onLoad` (finding #3) so a
+                // scene that finalizes the camera's Position/zoom in its hook is
+                // reflected on the first rendered frame. Comptime-folds away on
+                // camera-less renderers.
+                self.seedCameraFromComponent();
             } else if (self.jsonc_scenes.get(name)) |_| {
                 // Runtime JSONC scene — loaded at runtime by the game loop
                 // The actual loading is deferred: the generated code or game code
@@ -698,6 +705,11 @@ pub fn Mixin(comptime Game: type) type {
             if (entry.hooks.onLoad) |onLoad| {
                 onLoad(self);
             }
+            // Seed the gfx camera from the authored `Camera` component AFTER
+            // `onLoad` (finding #3), so a scene finalizing the camera in its
+            // hook is reflected on the first rendered frame (camera-prefabs
+            // #714). Comptime-folds away on camera-less renderers.
+            self.seedCameraFromComponent();
 
             if (previous_name) |p| {
                 const prev_assets: []const []const u8 = if (self.scenes.get(p)) |e| e.assets else &.{};

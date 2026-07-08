@@ -580,6 +580,36 @@ pub fn Mixin(comptime Game: type) type {
                         self.addTilemap(entity, .{ .asset_name = name_dup, .layer_bindings = bindings });
                     }
                 }
+
+                // Restore Camera (built-in, camera-prefabs #714) — counterpart
+                // to the save block. Plain POD (no strings / no runtime), so a
+                // straight `addComponent` re-attaches it; the seed re-applies to
+                // the live camera on the next scene bind / paused frame. Gated
+                // on `camera_is_builtin` like the save side.
+                if (comptime Game.camera_is_builtin) {
+                    if (components.get("Camera")) |cam_val| blk: {
+                        const cam_obj = switch (cam_val) {
+                            .object => |o| o,
+                            else => break :blk,
+                        };
+                        var cam: Game.CameraComp = .{};
+                        // Preserve the 1.0 default if a (malformed) save omits
+                        // zoom — `getNumberField` would otherwise yield 0.
+                        if (cam_obj.get("zoom") != null) cam.zoom = getNumberField(cam_obj, "zoom");
+                        if (cam_obj.get("viewport")) |vp_val| {
+                            if (vp_val == .object) {
+                                const vp = vp_val.object;
+                                cam.viewport = .{
+                                    .x = @intFromFloat(getNumberField(vp, "x")),
+                                    .y = @intFromFloat(getNumberField(vp, "y")),
+                                    .width = @intFromFloat(getNumberField(vp, "width")),
+                                    .height = @intFromFloat(getNumberField(vp, "height")),
+                                };
+                            }
+                        }
+                        self.addComponent(entity, cam);
+                    }
+                }
             }
 
             // Step 4: Restore ref arrays ([]const u64 slices)

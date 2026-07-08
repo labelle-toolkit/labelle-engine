@@ -72,6 +72,16 @@ pub const TilemapLayerBinding = @import("tilemap.zig").LayerBinding;
 /// `Game`. See `src/tilemap_runtime.zig`.
 pub const tilemapSupported = @import("tilemap_runtime.zig").supported;
 
+// ── Camera (camera-prefabs MVP, #714) ──
+/// Engine built-in `Camera` component — the authored / seed camera state
+/// (`zoom` + optional inert `viewport`; the camera's world center is the
+/// entity's `Position`). Reachable on a configured game as `Game.CameraComp`.
+/// See `src/camera.zig` / `RFC-CAMERA-PREFABS.md`.
+pub const Camera = @import("camera.zig").Camera;
+/// Engine-local screen-space viewport rect carried by `Camera.viewport`
+/// (renderer-agnostic; inert in the single-camera MVP). See `src/camera.zig`.
+pub const CameraViewport = @import("camera.zig").Viewport;
+
 // ── Input ──
 pub const InputInterface = input_mod.InputInterface;
 pub const StubInput = input_mod.StubInput;

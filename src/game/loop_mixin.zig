@@ -180,6 +180,11 @@ pub fn Mixin(comptime Game: type) type {
                             );
                         };
                         self.loading_scene_name = null;
+                        // Re-seed the gfx camera from the authored `Camera`
+                        // component after a hot reload rebuilds the scene
+                        // (camera-prefabs #714). Comptime-folds away on
+                        // camera-less renderers.
+                        self.seedCameraFromComponent();
                         self.emitHook(.{ .scene_load = .{ .name = name } });
                         // Engine `Events` dual-emit (#578).
                         self.emitEngineEvent("engine__scene_loaded", .{ .name = name });

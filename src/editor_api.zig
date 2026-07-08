@@ -59,6 +59,12 @@ const core = @import("labelle-core");
 
 var editor_paused: bool = false;
 var pending_steps: u32 = 0;
+/// Whether the CURRENT frame consumed an `editor_step` (i.e. `g.tick` ran for
+/// it while paused). Set by `shouldTick`, read by `frame` to SKIP the
+/// apply-while-paused re-seed on a stepped frame — otherwise single-step
+/// debugging would clobber the just-ticked camera with the authored seed
+/// before render (finding #2). One shouldTick→frame pair per loop iteration.
+var stepped_this_frame: bool = false;
 
 pub const CameraOverride = struct { x: f32, y: f32, zoom: f32 };
 var camera_override: ?CameraOverride = null;
@@ -72,6 +78,7 @@ const VTable = struct {
     load_animation_def: *const fn (name: []const u8, src: []const u8) i32,
     reload_prefab: *const fn (name: []const u8, src: []const u8) i32,
     set_entity_position: *const fn (id: u64, x: f32, y: f32) void,
+    set_component: *const fn (id: u64, name: []const u8, json: []const u8) i32,
     scene_digest: *const fn (out: []u8) usize,
     apply_camera: *const fn (x: f32, y: f32, zoom: f32) void,
 };
@@ -106,6 +113,7 @@ pub fn unbind() void {
     vtable = null;
     editor_paused = false;
     pending_steps = 0;
+    stepped_this_frame = false;
     camera_override = null;
 }
 
@@ -114,20 +122,40 @@ pub fn unbind() void {
 /// count per call and returns true for it; false otherwise (render
 /// continues either way — only `g.tick` is gated on this).
 pub fn shouldTick() bool {
-    if (!editor_paused) return true;
-    if (pending_steps > 0) {
-        pending_steps -= 1;
+    if (!editor_paused) {
+        stepped_this_frame = false;
         return true;
     }
+    if (pending_steps > 0) {
+        pending_steps -= 1;
+        stepped_this_frame = true; // this frame ticks — frame() must not re-seed
+        return true;
+    }
+    stepped_this_frame = false;
     return false;
 }
 
 /// Per-frame editor pass, called by the generated main AFTER the sim
-/// tick (and its camera-writing scripts) and BEFORE `g.render()`:
-/// re-asserts the editor camera while the override is engaged so the
-/// frame about to be rendered uses it; a no-op otherwise, and a
-/// comptime no-op for games whose renderer has no camera.
+/// tick (and its camera-writing scripts) and BEFORE `g.render()`.
+/// Two jobs, in precedence order:
+///
+///   1. **Apply-while-paused** (camera-prefabs #714): while the sim is
+///      PAUSED and no look-around override is engaged, re-seed the gfx
+///      camera from the authored `Camera` component every frame, so
+///      inspector/gizmo edits show live. Safe precisely because the sim
+///      is paused — no gameplay camera script is ticking to fight it. On
+///      resume the script drives and this stops asserting. SKIPPED on a
+///      STEPPED frame (one this `shouldTick` advanced): `g.tick` just ran
+///      and may have moved the camera, so single-step debugging must render
+///      that ticked frame, not the re-seeded authored camera (finding #2).
+///   2. **Look-around override**: re-asserts the editor camera while the
+///      override is engaged so the frame about to be rendered uses it.
+///      Applied LAST so it wins over both the component and the script.
+///
+/// A no-op when neither is active, and a comptime no-op for games whose
+/// renderer has no camera (or no `Camera` seed path).
 pub fn frame(g: anytype) void {
+    if (editor_paused and camera_override == null and !stepped_this_frame) applyCameraComponentTo(g);
     if (camera_override) |c| applyCameraTo(g, c);
 }
 
@@ -276,6 +304,37 @@ pub export fn editor_set_entity_position(id: u64, x: f32, y: f32) void {
     vt.set_entity_position(id, x, y);
 }
 
+/// Set component `name` on entity `id` from a JSON object — the general
+/// per-component edit seam (editor-bridge contract **v1.5**, camera-prefabs
+/// #714). `editor_set_entity_position` stays the drag hot-path; this is the
+/// general path the inspector grows into.
+///
+/// **Allowlisted** (MVP): only the vetted `"Camera"` built-in is accepted — a
+/// `{"zoom":…}` (and, when authored, `"viewport":{…}`) object. Any other name
+/// returns -1; there is deliberately no blanket apply-any-component path.
+///
+/// **Merge/patch semantics**: only the keys PRESENT in the JSON overwrite the
+/// entity's existing `Camera` — a `{"zoom":…}` patch preserves a prior
+/// `viewport`. A default `Camera` is materialized when the entity has none. On
+/// success the live `getCamera()` is re-seeded so a paused preview updates
+/// immediately.
+///
+/// Returns 0 = ok; -1 = not bound / unknown id / unknown-or-unvetted
+/// component; -2 = parse/validation failure (entity untouched — the parse runs
+/// before any mutation). The buffers are copied; the caller may free them
+/// right after the call. Optional on older builds like v1.1–v1.4: a studio
+/// that finds no `editor_set_component` degrades to today's behavior.
+pub export fn editor_set_component(
+    id: u64,
+    name_ptr: [*]const u8,
+    name_len: usize,
+    json_ptr: [*]const u8,
+    json_len: usize,
+) i32 {
+    const vt = vtable orelse return -1;
+    return vt.set_component(id, name_ptr[0..name_len], json_ptr[0..json_len]);
+}
+
 /// v1: always -1 — the studio picks client-side from the scene digest.
 pub export fn editor_pick(x: f32, y: f32) i64 {
     _ = x;
@@ -286,9 +345,15 @@ pub export fn editor_pick(x: f32, y: f32) i64 {
 /// Write a JSON digest of the current scene into `out` (capacity
 /// `cap`) and return the number of bytes written. Shape:
 /// `{"scene":"...","state":"...","paused":0|1,"entity_count":N,
-///   "entities":[{"id":<u64>,"prefab":"?","sprite":"?","x":f,"y":f},...]}`
-/// `prefab`/`sprite` appear only when known; `x`/`y` are WORLD
-/// coordinates (the same space `editor_set_entity_position` consumes).
+///   "entities":[{"id":<u64>,"prefab":"?","sprite":"?","tilemap":"?",
+///     "camera":{"zoom":f,"viewport"?:{x,y,width,height},
+///               "view":{x,y,width,height}},"x":f,"y":f},...]}`
+/// `prefab`/`sprite`/`tilemap`/`camera` appear only when the entity
+/// carries them; a Camera entity's `viewport` is present only when
+/// authored, while `view` is the derived WORLD-space visible rect
+/// (`getCamera().getViewport()`) the studio draws its gizmo from. `x`/`y`
+/// are WORLD coordinates (the same space `editor_set_entity_position`
+/// consumes).
 /// The entity list is
 /// truncated to fit `cap` while `entity_count` keeps the full count —
 /// the output is always valid JSON (worst case `{}`; 0 bytes only when
@@ -337,6 +402,18 @@ fn applyCameraTo(g: anytype, c: CameraOverride) void {
     cam.setZoom(c.zoom);
 }
 
+/// The apply-while-paused pass (camera-prefabs #714): re-seed the gfx camera
+/// from the authored `Camera` component. Dispatches to the engine's
+/// `seedCameraFromComponent`, which is itself comptime-gated on the renderer
+/// having a settable camera. The extra `@hasDecl` gate here lets the minimal
+/// camera stand-ins used by the override tests (`CameraGame`, which duck-types
+/// only `getCamera`) still compile — they carry no `Camera` seed path.
+fn applyCameraComponentTo(g: anytype) void {
+    const G = @typeInfo(@TypeOf(g)).pointer.child;
+    if (comptime !@hasDecl(G, "seedCameraFromComponent")) return;
+    g.seedCameraFromComponent();
+}
+
 /// One instantiation per concrete (Game-pointer, Runner) pair. The
 /// container-level `var`s give the plain vtable fns a place to find
 /// the typed pointers without any runtime type erasure gymnastics.
@@ -354,6 +431,7 @@ fn Holder(comptime GP: type, comptime RP: type) type {
             .load_animation_def = &loadAnimationDefImpl,
             .reload_prefab = &reloadPrefabImpl,
             .set_entity_position = &setEntityPositionImpl,
+            .set_component = &setComponentImpl,
             .scene_digest = &sceneDigestImpl,
             .apply_camera = &applyCameraImpl,
         };
@@ -476,6 +554,30 @@ fn Holder(comptime GP: type, comptime RP: type) type {
             game.setWorldPosition(ent, .{ .x = x, .y = y });
         }
 
+        fn setComponentImpl(id: u64, name: []const u8, json: []const u8) i32 {
+            // Allowlist (FLAG B): only the vetted "Camera" built-in in the
+            // MVP. An unknown/unvetted name is refused up front — no blanket
+            // apply-any-component path is wired.
+            if (!std.mem.eql(u8, name, "Camera")) return -1;
+            // Defer to a project that registered its OWN `Camera` (finding #1):
+            // the built-in bridge is off for such projects — refuse rather than
+            // materialize a conflicting second component. Routing "Camera" to
+            // the registry path is a later, studio-side change.
+            if (comptime !G.camera_is_builtin) return -1;
+            const Entity = G.EntityType;
+            if (comptime @typeInfo(Entity) != .int) return -1;
+            const ent = std.math.cast(Entity, id) orelse return -1;
+            // Unknown/dead id → -1 (distinct from a parse failure, which is
+            // -2). The entity need NOT already carry a `Camera` — the first
+            // edit materializes one.
+            if (!game.ecs_backend.entityExists(ent)) return -1;
+            // MERGE the JSON patch into the entity's `Camera` and re-seed
+            // getCamera(). The parse happens before any mutation, so a
+            // parse/validation failure (-2) leaves the entity untouched.
+            game.applyCameraComponentJson(ent, json) catch return -2;
+            return 0;
+        }
+
         fn applyCameraImpl(x: f32, y: f32, zoom: f32) void {
             applyCameraTo(game, .{ .x = x, .y = y, .zoom = zoom });
         }
@@ -549,6 +651,40 @@ fn Holder(comptime GP: type, comptime RP: type) type {
                 if (game.getComponent(ent, G.TilemapComp)) |tm| {
                     try appendLit(buf, cur, ",\"tilemap\":");
                     try appendJsonString(buf, cur, tm.asset_name);
+                }
+            }
+            // Camera (camera-prefabs MVP, #714) — the authored `zoom` and
+            // (when set) `viewport` so the studio round-trips them, plus the
+            // derived WORLD-space visible rect `view` from
+            // `getCamera().getViewport()` — the rect the studio draws its
+            // draggable gizmo from. Emitted only for Camera-bearing entities,
+            // exactly like the sprite/tilemap optional-field pattern above.
+            // Suppressed when a project registered its own `Camera` (finding
+            // #1): the built-in feature defers, so its component is never
+            // injected/published here.
+            if (comptime @hasDecl(G, "CameraComp") and G.camera_is_builtin) {
+                if (game.getComponent(ent, G.CameraComp)) |cam| {
+                    try appendFmt(buf, cur, ",\"camera\":{{\"zoom\":{d}", .{jsonSafeFloat(cam.zoom)});
+                    if (cam.viewport) |vp| {
+                        try appendFmt(buf, cur, ",\"viewport\":{{\"x\":{d},\"y\":{d},\"width\":{d},\"height\":{d}}}", .{
+                            vp.x, vp.y, vp.width, vp.height,
+                        });
+                    }
+                    // The derived world view-rect — only for renderers whose
+                    // camera reports one (`getViewport`). Nested comptime block
+                    // (not an `and`) so `getViewport` is never reflected on a
+                    // `void` camera — mirrors tilemap_mixin's `camera_cullable`.
+                    const emit_view = comptime blk: {
+                        if (!gameHasCamera(G)) break :blk false;
+                        break :blk @hasDecl(G.CameraType, "getViewport");
+                    };
+                    if (emit_view) {
+                        const vr = game.getCamera().getViewport();
+                        try appendFmt(buf, cur, ",\"view\":{{\"x\":{d},\"y\":{d},\"width\":{d},\"height\":{d}}}", .{
+                            jsonSafeFloat(vr.x), jsonSafeFloat(vr.y), jsonSafeFloat(vr.width), jsonSafeFloat(vr.height),
+                        });
+                    }
+                    try appendLit(buf, cur, "}");
                 }
             }
             // WORLD coordinates, not the raw (parent-relative) Position
