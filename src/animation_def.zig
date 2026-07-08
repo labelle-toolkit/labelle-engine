@@ -21,11 +21,12 @@
 /// a slot showing for `run` beats. The count form has run 1 everywhere, so
 /// `beat_count == slot_count` and playback is bit-identical to pre-#664.
 ///
-/// Entry lists are PER-VARIANT (#684): a variant's `.overrides` may replace
-/// a clip's `.frames` with any of the three forms, so every derived table
-/// (beat→slot, marker→beat, sprite names) is keyed `[clip][variant]`. A
-/// variant with no `.frames` override shares the base clip's entry list,
-/// so defs without overrides generate exactly the tables they always did.
+/// Entry lists are PER-VARIANT (#684): a clip's `.overrides` sub-map, keyed
+/// by variant name, may replace that clip's `.frames` with any of the three
+/// forms for a single variant, so every derived table (beat→slot,
+/// marker→beat, sprite names) is keyed `[clip][variant]`. A (clip, variant)
+/// pair with no override shares the base clip's entry list, so defs without
+/// overrides generate exactly the tables they always did.
 
 const std = @import("std");
 const anim_timing = @import("anim_timing.zig");
@@ -83,6 +84,14 @@ fn clipIdxByName(comptime clip_fields: anytype, comptime name: []const u8) ?u8 {
     return null;
 }
 
+/// Comptime variant-name → ordinal lookup over the `.variants` list.
+fn variantIdxByName(comptime variant_list: anytype, comptime name: []const u8) ?u8 {
+    inline for (variant_list, 0..) |v, i| {
+        if (std.mem.eql(u8, v, name)) return @intCast(i);
+    }
+    return null;
+}
+
 /// Normalize any of the three `.frames` forms into a slot list. Pure
 /// comptime; the returned slice points at comptime memory. Rejects
 /// malformed data with a clear message (empty, run 0, f out of the
@@ -133,31 +142,18 @@ fn checkedF(comptime f: anytype) u16 {
     return @intCast(f);
 }
 
-/// A `.variants` element is either a string (`"m_bald"`) or a struct
-/// `.{ .name = "w_ginger", .overrides = .{ ... } }` (#666). Resolve its
-/// display name either way.
-fn variantNameOf(comptime elem: anytype) []const u8 {
-    const info = @typeInfo(@TypeOf(elem));
-    if (info == .pointer) return elem; // string literal (*const [N:0]u8)
-    if (info == .@"struct") {
-        if (!@hasField(@TypeOf(elem), "name")) @compileError("variant struct needs a `.name` field");
-        return elem.name;
-    }
-    @compileError("variant must be a string or a `.{ .name, .overrides }` struct");
-}
-
 /// Reject any override field that isn't `frames`/`speed`/`mode`/`folder`
 /// — overrides may change clip content, never its identity (#666).
 fn validateOverrideFields(comptime T: type, comptime clip_name: []const u8, comptime variant_name: []const u8) void {
     if (@typeInfo(T) != .@"struct")
-        @compileError("variant '" ++ variant_name ++ "' override for clip '" ++ clip_name ++
+        @compileError("clip '" ++ clip_name ++ "' override for variant '" ++ variant_name ++
             "' must be a struct like `.{ .frames = 4 }`");
     inline for (@typeInfo(T).@"struct".fields) |f| {
         const ok = std.mem.eql(u8, f.name, "frames") or
             std.mem.eql(u8, f.name, "speed") or
             std.mem.eql(u8, f.name, "mode") or
             std.mem.eql(u8, f.name, "folder");
-        if (!ok) @compileError("variant '" ++ variant_name ++ "' override for clip '" ++ clip_name ++
+        if (!ok) @compileError("clip '" ++ clip_name ++ "' override for variant '" ++ variant_name ++
             "' has unknown field '" ++ f.name ++ "' (only frames/speed/mode/folder allowed)");
     }
 }
@@ -205,12 +201,12 @@ pub fn AnimationDef(comptime zon: anytype) type {
 
     const Clip = @Enum(u8, .exhaustive, &ClipNames.names, &ClipNames.values);
 
-    // Build Variant enum fields (name from a string element or its `.name`).
+    // Build Variant enum fields (the `.variants` list is plain strings).
     const VariantNames = blk: {
         var names: [variant_count][]const u8 = undefined;
         var values: [variant_count]u8 = undefined;
-        inline for (variant_list, 0..) |velem, i| {
-            names[i] = variantNameOf(velem);
+        for (0..variant_count) |i| {
+            names[i] = variant_list[i];
             values[i] = i;
         }
         break :blk .{ .names = names, .values = values };
@@ -230,8 +226,8 @@ pub fn AnimationDef(comptime zon: anytype) type {
 
     // Per-variant slot lists (#684) — the single source the meta, name,
     // beat, and marker tables all derive from. Row [ci][vi] is the base
-    // list unless variant vi overrides that clip's `.frames` (any of the
-    // three #664 forms, through the same `normalizeFrames`). Non-
+    // list unless clip ci overrides its `.frames` for variant vi (any of
+    // the three #664 forms, through the same `normalizeFrames`). Non-
     // overriding rows alias the base slice, so defs without overrides
     // derive tables identical to the pre-#684 per-clip ones.
     const clip_entries_2d: [clip_count][variant_count][]const FrameEntry = blk: {
@@ -240,16 +236,16 @@ pub fn AnimationDef(comptime zon: anytype) type {
         for (0..clip_count) |ci| {
             for (0..variant_count) |vi| arr[ci][vi] = clip_entries[ci];
         }
-        inline for (variant_list, 0..) |velem, vi| {
-            const vinfo = @typeInfo(@TypeOf(velem));
-            if (vinfo == .@"struct" and @hasField(@TypeOf(velem), "overrides")) {
-                inline for (@typeInfo(@TypeOf(velem.overrides)).@"struct".fields) |of| {
-                    // Unknown clip names are reported by clip_meta_2d's
+        inline for (clip_fields, 0..) |cf, ci| {
+            const clip_data = @field(zon.clips, cf.name);
+            if (@hasField(@TypeOf(clip_data), "overrides")) {
+                inline for (@typeInfo(@TypeOf(clip_data.overrides)).@"struct".fields) |of| {
+                    // Unknown variant names are reported by clip_meta_2d's
                     // validation below — skip here to keep one error site.
-                    if (clipIdxByName(clip_fields, of.name)) |cidx| {
-                        const override = @field(velem.overrides, of.name);
+                    if (variantIdxByName(variant_list, of.name)) |vidx| {
+                        const override = @field(clip_data.overrides, of.name);
                         if (@hasField(@TypeOf(override), "frames")) {
-                            arr[cidx][vi] = normalizeFrames(override.frames);
+                            arr[ci][vidx] = normalizeFrames(override.frames);
                         }
                     }
                 }
@@ -298,10 +294,10 @@ pub fn AnimationDef(comptime zon: anytype) type {
     };
 
     // Per-variant ClipMeta (#666): start from the base, then patch each
-    // variant's `.overrides` block. Overrides change clip CONTENT (frames/
-    // speed/mode/folder) only — never structure — so the single Clip/
-    // Variant enum pair still drives every skin (Unity Sprite Library
-    // Variant's structural-consistency rule).
+    // clip's `.overrides` sub-map (keyed by variant name). Overrides change
+    // clip CONTENT (frames/speed/mode/folder) only — never structure — so
+    // the single Clip/Variant enum pair still drives every skin (Unity
+    // Sprite Library Variant's structural-consistency rule).
     //
     // A `.frames` override accepts any of the three #664 forms (#684):
     // its counts are derived from the variant's own entry row in
@@ -313,22 +309,20 @@ pub fn AnimationDef(comptime zon: anytype) type {
         for (0..clip_count) |ci| {
             for (0..variant_count) |vi| table[ci][vi] = clip_meta_table[ci];
         }
-        inline for (variant_list, 0..) |velem, vi| {
-            const vinfo = @typeInfo(@TypeOf(velem));
-            if (vinfo == .@"struct" and @hasField(@TypeOf(velem), "overrides")) {
-                const ov = velem.overrides;
+        inline for (clip_fields, 0..) |cf, ci| {
+            const clip_data = @field(zon.clips, cf.name);
+            if (@hasField(@TypeOf(clip_data), "overrides")) {
+                const ov = clip_data.overrides;
                 if (@typeInfo(@TypeOf(ov)) != .@"struct")
-                    @compileError("variant '" ++ variantNameOf(velem) ++
-                        "' `.overrides` must be a struct of clip overrides");
+                    @compileError("clip '" ++ cf.name ++ "' `.overrides` must be a struct of per-variant overrides");
                 inline for (@typeInfo(@TypeOf(ov)).@"struct".fields) |of| {
-                    const cidx = clipIdxByName(clip_fields, of.name) orelse
-                        @compileError("variant '" ++ variantNameOf(velem) ++
-                        "' overrides unknown clip '" ++ of.name ++ "'");
+                    const vidx = variantIdxByName(variant_list, of.name) orelse
+                        @compileError("clip '" ++ cf.name ++ "' overrides unknown variant '" ++ of.name ++ "'");
                     const override = @field(ov, of.name);
-                    validateOverrideFields(@TypeOf(override), of.name, variantNameOf(velem));
-                    var m = clip_meta_table[cidx];
+                    validateOverrideFields(@TypeOf(override), cf.name, of.name);
+                    var m = clip_meta_table[ci];
                     if (@hasField(@TypeOf(override), "frames")) {
-                        const ventries = clip_entries_2d[cidx][vi];
+                        const ventries = clip_entries_2d[ci][vidx];
                         var beats: u16 = 0;
                         for (ventries) |e| beats += e.run;
                         m.frame_count = @intCast(ventries.len);
@@ -338,17 +332,16 @@ pub fn AnimationDef(comptime zon: anytype) type {
                     if (@hasField(@TypeOf(override), "speed")) m.speed = override.speed;
                     if (@hasField(@TypeOf(override), "mode")) m.mode = override.mode;
                     if (@hasField(@TypeOf(override), "folder")) m.folder = override.folder;
-                    // Same rule as the base table: a clip that is .static
-                    // FOR THIS VARIANT (inherited or overridden) only ever
-                    // shows slot 0, so holds in its effective entry list
-                    // are meaningless — reject the combination.
+                    // A clip that is .static FOR THIS VARIANT only ever shows
+                    // slot 0, so per-slot holds in its effective entry list are
+                    // meaningless — reject the combination.
                     if (m.mode == .static) {
-                        for (clip_entries_2d[cidx][vi]) |e| {
-                            if (e.run != 1) @compileError("variant '" ++ variantNameOf(velem) ++ "' makes clip '" ++
-                                of.name ++ "' .static with per-slot holds — holds are meaningless when frame is always slot 0");
+                        for (clip_entries_2d[ci][vidx]) |e| {
+                            if (e.run != 1) @compileError("clip '" ++ cf.name ++ "' variant '" ++ of.name ++
+                                "' is .static with per-slot holds — holds are meaningless when frame is always slot 0");
                         }
                     }
-                    table[cidx][vi] = m;
+                    table[ci][vidx] = m;
                 }
             }
         }
