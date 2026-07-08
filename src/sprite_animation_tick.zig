@@ -29,11 +29,16 @@
 //! across two files (and two PRs).
 
 const SpriteAnimation = @import("sprite_animation.zig").SpriteAnimation;
+const anim_events = @import("animation_events.zig");
 
 /// Advance all `SpriteAnimation` components by `dt` and update their
 /// sibling Sprite on frame flips.
 ///
 /// Semantics:
+/// - `dt` is the time-scaled frame delta. Each animation's per-clip
+///   `speed` (#625) is applied ON TOP here (`dt * max(0, speed)`), so a
+///   `speed = 2` clip advances twice as fast and `speed <= 0` pauses it
+///   (negative is paused, never reverse).
 /// - Entities without both `SpriteAnimation` and `Sprite` are skipped.
 /// - On a frame flip, `Sprite.sprite_name` is written. Atlas fields
 ///   (`source_rect`, `texture`, `display_*`) are NOT touched here —
@@ -42,16 +47,42 @@ const SpriteAnimation = @import("sprite_animation.zig").SpriteAnimation;
 ///   scaling.
 /// - Idle ticks (sub-frame `dt`) write nothing and cost only the
 ///   timer bookkeeping inside `advance`.
+///
+/// ## Playback events (#625)
+///
+/// When the project's `GameEvents` declares any of `engine__anim_frame`
+/// / `engine__anim_complete` / `engine__anim_loop`, the tick advances
+/// through `advanceEvents` and forwards the queued lifecycle / frame-cue
+/// events to `game.emit` (buffered; drained end-of-frame), injecting the
+/// entity the pure `advance` methods don't know. When NONE are wanted the
+/// whole events path folds away at comptime and the tick uses the plain
+/// `advance` — an events-less game pays nothing.
 pub fn tick(game: anytype, dt: f32) void {
     const Game = @TypeOf(game.*);
     const Sprite = Game.SpriteComp;
+
+    const events_wanted = comptime Game.engineEventWanted("engine__anim_frame") or
+        Game.engineEventWanted("engine__anim_complete") or
+        Game.engineEventWanted("engine__anim_loop");
 
     var view = game.ecs_backend.view(.{ SpriteAnimation, Sprite }, .{});
     defer view.deinit();
 
     while (view.next()) |entity| {
         const anim = game.ecs_backend.getComponent(entity, SpriteAnimation) orelse continue;
-        if (!anim.advance(dt)) continue;
+
+        // Per-clip playback speed on top of the (already time-scaled) dt.
+        // `max(0, speed)`: 0 / negative → paused, never reverse.
+        const eff_dt = dt * @max(@as(f32, 0), anim.speed);
+
+        const changed = if (comptime events_wanted) blk: {
+            var buf: anim_events.PendingBuf = .{};
+            const c = anim.advanceEvents(eff_dt, &buf);
+            forwardEvents(game, entity, &buf);
+            break :blk c;
+        } else anim.advance(eff_dt);
+
+        if (!changed) continue;
 
         const new_name = anim.currentSprite() orelse continue;
         const sprite = game.ecs_backend.getComponent(entity, Sprite) orelse continue;
@@ -64,5 +95,21 @@ pub fn tick(game: anytype, dt: f32) void {
         // only place the visual change gets signalled, so the call
         // has to stay here rather than being pushed downstream.
         game.renderer.markVisualDirty(entity);
+    }
+}
+
+/// Forward the entity-less `PendingBuf` produced by `advanceEvents` to
+/// the game's buffered event bus, mapping each `PendingKind` onto its
+/// `engine__anim_*` variant and injecting the entity. `emitEngineEvent`
+/// folds away per-tag when a given variant isn't declared, so a project
+/// that listens to only one of the three pays for only that one.
+fn forwardEvents(game: anytype, entity: anytype, buf: *const anim_events.PendingBuf) void {
+    const id: u32 = @intCast(entity);
+    for (buf.slice()) |e| {
+        switch (e.kind) {
+            .marker => game.emitEngineEvent("engine__anim_frame", .{ .entity = id, .frame = e.frame }),
+            .clip_end => game.emitEngineEvent("engine__anim_complete", .{ .entity = id }),
+            .loop_end => game.emitEngineEvent("engine__anim_loop", .{ .entity = id, .repetition = e.repetition }),
+        }
     }
 }

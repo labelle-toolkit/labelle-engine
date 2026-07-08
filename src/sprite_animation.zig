@@ -67,6 +67,30 @@ pub const SpriteAnimation = struct {
     fps: f32,
     mode: AnimationMode = .loop,
 
+    /// Per-animation playback-speed multiplier (#625), applied ON TOP of
+    /// the global `time_scale` by the tick (`advance` receives an
+    /// already-speed-scaled `dt`). `1.0` reproduces today's behavior;
+    /// `2.0` plays twice as fast; `0` pauses just this animation.
+    /// NEGATIVE values are treated as paused — the tick clamps the
+    /// effective rate to `>= 0`, so a negative `speed` never runs the
+    /// clip in reverse (reverse playback is a deferred #625 item).
+    ///
+    /// Because the multiply lives in the tick, the component's internal
+    /// clock (`timer`/`frame`) stays in clip-time, so `progress()` /
+    /// `elapsed()` are speed-INDEPENDENT fractions; only the wall-clock
+    /// `duration()` folds `speed` in.
+    speed: f32 = 1.0,
+
+    /// Frame indices (0-based) that fire an `engine__anim_frame` event
+    /// the tick the animation LANDS on them — footstep / hit / spawn
+    /// cue frames (#625). Borrowed comptime slice, like `frames`; empty
+    /// (the default) means no per-frame events and reproduces today's
+    /// behavior. v1 detects "landed on", not "crossed": a `dt` spike
+    /// that steps PAST a marked frame without landing on it misses it
+    /// (documented follow-up — the `AnimationDef` path already does
+    /// crossing-accurate markers via beat iteration).
+    event_frames: []const u8 = &.{},
+
     // Runtime state — excluded from save.
     timer: f32 = 0,
     frame: u8 = 0,
@@ -206,7 +230,28 @@ pub const SpriteAnimation = struct {
                 }
             },
         }
+
+        // #625 per-frame events: fire when the tick LANDED the animation
+        // on a marked frame. Runs after the mode switch so it's uniform
+        // across loop/once/ping_pong. Only emitted when the frame changed
+        // (steady-state ticks never re-fire) and only when an event sink
+        // is present (plain `advance` skips this entirely).
+        if (out) |o| {
+            if (self.frame != old_frame and self.frameIsMarked(self.frame)) {
+                _ = o.append(.{ .kind = .marker, .frame = self.frame });
+            }
+        }
+
         return self.frame != old_frame;
+    }
+
+    /// True when `f` is listed in `event_frames`. Linear scan — the list
+    /// is a handful of cue frames in practice.
+    fn frameIsMarked(self: *const SpriteAnimation, f: u8) bool {
+        for (self.event_frames) |m| {
+            if (m == f) return true;
+        }
+        return false;
     }
 
     fn emitReversal(self: *SpriteAnimation, out: ?*anim_events.PendingBuf) void {
@@ -236,5 +281,70 @@ pub const SpriteAnimation = struct {
     pub fn isFinished(self: *const SpriteAnimation) bool {
         if (self.mode != .once or self.frames.len == 0) return false;
         return @as(usize, self.frame) + 1 >= self.frames.len;
+    }
+
+    // ── Progress / duration queries (#625) ──────────────────────────
+    //
+    // All pure reads of the current state — no mutation, no dependency
+    // on the tick. `elapsed()` / `clipDuration()` / `progress()` work in
+    // CLIP-TIME (the animation's own `timer`/`frame` clock, which the
+    // speed-scaled tick advances), so they're speed-INDEPENDENT. Only
+    // `duration()` folds `speed` in to report wall-clock seconds.
+
+    /// `true` once a `.once` clip has played through to its last frame
+    /// (alias of `isFinished`, named per #625). `.loop` / `.ping_pong`
+    /// never complete; a zero-frame clip never completes.
+    pub fn isComplete(self: *const SpriteAnimation) bool {
+        return self.isFinished();
+    }
+
+    /// Effective playback rate: `speed` when positive, else `0` (paused).
+    /// Negative `speed` is paused, never reverse (see the field doc).
+    fn effectiveSpeed(self: *const SpriteAnimation) f32 {
+        return if (self.speed > 0) self.speed else 0;
+    }
+
+    /// Clip-seconds a single frame is shown at `fps` (speed-independent).
+    /// `0` for a degenerate `fps <= 0`.
+    pub fn frameDuration(self: *const SpriteAnimation) f32 {
+        if (self.fps <= 0) return 0;
+        return 1.0 / self.fps;
+    }
+
+    /// Intrinsic clip length in clip-seconds: `frames.len / fps`
+    /// (speed-independent — the span `timer`/`frame` measure against).
+    /// `0` for a degenerate clip (no frames or `fps <= 0`).
+    pub fn clipDuration(self: *const SpriteAnimation) f32 {
+        return @as(f32, @floatFromInt(self.frames.len)) * self.frameDuration();
+    }
+
+    /// Total clip play time in WALL-CLOCK seconds, adjusted by `speed`:
+    /// `clipDuration() / speed`. At `speed = 2` a 1s clip reports `0.5s`.
+    /// When paused (`speed <= 0`) there IS no finite wall-clock duration,
+    /// so this reports the intrinsic `clipDuration()` (the `speed = 1`
+    /// length) rather than infinity. `0` for a degenerate clip.
+    pub fn duration(self: *const SpriteAnimation) f32 {
+        const s = self.effectiveSpeed();
+        if (s <= 0) return self.clipDuration();
+        return self.clipDuration() / s;
+    }
+
+    /// Clip-seconds consumed so far: `frame * frameDuration + timer`
+    /// (speed-independent). For a looping clip this ramps 0 → clip length
+    /// each cycle; for `.ping_pong` it tracks the current frame position.
+    pub fn elapsed(self: *const SpriteAnimation) f32 {
+        return @as(f32, @floatFromInt(self.frame)) * self.frameDuration() + self.timer;
+    }
+
+    /// Playback progress in `[0, 1]`: `elapsed() / clipDuration()`,
+    /// clamped. Speed-independent (both terms are clip-time). Returns
+    /// exactly `1.0` once `isComplete()` (a finished `.once` clip lands
+    /// on its last frame with `timer` short of a full frame, so the raw
+    /// ratio would read just under 1). `0` for a degenerate clip.
+    pub fn progress(self: *const SpriteAnimation) f32 {
+        if (self.isComplete()) return 1.0;
+        const total = self.clipDuration();
+        if (total <= 0) return 0;
+        return std.math.clamp(self.elapsed() / total, 0, 1);
     }
 };
