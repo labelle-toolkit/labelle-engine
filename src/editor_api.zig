@@ -59,6 +59,12 @@ const core = @import("labelle-core");
 
 var editor_paused: bool = false;
 var pending_steps: u32 = 0;
+/// Whether the CURRENT frame consumed an `editor_step` (i.e. `g.tick` ran for
+/// it while paused). Set by `shouldTick`, read by `frame` to SKIP the
+/// apply-while-paused re-seed on a stepped frame — otherwise single-step
+/// debugging would clobber the just-ticked camera with the authored seed
+/// before render (finding #2). One shouldTick→frame pair per loop iteration.
+var stepped_this_frame: bool = false;
 
 pub const CameraOverride = struct { x: f32, y: f32, zoom: f32 };
 var camera_override: ?CameraOverride = null;
@@ -107,6 +113,7 @@ pub fn unbind() void {
     vtable = null;
     editor_paused = false;
     pending_steps = 0;
+    stepped_this_frame = false;
     camera_override = null;
 }
 
@@ -115,11 +122,16 @@ pub fn unbind() void {
 /// count per call and returns true for it; false otherwise (render
 /// continues either way — only `g.tick` is gated on this).
 pub fn shouldTick() bool {
-    if (!editor_paused) return true;
-    if (pending_steps > 0) {
-        pending_steps -= 1;
+    if (!editor_paused) {
+        stepped_this_frame = false;
         return true;
     }
+    if (pending_steps > 0) {
+        pending_steps -= 1;
+        stepped_this_frame = true; // this frame ticks — frame() must not re-seed
+        return true;
+    }
+    stepped_this_frame = false;
     return false;
 }
 
@@ -132,7 +144,10 @@ pub fn shouldTick() bool {
 ///      camera from the authored `Camera` component every frame, so
 ///      inspector/gizmo edits show live. Safe precisely because the sim
 ///      is paused — no gameplay camera script is ticking to fight it. On
-///      resume the script drives and this stops asserting.
+///      resume the script drives and this stops asserting. SKIPPED on a
+///      STEPPED frame (one this `shouldTick` advanced): `g.tick` just ran
+///      and may have moved the camera, so single-step debugging must render
+///      that ticked frame, not the re-seeded authored camera (finding #2).
 ///   2. **Look-around override**: re-asserts the editor camera while the
 ///      override is engaged so the frame about to be rendered uses it.
 ///      Applied LAST so it wins over both the component and the script.
@@ -140,7 +155,7 @@ pub fn shouldTick() bool {
 /// A no-op when neither is active, and a comptime no-op for games whose
 /// renderer has no camera (or no `Camera` seed path).
 pub fn frame(g: anytype) void {
-    if (editor_paused and camera_override == null) applyCameraComponentTo(g);
+    if (editor_paused and camera_override == null and !stepped_this_frame) applyCameraComponentTo(g);
     if (camera_override) |c| applyCameraTo(g, c);
 }
 
@@ -544,6 +559,11 @@ fn Holder(comptime GP: type, comptime RP: type) type {
             // MVP. An unknown/unvetted name is refused up front — no blanket
             // apply-any-component path is wired.
             if (!std.mem.eql(u8, name, "Camera")) return -1;
+            // Defer to a project that registered its OWN `Camera` (finding #1):
+            // the built-in bridge is off for such projects — refuse rather than
+            // materialize a conflicting second component. Routing "Camera" to
+            // the registry path is a later, studio-side change.
+            if (comptime !G.camera_is_builtin) return -1;
             const Entity = G.EntityType;
             if (comptime @typeInfo(Entity) != .int) return -1;
             const ent = std.math.cast(Entity, id) orelse return -1;
@@ -639,7 +659,10 @@ fn Holder(comptime GP: type, comptime RP: type) type {
             // `getCamera().getViewport()` — the rect the studio draws its
             // draggable gizmo from. Emitted only for Camera-bearing entities,
             // exactly like the sprite/tilemap optional-field pattern above.
-            if (comptime @hasDecl(G, "CameraComp")) {
+            // Suppressed when a project registered its own `Camera` (finding
+            // #1): the built-in feature defers, so its component is never
+            // injected/published here.
+            if (comptime @hasDecl(G, "CameraComp") and G.camera_is_builtin) {
                 if (game.getComponent(ent, G.CameraComp)) |cam| {
                     try appendFmt(buf, cur, ",\"camera\":{{\"zoom\":{d}", .{jsonSafeFloat(cam.zoom)});
                     if (cam.viewport) |vp| {

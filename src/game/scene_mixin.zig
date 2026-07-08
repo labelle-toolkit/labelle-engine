@@ -518,11 +518,6 @@ pub fn Mixin(comptime Game: type) type {
                     defer self.loading_scene_name = null;
                     try entry.loader_fn(self);
                 }
-                // Seed the gfx camera from the authored `Camera` component now
-                // that the scene's entities exist (camera-prefabs #714) — the
-                // authored starting point, before scripts take the wheel on the
-                // first tick. Comptime-folds away on camera-less renderers.
-                self.seedCameraFromComponent();
                 self.current_scene_name = self.allocator.dupe(u8, name) catch null;
                 self.emitHook(.{ .scene_load = .{ .name = name } });
                 // Engine `Events` dual-emit (#578).
@@ -530,6 +525,13 @@ pub fn Mixin(comptime Game: type) type {
                 if (entry.hooks.onLoad) |onLoad| {
                     onLoad(self);
                 }
+                // Seed the gfx camera from the authored `Camera` component
+                // (camera-prefabs #714) — the authored starting point before
+                // scripts take the wheel. Runs AFTER `onLoad` (finding #3) so a
+                // scene that finalizes the camera's Position/zoom in its hook is
+                // reflected on the first rendered frame. Comptime-folds away on
+                // camera-less renderers.
+                self.seedCameraFromComponent();
             } else if (self.jsonc_scenes.get(name)) |_| {
                 // Runtime JSONC scene — loaded at runtime by the game loop
                 // The actual loading is deferred: the generated code or game code
@@ -695,10 +697,6 @@ pub fn Mixin(comptime Game: type) type {
                 defer self.loading_scene_name = null;
                 try entry.loader_fn(self);
             }
-            // Seed the gfx camera from the authored `Camera` component now that
-            // the fresh ECS is populated (camera-prefabs #714). Comptime-folds
-            // away on camera-less renderers.
-            self.seedCameraFromComponent();
             self.current_scene_name = self.allocator.dupe(u8, name) catch null;
             self.emitHook(.{ .scene_load = .{ .name = name } });
             // Engine `Events` dual-emit (#578).
@@ -707,6 +705,11 @@ pub fn Mixin(comptime Game: type) type {
             if (entry.hooks.onLoad) |onLoad| {
                 onLoad(self);
             }
+            // Seed the gfx camera from the authored `Camera` component AFTER
+            // `onLoad` (finding #3), so a scene finalizing the camera in its
+            // hook is reflected on the first rendered frame (camera-prefabs
+            // #714). Comptime-folds away on camera-less renderers.
+            self.seedCameraFromComponent();
 
             if (previous_name) |p| {
                 const prev_assets: []const []const u8 = if (self.scenes.get(p)) |e| e.assets else &.{};

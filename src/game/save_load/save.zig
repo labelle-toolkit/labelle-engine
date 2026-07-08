@@ -142,6 +142,23 @@ pub fn Mixin(comptime Game: type) type {
                 }
             }
 
+            // Auto-collect Camera entities (camera-prefabs #714). Same
+            // rationale as the Tilemap sweep: the built-in `Camera` carries no
+            // registry component, so a camera-only entity would otherwise be
+            // missed by the registry sweep. Gated on `camera_is_builtin` so a
+            // project that registered its own `Camera` uses the registry path.
+            if (comptime Game.camera_is_builtin) {
+                var cam_view = self.active_world.ecs_backend.view(.{Game.CameraComp}, .{});
+                defer cam_view.deinit();
+                while (cam_view.next()) |entity| {
+                    const id = Common.entityToU64(entity);
+                    if (!entity_set.contains(id)) {
+                        try entity_set.put(id, {});
+                        try entity_list.append(allocator, id);
+                    }
+                }
+            }
+
             var alloc_writer: std.Io.Writer.Allocating = .init(allocator);
             defer alloc_writer.deinit();
             const writer = &alloc_writer.writer;
@@ -294,6 +311,23 @@ pub fn Mixin(comptime Game: type) type {
                                 try writer.writeAll("}");
                             }
                             try writer.writeAll("]");
+                        }
+                        try writer.writeAll("}");
+                        first_comp = false;
+                    }
+                }
+
+                // Save Camera (built-in, camera-prefabs #714). `zoom` is a
+                // scalar and `viewport` a small optional flat rect — no strings,
+                // so (unlike Tilemap) nothing needs arena-duping. Gated on
+                // `camera_is_builtin`: a project that registered its own
+                // `Camera` goes through the registry serde sweep below instead.
+                if (comptime Game.camera_is_builtin) {
+                    if (self.active_world.ecs_backend.getComponent(entity, Game.CameraComp)) |cam| {
+                        if (!first_comp) try writer.writeAll(",");
+                        try writer.print("\n        \"Camera\": {{\"zoom\": {d}", .{cam.zoom});
+                        if (cam.viewport) |vp| {
+                            try writer.print(", \"viewport\": {{\"x\": {d}, \"y\": {d}, \"width\": {d}, \"height\": {d}}}", .{ vp.x, vp.y, vp.width, vp.height });
                         }
                         try writer.writeAll("}");
                         first_comp = false;

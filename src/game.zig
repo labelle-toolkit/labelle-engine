@@ -231,6 +231,16 @@ pub fn GameConfigWithYAxis(
         /// (scene loader, seed/apply sync, digest, editor bridge) — NOT a
         /// `ComponentRegistry` component. See `src/camera.zig`.
         pub const CameraComp = camera_mod.Camera;
+        /// True when the engine's built-in `Camera` feature is ACTIVE — i.e.
+        /// the project did NOT register its own `Camera` in its
+        /// `ComponentRegistry`. When a project registers `Camera`, every
+        /// built-in Camera channel (seed / apply-while-paused / digest / the
+        /// `editor_set_component` bridge / save-load) DEFERS to the project's
+        /// component so the two never fight over the name — mirroring the
+        /// scene-loader `!Components.has("Camera")` guard in
+        /// `jsonc/component_apply.zig`. The `@hasDecl` guard keeps this sound
+        /// for any `ComponentRegistry` shape that predates a `has` decl.
+        pub const camera_is_builtin = !(@hasDecl(ComponentsType, "has") and ComponentsType.has("Camera"));
 
         // ── Tilemap (T2 Phase 2) ─────────────────────────────────
         /// Engine built-in `Tilemap` component (references a `.tmx` asset

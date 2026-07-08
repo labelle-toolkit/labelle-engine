@@ -33,6 +33,9 @@ pub fn Mixin(comptime Game: type) type {
         /// the first Camera entity wins.
         pub fn seedCameraFromComponent(self: *Game) void {
             if (comptime !camera_mod.hasSettableCamera(Game)) return;
+            // Defer to a project that registered its OWN `Camera` (finding #1):
+            // the built-in seed is off for such projects.
+            if (comptime !Game.camera_is_builtin) return;
             var v = self.ecs_backend.view(.{ Position, CameraComp }, .{});
             defer v.deinit();
             while (v.next()) |ent| {
@@ -73,20 +76,27 @@ pub fn Mixin(comptime Game: type) type {
                 comp.zoom = @floatFromInt(z);
             }
 
-            if (obj.getObject("viewport")) |vp| {
-                // Merge sub-fields into the existing (or default) viewport so a
-                // partial viewport patch is also additive.
-                var out = comp.viewport orelse camera_mod.Viewport{};
-                // Bounds-check the JSON int → i32 narrowing: an out-of-range
-                // value from studio JSON must fail the patch (-2, entity
-                // untouched — this returns before `setComponent` below), NOT
-                // panic via a raw `@intCast` (gemini on #719).
-                if (vp.getInteger("x")) |x| out.x = std.math.cast(i32, x) orelse return error.InvalidCameraComponentJson;
-                if (vp.getInteger("y")) |y| out.y = std.math.cast(i32, y) orelse return error.InvalidCameraComponentJson;
-                if (vp.getInteger("width")) |w| out.width = std.math.cast(i32, w) orelse return error.InvalidCameraComponentJson;
-                if (vp.getInteger("height")) |h| out.height = std.math.cast(i32, h) orelse return error.InvalidCameraComponentJson;
-                comp.viewport = out;
-            }
+            // A PRESENT `viewport` key drives the merge; distinguish an
+            // explicit JSON `null` (→ clear back to fullscreen, finding #4)
+            // from an absent key (→ leave the viewport untouched).
+            if (obj.get("viewport")) |vp_val| switch (vp_val) {
+                .null_value => comp.viewport = null,
+                .object => |vp| {
+                    // Merge sub-fields into the existing (or default) viewport
+                    // so a partial viewport patch is also additive.
+                    var out = comp.viewport orelse camera_mod.Viewport{};
+                    // Bounds-check the JSON int → i32 narrowing: an out-of-range
+                    // value from studio JSON must fail the patch (-2, entity
+                    // untouched — this returns before `setComponent` below), NOT
+                    // panic via a raw `@intCast` (gemini on #719).
+                    if (vp.getInteger("x")) |x| out.x = std.math.cast(i32, x) orelse return error.InvalidCameraComponentJson;
+                    if (vp.getInteger("y")) |y| out.y = std.math.cast(i32, y) orelse return error.InvalidCameraComponentJson;
+                    if (vp.getInteger("width")) |w| out.width = std.math.cast(i32, w) orelse return error.InvalidCameraComponentJson;
+                    if (vp.getInteger("height")) |h| out.height = std.math.cast(i32, h) orelse return error.InvalidCameraComponentJson;
+                    comp.viewport = out;
+                },
+                else => {}, // a non-object, non-null viewport is ignored
+            };
 
             self.setComponent(ent, comp);
             seedCameraFromComponent(self);
