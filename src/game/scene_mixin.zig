@@ -518,6 +518,11 @@ pub fn Mixin(comptime Game: type) type {
                     defer self.loading_scene_name = null;
                     try entry.loader_fn(self);
                 }
+                // Seed the gfx camera from the authored `Camera` component now
+                // that the scene's entities exist (camera-prefabs #714) — the
+                // authored starting point, before scripts take the wheel on the
+                // first tick. Comptime-folds away on camera-less renderers.
+                self.seedCameraFromComponent();
                 self.current_scene_name = self.allocator.dupe(u8, name) catch null;
                 self.emitHook(.{ .scene_load = .{ .name = name } });
                 // Engine `Events` dual-emit (#578).
@@ -690,6 +695,10 @@ pub fn Mixin(comptime Game: type) type {
                 defer self.loading_scene_name = null;
                 try entry.loader_fn(self);
             }
+            // Seed the gfx camera from the authored `Camera` component now that
+            // the fresh ECS is populated (camera-prefabs #714). Comptime-folds
+            // away on camera-less renderers.
+            self.seedCameraFromComponent();
             self.current_scene_name = self.allocator.dupe(u8, name) catch null;
             self.emitHook(.{ .scene_load = .{ .name = name } });
             // Engine `Events` dual-emit (#578).

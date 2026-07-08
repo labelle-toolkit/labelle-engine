@@ -132,6 +132,22 @@ pub fn ComponentApply(comptime GameType: type, comptime Components: type) type {
                 }
             }
 
+            // Camera (camera-prefabs MVP, #714) — built-in, attaches as a
+            // plain POD component (no runtime/side-table, unlike Tilemap). The
+            // engine seeds the live gfx camera from it after instantiation
+            // (`seedCameraFromComponent`). Guarded `!Components.has("Camera")`
+            // exactly like Tilemap so a project-registered `Camera` still wins
+            // (the built-in branch compiles out, routing `"Camera"` to the
+            // registered type via the generic dispatch below).
+            if (comptime !Components.has("Camera")) {
+                if (std.mem.eql(u8, name, "Camera")) {
+                    if (deserializer.deserialize(GameType.CameraComp, value, comp_alloc)) |camera| {
+                        game.addComponent(entity, camera);
+                    }
+                    return;
+                }
+            }
+
             // All other components — comptime dispatch via
             // Components registry.
             const filtered = stripEntityArrayFields(value, game.allocator);
