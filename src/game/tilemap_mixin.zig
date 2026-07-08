@@ -345,13 +345,28 @@ pub fn Mixin(comptime Game: type) type {
         /// backgrounds per-camera (closes #709) instead of primary-only.
         pub fn tilemapBackgroundHook(self: *Game, cam: *const Game.CameraType) void {
             if (self.tilemaps.count() == 0) return;
-            // Reap orphaned side-table runtimes once — idempotent across the
-            // per-camera invocations (a ghost freed on the first camera is
-            // simply gone for the rest). Safe: a reaped entity has no
-            // component, so it never drew anyway.
-            reapGhostTilemaps(self);
-            if (self.tilemaps.count() == 0) return;
+            // NB: ghost reaping is a PRE-render step done ONCE by
+            // `loop_mixin.render` (`reapTilemapGhosts`) BEFORE
+            // `renderWithLayerHooks` — deliberately NOT here. Reaping frees
+            // tileset textures (`Runtime.deinit → unloadTexture`), which must
+            // not run mid-render inside gfx's camera loop, nor redundantly
+            // once per active camera. Any ghost that slipped through is still
+            // skipped by `drawUnboundLayers`' `getComponent` guard.
             drawUnboundLayers(self, cam);
+        }
+
+        /// Reap orphaned tilemap side-table runtimes (entities whose `Tilemap`
+        /// was stripped via the generic `removeComponent`, or stale ids left
+        /// by a world swap). This is the PRE-render reap step for the
+        /// per-camera path: `loop_mixin.render` calls it ONCE before
+        /// `renderWithLayerHooks`, so the draw hooks
+        /// (`tilemapBackgroundHook`/`tilemapLayerHook`) only draw and never
+        /// mutate the side table / unload textures mid-render. No-op when the
+        /// feature is unsupported or there are no tilemaps.
+        pub fn reapTilemapGhosts(self: *Game) void {
+            if (comptime !supported) return;
+            if (self.tilemaps.count() == 0) return;
+            reapGhostTilemaps(self);
         }
 
         /// Single-primary-camera pre-sprite background pass — the fallback for

@@ -241,6 +241,11 @@ pub fn Mixin(comptime Game: type) type {
                     //   * `tilemapLayerHook` (on_after_layer) draws the BOUND
                     //     `.tmx` layers at their engine layer's z, per camera —
                     //     unchanged.
+                    // Reap orphaned side-table runtimes ONCE up front — never
+                    // inside the per-camera draw hooks, which would unload
+                    // tileset textures mid-render and repeat once per active
+                    // camera (codex #712). Both hooks then only draw.
+                    TilemapMixin.reapTilemapGhosts(self);
                     self.renderer.renderWithLayerHooks(
                         *Game,
                         self,

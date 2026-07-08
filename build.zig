@@ -346,6 +346,24 @@ pub fn build(b: *std.Build) void {
             }),
         });
         test_step.dependOn(&b.addRunArtifact(tilemap_interleave_test).step);
+
+        // T3 per-camera correctness (cull #711 P1 / background #709 / reap
+        // #712). Shares mocks with the interleave test via
+        // `tilemap_interleave_support.zig` (path-imported).
+        const tilemap_percamera_test = b.addTest(.{
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("test/tilemap_percamera_test.zig"),
+                .target = target,
+                .optimize = optimize,
+                .imports = &.{
+                    .{ .name = "labelle-core", .module = core_module },
+                    .{ .name = "engine", .module = engine_module },
+                    .{ .name = "scene", .module = scene_module },
+                    .{ .name = "tilemap", .module = tilemap_module },
+                },
+            }),
+        });
+        test_step.dependOn(&b.addRunArtifact(tilemap_percamera_test).step);
     }
 
     // zspec BDD specs — mirrors the `spec` step in labelle-pathfinding.
