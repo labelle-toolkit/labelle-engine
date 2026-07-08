@@ -273,6 +273,20 @@ pub fn GameConfigWithYAxis(
             return true;
         }
 
+        /// True when the tilemap BACKGROUND (unbound `.tmx` layers) can be
+        /// drawn PER active camera: the renderer exposes the dual-hook
+        /// `renderWithLayerHooks` (gfx ≥1.24.0), whose `on_before_layers`
+        /// callback runs once per active camera inside that camera's transform
+        /// + viewport scissor, before the sprite stack. Builds on
+        /// `tilemap_interleave_supported`. When false but interleave IS
+        /// supported (a renderer with only the older single-callback
+        /// `renderWithLayerHook`, gfx 1.22–1.23) the background falls back to
+        /// the single primary-camera pass; BOUND layers are per-camera either
+        /// way. `@hasDecl` on the valid `RenderImpl` is always safe, so a
+        /// plain `and` suffices here.
+        pub const tilemap_percamera_background_supported = tilemap_interleave_supported and
+            @hasDecl(RenderImpl, "renderWithLayerHooks");
+
         pub const Input = @import("input.zig").InputInterface(InputImpl);
 
         /// True when the active input backend itself declares

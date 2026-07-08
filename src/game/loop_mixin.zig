@@ -227,22 +227,39 @@ pub fn Mixin(comptime Game: type) type {
             // is suppressed, and only for the few frames the re-decode
             // takes. The common path (no gate armed) is unchanged.
             if (self.post_load_render_gate == null) {
-                if (comptime Game.tilemap_interleave_supported) {
-                    // T3 Z-interleave (hook-capable renderer). Split the
-                    // tilemap draw so individual `.tmx` layers sit at their
-                    // bound engine layer's z:
-                    //   1. Pre-sprite background — only the UNBOUND `.tmx`
-                    //      layers (whole-stack T2 semantics: under every
-                    //      sprite, primary camera). A Tilemap with no
-                    //      bindings / no name-matching engine layers has ALL
-                    //      layers unbound here → renders EXACTLY as T2.
-                    //   2. `renderWithLayerHook` draws the sprite layers and,
-                    //      after each WORLD layer's sprite pass (inside that
-                    //      layer's active camera transform, once per active
-                    //      camera), calls `tilemapLayerHook` to draw the
-                    //      `.tmx` layers BOUND to that engine layer — so
-                    //      terrain sits under sprites, canopy/roof over them,
-                    //      per camera (closes #709).
+                if (comptime Game.tilemap_percamera_background_supported) {
+                    // T3 Z-interleave with a PER-CAMERA background (gfx
+                    // ≥1.24.0 `renderWithLayerHooks`). One render call carries
+                    // both tilemap hooks, so every draw rides gfx's own
+                    // per-active-camera loop (viewport scissor included):
+                    //   * `tilemapBackgroundHook` (on_before_layers) fires once
+                    //     per active camera, inside its transform + scissor,
+                    //     BEFORE the first sprite layer → the UNBOUND `.tmx`
+                    //     layers draw under everything, culled to THAT camera's
+                    //     world rect. So split-screen backgrounds are per
+                    //     viewport, not primary-only (closes #709).
+                    //   * `tilemapLayerHook` (on_after_layer) draws the BOUND
+                    //     `.tmx` layers at their engine layer's z, per camera —
+                    //     unchanged.
+                    // Reap orphaned side-table runtimes ONCE up front — never
+                    // inside the per-camera draw hooks, which would unload
+                    // tileset textures mid-render and repeat once per active
+                    // camera (codex #712). Both hooks then only draw.
+                    TilemapMixin.reapTilemapGhosts(self);
+                    self.renderer.renderWithLayerHooks(
+                        *Game,
+                        self,
+                        TilemapMixin.tilemapBackgroundHook,
+                        TilemapMixin.tilemapLayerHook,
+                    );
+                } else if (comptime Game.tilemap_interleave_supported) {
+                    // Interleave, but the renderer only has the older
+                    // single-callback `renderWithLayerHook` (gfx 1.22–1.23):
+                    //   1. Pre-sprite background — UNBOUND `.tmx` layers, drawn
+                    //      once through the PRIMARY camera (see
+                    //      `renderTilemapBackground`).
+                    //   2. `renderWithLayerHook` draws sprite layers + the
+                    //      BOUND `.tmx` layers per camera (`tilemapLayerHook`).
                     TilemapMixin.renderTilemapBackground(self);
                     self.renderer.renderWithLayerHook(*Game, self, TilemapMixin.tilemapLayerHook);
                 } else {
@@ -251,9 +268,9 @@ pub fn Mixin(comptime Game: type) type {
                     // terrain draws FIRST, under the gameplay sprites, inside
                     // the same world camera transform (see `renderTilemaps`).
                     // No-op when no Tilemap entities exist / the renderer
-                    // lacks the seam. Both branches are gated by the
-                    // post-load render gate so restored tilemaps don't flash
-                    // before their tileset textures re-bind.
+                    // lacks the seam. All branches are gated by the post-load
+                    // render gate so restored tilemaps don't flash before
+                    // their tileset textures re-bind.
                     self.renderTilemaps();
                     self.renderer.render();
                 }
