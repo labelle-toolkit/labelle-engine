@@ -338,11 +338,134 @@ fn totalTileDraws(calls: anytype) usize {
     return n;
 }
 
+/// A renderer that DECLARES `renderWithLayerHook` AND the tilemap seam, but
+/// whose `Layer` is `void` (a stub / non-standard renderer) — i.e. NOT a
+/// genuine config-bearing enum. The T3 interleave gate must reject it (so the
+/// engine never analyzes `stringToEnum(void, …)` / `void.config()`) and fall
+/// back to the T2 whole-stack background path. Locks the gemini #711 fix.
+const BadLayerRender = struct {
+    const Self = @This();
+
+    /// The offending decl: present (so the gate's `@hasDecl` step passes) but
+    /// NOT an enum — the strengthened gate's `@typeInfo(Layer) == .@"enum"`
+    /// check rejects it.
+    pub const Layer = void;
+
+    /// Existence is all the gate checks — signature is irrelevant here.
+    pub fn renderWithLayerHook(_: *Self) void {}
+
+    pub const Sprite = struct {
+        sprite_name: []const u8 = "",
+        visible: bool = true,
+        z_index: i16 = 0,
+        layer: enum { default } = .default,
+    };
+    pub const Shape = struct {
+        shape: union(enum) {
+            rectangle: struct { width: f32 = 10, height: f32 = 10 },
+            circle: struct { radius: f32 = 10 },
+        } = .{ .rectangle = .{} },
+        color: struct { r: u8 = 255, g: u8 = 255, b: u8 = 255, a: u8 = 255 } = .{},
+        visible: bool = true,
+        z_index: i16 = 0,
+        layer: enum { default } = .default,
+    };
+
+    pub const TileMapRendererType = tilemap.TileMapRendererWith(MockBackend);
+    pub const Inner = struct {
+        pub const TextureInfo = struct { backend_texture: MockBackend.Texture };
+    };
+
+    inner: Inner = .{},
+    alloc: std.mem.Allocator = undefined,
+    textures: std.AutoHashMapUnmanaged(u32, MockBackend.Texture) = .empty,
+    next_id: u32 = 1,
+    screen_height: f32 = 600,
+
+    pub fn init(allocator: std.mem.Allocator) Self {
+        return .{ .alloc = allocator };
+    }
+    pub fn deinit(self: *Self) void {
+        self.textures.deinit(self.alloc);
+    }
+    pub fn loadTextureFromMemory(self: *Self, file_type: [:0]const u8, data: []const u8) !u32 {
+        _ = file_type;
+        _ = data;
+        const id = self.next_id;
+        self.next_id += 1;
+        try self.textures.put(self.alloc, id, .{ .id = id, .width = 64, .height = 32 });
+        return id;
+    }
+    pub fn getTextureInfo(self: *const Self, id: u32) ?@TypeOf(self.inner).TextureInfo {
+        const tex = self.textures.get(id) orelse return null;
+        return .{ .backend_texture = tex };
+    }
+    pub fn unloadTexture(self: *Self, id: u32) void {
+        _ = self.textures.remove(id);
+    }
+    pub fn trackEntity(_: *Self, _: u32, _: core.render.VisualType) void {}
+    pub fn untrackEntity(_: *Self, _: u32) void {}
+    pub fn markPositionDirty(_: *Self, _: u32) void {}
+    pub fn markPositionDirtyWithChildren(_: *Self, comptime _: type, _: anytype, _: u32) void {}
+    pub fn updateHierarchyFlag(_: *Self, _: u32, _: bool) void {}
+    pub fn markVisualDirty(_: *Self, _: u32) void {}
+    pub fn sync(_: *Self, comptime _: type, _: anytype) void {}
+    pub fn setScreenHeight(self: *Self, h: f32) void {
+        self.screen_height = h;
+    }
+    pub fn renderGizmoDraws(_: *Self, _: []const core.gizmos.GizmoDraw) void {}
+    pub fn hasEntity(_: *const Self, _: u32) bool {
+        return false;
+    }
+    pub fn clear(_: *Self) void {}
+    pub fn render(_: *Self) void {}
+};
+
+fn BadLayerGame() type {
+    return GameConfig(
+        BadLayerRender,
+        MockEcsBackend(u32),
+        StubInput,
+        StubAudio,
+        StubVideo,
+        StubGui,
+        void,
+        StubLogSink,
+        EmptyComponents,
+        &.{},
+        void,
+    );
+}
+
 // ── Tests ────────────────────────────────────────────────────────────────
 
 test "the hook-capable renderer enables the T3 interleave path" {
     try testing.expect(InterleaveGame().tilemap_supported);
     try testing.expect(InterleaveGame().tilemap_interleave_supported);
+}
+
+test "gate rejects a renderWithLayerHook renderer whose Layer is not a config enum" {
+    // The tilemap seam IS present (T2 works), but `Layer = void` → the
+    // strengthened interleave gate is OFF, so the engine uses the T2
+    // whole-stack background path (never analyzing `stringToEnum(void, …)`).
+    const G = BadLayerGame();
+    try testing.expect(G.tilemap_supported);
+    try testing.expect(!G.tilemap_interleave_supported);
+
+    // And it still renders as a valid T2 game: a ground tilemap draws its
+    // whole stack on the non-interleave path with no crash.
+    var game = G.init(testing.allocator);
+    defer game.deinit();
+    try game.addEmbeddedTilemapAsset("g.tmx", ground_tmx);
+    try game.addEmbeddedTilemapAsset("tiles.png", fake_png);
+    const e = game.createEntity();
+    game.addTilemap(e, .{ .asset_name = "g.tmx" });
+
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+    game.render();
+    // 6 tiles from the single `ground` layer, whole-stack background.
+    try testing.expectEqual(@as(usize, 6), totalTileDraws(MockBackend.getDrawCalls()));
 }
 
 test "bound .tmx layers interleave: terrain below, canopy above a sprite layer between them" {

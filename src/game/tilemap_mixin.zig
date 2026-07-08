@@ -246,6 +246,11 @@ pub fn Mixin(comptime Game: type) type {
         /// `LayerEnum` tag named `name`, but only if it is a WORLD-space
         /// layer; `null` for an unknown name or a screen-space layer.
         fn worldLayerFromName(name: []const u8) ?LayerEnum {
+            // Precondition (guaranteed by `Game.tilemap_interleave_supported`,
+            // the only gate that reaches this fn): `LayerEnum` is a genuine
+            // config-bearing enum, so `stringToEnum`/`config()` below are
+            // sound. Asserted locally so the safety is obvious here too.
+            comptime std.debug.assert(@typeInfo(LayerEnum) == .@"enum" and @hasDecl(LayerEnum, "config"));
             const l = std.meta.stringToEnum(LayerEnum, name) orelse return null;
             if (l.config().space != .world) return null;
             return l;
@@ -291,6 +296,11 @@ pub fn Mixin(comptime Game: type) type {
         /// sprites). The `cam` argument is unused: tiles cull against the
         /// backend screen size like the T2 background (a safe over-estimate).
         pub fn tilemapLayerHook(self: *Game, layer: LayerEnum, cam: *const Game.CameraType) void {
+            // Precondition (guaranteed by `Game.tilemap_interleave_supported`,
+            // the only gate that passes this fn to `renderWithLayerHook`):
+            // `LayerEnum` is a genuine config-bearing enum, so `layer.config()`
+            // below is sound. Asserted locally so the safety is obvious here.
+            comptime std.debug.assert(@typeInfo(LayerEnum) == .@"enum" and @hasDecl(LayerEnum, "config"));
             _ = cam;
             // Tilemaps are world-space; `worldLayerFromName` already filters
             // screen-space bindings, but guard here too so a screen-layer
