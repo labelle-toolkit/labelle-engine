@@ -206,7 +206,18 @@ fn bridgeImageAssetsToAtlasManager(game: anytype, assets: []const []const u8) vo
         // Both are normal: the first means we already bridged on
         // an earlier setScene; the second means the asset name
         // doesn't correspond to a registered atlas (e.g. audio).
-        game.atlas_manager.markPendingLoaded(asset_name, handle, null) catch {};
+        // Those two are the only errors `markPendingLoaded` can
+        // return today, so swallow exactly those — but surface
+        // anything else instead of a blanket `catch {}` so a future
+        // genuine bind failure can't vanish silently (#697).
+        game.atlas_manager.markPendingLoaded(asset_name, handle, null) catch |err| {
+            if (err != error.AtlasNotPending and err != error.AtlasNotFound) {
+                game.log.err(
+                    "bridgeImageAssetsToAtlasManager: unexpected atlas bind failure for '{s}': {s}",
+                    .{ asset_name, @errorName(err) },
+                );
+            }
+        };
     }
 }
 
@@ -258,7 +269,20 @@ fn bridgeAllReadyImageAssets_impl(game: anytype) void {
             .image => |t| t,
             else => continue,
         };
-        game.atlas_manager.markPendingLoaded(kv.key_ptr.*, handle, null) catch {};
+        // Idempotent per-tick walk: AtlasNotPending (already bridged)
+        // and AtlasNotFound are expected and swallowed. Anything else
+        // is a genuine bind failure — surface it rather than letting a
+        // blanket `catch {}` hide it (#697). The guard keeps the normal
+        // per-frame path silent (no log spam), since those two are the
+        // only errors `markPendingLoaded` returns today.
+        game.atlas_manager.markPendingLoaded(kv.key_ptr.*, handle, null) catch |err| {
+            if (err != error.AtlasNotPending and err != error.AtlasNotFound) {
+                game.log.err(
+                    "bridgeAllReadyImageAssets: unexpected atlas bind failure for '{s}': {s}",
+                    .{ kv.key_ptr.*, @errorName(err) },
+                );
+            }
+        };
     }
 }
 
@@ -288,7 +312,16 @@ pub fn Mixin(comptime Game: type) type {
             self.scenes.put(name, .{
                 .loader_fn = wrapper,
                 .hooks = hooks_val,
-            }) catch {};
+            }) catch |err| {
+                // A dropped registration silently vanishes here and only
+                // resurfaces much later as an opaque `error.SceneNotFound`
+                // from `setScene('{name}')` with no clue why. Surface the
+                // real cause (OOM) at the point of failure (#697).
+                self.log.err(
+                    "registerScene('{s}') failed: {s} — scene will be missing at setScene time",
+                    .{ name, @errorName(err) },
+                );
+            };
         }
 
         pub fn registerSceneSimple(

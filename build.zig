@@ -203,6 +203,12 @@ pub fn build(b: *std.Build) void {
         // The cascade iterates a snapshot so the per-child unlink can't
         // invalidate the walk.
         "test/destroy_unlink_test.zig",
+        // #697 — silent-failure hardening on the loading→gameplay
+        // transition: the hot-reload loader swallow (`catch {}`) now
+        // surfaces a loader failure through `game.log.err` instead of
+        // vanishing. Drives a hot reload with a fail-on-demand loader and
+        // asserts the error reaches a capturing log sink.
+        "test/loading_transition_hardening_test.zig",
     };
 
     for (test_files) |test_file| {
