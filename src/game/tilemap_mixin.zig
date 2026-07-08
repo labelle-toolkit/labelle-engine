@@ -155,8 +155,12 @@ pub fn Mixin(comptime Game: type) type {
         pub fn renderTilemaps(self: *Game) void {
             if (comptime !supported) return;
 
-            reapGhostTilemaps(self);
+            // Fast path: games/scenes without tilemaps pay nothing per frame —
+            // skip the reap iterator entirely. `reapGhostTilemaps` only ever
+            // removes entries, so an empty table has nothing to reap.
             if (self.tilemaps.count() == 0) return;
+            reapGhostTilemaps(self);
+            if (self.tilemaps.count() == 0) return; // all entries were ghosts
 
             // Enter the SAME world camera transform sprites render through,
             // so the tilemap pass is world-space: pans/zooms with the world.
@@ -164,6 +168,14 @@ pub fn Mixin(comptime Game: type) type {
             // does the transform, matching how sprites use the camera. On a
             // camera-less renderer this folds away and the pass runs in raw
             // screen space (the T2 fallback).
+            //
+            // LIMITATION — single active camera: this wraps the primary camera
+            // ONCE. Under split-screen / multi-camera the renderer draws sprites
+            // once PER active camera (each viewport), but this background pass
+            // runs a single full-window time, so secondary viewports would show
+            // the primary camera's terrain. Per-camera tilemap backgrounds are
+            // tracked in engine#709; single-camera (the common case + the
+            // colony demo) is correct.
             if (comptime camera_capable) self.getCamera().begin();
             defer if (comptime camera_capable) self.getCamera().end();
 
