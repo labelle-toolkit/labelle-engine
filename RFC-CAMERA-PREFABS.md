@@ -95,11 +95,16 @@ pub const Camera = struct {
     /// gfx camera's `min_zoom`/`max_zoom` (camera/src/root.zig:156).
     zoom: f32 = 1.0,
 
-    /// Optional screen-space viewport placement (split-screen / minimap / PiP).
-    /// `null` = fullscreen. The single-camera MVP always renders fullscreen and
-    /// ignores a non-null value; carried NOW so the deferred multi-camera work
-    /// (§Deferred) is purely additive rather than a breaking component change.
-    viewport: ?ScreenViewport = null,
+    /// Optional screen-space viewport placement (split-screen / minimap / PiP),
+    /// as an ENGINE-LOCAL rect type. The engine is renderer-agnostic and gfx is
+    /// an optional / test-only dependency, so the component must NOT reference
+    /// gfx's `ScreenViewport` — a hard reference would couple every engine build
+    /// to gfx. Define a tiny engine-local `{ x, y, width, height }` mirror
+    /// instead (inert in the MVP anyway). `null` = fullscreen. The single-camera
+    /// MVP always renders fullscreen and ignores a non-null value; carried NOW
+    /// so the deferred multi-camera work (§Deferred) is purely additive rather
+    /// than a breaking component change.
+    viewport: ?CameraViewport = null, // engine-local rect; NOT gfx.ScreenViewport
 
     // Reserved for a future declarative follow target (entity id + offset +
     // deadzone). Deferred: shipping games express "follow" in their gameplay
@@ -109,9 +114,9 @@ pub const Camera = struct {
 };
 ```
 
-- **`x` / `y`** — the entity's `Position` (the camera's world center). Reuses the digest `x`/`y` and `editor_set_entity_position` verbatim: dragging the camera *is* moving an entity.
+- **`x` / `y`** — the entity's **world position** (`getWorldPosition`), the camera's world center. Reuses the digest `x`/`y` and `editor_set_entity_position` verbatim — both already speak WORLD coords (§Seed sync) — so dragging the camera *is* moving an entity.
 - **`zoom`** — a scalar the inspector edits and the gizmo resizes.
-- **`viewport`** — a screen-space rect, `ScreenViewport`-shaped (`camera/src/root.zig:30`), `null` = fullscreen. Inert in the MVP; present for forward-compat with multi-camera.
+- **`viewport`** — a screen-space rect in an **engine-local** type (mirrors gfx's `ScreenViewport` shape at `camera/src/root.zig:30` but does **not** import it — the engine stays renderer-agnostic; gfx is an optional/test-only dep), `null` = fullscreen. Inert in the MVP; present for forward-compat with multi-camera.
 - **`follow`** — reserved, not modeled in v1 (deferred; scripts own runtime follow).
 
 Note the distinction between this **authored `viewport`** (screen-space, where the camera *renders to*, MVP: fullscreen) and the **derived world view-rect** the studio draws its gizmo from (§Digest below) — the latter is `getViewport()` (world-space, what the camera *sees*), computed from position + zoom + screen size, never stored.
@@ -120,9 +125,9 @@ Note the distinction between this **authored `viewport`** (screen-space, where t
 
 The component reaches the live gfx camera through the engine, never the other way around:
 
-1. **Seed on scene load.** After a root prefab / scene is instantiated, the engine finds the Camera entity, reads its `Position` and `Camera.zoom`, and seeds the active camera once: `getCamera().setPosition(pos.x, pos.y)` and `getCamera().setZoom(zoom)` (`renderer.zig:699`, `camera/src/root.zig:144`/`:156`). This is the authored starting point. From here the gameplay script (if any) takes over on the very first tick — the component does not fight it.
+1. **Seed on scene load.** After a root prefab / scene is instantiated, the engine finds the Camera entity, reads its **world** position — `getWorldPosition(cameraEntity)`, **not** the raw `Position` component — and its `Camera.zoom`, and seeds the active camera once: `getCamera().setPosition(world.x, world.y)` and `getCamera().setZoom(zoom)` (`renderer.zig:699`, `camera/src/root.zig:144`/`:156`). Reading **world** coords is required, not cosmetic: the digest already publishes world position (`editor_api.zig:559` is deliberately `getWorldPosition`, with the comment at `:554–558` spelling out why) and `editor_set_entity_position` writes world coords, so the seed must read the same space. For an unparented MVP camera world == local, so this is identical **today** — but stating it now is what keeps the future `follow`-via-`Parent` direction from silently desyncing the seeded camera from what studio drew and dragged. From here the gameplay script (if any) takes over on the very first tick — the component does not fight it.
 
-2. **Apply while paused.** While `editor_api.isPaused()` and no `editor_set_camera` override is engaged, the engine re-applies the authored Camera entity's `Position` + `zoom` to `getCamera()` every frame. Because the sim is paused, the gameplay script is not writing the camera, so there is nothing to fight — and the designer sees inspector/gizmo edits **live**. This is a natural extension of the existing per-frame `frame()` pass (`editor_api.zig:130`), which already runs after the (gated) tick and before render.
+2. **Apply while paused.** While `editor_api.isPaused()` and no `editor_set_camera` override is engaged, the engine re-applies the authored Camera entity's **world position** (`getWorldPosition`) + `zoom` to `getCamera()` every frame. Because the sim is paused, the gameplay script is not writing the camera, so there is nothing to fight — and the designer sees inspector/gizmo edits **live**. This is a natural extension of the existing per-frame `frame()` pass (`editor_api.zig:130`), which already runs after the (gated) tick and before render.
 
 3. **Override still wins.** `editor_set_camera` is applied last, unchanged (`editor_api.zig:41–51`). Look-around overrides both the authored component and the script in either mode.
 
@@ -138,14 +143,17 @@ Because the Camera entity has a `Position`, it **already** appears in the digest
 {
   "id": 7, "x": 400, "y": 300,
   "camera": {
-    "zoom": 1.5,
-    "view": { "x": 133, "y": 100, "width": 533, "height": 400 }  // world-space, from getViewport()
+    "zoom": 1.5,                                                  // AUTHORED field
+    // "viewport": {…} — AUTHORED field, emitted ONLY when non-null (fullscreen ⇒ omitted)
+    "view": { "x": 133, "y": 100, "width": 533, "height": 400 }  // DERIVED (getViewport), world-space
   }
 }
 ```
 
-- `zoom` — the live/authored zoom.
-- `view` — the world-space visible rectangle from `getCamera().getViewport()` (`camera/src/root.zig:182`). This is exactly the rect the studio draws as the draggable gizmo; dragging its center pans, resizing it zooms (§Studio side).
+The `camera` object publishes **both** the authored component fields **and** the derived view-rect:
+
+- `zoom` (always) and `viewport` (only when non-null) — the **authored** component, republished so the studio can round-trip the *full* component, not just re-derive geometry. Without these a studio that only saw `view` could not reconstruct a non-fullscreen `viewport`, nor tell an authored zoom apart from a resolution artifact.
+- `view` — the **derived** world-space visible rectangle from `getCamera().getViewport()` (`camera/src/root.zig:182`). This is what the studio draws as the draggable gizmo; dragging its center pans, resizing it zooms (§Studio side). Note `view` is **resolution-dependent** (`getViewport` divides the screen dims by zoom) — see the screen-size note in §Studio side.
 
 The per-entity placement (rather than a top-level `"camera"` object) is chosen because it mirrors the existing digest grammar one-for-one and keeps the camera discoverable in the same entity sweep the tree already consumes.
 
@@ -154,10 +162,12 @@ The per-entity placement (rather than a top-level `"camera"` object) is chosen b
 Today the only per-component edit the bridge offers is `editor_set_entity_position` (`editor_api.zig:274`). Editing camera **zoom** — or, later, any other component field from the inspector — needs a general path. Add one export:
 
 ```zig
-/// Set component `name` on entity `id` from a JSON object. Returns
-/// 0 = ok; -1 = not bound / unknown id / unknown component;
-/// -2 = parse/validation failure (entity untouched). Buffers are copied;
-/// the caller may free them immediately.
+/// MERGE a JSON object of component fields onto component `name` of entity
+/// `id` — PATCH semantics: only the provided keys are overlaid, unspecified
+/// fields keep their current value (a `{"zoom":…}` edit does NOT reset
+/// `viewport`). Returns 0 = ok; -1 = not bound / unknown id / component NOT
+/// on the live-edit allowlist; -2 = parse/validation failure (entity
+/// untouched). Buffers are copied; the caller may free them immediately.
 pub export fn editor_set_component(
     id: u64,
     name_ptr: [*]const u8, name_len: usize,
@@ -165,8 +175,8 @@ pub export fn editor_set_component(
 ) i32
 ```
 
-- **MVP**: implements `"Camera"` — parse `{"zoom":…}` (and, when non-fullscreen authoring lands, `"viewport"`), write the entity's `Camera` component, and re-seed `getCamera()` so the paused preview updates immediately.
-- **Generalizes for free**: the engine already deserializes arbitrary components by name from JSON in `component_apply.zig` (`applyComponent`, `:71`). `editor_set_component` reuses that path, so extending the inspector to *any* registry component later is a studio-side change, not a new export each time. This is the future-proofing: `editor_set_entity_position` stays as the hot-path for drags, but `editor_set_component` is the general seam the studio grows into.
+- **MVP**: the allowlist contains **only `"Camera"`**. It parses the provided keys (`{"zoom":…}`, and `"viewport"` when non-fullscreen authoring lands), **merges** them onto the entity's existing `Camera` component (read current → overlay provided keys → write back), and re-seeds `getCamera()` so the paused preview updates immediately. Any other component name returns `-1`.
+- **Future-proof signature, allowlist-gated implementation.** The *signature* generalizes to any component, but a component is admitted to **live** mutation only after its live-edit semantics are audited: **owned-slice replacement** (freeing the old backing memory rather than leaking it), **dirty-marking** for the render pipeline, and **transient-component safety**. This is deliberate. `component_apply.zig`'s `applyComponent` (`:71`) is a **spawn / load** path — a fresh entity, arena-allocated, with no prior state to reconcile — and **live mutation ≠ spawn-time application**: reusing it wholesale on an already-live entity would leak or corrupt owned slices. So `editor_set_component` does **not** get merge "for free" from `applyComponent`; merge is a distinct read-existing → overlay → apply per component, and each new component joins the allowlist only once that reconciliation is written and reviewed. `editor_set_entity_position` stays the audited hot-path for position drags; `editor_set_component` is the general seam the studio grows into **one vetted component at a time.**
 
 This is the next editor-bridge contract bump (**v1.5**), following v1.1 state / v1.2 animation-def / v1.3 prefab-reload / v1.4 prefab-refresh. Like the others it is optional-on-older-builds: a studio that finds no `editor_set_component`/`camera`-digest degrades to today's behavior (no camera entity).
 
@@ -177,6 +187,7 @@ All four surfaces already exist for other entities; the camera plugs into each:
 - **Tree** (`labelle-studio/src/features/Explorer.tsx`). The camera entity arrives in the digest entity list automatically. The new per-entity `camera` field tags it, so the Explorer shows it with a camera icon and lets the user select it.
 - **Inspector** (`src/features/Inspector.tsx`). A Camera section: a zoom control (and a read-only world view-rect / viewport readout; a `follow` target later). Edits call `editor_set_component(id, "Camera", {…})` — live while paused.
 - **Viewport gizmo** (`src/features/SceneCanvas.tsx` + `sceneCanvasDraw.ts`, projected with the existing preview camera math at `preview.ts:484–485`). Draw the digest `camera.view` world-rect as a draggable frame. **Drag the center → pan →** `editor_set_entity_position(cameraId, x, y)`. **Drag a corner/edge → zoom →** `editor_set_component(cameraId, "Camera", {"zoom":…})`. This reuses the existing drag→`editor_*` plumbing already wired for entity moves and the look-around override (`preview.ts:441`, `PlayCanvas.tsx`). The gizmo **is in v1.**
+  - **Screen-size dependency (load-bearing).** The corner-drag→zoom inverse is **resolution-dependent**: `view.width = screenWidth / zoom` (`getViewport`, `camera/src/root.zig:182`/`:194`), so recovering a target `zoom` from a dragged rect width needs the **preview screen size** the digest's `view` was computed against. The MVP uses the preview canvas / design-canvas size the studio already tracks for its `PlayCamera` projection (`preview.ts:484–485`) as that source, and recomputes on canvas resize. This intersects the still-open **gfx#249** (camera does not react to a midgame resolution change): until #249 lands, a mid-session resolution change can make `view` and the live camera disagree, so the studio should treat a resize as a digest-refresh trigger rather than assume a fixed screen size.
 - **`.jsonc` round-trip.** The camera is authored into the scene/prefab `.jsonc` as a normal component. The studio's scene round-tripper (`src/services/scene.ts` + `sceneJsonc.ts` / `sceneModel.ts` / `sceneWrite.ts`) already round-trips components with the **typed-model-plus-verbatim-slices** discipline that `animationDef.ts` documents in its header (`src/services/animationDef.ts:1–17` — "this follows `scene.ts`'s discipline … every non-edited byte is captured verbatim and re-emitted, so an untouched document re-renders byte-identically and editing one field yields a minimal diff"). Add `Camera` to the modeled component set so a zoom/viewport edit writes back a minimal diff and every other byte (comments, layout, sibling components) stays verbatim. Save flows through the existing save bus → `editor_load_scene` reload.
 
 Authored form (aligned with RFC-UNIFY-SCENES-AND-PREFABS §"Camera", which already shows this shape):
@@ -204,13 +215,15 @@ That ticket was filed **before a `Camera` component existed** — it described a
 
 > **Default-camera insertion = insert a default `Camera` ENTITY** (a `Position` + a default `Camera` component) at root instantiation when the tree declares no camera. Nested prefabs and script-driven spawns do not get one. An explicit authored `Camera` wins.
 
+**This is a runtime engine helper, not a codegen decision.** "An explicit `Camera` *anywhere* in the tree wins" **cannot** be evaluated by the assembler at comptime — whether a camera exists is a property of the *instantiated* tree (it depends on nested-prefab contents, overrides, and runtime spawns), not of the static scene source. So the engine exposes a runtime helper — `ensureDefaultCamera(rootEntity)`: scan the just-instantiated root tree and insert a default camera entity (parented under the root) **only if none exists** — and the **assembler emits a call to it** at the root-instantiation site. The assembler owns *where the call goes* (root entry path only, never nested spawns); the engine owns *whether a camera is needed* at runtime. This keeps "explicit anywhere wins" correct regardless of how the tree was assembled.
+
 #564 is therefore **reframed under this RFC, not obsoleted** — its three rules become the acceptance criteria of the assembler ticket (§Rollout), and it aligns with RFC-UNIFY-SCENES-AND-PREFABS §"Camera — default inserted by the engine" (`RFC-UNIFY-SCENES-AND-PREFABS.md:435`), including the lifecycle detail that the default camera is parented under the state root so the `Parent` cascade tears it down with the scene.
 
 ## Goals
 
 - The game camera is a selectable, inspectable, gizmo-editable, savable **entity** in labelle-studio.
 - **Zero migration** for games that drive their camera from a script — `camera_control` and its kind are untouched.
-- Authored camera state (`Position` + `zoom`) seeds the runtime and round-trips to `.jsonc` byte-faithfully.
+- Authored camera state (world `Position` + `zoom`) seeds the runtime and round-trips to `.jsonc` byte-faithfully.
 - The whole feature is comptime-gated to nothing on camera-less renderers.
 
 ## Non-goals
@@ -222,9 +235,9 @@ That ticket was filed **before a `Camera` component existed** — it described a
 
 ## Rollout — decomposed tickets
 
-1. **labelle-engine — "Camera component + studio editor bridge (camera-prefabs MVP)."** The `Camera` built-in component (`src/camera.zig`-style module + `Game.CameraComp`, mirroring `TilemapComp` at `game.zig:229`); the `"Camera"` branch in `component_apply.zig` (guarded `!Components.has("Camera")` like Tilemap, `:126`); seed-on-load + apply-while-paused sync; save/load of `Position`+`zoom`; the digest `camera.view` field; and the generic `editor_set_component` export (contract v1.5).
+1. **labelle-engine — "Camera component + studio editor bridge (camera-prefabs MVP)."** The `Camera` built-in component (`src/camera.zig`-style module + `Game.CameraComp`, mirroring `TilemapComp` at `game.zig:229`; **engine-local** `viewport` rect, no gfx `ScreenViewport` import); the `"Camera"` branch in `component_apply.zig` (guarded `!Components.has("Camera")` like Tilemap, `:126`); **world-space** seed-on-load + apply-while-paused sync (`getWorldPosition`, not raw `Position`); save/load of `Position`+`zoom`; the digest `camera` object (authored `zoom`/`viewport` **plus** derived `view`); and the generic `editor_set_component` export (contract v1.5) — **allowlist-gated (Camera only), merge/patch semantics**.
 
-2. **labelle-assembler — "Register Camera builtin component + default-camera-entity insertion."** Make the assembler aware of `Camera` as a built-in (so generated scene/prefab code + the component registry recognize `"Camera"`) and emit the **default-camera-entity insertion** at root instantiation per #564's rules (root-only, nested-excluded, explicit-override-wins, parented under the state root). **Reframes/subsumes labelle-engine#564.**
+2. **labelle-assembler — "Register Camera builtin component + default-camera-entity insertion."** Make the assembler aware of `Camera` as a built-in (so generated scene/prefab code + the component registry recognize `"Camera"`) and **emit a call to the engine's runtime `ensureDefaultCamera(root)` helper** at the root-instantiation site (root-only, never nested spawns). The engine helper does the tree scan + conditional insert (explicit-camera-anywhere-wins is a runtime property, not comptime — see §"How this subsumes #564"); the assembler owns only the call-site placement + parenting under the state root. **Reframes/subsumes labelle-engine#564.**
 
 3. **labelle-studio — "Camera entity: tree + inspector + draggable viewport gizmo + `.jsonc` round-trip."** Tag the camera entity in the Explorer; a Camera Inspector section (zoom); the draggable world view-rect gizmo (pan → `editor_set_entity_position`, zoom → `editor_set_component`); and `Camera` in the scene round-tripper's modeled set.
 
@@ -257,5 +270,5 @@ Rationale: the single-camera MVP proves the entire seam end-to-end (component �
 ## Open questions
 
 1. **Apply-while-paused home.** Extend `editor_api.frame()` to re-apply the authored component when paused, or add a dedicated engine pass gated on `editor_api.isPaused()`? `frame` already runs at the right point (post-tick, pre-render) and already owns the override; folding the component-apply there keeps the precedence ordering in one place. (Leaning: extend `frame`.)
-2. **Default-insertion placement — engine vs. assembler.** #564 phrases it as "the engine inserts"; this RFC assigns it to the assembler ticket because the assembler generates the root-instantiation code and the builtin-component registration. The two are compatible (the assembler can emit a call into an engine helper). Resolve during the assembler ticket.
+2. **Default-insertion placement — RESOLVED: the assembler calls an engine helper.** The insertion is a **runtime engine helper** (`ensureDefaultCamera(root)`: scan the instantiated tree, insert a default only if none exists) that the **assembler emits a call to** at the root-instantiation site — *not* a comptime codegen decision. The assembler cannot evaluate "an explicit `Camera` anywhere wins" statically (it is a property of the instantiated tree), so the *whether* lives in the engine at runtime and the *where the call goes* lives in the assembler. See §"How this subsumes #564".
 3. **Digest `camera` on non-authored default cameras.** Should an engine-inserted default camera (no authored component) still publish its `camera.view` so the studio can gizmo it before the user commits a component? (Leaning: yes — publish for any camera entity; the first gizmo drag materializes an authored component.)
