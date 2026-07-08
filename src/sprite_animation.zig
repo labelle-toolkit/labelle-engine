@@ -300,7 +300,9 @@ pub const SpriteAnimation = struct {
 
     /// Effective playback rate: `speed` when positive, else `0` (paused).
     /// Negative `speed` is paused, never reverse (see the field doc).
-    fn effectiveSpeed(self: *const SpriteAnimation) f32 {
+    /// Single source of truth for the clamped rate — the tick multiplies
+    /// `dt` by this, and `duration()` divides by it.
+    pub fn effectiveSpeed(self: *const SpriteAnimation) f32 {
         return if (self.speed > 0) self.speed else 0;
     }
 

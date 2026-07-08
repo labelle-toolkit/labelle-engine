@@ -72,13 +72,15 @@ pub fn tick(game: anytype, dt: f32) void {
         const anim = game.ecs_backend.getComponent(entity, SpriteAnimation) orelse continue;
 
         // Per-clip playback speed on top of the (already time-scaled) dt.
-        // `max(0, speed)`: 0 / negative → paused, never reverse.
-        const eff_dt = dt * @max(@as(f32, 0), anim.speed);
+        // `effectiveSpeed()`: 0 / negative → paused, never reverse.
+        const eff_dt = dt * anim.effectiveSpeed();
 
         const changed = if (comptime events_wanted) blk: {
             var buf: anim_events.PendingBuf = .{};
             const c = anim.advanceEvents(eff_dt, &buf);
-            forwardEvents(game, entity, &buf);
+            // Most ticks queue nothing (sub-frame or an event-less frame);
+            // skip the entity cast + slice walk unless something fired.
+            if (buf.len > 0) forwardEvents(game, entity, &buf);
             break :blk c;
         } else anim.advance(eff_dt);
 
