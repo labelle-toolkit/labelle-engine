@@ -57,7 +57,7 @@ test "RuntimeAnimationDef: byte-equal sprite names + index compatibility (#672)"
             while (b < cm.beat_count) : (b += 1) {
                 try testing.expectEqual(
                     WorkerAnim.slotForBeat(clip, variant, b),
-                    rt.slotForBeat(ci, b),
+                    rt.slotForBeat(ci, vi, b),
                 );
             }
         }
@@ -98,10 +98,10 @@ test "RuntimeAnimationDef: entry-list frames parse holds/reuse/markers (#685)" {
 
     // Slot 3 renders file 2 again; the held slot spans beats 2 and 3.
     try testing.expectEqualStrings("swing/m_bald_0002.png", rt.spriteName(ci, 0, 3));
-    try testing.expectEqual(@as(u8, 2), rt.slotForBeat(ci, 2));
-    try testing.expectEqual(@as(u8, 2), rt.slotForBeat(ci, 3));
-    try testing.expectEqual(@as(u8, 3), rt.slotForBeat(ci, 4));
-    try testing.expectEqual(@as(u8, 0), rt.slotForBeat(ci, 5)); // wraps
+    try testing.expectEqual(@as(u8, 2), rt.slotForBeat(ci, 0, 2));
+    try testing.expectEqual(@as(u8, 2), rt.slotForBeat(ci, 0, 3));
+    try testing.expectEqual(@as(u8, 3), rt.slotForBeat(ci, 0, 4));
+    try testing.expectEqual(@as(u8, 0), rt.slotForBeat(ci, 0, 5)); // wraps
 }
 
 test "RuntimeAnimationDef: minimal clip gets the comptime defaults (#672)" {
@@ -486,4 +486,77 @@ test "RuntimeAnimationDef.load: clip-major override errors mirror the comptime r
     try testing.expectError(error.BadOverride, RuntimeAnimationDef.load(a,
         \\.{ .variants = .{ "a" }, .clips = .{ .c = .{ .frames = 2, .mode = .time, .speed = 1.0, .overrides = .{ .a = 5 } } } }
     ));
+}
+
+test "RuntimeAnimationDef.load: an empty `.overrides = .{}` map is a no-op (editor-emitted)" {
+    // Zoir lowers `.{}` to empty_literal, not struct_literal — the runtime
+    // must accept it as "no overrides" (the comptime path does), because the
+    // editor writes it the instant it opens the field before setting one.
+    var rt = try RuntimeAnimationDef.load(testing.allocator,
+        \\.{ .variants = .{ "a", "b" }, .clips = .{ .c = .{ .frames = 3, .mode = .time, .speed = 1.0, .overrides = .{} } } }
+    );
+    defer rt.deinit();
+    const c = rt.clipIndex("c").?;
+    // Both variants see the base — nothing was overridden.
+    try testing.expectEqual(@as(u8, 3), rt.clipMetaFor(c, 0).frame_count);
+    try testing.expectEqual(@as(u8, 3), rt.clipMetaFor(c, 1).frame_count);
+    try testing.expectEqualStrings("c/b_0001.png", rt.spriteName(c, 1, 0));
+}
+
+test "RuntimeAnimationDef.load: an empty override VALUE `.{}` inherits everything" {
+    // `.b = .{}` — the variant is listed but sets no field, so it inherits
+    // the base clip wholesale (comptime accepts it as a no-op patch).
+    var rt = try RuntimeAnimationDef.load(testing.allocator,
+        \\.{ .variants = .{ "a", "b" }, .clips = .{ .c = .{ .frames = 3, .mode = .time, .speed = 2.0, .folder = "f", .overrides = .{ .b = .{} } } } }
+    );
+    defer rt.deinit();
+    const c = rt.clipIndex("c").?;
+    const b = rt.variantIndex("b").?;
+    const m = rt.clipMetaFor(c, b);
+    try testing.expectEqual(@as(u8, 3), m.frame_count);
+    try testing.expectEqual(@as(f32, 2.0), m.speed);
+    try testing.expectEqual(engine.AnimMode.time, m.mode);
+    try testing.expectEqualStrings("f", m.folder);
+    try testing.expectEqualStrings("f/b_0001.png", rt.spriteName(c, b, 0));
+}
+
+test "RuntimeAnimationDef.load: a `.mode=.static`-only override over a HELD base is rejected" {
+    // The variant overrides ONLY the mode; the base's held entries (run 2)
+    // are inherited, so the effective (static, holds) pair is illegal — the
+    // comptime path rejects it, and the runtime must too even though the
+    // override carries no `.frames` of its own.
+    try testing.expectError(error.HoldOnStaticClip, RuntimeAnimationDef.load(testing.allocator,
+        \\.{ .variants = .{ "a", "b" }, .clips = .{
+        \\    .c = .{ .frames = .{ .{ .f = 1, .run = 2 }, 2 }, .mode = .time, .speed = 1.0, .overrides = .{ .b = .{ .mode = .static } } },
+        \\} }
+    ));
+}
+
+test "RuntimeAnimationDef: slotForBeat is variant-aware (override changes the run structure)" {
+    // swing base is a 4-frame count-form clip; `heavy` overrides it with a
+    // held+reordered entry list. slotForBeat must walk the VARIANT's entries.
+    var rt = try RuntimeAnimationDef.load(testing.allocator,
+        \\.{ .variants = .{ "base", "heavy" }, .clips = .{
+        \\    .swing = .{ .frames = 4, .mode = .time, .speed = 1.0, .overrides = .{
+        \\        .heavy = .{ .frames = .{ .{ .f = 1, .run = 2 }, 2, 3 } },
+        \\    } },
+        \\} }
+    );
+    defer rt.deinit();
+    const swing = rt.clipIndex("swing").?;
+    const base = rt.variantIndex("base").?;
+    const heavy = rt.variantIndex("heavy").?;
+
+    // base: identity count-form row over 4 beats.
+    try testing.expectEqual(@as(u8, 0), rt.slotForBeat(swing, base, 0));
+    try testing.expectEqual(@as(u8, 1), rt.slotForBeat(swing, base, 1));
+    try testing.expectEqual(@as(u8, 3), rt.slotForBeat(swing, base, 3));
+    // heavy: slot 0 held two beats {0,0,1,2}, beat_count 4.
+    try testing.expectEqual(@as(u8, 0), rt.slotForBeat(swing, heavy, 0));
+    try testing.expectEqual(@as(u8, 0), rt.slotForBeat(swing, heavy, 1)); // held
+    try testing.expectEqual(@as(u8, 1), rt.slotForBeat(swing, heavy, 2));
+    try testing.expectEqual(@as(u8, 2), rt.slotForBeat(swing, heavy, 3));
+    try testing.expectEqual(@as(u8, 0), rt.slotForBeat(swing, heavy, 4)); // wraps
+    // clipMetaFor already reports the overridden beat_count; slotForBeat now agrees.
+    try testing.expectEqual(@as(u16, 4), rt.clipMetaFor(swing, heavy).beat_count);
 }

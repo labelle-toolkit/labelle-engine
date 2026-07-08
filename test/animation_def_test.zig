@@ -290,6 +290,29 @@ test "AnimationDef: spriteName honors overridden folder and frame count (#666)" 
     try testing.expectEqualStrings("", OverrideAnim.spriteName(.drink, .w_ginger, 8));
 }
 
+// Parity anchor for the runtime parser (studio#61): an empty `.overrides`
+// map and an empty per-variant override VALUE are both accepted here as
+// no-ops. The runtime `RuntimeAnimationDef.load` mirrors this — a mismatch
+// would break the editor's hot-push, which emits exactly these shapes.
+const empty_override_zon = .{
+    .variants = .{ "a", "b" },
+    .clips = .{
+        .c = .{ .frames = 3, .mode = .time, .speed = 2.0, .overrides = .{} },
+        .d = .{ .frames = 4, .mode = .time, .speed = 1.0, .overrides = .{ .b = .{} } },
+    },
+};
+const EmptyOverrideAnim = AnimationDef(empty_override_zon);
+
+test "AnimationDef: empty override map + empty override value compile as base no-ops (#666)" {
+    // Empty map: every variant sees the base clip.
+    try testing.expectEqual(@as(u8, 3), EmptyOverrideAnim.clipMetaFor(.c, .a).frame_count);
+    try testing.expectEqual(@as(u8, 3), EmptyOverrideAnim.clipMetaFor(.c, .b).frame_count);
+    // Empty value: the listed variant inherits everything.
+    try testing.expectEqual(@as(u8, 4), EmptyOverrideAnim.clipMetaFor(.d, .b).frame_count);
+    try testing.expectEqual(@as(f32, 1.0), EmptyOverrideAnim.clipMetaFor(.d, .b).speed);
+    try testing.expectEqualStrings("d/b_0001.png", EmptyOverrideAnim.spriteName(.d, .b, 0));
+}
+
 // ── Per-variant frame-ENTRY overrides (#684) ──────────────
 
 const entry_override_zon = .{

@@ -222,6 +222,11 @@ pub const RuntimeAnimationDef = struct {
                 const ov_node = findField(zoir, cnode, "overrides") orelse continue;
                 const ov_struct = switch (ov_node.get(zoir)) {
                     .struct_literal => |s| s,
+                    // `.overrides = .{}` lowers to empty_literal — an empty
+                    // map is a no-op (the comptime path accepts it), not a
+                    // parse error. The editor emits this when it opens the
+                    // field before any variant is overridden.
+                    .empty_literal => continue,
                     else => return error.BadOverrides,
                 };
                 var j: u32 = 0;
@@ -237,12 +242,6 @@ pub const RuntimeAnimationDef = struct {
                     }
                     const vidx = vidx_opt orelse return error.UnknownVariant;
 
-                    // Field VALUE is the per-variant override struct.
-                    const val_node = ov_struct.vals.at(j);
-                    const ov_val = switch (val_node.get(zoir)) {
-                        .struct_literal => |s| s,
-                        else => return error.BadOverride,
-                    };
                     var entries: ?[]FrameEntry = null;
                     var ov_speed: ?f32 = null;
                     var ov_mode: ?Mode = null;
@@ -254,31 +253,43 @@ pub const RuntimeAnimationDef = struct {
                         if (entries) |es| freeEntries(allocator, es);
                         if (ov_folder) |f| allocator.free(f);
                     }
-                    var k: u32 = 0;
-                    while (k < ov_val.names.len) : (k += 1) {
-                        const fname = ov_val.names[k].get(zoir);
-                        const fnode = ov_val.vals.at(k);
-                        if (std.mem.eql(u8, fname, "frames")) {
-                            entries = try parseFrames(allocator, zoir, fnode);
-                        } else if (std.mem.eql(u8, fname, "speed")) {
-                            ov_speed = try getFloat(zoir, fnode);
-                        } else if (std.mem.eql(u8, fname, "mode")) {
-                            ov_mode = try modeFromName(try getEnumName(zoir, fnode));
-                        } else if (std.mem.eql(u8, fname, "folder")) {
-                            ov_folder = try allocator.dupe(u8, try getString(zoir, fnode));
-                        } else {
-                            return error.UnknownOverrideField;
-                        }
+                    // Field VALUE is the per-variant override struct. `.{}`
+                    // (empty_literal) is a valid inherit-everything no-op —
+                    // the comptime path accepts it, and the editor emits it
+                    // for a just-created override with no field set yet.
+                    switch (ov_struct.vals.at(j).get(zoir)) {
+                        .empty_literal => {},
+                        .struct_literal => |ov_val| {
+                            var k: u32 = 0;
+                            while (k < ov_val.names.len) : (k += 1) {
+                                const fname = ov_val.names[k].get(zoir);
+                                const fnode = ov_val.vals.at(k);
+                                if (std.mem.eql(u8, fname, "frames")) {
+                                    entries = try parseFrames(allocator, zoir, fnode);
+                                } else if (std.mem.eql(u8, fname, "speed")) {
+                                    ov_speed = try getFloat(zoir, fnode);
+                                } else if (std.mem.eql(u8, fname, "mode")) {
+                                    ov_mode = try modeFromName(try getEnumName(zoir, fnode));
+                                } else if (std.mem.eql(u8, fname, "folder")) {
+                                    ov_folder = try allocator.dupe(u8, try getString(zoir, fnode));
+                                } else {
+                                    return error.UnknownOverrideField;
+                                }
+                            }
+                        },
+                        else => return error.BadOverride,
                     }
-                    // Comptime parity: a clip that is .static FOR THIS
-                    // VARIANT (override mode, else base) only shows slot 0,
-                    // so per-slot holds in its entries are meaningless.
+                    // Comptime parity: a clip that is .static FOR THIS VARIANT
+                    // (override mode, else base) only shows slot 0, so per-slot
+                    // holds in its EFFECTIVE entries are meaningless. Check the
+                    // effective list — the override's own entries, or the
+                    // inherited base — so a variant that overrides ONLY
+                    // `.mode = .static` over a held base is still rejected.
                     const eff_mode = ov_mode orelse clip_meta[ci].mode;
                     if (eff_mode == .static) {
-                        if (entries) |es| {
-                            for (es) |e| {
-                                if (e.run != 1) return error.HoldOnStaticClip;
-                            }
+                        const eff_entries = entries orelse clip_entries[ci];
+                        for (eff_entries) |e| {
+                            if (e.run != 1) return error.HoldOnStaticClip;
                         }
                     }
                     try override_list.append(allocator, .{
@@ -462,17 +473,26 @@ pub const RuntimeAnimationDef = struct {
         return m;
     }
 
-    /// The slot shown at a given beat of a clip — the runtime mirror of
-    /// the comptime `slotForBeat`, computed on the fly by walking the
-    /// entry runs (no baked beat table; the runtime path is preview-only,
-    /// so O(entries) per lookup is inside budget). Returns 0 for any
-    /// out-of-range clip; wraps `beat` past the clip's beat_count.
-    pub fn slotForBeat(self: *const RuntimeAnimationDef, clip: u8, beat: u16) u8 {
+    /// The slot shown at a given beat of a clip AS SEEN BY a variant — the
+    /// runtime mirror of the comptime `slotForBeat`, computed on the fly by
+    /// walking the (per-variant) entry runs (no baked beat table; the
+    /// runtime path is preview-only, so O(entries) per lookup is inside
+    /// budget). A `.frames` override changes a variant's run structure, so
+    /// this reads the EFFECTIVE entries (the override's, else the base) — a
+    /// base-only walk would resolve the wrong slot/marker for an overridden
+    /// variant. Returns 0 for any out-of-range clip; wraps `beat` past the
+    /// (variant's) beat_count.
+    pub fn slotForBeat(self: *const RuntimeAnimationDef, clip: u8, variant: u8, beat: u16) u8 {
         if (clip >= self.clip_entries.len) return 0;
-        const bc = self.clip_meta[clip].beat_count;
+        const entries = if (self.overrideFor(clip, variant)) |o|
+            (o.entries orelse self.clip_entries[clip])
+        else
+            self.clip_entries[clip];
+        var bc: u16 = 0;
+        for (entries) |e| bc += e.run;
         if (bc == 0) return 0;
         var b = beat % bc;
-        for (self.clip_entries[clip], 0..) |e, si| {
+        for (entries, 0..) |e, si| {
             if (b < e.run) return @intCast(si);
             b -= e.run;
         }
