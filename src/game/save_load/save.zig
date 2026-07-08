@@ -270,8 +270,12 @@ pub fn Mixin(comptime Game: type) type {
                 // Save Tilemap (built-in, T2 Phase 2). `asset_name` is a
                 // `[]const u8` (serde can't round-trip it — same reason
                 // PrefabInstance lives here), and T2 tilemaps are immutable
-                // (deterministic from the asset), so ONLY the asset
-                // reference persists — the decoded map is never saved.
+                // (deterministic from the asset), so the asset reference
+                // persists — the decoded map is never saved. T3 adds the
+                // scene-authored `layer_bindings` (a small name→name list):
+                // implicit-by-name survives a round-trip on its own (it
+                // derives from layer names), but an EXPLICIT override would
+                // silently revert to implicit without this, so persist it too.
                 // Same registry-identity guard as the other built-ins.
                 const TilemapT = Game.TilemapComp;
                 if (comptime !Common.isRegistered(TilemapT)) {
@@ -279,6 +283,18 @@ pub fn Mixin(comptime Game: type) type {
                         if (!first_comp) try writer.writeAll(",");
                         try writer.writeAll("\n        \"Tilemap\": {\"asset_name\": ");
                         try writeJsonString(writer, tm.asset_name);
+                        if (tm.layer_bindings) |bindings| {
+                            try writer.writeAll(", \"layer_bindings\": [");
+                            for (bindings, 0..) |b, bi| {
+                                if (bi != 0) try writer.writeAll(", ");
+                                try writer.writeAll("{\"tmx_layer\": ");
+                                try writeJsonString(writer, b.tmx_layer);
+                                try writer.writeAll(", \"engine_layer\": ");
+                                try writeJsonString(writer, b.engine_layer);
+                                try writer.writeAll("}");
+                            }
+                            try writer.writeAll("]");
+                        }
                         try writer.writeAll("}");
                         first_comp = false;
                     }

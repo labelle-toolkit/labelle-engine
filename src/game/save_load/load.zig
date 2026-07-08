@@ -543,7 +543,41 @@ pub fn Mixin(comptime Game: type) type {
                         };
                         const tm_arena = self.active_world.nested_entity_arena.allocator();
                         const name_dup = try tm_arena.dupe(u8, name_str);
-                        self.addTilemap(entity, .{ .asset_name = name_dup });
+
+                        // Restore explicit `layer_bindings` (T3), if the save
+                        // carried them. Absent → `null` (implicit-by-name),
+                        // matching a T2 save. Strings + the slice are duped
+                        // into the world arena to outlive the parsed JSON.
+                        const LayerBinding = @import("../../tilemap.zig").LayerBinding;
+                        var bindings: ?[]const LayerBinding = null;
+                        if (tm_obj.get("layer_bindings")) |lb_val| {
+                            if (lb_val == .array) {
+                                const arr = lb_val.array;
+                                const buf = try tm_arena.alloc(LayerBinding, arr.items.len);
+                                var n: usize = 0;
+                                for (arr.items) |item| {
+                                    const obj = switch (item) {
+                                        .object => |o| o,
+                                        else => continue,
+                                    };
+                                    const tmx = switch (obj.get("tmx_layer") orelse continue) {
+                                        .string => |s| s,
+                                        else => continue,
+                                    };
+                                    const eng = switch (obj.get("engine_layer") orelse continue) {
+                                        .string => |s| s,
+                                        else => continue,
+                                    };
+                                    buf[n] = .{
+                                        .tmx_layer = try tm_arena.dupe(u8, tmx),
+                                        .engine_layer = try tm_arena.dupe(u8, eng),
+                                    };
+                                    n += 1;
+                                }
+                                bindings = buf[0..n];
+                            }
+                        }
+                        self.addTilemap(entity, .{ .asset_name = name_dup, .layer_bindings = bindings });
                     }
                 }
             }

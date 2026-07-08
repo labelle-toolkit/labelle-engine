@@ -327,6 +327,25 @@ pub fn build(b: *std.Build) void {
             }),
         });
         test_step.dependOn(&b.addRunArtifact(tilemap_test).step);
+
+        // T3 tilemap Z-interleave test — drives the `renderWithLayerHook`
+        // (gfx v1.22.0) interleave path with a hook-capable, multi-camera
+        // mock. Same gfx `tilemap` sub-package + MockBackend seam as the T2
+        // test above.
+        const tilemap_interleave_test = b.addTest(.{
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("test/tilemap_interleave_test.zig"),
+                .target = target,
+                .optimize = optimize,
+                .imports = &.{
+                    .{ .name = "labelle-core", .module = core_module },
+                    .{ .name = "engine", .module = engine_module },
+                    .{ .name = "scene", .module = scene_module },
+                    .{ .name = "tilemap", .module = tilemap_module },
+                },
+            }),
+        });
+        test_step.dependOn(&b.addRunArtifact(tilemap_interleave_test).step);
     }
 
     // zspec BDD specs — mirrors the `spec` step in labelle-pathfinding.

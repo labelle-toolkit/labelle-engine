@@ -11,12 +11,23 @@
 const std = @import("std");
 const core = @import("labelle-core");
 const tilemap_runtime = @import("../tilemap_runtime.zig");
+const tilemap_mod = @import("../tilemap.zig");
 
 pub fn Mixin(comptime Game: type) type {
     const Entity = Game.EntityType;
     const Tilemap = Game.TilemapComp;
     const supported = Game.tilemap_supported;
     const Runtime = Game.TilemapRuntimeType;
+
+    // T3 Z-interleave: bind `.tmx` layers to engine layers by name and draw
+    // bound layers at their engine layer's z (via the renderer's per-layer
+    // hook), interleaved with the sprite layers. `LayerEnum` is the
+    // renderer's `Layer` (or `void` when unsupported); the interleave
+    // helpers below are only ever *referenced* on the interleave path in
+    // `loop_mixin.render` (gated by `Game.tilemap_interleave_supported`), so
+    // they are never analyzed when `LayerEnum` is `void`.
+    const LayerEnum = Game.RenderLayerEnum;
+    const LayerBinding = tilemap_mod.LayerBinding;
 
     // Whether the renderer plugin exposes a world camera the tilemap pass
     // can render through: a `begin()/end()` camera reached via
@@ -31,6 +42,23 @@ pub fn Mixin(comptime Game: type) type {
     const camera_capable = Game.CameraType != void and
         @hasDecl(Game.CameraType, "begin") and
         @hasDecl(Game.CameraType, "end");
+
+    // Whether the camera also exposes `getViewport()` — the active camera's
+    // visible WORLD rect. When present, the interleave path culls each bound
+    // `.tmx` layer to that rect (via gfx ≥1.23.0's `view_start_*`), so a
+    // panned / split-screen camera on a large map draws the tiles it actually
+    // sees instead of the world-origin range (codex #711 P1). When absent
+    // (a stub camera without a viewport) the cull falls back to the backend
+    // screen size at the world origin — the pre-#711 behavior.
+    const camera_cullable = blk: {
+        if (!camera_capable) break :blk false;
+        break :blk @hasDecl(Game.CameraType, "getViewport");
+    };
+
+    // World-unit margin added on every side of the per-camera cull rect so a
+    // tile straddling the viewport edge is never clipped (mirrors the
+    // renderer's own `cull_margin` for sprite viewport culling).
+    const cull_margin: f32 = 64;
 
     return struct {
         /// Register raw bytes for a tilemap-related embedded asset — the
@@ -150,8 +178,14 @@ pub fn Mixin(comptime Game: type) type {
         /// never drawn: the table is keyed on the Game, not swapped with
         /// `active_world`, so it's guarded against the CURRENTLY active ECS.
         ///
-        /// Z-interleaving with individual sprite layers remains deferred:
-        /// the whole tilemap stack draws under the whole sprite stack.
+        /// **Z-interleaving (T3).** `renderTilemaps` is the WHOLE-STACK
+        /// background used by renderers WITHOUT the per-layer render hook
+        /// (`renderWithLayerHook`) — it draws every `.tmx` layer under every
+        /// sprite. On a hook-capable renderer, `loop_mixin.render` instead
+        /// splits the work: `renderTilemapBackground` draws only the
+        /// *unbound* `.tmx` layers pre-sprite, and `tilemapLayerHook` draws
+        /// each *bound* layer at its engine layer's z, interleaved with the
+        /// sprite layers and per active camera (see below).
         pub fn renderTilemaps(self: *Game) void {
             if (comptime !supported) return;
 
@@ -179,24 +213,185 @@ pub fn Mixin(comptime Game: type) type {
             if (comptime camera_capable) self.getCamera().begin();
             defer if (comptime camera_capable) self.getCamera().end();
 
-            const y_axis = Game.y_axis;
-            const screen_h = tilemapScreenHeight(self);
             var it = self.tilemaps.iterator();
             while (it.next()) |e| {
                 const entity = e.key_ptr.*;
                 const rt = e.value_ptr.*;
-                const pos = self.getWorldPosition(entity);
-                const off_x = pos.x;
-                // Flip the map's world Y into screen space exactly as the
-                // renderer flips sprite Y, then (under `.up`) raise by the
-                // map height so the map's bottom edge sits at the flipped
-                // Position.y — identity under `.down`.
-                const off_y = core.toScreenY(y_axis, pos.y, screen_h) -
-                    switch (y_axis) {
-                        .up => rt.pixelHeight(),
-                        .down => @as(f32, 0),
-                    };
-                rt.draw(0, 0, off_x, off_y, null, null);
+                const off = tilemapWorldOffset(self, entity, rt);
+                rt.draw(0, 0, off.x, off.y, null, null);
+            }
+        }
+
+        /// The map's world-space draw offset for `entity` (T2/T3). `x` is
+        /// the entity's world `Position.x`; `y` flips the world Y into
+        /// screen space exactly as the renderer flips sprite Y, then (under
+        /// `.up`) raises by the map's pixel height so the map's BOTTOM edge
+        /// sits at the flipped `Position.y` — identity under `.down`. Shared
+        /// by the whole-stack background (`renderTilemaps`), the unbound
+        /// background (`renderTilemapBackground`), and the per-layer
+        /// interleave (`tilemapLayerHook`) so a bound and an unbound layer of
+        /// the same map never disagree on where the map sits.
+        fn tilemapWorldOffset(self: *Game, entity: Entity, rt: *Runtime) struct { x: f32, y: f32 } {
+            const pos = self.getWorldPosition(entity);
+            const off_y = core.toScreenY(Game.y_axis, pos.y, tilemapScreenHeight(self)) -
+                switch (Game.y_axis) {
+                    .up => rt.pixelHeight(),
+                    .down => @as(f32, 0),
+                };
+            return .{ .x = pos.x, .y = off_y };
+        }
+
+        /// The per-camera CULL rect (gfx ≥1.23.0 `view_start_*` + `view_*`),
+        /// expressed in the frame the tilemap offsets use: X is unflipped
+        /// (same frame as `off_x`); Y is flipped through the SAME
+        /// `core.toScreenY` as `off_y`, so the cull window and the drawn tiles
+        /// agree. Fed the ACTIVE camera's visible world rect so a panned /
+        /// split-screen camera on a large map culls to its OWN region rather
+        /// than the world origin (codex #711 P1). Every side is expanded by
+        /// `cull_margin`. Returns all-`null` when the camera can't report a
+        /// viewport (→ gfx falls back to the backend screen size at the world
+        /// origin — the pre-#711 behavior). `null` for the whole thing keeps
+        /// the call-site fields optional.
+        const CullRect = struct {
+            start_x: ?f32 = null,
+            start_y: ?f32 = null,
+            width: ?f32 = null,
+            height: ?f32 = null,
+        };
+        fn cameraCullRect(self: *Game, cam: *const Game.CameraType) CullRect {
+            if (comptime !camera_cullable) return .{};
+            const vp = cam.getViewport(); // Y-up world rect {x, y, width, height}
+            const h = tilemapScreenHeight(self);
+            // Flip both world-Y edges to the tilemap (screen-Y) frame and take
+            // the min as the top; `toScreenY` is monotonic so the two edges
+            // bracket the same span under either y-axis convention.
+            const y0 = core.toScreenY(Game.y_axis, vp.y, h);
+            const y1 = core.toScreenY(Game.y_axis, vp.y + vp.height, h);
+            return .{
+                .start_x = vp.x - cull_margin,
+                .start_y = @min(y0, y1) - cull_margin,
+                .width = vp.width + 2 * cull_margin,
+                .height = vp.height + 2 * cull_margin,
+            };
+        }
+
+        // ── T3 Z-interleave (hook-capable renderers only) ───────────────
+
+        /// Resolve a `.tmx` layer name to the WORLD engine layer it renders
+        /// at, or `null` when it is UNBOUND (→ background pass). Explicit
+        /// `layer_bindings` win over the implicit-by-name rule; either way
+        /// the target must be a known WORLD-space `LayerEnum` tag (a binding
+        /// to a screen-space or unknown engine layer is treated as unbound,
+        /// since a tilemap can only draw inside the world camera transform).
+        fn resolveBinding(bindings: ?[]const LayerBinding, tmx_name: []const u8) ?LayerEnum {
+            if (bindings) |list| {
+                for (list) |b| {
+                    if (std.mem.eql(u8, b.tmx_layer, tmx_name)) {
+                        return worldLayerFromName(b.engine_layer);
+                    }
+                }
+            }
+            return worldLayerFromName(tmx_name);
+        }
+
+        /// `LayerEnum` tag named `name`, but only if it is a WORLD-space
+        /// layer; `null` for an unknown name or a screen-space layer.
+        fn worldLayerFromName(name: []const u8) ?LayerEnum {
+            // Precondition (guaranteed by `Game.tilemap_interleave_supported`,
+            // the only gate that reaches this fn): `LayerEnum` is a genuine
+            // config-bearing enum, so `stringToEnum`/`config()` below are
+            // sound. Asserted locally so the safety is obvious here too.
+            comptime std.debug.assert(@typeInfo(LayerEnum) == .@"enum" and @hasDecl(LayerEnum, "config"));
+            const l = std.meta.stringToEnum(LayerEnum, name) orelse return null;
+            if (l.config().space != .world) return null;
+            return l;
+        }
+
+        /// Pre-sprite background pass for hook-capable renderers: draws only
+        /// the `.tmx` layers that are NOT bound to an engine layer (bound
+        /// layers are drawn interleaved by `tilemapLayerHook`). Mirrors
+        /// `renderTilemaps` (whole-stack, primary-camera, world-space) but
+        /// per-layer-filtered — so a Tilemap with no bindings / no
+        /// name-matching engine layers renders EXACTLY as T2. Reaps ghosts
+        /// (runs before the hook, which does not).
+        ///
+        /// SPLIT-SCREEN LIMITATION (single primary camera): this pass runs
+        /// ONCE through `getCamera()`, so under split-screen the UNBOUND
+        /// background draws only in the primary viewport — bound layers are
+        /// already per-camera (via the hook). Making the background per-camera
+        /// needs a pre-layer-stack callback in gfx's `renderWithLayerHook`
+        /// (the per-camera viewport SCISSOR — `applyViewport` — is private to
+        /// the gfx renderer, so the engine can't reproduce it here). Tracked
+        /// for a gfx point release; until then binding a layer is the way to
+        /// get per-camera terrain. Matches the T2 background's #709 note.
+        pub fn renderTilemapBackground(self: *Game) void {
+            if (comptime !supported) return;
+            if (self.tilemaps.count() == 0) return;
+            reapGhostTilemaps(self);
+            if (self.tilemaps.count() == 0) return;
+
+            if (comptime camera_capable) self.getCamera().begin();
+            defer if (comptime camera_capable) self.getCamera().end();
+
+            // Cull the background (unbound) layers to the primary camera's
+            // world rect — same treatment as the interleaved layers, so a
+            // panned primary camera on a large map keeps its background too.
+            const cull = if (comptime camera_cullable) cameraCullRect(self, self.getCamera()) else CullRect{};
+
+            var it = self.tilemaps.iterator();
+            while (it.next()) |e| {
+                const entity = e.key_ptr.*;
+                const rt = e.value_ptr.*;
+                const comp = self.ecs_backend.getComponent(entity, Tilemap) orelse continue;
+                const off = tilemapWorldOffset(self, entity, rt);
+                var i: usize = 0;
+                while (i < rt.layerCount()) : (i += 1) {
+                    if (resolveBinding(comp.layer_bindings, rt.layerName(i)) != null) continue;
+                    rt.drawLayerAt(i, 0, 0, off.x, off.y, cull.start_x, cull.start_y, cull.width, cull.height);
+                }
+            }
+        }
+
+        /// Per-layer render hook (T3) passed to `renderer.renderWithLayerHook`.
+        /// Fires after each engine layer's sprite pass, INSIDE that layer's
+        /// active camera transform for world layers — and once per active
+        /// camera, so split-screen renders bound tilemap layers per viewport
+        /// automatically (closes #709). For the just-drawn engine `layer`,
+        /// draws every Tilemap's `.tmx` layer bound to it, at world coords
+        /// (`camera_x/y = 0`; the camera matrix does the pan/zoom, matching
+        /// sprites), CULLED to `cam`'s own visible world rect — so a panned or
+        /// split-screen camera on a large map draws the tiles IT sees, not the
+        /// world-origin range (codex #711 P1).
+        pub fn tilemapLayerHook(self: *Game, layer: LayerEnum, cam: *const Game.CameraType) void {
+            // Precondition (guaranteed by `Game.tilemap_interleave_supported`,
+            // the only gate that passes this fn to `renderWithLayerHook`):
+            // `LayerEnum` is a genuine config-bearing enum, so `layer.config()`
+            // below is sound. Asserted locally so the safety is obvious here.
+            comptime std.debug.assert(@typeInfo(LayerEnum) == .@"enum" and @hasDecl(LayerEnum, "config"));
+            // Tilemaps are world-space; `worldLayerFromName` already filters
+            // screen-space bindings, but guard here too so a screen-layer
+            // hook (fired outside the camera transform) never draws terrain.
+            if (layer.config().space != .world) return;
+            if (self.tilemaps.count() == 0) return;
+
+            // Cull to THIS active camera's visible world rect (the hook fires
+            // once per active camera — split-screen views each get their own).
+            const cull = cameraCullRect(self, cam);
+
+            var it = self.tilemaps.iterator();
+            while (it.next()) |e| {
+                const entity = e.key_ptr.*;
+                const rt = e.value_ptr.*;
+                // A component stripped via generic `removeComponent` leaves a
+                // side-table ghost; skip it (the background pass reaps it).
+                const comp = self.ecs_backend.getComponent(entity, Tilemap) orelse continue;
+                const off = tilemapWorldOffset(self, entity, rt);
+                var i: usize = 0;
+                while (i < rt.layerCount()) : (i += 1) {
+                    const bound = resolveBinding(comp.layer_bindings, rt.layerName(i)) orelse continue;
+                    if (bound != layer) continue;
+                    rt.drawLayerAt(i, 0, 0, off.x, off.y, cull.start_x, cull.start_y, cull.width, cull.height);
+                }
             }
         }
 

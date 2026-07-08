@@ -239,6 +239,40 @@ pub fn GameConfigWithYAxis(
         else
             void;
 
+        /// The renderer's layer enum (`RenderImpl.Layer`, gfx's
+        /// `LayerEnum`), or `void` when the renderer doesn't expose one.
+        /// The T3 tilemap Z-interleave binds `.tmx` layers to engine layers
+        /// by matching a `.tmx` layer name to a `@tagName` of this enum.
+        pub const RenderLayerEnum = if (@hasDecl(RenderImpl, "Layer")) RenderImpl.Layer else void;
+
+        /// True when the tilemap Z-interleave (T3) is available. When false
+        /// the engine falls back to the T2 whole-stack pre-sprite background
+        /// pass (`renderTilemaps` + `renderer.render()`), so stub / older /
+        /// non-standard renderers are unaffected.
+        ///
+        /// Requires, in order (short-circuited so a later reflection is never
+        /// analyzed when an earlier guard fails — same defensive-comptime
+        /// spirit as `tilemap_runtime.hasReflectableSeam`, gfx #711 review):
+        ///   1. the decoded-map seam (`tilemap_supported`);
+        ///   2. the per-layer render hook `renderWithLayerHook` (gfx ≥1.22.0);
+        ///   3. a `Layer` decl that is a genuine `enum` type (NOT `void` / a
+        ///      non-enum stub) exposing `config()` — the two things the
+        ///      interleave path calls on it (`stringToEnum(Layer, …)` and
+        ///      `layer.config().space`). Without this a renderer that declares
+        ///      `renderWithLayerHook` but has `Layer = void` (or a non-config
+        ///      type) would route into a path that can't compile.
+        pub const tilemap_interleave_supported = interleaveSupported();
+
+        fn interleaveSupported() bool {
+            if (!tilemap_supported) return false;
+            if (!@hasDecl(RenderImpl, "renderWithLayerHook")) return false;
+            if (!@hasDecl(RenderImpl, "Layer")) return false;
+            const L = RenderImpl.Layer;
+            if (@typeInfo(L) != .@"enum") return false;
+            if (!@hasDecl(L, "config")) return false;
+            return true;
+        }
+
         pub const Input = @import("input.zig").InputInterface(InputImpl);
 
         /// True when the active input backend itself declares

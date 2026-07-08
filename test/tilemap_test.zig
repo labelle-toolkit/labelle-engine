@@ -470,6 +470,56 @@ test "save persists only asset_name; load rehydrates the runtime" {
     }
 }
 
+test "save/load round-trips explicit layer_bindings (T3)" {
+    const G = TilemapGame();
+    const filename = "test_tilemap_bindings_save.json";
+    defer std.Io.Dir.cwd().deleteFile(std.testing.io, filename) catch {};
+
+    // Save a tilemap carrying an EXPLICIT binding list (the override that
+    // does NOT derive from layer names — so it must persist or it silently
+    // reverts to implicit-by-name on reload).
+    {
+        var game = G.init(testing.allocator);
+        defer game.deinit();
+        try registerFixture(&game);
+        const e = game.createEntity();
+        game.setPosition(e, .{ .x = 0, .y = 0 });
+        const bindings = [_]engine.TilemapLayerBinding{
+            .{ .tmx_layer = "ground", .engine_layer = "terrain" },
+            .{ .tmx_layer = "tops", .engine_layer = "canopy" },
+        };
+        game.addTilemap(e, .{ .asset_name = "level.tmx", .layer_bindings = &bindings });
+        try game.saveGameState(filename);
+    }
+
+    // Load into a fresh game: the explicit bindings come back intact.
+    {
+        var game = G.init(testing.allocator);
+        defer game.deinit();
+        try registerFixture(&game);
+        try game.loadGameState(filename);
+
+        var found = false;
+        var v = game.ecs_backend.view(.{core.Position}, .{});
+        defer v.deinit();
+        while (v.next()) |ent| {
+            if (game.getComponent(ent, G.TilemapComp)) |tm| {
+                const lb = tm.layer_bindings orelse {
+                    try testing.expect(false); // bindings were dropped
+                    continue;
+                };
+                try testing.expectEqual(@as(usize, 2), lb.len);
+                try testing.expectEqualStrings("ground", lb[0].tmx_layer);
+                try testing.expectEqualStrings("terrain", lb[0].engine_layer);
+                try testing.expectEqualStrings("tops", lb[1].tmx_layer);
+                try testing.expectEqualStrings("canopy", lb[1].engine_layer);
+                found = true;
+            }
+        }
+        try testing.expect(found);
+    }
+}
+
 test "scene digest reports the tilemap entity" {
     const G = TilemapGame();
     var game = G.init(testing.allocator);

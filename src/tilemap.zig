@@ -20,6 +20,23 @@
 //! path cannot round-trip. Do not register it in a game's
 //! `ComponentRegistry`.
 
+/// An explicit `.tmx`-layer → engine-layer binding (T3 Z-interleave).
+/// Overrides the implicit-by-name rule for a single `.tmx` layer: the
+/// layer named `tmx_layer` renders at the z of the engine layer named
+/// `engine_layer` (matched against the renderer's `LayerEnum` `@tagName`),
+/// interleaved with the sprite layers, instead of in the pre-sprite
+/// background pass. Authored in scene JSONC; the assembler emits `null`
+/// bindings for back-compat.
+pub const LayerBinding = struct {
+    /// Name of the `.tmx` `<layer>` (Tiled layer name).
+    tmx_layer: []const u8 = "",
+    /// Name of the engine layer (`@tagName` of the renderer's `LayerEnum`)
+    /// this `.tmx` layer binds to. Must be a WORLD-space layer — a binding
+    /// to a screen-space (or unknown) engine layer is ignored and the
+    /// `.tmx` layer falls back to the background pass.
+    engine_layer: []const u8 = "",
+};
+
 /// The `Tilemap` component. Reachable on a configured game as
 /// `Game.TilemapComp`.
 pub const Tilemap = struct {
@@ -28,4 +45,15 @@ pub const Tilemap = struct {
     /// same registry for each tileset's image bytes. The ONLY field that
     /// persists across save/load — the decoded map is rebuilt from it.
     asset_name: []const u8 = "",
+
+    /// Optional explicit `.tmx`-layer → engine-layer bindings (T3
+    /// Z-interleave). `null` (the default the assembler emits) means
+    /// "implicit-by-name only": a `.tmx` layer named X binds to the engine
+    /// layer named X if one exists, otherwise it renders in the pre-sprite
+    /// background pass (exactly T2). A non-null list overrides that mapping
+    /// per named `.tmx` layer. Scene-authored, and persisted across
+    /// save/load (the built-in Tilemap channel serializes the name→name
+    /// pairs alongside `asset_name`), so an explicit override survives a
+    /// snapshot instead of silently reverting to implicit-by-name.
+    layer_bindings: ?[]const LayerBinding = null,
 };
