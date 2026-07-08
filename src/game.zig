@@ -39,6 +39,7 @@ const video_mixin = @import("game/video_mixin.zig");
 const gui_mixin = @import("game/gui_mixin.zig");
 const gizmo_mixin = @import("game/gizmo_mixin.zig");
 const mesh_mixin = @import("game/mesh_mixin.zig");
+const render_target_mixin = @import("game/render_target_mixin.zig");
 const scene_mixin = @import("game/scene_mixin.zig");
 const save_load_mixin = @import("game/save_load_mixin.zig");
 const state_mixin = @import("game/state_mixin.zig");
@@ -361,6 +362,7 @@ pub fn GameConfigWithYAxis(
         const GuiMixin = gui_mixin.Mixin(Self);
         const GizmoMixin = gizmo_mixin.Mixin(Self);
         const MeshMixin = mesh_mixin.Mixin(Self);
+        const RenderTargetMixin = render_target_mixin.Mixin(Self);
         const SceneMixin = scene_mixin.Mixin(Self);
         const SaveLoadMixin = save_load_mixin.Mixin(Self);
         const StateMixin = state_mixin.Mixin(Self);
@@ -1092,6 +1094,18 @@ pub fn GameConfigWithYAxis(
         /// on renderers/backends that don't declare it. Plugins call this from
         /// a `Systems.renderMeshes(game)` callback (see `SystemRegistry`).
         pub const drawMesh = MeshMixin.drawMesh;
+
+        // ── Offscreen render targets / transport mirror (mixin) ──
+        /// Render a scene into a texture instead of the screen, then draw that
+        /// texture elsewhere (the "transport mirror") — same primitive as headless
+        /// capture (labelle-bgfx#36). Opaque `u32` handles. Each forwards to the
+        /// renderer's optional render-target op; a no-op / INVALID on renderers or
+        /// backends that don't declare it (bgfx today; raylib/sokol/… omit it).
+        pub const createRenderTarget = RenderTargetMixin.createRenderTarget;
+        pub const beginRenderTarget = RenderTargetMixin.beginRenderTarget;
+        pub const endRenderTarget = RenderTargetMixin.endRenderTarget;
+        pub const drawRenderTarget = RenderTargetMixin.drawRenderTarget;
+        pub const destroyRenderTarget = RenderTargetMixin.destroyRenderTarget;
 
         // ── Scene Management (mixin) ─────────────────────────────
         pub const registerScene = SceneMixin.registerScene;
