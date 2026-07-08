@@ -372,7 +372,16 @@ pub fn Mixin(comptime Game: type) type {
             if (comptime camera_capable) self.getCamera().begin();
             defer if (comptime camera_capable) self.getCamera().end();
 
-            drawUnboundLayers(self, self.getCamera());
+            // `getCamera` is `void` on a non-camera renderer, so calling it
+            // unconditionally would fail to compile there. Pass `undefined`
+            // when cameras are unsupported — `cameraCullRect` is gated on
+            // `camera_cullable` and returns an empty rect without ever
+            // dereferencing the camera in that case.
+            if (comptime camera_capable) {
+                drawUnboundLayers(self, self.getCamera());
+            } else {
+                drawUnboundLayers(self, undefined);
+            }
         }
 
         /// Per-layer render hook (T3) passed to `renderer.renderWithLayerHook`.
