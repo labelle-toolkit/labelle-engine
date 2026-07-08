@@ -314,6 +314,16 @@ pub fn Mixin(comptime Game: type) type {
         /// per-layer-filtered — so a Tilemap with no bindings / no
         /// name-matching engine layers renders EXACTLY as T2. Reaps ghosts
         /// (runs before the hook, which does not).
+        ///
+        /// SPLIT-SCREEN LIMITATION (single primary camera): this pass runs
+        /// ONCE through `getCamera()`, so under split-screen the UNBOUND
+        /// background draws only in the primary viewport — bound layers are
+        /// already per-camera (via the hook). Making the background per-camera
+        /// needs a pre-layer-stack callback in gfx's `renderWithLayerHook`
+        /// (the per-camera viewport SCISSOR — `applyViewport` — is private to
+        /// the gfx renderer, so the engine can't reproduce it here). Tracked
+        /// for a gfx point release; until then binding a layer is the way to
+        /// get per-camera terrain. Matches the T2 background's #709 note.
         pub fn renderTilemapBackground(self: *Game) void {
             if (comptime !supported) return;
             if (self.tilemaps.count() == 0) return;

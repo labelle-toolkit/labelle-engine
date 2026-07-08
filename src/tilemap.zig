@@ -51,8 +51,9 @@ pub const Tilemap = struct {
     /// "implicit-by-name only": a `.tmx` layer named X binds to the engine
     /// layer named X if one exists, otherwise it renders in the pre-sprite
     /// background pass (exactly T2). A non-null list overrides that mapping
-    /// per named `.tmx` layer. Scene-authored: like the decoded map itself,
-    /// bindings are NOT carried through save/load snapshots (only
-    /// `asset_name` persists); they are re-applied when the scene reloads.
+    /// per named `.tmx` layer. Scene-authored, and persisted across
+    /// save/load (the built-in Tilemap channel serializes the name→name
+    /// pairs alongside `asset_name`), so an explicit override survives a
+    /// snapshot instead of silently reverting to implicit-by-name.
     layer_bindings: ?[]const LayerBinding = null,
 };
