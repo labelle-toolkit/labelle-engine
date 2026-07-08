@@ -293,6 +293,39 @@ pub const Events = struct {
         paused: bool,
     };
 
+    // ── SpriteAnimation playback events (#625) ────────────────────────
+    //
+    // Emitted by the engine's `sprite_animation_tick` driver (NOT the
+    // in-process `HookPayload` path — these have no HookPayload mirror,
+    // like the input events above). A project opts in purely by declaring
+    // the variant on its `GameEvents`; when absent, the driver's whole
+    // events path folds away and the tick uses the plain `advance`. Wire
+    // a flow / hook to `engine__anim_frame` for footstep / hit cues,
+    // `engine__anim_complete` for one-shot `.once` clips, and
+    // `engine__anim_loop` for loop-wrap / ping-pong-reversal cadence.
+
+    /// Fired the tick a `SpriteAnimation` LANDS on a frame listed in its
+    /// `event_frames` (footstep / hit / spawn cue). `frame` is the 0-based
+    /// index it landed on.
+    pub const anim_frame = struct {
+        entity: u32,
+        frame: u8 = 0,
+    };
+
+    /// Fired exactly once when a `.once` `SpriteAnimation` reaches its
+    /// final frame. `.loop` / `.ping_pong` clips never emit this.
+    pub const anim_complete = struct {
+        entity: u32,
+    };
+
+    /// Fired on every `.loop` wrap and every `.ping_pong` endpoint
+    /// reversal. `repetition` is the saturating loop/reversal count at
+    /// the moment it fired.
+    pub const anim_loop = struct {
+        entity: u32,
+        repetition: u16 = 0,
+    };
+
     // ── Input events (labelle-gui#208, Option B) ─────────────────
     // Engine-hosted input events scanned in `Game.tick` through the
     // unified `InputInterface`. Flows handle them via

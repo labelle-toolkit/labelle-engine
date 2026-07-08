@@ -19,7 +19,6 @@
 /// All event bookkeeping (pending buffers, `finished_emitted` bits,
 /// repetition counters) is runtime-only and never serialized — mirrors
 /// the existing frame/timer save policy.
-
 const std = @import("std");
 
 /// Fired when a clip-frame carrying a marker becomes current.
@@ -110,5 +109,14 @@ pub const PendingBuf = struct {
 /// of a 4-frame clip would overflow u16 in ~1.2h; saturate, don't wrap).
 pub fn satAddU16(a: u16, b: u16) u16 {
     const sum: u32 = @as(u32, a) + @as(u32, b);
+    return if (sum > std.math.maxInt(u16)) std.math.maxInt(u16) else @intCast(sum);
+}
+
+/// Saturating add of a `usize` delta onto the u16 repetition counter.
+/// Lets a multi-wrap tick bump `repetition` arithmetically (O(1)) instead
+/// of iterating once per wrap — a huge `dt` (tab resume, debugger pause)
+/// stays bounded. Saturates at `maxInt(u16)`.
+pub fn satAddU16Count(a: u16, b: usize) u16 {
+    const sum: usize = @as(usize, a) + b;
     return if (sum > std.math.maxInt(u16)) std.math.maxInt(u16) else @intCast(sum);
 }

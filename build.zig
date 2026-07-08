@@ -103,6 +103,7 @@ pub fn build(b: *std.Build) void {
         "test/tween_test.zig",
         "test/sprite_animation_test.zig",
         "test/sprite_animation_tick_test.zig",
+        "test/sprite_animation_events_test.zig",
         "test/sprite_by_field_test.zig",
         "test/sprite_by_field_tick_test.zig",
         "test/scene_assets_hooks_test.zig",
