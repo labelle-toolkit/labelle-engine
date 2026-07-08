@@ -18,6 +18,20 @@ pub fn Mixin(comptime Game: type) type {
     const supported = Game.tilemap_supported;
     const Runtime = Game.TilemapRuntimeType;
 
+    // Whether the renderer plugin exposes a world camera the tilemap pass
+    // can render through: a `begin()/end()` camera reached via
+    // `Game.getCamera()` (gfx's `GfxRendererWith`/`CameraWith` satisfy
+    // this; `Game.CameraType != void` is set exactly when the renderer
+    // declares `CameraType`, and `getCamera` is wired on the same gate).
+    // When present, the pass runs INSIDE that camera transform so a
+    // tilemap pans/zooms with the world exactly like sprites (T2 Phase 3).
+    // When absent — a bare test stub or a screen-only backend — the pass
+    // falls back to raw screen space, which is the identity for a static
+    // view.
+    const camera_capable = Game.CameraType != void and
+        @hasDecl(Game.CameraType, "begin") and
+        @hasDecl(Game.CameraType, "end");
+
     return struct {
         /// Register raw bytes for a tilemap-related embedded asset — the
         /// `.tmx` document itself AND each tileset image it references,
@@ -104,10 +118,22 @@ pub fn Mixin(comptime Game: type) type {
             self.removeComponent(entity, Tilemap);
         }
 
-        /// The post-sprite tilemap pass: after the entity render pass, draw
-        /// every `Tilemap` entity's decoded map at its world `Position`.
-        /// The engine owns pass ordering here (entities first, tilemaps
-        /// after); gfx's `RetainedEngine` is untouched.
+        /// The tilemap BACKGROUND pass: before the entity render pass, draw
+        /// every `Tilemap` entity's decoded map at its world `Position`,
+        /// INSIDE the world camera transform. The engine owns pass ordering
+        /// here — tilemaps first (terrain under gameplay entities), sprites
+        /// after (see `loop_mixin.render`); gfx's `RetainedEngine` is
+        /// untouched.
+        ///
+        /// **World space (T2 Phase 3).** When the renderer exposes a camera
+        /// (`camera_capable`), the pass is wrapped in the SAME
+        /// `camera.begin()/end()` sprites render through, and each map draws
+        /// with `camera_x/camera_y = 0` — the camera MATRIX (not a software
+        /// offset) does the pan/zoom, so a Tilemap entity's `Position` is a
+        /// true world position that stays aligned with sprites at the same
+        /// world coords under any camera pan or zoom. A renderer with no
+        /// camera falls back to raw screen space (the identity for a static
+        /// view), preserving the T2 behaviour for headless/stub backends.
         ///
         /// **Y-axis (F3).** The map's world offset is flipped through the
         /// SAME `core.toScreenY` transform sprites use, so a tilemap and a
@@ -124,12 +150,22 @@ pub fn Mixin(comptime Game: type) type {
         /// never drawn: the table is keyed on the Game, not swapped with
         /// `active_world`, so it's guarded against the CURRENTLY active ECS.
         ///
-        /// T2 runs the pass in screen space (`camera_* = 0`). Camera-transform
-        /// alignment + Z-interleaving with sprite layers are deferred to T3.
+        /// Z-interleaving with individual sprite layers remains deferred:
+        /// the whole tilemap stack draws under the whole sprite stack.
         pub fn renderTilemaps(self: *Game) void {
             if (comptime !supported) return;
 
             reapGhostTilemaps(self);
+            if (self.tilemaps.count() == 0) return;
+
+            // Enter the SAME world camera transform sprites render through,
+            // so the tilemap pass is world-space: pans/zooms with the world.
+            // `camera_x/camera_y` passed to `draw` stay 0 — the camera matrix
+            // does the transform, matching how sprites use the camera. On a
+            // camera-less renderer this folds away and the pass runs in raw
+            // screen space (the T2 fallback).
+            if (comptime camera_capable) self.getCamera().begin();
+            defer if (comptime camera_capable) self.getCamera().end();
 
             const y_axis = Game.y_axis;
             const screen_h = tilemapScreenHeight(self);

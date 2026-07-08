@@ -65,8 +65,34 @@ const minimal_tmx =
 const fake_png = "\x89PNG\r\n\x1a\n fake tileset pixels";
 
 /// The sprite pass emits one draw with this sentinel texture id, so the
-/// test can prove tilemap tiles are drawn strictly AFTER it (post-sprite).
+/// test can prove tilemap tiles are drawn strictly BEFORE it (the terrain
+/// is the background layer, under the gameplay sprites).
 const sprite_sentinel_id: u32 = 90001;
+
+/// A minimal world camera exposing the `begin()/end()` seam the engine
+/// wraps the tilemap pass in — mirrors gfx's `CameraWith`. `begin()`
+/// records a backend camera pass whose target reflects the camera
+/// position, so a test can prove the tilemap pass runs UNDER the camera
+/// transform and that a camera pan shifts that transform.
+const MockCamera = struct {
+    x: f32 = 0,
+    y: f32 = 0,
+    zoom: f32 = 1,
+
+    pub fn setPosition(self: *MockCamera, x: f32, y: f32) void {
+        self.x = x;
+        self.y = y;
+    }
+    pub fn begin(self: *const MockCamera) void {
+        MockBackend.beginMode2D(.{
+            .target = .{ .x = self.x, .y = self.y },
+            .zoom = self.zoom,
+        });
+    }
+    pub fn end(_: *const MockCamera) void {
+        MockBackend.endMode2D();
+    }
+};
 
 /// Renderer mock: satisfies `core.RenderInterface` and exposes the gfx
 /// 1.21.0 tilemap seam. `render()` emits a sentinel sprite-pass draw.
@@ -99,11 +125,20 @@ const MockRender = struct {
         pub const TextureInfo = struct { backend_texture: MockBackend.Texture };
     };
 
+    // ── camera seam (as GfxRendererWith exposes it) ──
+    // Present so the engine wraps the tilemap pass in the world camera
+    // transform (`camera_capable`), exactly as it does for `GfxRendererWith`.
+    // `CameraManagerType` is declared alongside `CameraType` because the
+    // engine's `has_camera` gate derives BOTH from the renderer.
+    pub const CameraType = MockCamera;
+    pub const CameraManagerType = struct {};
+
     inner: Inner = .{},
     alloc: std.mem.Allocator = undefined,
     textures: std.AutoHashMapUnmanaged(u32, MockBackend.Texture) = .empty,
     next_id: u32 = 1,
     render_count: usize = 0,
+    camera: MockCamera = .{},
     /// Logical screen height sprites (and the tilemap y-flip) flip against —
     /// mirrors `GfxRendererWith.screen_height` (set via `setScreenHeight`).
     screen_height: f32 = 600,
@@ -147,6 +182,13 @@ const MockRender = struct {
     pub fn sync(_: *Self, comptime _: type, _: anytype) void {}
     pub fn setScreenHeight(self: *Self, h: f32) void {
         self.screen_height = h;
+    }
+    pub fn getCamera(self: *Self) *MockCamera {
+        return &self.camera;
+    }
+    pub fn getCameraManager(self: *Self) *CameraManagerType {
+        _ = self;
+        return undefined;
     }
     pub fn renderGizmoDraws(_: *Self, _: []const core.gizmos.GizmoDraw) void {}
     pub fn hasEntity(_: *const Self, _: u32) bool {
@@ -273,7 +315,7 @@ test "addTilemap decodes the .tmx into a per-entity runtime" {
     try testing.expectEqualStrings("tiles.png", rt.map.tilesets[0].image_source);
 }
 
-test "tilemap renders as a POST-SPRITE pass at the entity's world offset" {
+test "tilemap renders as a PRE-SPRITE background pass at the entity's world offset" {
     const G = TilemapGame();
     var game = G.init(testing.allocator);
     defer game.deinit();
@@ -288,17 +330,23 @@ test "tilemap renders as a POST-SPRITE pass at the entity's world offset" {
     MockBackend.initMock(testing.allocator);
     defer MockBackend.deinitMock();
 
-    game.render(); // sprite pass (sentinel) THEN tilemap pass
+    game.render(); // tilemap BACKGROUND pass THEN sprite pass
 
     const calls = MockBackend.getDrawCalls();
-    // Sprite pass first, tiles after — proves post-sprite ordering.
+    // Tilemap draws FIRST (background), sprite sentinel LAST — proves the
+    // terrain renders UNDER the gameplay sprites (pre-sprite ordering).
     try testing.expect(calls.len >= 7);
-    try testing.expectEqual(sprite_sentinel_id, calls[0].texture_id);
+    try testing.expectEqual(sprite_sentinel_id, calls[calls.len - 1].texture_id);
 
     var tile_draws: usize = 0;
     var min_x: f32 = std.math.floatMax(f32);
     var min_y: f32 = std.math.floatMax(f32);
-    for (calls[1..]) |c| {
+    for (calls, 0..) |c, i| {
+        if (c.texture_id == sprite_sentinel_id) {
+            // The sentinel must be the very last draw — every tile precedes it.
+            try testing.expectEqual(calls.len - 1, i);
+            continue;
+        }
         try testing.expectEqual(tileset_handle, c.texture_id);
         tile_draws += 1;
         if (c.dest.x < min_x) min_x = c.dest.x;
@@ -307,11 +355,65 @@ test "tilemap renders as a POST-SPRITE pass at the entity's world offset" {
     // 3×2 fully-populated layer → 6 tile draws.
     try testing.expectEqual(@as(usize, 6), tile_draws);
     // X is not flipped: tile (0,0) dest.x = 0*16 + offset_x(100) + 8 = 108.
+    // This is the PRE-camera world→screen store offset (the camera matrix,
+    // recorded as a pass below, applies the pan/zoom on top).
     try testing.expectEqual(@as(f32, 108), min_x);
     // Y IS flipped for the default `.up` project (F3): the map's top-left
     // screen offset = toScreenY(.up, 50, 600) - pixelHeight(32) = 518, so the
     // top row draws at 518 + 8 (centre) = 526.
     try testing.expectEqual(@as(f32, 526), min_y);
+}
+
+test "tilemap background pass runs INSIDE the world camera transform" {
+    const G = TilemapGame();
+    var game = G.init(testing.allocator);
+    defer game.deinit();
+    try registerFixture(&game);
+
+    const e = game.createEntity();
+    game.setPosition(e, .{ .x = 0, .y = 0 });
+    game.addTilemap(e, .{ .asset_name = "level.tmx" });
+
+    // Frame 1: camera at the origin. The tilemap pass must enter the camera
+    // (one recorded backend camera pass) so tiles pan/zoom with the world.
+    {
+        MockBackend.initMock(testing.allocator);
+        defer MockBackend.deinitMock();
+        game.getCamera().setPosition(0, 0);
+        game.render();
+
+        const passes = MockBackend.getCameraPasses();
+        try testing.expect(passes.len >= 1);
+        // The pass carries the camera's target — proof the tilemap draws
+        // under the SAME transform sprites use, not in raw screen space.
+        try testing.expectEqual(@as(f32, 0), passes[0].target_x);
+        try testing.expectEqual(@as(f32, 0), passes[0].target_y);
+    }
+
+    // Frame 2: pan the camera. The recorded transform must shift with it —
+    // i.e. a camera pan moves the tilemap pass exactly as it moves sprites.
+    {
+        MockBackend.initMock(testing.allocator);
+        defer MockBackend.deinitMock();
+        game.getCamera().setPosition(200, 120);
+        game.render();
+
+        const passes = MockBackend.getCameraPasses();
+        try testing.expect(passes.len >= 1);
+        try testing.expectEqual(@as(f32, 200), passes[0].target_x);
+        try testing.expectEqual(@as(f32, 120), passes[0].target_y);
+
+        // The per-tile dest offsets stay in WORLD space (camera_x/y = 0):
+        // the pan lives in the camera transform, NOT baked into the tile
+        // positions — tile (0,0) dest.x is still 0*16 + offset_x(0) + 8 = 8,
+        // unchanged by the pan.
+        var min_x: f32 = std.math.floatMax(f32);
+        for (MockBackend.getDrawCalls()) |c| {
+            if (c.texture_id == sprite_sentinel_id) continue;
+            if (c.dest.x < min_x) min_x = c.dest.x;
+        }
+        try testing.expectEqual(@as(f32, 8), min_x);
+    }
 }
 
 test "save persists only asset_name; load rehydrates the runtime" {
@@ -426,7 +528,8 @@ test "F3: tilemap y-offset matches the sprite y-axis transform (.up)" {
     // centre), so the map's bottom edge = max centre-y + half a tile.
     const half_tile: f32 = 8;
     var max_center_y: f32 = -std.math.floatMax(f32);
-    for (MockBackend.getDrawCalls()[1..]) |c| {
+    for (MockBackend.getDrawCalls()) |c| {
+        if (c.texture_id == sprite_sentinel_id) continue; // skip sprite pass
         if (c.dest.y > max_center_y) max_center_y = c.dest.y;
     }
     const map_bottom_edge = max_center_y + half_tile;
@@ -454,7 +557,8 @@ test "F3: tilemap y-offset is the identity under .down" {
     // `.down`: offset_y = Position.y (identity, no height adjust). Top-left
     // tile (0,0) centre = 0*16 + 50 + 8 = 58.
     var min_y: f32 = std.math.floatMax(f32);
-    for (MockBackend.getDrawCalls()[1..]) |c| {
+    for (MockBackend.getDrawCalls()) |c| {
+        if (c.texture_id == sprite_sentinel_id) continue; // skip sprite pass
         if (c.dest.y < min_y) min_y = c.dest.y;
     }
     try testing.expectEqual(@as(f32, 58), min_y);
