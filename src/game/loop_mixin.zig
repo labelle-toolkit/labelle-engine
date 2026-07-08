@@ -164,7 +164,21 @@ pub fn Mixin(comptime Game: type) type {
                         // Scene-source override resolution (Play mode /
                         // editor_api) — same pattern as `setScene`.
                         self.loading_scene_name = name;
-                        entry.loader_fn(self) catch {};
+                        // Hot-reload loader failure must NOT vanish (#697).
+                        // `tick` returns void, so there's no caller to
+                        // propagate to — surface it via the engine log
+                        // instead of a bare `catch {}`. Control flow is
+                        // otherwise unchanged: `loading_scene_name` is
+                        // cleared and the scene-load hooks fire below, just
+                        // as they did before, so a partial reload leaves the
+                        // game in the same (best-effort) state — only now
+                        // the failure is visible in the log.
+                        entry.loader_fn(self) catch |err| {
+                            self.log.err(
+                                "[Scene] hot-reload loader for '{s}' failed: {s}",
+                                .{ name, @errorName(err) },
+                            );
+                        };
                         self.loading_scene_name = null;
                         self.emitHook(.{ .scene_load = .{ .name = name } });
                         // Engine `Events` dual-emit (#578).
