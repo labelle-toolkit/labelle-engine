@@ -59,8 +59,8 @@
         // module never fetch it — it is reached only by the `test` step via
         // `b.lazyDependency`, mirroring `zspec`.
         .labelle_gfx = .{
-            .url = "https://github.com/labelle-toolkit/labelle-gfx/archive/refs/tags/v1.22.0.tar.gz",
-            .hash = "labelle_gfx-1.22.0-nMpCPGWeBACma_PqkElZ6ecw992pp6hynFnJC5RVU4XC",
+            .url = "https://github.com/labelle-toolkit/labelle-gfx/archive/refs/tags/v1.23.0.tar.gz",
+            .hash = "labelle_gfx-1.23.0-nMpCPGPGBAC7M6l36CrRbafQ0jV-4F1qlxN_0zhTuAuE",
             .lazy = true,
         },
     },

@@ -128,15 +128,26 @@ fn layerSentinel(comptime l: LayerEnum) u32 {
     return sentinel_base + @intFromEnum(l);
 }
 
-/// Minimal world camera mirroring gfx's `CameraWith` begin/end seam.
+/// Minimal world camera mirroring gfx's `CameraWith` begin/end + getViewport
+/// seam. `getViewport` returns the visible WORLD rect (Y-up), centered on the
+/// camera position — the same shape gfx's `CameraWith.getViewport` returns —
+/// so the engine's per-camera tilemap cull (#711) has a real viewport to read.
 const MockCamera = struct {
     x: f32 = 0,
     y: f32 = 0,
     zoom: f32 = 1,
+    /// World-space view extent (unzoomed). Defaults to an 800×600 window.
+    view_w: f32 = 800,
+    view_h: f32 = 600,
 
     pub fn setPosition(self: *MockCamera, x: f32, y: f32) void {
         self.x = x;
         self.y = y;
+    }
+    pub fn getViewport(self: *const MockCamera) struct { x: f32, y: f32, width: f32, height: f32 } {
+        const w = self.view_w / self.zoom;
+        const h = self.view_h / self.zoom;
+        return .{ .x = self.x - w / 2, .y = self.y - h / 2, .width = w, .height = h };
     }
     pub fn begin(self: *const MockCamera) void {
         MockBackend.beginMode2D(.{ .target = .{ .x = self.x, .y = self.y }, .zoom = self.zoom });
@@ -634,5 +645,141 @@ test "#709 split-screen: bound tilemap layers render once per active camera" {
             if (c.texture_id == layerSentinel(.canopy)) canopy_passes += 1;
         }
         try testing.expectEqual(@as(usize, 2), canopy_passes);
+    }
+}
+
+/// Build a `w×h` two-layer (`terrain` + `canopy`) `.tmx` with every cell set
+/// to gid 1 — a large map for the per-camera cull regression. Caller frees.
+fn buildFullTmx(alloc: std.mem.Allocator, w: u32, h: u32) ![]const u8 {
+    var list: std.ArrayListUnmanaged(u8) = .empty;
+    errdefer list.deinit(alloc);
+
+    const header = try std.fmt.allocPrint(alloc,
+        \\<?xml version="1.0" encoding="UTF-8"?>
+        \\<map version="1.10" orientation="orthogonal" width="{d}" height="{d}" tilewidth="16" tileheight="16">
+        \\ <tileset firstgid="1" name="test_tiles" tilewidth="16" tileheight="16" columns="4" tilecount="8">
+        \\  <image source="tiles.png" width="64" height="32"/>
+        \\ </tileset>
+        \\
+    , .{ w, h });
+    defer alloc.free(header);
+    try list.appendSlice(alloc, header);
+
+    for ([_][]const u8{ "terrain", "canopy" }) |name| {
+        const lh = try std.fmt.allocPrint(alloc, " <layer name=\"{s}\" width=\"{d}\" height=\"{d}\">\n  <data encoding=\"csv\">\n", .{ name, w, h });
+        defer alloc.free(lh);
+        try list.appendSlice(alloc, lh);
+        var row: u32 = 0;
+        while (row < h) : (row += 1) {
+            var col: u32 = 0;
+            while (col < w) : (col += 1) try list.appendSlice(alloc, "1,");
+            try list.append(alloc, '\n');
+        }
+        try list.appendSlice(alloc, "</data>\n </layer>\n");
+    }
+    try list.appendSlice(alloc, "</map>\n");
+    return list.toOwnedSlice(alloc);
+}
+
+test "#711 P1: each camera culls interleaved tiles to ITS world rect, not the world origin" {
+    const fmax = std.math.floatMax(f32);
+    const G = InterleaveGame();
+    var game = G.init(testing.allocator);
+    defer game.deinit();
+
+    // A large map: 400 tiles wide (6400 world px) and 50 tall (800 world px >
+    // the 600 screen height, so the map's screen offset `off_y` is NEGATIVE —
+    // the case that made a naive "draw everything" impossible). Both layer
+    // names match a WORLD engine layer → implicitly bound → interleave path
+    // (no single-camera background involved).
+    const big = try buildFullTmx(testing.allocator, 400, 50);
+    defer testing.allocator.free(big);
+    try game.addEmbeddedTilemapAsset("big.tmx", big);
+    try game.addEmbeddedTilemapAsset("tiles.png", fake_png);
+
+    const e = game.createEntity();
+    game.setPosition(e, .{ .x = 0, .y = 0 });
+    game.addTilemap(e, .{ .asset_name = "big.tmx" });
+
+    // ── Split-screen: two cameras at FAR-APART world positions ──
+    // Camera 0 sits near the origin; camera 1 is panned to x≈5000. Each has a
+    // 200×200 world view. Before #711 both culled at the world origin (so
+    // camera 1 drew the wrong tiles / nothing in its region); now each culls
+    // to its OWN viewport.
+    {
+        game.renderer.active_cameras = 2;
+        game.renderer.cameras[0] = .{ .x = 100, .y = 100, .view_w = 200, .view_h = 200 };
+        game.renderer.cameras[1] = .{ .x = 5000, .y = 100, .view_w = 200, .view_h = 200 };
+
+        MockBackend.initMock(testing.allocator);
+        defer MockBackend.deinitMock();
+        game.render();
+        const calls = MockBackend.getDrawCalls();
+
+        // The mock draws camera 0's whole layer stack, then camera 1's — so
+        // camera 1's pass begins at the SECOND `terrain` sprite-pass sentinel.
+        var first_terrain: ?usize = null;
+        var second_terrain: ?usize = null;
+        for (calls, 0..) |c, i| {
+            if (c.texture_id != layerSentinel(.terrain)) continue;
+            if (first_terrain == null) {
+                first_terrain = i;
+            } else {
+                second_terrain = i;
+                break;
+            }
+        }
+        try testing.expect(first_terrain != null and second_terrain != null);
+
+        // dest.x per camera segment (camera_x = 0, so dest.x is the tile's
+        // world x + centre offset — a faithful proxy for which columns drew).
+        var c0_max: f32 = -fmax;
+        var c1_min: f32 = fmax;
+        var c0_tiles: usize = 0;
+        var c1_tiles: usize = 0;
+        for (calls, 0..) |c, i| {
+            if (c.texture_id != tileset_handle) continue;
+            if (i >= first_terrain.? and i < second_terrain.?) {
+                c0_tiles += 1;
+                c0_max = @max(c0_max, c.dest.x);
+            } else if (i >= second_terrain.?) {
+                c1_tiles += 1;
+                c1_min = @min(c1_min, c.dest.x);
+            }
+        }
+
+        // Both cameras drew tiles…
+        try testing.expect(c0_tiles > 0);
+        try testing.expect(c1_tiles > 0);
+        // …camera 0 near the origin…
+        try testing.expect(c0_max < 1000);
+        // …and camera 1 in ITS far region (x≈5000), NOT the world origin —
+        // this is the exact regression (`c1_min` would be ≈0 pre-#711).
+        try testing.expect(c1_min > 4000);
+    }
+
+    // ── Single panned camera on the same large map draws its own region ──
+    {
+        game.renderer.active_cameras = 1;
+        game.renderer.cameras[0] = .{ .x = 5000, .y = 100, .view_w = 200, .view_h = 200 };
+
+        MockBackend.initMock(testing.allocator);
+        defer MockBackend.deinitMock();
+        game.render();
+
+        var tiles: usize = 0;
+        var min_x: f32 = fmax;
+        var max_x: f32 = -fmax;
+        for (MockBackend.getDrawCalls()) |c| {
+            if (c.texture_id != tileset_handle) continue;
+            tiles += 1;
+            min_x = @min(min_x, c.dest.x);
+            max_x = @max(max_x, c.dest.x);
+        }
+        // Draws the tiles around x≈5000 (its viewport) and nothing at the
+        // origin — the panned camera sees what it's actually looking at.
+        try testing.expect(tiles > 0);
+        try testing.expect(min_x > 4000);
+        try testing.expect(max_x < 6000);
     }
 }

@@ -303,6 +303,14 @@ pub fn Runtime(comptime RenderImpl: type) type {
         /// interleaved with the sprite layers. `camera_x/camera_y` are 0
         /// when the caller runs inside a backend camera transform (the
         /// interleave path always does).
+        ///
+        /// `view_start_x/view_start_y` (gfx ≥1.23.0) set the CULL origin
+        /// separately from the dest offset (`camera_x/y`). On the interleave
+        /// path `camera_x/y = 0` keeps dest world-space for the camera matrix,
+        /// while the caller passes the ACTIVE camera's visible world rect here
+        /// so a panned camera on a large map culls the tiles it actually sees
+        /// (codex #711 P1). `null` = today's behavior (cull origin = dest
+        /// offset). `view_width/height` size the cull rect.
         pub fn drawLayerAt(
             self: *Self,
             i: usize,
@@ -310,12 +318,16 @@ pub fn Runtime(comptime RenderImpl: type) type {
             camera_y: f32,
             offset_x: f32,
             offset_y: f32,
+            view_start_x: ?f32,
+            view_start_y: ?f32,
             view_width: ?f32,
             view_height: ?f32,
         ) void {
             self.tm.drawLayerDirect(&self.map.tile_layers[i], camera_x, camera_y, .{
                 .offset_x = offset_x,
                 .offset_y = offset_y,
+                .view_start_x = view_start_x,
+                .view_start_y = view_start_y,
                 .view_width = view_width,
                 .view_height = view_height,
             });
