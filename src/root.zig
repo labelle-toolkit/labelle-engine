@@ -63,6 +63,9 @@ pub const Game = game_mod.Game;
 /// asset by name. Reachable on a configured game as `Game.TilemapComp`.
 /// See `src/tilemap.zig` / `src/tilemap_runtime.zig`.
 pub const Tilemap = @import("tilemap.zig").Tilemap;
+/// An explicit `.tmx`-layer → engine-layer binding for the T3 Z-interleave
+/// (`Tilemap.layer_bindings`). See `src/tilemap.zig`.
+pub const TilemapLayerBinding = @import("tilemap.zig").LayerBinding;
 /// True when a renderer plugin exposes a CONCRETELY reflectable gfx tilemap
 /// seam. Gates `Game.tilemap_supported` / `Game.TilemapRuntimeType`; exposed
 /// so consumers (and tests) can probe a renderer without configuring a whole

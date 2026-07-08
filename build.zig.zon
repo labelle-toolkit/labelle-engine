@@ -1,7 +1,7 @@
 .{
     .fingerprint = 0xe8a81a8dc7f48c87,
     .name = .engine,
-    .version = "1.77.0",
+    .version = "1.78.0",
     .minimum_zig_version = "0.16.0",
     .dependencies = .{
         // Requires labelle-core >= v1.20.0 — font_types aliases core's
@@ -59,8 +59,8 @@
         // module never fetch it — it is reached only by the `test` step via
         // `b.lazyDependency`, mirroring `zspec`.
         .labelle_gfx = .{
-            .url = "https://github.com/labelle-toolkit/labelle-gfx/archive/refs/tags/v1.21.0.tar.gz",
-            .hash = "labelle_gfx-1.21.0-nMpCPCWWBADjXOGmLAPU849pmoxipfIbvwefjhTVPzNn",
+            .url = "https://github.com/labelle-toolkit/labelle-gfx/archive/refs/tags/v1.22.0.tar.gz",
+            .hash = "labelle_gfx-1.22.0-nMpCPGWeBACma_PqkElZ6ecw992pp6hynFnJC5RVU4XC",
             .lazy = true,
         },
     },

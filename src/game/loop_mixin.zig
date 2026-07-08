@@ -8,6 +8,7 @@
 /// `Game`, matching how `game.zig` invoked them.
 const atlas_mixin = @import("atlas_mixin.zig");
 const input_events_mixin = @import("input_events_mixin.zig");
+const tilemap_mixin = @import("tilemap_mixin.zig");
 
 /// Returns the per-frame loop mixin for a given Game type.
 pub fn Mixin(comptime Game: type) type {
@@ -16,6 +17,9 @@ pub fn Mixin(comptime Game: type) type {
     const EcsImpl = Game.EcsBackend;
     const AtlasMixin = atlas_mixin.Mixin(Game);
     const InputEventsMixin = input_events_mixin.Mixin(Game);
+    // Same instantiation `game.zig` uses (generic memoization → identical
+    // type); reached here to drive the T3 tilemap Z-interleave render split.
+    const TilemapMixin = tilemap_mixin.Mixin(Game);
 
     return struct {
         pub fn tick(self: *Game, dt: f32) void {
@@ -223,17 +227,36 @@ pub fn Mixin(comptime Game: type) type {
             // is suppressed, and only for the few frames the re-decode
             // takes. The common path (no gate armed) is unchanged.
             if (self.post_load_render_gate == null) {
-                // Tilemap PRE-SPRITE background pass (T2 Phase 3): terrain
-                // is the WORLD background, so it draws FIRST — under the
-                // gameplay sprites, not over them — and INSIDE the same
-                // world camera transform sprites use (pans/zooms with the
-                // world; see `renderTilemaps`). No-op when no Tilemap
-                // entities exist / the renderer lacks the seam. Gated by
-                // the same post-load render gate as the world draw so
-                // restored tilemaps don't flash before their tileset
-                // textures re-bind.
-                self.renderTilemaps();
-                self.renderer.render();
+                if (comptime Game.tilemap_interleave_supported) {
+                    // T3 Z-interleave (hook-capable renderer). Split the
+                    // tilemap draw so individual `.tmx` layers sit at their
+                    // bound engine layer's z:
+                    //   1. Pre-sprite background — only the UNBOUND `.tmx`
+                    //      layers (whole-stack T2 semantics: under every
+                    //      sprite, primary camera). A Tilemap with no
+                    //      bindings / no name-matching engine layers has ALL
+                    //      layers unbound here → renders EXACTLY as T2.
+                    //   2. `renderWithLayerHook` draws the sprite layers and,
+                    //      after each WORLD layer's sprite pass (inside that
+                    //      layer's active camera transform, once per active
+                    //      camera), calls `tilemapLayerHook` to draw the
+                    //      `.tmx` layers BOUND to that engine layer — so
+                    //      terrain sits under sprites, canopy/roof over them,
+                    //      per camera (closes #709).
+                    TilemapMixin.renderTilemapBackground(self);
+                    self.renderer.renderWithLayerHook(*Game, self, TilemapMixin.tilemapLayerHook);
+                } else {
+                    // T2 path (renderer without the per-layer hook): the
+                    // whole tilemap stack is a PRE-SPRITE world background —
+                    // terrain draws FIRST, under the gameplay sprites, inside
+                    // the same world camera transform (see `renderTilemaps`).
+                    // No-op when no Tilemap entities exist / the renderer
+                    // lacks the seam. Both branches are gated by the
+                    // post-load render gate so restored tilemaps don't flash
+                    // before their tileset textures re-bind.
+                    self.renderTilemaps();
+                    self.renderer.render();
+                }
             }
             self.renderGizmos();
             self.clearGizmos();

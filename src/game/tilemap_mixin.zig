@@ -11,12 +11,23 @@
 const std = @import("std");
 const core = @import("labelle-core");
 const tilemap_runtime = @import("../tilemap_runtime.zig");
+const tilemap_mod = @import("../tilemap.zig");
 
 pub fn Mixin(comptime Game: type) type {
     const Entity = Game.EntityType;
     const Tilemap = Game.TilemapComp;
     const supported = Game.tilemap_supported;
     const Runtime = Game.TilemapRuntimeType;
+
+    // T3 Z-interleave: bind `.tmx` layers to engine layers by name and draw
+    // bound layers at their engine layer's z (via the renderer's per-layer
+    // hook), interleaved with the sprite layers. `LayerEnum` is the
+    // renderer's `Layer` (or `void` when unsupported); the interleave
+    // helpers below are only ever *referenced* on the interleave path in
+    // `loop_mixin.render` (gated by `Game.tilemap_interleave_supported`), so
+    // they are never analyzed when `LayerEnum` is `void`.
+    const LayerEnum = Game.RenderLayerEnum;
+    const LayerBinding = tilemap_mod.LayerBinding;
 
     // Whether the renderer plugin exposes a world camera the tilemap pass
     // can render through: a `begin()/end()` camera reached via
@@ -150,8 +161,14 @@ pub fn Mixin(comptime Game: type) type {
         /// never drawn: the table is keyed on the Game, not swapped with
         /// `active_world`, so it's guarded against the CURRENTLY active ECS.
         ///
-        /// Z-interleaving with individual sprite layers remains deferred:
-        /// the whole tilemap stack draws under the whole sprite stack.
+        /// **Z-interleaving (T3).** `renderTilemaps` is the WHOLE-STACK
+        /// background used by renderers WITHOUT the per-layer render hook
+        /// (`renderWithLayerHook`) — it draws every `.tmx` layer under every
+        /// sprite. On a hook-capable renderer, `loop_mixin.render` instead
+        /// splits the work: `renderTilemapBackground` draws only the
+        /// *unbound* `.tmx` layers pre-sprite, and `tilemapLayerHook` draws
+        /// each *bound* layer at its engine layer's z, interleaved with the
+        /// sprite layers and per active camera (see below).
         pub fn renderTilemaps(self: *Game) void {
             if (comptime !supported) return;
 
@@ -179,24 +196,122 @@ pub fn Mixin(comptime Game: type) type {
             if (comptime camera_capable) self.getCamera().begin();
             defer if (comptime camera_capable) self.getCamera().end();
 
-            const y_axis = Game.y_axis;
-            const screen_h = tilemapScreenHeight(self);
             var it = self.tilemaps.iterator();
             while (it.next()) |e| {
                 const entity = e.key_ptr.*;
                 const rt = e.value_ptr.*;
-                const pos = self.getWorldPosition(entity);
-                const off_x = pos.x;
-                // Flip the map's world Y into screen space exactly as the
-                // renderer flips sprite Y, then (under `.up`) raise by the
-                // map height so the map's bottom edge sits at the flipped
-                // Position.y — identity under `.down`.
-                const off_y = core.toScreenY(y_axis, pos.y, screen_h) -
-                    switch (y_axis) {
-                        .up => rt.pixelHeight(),
-                        .down => @as(f32, 0),
-                    };
-                rt.draw(0, 0, off_x, off_y, null, null);
+                const off = tilemapWorldOffset(self, entity, rt);
+                rt.draw(0, 0, off.x, off.y, null, null);
+            }
+        }
+
+        /// The map's world-space draw offset for `entity` (T2/T3). `x` is
+        /// the entity's world `Position.x`; `y` flips the world Y into
+        /// screen space exactly as the renderer flips sprite Y, then (under
+        /// `.up`) raises by the map's pixel height so the map's BOTTOM edge
+        /// sits at the flipped `Position.y` — identity under `.down`. Shared
+        /// by the whole-stack background (`renderTilemaps`), the unbound
+        /// background (`renderTilemapBackground`), and the per-layer
+        /// interleave (`tilemapLayerHook`) so a bound and an unbound layer of
+        /// the same map never disagree on where the map sits.
+        fn tilemapWorldOffset(self: *Game, entity: Entity, rt: *Runtime) struct { x: f32, y: f32 } {
+            const pos = self.getWorldPosition(entity);
+            const off_y = core.toScreenY(Game.y_axis, pos.y, tilemapScreenHeight(self)) -
+                switch (Game.y_axis) {
+                    .up => rt.pixelHeight(),
+                    .down => @as(f32, 0),
+                };
+            return .{ .x = pos.x, .y = off_y };
+        }
+
+        // ── T3 Z-interleave (hook-capable renderers only) ───────────────
+
+        /// Resolve a `.tmx` layer name to the WORLD engine layer it renders
+        /// at, or `null` when it is UNBOUND (→ background pass). Explicit
+        /// `layer_bindings` win over the implicit-by-name rule; either way
+        /// the target must be a known WORLD-space `LayerEnum` tag (a binding
+        /// to a screen-space or unknown engine layer is treated as unbound,
+        /// since a tilemap can only draw inside the world camera transform).
+        fn resolveBinding(bindings: ?[]const LayerBinding, tmx_name: []const u8) ?LayerEnum {
+            if (bindings) |list| {
+                for (list) |b| {
+                    if (std.mem.eql(u8, b.tmx_layer, tmx_name)) {
+                        return worldLayerFromName(b.engine_layer);
+                    }
+                }
+            }
+            return worldLayerFromName(tmx_name);
+        }
+
+        /// `LayerEnum` tag named `name`, but only if it is a WORLD-space
+        /// layer; `null` for an unknown name or a screen-space layer.
+        fn worldLayerFromName(name: []const u8) ?LayerEnum {
+            const l = std.meta.stringToEnum(LayerEnum, name) orelse return null;
+            if (l.config().space != .world) return null;
+            return l;
+        }
+
+        /// Pre-sprite background pass for hook-capable renderers: draws only
+        /// the `.tmx` layers that are NOT bound to an engine layer (bound
+        /// layers are drawn interleaved by `tilemapLayerHook`). Mirrors
+        /// `renderTilemaps` (whole-stack, primary-camera, world-space) but
+        /// per-layer-filtered — so a Tilemap with no bindings / no
+        /// name-matching engine layers renders EXACTLY as T2. Reaps ghosts
+        /// (runs before the hook, which does not).
+        pub fn renderTilemapBackground(self: *Game) void {
+            if (comptime !supported) return;
+            if (self.tilemaps.count() == 0) return;
+            reapGhostTilemaps(self);
+            if (self.tilemaps.count() == 0) return;
+
+            if (comptime camera_capable) self.getCamera().begin();
+            defer if (comptime camera_capable) self.getCamera().end();
+
+            var it = self.tilemaps.iterator();
+            while (it.next()) |e| {
+                const entity = e.key_ptr.*;
+                const rt = e.value_ptr.*;
+                const comp = self.ecs_backend.getComponent(entity, Tilemap) orelse continue;
+                const off = tilemapWorldOffset(self, entity, rt);
+                var i: usize = 0;
+                while (i < rt.layerCount()) : (i += 1) {
+                    if (resolveBinding(comp.layer_bindings, rt.layerName(i)) != null) continue;
+                    rt.drawLayerAt(i, 0, 0, off.x, off.y, null, null);
+                }
+            }
+        }
+
+        /// Per-layer render hook (T3) passed to `renderer.renderWithLayerHook`.
+        /// Fires after each engine layer's sprite pass, INSIDE that layer's
+        /// active camera transform for world layers — and once per active
+        /// camera, so split-screen renders bound tilemap layers per viewport
+        /// automatically (closes #709). For the just-drawn engine `layer`,
+        /// draws every Tilemap's `.tmx` layer bound to it, at world coords
+        /// (`camera_x/y = 0`; the camera matrix does the pan/zoom, matching
+        /// sprites). The `cam` argument is unused: tiles cull against the
+        /// backend screen size like the T2 background (a safe over-estimate).
+        pub fn tilemapLayerHook(self: *Game, layer: LayerEnum, cam: *const Game.CameraType) void {
+            _ = cam;
+            // Tilemaps are world-space; `worldLayerFromName` already filters
+            // screen-space bindings, but guard here too so a screen-layer
+            // hook (fired outside the camera transform) never draws terrain.
+            if (layer.config().space != .world) return;
+            if (self.tilemaps.count() == 0) return;
+
+            var it = self.tilemaps.iterator();
+            while (it.next()) |e| {
+                const entity = e.key_ptr.*;
+                const rt = e.value_ptr.*;
+                // A component stripped via generic `removeComponent` leaves a
+                // side-table ghost; skip it (the background pass reaps it).
+                const comp = self.ecs_backend.getComponent(entity, Tilemap) orelse continue;
+                const off = tilemapWorldOffset(self, entity, rt);
+                var i: usize = 0;
+                while (i < rt.layerCount()) : (i += 1) {
+                    const bound = resolveBinding(comp.layer_bindings, rt.layerName(i)) orelse continue;
+                    if (bound != layer) continue;
+                    rt.drawLayerAt(i, 0, 0, off.x, off.y, null, null);
+                }
             }
         }
 

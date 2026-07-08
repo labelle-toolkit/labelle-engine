@@ -239,6 +239,22 @@ pub fn GameConfigWithYAxis(
         else
             void;
 
+        /// The renderer's layer enum (`RenderImpl.Layer`, gfx's
+        /// `LayerEnum`), or `void` when the renderer doesn't expose one.
+        /// The T3 tilemap Z-interleave binds `.tmx` layers to engine layers
+        /// by matching a `.tmx` layer name to a `@tagName` of this enum.
+        pub const RenderLayerEnum = if (@hasDecl(RenderImpl, "Layer")) RenderImpl.Layer else void;
+
+        /// True when the tilemap Z-interleave (T3) is available: the
+        /// renderer exposes the per-layer render hook (`renderWithLayerHook`,
+        /// gfx ≥1.22.0) AND a layer enum (`Layer`), on top of the decoded-map
+        /// seam. When false the engine falls back to the T2 whole-stack
+        /// pre-sprite background pass (`renderTilemaps` + `renderer.render()`),
+        /// so stub / older renderers are unaffected.
+        pub const tilemap_interleave_supported = tilemap_supported and
+            @hasDecl(RenderImpl, "renderWithLayerHook") and
+            @hasDecl(RenderImpl, "Layer");
+
         pub const Input = @import("input.zig").InputInterface(InputImpl);
 
         /// True when the active input backend itself declares
