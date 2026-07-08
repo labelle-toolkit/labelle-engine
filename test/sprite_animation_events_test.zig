@@ -94,7 +94,7 @@ test "tick: landing on an event frame emits engine__anim_frame with entity + ind
     var game = newGame(&recorder);
     defer game.deinit();
 
-    const marked = [_]u8{2};
+    const marked = [_]u16{2};
     const entity = game.createEntity();
     game.active_world.ecs_backend.addComponent(entity, Sprite{ .sprite_name = "a.png" });
     game.active_world.ecs_backend.addComponent(entity, SpriteAnimation{

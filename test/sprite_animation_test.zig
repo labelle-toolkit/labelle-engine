@@ -340,7 +340,7 @@ fn countKind(buf: *const PendingBuf, kind: Kind) usize {
 }
 
 test "SpriteAnimation: advanceEvents fires a marker when landing on an event frame" {
-    const marked = [_]u8{2};
+    const marked = [_]u16{2};
     var anim = SpriteAnimation{
         .frames = &pipe_frames,
         .fps = 6,
@@ -393,7 +393,7 @@ test "SpriteAnimation: a full-period wrap back to the same frame fires no marker
     // exactly one full period (returns to the same index) intentionally
     // doesn't re-fire that frame's marker — only the loop_end fires. A
     // crossing-accurate design (deferred #625 follow-up) would catch it.
-    const marked = [_]u8{0};
+    const marked = [_]u16{0};
     var anim = SpriteAnimation{
         .frames = &pipe_frames,
         .fps = 6,
@@ -405,4 +405,40 @@ test "SpriteAnimation: a full-period wrap back to the same frame fires no marker
     try testing.expectEqual(@as(u8, 0), anim.frame);
     try testing.expectEqual(@as(usize, 0), countKind(&buf, .marker));
     try testing.expectEqual(@as(usize, 1), countKind(&buf, .loop_end));
+}
+
+test "SpriteAnimation: advanceEventsMasked queues only the selected kinds" {
+    // #718 codex P2 #2: a project listening to only anim_frame must not
+    // have its buffer filled with loop_end events. Mask loop_end/clip_end
+    // OFF; a wrapping tick that lands on a marked frame yields ONLY the
+    // marker — the wanted event isn't crowded out.
+    const marked = [_]u16{2};
+    var anim = SpriteAnimation{
+        .frames = &pipe_frames,
+        .fps = 6,
+        .mode = .loop,
+        .event_frames = &marked,
+    };
+    var buf = PendingBuf{};
+    // From frame 0: 8 steps → one wrap, lands on frame 2 (marked).
+    _ = anim.advanceEventsMasked(8.0 / 6.0, &buf, .{ .frame = true, .clip_end = false, .loop_end = false });
+    try testing.expectEqual(@as(u8, 2), anim.frame);
+    try testing.expectEqual(@as(usize, 1), countKind(&buf, .marker));
+    try testing.expectEqual(@as(usize, 0), countKind(&buf, .loop_end));
+    try testing.expectEqual(@as(usize, 1), buf.len);
+    // repetition still tracked even though loop_end wasn't queued.
+    try testing.expectEqual(@as(u16, 1), anim.repetition);
+}
+
+test "SpriteAnimation: a huge-dt loop tick is bounded and repetition saturates" {
+    // #718 codex P2 #3: a multi-wrap dt spike (tab resume / debugger
+    // pause) must be O(bounded), not O(wraps). ~100k wraps in one tick:
+    // repetition is computed arithmetically (saturates at u16 max) and
+    // emission is capped by the fixed buffer, not the wrap count.
+    var anim = SpriteAnimation{ .frames = &pipe_frames, .fps = 6, .mode = .loop };
+    var buf = PendingBuf{};
+    _ = anim.advanceEvents(100000.0, &buf);
+    try testing.expectEqual(@as(u16, std.math.maxInt(u16)), anim.repetition);
+    // Buffer filled to capacity, not beyond — the overflow tail is dropped.
+    try testing.expectEqual(@as(usize, buf.items.len), @as(usize, buf.len));
 }

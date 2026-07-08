@@ -61,9 +61,17 @@ pub fn tick(game: anytype, dt: f32) void {
     const Game = @TypeOf(game.*);
     const Sprite = Game.SpriteComp;
 
-    const events_wanted = comptime Game.engineEventWanted("engine__anim_frame") or
-        Game.engineEventWanted("engine__anim_complete") or
-        Game.engineEventWanted("engine__anim_loop");
+    // Queue ONLY the event kinds this project declared. A project that
+    // listens to just `anim_frame` must not have its fixed `PendingBuf`
+    // filled with `loop_end` events from a multi-wrap tick (which would
+    // crowd out / drop the frame events it wants). The mask is comptime,
+    // so unwanted kinds are never even queued.
+    const mask = comptime SpriteAnimation.EventMask{
+        .frame = Game.engineEventWanted("engine__anim_frame"),
+        .clip_end = Game.engineEventWanted("engine__anim_complete"),
+        .loop_end = Game.engineEventWanted("engine__anim_loop"),
+    };
+    const events_wanted = comptime mask.frame or mask.clip_end or mask.loop_end;
 
     var view = game.ecs_backend.view(.{ SpriteAnimation, Sprite }, .{});
     defer view.deinit();
@@ -77,7 +85,7 @@ pub fn tick(game: anytype, dt: f32) void {
 
         const changed = if (comptime events_wanted) blk: {
             var buf: anim_events.PendingBuf = .{};
-            const c = anim.advanceEvents(eff_dt, &buf);
+            const c = anim.advanceEventsMasked(eff_dt, &buf, mask);
             // Most ticks queue nothing (sub-frame or an event-less frame);
             // skip the entity cast + slice walk unless something fired.
             if (buf.len > 0) forwardEvents(game, entity, &buf);

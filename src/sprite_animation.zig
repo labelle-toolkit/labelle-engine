@@ -83,13 +83,22 @@ pub const SpriteAnimation = struct {
 
     /// Frame indices (0-based) that fire an `engine__anim_frame` event
     /// the tick the animation LANDS on them — footstep / hit / spawn
-    /// cue frames (#625). Borrowed comptime slice, like `frames`; empty
-    /// (the default) means no per-frame events and reproduces today's
-    /// behavior. v1 detects "landed on", not "crossed": a `dt` spike
-    /// that steps PAST a marked frame without landing on it misses it
-    /// (documented follow-up — the `AnimationDef` path already does
-    /// crossing-accurate markers via beat iteration).
-    event_frames: []const u8 = &.{},
+    /// cue frames (#625). Borrowed slice; empty (the default) means no
+    /// per-frame events and reproduces today's behavior.
+    ///
+    /// `u16` (not `u8`) ON PURPOSE: the JSONC scene-bridge deserializer
+    /// special-cases every `[]const u8` field as a STRING (for the intern
+    /// pool), so a `[]const u8` here couldn't be authored as a number
+    /// array — `"event_frames": [2, 5]` would be parsed as a string. A
+    /// `[]const u16` falls through to the generic slice→number-array
+    /// branch, so scenes / prefabs can author it. Indices `>= frames.len`
+    /// (or above the `u8` frame ceiling) simply never match — harmless.
+    ///
+    /// v1 detects "landed on", not "crossed": a `dt` spike that steps
+    /// PAST a marked frame without landing on it misses it (documented
+    /// follow-up — the `AnimationDef` path already does crossing-accurate
+    /// markers via beat iteration).
+    event_frames: []const u16 = &.{},
 
     // Runtime state — excluded from save.
     timer: f32 = 0,
@@ -105,6 +114,19 @@ pub const SpriteAnimation = struct {
     finished_emitted: bool = false,
     repetition: u16 = 0,
 
+    /// Comptime selector of which event KINDS `advanceEventsMasked` queues
+    /// into the `PendingBuf` (#625). The tick builds this from the
+    /// project's declared `engine__anim_*` variants so the fixed-capacity
+    /// buffer only ever holds events the game will consume — a project
+    /// listening to only `anim_frame` never has its buffer crowded out by
+    /// `loop_end` events from a multi-wrap tick. Defaults to all-on (what
+    /// the back-compat `advanceEvents` requests).
+    pub const EventMask = struct {
+        frame: bool = true,
+        clip_end: bool = true,
+        loop_end: bool = true,
+    };
+
     /// Advance the animation by `dt` seconds. Pure state machine —
     /// does not touch the entity's Sprite. The caller (a tick system
     /// that walks `view(.{SpriteAnimation, Sprite}, .{})`) decides
@@ -116,19 +138,39 @@ pub const SpriteAnimation = struct {
     /// which is the common case for single-frame animations or ticks
     /// that fall within the same frame.
     pub fn advance(self: *SpriteAnimation, dt: f32) bool {
-        return self.advanceImpl(dt, null);
+        return self.advanceImpl(dt, null, .{});
     }
 
-    /// Like `advance`, but appends lifecycle events (#670) to `out`:
-    /// `AnimClipEnd` once when a `.once` clip finishes, `AnimLoopEnd` on
-    /// each `.loop` wrap and each `.ping_pong` endpoint reversal. The
-    /// driver adds the entity and forwards `out` to `game.emit`. Props
-    /// have no per-frame markers in v1 (lifecycle only).
+    /// Like `advance`, but appends ALL event kinds to `out`: `AnimClipEnd`
+    /// once when a `.once` clip finishes, `AnimLoopEnd` on each `.loop`
+    /// wrap and each `.ping_pong` endpoint reversal, and a per-frame marker
+    /// when landing on an `event_frames` index. The driver adds the entity
+    /// and forwards `out` to `game.emit`. Kept for callers that want every
+    /// kind (e.g. #670 tests); the tick uses `advanceEventsMasked`.
     pub fn advanceEvents(self: *SpriteAnimation, dt: f32, out: *anim_events.PendingBuf) bool {
-        return self.advanceImpl(dt, out);
+        return self.advanceImpl(dt, out, .{});
     }
 
-    fn advanceImpl(self: *SpriteAnimation, dt: f32, out: ?*anim_events.PendingBuf) bool {
+    /// Like `advanceEvents`, but only queues the event kinds selected by
+    /// the comptime `mask` (#625) — the fixed `PendingBuf` then holds only
+    /// events the project actually listens to. The `repetition` counter
+    /// still advances arithmetically across every wrap even for kinds that
+    /// aren't queued, so counts stay accurate if the game later reads them.
+    pub fn advanceEventsMasked(
+        self: *SpriteAnimation,
+        dt: f32,
+        out: *anim_events.PendingBuf,
+        comptime mask: EventMask,
+    ) bool {
+        return self.advanceImpl(dt, out, mask);
+    }
+
+    fn advanceImpl(
+        self: *SpriteAnimation,
+        dt: f32,
+        out: ?*anim_events.PendingBuf,
+        comptime mask: EventMask,
+    ) bool {
         // Degenerate case: empty frames or zero/negative fps. No
         // advance, no mutation. Protects against malformed data
         // (e.g. a prefab with `"frames": []`) without a compile-time
@@ -166,14 +208,31 @@ pub const SpriteAnimation = struct {
                 const total: usize = @as(usize, self.frame) + steps;
                 self.frame = @intCast(total % self.frames.len);
                 if (out) |o| {
-                    // One AnimLoopEnd per boundary crossed this tick. The
-                    // repetition counter advances for EVERY wrap even when
-                    // the buffer caps emission — it must stay arithmetically
-                    // accurate across the full span.
-                    var wraps: usize = total / self.frames.len;
-                    while (wraps > 0) : (wraps -= 1) {
-                        self.repetition = anim_events.satAddU16(self.repetition, 1);
-                        _ = o.append(.{ .kind = .loop_end, .repetition = self.repetition });
+                    const wraps: usize = total / self.frames.len;
+                    if (wraps > 0) {
+                        const start_rep = self.repetition;
+                        // Advance the running count arithmetically — O(1),
+                        // accurate even on a huge multi-wrap `dt` spike (tab
+                        // resume, debugger pause) that a per-wrap loop would
+                        // turn into an unbounded traversal.
+                        self.repetition = anim_events.satAddU16Count(start_rep, wraps);
+                        if (comptime mask.loop_end) {
+                            // Emit at most a buffer's worth of AnimLoopEnd —
+                            // the overflow tail is dropped (same observable
+                            // result as the old append-until-full loop, but
+                            // now bounded by `max_pending`, not `wraps`).
+                            // Each emitted event carries its true running
+                            // repetition.
+                            const room: usize = anim_events.max_pending - o.len;
+                            const emit_n: usize = @min(wraps, room);
+                            var k: usize = 1;
+                            while (k <= emit_n) : (k += 1) {
+                                _ = o.append(.{
+                                    .kind = .loop_end,
+                                    .repetition = anim_events.satAddU16Count(start_rep, k),
+                                });
+                            }
+                        }
                     }
                 }
             },
@@ -186,9 +245,11 @@ pub const SpriteAnimation = struct {
                 if (out) |o| {
                     // Fire AnimClipEnd exactly once, the tick it lands on
                     // the final frame.
-                    if (self.frame + 1 >= len_u8 and !self.finished_emitted) {
-                        self.finished_emitted = true;
-                        _ = o.append(.{ .kind = .clip_end });
+                    if (comptime mask.clip_end) {
+                        if (self.frame + 1 >= len_u8 and !self.finished_emitted) {
+                            self.finished_emitted = true;
+                            _ = o.append(.{ .kind = .clip_end });
+                        }
                     }
                 }
             },
@@ -213,7 +274,7 @@ pub const SpriteAnimation = struct {
                             if (self.frame + 1 >= len_u8) {
                                 self.forward = false;
                                 self.frame -= 1;
-                                self.emitReversal(out); // #670: endpoint reversal
+                                self.emitReversal(out, mask.loop_end); // #670: endpoint reversal
                             } else {
                                 self.frame += 1;
                             }
@@ -221,7 +282,7 @@ pub const SpriteAnimation = struct {
                             if (self.frame == 0) {
                                 self.forward = true;
                                 self.frame += 1;
-                                self.emitReversal(out);
+                                self.emitReversal(out, mask.loop_end);
                             } else {
                                 self.frame -= 1;
                             }
@@ -236,30 +297,37 @@ pub const SpriteAnimation = struct {
         // across loop/once/ping_pong. Only emitted when the frame changed
         // (steady-state ticks never re-fire) and only when an event sink
         // is present (plain `advance` skips this entirely).
-        if (out) |o| {
-            if (self.frame != old_frame and self.frameIsMarked(self.frame)) {
-                _ = o.append(.{ .kind = .marker, .frame = self.frame });
+        if (comptime mask.frame) {
+            if (out) |o| {
+                if (self.frame != old_frame and self.frameIsMarked(self.frame)) {
+                    _ = o.append(.{ .kind = .marker, .frame = self.frame });
+                }
             }
         }
 
         return self.frame != old_frame;
     }
 
-    /// True when `f` is listed in `event_frames`. Linear scan — the list
-    /// is a handful of cue frames in practice.
+    /// True when the current frame `f` is listed in `event_frames`. Linear
+    /// scan — the list is a handful of cue frames in practice. `f` is the
+    /// `u8` frame index widened to compare against the `u16` cue values.
     fn frameIsMarked(self: *const SpriteAnimation, f: u8) bool {
         for (self.event_frames) |m| {
-            if (m == f) return true;
+            if (m == @as(u16, f)) return true;
         }
         return false;
     }
 
-    fn emitReversal(self: *SpriteAnimation, out: ?*anim_events.PendingBuf) void {
+    /// Record a `.ping_pong` endpoint reversal: always bump the running
+    /// `repetition`, and append an `AnimLoopEnd` only when `emit_loop`
+    /// (the project listens for loop events). Bumping regardless keeps the
+    /// count accurate even when loop events aren't queued.
+    fn emitReversal(self: *SpriteAnimation, out: ?*anim_events.PendingBuf, comptime emit_loop: bool) void {
         if (out) |o| {
-            // Count the reversal even when the buffer is full — the
-            // repetition counter must not lag actual playback.
             self.repetition = anim_events.satAddU16(self.repetition, 1);
-            _ = o.append(.{ .kind = .loop_end, .repetition = self.repetition });
+            if (comptime emit_loop) {
+                _ = o.append(.{ .kind = .loop_end, .repetition = self.repetition });
+            }
         }
     }
 
