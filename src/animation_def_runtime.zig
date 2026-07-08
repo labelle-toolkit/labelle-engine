@@ -36,6 +36,17 @@ pub const FrameEntry = animation_def.FrameEntry;
 
 const Zoir = std.zig.Zoir;
 
+/// A parsed per-(clip, variant) override (clip-major `.overrides`).
+/// `entries` and `folder` are heap-owned when non-null.
+const VariantOverride = struct {
+    clip: u8,
+    variant: u8,
+    entries: ?[]FrameEntry, // owned; null = frames not overridden
+    speed: ?f32,
+    mode: ?Mode,
+    folder: ?[]const u8, // owned; null = folder not overridden
+};
+
 pub const RuntimeAnimationDef = struct {
     allocator: std.mem.Allocator,
     /// Clip names in declaration order; index == the `u8` in AnimationState.clip.
@@ -50,10 +61,17 @@ pub const RuntimeAnimationDef = struct {
     /// to slots 1..N with run 1. Heap-owned (marker strings included).
     clip_entries: [][]FrameEntry,
     /// Precomputed sprite-name strings, `[clip][variant][slot]`. Jagged:
-    /// row length is that clip's `frame_count`. Byte-equal to the comptime
-    /// table's `"{folder}/{variant}_{f:04}.png"` (slot i names file
-    /// `entries[i].f`, so reorders/reuse resolve identically).
+    /// row length is that (clip, variant)'s effective slot count (an
+    /// override may lengthen/shorten a single variant's row). Byte-equal to
+    /// the comptime table's `"{folder}/{variant}_{f:04}.png"` (slot i names
+    /// file `entries[i].f`, so reorders/reuse resolve identically).
     sprite_names: [][][][]const u8,
+    /// Sparse clip-major `.overrides`: one entry per (clip, variant) pair
+    /// that actually overrides something — non-overridden pairs are absent
+    /// and inherit the base. The sprite-name table above already bakes
+    /// overrides in; this list drives `clipMetaFor`/`refreshState`. Each
+    /// element's `entries` + `folder` are heap-owned (freed in `deinit`).
+    overrides: []VariantOverride,
 
     /// Parse a `.zon` animation definition. On any malformed input (parse
     /// error, missing `.variants`/`.clips`, bad field type, frame count
@@ -184,6 +202,105 @@ pub const RuntimeAnimationDef = struct {
             }
         }
 
+        // ── per-variant overrides (clip-major `.overrides`) ───
+        // Sparse: only the (clip, variant) pairs that override something.
+        // Parsed BEFORE the sprite-name table so that table can bake in the
+        // effective per-variant entries/folder. `clipMetaFor`/`refreshState`
+        // read this list to patch meta for the overridden variant.
+        var override_list: std.ArrayList(VariantOverride) = .empty;
+        errdefer {
+            for (override_list.items) |*o| {
+                if (o.entries) |es| freeEntries(allocator, es);
+                if (o.folder) |f| allocator.free(f);
+            }
+            override_list.deinit(allocator);
+        }
+        {
+            var ci: u32 = 0;
+            while (ci < ccount) : (ci += 1) {
+                const cnode = cstruct.vals.at(ci);
+                const ov_node = findField(zoir, cnode, "overrides") orelse continue;
+                const ov_struct = switch (ov_node.get(zoir)) {
+                    .struct_literal => |s| s,
+                    else => return error.BadOverrides,
+                };
+                var j: u32 = 0;
+                while (j < ov_struct.names.len) : (j += 1) {
+                    // Field NAME is a variant name → its index (or reject).
+                    const vname = ov_struct.names[j].get(zoir);
+                    var vidx_opt: ?u8 = null;
+                    for (variant_names, 0..) |vn, vi2| {
+                        if (std.mem.eql(u8, vn, vname)) {
+                            vidx_opt = @intCast(vi2);
+                            break;
+                        }
+                    }
+                    const vidx = vidx_opt orelse return error.UnknownVariant;
+
+                    // Field VALUE is the per-variant override struct.
+                    const val_node = ov_struct.vals.at(j);
+                    const ov_val = switch (val_node.get(zoir)) {
+                        .struct_literal => |s| s,
+                        else => return error.BadOverride,
+                    };
+                    var entries: ?[]FrameEntry = null;
+                    var ov_speed: ?f32 = null;
+                    var ov_mode: ?Mode = null;
+                    var ov_folder: ?[]const u8 = null;
+                    // Frees a partially-parsed override on any error below
+                    // (incl. the static-hold reject); on a clean append the
+                    // scope exits normally and ownership passes to the list.
+                    errdefer {
+                        if (entries) |es| freeEntries(allocator, es);
+                        if (ov_folder) |f| allocator.free(f);
+                    }
+                    var k: u32 = 0;
+                    while (k < ov_val.names.len) : (k += 1) {
+                        const fname = ov_val.names[k].get(zoir);
+                        const fnode = ov_val.vals.at(k);
+                        if (std.mem.eql(u8, fname, "frames")) {
+                            entries = try parseFrames(allocator, zoir, fnode);
+                        } else if (std.mem.eql(u8, fname, "speed")) {
+                            ov_speed = try getFloat(zoir, fnode);
+                        } else if (std.mem.eql(u8, fname, "mode")) {
+                            ov_mode = try modeFromName(try getEnumName(zoir, fnode));
+                        } else if (std.mem.eql(u8, fname, "folder")) {
+                            ov_folder = try allocator.dupe(u8, try getString(zoir, fnode));
+                        } else {
+                            return error.UnknownOverrideField;
+                        }
+                    }
+                    // Comptime parity: a clip that is .static FOR THIS
+                    // VARIANT (override mode, else base) only shows slot 0,
+                    // so per-slot holds in its entries are meaningless.
+                    const eff_mode = ov_mode orelse clip_meta[ci].mode;
+                    if (eff_mode == .static) {
+                        if (entries) |es| {
+                            for (es) |e| {
+                                if (e.run != 1) return error.HoldOnStaticClip;
+                            }
+                        }
+                    }
+                    try override_list.append(allocator, .{
+                        .clip = @intCast(ci),
+                        .variant = vidx,
+                        .entries = entries,
+                        .speed = ov_speed,
+                        .mode = ov_mode,
+                        .folder = ov_folder,
+                    });
+                }
+            }
+        }
+        const overrides = try override_list.toOwnedSlice(allocator);
+        errdefer {
+            for (overrides) |*o| {
+                if (o.entries) |es| freeEntries(allocator, es);
+                if (o.folder) |f| allocator.free(f);
+            }
+            allocator.free(overrides);
+        }
+
         // ── sprite-name table [clip][variant][slot] ───────────
         const sprite_names = try allocator.alloc([][][]const u8, ccount);
         var sn_clips: usize = 0;
@@ -200,8 +317,6 @@ pub const RuntimeAnimationDef = struct {
         {
             var ci: usize = 0;
             while (ci < ccount) : (ci += 1) {
-                const fc = clip_meta[ci].frame_count;
-                const folder = clip_meta[ci].folder;
                 const block = try allocator.alloc([][]const u8, vcount);
                 var blk_rows: usize = 0;
                 errdefer {
@@ -213,6 +328,19 @@ pub const RuntimeAnimationDef = struct {
                 }
                 var vi: usize = 0;
                 while (vi < vcount) : (vi += 1) {
+                    // Effective (per-variant) entries + folder: an override
+                    // for THIS (clip, variant) replaces them, else the base.
+                    // Row length is jagged — a shorter/longer override row.
+                    var eff_entries = clip_entries[ci];
+                    var eff_folder = clip_meta[ci].folder;
+                    for (overrides) |*o| {
+                        if (@as(usize, o.clip) == ci and @as(usize, o.variant) == vi) {
+                            if (o.entries) |es| eff_entries = es;
+                            if (o.folder) |f| eff_folder = f;
+                            break;
+                        }
+                    }
+                    const fc = eff_entries.len;
                     const row = try allocator.alloc([]const u8, fc);
                     var row_f: usize = 0;
                     errdefer {
@@ -223,7 +351,7 @@ pub const RuntimeAnimationDef = struct {
                     while (fi < fc) : (fi += 1) {
                         // Slot fi names file `entries[fi].f` (not fi+1),
                         // matching the comptime table for reorders/reuse.
-                        row[fi] = try std.fmt.allocPrint(allocator, "{s}/{s}_{d:0>4}.png", .{ folder, variant_names[vi], clip_entries[ci][fi].f });
+                        row[fi] = try std.fmt.allocPrint(allocator, "{s}/{s}_{d:0>4}.png", .{ eff_folder, variant_names[vi], eff_entries[fi].f });
                         row_f += 1;
                     }
                     block[vi] = row;
@@ -241,6 +369,7 @@ pub const RuntimeAnimationDef = struct {
             .clip_meta = clip_meta,
             .clip_entries = clip_entries,
             .sprite_names = sprite_names,
+            .overrides = overrides,
         };
     }
 
@@ -254,6 +383,11 @@ pub const RuntimeAnimationDef = struct {
             a.free(blk);
         }
         a.free(self.sprite_names);
+        for (self.overrides) |*o| {
+            if (o.entries) |es| freeEntries(a, es);
+            if (o.folder) |f| a.free(f);
+        }
+        a.free(self.overrides);
         for (self.clip_entries) |es| freeEntries(a, es);
         a.free(self.clip_entries);
         for (self.clip_meta) |m| a.free(m.folder);
@@ -290,12 +424,42 @@ pub const RuntimeAnimationDef = struct {
     }
 
     /// Look up a precomputed sprite name; returns "" for any out-of-range
-    /// clip/variant/frame (never indexes OOB).
+    /// clip/variant/frame (never indexes OOB). The frame bound is the actual
+    /// per-(clip, variant) ROW length, so a shorter/longer overridden row
+    /// resolves correctly.
     pub fn spriteName(self: *const RuntimeAnimationDef, clip: u8, variant: u8, frame: u8) []const u8 {
         if (clip >= self.clip_meta.len) return "";
-        if (frame >= self.clip_meta[clip].frame_count) return "";
         if (variant >= self.variant_names.len) return "";
-        return self.sprite_names[clip][variant][frame];
+        const row = self.sprite_names[clip][variant];
+        if (frame >= row.len) return "";
+        return row[frame];
+    }
+
+    /// Find a sparse override for a (clip, variant) pair, or null.
+    fn overrideFor(self: *const RuntimeAnimationDef, clip: u8, variant: u8) ?*const VariantOverride {
+        for (self.overrides) |*o| if (o.clip == clip and o.variant == variant) return o;
+        return null;
+    }
+
+    /// Metadata for a clip AS SEEN BY a variant — base patched by the
+    /// variant's clip-major `.overrides`, if any.
+    pub fn clipMetaFor(self: *const RuntimeAnimationDef, clip: u8, variant: u8) ClipMeta {
+        var m = self.clipMeta(clip);
+        if (clip < self.clip_meta.len) {
+            if (self.overrideFor(clip, variant)) |o| {
+                if (o.entries) |es| {
+                    var beats: u16 = 0;
+                    for (es) |e| beats += e.run;
+                    m.frame_count = @intCast(es.len);
+                    m.entry_count = @intCast(es.len);
+                    m.beat_count = beats;
+                }
+                if (o.speed) |s| m.speed = s;
+                if (o.mode) |md| m.mode = md;
+                if (o.folder) |f| m.folder = f;
+            }
+        }
+        return m;
     }
 
     /// The slot shown at a given beat of a clip — the runtime mirror of
@@ -497,7 +661,9 @@ pub fn refreshState(state: anytype, def: *const RuntimeAnimationDef) void {
     if (def.variant_names.len > 0 and rawIndex(state.variant) >= def.variant_names.len) {
         setIndex(&state.variant, @intCast(def.variant_names.len - 1));
     }
-    const meta = def.clip_meta[rawIndex(state.clip)];
+    // Read the meta AS SEEN BY the (clamped) variant so the preview applies
+    // that variant's per-clip override (speed/frame_count/mode).
+    const meta = def.clipMetaFor(rawIndex(state.clip), rawIndex(state.variant));
     state.frame_count = meta.frame_count;
     state.speed = meta.speed;
     state.mode = meta.mode;

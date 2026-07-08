@@ -239,28 +239,25 @@ test "AnimationDef: advanceState maps beats to held slots (#664)" {
 // ── Per-variant clip overrides (#666) ─────────────────────
 
 const override_zon = .{
-    .variants = .{
-        "m_bald",
-        "m_beard",
-        .{ .name = "w_ginger", .overrides = .{
-            .drink = .{ .frames = 8, .speed = 4.0 }, // fewer frames, slower
-            .carry = .{ .folder = "take_ginger" }, // different sprite folder
-        } },
-    },
+    .variants = .{ "m_bald", "m_beard", "w_ginger" },
     .clips = .{
         .idle = .{ .frames = 1, .mode = .static },
-        .drink = .{ .frames = 10, .mode = .time, .speed = 5.0 },
-        .carry = .{ .frames = 4, .mode = .distance, .speed = 15.0, .folder = "take" },
+        .drink = .{ .frames = 10, .mode = .time, .speed = 5.0, .overrides = .{
+            .w_ginger = .{ .frames = 8, .speed = 4.0 }, // fewer frames, slower
+        } },
+        .carry = .{ .frames = 4, .mode = .distance, .speed = 15.0, .folder = "take", .overrides = .{
+            .w_ginger = .{ .folder = "take_ginger" }, // different sprite folder
+        } },
     },
 };
 const OverrideAnim = AnimationDef(override_zon);
 
-test "AnimationDef: mixed string/struct variants keep enum order and names (#666)" {
+test "AnimationDef: variant enum order and names with clip overrides (#666)" {
     try testing.expectEqual(@as(u8, 0), @intFromEnum(OverrideAnim.variants.m_bald));
     try testing.expectEqual(@as(u8, 1), @intFromEnum(OverrideAnim.variants.m_beard));
     try testing.expectEqual(@as(u8, 2), @intFromEnum(OverrideAnim.variants.w_ginger));
     try testing.expectEqualStrings("w_ginger", OverrideAnim.variantName(.w_ginger));
-    // #665 name resolution still works for a struct-declared variant.
+    // #665 name resolution still works for a variant a clip overrides.
     const V = OverrideAnim.variants;
     try testing.expectEqual(@as(?V, V.w_ginger), OverrideAnim.variantFromName("w_ginger"));
 }
@@ -296,25 +293,19 @@ test "AnimationDef: spriteName honors overridden folder and frame count (#666)" 
 // ── Per-variant frame-ENTRY overrides (#684) ──────────────
 
 const entry_override_zon = .{
-    .variants = .{
-        "base_gal",
-        // Entry-list override on a count-form base clip: hold + reorder
-        // + a marker the base doesn't have.
-        .{ .name = "heavy", .overrides = .{
-            .swing = .{ .frames = .{ .{ .f = 1, .run = 2 }, .{ .f = 3, .marker = "impact" }, 2 } },
-        } },
-        // Count-form override on an entry-list base clip (the "vice
-        // versa" direction): flattens holds/markers/reuse away.
-        .{ .name = "swift", .overrides = .{
-            .combo = .{ .frames = 2, .speed = 9.0 },
-        } },
-    },
+    .variants = .{ "base_gal", "heavy", "swift" },
     .clips = .{
-        // Count-form base; `heavy` replaces it with an entry list.
-        .swing = .{ .frames = 4, .mode = .time, .speed = 1.0 },
-        // Entry-list base (hold + marker + file reuse); `swift` replaces
-        // it with a bare count.
-        .combo = .{ .frames = .{ .{ .f = 1, .run = 3, .marker = "windup" }, 2, .{ .f = 1 } }, .mode = .time, .speed = 1.0 },
+        // Count-form base clip; `heavy` overrides it with an entry list
+        // (hold + reorder + a marker the base doesn't have).
+        .swing = .{ .frames = 4, .mode = .time, .speed = 1.0, .overrides = .{
+            .heavy = .{ .frames = .{ .{ .f = 1, .run = 2 }, .{ .f = 3, .marker = "impact" }, 2 } },
+        } },
+        // Entry-list base (hold + marker + file reuse); `swift` overrides it
+        // with a bare count (the "vice versa" direction — flattens the
+        // holds/markers/reuse away).
+        .combo = .{ .frames = .{ .{ .f = 1, .run = 3, .marker = "windup" }, 2, .{ .f = 1 } }, .mode = .time, .speed = 1.0, .overrides = .{
+            .swift = .{ .frames = 2, .speed = 9.0 },
+        } },
     },
 };
 const EntryOverrideAnim = AnimationDef(entry_override_zon);
@@ -449,7 +440,7 @@ test "AnimationDef: no-override defs keep base-identical per-variant rows (#684)
 
 // Comptime-error cases (verified by construction; the repo has no
 // compile-failure harness, so these stay documented rather than run):
-//   - override key naming a nonexistent clip → "overrides unknown clip '…'"
+//   - override key naming a nonexistent VARIANT → "overrides unknown variant '…'"
 //   - override field other than frames/speed/mode/folder → "unknown field '…'"
-//   - a variant whose effective (mode, frames) pair is .static with a
-//     .run > 1 → "holds are meaningless when frame is always slot 0"
+//   - a (clip, variant) whose effective (mode, frames) pair is .static with
+//     a .run > 1 → "holds are meaningless when frame is always slot 0"

@@ -373,3 +373,117 @@ test "RuntimeAnimDefs: replacing a def retires the old generation alive (no UAF)
     try testing.expectEqual(@as(f32, 1.0), gen0.clipMeta(0).speed);
     // store.deinit() frees both generations; testing.allocator asserts no leak.
 }
+
+// ── Clip-major per-variant overrides (studio#61) ──
+
+// Mirrors the comptime `override_zon`: drink shrinks + slows for w_ginger,
+// carry re-folders for w_ginger. m_bald/m_beard inherit the base.
+const override_src =
+    \\.{
+    \\    .variants = .{ "m_bald", "m_beard", "w_ginger" },
+    \\    .clips = .{
+    \\        .idle = .{ .frames = 1, .mode = .static },
+    \\        .drink = .{ .frames = 10, .mode = .time, .speed = 5.0, .overrides = .{
+    \\            .w_ginger = .{ .frames = 8, .speed = 4.0 },
+    \\        } },
+    \\        .carry = .{ .frames = 4, .mode = .distance, .speed = 15.0, .folder = "take", .overrides = .{
+    \\            .w_ginger = .{ .folder = "take_ginger" },
+    \\        } },
+    \\    },
+    \\}
+;
+
+test "RuntimeAnimationDef: clip-major overrides patch meta + sprite names" {
+    var rt = try RuntimeAnimationDef.load(testing.allocator, override_src);
+    defer rt.deinit();
+
+    const idle = rt.clipIndex("idle").?;
+    const drink = rt.clipIndex("drink").?;
+    const carry = rt.clipIndex("carry").?;
+    const m_bald = rt.variantIndex("m_bald").?;
+    const w_ginger = rt.variantIndex("w_ginger").?;
+
+    // drink: base (m_bald) keeps 10 @ 5.0; w_ginger sees 8 @ 4.0, with
+    // mode + folder inherited from the base clip.
+    const base = rt.clipMetaFor(drink, m_bald);
+    try testing.expectEqual(@as(u8, 10), base.frame_count);
+    try testing.expectEqual(@as(f32, 5.0), base.speed);
+    try testing.expectEqualStrings("drink", base.folder);
+
+    const ginger = rt.clipMetaFor(drink, w_ginger);
+    try testing.expectEqual(@as(u8, 8), ginger.frame_count);
+    try testing.expectEqual(@as(u8, 8), ginger.entry_count);
+    try testing.expectEqual(@as(u16, 8), ginger.beat_count);
+    try testing.expectEqual(@as(f32, 4.0), ginger.speed);
+    try testing.expectEqual(engine.AnimMode.time, ginger.mode); // inherited
+    try testing.expectEqualStrings("drink", ginger.folder); // inherited
+
+    // carry: w_ginger only re-folders (frames/speed inherited).
+    const carry_ginger = rt.clipMetaFor(carry, w_ginger);
+    try testing.expectEqual(@as(u8, 4), carry_ginger.frame_count);
+    try testing.expectEqual(@as(f32, 15.0), carry_ginger.speed);
+    try testing.expectEqualStrings("take_ginger", carry_ginger.folder);
+    try testing.expectEqualStrings("take", rt.clipMetaFor(carry, m_bald).folder);
+
+    // A clip w_ginger does NOT override inherits the base meta exactly.
+    try testing.expectEqual(rt.clipMeta(idle).frame_count, rt.clipMetaFor(idle, w_ginger).frame_count);
+
+    // Sprite names honor the overridden folder + per-variant frame count.
+    try testing.expectEqualStrings("take/m_bald_0001.png", rt.spriteName(carry, m_bald, 0));
+    try testing.expectEqualStrings("take_ginger/w_ginger_0001.png", rt.spriteName(carry, w_ginger, 0));
+    try testing.expectEqualStrings("drink/m_bald_0010.png", rt.spriteName(drink, m_bald, 9));
+    try testing.expectEqualStrings("drink/w_ginger_0008.png", rt.spriteName(drink, w_ginger, 7));
+    // w_ginger's drink row is 8 long — frame 8 is past it, but the base
+    // (m_bald) still resolves its own longer row.
+    try testing.expectEqualStrings("", rt.spriteName(drink, w_ginger, 8));
+    try testing.expectEqualStrings("drink/m_bald_0009.png", rt.spriteName(drink, m_bald, 8));
+}
+
+test "RuntimeAnimationDef: refreshState applies the variant's override meta" {
+    var def = try RuntimeAnimationDef.load(testing.allocator, override_src);
+    defer def.deinit();
+
+    const drink = def.clipIndex("drink").?;
+    const m_bald = def.variantIndex("m_bald").?;
+    const w_ginger = def.variantIndex("w_ginger").?;
+
+    // Entity on w_ginger drinking: refreshState copies the OVERRIDE meta,
+    // not the base — 8 frames @ 4.0, mode inherited as .time.
+    var ginger_state = AnimationState{ .clip = drink, .variant = w_ginger, .frame = 0, .frame_count = 99, .speed = 1.0, .mode = .static };
+    refreshState(&ginger_state, &def);
+    try testing.expectEqual(@as(u8, 8), ginger_state.frame_count);
+    try testing.expectEqual(@as(f32, 4.0), ginger_state.speed);
+    try testing.expectEqual(engine.AnimMode.time, ginger_state.mode);
+    try testing.expect(ginger_state.dirty);
+
+    // Entity on the base variant gets the (unpatched) base meta.
+    var base_state = AnimationState{ .clip = drink, .variant = m_bald, .frame = 0, .frame_count = 99, .speed = 1.0, .mode = .static };
+    refreshState(&base_state, &def);
+    try testing.expectEqual(@as(u8, 10), base_state.frame_count);
+    try testing.expectEqual(@as(f32, 5.0), base_state.speed);
+    try testing.expectEqual(engine.AnimMode.time, base_state.mode);
+}
+
+test "RuntimeAnimationDef.load: clip-major override errors mirror the comptime rejects" {
+    const a = testing.allocator;
+    // Override key names a variant that doesn't exist.
+    try testing.expectError(error.UnknownVariant, RuntimeAnimationDef.load(a,
+        \\.{ .variants = .{ "a" }, .clips = .{ .c = .{ .frames = 2, .mode = .time, .speed = 1.0, .overrides = .{ .nope = .{ .frames = 1 } } } } }
+    ));
+    // Override carries a field outside frames/speed/mode/folder.
+    try testing.expectError(error.UnknownOverrideField, RuntimeAnimationDef.load(a,
+        \\.{ .variants = .{ "a" }, .clips = .{ .c = .{ .frames = 2, .mode = .time, .speed = 1.0, .overrides = .{ .a = .{ .bogus = 3 } } } } }
+    ));
+    // Effective .static (base mode) + per-slot hold in the override entries.
+    try testing.expectError(error.HoldOnStaticClip, RuntimeAnimationDef.load(a,
+        \\.{ .variants = .{ "a" }, .clips = .{ .c = .{ .frames = 1, .mode = .static, .overrides = .{ .a = .{ .frames = .{ .{ .f = 1, .run = 2 } } } } } } }
+    ));
+    // Top-level `.overrides` that isn't a struct of per-variant overrides.
+    try testing.expectError(error.BadOverrides, RuntimeAnimationDef.load(a,
+        \\.{ .variants = .{ "a" }, .clips = .{ .c = .{ .frames = 2, .mode = .time, .speed = 1.0, .overrides = 5 } } }
+    ));
+    // A per-variant override VALUE that isn't a struct.
+    try testing.expectError(error.BadOverride, RuntimeAnimationDef.load(a,
+        \\.{ .variants = .{ "a" }, .clips = .{ .c = .{ .frames = 2, .mode = .time, .speed = 1.0, .overrides = .{ .a = 5 } } } }
+    ));
+}
