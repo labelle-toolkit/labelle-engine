@@ -77,10 +77,14 @@ pub fn Mixin(comptime Game: type) type {
                 // Merge sub-fields into the existing (or default) viewport so a
                 // partial viewport patch is also additive.
                 var out = comp.viewport orelse camera_mod.Viewport{};
-                if (vp.getInteger("x")) |x| out.x = @intCast(x);
-                if (vp.getInteger("y")) |y| out.y = @intCast(y);
-                if (vp.getInteger("width")) |w| out.width = @intCast(w);
-                if (vp.getInteger("height")) |h| out.height = @intCast(h);
+                // Bounds-check the JSON int → i32 narrowing: an out-of-range
+                // value from studio JSON must fail the patch (-2, entity
+                // untouched — this returns before `setComponent` below), NOT
+                // panic via a raw `@intCast` (gemini on #719).
+                if (vp.getInteger("x")) |x| out.x = std.math.cast(i32, x) orelse return error.InvalidCameraComponentJson;
+                if (vp.getInteger("y")) |y| out.y = std.math.cast(i32, y) orelse return error.InvalidCameraComponentJson;
+                if (vp.getInteger("width")) |w| out.width = std.math.cast(i32, w) orelse return error.InvalidCameraComponentJson;
+                if (vp.getInteger("height")) |h| out.height = std.math.cast(i32, h) orelse return error.InvalidCameraComponentJson;
                 comp.viewport = out;
             }
 

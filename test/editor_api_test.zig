@@ -1223,4 +1223,12 @@ test "editor_set_component: Camera MERGES (a prior viewport survives a zoom-only
     try testing.expectEqual(@as(f32, 2.0), comp2.zoom); // untouched by a viewport patch
     try testing.expectEqual(@as(i32, 99), comp2.viewport.?.width);
     try testing.expectEqual(@as(i32, 2), comp2.viewport.?.y); // prior sub-field survives
+
+    // Out-of-range viewport int → -2 (bounds-checked i32 narrowing, NOT a
+    // raw @intCast panic — gemini HIGH on #719); entity untouched.
+    // 3_000_000_000 parses as i64 but exceeds i32 max.
+    const oor = try testing.allocator.dupe(u8, "{\"viewport\":{\"width\":3000000000}}");
+    try testing.expectEqual(@as(i32, -2), editor_api.editor_set_component(@intCast(cam_ent), "Camera", 6, oor.ptr, oor.len));
+    testing.allocator.free(oor);
+    try testing.expectEqual(@as(i32, 99), game.getComponent(cam_ent, engine.Camera).?.viewport.?.width); // unchanged by the rejected patch
 }
