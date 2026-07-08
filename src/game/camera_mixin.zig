@@ -64,42 +64,59 @@ pub fn Mixin(comptime Game: type) type {
             defer arena.deinit();
             var parser = jsonc.JsoncParser.init(arena.allocator(), source);
             const value = try parser.parse();
+            // Reject trailing junk after the object (`{...}garbage`): `parse`
+            // already consumed trailing whitespace/comments, so any remaining
+            // byte is a malformed payload → validation failure, not a silent
+            // success that mutates the entity (codex on #719).
+            if (parser.pos < parser.source.len) return error.InvalidCameraComponentJson;
             const obj = value.asObject() orelse return error.InvalidCameraComponentJson;
 
             // Read-existing-then-overlay: start from the live component (or a
             // default) so unprovided keys survive the patch.
             var comp: CameraComp = if (self.ecs_backend.getComponent(ent, CameraComp)) |c| c.* else .{};
 
-            if (obj.getFloat("zoom")) |z| {
-                comp.zoom = @floatCast(z);
-            } else if (obj.getInteger("zoom")) |z| {
-                comp.zoom = @floatFromInt(z);
-            }
+            // A PRESENT `zoom` must be numeric — a wrong-shaped value (e.g.
+            // `{"zoom":"2"}`) is a validation failure, NOT a silently-ignored
+            // key that would author a default zoom (codex on #719). An ABSENT
+            // key leaves the existing/default zoom untouched.
+            if (obj.get("zoom")) |z_val| switch (z_val) {
+                .float => |f| comp.zoom = @floatCast(f),
+                .integer => |i| comp.zoom = @floatFromInt(i),
+                else => return error.InvalidCameraComponentJson,
+            };
 
             // A PRESENT `viewport` key drives the merge; distinguish an
             // explicit JSON `null` (→ clear back to fullscreen, finding #4)
-            // from an absent key (→ leave the viewport untouched).
+            // from an absent key (→ leave the viewport untouched). A present
+            // but wrong-shaped `viewport` (or sub-field) is a validation
+            // failure, same as `zoom`.
             if (obj.get("viewport")) |vp_val| switch (vp_val) {
                 .null_value => comp.viewport = null,
                 .object => |vp| {
                     // Merge sub-fields into the existing (or default) viewport
                     // so a partial viewport patch is also additive.
                     var out = comp.viewport orelse camera_mod.Viewport{};
-                    // Bounds-check the JSON int → i32 narrowing: an out-of-range
-                    // value from studio JSON must fail the patch (-2, entity
-                    // untouched — this returns before `setComponent` below), NOT
-                    // panic via a raw `@intCast` (gemini on #719).
-                    if (vp.getInteger("x")) |x| out.x = std.math.cast(i32, x) orelse return error.InvalidCameraComponentJson;
-                    if (vp.getInteger("y")) |y| out.y = std.math.cast(i32, y) orelse return error.InvalidCameraComponentJson;
-                    if (vp.getInteger("width")) |w| out.width = std.math.cast(i32, w) orelse return error.InvalidCameraComponentJson;
-                    if (vp.getInteger("height")) |h| out.height = std.math.cast(i32, h) orelse return error.InvalidCameraComponentJson;
+                    if (vp.get("x")) |v| out.x = try viewportInt(v);
+                    if (vp.get("y")) |v| out.y = try viewportInt(v);
+                    if (vp.get("width")) |v| out.width = try viewportInt(v);
+                    if (vp.get("height")) |v| out.height = try viewportInt(v);
                     comp.viewport = out;
                 },
-                else => {}, // a non-object, non-null viewport is ignored
+                else => return error.InvalidCameraComponentJson,
             };
 
             self.setComponent(ent, comp);
             seedCameraFromComponent(self);
+        }
+
+        /// A viewport sub-field: must be a JSON integer in `i32` range. A
+        /// non-integer or out-of-range value fails the patch (codex/gemini on
+        /// #719) — never a silent skip nor a panicking raw `@intCast`.
+        fn viewportInt(v: jsonc.Value) !i32 {
+            return switch (v) {
+                .integer => |i| std.math.cast(i32, i) orelse error.InvalidCameraComponentJson,
+                else => error.InvalidCameraComponentJson,
+            };
         }
     };
 }

@@ -1258,6 +1258,16 @@ test "editor_set_component: Camera MERGES (a prior viewport survives a zoom-only
     const comp3 = game.getComponent(cam_ent, engine.Camera).?;
     try testing.expect(comp3.viewport == null);
     try testing.expectEqual(@as(f32, 2.0), comp3.zoom); // an absent zoom key leaves zoom alone
+
+    // A present-but-wrong-TYPE `zoom` (`"2"` string) → -2, not a silent skip
+    // that would author a default zoom (codex on #719); entity untouched.
+    try testing.expectEqual(@as(i32, -2), editor_api.editor_set_component(@intCast(cam_ent), "Camera", 6, "{\"zoom\":\"2\"}", 12));
+    try testing.expectEqual(@as(f32, 2.0), game.getComponent(cam_ent, engine.Camera).?.zoom);
+
+    // Trailing junk after a valid object (`{...}garbage`) → -2 (parse must
+    // reach EOF), not a partial-parse success (codex on #719).
+    try testing.expectEqual(@as(i32, -2), editor_api.editor_set_component(@intCast(cam_ent), "Camera", 6, "{\"zoom\":5}garbage", 17));
+    try testing.expectEqual(@as(f32, 2.0), game.getComponent(cam_ent, engine.Camera).?.zoom);
 }
 
 test "camera built-in DEFERS to a project's own registered Camera (finding #1)" {
