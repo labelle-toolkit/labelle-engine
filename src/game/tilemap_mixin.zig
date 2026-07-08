@@ -259,20 +259,26 @@ pub fn Mixin(comptime Game: type) type {
             height: ?f32 = null,
         };
         fn cameraCullRect(self: *Game, cam: *const Game.CameraType) CullRect {
-            if (comptime !camera_cullable) return .{};
-            const vp = cam.getViewport(); // Y-up world rect {x, y, width, height}
-            const h = tilemapScreenHeight(self);
-            // Flip both world-Y edges to the tilemap (screen-Y) frame and take
-            // the min as the top; `toScreenY` is monotonic so the two edges
-            // bracket the same span under either y-axis convention.
-            const y0 = core.toScreenY(Game.y_axis, vp.y, h);
-            const y1 = core.toScreenY(Game.y_axis, vp.y + vp.height, h);
-            return .{
-                .start_x = vp.x - cull_margin,
-                .start_y = @min(y0, y1) - cull_margin,
-                .width = vp.width + 2 * cull_margin,
-                .height = vp.height + 2 * cull_margin,
-            };
+            // `getViewport` is referenced ONLY inside this comptime-gated
+            // block, so a camera without it (a renderer that has the render
+            // hooks but no viewport report) still compiles — it just gets the
+            // all-null rect → gfx's screen-size origin cull fallback.
+            if (comptime camera_cullable) {
+                const vp = cam.getViewport(); // Y-up world rect {x, y, width, height}
+                const h = tilemapScreenHeight(self);
+                // Flip both world-Y edges to the tilemap (screen-Y) frame and
+                // take the min as the top; `toScreenY` is monotonic so the two
+                // edges bracket the same span under either y-axis convention.
+                const y0 = core.toScreenY(Game.y_axis, vp.y, h);
+                const y1 = core.toScreenY(Game.y_axis, vp.y + vp.height, h);
+                return .{
+                    .start_x = vp.x - cull_margin,
+                    .start_y = @min(y0, y1) - cull_margin,
+                    .width = vp.width + 2 * cull_margin,
+                    .height = vp.height + 2 * cull_margin,
+                };
+            }
+            return .{};
         }
 
         // ── T3 Z-interleave (hook-capable renderers only) ───────────────
@@ -307,37 +313,15 @@ pub fn Mixin(comptime Game: type) type {
             return l;
         }
 
-        /// Pre-sprite background pass for hook-capable renderers: draws only
-        /// the `.tmx` layers that are NOT bound to an engine layer (bound
-        /// layers are drawn interleaved by `tilemapLayerHook`). Mirrors
-        /// `renderTilemaps` (whole-stack, primary-camera, world-space) but
-        /// per-layer-filtered — so a Tilemap with no bindings / no
-        /// name-matching engine layers renders EXACTLY as T2. Reaps ghosts
-        /// (runs before the hook, which does not).
-        ///
-        /// SPLIT-SCREEN LIMITATION (single primary camera): this pass runs
-        /// ONCE through `getCamera()`, so under split-screen the UNBOUND
-        /// background draws only in the primary viewport — bound layers are
-        /// already per-camera (via the hook). Making the background per-camera
-        /// needs a pre-layer-stack callback in gfx's `renderWithLayerHook`
-        /// (the per-camera viewport SCISSOR — `applyViewport` — is private to
-        /// the gfx renderer, so the engine can't reproduce it here). Tracked
-        /// for a gfx point release; until then binding a layer is the way to
-        /// get per-camera terrain. Matches the T2 background's #709 note.
-        pub fn renderTilemapBackground(self: *Game) void {
-            if (comptime !supported) return;
-            if (self.tilemaps.count() == 0) return;
-            reapGhostTilemaps(self);
-            if (self.tilemaps.count() == 0) return;
-
-            if (comptime camera_capable) self.getCamera().begin();
-            defer if (comptime camera_capable) self.getCamera().end();
-
-            // Cull the background (unbound) layers to the primary camera's
-            // world rect — same treatment as the interleaved layers, so a
-            // panned primary camera on a large map keeps its background too.
-            const cull = if (comptime camera_cullable) cameraCullRect(self, self.getCamera()) else CullRect{};
-
+        /// Draw every Tilemap's UNBOUND `.tmx` layers (those with no engine
+        /// layer binding) for ONE camera, culled to `cam`'s world rect. The
+        /// caller owns the camera transform + scissor: the per-camera
+        /// `tilemapBackgroundHook` is invoked already inside gfx's
+        /// `cam.begin()` + `applyViewport`, and `renderTilemapBackground`
+        /// wraps its own `getCamera().begin()/end()`. Shared so the two
+        /// background paths can't diverge. Ghosts are skipped via `getComponent`.
+        fn drawUnboundLayers(self: *Game, cam: *const Game.CameraType) void {
+            const cull = cameraCullRect(self, cam);
             var it = self.tilemaps.iterator();
             while (it.next()) |e| {
                 const entity = e.key_ptr.*;
@@ -350,6 +334,45 @@ pub fn Mixin(comptime Game: type) type {
                     rt.drawLayerAt(i, 0, 0, off.x, off.y, cull.start_x, cull.start_y, cull.width, cull.height);
                 }
             }
+        }
+
+        /// Per-camera pre-sprite BACKGROUND hook (T3), passed as
+        /// `on_before_layers` to `renderer.renderWithLayerHooks` (gfx ≥1.24.0).
+        /// Fires ONCE per active camera, inside that camera's transform +
+        /// viewport scissor, BEFORE the first sprite layer — so the UNBOUND
+        /// `.tmx` layers draw under everything, per viewport, each culled to
+        /// its own camera's world rect. This is what makes split-screen
+        /// backgrounds per-camera (closes #709) instead of primary-only.
+        pub fn tilemapBackgroundHook(self: *Game, cam: *const Game.CameraType) void {
+            if (self.tilemaps.count() == 0) return;
+            // Reap orphaned side-table runtimes once — idempotent across the
+            // per-camera invocations (a ghost freed on the first camera is
+            // simply gone for the rest). Safe: a reaped entity has no
+            // component, so it never drew anyway.
+            reapGhostTilemaps(self);
+            if (self.tilemaps.count() == 0) return;
+            drawUnboundLayers(self, cam);
+        }
+
+        /// Single-primary-camera pre-sprite background pass — the fallback for
+        /// renderers that expose only the older single-callback
+        /// `renderWithLayerHook` (gfx 1.22–1.23), where there is no
+        /// per-camera before-hook. Draws every Tilemap's UNBOUND `.tmx` layers
+        /// once through `getCamera()`. On a renderer with the dual-hook
+        /// `renderWithLayerHooks` the loop uses `tilemapBackgroundHook`
+        /// instead (per active camera) and this is not called. A Tilemap with
+        /// no bindings / no name-matching engine layers renders EXACTLY as T2.
+        /// Reaps ghosts (runs before the hook, which does not).
+        pub fn renderTilemapBackground(self: *Game) void {
+            if (comptime !supported) return;
+            if (self.tilemaps.count() == 0) return;
+            reapGhostTilemaps(self);
+            if (self.tilemaps.count() == 0) return;
+
+            if (comptime camera_capable) self.getCamera().begin();
+            defer if (comptime camera_capable) self.getCamera().end();
+
+            drawUnboundLayers(self, self.getCamera());
         }
 
         /// Per-layer render hook (T3) passed to `renderer.renderWithLayerHook`.

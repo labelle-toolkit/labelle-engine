@@ -262,19 +262,26 @@ const HookRender = struct {
         );
     }
 
-    /// gfx v1.22.0 seam: per active camera, iterate the layer stack; after
-    /// each layer's sprite pass (a per-layer sentinel) fire `on_after_layer`
-    /// — inside the camera transform for WORLD layers, outside for screen.
-    pub fn renderWithLayerHook(
+    /// gfx v1.24.0 dual-hook seam: per active camera, fire `on_before_layers`
+    /// ONCE (inside the camera transform + scissor, before the layer stack —
+    /// the pre-sprite BACKGROUND slot), then iterate the layer stack firing
+    /// `on_after_layer` after each layer's sprite-pass sentinel.
+    pub fn renderWithLayerHooks(
         self: *Self,
         comptime Ctx: type,
         ctx: Ctx,
+        comptime on_before_layers: fn (Ctx, *const MockCamera) void,
         comptime on_after_layer: fn (Ctx, LayerEnum, *const MockCamera) void,
     ) void {
         self.render_count += 1;
         var ci: u8 = 0;
         while (ci < self.active_cameras) : (ci += 1) {
             const cam = &self.cameras[ci];
+            // Pre-sprite background hook, inside the camera (world-space).
+            cam.begin();
+            on_before_layers(ctx, cam);
+            cam.end();
+            // Then the layer stack (camera re-entered per world layer).
             inline for (comptime std.enums.values(LayerEnum)) |l| {
                 const world = comptime (l.config().space == .world);
                 if (world) cam.begin();
@@ -283,6 +290,20 @@ const HookRender = struct {
                 if (world) cam.end();
             }
         }
+    }
+
+    /// gfx v1.22.0 single-hook seam — delegates with a no-op before-hook, so
+    /// the mock still satisfies the older interface (behavior-identical).
+    pub fn renderWithLayerHook(
+        self: *Self,
+        comptime Ctx: type,
+        ctx: Ctx,
+        comptime on_after_layer: fn (Ctx, LayerEnum, *const MockCamera) void,
+    ) void {
+        const noop_before = struct {
+            fn f(_: Ctx, _: *const MockCamera) void {}
+        }.f;
+        self.renderWithLayerHooks(Ctx, ctx, noop_before, on_after_layer);
     }
 
     pub fn render(self: *Self) void {
@@ -453,6 +474,9 @@ fn BadLayerGame() type {
 test "the hook-capable renderer enables the T3 interleave path" {
     try testing.expect(InterleaveGame().tilemap_supported);
     try testing.expect(InterleaveGame().tilemap_interleave_supported);
+    // HookRender exposes the dual-hook `renderWithLayerHooks` → the per-camera
+    // background path is on.
+    try testing.expect(InterleaveGame().tilemap_percamera_background_supported);
 }
 
 test "gate rejects a renderWithLayerHook renderer whose Layer is not a config enum" {
@@ -648,9 +672,9 @@ test "#709 split-screen: bound tilemap layers render once per active camera" {
     }
 }
 
-/// Build a `w×h` two-layer (`terrain` + `canopy`) `.tmx` with every cell set
-/// to gid 1 — a large map for the per-camera cull regression. Caller frees.
-fn buildFullTmx(alloc: std.mem.Allocator, w: u32, h: u32) ![]const u8 {
+/// Build a `w×h` `.tmx` with the given `layer_names`, every cell set to gid 1
+/// — a large map for the per-camera cull regressions. Caller frees.
+fn buildFullTmx(alloc: std.mem.Allocator, w: u32, h: u32, layer_names: []const []const u8) ![]const u8 {
     var list: std.ArrayListUnmanaged(u8) = .empty;
     errdefer list.deinit(alloc);
 
@@ -665,7 +689,7 @@ fn buildFullTmx(alloc: std.mem.Allocator, w: u32, h: u32) ![]const u8 {
     defer alloc.free(header);
     try list.appendSlice(alloc, header);
 
-    for ([_][]const u8{ "terrain", "canopy" }) |name| {
+    for (layer_names) |name| {
         const lh = try std.fmt.allocPrint(alloc, " <layer name=\"{s}\" width=\"{d}\" height=\"{d}\">\n  <data encoding=\"csv\">\n", .{ name, w, h });
         defer alloc.free(lh);
         try list.appendSlice(alloc, lh);
@@ -692,7 +716,7 @@ test "#711 P1: each camera culls interleaved tiles to ITS world rect, not the wo
     // the case that made a naive "draw everything" impossible). Both layer
     // names match a WORLD engine layer → implicitly bound → interleave path
     // (no single-camera background involved).
-    const big = try buildFullTmx(testing.allocator, 400, 50);
+    const big = try buildFullTmx(testing.allocator, 400, 50, &.{ "terrain", "canopy" });
     defer testing.allocator.free(big);
     try game.addEmbeddedTilemapAsset("big.tmx", big);
     try game.addEmbeddedTilemapAsset("tiles.png", fake_png);
@@ -782,4 +806,171 @@ test "#711 P1: each camera culls interleaved tiles to ITS world rect, not the wo
         try testing.expect(min_x > 4000);
         try testing.expect(max_x < 6000);
     }
+}
+
+test "#709 split-screen: UNBOUND background renders PER active camera, culled to its rect" {
+    const fmax = std.math.floatMax(f32);
+    const G = InterleaveGame();
+    var game = G.init(testing.allocator);
+    defer game.deinit();
+
+    // A large map with a SINGLE `ground` layer — name matches NO engine layer
+    // and there is no explicit binding, so it is UNBOUND → the pre-sprite
+    // BACKGROUND (on_before_layers). No `.tmx` layer is drawn by the after-hook,
+    // so every tile draw here comes from the per-camera background.
+    const big = try buildFullTmx(testing.allocator, 400, 50, &.{"ground"});
+    defer testing.allocator.free(big);
+    try game.addEmbeddedTilemapAsset("bg.tmx", big);
+    try game.addEmbeddedTilemapAsset("tiles.png", fake_png);
+
+    const e = game.createEntity();
+    game.setPosition(e, .{ .x = 0, .y = 0 });
+    game.addTilemap(e, .{ .asset_name = "bg.tmx" });
+
+    // Two split-screen cameras far apart: camera 0 near the origin, camera 1
+    // panned to x≈5000. Pre-#709 the background drew ONCE through the primary
+    // camera, so camera 1's viewport showed the primary's terrain (or nothing);
+    // now the before-hook fires per active camera, each culled to its own rect.
+    game.renderer.active_cameras = 2;
+    game.renderer.cameras[0] = .{ .x = 100, .y = 100, .view_w = 200, .view_h = 200 };
+    game.renderer.cameras[1] = .{ .x = 5000, .y = 100, .view_w = 200, .view_h = 200 };
+
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+    game.render();
+    const calls = MockBackend.getDrawCalls();
+
+    // The mock draws camera 0's full pass (background THEN layer stack) then
+    // camera 1's, so camera 1's segment begins at the SECOND `terrain`
+    // sprite-pass sentinel. Camera 0's background tiles precede the FIRST
+    // sentinel; camera 1's follow it.
+    const first_terrain = sentinelIndex(calls, layerSentinel(.terrain)).?;
+
+    var c0_tiles: usize = 0;
+    var c0_max: f32 = -fmax;
+    var c1_tiles: usize = 0;
+    var c1_min: f32 = fmax;
+    for (calls, 0..) |c, i| {
+        if (c.texture_id != tileset_handle) continue;
+        if (i < first_terrain) {
+            c0_tiles += 1;
+            c0_max = @max(c0_max, c.dest.x);
+        } else {
+            c1_tiles += 1;
+            c1_min = @min(c1_min, c.dest.x);
+        }
+    }
+
+    // BOTH viewports drew the background (pre-#709: camera 1 would draw none)…
+    try testing.expect(c0_tiles > 0);
+    try testing.expect(c1_tiles > 0);
+    // …camera 0's background near the origin…
+    try testing.expect(c0_max < 1000);
+    // …and camera 1's background in ITS far region (x≈5000), not the origin.
+    try testing.expect(c1_min > 4000);
+}
+
+// ── Middle tier: renderer with only the OLD single hook (gfx 1.22–1.23) ──
+
+/// A renderer that has `renderWithLayerHook` (interleave) + a valid config
+/// `Layer`, but NOT the dual-hook `renderWithLayerHooks` — the gfx 1.22–1.23
+/// shape. The gate must report interleave-supported but per-camera-background
+/// UNsupported, so the engine keeps the single-primary background fallback.
+const OldHookRender = struct {
+    const Self = @This();
+
+    pub const Layer = LayerEnum;
+    pub const Sprite = HookRender.Sprite;
+    pub const Shape = HookRender.Shape;
+    pub const TileMapRendererType = tilemap.TileMapRendererWith(MockBackend);
+    pub const Inner = struct {
+        pub const TextureInfo = struct { backend_texture: MockBackend.Texture };
+    };
+    pub const CameraType = MockCamera;
+    pub const CameraManagerType = struct {};
+
+    inner: Inner = .{},
+    alloc: std.mem.Allocator = undefined,
+    textures: std.AutoHashMapUnmanaged(u32, MockBackend.Texture) = .empty,
+    next_id: u32 = 1,
+    camera: MockCamera = .{},
+    screen_height: f32 = 600,
+
+    pub fn init(allocator: std.mem.Allocator) Self {
+        return .{ .alloc = allocator };
+    }
+    pub fn deinit(self: *Self) void {
+        self.textures.deinit(self.alloc);
+    }
+    pub fn loadTextureFromMemory(self: *Self, _: [:0]const u8, _: []const u8) !u32 {
+        const id = self.next_id;
+        self.next_id += 1;
+        try self.textures.put(self.alloc, id, .{ .id = id, .width = 64, .height = 32 });
+        return id;
+    }
+    pub fn getTextureInfo(self: *const Self, id: u32) ?@TypeOf(self.inner).TextureInfo {
+        const tex = self.textures.get(id) orelse return null;
+        return .{ .backend_texture = tex };
+    }
+    pub fn unloadTexture(self: *Self, id: u32) void {
+        _ = self.textures.remove(id);
+    }
+    pub fn trackEntity(_: *Self, _: u32, _: core.render.VisualType) void {}
+    pub fn untrackEntity(_: *Self, _: u32) void {}
+    pub fn markPositionDirty(_: *Self, _: u32) void {}
+    pub fn markPositionDirtyWithChildren(_: *Self, comptime _: type, _: anytype, _: u32) void {}
+    pub fn updateHierarchyFlag(_: *Self, _: u32, _: bool) void {}
+    pub fn markVisualDirty(_: *Self, _: u32) void {}
+    pub fn sync(_: *Self, comptime _: type, _: anytype) void {}
+    pub fn setScreenHeight(self: *Self, h: f32) void {
+        self.screen_height = h;
+    }
+    pub fn getCamera(self: *Self) *MockCamera {
+        return &self.camera;
+    }
+    pub fn getCameraManager(self: *Self) *CameraManagerType {
+        _ = self;
+        return undefined;
+    }
+    pub fn renderGizmoDraws(_: *Self, _: []const core.gizmos.GizmoDraw) void {}
+    pub fn hasEntity(_: *const Self, _: u32) bool {
+        return false;
+    }
+    pub fn clear(_: *Self) void {}
+    /// Only the SINGLE-hook seam — deliberately no `renderWithLayerHooks`.
+    pub fn renderWithLayerHook(
+        _: *Self,
+        comptime Ctx: type,
+        ctx: Ctx,
+        comptime on_after_layer: fn (Ctx, LayerEnum, *const MockCamera) void,
+    ) void {
+        _ = ctx;
+        _ = on_after_layer;
+    }
+    pub fn render(_: *Self) void {}
+};
+
+fn OldHookGame() type {
+    return GameConfig(
+        OldHookRender,
+        MockEcsBackend(u32),
+        StubInput,
+        StubAudio,
+        StubVideo,
+        StubGui,
+        void,
+        StubLogSink,
+        EmptyComponents,
+        &.{},
+        void,
+    );
+}
+
+test "gate: a renderWithLayerHook-only renderer keeps interleave but NOT per-camera background" {
+    const G = OldHookGame();
+    try testing.expect(G.tilemap_supported);
+    try testing.expect(G.tilemap_interleave_supported);
+    // No `renderWithLayerHooks` → the per-camera background gate is OFF, so the
+    // engine uses the single-primary `renderTilemapBackground` fallback.
+    try testing.expect(!G.tilemap_percamera_background_supported);
 }
