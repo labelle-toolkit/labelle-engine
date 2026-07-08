@@ -10,7 +10,6 @@
 /// existing game and backend.
 ///
 /// Handles are opaque `u32` ids (like a texture handle), never a backend struct.
-const std = @import("std");
 
 /// The id returned by `createRenderTarget` on a renderer without support (or on
 /// a create failure); never a valid target. Kept in sync with the backend's
@@ -37,6 +36,7 @@ pub fn Mixin(comptime Game: type) type {
         /// texture instead of the screen, until `endRenderTarget`. No-op on an
         /// unknown id or a renderer without support.
         pub fn beginRenderTarget(self: *Game, id: u32) void {
+            if (id == INVALID_RENDER_TARGET) return;
             const Renderer = @TypeOf(self.renderer.*);
             if (@hasDecl(Renderer, "beginRenderTarget")) self.renderer.beginRenderTarget(id);
         }
@@ -52,13 +52,20 @@ pub fn Mixin(comptime Game: type) type {
         /// begin/end) at `x,y` sized `width`×`height`, modulated by the `r,g,b,a`
         /// tint (255,255,255,255 = untinted) — the mirror. No-op on an unknown id
         /// or a renderer without support.
+        ///
+        /// Coordinates are SCREEN space — top-left origin, Y-down, in pixels — NOT
+        /// world/`y_axis` space and not camera-transformed: compositing a render
+        /// target is a screen operation (a mirror panel / minimap / HUD element),
+        /// like raylib's `DrawTextureRec` of a `RenderTexture2D`.
         pub fn drawRenderTarget(self: *Game, id: u32, x: f32, y: f32, width: f32, height: f32, r: u8, g: u8, b: u8, a: u8) void {
+            if (id == INVALID_RENDER_TARGET) return;
             const Renderer = @TypeOf(self.renderer.*);
             if (@hasDecl(Renderer, "drawRenderTarget")) self.renderer.drawRenderTarget(id, x, y, width, height, r, g, b, a);
         }
 
         /// Free target `id`. No-op on an unknown id or a renderer without support.
         pub fn destroyRenderTarget(self: *Game, id: u32) void {
+            if (id == INVALID_RENDER_TARGET) return;
             const Renderer = @TypeOf(self.renderer.*);
             if (@hasDecl(Renderer, "destroyRenderTarget")) self.renderer.destroyRenderTarget(id);
         }
