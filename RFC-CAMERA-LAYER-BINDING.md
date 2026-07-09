@@ -3,7 +3,7 @@
 **Issue:** labelle-toolkit/labelle-engine#723  
 **Status:** Draft  
 **Author:** Alexandre  
-**Date:** 2026-07-08 (rev 2, 2026-07-09 — verified current architecture across gfx/engine/backends)
+**Date:** 2026-07-08 (rev 2, 2026-07-09 — verified architecture across gfx/engine/backends; rev 3 — default-camera invariant)
 
 ## Problem
 
@@ -51,6 +51,12 @@ The surprising finding: **labelle-gfx already ships a multi-camera renderer.** T
 
 Introduce a **per-layer camera binding by tag**. A layer names a camera tag; `Camera` entities carry a tag; the engine assigns tagged cameras to manager slots; the renderer resolves tag → active camera per layer. No tag = today's behavior.
 
+### The default camera (invariant)
+
+Slot 0 of the gfx camera pool is the **default camera**: always allocated, always active, implicitly tagged `"main"`. It exists whether or not the scene authors any `Camera` entity — exactly as today, where `game.getCamera()` returns slot 0 and imperative drivers (FP's `camera_control`) work without any authored camera. An authored `Camera` entity tagged `"main"` **configures** the default camera (the existing #714 seed path); it never creates or replaces it. Cameras with other tags are *additional* cameras in slots 1–3, and slot 0 is **reserved** — a scene authoring only a `"sky_parallax"` camera must not capture slot 0, or `getCamera()` would silently return the parallax camera.
+
+Consequences: a game with zero `Camera` entities renders identically to today; `"main"` bindings always resolve; authored cameras stay pure opt-in configuration, which keeps the simple case simple.
+
 ### Authoring surface (`project.labelle`)
 
 ```zig
@@ -88,9 +94,15 @@ pub const Camera = struct {
 };
 ```
 
-### Engine seeding: first-match → all-matches
+### Engine seeding: first-match → all-matches (slot 0 reserved)
 
-`seedCameraFromComponent` iterates **all** `{Position, Camera}` entities (drop the early `return` at `camera_mixin.zig:47`), assigns each to a manager slot in encounter order, records `tag → slot`, and marks the slot active. The tag map lives beside the camera manager and is rebuilt on the existing seed triggers (scene load / hot reload / apply-while-paused). `game.getCamera()` stays = slot 0 = the first-seeded camera; for single-camera scenes nothing changes.
+`seedCameraFromComponent` iterates **all** `{Position, Camera}` entities (drop the early `return` at `camera_mixin.zig:47`):
+
+- **tag `"main"`** → configure slot 0 (position/zoom — the existing #714 behavior). First `"main"` wins; extras warn once (multi-`"main"` authoring = split-screen, Phase 3).
+- **other tags** → next free slot 1–3; record `tag → slot`; mark active.
+- **zero matches** → nothing to do. The default camera in slot 0 remains, at its current state (defaults, or wherever an imperative driver put it). No `Camera` entity is ever required.
+
+The tag map lives beside the camera manager and is rebuilt on the existing seed triggers (scene load / hot reload / apply-while-paused). `game.getCamera()` stays = slot 0 = the default camera, unconditionally.
 
 ### Render loop: layer-outer, camera-inner (the load-bearing change)
 
@@ -125,6 +137,8 @@ Two binding shapes fall out naturally:
 - **Partition (parallax):** each layer binds one tag → renders exactly once, through its camera, in global layer order.
 - **Fan-out (split-screen):** N active cameras sharing the `"main"` tag → every `"main"`-bound layer renders once per camera, into each camera's viewport. This preserves the #226 split-screen semantics (each viewport gets the full stack) — the interleaving across viewports differs from today's camera-outer order, but with disjoint viewports the composed result is identical, and without viewport support multiple active cameras already overlay meaninglessly.
 
+**Unresolved tags degrade to unbound behavior.** `"main"` always resolves (the default camera in slot 0 is always active). A non-`"main"` tag with no matching active camera falls back to the layer's *unbound* default — world space → the default camera, screen space → pinned — with a one-shot debug warning. So a layer binding is a pure opt-in refinement: if the tagged camera prefab was never created (or is removed mid-development), the layer renders exactly as it did before the binding existed, never blank.
+
 Per-(layer×camera) `begin/end`/viewport churn is a few state writes; the draw volume is unchanged.
 
 ### Culling
@@ -140,7 +154,7 @@ Layers are **comptime** (a generated `LayerEnum` from `project.labelle`); camera
 - **Assembler stays dumb**: it passes the authored tag string through verbatim; no resolution at generate time.
 
 **Slot overflow:** >4 tagged cameras seeded → warn once, ignore extras (slots are a gfx pool cap; raising it is orthogonal).  
-**Duplicate tags:** multiple active cameras sharing a tag is *the fan-out feature* for `"main"` (split-screen); for non-main tags it means "this layer renders through each" — allowed, same rule, no special case.
+**Duplicate tags:** the render loop's semantics are uniform — a layer renders through *every* active camera matching its tag (fan-out). Phase 1 seeding keeps it simple by seeding one camera per tag (first wins + warn); multi-camera-per-tag authoring (split-screen) activates in Phase 3 without touching the loop.
 
 ## Backward compatibility
 
@@ -148,6 +162,7 @@ Zero migration:
 
 - `LayerConfig.camera` defaults `null`; `.world` layers resolve the implicit `"main"` tag; screen layers stay pinned.
 - `Camera.tag` defaults `"main"`; single-camera scenes seed slot 0 exactly as today.
+- **Zero `Camera` entities is a fully supported configuration** (it is FP before the camera demo): the default camera always exists in slot 0 and imperative control via `game.getCamera()` keeps working. Authoring a camera is never required.
 - Assembler emits `.camera` only when authored → byte-identical codegen for existing projects.
 - The loop inversion reproduces today's output for every existing configuration (one active camera ⇒ layer-outer ≡ camera-outer).
 
