@@ -3,7 +3,7 @@
 **Issue:** labelle-toolkit/labelle-engine#725  
 **Status:** Draft  
 **Author:** Alexandre  
-**Date:** 2026-07-10 (rev 2 — the plugin is the attachable unit; plugins can bundle packs)
+**Date:** 2026-07-10 (rev 2 — the plugin is the attachable unit; plugins can bundle packs; rev 3 — studio panels: plugin-contributed editor UX)
 
 ## Problem
 
@@ -11,11 +11,11 @@ A labelle game can attach a **plugin** — one `project.labelle` entry, version-
 
 The consequence is a hidden contract. Flying-Platform's `sky` pack renders backdrops and clouds — and its prefabs carry a warning comment that the assembler *"expects the `background` + `cloud` atlases in the scene meta"*: the **game** must hand-declare, in its own `.resources`, atlases whose frame names happen to match what the pack references. Nothing checks it. A missing atlas or a misspelled frame is a **silent runtime blank**.
 
-And it blocks the real product this RFC targets: **full plugins that attach to a game with the assets already on them.** A vendor should be able to build "fantasy dungeon" — tileset atlases, prop prefabs, a map-generator script, organized as packs inside one plugin — sell it as a version-pinned repo, and a buyer should get a working install from one `project.labelle` line, validated at generate time.
+And it blocks the real product this RFC targets: **full plugins that attach to a game with the assets already on them.** A vendor should be able to build "fantasy dungeon" — tileset atlases, prop prefabs, a map-generator script, organized as packs inside one plugin, plus the generator's controls as a **studio panel** — sell it as a version-pinned repo, and a buyer should get a working install (editor tab included) from one `project.labelle` line, validated at generate time.
 
 ### The unit model: plugins carry, packs organize
 
-- A **plugin** is the *attachable unit* — the repo+version a game pins. It may contain: code (as today), **assets** (this RFC), and **packs** (this RFC — a plugin can bundle whole packs inside it).
+- A **plugin** is the *attachable unit* — the repo+version a game pins. It may contain: code (as today), **assets** (this RFC), **packs** (this RFC — a plugin can bundle whole packs inside it), and **studio panels** (this RFC — declarative editor UX, e.g. a generator's controls).
 - A **pack** is the *content-organization unit* — prefabs/scripts/components/assets for one domain. Packs live in the game tree (`packs/`, as today) **or inside a plugin** (`<plugin>/packs/<name>/`), with identical structure either way.
 - Assets attach at **both levels**: plugin-level `assets/` (for the plugin's own visuals) and pack-level `assets/` (for a pack's content), flowing through one merge.
 
@@ -61,6 +61,8 @@ fantasy-dungeon/                  # the plugin repo — the attachable unit
       pack.labelle
       assets/ …
       prefabs/ …
+  studio/                         # declarative editor panels (kit-rendered)
+    dungeon_generator.panel.jsonc
 ```
 
 ```zig
@@ -116,6 +118,41 @@ The assembler fetches the plugin, discovers its `.packs`, and registers everythi
 
 No new machinery beyond the above. Tiles are entities and tilesets are atlases, so the sold "tile-map plugin with a generator" is: bundled packs carrying tileset atlases + tile/prop prefabs + generator scripts (seeded room/corridor layout spawning tile entities), and optionally a demo scene. `.tmx` templates can ship in `assets/` as plain copied files for the labelle-studio-tmx import path when that lands (deliberately not blocked on it).
 
+### Studio panels: plugin-contributed editor UX
+
+A full plugin should be usable from the editor, not just at runtime — the dungeon vendor's buyer expects a **Dungeon Generator** tab in labelle-studio, not a "run this script" README. Verified state of the studio (investigation, 2026-07-10): **no extension mechanism exists** — panels are a hardcoded Dockview map (`src/features/DockLayout.tsx:24-32`), commands a static array, and the only iframe is the game preview. But three facts make plugin panels cheap:
+
+- the tiles palette is **already a dynamically added/removed Dockview panel** (`DockLayout.tsx:72-88`) — plugin panels reuse that exact lifecycle;
+- **data-driven UI is the established studio pattern**: atlas manifests drive the TilePalette, the `.rules.jsonc` sidecar drives the GeneratePanel, the CLI status-file contract drives BuildProgress;
+- the **kit already has the widget vocabulary** (`PropertyRow`, `NumField`, `Select`, `SegmentedControl`, …); the only missing piece is a schema→form renderer.
+
+**Design: declaration is static, actions are live.**
+
+A plugin ships declarative panels in a `studio/` convention dir:
+
+```jsonc
+// studio/dungeon_generator.panel.jsonc
+{
+    "id": "dungeon_generator",
+    "title": "Dungeon Generator",
+    "icon": "grid",
+    "fields": [
+        { "name": "seed",    "type": "number", "default": 42 },
+        { "name": "density", "type": "slider", "min": 0.1, "max": 1.0, "default": 0.5 },
+        { "name": "theme",   "type": "select", "options": ["stone", "crypt", "lava"] }
+    ],
+    "actions": [
+        { "label": "Generate",        "command": "generate",       "target": "preview" },
+        { "label": "Save as scene…",  "command": "generate_scene", "target": "cli" }
+    ]
+}
+```
+
+- **Discovery + rendering.** The studio's project walk (`src-tauri open_project`) already visits attached-plugin dirs; it collects `studio/*.panel.jsonc` from every attached plugin and registers each through the Dockview API. Panels are rendered by a new **schema→form renderer composed from the kit** — Linear-dark, kit-only rule intact, and **no third-party JS ever executes in the editor** (panels are data, not code).
+- **Play-time actions** (`"target": "preview"`) route through the existing game bridge: a new `_editor_plugin_command(plugin, command, params_json)` WASM export (editor-contract bump, same channel family as `editor_set_component`); the engine dispatches it to the plugin's script/hook inside the running preview — the generator spawns its tile entities live.
+- **Edit-time actions** (`"target": "cli"`) invoke the plugin's generator through the CLI/file layer (e.g. emit a scene `.jsonc` into the project), so panels remain useful when the game isn't running.
+- **Validation**: `panel.jsonc` is schema-checked at `labelle generate` alongside the asset validation — a malformed panel is a generate-time error, and a `preview` command must name a handler the plugin's code declares.
+
 ### Distribution and selling
 
 The promotion path covers the full unit with zero restructuring: game-local `packs/dungeon/` → move into a plugin repo's `packs/` + declare in `plugin.labelle` → publish with a git tag. Published plugins fetch by tag into the package cache like today; **private repos** work via standard git credentials — a paid plugin is a private repo the buyer gets access to (the industry-standard asset-store model; no DRM, the license field states terms). Prebuilt sheets mean the sold artifact is the packed atlas, not the source art.
@@ -132,14 +169,15 @@ Zero migration:
 ## Use cases (worked)
 
 1. **Sky pack self-containment (the cheapest live proof).** Move FP's `background`/`cloud` atlases into `packs/sky/assets/` + a `.resources` block; delete the two game-side `.resources` entries and the warning comment. Namespaced `sky__background`/`sky__cloud`, refs rewritten, scenes auto-wired. FP renders pixel-identically — verified by bgfx headless screenshot diff.
-2. **Sold full plugin.** `fantasy-dungeon`: two bundled packs (tiles+generator, props), plugin-level UI icons, license metadata, private repo, version-pinned. Installing = one `.plugins` entry; `labelle generate` validates every sprite ref before first run.
+2. **Sold full plugin.** `fantasy-dungeon`: two bundled packs (tiles+generator, props), plugin-level UI icons, a **Dungeon Generator studio panel** (seed/density/theme + Generate), license metadata, private repo, version-pinned. Installing = one `.plugins` entry; `labelle generate` validates every sprite ref and the panel schema before first run; the panel appears in the studio with no studio update.
 3. **Studio-shared art plugin.** A studio's common UI/character art + widget prefabs as one internal plugin consumed by several games; an art update is a version bump, not a copy-paste sweep.
 
 ## Phasing
 
 - **Phase 1 — pack-level resources end-to-end.** `pack.labelle` `.resources`; merge + namespacing; frame-key + `sprite_name` rewrite; generate-time validation; scene auto-wiring. Prove on FP: the sky pack goes self-contained (use case 1). Repos: labelle-assembler (core), labelle-cli (manifest schema surface). Zero engine/gfx changes.
 - **Phase 2 — the full plugin.** `plugin.labelle` `.resources` + `.packs` nested-pack discovery + cross-unit pack-name collision detection; `depends_on_resources` validation; license/author metadata surfaced by tooling (`labelle` CLI listing attached plugins + licenses). Prove with a demo plugin repo bundling two packs (use case 2's skeleton).
-- **Phase 3 — the marketplace story.** `.tmx` template import (with labelle-studio-tmx); a plugin registry/catalog page (labelle.games); studio integration — browse attached plugins' sprites in the editor's sprite picker.
+- **Phase 3 — studio panels.** The `studio/*.panel.jsonc` convention: discovery in the studio's project walk; the kit-composed schema→form renderer; Dockview registration (the tiles-palette lifecycle); `_editor_plugin_command` editor-contract bump for play-time actions + CLI routing for edit-time actions; panel-schema validation in `labelle generate`. Prove with the demo plugin's generator panel driving the running preview. Repos: labelle-studio (renderer + discovery), labelle-engine (bridge export), labelle-assembler (validation).
+- **Phase 4 — the marketplace story.** `.tmx` template import (with labelle-studio-tmx); a plugin registry/catalog page (labelle.games); browse attached plugins' sprites in the editor's sprite picker.
 
 ## Alternatives considered
 
@@ -147,6 +185,8 @@ Zero migration:
 2. **Re-pack raw sprites into the game's atlases at build time.** Rejected as the default — requires shipping raw art (kills the sold-plugin story), adds a packer dependency to every consumer build, and makes builds non-deterministic across packer versions. Possible future opt-in for *local* packs where batching matters more than opacity.
 3. **Runtime asset discovery (scan a directory at startup).** Rejected — the pipeline is comptime `@embedFile` + generated manifests; a runtime path would fork every downstream seam (ASTC, streaming, scene preload) and reintroduce silent late failures.
 4. **Keep frame names global, namespace only atlas names.** Rejected — `findSprite` searches across atlases, so two units shipping `grass.png` still collide; rewriting frame keys at copy time closes the hole with zero engine changes.
+5. **Sandboxed webview panels (plugin ships its own web UI).** Rejected for v1 — unlimited flexibility, but it breaks the studio's kit-only rule (visual consistency), opens a security surface (vendor JS executing in the editor), and adds a Tauri webview dependency. Declarative kit-rendered panels cover the generator/params use cases; the webview escape hatch can be revisited if a real panel outgrows the schema.
+6. **Plugin panels via the digest only (game-runtime-declared, no manifest).** Rejected as the primary path — panels would exist only while the game runs; a generator panel should also work at edit time (emit a scene file). The static `panel.jsonc` declaration + dual `preview`/`cli` action targets covers both; the digest remains the *state* channel, not the *declaration* channel.
 
 ## Open questions
 
@@ -155,3 +195,6 @@ Zero migration:
 - **Loose sprites.** Should a unit be able to ship un-atlased single PNGs (`assets/loose/*.png`) that the assembler packs at generate time via the built-in MaxRects packer? Convenient for tiny plugins; blurs the prebuilt-first rule.
 - **Sound/font resources.** `ResourceDef` already carries `sound`/`font` — plugins/packs get them "for free" through the same merge. Bless in Phase 1 or restrict to atlases first?
 - **Frame-name rewrite format.** `<owner>/<frame>` (path-like, matches existing idiom; studio sprite picker groups by directory) vs `<owner>__<frame>` (matches key convention). Leaning path-like.
+- **Panel widget vocabulary v1.** `number`/`slider`/`select`/`text`/`toggle`/`button` covers the generator case; do lists/tables (e.g. "generated rooms" preview) make v1 or wait for a real demand?
+- **Panel state persistence.** Do panel field values persist per-project (in `.labelle/` state or project extras) or reset per session? Leaning per-project persistence — a seed you liked shouldn't vanish on restart.
+- **Command handler declaration.** How a plugin's code declares which `preview` commands it handles (comptime hook registration vs a manifest list the validator checks) — decide in Phase 3 design.
