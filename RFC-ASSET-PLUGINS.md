@@ -153,6 +153,8 @@ A plugin ships declarative panels in a `studio/` convention dir:
 - **Edit-time actions** (`"target": "cli"`) invoke the plugin's generator through the CLI/file layer (e.g. emit a scene `.jsonc` into the project), so panels remain useful when the game isn't running.
 - **Validation**: `panel.jsonc` is schema-checked at `labelle generate` alongside the asset validation — a malformed panel is a generate-time error, and a `preview` command must name a handler the plugin's code declares.
 
+**Validated by POC** (labelle-studio#73, draft): discovery + kit-only schema→form renderer + Dockview lifecycle + the dispatch payload shape, end to end — 18 new tests, zero broken, panels render from the dungeon example verbatim. POC findings folded back: discovery walks `fsService.readDir` (the Explorer tree is lazy — no in-memory tree exists at project open); the kit has no slider or boolean control, so v1 maps slider → clamped `NumField` and toggle → the `SegmentedControl` binary idiom (a kit `Slider` is a nice-to-have, not a blocker); `icon` stays schema-accepted but unrendered in v1.
+
 ### Distribution and selling
 
 The promotion path covers the full unit with zero restructuring: game-local `packs/dungeon/` → move into a plugin repo's `packs/` + declare in `plugin.labelle` → publish with a git tag. Published plugins fetch by tag into the package cache like today; **private repos** work via standard git credentials — a paid plugin is a private repo the buyer gets access to (the industry-standard asset-store model; no DRM, the license field states terms). Prebuilt sheets mean the sold artifact is the packed atlas, not the source art.
