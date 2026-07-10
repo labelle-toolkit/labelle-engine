@@ -36,10 +36,16 @@ const Doomed = struct {
     }
 };
 
+/// String-bearing component — pins the copy-out-of-the-caller's-buffer
+/// contract (a borrowed slice would dangle the moment the C call
+/// returns).
+const Label = struct { text: []const u8 = "" };
+
 const TestComponents = engine.ComponentRegistry(.{
     .Health = Health,
     .Velocity = Velocity,
     .Doomed = Doomed,
+    .Label = Label,
 });
 
 const TestEvents = union(enum) {
@@ -48,6 +54,8 @@ const TestEvents = union(enum) {
     // Slice-bearing payload — pins the emit-arena lifetime contract
     // (parsed name must survive from emit through dispatch).
     state__renamed: struct { name: []const u8 = "" },
+    // Void payload — pins the emit accept set (empty / "{}" / "null").
+    game__paused,
 };
 
 const MockEcs = core.MockEcsBackend(u32);
@@ -71,8 +79,13 @@ fn setComp(id: u64, name: []const u8, json: []const u8) i32 {
     return contract.labelle_component_set(id, name.ptr, name.len, json.ptr, json.len);
 }
 
+/// Call component_get with a buffer known to FIT the component — the
+/// return is the required size (snprintf-style), which then equals
+/// bytes written. The sizing test drives `labelle_component_get`
+/// directly instead.
 fn getComp(id: u64, name: []const u8, buf: []u8) []const u8 {
     const n = contract.labelle_component_get(id, name.ptr, name.len, buf.ptr, buf.len);
+    std.debug.assert(n <= buf.len);
     return buf[0..n];
 }
 
@@ -239,8 +252,169 @@ test "component set/get: JSON round-trip over the registry" {
     try testing.expectEqual(@as(usize, 0), getComp(id, "Mana", &buf).len); // unknown name
     try testing.expectEqual(@as(usize, 0), getComp(id, "Velocity", &buf).len); // absent component
     try testing.expectEqual(@as(usize, 0), getComp(999_999, "Health", &buf).len); // dead entity
+
+    // Doesn't fit is NOT a failure mode anymore: an under-sized cap
+    // returns the required size (> cap = the truncation signal) — the
+    // dedicated sizing test below pins the all-or-nothing write.
+    const health = "Health";
     var tiny: [2]u8 = undefined;
-    try testing.expectEqual(@as(usize, 0), getComp(id, "Health", &tiny).len); // doesn't fit
+    try testing.expect(contract.labelle_component_get(id, health.ptr, health.len, &tiny, tiny.len) > tiny.len);
+}
+
+test "component_get: required-size sizing — probe, all-or-nothing write, exact cap" {
+    contract.unbind();
+    defer contract.unbind();
+
+    var game = ContractGame.init(testing.allocator);
+    defer game.deinit();
+    contract.bind(&game);
+
+    const id = contract.labelle_entity_create();
+    const name = "Health";
+    try testing.expectEqual(@as(i32, 0), setComp(id, name, "{\"hp\":1234,\"regen\":2.5}"));
+
+    // NULL/cap-0 is the pure sizing probe: the required size of the
+    // complete JSON, nothing written.
+    const required = contract.labelle_component_get(id, name.ptr, name.len, null, 0);
+    try testing.expect(required > 0);
+
+    // A call at exactly `required` writes the FULL JSON, returns the
+    // same size the probe promised, and never touches a byte past the
+    // cap.
+    var buf: [256]u8 = undefined;
+    try testing.expect(required < buf.len);
+    @memset(&buf, 0xAA);
+    const n = contract.labelle_component_get(id, name.ptr, name.len, &buf, required);
+    try testing.expectEqual(required, n);
+    const parsed = try std.json.parseFromSlice(Health, testing.allocator, buf[0..n], .{});
+    defer parsed.deinit();
+    try testing.expectEqual(@as(i32, 1234), parsed.value.hp);
+    try testing.expectEqual(@as(u8, 0xAA), buf[required]);
+
+    // EVERY under-sized cap (cap-1 included — the canary case): the
+    // required size still returns, and NOTHING is written — a truncated
+    // JSON object prefix is useless, so the write is all-or-nothing
+    // (unlike the query's still-valid id-list prefix).
+    var cap: usize = 0;
+    while (cap < required) : (cap += 1) {
+        @memset(&buf, 0xAA);
+        try testing.expectEqual(
+            required,
+            contract.labelle_component_get(id, name.ptr, name.len, &buf, cap),
+        );
+        for (buf) |b| try testing.expectEqual(@as(u8, 0xAA), b); // canary intact
+    }
+
+    // Absent / unknown / dead keep the 0 sentinel — even as a probe.
+    const velocity = "Velocity";
+    const mana = "Mana";
+    try testing.expectEqual(@as(usize, 0), contract.labelle_component_get(id, velocity.ptr, velocity.len, null, 0));
+    try testing.expectEqual(@as(usize, 0), contract.labelle_component_get(id, mana.ptr, mana.len, null, 0));
+    try testing.expectEqual(@as(usize, 0), contract.labelle_component_get(999_999, name.ptr, name.len, null, 0));
+
+    // The built-in and filtered paths size the same way: probe ==
+    // sized call, for Position and a scene built-in alike.
+    try testing.expectEqual(@as(i32, 0), setComp(id, "Position", "{\"x\":12.5,\"y\":-3}"));
+    try testing.expectEqual(@as(i32, 0), setComp(id, "Sprite", "{\"sprite_name\":\"hero\",\"z_index\":3}"));
+    inline for (.{ "Position", "Sprite" }) |comp_name| {
+        const probe = contract.labelle_component_get(id, comp_name.ptr, comp_name.len, null, 0);
+        try testing.expect(probe > 0);
+        var out: [512]u8 = undefined;
+        try testing.expectEqual(
+            probe,
+            contract.labelle_component_get(id, comp_name.ptr, comp_name.len, &out, out.len),
+        );
+        // And an under-sized cap writes nothing on these paths too.
+        @memset(&out, 0xAA);
+        try testing.expectEqual(
+            probe,
+            contract.labelle_component_get(id, comp_name.ptr, comp_name.len, &out, probe - 1),
+        );
+        for (out) |b| try testing.expectEqual(@as(u8, 0xAA), b);
+    }
+}
+
+test "component set: string fields are COPIED out of the caller's buffer" {
+    contract.unbind();
+    defer contract.unbind();
+
+    var game = ContractGame.init(testing.allocator);
+    defer game.deinit();
+    contract.bind(&game);
+
+    const id = contract.labelle_entity_create();
+    const ent: u32 = @intCast(id);
+
+    // The C caller's json is only valid DURING the call — a native
+    // plugin passes a stack or reused buffer. "hello world" needs no
+    // unescaping, which is exactly the case where a default
+    // (alloc_if_needed) parse BORROWS the input instead of copying
+    // into the component arena; the contract must copy always.
+    var jsonbuf: [64]u8 = undefined;
+    const src = "{\"text\":\"hello world\"}";
+    @memcpy(jsonbuf[0..src.len], src);
+    const name = "Label";
+    try testing.expectEqual(
+        @as(i32, 0),
+        contract.labelle_component_set(id, name.ptr, name.len, &jsonbuf, src.len),
+    );
+    @memset(&jsonbuf, 0xAA); // the buffer dies/reuses after the call
+
+    const label = game.getComponent(ent, Label).?;
+    try testing.expectEqualStrings("hello world", label.text);
+    // Structural proof, not just value luck: the stored slice lives
+    // OUTSIDE the caller's buffer (the arena copy).
+    const lo = @intFromPtr(&jsonbuf);
+    const hi = lo + jsonbuf.len;
+    const p = @intFromPtr(label.text.ptr);
+    try testing.expect(p < lo or p >= hi);
+}
+
+test "component set: trailing garbage after the JSON document refuses with -1" {
+    contract.unbind();
+    defer contract.unbind();
+
+    var game = ContractGame.init(testing.allocator);
+    defer game.deinit();
+    contract.bind(&game);
+
+    const id = contract.labelle_entity_create();
+    const ent: u32 = @intCast(id);
+
+    // Seed known-good values on both dispatch paths.
+    try testing.expectEqual(@as(i32, 0), setComp(id, "Sprite", "{\"sprite_name\":\"hero\"}"));
+    try testing.expectEqual(@as(i32, 0), setComp(id, "Health", "{\"hp\":7}"));
+
+    // Built-in path (the JSONC parser stops after ONE value): any
+    // trailing garbage — a second document included — is malformed
+    // JSON, refused BEFORE the apply, entity untouched.
+    inline for (.{
+        "{\"sprite_name\":\"evil\"}garbage",
+        "{\"sprite_name\":\"evil\"}{}",
+        "{\"sprite_name\":\"evil\"}]",
+    }) |payload| {
+        try testing.expectEqual(@as(i32, -1), setComp(id, "Sprite", payload));
+    }
+    try testing.expectEqualStrings("hero", game.getComponent(ent, ContractGame.SpriteComp).?.sprite_name);
+
+    // Registry path: std.json's end-of-document check refuses the same
+    // shapes by itself — pinned here so a parser swap can't quietly
+    // open the hole the built-in path had.
+    inline for (.{
+        "{\"hp\":9}garbage",
+        "{\"hp\":9}{\"hp\":10}",
+        "{\"hp\":9}}",
+    }) |payload| {
+        try testing.expectEqual(@as(i32, -1), setComp(id, "Health", payload));
+    }
+    try testing.expectEqual(@as(i32, 7), game.getComponent(ent, Health).?.hp);
+
+    // Whitespace-only tails stay legal on both paths — and the
+    // built-in path, being JSONC, treats a trailing comment as trivia.
+    try testing.expectEqual(@as(i32, 0), setComp(id, "Health", "{\"hp\":8} \n"));
+    try testing.expectEqual(@as(i32, 0), setComp(id, "Sprite", "{\"sprite_name\":\"neo\"} // done\n"));
+    try testing.expectEqual(@as(i32, 8), game.getComponent(ent, Health).?.hp);
+    try testing.expectEqualStrings("neo", game.getComponent(ent, ContractGame.SpriteComp).?.sprite_name);
 }
 
 test "component set/get: the built-in Position routes through setPosition" {
@@ -919,6 +1093,42 @@ test "event emit: named union variant parsed from JSON into the game buffer" {
     try testing.expectEqual(@as(usize, 2), game.event_buffer.items.len);
 }
 
+test "event emit: void payloads accept exactly empty, {} and null" {
+    contract.unbind();
+    defer contract.unbind();
+
+    var game = ContractGame.init(testing.allocator);
+    defer game.deinit();
+    contract.bind(&game);
+
+    // A void variant has no payload struct for std.json to validate
+    // against, so the accept set is pinned explicitly (module doc +
+    // header): anything outside it — malformed bytes included — is the
+    // contract's parse failure, -1 with nothing buffered.
+    try testing.expectEqual(@as(i32, -1), emitEvent("game__paused", "{"));
+    try testing.expectEqual(@as(i32, -1), emitEvent("game__paused", "{\"x\":1}"));
+    try testing.expectEqual(@as(i32, -1), emitEvent("game__paused", "garbage"));
+    try testing.expectEqual(@as(i32, -1), emitEvent("game__paused", " {} ")); // exact bytes only
+    try testing.expectEqual(@as(usize, 0), game.event_buffer.items.len);
+
+    // The accept set: empty (len 0), NULL (a C caller's natural "no
+    // payload"), the exact "{}", and the exact "null".
+    try testing.expectEqual(@as(i32, 0), emitEvent("game__paused", ""));
+    const name = "game__paused";
+    try testing.expectEqual(@as(i32, 0), contract.labelle_event_emit(name.ptr, name.len, null, 0));
+    try testing.expectEqual(@as(i32, 0), emitEvent("game__paused", "{}"));
+    try testing.expectEqual(@as(i32, 0), emitEvent("game__paused", "null"));
+    try testing.expectEqual(@as(usize, 4), game.event_buffer.items.len);
+    for (game.event_buffer.items) |ev| {
+        try testing.expect(ev == .game__paused);
+    }
+
+    // Struct-payload variants keep std.json's whole-document check:
+    // trailing garbage after the JSON is a parse failure there too.
+    try testing.expectEqual(@as(i32, -1), emitEvent("turret__fired", "{\"turret\":1}garbage"));
+    try testing.expectEqual(@as(usize, 4), game.event_buffer.items.len);
+}
+
 test "event emit: a game without a GameEvents union refuses with -1" {
     contract.unbind();
     defer contract.unbind();
@@ -1063,9 +1273,21 @@ test "subscribe/poll: slice-bearing payload survives emit → drain → dispatch
     subscribe("state__renamed");
     contract.drainEvents(&game); // activate the subscription (next-drain semantics)
 
-    // Frame 1: emit with a string payload. The parsed slice lives in
-    // the ACTIVE emit arena.
-    try testing.expectEqual(@as(i32, 0), emitEvent("state__renamed", "{\"name\":\"combat\"}"));
+    // Frame 1: emit with a string payload FROM A TRANSIENT BUFFER —
+    // the plugin's json is only valid during the call — and poison it
+    // the moment the call returns. The parsed slice must be a COPY in
+    // the ACTIVE emit arena, never a borrow of the caller's bytes
+    // ("combat" needs no unescaping, the exact case alloc_if_needed
+    // would alias).
+    var jsonbuf: [32]u8 = undefined;
+    const src = "{\"name\":\"combat\"}";
+    @memcpy(jsonbuf[0..src.len], src);
+    const ev_name = "state__renamed";
+    try testing.expectEqual(
+        @as(i32, 0),
+        contract.labelle_event_emit(ev_name.ptr, ev_name.len, &jsonbuf, src.len),
+    );
+    @memset(&jsonbuf, 0xAA); // the buffer dies/reuses after the call
     contract.drainEvents(&game); // flips arenas — must NOT recycle this frame's payload
     switch (game.event_buffer.items[0]) {
         .state__renamed => |p| try testing.expectEqualStrings("combat", p.name),
@@ -1284,14 +1506,17 @@ test "NULL C-ABI shapes: NULL/len-0 payloads take defaults; NULL out buffers pro
         else => return error.TestUnexpectedResult,
     }
 
-    // NULL out buffers: component_get reports 0 bytes, nothing written…
+    // NULL out buffers are pure SIZING PROBES: component_get returns
+    // the required size of the complete JSON (nothing written) and a
+    // right-sized call returns the same…
+    const get_required = contract.labelle_component_get(id, health.ptr, health.len, null, 0);
+    try testing.expect(get_required > 0);
+    var gbuf: [128]u8 = undefined;
     try testing.expectEqual(
-        @as(usize, 0),
-        contract.labelle_component_get(id, health.ptr, health.len, null, 0),
+        get_required,
+        contract.labelle_component_get(id, health.ptr, health.len, &gbuf, gbuf.len),
     );
-    // …while query treats NULL/cap-0 as the pure SIZING PROBE (its
-    // documented asymmetry): the required size of the one-carrier
-    // result comes back, and a right-sized call returns the same.
+    // …query probes identically (the shared snprintf-style sizing)…
     const names = "[\"Health\"]";
     const probe = contract.labelle_query(names.ptr, names.len, null, 0);
     try testing.expect(probe > 2);
@@ -1301,13 +1526,17 @@ test "NULL C-ABI shapes: NULL/len-0 payloads take defaults; NULL out buffers pro
         contract.labelle_query(names.ptr, names.len, &qbuf, qbuf.len),
     );
 
-    // poll with a NULL out reads NOTHING and consumes NOTHING: the
-    // pending entry survives for the next real poll.
+    // …and poll's NULL probe reports the NEXT entry's size while
+    // consuming NOTHING: the entry survives — repeatedly — until the
+    // real poll reads it, after which the probe is back to 0 (empty).
     contract.drainEvents(&game); // taps the NULL-emitted wave event above
     game.dispatchEvents();
-    try testing.expectEqual(@as(usize, 0), contract.labelle_event_poll(null, 0));
+    const entry = "wave__started {\"index\":0}";
+    try testing.expectEqual(entry.len, contract.labelle_event_poll(null, 0));
+    try testing.expectEqual(entry.len, contract.labelle_event_poll(null, 0));
     var buf: [128]u8 = undefined;
-    try testing.expectEqualStrings("wave__started {\"index\":0}", poll(&buf));
+    try testing.expectEqualStrings(entry, poll(&buf));
+    try testing.expectEqual(@as(usize, 0), contract.labelle_event_poll(null, 0));
 }
 
 // ── Time / log ──────────────────────────────────────────────────────

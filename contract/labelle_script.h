@@ -17,10 +17,9 @@
  *     prefab names, log messages, the query's names_json) must be
  *     non-NULL even when their length is 0. Only JSON payloads
  *     documented "NULL/len 0" may be NULL, and `out` buffers may be
- *     NULL only together with a 0 capacity (treated as capacity 0:
- *     nothing written; 0 returned — except labelle_query, whose
- *     NULL/cap-0 call is a legal sizing probe returning the required
- *     size).
+ *     NULL only together with a 0 capacity — the NULL/cap-0 call is
+ *     each out-writing function's documented sizing probe (see the
+ *     sizing convention below and the per-function comments).
  *   - Structured payloads are UTF-8 JSON (encoding v1).
  *   - Components are addressed BY NAME over the game's own component
  *     registry plus the engine built-ins JSONC scenes author: "Position"
@@ -37,13 +36,19 @@
  *     -1 = failure (unknown name / unknown-or-dead entity / parse
  *     error / host not bound), except `labelle_component_has`, which
  *     is a boolean 1/0.
- *   - Out-parameter functions return bytes written; 0 = absent /
- *     unknown / empty / doesn't fit. Two-call sizing is deliberately
- *     not offered — script payloads are small, size buffers generously.
- *     The ONE deliberate exception is labelle_query, the contract's
- *     only unbounded-cardinality op: it returns the bytes the complete
- *     result REQUIRES (snprintf-style) while writing at most `out_cap`,
- *     so callers can detect truncation and retry right-sized.
+ *   - Out-parameter sizing: labelle_component_get and labelle_query
+ *     return the bytes the COMPLETE result REQUIRES (snprintf-style;
+ *     required > out_cap is the truncation signal — retry right-sized;
+ *     NULL/cap-0 out is a legal pure sizing probe; 0 keeps its
+ *     sentinel meaning: absent / unknown / dead / malformed). They
+ *     differ in what an under-sized cap writes: the query fills a
+ *     truncated-at-the-last-whole-id prefix that is still valid JSON,
+ *     while component_get writes ALL-OR-NOTHING (a truncated JSON
+ *     object prefix is useless — on overflow the buffer is untouched).
+ *     labelle_event_poll alone returns bytes WRITTEN, because a real
+ *     poll consumes its entry, truncation included; its sizing story
+ *     is the paired NULL/cap-0 probe, which returns the NEXT entry's
+ *     size without consuming — probe, grow, then poll.
  *   - Main-thread only; calls are valid during the plugin's tick.
  *   - Before the host binds its game (once, at startup, before plugin
  *     setup), every call is a safe no-op following the same
@@ -123,16 +128,24 @@ uint64_t labelle_prefab_spawn(const char *name, size_t name_len,
  * semantics: the JSON is parsed as the whole component struct — absent
  * fields take the component's declared defaults, unknown fields are
  * ignored; there is no merge/patch. Empty json (NULL/len 0) means "{}"
- * (all defaults). 0 = ok; -1 = unknown component / unknown-or-dead
- * entity / parse error. On -1 the entity is untouched. */
+ * (all defaults). The payload must be a single JSON document: trailing
+ * bytes after it (beyond whitespace — plus comments for the built-ins,
+ * which parse as JSONC) are a parse error. 0 = ok; -1 = unknown
+ * component / unknown-or-dead entity / parse error. On -1 the entity
+ * is untouched. */
 int32_t labelle_component_set(uint64_t id,
                               const char *name, size_t name_len,
                               const char *json, size_t json_len);
 
 /* Serialize component `name` of entity `id` to JSON into `out`
- * (capacity `out_cap`). Returns bytes written; 0 = absent / unknown
- * name / dead entity / doesn't fit. Scene built-ins serialize as a
- * scene could have authored them — see the support table above. */
+ * (capacity `out_cap`). Returns the bytes the COMPLETE JSON requires
+ * (snprintf-style, like labelle_query); 0 = absent / unknown name /
+ * dead entity. The write is ALL-OR-NOTHING: `out` is filled only when
+ * the whole JSON fits (required <= out_cap) — a truncated JSON object
+ * prefix is useless, so on overflow nothing is written; retry with a
+ * buffer of the returned size. NULL/cap-0 `out` is a legal pure
+ * sizing probe. Scene built-ins serialize as a scene could have
+ * authored them — see the support table above. */
 size_t labelle_component_get(uint64_t id,
                              const char *name, size_t name_len,
                              char *out, size_t out_cap);
@@ -152,11 +165,10 @@ int32_t labelle_component_remove(uint64_t id, const char *name, size_t name_len)
  * component names (["CloudDrift","Position"]); the host iterates a
  * view on the FIRST name and filters on the rest, writing the matching
  * ids as a JSON array ([3,7,12]) into `out`. Returns the size the
- * COMPLETE result requires, snprintf-style — the one written-bytes
- * exception in the contract, because a query's cardinality (every
- * matching entity) is the one thing a caller cannot bound up front.
- * 0 = malformed input / not bound. Unknown names yield the valid empty
- * result "[]" (required size 2).
+ * COMPLETE result requires, snprintf-style (the shared sizing
+ * convention — see the conventions block above). 0 = malformed input /
+ * not bound. Unknown names yield the valid empty result "[]"
+ * (required size 2).
  *
  * Writing fills `out` up to `out_cap`, truncated at the last whole id,
  * so the written prefix is always valid JSON. A return larger than
@@ -176,8 +188,11 @@ size_t labelle_query(const char *names_json, size_t names_json_len,
  * path — flows (OnEvent), Zig hooks, and other subscribed scripts all
  * see it at this frame's dispatch. Empty json (NULL/len 0) means "{}"
  * (all-default payload; payload fields without defaults must be
- * present in the JSON). 0 = ok; -1 = unknown event name / parse
- * failure / the game declares no events. */
+ * present in the JSON). VOID-payload events (the union tag declares no
+ * payload struct) accept exactly: empty (NULL/len 0), the exact bytes
+ * "{}", or the exact bytes "null" — anything else, malformed JSON
+ * included, is a parse failure. 0 = ok; -1 = unknown event name /
+ * parse failure / the game declares no events. */
 int32_t labelle_event_emit(const char *name, size_t name_len,
                            const char *json, size_t json_len);
 
@@ -193,13 +208,16 @@ int32_t labelle_event_emit(const char *name, size_t name_len,
 void labelle_event_subscribe(const char *name, size_t name_len);
 
 /* Drain one pending event: copies the next "<name> <json>" entry
- * (FIFO, emission order) into `out` and returns bytes written; 0 =
- * inbox empty. The entry is consumed even when `out_cap` truncates it
- * — size `out` generously. A NULL or zero-capacity `out` is the one
- * exception: it reads (and consumes) nothing and returns 0. Drain in a
- * while (poll() > 0) loop once per tick. Beyond an internal cap of
- * pending events, further events are dropped newest-first until the
- * script polls. */
+ * (FIFO, emission order) into `out` and returns bytes WRITTEN; 0 =
+ * inbox empty. A real read consumes the entry even when `out_cap`
+ * truncates it — but no caller needs to eat a truncation: a NULL or
+ * zero-capacity `out` is the paired no-consume SIZING PROBE, returning
+ * the NEXT entry's full size (0 = inbox empty) while reading and
+ * consuming nothing — probe, grow the buffer, then poll. An entry is
+ * never empty, so a probe's non-zero return cannot be confused with
+ * inbox-empty. Drain in a while (poll() > 0) loop once per tick.
+ * Beyond an internal cap of pending events, further events are
+ * dropped newest-first until the script polls. */
 size_t labelle_event_poll(char *out, size_t out_cap);
 
 /* ── Scene / log / time ───────────────────────────────────────────── */

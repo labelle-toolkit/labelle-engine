@@ -103,18 +103,24 @@
 //! Pointer-free components (the per-tick hot path, e.g. `Position`)
 //! parse without allocating at all.
 //!
-//! ## Out-buffer sizing (one deliberate asymmetry)
+//! ## Out-buffer sizing (required-size vs written-bytes)
 //!
-//! `labelle_component_get` and `labelle_event_poll` return bytes
-//! WRITTEN (0 = absent / empty / doesn't fit): their payloads are
-//! single structs — bounded in practice — so two-call sizing would buy
-//! nothing (POC decision). `labelle_query` is the contract's only
-//! UNBOUNDED-cardinality op (every matching entity), so it alone sizes
-//! snprintf-style: the return is the bytes the COMPLETE result
-//! requires, while writing still fills only up to the cap, truncated
-//! at the last whole id and always valid JSON. `required > cap` is the
-//! caller's truncation signal — retry with a `required`-sized buffer;
-//! NULL/cap-0 is a legal pure sizing probe.
+//! `labelle_query` and `labelle_component_get` size snprintf-style:
+//! the return is the bytes the COMPLETE result requires, `required >
+//! cap` is the caller's truncation signal (retry right-sized), and a
+//! NULL/cap-0 `out` is a legal pure sizing probe. 0 keeps its
+//! sentinel meaning (malformed names for the query; absent / unknown
+//! / dead for the get). They differ in what an under-sized cap
+//! WRITES: the query fills `out` up to the cap, truncated at the
+//! last whole id and always valid JSON — a prefix of independent ids
+//! has value — while the get writes ALL-OR-NOTHING (only when
+//! `required <= cap`): a truncated JSON object prefix is useless, so
+//! on overflow the buffer is untouched. `labelle_event_poll` alone
+//! returns bytes WRITTEN, because a poll CONSUMES its entry
+//! (truncation included) and a required-size return after the copy
+//! could not be retried; its sizing story is the paired NULL/cap-0
+//! probe instead — the NEXT entry's size, nothing read or consumed —
+//! so a sizing caller probes, grows its buffer, then polls.
 //!
 //! ## Component name space (registry + scene built-ins)
 //!
@@ -405,6 +411,9 @@ pub export fn labelle_prefab_spawn(
 /// mutation). The built-ins follow the scene loader's LENIENT field
 /// semantics (a wrong-typed field with a default falls back to that
 /// default; malformed JSON and non-object payloads are still -1).
+/// On EVERY path the payload must be a single JSON document: trailing
+/// bytes after it (beyond whitespace — plus comments on the built-in
+/// path, which is JSONC) are malformed JSON, refused with -1.
 pub export fn labelle_component_set(
     id: u64,
     name_ptr: [*]const u8,
@@ -422,11 +431,16 @@ pub export fn labelle_component_set(
 }
 
 /// Serialize component `name` of entity `id` to JSON into `out`
-/// (capacity `out_cap`) and return the number of bytes written. 0 =
-/// absent component / unknown name / dead entity / not bound / doesn't
-/// fit. A NULL `out` is treated as capacity 0 (nothing written, 0
-/// returned). Two-call sizing is deliberately avoided (POC decision):
-/// script payloads are small — size `out` generously.
+/// (capacity `out_cap`) and return the bytes the COMPLETE JSON
+/// requires (snprintf-style sizing, like `labelle_query`). 0 keeps
+/// its sentinel meaning: absent component / unknown name / dead
+/// entity / not bound. The write is ALL-OR-NOTHING: `out` is filled
+/// only when the whole JSON fits (`required <= out_cap`) — a
+/// truncated JSON object prefix is useless, unlike the query's
+/// still-valid id prefix — so on overflow the buffer is untouched
+/// and `required > out_cap` is the caller's signal to retry with a
+/// `required`-sized buffer. A NULL or zero-capacity `out` is a legal
+/// pure sizing probe: nothing written, the required size returned.
 ///
 /// Scene built-ins serialize as a scene could have AUTHORED them: any
 /// field that is a renderer handle rather than authored data (the
@@ -442,9 +456,12 @@ pub export fn labelle_component_get(
     out_cap: usize,
 ) usize {
     const vt = vtable orelse return 0;
-    if (name_len == 0 or out_cap == 0) return 0;
-    const buf = out orelse return 0;
-    return vt.component_get(id, name_ptr[0..name_len], buf[0..out_cap]);
+    if (name_len == 0) return 0;
+    // NULL (legal only alongside cap 0, but tolerated regardless) is
+    // the documented sizing probe: an empty destination — required-size
+    // computation runs, nothing is written. Same shape as the query's.
+    const buf: []u8 = if (out) |p| p[0..out_cap] else &.{};
+    return vt.component_get(id, name_ptr[0..name_len], buf);
 }
 
 /// 1 when entity `id` carries component `name`; 0 otherwise (absent,
@@ -511,7 +528,10 @@ pub export fn labelle_query(
 /// other subscribed scripts all see it at this frame's
 /// `dispatchEvents`. `name` must be a `GameEvents` union tag; `json` is
 /// the variant's payload struct (NULL or empty → `{}`, i.e. all-default
-/// fields). Returns 0 = ok; -1 = unknown event name / parse failure /
+/// fields). VOID-payload variants (the tag declares no payload struct)
+/// accept exactly: empty (NULL/len 0), the bytes `{}`, or the bytes
+/// `null` — anything else, malformed JSON included, is a parse
+/// failure. Returns 0 = ok; -1 = unknown event name / parse failure /
 /// the game declares no `GameEvents` union / not bound.
 pub export fn labelle_event_emit(
     name_ptr: [*]const u8,
@@ -554,17 +574,23 @@ pub export fn labelle_event_subscribe(name_ptr: [*]const u8, name_len: usize) vo
 
 /// Drain one pending event: copies the next `"<name> <json>"` entry
 /// (FIFO — emission order within and across frames) into `out` and
-/// returns bytes written; 0 = inbox empty. The entry is consumed even
-/// when `out_cap` truncates it (POC-pinned behavior) — size `out`
-/// generously. A NULL or zero-capacity `out` is the one exception: it
-/// reads (and consumes) nothing and returns 0. Scripts drain in a
-/// `while (poll() > 0)` loop once per tick.
+/// returns bytes WRITTEN; 0 = inbox empty. A real read consumes the
+/// entry even when `out_cap` truncates it (POC-pinned behavior) — but
+/// no caller ever needs to eat a truncation, because a NULL or
+/// zero-capacity `out` is the paired no-consume SIZING PROBE: it
+/// returns the NEXT entry's full size (0 = inbox empty) while reading
+/// and consuming nothing, so a sizing caller probes, grows its
+/// buffer, then polls. An entry is never empty (`"<name> <json>"`
+/// carries at least the name), so a probe's non-zero return cannot be
+/// confused with inbox-empty. Scripts drain in a `while (poll() > 0)`
+/// loop once per tick.
 pub export fn labelle_event_poll(out: ?[*]u8, out_cap: usize) usize {
     if (inbox_head >= inbox.items.len) return 0;
     const alloc = bound_allocator orelse return 0;
-    const buf = out orelse return 0;
-    if (out_cap == 0) return 0;
     const entry = inbox.items[inbox_head];
+    // The probe leg: report the pending entry's size, touch nothing.
+    const buf = out orelse return entry.len;
+    if (out_cap == 0) return entry.len;
     inbox_head += 1;
     const len = @min(entry.len, out_cap);
     @memcpy(buf[0..len], entry[0..len]);
@@ -876,11 +902,16 @@ fn Holder(comptime GP: type) type {
                     // Slice-bearing fields land in the nested-entity
                     // arena — the scene bridge's exact lifetime
                     // convention (freed atomically on scene change).
+                    // `alloc_always`, never the slice default
+                    // alloc_if_needed: an unescaped string field would
+                    // otherwise BORROW the caller's json — a buffer
+                    // valid only during this call — and the stored
+                    // component's slices would dangle on return.
                     const comp = std.json.parseFromSliceLeaky(
                         T,
                         componentAlloc(),
                         json,
-                        .{ .ignore_unknown_fields = true },
+                        .{ .ignore_unknown_fields = true, .allocate = .alloc_always },
                     ) catch return -1;
                     // `setComponent`, not the backend add: it fires
                     // onSet/onAdd, roster invalidation, and preview
@@ -905,6 +936,14 @@ fn Holder(comptime GP: type) type {
             defer arena.deinit();
             var parser = jsonc.JsoncParser.init(arena.allocator(), json);
             const value = parser.parse() catch return -1;
+            // The JSONC parser stops after ONE value (consuming any
+            // trailing whitespace/comments — JSONC trivia); bytes left
+            // past it mean the payload wasn't a single JSON document.
+            // That is the contract's malformed-JSON -1, decided BEFORE
+            // the apply so the entity stays untouched — std.json's
+            // end-of-document check refuses the same shapes on the
+            // registry path by itself.
+            if (parser.pos != json.len) return -1;
             const applied = if (comptime std.mem.eql(u8, comp_name, "Sprite"))
                 Apply.applySprite(game, ent, value)
             else if (comptime std.mem.eql(u8, comp_name, "Shape"))
@@ -1176,19 +1215,34 @@ fn Holder(comptime GP: type) type {
             inline for (fields) |f| {
                 if (std.mem.eql(u8, name, f.name)) {
                     if (comptime f.type == void) {
+                        // No payload struct exists for std.json to
+                        // validate against, so the accept set is pinned
+                        // explicitly (and documented in the export doc
+                        // + header): empty — NULL/len-0 arrives here as
+                        // "{}" via the export's default — or the exact
+                        // bytes "{}" or "null". Anything else is the
+                        // contract's parse failure: -1, nothing
+                        // buffered.
+                        if (!std.mem.eql(u8, json, "{}") and !std.mem.eql(u8, json, "null"))
+                            return -1;
                         game.emit(@unionInit(G.GameEvents, f.name, {}));
                         return 0;
                     }
                     // Payload slices live in the ACTIVE emit arena,
                     // which stays untouched through this frame's
                     // dispatch and is recycled one flip later (module
-                    // doc, "Payload memory").
+                    // doc, "Payload memory"). `alloc_always`, never the
+                    // slice default alloc_if_needed: the event sits
+                    // buffered until dispatchEvents long after this
+                    // call returns, so an unescaped string field must
+                    // be COPIED into the arena, not borrowed from the
+                    // caller's transient json.
                     const arena = if (emit_arenas[emit_active]) |*a| a.allocator() else return -1;
                     const payload = std.json.parseFromSliceLeaky(
                         f.type,
                         arena,
                         json,
-                        .{ .ignore_unknown_fields = true },
+                        .{ .ignore_unknown_fields = true, .allocate = .alloc_always },
                     ) catch return -1;
                     game.emit(@unionInit(G.GameEvents, f.name, payload));
                     return 0;
@@ -1245,11 +1299,26 @@ fn Holder(comptime GP: type) type {
             return game.active_world.nested_entity_arena.allocator();
         }
 
+        /// Serialize `value` with the get's required-size semantics:
+        /// the return is the bytes the COMPLETE JSON needs, and `out`
+        /// is written only when all of it fits — ALL-OR-NOTHING, a
+        /// truncated JSON object prefix being useless (unlike the
+        /// query's id-list prefix). A counting pass sizes first so an
+        /// over-cap value never scribbles a partial write into `out`
+        /// (the canary the contract tests pin); gets are game-logic
+        /// scale, so the doubled serialization is irrelevant.
         fn stringifyInto(value: anytype, out: []u8) usize {
-            var w = std.Io.Writer.fixed(out);
-            // WriteFailed = doesn't fit → 0, per the export's contract.
-            std.json.Stringify.value(value, .{}, &w) catch return 0;
-            return w.buffered().len;
+            var counting: std.Io.Writer.Discarding = .init(&.{});
+            // A discarding writer cannot fail; catch is belt.
+            std.json.Stringify.value(value, .{}, &counting.writer) catch return 0;
+            const required: usize = @intCast(counting.fullCount());
+            if (required <= out.len) {
+                var w = std.Io.Writer.fixed(out);
+                // Counted to fit — unreachable, but 0 (absent) beats a
+                // lying required if it ever fires.
+                std.json.Stringify.value(value, .{}, &w) catch return 0;
+            }
+            return required;
         }
 
         /// `stringifyInto` for the scene built-ins: streams the struct
@@ -1258,19 +1327,28 @@ fn Holder(comptime GP: type) type {
         /// `Sprite.texture`, a renderer handle the next set re-derives
         /// from `sprite_name`). The registry path keeps whole-struct
         /// `stringifyInto`; only built-ins carry renderer handles.
+        /// Same required-size / all-or-nothing semantics.
         fn stringifyFilteredInto(comp: anytype, out: []u8) usize {
-            var w = std.Io.Writer.fixed(out);
-            var jw: std.json.Stringify = .{ .writer = &w };
-            // WriteFailed = doesn't fit → 0, per the export's contract.
-            jw.beginObject() catch return 0;
+            var counting: std.Io.Writer.Discarding = .init(&.{});
+            writeFilteredJson(comp, &counting.writer) catch return 0;
+            const required: usize = @intCast(counting.fullCount());
+            if (required <= out.len) {
+                var w = std.Io.Writer.fixed(out);
+                writeFilteredJson(comp, &w) catch return 0;
+            }
+            return required;
+        }
+
+        fn writeFilteredJson(comp: anytype, w: *std.Io.Writer) std.Io.Writer.Error!void {
+            var jw: std.json.Stringify = .{ .writer = w };
+            try jw.beginObject();
             inline for (@typeInfo(@TypeOf(comp)).@"struct".fields) |f| {
                 if (comptime jsonRoundTrips(f.type)) {
-                    jw.objectField(f.name) catch return 0;
-                    jw.write(@field(comp, f.name)) catch return 0;
+                    try jw.objectField(f.name);
+                    try jw.write(@field(comp, f.name));
                 }
             }
-            jw.endObject() catch return 0;
-            return w.buffered().len;
+            try jw.endObject();
         }
 
         fn castEntity(id: u64) ?Entity {
