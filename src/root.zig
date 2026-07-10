@@ -98,6 +98,21 @@ pub const Image = @import("image_component.zig").Image;
 /// mirror of gfx's `Pivot`). See `src/image_component.zig`.
 pub const ImagePivot = @import("image_component.zig").Pivot;
 
+// ── Asset inference (sprite-based reverse index + AssetManifest, #563) ──
+/// Sprite/image → resource-bundle reverse index + entity-tree walker that
+/// infers which atlas/image resources a scene needs (making the explicit
+/// `meta.assets` list derivable) plus the `AssetManifest` escape-hatch
+/// component. RFC-UNIFY-SCENES-AND-PREFABS §"Assets — inference". Engine half
+/// of #563; see `src/asset_manifest.zig`.
+pub const asset_manifest_mod = @import("asset_manifest.zig");
+pub const ResourceRef = asset_manifest_mod.ResourceRef;
+pub const AssetManifest = asset_manifest_mod.AssetManifest;
+pub const ReverseIndex = asset_manifest_mod.ReverseIndex;
+pub const InferredManifest = asset_manifest_mod.InferredManifest;
+pub const inferAssets = asset_manifest_mod.inferAssets;
+pub const inferAssetsJsonc = asset_manifest_mod.inferAssetsJsonc;
+pub const inferAssetsFromSource = asset_manifest_mod.inferAssetsFromSource;
+
 // ── Input ──
 pub const InputInterface = input_mod.InputInterface;
 pub const StubInput = input_mod.StubInput;
