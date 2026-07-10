@@ -3,7 +3,7 @@
 **Issue:** labelle-toolkit/labelle-engine#237 (updated 2026-07 — re-scoped from "Lua module" to the language-plugin family)  
 **Status:** Draft  
 **Author:** Alexandre  
-**Date:** 2026-07-10
+**Date:** 2026-07-10 (rev 2 — POC validated: PR #734)
 
 ## Problem
 
@@ -60,6 +60,8 @@ scene_change(name)                log(level, msg)
 - **Main-thread-only in v1.** Calls are valid during the plugin's tick.
 - **Comptime-gated**: the contract surface compiles into the game **only when a language plugin is attached** — zero cost for every game that doesn't use one, like every other engine seam.
 - Versioned like the editor contract; plugins declare the contract version they target.
+
+**Validated by POC** (PR #734, `spike/language-plugins/`): the same behavior in Lua (VM family), Rust and Crystal (native family) against one flat C-ABI surface — including **both event directions** (emit + subscribe/poll-drain) — produces byte-identical world state, host-asserted. Findings folded in: Rust needs no bindings (the header *is* the binding); Crystal requires `Crystal.init_runtime` boot, `ld -r` main-localization, and **non-raising script entry points** (raise's backtrace capture segfaults across foreign stacks) — labelle-crystal's first work items; C#/hostfxr and mruby recipes documented in the spike README.
 
 ### 2. Language plugin anatomy (uniform across languages)
 
