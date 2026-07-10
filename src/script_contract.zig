@@ -21,12 +21,13 @@
 //! vtable — they carry no comptime type information themselves.
 //!
 //! Before `bind` runs, every export is a safe no-op: id-returning ops
-//! (incl. `labelle_entity_find`) return 0, rc-returning ops return -1,
-//! `labelle_component_get` / `labelle_query` / `labelle_event_poll` write
-//! nothing and return 0, the void ops silently ignore, the
-//! `labelle_input_key_*` reads report not-down (0), and
-//! `labelle_input_mouse` writes the origin. `labelle_contract_version` is
-//! pure and works even before `bind`.
+//! (incl. `labelle_entity_find`) return 0, rc-returning ops return -1
+//! (`labelle_plugin_call` its unroutable sentinel — the same -1, carried
+//! in its usize), `labelle_component_get` / `labelle_query` /
+//! `labelle_event_poll` write nothing and return 0, the void ops
+//! silently ignore, the `labelle_input_key_*` reads report not-down (0),
+//! and `labelle_input_mouse` writes the origin.
+//! `labelle_contract_version` is pure and works even before `bind`.
 //!
 //! ## No symbols in script-less builds
 //!
@@ -142,6 +143,35 @@
 //! per-name `get` caveats (renderer-handle fields are omitted; `Camera`
 //! serializes `tag` as a string).
 //!
+//! ## Plugin commands (`labelle_plugin_call`, contract v1.1, #744)
+//!
+//! Scripts call Zig PLUGIN commands (pathfinder navigate, dungeon
+//! generate, …) through the SAME handler channel labelle-studio's
+//! plugin panels use: the game's `editorPluginCommand` mixin
+//! (`game/editor_command_mixin.zig`, #748) — a SYNCHRONOUS `emitSync`
+//! of `engine__editor_plugin_command` to the handler a plugin declared
+//! by subscribing to that engine event. One registration is dual-use:
+//! a handler written for a studio panel is reachable from every
+//! scripting language, unmodified — and the mixin's borrowed-slices
+//! handler contract carries over verbatim (the dispatch returns only
+//! after the handler ran, so the script's transient buffers stay valid
+//! with no copy).
+//!
+//! The mixin is fire-and-forward — handlers produce no return payload
+//! — so the export's usize return is an rc, not a size: 0 = dispatched
+//! into the channel; `plugin_call_unroutable` (`maxInt(usize)`, C's
+//! `(size_t)-1` — the rc convention's -1 in a usize) = empty
+//! plugin/command, no handler registered in this build (the variant
+//! never landed on the merged `GameEvents`), or not bound. The channel
+//! is a broadcast that handlers name-filter THEMSELVES, so the engine
+//! cannot tell an unknown plugin/command from a delivered-and-ignored
+//! one: both dispatch as 0 wherever a handler exists. Results and acks
+//! travel back as game events — the subscribe/poll tap above.
+//! `out`/`out_cap` are reserved for a future response payload
+//! (required-size return, all-or-nothing write, `component_get`-style;
+//! 0 would keep meaning dispatched-no-response and the sentinel
+//! unroutable) and are never written in v1.1.
+//!
 //! Single-threaded by design (main thread, during the plugin's tick);
 //! no atomics.
 
@@ -150,10 +180,22 @@ const core = @import("labelle-core");
 const jsonc = @import("jsonc");
 const component_apply = @import("jsonc/component_apply.zig");
 
-/// Contract version consumers compile against. Bump on any ABI or
-/// semantic change; language plugins check it via
-/// `labelle_contract_version()` at startup and refuse a mismatch.
+/// Contract version consumers compile against — bumped on BREAKING ABI
+/// or semantic changes only. Language plugins check it via
+/// `labelle_contract_version()` at startup and refuse a mismatch, so a
+/// bump on additions would strand every still-compatible consumer;
+/// ADDITIVE growth (new exports) is a minor revision instead, marked
+/// "since v1.x" in `contract/labelle_script.h` and detected by probing
+/// for the symbol — the editor-bridge contract's exact convention
+/// (v1.1–v1.7). Current surface: v1.1 = v1 + `labelle_plugin_call`
+/// (#744).
 pub const CONTRACT_VERSION: u32 = 1;
+
+/// `labelle_plugin_call`'s unroutable sentinel: the rc convention's -1
+/// carried in that export's usize return (C's `(size_t)-1`). Distinct
+/// from 0 = dispatched — and from any future response-size return,
+/// which could never require the whole address space.
+pub const plugin_call_unroutable: usize = std.math.maxInt(usize);
 
 /// Inbox back-pressure cap: pending (drained-but-unpolled) events beyond
 /// this are dropped NEWEST-first, matching the POC's fixed-ring behavior.
@@ -226,6 +268,7 @@ const VTable = struct {
     input_key_down: *const fn (key: u32) bool,
     input_key_pressed: *const fn (key: u32) bool,
     input_mouse: *const fn () core.Position,
+    plugin_call: *const fn (plugin: []const u8, command: []const u8, params_json: []const u8) i32,
 };
 
 // ── Generated-main API (non-export) ─────────────────────────────────
@@ -730,6 +773,56 @@ pub export fn labelle_input_mouse(x_out: ?*f32, y_out: ?*f32) void {
     if (y_out) |p| p.* = pos.y;
 }
 
+// ── Plugin commands (contract v1.1, #744) ───────────────────────────
+
+/// Call a named command on a Zig engine PLUGIN — the script-side entry
+/// to the handler channel labelle-studio's panels reach through
+/// `editor_plugin_command` (editor-bridge v1.7): the game's
+/// `editorPluginCommand` mixin `emitSync`s `engine__editor_plugin_command`
+/// to the handler the plugin registered by subscribing to that event,
+/// so ONE registration serves studio panels and every scripting
+/// language alike (module doc, "Plugin commands"). `params_json` is the
+/// arguments object; NULL or empty (`len == 0`) means `"{}"`. Dispatch
+/// is SYNCHRONOUS — the handler has run by the time this returns — and
+/// all three strings are borrowed for the call only.
+///
+/// Fire-and-forward v1.1 rc, carried in the usize return: 0 =
+/// dispatched into the handler channel; `plugin_call_unroutable`
+/// (`maxInt(usize)`, C's `(size_t)-1`) = unroutable — empty
+/// plugin/command, no handler registered in this build, a game shape
+/// without the mixin, or not bound. Handlers name-filter the broadcast
+/// themselves, so a name no plugin claims still returns 0 wherever a
+/// handler exists — dispatched-and-ignored is indistinguishable from
+/// handled BY DESIGN; responses and acks arrive as game events through
+/// the subscribe/poll tap. `out`/`out_cap` are RESERVED for handler
+/// response payloads (a future minor revision: required-size return
+/// with `labelle_component_get`'s all-or-nothing write; 0 keeps its
+/// dispatched-no-response meaning, the sentinel stays unroutable);
+/// v1.1 never writes them — pass NULL/0.
+pub export fn labelle_plugin_call(
+    plugin_ptr: [*]const u8,
+    plugin_len: usize,
+    command_ptr: [*]const u8,
+    command_len: usize,
+    params_ptr: ?[*]const u8,
+    params_len: usize,
+    out: ?[*]u8,
+    out_cap: usize,
+) usize {
+    // Reserved for handler responses (see the doc above) — v1.1 never
+    // writes them.
+    _ = out;
+    _ = out_cap;
+    const vt = vtable orelse return plugin_call_unroutable;
+    if (plugin_len == 0 or command_len == 0) return plugin_call_unroutable;
+    const rc = vt.plugin_call(
+        plugin_ptr[0..plugin_len],
+        command_ptr[0..command_len],
+        optionalJson(params_ptr, params_len, "{}"),
+    );
+    return if (rc == 0) 0 else plugin_call_unroutable;
+}
+
 // ── Implementation ──────────────────────────────────────────────────
 
 /// The documented consumer gate for `Game.GameEvents` (see game.zig):
@@ -882,6 +975,7 @@ fn Holder(comptime GP: type) type {
             .input_key_down = &inputKeyDownImpl,
             .input_key_pressed = &inputKeyPressedImpl,
             .input_mouse = &inputMouseImpl,
+            .plugin_call = &pluginCallImpl,
         };
 
         // ── Entities ─────────────────────────────────────────────
@@ -1404,6 +1498,23 @@ fn Holder(comptime GP: type) type {
 
         fn inputMouseImpl() core.Position {
             return .{ .x = G.Input.getMouseX(), .y = G.Input.getMouseY() };
+        }
+
+        // ── Plugin commands ──────────────────────────────────────
+
+        /// Straight through the game's `editorPluginCommand` mixin —
+        /// the very dispatch the `editor_plugin_command` bridge export
+        /// uses, NOT a reimplementation: the routing/handler-channel
+        /// decision lives in `game/editor_command_mixin.zig` alone.
+        /// Every GameConfig-built Game carries the decl; the `@hasDecl`
+        /// belt keeps a minimal duck-typed stand-in compiling (it
+        /// degrades to the unroutable -1) — the same belt editor_api's
+        /// pluginCommandImpl wears. A game whose merged `GameEvents`
+        /// never consumed `engine__editor_plugin_command` folds to -1
+        /// INSIDE the mixin (the zero-cost no-handler gate).
+        fn pluginCallImpl(plugin: []const u8, command: []const u8, params_json: []const u8) i32 {
+            if (comptime !@hasDecl(G, "editorPluginCommand")) return -1;
+            return game.editorPluginCommand(plugin, command, params_json);
         }
 
         // ── Helpers ──────────────────────────────────────────────

@@ -127,6 +127,22 @@ fn findEntity(name: []const u8) u64 {
     return contract.labelle_entity_find(name.ptr, name.len);
 }
 
+/// Call plugin_call with the reserved out-buffer at its documented
+/// v1.1 shape (NULL/0). The reserved-buffer canary test drives
+/// `labelle_plugin_call` directly instead.
+fn pluginCall(plugin: []const u8, command: []const u8, params: []const u8) usize {
+    return contract.labelle_plugin_call(
+        plugin.ptr,
+        plugin.len,
+        command.ptr,
+        command.len,
+        params.ptr,
+        params.len,
+        null,
+        0,
+    );
+}
+
 /// Parse a query result (`[3,7]`) and check it equals `expected` as a
 /// SET — the mock backend iterates a hash map, so id order is
 /// unspecified.
@@ -184,6 +200,11 @@ test "pre-bind: every export is a safe no-op" {
     try testing.expectEqual(@as(i32, -1), removeComp(1, "Health"));
     try testing.expectEqual(@as(i32, -1), emitEvent("turret__fired", "{}"));
     try testing.expectEqual(@as(i32, -1), contract.labelle_scene_change("main", 4));
+    // plugin_call carries its rc in a usize: pre-bind is unroutable.
+    try testing.expectEqual(
+        contract.plugin_call_unroutable,
+        pluginCall("pathfinder", "navigate", "{}"),
+    );
 
     // Boolean / out-writing ops: 0 bytes, 0 answer.
     try testing.expectEqual(@as(i32, 0), hasComp(1, "Health"));
@@ -1826,4 +1847,215 @@ test "input_mouse: writes the reported position; NULL out-pointers are skipped" 
     contract.labelle_input_mouse(null, &only_y);
     try testing.expectEqual(@as(f32, 240.0), only_y);
     contract.labelle_input_mouse(&x, null); // both-write path already checked
+}
+
+// ── labelle_plugin_call: cross-language plugin commands (v1.1, #744) ──
+//
+// The export routes through the SAME handler channel labelle-studio's
+// panels use — the game's `editorPluginCommand` mixin
+// (`game/editor_command_mixin.zig`): a synchronous `emitSync` of
+// `engine__editor_plugin_command` to the handler a plugin registered by
+// subscribing to that engine event, so one registration is dual-use
+// (studio + every language). Dispatch is fire-and-forward; the usize
+// return is an rc — 0 = dispatched, `plugin_call_unroutable` = empty
+// name / no handler in this build / not bound. These tests register a
+// recorder through the REAL registration path (a hooks subscriber to
+// the engine event — the editor_api_test shape) and pin both legs plus
+// the reserved out-buffer.
+
+const PluginCallEvents = union(enum) {
+    engine__editor_plugin_command: engine.Events.editor_plugin_command,
+};
+
+const PluginCallRecorder = struct {
+    count: usize = 0,
+    last_plugin_buf: [64]u8 = undefined,
+    last_plugin_len: usize = 0,
+    last_command_buf: [64]u8 = undefined,
+    last_command_len: usize = 0,
+    last_params_buf: [128]u8 = undefined,
+    last_params_len: usize = 0,
+
+    // Dispatch is SYNCHRONOUS, so the borrowed script-owned slices are
+    // valid here; copy them out because the assertions read after the
+    // call returns.
+    pub fn engine__editor_plugin_command(self: *PluginCallRecorder, info: anytype) void {
+        self.count += 1;
+        @memcpy(self.last_plugin_buf[0..info.plugin.len], info.plugin);
+        self.last_plugin_len = info.plugin.len;
+        @memcpy(self.last_command_buf[0..info.command.len], info.command);
+        self.last_command_len = info.command.len;
+        @memcpy(self.last_params_buf[0..info.params.len], info.params);
+        self.last_params_len = info.params.len;
+    }
+    fn lastPlugin(self: *const PluginCallRecorder) []const u8 {
+        return self.last_plugin_buf[0..self.last_plugin_len];
+    }
+    fn lastCommand(self: *const PluginCallRecorder) []const u8 {
+        return self.last_command_buf[0..self.last_command_len];
+    }
+    fn lastParams(self: *const PluginCallRecorder) []const u8 {
+        return self.last_params_buf[0..self.last_params_len];
+    }
+};
+
+/// A project whose merged `GameEvents` carries the plugin-command
+/// channel (a plugin consumed `engine__editor_plugin_command`) — the
+/// wired-up path.
+const PluginCallGame = engine.GameConfig(
+    core.StubRender(MockEcs.Entity),
+    MockEcs,
+    engine.StubInput,
+    engine.StubAudio,
+    engine.StubVideo,
+    engine.StubGui,
+    *PluginCallRecorder,
+    core.StubLogSink,
+    TestComponents,
+    &.{},
+    PluginCallEvents,
+);
+
+test "plugin_call: routes through the editorPluginCommand mixin to the registered handler" {
+    contract.unbind();
+    defer contract.unbind();
+
+    var recorder = PluginCallRecorder{};
+    var game = PluginCallGame.init(testing.allocator);
+    defer game.deinit();
+    game.setHooks(&recorder);
+    contract.bind(&game);
+
+    // One call, the handler fired synchronously (before the return),
+    // {plugin, command, params} verbatim.
+    try testing.expectEqual(
+        @as(usize, 0),
+        pluginCall("pathfinder", "navigate", "{\"entity\":7,\"to\":{\"x\":3,\"y\":4}}"),
+    );
+    try testing.expectEqual(@as(usize, 1), recorder.count);
+    try testing.expectEqualStrings("pathfinder", recorder.lastPlugin());
+    try testing.expectEqualStrings("navigate", recorder.lastCommand());
+    try testing.expectEqualStrings("{\"entity\":7,\"to\":{\"x\":3,\"y\":4}}", recorder.lastParams());
+
+    // The channel is a BROADCAST handlers name-filter themselves: a
+    // plugin/command no handler claims still dispatches as 0 wherever a
+    // handler exists — dispatched-and-ignored is indistinguishable from
+    // handled (the documented encoding; acks travel back as events).
+    try testing.expectEqual(@as(usize, 0), pluginCall("nonexistent_plugin", "whatever", "{}"));
+    try testing.expectEqual(@as(usize, 2), recorder.count);
+    try testing.expectEqualStrings("nonexistent_plugin", recorder.lastPlugin());
+
+    // out/out_cap are RESERVED in v1.1: never written even on a
+    // dispatched call (canary intact), and the return stays the rc.
+    var out: [32]u8 = undefined;
+    @memset(&out, 0xAA);
+    const plugin = "pathfinder";
+    const command = "navigate";
+    const params = "{}";
+    try testing.expectEqual(@as(usize, 0), contract.labelle_plugin_call(
+        plugin.ptr,
+        plugin.len,
+        command.ptr,
+        command.len,
+        params.ptr,
+        params.len,
+        &out,
+        out.len,
+    ));
+    for (out) |b| try testing.expectEqual(@as(u8, 0xAA), b);
+    try testing.expectEqual(@as(usize, 3), recorder.count);
+}
+
+test "plugin_call: NULL/len-0 params dispatch as {} (the optionalJson convention)" {
+    contract.unbind();
+    defer contract.unbind();
+
+    var recorder = PluginCallRecorder{};
+    var game = PluginCallGame.init(testing.allocator);
+    defer game.deinit();
+    game.setHooks(&recorder);
+    contract.bind(&game);
+
+    // NULL params — a C caller's natural "no arguments".
+    const plugin = "pathfinder";
+    const command = "cancel";
+    try testing.expectEqual(@as(usize, 0), contract.labelle_plugin_call(
+        plugin.ptr,
+        plugin.len,
+        command.ptr,
+        command.len,
+        null,
+        0,
+        null,
+        0,
+    ));
+    try testing.expectEqual(@as(usize, 1), recorder.count);
+    try testing.expectEqualStrings("{}", recorder.lastParams());
+
+    // Non-NULL empty params take the same default.
+    try testing.expectEqual(@as(usize, 0), pluginCall("pathfinder", "cancel", ""));
+    try testing.expectEqual(@as(usize, 2), recorder.count);
+    try testing.expectEqualStrings("{}", recorder.lastParams());
+}
+
+test "plugin_call: unroutable sentinel — pre-bind, no handler channel, empty names" {
+    contract.unbind();
+    defer contract.unbind();
+
+    // The sentinel is the rc convention's -1 as a usize — the header's
+    // ((size_t)-1) — pinned so the C define and the Zig const can't
+    // drift apart.
+    try testing.expectEqual(std.math.maxInt(usize), contract.plugin_call_unroutable);
+
+    // Pre-bind: the documented no-op — unroutable, nothing dispatched.
+    try testing.expectEqual(
+        contract.plugin_call_unroutable,
+        pluginCall("pathfinder", "navigate", "{}"),
+    );
+
+    // Bound to a game whose GameEvents never consumed
+    // `engine__editor_plugin_command` (ContractGame's TestEvents): no
+    // handler registered in this build, so the mixin's comptime gate
+    // folds to the graceful degrade. This is what "unknown plugin"
+    // looks like at the engine level — nobody subscribed, unroutable.
+    {
+        var game = ContractGame.init(testing.allocator);
+        defer game.deinit();
+        contract.bind(&game);
+        try testing.expectEqual(
+            contract.plugin_call_unroutable,
+            pluginCall("pathfinder", "navigate", "{}"),
+        );
+    }
+    contract.unbind();
+
+    // Bound WITH a handler channel but an empty plugin/command: refused
+    // before dispatch — the handler never fires.
+    var recorder = PluginCallRecorder{};
+    var game = PluginCallGame.init(testing.allocator);
+    defer game.deinit();
+    game.setHooks(&recorder);
+    contract.bind(&game);
+    try testing.expectEqual(contract.plugin_call_unroutable, pluginCall("", "navigate", "{}"));
+    try testing.expectEqual(contract.plugin_call_unroutable, pluginCall("pathfinder", "", "{}"));
+    try testing.expectEqual(@as(usize, 0), recorder.count);
+}
+
+test "plugin_call: the minimal engine.Game shape compiles and degrades to unroutable" {
+    contract.unbind();
+    defer contract.unbind();
+
+    // engine.Game is the GameWith(void) shape (EmptyComponents,
+    // `GameEvents = void`): the mixin decl exists but its handler
+    // channel comptime-folds away — the call must compile and return
+    // the degrade sentinel, never crash (the event-emit refusal test's
+    // pattern).
+    var game = engine.Game.init(testing.allocator);
+    defer game.deinit();
+    contract.bind(&game);
+
+    try testing.expectEqual(
+        contract.plugin_call_unroutable,
+        pluginCall("pathfinder", "navigate", "{}"),
+    );
 }
