@@ -3,7 +3,7 @@
 **Issue:** labelle-toolkit/labelle-engine#723  
 **Status:** Draft  
 **Author:** Alexandre  
-**Date:** 2026-07-08 (rev 2, 2026-07-09 — verified architecture across gfx/engine/backends; rev 3 — default-camera invariant; rev 4 — review findings: reset-then-seed, `getCameraByTag`, tag serde, minimap boundary)
+**Date:** 2026-07-08 (rev 2, 2026-07-09 — verified architecture across gfx/engine/backends; rev 3 — default-camera invariant; rev 4 — review findings: reset-then-seed, `getCameraByTag`, tag serde, minimap boundary; rev 5, 2026-07-10 — seeding/duplicate-tag consistency, deterministic `getCameraByTag`, scene-loader + per-camera digest channels, both-hooks constraint)
 
 ## Problem
 
@@ -90,18 +90,25 @@ pub const Camera = struct {
     zoom: f32 = 1.0,
     viewport: ?Viewport = null,
     /// Layers whose binding equals this tag are transformed by this camera.
-    tag: []const u8 = "main", // storage: bounded/interned — see note
+    /// CONCEPTUAL type — the field is stored bounded/interned, never a heap
+    /// slice; see "Tag storage & serde" directly below.
+    tag: []const u8 = "main",
 };
 ```
 
-**Tag storage & serde (implementation note).** `Camera` deliberately has no string fields today — `applyCameraComponentJson` (`camera_mixin.zig:88`) parses patches with a transient call-scoped arena, so a heap `[]const u8` would dangle. But the tag vocabulary is **comptime-closed**: it is exactly the set of tags authored in `project.labelle` layer bindings, plus `"main"`. So the component stores a bounded inline buffer (`[16:0]u8`) or an index into the comptime tag table — never an allocated slice — and validation against the vocabulary happens at seed time. The built-in Camera channels must round-trip the tag: save/load serde, the studio digest (`camera:{zoom,viewport?,view}` → gains `tag`), and the `editor_set_component` bridge (contract bump alongside the field).
+**Tag storage & serde (implementation note).** `Camera` deliberately has no string fields today — `applyCameraComponentJson` (`camera_mixin.zig:88`) parses patches with a transient call-scoped arena, so a heap `[]const u8` would dangle. But the tag vocabulary is **comptime-closed**: it is exactly the set of tags authored in `project.labelle` layer bindings, plus `"main"`. So the component stores a bounded inline buffer (`[16:0]u8`) or an index into the comptime tag table — never an allocated slice — and validation against the vocabulary happens at seed time. Every built-in Camera channel must round-trip the tag:
+
+- the **scene/prefab loader** (`jsonc_scene_bridge`) — the *initial authoring* channel: `"Camera": { "zoom": 1.0, "tag": "sky_parallax" }` must parse into the bounded field;
+- **save/load** serde;
+- the **studio digest** — `camera:{zoom,viewport?,view}` gains `tag`, and the `view` sub-object must be resolved **per tagged camera** (today it reads the slot-0 renderer camera; a secondary camera's digest must read *its* slot);
+- the **`editor_set_component` bridge** (contract bump alongside the field).
 
 ### Engine seeding: first-match → all-matches (slot 0 reserved)
 
 `seedCameraFromComponent` becomes a **reset-then-seed** pass. It first deactivates slots 1–3 and clears the tag map (slot 0 / `"main"` untouched) — otherwise a camera removed by a scene change or reload would leave a stale active slot that bound layers keep rendering through. Then it iterates **all** `{Position, Camera}` entities (drop the early `return` at `camera_mixin.zig:47`):
 
 - **tag `"main"`** → configure slot 0 (position/zoom — the existing #714 behavior). First `"main"` wins; extras warn once (multi-`"main"` authoring = split-screen, Phase 3).
-- **other tags** → next free slot 1–3; seed position/zoom from the entity (`getWorldPosition` + `Camera`), record `tag → slot`, mark active.
+- **other tags** → same rule, uniformly: **first camera per tag wins in Phase 1** (extras warn once; fan-out seeding activates in Phase 3). The winner takes the next free slot 1–3, seeded position/zoom from the entity (`getWorldPosition` + `Camera`), recorded in the tag map, marked active.
 - **zero matches** → done. The default camera in slot 0 remains, at its current state (defaults, or wherever an imperative driver put it). No `Camera` entity is ever required.
 
 Reseed triggers: the existing three (scene load `scene_mixin.zig:534/:712`, hot reload `loop_mixin.zig:187`, apply-while-paused `editor_api.zig:143`) **plus `loadGameState`** — the save-load path reattaches `Camera` components without any seed call (`save_load/load.zig:584-610`), so tagged cameras in a save would otherwise come back with dead slots.
@@ -113,6 +120,8 @@ Reseed triggers: the existing three (scene load `scene_mixin.zig:534/:712`, hot 
 ```zig
 game.getCameraByTag("sky_parallax")  // → ?*CameraType (the gfx slot camera), null if unseeded
 ```
+
+Selection is deterministic when a tag is one-to-many: `getCameraByTag` returns the **lowest active slot** carrying the tag (stable across frames; for `"main"` that is always slot 0). A plural accessor for fan-out scripting is Phase-3 work if split-screen ever needs it.
 
 Gameplay scripts drive the returned slot camera imperatively — the parallax follow script is then really three lines: read `getCamera()` (main), compute the fractional target, `setPosition` on `getCameraByTag("sky_parallax")`. The component is not written back, mirroring how `camera_control` drives the main camera today.
 
@@ -145,7 +154,10 @@ inline for (sorted_layers) |layer| {
         // Unbound — or bound to a tag with no active camera (missing /
         // misspelled prefab; warn once): degrade to the unbound default.
         // World layers render through the default camera (slot 0);
-        // screen layers render pinned, full window.
+        // screen layers render pinned, full window. (Whether pinned HUD
+        // layers should instead replicate per viewport under split-screen
+        // is the first Open question; this sketch shows the once-full-
+        // window baseline.)
         clearViewport();
         ...setApplyFit + (default cam begin/end for .world) + renderLayer...
     }
@@ -195,7 +207,7 @@ Zero migration:
 ## Phasing
 
 - **Phase 1 — parallax (no viewports).** Three repos, all seams verified:
-  - *gfx*: `LayerConfig.camera` (`src/layer.zig:20`); tag storage on manager cameras; invert `render()`/`renderThroughCamera` to layer-outer (`src/renderer.zig:525-583`). Constraint: preserve the `renderWithLayerHooks` contract — `on_before_layers` (the engine's `tilemapBackgroundHook`) must still fire once per active camera before its first world layer (`loop_mixin.zig:249-272`), so the inversion hoists a per-camera prelude rather than dropping the hook.
+  - *gfx*: `LayerConfig.camera` (`src/layer.zig:20`); tag storage on manager cameras; invert `render()`/`renderThroughCamera` to layer-outer (`src/renderer.zig:525-583`). Constraint: preserve **both** `renderWithLayerHooks` hooks across the inversion — `on_before_layers` (the engine's `tilemapBackgroundHook`) still fires once per active camera before its first layer (`loop_mixin.zig:249-272`), and `on_after_layer` (tilemap interleaves) still fires after **each layer × camera pass, inside that camera's transform and fit mode** — a bound tilemap layer must interleave under its bound camera, not the default one.
   - *engine*: `Camera.tag` (`src/camera.zig:38`, bounded storage per the serde note); reset-then-seed `seedCameraFromComponent` + `loadGameState` trigger (`camera_mixin.zig:34-49`); `getCameraByTag` accessor; digest/bridge round-trip of `tag`.
   - *assembler*: `LayerDef.camera` + conditional emit (`src/codegen/main_template.zig:500`).
   - Prove on FP: clouds drift against the platform via a `"sky_parallax"` camera driven by a follow script on `getCameraByTag`.
