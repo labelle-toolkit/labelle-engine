@@ -81,6 +81,9 @@ pub const Camera = @import("camera.zig").Camera;
 /// Engine-local screen-space viewport rect carried by `Camera.viewport`
 /// (renderer-agnostic; inert in the single-camera MVP). See `src/camera.zig`.
 pub const CameraViewport = @import("camera.zig").Viewport;
+/// The `Camera` component module — exposes `makeTag` / `tag_capacity` for the
+/// inline camera-tag buffer (camera-bound layers, #723/#724).
+pub const camera_mod = @import("camera.zig");
 
 // ── Input ──
 pub const InputInterface = input_mod.InputInterface;

@@ -305,18 +305,19 @@ pub export fn editor_set_entity_position(id: u64, x: f32, y: f32) void {
 }
 
 /// Set component `name` on entity `id` from a JSON object — the general
-/// per-component edit seam (editor-bridge contract **v1.5**, camera-prefabs
-/// #714). `editor_set_entity_position` stays the drag hot-path; this is the
-/// general path the inspector grows into.
+/// per-component edit seam (editor-bridge contract **v1.6**, camera-bound
+/// layers #723/#724; was v1.5 for camera-prefabs #714). `editor_set_entity_position`
+/// stays the drag hot-path; this is the general path the inspector grows into.
 ///
 /// **Allowlisted** (MVP): only the vetted `"Camera"` built-in is accepted — a
-/// `{"zoom":…}` (and, when authored, `"viewport":{…}`) object. Any other name
-/// returns -1; there is deliberately no blanket apply-any-component path.
+/// `{"zoom":…}` (and, when authored, `"viewport":{…}` / `"tag":"…"`) object.
+/// Any other name returns -1; there is deliberately no blanket
+/// apply-any-component path.
 ///
 /// **Merge/patch semantics**: only the keys PRESENT in the JSON overwrite the
 /// entity's existing `Camera` — a `{"zoom":…}` patch preserves a prior
-/// `viewport`. A default `Camera` is materialized when the entity has none. On
-/// success the live `getCamera()` is re-seeded so a paused preview updates
+/// `viewport` and `tag`. A default `Camera` is materialized when the entity has
+/// none. On success the live camera is re-seeded so a paused preview updates
 /// immediately.
 ///
 /// Returns 0 = ok; -1 = not bound / unknown id / unknown-or-unvetted
@@ -346,14 +347,15 @@ pub export fn editor_pick(x: f32, y: f32) i64 {
 /// `cap`) and return the number of bytes written. Shape:
 /// `{"scene":"...","state":"...","paused":0|1,"entity_count":N,
 ///   "entities":[{"id":<u64>,"prefab":"?","sprite":"?","tilemap":"?",
-///     "camera":{"zoom":f,"viewport"?:{x,y,width,height},
+///     "camera":{"zoom":f,"tag":"...","viewport"?:{x,y,width,height},
 ///               "view":{x,y,width,height}},"x":f,"y":f},...]}`
 /// `prefab`/`sprite`/`tilemap`/`camera` appear only when the entity
-/// carries them; a Camera entity's `viewport` is present only when
-/// authored, while `view` is the derived WORLD-space visible rect
-/// (`getCamera().getViewport()`) the studio draws its gizmo from. `x`/`y`
-/// are WORLD coordinates (the same space `editor_set_entity_position`
-/// consumes).
+/// carries them; a Camera entity's `tag` (camera-bound layers #723/#724,
+/// contract v1.6) is always present and its `viewport` only when authored,
+/// while `view` is the derived WORLD-space visible rect resolved against THAT
+/// camera's own slot (`getCameraByTag(tag) orelse getCamera()`) — the rect the
+/// studio draws its gizmo from. `x`/`y` are WORLD coordinates (the same space
+/// `editor_set_entity_position` consumes).
 /// The entity list is
 /// truncated to fit `cap` while `entity_count` keeps the full count —
 /// the output is always valid JSON (worst case `{}`; 0 bytes only when
@@ -665,6 +667,10 @@ fn Holder(comptime GP: type, comptime RP: type) type {
             if (comptime @hasDecl(G, "CameraComp") and G.camera_is_builtin) {
                 if (game.getComponent(ent, G.CameraComp)) |cam| {
                     try appendFmt(buf, cur, ",\"camera\":{{\"zoom\":{d}", .{jsonSafeFloat(cam.zoom)});
+                    // Camera tag (camera-bound layers, #723/#724) so the studio
+                    // round-trips the slot binding and can resolve `view` below.
+                    try appendLit(buf, cur, ",\"tag\":");
+                    try appendJsonString(buf, cur, cam.tagSlice());
                     if (cam.viewport) |vp| {
                         try appendFmt(buf, cur, ",\"viewport\":{{\"x\":{d},\"y\":{d},\"width\":{d},\"height\":{d}}}", .{
                             vp.x, vp.y, vp.width, vp.height,
@@ -679,7 +685,13 @@ fn Holder(comptime GP: type, comptime RP: type) type {
                         break :blk @hasDecl(G.CameraType, "getViewport");
                     };
                     if (emit_view) {
-                        const vr = game.getCamera().getViewport();
+                        // Resolve `view` against THIS camera's own slot: a
+                        // secondary camera's visible rect must come from the
+                        // slot its tag bound (findByTag), not slot 0. Falls back
+                        // to the primary camera when the tag isn't bound yet
+                        // (e.g. an unseeded "main"), preserving prior behavior.
+                        const view_cam = game.getCameraByTag(cam.tagSlice()) orelse game.getCamera();
+                        const vr = view_cam.getViewport();
                         try appendFmt(buf, cur, ",\"view\":{{\"x\":{d},\"y\":{d},\"width\":{d},\"height\":{d}}}", .{
                             jsonSafeFloat(vr.x), jsonSafeFloat(vr.y), jsonSafeFloat(vr.width), jsonSafeFloat(vr.height),
                         });

@@ -834,6 +834,9 @@ const CamCamera = struct {
     x: f32 = 0,
     y: f32 = 0,
     zoom: f32 = 1,
+    // Inline tag buffer, mirroring gfx `CameraWith.tag_buf` (#723/#724).
+    tag_buf: [16:0]u8 = [_:0]u8{0} ** 16,
+    tag_len: u8 = 0,
 
     const ViewRect = struct { x: f32, y: f32, width: f32, height: f32 };
 
@@ -848,6 +851,60 @@ const CamCamera = struct {
         const w = 800.0 / self.zoom;
         const h = 600.0 / self.zoom;
         return .{ .x = self.x - w / 2.0, .y = self.y - h / 2.0, .width = w, .height = h };
+    }
+    pub fn setTag(self: *CamCamera, s: []const u8) void {
+        const n = @min(s.len, 15);
+        @memcpy(self.tag_buf[0..n], s[0..n]);
+        self.tag_buf[n] = 0;
+        self.tag_len = @intCast(n);
+    }
+    pub fn clearTag(self: *CamCamera) void {
+        self.tag_len = 0;
+        self.tag_buf[0] = 0;
+    }
+    pub fn hasTag(self: *const CamCamera, s: []const u8) bool {
+        return std.mem.eql(u8, self.tag_buf[0..self.tag_len], s);
+    }
+};
+
+/// 4-slot camera manager mirroring gfx `CameraManagerWith`'s tag API
+/// (camera-bound layers #723/#724): the exact seam the engine seed drives.
+const CamCameraManager = struct {
+    cameras: [4]CamCamera = .{ .{}, .{}, .{}, .{} },
+    active_mask: u4 = 0b0001,
+    selected: u2 = 0,
+
+    pub fn getCamera(self: *CamCameraManager, index: u2) *CamCamera {
+        return &self.cameras[index];
+    }
+    pub fn isActive(self: *const CamCameraManager, index: u2) bool {
+        return (self.active_mask & (@as(u4, 1) << index)) != 0;
+    }
+    pub fn setActive(self: *CamCameraManager, index: u2, active: bool) void {
+        if (active) {
+            self.active_mask |= (@as(u4, 1) << index);
+        } else {
+            self.active_mask &= ~(@as(u4, 1) << index);
+        }
+    }
+    pub fn setTag(self: *CamCameraManager, index: u2, s: []const u8) void {
+        self.cameras[index].setTag(s);
+    }
+    pub fn findByTag(self: *CamCameraManager, s: []const u8) ?*CamCamera {
+        var i: u3 = 0;
+        while (i < 4) : (i += 1) {
+            const idx: u2 = @intCast(i);
+            if (self.isActive(idx) and self.cameras[idx].hasTag(s)) return &self.cameras[idx];
+        }
+        return null;
+    }
+    pub fn resetSecondary(self: *CamCameraManager) void {
+        var i: u3 = 1;
+        while (i < 4) : (i += 1) {
+            const idx: u2 = @intCast(i);
+            self.setActive(idx, false);
+            self.cameras[idx].clearTag();
+        }
     }
 };
 
@@ -885,9 +942,9 @@ fn CamRender(comptime Entity: type) type {
         };
 
         pub const CameraType = CamCamera;
-        pub const CameraManagerType = struct {};
+        pub const CameraManagerType = CamCameraManager;
 
-        camera: CamCamera = .{},
+        mgr: CamCameraManager = .{},
         tracked_count: usize = 0,
         render_count: usize = 0,
 
@@ -918,11 +975,12 @@ fn CamRender(comptime Entity: type) type {
             return false;
         }
         pub fn getCamera(self: *Self) *CamCamera {
-            return &self.camera;
+            // The selected (primary) camera — slot 0 in single-camera mode,
+            // matching gfx `GfxRenderer.getCamera`.
+            return &self.mgr.cameras[self.mgr.selected];
         }
         pub fn getCameraManager(self: *Self) *CameraManagerType {
-            _ = self;
-            return undefined;
+            return &self.mgr;
         }
     };
 }
@@ -1397,4 +1455,313 @@ test "save/load: the built-in Camera round-trips zoom + viewport (finding #5)" {
     try testing.expect(restored.?.viewport != null);
     try testing.expectEqual(@as(i32, 320), restored.?.viewport.?.width);
     try testing.expectEqual(@as(i32, 6), restored.?.viewport.?.y);
+}
+
+// ── Camera-bound layers: tagged multi-camera seeding (#723/#724) ─────────────
+
+test "Camera.tag defaults to \"main\" and round-trips through the bounded buffer" {
+    var cam = engine.Camera{};
+    try testing.expectEqualStrings("main", cam.tagSlice());
+    cam.setTagSlice("sky_parallax");
+    try testing.expectEqualStrings("sky_parallax", cam.tagSlice());
+    // Over-long tags are truncated to the 15-byte capacity, never overrun.
+    cam.setTagSlice("0123456789abcdefGHIJK");
+    try testing.expectEqual(@as(usize, 15), cam.tagSlice().len);
+    try testing.expectEqualStrings("0123456789abcde", cam.tagSlice());
+}
+
+test "camera multi-seed: main → slot 0; secondary tags claim slots 1..3 (reset-then-seed)" {
+    editor_api.unbind();
+    defer editor_api.unbind();
+
+    var game = CameraTestGame.init(testing.allocator);
+    defer game.deinit();
+
+    const main_ent = game.createEntity();
+    game.setPosition(main_ent, .{ .x = 640, .y = 360 });
+    game.addComponent(main_ent, engine.Camera{ .zoom = 1.0 }); // default tag "main"
+
+    const sky_ent = game.createEntity();
+    game.setPosition(sky_ent, .{ .x = 100, .y = 50 });
+    game.addComponent(sky_ent, engine.Camera{ .zoom = 2.0, .tag = engine.camera_mod.makeTag("sky") });
+
+    const mini_ent = game.createEntity();
+    game.setPosition(mini_ent, .{ .x = 900, .y = 700 });
+    game.addComponent(mini_ent, engine.Camera{ .zoom = 0.5, .tag = engine.camera_mod.makeTag("minimap") });
+
+    game.seedCameraFromComponent();
+
+    const mgr = game.getCameraManager();
+    // Slot 0 = main, seeded via getCamera() and tagged "main".
+    try testing.expectEqual(@as(f32, 640), game.getCamera().x);
+    try testing.expectEqual(@as(f32, 360), game.getCamera().y);
+    try testing.expect(mgr.isActive(0));
+    try testing.expect(mgr.cameras[0].hasTag("main"));
+
+    // Each secondary tag resolves to an ACTIVE slot carrying its authored
+    // world position + zoom (resolution is tag-based, order-independent).
+    const sky = mgr.findByTag("sky") orelse return error.SkyNotBound;
+    try testing.expectEqual(@as(f32, 100), sky.x);
+    try testing.expectEqual(@as(f32, 50), sky.y);
+    try testing.expectEqual(@as(f32, 2.0), sky.zoom);
+
+    const mini = mgr.findByTag("minimap") orelse return error.MinimapNotBound;
+    try testing.expectEqual(@as(f32, 0.5), mini.zoom);
+
+    // Exactly two secondary slots claimed (1 and 2); slot 3 stays inactive.
+    try testing.expect(mgr.isActive(1));
+    try testing.expect(mgr.isActive(2));
+    try testing.expect(!mgr.isActive(3));
+}
+
+test "camera reseed: resetSecondary drops a removed secondary camera's slot" {
+    editor_api.unbind();
+    defer editor_api.unbind();
+
+    var game = CameraTestGame.init(testing.allocator);
+    defer game.deinit();
+
+    const sky_ent = game.createEntity();
+    game.setPosition(sky_ent, .{ .x = 100, .y = 50 });
+    game.addComponent(sky_ent, engine.Camera{ .zoom = 2.0, .tag = engine.camera_mod.makeTag("sky") });
+    game.seedCameraFromComponent();
+
+    const mgr = game.getCameraManager();
+    try testing.expect(mgr.findByTag("sky") != null);
+
+    // Remove the camera entity and re-seed: the stale secondary slot is
+    // deactivated + untagged (slot 0 is never touched).
+    game.destroyEntity(sky_ent);
+    game.seedCameraFromComponent();
+    try testing.expect(mgr.findByTag("sky") == null);
+    try testing.expect(!mgr.isActive(1));
+    try testing.expect(mgr.isActive(0)); // main slot survives
+}
+
+test "camera zero-noop: no Camera entities leaves the slot-0 default camera untouched" {
+    editor_api.unbind();
+    defer editor_api.unbind();
+
+    var game = CameraTestGame.init(testing.allocator);
+    defer game.deinit();
+
+    // Author a distinctive slot-0 state, then seed a scene with NO Camera.
+    game.getCamera().setPosition(1234, 5678);
+    game.getCamera().setZoom(3.3);
+    game.seedCameraFromComponent();
+
+    // Invariant: a Camera-less scene renders exactly as before — slot 0 is
+    // left exactly as it was; no secondary slot is activated.
+    try testing.expectEqual(@as(f32, 1234), game.getCamera().x);
+    try testing.expectEqual(@as(f32, 3.3), game.getCamera().zoom);
+    const mgr = game.getCameraManager();
+    try testing.expect(!mgr.isActive(1));
+    try testing.expect(!mgr.isActive(2));
+    try testing.expect(!mgr.isActive(3));
+}
+
+test "camera first-per-tag: a duplicate tag keeps the first camera, ignores extras" {
+    editor_api.unbind();
+    defer editor_api.unbind();
+
+    var game = CameraTestGame.init(testing.allocator);
+    defer game.deinit();
+
+    const a = game.createEntity();
+    game.setPosition(a, .{ .x = 10, .y = 20 });
+    game.addComponent(a, engine.Camera{ .zoom = 1.0, .tag = engine.camera_mod.makeTag("hud") });
+
+    const b = game.createEntity();
+    game.setPosition(b, .{ .x = 999, .y = 888 });
+    game.addComponent(b, engine.Camera{ .zoom = 9.0, .tag = engine.camera_mod.makeTag("hud") });
+
+    game.seedCameraFromComponent();
+
+    const mgr = game.getCameraManager();
+    // Only ONE slot carries "hud" — the first-seen camera; the duplicate did
+    // not claim a second slot.
+    const hud = mgr.findByTag("hud") orelse return error.HudNotBound;
+    try testing.expectEqual(@as(f32, 10), hud.x);
+    try testing.expectEqual(@as(f32, 1.0), hud.zoom);
+    try testing.expect(mgr.isActive(1));
+    try testing.expect(!mgr.isActive(2)); // the duplicate was ignored
+}
+
+test "camera overflow: a 4th secondary tag past slots 1..3 is ignored" {
+    editor_api.unbind();
+    defer editor_api.unbind();
+
+    var game = CameraTestGame.init(testing.allocator);
+    defer game.deinit();
+
+    inline for (.{ "a", "b", "c", "d" }) |t| {
+        const e = game.createEntity();
+        game.setPosition(e, .{ .x = 0, .y = 0 });
+        game.addComponent(e, engine.Camera{ .tag = engine.camera_mod.makeTag(t) });
+    }
+    game.seedCameraFromComponent();
+
+    const mgr = game.getCameraManager();
+    // Three of the four claimed slots 1..3; the fourth overflowed and was
+    // dropped. All three secondary slots are active.
+    try testing.expect(mgr.isActive(1));
+    try testing.expect(mgr.isActive(2));
+    try testing.expect(mgr.isActive(3));
+    var bound: usize = 0;
+    inline for (.{ "a", "b", "c", "d" }) |t| {
+        if (mgr.findByTag(t) != null) bound += 1;
+    }
+    try testing.expectEqual(@as(usize, 3), bound);
+}
+
+test "getCameraByTag: returns the lowest active slot carrying the tag" {
+    editor_api.unbind();
+    defer editor_api.unbind();
+
+    var game = CameraTestGame.init(testing.allocator);
+    defer game.deinit();
+
+    // Drive the manager directly to place the SAME tag on two active slots,
+    // exercising the lowest-slot forwarder (the seed enforces first-per-tag,
+    // so this is the only way to construct the ambiguity).
+    const mgr = game.getCameraManager();
+    mgr.setActive(2, true);
+    mgr.setTag(2, "dup");
+    mgr.getCamera(2).setPosition(20, 0);
+    mgr.setActive(3, true);
+    mgr.setTag(3, "dup");
+    mgr.getCamera(3).setPosition(30, 0);
+
+    const got = game.getCameraByTag("dup") orelse return error.NotFound;
+    try testing.expectEqual(@as(f32, 20), got.x); // slot 2, the lowest
+    try testing.expect(game.getCameraByTag("absent") == null);
+}
+
+test "camera load-path: loadGameState reseeds tagged cameras into their slots" {
+    editor_api.unbind();
+    defer editor_api.unbind();
+
+    var game = CameraTestGame.init(testing.allocator);
+    defer game.deinit();
+
+    const main_ent = game.createEntity();
+    game.setPosition(main_ent, .{ .x = 640, .y = 360 });
+    game.addComponent(main_ent, engine.Camera{ .zoom = 1.0 });
+
+    const sky_ent = game.createEntity();
+    game.setPosition(sky_ent, .{ .x = 100, .y = 50 });
+    game.addComponent(sky_ent, engine.Camera{ .zoom = 2.0, .tag = engine.camera_mod.makeTag("sky") });
+
+    const save_path = "test_save_camera_724.json";
+    try game.saveGameState(save_path);
+    defer std.Io.Dir.cwd().deleteFile(std.testing.io, save_path) catch {};
+
+    // Wipe ECS *and* the camera slots, then load: loadGameState must both
+    // restore the tag onto the component AND re-seed the slot binding.
+    game.resetEcsBackend();
+    game.getCameraManager().resetSecondary();
+    try testing.expect(game.getCameraManager().findByTag("sky") == null);
+
+    try game.loadGameState(save_path);
+
+    // The tag round-tripped onto the component…
+    var restored_sky: ?*engine.Camera = null;
+    var v = game.active_world.ecs_backend.view(.{ core.Position, engine.Camera }, .{});
+    defer v.deinit();
+    while (v.next()) |e| {
+        const c = game.active_world.ecs_backend.getComponent(e, engine.Camera).?;
+        if (c.tagSlice().len > 0 and std.mem.eql(u8, c.tagSlice(), "sky")) restored_sky = c;
+    }
+    try testing.expect(restored_sky != null);
+    // …and the load reseeded a live secondary slot for it.
+    const sky = game.getCameraManager().findByTag("sky") orelse return error.SkyNotReseeded;
+    try testing.expectEqual(@as(f32, 2.0), sky.zoom);
+}
+
+test "scene JSONC: an authored Camera \"tag\" seeds the inline bounded field" {
+    editor_api.unbind();
+    defer editor_api.unbind();
+
+    var game = CameraTestGame.init(testing.allocator);
+    defer game.deinit();
+
+    const Bridge = engine.JsoncSceneBridge(CameraTestGame, EmptyComponents);
+    try Bridge.loadSceneFromSource(&game,
+        \\{ "entities": [
+        \\   { "components": { "Position": { "x": 512, "y": 384 }, "Camera": { "zoom": 1.0, "tag": "sky_parallax" } } }
+        \\ ] }
+    , "prefabs");
+
+    var found: ?*engine.Camera = null;
+    var v = game.ecs_backend.view(.{ core.Position, engine.Camera }, .{});
+    defer v.deinit();
+    while (v.next()) |e| found = game.getComponent(e, engine.Camera);
+    try testing.expect(found != null);
+    // The primary authoring channel parsed the string into the bounded field
+    // (not silently defaulted to "main").
+    try testing.expectEqualStrings("sky_parallax", found.?.tagSlice());
+}
+
+test "editor_set_component: a Camera \"tag\" patch updates the bounded field and merges" {
+    editor_api.unbind();
+    defer editor_api.unbind();
+
+    var game = CameraTestGame.init(testing.allocator);
+    defer game.deinit();
+
+    const cam_ent = game.createEntity();
+    game.setPosition(cam_ent, .{ .x = 0, .y = 0 });
+    game.addComponent(cam_ent, engine.Camera{ .zoom = 1.0 }); // default tag "main"
+
+    var runner = DummyRunner{};
+    editor_api.bind(&game, &runner);
+    editor_api.editor_pause(1);
+
+    const patch = try testing.allocator.dupe(u8, "{\"tag\":\"sky\"}");
+    try testing.expectEqual(@as(i32, 0), editor_api.editor_set_component(@intCast(cam_ent), "Camera", 6, patch.ptr, patch.len));
+    testing.allocator.free(patch);
+
+    const comp = game.getComponent(cam_ent, engine.Camera).?;
+    try testing.expectEqualStrings("sky", comp.tagSlice());
+    try testing.expectEqual(@as(f32, 1.0), comp.zoom); // zoom untouched by a tag-only patch
+
+    // A wrong-shaped tag is a validation failure (-2), entity untouched.
+    try testing.expectEqual(@as(i32, -2), editor_api.editor_set_component(@intCast(cam_ent), "Camera", 6, "{\"tag\":5}", 9));
+    try testing.expectEqualStrings("sky", game.getComponent(cam_ent, engine.Camera).?.tagSlice());
+}
+
+test "digest: a Camera entity publishes its tag and resolves view against its own slot" {
+    editor_api.unbind();
+    defer editor_api.unbind();
+
+    var game = CameraTestGame.init(testing.allocator);
+    defer game.deinit();
+
+    const sky_ent = game.createEntity();
+    game.setPosition(sky_ent, .{ .x = 100, .y = 50 });
+    game.addComponent(sky_ent, engine.Camera{ .zoom = 2.0, .tag = engine.camera_mod.makeTag("sky") });
+    game.seedCameraFromComponent();
+
+    var runner = DummyRunner{};
+    editor_api.bind(&game, &runner);
+
+    var buf: [4096]u8 = undefined;
+    const json = digestInto(&buf);
+    var parsed = try std.json.parseFromSlice(std.json.Value, testing.allocator, json, .{});
+    defer parsed.deinit();
+
+    var saw = false;
+    for (parsed.value.object.get("entities").?.array.items) |item| {
+        const obj = item.object;
+        if (obj.get("id").?.integer != @as(i64, @intCast(sky_ent))) continue;
+        const cam = obj.get("camera").?.object;
+        try testing.expectEqualStrings("sky", cam.get("tag").?.string);
+        // view resolves against the secondary slot the tag bound: centered on
+        // (100, 50), sized 800/2 × 600/2.
+        const view = cam.get("view").?.object;
+        try testing.expectApproxEqAbs(@as(f64, 400.0), jsonNum(view.get("width").?), 0.01);
+        try testing.expectApproxEqAbs(@as(f64, 100.0 - 200.0), jsonNum(view.get("x").?), 0.01);
+        saw = true;
+    }
+    try testing.expect(saw);
 }

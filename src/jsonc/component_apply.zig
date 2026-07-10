@@ -142,7 +142,19 @@ pub fn ComponentApply(comptime GameType: type, comptime Components: type) type {
             if (comptime !Components.has("Camera")) {
                 if (std.mem.eql(u8, name, "Camera")) {
                     if (deserializer.deserialize(GameType.CameraComp, value, comp_alloc)) |camera| {
-                        game.addComponent(entity, camera);
+                        var cam = camera;
+                        // `tag` is an INLINE bounded buffer (`[16:0]u8`), which
+                        // the generic struct deserializer doesn't map from a
+                        // JSON string — it would silently keep the `"main"`
+                        // default. Apply the authored tag here so the primary
+                        // authoring channel (`{"Camera":{"tag":"sky_parallax"}}`)
+                        // seeds the bounded field. Absent → default `"main"`.
+                        if (value.asObject()) |o| {
+                            if (o.get("tag")) |t| {
+                                if (t.asString()) |s| cam.setTagSlice(s);
+                            }
+                        }
+                        game.addComponent(entity, cam);
                     }
                     return;
                 }

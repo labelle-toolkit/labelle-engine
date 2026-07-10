@@ -329,6 +329,10 @@ pub fn Mixin(comptime Game: type) type {
                         if (cam.viewport) |vp| {
                             try writer.print(", \"viewport\": {{\"x\": {d}, \"y\": {d}, \"width\": {d}, \"height\": {d}}}", .{ vp.x, vp.y, vp.width, vp.height });
                         }
+                        // Camera tag (camera-bound layers, #723/#724) — a short
+                        // authored identifier, emitted so the slot binding
+                        // round-trips through save/load.
+                        try writer.print(", \"tag\": \"{s}\"", .{cam.tagSlice()});
                         try writer.writeAll("}");
                         first_comp = false;
                     }

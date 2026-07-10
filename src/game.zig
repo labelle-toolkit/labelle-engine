@@ -1323,6 +1323,15 @@ pub fn GameConfigWithYAxis(
         /// Get the camera manager (for multi-camera / split-screen).
         pub const getCameraManager = if (has_camera) MiscMixin.getCameraManagerImpl else void;
 
+        /// Resolve a camera by tag (camera-bound layers, #723/#724). Returns
+        /// the lowest active slot carrying `tag`, or `null`. Comptime no-op
+        /// returning `null` on renderers without a settable camera.
+        pub const getCameraByTag = if (has_camera) MiscMixin.getCameraByTagImpl else struct {
+            fn f(_: *Self, _: []const u8) ?*CameraType {
+                return null;
+            }
+        }.f;
+
         // ── Camera component seed / sync (#714) ───────────────────
         /// Seed `getCamera()` from the authored `Camera` component (world
         /// position + zoom). Called once after scene instantiation and every
