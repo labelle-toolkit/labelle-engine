@@ -3,7 +3,7 @@
 **Issue:** labelle-toolkit/labelle-engine#237 (updated 2026-07 — re-scoped from "Lua module" to the language-plugin family)  
 **Status:** Draft  
 **Author:** Alexandre  
-**Date:** 2026-07-10 (rev 2 — POC validated: PR #734; rev 3 — single-repo packaging: `labelle-scripting` with language sub-modules; rev 4 — reference bindings: Lua queries, Ruby events; rev 5 — Ruby controllers: script-language domain owners; rev 6 — script-declared components: generate-time codegen, runtime tier for mods; rev 7 — native declaration idioms per language; rev 8 — policy: one language per project, enforced at generate; rev 9 — policy rationale: role-based, pack/mod carve-outs; rev 10 — Zig plugins in script-language projects; rev 11 — script-language packs)
+**Date:** 2026-07-10 (rev 2 — POC validated: PR #734; rev 3 — single-repo packaging: `labelle-scripting` with language sub-modules; rev 4 — reference bindings: Lua queries, Ruby events; rev 5 — Ruby controllers: script-language domain owners; rev 6 — script-declared components: generate-time codegen, runtime tier for mods; rev 7 — native declaration idioms per language; rev 8 — policy: one language per project, enforced at generate; rev 9 — policy rationale: role-based, pack/mod carve-outs; rev 10 — Zig plugins in script-language projects; rev 11 — script-language packs; rev 12 — TypeScript (QuickJS) and Go (c-archive) join the families)
 
 ## Problem
 
@@ -32,8 +32,8 @@ The engine API is comptime-parameterized — there is no stable ABI a VM can cal
 
 | Family | Languages | Mechanism | Scripts are | Hot reload | Sandbox |
 |---|---|---|---|---|---|
-| **Embedded VM** | Lua (ziglua / LuaJIT), Ruby (mruby), C# (CoreCLR hosting) | plugin embeds the interpreter/runtime | data (embedded at release, disk-watched in dev) | yes | per-VM (Lua easily, CLR partially) |
-| **Native-compiled** | Rust, Crystal | game code compiles against the contract as `extern "C"`, linked by the plugin's build integration | code (compiled at build) | dev-only via dylib swap (optional) | no (native) |
+| **Embedded VM** | Lua (ziglua / LuaJIT), **TypeScript (QuickJS)**, Ruby (mruby), C# (CoreCLR hosting) | plugin embeds the interpreter/runtime | data (embedded at release, disk-watched in dev) | yes | per-VM (Lua & QuickJS easily, CLR partially) |
+| **Native-compiled** | Rust, Crystal, **Go (c-archive)** | game code compiles against the contract as `extern "C"`, linked by the plugin's build integration | code (compiled at build) | dev-only via dylib swap (optional) | no (native) |
 
 WASM is a *third* possible mechanism unifying both (any language → wasm module in an embedded runtime, sandboxing for free) — treated in Alternatives; deliberately not the only path.
 
@@ -92,6 +92,8 @@ Anatomy (shared once, per-language where noted):
 - **lua** — the flagship (P1). Lua 5.4 via ziglua (~200 KB), LuaJIT as a build option (the #237 open question stands). Everything in #237's Phases 1–2 carries over; only the integration points change (convention dir instead of scene prefixes; plugin config instead of a `.lua` project block).
 - **rust / crystal** — the native family. The contract ships as a C header; game Rust/Crystal code builds as a static lib the plugin's build integration links into the game binary. Full native performance, no VM, no sandbox; hot reload only as an optional dev-mode dylib swap. Crystal gives the Ruby-shaped syntax at native speed.
 - **ruby** — **mruby**, not CRuby (CRuby is not designed for embedding). Embedded-VM family; smaller community than Lua but the same shape.
+- **typescript** — **QuickJS** (the Lua of JS: small, embeddable, no JIT, sandboxes well — a strong mods candidate) with a **TS→JS transpile step at generate time** (esbuild via the plugin build hook; dev watch for hot reload). The largest-audience accessibility play, and the best-typed DX of the VM family: **`.d.ts` files are codegen'd from the component schemas + contract**, so scripts get real autocomplete, and TS interfaces feed declare-mode (the type system is the DSL, like Rust). Priority: right after Lua.
+- **go** — feasible via `-buildmode=c-archive` (cgo `//export` entries over the contract header), with honest caveats: Go brings its **own runtime as a guest** (scheduler, GC, signal handlers — coexistence needs explicit cgo configuration), +2–8 MB binary, goroutines vs the main-thread-only contract (guard rails), and cgo cross-compilation pain on mobile. The awkward middle of the native family; demand-driven, behind rust/crystal.
 - **csharp** — the heaviest: CoreCLR hosting via `hostfxr`, desktop-first (Android/iOS AOT constraints are real — Godot's Mono history is the cautionary precedent). Explicitly last.
 
 ### 4. Reference bindings: what the sugar looks like
@@ -224,7 +226,7 @@ This completes the vendor story: a full content pack — atlases, prefabs, a gen
 - **Phase 1 — contract + labelle-scripting with Lua.** Script Runtime Contract v1 (JSON encoding, comptime-gated) in the engine; the `labelle-scripting` repo with the shared glue + the `lua` sub-module enabled: VM init, script loading from the convention dir (embedded), `init/update/deinit` per script, entity/component/input bindings. Proof: an FP-adjacent demo scene driven by a `.lua` behavior.
 - **Phase 2 — dev experience.** Hot reload (disk watch + studio preview integration), Lua stack-trace error UX, the sandbox profile for mods (no `io`/`os` by default), script console studio panel.
 - **Phase 3 — native family.** The `rust` (and `crystal`) sub-modules: C header generation from the contract, the **assembler build-integration hook** (plugins declaring "run cargo/crystal, link this artifact" — the one new assembler seam the native family needs), optional dev dylib swap. Decide WASM-vs-dylib here with real data.
-- **Phase 4 — the long tail.** The `ruby` (mruby) and `csharp` (CoreCLR, desktop-first) sub-modules.
+- **Phase 4 — the long tail.** The `typescript` (QuickJS + esbuild step + `.d.ts` codegen — first of this batch by audience), `ruby` (mruby), `go` (c-archive, demand-driven), and `csharp` (CoreCLR, desktop-first, last) sub-modules.
 
 ## Alternatives considered
 
