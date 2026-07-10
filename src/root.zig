@@ -748,6 +748,17 @@ pub const preview_iosurface_mod = preview_mode_mod.preview_iosurface;
 // so non-preview builds emit no `editor_*` symbols.
 pub const editor_api = @import("editor_api.zig");
 
+// ── Script Runtime Contract v1 (language plugins, #737) ──
+// The flat `export fn labelle_*` C-ABI surface every scripting language
+// binds (RFC-LANGUAGE-PLUGINS; header in `contract/labelle_script.h`),
+// plus the two touchpoints the assembler-generated main splices in when
+// a language plugin is attached (`bind` / `drainEvents`). Deliberately a
+// lazy `pub const` and NOT referenced anywhere else in the engine: a
+// build that never references `engine.script_contract` never analyzes
+// the file, so script-less builds emit no `labelle_*` symbols — the
+// same zero-cost gate as `editor_api` above.
+pub const script_contract = @import("script_contract.zig");
+
 // ── Out-of-band screenshot request (labelle-cli#227) ──
 // Read by the assembler-generated `main.zig`'s frame loop after the
 // game enters its main loop — when `LABELLE_SCREENSHOT_PATH` is set

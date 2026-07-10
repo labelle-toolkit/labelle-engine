@@ -79,5 +79,9 @@
         "codegen",
         "audio_backend",
         "spec",
+        // The Script Runtime Contract header (contract/labelle_script.h)
+        // ships with the package — native-compiled language plugins bind
+        // against it (#737).
+        "contract",
     },
 }

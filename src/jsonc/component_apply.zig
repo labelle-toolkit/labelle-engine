@@ -8,6 +8,15 @@
 //! with the two-pass `@ref` resolution flow when a `RefContext` is
 //! active.
 //!
+//! The per-built-in branches are factored into `applySprite` /
+//! `applyShape` / `applyTilemap` / `applyCamera` / `applyImage` so the
+//! Script Runtime Contract (`src/script_contract.zig`, #737) can route
+//! `labelle_component_set` through the IDENTICAL machinery — scripts
+//! get write-parity with scenes by construction. The fns report
+//! whether the deserialize applied; `applyComponent` ignores the
+//! answer (scene loading stays fire-and-forget), the contract maps
+//! `false` to its rc `-1`.
+//!
 //! Allocation lifetime — `deserialize`-side allocations (slices for
 //! `frames` / `entries` / etc.) land in
 //! `active_world.nested_entity_arena` so they share the lifetime of
@@ -99,17 +108,13 @@ pub fn ComponentApply(comptime GameType: type, comptime Components: type) type {
 
             // Sprite — uses addSprite for renderer registration.
             if (std.mem.eql(u8, name, "Sprite")) {
-                if (deserializer.deserialize(Sprite, value, comp_alloc)) |sprite| {
-                    game.addSprite(entity, sprite);
-                }
+                _ = applySprite(game, entity, value);
                 return;
             }
 
             // Shape — uses addShape for renderer registration.
             if (std.mem.eql(u8, name, "Shape")) {
-                if (deserializer.deserialize(Shape, value, comp_alloc)) |shape| {
-                    game.addShape(entity, shape);
-                }
+                _ = applyShape(game, entity, value);
                 return;
             }
 
@@ -126,9 +131,7 @@ pub fn ComponentApply(comptime GameType: type, comptime Components: type) type {
             // tilemap) — silent scene-data loss (C2).
             if (comptime !Components.has("Tilemap")) {
                 if (std.mem.eql(u8, name, "Tilemap")) {
-                    if (deserializer.deserialize(GameType.TilemapComp, value, comp_alloc)) |tilemap| {
-                        game.addTilemap(entity, tilemap);
-                    }
+                    _ = applyTilemap(game, entity, value);
                     return;
                 }
             }
@@ -142,21 +145,7 @@ pub fn ComponentApply(comptime GameType: type, comptime Components: type) type {
             // registered type via the generic dispatch below).
             if (comptime !Components.has("Camera")) {
                 if (std.mem.eql(u8, name, "Camera")) {
-                    if (deserializer.deserialize(GameType.CameraComp, value, comp_alloc)) |camera| {
-                        var cam = camera;
-                        // `tag` is an INLINE bounded buffer (`[16:0]u8`), which
-                        // the generic struct deserializer doesn't map from a
-                        // JSON string — it would silently keep the `"main"`
-                        // default. Apply the authored tag here so the primary
-                        // authoring channel (`{"Camera":{"tag":"sky_parallax"}}`)
-                        // seeds the bounded field. Absent → default `"main"`.
-                        if (value.asObject()) |o| {
-                            if (o.get("tag")) |t| {
-                                if (t.asString()) |s| cam.setTagSlice(s);
-                            }
-                        }
-                        game.addComponent(entity, cam);
-                    }
+                    _ = applyCamera(game, entity, value);
                     return;
                 }
             }
@@ -170,17 +159,9 @@ pub fn ComponentApply(comptime GameType: type, comptime Components: type) type {
             // project-registered `Image` still wins (the built-in branch
             // compiles out, routing `"Image"` to the registered type via the
             // generic dispatch below).
-            //
-            // `name` / `layer` are `[]const u8` and `pivot` is an enum — the
-            // generic struct deserializer maps all of them from JSONC (strings
-            // land in `comp_alloc` = the nested-entity arena, matching
-            // `Sprite.sprite_name`'s lifetime), so no `Camera`-style inline-tag
-            // special-casing is needed here.
             if (comptime !Components.has("Image")) {
                 if (std.mem.eql(u8, name, "Image")) {
-                    if (deserializer.deserialize(ImageComp, value, comp_alloc)) |image| {
-                        game.addComponent(entity, image);
-                    }
+                    _ = applyImage(game, entity, value);
                     return;
                 }
             }
@@ -222,6 +203,74 @@ pub fn ComponentApply(comptime GameType: type, comptime Components: type) type {
             if (uf.isPascalCase(name)) {
                 uf.warnUnknownComponent(game.log, name);
             }
+        }
+
+        // ── Per-built-in apply fns (shared with the script contract) ──
+        //
+        // Each targets the ENGINE built-in type unconditionally; the
+        // registry-precedence gates (`!Components.has("Tilemap")` etc.)
+        // stay at the call sites — `applyComponent` above and the
+        // contract's `builtin_comps` dispatch — so a project-registered
+        // component of the same name never reaches these. The `bool`
+        // return reports whether the deserialize applied: scenes ignore
+        // it, `labelle_component_set` maps `false` to `-1` (the entity
+        // is untouched on failure — the deserialize is all-or-nothing).
+
+        /// `Sprite` → `addSprite`, so renderer entity-tracking fires.
+        pub fn applySprite(game: *GameType, entity: Entity, value: Value) bool {
+            const comp_alloc = game.active_world.nested_entity_arena.allocator();
+            const sprite = deserializer.deserialize(Sprite, value, comp_alloc) orelse return false;
+            game.addSprite(entity, sprite);
+            return true;
+        }
+
+        /// `Shape` → `addShape`, so renderer entity-tracking fires.
+        pub fn applyShape(game: *GameType, entity: Entity, value: Value) bool {
+            const comp_alloc = game.active_world.nested_entity_arena.allocator();
+            const shape = deserializer.deserialize(Shape, value, comp_alloc) orelse return false;
+            game.addShape(entity, shape);
+            return true;
+        }
+
+        /// `Tilemap` → `addTilemap`, so the `.tmx` asset decodes + binds
+        /// a draw-pass renderer (a no-op attach on renderers without the
+        /// tilemap seam — the component still lands).
+        pub fn applyTilemap(game: *GameType, entity: Entity, value: Value) bool {
+            const comp_alloc = game.active_world.nested_entity_arena.allocator();
+            const tilemap = deserializer.deserialize(GameType.TilemapComp, value, comp_alloc) orelse return false;
+            game.addTilemap(entity, tilemap);
+            return true;
+        }
+
+        /// `Camera` → `addComponent` of the engine built-in POD. `tag` is
+        /// an INLINE bounded buffer (`[16:0]u8`), which the generic struct
+        /// deserializer doesn't map from a JSON string — it would silently
+        /// keep the `"main"` default. Apply the authored tag here so the
+        /// primary authoring channel (`{"Camera":{"tag":"sky_parallax"}}`)
+        /// seeds the bounded field. Absent → default `"main"`.
+        pub fn applyCamera(game: *GameType, entity: Entity, value: Value) bool {
+            const comp_alloc = game.active_world.nested_entity_arena.allocator();
+            var cam = deserializer.deserialize(GameType.CameraComp, value, comp_alloc) orelse return false;
+            if (value.asObject()) |o| {
+                if (o.get("tag")) |t| {
+                    if (t.asString()) |s| cam.setTagSlice(s);
+                }
+            }
+            game.addComponent(entity, cam);
+            return true;
+        }
+
+        /// `Image` → `addComponent` of the engine-local POD (#568).
+        /// `name` / `layer` are `[]const u8` and `pivot` is an enum — the
+        /// generic struct deserializer maps all of them from JSONC
+        /// (strings land in the nested-entity arena, matching
+        /// `Sprite.sprite_name`'s lifetime), so no `Camera`-style
+        /// inline-tag special-casing is needed here.
+        pub fn applyImage(game: *GameType, entity: Entity, value: Value) bool {
+            const comp_alloc = game.active_world.nested_entity_arena.allocator();
+            const image = deserializer.deserialize(ImageComp, value, comp_alloc) orelse return false;
+            game.addComponent(entity, image);
+            return true;
         }
 
         /// Strip fields that contain entity-like arrays from a

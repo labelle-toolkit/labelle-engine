@@ -232,6 +232,13 @@ pub fn build(b: *std.Build) void {
         // these cover the FPS counter and the overlay-facing surface.
         "test/frame_profiler_test.zig",
         "test/inspector_overlay_test.zig",
+        // #737 — Script Runtime Contract v1: the `labelle_*` C-ABI
+        // surface language plugins bind (RFC-LANGUAGE-PLUGINS). Covers
+        // pre-bind no-op safety, the bind/vtable dispatch for every op,
+        // component serde round-trips over the registry, name-dispatched
+        // queries, event emit-by-name, and the subscribe/drain/poll FIFO
+        // (incl. the two-arena payload lifetime).
+        "test/script_contract_test.zig",
     };
 
     for (test_files) |test_file| {
