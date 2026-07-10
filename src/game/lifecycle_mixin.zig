@@ -99,6 +99,13 @@ pub fn Mixin(comptime Game: type) type {
             self.gizmo_state.deinit(self.allocator);
             self.scenes.deinit();
             self.jsonc_scenes.deinit();
+            // Sprite-based asset inference (#563): free the reverse index and
+            // every parked inferred manifest (each owns its name dupes). Both
+            // are lazily allocated — untouched for games that declare every
+            // manifest explicitly.
+            if (self.reverse_index) |*ri| ri.deinit();
+            for (self.inferred_manifests.items) |*m| m.deinit();
+            self.inferred_manifests.deinit(self.allocator);
             // Free duplicated keys; values are program-lifetime @embedFile
             // borrows so they aren't owned by this map.
             var emb_iter = self.embedded_scene_sources.iterator();
