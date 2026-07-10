@@ -3,7 +3,7 @@
 **Issue:** labelle-toolkit/labelle-engine#723  
 **Status:** Draft  
 **Author:** Alexandre  
-**Date:** 2026-07-08 (rev 2, 2026-07-09 — verified architecture across gfx/engine/backends; rev 3 — default-camera invariant; rev 4 — review findings: reset-then-seed, `getCameraByTag`, tag serde, minimap boundary; rev 5, 2026-07-10 — seeding/duplicate-tag consistency, deterministic `getCameraByTag`, scene-loader + per-camera digest channels, both-hooks constraint)
+**Date:** 2026-07-08 (rev 2, 2026-07-09 — verified architecture across gfx/engine/backends; rev 3 — default-camera invariant; rev 4 — review findings: reset-then-seed, `getCameraByTag`, tag serde, minimap boundary; rev 5, 2026-07-10 — seeding/duplicate-tag consistency, deterministic `getCameraByTag`, scene-loader + per-camera digest channels, both-hooks constraint; rev 6 — detailed Phase-1 implementation plan)
 
 ## Problem
 
@@ -206,13 +206,67 @@ Zero migration:
 
 ## Phasing
 
-- **Phase 1 — parallax (no viewports).** Three repos, all seams verified:
+- **Phase 1 — parallax (no viewports).** Three repos, all seams verified — full per-PR breakdown in *Implementation plan* below:
   - *gfx*: `LayerConfig.camera` (`src/layer.zig:20`); tag storage on manager cameras; invert `render()`/`renderThroughCamera` to layer-outer (`src/renderer.zig:525-583`). Constraint: preserve **both** `renderWithLayerHooks` hooks across the inversion — `on_before_layers` (the engine's `tilemapBackgroundHook`) still fires once per active camera before its first layer (`loop_mixin.zig:249-272`), and `on_after_layer` (tilemap interleaves) still fires after **each layer × camera pass, inside that camera's transform and fit mode** — a bound tilemap layer must interleave under its bound camera, not the default one.
   - *engine*: `Camera.tag` (`src/camera.zig:38`, bounded storage per the serde note); reset-then-seed `seedCameraFromComponent` + `loadGameState` trigger (`camera_mixin.zig:34-49`); `getCameraByTag` accessor; digest/bridge round-trip of `tag`.
   - *assembler*: `LayerDef.camera` + conditional emit (`src/codegen/main_template.zig:500`).
   - Prove on FP: clouds drift against the platform via a `"sky_parallax"` camera driven by a follow script on `getCameraByTag`.
 - **Phase 2 — viewports (minimap).** Activate `Camera.viewport` → gfx `screen_viewport` in seeding; implement `setViewport`/`clearViewport` in labelle-bgfx (`setViewRect`/scissor), then sokol/raylib. Today these hooks exist only in the MockBackend.
 - **Phase 3 — split-screen authoring + studio.** Multiple `"main"`-tagged cameras / `setupSplitScreen` authoring; a studio gizmo to assign a layer's camera visually (extends the camera-prefab gizmo work).
+
+## Implementation plan (Phase 1, detailed)
+
+Four PRs, landed in dependency order. Developed against `local:../` overrides; released gfx → engine → assembler (gfx/engine are source tags, the assembler is a binary release), FP pins bumped last. Every piece is additive and defaulted, so rollback at any point = revert the FP pin.
+
+### PR 1 — labelle-gfx: loop inversion + binding (the concentrated risk)
+
+1. **`LayerConfig.camera: ?[]const u8 = null`** (`src/layer.zig:20`). Comptime string; doc per the Proposal.
+2. **Tag storage + manager API** (`camera/src/root.zig`):
+   - `CameraWith`: bounded tag (`tag_buf: [16:0]u8`, `tag_len: u8 = 0`), `setTag(s)/clearTag()`, `hasTag(s) bool`.
+   - `CameraManager`: `setTag(index, s)`, `findByTag(s) ?*CameraT` (**lowest active slot wins**), `resetSecondary()` (deactivate slots 1–3 + clear their tags — the engine's reset-then-seed primitive).
+3. **Renderer inversion** (`src/renderer.zig:525-583` + hook variants `:599-750`). Hard constraint: the three public entry points keep their exact signatures and hook contracts — `render()`, `renderWithLayerHook(...)` (gfx 1.22–1.23 engine shim), `renderWithLayerHooks(...)` (≥1.24) — because the engine selects between them with comptime gates (`loop_mixin.zig:249-296`) that must not notice the rewrite. New internal shape shared by all three:
+   - **Per-camera prelude** (hoisted): for each active camera — `applyViewport(cam)`, `cam.begin()`, `on_before_layers(ctx, cam)`, `cam.end()`. Preserves the `tilemapBackgroundHook` per-camera contract (#709).
+   - **Layer-outer loop**: resolve binding (explicit tag → else implicit `"main"` for `.world` → else null); for each active camera with the tag: `applyViewport` + `setApplyFit(space != .screen_fill)` + `cam.begin()` + `renderLayerInPass(layer)` + `on_after_layer(ctx, layer, cam)` + `cam.end()`. `!rendered` → fallback (default camera for `.world`, pinned for screen) + once-per-layer warn (comptime-sized `[layerCount]bool` in `Self`).
+   - **End of frame**: `setApplyFit(true)` + `clearViewport()`.
+4. **Tests** (`test/root_test.zig`, mock backend records calls):
+   - **Golden regression**: single active camera → draw-call sequence identical to pre-inversion (the load-bearing safety net; land it in a preparatory commit *before* the rewrite).
+   - Split-screen: viewport calls become per layer × camera — update the existing `.vertical_split` assertions from global order to per-pair correctness.
+   - Partition z-order: 3 layers, middle bound to camera 1 → global layer order preserved (the sky-under-world proof).
+   - Bound `.screen` layer receives the camera transform (parallax semantics); `space` keeps fit-only meaning.
+   - Unresolved tag → fallback path + warn fires exactly once.
+   - `on_after_layer` receives the bound camera, inside its transform + fit.
+   - `findByTag` determinism (lowest slot), `resetSecondary` clears tags + active bits.
+5. **Release**: gfx **1.26.0**. Estimated ~400–600 LOC including tests.
+
+### PR 2 — labelle-engine: tagged seeding + accessor + channels
+
+1. **`Camera.tag`** (`src/camera.zig:38-53`): bounded `[16:0]u8` defaulting to `"main"` (never a heap slice — the `applyCameraComponentJson` arena constraint). Comptime tag **vocabulary** = the union of `LayerEnum` configs' `.camera` values + `"main"` (the engine can iterate the generated enum at comptime); seed-time warn on a tag no layer binds.
+2. **`seedCameraFromComponent`** (`camera_mixin.zig:34-49`): `resetSecondary()` first; iterate **all** `{Position, Camera}` — `"main"` configures slot 0 (first wins, warn extras); other tags first-per-tag → next free slot 1–3, `setTag`, seed `getWorldPosition` + zoom. `viewport` stays inert (Phase 2).
+3. **`getCameraByTag`** (`misc_mixin.zig` beside `:165`): forwards to `manager.findByTag`; returns `?*CameraType`.
+4. **`loadGameState` reseed** (`save_load/load.zig:584-610`): call the seed after component reattach.
+5. **Channels**: scene/prefab JSONC loader parses `"tag"` (string → bounded buffer); studio digest `camera:{…}` gains `tag` and resolves `view` against the camera's own slot; `editor_set_component` accepts `tag`; bump the editor bridge contract minor.
+6. **Tests**: multi-seed slot assignment; reseed clears removed cameras; zero-camera no-op (default camera untouched — the invariant test); first-per-tag warn; `getCameraByTag` lowest-slot; load-path reseed; JSONC round-trip of `tag`.
+7. **Release**: engine **1.83.0**, pinning gfx 1.26. No render-path changes. ~250–400 LOC.
+
+### PR 3 — labelle-assembler: authoring + emit
+
+1. Parse `.camera` on `.layers` entries → `LayerDef.camera: ?[]const u8` (`src/config.zig`).
+2. Conditional emit in `generateGameLayers` (`src/codegen/main_template.zig:500`): append `, .camera = "{s}"` only when authored — unauthored projects stay **byte-identical**.
+3. Validate at generate time: length ≤ 15, identifier charset; fail early with a labelled error.
+4. Tests: golden byte-identity without bindings; with a binding → `expectAstGenOk` compile check; rejection cases.
+5. **Release**: assembler minor (binary release via tag → release.yml). ~60–100 LOC.
+
+### PR 4 — Flying-Platform: the parallax proof
+
+1. Bump pins (gfx 1.26 / engine 1.83 / new assembler); `project.labelle` sky layer gains `.camera = "sky_parallax"`.
+2. `packs/sky`: a `Camera` entity (tag `"sky_parallax"`, zoom 1) at design center + a follow script (`36_sky_parallax.zig`, ~10 lines): read `getCamera()` (main), write `getCameraByTag("sky_parallax")` position as `center + (main − center) × 0.4` on x, y pinned.
+3. **Verification**: bgfx headless screenshots at two main-camera x positions; assert the cloud band shifts ≈0.4× the world shift while the `screen_fill` backdrop (unbound) is unmoved. The menu scene (zero cameras) doubles as the default-camera invariant check.
+
+### Risks
+
+- The **loop inversion** carries nearly all the risk → the single-camera golden lands first, and no binding feature ships until it is green.
+- Split-screen draw interleave changes order across viewports — observable only to tests today (no real backend implements `setViewport`).
+- The bounded 15-char tag is a hard limit — enforced at assembler generate time and engine seed time, documented in both.
 
 ## Alternatives considered
 
