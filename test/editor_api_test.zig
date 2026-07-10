@@ -1018,6 +1018,99 @@ const RegisteredCameraGame = engine.GameConfig(
     void,
 );
 
+/// A renderer with a SETTABLE camera but an OLD, non-tagged `CameraManagerType`
+/// (no `resetSecondary`/`setTag`/`setActive`/`findByTag`) — the pre-gfx-1.26
+/// shape. The seeder must compile against it and fall back to the single-camera
+/// path (never referencing the missing tagged-manager methods). Mirrors
+/// `CamRender`'s no-op surface but swaps the manager.
+const OldCamManager = struct {}; // deliberately NO tag methods
+fn OldCamRender(comptime Entity: type) type {
+    return struct {
+        const Self = @This();
+
+        pub const Sprite = struct {
+            sprite_name: []const u8 = "",
+            visible: bool = true,
+            z_index: i16 = 0,
+            layer: enum { default } = .default,
+        };
+        pub const Shape = struct {
+            shape: union(enum) {
+                rectangle: struct { width: f32 = 10, height: f32 = 10 },
+                circle: struct { radius: f32 = 10 },
+            } = .{ .rectangle = .{} },
+            color: struct { r: u8 = 255, g: u8 = 255, b: u8 = 255, a: u8 = 255 } = .{},
+            visible: bool = true,
+            z_index: i16 = 0,
+            layer: enum { default } = .default,
+        };
+        pub const Text = struct {
+            text: [:0]const u8 = "",
+            visible: bool = true,
+            z_index: i16 = 0,
+        };
+        pub const Icon = struct {
+            name: []const u8 = "",
+            visible: bool = true,
+        };
+
+        pub const CameraType = CamCamera;
+        pub const CameraManagerType = OldCamManager;
+
+        camera: CamCamera = .{},
+        manager: OldCamManager = .{},
+        tracked_count: usize = 0,
+        render_count: usize = 0,
+
+        pub fn init(_: std.mem.Allocator) Self {
+            return .{};
+        }
+        pub fn deinit(_: *Self) void {}
+        pub fn trackEntity(self: *Self, _: Entity, _: core.render.VisualType) void {
+            self.tracked_count += 1;
+        }
+        pub fn untrackEntity(self: *Self, _: Entity) void {
+            if (self.tracked_count > 0) self.tracked_count -= 1;
+        }
+        pub fn markPositionDirty(_: *Self, _: Entity) void {}
+        pub fn markPositionDirtyWithChildren(_: *Self, comptime _: type, _: anytype, _: Entity) void {}
+        pub fn updateHierarchyFlag(_: *Self, _: Entity, _: bool) void {}
+        pub fn markVisualDirty(_: *Self, _: Entity) void {}
+        pub fn sync(_: *Self, comptime _: type, _: anytype) void {}
+        pub fn render(self: *Self) void {
+            self.render_count += 1;
+        }
+        pub fn setScreenHeight(_: *Self, _: f32) void {}
+        pub fn clear(self: *Self) void {
+            self.tracked_count = 0;
+        }
+        pub fn renderGizmoDraws(_: *Self, _: []const core.gizmos.GizmoDraw) void {}
+        pub fn hasEntity(_: *const Self, _: Entity) bool {
+            return false;
+        }
+        pub fn getCamera(self: *Self) *CamCamera {
+            return &self.camera;
+        }
+        pub fn getCameraManager(self: *Self) *OldCamManager {
+            return &self.manager;
+        }
+    };
+}
+
+const OldManagerGame = engine.GameConfig(
+    OldCamRender(CamMockEcs.Entity),
+    CamMockEcs,
+    engine.input_mod.StubInput,
+    engine.audio_mod.StubAudio,
+    engine.StubVideo,
+    engine.gui_mod.StubGui,
+    void,
+    core.StubLogSink,
+    EmptyComponents,
+    &.{},
+    void,
+);
+
 /// Read a JSON number as f64 regardless of whether it serialized as an
 /// integer (`{d}` on a whole f32 drops the fraction, e.g. `400`) or a float
 /// (`533.333…`).
@@ -1794,4 +1887,34 @@ test "digest: a Camera entity publishes its tag and resolves view against its ow
         saw = true;
     }
     try testing.expect(saw);
+}
+
+test "camera seed: an OLD non-tagged manager falls back to the single-camera seed (compiles)" {
+    editor_api.unbind();
+    defer editor_api.unbind();
+
+    // A renderer with a settable camera but a non-tagged manager: the seeder
+    // must NOT reference the tagged-manager methods (this test failing to
+    // COMPILE is the real regression guard). Behavior is the pre-PR single
+    // camera seed.
+    comptime std.debug.assert(!engine.camera_mod.hasTaggedCameraManager(OldManagerGame));
+
+    var game = OldManagerGame.init(testing.allocator);
+    defer game.deinit();
+
+    const cam_ent = game.createEntity();
+    game.setPosition(cam_ent, .{ .x = 320, .y = 240 });
+    game.addComponent(cam_ent, engine.Camera{ .zoom = 2.0, .tag = engine.camera_mod.makeTag("old_ignored") });
+
+    game.seedCameraFromComponent();
+
+    // Single-camera fallback: the (first) Camera entity's world transform
+    // reached the one renderer camera, tag notwithstanding.
+    try testing.expectEqual(@as(f32, 320), game.getCamera().x);
+    try testing.expectEqual(@as(f32, 240), game.getCamera().y);
+    try testing.expectEqual(@as(f32, 2.0), game.getCamera().zoom);
+
+    // getCameraByTag is a comptime no-op (null) on a non-tagged manager.
+    try testing.expect(game.getCameraByTag("old_ignored") == null);
+    try testing.expect(game.getCameraByTag("main") == null);
 }

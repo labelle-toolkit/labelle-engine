@@ -1325,8 +1325,10 @@ pub fn GameConfigWithYAxis(
 
         /// Resolve a camera by tag (camera-bound layers, #723/#724). Returns
         /// the lowest active slot carrying `tag`, or `null`. Comptime no-op
-        /// returning `null` on renderers without a settable camera.
-        pub const getCameraByTag = if (has_camera) MiscMixin.getCameraByTagImpl else struct {
+        /// returning `null` on renderers without a settable camera OR without
+        /// the tagged (gfx ≥1.26) camera manager — the same gate the tagged
+        /// seeding uses, so a non-tagged manager never reaches `findByTag`.
+        pub const getCameraByTag = if (has_camera and camera_mod.hasTaggedCameraManager(@This())) MiscMixin.getCameraByTagImpl else struct {
             fn f(_: *Self, _: []const u8) ?*CameraType {
                 return null;
             }

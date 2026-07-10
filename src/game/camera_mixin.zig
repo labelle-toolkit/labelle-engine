@@ -57,9 +57,33 @@ pub fn Mixin(comptime Game: type) type {
         /// as it did before this feature). A comptime no-op that never touches
         /// the (possibly `void`) camera seam on camera-less renderers, and off
         /// entirely for a project that registered its own `Camera` (finding #1).
+        ///
+        /// The multi-slot tagged path requires the gfx ≥1.26 TAGGED manager
+        /// (`hasTaggedCameraManager`). A renderer with a settable camera but an
+        /// OLD, non-tagged manager falls back to the pre-PR single-camera seed
+        /// (first `{Position,Camera}` → `getCamera()`, no reset, no tags) so it
+        /// still compiles and behaves exactly as before.
         pub fn seedCameraFromComponent(self: *Game) void {
             if (comptime !camera_mod.hasSettableCamera(Game)) return;
             if (comptime !Game.camera_is_builtin) return;
+
+            if (comptime !camera_mod.hasTaggedCameraManager(Game)) {
+                // Pre-PR fallback: seed the first Camera entity onto the single
+                // renderer camera. No manager reset / tags — the non-tagged
+                // manager type declares none of those methods, so this branch
+                // must never reference them.
+                var v = self.ecs_backend.view(.{ Position, CameraComp }, .{});
+                defer v.deinit();
+                while (v.next()) |ent| {
+                    const cam = self.ecs_backend.getComponent(ent, CameraComp) orelse continue;
+                    const wp = self.getWorldPosition(ent);
+                    const camera = self.getCamera();
+                    camera.setPosition(wp.x, wp.y);
+                    camera.setZoom(cam.zoom);
+                    return;
+                }
+                return;
+            }
 
             const mgr = self.getCameraManager();
             // Clear stale secondary bindings before re-seeding (slot 0 kept).
@@ -93,7 +117,10 @@ pub fn Mixin(comptime Game: type) type {
                         continue;
                     }
                     seen_main = true;
-                    const camera = self.getCamera();
+                    // Seed slot 0 EXPLICITLY (not via `getCamera()`, which may
+                    // return the *selected* camera): the main transform and the
+                    // `"main"` tag must both land on slot 0.
+                    const camera = mgr.getCamera(0);
                     camera.setPosition(wp.x, wp.y);
                     camera.setZoom(cam.zoom);
                     mgr.setTag(0, "main");

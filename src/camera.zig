@@ -108,3 +108,23 @@ pub fn hasSettableCamera(comptime G: type) bool {
     if (G.CameraType == void) return false;
     return @hasDecl(G.CameraType, "setPosition") and @hasDecl(G.CameraType, "setZoom");
 }
+
+/// True when game type `G`'s `CameraManagerType` is the TAGGED multi-camera
+/// manager (gfx ≥1.26) — i.e. it declares the full slot/tag seam the
+/// camera-bound-layers seeding drives (`resetSecondary` / `setTag` /
+/// `setActive` / `getCamera` / `findByTag`). Used to comptime-fold the new
+/// multi-slot tagged seeding — and `getCameraByTag` — away on a renderer that
+/// has a settable camera but an OLD, non-tagged manager (e.g. a `struct{}`
+/// placeholder), which then falls back to the pre-PR single-camera seed rather
+/// than failing to compile. The `!= void` guard short-circuits before the
+/// `@hasDecl(M, …)` reflection so a camera-less `void` manager never reaches it.
+pub fn hasTaggedCameraManager(comptime G: type) bool {
+    if (!@hasDecl(G, "CameraManagerType")) return false;
+    const M = G.CameraManagerType;
+    if (M == void) return false;
+    return @hasDecl(M, "resetSecondary") and
+        @hasDecl(M, "setTag") and
+        @hasDecl(M, "setActive") and
+        @hasDecl(M, "getCamera") and
+        @hasDecl(M, "findByTag");
+}
