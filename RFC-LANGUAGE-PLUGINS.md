@@ -3,7 +3,7 @@
 **Issue:** labelle-toolkit/labelle-engine#237 (updated 2026-07 — re-scoped from "Lua module" to the language-plugin family)  
 **Status:** Draft  
 **Author:** Alexandre  
-**Date:** 2026-07-10 (rev 2 — POC validated: PR #734; rev 3 — single-repo packaging: `labelle-scripting` with language sub-modules; rev 4 — reference bindings: Lua queries, Ruby events; rev 5 — Ruby controllers: script-language domain owners; rev 6 — script-declared components: generate-time codegen, runtime tier for mods; rev 7 — native declaration idioms per language; rev 8 — policy: one language per project, enforced at generate; rev 9 — policy rationale: role-based, pack/mod carve-outs; rev 10 — Zig plugins in script-language projects)
+**Date:** 2026-07-10 (rev 2 — POC validated: PR #734; rev 3 — single-repo packaging: `labelle-scripting` with language sub-modules; rev 4 — reference bindings: Lua queries, Ruby events; rev 5 — Ruby controllers: script-language domain owners; rev 6 — script-declared components: generate-time codegen, runtime tier for mods; rev 7 — native declaration idioms per language; rev 8 — policy: one language per project, enforced at generate; rev 9 — policy rationale: role-based, pack/mod carve-outs; rev 10 — Zig plugins in script-language projects; rev 11 — script-language packs)
 
 ## Problem
 
@@ -200,6 +200,18 @@ A "C# project" is still a **Zig binary whose scripts are C#** — the assembler 
 - **Typed wrappers (polish tier)**: the handler manifest is introspectable, so `labelle generate` can emit per-language typed wrappers (`Pathfinder.Navigate(worker, 340, 186)`) — the component declare-mode codegen run in reverse.
 
 The performance framing is the architecture's best case: heavy machinery (graph, walkers, arrival detection) runs at full Zig speed inside the plugin; the script pays the JSON boundary only at orchestration points. Hot paths stay native — with plugins as the hot path.
+
+### 6. Script-language packs
+
+Packs can be authored in a script language — `packs/dungeon/` with language-neutral `prefabs/` + `assets/` (asset-plugins #725) and a `ruby/` dir holding the pack's components and controllers. Composition of pinned decisions:
+
+- **Components**: the declare-mode extraction already handles pack-nested language dirs — codegen'd Zig components arrive **pack-namespaced** (`dungeon__Room`); scenes, save buckets, and cross-language access identical to Zig-pack components.
+- **Controllers**: loaded into the existing two-block order — pack controllers tick in their pack's slot (project plugin order between packs, file prefix within).
+- **Policy**: the pack declares `requires_language = "ruby"` (v1 installs into matching projects); the rev-9 pack-language exemption is what later lets a script-language pack install anywhere, scoped to its own VM.
+- **New work item — event names**: the invisible bare→`pack__*` event rewrite is AST-level and does not translate safely to dynamic script strings. v1 rule: script-language pack code writes **namespaced event names explicitly**, with generate-time validation that emitted/subscribed names resolve.
+- **Crystal packs** inherit the native-family caveats: consumer toolchain, the assembler build hook, and the POC's non-raising-entry rules (a validator lint candidate).
+
+This completes the vendor story: a full content pack — atlases, prefabs, a generator controller, a studio panel — with **zero Zig**, sellable as one plugin. Zig remains the floor (engine, plugins, hot paths), not the entry fee.
 
 ## Backward compatibility
 
