@@ -21,10 +21,12 @@
 //! vtable — they carry no comptime type information themselves.
 //!
 //! Before `bind` runs, every export is a safe no-op: id-returning ops
-//! return 0, rc-returning ops return -1, `labelle_component_get` /
-//! `labelle_query` / `labelle_event_poll` write nothing and return 0, and
-//! the void ops silently ignore. `labelle_contract_version` is pure and
-//! works even before `bind`.
+//! (incl. `labelle_entity_find`) return 0, rc-returning ops return -1,
+//! `labelle_component_get` / `labelle_query` / `labelle_event_poll` write
+//! nothing and return 0, the void ops silently ignore, the
+//! `labelle_input_key_*` reads report not-down (0), and
+//! `labelle_input_mouse` writes the origin. `labelle_contract_version` is
+//! pure and works even before `bind`.
 //!
 //! ## No symbols in script-less builds
 //!
@@ -210,6 +212,7 @@ var emit_active: u1 = 0;
 const VTable = struct {
     entity_create: *const fn () u64,
     entity_destroy: *const fn (id: u64) void,
+    entity_find: *const fn (name: []const u8) u64,
     prefab_spawn: *const fn (name: []const u8, params_json: []const u8) u64,
     component_set: *const fn (id: u64, name: []const u8, json: []const u8) i32,
     component_get: *const fn (id: u64, name: []const u8, out: []u8) usize,
@@ -220,6 +223,9 @@ const VTable = struct {
     scene_change: *const fn (name: []const u8) i32,
     log: *const fn (msg: []const u8) void,
     time_dt: *const fn () f32,
+    input_key_down: *const fn (key: u32) bool,
+    input_key_pressed: *const fn (key: u32) bool,
+    input_mouse: *const fn () core.Position,
 };
 
 // ── Generated-main API (non-export) ─────────────────────────────────
@@ -370,6 +376,22 @@ pub export fn labelle_entity_create() u64 {
 pub export fn labelle_entity_destroy(id: u64) void {
     const vt = vtable orelse return;
     vt.entity_destroy(id);
+}
+
+/// Find an entity by name — the RFC's `entity_find`, resolved through a
+/// registered `Name` (or `Tag`) component: the game's own
+/// `ComponentRegistry` is searched at COMPTIME for a component of that
+/// name carrying a `[]const u8` field (`name`/`value`/`tag`), and the
+/// first live entity whose field equals `name` wins. Returns its id, or
+/// 0 = no match / empty name / the game registers no such component
+/// (the whole lookup folds away at comptime for those, a zero-cost
+/// always-0) / not bound. First-match, snapshot over the ECS view at
+/// call time. Names are not guaranteed unique — a game that wants
+/// uniqueness enforces it; this returns the first the view yields.
+pub export fn labelle_entity_find(name_ptr: [*]const u8, name_len: usize) u64 {
+    const vt = vtable orelse return 0;
+    if (name_len == 0) return 0;
+    return vt.entity_find(name_ptr[0..name_len]);
 }
 
 /// Spawn a named prefab. `params_json` is optional: NULL or empty
@@ -674,6 +696,40 @@ pub export fn labelle_time_dt_stamp(dt: f32) void {
     stamped_dt = dt;
 }
 
+// ── Input ────────────────────────────────────────────────────────────
+//
+// Read-only polling over the game's unified `InputInterface`, valid
+// during the plugin's tick (main-thread, like every other op). `key` is
+// the backend-agnostic `KeyboardKey` code (the engine enum's integer
+// value — the same code Zig scripts pass `game.isKeyDown`); an unknown
+// code is simply never down. Mouse coordinates are the same space the
+// backend reports to Zig scripts. All three are safe no-ops pre-bind
+// (keys read as not-down, the mouse as the origin).
+
+/// 1 while key `key` is held down this frame; 0 otherwise (up, unknown
+/// code, or not bound).
+pub export fn labelle_input_key_down(key: u32) i32 {
+    const vt = vtable orelse return 0;
+    return @intFromBool(vt.input_key_down(key));
+}
+
+/// 1 on the frame `key` transitions from up to down (the press edge);
+/// 0 otherwise (not this frame, unknown code, or not bound).
+pub export fn labelle_input_key_pressed(key: u32) i32 {
+    const vt = vtable orelse return 0;
+    return @intFromBool(vt.input_key_pressed(key));
+}
+
+/// Write the current mouse position into `x_out`/`y_out` (either may be
+/// NULL to skip that axis). Pre-bind writes (0, 0). The values are the
+/// backend's reported cursor coordinates — 0 on platforms/backends with
+/// no mouse.
+pub export fn labelle_input_mouse(x_out: ?*f32, y_out: ?*f32) void {
+    const pos = if (vtable) |vt| vt.input_mouse() else core.Position{};
+    if (x_out) |p| p.* = pos.x;
+    if (y_out) |p| p.* = pos.y;
+}
+
 // ── Implementation ──────────────────────────────────────────────────
 
 /// The documented consumer gate for `Game.GameEvents` (see game.zig):
@@ -812,6 +868,7 @@ fn Holder(comptime GP: type) type {
         const vtable_impl = VTable{
             .entity_create = &entityCreateImpl,
             .entity_destroy = &entityDestroyImpl,
+            .entity_find = &entityFindImpl,
             .prefab_spawn = &prefabSpawnImpl,
             .component_set = &componentSetImpl,
             .component_get = &componentGetImpl,
@@ -822,6 +879,9 @@ fn Holder(comptime GP: type) type {
             .scene_change = &sceneChangeImpl,
             .log = &logImpl,
             .time_dt = &timeDtImpl,
+            .input_key_down = &inputKeyDownImpl,
+            .input_key_pressed = &inputKeyPressedImpl,
+            .input_mouse = &inputMouseImpl,
         };
 
         // ── Entities ─────────────────────────────────────────────
@@ -838,6 +898,47 @@ fn Holder(comptime GP: type) type {
             // no-op, not a panic.
             if (!game.ecs_backend.entityExists(ent)) return;
             game.destroyEntity(ent);
+        }
+
+        /// Comptime-resolved `(component-type, string-field)` for
+        /// `entity_find`: a registry component named `Name` or `Tag`
+        /// carrying a `[]const u8` field (`name`/`value`/`tag`). `null`
+        /// when the game registers no such component — the RFC's "by the
+        /// Name/tag component IF ONE EXISTS" — which makes
+        /// `labelle_entity_find` a zero-cost always-0 no-op there. The
+        /// convention is deliberately narrow (a single well-known
+        /// component) so the future language sub-modules bind ONE name;
+        /// widening it is a contract change, not an ad-hoc per-game one.
+        const name_lookup: ?struct { T: type, field: []const u8 } = blk: {
+            if (!@hasDecl(Components, "names") or !@hasDecl(Components, "getType")) break :blk null;
+            for (Components.names()) |n| {
+                if (!std.mem.eql(u8, n, "Name") and !std.mem.eql(u8, n, "Tag")) continue;
+                const T = Components.getType(n);
+                if (@typeInfo(T) != .@"struct") continue;
+                for (@typeInfo(T).@"struct".fields) |f| {
+                    if (f.type != []const u8) continue;
+                    if (std.mem.eql(u8, f.name, "name") or
+                        std.mem.eql(u8, f.name, "value") or
+                        std.mem.eql(u8, f.name, "tag"))
+                        break :blk .{ .T = T, .field = f.name };
+                }
+            }
+            break :blk null;
+        };
+
+        fn entityFindImpl(name: []const u8) u64 {
+            if (comptime name_lookup == null) return 0;
+            const lk = comptime name_lookup.?;
+            // Snapshot the view at call time (matches `query`): a
+            // per-id read on a since-destroyed entity is handled by the
+            // caller's later ops, not this scan.
+            var v = game.ecs_backend.view(.{lk.T}, .{});
+            defer v.deinit();
+            while (v.next()) |ent| {
+                const comp = game.getComponent(ent, lk.T) orelse continue;
+                if (std.mem.eql(u8, @field(comp.*, lk.field), name)) return entityId(ent);
+            }
+            return 0;
         }
 
         // ── Prefabs ──────────────────────────────────────────────
@@ -1284,6 +1385,25 @@ fn Holder(comptime GP: type) type {
             const n = fp.frame_times.len;
             const last = fp.frame_times[(fp.index + n - 1) % n];
             return last * game.time_scale;
+        }
+
+        // ── Input ────────────────────────────────────────────────
+        //
+        // Straight through the game's static `InputInterface` — the same
+        // path `game.isKeyDown`/`getMouse` take (the `input_mixin` just
+        // adds the `KeyboardKey` enum conversion the C surface skips, so
+        // the raw integer code goes to the backend unmodified).
+
+        fn inputKeyDownImpl(key: u32) bool {
+            return G.Input.isKeyDown(key);
+        }
+
+        fn inputKeyPressedImpl(key: u32) bool {
+            return G.Input.isKeyPressed(key);
+        }
+
+        fn inputMouseImpl() core.Position {
+            return .{ .x = G.Input.getMouseX(), .y = G.Input.getMouseY() };
         }
 
         // ── Helpers ──────────────────────────────────────────────

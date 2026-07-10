@@ -80,6 +80,14 @@ uint64_t labelle_entity_create(void);
  * destroyEntity). Unknown / already-dead ids are ignored. */
 void labelle_entity_destroy(uint64_t id);
 
+/* Find an entity by name, via a registered `Name` (or `Tag`) component
+ * carrying a string field (name/value/tag). Returns the first live
+ * match's id, or 0 = no match / empty name / the game registers no such
+ * component (the lookup is compiled out for those — a zero-cost always-0)
+ * / not bound. Names are not required unique; the first the view yields
+ * wins. First-match snapshot over the ECS view at call time. */
+uint64_t labelle_entity_find(const char *name, size_t name_len);
+
 /* Spawn a named prefab (requires a JSONC scene to have been loaded —
  * the standard assembled-game boot). `params_json` is optional: pass
  * NULL/len 0 to spawn at the origin, or a {"x":…,"y":…} object for the
@@ -245,6 +253,25 @@ float labelle_time_dt(void);
  * received this tick even when a script changes the time scale
  * mid-tick. Ignored before the host binds. */
 void labelle_time_dt_stamp(float dt);
+
+/* ── Input ────────────────────────────────────────────────────────────
+ *
+ * Read-only polling over the host's unified input, valid during the
+ * plugin's tick (main thread). `key` is the backend-agnostic KeyboardKey
+ * code (the engine enum's integer value) — an unknown code simply reads
+ * as not-down. Safe no-ops before the host binds (keys not-down, mouse at
+ * the origin). */
+
+/* 1 while `key` is held down this frame; 0 otherwise. */
+int32_t labelle_input_key_down(uint32_t key);
+
+/* 1 on the frame `key` transitions up→down (the press edge); 0
+ * otherwise. */
+int32_t labelle_input_key_pressed(uint32_t key);
+
+/* Write the current mouse position into *x_out / *y_out; either pointer
+ * may be NULL to skip that axis. 0 on backends with no mouse. */
+void labelle_input_mouse(float *x_out, float *y_out);
 
 #ifdef __cplusplus
 }
