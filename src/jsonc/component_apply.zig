@@ -24,6 +24,7 @@ const Position = core.Position;
 const deserializer = @import("deserializer.zig");
 const ref_resolver_mod = @import("ref_resolver.zig");
 const uf = @import("unified_format.zig");
+const ImageComp = @import("../image_component.zig").Image;
 
 pub fn ComponentApply(comptime GameType: type, comptime Components: type) type {
     const Entity = GameType.EntityType;
@@ -155,6 +156,30 @@ pub fn ComponentApply(comptime GameType: type, comptime Components: type) type {
                             }
                         }
                         game.addComponent(entity, cam);
+                    }
+                    return;
+                }
+            }
+
+            // Image (standalone-PNG component, #568) — built-in, deserializes
+            // to a plain engine-local POD stored via `addComponent` (like the
+            // `Camera` branch above; unlike `Tilemap` there is no side-table /
+            // asset decode at apply time — the referenced PNG is acquired
+            // through `AssetCatalog` on the scene's asset path). Guarded
+            // `!Components.has("Image")` exactly like `Tilemap` / `Camera` so a
+            // project-registered `Image` still wins (the built-in branch
+            // compiles out, routing `"Image"` to the registered type via the
+            // generic dispatch below).
+            //
+            // `name` / `layer` are `[]const u8` and `pivot` is an enum — the
+            // generic struct deserializer maps all of them from JSONC (strings
+            // land in `comp_alloc` = the nested-entity arena, matching
+            // `Sprite.sprite_name`'s lifetime), so no `Camera`-style inline-tag
+            // special-casing is needed here.
+            if (comptime !Components.has("Image")) {
+                if (std.mem.eql(u8, name, "Image")) {
+                    if (deserializer.deserialize(ImageComp, value, comp_alloc)) |image| {
+                        game.addComponent(entity, image);
                     }
                     return;
                 }

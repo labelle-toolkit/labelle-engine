@@ -86,6 +86,18 @@ pub const CameraViewport = @import("camera.zig").Viewport;
 /// inline camera-tag buffer (camera-bound layers, #723/#724).
 pub const camera_mod = @import("camera.zig");
 
+// ── Image (standalone-PNG component, #568) ──
+/// Engine built-in `Image` component — displays a standalone PNG loaded
+/// through `AssetCatalog` (no atlas, no sub-rect), the entity-side
+/// counterpart to `Sprite`. Reachable on a configured game as
+/// `Game.ImageComp`. NOTE: distinct from `gui_types.Image` in the imgui
+/// layer — different module, different render path. See
+/// `src/image_component.zig` / RFC-UNIFY-SCENES-AND-PREFABS.md.
+pub const Image = @import("image_component.zig").Image;
+/// Engine-local pivot enum carried by `Image.pivot` (a renderer-agnostic
+/// mirror of gfx's `Pivot`). See `src/image_component.zig`.
+pub const ImagePivot = @import("image_component.zig").Pivot;
+
 // ── Input ──
 pub const InputInterface = input_mod.InputInterface;
 pub const StubInput = input_mod.StubInput;
