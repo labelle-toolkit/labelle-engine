@@ -3,7 +3,7 @@
 **Issue:** labelle-toolkit/labelle-engine#237 (updated 2026-07 — re-scoped from "Lua module" to the language-plugin family)  
 **Status:** Draft  
 **Author:** Alexandre  
-**Date:** 2026-07-10 (rev 2 — POC validated: PR #734; rev 3 — single-repo packaging: `labelle-scripting` with language sub-modules; rev 4 — reference bindings: Lua queries, Ruby events; rev 5 — Ruby controllers: script-language domain owners; rev 6 — script-declared components: generate-time codegen, runtime tier for mods; rev 7 — native declaration idioms per language; rev 8 — policy: one language per project, enforced at generate)
+**Date:** 2026-07-10 (rev 2 — POC validated: PR #734; rev 3 — single-repo packaging: `labelle-scripting` with language sub-modules; rev 4 — reference bindings: Lua queries, Ruby events; rev 5 — Ruby controllers: script-language domain owners; rev 6 — script-declared components: generate-time codegen, runtime tier for mods; rev 7 — native declaration idioms per language; rev 8 — policy: one language per project, enforced at generate; rev 9 — policy rationale: role-based, pack/mod carve-outs)
 
 ## Problem
 
@@ -71,7 +71,11 @@ All languages ship in a single first-party plugin repo — **`labelle-scripting`
 
 - **Generate-time validation**: the assembler scans every script convention dir — game root *and* pack-bundled — and errors (file list included) on any script outside the declared language. Content packs/plugins that bundle scripts declare `requires_language = "…"` in their manifest (symmetric with `depends_on_resources`), validated on attach, so a Lua-scripted pack fails loudly in a Rust project.
 - **Comptime**: only the declared sub-module compiles; `b.lazyDependency` means other runtimes are never fetched, built, or linked — the binary physically contains one language runtime. Dir-presence detection remains as a cross-check, not the selector.
-- **Future**: if multi-language is ever wanted, widening to a plural field is purely additive — the shared glue supports N by construction; the ban is policy in the schema, not architecture. Rationale: one team, one script language, one debugging/mods story (the same keep-the-simple-case-simple call as the default camera).
+- **Why the ban is right for the game's own scripts**: the legitimate "iteration layer + native layer" architecture already exists in every project as **Zig + script** — Zig is the engine language, always present as the performance escape hatch. `labelle-rust` serves Rust-preferring teams as their *primary*, not as a sidecar to Lua. With that objection defused, the ban is pure upside: one hiring/reading/debugging story, one GC in the frame budget, no cross-VM event spaghetti.
+- **Carve-outs (by role, not by exception)**:
+  - *Content packs*: v1 enforces `requires_language` matching (strict). The documented follow-up — when the first scripted pack exists — is exempting **pack-internal scripts** (the pack's language sub-module enables scoped to that pack): a pack's language is an implementation detail the game author never reads, and project-wide enforcement would fragment the pack market by language, against the asset-plugins marketplace vision (#725). Cost stated honestly: a second VM in the binary, paid only by choosing that pack, surfaced by `labelle plugins`.
+  - *Mods*: the mod sandbox runtime (Lua or WASM) is orthogonal to `.language` — a Rust-scripted game with Lua mods is legal by construction; `.language` governs authoring, never the sandbox.
+- **Review triggers**: widen to a plural field on real multi-language demand; enable the pack exemption on marketplace demand. Both are additive — the shared glue supports N by construction; the ban is policy in the schema, not architecture.
 
 Per-language maturity is labeled per release (lua = stable first; csharp = experimental, last). Third parties can still ship independent language plugins over the public contract — `labelle-scripting` is the first-party bundle, not a monopoly.
 
