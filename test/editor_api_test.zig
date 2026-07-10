@@ -1445,6 +1445,113 @@ test "camera built-in DEFERS to a project's own registered Camera (finding #1)" 
     try testing.expect(game.getComponent(e, engine.Camera) == null);
 }
 
+// ── Default camera at root-only instantiation (labelle-engine#564) ──────
+
+/// Count the entities carrying a built-in `Camera` component in `game`'s
+/// world — the assertion `ensureDefaultCamera` is really about ("exactly one").
+fn countCameraEntities(game: *CameraTestGame) usize {
+    var n: usize = 0;
+    var v = game.ecs_backend.view(.{engine.Camera}, .{});
+    defer v.deinit();
+    while (v.next()) |_| n += 1;
+    return n;
+}
+
+test "ensureDefaultCamera: a root with NO Camera gets exactly one default Camera at root scope" {
+    editor_api.unbind();
+    defer editor_api.unbind();
+
+    var game = CameraTestGame.init(testing.allocator);
+    defer game.deinit();
+
+    const root = game.createEntity();
+    game.setPosition(root, .{ .x = 0, .y = 0 });
+    try testing.expectEqual(@as(usize, 0), countCameraEntities(&game));
+
+    const cam = game.ensureDefaultCamera(root).?;
+
+    // Exactly ONE camera, it carries a default Camera component, and it is
+    // parented under the root (so the scene cascade / hierarchy groups it).
+    try testing.expectEqual(@as(usize, 1), countCameraEntities(&game));
+    const comp = game.getComponent(cam, engine.Camera).?;
+    try testing.expectEqual(@as(f32, 1.0), comp.zoom); // default
+    try testing.expectEqual(root, game.getParent(cam).?);
+
+    // Idempotent: a second call finds the just-inserted camera and inserts
+    // nothing new (the mechanic never stacks cameras).
+    const cam2 = game.ensureDefaultCamera(root).?;
+    try testing.expectEqual(cam, cam2);
+    try testing.expectEqual(@as(usize, 1), countCameraEntities(&game));
+}
+
+test "ensureDefaultCamera: a root WITH a Camera anywhere in the tree is left untouched (authored wins)" {
+    editor_api.unbind();
+    defer editor_api.unbind();
+
+    var game = CameraTestGame.init(testing.allocator);
+    defer game.deinit();
+
+    // Authored camera sits on a CHILD of the root, not the root itself —
+    // "explicit Camera *anywhere* in the tree wins."
+    const root = game.createEntity();
+    game.setPosition(root, .{ .x = 0, .y = 0 });
+    const child = game.createEntity();
+    game.setPosition(child, .{ .x = 10, .y = 20 });
+    game.setParent(child, root, .{});
+    game.addComponent(child, engine.Camera{ .zoom = 3.0 });
+
+    try testing.expectEqual(@as(usize, 1), countCameraEntities(&game));
+
+    const got = game.ensureDefaultCamera(root).?;
+
+    // No new entity: it returned the authored camera and inserted nothing.
+    try testing.expectEqual(child, got);
+    try testing.expectEqual(@as(usize, 1), countCameraEntities(&game));
+    try testing.expectEqual(@as(f32, 3.0), game.getComponent(child, engine.Camera).?.zoom);
+}
+
+test "ensureDefaultCamera: nested camera-less prefabs get ONE default at root, not one each" {
+    editor_api.unbind();
+    defer editor_api.unbind();
+
+    var game = CameraTestGame.init(testing.allocator);
+    defer game.deinit();
+
+    // A root with two nested camera-less subtrees (as if two scenes were
+    // nested inside a scene): root → childA → grandchild, and root → childB.
+    const root = game.createEntity();
+    game.setPosition(root, .{ .x = 0, .y = 0 });
+    const child_a = game.createEntity();
+    game.setParent(child_a, root, .{});
+    const grandchild = game.createEntity();
+    game.setParent(grandchild, child_a, .{});
+    const child_b = game.createEntity();
+    game.setParent(child_b, root, .{});
+
+    // The helper fires ONCE at the root (the assembler's job is to place it
+    // there, never per nested spawn) → exactly one camera for the whole tree.
+    const cam = game.ensureDefaultCamera(root).?;
+    try testing.expectEqual(@as(usize, 1), countCameraEntities(&game));
+    // It is parented directly under the root, not under a nested subtree.
+    try testing.expectEqual(root, game.getParent(cam).?);
+}
+
+test "ensureDefaultCamera: defers (no insert) for a project that registered its own Camera" {
+    editor_api.unbind();
+    defer editor_api.unbind();
+
+    var game = RegisteredCameraGame.init(testing.allocator);
+    defer game.deinit();
+
+    const root = game.createEntity();
+    game.setPosition(root, .{ .x = 0, .y = 0 });
+
+    // camera_is_builtin is off → the engine does not materialize a built-in
+    // Camera entity (the project owns the "Camera" name).
+    try testing.expect(game.ensureDefaultCamera(root) == null);
+    try testing.expect(game.getComponent(root, engine.Camera) == null);
+}
+
 test "camera apply-while-paused: a STEPPED frame keeps the ticked camera (single-step debug, finding #2)" {
     editor_api.unbind();
     defer editor_api.unbind();

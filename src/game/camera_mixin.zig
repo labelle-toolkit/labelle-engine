@@ -275,5 +275,76 @@ pub fn Mixin(comptime Game: type) type {
                 else => error.InvalidCameraComponentJson,
             };
         }
+
+        /// labelle-engine#564 — insert a default `Camera` ENTITY into the
+        /// just-instantiated ROOT tree when it declares none.
+        ///
+        /// The engine owns *whether* a camera is needed — "an explicit
+        /// `Camera` anywhere in the tree wins" is a property of the
+        /// *instantiated* tree (nested-prefab contents, overrides, runtime
+        /// spawns), NOT of the static scene source, so it cannot be evaluated
+        /// by the assembler at comptime. The assembler owns *where* the call
+        /// goes: the root-instantiation site only, never nested-prefab spawns
+        /// — which is what keeps "no two cameras when you nest a scene inside a
+        /// scene" true. See RFC-CAMERA-PREFABS §"How this subsumes #564".
+        ///
+        /// Rules (the three from #564, verbatim):
+        ///   1. Scans the subtree rooted at `root` for ANY entity carrying a
+        ///      `Camera` component. If one exists — anywhere in the tree — the
+        ///      tree is left UNTOUCHED (the authored / explicit camera wins).
+        ///   2. Otherwise materializes exactly ONE default camera: a fresh
+        ///      entity with a default `Position` + default `Camera`, PARENTED
+        ///      under `root` (so the `Parent` cascade groups it with the scene)
+        ///      and tracked as a scene entity (so the scene-unload drain —
+        ///      which pops tracked entities via `destroyEntityOnly`, NOT a
+        ///      single root cascade — tears it down too).
+        ///   3. Because the assembler emits this call at the root only, nested
+        ///      prefabs never each get one, and a tree with several camera-less
+        ///      nested subtrees still receives exactly one default at root.
+        ///
+        /// Returns the entity governing the tree — the pre-existing camera when
+        /// found, else the freshly inserted default. Defers entirely (no-op,
+        /// returns `null`) for a project that registered its OWN `Camera` in
+        /// its `ComponentRegistry` (`camera_is_builtin == false`), mirroring
+        /// every other built-in Camera channel (save/load, digest). Independent
+        /// of whether the renderer has a settable camera: the inserted entity
+        /// exists for the studio (inspector / gizmo / save-load); the render
+        /// seed (`seedCameraFromComponent`) still comptime-folds away on a
+        /// camera-less renderer, leaving the renderer's slot-0 fallback intact.
+        pub fn ensureDefaultCamera(self: *Game, root: Entity) ?Entity {
+            if (comptime !Game.camera_is_builtin) return null;
+
+            // "Explicit Camera anywhere in the tree wins": scan every Camera
+            // entity, keeping the first that belongs to `root`'s subtree.
+            var v = self.ecs_backend.view(.{CameraComp}, .{});
+            defer v.deinit();
+            while (v.next()) |ent| {
+                if (entityInTree(self, ent, root)) return ent;
+            }
+
+            // None found — materialize a default at root scope.
+            const cam = self.createEntity();
+            self.setComponent(cam, Position{});
+            self.setComponent(cam, CameraComp{});
+            self.setParent(cam, root, .{});
+            self.trackSceneEntity(cam);
+            return cam;
+        }
+
+        /// True when `ent` is `root` or a (transitive) descendant of `root`,
+        /// walking the `Parent` chain upward. Depth-capped like
+        /// `hierarchy.wouldCreateCycle` so a malformed cycle can't spin.
+        fn entityInTree(self: *Game, ent: Entity, root: Entity) bool {
+            const Parent = Game.ParentComp;
+            var current = ent;
+            var depth: u8 = 0;
+            while (depth < 33) : (depth += 1) {
+                if (current == root) return true;
+                if (self.ecs_backend.getComponent(current, Parent)) |p| {
+                    current = p.entity;
+                } else return false;
+            }
+            return false;
+        }
     };
 }
