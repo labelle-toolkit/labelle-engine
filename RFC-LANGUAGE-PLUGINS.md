@@ -3,7 +3,7 @@
 **Issue:** labelle-toolkit/labelle-engine#237 (updated 2026-07 — re-scoped from "Lua module" to the language-plugin family)  
 **Status:** Draft  
 **Author:** Alexandre  
-**Date:** 2026-07-10 (rev 2 — POC validated: PR #734; rev 3 — single-repo packaging: `labelle-scripting` with language sub-modules; rev 4 — reference bindings: Lua queries, Ruby events; rev 5 — Ruby controllers: script-language domain owners; rev 6 — script-declared components: generate-time codegen, runtime tier for mods; rev 7 — native declaration idioms per language; rev 8 — policy: one language per project, enforced at generate; rev 9 — policy rationale: role-based, pack/mod carve-outs; rev 10 — Zig plugins in script-language projects; rev 11 — script-language packs; rev 12 — TypeScript (QuickJS) and Go (c-archive) join the families; rev 13 — language rides generic plugin params; rev 14 — per-frame allocation idioms: FrameArray, into: reuse)
+**Date:** 2026-07-10 (rev 2 — POC validated: PR #734; rev 3 — single-repo packaging: `labelle-scripting` with language sub-modules; rev 4 — reference bindings: Lua queries, Ruby events; rev 5 — Ruby controllers: script-language domain owners; rev 6 — script-declared components: generate-time codegen, runtime tier for mods; rev 7 — native declaration idioms per language; rev 8 — policy: one language per project, enforced at generate; rev 9 — policy rationale: role-based, pack/mod carve-outs; rev 10 — Zig plugins in script-language projects; rev 11 — script-language packs; rev 12 — TypeScript (QuickJS) and Go (c-archive) join the families; rev 13 — language rides generic plugin params; rev 14 — per-frame allocation idioms: FrameArray, into: reuse; rev 15 — idioms generalized per language)
 
 ## Problem
 
@@ -144,7 +144,17 @@ end
 
 - `Labelle::FrameArray.new(cap)` — preallocated backing + logical length; `<<` is in-bounds index assignment (never reallocates), `clear` is `len = 0`, growth is deliberate. `clearRetainingCapacity` by construction.
 - `e.get(Hunger, into: @cached)` — refills a setup-allocated Struct instance instead of materializing a new one per read: the same reuse idea applied to the component boundary, where the real per-frame garbage comes from. With the per-tick `mrb_gc_arena_save/restore`, a hot script's steady state allocates nothing.
-- Lua mirror: keep a logical `n` over a reused table (`t[i]` assignment retains the array part; LuaJIT `table.clear` retains) — the lua prelude documents the same pattern.
+- **Per-language matrix** (the need is universal; who provides it varies):
+
+| language | scratch-clear idiom | shipped by us | GC discipline (plugin-owned) |
+|---|---|---|---|
+| Ruby (mruby) | `Array#clear` **frees** — trap | `Labelle::FrameArray` + `into:` | GC arena save/restore per tick |
+| Lua 5.4 | no `table.clear` builtin | prelude FrameArray (logical `n`) + `e:get(name, into)` | `lua_gc(LUA_GCSTEP)` per-tick budget |
+| TypeScript (QuickJS) | `length = 0` is engine-internal — don't rely | prelude FrameArray + `into:`; **typed arrays** (reused `Float64Array`) = true zero-alloc numeric scratch | refcount+cycle GC — smooth by nature |
+| Go | **native**: `s = s[:0]`, `sync.Pool` | nothing — wrapper layer reuses marshal buffers internally | guest Go GC, background |
+| Rust / Crystal / Zig | native (`Vec::clear` etc.) | nothing | n/a |
+
+The unifying rule: the real per-frame allocator in every VM language is **the boundary** (each get/decode materializes objects) — so `into:`-reuse and a FrameArray are standard prelude equipment for the whole VM family, not per-language afterthoughts.
 
 **Controllers in Ruby** — script-language *domain owners*, not just leaf behaviors. Subclassing registers (Ruby's `inherited` hook — convention over config); the file's numeric prefix orders ticks:
 
