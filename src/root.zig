@@ -724,6 +724,20 @@ pub const ControllerManagerEvent = controller_manager_mod.ManagerEvent;
 pub const NO_PLAYER = controller_manager_mod.NO_PLAYER;
 pub const NO_CONTROLLER = controller_manager_mod.NO_CONTROLLER;
 
+// ── Behavior Tree (game-agnostic AI facility, #616) ──
+// Flat-array (serializable) behavior-tree interpreter promoted from
+// flying-platform-labelle. `engine.BehaviorTree(.{...})` builds a facility
+// with custom capacities; the module also exposes default-capacity `Tree` /
+// `TreeBuilder` aliases (`engine.behavior_tree.Tree`).
+pub const behavior_tree = @import("behavior_tree.zig");
+pub const BehaviorTree = behavior_tree.BehaviorTree;
+pub const BehaviorTreeOptions = behavior_tree.Options;
+pub const BehaviorTreeStatus = behavior_tree.Status;
+pub const BehaviorTreeNode = behavior_tree.Node;
+pub const BehaviorTreeNodeKind = behavior_tree.NodeKind;
+pub const BehaviorTreeActionFn = behavior_tree.ActionFn;
+pub const BehaviorTreeConditionFn = behavior_tree.ConditionFn;
+
 // ── Core Re-exports ──
 pub const Position = core.Position;
 pub const Ecs = core.Ecs;
