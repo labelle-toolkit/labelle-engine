@@ -74,6 +74,10 @@ pub fn build(b: *std.Build) void {
         "test/gestures_test.zig",
         "test/sparse_set_test.zig",
         "test/query_test.zig",
+        // #615 — first-class CommandBuffer(Command): enqueue (growable
+        // engine-owned storage), conflict detection (write-key overlap +
+        // release-before-acquire handoff exemption), deferred apply.
+        "test/command_buffer_test.zig",
         "test/gui_view_test.zig",
         "test/anim_timing_test.zig",
         "test/gui_runtime_state_test.zig",
