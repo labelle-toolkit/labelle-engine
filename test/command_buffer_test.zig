@@ -123,6 +123,24 @@ test "conflict detection: acquire-before-release stays flagged" {
     try testing.expectEqual(@as(u64, 5), report.slice()[0].entity);
 }
 
+test "conflict detection: report caps at MAX_CONFLICTS with overflow flagged" {
+    var buf = Buffer.init(testing.allocator);
+    defer buf.deinit();
+
+    // 10 acquires on the same worker → 45 conflicting pairs, well past
+    // MAX_CONFLICTS (32). The report caps and flags overflow (and bails
+    // early once full rather than finishing the O(N^2) sweep).
+    var i: u64 = 0;
+    while (i < 10) : (i += 1) {
+        try buf.push(.{ .wander = .{ .worker = 1 } });
+    }
+
+    const report = buf.detectConflicts();
+    try testing.expectEqual(Buffer.ConflictReport.MAX_CONFLICTS, report.len);
+    try testing.expect(report.overflow);
+    try testing.expect(!report.isEmpty());
+}
+
 /// Apply context: records applied worker ids in push order.
 const World = struct {
     applied: std.ArrayListUnmanaged(u64) = .empty,

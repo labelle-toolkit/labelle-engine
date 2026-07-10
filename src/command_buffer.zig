@@ -190,7 +190,13 @@ pub fn CommandBuffer(comptime Command: type) type {
                             report.conflicts[report.len] = .{ .cmd_a = i, .cmd_b = j, .entity = entity };
                             report.len += 1;
                         } else {
+                            // Report is full and we've found one more
+                            // conflict that can't be stored — flag overflow
+                            // and stop. Continuing the O(N^2) sweep is wasted
+                            // work: nothing further can change (`overflow` is
+                            // already the terminal state).
                             report.overflow = true;
+                            return report;
                         }
                     }
                 }
@@ -244,6 +250,14 @@ pub fn validateCommandContract(comptime Command: type) void {
         @compileError("CommandBuffer: `" ++ @typeName(Command) ++
             "` must declare `pub fn acquiresWorker(self) bool`");
 
+    // Each contract decl must be a *function*. Accessing `.@"fn"` on a
+    // non-function `@typeInfo` panics with an obscure "inactive union
+    // field" error, so gate on the tag first and emit a clear message
+    // naming the offending decl.
+    requireFnDecl(Command, "writeKeys");
+    requireFnDecl(Command, "releasesWorker");
+    requireFnDecl(Command, "acquiresWorker");
+
     const ret = @typeInfo(@TypeOf(Command.writeKeys)).@"fn".return_type orelse
         @compileError("CommandBuffer: `writeKeys` must return `[N]?Key`");
     const ret_info = @typeInfo(ret);
@@ -259,4 +273,14 @@ pub fn validateCommandContract(comptime Command: type) void {
     const AcqRet = @typeInfo(@TypeOf(Command.acquiresWorker)).@"fn".return_type;
     if (AcqRet != bool)
         @compileError("CommandBuffer: `acquiresWorker` must return `bool`");
+}
+
+/// Assert that `Command.<name>` is a function, with a readable
+/// `@compileError` (naming the decl) when a game declares it as a const,
+/// field, or other non-function value — otherwise the subsequent
+/// `.@"fn"` access panics on an inactive union field.
+fn requireFnDecl(comptime Command: type, comptime name: []const u8) void {
+    if (@typeInfo(@TypeOf(@field(Command, name))) != .@"fn")
+        @compileError("CommandBuffer: `" ++ @typeName(Command) ++ "." ++ name ++
+            "` must be a function (`pub fn " ++ name ++ "(self) ...`), not a const/field");
 }
