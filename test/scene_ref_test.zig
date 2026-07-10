@@ -84,7 +84,7 @@ test "@ref: basic bidirectional cross-reference" {
 
     try loadSource(&game,
         \\{
-        \\  "entities": [
+        \\  "children": [
         \\    { "ref": "box", "components": { "HoldsItem": { "item_id": "@apple" } } },
         \\    { "ref": "apple", "components": { "StoredIn": { "container_id": "@box" } } }
         \\  ]
@@ -124,7 +124,7 @@ test "@ref: forward reference (referenced entity declared after)" {
     // apple references box, but box is declared AFTER apple
     try loadSource(&game,
         \\{
-        \\  "entities": [
+        \\  "children": [
         \\    { "ref": "apple", "components": { "StoredIn": { "container_id": "@box" } } },
         \\    { "ref": "box", "components": { "Health": { "current": 50, "max": 50 } } }
         \\  ]
@@ -158,7 +158,7 @@ test "@ref: multiple entity refs in one component" {
 
     try loadSource(&game,
         \\{
-        \\  "entities": [
+        \\  "children": [
         \\    { "ref": "a", "components": { "Health": { "current": 1, "max": 1 } } },
         \\    { "ref": "b", "components": { "Health": { "current": 2, "max": 2 } } },
         \\    { "ref": "link", "components": { "Link": { "source": "@a", "target": "@b" } } }
@@ -202,7 +202,7 @@ test "@ref: entities without refs work unchanged" {
 
     try loadSource(&game,
         \\{
-        \\  "entities": [
+        \\  "children": [
         \\    { "components": { "Health": { "current": 42, "max": 100 } } },
         \\    { "components": { "Health": { "current": 99, "max": 200 } } }
         \\  ]
@@ -223,7 +223,7 @@ test "@ref: mixed refs and non-refs in same scene" {
 
     try loadSource(&game,
         \\{
-        \\  "entities": [
+        \\  "children": [
         \\    { "components": { "Health": { "current": 10, "max": 10 } } },
         \\    { "ref": "box", "components": { "Health": { "current": 20, "max": 20 } } },
         \\    { "components": { "StoredIn": { "container_id": "@box" } } }
@@ -262,7 +262,7 @@ test "@ref: no memory leaks" {
 
     try loadSource(&game,
         \\{
-        \\  "entities": [
+        \\  "children": [
         \\    { "ref": "a", "components": { "HoldsItem": { "item_id": "@b" } } },
         \\    { "ref": "b", "components": { "StoredIn": { "container_id": "@a" } } }
         \\  ]
@@ -278,7 +278,7 @@ test "@ref: ref with non-ref components on same entity" {
 
     try loadSource(&game,
         \\{
-        \\  "entities": [
+        \\  "children": [
         \\    { "ref": "target", "components": { "Health": { "current": 77, "max": 77 } } },
         \\    { "components": { "Health": { "current": 33, "max": 33 }, "StoredIn": { "container_id": "@target" } } }
         \\  ]
@@ -349,8 +349,8 @@ test "@ref: refs inside prefab with children" {
         .sub_path = "scene.jsonc",
         .data =
         \\{
-        \\  "entities": [
-        \\    { "prefab": "box_with_item", "components": { "Position": { "x": 10, "y": 20 } } }
+        \\  "children": [
+        \\    { "prefab": "box_with_item", "overrides": { "Position": { "x": 10, "y": 20 } } }
         \\  ]
         \\}
         ,
@@ -413,8 +413,8 @@ test "@ref: cross-reference between prefab and scene entity" {
         .sub_path = "scene.jsonc",
         .data =
         \\{
-        \\  "entities": [
-        \\    { "ref": "mybox", "prefab": "container", "components": { "Position": { "x": 0, "y": 0 } } },
+        \\  "children": [
+        \\    { "ref": "mybox", "prefab": "container", "overrides": { "Position": { "x": 0, "y": 0 } } },
         \\    { "components": { "StoredIn": { "container_id": "@mybox" } } }
         \\  ]
         \\}
@@ -488,8 +488,8 @@ test "@ref: position offset applied correctly with refs" {
         .sub_path = "scene.jsonc",
         .data =
         \\{
-        \\  "entities": [
-        \\    { "prefab": "parent_with_child", "components": { "Position": { "x": 100, "y": 200 } } }
+        \\  "children": [
+        \\    { "prefab": "parent_with_child", "overrides": { "Position": { "x": 100, "y": 200 } } }
         \\  ]
         \\}
         ,
@@ -548,7 +548,7 @@ test "@ref: nested entity arrays register refs (#415)" {
 
     try loadSource(&game,
         \\{
-        \\  "entities": [
+        \\  "children": [
         \\    {
         \\      "components": {
         \\        "Container": {
@@ -628,12 +628,12 @@ test "@ref: nested entities with children and cross-refs (#415)" {
         .sub_path = "scene.jsonc",
         .data =
         \\{
-        \\  "entities": [
+        \\  "children": [
         \\    {
         \\      "components": {
         \\        "Container": {
         \\          "slots": [
-        \\            { "prefab": "filled_slot", "components": { "Position": { "x": 10, "y": 0 } } },
+        \\            { "prefab": "filled_slot", "overrides": { "Position": { "x": 10, "y": 0 } } },
         \\            { "components": { "Health": { "current": 1, "max": 1 } } }
         \\          ]
         \\        }
@@ -724,8 +724,8 @@ test "children with Sprite render at correct position (#417)" {
         .sub_path = "scene.jsonc",
         .data =
         \\{
-        \\  "entities": [
-        \\    { "prefab": "room_with_decor", "components": { "Position": { "x": 100, "y": 200 } } }
+        \\  "children": [
+        \\    { "prefab": "room_with_decor", "overrides": { "Position": { "x": 100, "y": 200 } } }
         \\  ]
         \\}
         ,
@@ -800,8 +800,8 @@ test "destroying parent also destroys children (#417)" {
         .sub_path = "scene.jsonc",
         .data =
         \\{
-        \\  "entities": [
-        \\    { "prefab": "parent_with_child", "components": { "Position": { "x": 0, "y": 0 } } }
+        \\  "children": [
+        \\    { "prefab": "parent_with_child", "overrides": { "Position": { "x": 0, "y": 0 } } }
         \\  ]
         \\}
         ,

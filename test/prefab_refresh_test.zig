@@ -80,7 +80,7 @@ fn boot(game: *engine.Game, prefabs: []const struct { name: []const u8, src: []c
         try Bridge.addEmbeddedPrefab(game, p.name, p.src, "prefabs");
     }
     try Bridge.loadSceneFromSource(game,
-        \\{ "entities": [] }
+        \\{ "children": [] }
     , "prefabs");
 }
 

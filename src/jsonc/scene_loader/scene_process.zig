@@ -284,16 +284,19 @@ pub fn SceneProcess(comptime GameType: type, comptime Components: type, comptime
                             try loadSceneFile(game, include_path, prefab_cache, include_depth + 1);
                         }
                     }
-                    uf.warnLegacyAssets(scene_obj, game.log);
+                    // Reject the pre-#560 legacy file-level aliases
+                    // (top-level `"entities"` / `"assets"`); removed
+                    // in engine v2.0 (#592).
+                    try uf.rejectLegacyAliases(scene_obj, game.log);
                     // RFC #560 §B2 at the file root: a reference-mode
                     // root may not declare `"children"`.
                     // `uf.rootObject` returns the explicit `"root"`
-                    // block when present (root-wrapped legacy v1.x
-                    // shape) and the file object itself otherwise
-                    // (flat top-level entity, RFC #594), so the
-                    // gate fires for either shape.
+                    // block when present (root-wrapped v1.x shape) and
+                    // the file object itself otherwise (flat top-level
+                    // entity, RFC #594), so the gate fires for either
+                    // shape.
                     try uf.rejectB2Violation(uf.rootObject(scene_obj), game.log, "reference-mode root");
-                    if (uf.fileChildren(scene_obj, game.log)) |entities_arr| {
+                    if (uf.fileChildren(scene_obj)) |entities_arr| {
                         var ref_ctx = RefContext.init(game.allocator, null);
                         defer ref_ctx.deinit();
                         try processEntities(game, entities_arr, prefab_cache, &ref_ctx);
@@ -337,9 +340,9 @@ pub fn SceneProcess(comptime GameType: type, comptime Components: type, comptime
                             try loadSceneFile(game, include_path, prefab_cache, 1);
                         }
                     }
-                    uf.warnLegacyAssets(scene_obj, game.log);
+                    try uf.rejectLegacyAliases(scene_obj, game.log);
                     try uf.rejectB2Violation(uf.rootObject(scene_obj), game.log, "reference-mode root");
-                    if (uf.fileChildren(scene_obj, game.log)) |entities_arr| {
+                    if (uf.fileChildren(scene_obj)) |entities_arr| {
                         var ref_ctx = RefContext.init(game.allocator, null);
                         defer ref_ctx.deinit();
                         try processEntities(game, entities_arr, prefab_cache, &ref_ctx);

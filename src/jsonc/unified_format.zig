@@ -22,17 +22,20 @@
 //!   - **Unknown PascalCase → warn-once.** Forward-compat with
 //!     cross-repo plugin authoring; typos still surface visibly.
 //!
-//! Pre-#560 legacy spellings are still accepted during the
-//! migration window and each logs a one-time deprecation warning so
-//! the #572 migrator has a checklist.
+//! Pre-#560 legacy spellings — a top-level `"entities"` array, a
+//! `"components"` wrapper on a prefab reference, and a top-level
+//! `"assets"` array — are NO LONGER accepted as of engine v2.0
+//! (#592). The loader rejects each with an actionable
+//! `error.InvalidFormat` that points at the `labelle migrate
+//! unified` CLI migrator (which rewrites legacy files to the
+//! unified/flat form).
 //!
 //! These accessors are the single place that bridges the shapes —
 //! the loader calls them instead of reading raw keys, so flat,
-//! `"root"`-wrapped, bundle, and legacy files all walk the exact
-//! same code path. Per RFC #594 "Loader changes", during v1.x
-//! every shape is first-class and warning-free (only outright
-//! legacy patterns warn); v2.0 drops the wrapper / root-wrapped /
-//! file-object-no-root paths.
+//! `"root"`-wrapped, and bundle files all walk the exact same code
+//! path. Per RFC #594 "Loader changes", every current shape is
+//! first-class and warning-free; the pre-#560 legacy aliases were
+//! removed in the v2.0 major bump (#592).
 //!
 //! See RFC-UNIFY-SCENES-AND-PREFABS.md, RFC-FLATTEN-ROOT.md, and
 //! RFC-FLATTEN-WRAPPERS-AND-BUNDLES.md.
@@ -56,11 +59,14 @@ const warned_allocator: std.mem.Allocator = if (builtin.target.os.tag == .emscri
 else
     std.heap.page_allocator;
 
-// One-time deprecation-warning dedup, keyed by the comptime message
-// literal. A legacy prefab spawned N times — or a scene with N
-// legacy references — then warns once, not N times. Never freed
-// (process-lifetime set); keys are string literals so there is
-// nothing to dupe.
+// One-time warning dedup, keyed by the comptime message literal.
+// The pre-#560 legacy deprecation warnings were removed in v2.0
+// (#592); the remaining callers are RFC #596 forward-compat
+// diagnostics — the defense-in-depth "mixed wrapper + flat
+// PascalCase shapes" warnings on inline entities, prefab references,
+// and prefab roots. A scene that trips one of these N times then
+// warns once, not N times. Never freed (process-lifetime set); keys
+// are string literals so there is nothing to dupe.
 //
 // Unguarded on purpose. Gemini-review on #573 asked why this isn't
 // behind a `std.Thread.Mutex` — the answer is two-fold:
@@ -161,11 +167,6 @@ pub fn warnUnknownComponent(log: anytype, name: []const u8) void {
 ///    sets are closed and disjoint (RFC #594 §"Key sets are closed
 ///    and disjoint").
 ///
-/// Pre-#594 legacy scenes (those without any `"root"` wrapper and
-/// still using a top-level `"entities"` array) ride the same flat
-/// path here — `entityPatch`/`fileChildren` continue to honor the
-/// legacy keys at top level, warning once.
-///
 /// Returns the object that carries the root entity content either
 /// way: the explicit `"root"` block when present, the file object
 /// itself otherwise.
@@ -173,28 +174,53 @@ pub fn rootObject(file_obj: Value.Object) Value.Object {
     return file_obj.getObject("root") orelse file_obj;
 }
 
-/// The file-level entity list for a scene file. Three shapes ride
-/// the same accessor:
+/// Reject the pre-#560 legacy file-level aliases. As of engine v2.0
+/// (#592) the loader accepts only the unified/flat form, so a scene
+/// file that still carries either:
+///
+///  - a top-level `"entities"` array (the pre-#560 wrapper; the
+///    unified form lists file-level entities under `"children"`, or
+///    directly as a top-level bundle Array), or
+///  - a top-level `"assets"` array (assets are inferred from sprite
+///    references — RFC #563),
+///
+/// is rejected with `error.InvalidFormat` and an actionable message
+/// pointing at the `labelle migrate unified` CLI migrator. Callers
+/// invoke this before `fileChildren` so a legacy file fails loudly
+/// instead of silently loading as empty.
+pub fn rejectLegacyAliases(file_obj: Value.Object, log: anytype) error{InvalidFormat}!void {
+    if (file_obj.get("entities") != null) {
+        log.err(
+            "[unified-format] legacy \"entities\" key is no longer accepted (removed in engine v2.0, #592): list file-level entities under \"children\", or as a top-level bundle Array. Run `labelle migrate unified` to convert this file.",
+            .{},
+        );
+        return error.InvalidFormat;
+    }
+    if (file_obj.get("assets") != null) {
+        log.err(
+            "[unified-format] legacy \"assets\" key is no longer accepted (removed in engine v2.0, #592): assets are inferred from sprite references (RFC #563). Run `labelle migrate unified` to convert this file.",
+            .{},
+        );
+        return error.InvalidFormat;
+    }
+}
+
+/// The file-level entity list for a scene file. Two shapes ride the
+/// same accessor:
 ///
 ///  - **Root-wrapped (v1.0 — v1.x):** `root.children`.
-///  - **Flat (RFC #594, v1.47+):** top-level `"children"` array
-///    sitting alongside `"name"` / future metadata.
-///  - **Legacy pre-RFC-#560:** a top-level `"entities"` array (warned).
+///  - **Flat (RFC #594):** top-level `"children"` array sitting
+///    alongside `"name"` / future metadata.
 ///
-/// Partial-migration safety: if `"root"` is present but carries no
-/// `"children"` array, we still consult the legacy top-level
-/// `"entities"` / `"children"` keys before giving up — otherwise a
-/// scene that adds the `"root"` wrapper before moving its entity
-/// list silently loads as empty (#573).
-pub fn fileChildren(file_obj: Value.Object, log: anytype) ?Value.Array {
+/// The pre-#560 legacy top-level `"entities"` array is no longer
+/// honored (removed in v2.0, #592) — `rejectLegacyAliases` fails such
+/// a file before this is reached.
+pub fn fileChildren(file_obj: Value.Object) ?Value.Array {
     if (file_obj.getObject("root")) |root| {
         if (root.getArray("children")) |children| return children;
-        // `root` is present but empty — fall through to legacy keys
-        // (warned) so a half-migrated file still loads its entities.
-    }
-    if (file_obj.getArray("entities")) |entities| {
-        warnOnce(log, "[unified-format] legacy \"entities\" key: wrap the entity array in a \"root\" block and rename it to \"children\" (RFC #560)");
-        return entities;
+        // `root` is present but empty — fall through to a top-level
+        // `"children"` so a half-migrated file still loads its
+        // entities.
     }
     return file_obj.getArray("children");
 }
@@ -287,15 +313,14 @@ fn isFileHeader(obj: Value.Object) bool {
     return true;
 }
 
-/// The component patch for an entity entry. Three shapes ride this
+/// The component patch for an entity entry. Two shapes ride this
 /// accessor (RFC #560 / #594 / #596):
 ///
-///   - **Wrapped (v1.0 — v1.x):** inline entries carry
-///     `"components": { ... }`; reference entries carry
-///     `"overrides": { ... }`. A legacy `"components"` on a
-///     reference is accepted as a synonym and warned. When
-///     `"overrides"` and `"components"` both appear on a reference,
-///     `"overrides"` wins.
+///   - **Wrapped:** inline entries carry `"components": { ... }`;
+///     reference entries carry `"overrides": { ... }`. As of engine
+///     v2.0 (#592) the pre-#560 `"components"` wrapper on a *prefab
+///     reference* is rejected with `error.InvalidFormat` (it must be
+///     `"overrides"`); an inline entity still uses `"components"`.
 ///   - **Flat (RFC #596 Axis 2):** PascalCase keys at the entity
 ///     scope are the components directly — no `overrides:` /
 ///     `components:` wrapper. Lowercase keys (`prefab`, `children`,
@@ -313,27 +338,27 @@ fn isFileHeader(obj: Value.Object) bool {
 /// Object verbatim). Callers pass their per-scene arena; the
 /// synthesized Object's `entries` slice lives in that arena and
 /// must not outlive it. Leaf values are shared with `entity_obj`.
-pub fn entityPatch(entity_obj: Value.Object, allocator: std.mem.Allocator, log: anytype) error{OutOfMemory}!?Value.Object {
+pub fn entityPatch(entity_obj: Value.Object, allocator: std.mem.Allocator, log: anytype) error{ OutOfMemory, InvalidFormat }!?Value.Object {
     const is_reference = entity_obj.getString("prefab") != null;
 
-    // Wrapped form takes precedence — back-compat for v1.x and the
-    // dual-accept matrix during the deprecation window.
     if (is_reference) {
+        // A prefab reference patches via `"overrides"` (or flat
+        // PascalCase keys, RFC #596). The pre-#560 `"components"`
+        // wrapper on a reference is no longer accepted (removed in
+        // v2.0, #592) — reject it loudly instead of silently
+        // ignoring the patch.
+        if (entity_obj.get("components") != null) {
+            log.err(
+                "[unified-format] legacy \"components\" on a prefab reference is no longer accepted (removed in engine v2.0, #592): rename it to \"overrides\", or use flat PascalCase component keys (RFC #596). Run `labelle migrate unified` to convert this file.",
+                .{},
+            );
+            return error.InvalidFormat;
+        }
         if (entity_obj.getObject("overrides")) |overrides| {
-            if (entity_obj.getObject("components") != null) {
-                warnOnce(log, "[unified-format] prefab reference has both \"overrides\" and \"components\"; \"overrides\" wins — remove \"components\" (RFC #560)");
-            }
             if (hasPascalCaseKey(entity_obj)) {
                 warnOnce(log, "[unified-format] reference entry has both an \"overrides\" wrapper and flat PascalCase keys — \"overrides\" wins. Drop one shape (RFC #596).");
             }
             return overrides;
-        }
-        if (entity_obj.getObject("components")) |legacy| {
-            warnOnce(log, "[unified-format] legacy \"components\" on a prefab reference: rename it to \"overrides\" (RFC #560)");
-            if (hasPascalCaseKey(entity_obj)) {
-                warnOnce(log, "[unified-format] reference entry has both a \"components\" wrapper and flat PascalCase keys — wrapper wins. Drop one shape (RFC #596).");
-            }
-            return legacy;
         }
     } else {
         if (entity_obj.getObject("components")) |components| {
@@ -424,15 +449,6 @@ pub fn prefabComponents(prefab_root: Value.Object, allocator: std.mem.Allocator,
 /// (RFC #560, #561).
 pub fn effectiveName(file_obj: Value.Object, basename: []const u8) []const u8 {
     return file_obj.getString("name") orelse basename;
-}
-
-/// Warn once if a scene file still declares the dropped `"assets"`
-/// field. Under the unified format assets are inferred from sprite
-/// references (RFC #563); the field is ignored.
-pub fn warnLegacyAssets(file_obj: Value.Object, log: anytype) void {
-    if (file_obj.get("assets") != null) {
-        warnOnce(log, "[unified-format] legacy \"assets\" key is ignored — assets are inferred from sprite references (RFC #560, #563)");
-    }
 }
 
 /// RFC §B2 gate: a reference-mode entry (one that carries a

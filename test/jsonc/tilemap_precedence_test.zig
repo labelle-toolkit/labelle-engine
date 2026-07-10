@@ -46,7 +46,7 @@ test "a registered component named Tilemap wins over the engine built-in" {
     defer game.deinit();
 
     try Bridge.loadSceneFromSource(&game,
-        \\{ "entities": [
+        \\{ "children": [
         \\  { "components": { "Tilemap": { "rows": 4, "cols": 7 } } }
         \\] }
     , "/tmp/labelle-nonexistent");

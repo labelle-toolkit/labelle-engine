@@ -678,7 +678,7 @@ const CONDENSER_V2 =
 fn bootPrefabGame(game: *engine.Game) !void {
     try PrefabBridge.addEmbeddedPrefab(game, "condenser", CONDENSER_V1, "prefabs");
     try PrefabBridge.loadSceneFromSource(game,
-        \\{ "entities": [] }
+        \\{ "children": [] }
     , "prefabs");
 }
 
@@ -1182,7 +1182,7 @@ test "scene loader: a scene-authored \"Camera\" component attaches as the built-
 
     const Bridge = engine.JsoncSceneBridge(CameraTestGame, EmptyComponents);
     try Bridge.loadSceneFromSource(&game,
-        \\{ "entities": [
+        \\{ "children": [
         \\   { "components": { "Position": { "x": 512, "y": 384 }, "Camera": { "zoom": 3.0 } } }
         \\ ] }
     , "prefabs");
@@ -1920,7 +1920,7 @@ test "scene JSONC: an authored Camera \"tag\" seeds the inline bounded field" {
 
     const Bridge = engine.JsoncSceneBridge(CameraTestGame, EmptyComponents);
     try Bridge.loadSceneFromSource(&game,
-        \\{ "entities": [
+        \\{ "children": [
         \\   { "components": { "Position": { "x": 512, "y": 384 }, "Camera": { "zoom": 1.0, "tag": "sky_parallax" } } }
         \\ ] }
     , "prefabs");
