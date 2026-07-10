@@ -94,6 +94,10 @@ pub fn build(b: *std.Build) void {
         // C2 — a project-registered component named `Tilemap` must win over
         // the engine built-in in the scene loader (no silent shadowing).
         "test/jsonc/tilemap_precedence_test.zig",
+        // #568 — standalone `Image` component: scene-loader parse, loader
+        // resolution through AssetCatalog, and registered-vs-built-in
+        // precedence.
+        "test/jsonc/image_component_test.zig",
         "test/scene_ref_test.zig",
         "test/asset_catalog_test.zig",
         "test/audio_loader_test.zig",

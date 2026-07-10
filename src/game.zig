@@ -62,6 +62,7 @@ const tilemap_mod = @import("tilemap.zig");
 const tilemap_runtime = @import("tilemap_runtime.zig");
 const tilemap_mixin = @import("game/tilemap_mixin.zig");
 const camera_mod = @import("camera.zig");
+const image_component_mod = @import("image_component.zig");
 const camera_mixin = @import("game/camera_mixin.zig");
 const frame_profiler_mod = @import("frame_profiler.zig");
 
@@ -218,6 +219,10 @@ pub fn GameConfigWithYAxis(
         pub const HooksIsMergedExport = HooksIsMerged;
         pub const EcsBackend = EcsImpl;
         pub const SpriteComp = Sprite;
+        /// Engine built-in `Image` component — standalone-PNG entity backed by
+        /// `AssetCatalog` (#568). Distinct from `SpriteComp` (atlas sprites)
+        /// and from the imgui `gui_types.Image`. See `src/image_component.zig`.
+        pub const ImageComp = image_component_mod.Image;
         pub const ShapeComp = Shape;
         pub const TextComp = Text;
         pub const IconComp = Icon;
