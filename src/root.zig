@@ -16,6 +16,7 @@ pub const script_runner_mod = @import("script_runner.zig");
 pub const gestures_mod = @import("gestures.zig");
 pub const sparse_set_mod = @import("sparse_set.zig");
 pub const query_mod = @import("query.zig");
+pub const command_buffer_mod = @import("command_buffer.zig");
 pub const hooks_types_mod = @import("hooks_types.zig");
 pub const anim_timing_mod = @import("anim_timing.zig");
 pub const animation_def_mod = @import("animation_def.zig");
@@ -164,6 +165,24 @@ pub const GuiEvent = form_binder_mod.GuiEvent;
 pub const SparseSet = sparse_set_mod.SparseSet;
 pub const separateComponents = query_mod.separateComponents;
 pub const CallbackType = query_mod.CallbackType;
+
+// ── Command Buffer (labelle-engine#615) ──
+//
+// First-class deferred-mutation staging + conflict detection,
+// parameterized over a game-supplied `Command` type — the same
+// comptime-trait pattern `labelle-core`'s `Ecs(Backend)` uses. Scripts
+// push commands during a frame instead of mutating the world directly;
+// at a safe end-of-frame sync point the runtime detects conflicts (two
+// commands mutating the same entity in one frame) and applies/clears.
+// Graduates flying-platform's vendored `command_buffer` plugin into the
+// engine, generalized game-agnostic. See `src/command_buffer.zig`.
+pub const CommandBuffer = command_buffer_mod.CommandBuffer;
+/// Comptime helper: the entity-key type a `Command` mutates (`[N]?Key` → `Key`).
+pub const CommandKey = command_buffer_mod.CommandKey;
+/// Comptime helper: the write-key arity of a `Command` (`[N]?Key` → `N`).
+pub const commandKeyCount = command_buffer_mod.commandKeyCount;
+/// Comptime contract check a game `Command` type must pass.
+pub const validateCommandContract = command_buffer_mod.validateCommandContract;
 
 // ── Engine Lifecycle Events (RFC-FLOW-VOCABULARY phase 6, #578) ──
 //
