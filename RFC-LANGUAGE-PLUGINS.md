@@ -3,7 +3,7 @@
 **Issue:** labelle-toolkit/labelle-engine#237 (updated 2026-07 — re-scoped from "Lua module" to the language-plugin family)  
 **Status:** Draft  
 **Author:** Alexandre  
-**Date:** 2026-07-10 (rev 2 — POC validated: PR #734; rev 3 — single-repo packaging: `labelle-scripting` with language sub-modules; rev 4 — reference bindings: Lua queries, Ruby events; rev 5 — Ruby controllers: script-language domain owners; rev 6 — script-declared components: generate-time codegen, runtime tier for mods)
+**Date:** 2026-07-10 (rev 2 — POC validated: PR #734; rev 3 — single-repo packaging: `labelle-scripting` with language sub-modules; rev 4 — reference bindings: Lua queries, Ruby events; rev 5 — Ruby controllers: script-language domain owners; rev 6 — script-declared components: generate-time codegen, runtime tier for mods; rev 7 — native declaration idioms per language)
 
 ## Problem
 
@@ -172,7 +172,13 @@ Two tiers, one DSL:
 - **Tier 1 — game developers (v1)**: declaration → generate-time codegen → first-class component. The schema lives in Ruby, the type lives in Zig, nothing is written twice.
 - **Tier 2 — mods (later)**: the same class registers at **runtime** into a dynamic component store (JSON-typed, generic serde) — modders cannot run `labelle generate`. Dynamic components stay invisible to comptime Zig systems, which is acceptable for sandboxed mod content.
 
-Lua mirrors the shape (`labelle.component("Hunger", { level = {"f32", 1.0} })`); native-family languages declare schemas in a sidecar consumed by the same codegen.
+**Native idioms per language, one schema underneath.** The `field` DSL is the explicit form; every language also declares in its own native shape, and the declare-mode extraction produces the same schema JSON:
+
+- **Ruby terse form**: `Hunger = Labelle.component(level: 1.0, starving: false)` — types inferred from the default literals (`1.0`→f32, `0`→i32, `false`→bool, `""`→str, `{x:,y:}`→vec2); the class DSL remains for what inference can't express (`:entity`, enums, width control, `persist :transient`). Instances are **Struct-backed** with attribute accessors (`h.level -= …; e.set(h)`) — `mruby-struct` is in the standard gem set; `Data.define` is not in mruby and its immutability fights the get→mutate→set flow.
+- **Lua**: `labelle.component("Hunger", { level = 1.0, starving = false })` — table form, same inference.
+- **Rust**: `#[labelle::component] struct Hunger { level: f32, starving: bool }` — the proc-macro emits schema JSON at build; the type system is the DSL.
+- **Crystal**: annotated struct, schema dumped by a declare-mode compile (same runner pattern as Ruby).
+- **C#**: `[LabelleComponent] record Hunger(float Level, bool Starving);`
 
 ## Backward compatibility
 
