@@ -3,7 +3,7 @@
 **Issue:** labelle-toolkit/labelle-engine#237 (updated 2026-07 — re-scoped from "Lua module" to the language-plugin family)  
 **Status:** Draft  
 **Author:** Alexandre  
-**Date:** 2026-07-10 (rev 2 — POC validated: PR #734; rev 3 — single-repo packaging: `labelle-scripting` with language sub-modules)
+**Date:** 2026-07-10 (rev 2 — POC validated: PR #734; rev 3 — single-repo packaging: `labelle-scripting` with language sub-modules; rev 4 — reference bindings: Lua queries, Ruby events)
 
 ## Problem
 
@@ -83,6 +83,50 @@ Anatomy (shared once, per-language where noted):
 - **rust / crystal** — the native family. The contract ships as a C header; game Rust/Crystal code builds as a static lib the plugin's build integration links into the game binary. Full native performance, no VM, no sandbox; hot reload only as an optional dev-mode dylib swap. Crystal gives the Ruby-shaped syntax at native speed.
 - **ruby** — **mruby**, not CRuby (CRuby is not designed for embedding). Embedded-VM family; smaller community than Lua but the same shape.
 - **csharp** — the heaviest: CoreCLR hosting via `hostfxr`, desktop-first (Android/iOS AOT constraints are real — Godot's Mono history is the cautionary precedent). Explicitly last.
+
+### 4. Reference bindings: what the sugar looks like
+
+The ABI stays minimal (one `query` function, subscribe+poll for events); everything idiomatic is per-language sugar. Two worked references pin the style.
+
+**Queries in Lua** — FP's cloud-drift loop as a script:
+
+```lua
+function update(dt)
+    for e in game:query("CloudDrift", "Position") do
+        local drift = e:get("CloudDrift")
+        local pos   = e:get("Position")
+        pos.x = pos.x + drift.speed * dt
+        if pos.x >= drift.tile_width then pos.x = pos.x - 2 * drift.tile_width end
+        e:set("Position", pos)
+    end
+end
+-- filters:  for e in game:query("Enemy", "Position"):without("Dead") do … end
+```
+
+- Maps to one contract call: `labelle_query(names_json) -> ids_json` (engine resolves names via the comptime component registry, runs a normal ECS view). The generic-for iterator, `Entity` handles, and JSON⇄table marshaling live in the lua sub-module.
+- **Snapshot semantics**: the id list is captured at query time — spawn/destroy inside the loop is safe; `e:get` on a destroyed entity returns `nil`. Main-thread, during the plugin tick.
+- **Cost model**: each `get`/`set` is one FFI crossing + JSON codec — fine at game-logic scale; hot paths stay Zig. A batched v2 escape hatch (`game:each(names, fn)` — one crossing fetches all rows, dirty rows write back in one call) is reserved for when profiling demands it.
+
+**Events in Ruby (mruby)** — blocks over the drain loop:
+
+```ruby
+def init
+  @turret = Labelle.entity_create
+  Labelle.set(@turret, "Position", x: 100, y: 50)
+
+  Labelle.on("combat__fight_started") do |ev|
+    @armed = true
+    Labelle.log "turret arming against raid #{ev[:raid_id]}"
+  end
+
+  Labelle.on("pathfinder__arrived") do |ev|
+    fire_at(ev[:entity]) if @armed
+  end
+end
+```
+
+- `Labelle.on` subscribes (once per name) via `labelle_event_subscribe` and registers the block; the shared controller **drains the inbox before each `update`** and dispatches to blocks with the JSON payload parsed to a symbol-keyed Hash. `Labelle.emit("turret__fired", turret: @turret)` is the symmetric kwargs→JSON emit. The ABI never grows callbacks — blocks are dispatcher sugar, identical in shape to Lua handler tables and C# events.
+- **mruby embedding rules** (the ruby sub-module's homework): wrap every dispatch in `mrb_protect` so a script exception is logged, not fatal to the tick — mruby exceptions are VM-internal and safe, unlike Crystal's cross-foreign raise (POC finding); and save/restore the **GC arena** (`mrb_gc_arena_save/restore`) around each tick's dispatch, the classic mruby-embedding overflow guard. Payload parsing uses a vendored JSON mrbgem.
 
 ## Backward compatibility
 
