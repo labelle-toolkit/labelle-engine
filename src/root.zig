@@ -526,6 +526,32 @@ pub const Events = struct {
     /// re-enqueued its GPU-resident assets, and the first frame has been
     /// pumped back to `.ready`.
     pub const surface_restored = struct {};
+
+    // ── Studio plugin panels: play-time action channel (Asset Plugins ──
+    //    Phase 3, RFC-ASSET-PLUGINS rev 4, #729 / assembler #577) ────────
+    //
+    // Fired by the `editor_plugin_command` bridge export (editor-contract
+    // **v1.7**) when the studio dispatches a panel action whose
+    // `"target"` is `"preview"`. A plugin declares its editor handler by
+    // subscribing to this event — comptime hook registration, the same
+    // channel input plugins use for `engine__key_pressed` (#606). Like the
+    // input/anim events, it has NO `HookPayload` mirror: the bridge emits
+    // it directly (synchronously — see `game/editor_command_mixin.zig`),
+    // not the in-process lifecycle path. Zero-cost when no plugin
+    // subscribes: the variant never lands on the merged `GameEvents`, the
+    // bridge folds to a -1, and an older/handler-less build degrades
+    // gracefully.
+
+    /// Fired for one studio play-time plugin command. `plugin` is the panel
+    /// id (the dispatch payload's `plugin_panel`), `command` the action's
+    /// `command`, and `params` the field values as a JSON object. All three
+    /// are borrowed from the studio's wasm buffers for the SYNCHRONOUS
+    /// dispatch only — a handler that retains them must copy.
+    pub const editor_plugin_command = struct {
+        plugin: []const u8,
+        command: []const u8,
+        params: []const u8,
+    };
 };
 
 // ── Hook Types ──
