@@ -1415,7 +1415,7 @@ const TURRET_PREFAB =
 fn bootPrefabGame(game: *ContractGame) !void {
     try PrefabBridge.addEmbeddedPrefab(game, "turret", TURRET_PREFAB, "prefabs");
     try PrefabBridge.loadSceneFromSource(game,
-        \\{ "entities": [] }
+        \\{ "root": { "children": [] } }
     , "prefabs");
 }
 
