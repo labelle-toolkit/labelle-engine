@@ -445,6 +445,59 @@ test "TreeBuilder: nested composites" {
 }
 
 // ============================================================================
+// Robustness: malformed data + capacity limits degrade gracefully (#732 review)
+// ============================================================================
+
+test "tick guards a negative first_child instead of panicking" {
+    // A composite claiming children but with the -1 leaf sentinel for
+    // first_child (malformed / hand-built) must not panic the @intCast.
+    var tree = Tree{};
+    tree.root = try tree.addNode(.{ .kind = .sequence, .first_child = -1, .child_count = 2 });
+    var ctx = TestContext{};
+    try std.testing.expectEqual(Status.success, tree.tick(@ptrCast(&ctx), &testAction, &testCondition));
+
+    var sel = Tree{};
+    sel.root = try sel.addNode(.{ .kind = .selector, .first_child = -1, .child_count = 2 });
+    try std.testing.expectEqual(Status.failure, sel.tick(@ptrCast(&ctx), &testAction, &testCondition));
+}
+
+test "repeater clamps an over-u16 repeat count instead of asserting" {
+    // node.data above u16 max would overflow running_child's @intCast.
+    // It must saturate rather than panic; a failing child returns cleanly.
+    var tree = Tree{};
+    const child = try tree.addNode(.{ .kind = .action, .data = 0 });
+    tree.root = try tree.addNode(.{ .kind = .repeater, .first_child = @as(i32, child), .child_count = 1, .data = 100_000 });
+
+    var ctx = TestContext{};
+    ctx.action_results[0] = .failure; // stop on first iteration
+    try std.testing.expectEqual(Status.failure, tree.tick(@ptrCast(&ctx), &testAction, &testCondition));
+    try std.testing.expectEqual(@as(u32, 1), ctx.action_call_counts[0]);
+}
+
+test "TreeBuilder: exceeding MAX_CHILDREN returns error.TreeFull" {
+    const BT = engine.BehaviorTree(.{ .max_children = 2 });
+    var tree = BT.Tree{};
+    var b = BT.TreeBuilder.init(&tree);
+
+    try b.beginSequence();
+    _ = try b.action(0);
+    _ = try b.action(1);
+    // Third direct child overflows the 2-child scope.
+    try std.testing.expectError(error.TreeFull, b.action(2));
+}
+
+test "TreeBuilder: exceeding MAX_DEPTH returns error.TreeFull" {
+    const BT = engine.BehaviorTree(.{ .max_depth = 2 });
+    var tree = BT.Tree{};
+    var b = BT.TreeBuilder.init(&tree);
+
+    try b.beginSequence(); // depth 1
+    try b.beginSelector(); // depth 2
+    // Opening a third scope overflows the 2-deep stack.
+    try std.testing.expectError(error.TreeFull, b.beginSequence());
+}
+
+// ============================================================================
 // Comptime-tunable capacity (labelle-engine#616 generalization)
 // ============================================================================
 

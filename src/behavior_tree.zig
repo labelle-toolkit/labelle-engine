@@ -140,7 +140,10 @@ pub fn BehaviorTree(comptime opts: Options) type {
             }
 
             fn tickSequence(self: *Self, node: *Node, context: *anyopaque, action_fn: ActionFn, condition_fn: ConditionFn) Status {
-                if (node.child_count == 0) return .success;
+                // A negative first_child is the leaf sentinel; combined with a
+                // zero child_count it means "no children". Guard it explicitly
+                // so a malformed/hand-built node can't panic the @intCast below.
+                if (node.child_count == 0 or node.first_child < 0) return .success;
                 const first: u16 = @intCast(node.first_child);
                 const start: u16 = if (node.state == .running) node.running_child else 0;
 
@@ -165,7 +168,8 @@ pub fn BehaviorTree(comptime opts: Options) type {
             }
 
             fn tickSelector(self: *Self, node: *Node, context: *anyopaque, action_fn: ActionFn, condition_fn: ConditionFn) Status {
-                if (node.child_count == 0) return .failure;
+                // See tickSequence: guard the negative-first_child sentinel.
+                if (node.child_count == 0 or node.first_child < 0) return .failure;
                 const first: u16 = @intCast(node.first_child);
                 const start: u16 = if (node.state == .running) node.running_child else 0;
 
@@ -203,9 +207,11 @@ pub fn BehaviorTree(comptime opts: Options) type {
             fn tickRepeater(self: *Self, node: *Node, context: *anyopaque, action_fn: ActionFn, condition_fn: ConditionFn) Status {
                 if (node.first_child < 0 or node.child_count == 0) return .failure;
                 const child_idx: u16 = @intCast(node.first_child);
-                const repeat_count: u32 = node.data;
-                // Guard: running_child is u16, so repeat count must fit.
-                std.debug.assert(repeat_count <= std.math.maxInt(u16));
+                // running_child is u16, so the resumable iteration index must
+                // fit in u16. Clamp rather than assert (asserts compile out in
+                // release, turning an over-large count into UB on the @intCast
+                // below). A count above 65535 simply saturates at 65535.
+                const repeat_count: u32 = @min(node.data, std.math.maxInt(u16));
                 // Resume from the iteration that was running on the previous tick.
                 const start: u32 = if (node.state == .running) node.running_child else 0;
 
@@ -280,12 +286,12 @@ pub fn BehaviorTree(comptime opts: Options) type {
 
             /// Open a sequence composite scope.
             pub fn beginSequence(self: *SelfBuilder) error{TreeFull}!void {
-                self.beginComposite(.sequence);
+                return self.beginComposite(.sequence);
             }
 
             /// Open a selector composite scope.
             pub fn beginSelector(self: *SelfBuilder) error{TreeFull}!void {
-                self.beginComposite(.selector);
+                return self.beginComposite(.selector);
             }
 
             /// Close the current composite scope. Appends the composite node
@@ -314,7 +320,9 @@ pub fn BehaviorTree(comptime opts: Options) type {
                 // Register the finalized composite with the parent scope.
                 if (self.depth > 0) {
                     const parent = &self.scope_stack[self.depth - 1];
-                    std.debug.assert(parent.child_count < MAX_CHILDREN);
+                    // Too many direct children is a data/config constraint, not
+                    // a programmer bug — surface it as error.TreeFull.
+                    if (parent.child_count >= MAX_CHILDREN) return error.TreeFull;
                     // Store a copy of the composite node so tick can find it
                     // via the parent's first_child + i offset.
                     parent.children[parent.child_count] = self.tree.nodes[composite_idx];
@@ -338,8 +346,10 @@ pub fn BehaviorTree(comptime opts: Options) type {
             // Internal helpers
             // ----------------------------------------------------------------
 
-            fn beginComposite(self: *SelfBuilder, kind: NodeKind) void {
-                std.debug.assert(self.depth < MAX_DEPTH);
+            fn beginComposite(self: *SelfBuilder, kind: NodeKind) error{TreeFull}!void {
+                // Exceeding the nesting depth is a data/config constraint, not
+                // a programmer bug — surface it as error.TreeFull.
+                if (self.depth >= MAX_DEPTH) return error.TreeFull;
                 self.scope_stack[self.depth] = .{ .kind = kind };
                 self.depth += 1;
             }
@@ -352,7 +362,8 @@ pub fn BehaviorTree(comptime opts: Options) type {
                 // Buffer into the current scope; the real tree index is
                 // assigned when the enclosing end() copies children.
                 const scope = &self.scope_stack[self.depth - 1];
-                std.debug.assert(scope.child_count < MAX_CHILDREN);
+                // Too many direct children — surface as error.TreeFull.
+                if (scope.child_count >= MAX_CHILDREN) return error.TreeFull;
                 scope.children[scope.child_count] = .{ .kind = kind, .data = data };
                 scope.child_count += 1;
                 // Return 0 as a placeholder — callers of action()/condition()
