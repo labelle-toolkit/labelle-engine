@@ -87,7 +87,7 @@ fn setupFixture(
 
     // Empty scene boot — we'll spawn prefabs manually via the runtime API.
     try Bridge.loadSceneFromSource(&game,
-        \\{ "entities": [] }
+        \\{ "children": [] }
     , prefab_dir);
 
     return .{ .game = game, .prefab_dir = prefab_dir };
@@ -281,7 +281,7 @@ test "two-phase load: scene-loaded prefab with children round-trips end-to-end" 
 
     try Bridge.loadSceneFromSource(&game,
         \\{
-        \\  "entities": [
+        \\  "children": [
         \\    { "prefab": "room" }
         \\  ]
         \\}
@@ -446,7 +446,7 @@ test "two-phase load: nested prefab doesn't duplicate into a ghost root" {
 
     try Bridge.loadSceneFromSource(&game,
         \\{
-        \\  "entities": [
+        \\  "children": [
         \\    { "prefab": "outer" }
         \\  ]
         \\}

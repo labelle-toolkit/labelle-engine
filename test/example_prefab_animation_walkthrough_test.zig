@@ -158,7 +158,7 @@ fn boot(tmp_dir: *std.testing.TmpDir) !Fixture {
     errdefer game.deinit();
 
     try Bridge.loadSceneFromSource(&game,
-        \\{ "entities": [] }
+        \\{ "children": [] }
     , prefab_dir);
 
     return .{ .game = game, .prefab_dir = prefab_dir };

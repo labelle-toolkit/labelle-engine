@@ -98,6 +98,21 @@ pub const Image = @import("image_component.zig").Image;
 /// mirror of gfx's `Pivot`). See `src/image_component.zig`.
 pub const ImagePivot = @import("image_component.zig").Pivot;
 
+// ── Asset inference (sprite-based reverse index + AssetManifest, #563) ──
+/// Sprite/image → resource-bundle reverse index + entity-tree walker that
+/// infers which atlas/image resources a scene needs (making the explicit
+/// `meta.assets` list derivable) plus the `AssetManifest` escape-hatch
+/// component. RFC-UNIFY-SCENES-AND-PREFABS §"Assets — inference". Engine half
+/// of #563; see `src/asset_manifest.zig`.
+pub const asset_manifest_mod = @import("asset_manifest.zig");
+pub const ResourceRef = asset_manifest_mod.ResourceRef;
+pub const AssetManifest = asset_manifest_mod.AssetManifest;
+pub const ReverseIndex = asset_manifest_mod.ReverseIndex;
+pub const InferredManifest = asset_manifest_mod.InferredManifest;
+pub const inferAssets = asset_manifest_mod.inferAssets;
+pub const inferAssetsJsonc = asset_manifest_mod.inferAssetsJsonc;
+pub const inferAssetsFromSource = asset_manifest_mod.inferAssetsFromSource;
+
 // ── Input ──
 pub const InputInterface = input_mod.InputInterface;
 pub const StubInput = input_mod.StubInput;
@@ -526,6 +541,32 @@ pub const Events = struct {
     /// re-enqueued its GPU-resident assets, and the first frame has been
     /// pumped back to `.ready`.
     pub const surface_restored = struct {};
+
+    // ── Studio plugin panels: play-time action channel (Asset Plugins ──
+    //    Phase 3, RFC-ASSET-PLUGINS rev 4, #729 / assembler #577) ────────
+    //
+    // Fired by the `editor_plugin_command` bridge export (editor-contract
+    // **v1.7**) when the studio dispatches a panel action whose
+    // `"target"` is `"preview"`. A plugin declares its editor handler by
+    // subscribing to this event — comptime hook registration, the same
+    // channel input plugins use for `engine__key_pressed` (#606). Like the
+    // input/anim events, it has NO `HookPayload` mirror: the bridge emits
+    // it directly (synchronously — see `game/editor_command_mixin.zig`),
+    // not the in-process lifecycle path. Zero-cost when no plugin
+    // subscribes: the variant never lands on the merged `GameEvents`, the
+    // bridge folds to a -1, and an older/handler-less build degrades
+    // gracefully.
+
+    /// Fired for one studio play-time plugin command. `plugin` is the panel
+    /// id (the dispatch payload's `plugin_panel`), `command` the action's
+    /// `command`, and `params` the field values as a JSON object. All three
+    /// are borrowed from the studio's wasm buffers for the SYNCHRONOUS
+    /// dispatch only — a handler that retains them must copy.
+    pub const editor_plugin_command = struct {
+        plugin: []const u8,
+        command: []const u8,
+        params: []const u8,
+    };
 };
 
 // ── Hook Types ──

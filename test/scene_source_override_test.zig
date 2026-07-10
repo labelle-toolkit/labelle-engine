@@ -27,14 +27,14 @@ const Bridge = engine.JsoncSceneBridge(Game, Components);
 
 // One entity in the compiled-in ("embedded") source…
 const base_src =
-    \\{ "entities": [
+    \\{ "children": [
     \\  { "components": { "Position": { "x": 1, "y": 1 } } }
     \\] }
 ;
 
 // …two in the editor's override.
 const override_src =
-    \\{ "entities": [
+    \\{ "children": [
     \\  { "components": { "Position": { "x": 10, "y": 10 } } },
     \\  { "components": { "Position": { "x": 20, "y": 20 } } }
     \\] }
@@ -43,7 +43,7 @@ const override_src =
 // Three in a second override, to prove replacement takes effect (and
 // frees the first copy).
 const override2_src =
-    \\{ "entities": [
+    \\{ "children": [
     \\  { "components": { "Position": { "x": 1, "y": 0 } } },
     \\  { "components": { "Position": { "x": 2, "y": 0 } } },
     \\  { "components": { "Position": { "x": 3, "y": 0 } } }
@@ -116,20 +116,20 @@ test "sceneSourceOverride: exact key first, then path stem; no false positives" 
 const root_with_include_src =
     \\{
     \\  "include": ["scenes/frag.jsonc"],
-    \\  "entities": [
+    \\  "children": [
     \\    { "components": { "Position": { "x": 0, "y": 0 } } }
     \\  ]
     \\}
 ;
 
 const frag_src =
-    \\{ "entities": [
+    \\{ "children": [
     \\  { "components": { "Position": { "x": 5, "y": 5 } } }
     \\] }
 ;
 
 const frag_override_src =
-    \\{ "entities": [
+    \\{ "children": [
     \\  { "components": { "Position": { "x": 6, "y": 6 } } },
     \\  { "components": { "Position": { "x": 7, "y": 7 } } }
     \\] }

@@ -84,6 +84,9 @@ test "pre-bind: every export is a safe no-op" {
     // Generic per-component edit (v1.5) reports "not bound" pre-bind.
     try testing.expectEqual(@as(i32, -1), editor_api.editor_set_component(42, "Camera", 6, "{\"zoom\":1}", 10));
 
+    // Play-time plugin command (v1.7) reports "not bound" pre-bind.
+    try testing.expectEqual(@as(i32, -1), editor_api.editor_plugin_command("dungeon", 7, "generate", 8, "{}", 2));
+
     // Pick is the documented v1 stub.
     try testing.expectEqual(@as(i64, -1), editor_api.editor_pick(10.0, 20.0));
 
@@ -675,7 +678,7 @@ const CONDENSER_V2 =
 fn bootPrefabGame(game: *engine.Game) !void {
     try PrefabBridge.addEmbeddedPrefab(game, "condenser", CONDENSER_V1, "prefabs");
     try PrefabBridge.loadSceneFromSource(game,
-        \\{ "entities": [] }
+        \\{ "children": [] }
     , "prefabs");
 }
 
@@ -1179,7 +1182,7 @@ test "scene loader: a scene-authored \"Camera\" component attaches as the built-
 
     const Bridge = engine.JsoncSceneBridge(CameraTestGame, EmptyComponents);
     try Bridge.loadSceneFromSource(&game,
-        \\{ "entities": [
+        \\{ "children": [
         \\   { "components": { "Position": { "x": 512, "y": 384 }, "Camera": { "zoom": 3.0 } } }
         \\ ] }
     , "prefabs");
@@ -1917,7 +1920,7 @@ test "scene JSONC: an authored Camera \"tag\" seeds the inline bounded field" {
 
     const Bridge = engine.JsoncSceneBridge(CameraTestGame, EmptyComponents);
     try Bridge.loadSceneFromSource(&game,
-        \\{ "entities": [
+        \\{ "children": [
         \\   { "components": { "Position": { "x": 512, "y": 384 }, "Camera": { "zoom": 1.0, "tag": "sky_parallax" } } }
         \\ ] }
     , "prefabs");
@@ -2024,4 +2027,156 @@ test "camera seed: an OLD non-tagged manager falls back to the single-camera see
     // getCameraByTag is a comptime no-op (null) on a non-tagged manager.
     try testing.expect(game.getCameraByTag("old_ignored") == null);
     try testing.expect(game.getCameraByTag("main") == null);
+}
+
+// ── editor_plugin_command: play-time plugin command channel (v1.7, #729) ──
+//
+// The studio dispatches a panel action whose `"target"` is `"preview"`
+// through `editor_plugin_command`; the engine routes it to the plugin's
+// declared handler — a subscriber to the `engine__editor_plugin_command`
+// engine event. These tests wire a recorder hook + a GameEvents union that
+// carries the channel and assert the export ROUTES, plus the graceful-degrade
+// path when no plugin subscribes.
+
+const PluginCmdEvents = union(enum) {
+    engine__editor_plugin_command: engine.Events.editor_plugin_command,
+};
+
+const PluginCmdRecorder = struct {
+    count: usize = 0,
+    last_plugin_buf: [64]u8 = undefined,
+    last_plugin_len: usize = 0,
+    last_command_buf: [64]u8 = undefined,
+    last_command_len: usize = 0,
+    last_params_buf: [128]u8 = undefined,
+    last_params_len: usize = 0,
+
+    // Dispatch is SYNCHRONOUS, so the borrowed studio-owned slices are valid
+    // here; copy them out because the assertions read after the call returns.
+    pub fn engine__editor_plugin_command(self: *PluginCmdRecorder, info: anytype) void {
+        self.count += 1;
+        @memcpy(self.last_plugin_buf[0..info.plugin.len], info.plugin);
+        self.last_plugin_len = info.plugin.len;
+        @memcpy(self.last_command_buf[0..info.command.len], info.command);
+        self.last_command_len = info.command.len;
+        @memcpy(self.last_params_buf[0..info.params.len], info.params);
+        self.last_params_len = info.params.len;
+    }
+    fn lastPlugin(self: *const PluginCmdRecorder) []const u8 {
+        return self.last_plugin_buf[0..self.last_plugin_len];
+    }
+    fn lastCommand(self: *const PluginCmdRecorder) []const u8 {
+        return self.last_command_buf[0..self.last_command_len];
+    }
+    fn lastParams(self: *const PluginCmdRecorder) []const u8 {
+        return self.last_params_buf[0..self.last_params_len];
+    }
+};
+
+const PluginCmdComponents = struct {
+    pub fn has(comptime _: []const u8) bool {
+        return false;
+    }
+    pub fn names() []const []const u8 {
+        return &.{};
+    }
+};
+
+const PluginCmdMockEcs = core.MockEcsBackend(u32);
+
+/// A project whose merged `GameEvents` DOES carry the editor-command channel
+/// (a plugin subscribed) — the wired-up path.
+const PluginCmdGame = engine.game_mod.GameConfig(
+    core.StubRender(PluginCmdMockEcs.Entity),
+    PluginCmdMockEcs,
+    engine.input_mod.StubInput,
+    engine.audio_mod.StubAudio,
+    engine.StubVideo,
+    engine.gui_mod.StubGui,
+    *PluginCmdRecorder,
+    core.StubLogSink,
+    PluginCmdComponents,
+    &.{},
+    PluginCmdEvents,
+);
+
+/// A project with NO editor-command channel (no plugin subscribed) — the
+/// graceful-degrade path: `editorPluginCommand` folds to a -1.
+const PluginCmdNoChannelGame = engine.game_mod.GameConfig(
+    core.StubRender(PluginCmdMockEcs.Entity),
+    PluginCmdMockEcs,
+    engine.input_mod.StubInput,
+    engine.audio_mod.StubAudio,
+    engine.StubVideo,
+    engine.gui_mod.StubGui,
+    void,
+    core.StubLogSink,
+    PluginCmdComponents,
+    &.{},
+    void,
+);
+
+test "editor_plugin_command: routes to the plugin's engine__editor_plugin_command subscriber" {
+    editor_api.unbind();
+    defer editor_api.unbind();
+
+    var recorder = PluginCmdRecorder{};
+    var game = PluginCmdGame.init(testing.allocator);
+    defer game.deinit();
+    game.setHooks(&recorder);
+    game.dispatchEvents(); // drain any buffered game_init
+    recorder = .{};
+
+    var runner = DummyRunner{};
+    editor_api.bind(&game, &runner);
+
+    // The exact payload the studio POC emits: {plugin_panel, command, params}.
+    const rc = editor_api.editor_plugin_command(
+        "dungeon_generator",
+        17,
+        "generate",
+        8,
+        "{\"seed\":42}",
+        11,
+    );
+    try testing.expectEqual(@as(i32, 0), rc);
+    try testing.expectEqual(@as(usize, 1), recorder.count);
+    try testing.expectEqualStrings("dungeon_generator", recorder.lastPlugin());
+    try testing.expectEqualStrings("generate", recorder.lastCommand());
+    try testing.expectEqualStrings("{\"seed\":42}", recorder.lastParams());
+}
+
+test "editor_plugin_command: -1 pre-bind, with no subscriber (graceful), and on empty name" {
+    editor_api.unbind();
+    defer editor_api.unbind();
+
+    // Pre-bind: not bound → -1 (mirrors the other export's no-op contract).
+    try testing.expectEqual(@as(i32, -1), editor_api.editor_plugin_command("p", 1, "c", 1, "{}", 2));
+
+    // Bound to a project with no editor-command channel — the RFC's
+    // graceful-degrade path (an older / handler-less build). Routes to -1
+    // without ever touching a subscriber.
+    {
+        var game = PluginCmdNoChannelGame.init(testing.allocator);
+        defer game.deinit();
+        var runner = DummyRunner{};
+        editor_api.bind(&game, &runner);
+        try testing.expectEqual(
+            @as(i32, -1),
+            editor_api.editor_plugin_command("dungeon", 7, "generate", 8, "{}", 2),
+        );
+    }
+
+    // Bound WITH a channel but an empty plugin/command → -1 (a host-side
+    // length bug, never a meaningful dispatch); the subscriber never fires.
+    editor_api.unbind();
+    var recorder = PluginCmdRecorder{};
+    var game2 = PluginCmdGame.init(testing.allocator);
+    defer game2.deinit();
+    game2.setHooks(&recorder);
+    var runner2 = DummyRunner{};
+    editor_api.bind(&game2, &runner2);
+    try testing.expectEqual(@as(i32, -1), editor_api.editor_plugin_command("", 0, "generate", 8, "{}", 2));
+    try testing.expectEqual(@as(i32, -1), editor_api.editor_plugin_command("dungeon", 7, "", 0, "{}", 2));
+    try testing.expectEqual(@as(usize, 0), recorder.count);
 }
