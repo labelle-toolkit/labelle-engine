@@ -38,9 +38,50 @@ const Command = union(enum) {
             .complete => false,
         };
     }
+
+    pub fn workerKey(self: Command) ?u64 {
+        return switch (self) {
+            .assign => |c| c.worker,
+            .wander => |c| c.worker,
+            .complete => |c| c.worker,
+        };
+    }
+};
+
+/// A `Command` whose release variant writes an EXTRA key beyond its
+/// worker — used to prove the handoff exemption is scoped to the worker
+/// key, not the whole pair.
+const LockCommand = union(enum) {
+    /// Releases `worker` but also releases a lock on `resource`.
+    complete_and_unlock: struct { worker: u64, resource: u64 },
+    /// Acquires `worker` onto `resource` (a genuine race on `resource`).
+    assign_locked: struct { worker: u64, resource: u64 },
+
+    pub fn writeKeys(self: LockCommand) [2]?u64 {
+        return switch (self) {
+            .complete_and_unlock => |c| .{ c.worker, c.resource },
+            .assign_locked => |c| .{ c.worker, c.resource },
+        };
+    }
+
+    pub fn releasesWorker(self: LockCommand) bool {
+        return self == .complete_and_unlock;
+    }
+
+    pub fn acquiresWorker(self: LockCommand) bool {
+        return self == .assign_locked;
+    }
+
+    pub fn workerKey(self: LockCommand) ?u64 {
+        return switch (self) {
+            .complete_and_unlock => |c| c.worker,
+            .assign_locked => |c| c.worker,
+        };
+    }
 };
 
 const Buffer = engine.CommandBuffer(Command);
+const LockBuffer = engine.CommandBuffer(LockCommand);
 
 test "inferred key type and arity" {
     try testing.expectEqual(u64, Buffer.KeyType);
@@ -123,6 +164,33 @@ test "conflict detection: acquire-before-release stays flagged" {
     try testing.expectEqual(@as(u64, 5), report.slice()[0].entity);
 }
 
+test "handoff exemption is scoped to the worker key, not other shared keys" {
+    var buf = LockBuffer.init(testing.allocator);
+    defer buf.deinit();
+
+    // Legal handoff on worker 5, but BOTH commands also touch resource
+    // 99 — that's a genuine race the pair-level exemption used to hide.
+    try buf.push(.{ .complete_and_unlock = .{ .worker = 5, .resource = 99 } });
+    try buf.push(.{ .assign_locked = .{ .worker = 5, .resource = 99 } });
+
+    const report = buf.detectConflicts();
+    // Worker 5 exempt (handoff); resource 99 still flagged.
+    try testing.expectEqual(@as(usize, 1), report.len);
+    try testing.expectEqual(@as(u64, 99), report.slice()[0].entity);
+}
+
+test "handoff on worker with disjoint resource keys is fully exempt" {
+    var buf = LockBuffer.init(testing.allocator);
+    defer buf.deinit();
+
+    // Same worker handoff, but different resources → nothing else shared.
+    try buf.push(.{ .complete_and_unlock = .{ .worker = 5, .resource = 1 } });
+    try buf.push(.{ .assign_locked = .{ .worker = 5, .resource = 2 } });
+
+    const report = buf.detectConflicts();
+    try testing.expect(report.isEmpty());
+}
+
 test "conflict detection: report caps at MAX_CONFLICTS with overflow flagged" {
     var buf = Buffer.init(testing.allocator);
     defer buf.deinit();
@@ -172,6 +240,54 @@ test "deferred apply: single ordered pass, then clears" {
     // Applied in push order.
     try testing.expectEqualSlices(u64, &.{ 10, 11, 12 }, world.applied.items);
     // Buffer drained after apply.
+    try testing.expectEqual(@as(usize, 0), buf.count());
+}
+
+/// Apply context that re-entrantly stages a follow-up command onto the
+/// same buffer while applying — exercises the snapshot/retain path.
+const Reentrant = struct {
+    buf: *Buffer,
+    applied: std.ArrayListUnmanaged(u64) = .empty,
+    allocator: std.mem.Allocator,
+    injected: bool = false,
+
+    fn applyOne(self: *Reentrant, cmd: Command) void {
+        const worker = switch (cmd) {
+            .assign => |c| c.worker,
+            .wander => |c| c.worker,
+            .complete => |c| c.worker,
+        };
+        self.applied.append(self.allocator, worker) catch @panic("oom");
+        // While applying the first command, enqueue a follow-up. It must
+        // NOT be applied this pass, and must NOT be dropped by the clear.
+        if (!self.injected and worker == 10) {
+            self.injected = true;
+            self.buf.push(.{ .wander = .{ .worker = 99 } }) catch @panic("oom");
+        }
+    }
+};
+
+test "deferred apply: re-entrant push survives, applied next pass" {
+    var buf = Buffer.init(testing.allocator);
+    defer buf.deinit();
+
+    var ctx = Reentrant{ .buf = &buf, .allocator = testing.allocator };
+    defer ctx.applied.deinit(testing.allocator);
+
+    try buf.push(.{ .assign = .{ .worker = 10, .station = 1 } });
+    try buf.push(.{ .wander = .{ .worker = 12 } });
+
+    buf.apply(&ctx, Reentrant.applyOne);
+
+    // Only the two snapshot commands were applied this pass.
+    try testing.expectEqualSlices(u64, &.{ 10, 12 }, ctx.applied.items);
+    // The re-entrant push survived for the next frame (not dropped).
+    try testing.expectEqual(@as(usize, 1), buf.count());
+    try testing.expectEqual(@as(u64, 99), buf.slice()[0].wander.worker);
+
+    // Next pass drains the survivor.
+    buf.apply(&ctx, Reentrant.applyOne);
+    try testing.expectEqualSlices(u64, &.{ 10, 12, 99 }, ctx.applied.items);
     try testing.expectEqual(@as(usize, 0), buf.count());
 }
 

@@ -38,6 +38,11 @@
 //!
 //!     /// True for commands that *acquire* an entity into a new job.
 //!     pub fn acquiresWorker(self: Command) bool { ... }
+//!
+//!     /// The handoff subject — the key that is legally released-then-
+//!     /// reacquired. Scopes the release→acquire exemption to THIS key
+//!     /// so a genuine conflict on any other shared key still surfaces.
+//!     pub fn workerKey(self: Command) ?u64 { ... }
 //! };
 //!
 //! var buf = engine.CommandBuffer(Command).init(allocator);
@@ -55,6 +60,7 @@ const std = @import("std");
 ///   - `writeKeys(self) [N]?Key` — the entity keys this command mutates.
 ///   - `releasesWorker(self) bool`
 ///   - `acquiresWorker(self) bool`
+///   - `workerKey(self) ?Key` — the handoff subject (see conflict detection).
 ///
 /// The engine owns growable storage, `push`/`clear`/`apply`, and the
 /// conflict detector. The game owns the `Command` type and its methods.
@@ -151,18 +157,48 @@ pub fn CommandBuffer(comptime Command: type) type {
             return detectConflictsSlice(self.commands.items);
         }
 
-        /// Deferred apply: invoke `applyFn(ctx, cmd)` for each staged
-        /// command in push order, then clear the buffer for the next
-        /// frame. This is the "safe sync point" the runtime drives at
-        /// end-of-frame — commands are applied in a single controlled
-        /// pass rather than mid-frame from scattered scripts.
+        /// Deferred apply: invoke `applyFn(ctx, cmd)` for each command
+        /// staged *at the moment apply was called*, in push order, then
+        /// drop exactly those commands. This is the "safe sync point" the
+        /// runtime drives at end-of-frame — commands are applied in a
+        /// single controlled pass rather than mid-frame from scattered
+        /// scripts.
+        ///
+        /// Re-entrancy: an `applyFn` may itself `push` follow-up commands
+        /// onto this same buffer (e.g. `ctx` is the game and applying one
+        /// command enqueues another). Those follow-ups are NOT applied in
+        /// this pass — they are retained for the next `apply`, not
+        /// silently dropped. The snapshot count is captured up front and
+        /// only that prefix is applied and removed; commands pushed
+        /// during the pass are shifted to the front and survive.
+        ///
+        /// Indexing is re-read each iteration (rather than caching the
+        /// `items` slice) so a re-entrant push that reallocates the
+        /// backing storage can't leave the loop walking freed memory.
         pub fn apply(
             self: *Self,
             ctx: anytype,
             comptime applyFn: fn (@TypeOf(ctx), Command) void,
         ) void {
-            for (self.commands.items) |cmd| applyFn(ctx, cmd);
-            self.clear();
+            const snapshot = self.commands.items.len;
+            var idx: usize = 0;
+            while (idx < snapshot) : (idx += 1) {
+                applyFn(ctx, self.commands.items[idx]);
+            }
+            // Remove exactly the applied prefix, retaining anything a
+            // re-entrant `applyFn` pushed during the pass.
+            const total = self.commands.items.len;
+            const remaining = total - snapshot;
+            if (remaining > 0) {
+                // dest (0..) strictly precedes src (snapshot..), so a
+                // forward copy is overlap-safe.
+                std.mem.copyForwards(
+                    Command,
+                    self.commands.items[0..remaining],
+                    self.commands.items[snapshot..total],
+                );
+            }
+            self.commands.items.len = remaining;
         }
 
         /// Conflict detection over an arbitrary command slice —
@@ -179,15 +215,44 @@ pub fn CommandBuffer(comptime Command: type) type {
         /// into one slot). Acquire-before-release is *not* exempt — that
         /// ordering is suspect and stays reported. Relaxing this
         /// exemption would hide genuine double-acquire races.
+        ///
+        /// The exemption is scoped to the *specific* handoff key — the
+        /// `workerKey()` both commands agree on. If a release command
+        /// writes MORE keys than just its worker (e.g. it also locks a
+        /// resource the acquire touches), a genuine conflict on those
+        /// other shared keys is still reported: only the worker key that
+        /// is legally released-then-reacquired is exempt, not the whole
+        /// pair. Conflicts are reported per overlapping key.
         pub fn detectConflictsSlice(cmds: []const Command) ConflictReport {
             var report = ConflictReport{};
             for (0..cmds.len) |i| {
                 const ki = cmds[i].writeKeys();
+                const i_releases = cmds[i].releasesWorker();
+                const i_worker = cmds[i].workerKey();
                 for ((i + 1)..cmds.len) |j| {
-                    if (keysOverlap(ki, cmds[j].writeKeys())) |entity| {
-                        if (cmds[i].releasesWorker() and cmds[j].acquiresWorker()) continue;
+                    const kj = cmds[j].writeKeys();
+                    // A release→acquire pair is a legal handoff, but only
+                    // for the worker both commands agree on.
+                    const handoff_key: ?Key = if (i_releases and cmds[j].acquiresWorker()) blk: {
+                        const jw = cmds[j].workerKey();
+                        if (i_worker) |iw| {
+                            if (jw) |jwv| {
+                                if (iw == jwv) break :blk iw;
+                            }
+                        }
+                        break :blk null;
+                    } else null;
+
+                    // Report every distinct shared key between the pair,
+                    // exempting only the handoff key.
+                    for (ki) |maybe_a| {
+                        const key_a = maybe_a orelse continue;
+                        if (handoff_key) |hk| {
+                            if (key_a == hk) continue; // legal handoff — not a conflict
+                        }
+                        if (!keyInSet(key_a, kj)) continue;
                         if (report.len < ConflictReport.MAX_CONFLICTS) {
-                            report.conflicts[report.len] = .{ .cmd_a = i, .cmd_b = j, .entity = entity };
+                            report.conflicts[report.len] = .{ .cmd_a = i, .cmd_b = j, .entity = key_a };
                             report.len += 1;
                         } else {
                             // Report is full and we've found one more
@@ -204,19 +269,14 @@ pub fn CommandBuffer(comptime Command: type) type {
             return report;
         }
 
-        /// Check whether two write-key sets share any entity key.
-        /// Returns the first overlapping key, or null.
-        fn keysOverlap(a: [key_count]?Key, b: [key_count]?Key) ?Key {
-            for (a) |ka| {
-                if (ka) |id_a| {
-                    for (b) |kb| {
-                        if (kb) |id_b| {
-                            if (id_a == id_b) return id_a;
-                        }
-                    }
+        /// True when `key` is present in the write-key set `set`.
+        fn keyInSet(key: Key, set: [key_count]?Key) bool {
+            for (set) |k| {
+                if (k) |id| {
+                    if (id == key) return true;
                 }
             }
-            return null;
+            return false;
         }
     };
 }
@@ -249,6 +309,10 @@ pub fn validateCommandContract(comptime Command: type) void {
     if (!@hasDecl(Command, "acquiresWorker"))
         @compileError("CommandBuffer: `" ++ @typeName(Command) ++
             "` must declare `pub fn acquiresWorker(self) bool`");
+    if (!@hasDecl(Command, "workerKey"))
+        @compileError("CommandBuffer: `" ++ @typeName(Command) ++
+            "` must declare `pub fn workerKey(self) ?Key` — the handoff " ++
+            "subject scoping the release→acquire exemption");
 
     // Each contract decl must be a *function*. Accessing `.@"fn"` on a
     // non-function `@typeInfo` panics with an obscure "inactive union
@@ -257,6 +321,7 @@ pub fn validateCommandContract(comptime Command: type) void {
     requireFnDecl(Command, "writeKeys");
     requireFnDecl(Command, "releasesWorker");
     requireFnDecl(Command, "acquiresWorker");
+    requireFnDecl(Command, "workerKey");
 
     const ret = @typeInfo(@TypeOf(Command.writeKeys)).@"fn".return_type orelse
         @compileError("CommandBuffer: `writeKeys` must return `[N]?Key`");
@@ -273,6 +338,15 @@ pub fn validateCommandContract(comptime Command: type) void {
     const AcqRet = @typeInfo(@TypeOf(Command.acquiresWorker)).@"fn".return_type;
     if (AcqRet != bool)
         @compileError("CommandBuffer: `acquiresWorker` must return `bool`");
+
+    const WkRet = @typeInfo(@TypeOf(Command.workerKey)).@"fn".return_type orelse
+        @compileError("CommandBuffer: `workerKey` must return `?Key`");
+    if (@typeInfo(WkRet) != .optional)
+        @compileError("CommandBuffer: `workerKey` must return an optional `?Key`, got `" ++
+            @typeName(WkRet) ++ "`");
+    if (@typeInfo(WkRet).optional.child != CommandKey(Command))
+        @compileError("CommandBuffer: `workerKey` must return `?" ++
+            @typeName(CommandKey(Command)) ++ "` matching `writeKeys`' key type");
 }
 
 /// Assert that `Command.<name>` is a function, with a readable
