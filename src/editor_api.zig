@@ -79,6 +79,7 @@ const VTable = struct {
     reload_prefab: *const fn (name: []const u8, src: []const u8) i32,
     set_entity_position: *const fn (id: u64, x: f32, y: f32) void,
     set_component: *const fn (id: u64, name: []const u8, json: []const u8) i32,
+    plugin_command: *const fn (plugin: []const u8, command: []const u8, params_json: []const u8) i32,
     scene_digest: *const fn (out: []u8) usize,
     apply_camera: *const fn (x: f32, y: f32, zoom: f32) void,
 };
@@ -336,6 +337,39 @@ pub export fn editor_set_component(
     return vt.set_component(id, name_ptr[0..name_len], json_ptr[0..json_len]);
 }
 
+/// Dispatch a studio-issued play-time PLUGIN command into the running
+/// preview — the play-time action channel for labelle-studio's declarative
+/// plugin panels (editor-bridge contract **v1.7**, Asset Plugins Phase 3,
+/// #729 / assembler #577). The studio calls this (as `_editor_plugin_command`
+/// on the wasm side, the emcc C-ABI underscore) when a panel action whose
+/// `"target"` is `"preview"` is clicked, carrying the panel's dispatch payload
+/// `{plugin_panel, command, params}`: `plugin` is the panel id, `command` the
+/// action's command, and `params_json` the field values as a JSON object.
+///
+/// Routed to the plugin's declared handler — a subscriber to the
+/// `engine__editor_plugin_command` engine event (comptime hook registration;
+/// see `game/editor_command_mixin.zig`). Dispatch is SYNCHRONOUS, so the three
+/// studio-owned buffers may be freed right after the call.
+///
+/// Returns 0 = dispatched; -1 = not bound / empty name / no plugin subscribed
+/// (the graceful-degrade path a v1.1–v1.6 studio also hits by finding no
+/// export at all — it then disables preview-target actions).
+pub export fn editor_plugin_command(
+    plugin_ptr: [*]const u8,
+    plugin_len: usize,
+    command_ptr: [*]const u8,
+    command_len: usize,
+    params_ptr: [*]const u8,
+    params_len: usize,
+) i32 {
+    const vt = vtable orelse return -1;
+    return vt.plugin_command(
+        plugin_ptr[0..plugin_len],
+        command_ptr[0..command_len],
+        params_ptr[0..params_len],
+    );
+}
+
 /// v1: always -1 — the studio picks client-side from the scene digest.
 pub export fn editor_pick(x: f32, y: f32) i64 {
     _ = x;
@@ -434,6 +468,7 @@ fn Holder(comptime GP: type, comptime RP: type) type {
             .reload_prefab = &reloadPrefabImpl,
             .set_entity_position = &setEntityPositionImpl,
             .set_component = &setComponentImpl,
+            .plugin_command = &pluginCommandImpl,
             .scene_digest = &sceneDigestImpl,
             .apply_camera = &applyCameraImpl,
         };
@@ -578,6 +613,16 @@ fn Holder(comptime GP: type, comptime RP: type) type {
             // parse/validation failure (-2) leaves the entity untouched.
             game.applyCameraComponentJson(ent, json) catch return -2;
             return 0;
+        }
+
+        fn pluginCommandImpl(plugin: []const u8, command: []const u8, params_json: []const u8) i32 {
+            // Every assembler-built Game carries `editorPluginCommand` (the
+            // engine mixin), but a minimal duck-typed test/tooling stand-in
+            // may not — gate so binding one still compiles, degrading to the
+            // graceful -1. The routing/handler-channel decision lives in
+            // `game/editor_command_mixin.zig`.
+            if (comptime !@hasDecl(G, "editorPluginCommand")) return -1;
+            return game.editorPluginCommand(plugin, command, params_json);
         }
 
         fn applyCameraImpl(x: f32, y: f32, zoom: f32) void {

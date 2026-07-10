@@ -51,6 +51,7 @@ const entity_mixin = @import("game/entity_mixin.zig");
 const scene_runtime_mixin = @import("game/scene_runtime_mixin.zig");
 const input_events_mixin = @import("game/input_events_mixin.zig");
 const events_mixin = @import("game/events_mixin.zig");
+const editor_command_mixin = @import("game/editor_command_mixin.zig");
 const loop_mixin = @import("game/loop_mixin.zig");
 const misc_mixin = @import("game/misc_mixin.zig");
 const animation_runtime_mixin = @import("game/animation_runtime_mixin.zig");
@@ -380,6 +381,7 @@ pub fn GameConfigWithYAxis(
         const SceneRuntimeMixin = scene_runtime_mixin.Mixin(Self);
         const InputEventsMixin = input_events_mixin.Mixin(Self);
         const EventsMixin = events_mixin.Mixin(Self);
+        const EditorCommandMixin = editor_command_mixin.Mixin(Self);
         const LoopMixin = loop_mixin.Mixin(Self);
         const MiscMixin = misc_mixin.Mixin(Self);
         const AnimationRuntimeMixin = animation_runtime_mixin.Mixin(Self);
@@ -921,6 +923,11 @@ pub fn GameConfigWithYAxis(
 
         /// Deliver buffered game events to hooks. Called at end of frame.
         pub const dispatchEvents = EventsMixin.dispatchEvents;
+
+        /// Route a studio-issued play-time plugin editor command (the
+        /// `editor_plugin_command` bridge export, editor-contract v1.7) to its
+        /// declared handler. See `game/editor_command_mixin.zig`.
+        pub const editorPluginCommand = EditorCommandMixin.editorPluginCommand;
 
         // ── Debug entity guards (#419, #420) ─────────────────────
 
