@@ -3,7 +3,7 @@
 **Issue:** labelle-toolkit/labelle-engine#237 (updated 2026-07 — re-scoped from "Lua module" to the language-plugin family)  
 **Status:** Draft  
 **Author:** Alexandre  
-**Date:** 2026-07-10 (rev 2 — POC validated: PR #734; rev 3 — single-repo packaging: `labelle-scripting` with language sub-modules; rev 4 — reference bindings: Lua queries, Ruby events; rev 5 — Ruby controllers: script-language domain owners; rev 6 — script-declared components: generate-time codegen, runtime tier for mods; rev 7 — native declaration idioms per language; rev 8 — policy: one language per project, enforced at generate; rev 9 — policy rationale: role-based, pack/mod carve-outs; rev 10 — Zig plugins in script-language projects; rev 11 — script-language packs; rev 12 — TypeScript (QuickJS) and Go (c-archive) join the families; rev 13 — language rides generic plugin params)
+**Date:** 2026-07-10 (rev 2 — POC validated: PR #734; rev 3 — single-repo packaging: `labelle-scripting` with language sub-modules; rev 4 — reference bindings: Lua queries, Ruby events; rev 5 — Ruby controllers: script-language domain owners; rev 6 — script-declared components: generate-time codegen, runtime tier for mods; rev 7 — native declaration idioms per language; rev 8 — policy: one language per project, enforced at generate; rev 9 — policy rationale: role-based, pack/mod carve-outs; rev 10 — Zig plugins in script-language projects; rev 11 — script-language packs; rev 12 — TypeScript (QuickJS) and Go (c-archive) join the families; rev 13 — language rides generic plugin params; rev 14 — per-frame allocation idioms: FrameArray, into: reuse)
 
 ## Problem
 
@@ -139,6 +139,12 @@ end
 
 - `Labelle.on` subscribes (once per name) via `labelle_event_subscribe` and registers the block; the shared controller **drains the inbox before each `update`** and dispatches to blocks with the JSON payload parsed to a symbol-keyed Hash. `Labelle.emit("turret__fired", turret: @turret)` is the symmetric kwargs→JSON emit. The ABI never grows callbacks — blocks are dispatcher sugar, identical in shape to Lua handler tables and C# events.
 - **mruby embedding rules** (the ruby sub-module's homework): wrap every dispatch in `mrb_protect` so a script exception is logged, not fatal to the tick — mruby exceptions are VM-internal and safe, unlike Crystal's cross-foreign raise (POC finding); and save/restore the **GC arena** (`mrb_gc_arena_save/restore`) around each tick's dispatch, the classic mruby-embedding overflow guard. Payload parsing uses a vendored JSON mrbgem.
+
+**Per-frame allocation idioms (Ruby/Lua)** — Zig's `clearRetainingCapacity` pattern, ported deliberately because the naive port silently fails: **mruby's `Array#clear` frees the heap buffer** (resets to the embedded representation — unlike CRuby, which retains), so per-frame scratch arrays cleared with `.clear` reallocate every tick inside the GC arena. The ruby prelude therefore ships the idiom as a utility:
+
+- `Labelle::FrameArray.new(cap)` — preallocated backing + logical length; `<<` is in-bounds index assignment (never reallocates), `clear` is `len = 0`, growth is deliberate. `clearRetainingCapacity` by construction.
+- `e.get(Hunger, into: @cached)` — refills a setup-allocated Struct instance instead of materializing a new one per read: the same reuse idea applied to the component boundary, where the real per-frame garbage comes from. With the per-tick `mrb_gc_arena_save/restore`, a hot script's steady state allocates nothing.
+- Lua mirror: keep a logical `n` over a reused table (`t[i]` assignment retains the array part; LuaJIT `table.clear` retains) — the lua prelude documents the same pattern.
 
 **Controllers in Ruby** — script-language *domain owners*, not just leaf behaviors. Subclassing registers (Ruby's `inherited` hook — convention over config); the file's numeric prefix orders ticks:
 
