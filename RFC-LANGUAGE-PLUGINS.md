@@ -3,7 +3,7 @@
 **Issue:** labelle-toolkit/labelle-engine#237 (updated 2026-07 — re-scoped from "Lua module" to the language-plugin family)  
 **Status:** Draft  
 **Author:** Alexandre  
-**Date:** 2026-07-10 (rev 2 — POC validated: PR #734; rev 3 — single-repo packaging: `labelle-scripting` with language sub-modules; rev 4 — reference bindings: Lua queries, Ruby events)
+**Date:** 2026-07-10 (rev 2 — POC validated: PR #734; rev 3 — single-repo packaging: `labelle-scripting` with language sub-modules; rev 4 — reference bindings: Lua queries, Ruby events; rev 5 — Ruby controllers: script-language domain owners)
 
 ## Problem
 
@@ -127,6 +127,32 @@ end
 
 - `Labelle.on` subscribes (once per name) via `labelle_event_subscribe` and registers the block; the shared controller **drains the inbox before each `update`** and dispatches to blocks with the JSON payload parsed to a symbol-keyed Hash. `Labelle.emit("turret__fired", turret: @turret)` is the symmetric kwargs→JSON emit. The ABI never grows callbacks — blocks are dispatcher sugar, identical in shape to Lua handler tables and C# events.
 - **mruby embedding rules** (the ruby sub-module's homework): wrap every dispatch in `mrb_protect` so a script exception is logged, not fatal to the tick — mruby exceptions are VM-internal and safe, unlike Crystal's cross-foreign raise (POC finding); and save/restore the **GC arena** (`mrb_gc_arena_save/restore`) around each tick's dispatch, the classic mruby-embedding overflow guard. Payload parsing uses a vendored JSON mrbgem.
+
+**Controllers in Ruby** — script-language *domain owners*, not just leaf behaviors. Subclassing registers (Ruby's `inherited` hook — convention over config); the file's numeric prefix orders ticks:
+
+```ruby
+# ruby/controllers/10_hunger_controller.rb
+class HungerController < Labelle::Controller
+  def setup
+    on "hunger__feed" { |ev| feed(ev[:entity], ev[:amount] || 0.5) }  # command-as-event
+  end
+
+  def tick(dt)
+    each("Hunger", "Worker") do |e|
+      h = e.get("Hunger")
+      h[:level] -= 0.02 * dt
+      h[:level] <= 0 ? (emit "hunger__starved", entity: e.id) : e.set("Hunger", h)
+    end
+  end
+
+  def feed(id, amount) … end   # same-VM public API for other Ruby scripts
+  def teardown … end
+end
+```
+
+- **Lifecycle mapping**: the shared plugin controller's `setup` instantiates registered classes in file order and calls `setup` (subscriptions land there); `tick` drains the inbox, dispatches event blocks, then ticks each controller in order; `deinit` runs `teardown` in reverse. All under `mrb_protect` + arena guards. The ABI is unchanged — controllers are dispatcher structure, not contract surface.
+- **Cross-language API = commands-as-events + components-as-state** (the pathfinder-v4 triad, minus direct calls): any language "calls" a Ruby controller by emitting its command event; the controller answers via events and component writes. Direct cross-language function calls are deliberately not in v1 — the bus is the boundary. Same-language callers use plain method calls.
+- **Authoritative state lives in components; ivars are caches.** The VM is transient — save/load rehydration and hot reload reset it (the FP plugin-State lesson). Keeping durable state in engine-serialized components makes script controllers save-safe and hot-reloadable for free.
 
 ## Backward compatibility
 
