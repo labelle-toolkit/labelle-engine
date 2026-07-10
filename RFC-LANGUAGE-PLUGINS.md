@@ -3,7 +3,7 @@
 **Issue:** labelle-toolkit/labelle-engine#237 (updated 2026-07 — re-scoped from "Lua module" to the language-plugin family)  
 **Status:** Draft  
 **Author:** Alexandre  
-**Date:** 2026-07-10 (rev 2 — POC validated: PR #734; rev 3 — single-repo packaging: `labelle-scripting` with language sub-modules; rev 4 — reference bindings: Lua queries, Ruby events; rev 5 — Ruby controllers: script-language domain owners; rev 6 — script-declared components: generate-time codegen, runtime tier for mods; rev 7 — native declaration idioms per language)
+**Date:** 2026-07-10 (rev 2 — POC validated: PR #734; rev 3 — single-repo packaging: `labelle-scripting` with language sub-modules; rev 4 — reference bindings: Lua queries, Ruby events; rev 5 — Ruby controllers: script-language domain owners; rev 6 — script-declared components: generate-time codegen, runtime tier for mods; rev 7 — native declaration idioms per language; rev 8 — policy: one language per project, enforced at generate)
 
 ## Problem
 
@@ -65,9 +65,15 @@ scene_change(name)                log(level, msg)
 
 ### 2. Packaging: ONE plugin repo, language sub-modules
 
-All languages ship in a single first-party plugin repo — **`labelle-scripting`** — rather than one repo per language. The shared layer (contract binding, script discovery, hot-reload machinery, the plugin controller) dominates every language integration; one repo writes it once, and each language is a thin sub-module over it (the in-tree sub-package convention, applied to a plugin). One `.plugins` entry, one version train pinned to one contract version — no per-language compat matrix — and a game using two languages gets one controller with one deterministic tick order instead of two plugins with duplicated glue.
+All languages ship in a single first-party plugin repo — **`labelle-scripting`** — rather than one repo per language. The shared layer (contract binding, script discovery, hot-reload machinery, the plugin controller) dominates every language integration; one repo writes it once, and each language is a thin sub-module over it (the in-tree sub-package convention, applied to a plugin). One `.plugins` entry, one version train pinned to one contract version — no per-language compat matrix — and should the one-language-per-project policy (below) ever be lifted, multi-language games get one controller with one deterministic tick order instead of N plugins with duplicated glue.
 
-**Choosing languages costs nothing for the rest.** Selection is by convention with comptime gates: a game containing a `lua/` dir compiles the Lua VM in; no `rust/` dir means the Rust glue folds out entirely. Vendored runtimes ride `b.lazyDependency`, so an unchosen language's runtime is never even *fetched*. Per-language maturity is labeled per release (lua = stable first; csharp = experimental, last). Third parties can still ship independent language plugins over the public contract — `labelle-scripting` is the first-party bundle, not a monopoly.
+**Policy: one language per project** (rev 8). The plugin declaration carries a **singular** `.language = "lua"` field — mixing is unrepresentable in config. Enforcement is layered:
+
+- **Generate-time validation**: the assembler scans every script convention dir — game root *and* pack-bundled — and errors (file list included) on any script outside the declared language. Content packs/plugins that bundle scripts declare `requires_language = "…"` in their manifest (symmetric with `depends_on_resources`), validated on attach, so a Lua-scripted pack fails loudly in a Rust project.
+- **Comptime**: only the declared sub-module compiles; `b.lazyDependency` means other runtimes are never fetched, built, or linked — the binary physically contains one language runtime. Dir-presence detection remains as a cross-check, not the selector.
+- **Future**: if multi-language is ever wanted, widening to a plural field is purely additive — the shared glue supports N by construction; the ban is policy in the schema, not architecture. Rationale: one team, one script language, one debugging/mods story (the same keep-the-simple-case-simple call as the default camera).
+
+Per-language maturity is labeled per release (lua = stable first; csharp = experimental, last). Third parties can still ship independent language plugins over the public contract — `labelle-scripting` is the first-party bundle, not a monopoly.
 
 Anatomy (shared once, per-language where noted):
 
