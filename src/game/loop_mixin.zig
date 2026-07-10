@@ -23,6 +23,12 @@ pub fn Mixin(comptime Game: type) type {
 
     return struct {
         pub fn tick(self: *Game, dt: f32) void {
+            // FPS / frame-time tracking for the debug inspector (#380).
+            // Record the REAL (unscaled) dt every frame — including paused
+            // frames that early-return below — so the inspector's FPS
+            // readout reflects true render cadence, not gameplay time_scale.
+            self.frame_profiler.record(dt);
+
             const scaled_dt = dt * self.time_scale;
             // Freeze the gameplay clock under EITHER pause path — the
             // `paused` flag (#465) doesn't zero `time_scale`, so guarding

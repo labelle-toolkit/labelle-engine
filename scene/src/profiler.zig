@@ -132,6 +132,105 @@ pub const Stat = struct {
 
 pub const Row = struct { name: []const u8, worst_ns: u64, avg_ns: u64 };
 
+// ── Live inspector overlay (labelle-engine#380) ──────────────────────
+//
+// The per-entry `Stat`s above are logged headless by `report()`. These
+// types re-shape the SAME data for an on-screen debug-inspector overlay:
+// stable layouts the `ScriptRunner` / `SystemRegistry` profile arrays
+// are, so `Game`'s opaque `script_profile_ptr` / `plugin_profile_ptr`
+// can be cast straight back to `[]const ScriptRow` / `[]const PluginRow`.
+
+/// One game script's live timing. Layout-shared with
+/// `ScriptRunner.ProfileEntry` so the Game's opaque pointer casts cleanly.
+pub const ScriptRow = struct {
+    name: []const u8,
+    tick: Stat = .{},
+    draw_gui: Stat = .{},
+};
+
+/// One plugin system's live timing. Layout-shared with
+/// `SystemRegistry.PluginProfileEntry`.
+pub const PluginRow = struct {
+    name: []const u8,
+    tick: Stat = .{},
+    post_tick: Stat = .{},
+};
+
+/// Traffic-light bucket for the inspector's color coding: green < 1 ms,
+/// yellow 1–5 ms, red > 5 ms (per the issue's spec).
+pub const Severity = enum { good, warn, bad };
+
+const warn_ns: u64 = 1_000_000; // 1 ms
+const bad_ns: u64 = 5_000_000; // 5 ms
+
+pub fn severityForNs(ns: u64) Severity {
+    if (ns >= bad_ns) return .bad;
+    if (ns >= warn_ns) return .warn;
+    return .good;
+}
+
+/// A flattened, render-ready row for the overlay: the live (`last_ns`)
+/// per-frame cost of an entry's primary phase (`tick`) and secondary
+/// phase (`drawGui` for scripts, `postTick` for plugins), already in ms
+/// with a severity bucket for coloring. Backend-agnostic — the debug
+/// plugin walks these and emits imgui/text; the shape is what makes the
+/// collector headless-testable.
+pub const OverlayRow = struct {
+    name: []const u8,
+    tick_ms: f32 = 0,
+    tick_severity: Severity = .good,
+    /// Secondary phase label ("drawGui" or "postTick").
+    aux_label: []const u8 = "",
+    aux_ms: f32 = 0,
+    aux_severity: Severity = .good,
+};
+
+fn nsToMs(ns: u64) f32 {
+    return @as(f32, @floatFromInt(ns)) / 1e6;
+}
+
+/// Fill `dst` from a slice of script profile rows using each entry's live
+/// `last_ns`. Returns the filled prefix (bounded by `dst.len`).
+pub fn collectScriptRows(dst: []OverlayRow, src: []const ScriptRow) []OverlayRow {
+    const n = @min(dst.len, src.len);
+    for (src[0..n], 0..) |e, i| {
+        dst[i] = .{
+            .name = e.name,
+            .tick_ms = nsToMs(e.tick.last_ns),
+            .tick_severity = severityForNs(e.tick.last_ns),
+            .aux_label = "drawGui",
+            .aux_ms = nsToMs(e.draw_gui.last_ns),
+            .aux_severity = severityForNs(e.draw_gui.last_ns),
+        };
+    }
+    return dst[0..n];
+}
+
+/// Fill `dst` from a slice of plugin profile rows using each entry's live
+/// `last_ns`. Returns the filled prefix (bounded by `dst.len`).
+pub fn collectPluginRows(dst: []OverlayRow, src: []const PluginRow) []OverlayRow {
+    const n = @min(dst.len, src.len);
+    for (src[0..n], 0..) |e, i| {
+        dst[i] = .{
+            .name = e.name,
+            .tick_ms = nsToMs(e.tick.last_ns),
+            .tick_severity = severityForNs(e.tick.last_ns),
+            .aux_label = "postTick",
+            .aux_ms = nsToMs(e.post_tick.last_ns),
+            .aux_severity = severityForNs(e.post_tick.last_ns),
+        };
+    }
+    return dst[0..n];
+}
+
+/// Sum of the primary + secondary live cost across `rows`, in ms — the
+/// "Total scripts" / "Total plugins" footer line.
+pub fn totalMs(rows: []const OverlayRow) f32 {
+    var sum: f32 = 0;
+    for (rows) |r| sum += r.tick_ms + r.aux_ms;
+    return sum;
+}
+
 /// Log a ranking of `rows` (sorted worst-first) under `label`, skipping
 /// entries below the threshold. `rows` is sorted in place. Emitted via
 /// `std.log.scoped(.profiler)` so it surfaces on stderr headless.

@@ -31,13 +31,11 @@ pub fn ScriptRunner(
         pub const profiling_enabled = true;
 
         /// Per-script timing (tick + drawGui), rolling over the current
-        /// dump window. Exposed via `Game.script_profile_ptr` for a live
-        /// overlay; ranked + logged by `dumpProfile`.
-        pub const ProfileEntry = struct {
-            name: []const u8,
-            tick: profiler.Stat = .{},
-            draw_gui: profiler.Stat = .{},
-        };
+        /// dump window. Exposed via `Game.script_profile_ptr` for the live
+        /// inspector overlay (#380); ranked + logged by `dumpProfile`.
+        /// Aliases the shared `profiler.ScriptRow` so `Game`'s opaque
+        /// pointer casts back to a stable, plugin-visible layout.
+        pub const ProfileEntry = profiler.ScriptRow;
 
         pub const script_count: usize = blk: {
             var count: usize = 0;

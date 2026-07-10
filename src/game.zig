@@ -63,6 +63,7 @@ const tilemap_runtime = @import("tilemap_runtime.zig");
 const tilemap_mixin = @import("game/tilemap_mixin.zig");
 const camera_mod = @import("camera.zig");
 const camera_mixin = @import("game/camera_mixin.zig");
+const frame_profiler_mod = @import("frame_profiler.zig");
 
 /// Full game configuration — the assembler fills ALL comptime slots.
 /// RenderImpl is a renderer plugin (e.g. gfx.GfxRenderer) satisfying RenderInterface.
@@ -816,6 +817,12 @@ pub fn GameConfigWithYAxis(
         plugin_profile_ptr: ?*const anyopaque = null,
         plugin_profile_count: usize = 0,
 
+        /// FPS / frame-time tracker for the debug inspector (#380). Fed one
+        /// `dt` per `tick` (see `loop_mixin`). Ungated — the per-frame cost
+        /// is a single ring write + EMA update — so the inspector's FPS
+        /// header always works even without `LABELLE_PROFILE`.
+        frame_profiler: frame_profiler_mod.FrameProfiler = .{},
+
         // Hot reload
         hot_reload_dirty: bool = false,
 
@@ -1388,6 +1395,13 @@ pub fn GameConfigWithYAxis(
         pub const getRenderer = MiscMixin.getRenderer;
         pub const getEcsBackend = MiscMixin.getEcsBackend;
         pub const entityCount = MiscMixin.entityCount;
+
+        // Debug inspector: FPS + profiler overlay (#380).
+        pub const fps = MiscMixin.fps;
+        pub const frameTimeMs = MiscMixin.frameTimeMs;
+        pub const frameStats = MiscMixin.frameStats;
+        pub const scriptProfileRows = MiscMixin.scriptProfileRows;
+        pub const pluginProfileRows = MiscMixin.pluginProfileRows;
     };
 }
 

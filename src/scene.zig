@@ -8,6 +8,7 @@ pub const prefab = scene.prefab;
 pub const component = scene.component;
 pub const script = scene.script;
 pub const gizmo = scene.gizmo;
+pub const profiler = scene.profiler;
 
 // ── Types ──
 pub const RefInfo = scene.RefInfo;
