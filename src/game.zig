@@ -1350,6 +1350,12 @@ pub fn GameConfigWithYAxis(
         /// MERGE a JSON patch into an entity's `Camera` component and re-seed.
         /// Backs the `editor_set_component("Camera", …)` bridge export.
         pub const applyCameraComponentJson = CameraMixin.applyCameraComponentJson;
+        /// Insert a default `Camera` entity into the just-instantiated ROOT
+        /// tree when it declares none (labelle-engine#564). The assembler
+        /// emits a call to this at the root-instantiation site only; the
+        /// engine decides *whether* a camera is needed at runtime. See
+        /// `game/camera_mixin.zig` / RFC-CAMERA-PREFABS §"How this subsumes #564".
+        pub const ensureDefaultCamera = CameraMixin.ensureDefaultCamera;
 
         // ── Atlas ─────────────────────────────────────────────────
 
