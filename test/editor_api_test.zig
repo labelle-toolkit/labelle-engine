@@ -1457,6 +1457,36 @@ test "save/load: the built-in Camera round-trips zoom + viewport (finding #5)" {
     try testing.expectEqual(@as(i32, 6), restored.?.viewport.?.y);
 }
 
+test "save/load: a Camera tag with JSON-special chars round-trips via the escape helper" {
+    editor_api.unbind();
+    defer editor_api.unbind();
+
+    var game = CameraTestGame.init(testing.allocator);
+    defer game.deinit();
+
+    // A tag carrying a quote AND a backslash: a raw `"{s}"` print would emit
+    // malformed JSON and the reload would fail/corrupt. The save-side escape
+    // helper (writeJsonString) + the reader's un-escape must round-trip it.
+    const nasty = "a\"b\\c"; // 5 bytes: a " b \ c
+    const cam_ent = game.createEntity();
+    game.setPosition(cam_ent, .{ .x = 0, .y = 0 });
+    game.addComponent(cam_ent, engine.Camera{ .tag = engine.camera_mod.makeTag(nasty) });
+
+    const save_path = "test_save_camera_tag_escape.json";
+    try game.saveGameState(save_path);
+    defer std.Io.Dir.cwd().deleteFile(std.testing.io, save_path) catch {};
+
+    game.resetEcsBackend();
+    try game.loadGameState(save_path); // would error/mis-parse on unescaped JSON
+
+    var restored: ?*engine.Camera = null;
+    var v = game.active_world.ecs_backend.view(.{ core.Position, engine.Camera }, .{});
+    defer v.deinit();
+    while (v.next()) |e| restored = game.active_world.ecs_backend.getComponent(e, engine.Camera);
+    try testing.expect(restored != null);
+    try testing.expectEqualStrings(nasty, restored.?.tagSlice());
+}
+
 // ── Camera-bound layers: tagged multi-camera seeding (#723/#724) ─────────────
 
 test "Camera.tag defaults to \"main\" and round-trips through the bounded buffer" {

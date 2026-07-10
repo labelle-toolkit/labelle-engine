@@ -329,10 +329,12 @@ pub fn Mixin(comptime Game: type) type {
                         if (cam.viewport) |vp| {
                             try writer.print(", \"viewport\": {{\"x\": {d}, \"y\": {d}, \"width\": {d}, \"height\": {d}}}", .{ vp.x, vp.y, vp.width, vp.height });
                         }
-                        // Camera tag (camera-bound layers, #723/#724) — a short
-                        // authored identifier, emitted so the slot binding
-                        // round-trips through save/load.
-                        try writer.print(", \"tag\": \"{s}\"", .{cam.tagSlice()});
+                        // Camera tag (camera-bound layers, #723/#724) — emitted
+                        // so the slot binding round-trips through save/load. Use
+                        // the escape helper (like every other string field): a
+                        // tag with a `"` or `\` must not corrupt the JSON.
+                        try writer.writeAll(", \"tag\": ");
+                        try writeJsonString(writer, cam.tagSlice());
                         try writer.writeAll("}");
                         first_comp = false;
                     }
