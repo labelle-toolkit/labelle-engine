@@ -128,7 +128,7 @@ test "nested postLoad fires exactly once" {
 
     try loadSource(&game,
         \\{
-        \\  "entities": [
+        \\  "children": [
         \\    {
         \\      "components": {
         \\        "Container": {
@@ -164,7 +164,7 @@ test "nested onReady fires exactly once per nested entity" {
 
     try loadSource(&game,
         \\{
-        \\  "entities": [
+        \\  "children": [
         \\    {
         \\      "components": {
         \\        "Container": {
@@ -189,7 +189,7 @@ test "top-level postLoad still fires (regression guard)" {
 
     try loadSource(&game,
         \\{
-        \\  "entities": [
+        \\  "children": [
         \\    { "components": { "PostLoadBump": {} } }
         \\  ]
         \\}
@@ -220,7 +220,7 @@ test "nested prefab-only postLoad fires exactly once" {
     });
     const scene_src =
         \\{
-        \\  "entities": [
+        \\  "children": [
         \\    {
         \\      "components": {
         \\        "Container": {
@@ -266,14 +266,14 @@ test "nested scene override + prefab definition fires postLoad exactly once (no 
     });
     const scene_src =
         \\{
-        \\  "entities": [
+        \\  "children": [
         \\    {
         \\      "components": {
         \\        "Container": {
         \\          "slots": [
         \\            {
         \\              "prefab": "overridable",
-        \\              "components": { "PostLoadBump": { "calls": 0 } }
+        \\              "overrides": { "PostLoadBump": { "calls": 0 } }
         \\            }
         \\          ]
         \\        }
@@ -316,14 +316,14 @@ test "nested scene override + prefab definition fires onReady exactly once" {
     });
     const scene_src =
         \\{
-        \\  "entities": [
+        \\  "children": [
         \\    {
         \\      "components": {
         \\        "Container": {
         \\          "slots": [
         \\            {
         \\              "prefab": "overridable_ready",
-        \\              "components": { "OnReadyBump": {} }
+        \\              "overrides": { "OnReadyBump": {} }
         \\            }
         \\          ]
         \\        }
@@ -355,7 +355,7 @@ test "nested postLoad sees resolved ref-array (spawned child IDs patched)" {
 
     try loadSource(&game,
         \\{
-        \\  "entities": [
+        \\  "children": [
         \\    {
         \\      "components": {
         \\        "Container": {
@@ -402,7 +402,7 @@ test "nested postLoad sees resolved @ref entity-ref" {
 
     try loadSource(&game,
         \\{
-        \\  "entities": [
+        \\  "children": [
         \\    {
         \\      "components": {
         \\        "Container": {

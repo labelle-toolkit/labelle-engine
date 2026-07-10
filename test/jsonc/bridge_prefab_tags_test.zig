@@ -92,8 +92,8 @@ test "jsonc_scene_bridge: prefab-sourced entity gets PrefabInstance tag" {
         ,
     },
         \\{
-        \\  "entities": [
-        \\    { "prefab": "enemy", "components": { "Position": { "x": 10, "y": 20 } } }
+        \\  "children": [
+        \\    { "prefab": "enemy", "overrides": { "Position": { "x": 10, "y": 20 } } }
         \\  ]
         \\}
     );
@@ -117,7 +117,7 @@ test "jsonc_scene_bridge: non-prefab entity does NOT get PrefabInstance" {
 
     var fixture = try setupFixture(&tmp_dir, .{},
         \\{
-        \\  "entities": [
+        \\  "children": [
         \\    { "components": { "Health": { "current": 50, "max": 50 } } }
         \\  ]
         \\}
@@ -147,9 +147,9 @@ test "jsonc_scene_bridge: multiple prefab instances each get their own PrefabIns
         ,
     },
         \\{
-        \\  "entities": [
+        \\  "children": [
         \\    { "prefab": "warrior" },
-        \\    { "prefab": "warrior", "components": { "Position": { "x": 5, "y": 5 } } },
+        \\    { "prefab": "warrior", "overrides": { "Position": { "x": 5, "y": 5 } } },
         \\    { "prefab": "archer" }
         \\  ]
         \\}
@@ -199,7 +199,7 @@ test "jsonc_scene_bridge: prefab children get PrefabChild tags on scene load" {
         ,
     },
         \\{
-        \\  "entities": [
+        \\  "children": [
         \\    { "prefab": "tree" }
         \\  ]
         \\}
@@ -286,7 +286,7 @@ test "jsonc_scene_bridge: scene-declared children on a prefab reference are a §
     // also declares `children`.
     const scene_source =
         \\{
-        \\  "entities": [
+        \\  "children": [
         \\    {
         \\      "prefab": "room",
         \\      "children": [
@@ -316,7 +316,7 @@ test "jsonc_scene_bridge: PrefabInstance.path survives save/load round-trip" {
         ,
     },
         \\{
-        \\  "entities": [
+        \\  "children": [
         \\    { "prefab": "unit" }
         \\  ]
         \\}

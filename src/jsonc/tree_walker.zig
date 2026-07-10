@@ -290,7 +290,15 @@ fn walkEntry(
         // effective component tree the loader will instantiate.
         const prefab_components: ?Value.Object =
             if (prefab_root) |proot| try uf.prefabComponents(proot, merge_arena.allocator(), NoopLog{}) else null;
-        const patch = try uf.entityPatch(obj, merge_arena.allocator(), NoopLog{});
+        // This is the cycle-detection pre-pass, not the loader. A
+        // legacy `"components"`-on-reference form (rejected in v2.0,
+        // #592) surfaces its `error.InvalidFormat` from the real
+        // loader; here we treat it as "no patch" so cycle detection
+        // still runs over the rest of the tree.
+        const patch = uf.entityPatch(obj, merge_arena.allocator(), NoopLog{}) catch |e| switch (e) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.InvalidFormat => null,
+        };
         if (try effectiveComponents(merge_arena, prefab_components, patch)) |eff| {
             try walkComponentFields(ctx, merge_arena, resolver, eff, depth, visitor);
         }

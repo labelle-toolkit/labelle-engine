@@ -1,17 +1,18 @@
 //! Loader acceptance tests for the unified scene/prefab format
 //! (RFC #560, ticket #561).
 //!
-//! Pins that the loader walks both shapes down the same code path:
+//! Pins that the loader walks every current shape down the same
+//! code path:
 //!
 //!  - the unified `"root"` wrapper at the file top,
-//!  - `"overrides"` (not `"components"`) on a prefab reference,
-//!  - and the legacy spellings — top-level `"entities"`,
-//!    `"components"` on a reference, a dropped `"assets"` field —
-//!    still load during the migration window.
+//!  - the flat top-level form and the RFC #596 bundle Array,
+//!  - `"overrides"` (not `"components"`) on a prefab reference.
 //!
-//! Cross-compatibility matters most: a unified scene referencing a
-//! legacy prefab (and vice-versa) must resolve, since files migrate
-//! one at a time.
+//! And pins that the pre-#560 legacy spellings — a top-level
+//! `"entities"` array, a `"components"` wrapper on a prefab
+//! reference, and a top-level `"assets"` array — are REJECTED as of
+//! engine v2.0 (#592) with `error.InvalidFormat`. `labelle migrate
+//! unified` converts a legacy file to the unified/flat form.
 
 const std = @import("std");
 const testing = std.testing;
@@ -130,25 +131,23 @@ test "unified: nested children under the root wrapper load" {
     try testing.expectEqualSlices(i32, &.{ 1, 2 }, markerIds(&game, &buf));
 }
 
-// ── Legacy shapes still accepted ────────────────────────────────
+// ── Legacy shapes now rejected (engine v2.0, #592) ──────────────
 
-test "legacy: top-level entities array still loads" {
-    var game = try boot(
+test "legacy: top-level entities array is a load-time error" {
+    // The pre-#560 top-level `"entities"` wrapper is no longer
+    // accepted — use `"children"` (or a top-level bundle Array).
+    try testing.expectError(error.InvalidFormat, boot(
         \\{ "entities": [ { "components": { "Marker": { "id": 9 } } } ] }
-    );
-    defer game.deinit();
-
-    try testing.expectEqual(@as(i32, 9), soleMarker(&game).id);
+    ));
 }
 
-test "legacy: dropped assets field is ignored, scene still loads" {
-    var game = try boot(
+test "legacy: top-level assets field is a load-time error" {
+    // Assets are inferred from sprite references (RFC #563); a
+    // dropped `"assets"` field is now rejected, not ignored.
+    try testing.expectError(error.InvalidFormat, boot(
         \\{ "assets": ["rooms", "props"],
-        \\  "entities": [ { "components": { "Marker": { "id": 8 } } } ] }
-    );
-    defer game.deinit();
-
-    try testing.expectEqual(@as(i32, 8), soleMarker(&game).id);
+        \\  "children": [ { "components": { "Marker": { "id": 8 } } } ] }
+    ));
 }
 
 // ── Prefab references: overrides vs. legacy components ──────────
@@ -169,41 +168,45 @@ test "unified: reference with overrides patches a unified prefab" {
     try testing.expectEqual(@as(i32, 7), soleMarker(&game).id);
 }
 
-test "legacy: reference with components still patches a legacy prefab" {
+test "legacy: components on a prefab reference is a load-time error" {
+    // A reference patches via `"overrides"` (or flat PascalCase
+    // keys); the pre-#560 `"components"` wrapper on a reference is
+    // rejected in v2.0 (#592).
     var game = TestGame.init(testing.allocator);
     defer game.deinit();
 
-    try Bridge.addEmbeddedPrefab(&game, "legacy_widget",
+    try Bridge.addEmbeddedPrefab(&game, "widget",
         \\{ "components": { "Marker": { "id": 200 } } }
     , PREFAB_DIR);
-    try Bridge.loadSceneFromSource(&game,
-        \\{ "entities": [
-        \\  { "prefab": "legacy_widget", "components": { "Marker": { "id": 5 } } }
+    try testing.expectError(error.InvalidFormat, Bridge.loadSceneFromSource(&game,
+        \\{ "children": [
+        \\  { "prefab": "widget", "components": { "Marker": { "id": 5 } } }
         \\] }
-    , PREFAB_DIR);
-
-    try testing.expectEqual(@as(i32, 5), soleMarker(&game).id);
+    , PREFAB_DIR));
 }
 
 // ── Cross-compatibility (files migrate one at a time) ───────────
 
-test "cross: unified scene + overrides references a legacy prefab" {
+test "cross: flat prefab (components wrapper, no root) resolves via overrides" {
     var game = TestGame.init(testing.allocator);
     defer game.deinit();
 
-    try Bridge.addEmbeddedPrefab(&game, "legacy_prefab",
+    // The prefab uses the flat form — a top-level `"components"`
+    // wrapper with no `"root"` (valid, RFC #594). The scene patches
+    // it with `"overrides"`.
+    try Bridge.addEmbeddedPrefab(&game, "flat_prefab",
         \\{ "components": { "Marker": { "id": 300 } } }
     , PREFAB_DIR);
     try Bridge.loadSceneFromSource(&game,
         \\{ "root": { "children": [
-        \\  { "prefab": "legacy_prefab", "overrides": { "Marker": { "id": 11 } } }
+        \\  { "prefab": "flat_prefab", "overrides": { "Marker": { "id": 11 } } }
         \\] } }
     , PREFAB_DIR);
 
     try testing.expectEqual(@as(i32, 11), soleMarker(&game).id);
 }
 
-test "cross: legacy scene + components references a unified prefab" {
+test "cross: bundle scene + overrides references a root-wrapped prefab" {
     var game = TestGame.init(testing.allocator);
     defer game.deinit();
 
@@ -211,9 +214,9 @@ test "cross: legacy scene + components references a unified prefab" {
         \\{ "root": { "components": { "Marker": { "id": 400 } } } }
     , PREFAB_DIR);
     try Bridge.loadSceneFromSource(&game,
-        \\{ "entities": [
-        \\  { "prefab": "unified_prefab", "components": { "Marker": { "id": 13 } } }
-        \\] }
+        \\[
+        \\  { "prefab": "unified_prefab", "overrides": { "Marker": { "id": 13 } } }
+        \\]
     , PREFAB_DIR);
 
     try testing.expectEqual(@as(i32, 13), soleMarker(&game).id);

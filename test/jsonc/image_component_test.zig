@@ -96,7 +96,7 @@ test "Image: scene entity parses into the engine built-in with the RFC shape" {
     defer game.deinit();
 
     try BuiltinBridge.loadSceneFromSource(&game,
-        \\{ "entities": [
+        \\{ "children": [
         \\  { "components": { "Image": {
         \\      "name": "logo_splash",
         \\      "pivot": "bottom_left",
@@ -124,7 +124,7 @@ test "Image: defaults land for a minimal block" {
     defer game.deinit();
 
     try BuiltinBridge.loadSceneFromSource(&game,
-        \\{ "entities": [
+        \\{ "children": [
         \\  { "components": { "Image": { "name": "bare" } } }
         \\] }
     , "/tmp/labelle-nonexistent");
@@ -154,7 +154,7 @@ test "Image: parsed name resolves end-to-end through the AssetCatalog image load
     try game.assets.register("logo_splash", engine.LoaderKind.image, "png", "fake-png-bytes");
 
     try BuiltinBridge.loadSceneFromSource(&game,
-        \\{ "entities": [
+        \\{ "children": [
         \\  { "components": { "Image": { "name": "logo_splash", "pivot": "center" } } }
         \\] }
     , "/tmp/labelle-nonexistent");
@@ -237,7 +237,7 @@ test "Image: a registered component named Image wins over the engine built-in" {
     defer game.deinit();
 
     try OverrideBridge.loadSceneFromSource(&game,
-        \\{ "entities": [
+        \\{ "children": [
         \\  { "components": { "Image": { "width": 320, "height": 240 } } }
         \\] }
     , "/tmp/labelle-nonexistent");
