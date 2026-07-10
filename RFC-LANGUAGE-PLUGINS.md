@@ -3,7 +3,7 @@
 **Issue:** labelle-toolkit/labelle-engine#237 (updated 2026-07 — re-scoped from "Lua module" to the language-plugin family)  
 **Status:** Draft  
 **Author:** Alexandre  
-**Date:** 2026-07-10 (rev 2 — POC validated: PR #734; rev 3 — single-repo packaging: `labelle-scripting` with language sub-modules; rev 4 — reference bindings: Lua queries, Ruby events; rev 5 — Ruby controllers: script-language domain owners)
+**Date:** 2026-07-10 (rev 2 — POC validated: PR #734; rev 3 — single-repo packaging: `labelle-scripting` with language sub-modules; rev 4 — reference bindings: Lua queries, Ruby events; rev 5 — Ruby controllers: script-language domain owners; rev 6 — script-declared components: generate-time codegen, runtime tier for mods)
 
 ## Problem
 
@@ -154,6 +154,26 @@ end
 - **Cross-language API = commands-as-events + components-as-state** (the pathfinder-v4 triad, minus direct calls): any language "calls" a Ruby controller by emitting its command event; the controller answers via events and component writes. Direct cross-language function calls are deliberately not in v1 — the bus is the boundary. Same-language callers use plain method calls.
 - **Authoritative state lives in components; ivars are caches.** The VM is transient — save/load rehydration and hot reload reset it (the FP plugin-State lesson). Keeping durable state in engine-serialized components makes script controllers save-safe and hot-reloadable for free.
 
+**Components declared in script languages** — first-class via generate-time codegen:
+
+```ruby
+# ruby/components/hunger.rb
+class Hunger < Labelle::Component
+  field :level,    :f32,  default: 1.0
+  field :starving, :bool, default: false
+  persist :persistent          # Saveable bucket, same vocabulary as Zig components
+end
+```
+
+Components are comptime Zig types (typed ECS storage, reflection registry, save/load, scene instantiation) — a VM cannot conjure one at runtime. So the declaration is consumed at **`labelle generate`**: the sub-module ships a *declare-mode runner* (the vendored VM loads `ruby/**/*.rb` under a stub `Labelle` that records `field`/`persist` and dumps JSON — Ruby introspects itself, no Ruby parser in the assembler), and the assembler **codegens a real Zig component struct** into the normal registry (pack-namespaced when the `ruby/` dir lives in a pack). Everything then works with zero special cases: scenes/prefabs (`"Hunger": {"level": 0.8}`), save/load with the declared bucket, cross-language name access, typed queries, and boundary validation (`e.set(Hunger, h)` checks the schema → script errors instead of silent drift).
+
+Two tiers, one DSL:
+
+- **Tier 1 — game developers (v1)**: declaration → generate-time codegen → first-class component. The schema lives in Ruby, the type lives in Zig, nothing is written twice.
+- **Tier 2 — mods (later)**: the same class registers at **runtime** into a dynamic component store (JSON-typed, generic serde) — modders cannot run `labelle generate`. Dynamic components stay invisible to comptime Zig systems, which is acceptable for sandboxed mod content.
+
+Lua mirrors the shape (`labelle.component("Hunger", { level = {"f32", 1.0} })`); native-family languages declare schemas in a sidecar consumed by the same codegen.
+
 ## Backward compatibility
 
 - Zero impact when no language plugin is attached (comptime-gated contract).
@@ -180,5 +200,5 @@ end
 - **LuaJIT vs Lua 5.4** (carried from #237): ship 5.4 first, LuaJIT as an opt-in backend?
 - **Encoding ceiling**: is JSON good enough for component-heavy scripts, or does v1 need the tagged-value ABI sooner? Measure on the Lua MVP.
 - **GC in the frame budget**: Lua incremental GC and CLR GC pauses — per-tick step budgets?
-- **Script-defined components**: can a Lua script register a *new* component type at runtime, or are components Zig-defined only (script data lives in a generic `ScriptData` component)? Leaning Zig-defined + generic bag for v1.
+- ~~**Script-defined components**~~ — resolved (rev 6): generate-time codegen from the script DSL makes them first-class for developers; a runtime dynamic-store tier covers mods later.
 - **mruby vs Crystal priority** for the Ruby-shaped slot — they are different beasts (embedded-dynamic vs compiled-static); demand should pick.
