@@ -3,7 +3,7 @@
 **Issue:** labelle-toolkit/labelle-engine#237 (updated 2026-07 — re-scoped from "Lua module" to the language-plugin family)  
 **Status:** Draft  
 **Author:** Alexandre  
-**Date:** 2026-07-10 (rev 2 — POC validated: PR #734)
+**Date:** 2026-07-10 (rev 2 — POC validated: PR #734; rev 3 — single-repo packaging: `labelle-scripting` with language sub-modules)
 
 ## Problem
 
@@ -63,22 +63,26 @@ scene_change(name)                log(level, msg)
 
 **Validated by POC** (PR #734, `spike/language-plugins/`): the same behavior in Lua (VM family), Rust and Crystal (native family) against one flat C-ABI surface — including **both event directions** (emit + subscribe/poll-drain) — produces byte-identical world state, host-asserted. Findings folded in: Rust needs no bindings (the header *is* the binding); Crystal requires `Crystal.init_runtime` boot, `ld -r` main-localization, and **non-raising script entry points** (raise's backtrace capture segfaults across foreign stacks) — labelle-crystal's first work items; C#/hostfxr and mruby recipes documented in the spike README.
 
-### 2. Language plugin anatomy (uniform across languages)
+### 2. Packaging: ONE plugin repo, language sub-modules
 
-Each language is **a plugin** — repo + version, one `.plugins` entry — that:
+All languages ship in a single first-party plugin repo — **`labelle-scripting`** — rather than one repo per language. The shared layer (contract binding, script discovery, hot-reload machinery, the plugin controller) dominates every language integration; one repo writes it once, and each language is a thin sub-module over it (the in-tree sub-package convention, applied to a plugin). One `.plugins` entry, one version train pinned to one contract version — no per-language compat matrix — and a game using two languages gets one controller with one deterministic tick order instead of two plugins with duplicated glue.
 
-1. **embeds or links its runtime** (ziglua VM / mruby VM / CoreCLR host / nothing for Rust+Crystal);
-2. **registers a plugin controller**: `setup` (init runtime, load scripts), `tick` (run script updates — in the plugin block of the two-block order, positioned like any pack script), `deinit`;
-3. **declares a script convention dir** via `plugin.labelle` convention dirs (e.g. `lua/`, `ruby/`) — game authors drop `.lua`/`.rb` files there; the assembler **embeds them** (`@embedFile`) for release builds, and dev builds also disk-watch the dir for hot reload;
-4. **exposes idiomatic bindings** over the contract — #237's Lua API sketch (`game:findEntity`, `entity:get/set`, `input:isKeyDown`, `vec2`) is kept verbatim as the reference binding design;
-5. optionally ships a **studio panel** (asset-plugins RFC) — a script console / REPL panel is the natural v2.
+**Choosing languages costs nothing for the rest.** Selection is by convention with comptime gates: a game containing a `lua/` dir compiles the Lua VM in; no `rust/` dir means the Rust glue folds out entirely. Vendored runtimes ride `b.lazyDependency`, so an unchosen language's runtime is never even *fetched*. Per-language maturity is labeled per release (lua = stable first; csharp = experimental, last). Third parties can still ship independent language plugins over the public contract — `labelle-scripting` is the first-party bundle, not a monopoly.
 
-### 3. Per-language notes
+Anatomy (shared once, per-language where noted):
 
-- **labelle-lua** — the flagship (P1). Lua 5.4 via ziglua (~200 KB), LuaJIT as a build option (the #237 open question stands). Everything in #237's Phases 1–2 carries over; only the integration points change (convention dir instead of scene prefixes; plugin config instead of a `.lua` project block).
-- **labelle-rust / labelle-crystal** — the native family. The contract ships as a C header; game Rust/Crystal code builds as a static lib the plugin's build integration links into the game binary. Full native performance, no VM, no sandbox; hot reload only as an optional dev-mode dylib swap. Crystal gives the Ruby-shaped syntax at native speed.
-- **labelle-ruby** — **mruby**, not CRuby (CRuby is not designed for embedding). Embedded-VM family; smaller community than Lua but the same shape.
-- **labelle-csharp** — the heaviest: CoreCLR hosting via `hostfxr`, desktop-first (Android/iOS AOT constraints are real — Godot's Mono history is the cautionary precedent). Explicitly last.
+1. **runtime**: each sub-module embeds or links its runtime (ziglua VM / mruby VM / CoreCLR host / nothing for Rust+Crystal), behind its comptime gate + lazy dependency;
+2. **one plugin controller**: `setup` (init the enabled runtimes, load scripts), `tick` (run script updates — in the plugin block of the two-block order), `deinit`;
+3. **script convention dirs** per language (`lua/`, `ruby/`, …) via `plugin.labelle` — the assembler **embeds** scripts (`@embedFile`) for release; dev builds disk-watch for hot reload;
+4. **idiomatic bindings** per sub-module over the shared contract binding — #237's Lua API sketch (`game:findEntity`, `entity:get/set`, `input:isKeyDown`, `vec2`) kept verbatim as the reference design;
+5. optionally a **studio panel** (asset-plugins RFC) — a script console / REPL panel is the natural v2.
+
+### 3. Per-language notes (sub-modules of labelle-scripting)
+
+- **lua** — the flagship (P1). Lua 5.4 via ziglua (~200 KB), LuaJIT as a build option (the #237 open question stands). Everything in #237's Phases 1–2 carries over; only the integration points change (convention dir instead of scene prefixes; plugin config instead of a `.lua` project block).
+- **rust / crystal** — the native family. The contract ships as a C header; game Rust/Crystal code builds as a static lib the plugin's build integration links into the game binary. Full native performance, no VM, no sandbox; hot reload only as an optional dev-mode dylib swap. Crystal gives the Ruby-shaped syntax at native speed.
+- **ruby** — **mruby**, not CRuby (CRuby is not designed for embedding). Embedded-VM family; smaller community than Lua but the same shape.
+- **csharp** — the heaviest: CoreCLR hosting via `hostfxr`, desktop-first (Android/iOS AOT constraints are real — Godot's Mono history is the cautionary precedent). Explicitly last.
 
 ## Backward compatibility
 
@@ -88,10 +92,10 @@ Each language is **a plugin** — repo + version, one `.plugins` entry — that:
 
 ## Phasing
 
-- **Phase 1 — contract + Lua MVP.** Script Runtime Contract v1 (JSON encoding, comptime-gated) in the engine; `labelle-lua` plugin: VM init, script loading from the convention dir (embedded), `init/update/deinit` per script, entity/component/input bindings. Proof: an FP-adjacent demo scene driven by a `.lua` behavior.
+- **Phase 1 — contract + labelle-scripting with Lua.** Script Runtime Contract v1 (JSON encoding, comptime-gated) in the engine; the `labelle-scripting` repo with the shared glue + the `lua` sub-module enabled: VM init, script loading from the convention dir (embedded), `init/update/deinit` per script, entity/component/input bindings. Proof: an FP-adjacent demo scene driven by a `.lua` behavior.
 - **Phase 2 — dev experience.** Hot reload (disk watch + studio preview integration), Lua stack-trace error UX, the sandbox profile for mods (no `io`/`os` by default), script console studio panel.
-- **Phase 3 — native family.** `labelle-rust` (and the Crystal variant): C header generation from the contract, build integration, optional dev dylib swap. Decide WASM-vs-dylib here with real data.
-- **Phase 4 — the long tail.** `labelle-ruby` (mruby); `labelle-csharp` (CoreCLR, desktop-first).
+- **Phase 3 — native family.** The `rust` (and `crystal`) sub-modules: C header generation from the contract, the **assembler build-integration hook** (plugins declaring "run cargo/crystal, link this artifact" — the one new assembler seam the native family needs), optional dev dylib swap. Decide WASM-vs-dylib here with real data.
+- **Phase 4 — the long tail.** The `ruby` (mruby) and `csharp` (CoreCLR, desktop-first) sub-modules.
 
 ## Alternatives considered
 
@@ -99,6 +103,7 @@ Each language is **a plugin** — repo + version, one `.plugins` entry — that:
 2. **Transpile-to-Zig at build time** (the flow-codegen precedent). Loses the two headline motivations — hot reload and mods — and flows already serve the visual/designer-authoring niche.
 3. **Per-language bespoke integrations** (each language binds the comptime API directly). N×M explosion against every engine change; the whole point of the runtime contract is to pay the bridge cost once.
 4. **CRuby instead of mruby.** CRuby embedding is fragile and GC-heavy; mruby exists precisely for this use case.
+5. **One repo per language** (labelle-lua, labelle-rust, …). Rejected — the shared glue (contract binding, discovery, hot reload, controller) would be duplicated N times and drift; versions form an N×contract compat matrix; and multi-language games would attach N plugins with N controllers. The single `labelle-scripting` repo with comptime-gated, lazily-fetched sub-modules keeps unchosen languages at literal zero cost while cutting the repo count. Third-party language plugins over the public contract remain possible.
 
 ## Open questions
 
