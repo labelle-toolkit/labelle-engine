@@ -150,3 +150,58 @@ test "setSceneSource: unknown scene returns SceneNotFound" {
     defer game.deinit();
     try testing.expectError(error.SceneNotFound, game.setSceneSource("nope", "{}"));
 }
+
+// ── End-to-end: transitive prefab-walk through the live PrefabCache (#754) ──
+
+test "setScene: pure prefab-composition scene infers via the PrefabCache (#754)" {
+    var game = Game.init(testing.allocator);
+    defer game.deinit();
+
+    // Two atlases, each provided by a different prefab.
+    try installAtlas(&game, "rooms", &.{"room/floor"});
+    try installAtlas(&game, "chars", &.{"worker/idle"});
+
+    // Register the prefabs into the real PrefabCache the resolver reads
+    // (`reloadPrefabSource` is the same cache-install seam the assembler's
+    // `addEmbeddedPrefab` uses; here it stands in without the full bridge).
+    // Each prefab carries an inline Sprite from its atlas; the second is
+    // reached transitively (condenser → worker).
+    try game.reloadPrefabSource("worker",
+        \\{ "Sprite": { "sprite_name": "worker/idle", "pivot": "center" } }
+    );
+    try game.reloadPrefabSource("condenser",
+        \\{ "children": [
+        \\  { "Sprite": { "sprite_name": "room/floor", "pivot": "center" } },
+        \\  { "prefab": "worker", "Position": { "x": 10, "y": 10 } }
+        \\] }
+    );
+
+    // A manifest-less scene that is ONLY prefab references (FP `colony` shape):
+    // a top-level array of `{ "prefab": ... }` with zero inline Sprite.
+    // Pre-#754 this inferred an EMPTY manifest.
+    game.registerSceneSimple("colony", emptyLoader);
+    try game.setSceneSource("colony",
+        \\[ { "prefab": "condenser", "Position": { "x": 0, "y": 0 } } ]
+    );
+
+    try game.setScene("colony");
+
+    // The scene now derives a NON-empty manifest: both atlases, unioned from
+    // the referenced prefab and its transitively-referenced child prefab.
+    const entry = game.scenes.get("colony").?;
+    try testing.expectEqual(@as(usize, 2), entry.assets.len);
+    var saw_rooms = false;
+    var saw_chars = false;
+    for (entry.assets) |a| {
+        if (std.mem.eql(u8, a, "rooms")) saw_rooms = true;
+        if (std.mem.eql(u8, a, "chars")) saw_chars = true;
+    }
+    try testing.expect(saw_rooms);
+    try testing.expect(saw_chars);
+
+    // Both inferred atlases were acquired through the gate, and the scene
+    // committed.
+    try testing.expect(game.assets.entries.getPtr("rooms").?.refcount >= 1);
+    try testing.expect(game.assets.entries.getPtr("chars").?.refcount >= 1);
+    try testing.expectEqualStrings("colony", game.getCurrentSceneName().?);
+}

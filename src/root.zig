@@ -112,6 +112,10 @@ pub const InferredManifest = asset_manifest_mod.InferredManifest;
 pub const inferAssets = asset_manifest_mod.inferAssets;
 pub const inferAssetsJsonc = asset_manifest_mod.inferAssetsJsonc;
 pub const inferAssetsFromSource = asset_manifest_mod.inferAssetsFromSource;
+// #754 — transitive prefab-reference walking for asset inference.
+pub const PrefabResolver = asset_manifest_mod.PrefabResolver;
+pub const inferAssetsJsoncWithPrefabs = asset_manifest_mod.inferAssetsJsoncWithPrefabs;
+pub const inferAssetsFromSourceWithPrefabs = asset_manifest_mod.inferAssetsFromSourceWithPrefabs;
 
 // ── Input ──
 pub const InputInterface = input_mod.InputInterface;

@@ -15,6 +15,10 @@
 //!   5. The `AssetManifest` escape hatch unions in assets the walker can't
 //!      see from a sprite reference (audio banks, script overlays).
 //!   6. `inferAssetsFromSource` — the JSONC scene-load wiring entry.
+//!   7. Transitive prefab-reference walking (#754): a pure prefab-composition
+//!      scene infers the union of its prefabs' bundles, prefab→prefab chains
+//!      resolve, reference cycles terminate, and unknown prefab names are
+//!      skipped — while inline-Sprite scenes stay unchanged.
 
 const std = @import("std");
 const testing = std.testing;
@@ -431,4 +435,247 @@ test "inferAssetsFromSource: JSONC scene source (comments + trailing commas)" {
     try testing.expectEqual(@as(usize, 2), inferred.slice().len);
     try testing.expect(inferred.contains("rooms"));
     try testing.expect(inferred.contains("logo_splash"));
+}
+
+// ── #754: transitive prefab-reference walking ──────────────────────────────
+//
+// A pure prefab-composition scene (dozens of `{ "prefab": ... }` entries, zero
+// inline `Sprite`) derives its manifest by following each prefab reference into
+// the referenced prefab's own tree. These tests wire a `PrefabResolver` over a
+// plain name→tree map — the unit-test analog of the scene loader wiring the
+// live `PrefabCache` behind the same interface.
+
+/// A name→parsed-tree prefab registry standing in for the engine's runtime
+/// `PrefabCache`. Parses prefab sources into `arena` up front and hands the
+/// walker a `PrefabResolver` over the resulting map.
+const PrefabReg = struct {
+    map: std.StringHashMap(engine.SceneValue),
+    arena: std.mem.Allocator,
+
+    fn init(arena: std.mem.Allocator) PrefabReg {
+        return .{ .map = std.StringHashMap(engine.SceneValue).init(arena), .arena = arena };
+    }
+
+    fn add(self: *PrefabReg, name: []const u8, src: []const u8) !void {
+        var parser = engine.JsoncParser.init(self.arena, src);
+        try self.map.put(name, try parser.parse());
+    }
+
+    fn resolveFn(ctx: *anyopaque, name: []const u8) ?engine.SceneValue {
+        const self: *PrefabReg = @ptrCast(@alignCast(ctx));
+        return self.map.get(name);
+    }
+
+    fn resolver(self: *PrefabReg) engine.PrefabResolver {
+        return .{ .ctx = self, .resolveFn = resolveFn };
+    }
+};
+
+test "prefab-walk: pure prefab-composition scene infers the union of its prefabs' bundles" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var idx = ReverseIndex.init(testing.allocator);
+    defer idx.deinit();
+    try idx.addAtlasFromJson("rooms", rooms_atlas_json);
+    try idx.addAtlasFromJson("characters", chars_atlas_json);
+
+    // Two prefabs, each carrying an inline Sprite from a DIFFERENT atlas.
+    var reg = PrefabReg.init(arena);
+    try reg.add("condenser",
+        \\{ "children": [
+        \\  { "Sprite": { "sprite_name": "room/floor.png", "pivot": "center" } }
+        \\] }
+    );
+    try reg.add("worker",
+        \\{ "Sprite": { "sprite_name": "worker/idle.png", "pivot": "center" } }
+    );
+
+    // The scene mirrors FP's `colony`: a top-level ARRAY of `{ "prefab": ... }`
+    // entries (with sibling `Position`), ZERO inline Sprite. Before #754 this
+    // derived an EMPTY manifest; now it unions both prefabs' bundles.
+    const scene_src =
+        \\[
+        \\  { "prefab": "condenser", "Position": { "x": 0, "y": 0 } },
+        \\  { "prefab": "worker", "Position": { "x": 156, "y": 0 } }
+        \\]
+    ;
+
+    // Without a resolver, the pre-#754 behavior: prefab names are misses → empty.
+    var no_prefab = try engine.inferAssetsFromSource(testing.allocator, &idx, scene_src);
+    defer no_prefab.deinit();
+    try testing.expectEqual(@as(usize, 0), no_prefab.slice().len);
+
+    // With the resolver, both prefabs' atlas bundles are derived.
+    var inferred = try engine.inferAssetsFromSourceWithPrefabs(
+        testing.allocator,
+        &idx,
+        scene_src,
+        reg.resolver(),
+    );
+    defer inferred.deinit();
+
+    try testing.expectEqual(@as(usize, 2), inferred.slice().len);
+    try testing.expect(inferred.contains("rooms"));
+    try testing.expect(inferred.contains("characters"));
+}
+
+test "prefab-walk: prefab→prefab chain resolves transitively" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var idx = ReverseIndex.init(testing.allocator);
+    defer idx.deinit();
+    try idx.addAtlasFromJson("rooms", rooms_atlas_json);
+    try idx.addAtlasFromJson("characters", chars_atlas_json);
+
+    var reg = PrefabReg.init(arena);
+    // `room` references `workstation` (a nested prefab ref, exactly like FP's
+    // `condenser` → `industry__condenser_workstation`), which carries the only
+    // Sprite from the `characters` atlas. `room` itself uses `rooms`.
+    try reg.add("room",
+        \\{ "children": [
+        \\  { "Sprite": { "sprite_name": "room/wall.png" } },
+        \\  { "prefab": "workstation", "Position": { "x": 10, "y": 10 } }
+        \\] }
+    );
+    try reg.add("workstation",
+        \\{ "Sprite": { "sprite_name": "worker/walk.png" } }
+    );
+
+    const scene_src =
+        \\[ { "prefab": "room", "Position": { "x": 0, "y": 0 } } ]
+    ;
+
+    var inferred = try engine.inferAssetsFromSourceWithPrefabs(
+        testing.allocator,
+        &idx,
+        scene_src,
+        reg.resolver(),
+    );
+    defer inferred.deinit();
+
+    // `rooms` from the room's own Sprite, `characters` from the transitively
+    // resolved workstation prefab.
+    try testing.expectEqual(@as(usize, 2), inferred.slice().len);
+    try testing.expect(inferred.contains("rooms"));
+    try testing.expect(inferred.contains("characters"));
+}
+
+test "prefab-walk: a reference cycle (A→B→A) terminates" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var idx = ReverseIndex.init(testing.allocator);
+    defer idx.deinit();
+    try idx.addAtlasFromJson("rooms", rooms_atlas_json);
+    try idx.addAtlasFromJson("characters", chars_atlas_json);
+
+    var reg = PrefabReg.init(arena);
+    // A → B → A. A malformed content cycle must not loop forever.
+    try reg.add("a",
+        \\{ "children": [
+        \\  { "Sprite": { "sprite_name": "room/door.png" } },
+        \\  { "prefab": "b" }
+        \\] }
+    );
+    try reg.add("b",
+        \\{ "children": [
+        \\  { "Sprite": { "sprite_name": "worker/idle.png" } },
+        \\  { "prefab": "a" }
+        \\] }
+    );
+
+    const scene_src =
+        \\[ { "prefab": "a" } ]
+    ;
+
+    var inferred = try engine.inferAssetsFromSourceWithPrefabs(
+        testing.allocator,
+        &idx,
+        scene_src,
+        reg.resolver(),
+    );
+    defer inferred.deinit();
+
+    // Terminates, and still collects both atlases before the cycle is cut.
+    try testing.expectEqual(@as(usize, 2), inferred.slice().len);
+    try testing.expect(inferred.contains("rooms"));
+    try testing.expect(inferred.contains("characters"));
+}
+
+test "prefab-walk: unknown prefab name is skipped gracefully" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var idx = ReverseIndex.init(testing.allocator);
+    defer idx.deinit();
+    try idx.addAtlasFromJson("rooms", rooms_atlas_json);
+
+    var reg = PrefabReg.init(arena);
+    try reg.add("known",
+        \\{ "Sprite": { "sprite_name": "room/floor.png" } }
+    );
+
+    // The scene references one KNOWN prefab and one that the resolver can't
+    // find (a dangling ref). The unknown one must be skipped, not crash, and
+    // the known one still resolves.
+    const scene_src =
+        \\[
+        \\  { "prefab": "known" },
+        \\  { "prefab": "does_not_exist", "Position": { "x": 5, "y": 5 } }
+        \\]
+    ;
+
+    var inferred = try engine.inferAssetsFromSourceWithPrefabs(
+        testing.allocator,
+        &idx,
+        scene_src,
+        reg.resolver(),
+    );
+    defer inferred.deinit();
+
+    try testing.expectEqual(@as(usize, 1), inferred.slice().len);
+    try testing.expect(inferred.contains("rooms"));
+}
+
+test "prefab-walk: inline-Sprite scene is unchanged when a resolver is present" {
+    // Preserve the existing behavior: a scene that ALREADY has inline Sprite
+    // refs (no prefab refs) infers exactly the same set whether or not a
+    // resolver is threaded — the resolver only adds coverage, never changes
+    // the inline path.
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var idx = ReverseIndex.init(testing.allocator);
+    defer idx.deinit();
+    try idx.addAtlasFromJson("rooms", rooms_atlas_json);
+
+    var reg = PrefabReg.init(arena);
+    // A prefab exists in the registry but is never referenced by the scene.
+    try reg.add("unused",
+        \\{ "Sprite": { "sprite_name": "worker/idle.png" } }
+    );
+
+    const scene_src =
+        \\{ "root": { "children": [
+        \\  { "components": { "Sprite": { "sprite_name": "room/floor.png" } } }
+        \\] } }
+    ;
+
+    var inferred = try engine.inferAssetsFromSourceWithPrefabs(
+        testing.allocator,
+        &idx,
+        scene_src,
+        reg.resolver(),
+    );
+    defer inferred.deinit();
+
+    try testing.expectEqual(@as(usize, 1), inferred.slice().len);
+    try testing.expect(inferred.contains("rooms"));
 }

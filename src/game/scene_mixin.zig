@@ -2,6 +2,30 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const asset_manifest_mod = @import("../asset_manifest.zig");
+const prefab_cache_mod = @import("../jsonc/prefab_cache.zig");
+const PrefabCache = prefab_cache_mod.PrefabCache;
+
+/// Build a `PrefabResolver` over the game's live `PrefabCache` so sprite-based
+/// asset inference (#563) can follow `{ "prefab": "<name>" }` references
+/// transitively into the referenced prefab's tree (#754). Returns `null` when
+/// no cache is attached yet (a first `setScene` before any prefab is
+/// registered) — inference then behaves as pre-#754 (prefab refs contribute
+/// only their name string).
+///
+/// Uses `getInstalled` (registry-only, no disk fallback, no insertion side
+/// effects) so inference stays a pure read: the assembler emits every project
+/// prefab via `addEmbeddedPrefab` at init — before the first `setScene` — so
+/// the cache is populated by the time inference runs on all assembler builds.
+fn prefabResolver(game: anytype) ?asset_manifest_mod.PrefabResolver {
+    const ptr = game.prefab_cache_ptr orelse return null;
+    const Resolve = struct {
+        fn resolve(ctx: *anyopaque, name: []const u8) ?@import("jsonc").Value {
+            const cache: *PrefabCache = @ptrCast(@alignCast(ctx));
+            return cache.getInstalled(name);
+        }
+    };
+    return .{ .ctx = ptr, .resolveFn = Resolve.resolve };
+}
 
 /// Collect every asset name currently registered in the catalog into a
 /// fresh allocator-owned slice. The returned slice borrows the name
@@ -100,7 +124,11 @@ fn resolveSceneAssets(game: anytype, name: []const u8) []const []const u8 {
     const index = ensureReverseIndex(game) orelse return &.{};
     if (index.count() == 0) return &.{};
 
-    var manifest = asset_manifest_mod.inferAssetsFromSource(game.allocator, index, source) catch |err| {
+    // Follow prefab references transitively (#754): a pure prefab-composition
+    // scene (zero inline `Sprite`) derives the union of its prefabs' atlas
+    // bundles instead of an empty manifest. Resolver is best-effort — `null`
+    // (no cache yet) falls back to inline-only inference.
+    var manifest = asset_manifest_mod.inferAssetsFromSourceWithPrefabs(game.allocator, index, source, prefabResolver(game)) catch |err| {
         game.log.warn(
             "[Scene] '{s}': asset inference skipped ({s}) — falling back to declared/eager behavior",
             .{ name, @errorName(err) },

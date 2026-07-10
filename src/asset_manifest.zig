@@ -46,36 +46,43 @@
 //! atlas's sprite paths → its bundle name; see `ensureReverseIndex`). Scenes
 //! WITH an explicit manifest are untouched — inference never runs for them.
 //!
-//! ── Completeness audit + known limitations (#566) ──
+//! ── Completeness audit + known limitations (#566, #754) ──
 //!
 //! What sprite/image-ref inference over a scene's inline tree CAN see:
 //!   - Inline `Sprite`/`Image` references (any string that exactly matches an
 //!     atlas sprite path / image name), including refs nested inside
 //!     entity-bearing component fields (`Room.movement_nodes`, etc.).
 //!   - `AssetManifest.load` escape-hatch declarations anywhere in the tree.
+//!   - **Prefab references** (`{ "prefab": "condenser" }`) — followed
+//!      *transitively* into the referenced prefab's own tree when a
+//!      `PrefabResolver` is supplied (the scene-load path wires one from the
+//!      engine's `PrefabCache`; see `inferAssetsFromSourceWithPrefabs`). This
+//!      closes the load-bearing gap: Flying-Platform's top-level scenes
+//!      (`colony`, `main`, …) are *pure prefab compositions* (dozens of
+//!      `"prefab":` entries, zero inline `Sprite`), so before #754 scene-level
+//!      inference resolved ~nothing for them; now their prefabs' atlas bundles
+//!      union in. Prefab→prefab chains recurse; a cycle (A→B→A) terminates via
+//!      a visited-set guard; an unknown prefab name is skipped. Inference over
+//!      each prefab source individually still works standalone (verified:
+//!      `prefabs/rooms/wc.jsonc` → `rooms` atlas). Without a resolver (the
+//!      old 3-arg entry points) a prefab ref still contributes only its literal
+//!      name string, preserving pre-#754 behavior.
 //!
 //! What it CANNOT see (a scene relying ONLY on these still needs an explicit
 //! `meta.assets` or an `AssetManifest`):
-//!   1. **Prefab references.** A `{ "prefab": "condenser" }` entry contributes
-//!      only the literal string `"condenser"` to the walk — the referenced
-//!      prefab's own `Sprite` refs live in a different file the walker isn't
-//!      handed. This is the load-bearing gap in practice: Flying-Platform's
-//!      top-level scenes (`colony`, `main`, …) are *pure prefab compositions*
-//!      (dozens of `"prefab":` entries, zero inline `Sprite`), so scene-level
-//!      inference resolves ~nothing for them. Inference over each PREFAB source
-//!      individually works (verified: `prefabs/rooms/wc.jsonc` → `rooms`
-//!      atlas); the missing piece is *transitively* following a scene's prefab
-//!      refs to their trees — the `TODO(#563 follow-up)` on `inferAssets`.
-//!      Until that lands, prefab-composition scenes keep their explicit list.
-//!   2. **Scene includes.** `"include": [...]` fragments are referenced by
-//!      path, not inlined into the walked tree — same shape as (1).
-//!   3. **Script-computed sprite names.** A name assembled at runtime
+//!   1. **Scene includes.** `"include": [...]` fragments are referenced by
+//!      path, not inlined into the walked tree — same shape as a prefab ref,
+//!      but the included fragment's source is not reachable through the
+//!      `PrefabResolver` (which is keyed by prefab effective-name, not include
+//!      path). Left as a documented follow-up to #754; a scene pulling in a
+//!      fragment keeps its explicit list until an include-resolver lands.
+//!   2. **Script-computed sprite names.** A name assembled at runtime
 //!      (`std.fmt`, config lookup) is invisible to a static walk. Lazy-on-miss
 //!      (#568/#563 Phase-B) recovers these via pop-in for VISUALS; anything
 //!      that must be ready *before* first render needs `AssetManifest`.
 //!      Flying-Platform has one script-acquire site today
 //!      (`scripts/menu/menu_ui.zig`) — the pattern the audit flags.
-//!   4. **Audio banks / fonts / raw bytes.** No `Sprite`/`Image` reference
+//!   3. **Audio banks / fonts / raw bytes.** No `Sprite`/`Image` reference
 //!      surfaces these, and audio in particular often must be decoded *before*
 //!      a trigger fires (lazy pop-in is too late). These are the canonical
 //!      `AssetManifest.load` case. (Flying-Platform's current `.resources` are
@@ -88,11 +95,12 @@
 //! For inline-Sprite scenes measured here the inferred set was a subset of the
 //! declared list (no over-load), but this is not yet audited at scale.
 //!
-//! **Migration guidance.** Before dropping a scene's `meta.assets`: if the
-//! scene composes prefabs (case 1) or pulls in fragments (case 2), keep the
-//! explicit list OR add an `AssetManifest` until transitive prefab-walk lands;
-//! if it uses inline `Sprite`/`Image` refs only, inference covers it; for
-//! script-loaded audio/overlays (cases 3–4), add an `AssetManifest.load`.
+//! **Migration guidance.** Before dropping a scene's `meta.assets`: a scene
+//! that composes prefabs is now covered (their trees are walked transitively
+//! at load time), as are inline `Sprite`/`Image`-ref scenes; if it pulls in
+//! `"include"` fragments (case 1) keep the explicit list OR add an
+//! `AssetManifest` until an include-resolver lands; for script-loaded
+//! audio/overlays (cases 2–3), add an `AssetManifest.load`.
 //!
 //! False-positive over-load auditing at scale is the remaining open part of
 //! #566.
@@ -369,24 +377,19 @@ pub const InferredManifest = struct {
 /// bundle. The mobile over-load cost of that is #566's audit, not this
 /// function's concern.
 ///
-/// **Prefab references and scene-includes are NOT followed (yet).** The walk
+/// **This `std.json.Value` overload does NOT follow prefab references.** It
 /// infers only from the *inline* `Sprite`/`Image` refs (and nested
-/// entity-bearing fields) present in the tree it is given. When an entity
-/// references another prefab by name (`"prefab": "condenser"` / `@ref`), or a
-/// scene pulls in another scene/fragment by an include reference, this walker
-/// sees only the reference *string*, not the referenced tree — resolving it
-/// needs the prefab / scene-include registry/cache, which lives on the
-/// comptime/assembler side, not here. A ref whose name happens to match an
-/// index key is treated as a plain string (usually a miss). Assets that live
-/// *only* inside a referenced prefab/scene must, for now, be surfaced by the
-/// referencing scene either through inference of that prefab/scene when *it*
-/// is loaded as a top-level tree, or via an `AssetManifest` on the referencing
-/// entity.
-/// TODO(#563 follow-up): resolve prefab references AND scene-includes against
-/// their trees so a referencing scene pulls in the referenced assets
-/// transitively. This is part of the same assembler-side wiring (build the
-/// reverse index from `project.labelle` + walk the comptime prefab / scene
-/// registry) noted in the PR body.
+/// entity-bearing fields) present in the tree it is given; a `"prefab":
+/// "condenser"` ref contributes only its literal name string. Transitive
+/// prefab-walking (#754) lives on the `jsonc.Value` path that the scene loader
+/// actually runs — see `inferAssetsJsoncWithPrefabs` /
+/// `inferAssetsFromSourceWithPrefabs`, which thread a `PrefabResolver` so a
+/// referenced prefab's own tree is unioned in. This overload stays inline-only
+/// because the runtime `PrefabCache` holds `jsonc.Value` trees, not
+/// `std.json.Value`, so a resolver here would have nothing to resolve against.
+/// Scene `"include"` fragments are still followed by neither path (a smaller
+/// documented follow-up to #754 — the include source is not reachable through
+/// the prefab-name-keyed resolver).
 ///
 /// Caller owns the returned `InferredManifest` (call `.deinit()`).
 pub fn inferAssets(
@@ -489,19 +492,79 @@ fn collectManifestLoad(
 // actually runs at scene-load time consumes that shape. `inferAssetsFromSource`
 // is the entry a loader calls: parse the scene source once, walk it, get the
 // inferred `meta.assets` list. Structurally identical to the `std.json.Value`
-// walk above.
+// walk above, PLUS transitive prefab-reference walking (#754) — see
+// `PrefabResolver`.
+
+/// Resolves a prefab *effective name* to its parsed entity tree so the walker
+/// can follow `{ "prefab": "<name>" }` references transitively into the assets
+/// they contribute (#754). Returns `null` for an unknown name (the reference
+/// is then skipped gracefully — no crash, no partial result).
+///
+/// Deliberately a tiny type-erased callback rather than a hard dependency on
+/// the engine's `PrefabCache`, so `asset_manifest.zig` stays lifecycle-free
+/// and unit-testable: the scene-load path wires the live `PrefabCache` behind
+/// it (via `getInstalled`, a registry-only lookup with no disk/side effects);
+/// a test wires a plain name→tree map. The returned `jsonc.Value` must stay
+/// valid for the duration of the `inferAssets*` call (the cache's trees are
+/// game-lifetime, so this holds at runtime).
+pub const PrefabResolver = struct {
+    ctx: *anyopaque,
+    resolveFn: *const fn (ctx: *anyopaque, name: []const u8) ?jsonc.Value,
+
+    pub fn resolve(self: PrefabResolver, name: []const u8) ?jsonc.Value {
+        return self.resolveFn(self.ctx, name);
+    }
+};
+
+/// Threaded through the recursive `jsonc.Value` walk so every level can reach
+/// the resolver + the cycle-guard set without a growing parameter list.
+const JsoncWalkCtx = struct {
+    out: *InferredManifest,
+    index: *const ReverseIndex,
+    /// `null` = don't follow prefab refs (the pre-#754 3-arg entry points).
+    resolver: ?PrefabResolver,
+    /// Prefab names already walked into — the cycle guard AND redundant-work
+    /// dedup. Keys alias the walked trees (stable for the whole call), so no
+    /// dupe is needed; the set itself is freed by the entry point.
+    visited: *std.StringHashMapUnmanaged(void),
+    gpa: std.mem.Allocator,
+};
 
 /// Walk a `jsonc.Value` entity tree and infer its required resource bundles.
-/// The scene-load counterpart to `inferAssets`. Caller owns the returned
-/// `InferredManifest`.
+/// The scene-load counterpart to `inferAssets`. Does NOT follow prefab
+/// references — use `inferAssetsJsoncWithPrefabs` for that. Caller owns the
+/// returned `InferredManifest`.
 pub fn inferAssetsJsonc(
     gpa: std.mem.Allocator,
     index: *const ReverseIndex,
     scene: jsonc.Value,
 ) std.mem.Allocator.Error!InferredManifest {
+    return inferAssetsJsoncWithPrefabs(gpa, index, scene, null);
+}
+
+/// Like `inferAssetsJsonc`, but follows `{ "prefab": "<name>" }` references
+/// transitively through `resolver` (#754): a referenced prefab's own tree is
+/// walked and its assets unioned in. Prefab→prefab chains recurse; cycles
+/// terminate via a visited-set guard; an unknown prefab name is skipped.
+/// Passing `resolver == null` is exactly `inferAssetsJsonc`.
+pub fn inferAssetsJsoncWithPrefabs(
+    gpa: std.mem.Allocator,
+    index: *const ReverseIndex,
+    scene: jsonc.Value,
+    resolver: ?PrefabResolver,
+) std.mem.Allocator.Error!InferredManifest {
     var out = InferredManifest{ .gpa = gpa };
     errdefer out.deinit();
-    try walkJsonc(&out, index, scene);
+    var visited: std.StringHashMapUnmanaged(void) = .empty;
+    defer visited.deinit(gpa);
+    var ctx = JsoncWalkCtx{
+        .out = &out,
+        .index = index,
+        .resolver = resolver,
+        .visited = &visited,
+        .gpa = gpa,
+    };
+    try walkJsonc(&ctx, scene);
     return out;
 }
 
@@ -511,10 +574,30 @@ pub fn inferAssetsJsonc(
 /// name copies. `error.ParseFailed` wraps a genuine JSONC *syntax* error;
 /// `error.OutOfMemory` propagates distinctly (a transient allocation failure
 /// is not a malformed scene and callers may want to retry, not reject).
+///
+/// Does NOT follow prefab references — see `inferAssetsFromSourceWithPrefabs`.
 pub fn inferAssetsFromSource(
     gpa: std.mem.Allocator,
     index: *const ReverseIndex,
     source: []const u8,
+) (error{ ParseFailed, OutOfMemory })!InferredManifest {
+    return inferAssetsFromSourceWithPrefabs(gpa, index, source, null);
+}
+
+/// Like `inferAssetsFromSource`, but follows prefab references transitively
+/// through `resolver` (#754). This is the entry the scene-load path (#563
+/// wiring in `game/scene_mixin.zig`) calls, passing a resolver backed by the
+/// engine's `PrefabCache`, so a pure prefab-composition scene (zero inline
+/// `Sprite`) still derives the union of its prefabs' atlas bundles.
+///
+/// Only the *scene* source is parsed here; referenced prefab trees come from
+/// `resolver` already-parsed (the cache holds `jsonc.Value` trees), so no
+/// re-parse happens per reference.
+pub fn inferAssetsFromSourceWithPrefabs(
+    gpa: std.mem.Allocator,
+    index: *const ReverseIndex,
+    source: []const u8,
+    resolver: ?PrefabResolver,
 ) (error{ ParseFailed, OutOfMemory })!InferredManifest {
     var arena = std.heap.ArenaAllocator.init(gpa);
     defer arena.deinit();
@@ -525,25 +608,37 @@ pub fn inferAssetsFromSource(
         error.OutOfMemory => return error.OutOfMemory,
         else => return error.ParseFailed,
     };
-    return inferAssetsJsonc(gpa, index, root);
+    return inferAssetsJsoncWithPrefabs(gpa, index, root, resolver);
 }
 
 fn walkJsonc(
-    out: *InferredManifest,
-    index: *const ReverseIndex,
+    ctx: *JsoncWalkCtx,
     node: jsonc.Value,
 ) std.mem.Allocator.Error!void {
     switch (node) {
         .string => |s| {
-            if (index.lookup(s)) |ref| try out.add(ref.resourceName());
+            if (ctx.index.lookup(s)) |ref| try ctx.out.add(ref.resourceName());
         },
         .array => |arr| {
-            for (arr.items) |item| try walkJsonc(out, index, item);
+            for (arr.items) |item| try walkJsonc(ctx, item);
         },
         .object => |obj| {
+            // Transitive prefab-walk (#754): an entity that references another
+            // prefab by name pulls in that prefab's own tree. Done BEFORE the
+            // generic entry walk so the referenced assets union in regardless
+            // of where `"prefab"` sits among the object's keys. The generic
+            // walk below still visits the `"prefab"` string value itself
+            // (usually an index miss — the name isn't a sprite path), and any
+            // sibling `overrides`/`components` keys, so a reference-with-
+            // overrides entity contributes both its own and its prefab's refs.
+            if (ctx.resolver) |resolver| {
+                if (obj.getString("prefab")) |prefab_name| {
+                    try walkPrefabRef(ctx, resolver, prefab_name);
+                }
+            }
             for (obj.entries) |entry| {
                 if (std.mem.eql(u8, entry.key, "AssetManifest")) {
-                    try collectManifestLoadJsonc(out, entry.value);
+                    try collectManifestLoadJsonc(ctx.out, entry.value);
                 }
                 // Skip the explicit `meta.assets` list — see the `walk`
                 // counterpart for the rationale (derive independently to
@@ -551,7 +646,7 @@ fn walkJsonc(
                 if (std.mem.eql(u8, entry.key, "meta") and entry.value == .object) {
                     for (entry.value.object.entries) |meta_entry| {
                         if (std.mem.eql(u8, meta_entry.key, "assets")) continue;
-                        try walkJsonc(out, index, meta_entry.value);
+                        try walkJsonc(ctx, meta_entry.value);
                     }
                     continue;
                 }
@@ -560,12 +655,29 @@ fn walkJsonc(
                 if (std.mem.eql(u8, entry.key, "assets") and entry.value == .array) {
                     continue;
                 }
-                try walkJsonc(out, index, entry.value);
+                try walkJsonc(ctx, entry.value);
             }
         },
         // number / bool / null / enum_literal carry no sprite references.
         else => {},
     }
+}
+
+/// Resolve a `"prefab": "<name>"` reference and walk the referenced tree,
+/// unioning its assets in. The visited set is the cycle guard (A→B→A stops
+/// when A is re-encountered) and also dedups redundant work in a diamond
+/// (A→B, A→C, B→D, C→D walks D once). Marking BEFORE the recurse is what
+/// makes the cycle terminate. An unknown name (resolver miss) is skipped —
+/// inference is best-effort and must never crash on a dangling reference.
+fn walkPrefabRef(
+    ctx: *JsoncWalkCtx,
+    resolver: PrefabResolver,
+    name: []const u8,
+) std.mem.Allocator.Error!void {
+    const gop = try ctx.visited.getOrPut(ctx.gpa, name);
+    if (gop.found_existing) return;
+    const tree = resolver.resolve(name) orelse return;
+    try walkJsonc(ctx, tree);
 }
 
 fn collectManifestLoadJsonc(
