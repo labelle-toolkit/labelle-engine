@@ -84,8 +84,12 @@ fn removeComp(id: u64, name: []const u8) i32 {
     return contract.labelle_component_remove(id, name.ptr, name.len);
 }
 
+/// Call the query with a buffer known to FIT the result — the return is
+/// the required size (snprintf-style), which then equals bytes written.
+/// The truncation test drives `labelle_query` directly instead.
 fn query(names_json: []const u8, buf: []u8) []const u8 {
     const n = contract.labelle_query(names_json.ptr, names_json.len, buf.ptr, buf.len);
+    std.debug.assert(n <= buf.len);
     return buf[0..n];
 }
 
@@ -830,7 +834,7 @@ test "query: view on the first name, filter on the rest" {
     try testing.expectEqual(@as(usize, 0), query("{\"not\":\"array\"}", &buf).len);
 }
 
-test "query: id list truncates at the last whole id and stays valid JSON" {
+test "query: snprintf sizing — truncation detectable, writes stay valid JSON, retry yields all" {
     contract.unbind();
     defer contract.unbind();
 
@@ -843,21 +847,42 @@ test "query: id list truncates at the last whole id and stays valid JSON" {
         _ = setComp(contract.labelle_entity_create(), "Health", "{}");
     }
 
-    // Full result parses.
+    const names = "[\"Health\"]";
+
+    // NULL/cap-0 is the pure sizing probe: required size back, nothing
+    // written.
+    const required = contract.labelle_query(names.ptr, names.len, null, 0);
+    try testing.expect(required > 2);
+
+    // A retry at exactly `required` holds the COMPLETE result: the
+    // return equals the cap and every id parses out.
     var big: [1024]u8 = undefined;
-    const full = query("[\"Health\"]", &big);
-    var parsed = try std.json.parseFromSlice([]u64, testing.allocator, full, .{});
+    try testing.expect(required <= big.len);
+    const n_full = contract.labelle_query(names.ptr, names.len, &big, required);
+    try testing.expectEqual(required, n_full);
+    var parsed = try std.json.parseFromSlice([]u64, testing.allocator, big[0..n_full], .{});
     const total = parsed.value.len;
     parsed.deinit();
     try testing.expectEqual(@as(usize, 50), total);
 
-    // Every cap must yield valid JSON — truncated, never torn.
+    // Every under-sized cap: the return is STILL the full required size
+    // — exceeding the cap, which is exactly how a caller detects the
+    // silent truncation the old written-bytes return hid — while the
+    // written prefix truncates at the last whole id and parses as valid
+    // JSON. Bytes past the cap are never touched.
     var cap: usize = 2;
-    while (cap <= 64) : (cap += 3) {
-        const out = query("[\"Health\"]", big[0..cap]);
-        var p = try std.json.parseFromSlice([]u64, testing.allocator, out, .{});
-        try testing.expect(p.value.len <= total);
+    while (cap < required) : (cap += 3) {
+        @memset(&big, 0xAA);
+        const ret = contract.labelle_query(names.ptr, names.len, &big, cap);
+        try testing.expectEqual(required, ret);
+        try testing.expect(ret > cap);
+        // Ids carry no `]`, so the first `]` ends the written region.
+        const end = std.mem.indexOfScalar(u8, big[0..cap], ']') orelse
+            return error.TestUnexpectedResult;
+        var p = try std.json.parseFromSlice([]u64, testing.allocator, big[0 .. end + 1], .{});
+        try testing.expect(p.value.len < total);
         p.deinit();
+        try testing.expectEqual(@as(u8, 0xAA), big[cap]);
     }
 }
 
@@ -1259,13 +1284,22 @@ test "NULL C-ABI shapes: NULL/len-0 payloads take defaults; NULL out buffers pro
         else => return error.TestUnexpectedResult,
     }
 
-    // NULL out buffers: 0 bytes, nothing written.
+    // NULL out buffers: component_get reports 0 bytes, nothing written…
     try testing.expectEqual(
         @as(usize, 0),
         contract.labelle_component_get(id, health.ptr, health.len, null, 0),
     );
+    // …while query treats NULL/cap-0 as the pure SIZING PROBE (its
+    // documented asymmetry): the required size of the one-carrier
+    // result comes back, and a right-sized call returns the same.
     const names = "[\"Health\"]";
-    try testing.expectEqual(@as(usize, 0), contract.labelle_query(names.ptr, names.len, null, 0));
+    const probe = contract.labelle_query(names.ptr, names.len, null, 0);
+    try testing.expect(probe > 2);
+    var qbuf: [64]u8 = undefined;
+    try testing.expectEqual(
+        probe,
+        contract.labelle_query(names.ptr, names.len, &qbuf, qbuf.len),
+    );
 
     // poll with a NULL out reads NOTHING and consumes NOTHING: the
     // pending entry survives for the next real poll.

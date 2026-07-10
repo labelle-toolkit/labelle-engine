@@ -103,6 +103,19 @@
 //! Pointer-free components (the per-tick hot path, e.g. `Position`)
 //! parse without allocating at all.
 //!
+//! ## Out-buffer sizing (one deliberate asymmetry)
+//!
+//! `labelle_component_get` and `labelle_event_poll` return bytes
+//! WRITTEN (0 = absent / empty / doesn't fit): their payloads are
+//! single structs — bounded in practice — so two-call sizing would buy
+//! nothing (POC decision). `labelle_query` is the contract's only
+//! UNBOUNDED-cardinality op (every matching entity), so it alone sizes
+//! snprintf-style: the return is the bytes the COMPLETE result
+//! requires, while writing still fills only up to the cap, truncated
+//! at the last whole id and always valid JSON. `required > cap` is the
+//! caller's truncation signal — retry with a `required`-sized buffer;
+//! NULL/cap-0 is a legal pure sizing probe.
+//!
 //! ## Component name space (registry + scene built-ins)
 //!
 //! Component names resolve over the game's own `ComponentRegistry` PLUS
@@ -458,19 +471,26 @@ pub export fn labelle_component_remove(id: u64, name_ptr: [*]const u8, name_len:
 /// Query entity ids by component names. `names_json` is a JSON array of
 /// component names (`["CloudDrift","Position"]`); the engine iterates a
 /// view on the FIRST name and filters the rest, writing the matching ids
-/// as a JSON array (`[3,7,12]`) into `out`. Returns bytes written; 0 =
-/// malformed names / not bound / `out_cap` too small for even `[]`.
-/// An unknown component name yields the valid empty result `[]`. Names
-/// resolve over the same space as the component ops — the registry,
-/// `Position`, and the scene built-ins (`Sprite`/`Shape`/`Tilemap`/
-/// `Camera`/`Image`, with the same registry-precedence gates).
+/// as a JSON array (`[3,7,12]`) into `out`. Returns the bytes the
+/// COMPLETE result requires (snprintf-style sizing — the one deliberate
+/// exception to the contract's written-bytes convention, because a query
+/// is its only unbounded-cardinality op); 0 = malformed names / not
+/// bound. An unknown component name yields the valid empty result `[]`
+/// (required = 2). Names resolve over the same space as the component
+/// ops — the registry, `Position`, and the scene built-ins (`Sprite`/
+/// `Shape`/`Tilemap`/`Camera`/`Image`, with the same registry-precedence
+/// gates).
+///
+/// Writing fills `out` up to `out_cap`, ending at the last whole id, so
+/// the written prefix is always valid JSON (same shape as
+/// `editor_scene_digest`); a return larger than `out_cap` is how the
+/// caller DETECTS truncation — retry with a `required`-sized buffer for
+/// the full set. A NULL or zero-capacity `out` is a legal pure sizing
+/// probe: nothing is written, the required size still returns.
 ///
 /// Snapshot semantics: the id list is captured at query time, so
 /// spawn/destroy while the script walks it is safe (a per-id
-/// `labelle_component_get` on a since-destroyed entity returns 0). When
-/// the ids don't all fit, the list is truncated at the last whole id —
-/// the output is always valid JSON (same contract as
-/// `editor_scene_digest`). A NULL `out` is treated as capacity 0.
+/// `labelle_component_get` on a since-destroyed entity returns 0).
 pub export fn labelle_query(
     names_json_ptr: [*]const u8,
     names_json_len: usize,
@@ -478,9 +498,12 @@ pub export fn labelle_query(
     out_cap: usize,
 ) usize {
     const vt = vtable orelse return 0;
-    if (names_json_len == 0 or out_cap == 0) return 0;
-    const buf = out orelse return 0;
-    return vt.query(names_json_ptr[0..names_json_len], buf[0..out_cap]);
+    if (names_json_len == 0) return 0;
+    // NULL (legal only alongside cap 0, but tolerated regardless) is the
+    // documented sizing probe: an empty destination — required-size
+    // computation runs, nothing is written.
+    const buf: []u8 = if (out) |p| p[0..out_cap] else &.{};
+    return vt.query(names_json_ptr[0..names_json_len], buf);
 }
 
 /// Emit a game event by name into the buffered event path — the same
@@ -1052,12 +1075,17 @@ fn Holder(comptime GP: type) type {
             for (rest) |rn| {
                 if (!nameResolvable(rn)) return writeEmptyArray(out);
             }
-            if (out.len < 2) return 0;
+            // snprintf-style: write up to the cap, RETURN the bytes the
+            // complete result requires. A cap under 2 can't hold even
+            // `[]`, so it degrades to a pure sizing pass (writes
+            // nothing) — the NULL/cap-0 probe the export documents.
+            var writing = out.len >= 2;
             // Reserve the closing `]` so id truncation can never eat
             // the byte that keeps the JSON valid (digest pattern).
-            const body = out[0 .. out.len - 1];
+            const body = if (writing) out[0 .. out.len - 1] else out;
             var cur: usize = 0;
-            appendLit(body, &cur, "[") catch return 0;
+            if (writing) appendLit(body, &cur, "[") catch unreachable;
+            var required: usize = 2; // the brackets, matches present or not
             var first = true;
             var v = game.ecs_backend.view(.{T}, .{});
             defer v.deinit();
@@ -1069,18 +1097,36 @@ fn Holder(comptime GP: type) type {
                     break :blk true;
                 };
                 if (!matches) continue;
-                const mark = cur;
-                writeIdJson(body, &cur, entityId(ent), first) catch {
-                    // Doesn't fit — roll back this id (and its comma)
-                    // and stop; the `]` below keeps the truncated list
-                    // valid JSON.
-                    cur = mark;
-                    break;
-                };
+                const id = entityId(ent);
+                required += idJsonLen(id, first);
+                if (writing) {
+                    const mark = cur;
+                    writeIdJson(body, &cur, id, first) catch {
+                        // Doesn't fit — roll back this id (and its
+                        // comma); the `]` below keeps the truncated
+                        // list valid JSON. Keep ITERATING though: the
+                        // remaining ids still count toward `required`,
+                        // which is what lets the caller detect the
+                        // truncation and retry right-sized.
+                        cur = mark;
+                        writing = false;
+                    };
+                }
                 first = false;
             }
-            out[cur] = ']';
-            return cur + 1;
+            if (out.len >= 2) out[cur] = ']';
+            return required;
+        }
+
+        /// Serialized length of one id in the result array — its digits
+        /// plus the separating comma — WITHOUT writing it: this is how
+        /// the past-the-cap ids contribute to the required size
+        /// cheaply.
+        fn idJsonLen(id: u64, first: bool) usize {
+            var digits: usize = 1;
+            var v = id;
+            while (v >= 10) : (v /= 10) digits += 1;
+            return digits + @intFromBool(!first);
         }
 
         fn writeIdJson(buf: []u8, cur: *usize, id: u64, first: bool) error{NoSpace}!void {
@@ -1242,10 +1288,13 @@ fn Holder(comptime GP: type) type {
     };
 }
 
+/// Empty query result: `[]` requires 2 bytes (the return, per the
+/// query's snprintf-style sizing) and is written only when it fits.
 fn writeEmptyArray(out: []u8) usize {
-    if (out.len < 2) return 0;
-    out[0] = '[';
-    out[1] = ']';
+    if (out.len >= 2) {
+        out[0] = '[';
+        out[1] = ']';
+    }
     return 2;
 }
 

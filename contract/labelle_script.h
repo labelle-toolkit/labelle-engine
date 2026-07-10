@@ -18,7 +18,9 @@
  *     non-NULL even when their length is 0. Only JSON payloads
  *     documented "NULL/len 0" may be NULL, and `out` buffers may be
  *     NULL only together with a 0 capacity (treated as capacity 0:
- *     nothing written, 0 returned).
+ *     nothing written; 0 returned — except labelle_query, whose
+ *     NULL/cap-0 call is a legal sizing probe returning the required
+ *     size).
  *   - Structured payloads are UTF-8 JSON (encoding v1).
  *   - Components are addressed BY NAME over the game's own component
  *     registry plus the engine built-ins JSONC scenes author: "Position"
@@ -38,6 +40,10 @@
  *   - Out-parameter functions return bytes written; 0 = absent /
  *     unknown / empty / doesn't fit. Two-call sizing is deliberately
  *     not offered — script payloads are small, size buffers generously.
+ *     The ONE deliberate exception is labelle_query, the contract's
+ *     only unbounded-cardinality op: it returns the bytes the complete
+ *     result REQUIRES (snprintf-style) while writing at most `out_cap`,
+ *     so callers can detect truncation and retry right-sized.
  *   - Main-thread only; calls are valid during the plugin's tick.
  *   - Before the host binds its game (once, at startup, before plugin
  *     setup), every call is a safe no-op following the same
@@ -145,14 +151,22 @@ int32_t labelle_component_remove(uint64_t id, const char *name, size_t name_len)
 /* Query entity ids by component names. `names_json` is a JSON array of
  * component names (["CloudDrift","Position"]); the host iterates a
  * view on the FIRST name and filters on the rest, writing the matching
- * ids as a JSON array ([3,7,12]) into `out`. Returns bytes written;
+ * ids as a JSON array ([3,7,12]) into `out`. Returns the size the
+ * COMPLETE result requires, snprintf-style — the one written-bytes
+ * exception in the contract, because a query's cardinality (every
+ * matching entity) is the one thing a caller cannot bound up front.
  * 0 = malformed input / not bound. Unknown names yield the valid empty
- * result "[]".
+ * result "[]" (required size 2).
+ *
+ * Writing fills `out` up to `out_cap`, truncated at the last whole id,
+ * so the written prefix is always valid JSON. A return larger than
+ * `out_cap` means the result was truncated — retry with a buffer of
+ * the returned size to get the full set. NULL/cap-0 `out` is a legal
+ * pure sizing probe: nothing written, required size returned.
  *
  * Snapshot semantics: the id list is captured at query time — spawning
  * or destroying entities while walking it is safe (component_get on a
- * since-destroyed id returns 0). If not all ids fit, the list is
- * truncated at the last whole id and stays valid JSON. */
+ * since-destroyed id returns 0). */
 size_t labelle_query(const char *names_json, size_t names_json_len,
                      char *out, size_t out_cap);
 
