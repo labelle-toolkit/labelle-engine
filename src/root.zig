@@ -518,6 +518,13 @@ pub const MergeHookPayloads = core.MergeHookPayloads;
 /// runtime with `LABELLE_PROFILE=1`; ranks tick costs to the log.
 pub const profiler = scene_mod.profiler;
 
+/// FPS / frame-time tracker for the debug inspector (#380). Fed one `dt`
+/// per `Game.tick`; read via `game.fps()` / `game.frameStats()`. Ungated —
+/// always available. The per-script/per-plugin overlay rows come from
+/// `game.scriptProfileRows()` / `game.pluginProfileRows()` + the
+/// `profiler.collect*Rows` helpers.
+pub const FrameProfiler = @import("frame_profiler.zig").FrameProfiler;
+
 // ── Scene System ──
 pub const Scene = scene_mod.Scene;
 pub const PrefabRegistry = scene_mod.PrefabRegistry;

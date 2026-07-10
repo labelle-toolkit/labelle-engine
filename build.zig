@@ -211,6 +211,12 @@ pub fn build(b: *std.Build) void {
         // vanishing. Drives a hot reload with a fail-on-demand loader and
         // asserts the error reaches a capturing log sink.
         "test/loading_transition_hardening_test.zig",
+        // #380 — debug inspector: FPS/frame-time tracker (FrameProfiler)
+        // + live per-script/per-plugin profiler-overlay data collection.
+        // The per-script profiler timings themselves shipped in v1.6.0;
+        // these cover the FPS counter and the overlay-facing surface.
+        "test/frame_profiler_test.zig",
+        "test/inspector_overlay_test.zig",
     };
 
     for (test_files) |test_file| {

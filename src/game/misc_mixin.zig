@@ -10,6 +10,8 @@
 
 const std = @import("std");
 const core = @import("labelle-core");
+const frame_profiler_mod = @import("../frame_profiler.zig");
+const profiler = @import("scene").profiler;
 
 /// Returns the misc-accessors mixin for a given Game type.
 pub fn Mixin(comptime Game: type) type {
@@ -191,6 +193,46 @@ pub fn Mixin(comptime Game: type) type {
 
         pub fn entityCount(self: *Game) usize {
             return @intCast(self.ecs_backend.entityCount());
+        }
+
+        // ── Debug inspector: FPS + profiler overlay (#380) ───────────
+
+        /// Smoothed frames-per-second for the inspector header. Always
+        /// available (the frame profiler is ungated).
+        pub fn fps(self: *const Game) f32 {
+            return self.frame_profiler.fps();
+        }
+
+        /// Smoothed frame time in milliseconds.
+        pub fn frameTimeMs(self: *const Game) f32 {
+            return self.frame_profiler.frameTimeMs();
+        }
+
+        /// Min/avg/max frame-time window stats (+ derived FPS) for the
+        /// inspector's frame-time section.
+        pub fn frameStats(self: *const Game) frame_profiler_mod.FrameProfiler.Stats {
+            return self.frame_profiler.stats();
+        }
+
+        /// The live per-script profile rows (`tick` + `drawGui` timings),
+        /// or an empty slice when the generated `main` hasn't wired the
+        /// pointer (unit-test games, or a build without scripts). The Game
+        /// stores this as `*const anyopaque`; the row layout is the shared
+        /// `profiler.ScriptRow`, so the cast is stable.
+        pub fn scriptProfileRows(self: *const Game) []const profiler.ScriptRow {
+            const ptr = self.script_profile_ptr orelse return &.{};
+            if (self.script_profile_count == 0) return &.{};
+            const many: [*]const profiler.ScriptRow = @ptrCast(@alignCast(ptr));
+            return many[0..self.script_profile_count];
+        }
+
+        /// The live per-plugin profile rows (`tick` + `postTick` timings),
+        /// or an empty slice when unwired. See `scriptProfileRows`.
+        pub fn pluginProfileRows(self: *const Game) []const profiler.PluginRow {
+            const ptr = self.plugin_profile_ptr orelse return &.{};
+            if (self.plugin_profile_count == 0) return &.{};
+            const many: [*]const profiler.PluginRow = @ptrCast(@alignCast(ptr));
+            return many[0..self.plugin_profile_count];
         }
     };
 }

@@ -41,12 +41,10 @@ pub fn SystemRegistry(comptime plugin_modules: anytype) type {
         pub const profiling_enabled = true;
 
         /// Plugin system timing (tick + postTick), rolling over the dump
-        /// window. Exposed via `Game.plugin_profile_ptr` for a live overlay.
-        pub const PluginProfileEntry = struct {
-            name: []const u8,
-            tick: profiler.Stat = .{},
-            post_tick: profiler.Stat = .{},
-        };
+        /// window. Exposed via `Game.plugin_profile_ptr` for the live
+        /// inspector overlay (#380). Aliases the shared `profiler.PluginRow`
+        /// so `Game`'s opaque pointer casts back to a stable layout.
+        pub const PluginProfileEntry = profiler.PluginRow;
         /// Frames since the last profiler log dump (advances only while recording).
         var prof_frame_counter: u64 = 0;
 
