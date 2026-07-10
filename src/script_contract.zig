@@ -73,6 +73,15 @@
 //! own `labelle_event_emit` alike. `emitSync` bypasses the buffer and is
 //! therefore NOT tappable, mirroring how it also skips flow `OnEvent`s.
 //!
+//! Subscriptions activate at DRAIN boundaries: `labelle_event_subscribe`
+//! parks the name in a PENDING set, and `drainEvents` filters the
+//! frame's buffer against the ACTIVE set only, absorbing the pending
+//! set at the end — a subscription takes effect for events emitted
+//! after the current tick's drain. Without the boundary, a script
+//! subscribing mid-tick would be handed events buffered EARLIER in
+//! that same tick (`engine__tick` fires before scripts run) — a replay
+//! of a past the script never subscribed to.
+//!
 //! ## Payload memory (`labelle_event_emit`)
 //!
 //! Emitted payloads are parsed from JSON into the typed variant struct;
@@ -94,11 +103,31 @@
 //! Pointer-free components (the per-tick hot path, e.g. `Position`)
 //! parse without allocating at all.
 //!
+//! ## Component name space (registry + scene built-ins)
+//!
+//! Component names resolve over the game's own `ComponentRegistry` PLUS
+//! everything JSONC scenes can author: `Position`, and the five
+//! `jsonc/component_apply.zig` special-cases — `Sprite`, `Shape`,
+//! `Tilemap`, `Camera`, `Image`. The built-ins are not merely
+//! name-aliased: `set` routes through the scene loader's OWN apply fns
+//! (`applySprite` → `addSprite` renderer tracking, `applyCamera`'s
+//! inline-tag mapping, `applyTilemap`'s asset decode), and `remove`
+//! through the engine's typed teardown channels (`removeSprite` /
+//! `removeShape` / `removeTilemap`), so a script write is
+//! indistinguishable from a scene author. The loader's registry-
+//! precedence gates carry over too — `Tilemap`/`Camera`/`Image` defer
+//! to a project-registered component of the same name, `Sprite`/`Shape`
+//! stay built-in — and `contract/labelle_script.h` tabulates the
+//! per-name `get` caveats (renderer-handle fields are omitted; `Camera`
+//! serializes `tag` as a string).
+//!
 //! Single-threaded by design (main thread, during the plugin's tick);
 //! no atomics.
 
 const std = @import("std");
 const core = @import("labelle-core");
+const jsonc = @import("jsonc");
+const component_apply = @import("jsonc/component_apply.zig");
 
 /// Contract version consumers compile against. Bump on any ABI or
 /// semantic change; language plugins check it via
@@ -125,8 +154,15 @@ var vtable: ?*const VTable = null;
 /// The bound game's allocator — owns `subs`/`inbox` entries and the
 /// emit arena. `null` = not bound.
 var bound_allocator: ?std.mem.Allocator = null;
-/// Subscribed event names (deduped, owned copies).
+/// ACTIVE subscribed event names (deduped, owned copies) — the set
+/// `drainEvents` filters against.
 var subs: std.ArrayList([]u8) = .empty;
+/// PENDING subscriptions (deduped against both sets, owned copies):
+/// names subscribed since the last drain. `drainEvents` absorbs them
+/// into `subs` at the END of the drain, so a subscription made
+/// mid-tick can never match events buffered earlier that same tick
+/// (effective-next-drain semantics — see the module doc).
+var pending_subs: std.ArrayList([]u8) = .empty;
 /// FIFO inbox of pending `"<name> <json>"` entries (owned). Popped from
 /// `inbox_head` so a drain-heavy frame is O(1) per poll; the backing
 /// list is compacted whenever it runs empty, or in place once the dead
@@ -206,6 +242,9 @@ pub fn unbind() void {
         for (subs.items) |s| alloc.free(s);
         subs.deinit(alloc);
         subs = .empty;
+        for (pending_subs.items) |s| alloc.free(s);
+        pending_subs.deinit(alloc);
+        pending_subs = .empty;
         // Entries before `inbox_head` were already freed by poll.
         for (inbox.items[inbox_head..]) |e| alloc.free(e);
         inbox.deinit(alloc);
@@ -225,8 +264,13 @@ pub fn unbind() void {
 /// and BEFORE `g.dispatchEvents()` — see the module doc for why that
 /// ordering is load-bearing (dispatch consumes the buffer; the tap only
 /// reads it). Walks the frame's buffered `GameEvents`, serializes each
-/// SUBSCRIBED one to `"<name> <json>"` (name = union tag, payload via
-/// `std.json` reflection), and appends it to the poll FIFO.
+/// event whose name is in the ACTIVE subscription set to
+/// `"<name> <json>"` (name = union tag, payload via `std.json`
+/// reflection), and appends it to the poll FIFO. Subscriptions made
+/// since the last drain are PENDING and do not match this walk; they
+/// activate at the end of it (effective-next-drain — the module doc's
+/// "Event tap semantics" section), so a mid-tick subscribe never
+/// replays events buffered earlier in the same tick.
 ///
 /// Also the once-per-frame maintenance point: flips the double-buffered
 /// `labelle_event_emit` payload arenas and recycles the one holding the
@@ -236,8 +280,8 @@ pub fn unbind() void {
 /// dance).
 ///
 /// A comptime no-op for games without a `GameEvents` union, and an
-/// early-out when nothing is subscribed — an unused tap costs one
-/// branch per frame.
+/// early-out (past pending-subscription activation) when nothing is
+/// subscribed — an unused tap costs one branch per frame.
 pub fn drainEvents(g: anytype) void {
     const GP = @TypeOf(g);
     comptime {
@@ -256,6 +300,10 @@ pub fn drainEvents(g: anytype) void {
     if (comptime !gameHasEventsUnion(G)) return;
     if (vtable == null) return;
     const alloc = bound_allocator orelse return;
+    // Pending subscriptions activate at the END of the drain — the
+    // defer covers the no-active-subs early-out below, so a session's
+    // FIRST subscription still becomes active for the next drain.
+    defer activatePendingSubs(alloc);
     if (subs.items.len == 0) return;
 
     for (g.event_buffer.items) |ev| {
@@ -266,6 +314,19 @@ pub fn drainEvents(g: anytype) void {
             },
         }
     }
+}
+
+/// Absorb the pending subscription set into the active one — the tail
+/// end of `drainEvents`. Entries MOVE (same allocator owns them);
+/// dedupe already happened at subscribe time, against both sets. The
+/// OOM policy matches subscribe's: a name that can't be recorded is
+/// dropped silently rather than taking the frame down.
+fn activatePendingSubs(alloc: std.mem.Allocator) void {
+    if (pending_subs.items.len == 0) return;
+    for (pending_subs.items) |s| {
+        subs.append(alloc, s) catch alloc.free(s);
+    }
+    pending_subs.clearRetainingCapacity();
 }
 
 // ── Exports (plain, non-generic; dispatch through the vtable) ───────
@@ -312,12 +373,15 @@ pub export fn labelle_prefab_spawn(
 }
 
 /// Set component `name` on entity `id` from a JSON object — the general
-/// serde seam over the game's OWN `ComponentRegistry` (plus the built-in
-/// `Position`, which routes through `setPosition` so render dirty-
-/// tracking fires). Unlike `editor_set_component` — deliberately
-/// allowlisted to the vetted `"Camera"` — this dispatch is open: the
-/// contract is the game's own code calling itself, so it gets the full
-/// registry, exactly like the JSONC scene loader.
+/// serde seam over the game's OWN `ComponentRegistry`, plus everything
+/// scenes can author: the built-in `Position` (routed through
+/// `setPosition` so render dirty-tracking fires) and the five scene
+/// built-ins `Sprite`/`Shape`/`Tilemap`/`Camera`/`Image`, dispatched
+/// through the scene loader's own apply fns with its registry-
+/// precedence gates (module doc, "Component name space"). Unlike
+/// `editor_set_component` — deliberately allowlisted to the vetted
+/// `"Camera"` — this dispatch is open: the contract is the game's own
+/// code calling itself, so it gets the full scene-authoring surface.
 ///
 /// REPLACE semantics: the JSON is parsed as the whole component struct
 /// (absent fields take the struct's defaults, unknown fields are
@@ -325,7 +389,9 @@ pub export fn labelle_prefab_spawn(
 /// (`len == 0`), meaning `"{}"` — all defaults. Returns 0 = ok; -1 =
 /// unknown component name / unknown-or-dead entity / parse failure /
 /// not bound. On -1 the entity is untouched (the parse runs before any
-/// mutation).
+/// mutation). The built-ins follow the scene loader's LENIENT field
+/// semantics (a wrong-typed field with a default falls back to that
+/// default; malformed JSON and non-object payloads are still -1).
 pub export fn labelle_component_set(
     id: u64,
     name_ptr: [*]const u8,
@@ -348,6 +414,13 @@ pub export fn labelle_component_set(
 /// fit. A NULL `out` is treated as capacity 0 (nothing written, 0
 /// returned). Two-call sizing is deliberately avoided (POC decision):
 /// script payloads are small — size `out` generously.
+///
+/// Scene built-ins serialize as a scene could have AUTHORED them: any
+/// field that is a renderer handle rather than authored data (the
+/// non-exhaustive-enum idiom, e.g. gfx `Sprite.texture`) is omitted —
+/// it re-derives on the next set — and `Camera.tag` serializes as a
+/// string (the inline `[16:0]u8` would emit as a NUL-padded array).
+/// The output feeds back through `labelle_component_set` losslessly.
 pub export fn labelle_component_get(
     id: u64,
     name_ptr: [*]const u8,
@@ -372,7 +445,10 @@ pub export fn labelle_component_has(id: u64, name_ptr: [*]const u8, name_len: us
 /// Remove component `name` from entity `id`. Idempotent on the
 /// component (removing an absent-but-known component is 0). Returns
 /// 0 = ok; -1 = unknown component name / unknown-or-dead entity / not
-/// bound.
+/// bound. Scene built-ins tear down through the engine's typed
+/// channels — `removeSprite`/`removeShape` (renderer untrack),
+/// `removeTilemap` (frees the decoded side-table runtime) — so a
+/// script remove can't strand renderer state.
 pub export fn labelle_component_remove(id: u64, name_ptr: [*]const u8, name_len: usize) i32 {
     const vt = vtable orelse return -1;
     if (name_len == 0) return -1;
@@ -384,7 +460,10 @@ pub export fn labelle_component_remove(id: u64, name_ptr: [*]const u8, name_len:
 /// view on the FIRST name and filters the rest, writing the matching ids
 /// as a JSON array (`[3,7,12]`) into `out`. Returns bytes written; 0 =
 /// malformed names / not bound / `out_cap` too small for even `[]`.
-/// An unknown component name yields the valid empty result `[]`.
+/// An unknown component name yields the valid empty result `[]`. Names
+/// resolve over the same space as the component ops — the registry,
+/// `Position`, and the scene built-ins (`Sprite`/`Shape`/`Tilemap`/
+/// `Camera`/`Image`, with the same registry-precedence gates).
 ///
 /// Snapshot semantics: the id list is captured at query time, so
 /// spawn/destroy while the script walks it is safe (a per-id
@@ -425,20 +504,27 @@ pub export fn labelle_event_emit(
     );
 }
 
-/// Declare interest in event `name` (a `GameEvents` union tag). From the
-/// next `drainEvents` on, matching events are queued for
-/// `labelle_event_poll`. Duplicate subscriptions are deduped. Pre-bind:
-/// a safe no-op (the generated main binds before plugin setup, so no
-/// real subscriber exists earlier).
+/// Declare interest in event `name` (a `GameEvents` union tag). The
+/// subscription lands in the PENDING set and takes effect for events
+/// emitted after the current tick's drain: `drainEvents` filters
+/// against the ACTIVE set only and absorbs pending names at its end.
+/// So events already buffered this tick — or emitted later this same
+/// tick — are NOT delivered; the next tick's are (no same-tick replay:
+/// `engine__tick` fires before scripts run, and a mid-tick subscriber
+/// must not receive a past it never subscribed to). Duplicate
+/// subscriptions are deduped across both sets. Pre-bind: a safe no-op
+/// (the generated main binds before plugin setup, so no real
+/// subscriber exists earlier).
 pub export fn labelle_event_subscribe(name_ptr: [*]const u8, name_len: usize) void {
     const alloc = bound_allocator orelse return;
     if (name_len == 0) return;
     const name = name_ptr[0..name_len];
-    for (subs.items) |s| {
-        if (std.mem.eql(u8, s, name)) return;
+    if (isSubscribed(name)) return; // already active
+    for (pending_subs.items) |s| {
+        if (std.mem.eql(u8, s, name)) return; // already pending
     }
     const copy = alloc.dupe(u8, name) catch return;
-    subs.append(alloc, copy) catch {
+    pending_subs.append(alloc, copy) catch {
         alloc.free(copy);
     };
 }
@@ -567,6 +653,39 @@ fn isSubscribed(name: []const u8) bool {
     return false;
 }
 
+/// Comptime: does `T` serialize through `std.json` as AUTHORED data —
+/// i.e. would `labelle_component_set`'s deserialize path accept the
+/// emitted shape back? Non-exhaustive enums are the renderer-handle
+/// idiom (gfx `TextureId`): unnamed values emit as raw integers and are
+/// not scene-authorable, so component GET omits such fields — they
+/// re-derive from the authored fields on the next set, exactly as the
+/// scene loader relies on. Everything else the engine built-ins carry
+/// (scalars, strings, exhaustive enums, optionals, tagged unions,
+/// nested structs, slices/arrays thereof) round-trips.
+fn jsonRoundTrips(comptime T: type) bool {
+    return switch (@typeInfo(T)) {
+        .bool, .int, .float, .void => true,
+        .@"enum" => |e| e.is_exhaustive,
+        .optional => |o| jsonRoundTrips(o.child),
+        .array => |a| jsonRoundTrips(a.child),
+        .pointer => |p| p.size == .slice and jsonRoundTrips(p.child),
+        .@"struct" => |s| blk: {
+            for (s.fields) |f| {
+                if (!jsonRoundTrips(f.type)) break :blk false;
+            }
+            break :blk true;
+        },
+        .@"union" => |u| blk: {
+            if (u.tag_type == null) break :blk false;
+            for (u.fields) |f| {
+                if (f.type != void and !jsonRoundTrips(f.type)) break :blk false;
+            }
+            break :blk true;
+        },
+        else => false,
+    };
+}
+
 /// Serialize + queue one tapped event. Drop-newest past the cap (see
 /// `max_pending_events`); allocation failures drop silently — an event
 /// tap must never take the frame down.
@@ -597,12 +716,47 @@ fn Holder(comptime GP: type) type {
         /// The game's own registry — the same `names()`/`getType()`
         /// surface the JSONC scene bridge dispatches over, so the
         /// contract resolves exactly the set of components scenes can
-        /// author (plus the built-in `Position`, which the bridge also
+        /// author (plus the built-ins below, which the bridge also
         /// special-cases). Registries without `getType` (the minimal
         /// `GameWith` shape) are fine: `names()` is empty there, so the
         /// `inline for` bodies that reference `getType` never
         /// instantiate.
         const Components = G.ComponentRegistry;
+        /// The scene loader's component-apply machinery, instantiated
+        /// for this Game — built-in `set`s reuse its per-name apply fns
+        /// VERBATIM (`applySprite`/…), so a script's `Sprite` write is
+        /// the scene loader's own code path, not a reimplementation.
+        const Apply = component_apply.ComponentApply(G, Components);
+
+        /// `true` when the game's registry claims `comp_name` for
+        /// itself. The `@hasDecl` belt mirrors `game.zig`'s
+        /// `camera_is_builtin`, keeping registry shapes that predate a
+        /// `has` decl compiling (they can't shadow built-ins either
+        /// way).
+        fn registryHas(comptime comp_name: []const u8) bool {
+            return @hasDecl(Components, "has") and Components.has(comp_name);
+        }
+
+        const BuiltinComp = struct { name: []const u8, T: type };
+        /// The five scene BUILT-INS (`jsonc/component_apply.zig`'s
+        /// dedicated branches), with the scene loader's exact
+        /// precedence: `Sprite`/`Shape` are unconditional (they shadow
+        /// a same-named registry entry in the scene path too);
+        /// `Tilemap`/`Camera`/`Image` are compiled out when the project
+        /// registered its own component of that name — the mirror of
+        /// the loader's `!Components.has(…)` gates (and game.zig's
+        /// `camera_is_builtin`), so the registry loop below owns the
+        /// name exactly when the scene's generic dispatch would.
+        const builtin_comps: []const BuiltinComp = blk: {
+            var list: []const BuiltinComp = &.{
+                .{ .name = "Sprite", .T = G.SpriteComp },
+                .{ .name = "Shape", .T = G.ShapeComp },
+            };
+            if (!registryHas("Tilemap")) list = list ++ &[_]BuiltinComp{.{ .name = "Tilemap", .T = G.TilemapComp }};
+            if (!registryHas("Camera")) list = list ++ &[_]BuiltinComp{.{ .name = "Camera", .T = G.CameraComp }};
+            if (!registryHas("Image")) list = list ++ &[_]BuiltinComp{.{ .name = "Image", .T = G.ImageComp }};
+            break :blk list;
+        };
 
         var game: GP = undefined;
 
@@ -682,6 +836,16 @@ fn Holder(comptime GP: type) type {
                 game.setPosition(ent, pos);
                 return 0;
             }
+            // Scene built-ins — dispatched BEFORE the registry loop so
+            // the contract matches the scene loader's precedence
+            // (`builtin_comps`), and through its very apply fns so a
+            // script's `Sprite`/`Camera`/… write is indistinguishable
+            // from a scene author's.
+            inline for (builtin_comps) |spec| {
+                if (std.mem.eql(u8, name, spec.name)) {
+                    return setBuiltinComponent(spec.name, ent, json);
+                }
+            }
             const comp_names = comptime Components.names();
             inline for (comp_names) |comp_name| {
                 if (std.mem.eql(u8, name, comp_name)) {
@@ -706,11 +870,60 @@ fn Holder(comptime GP: type) type {
             return -1;
         }
 
+        /// Set one scene built-in by routing the payload through the
+        /// scene loader's own apply fn. The apply fns consume a parsed
+        /// JSONC `Value`; the tree is parsed with a call-scoped arena —
+        /// `deserialize` copies everything it keeps (strings intern,
+        /// other slices land in `componentAlloc()`), so nothing escapes
+        /// it. -1 on parse/deserialize failure leaves the entity
+        /// untouched: the apply is all-or-nothing.
+        fn setBuiltinComponent(comptime comp_name: []const u8, ent: Entity, json: []const u8) i32 {
+            var arena = std.heap.ArenaAllocator.init(game.allocator);
+            defer arena.deinit();
+            var parser = jsonc.JsoncParser.init(arena.allocator(), json);
+            const value = parser.parse() catch return -1;
+            const applied = if (comptime std.mem.eql(u8, comp_name, "Sprite"))
+                Apply.applySprite(game, ent, value)
+            else if (comptime std.mem.eql(u8, comp_name, "Shape"))
+                Apply.applyShape(game, ent, value)
+            else if (comptime std.mem.eql(u8, comp_name, "Tilemap"))
+                Apply.applyTilemap(game, ent, value)
+            else if (comptime std.mem.eql(u8, comp_name, "Camera"))
+                Apply.applyCamera(game, ent, value)
+            else
+                Apply.applyImage(game, ent, value);
+            return if (applied) 0 else -1;
+        }
+
         fn componentGetImpl(id: u64, name: []const u8, out: []u8) usize {
             const ent = castEntity(id) orelse return 0;
+            // Liveness guard, same as set/remove: `getComponent` is a
+            // raw sparse lookup on real backends, so a stale script id
+            // held past `labelle_entity_destroy` could otherwise read a
+            // dead — or recycled — entity's row. Dead → 0 (absent).
+            if (!game.ecs_backend.entityExists(ent)) return 0;
             if (std.mem.eql(u8, name, "Position")) {
                 const pos = game.getComponent(ent, core.Position) orelse return 0;
                 return stringifyInto(pos.*, out);
+            }
+            inline for (builtin_comps) |spec| {
+                if (std.mem.eql(u8, name, spec.name)) {
+                    const comp = game.getComponent(ent, spec.T) orelse return 0;
+                    if (comptime std.mem.eql(u8, spec.name, "Camera")) {
+                        // `tag` is an inline `[16:0]u8`; serialize the
+                        // STRING view so the output round-trips through
+                        // the apply branch's `setTagSlice` (the generic
+                        // path would emit a NUL-padded byte array).
+                        return stringifyInto(.{
+                            .zoom = comp.zoom,
+                            .viewport = comp.viewport,
+                            .tag = comp.tagSlice(),
+                        }, out);
+                    }
+                    // Omit renderer-handle fields (gfx `Sprite.texture`)
+                    // — GET mirrors what a scene could have authored.
+                    return stringifyFilteredInto(comp.*, out);
+                }
             }
             const comp_names = comptime Components.names();
             inline for (comp_names) |comp_name| {
@@ -725,8 +938,15 @@ fn Holder(comptime GP: type) type {
 
         fn componentHasImpl(id: u64, name: []const u8) i32 {
             const ent = castEntity(id) orelse return 0;
+            // Liveness guard — see componentGetImpl. Dead → 0 (absent).
+            if (!game.ecs_backend.entityExists(ent)) return 0;
             if (std.mem.eql(u8, name, "Position")) {
                 return @intFromBool(game.hasComponent(ent, core.Position));
+            }
+            inline for (builtin_comps) |spec| {
+                if (std.mem.eql(u8, name, spec.name)) {
+                    return @intFromBool(game.hasComponent(ent, spec.T));
+                }
             }
             const comp_names = comptime Components.names();
             inline for (comp_names) |comp_name| {
@@ -749,6 +969,30 @@ fn Holder(comptime GP: type) type {
                 if (!game.hasComponent(ent, core.Position)) return 0;
                 game.removeComponent(ent, core.Position);
                 return 0;
+            }
+            // Scene built-ins tear down through the engine's TYPED
+            // channels, not bare `removeComponent`: `removeSprite` /
+            // `removeShape` untrack the renderer, `removeTilemap` frees
+            // the decoded side-table runtime. Same absent-but-known
+            // idempotence guard as the registry path (and those typed
+            // removes would untrack/backend-remove unconditionally).
+            inline for (builtin_comps) |spec| {
+                if (std.mem.eql(u8, name, spec.name)) {
+                    if (!game.hasComponent(ent, spec.T)) return 0;
+                    if (comptime std.mem.eql(u8, spec.name, "Sprite")) {
+                        game.removeSprite(ent);
+                    } else if (comptime std.mem.eql(u8, spec.name, "Shape")) {
+                        game.removeShape(ent);
+                    } else if (comptime std.mem.eql(u8, spec.name, "Tilemap")) {
+                        game.removeTilemap(ent);
+                    } else {
+                        // Camera / Image are plain data components; the
+                        // generic remove (with its onRemove gate) is the
+                        // whole teardown.
+                        game.removeComponent(ent, spec.T);
+                    }
+                    return 0;
+                }
             }
             const comp_names = comptime Components.names();
             inline for (comp_names) |comp_name| {
@@ -777,9 +1021,17 @@ fn Holder(comptime GP: type) type {
             const names = parsed.value;
             if (names.len == 0) return writeEmptyArray(out);
             // Comptime-dispatch the FIRST name to a typed view; the
-            // rest filter per-entity by name below.
+            // rest filter per-entity by name below. Scene built-ins
+            // resolve here too (before the registry, same precedence
+            // as the component ops) so `has`/`query` agree on the
+            // name space.
             if (std.mem.eql(u8, names[0], "Position")) {
                 return runQuery(core.Position, names[1..], out);
+            }
+            inline for (builtin_comps) |spec| {
+                if (std.mem.eql(u8, names[0], spec.name)) {
+                    return runQuery(spec.T, names[1..], out);
+                }
             }
             const comp_names = comptime Components.names();
             inline for (comp_names) |comp_name| {
@@ -839,6 +1091,9 @@ fn Holder(comptime GP: type) type {
         /// Runtime component name → "is it dispatchable at all".
         fn nameResolvable(name: []const u8) bool {
             if (std.mem.eql(u8, name, "Position")) return true;
+            inline for (builtin_comps) |spec| {
+                if (std.mem.eql(u8, name, spec.name)) return true;
+            }
             const comp_names = comptime Components.names();
             inline for (comp_names) |comp_name| {
                 if (std.mem.eql(u8, name, comp_name)) return true;
@@ -850,6 +1105,11 @@ fn Holder(comptime GP: type) type {
         fn hasByName(ent: Entity, name: []const u8) bool {
             if (std.mem.eql(u8, name, "Position")) {
                 return game.hasComponent(ent, core.Position);
+            }
+            inline for (builtin_comps) |spec| {
+                if (std.mem.eql(u8, name, spec.name)) {
+                    return game.hasComponent(ent, spec.T);
+                }
             }
             const comp_names = comptime Components.names();
             inline for (comp_names) |comp_name| {
@@ -943,6 +1203,27 @@ fn Holder(comptime GP: type) type {
             var w = std.Io.Writer.fixed(out);
             // WriteFailed = doesn't fit → 0, per the export's contract.
             std.json.Stringify.value(value, .{}, &w) catch return 0;
+            return w.buffered().len;
+        }
+
+        /// `stringifyInto` for the scene built-ins: streams the struct
+        /// as a JSON object, omitting fields `std.json` can't round-trip
+        /// as AUTHORED data (see `jsonRoundTrips` — e.g. gfx
+        /// `Sprite.texture`, a renderer handle the next set re-derives
+        /// from `sprite_name`). The registry path keeps whole-struct
+        /// `stringifyInto`; only built-ins carry renderer handles.
+        fn stringifyFilteredInto(comp: anytype, out: []u8) usize {
+            var w = std.Io.Writer.fixed(out);
+            var jw: std.json.Stringify = .{ .writer = &w };
+            // WriteFailed = doesn't fit → 0, per the export's contract.
+            jw.beginObject() catch return 0;
+            inline for (@typeInfo(@TypeOf(comp)).@"struct".fields) |f| {
+                if (comptime jsonRoundTrips(f.type)) {
+                    jw.objectField(f.name) catch return 0;
+                    jw.write(@field(comp, f.name)) catch return 0;
+                }
+            }
+            jw.endObject() catch return 0;
             return w.buffered().len;
         }
 

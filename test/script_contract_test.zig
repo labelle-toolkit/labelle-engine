@@ -265,6 +265,280 @@ test "component set/get: the built-in Position routes through setPosition" {
     try testing.expectEqual(@as(i32, 1), hasComp(id, "Position"));
 }
 
+// ── Components: scene built-ins (JSONC write-parity, #749) ──────────
+//
+// `Sprite`/`Shape`/`Tilemap`/`Camera`/`Image` dispatch through the
+// scene loader's OWN apply fns (`jsonc/component_apply.zig`) with its
+// registry-precedence gates — whatever a scene can author, a script
+// can set/get/has/remove. The support matrix lives in
+// `contract/labelle_script.h`.
+
+test "built-ins: set routes through the scene apply machinery" {
+    contract.unbind();
+    defer contract.unbind();
+
+    var game = ContractGame.init(testing.allocator);
+    defer game.deinit();
+    contract.bind(&game);
+
+    const id = contract.labelle_entity_create();
+    const ent: u32 = @intCast(id);
+
+    // Sprite — lands as the renderer's component AND registers with
+    // the renderer (addSprite entity-tracking), exactly like a scene.
+    try testing.expectEqual(@as(i32, 0), setComp(id, "Sprite", "{\"sprite_name\":\"hero\",\"z_index\":3}"));
+    const sp = game.getComponent(ent, ContractGame.SpriteComp).?;
+    try testing.expectEqualStrings("hero", sp.sprite_name);
+    try testing.expectEqual(@as(i16, 3), sp.z_index);
+    try testing.expectEqual(@as(usize, 1), game.renderer.tracked_count);
+
+    // Shape — addShape, tracked too.
+    try testing.expectEqual(@as(i32, 0), setComp(id, "Shape", "{\"shape\":{\"circle\":{\"radius\":7}},\"visible\":false}"));
+    const sh = game.getComponent(ent, ContractGame.ShapeComp).?;
+    try testing.expectEqual(@as(f32, 7), sh.shape.circle.radius);
+    try testing.expect(!sh.visible);
+    try testing.expectEqual(@as(usize, 2), game.renderer.tracked_count);
+
+    // Tilemap — attaches the component (StubRender has no tilemap
+    // seam, so no decode side-table — same as a scene on a stub).
+    try testing.expectEqual(@as(i32, 0), setComp(id, "Tilemap", "{\"asset_name\":\"dungeon.tmx\"}"));
+    try testing.expectEqualStrings("dungeon.tmx", game.getComponent(ent, ContractGame.TilemapComp).?.asset_name);
+
+    // Camera — built-in here (no registry "Camera"): the authored tag
+    // string routes through `setTagSlice` onto the inline `[16:0]u8`,
+    // the scene branch's special case.
+    try testing.expectEqual(@as(i32, 0), setComp(id, "Camera", "{\"zoom\":2,\"tag\":\"minimap\"}"));
+    const cam = game.getComponent(ent, ContractGame.CameraComp).?;
+    try testing.expectEqual(@as(f32, 2), cam.zoom);
+    try testing.expectEqualStrings("minimap", cam.tagSlice());
+
+    // Image — plain engine POD; the enum pivot maps from its name.
+    try testing.expectEqual(@as(i32, 0), setComp(id, "Image", "{\"name\":\"logo.png\",\"pivot\":\"bottom_center\",\"z_index\":2}"));
+    const img = game.getComponent(ent, ContractGame.ImageComp).?;
+    try testing.expectEqualStrings("logo.png", img.name);
+    try testing.expect(img.pivot == .bottom_center);
+    try testing.expectEqual(@as(i16, 2), img.z_index);
+
+    // Failure modes, -1 with the entity untouched: malformed JSON and
+    // non-object payloads (the apply is all-or-nothing).
+    try testing.expectEqual(@as(i32, -1), setComp(id, "Sprite", "{\"sprite_name\":"));
+    try testing.expectEqual(@as(i32, -1), setComp(id, "Sprite", "5"));
+    try testing.expectEqualStrings("hero", game.getComponent(ent, ContractGame.SpriteComp).?.sprite_name);
+
+    // Dead entity → -1 (the same liveness gate as the registry path).
+    try testing.expectEqual(@as(i32, -1), setComp(999_999, "Sprite", "{}"));
+}
+
+test "built-ins: get serializes what a scene could author, and feeds back through set" {
+    contract.unbind();
+    defer contract.unbind();
+
+    var game = ContractGame.init(testing.allocator);
+    defer game.deinit();
+    contract.bind(&game);
+
+    const id = contract.labelle_entity_create();
+    const id2 = contract.labelle_entity_create();
+    const ent2: u32 = @intCast(id2);
+    var buf: [512]u8 = undefined;
+
+    // Absent built-in: 0 bytes, per the get contract.
+    try testing.expectEqual(@as(usize, 0), getComp(id, "Sprite", &buf).len);
+
+    // Sprite round-trip: get's output applies cleanly to a fresh
+    // entity and reproduces the component (StubRender's Sprite has no
+    // handle fields; on gfx `texture` would be omitted and re-derived).
+    try testing.expectEqual(@as(i32, 0), setComp(id, "Sprite", "{\"sprite_name\":\"hero\",\"z_index\":3}"));
+    const sprite_json = getComp(id, "Sprite", &buf);
+    try testing.expect(sprite_json.len > 0);
+    try testing.expectEqual(@as(i32, 0), setComp(id2, "Sprite", sprite_json));
+    const sp2 = game.getComponent(ent2, ContractGame.SpriteComp).?;
+    try testing.expectEqualStrings("hero", sp2.sprite_name);
+    try testing.expectEqual(@as(i16, 3), sp2.z_index);
+
+    // Shape round-trip (tagged union payload).
+    try testing.expectEqual(@as(i32, 0), setComp(id, "Shape", "{\"shape\":{\"rectangle\":{\"width\":4,\"height\":5}}}"));
+    const shape_json = getComp(id, "Shape", &buf);
+    try testing.expectEqual(@as(i32, 0), setComp(id2, "Shape", shape_json));
+    try testing.expectEqual(@as(f32, 4), game.getComponent(ent2, ContractGame.ShapeComp).?.shape.rectangle.width);
+
+    // Camera: `tag` serializes as a STRING (the component stores an
+    // inline `[16:0]u8`), and the whole shape feeds back through the
+    // apply branch's `setTagSlice`.
+    try testing.expectEqual(@as(i32, 0), setComp(
+        id,
+        "Camera",
+        "{\"zoom\":2,\"tag\":\"minimap\",\"viewport\":{\"x\":0,\"y\":0,\"width\":320,\"height\":180}}",
+    ));
+    var cam_buf: [512]u8 = undefined;
+    const cam_json = getComp(id, "Camera", &cam_buf);
+    const cam_parsed = try std.json.parseFromSlice(struct {
+        zoom: f32,
+        viewport: ?struct { x: i32, y: i32, width: i32, height: i32 },
+        tag: []const u8,
+    }, testing.allocator, cam_json, .{});
+    defer cam_parsed.deinit();
+    try testing.expectEqual(@as(f32, 2), cam_parsed.value.zoom);
+    try testing.expectEqualStrings("minimap", cam_parsed.value.tag);
+    try testing.expectEqual(@as(i32, 180), cam_parsed.value.viewport.?.height);
+    try testing.expectEqual(@as(i32, 0), setComp(id2, "Camera", cam_json));
+    const cam2 = game.getComponent(ent2, ContractGame.CameraComp).?;
+    try testing.expectEqualStrings("minimap", cam2.tagSlice());
+    try testing.expectEqual(@as(i32, 320), cam2.viewport.?.width);
+
+    // Tilemap round-trips including layer bindings (slice of structs).
+    try testing.expectEqual(@as(i32, 0), setComp(
+        id,
+        "Tilemap",
+        "{\"asset_name\":\"a.tmx\",\"layer_bindings\":[{\"tmx_layer\":\"bg\",\"engine_layer\":\"world\"}]}",
+    ));
+    const tm_json = getComp(id, "Tilemap", &buf);
+    try testing.expectEqual(@as(i32, 0), setComp(id2, "Tilemap", tm_json));
+    const tm2 = game.getComponent(ent2, ContractGame.TilemapComp).?;
+    try testing.expectEqualStrings("a.tmx", tm2.asset_name);
+    try testing.expectEqualStrings("bg", tm2.layer_bindings.?[0].tmx_layer);
+    try testing.expectEqualStrings("world", tm2.layer_bindings.?[0].engine_layer);
+
+    // Image round-trip (string / enum / int / bool fields).
+    try testing.expectEqual(@as(i32, 0), setComp(id, "Image", "{\"name\":\"logo.png\",\"pivot\":\"bottom_center\"}"));
+    const img_json = getComp(id, "Image", &buf);
+    try testing.expectEqual(@as(i32, 0), setComp(id2, "Image", img_json));
+    const img2 = game.getComponent(ent2, ContractGame.ImageComp).?;
+    try testing.expectEqualStrings("logo.png", img2.name);
+    try testing.expect(img2.pivot == .bottom_center);
+}
+
+test "built-ins: has/remove — typed teardown channels with the idempotence guard" {
+    contract.unbind();
+    defer contract.unbind();
+
+    var game = ContractGame.init(testing.allocator);
+    defer game.deinit();
+    contract.bind(&game);
+
+    const id = contract.labelle_entity_create();
+
+    // Sprite: remove goes through removeSprite — the renderer is
+    // untracked, not just the ECS row dropped.
+    try testing.expectEqual(@as(i32, 0), hasComp(id, "Sprite"));
+    try testing.expectEqual(@as(i32, 0), setComp(id, "Sprite", "{\"sprite_name\":\"hero\"}"));
+    try testing.expectEqual(@as(i32, 1), hasComp(id, "Sprite"));
+    try testing.expectEqual(@as(usize, 1), game.renderer.tracked_count);
+    try testing.expectEqual(@as(i32, 0), removeComp(id, "Sprite"));
+    try testing.expectEqual(@as(i32, 0), hasComp(id, "Sprite"));
+    try testing.expectEqual(@as(usize, 0), game.renderer.tracked_count);
+    // Absent-but-known: idempotent 0, and NO second renderer untrack.
+    try testing.expectEqual(@as(i32, 0), removeComp(id, "Sprite"));
+    try testing.expectEqual(@as(usize, 0), game.renderer.tracked_count);
+
+    // Shape mirrors Sprite (removeShape).
+    try testing.expectEqual(@as(i32, 0), setComp(id, "Shape", "{}"));
+    try testing.expectEqual(@as(i32, 1), hasComp(id, "Shape"));
+    try testing.expectEqual(@as(i32, 0), removeComp(id, "Shape"));
+    try testing.expectEqual(@as(i32, 0), hasComp(id, "Shape"));
+
+    // Tilemap: removeTilemap — the full teardown channel (frees the
+    // decoded side-table runtime where a renderer has the seam).
+    try testing.expectEqual(@as(i32, 0), setComp(id, "Tilemap", "{\"asset_name\":\"a.tmx\"}"));
+    try testing.expectEqual(@as(i32, 1), hasComp(id, "Tilemap"));
+    try testing.expectEqual(@as(i32, 0), removeComp(id, "Tilemap"));
+    try testing.expectEqual(@as(i32, 0), hasComp(id, "Tilemap"));
+    try testing.expectEqual(@as(i32, 0), removeComp(id, "Tilemap")); // idempotent
+
+    // Camera / Image: plain data components, generic remove.
+    try testing.expectEqual(@as(i32, 0), setComp(id, "Camera", "{}"));
+    try testing.expectEqual(@as(i32, 1), hasComp(id, "Camera"));
+    try testing.expectEqual(@as(i32, 0), removeComp(id, "Camera"));
+    try testing.expectEqual(@as(i32, 0), hasComp(id, "Camera"));
+    try testing.expectEqual(@as(i32, 0), setComp(id, "Image", "{}"));
+    try testing.expectEqual(@as(i32, 1), hasComp(id, "Image"));
+    try testing.expectEqual(@as(i32, 0), removeComp(id, "Image"));
+    try testing.expectEqual(@as(i32, 0), hasComp(id, "Image"));
+
+    // Dead entity: -1 (remove), 0 (has) — the liveness gates.
+    try testing.expectEqual(@as(i32, -1), removeComp(999_999, "Sprite"));
+    try testing.expectEqual(@as(i32, 0), hasComp(999_999, "Sprite"));
+}
+
+// A project that registers its OWN `Camera`: the built-in channel is
+// compiled out (`camera_is_builtin == false`) and the name routes
+// through the registry — the scene loader's exact precedence.
+const RegisteredCamera = struct { fov: f32 = 90 };
+const RegisteredCameraComponents = engine.ComponentRegistry(.{
+    .Health = Health,
+    .Camera = RegisteredCamera,
+});
+const RegisteredCameraGame = engine.GameConfig(
+    core.StubRender(MockEcs.Entity),
+    MockEcs,
+    engine.StubInput,
+    engine.StubAudio,
+    engine.StubVideo,
+    engine.StubGui,
+    void,
+    core.StubLogSink,
+    RegisteredCameraComponents,
+    &.{},
+    void,
+);
+
+test "built-ins: a project-registered Camera wins over the built-in (scene precedence)" {
+    contract.unbind();
+    defer contract.unbind();
+
+    // The same comptime gate every built-in Camera channel keys on.
+    try testing.expect(ContractGame.camera_is_builtin);
+    try testing.expect(!RegisteredCameraGame.camera_is_builtin);
+
+    var game = RegisteredCameraGame.init(testing.allocator);
+    defer game.deinit();
+    contract.bind(&game);
+
+    const id = contract.labelle_entity_create();
+    const ent: u32 = @intCast(id);
+
+    // "Camera" resolves through the REGISTRY (setComponent): the
+    // project's type lands, the engine built-in never materializes.
+    try testing.expectEqual(@as(i32, 0), setComp(id, "Camera", "{\"fov\":45}"));
+    try testing.expectEqual(@as(f32, 45), game.getComponent(ent, RegisteredCamera).?.fov);
+    try testing.expect(game.getComponent(ent, RegisteredCameraGame.CameraComp) == null);
+
+    // get / has / remove route to the registry type too.
+    try testing.expectEqual(@as(i32, 1), hasComp(id, "Camera"));
+    var buf: [128]u8 = undefined;
+    const json = getComp(id, "Camera", &buf);
+    const parsed = try std.json.parseFromSlice(RegisteredCamera, testing.allocator, json, .{});
+    defer parsed.deinit();
+    try testing.expectEqual(@as(f32, 45), parsed.value.fov);
+    try testing.expectEqual(@as(i32, 0), removeComp(id, "Camera"));
+    try testing.expectEqual(@as(i32, 0), hasComp(id, "Camera"));
+
+    // Sprite/Shape stay built-in even here — they are unconditional in
+    // the scene path too.
+    try testing.expectEqual(@as(i32, 0), setComp(id, "Sprite", "{\"sprite_name\":\"x\"}"));
+    try testing.expectEqual(@as(i32, 1), hasComp(id, "Sprite"));
+}
+
+test "built-ins: query resolves them on both sides of the dispatch" {
+    contract.unbind();
+    defer contract.unbind();
+
+    var game = ContractGame.init(testing.allocator);
+    defer game.deinit();
+    contract.bind(&game);
+
+    const e1 = contract.labelle_entity_create();
+    try testing.expectEqual(@as(i32, 0), setComp(e1, "Sprite", "{\"sprite_name\":\"a\"}"));
+    try testing.expectEqual(@as(i32, 0), setComp(e1, "Health", "{}"));
+    const e2 = contract.labelle_entity_create();
+    try testing.expectEqual(@as(i32, 0), setComp(e2, "Sprite", "{\"sprite_name\":\"b\"}"));
+
+    var buf: [256]u8 = undefined;
+    try expectQueryIds(query("[\"Sprite\"]", &buf), &.{ e1, e2 });
+    try expectQueryIds(query("[\"Sprite\",\"Health\"]", &buf), &.{e1});
+    try expectQueryIds(query("[\"Health\",\"Sprite\"]", &buf), &.{e1});
+}
+
 test "component has/remove: presence flips, unknown names refuse" {
     contract.unbind();
     defer contract.unbind();
@@ -322,6 +596,195 @@ test "component remove: an absent component never false-fires onRemove" {
     // The built-in Position takes the same guard (absent → 0, no-op).
     try testing.expectEqual(@as(i32, 0), removeComp(id, "Position"));
     try testing.expectEqual(@as(i32, 5), game.getComponent(@as(u32, @intCast(id)), Health).?.hp);
+}
+
+// ── Stale-id liveness (reads must guard entityExists) ───────────────
+//
+// core's MockEcsBackend liveness-checks INSIDE getComponent /
+// hasComponent, which would mask the very hazard the contract guards
+// against: on a real sparse-set backend (zig_ecs) a component read is a
+// raw index lookup, so a stale id held by a script past
+// `labelle_entity_destroy` can still hit the dead entity's row — or a
+// recycled one. LeakyReadEcs models that backend: the MockEcs surface,
+// but component reads skip the alive gate and `destroyEntity` only
+// drops the id from `alive`, leaving rows readable. With it, ONLY the
+// contract-level `entityExists` guard keeps get/has at 0.
+
+const LeakyReadEcs = struct {
+    pub const Entity = u32;
+
+    const CleanupFn = *const fn (*Self) void;
+
+    next_id: u32 = 1,
+    alive: std.AutoHashMap(u32, void),
+    storages: std.AutoHashMap(usize, *anyopaque),
+    cleanups: std.ArrayListUnmanaged(CleanupFn) = .empty,
+    allocator: std.mem.Allocator,
+
+    const Self = @This();
+
+    pub fn init(allocator: std.mem.Allocator) Self {
+        return .{
+            .alive = std.AutoHashMap(u32, void).init(allocator),
+            .storages = std.AutoHashMap(usize, *anyopaque).init(allocator),
+            .allocator = allocator,
+        };
+    }
+
+    pub fn deinit(self: *Self) void {
+        for (self.cleanups.items) |cleanup| cleanup(self);
+        self.cleanups.deinit(self.allocator);
+        self.storages.deinit();
+        self.alive.deinit();
+    }
+
+    pub fn createEntity(self: *Self) u32 {
+        const id = self.next_id;
+        self.next_id += 1;
+        self.alive.put(id, {}) catch @panic("OOM");
+        return id;
+    }
+
+    pub fn destroyEntity(self: *Self, entity: u32) void {
+        // Deliberately NO storage scrub — stale rows stay readable.
+        _ = self.alive.remove(entity);
+    }
+
+    pub fn entityExists(self: *Self, entity: u32) bool {
+        return self.alive.contains(entity);
+    }
+
+    pub fn entityCount(self: *Self) usize {
+        return self.alive.count();
+    }
+
+    pub fn addComponent(self: *Self, entity: u32, component: anytype) void {
+        self.getOrCreateStorage(@TypeOf(component)).put(entity, component) catch @panic("OOM");
+    }
+
+    /// Raw lookup — no alive gate (the point of this fixture).
+    pub fn getComponent(self: *Self, entity: u32, comptime T: type) ?*T {
+        const storage = self.getStorage(T) orelse return null;
+        return storage.getPtr(entity);
+    }
+
+    /// Raw lookup — no alive gate (the point of this fixture).
+    pub fn hasComponent(self: *Self, entity: u32, comptime T: type) bool {
+        const storage = self.getStorage(T) orelse return false;
+        return storage.contains(entity);
+    }
+
+    pub fn removeComponent(self: *Self, entity: u32, comptime T: type) void {
+        const storage = self.getStorage(T) orelse return;
+        _ = storage.remove(entity);
+    }
+
+    // The iteration shape is liveness-agnostic — reuse MockEcs's View
+    // type; only entities in `alive` are collected, like any backend.
+    pub fn View(comptime includes: anytype, comptime excludes: anytype) type {
+        return MockEcs.View(includes, excludes);
+    }
+
+    pub fn view(self: *Self, comptime includes: anytype, comptime excludes: anytype) View(includes, excludes) {
+        var result: std.ArrayListUnmanaged(u32) = .empty;
+        var it = self.alive.keyIterator();
+        while (it.next()) |key_ptr| {
+            const entity = key_ptr.*;
+            const matches = blk: {
+                inline for (includes) |T| {
+                    if (!self.hasComponent(entity, T)) break :blk false;
+                }
+                inline for (excludes) |T| {
+                    if (self.hasComponent(entity, T)) break :blk false;
+                }
+                break :blk true;
+            };
+            if (matches) result.append(self.allocator, entity) catch @panic("OOM");
+        }
+        return .{
+            .entities = result.toOwnedSlice(self.allocator) catch @panic("OOM"),
+            .allocator = self.allocator,
+        };
+    }
+
+    fn getOrCreateStorage(self: *Self, comptime T: type) *std.AutoHashMap(u32, T) {
+        const tid = typeId(T);
+        if (self.storages.get(tid)) |raw| return @ptrCast(@alignCast(raw));
+        const storage = self.allocator.create(std.AutoHashMap(u32, T)) catch @panic("OOM");
+        storage.* = std.AutoHashMap(u32, T).init(self.allocator);
+        self.storages.put(tid, @ptrCast(storage)) catch @panic("OOM");
+        self.cleanups.append(self.allocator, &struct {
+            fn cleanup(s: *Self) void {
+                if (s.storages.get(typeId(T))) |raw| {
+                    const typed: *std.AutoHashMap(u32, T) = @ptrCast(@alignCast(raw));
+                    typed.deinit();
+                    s.allocator.destroy(typed);
+                }
+            }
+        }.cleanup) catch @panic("OOM");
+        return storage;
+    }
+
+    fn getStorage(self: *Self, comptime T: type) ?*std.AutoHashMap(u32, T) {
+        const raw = self.storages.get(typeId(T)) orelse return null;
+        return @ptrCast(@alignCast(raw));
+    }
+
+    fn typeId(comptime T: type) usize {
+        return @intFromPtr(&struct {
+            comptime {
+                _ = T;
+            }
+            var x: u8 = 0;
+        }.x);
+    }
+};
+
+const LeakyGame = engine.GameConfig(
+    core.StubRender(u32),
+    LeakyReadEcs,
+    engine.StubInput,
+    engine.StubAudio,
+    engine.StubVideo,
+    engine.StubGui,
+    void,
+    core.StubLogSink,
+    TestComponents,
+    &.{},
+    void, // no events — the fixture pins component reads only
+);
+
+test "component get/has: a stale id after entity_destroy reads as absent (liveness guard)" {
+    contract.unbind();
+    defer contract.unbind();
+
+    var game = LeakyGame.init(testing.allocator);
+    defer game.deinit();
+    contract.bind(&game);
+
+    const id = contract.labelle_entity_create();
+    try testing.expectEqual(@as(i32, 0), setComp(id, "Health", "{\"hp\":31}"));
+    try testing.expectEqual(@as(i32, 0), setComp(id, "Position", "{\"x\":1,\"y\":2}"));
+    try testing.expectEqual(@as(i32, 0), setComp(id, "Sprite", "{\"sprite_name\":\"husk\"}"));
+    var buf: [256]u8 = undefined;
+    try testing.expect(getComp(id, "Health", &buf).len > 0);
+
+    contract.labelle_entity_destroy(id);
+
+    // The backend itself still serves the dead rows — proving the
+    // assertions below pin the CONTRACT's guard, not backend charity.
+    const ent: u32 = @intCast(id);
+    try testing.expect(game.ecs_backend.getComponent(ent, Health) != null);
+    try testing.expect(game.ecs_backend.hasComponent(ent, Health));
+
+    // Through the exports the stale id reads as ABSENT: registry name,
+    // built-in Position, and scene built-in alike (get 0 bytes, has 0).
+    try testing.expectEqual(@as(usize, 0), getComp(id, "Health", &buf).len);
+    try testing.expectEqual(@as(i32, 0), hasComp(id, "Health"));
+    try testing.expectEqual(@as(usize, 0), getComp(id, "Position", &buf).len);
+    try testing.expectEqual(@as(i32, 0), hasComp(id, "Position"));
+    try testing.expectEqual(@as(usize, 0), getComp(id, "Sprite", &buf).len);
+    try testing.expectEqual(@as(i32, 0), hasComp(id, "Sprite"));
 }
 
 // ── Query ───────────────────────────────────────────────────────────
@@ -463,7 +926,11 @@ test "subscribe/poll: name-filtered FIFO in emission order; the tap does not con
     contract.bind(&game);
 
     subscribe("turret__fired");
-    subscribe("turret__fired"); // deduped — no double delivery
+    subscribe("turret__fired"); // deduped (while still pending) — no double delivery
+    // A subscription activates at the END of a drain (effective-next-
+    // drain, no same-tick replay) — run the subscribe tick's drain
+    // before emitting so the next frame's events match.
+    contract.drainEvents(&game);
 
     // Mixed emitters, one frame: contract-side and Zig-side (game.emit)
     // both flow through the buffered path the tap walks.
@@ -518,6 +985,48 @@ test "subscribe/poll: name-filtered FIFO in emission order; the tap does not con
     try testing.expectEqual(@as(usize, 0), poll(&buf).len);
 }
 
+test "subscribe mid-tick: effective-next-drain — no same-tick replay, next tick delivers" {
+    contract.unbind();
+    defer contract.unbind();
+
+    var game = ContractGame.init(testing.allocator);
+    defer game.deinit();
+    contract.bind(&game);
+
+    // Tick N, the engine__tick shape: an event is buffered BEFORE the
+    // script subscribes (engine emits precede script execution), and
+    // another lands after the subscribe, still in the same tick.
+    game.emit(.{ .turret__fired = .{ .turret = 1 } });
+    subscribe("turret__fired");
+    game.emit(.{ .turret__fired = .{ .turret = 2 } });
+    contract.drainEvents(&game); // the same tick's drain
+    game.dispatchEvents();
+
+    // Neither event is delivered: the subscription was PENDING for the
+    // whole of tick N's drain — a mid-tick subscribe must not replay a
+    // past it never subscribed to (and activation is a drain boundary,
+    // not a mid-buffer split).
+    var buf: [256]u8 = undefined;
+    try testing.expectEqual(@as(usize, 0), poll(&buf).len);
+
+    // Tick N+1: the subscription is active now — delivery starts here,
+    // and it is the NEW emit, not a replay of tick N's.
+    game.emit(.{ .turret__fired = .{ .turret = 3 } });
+    contract.drainEvents(&game);
+    game.dispatchEvents();
+    const entry = poll(&buf);
+    try testing.expect(std.mem.startsWith(u8, entry, "turret__fired "));
+    const p = try std.json.parseFromSlice(
+        @FieldType(TestEvents, "turret__fired"),
+        testing.allocator,
+        entry["turret__fired ".len..],
+        .{},
+    );
+    defer p.deinit();
+    try testing.expectEqual(@as(u32, 3), p.value.turret);
+    try testing.expectEqual(@as(usize, 0), poll(&buf).len);
+}
+
 test "subscribe/poll: slice-bearing payload survives emit → drain → dispatch (two-arena lifetime)" {
     contract.unbind();
     defer contract.unbind();
@@ -527,6 +1036,7 @@ test "subscribe/poll: slice-bearing payload survives emit → drain → dispatch
     contract.bind(&game);
 
     subscribe("state__renamed");
+    contract.drainEvents(&game); // activate the subscription (next-drain semantics)
 
     // Frame 1: emit with a string payload. The parsed slice lives in
     // the ACTIVE emit arena.
@@ -566,9 +1076,11 @@ test "subscribe pre-bind is a no-op; unpolled inbox entries free on unbind" {
     var buf: [128]u8 = undefined;
     try testing.expectEqual(@as(usize, 0), poll(&buf).len); // pre-bind sub didn't stick
 
-    // Now a real subscription; leave an entry UNPOLLED at unbind — the
-    // testing allocator flags it if unbind doesn't free.
+    // Now a real subscription (activated by a drain — next-drain
+    // semantics); leave an entry UNPOLLED at unbind — the testing
+    // allocator flags it if unbind doesn't free.
     subscribe("turret__fired");
+    contract.drainEvents(&game);
     game.emit(.{ .turret__fired = .{ .turret = 9 } });
     game.emit(.{ .turret__fired = .{ .turret = 10 } });
     contract.drainEvents(&game);
@@ -585,6 +1097,7 @@ test "poll: budgeted polling (a backlog always left pending) keeps the inbox sto
     contract.bind(&game);
 
     subscribe("turret__fired");
+    contract.drainEvents(&game); // activate the subscription (next-drain semantics)
 
     // Frame 0 polls one FEWER than arrived; every later frame polls at
     // matched throughput — so the inbox carries a standing backlog and
@@ -730,7 +1243,12 @@ test "NULL C-ABI shapes: NULL/len-0 payloads take defaults; NULL out buffers pro
     );
     try testing.expectEqual(@as(i32, 100), game.getComponent(@as(u32, @intCast(id)), Health).?.hp);
 
-    // event_emit with NULL json = "{}" (all-default payload).
+    // event_emit with NULL json = "{}" (all-default payload). Subscribe
+    // FIRST and run a drain so the subscription is active when the
+    // NULL-emitted event is tapped below (next-drain semantics — a
+    // subscribe after the emit would see nothing this tick).
+    subscribe("wave__started");
+    contract.drainEvents(&game);
     const wave = "wave__started";
     try testing.expectEqual(
         @as(i32, 0),
@@ -751,7 +1269,6 @@ test "NULL C-ABI shapes: NULL/len-0 payloads take defaults; NULL out buffers pro
 
     // poll with a NULL out reads NOTHING and consumes NOTHING: the
     // pending entry survives for the next real poll.
-    subscribe("wave__started");
     contract.drainEvents(&game); // taps the NULL-emitted wave event above
     game.dispatchEvents();
     try testing.expectEqual(@as(usize, 0), contract.labelle_event_poll(null, 0));
@@ -860,11 +1377,16 @@ test "bind twice: the second bind starts a fresh session (no leaks, no stale sub
     contract.bind(&game);
 
     subscribe("turret__fired");
+    contract.drainEvents(&game); // activate (next-drain semantics)
     game.emit(.{ .turret__fired = .{} });
-    contract.drainEvents(&game);
+    contract.drainEvents(&game); // tap: one inbox entry now pending
+    // A second, NOT-yet-activated subscription: rebind must free the
+    // pending-subscription set too, not just the active one.
+    subscribe("wave__started");
 
     // Re-bind (e.g. a restarted plugin session): pending entries and
-    // subscriptions from the first session are torn down.
+    // subscriptions (active AND pending) from the first session are
+    // torn down.
     contract.bind(&game);
     var buf: [128]u8 = undefined;
     try testing.expectEqual(@as(usize, 0), poll(&buf).len);

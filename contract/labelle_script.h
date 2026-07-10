@@ -21,8 +21,11 @@
  *     nothing written, 0 returned).
  *   - Structured payloads are UTF-8 JSON (encoding v1).
  *   - Components are addressed BY NAME over the game's own component
- *     registry (the same set JSONC scenes author), plus the built-in
- *     "Position" ({"x":…,"y":…}).
+ *     registry plus the engine built-ins JSONC scenes author: "Position"
+ *     ({"x":…,"y":…}) and the five scene built-ins "Sprite", "Shape",
+ *     "Tilemap", "Camera", "Image" — routed through the scene loader's
+ *     own apply machinery (see the support table before
+ *     labelle_component_set).
  *   - Events are addressed by the game's `GameEvents` union tag name
  *     (e.g. "turret__fired", "engine__tick"); payloads are the variant
  *     struct as JSON.
@@ -76,6 +79,40 @@ uint64_t labelle_prefab_spawn(const char *name, size_t name_len,
 
 /* ── Components (by name, JSON payloads) ──────────────────────────── */
 
+/* Built-in component support (write-parity with JSONC scenes — `set`
+ * dispatches through the very apply branches the scene loader uses,
+ * with its precedence: a project-registered component named Tilemap /
+ * Camera / Image WINS and routes through the registry instead; Sprite /
+ * Shape are always the built-ins, in scenes too). All five also
+ * resolve in labelle_query.
+ *
+ *   name      set  get  has  remove   notes
+ *   Position  yes  yes  yes  yes      set routes through setPosition so
+ *                                     render dirty-tracking fires
+ *   Sprite    yes  yes* yes  yes      set/remove register/untrack the
+ *                                     renderer (addSprite/removeSprite)
+ *   Shape     yes  yes* yes  yes      same channel as Sprite
+ *                                     (addShape/removeShape)
+ *   Tilemap   yes  yes  yes  yes      set decodes the referenced .tmx
+ *                                     (where the renderer has the seam);
+ *                                     remove frees the decoded runtime
+ *                                     (removeTilemap)
+ *   Camera    yes  yes  yes  yes      `tag` is carried as a JSON string
+ *                                     both ways; remove drops the
+ *                                     authored seed (the live camera
+ *                                     keeps its last seeded state)
+ *   Image     yes  yes  yes  yes      plain data component
+ *
+ * yes* — get omits fields that are renderer HANDLES rather than
+ * authored data (e.g. gfx Sprite's `texture`); they re-derive from the
+ * authored fields (`sprite_name`) on the next set, so get→set is still
+ * lossless. Camera's get emits {"zoom":…,"viewport":…|null,"tag":"…"}.
+ *
+ * Built-in sets follow the scene loader's LENIENT field semantics: a
+ * wrong-typed field with a declared default falls back to that default;
+ * malformed JSON and non-object payloads are refused with -1 (entity
+ * untouched). */
+
 /* Set component `name` on entity `id` from a JSON object. REPLACE
  * semantics: the JSON is parsed as the whole component struct — absent
  * fields take the component's declared defaults, unknown fields are
@@ -88,7 +125,8 @@ int32_t labelle_component_set(uint64_t id,
 
 /* Serialize component `name` of entity `id` to JSON into `out`
  * (capacity `out_cap`). Returns bytes written; 0 = absent / unknown
- * name / dead entity / doesn't fit. */
+ * name / dead entity / doesn't fit. Scene built-ins serialize as a
+ * scene could have authored them — see the support table above. */
 size_t labelle_component_get(uint64_t id,
                              const char *name, size_t name_len,
                              char *out, size_t out_cap);
@@ -129,10 +167,15 @@ size_t labelle_query(const char *names_json, size_t names_json_len,
 int32_t labelle_event_emit(const char *name, size_t name_len,
                            const char *json, size_t json_len);
 
-/* Declare interest in an event name. From the next frame on, matching
- * events are queued for labelle_event_poll. Duplicates are deduped.
- * Subscribing before the host binds is a no-op (plugin setup always
- * runs after bind in the generated main). */
+/* Declare interest in an event name. A subscription takes effect for
+ * events emitted AFTER the current tick's drain: events already
+ * buffered this tick (e.g. the engine's own emits, which precede
+ * script execution) — or emitted later within this same tick — are
+ * never delivered to it, so subscribing mid-tick cannot replay a past
+ * the script never subscribed to. Delivery starts with the next tick's
+ * events. Duplicates are deduped. Subscribing before the host binds is
+ * a no-op (plugin setup always runs after bind in the generated
+ * main). */
 void labelle_event_subscribe(const char *name, size_t name_len);
 
 /* Drain one pending event: copies the next "<name> <json>" entry
