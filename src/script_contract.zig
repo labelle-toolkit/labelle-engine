@@ -129,9 +129,20 @@ var bound_allocator: ?std.mem.Allocator = null;
 var subs: std.ArrayList([]u8) = .empty;
 /// FIFO inbox of pending `"<name> <json>"` entries (owned). Popped from
 /// `inbox_head` so a drain-heavy frame is O(1) per poll; the backing
-/// list is compacted whenever it runs empty.
+/// list is compacted whenever it runs empty, or in place once the dead
+/// prefix passes `inbox_compact_threshold` (see `compactInbox` — a
+/// budgeted poller that always leaves a backlog never runs it empty).
 var inbox: std.ArrayList([]u8) = .empty;
 var inbox_head: usize = 0;
+/// Dead-slot count past which `compactInbox` slides the pending tail
+/// to the front instead of waiting for the inbox to run empty.
+const inbox_compact_threshold: usize = 16;
+/// The tick's scaled (gameplay) dt as stamped by the language plugin
+/// via `labelle_time_dt_stamp`; `null` = never stamped this session,
+/// so `labelle_time_dt` reconstructs the value from the frame-profiler
+/// ring instead. Reset on bind/unbind — the stamp belongs to the
+/// plugin session, exactly like `subs`/`inbox`.
+var stamped_dt: ?f32 = null;
 /// Double-buffered arenas for `labelle_event_emit` payloads — see the
 /// module doc's "Payload memory" section for why one arena would UAF.
 /// `emit_active` indexes the arena current emits parse into; it flips
@@ -181,6 +192,7 @@ pub fn bind(g: anytype) void {
         std.heap.ArenaAllocator.init(g.allocator),
     };
     emit_active = 0;
+    stamped_dt = null;
 }
 
 /// Drop the bound game and reset all contract state (subscriptions,
@@ -205,6 +217,7 @@ pub fn unbind() void {
         slot.* = null;
     }
     emit_active = 0;
+    stamped_dt = null;
     bound_allocator = null;
 }
 
@@ -279,22 +292,22 @@ pub export fn labelle_entity_destroy(id: u64) void {
     vt.entity_destroy(id);
 }
 
-/// Spawn a named prefab. `params_json` is optional: empty (`len == 0`)
-/// spawns at the origin; otherwise it is a `{"x":…,"y":…}` object giving
-/// the spawn position (unknown keys ignored; malformed JSON fails the
-/// spawn). Returns the root entity id, or 0 on failure (unknown prefab,
-/// no JSONC scene loaded yet, bad params, not bound).
+/// Spawn a named prefab. `params_json` is optional: NULL or empty
+/// (`len == 0`) spawns at the origin; otherwise it is a `{"x":…,"y":…}`
+/// object giving the spawn position (unknown keys ignored; malformed
+/// JSON fails the spawn). Returns the root entity id, or 0 on failure
+/// (unknown prefab, no JSONC scene loaded yet, bad params, not bound).
 pub export fn labelle_prefab_spawn(
     name_ptr: [*]const u8,
     name_len: usize,
-    json_ptr: [*]const u8,
+    json_ptr: ?[*]const u8,
     json_len: usize,
 ) u64 {
     const vt = vtable orelse return 0;
     if (name_len == 0) return 0;
     return vt.prefab_spawn(
         name_ptr[0..name_len],
-        if (json_len == 0) "" else json_ptr[0..json_len],
+        optionalJson(json_ptr, json_len, ""),
     );
 }
 
@@ -308,14 +321,16 @@ pub export fn labelle_prefab_spawn(
 ///
 /// REPLACE semantics: the JSON is parsed as the whole component struct
 /// (absent fields take the struct's defaults, unknown fields are
-/// ignored); there is no merge/patch. Returns 0 = ok; -1 = unknown
-/// component name / unknown-or-dead entity / parse failure / not bound.
-/// On -1 the entity is untouched (the parse runs before any mutation).
+/// ignored); there is no merge/patch. `json` may be NULL or empty
+/// (`len == 0`), meaning `"{}"` — all defaults. Returns 0 = ok; -1 =
+/// unknown component name / unknown-or-dead entity / parse failure /
+/// not bound. On -1 the entity is untouched (the parse runs before any
+/// mutation).
 pub export fn labelle_component_set(
     id: u64,
     name_ptr: [*]const u8,
     name_len: usize,
-    json_ptr: [*]const u8,
+    json_ptr: ?[*]const u8,
     json_len: usize,
 ) i32 {
     const vt = vtable orelse return -1;
@@ -323,25 +338,27 @@ pub export fn labelle_component_set(
     return vt.component_set(
         id,
         name_ptr[0..name_len],
-        if (json_len == 0) "{}" else json_ptr[0..json_len],
+        optionalJson(json_ptr, json_len, "{}"),
     );
 }
 
 /// Serialize component `name` of entity `id` to JSON into `out`
 /// (capacity `out_cap`) and return the number of bytes written. 0 =
 /// absent component / unknown name / dead entity / not bound / doesn't
-/// fit. Two-call sizing is deliberately avoided (POC decision): script
-/// payloads are small — size `out` generously.
+/// fit. A NULL `out` is treated as capacity 0 (nothing written, 0
+/// returned). Two-call sizing is deliberately avoided (POC decision):
+/// script payloads are small — size `out` generously.
 pub export fn labelle_component_get(
     id: u64,
     name_ptr: [*]const u8,
     name_len: usize,
-    out: [*]u8,
+    out: ?[*]u8,
     out_cap: usize,
 ) usize {
     const vt = vtable orelse return 0;
     if (name_len == 0 or out_cap == 0) return 0;
-    return vt.component_get(id, name_ptr[0..name_len], out[0..out_cap]);
+    const buf = out orelse return 0;
+    return vt.component_get(id, name_ptr[0..name_len], buf[0..out_cap]);
 }
 
 /// 1 when entity `id` carries component `name`; 0 otherwise (absent,
@@ -374,36 +391,37 @@ pub export fn labelle_component_remove(id: u64, name_ptr: [*]const u8, name_len:
 /// `labelle_component_get` on a since-destroyed entity returns 0). When
 /// the ids don't all fit, the list is truncated at the last whole id —
 /// the output is always valid JSON (same contract as
-/// `editor_scene_digest`).
+/// `editor_scene_digest`). A NULL `out` is treated as capacity 0.
 pub export fn labelle_query(
     names_json_ptr: [*]const u8,
     names_json_len: usize,
-    out: [*]u8,
+    out: ?[*]u8,
     out_cap: usize,
 ) usize {
     const vt = vtable orelse return 0;
     if (names_json_len == 0 or out_cap == 0) return 0;
-    return vt.query(names_json_ptr[0..names_json_len], out[0..out_cap]);
+    const buf = out orelse return 0;
+    return vt.query(names_json_ptr[0..names_json_len], buf[0..out_cap]);
 }
 
 /// Emit a game event by name into the buffered event path — the same
 /// `game.emit` every Zig script uses, so flows (`OnEvent`), hooks, and
 /// other subscribed scripts all see it at this frame's
 /// `dispatchEvents`. `name` must be a `GameEvents` union tag; `json` is
-/// the variant's payload struct (empty → `{}`, i.e. all-default
+/// the variant's payload struct (NULL or empty → `{}`, i.e. all-default
 /// fields). Returns 0 = ok; -1 = unknown event name / parse failure /
 /// the game declares no `GameEvents` union / not bound.
 pub export fn labelle_event_emit(
     name_ptr: [*]const u8,
     name_len: usize,
-    json_ptr: [*]const u8,
+    json_ptr: ?[*]const u8,
     json_len: usize,
 ) i32 {
     const vt = vtable orelse return -1;
     if (name_len == 0) return -1;
     return vt.event_emit(
         name_ptr[0..name_len],
-        if (json_len == 0) "{}" else json_ptr[0..json_len],
+        optionalJson(json_ptr, json_len, "{}"),
     );
 }
 
@@ -429,23 +447,50 @@ pub export fn labelle_event_subscribe(name_ptr: [*]const u8, name_len: usize) vo
 /// (FIFO — emission order within and across frames) into `out` and
 /// returns bytes written; 0 = inbox empty. The entry is consumed even
 /// when `out_cap` truncates it (POC-pinned behavior) — size `out`
-/// generously. Scripts drain in a `while (poll() > 0)` loop once per
-/// tick.
-pub export fn labelle_event_poll(out: [*]u8, out_cap: usize) usize {
+/// generously. A NULL or zero-capacity `out` is the one exception: it
+/// reads (and consumes) nothing and returns 0. Scripts drain in a
+/// `while (poll() > 0)` loop once per tick.
+pub export fn labelle_event_poll(out: ?[*]u8, out_cap: usize) usize {
     if (inbox_head >= inbox.items.len) return 0;
     const alloc = bound_allocator orelse return 0;
+    const buf = out orelse return 0;
+    if (out_cap == 0) return 0;
     const entry = inbox.items[inbox_head];
     inbox_head += 1;
     const len = @min(entry.len, out_cap);
-    if (len > 0) @memcpy(out[0..len], entry[0..len]);
+    @memcpy(buf[0..len], entry[0..len]);
     alloc.free(entry);
-    // Compact once drained so the list never grows past one frame's
-    // backlog (head-index popping leaves freed slots behind otherwise).
+    compactInbox();
+    return len;
+}
+
+/// Reclaim the freed slots head-index popping leaves behind. Fully
+/// drained → plain reset; otherwise slide the pending tail to the
+/// front once the dead prefix is worth the copy. The in-place slide is
+/// what keeps a BUDGETED poller bounded: a script that always leaves a
+/// backlog never runs the inbox empty, and without it the backing
+/// array would grow every frame even at matched emit/poll throughput.
+/// Amortized O(1) per poll — a slide of `pending` entries only happens
+/// after at least `pending` (or `inbox_compact_threshold`) dead slots
+/// accumulated, and `max_pending_events` caps the slide size anyway.
+fn compactInbox() void {
     if (inbox_head == inbox.items.len) {
         inbox.clearRetainingCapacity();
         inbox_head = 0;
+        return;
     }
-    return len;
+    if (inbox_head < inbox_compact_threshold and inbox_head * 2 < inbox.items.len) return;
+    const pending = inbox.items.len - inbox_head;
+    std.mem.copyForwards([]u8, inbox.items[0..pending], inbox.items[inbox_head..]);
+    inbox.shrinkRetainingCapacity(pending);
+    inbox_head = 0;
+}
+
+/// Backing capacity of the poll inbox — a test seam (asserts budgeted
+/// polling can't grow the storage unboundedly), not part of the C
+/// surface.
+pub fn inboxCapacity() usize {
+    return inbox.capacity;
 }
 
 /// Switch to scene `name`. 0 = ok (including a swap deferred on the
@@ -468,14 +513,30 @@ pub export fn labelle_log(msg_ptr: [*]const u8, len: usize) void {
 }
 
 /// The last tick's GAMEPLAY delta-time in seconds — the same scaled dt
-/// Zig scripts receive (`engine__tick`'s `.dt`): the real frame time ×
-/// `time_scale`, and 0 while paused. Reads the game's own record of the
-/// last tick (the `frame_profiler` ring `tick()` feeds every frame), so
-/// no extra generated-main touchpoint is needed. 0 before the first
-/// tick / pre-bind.
+/// Zig scripts receive (`engine__tick`'s `.dt`). When the language
+/// plugin has stamped the tick (`labelle_time_dt_stamp`), the stamped
+/// value is returned verbatim; otherwise — pre-plugin, or a plugin
+/// that never stamps — it is reconstructed from the game's own record
+/// of the last tick (the `frame_profiler` ring `tick()` feeds every
+/// frame): the real frame time × `time_scale`, and 0 while paused. 0
+/// before the first tick / pre-bind.
 pub export fn labelle_time_dt() f32 {
     const vt = vtable orelse return 0;
-    return vt.time_dt();
+    return stamped_dt orelse vt.time_dt();
+}
+
+/// Stamp the tick's gameplay delta-time. Called once per tick by the
+/// scripting LANGUAGE PLUGIN, with the scaled dt the host handed it,
+/// before it runs the frame's scripts — game scripts should not call
+/// it. Once a session has stamped, `labelle_time_dt` returns the
+/// stamped value exactly, so every script observes the very dt Zig
+/// scripts received this tick even when a script changes `time_scale`
+/// mid-tick (the profiler reconstruction reads the CURRENT scale and
+/// would drift). Pre-bind: silently ignored; bind/unbind reset the
+/// stamp with the rest of the session state.
+pub export fn labelle_time_dt_stamp(dt: f32) void {
+    if (vtable == null) return;
+    stamped_dt = dt;
 }
 
 // ── Implementation ──────────────────────────────────────────────────
@@ -486,6 +547,17 @@ pub export fn labelle_time_dt() f32 {
 fn gameHasEventsUnion(comptime G: type) bool {
     if (!@hasDecl(G, "GameEvents")) return false;
     return @typeInfo(G.GameEvents) == .@"union";
+}
+
+/// Normalize an optional (documented "NULL/len 0") JSON parameter to a
+/// slice: NULL or empty selects `default`, the export's documented
+/// stand-in payload. NULL must be handled BEFORE any slicing — a null
+/// non-optional `[*]const u8` is an invalid ABI value in its own
+/// right, len check or no.
+fn optionalJson(ptr: ?[*]const u8, len: usize, default: []const u8) []const u8 {
+    const p = ptr orelse return default;
+    if (len == 0) return default;
+    return p[0..len];
 }
 
 fn isSubscribed(name: []const u8) bool {
@@ -669,7 +741,12 @@ fn Holder(comptime GP: type) type {
         fn componentRemoveImpl(id: u64, name: []const u8) i32 {
             const ent = castEntity(id) orelse return -1;
             if (!game.ecs_backend.entityExists(ent)) return -1;
+            // Absent-but-known is the documented idempotent 0 — and it
+            // must return WITHOUT calling `removeComponent`, which
+            // fires `T.onRemove` unconditionally: a remove the entity
+            // never had would leak a false hook side effect.
             if (std.mem.eql(u8, name, "Position")) {
+                if (!game.hasComponent(ent, core.Position)) return 0;
                 game.removeComponent(ent, core.Position);
                 return 0;
             }
@@ -677,6 +754,7 @@ fn Holder(comptime GP: type) type {
             inline for (comp_names) |comp_name| {
                 if (std.mem.eql(u8, name, comp_name)) {
                     const T = Components.getType(comp_name);
+                    if (!game.hasComponent(ent, T)) return 0;
                     game.removeComponent(ent, T);
                     return 0;
                 }

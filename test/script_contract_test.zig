@@ -21,9 +21,25 @@ const contract = engine.script_contract;
 const Health = struct { hp: i32 = 100, regen: f32 = 0 };
 const Velocity = struct { dx: f32 = 0, dy: f32 = 0 };
 
+/// `Doomed.onRemove` is a static method — no instance to mutate. A
+/// module-scope counter (reset at the start of the relevant test, the
+/// nested_lifecycle_test pattern) pins that `labelle_component_remove`
+/// on an ABSENT component never false-fires the hook.
+var doomed_on_remove_calls: u32 = 0;
+
+const Doomed = struct {
+    tag: u8 = 0,
+
+    pub fn onRemove(payload: engine.ComponentPayload) void {
+        _ = payload;
+        doomed_on_remove_calls += 1;
+    }
+};
+
 const TestComponents = engine.ComponentRegistry(.{
     .Health = Health,
     .Velocity = Velocity,
+    .Doomed = Doomed,
 });
 
 const TestEvents = union(enum) {
@@ -129,6 +145,7 @@ test "pre-bind: every export is a safe no-op" {
     // Void ops silently ignore.
     contract.labelle_entity_destroy(42);
     contract.labelle_log("hello", 5);
+    contract.labelle_time_dt_stamp(0.033);
     subscribe("turret__fired");
 
     // rc ops report failure.
@@ -271,6 +288,40 @@ test "component has/remove: presence flips, unknown names refuse" {
     try testing.expectEqual(@as(i32, -1), removeComp(id, "Mana"));
     try testing.expectEqual(@as(i32, -1), removeComp(999_999, "Velocity"));
     try testing.expectEqual(@as(i32, 0), hasComp(999_999, "Velocity"));
+}
+
+test "component remove: an absent component never false-fires onRemove" {
+    contract.unbind();
+    defer contract.unbind();
+
+    var game = ContractGame.init(testing.allocator);
+    defer game.deinit();
+    contract.bind(&game);
+
+    doomed_on_remove_calls = 0;
+    const id = contract.labelle_entity_create();
+    try testing.expectEqual(@as(i32, 0), setComp(id, "Health", "{\"hp\":5}"));
+
+    // Absent-but-known: idempotent 0, and the hook must NOT fire —
+    // `game.removeComponent` runs `T.onRemove` unconditionally, so the
+    // contract has to gate on presence first.
+    try testing.expectEqual(@as(i32, 0), removeComp(id, "Doomed"));
+    try testing.expectEqual(@as(u32, 0), doomed_on_remove_calls);
+    // Sibling components are untouched by the no-op remove.
+    try testing.expectEqual(@as(i32, 5), game.getComponent(@as(u32, @intCast(id)), Health).?.hp);
+
+    // Present: the hook fires exactly once per real removal.
+    try testing.expectEqual(@as(i32, 0), setComp(id, "Doomed", "{}"));
+    try testing.expectEqual(@as(i32, 0), removeComp(id, "Doomed"));
+    try testing.expectEqual(@as(u32, 1), doomed_on_remove_calls);
+
+    // And the remove made it absent again: back to the silent path.
+    try testing.expectEqual(@as(i32, 0), removeComp(id, "Doomed"));
+    try testing.expectEqual(@as(u32, 1), doomed_on_remove_calls);
+
+    // The built-in Position takes the same guard (absent → 0, no-op).
+    try testing.expectEqual(@as(i32, 0), removeComp(id, "Position"));
+    try testing.expectEqual(@as(i32, 5), game.getComponent(@as(u32, @intCast(id)), Health).?.hp);
 }
 
 // ── Query ───────────────────────────────────────────────────────────
@@ -525,6 +576,42 @@ test "subscribe pre-bind is a no-op; unpolled inbox entries free on unbind" {
     _ = poll(&buf); // consume one, leave one pending
 }
 
+test "poll: budgeted polling (a backlog always left pending) keeps the inbox storage bounded" {
+    contract.unbind();
+    defer contract.unbind();
+
+    var game = ContractGame.init(testing.allocator);
+    defer game.deinit();
+    contract.bind(&game);
+
+    subscribe("turret__fired");
+
+    // Frame 0 polls one FEWER than arrived; every later frame polls at
+    // matched throughput — so the inbox carries a standing backlog and
+    // never runs empty. The compact-only-when-empty scheme never fired
+    // here: `inbox_head` advanced forever while appends landed at
+    // `items.len`, growing the backing array every frame even though
+    // the pending count stayed at ~1. The threshold compaction slides
+    // the pending tail back to index 0 instead.
+    var buf: [128]u8 = undefined;
+    var settled: usize = 0;
+    var frame: usize = 0;
+    while (frame < 100) : (frame += 1) {
+        game.emit(.{ .turret__fired = .{ .turret = 1 } });
+        game.emit(.{ .turret__fired = .{ .turret = 2 } });
+        contract.drainEvents(&game);
+        game.dispatchEvents();
+        try testing.expect(poll(&buf).len > 0);
+        if (frame > 0) try testing.expect(poll(&buf).len > 0);
+        // A few frames in the capacity must have settled for good:
+        // pending stays at one carried entry + the frame's traffic.
+        if (frame == 10) settled = contract.inboxCapacity();
+        if (frame > 10) try testing.expect(contract.inboxCapacity() <= settled);
+    }
+    // The standing backlog entry is still pending here; the deferred
+    // unbind frees it (proven leak-free by the test above).
+}
+
 // ── Scene change ────────────────────────────────────────────────────
 
 test "scene_change: 0 on a known scene, -1 leaves the running scene alone" {
@@ -614,6 +701,64 @@ test "prefab_spawn: 0 before any JSONC scene attached the prefab cache" {
     try testing.expectEqual(@as(u64, 0), spawnPrefab("turret", ""));
 }
 
+// ── NULL-pointer ABI shapes ─────────────────────────────────────────
+
+test "NULL C-ABI shapes: NULL/len-0 payloads take defaults; NULL out buffers probe safely" {
+    contract.unbind();
+    defer contract.unbind();
+
+    var game = ContractGame.init(testing.allocator);
+    defer game.deinit();
+    try bootPrefabGame(&game);
+    contract.bind(&game);
+
+    // prefab_spawn with params_json = NULL/0 — the header's documented
+    // origin-spawn shape (a C caller's natural "no params").
+    const name = "turret";
+    const id = contract.labelle_prefab_spawn(name.ptr, name.len, null, 0);
+    try testing.expect(id != 0);
+    const pos = game.getComponent(@as(u32, @intCast(id)), core.Position).?;
+    try testing.expectEqual(@as(f32, 0), pos.x);
+    try testing.expectEqual(@as(f32, 0), pos.y);
+
+    // component_set with NULL json = "{}": the whole struct resets to
+    // its declared defaults (hp 100, not the prefab's 55).
+    const health = "Health";
+    try testing.expectEqual(
+        @as(i32, 0),
+        contract.labelle_component_set(id, health.ptr, health.len, null, 0),
+    );
+    try testing.expectEqual(@as(i32, 100), game.getComponent(@as(u32, @intCast(id)), Health).?.hp);
+
+    // event_emit with NULL json = "{}" (all-default payload).
+    const wave = "wave__started";
+    try testing.expectEqual(
+        @as(i32, 0),
+        contract.labelle_event_emit(wave.ptr, wave.len, null, 0),
+    );
+    switch (game.event_buffer.items[game.event_buffer.items.len - 1]) {
+        .wave__started => |p| try testing.expectEqual(@as(u32, 0), p.index),
+        else => return error.TestUnexpectedResult,
+    }
+
+    // NULL out buffers: 0 bytes, nothing written.
+    try testing.expectEqual(
+        @as(usize, 0),
+        contract.labelle_component_get(id, health.ptr, health.len, null, 0),
+    );
+    const names = "[\"Health\"]";
+    try testing.expectEqual(@as(usize, 0), contract.labelle_query(names.ptr, names.len, null, 0));
+
+    // poll with a NULL out reads NOTHING and consumes NOTHING: the
+    // pending entry survives for the next real poll.
+    subscribe("wave__started");
+    contract.drainEvents(&game); // taps the NULL-emitted wave event above
+    game.dispatchEvents();
+    try testing.expectEqual(@as(usize, 0), contract.labelle_event_poll(null, 0));
+    var buf: [128]u8 = undefined;
+    try testing.expectEqualStrings("wave__started {\"index\":0}", poll(&buf));
+}
+
 // ── Time / log ──────────────────────────────────────────────────────
 
 test "time_dt: last tick's scaled dt; 0 while paused and before the first tick" {
@@ -642,6 +787,54 @@ test "time_dt: last tick's scaled dt; 0 while paused and before the first tick" 
     game.setPaused(false);
     game.tick(0.020);
     try testing.expectApproxEqAbs(@as(f32, 0.020), contract.labelle_time_dt(), 0.0001);
+}
+
+test "time_dt: the plugin's stamped dt wins over the profiler reconstruction" {
+    contract.unbind();
+    defer contract.unbind();
+
+    var game = ContractGame.init(testing.allocator);
+    defer game.deinit();
+    contract.bind(&game);
+
+    // Unstamped session: the profiler fallback (the pre-plugin path).
+    game.tick(0.016);
+    try testing.expectApproxEqAbs(@as(f32, 0.016), contract.labelle_time_dt(), 0.0001);
+
+    // The plugin stamps the scaled dt it was handed; a script then
+    // changes time_scale MID-TICK. Scripts must still observe the dt
+    // this frame's Zig scripts got — the profiler reconstruction would
+    // report last-real-dt × the NEW scale instead.
+    contract.labelle_time_dt_stamp(0.016);
+    game.setTimeScale(0.25);
+    try testing.expectEqual(@as(f32, 0.016), contract.labelle_time_dt());
+    game.setTimeScale(1.0);
+
+    // Exactness: the stamp is returned verbatim, not recomputed.
+    contract.labelle_time_dt_stamp(0.125);
+    try testing.expectEqual(@as(f32, 0.125), contract.labelle_time_dt());
+
+    // Rebind = a fresh plugin session: the stamp resets, the fallback
+    // takes over again.
+    contract.bind(&game);
+    try testing.expectApproxEqAbs(@as(f32, 0.016), contract.labelle_time_dt(), 0.0001);
+    game.tick(0.020);
+    try testing.expectApproxEqAbs(@as(f32, 0.020), contract.labelle_time_dt(), 0.0001);
+}
+
+test "time_dt_stamp: pre-bind stamps are ignored and never leak into a session" {
+    contract.unbind();
+    defer contract.unbind();
+
+    contract.labelle_time_dt_stamp(0.5);
+    try testing.expectEqual(@as(f32, 0), contract.labelle_time_dt());
+
+    var game = ContractGame.init(testing.allocator);
+    defer game.deinit();
+    contract.bind(&game);
+
+    // No tick yet and no session stamp: the fallback's 0, not 0.5.
+    try testing.expectEqual(@as(f32, 0), contract.labelle_time_dt());
 }
 
 test "log: routes through the game log sink without crashing" {

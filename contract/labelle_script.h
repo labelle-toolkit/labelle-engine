@@ -13,6 +13,12 @@
  *
  * Conventions
  *   - Strings are (pointer, length) pairs — NOT NUL-terminated.
+ *   - Nullability: required string parameters (component/event/scene/
+ *     prefab names, log messages, the query's names_json) must be
+ *     non-NULL even when their length is 0. Only JSON payloads
+ *     documented "NULL/len 0" may be NULL, and `out` buffers may be
+ *     NULL only together with a 0 capacity (treated as capacity 0:
+ *     nothing written, 0 returned).
  *   - Structured payloads are UTF-8 JSON (encoding v1).
  *   - Components are addressed BY NAME over the game's own component
  *     registry (the same set JSONC scenes author), plus the built-in
@@ -73,7 +79,7 @@ uint64_t labelle_prefab_spawn(const char *name, size_t name_len,
 /* Set component `name` on entity `id` from a JSON object. REPLACE
  * semantics: the JSON is parsed as the whole component struct — absent
  * fields take the component's declared defaults, unknown fields are
- * ignored; there is no merge/patch. Empty json (len 0) means "{}"
+ * ignored; there is no merge/patch. Empty json (NULL/len 0) means "{}"
  * (all defaults). 0 = ok; -1 = unknown component / unknown-or-dead
  * entity / parse error. On -1 the entity is untouched. */
 int32_t labelle_component_set(uint64_t id,
@@ -116,7 +122,7 @@ size_t labelle_query(const char *names_json, size_t names_json_len,
 
 /* Emit a game event by union-tag name into the engine's buffered event
  * path — flows (OnEvent), Zig hooks, and other subscribed scripts all
- * see it at this frame's dispatch. Empty json (len 0) means "{}"
+ * see it at this frame's dispatch. Empty json (NULL/len 0) means "{}"
  * (all-default payload; payload fields without defaults must be
  * present in the JSON). 0 = ok; -1 = unknown event name / parse
  * failure / the game declares no events. */
@@ -132,9 +138,11 @@ void labelle_event_subscribe(const char *name, size_t name_len);
 /* Drain one pending event: copies the next "<name> <json>" entry
  * (FIFO, emission order) into `out` and returns bytes written; 0 =
  * inbox empty. The entry is consumed even when `out_cap` truncates it
- * — size `out` generously. Drain in a while (poll() > 0) loop once per
- * tick. Beyond an internal cap of pending events, further events are
- * dropped newest-first until the script polls. */
+ * — size `out` generously. A NULL or zero-capacity `out` is the one
+ * exception: it reads (and consumes) nothing and returns 0. Drain in a
+ * while (poll() > 0) loop once per tick. Beyond an internal cap of
+ * pending events, further events are dropped newest-first until the
+ * script polls. */
 size_t labelle_event_poll(char *out, size_t out_cap);
 
 /* ── Scene / log / time ───────────────────────────────────────────── */
@@ -148,9 +156,20 @@ int32_t labelle_scene_change(const char *name, size_t name_len);
 void labelle_log(const char *msg, size_t len);
 
 /* The last tick's GAMEPLAY delta-time in seconds — the same scaled dt
- * Zig scripts receive: real frame time × time_scale, 0 while paused
- * (and before the first tick). */
+ * Zig scripts receive: the value stamped for this tick via
+ * labelle_time_dt_stamp when the language plugin stamps, else the
+ * host's own record of the last tick (real frame time × time_scale,
+ * 0 while paused and before the first tick). */
 float labelle_time_dt(void);
+
+/* Stamp the tick's gameplay delta-time. Called once per tick by the
+ * scripting LANGUAGE PLUGIN, with the scaled dt the host handed it,
+ * before it runs the frame's scripts — game scripts must not call it.
+ * Once a session has stamped, labelle_time_dt returns the stamped
+ * value exactly, so every script observes the very dt Zig scripts
+ * received this tick even when a script changes the time scale
+ * mid-tick. Ignored before the host binds. */
+void labelle_time_dt_stamp(float dt);
 
 #ifdef __cplusplus
 }
