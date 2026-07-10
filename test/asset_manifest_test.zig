@@ -183,6 +183,27 @@ test "walker: explicit meta.assets and inferred set agree" {
     }
 }
 
+test "reverse index: malformed atlas HASH-form entry is rejected" {
+    var idx = ReverseIndex.init(testing.allocator);
+    defer idx.deinit();
+
+    // Hash-form frame value missing the required `frame` rect.
+    const no_frame =
+        \\{ "frames": { "room/floor.png": { "rotated": false } } }
+    ;
+    try testing.expectError(error.InvalidAtlasJson, idx.addAtlasFromJson("a", no_frame));
+
+    // Hash-form frame value is a scalar, not an object.
+    const scalar_value =
+        \\{ "frames": { "room/floor.png": 42 } }
+    ;
+    try testing.expectError(error.InvalidAtlasJson, idx.addAtlasFromJson("b", scalar_value));
+
+    // A well-formed hash atlas still parses (guards against over-strictness).
+    try idx.addAtlasFromJson("rooms", rooms_atlas_json);
+    try testing.expect(idx.lookup("room/floor.png") != null);
+}
+
 test "reverse index: malformed atlas array entry is rejected" {
     var idx = ReverseIndex.init(testing.allocator);
     defer idx.deinit();
@@ -245,6 +266,82 @@ test "walker: explicit meta.assets is NOT re-inferred as sprite refs" {
     try testing.expectEqual(@as(usize, 1), inferred.slice().len);
     try testing.expect(inferred.contains("rooms"));
     try testing.expect(!inferred.contains("logo_splash"));
+}
+
+test "walker: legacy top-level assets list is NOT re-inferred" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var idx = ReverseIndex.init(testing.allocator);
+    defer idx.deinit();
+    try idx.addAtlasFromJson("rooms", rooms_atlas_json);
+    try idx.addImage("logo_splash");
+
+    // Pre-unification scenes carried the hand-authored list at the TOP level
+    // (before it moved under `meta`). A stale "logo_splash" there must not
+    // leak into the derived set; only the real Sprite → rooms is inferred.
+    const scene_src =
+        \\{
+        \\  "assets": ["rooms", "logo_splash"],
+        \\  "root": {
+        \\    "children": [
+        \\      { "components": { "Sprite": { "sprite_name": "room/wall.png" } } }
+        \\    ]
+        \\  }
+        \\}
+    ;
+    const scene = try stdValue(scene_src, arena);
+
+    var inferred = try engine.inferAssets(testing.allocator, &idx, scene);
+    defer inferred.deinit();
+
+    try testing.expectEqual(@as(usize, 1), inferred.slice().len);
+    try testing.expect(inferred.contains("rooms"));
+    try testing.expect(!inferred.contains("logo_splash"));
+}
+
+test "inferAssetsFromSource: OutOfMemory propagates distinctly (not ParseFailed)" {
+    var idx = ReverseIndex.init(testing.allocator);
+    defer idx.deinit();
+    try idx.addAtlasFromJson("rooms", rooms_atlas_json);
+
+    const scene_src =
+        \\{ "root": { "components": { "Sprite": { "sprite_name": "room/floor.png" } } } }
+    ;
+
+    // Fail the very first allocation the JSONC parser makes: the parse must
+    // surface OutOfMemory *as* OutOfMemory, not collapse it into ParseFailed
+    // (a transient alloc failure is not a malformed scene).
+    var failing = std.testing.FailingAllocator.init(testing.allocator, .{ .fail_index = 0 });
+    try testing.expectError(
+        error.OutOfMemory,
+        engine.inferAssetsFromSource(failing.allocator(), &idx, scene_src),
+    );
+}
+
+test "walker: AssetManifest.load skips empty-string entries" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var idx = ReverseIndex.init(testing.allocator);
+    defer idx.deinit();
+
+    const scene_src =
+        \\{ "root": { "components": {
+        \\  "AssetManifest": { "load": ["intro_audio", "", "cinematic_overlay"] }
+        \\} } }
+    ;
+    const scene = try stdValue(scene_src, arena);
+
+    var inferred = try engine.inferAssets(testing.allocator, &idx, scene);
+    defer inferred.deinit();
+
+    // The empty "" name is dropped; the two real ones remain.
+    try testing.expectEqual(@as(usize, 2), inferred.slice().len);
+    try testing.expect(inferred.contains("intro_audio"));
+    try testing.expect(inferred.contains("cinematic_overlay"));
 }
 
 test "walker: AssetManifest.load unions in assets inference can't see" {

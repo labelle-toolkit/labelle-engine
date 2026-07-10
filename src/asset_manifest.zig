@@ -171,6 +171,15 @@ pub const ReverseIndex = struct {
             .object => |frames_obj| {
                 var it = frames_obj.iterator();
                 while (it.next()) |entry| {
+                    // Same validation as the array form below: a hash-form
+                    // frame value must be an object carrying a `frame` rect.
+                    // A malformed value here is the same "this isn't the atlas
+                    // I think it is" signal — reject rather than index a bogus
+                    // sprite key.
+                    if (entry.value_ptr.* != .object) return IndexError.InvalidAtlasJson;
+                    const frame = entry.value_ptr.*.object.get("frame") orelse
+                        return IndexError.InvalidAtlasJson;
+                    if (frame != .object) return IndexError.InvalidAtlasJson;
                     const key = try self.arena.allocator().dupe(u8, entry.key_ptr.*);
                     try self.insert(key, .{ .atlas = owned_bundle });
                 }
@@ -256,21 +265,24 @@ pub const InferredManifest = struct {
 /// bundle. The mobile over-load cost of that is #566's audit, not this
 /// function's concern.
 ///
-/// **Prefab references are NOT followed (yet).** The walk infers only from the
-/// *inline* `Sprite`/`Image` refs (and nested entity-bearing fields) present in
-/// the tree it is given. When an entity references another prefab by name
-/// (`"prefab": "condenser"` / `@ref`), this walker sees only the reference
-/// *string*, not the referenced prefab's tree — resolving it needs the prefab
-/// registry/cache, which lives on the comptime/assembler side, not here. A ref
-/// whose name happens to match an index key is treated as a plain string
-/// (usually a miss). Assets that live *only* inside a referenced prefab must,
-/// for now, be surfaced by the referencing scene either through inference of
-/// that prefab when *it* is loaded as a top-level tree, or via an
-/// `AssetManifest` on the referencing entity.
-/// TODO(#563 follow-up): resolve prefab references against the prefab tree so a
-/// referencing scene pulls in the referenced prefab's assets transitively. This
-/// is part of the same assembler-side wiring (build the reverse index from
-/// `project.labelle` + walk the comptime prefab registry) noted in the PR body.
+/// **Prefab references and scene-includes are NOT followed (yet).** The walk
+/// infers only from the *inline* `Sprite`/`Image` refs (and nested
+/// entity-bearing fields) present in the tree it is given. When an entity
+/// references another prefab by name (`"prefab": "condenser"` / `@ref`), or a
+/// scene pulls in another scene/fragment by an include reference, this walker
+/// sees only the reference *string*, not the referenced tree — resolving it
+/// needs the prefab / scene-include registry/cache, which lives on the
+/// comptime/assembler side, not here. A ref whose name happens to match an
+/// index key is treated as a plain string (usually a miss). Assets that live
+/// *only* inside a referenced prefab/scene must, for now, be surfaced by the
+/// referencing scene either through inference of that prefab/scene when *it*
+/// is loaded as a top-level tree, or via an `AssetManifest` on the referencing
+/// entity.
+/// TODO(#563 follow-up): resolve prefab references AND scene-includes against
+/// their trees so a referencing scene pulls in the referenced assets
+/// transitively. This is part of the same assembler-side wiring (build the
+/// reverse index from `project.labelle` + walk the comptime prefab / scene
+/// registry) noted in the PR body.
 ///
 /// Caller owns the returned `InferredManifest` (call `.deinit()`).
 pub fn inferAssets(
@@ -316,6 +328,14 @@ fn walk(
                     try walkMetaSkippingAssets(out, index, entry.value_ptr.*.object);
                     continue;
                 }
+                // Legacy pre-unification scenes carried the hand-authored
+                // list as a top-level `"assets": [...]` field (before it moved
+                // under `meta`). Skip it for the same reason as `meta.assets`.
+                // Guarded on an array value so a component field that happens
+                // to be named `assets` isn't accidentally dropped.
+                if (std.mem.eql(u8, entry.key_ptr.*, "assets") and entry.value_ptr.* == .array) {
+                    continue;
+                }
                 try walk(out, index, entry.value_ptr.*);
             }
         },
@@ -339,6 +359,13 @@ fn walkMetaSkippingAssets(
 /// Read `{"load":[...]}` out of an `AssetManifest` value node and union every
 /// listed name into the set. Tolerant of a missing/mis-typed `load` (the
 /// generic walk still visits nested strings, so nothing is lost).
+///
+/// Entries are restricted to non-empty strings: an empty `""` name would ask
+/// the catalog to `acquire("")` (a guaranteed miss / no-op) and only bloats
+/// the set, so it's dropped. Fuller validation — that each name is a *known*
+/// resource — needs the resource set, which isn't available at walk time;
+/// TODO(#563 follow-up): validate manifest entries against the built reverse
+/// index / catalog once the assembler wires the real resource list in.
 fn collectManifestLoad(
     out: *InferredManifest,
     manifest: std.json.Value,
@@ -347,7 +374,7 @@ fn collectManifestLoad(
     const load = manifest.object.get("load") orelse return;
     if (load != .array) return;
     for (load.array.items) |item| {
-        if (item == .string) try out.add(item.string);
+        if (item == .string and item.string.len > 0) try out.add(item.string);
     }
 }
 
@@ -377,16 +404,23 @@ pub fn inferAssetsJsonc(
 /// Parse a JSONC scene/prefab source and infer its required resource bundles
 /// in one call — the shape a scene loader wires in. Parses into an internal
 /// arena (freed before return); the returned `InferredManifest` owns its own
-/// name copies. `error.ParseFailed` wraps any JSONC syntax error.
+/// name copies. `error.ParseFailed` wraps a genuine JSONC *syntax* error;
+/// `error.OutOfMemory` propagates distinctly (a transient allocation failure
+/// is not a malformed scene and callers may want to retry, not reject).
 pub fn inferAssetsFromSource(
     gpa: std.mem.Allocator,
     index: *const ReverseIndex,
     source: []const u8,
-) !InferredManifest {
+) (error{ ParseFailed, OutOfMemory })!InferredManifest {
     var arena = std.heap.ArenaAllocator.init(gpa);
     defer arena.deinit();
     var parser = jsonc.JsoncParser.init(arena.allocator(), source);
-    const root = parser.parse() catch return error.ParseFailed;
+    const root = parser.parse() catch |err| switch (err) {
+        // Keep OOM distinct — collapsing it into ParseFailed would make a
+        // recoverable allocation hiccup look like a permanently broken scene.
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return error.ParseFailed,
+    };
     return inferAssetsJsonc(gpa, index, root);
 }
 
@@ -417,6 +451,11 @@ fn walkJsonc(
                     }
                     continue;
                 }
+                // Legacy top-level `"assets": [...]` list (pre-`meta` move) —
+                // skip for the same reason, guarded on an array value.
+                if (std.mem.eql(u8, entry.key, "assets") and entry.value == .array) {
+                    continue;
+                }
                 try walkJsonc(out, index, entry.value);
             }
         },
@@ -433,6 +472,6 @@ fn collectManifestLoadJsonc(
     const load = manifest.object.get("load") orelse return;
     if (load != .array) return;
     for (load.array.items) |item| {
-        if (item == .string) try out.add(item.string);
+        if (item == .string and item.string.len > 0) try out.add(item.string);
     }
 }
