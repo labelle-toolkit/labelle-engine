@@ -177,9 +177,19 @@ pub const ReverseIndex = struct {
             },
             .array => |frames_arr| {
                 for (frames_arr.items) |item| {
-                    if (item != .object) continue;
-                    const fname = item.object.get("filename") orelse continue;
-                    if (fname != .string) continue;
+                    // A malformed entry is a real "this isn't the atlas I
+                    // think it is" signal — surface it rather than silently
+                    // skipping (which would drop a sprite from the index and
+                    // reappear later as a mysterious missing-texture bug).
+                    // Expected TexturePacker array shape:
+                    // `{ "filename": "<path>", "frame": { … }, … }`.
+                    if (item != .object) return IndexError.InvalidAtlasJson;
+                    const fname = item.object.get("filename") orelse
+                        return IndexError.InvalidAtlasJson;
+                    if (fname != .string) return IndexError.InvalidAtlasJson;
+                    const frame = item.object.get("frame") orelse
+                        return IndexError.InvalidAtlasJson;
+                    if (frame != .object) return IndexError.InvalidAtlasJson;
                     const key = try self.arena.allocator().dupe(u8, fname.string);
                     try self.insert(key, .{ .atlas = owned_bundle });
                 }
@@ -246,6 +256,22 @@ pub const InferredManifest = struct {
 /// bundle. The mobile over-load cost of that is #566's audit, not this
 /// function's concern.
 ///
+/// **Prefab references are NOT followed (yet).** The walk infers only from the
+/// *inline* `Sprite`/`Image` refs (and nested entity-bearing fields) present in
+/// the tree it is given. When an entity references another prefab by name
+/// (`"prefab": "condenser"` / `@ref`), this walker sees only the reference
+/// *string*, not the referenced prefab's tree — resolving it needs the prefab
+/// registry/cache, which lives on the comptime/assembler side, not here. A ref
+/// whose name happens to match an index key is treated as a plain string
+/// (usually a miss). Assets that live *only* inside a referenced prefab must,
+/// for now, be surfaced by the referencing scene either through inference of
+/// that prefab when *it* is loaded as a top-level tree, or via an
+/// `AssetManifest` on the referencing entity.
+/// TODO(#563 follow-up): resolve prefab references against the prefab tree so a
+/// referencing scene pulls in the referenced prefab's assets transitively. This
+/// is part of the same assembler-side wiring (build the reverse index from
+/// `project.labelle` + walk the comptime prefab registry) noted in the PR body.
+///
 /// Caller owns the returned `InferredManifest` (call `.deinit()`).
 pub fn inferAssets(
     gpa: std.mem.Allocator,
@@ -279,11 +305,34 @@ fn walk(
                 if (std.mem.eql(u8, entry.key_ptr.*, "AssetManifest")) {
                     try collectManifestLoad(out, entry.value_ptr.*);
                 }
+                // Do NOT recurse into the explicit `meta.assets` list. Those
+                // are hand-authored asset KEYS, not sprite-path refs — the
+                // whole point of inference is to derive the set INDEPENDENTLY
+                // so it can validate the explicit list. Walking them would let
+                // a stale explicit entry re-inject itself into the inferred
+                // set (a self-fulfilling, non-validating result). Everything
+                // else under `meta` is still walked.
+                if (std.mem.eql(u8, entry.key_ptr.*, "meta") and entry.value_ptr.* == .object) {
+                    try walkMetaSkippingAssets(out, index, entry.value_ptr.*.object);
+                    continue;
+                }
                 try walk(out, index, entry.value_ptr.*);
             }
         },
         // number / bool / null carry no references.
         else => {},
+    }
+}
+
+fn walkMetaSkippingAssets(
+    out: *InferredManifest,
+    index: *const ReverseIndex,
+    meta: std.json.ObjectMap,
+) std.mem.Allocator.Error!void {
+    var it = meta.iterator();
+    while (it.next()) |entry| {
+        if (std.mem.eql(u8, entry.key_ptr.*, "assets")) continue;
+        try walk(out, index, entry.value_ptr.*);
     }
 }
 
@@ -357,6 +406,16 @@ fn walkJsonc(
             for (obj.entries) |entry| {
                 if (std.mem.eql(u8, entry.key, "AssetManifest")) {
                     try collectManifestLoadJsonc(out, entry.value);
+                }
+                // Skip the explicit `meta.assets` list — see the `walk`
+                // counterpart for the rationale (derive independently to
+                // validate; a stale entry must not re-inject itself).
+                if (std.mem.eql(u8, entry.key, "meta") and entry.value == .object) {
+                    for (entry.value.object.entries) |meta_entry| {
+                        if (std.mem.eql(u8, meta_entry.key, "assets")) continue;
+                        try walkJsonc(out, index, meta_entry.value);
+                    }
+                    continue;
                 }
                 try walkJsonc(out, index, entry.value);
             }

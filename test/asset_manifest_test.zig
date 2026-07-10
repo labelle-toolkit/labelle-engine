@@ -183,6 +183,70 @@ test "walker: explicit meta.assets and inferred set agree" {
     }
 }
 
+test "reverse index: malformed atlas array entry is rejected" {
+    var idx = ReverseIndex.init(testing.allocator);
+    defer idx.deinit();
+
+    // Entry missing the required `frame` rect.
+    const no_frame =
+        \\{ "frames": [ { "filename": "worker/idle.png" } ] }
+    ;
+    try testing.expectError(error.InvalidAtlasJson, idx.addAtlasFromJson("a", no_frame));
+
+    // Entry missing `filename`.
+    const no_filename =
+        \\{ "frames": [ { "frame": { "x": 0, "y": 0, "w": 8, "h": 8 } } ] }
+    ;
+    try testing.expectError(error.InvalidAtlasJson, idx.addAtlasFromJson("b", no_filename));
+
+    // Non-object entry.
+    const scalar_entry =
+        \\{ "frames": [ "worker/idle.png" ] }
+    ;
+    try testing.expectError(error.InvalidAtlasJson, idx.addAtlasFromJson("c", scalar_entry));
+
+    // A well-formed array entry still parses (guards against over-strictness).
+    try idx.addAtlasFromJson("characters", chars_atlas_json);
+    try testing.expect(idx.lookup("worker/idle.png") != null);
+}
+
+test "walker: explicit meta.assets is NOT re-inferred as sprite refs" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var idx = ReverseIndex.init(testing.allocator);
+    defer idx.deinit();
+    try idx.addAtlasFromJson("rooms", rooms_atlas_json);
+    // `logo_splash` is a valid index key (a standalone image), so if the
+    // walker recursed into `meta.assets` it would wrongly pick it up.
+    try idx.addImage("logo_splash");
+
+    // `meta.assets` lists BOTH "rooms" and a STALE "logo_splash" — but no
+    // entity actually references logo_splash. Only a Sprite → rooms is used.
+    const scene_src =
+        \\{
+        \\  "meta": { "assets": ["rooms", "logo_splash"] },
+        \\  "root": {
+        \\    "children": [
+        \\      { "components": { "Sprite": { "sprite_name": "room/floor.png" } } }
+        \\    ]
+        \\  }
+        \\}
+    ;
+    const scene = try stdValue(scene_src, arena);
+
+    var inferred = try engine.inferAssets(testing.allocator, &idx, scene);
+    defer inferred.deinit();
+
+    // Only "rooms" is inferred (from the real Sprite ref). The stale
+    // "logo_splash" in the explicit list must NOT leak into the derived set —
+    // otherwise inference could never contradict/validate a stale list.
+    try testing.expectEqual(@as(usize, 1), inferred.slice().len);
+    try testing.expect(inferred.contains("rooms"));
+    try testing.expect(!inferred.contains("logo_splash"));
+}
+
 test "walker: AssetManifest.load unions in assets inference can't see" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
