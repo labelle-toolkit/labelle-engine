@@ -123,6 +123,10 @@ fn spawnPrefab(name: []const u8, json: []const u8) u64 {
     return contract.labelle_prefab_spawn(name.ptr, name.len, json.ptr, json.len);
 }
 
+fn findEntity(name: []const u8) u64 {
+    return contract.labelle_entity_find(name.ptr, name.len);
+}
+
 /// Parse a query result (`[3,7]`) and check it equals `expected` as a
 /// SET — the mock backend iterates a hash map, so id order is
 /// unspecified.
@@ -158,6 +162,16 @@ test "pre-bind: every export is a safe no-op" {
     // Id-returning ops: 0 (never a valid entity id).
     try testing.expectEqual(@as(u64, 0), contract.labelle_entity_create());
     try testing.expectEqual(@as(u64, 0), spawnPrefab("turret", ""));
+    try testing.expectEqual(@as(u64, 0), findEntity("player"));
+
+    // Input reads: not-down, and the mouse writes the origin.
+    try testing.expectEqual(@as(i32, 0), contract.labelle_input_key_down(32));
+    try testing.expectEqual(@as(i32, 0), contract.labelle_input_key_pressed(32));
+    var mx: f32 = 7;
+    var my: f32 = 9;
+    contract.labelle_input_mouse(&mx, &my);
+    try testing.expectEqual(@as(f32, 0), mx);
+    try testing.expectEqual(@as(f32, 0), my);
 
     // Void ops silently ignore.
     contract.labelle_entity_destroy(42);
@@ -1660,4 +1674,156 @@ test "bind twice: the second bind starts a fresh session (no leaks, no stale sub
     contract.drainEvents(&game);
     game.dispatchEvents();
     try testing.expectEqual(@as(usize, 0), poll(&buf).len);
+}
+
+// ── entity_find + input: a game with a Name component and a ────────────
+//    controllable input backend
+//
+// `entity_find` resolves through a registry component named `Name`/`Tag`
+// carrying a string field, so the feature game registers a `Name`. The
+// input backend dispatches to *type* decls (static fns, process-global
+// state — the real backends' shape), reset between tests.
+
+const Name = struct { name: []const u8 = "" };
+
+/// Controllable input stub: reports one down key, one press-edge key, and
+/// a settable mouse position. Only `isKeyDown`/`isKeyPressed` are required
+/// by `InputInterface`; `getMouseX`/`getMouseY` are the optional mouse seam.
+const KeyInput = struct {
+    var down_key: ?u32 = null;
+    var pressed_key: ?u32 = null;
+    var mouse_x: f32 = 0;
+    var mouse_y: f32 = 0;
+
+    fn reset() void {
+        down_key = null;
+        pressed_key = null;
+        mouse_x = 0;
+        mouse_y = 0;
+    }
+
+    pub fn isKeyDown(key: u32) bool {
+        return down_key != null and down_key.? == key;
+    }
+    pub fn isKeyPressed(key: u32) bool {
+        return pressed_key != null and pressed_key.? == key;
+    }
+    pub fn getMouseX() f32 {
+        return mouse_x;
+    }
+    pub fn getMouseY() f32 {
+        return mouse_y;
+    }
+};
+
+const FeatureComponents = engine.ComponentRegistry(.{
+    .Name = Name,
+    .Health = Health,
+});
+
+const FeatureGame = engine.GameConfig(
+    core.StubRender(MockEcs.Entity),
+    MockEcs,
+    KeyInput,
+    engine.StubAudio,
+    engine.StubVideo,
+    engine.StubGui,
+    void,
+    core.StubLogSink,
+    FeatureComponents,
+    &.{},
+    TestEvents,
+);
+
+test "entity_find: resolves an entity by its Name component; first live match" {
+    contract.unbind();
+    defer contract.unbind();
+
+    var game = FeatureGame.init(testing.allocator);
+    defer game.deinit();
+    contract.bind(&game);
+
+    const a = contract.labelle_entity_create();
+    try testing.expectEqual(@as(i32, 0), setComp(a, "Name", "{\"name\":\"player\"}"));
+    const b = contract.labelle_entity_create();
+    try testing.expectEqual(@as(i32, 0), setComp(b, "Name", "{\"name\":\"enemy\"}"));
+
+    try testing.expectEqual(a, findEntity("player"));
+    try testing.expectEqual(b, findEntity("enemy"));
+
+    // No match / empty name → 0.
+    try testing.expectEqual(@as(u64, 0), findEntity("nobody"));
+    try testing.expectEqual(@as(u64, 0), findEntity(""));
+
+    // After the named entity is destroyed the name no longer resolves.
+    contract.labelle_entity_destroy(a);
+    try testing.expectEqual(@as(u64, 0), findEntity("player"));
+    try testing.expectEqual(b, findEntity("enemy"));
+}
+
+test "entity_find: comptime-gated out for a game with no Name/Tag component" {
+    contract.unbind();
+    defer contract.unbind();
+
+    // ContractGame's registry has Health/Velocity/Doomed/Label — no
+    // Name/Tag — so the lookup folds away at comptime: always 0, never a
+    // crash, even after a real entity with a component exists.
+    var game = ContractGame.init(testing.allocator);
+    defer game.deinit();
+    contract.bind(&game);
+
+    const e = contract.labelle_entity_create();
+    try testing.expectEqual(@as(i32, 0), setComp(e, "Label", "{\"text\":\"player\"}"));
+    try testing.expectEqual(@as(u64, 0), findEntity("player"));
+}
+
+test "input_key_down / input_key_pressed: reflect the backend, unknown codes read up" {
+    contract.unbind();
+    defer contract.unbind();
+    KeyInput.reset();
+    defer KeyInput.reset();
+
+    var game = FeatureGame.init(testing.allocator);
+    defer game.deinit();
+    contract.bind(&game);
+
+    const space: u32 = @intFromEnum(engine.KeyboardKey.space);
+    const enter: u32 = @intFromEnum(engine.KeyboardKey.enter);
+
+    KeyInput.down_key = space;
+    KeyInput.pressed_key = enter;
+
+    try testing.expectEqual(@as(i32, 1), contract.labelle_input_key_down(space));
+    try testing.expectEqual(@as(i32, 0), contract.labelle_input_key_down(enter));
+    try testing.expectEqual(@as(i32, 1), contract.labelle_input_key_pressed(enter));
+    try testing.expectEqual(@as(i32, 0), contract.labelle_input_key_pressed(space));
+
+    // A code nothing reports is simply not down.
+    try testing.expectEqual(@as(i32, 0), contract.labelle_input_key_down(9999));
+}
+
+test "input_mouse: writes the reported position; NULL out-pointers are skipped" {
+    contract.unbind();
+    defer contract.unbind();
+    KeyInput.reset();
+    defer KeyInput.reset();
+
+    var game = FeatureGame.init(testing.allocator);
+    defer game.deinit();
+    contract.bind(&game);
+
+    KeyInput.mouse_x = 320.5;
+    KeyInput.mouse_y = 240.0;
+
+    var x: f32 = -1;
+    var y: f32 = -1;
+    contract.labelle_input_mouse(&x, &y);
+    try testing.expectEqual(@as(f32, 320.5), x);
+    try testing.expectEqual(@as(f32, 240.0), y);
+
+    // Either out-pointer may be NULL — the other axis still lands, no crash.
+    var only_y: f32 = -1;
+    contract.labelle_input_mouse(null, &only_y);
+    try testing.expectEqual(@as(f32, 240.0), only_y);
+    contract.labelle_input_mouse(&x, null); // both-write path already checked
 }
