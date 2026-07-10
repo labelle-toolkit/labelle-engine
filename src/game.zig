@@ -14,6 +14,7 @@ const PrefabChild = core.PrefabChild;
 
 const atlas_mod = @import("atlas.zig");
 const assets_mod = @import("assets/mod.zig");
+const asset_manifest_mod = @import("asset_manifest.zig");
 const game_log_mod = @import("game_log.zig");
 const preview_mode_mod = @import("preview_mode.zig");
 const scheduler_mod = @import("scheduler.zig");
@@ -425,6 +426,19 @@ pub fn GameConfigWithYAxis(
             /// Lifetime: stored by reference, must outlive the `Game`. The
             /// assembler emits a string-literal slice, which is program-lifetime.
             initial_state: ?[]const u8 = null,
+            /// Raw JSONC scene source, for **sprite-based asset inference**
+            /// (#563). Populated by the assembler via `setSceneSource` — a
+            /// program-lifetime `@embedFile` borrow of the scene's `.jsonc`.
+            /// When a scene declares NO explicit `assets` manifest and this
+            /// source is present, `setScene`/`setSceneAtomic` walk it against
+            /// the runtime reverse index (`inferAssetsFromSource`) to *derive*
+            /// the manifest, then cache the result into `assets` above so the
+            /// acquire/release/gate path behaves exactly as if it had been
+            /// declared. `null` (default) preserves pre-inference behavior
+            /// (the Debug eager-load-everything fallback still applies).
+            ///
+            /// Lifetime: stored by reference, must outlive the `Game`.
+            source: ?[]const u8 = null,
         };
 
         /// Runtime JSONC scene path info.
@@ -590,6 +604,25 @@ pub fn GameConfigWithYAxis(
         /// Cleared after the swap completes (success path) or after
         /// an explicit abort (`scene_assets_release_pending`).
         pending_scene_assets: ?[]const u8 = null,
+
+        /// Sprite-based asset-inference reverse index (#563), built lazily
+        /// the first time a manifest-less scene with a `source` is loaded.
+        /// Maps every atlas sprite path (and standalone image name) currently
+        /// known to the engine to its providing resource bundle, so
+        /// `inferAssetsFromSource` can derive a scene's manifest from its
+        /// `Sprite`/`Image` references. `null` until first needed (zero cost
+        /// for games that declare every manifest explicitly). Freed on
+        /// `deinit`. See `scene_mixin.ensureReverseIndex`.
+        reverse_index: ?asset_manifest_mod.ReverseIndex = null,
+
+        /// Owns the name copies of every *inferred* scene manifest (#563).
+        /// When `setScene` derives a manifest for a manifest-less scene, the
+        /// resulting `InferredManifest` is parked here and its stable slice is
+        /// cached onto `SceneEntry.assets`; this list keeps those name dupes
+        /// alive for the `Game`'s lifetime so the cached slice never dangles.
+        /// Each entry is `deinit`'d on `Game.deinit`. Explicitly-declared
+        /// scenes never touch this list.
+        inferred_manifests: std.ArrayListUnmanaged(asset_manifest_mod.InferredManifest) = .empty,
 
         /// Controls how `setScene` / `setSceneAtomic` react when
         /// `catalog.anyFailed(target.assets)` returns non-null during
@@ -1165,6 +1198,7 @@ pub fn GameConfigWithYAxis(
         /// `game/prefab_runtime_mixin.zig` for the scope contract.
         pub const reloadPrefabSource = PrefabRuntimeMixin.reloadPrefabSource;
         pub const setSceneAssets = SceneMixin.setSceneAssets;
+        pub const setSceneSource = SceneMixin.setSceneSource;
         pub const setSceneInitialState = SceneMixin.setSceneInitialState;
         pub const setScene = SceneMixin.setScene;
         pub const setSceneAtomic = SceneMixin.setSceneAtomic;

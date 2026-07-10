@@ -36,10 +36,66 @@
 //! **Scope of this module / PR:** the reverse-index + walker *core*. It takes
 //! no gfx dependency, touches no lifecycle, and reuses the existing
 //! `AssetCatalog` for the actual acquire/decode/upload/release (Phase B).
-//! Wiring the walker's output into `setScene`'s acquire gate (replacing the
-//! Debug eager-load fallback) and building the reverse index from the real
-//! `project.labelle` `.resources` at codegen time is assembler-side follow-up
-//! — see the PR body. False-positive over-load auditing is #566.
+//! **Wiring status (#563 follow-up — this PR).** The walker is now wired into
+//! the scene-load path (`game/scene_mixin.zig`): a scene that declares NO
+//! explicit `meta.assets` but carries its JSONC `source` (handed over by the
+//! assembler via `Game.setSceneSource`) has its manifest *derived* on first
+//! load and cached onto `SceneEntry.assets`, from which the existing
+//! acquire/gate/release machinery drives loading unchanged. The runtime
+//! reverse index is built lazily from the live `TextureManager` (every loaded
+//! atlas's sprite paths → its bundle name; see `ensureReverseIndex`). Scenes
+//! WITH an explicit manifest are untouched — inference never runs for them.
+//!
+//! ── Completeness audit + known limitations (#566) ──
+//!
+//! What sprite/image-ref inference over a scene's inline tree CAN see:
+//!   - Inline `Sprite`/`Image` references (any string that exactly matches an
+//!     atlas sprite path / image name), including refs nested inside
+//!     entity-bearing component fields (`Room.movement_nodes`, etc.).
+//!   - `AssetManifest.load` escape-hatch declarations anywhere in the tree.
+//!
+//! What it CANNOT see (a scene relying ONLY on these still needs an explicit
+//! `meta.assets` or an `AssetManifest`):
+//!   1. **Prefab references.** A `{ "prefab": "condenser" }` entry contributes
+//!      only the literal string `"condenser"` to the walk — the referenced
+//!      prefab's own `Sprite` refs live in a different file the walker isn't
+//!      handed. This is the load-bearing gap in practice: Flying-Platform's
+//!      top-level scenes (`colony`, `main`, …) are *pure prefab compositions*
+//!      (dozens of `"prefab":` entries, zero inline `Sprite`), so scene-level
+//!      inference resolves ~nothing for them. Inference over each PREFAB source
+//!      individually works (verified: `prefabs/rooms/wc.jsonc` → `rooms`
+//!      atlas); the missing piece is *transitively* following a scene's prefab
+//!      refs to their trees — the `TODO(#563 follow-up)` on `inferAssets`.
+//!      Until that lands, prefab-composition scenes keep their explicit list.
+//!   2. **Scene includes.** `"include": [...]` fragments are referenced by
+//!      path, not inlined into the walked tree — same shape as (1).
+//!   3. **Script-computed sprite names.** A name assembled at runtime
+//!      (`std.fmt`, config lookup) is invisible to a static walk. Lazy-on-miss
+//!      (#568/#563 Phase-B) recovers these via pop-in for VISUALS; anything
+//!      that must be ready *before* first render needs `AssetManifest`.
+//!      Flying-Platform has one script-acquire site today
+//!      (`scripts/menu/menu_ui.zig`) — the pattern the audit flags.
+//!   4. **Audio banks / fonts / raw bytes.** No `Sprite`/`Image` reference
+//!      surfaces these, and audio in particular often must be decoded *before*
+//!      a trigger fires (lazy pop-in is too late). These are the canonical
+//!      `AssetManifest.load` case. (Flying-Platform's current `.resources` are
+//!      all atlases, so it has no such case yet — but any project adding a
+//!      sound bank referenced only from a script will.)
+//!
+//! Over-load (false positives): every string is matched, so a component field
+//! that happens to equal a sprite path pre-loads an unneeded bundle. Harmless
+//! for correctness; the mobile memory cost is the remaining open item of #566.
+//! For inline-Sprite scenes measured here the inferred set was a subset of the
+//! declared list (no over-load), but this is not yet audited at scale.
+//!
+//! **Migration guidance.** Before dropping a scene's `meta.assets`: if the
+//! scene composes prefabs (case 1) or pulls in fragments (case 2), keep the
+//! explicit list OR add an `AssetManifest` until transitive prefab-walk lands;
+//! if it uses inline `Sprite`/`Image` refs only, inference covers it; for
+//! script-loaded audio/overlays (cases 3–4), add an `AssetManifest.load`.
+//!
+//! False-positive over-load auditing at scale is the remaining open part of
+//! #566.
 
 const std = @import("std");
 const jsonc = @import("jsonc");
@@ -205,6 +261,54 @@ pub const ReverseIndex = struct {
             },
             else => return IndexError.InvalidAtlasJson,
         }
+    }
+
+    /// Register an atlas resource from an explicit sprite-path list,
+    /// **tolerating duplicate keys** (first-wins). Unlike `addAtlas`, a
+    /// sprite path already present in the index is silently skipped rather
+    /// than raising `DuplicateResourceName`.
+    ///
+    /// This is the entry the *runtime* reverse-index builder uses. That
+    /// builder indexes EVERY currently-loaded atlas from the live
+    /// `TextureManager`; two atlases that happen to declare the same sprite
+    /// path there must NOT abort the whole build (the renderer's
+    /// `findSprite` already resolves such a collision by first-match, so a
+    /// game that ships with a cross-atlas duplicate sprite name is already
+    /// running fine — inference must not be the thing that crashes it).
+    /// The strict `addAtlas` / `addAtlasFromJson` collision error is
+    /// retained for the codegen/authoring path where a duplicate really is
+    /// a fixable content bug. Returns the number of newly-inserted keys.
+    ///
+    /// `bundle_name` is duped only if at least one key is inserted, so an
+    /// atlas whose every sprite is already indexed costs nothing.
+    pub fn addAtlasLenient(
+        self: *ReverseIndex,
+        bundle_name: []const u8,
+        sprite_paths: []const []const u8,
+    ) IndexError!usize {
+        const a = self.arena.allocator();
+        var owned_bundle: ?[]const u8 = null;
+        var inserted: usize = 0;
+        for (sprite_paths) |path| {
+            if (self.map.contains(path)) continue;
+            if (owned_bundle == null) owned_bundle = try a.dupe(u8, bundle_name);
+            const key = try a.dupe(u8, path);
+            try self.insert(key, .{ .atlas = owned_bundle.? });
+            inserted += 1;
+        }
+        return inserted;
+    }
+
+    /// Register a standalone image resource tolerating a duplicate key
+    /// (first-wins). Runtime counterpart to `addImage` — see
+    /// `addAtlasLenient` for why the runtime builder can't hard-error on a
+    /// collision. Returns `true` if newly inserted.
+    pub fn addImageLenient(self: *ReverseIndex, asset_name: []const u8) IndexError!bool {
+        if (self.map.contains(asset_name)) return false;
+        const a = self.arena.allocator();
+        const key = try a.dupe(u8, asset_name);
+        try self.insert(key, .{ .image = key });
+        return true;
     }
 
     fn insert(self: *ReverseIndex, key: []const u8, ref: ResourceRef) IndexError!void {

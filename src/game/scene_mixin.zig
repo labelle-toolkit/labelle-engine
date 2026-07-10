@@ -1,6 +1,7 @@
 /// Scene mixin — scene registration, loading, transitions, and lifecycle.
 const std = @import("std");
 const builtin = @import("builtin");
+const asset_manifest_mod = @import("../asset_manifest.zig");
 
 /// Collect every asset name currently registered in the catalog into a
 /// fresh allocator-owned slice. The returned slice borrows the name
@@ -22,6 +23,108 @@ fn collectAllRegisteredAssetNames(allocator: std.mem.Allocator, catalog: anytype
         try list.append(allocator, key.*);
     }
     return list.toOwnedSlice(allocator);
+}
+
+/// Lazily build the sprite-based asset-inference reverse index (#563) from
+/// every atlas currently registered in `atlas_manager`, caching it on
+/// `game.reverse_index`. Returns a pointer to the built index, or `null` if
+/// the build could not complete (OOM) — in which case the caller skips
+/// inference and falls back to its existing behavior.
+///
+/// The index maps every atlas *sprite path* to its providing atlas *bundle
+/// name* (the same name used as the `AssetCatalog` resource key, so an
+/// inferred entry can be `acquire`d directly). Cross-atlas duplicate sprite
+/// names are first-wins and never fatal (`addAtlasLenient`) — the renderer's
+/// `findSprite` already resolves such collisions that way, so inference must
+/// not be the thing that turns a shipping game into a crash. Built once and
+/// reused; steady-state cost is zero for games that declare every manifest.
+///
+/// Standalone images (`Image` component, #568) are a documented gap here:
+/// they are not currently enumerable from a single runtime registry the way
+/// atlas sprites are. A scene relying on a standalone image with no explicit
+/// manifest should carry an `AssetManifest` until that registry lands. Sprite
+/// refs — the #563 acceptance case — are fully covered.
+fn ensureReverseIndex(game: anytype) ?*asset_manifest_mod.ReverseIndex {
+    if (game.reverse_index) |*ri| return ri;
+
+    var index = asset_manifest_mod.ReverseIndex.init(game.allocator);
+
+    var scratch: std.ArrayListUnmanaged([]const u8) = .empty;
+    defer scratch.deinit(game.allocator);
+
+    var it = game.atlas_manager.atlases.iterator();
+    while (it.next()) |entry| {
+        scratch.clearRetainingCapacity();
+        var sit = entry.value_ptr.sprites.keyIterator();
+        while (sit.next()) |k| {
+            scratch.append(game.allocator, k.*) catch {
+                index.deinit();
+                return null;
+            };
+        }
+        _ = index.addAtlasLenient(entry.key_ptr.*, scratch.items) catch {
+            index.deinit();
+            return null;
+        };
+    }
+
+    game.reverse_index = index;
+    return &(game.reverse_index.?);
+}
+
+/// Resolve the asset manifest a scene should load through the gate.
+///
+/// This is the single point where sprite-based asset inference (#563) hooks
+/// into the existing acquire/gate/release machinery, and it is deliberately
+/// conservative:
+///
+///   - Scene has an explicit / already-cached manifest (`assets.len > 0`):
+///     returned untouched. Every existing scene loads byte-for-byte
+///     identically — inference never runs for it.
+///   - Scene has no manifest but no `source` either: returns empty, so the
+///     caller's existing Debug eager-load-everything fallback still applies.
+///   - Scene has no manifest but DOES carry its JSONC `source`: walk it
+///     against the runtime reverse index, and if that yields a non-empty set,
+///     cache it onto `SceneEntry.assets`. From then on the scene is
+///     indistinguishable from one with an explicit manifest — the gate
+///     acquires the inferred set and the scene-swap path releases it
+///     symmetrically. Inference runs once (result cached), and any failure
+///     (malformed source / OOM) is best-effort: it logs and returns empty
+///     rather than failing the load.
+fn resolveSceneAssets(game: anytype, name: []const u8) []const []const u8 {
+    const entry = game.scenes.getPtr(name) orelse return &.{};
+    // Explicit or already-inferred manifest — never re-derive.
+    if (entry.assets.len > 0) return entry.assets;
+    const source = entry.source orelse return &.{};
+
+    const index = ensureReverseIndex(game) orelse return &.{};
+    if (index.count() == 0) return &.{};
+
+    var manifest = asset_manifest_mod.inferAssetsFromSource(game.allocator, index, source) catch |err| {
+        game.log.warn(
+            "[Scene] '{s}': asset inference skipped ({s}) — falling back to declared/eager behavior",
+            .{ name, @errorName(err) },
+        );
+        return &.{};
+    };
+    if (manifest.slice().len == 0) {
+        manifest.deinit();
+        return &.{};
+    }
+
+    // Park the manifest so its heap-owned name copies outlive this call, then
+    // cache the (heap-stable) slice onto the SceneEntry. The slice pointer is
+    // owned by `manifest.names` — appending the struct to `inferred_manifests`
+    // copies the struct by value but leaves that buffer in place, so the
+    // cached slice stays valid even if the outer list later reallocs.
+    const slice = manifest.slice();
+    game.inferred_manifests.append(game.allocator, manifest) catch {
+        manifest.deinit();
+        return &.{};
+    };
+    entry.assets = slice;
+    std.log.info("[Scene] '{s}' has no manifest, inferred {d} asset(s) from sprite refs", .{ name, slice.len });
+    return slice;
 }
 
 /// Possible outcomes of the asset-manifest gate fired at the start
@@ -401,6 +504,31 @@ pub fn Mixin(comptime Game: type) type {
             entry.assets = assets;
         }
 
+        /// Attach the raw JSONC `source` of a previously-registered scene,
+        /// enabling sprite-based asset inference (#563) when the scene has no
+        /// explicit manifest. Mirrors `setSceneAssets` — the assembler emits
+        /// one call per comptime scene (gated on `@hasDecl` for forward-compat
+        /// with older engines) after the `registerScene*` loop, passing the
+        /// scene's `@embedFile`'d `.jsonc` source. Returns
+        /// `error.SceneNotFound` if `name` was never registered.
+        ///
+        /// Setting a source has NO effect on a scene that already declares an
+        /// explicit `assets` manifest — inference is skipped for those, so
+        /// their loading stays byte-for-byte identical. It only matters for
+        /// manifest-less scenes, where `setScene`/`setSceneAtomic` walk the
+        /// source to derive the manifest on first load.
+        ///
+        /// Lifetime: `source` is stored by reference and must outlive the
+        /// `Game`. The assembler emits a program-lifetime `@embedFile` slice.
+        pub fn setSceneSource(
+            self: *Game,
+            name: []const u8,
+            source: []const u8,
+        ) error{SceneNotFound}!void {
+            const entry = self.scenes.getPtr(name) orelse return error.SceneNotFound;
+            entry.source = source;
+        }
+
         /// Attach a declared `initial_state` to a previously-registered scene.
         /// `setScene` will call `setState(state)` after the scene loads.
         ///
@@ -434,10 +562,16 @@ pub fn Mixin(comptime Game: type) type {
             // the gate entirely. Scenes registered via the legacy
             // `registerSceneSimple` (no manifest) have `assets ==
             // &.{}` and behave identically to before this change.
-            const declared_assets: []const []const u8 = if (self.scenes.get(name)) |e|
-                e.assets
-            else
-                &.{};
+            // Sprite-based asset inference (#563): when the scene declares no
+            // explicit manifest but carries its JSONC `source`, derive the
+            // manifest from the entity tree's Sprite refs and cache it onto
+            // `SceneEntry.assets`. From that point the scene flows through the
+            // identical acquire/gate/release path as an explicitly-declared
+            // one; scenes WITH a manifest are returned untouched, so their
+            // loading is byte-for-byte unchanged. Returns empty when there is
+            // no source (or inference found nothing), preserving the Debug
+            // eager-load fallback below.
+            const declared_assets: []const []const u8 = resolveSceneAssets(self, name);
 
             // Dev-mode eager-load fallback (issue #502) — if the scene
             // declared no assets and we're a Debug build, load every
@@ -586,22 +720,29 @@ pub fn Mixin(comptime Game: type) type {
         /// Clears the scene entity list first so Scene.deinit skips entity destruction,
         /// then resets the ECS atomically, then loads the new scene.
         pub fn setSceneAtomic(self: *Game, name: []const u8) !void {
-            const entry = self.scenes.get(name) orelse return error.SceneNotFound;
+            if (!self.scenes.contains(name)) return error.SceneNotFound;
+
+            // Sprite-based asset inference (#563) — mirror of `setScene`.
+            // Derives + caches the manifest for a source-bearing, manifest-less
+            // scene before the entry is (re-)read below, so `declared_assets`
+            // reflects the inferred set. See `resolveSceneAssets` / `setScene`.
+            const declared_assets: []const []const u8 = resolveSceneAssets(self, name);
+            const entry = self.scenes.get(name).?;
 
             // Dev-mode eager-load fallback (issue #502) — same logic as
             // setScene, kept in sync. See setScene for the full rationale.
             var eager_buf: ?[][]const u8 = null;
             defer if (eager_buf) |b| self.allocator.free(b);
-            const target_assets: []const []const u8 = if (entry.assets.len == 0 and comptime builtin.mode == .Debug) blk: {
-                const all = collectAllRegisteredAssetNames(self.allocator, &self.assets) catch break :blk entry.assets;
+            const target_assets: []const []const u8 = if (declared_assets.len == 0 and comptime builtin.mode == .Debug) blk: {
+                const all = collectAllRegisteredAssetNames(self.allocator, &self.assets) catch break :blk declared_assets;
                 if (all.len == 0) {
                     self.allocator.free(all);
-                    break :blk entry.assets;
+                    break :blk declared_assets;
                 }
                 std.log.info("[Scene] '{s}' has no manifest, eager-loaded {d} resources (Debug build)", .{ name, all.len });
                 eager_buf = all;
                 break :blk @as([]const []const u8, all);
-            } else entry.assets;
+            } else declared_assets;
 
             // Manifest gate — see `setScene` for the full
             // explanation. Both entry points participate in the

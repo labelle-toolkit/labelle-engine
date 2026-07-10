@@ -110,6 +110,7 @@ pub fn build(b: *std.Build) void {
         // unification; assembler-side codegen (making `meta.assets` optional)
         // is the follow-up.
         "test/asset_manifest_test.zig",
+        "test/asset_inference_wire_test.zig",
         "test/animation_def_test.zig",
         "test/animation_state_transitions_test.zig",
         "test/animation_def_runtime_test.zig",
