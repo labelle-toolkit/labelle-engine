@@ -21,31 +21,177 @@ pub fn Mixin(comptime Game: type) type {
     const Entity = Game.EntityType;
     const CameraComp = Game.CameraComp;
     const Position = core.Position;
+    // The generated render-layer enum (or `void` on layer-less renderers). Its
+    // configs' `.camera` values, plus `"main"`, form the comptime tag
+    // vocabulary a seed can warn against. See `tagVocabularyCheckable`.
+    const LayerEnum = Game.RenderLayerEnum;
 
     return struct {
-        /// Seed the active gfx camera from the authored `Camera` component:
-        /// locate the first entity carrying both `Position` and `Camera`, read
-        /// its WORLD position (`getWorldPosition`, matching the digest and
-        /// `editor_set_entity_position`) plus `Camera.zoom`, and apply them to
-        /// `getCamera()`. A no-op — and a comptime no-op that never touches the
-        /// (possibly `void`) camera seam — when the renderer has no settable
-        /// camera or the scene declares no Camera entity. Single-camera MVP:
-        /// the first Camera entity wins.
+        // Latching warn-once flags (camera-bound layers). Seeding runs on every
+        // PAUSED frame (apply-while-paused), so each diagnostic is emitted at
+        // most once per process rather than every frame. Struct-scope statics:
+        // one instantiation per concrete `Game`.
+        var warned_unknown_tag = false;
+        var warned_extra_main = false;
+        var warned_extra_tag = false;
+        var warned_overflow = false;
+
+        /// Seed the gfx cameras from the authored `Camera` components
+        /// (camera-bound layers, labelle-engine#723/#724). Reset-then-seed:
+        ///
+        ///   1. `resetSecondary()` deactivates + untags slots 1–3 so a
+        ///      removed/renamed secondary camera never leaves a live bound
+        ///      slot. Slot 0 (`"main"`) is untouched.
+        ///   2. Iterate EVERY entity carrying `Position` + `Camera`, reading
+        ///      its WORLD position (`getWorldPosition`, matching the digest and
+        ///      `editor_set_entity_position`) plus `Camera.zoom`:
+        ///        * tag `"main"` → configure slot 0 via `getCamera()` (the
+        ///          existing single-camera behavior) and tag it `"main"`. First
+        ///          `"main"` wins; extras warn once.
+        ///        * any other tag → claim the next free secondary slot (1–3)
+        ///          via the camera manager. First camera per tag wins; extras
+        ///          and slot overflow past 3 warn once and are ignored.
+        ///
+        /// Zero Camera entities → nothing is seeded and slot 0's default camera
+        /// is left exactly as-is (the invariant: a scene with no Camera renders
+        /// as it did before this feature). A comptime no-op that never touches
+        /// the (possibly `void`) camera seam on camera-less renderers, and off
+        /// entirely for a project that registered its own `Camera` (finding #1).
+        ///
+        /// The multi-slot tagged path requires the gfx ≥1.26 TAGGED manager
+        /// (`hasTaggedCameraManager`). A renderer with a settable camera but an
+        /// OLD, non-tagged manager falls back to the pre-PR single-camera seed
+        /// (first `{Position,Camera}` → `getCamera()`, no reset, no tags) so it
+        /// still compiles and behaves exactly as before.
         pub fn seedCameraFromComponent(self: *Game) void {
             if (comptime !camera_mod.hasSettableCamera(Game)) return;
-            // Defer to a project that registered its OWN `Camera` (finding #1):
-            // the built-in seed is off for such projects.
             if (comptime !Game.camera_is_builtin) return;
+
+            if (comptime !camera_mod.hasTaggedCameraManager(Game)) {
+                // Pre-PR fallback: seed the first Camera entity onto the single
+                // renderer camera. No manager reset / tags — the non-tagged
+                // manager type declares none of those methods, so this branch
+                // must never reference them.
+                var v = self.ecs_backend.view(.{ Position, CameraComp }, .{});
+                defer v.deinit();
+                while (v.next()) |ent| {
+                    const cam = self.ecs_backend.getComponent(ent, CameraComp) orelse continue;
+                    const wp = self.getWorldPosition(ent);
+                    const camera = self.getCamera();
+                    camera.setPosition(wp.x, wp.y);
+                    camera.setZoom(cam.zoom);
+                    return;
+                }
+                return;
+            }
+
+            const mgr = self.getCameraManager();
+            // Clear stale secondary bindings before re-seeding (slot 0 kept).
+            mgr.resetSecondary();
+
+            var seen_main = false;
+            // First-per-tag bookkeeping for the ≤ 3 secondary slots. Inline
+            // fixed buffers — never heap (mirrors the tag-storage rule).
+            var claimed_buf: [3][camera_mod.tag_capacity]u8 = undefined;
+            var claimed_len: [3]usize = .{ 0, 0, 0 };
+            var claimed_count: usize = 0;
+            var next_slot: usize = 1; // slots 1..3; > 3 == exhausted
+
             var v = self.ecs_backend.view(.{ Position, CameraComp }, .{});
             defer v.deinit();
             while (v.next()) |ent| {
                 const cam = self.ecs_backend.getComponent(ent, CameraComp) orelse continue;
                 const wp = self.getWorldPosition(ent);
-                const camera = self.getCamera();
-                camera.setPosition(wp.x, wp.y);
-                camera.setZoom(cam.zoom);
-                return;
+                const tag = cam.tagSlice();
+
+                // Warn once on a tag no layer binds (comptime vocabulary).
+                if (comptime tagVocabularyCheckable()) {
+                    if (!tagInVocabulary(tag)) {
+                        warnOnce(self, &warned_unknown_tag, "camera tag '{s}' is bound by no layer", .{tag});
+                    }
+                }
+
+                if (std.mem.eql(u8, tag, "main")) {
+                    if (seen_main) {
+                        warnOnce(self, &warned_extra_main, "multiple 'main' camera entities; keeping the first", .{});
+                        continue;
+                    }
+                    seen_main = true;
+                    // Seed slot 0 EXPLICITLY (not via `getCamera()`, which may
+                    // return the *selected* camera): the main transform and the
+                    // `"main"` tag must both land on slot 0.
+                    const camera = mgr.getCamera(0);
+                    camera.setPosition(wp.x, wp.y);
+                    camera.setZoom(cam.zoom);
+                    mgr.setTag(0, "main");
+                    continue;
+                }
+
+                // Secondary tag — first camera per tag wins.
+                var dup = false;
+                for (0..claimed_count) |i| {
+                    if (std.mem.eql(u8, claimed_buf[i][0..claimed_len[i]], tag)) {
+                        dup = true;
+                        break;
+                    }
+                }
+                if (dup) {
+                    warnOnce(self, &warned_extra_tag, "multiple camera entities tagged '{s}'; keeping the first", .{tag});
+                    continue;
+                }
+
+                if (next_slot > 3) {
+                    warnOnce(self, &warned_overflow, "more than 3 secondary cameras; tag '{s}' ignored", .{tag});
+                    continue;
+                }
+
+                const slot: u2 = @intCast(next_slot);
+                mgr.setActive(slot, true);
+                mgr.setTag(slot, tag);
+                const scam = mgr.getCamera(slot);
+                scam.setPosition(wp.x, wp.y);
+                scam.setZoom(cam.zoom);
+
+                if (claimed_count < 3) {
+                    const n = @min(tag.len, camera_mod.tag_capacity);
+                    @memcpy(claimed_buf[claimed_count][0..n], tag[0..n]);
+                    claimed_len[claimed_count] = n;
+                    claimed_count += 1;
+                }
+                next_slot += 1;
             }
+        }
+
+        /// Whether the render-layer enum is a genuine config-bearing enum whose
+        /// `LayerConfig` carries a `.camera` field — i.e. the tag vocabulary is
+        /// introspectable. False on layer-less renderers (`void`) or pre-#724
+        /// gfx (no `.camera`), where only `"main"` is a known tag and the
+        /// unknown-tag warning is suppressed rather than false-firing.
+        fn tagVocabularyCheckable() bool {
+            if (LayerEnum == void) return false;
+            if (@typeInfo(LayerEnum) != .@"enum") return false;
+            if (!@hasDecl(LayerEnum, "config")) return false;
+            const Cfg = @TypeOf(@field(LayerEnum, @typeInfo(LayerEnum).@"enum".fields[0].name).config());
+            return @hasField(Cfg, "camera");
+        }
+
+        /// True when `tag` is `"main"` or equals some layer's `.camera` binding.
+        /// Only reached under `comptime tagVocabularyCheckable()`, so the enum
+        /// reflection below is never analyzed on a `void`/pre-#724 layer enum.
+        fn tagInVocabulary(tag: []const u8) bool {
+            if (std.mem.eql(u8, tag, "main")) return true;
+            inline for (comptime std.enums.values(LayerEnum)) |l| {
+                if (l.config().camera) |c| {
+                    if (std.mem.eql(u8, c, tag)) return true;
+                }
+            }
+            return false;
+        }
+
+        fn warnOnce(self: *Game, flag: *bool, comptime fmt: []const u8, args: anytype) void {
+            if (flag.*) return;
+            flag.* = true;
+            self.log.warn(fmt, args);
         }
 
         /// MERGE a JSON patch into entity `ent`'s `Camera` component, then
@@ -57,8 +203,9 @@ pub fn Mixin(comptime Game: type) type {
         ///
         /// Errors (leaving the entity untouched) when `source` is unparseable
         /// or its top level is not a JSON object. The parse tree lives in a
-        /// call-scoped arena; `Camera` has no string fields, so nothing aliases
-        /// `source` past the call and the caller may free it immediately.
+        /// call-scoped arena; `Camera.tag` is copied INLINE (bounded buffer,
+        /// not a slice into `source`), so nothing aliases `source` past the
+        /// call and the caller may free it immediately.
         pub fn applyCameraComponentJson(self: *Game, ent: Entity, source: []const u8) !void {
             var arena = std.heap.ArenaAllocator.init(self.allocator);
             defer arena.deinit();
@@ -102,6 +249,16 @@ pub fn Mixin(comptime Game: type) type {
                     if (vp.get("height")) |v| out.height = try viewportInt(v);
                     comp.viewport = out;
                 },
+                else => return error.InvalidCameraComponentJson,
+            };
+
+            // A PRESENT `tag` must be a string; it seeds the inline bounded
+            // buffer (camera-bound layers, #723/#724). An ABSENT key leaves the
+            // existing/default tag untouched (patch semantics, like `zoom`). A
+            // wrong-shaped value is a validation failure. Because the tag is
+            // copied INLINE, nothing aliases the call-scoped `source` arena.
+            if (obj.get("tag")) |t_val| switch (t_val) {
+                .string => |s| comp.setTagSlice(s),
                 else => return error.InvalidCameraComponentJson,
             };
 

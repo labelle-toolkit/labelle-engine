@@ -596,6 +596,9 @@ pub fn Mixin(comptime Game: type) type {
                         // Preserve the 1.0 default if a (malformed) save omits
                         // zoom — `getNumberField` would otherwise yield 0.
                         if (cam_obj.get("zoom") != null) cam.zoom = getNumberField(cam_obj, "zoom");
+                        // Camera tag (camera-bound layers, #723/#724). Absent in
+                        // pre-#724 saves → the `"main"` default is kept.
+                        if (getStringField(cam_obj, "tag")) |t| cam.setTagSlice(t);
                         if (cam_obj.get("viewport")) |vp_val| {
                             if (vp_val == .object) {
                                 const vp = vp_val.object;
@@ -743,6 +746,15 @@ pub fn Mixin(comptime Game: type) type {
             // itself — making loadGameState self-contained and retiring
             // the manual `assets.acquire(...)` loop games shipped (FP#542).
             self.armPostLoadRenderGate(saved_scene);
+
+            // Re-seed the gfx cameras from the just-restored `Camera`
+            // components (camera-bound layers, #723/#724). Without this a save
+            // that authored a tagged secondary camera comes back with its
+            // component reattached but no live camera slot bound — the layers
+            // it drives would fall back to the main camera. `reset-then-seed`
+            // also clears any stale secondary slot the pre-load scene left
+            // active. Comptime no-op on camera-less / project-Camera builds.
+            self.seedCameraFromComponent();
         }
 
         /// Arm the post-load render gate from the current scene's

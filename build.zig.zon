@@ -58,9 +58,15 @@
         // hand-rolled stand-in. `lazy` so downstream consumers of the engine
         // module never fetch it — it is reached only by the `test` step via
         // `b.lazyDependency`, mirroring `zspec`.
+        // Bumped to gfx v1.26.0 for camera-bound layers (RFC #723): engine
+        // 1.83.0's tagged-camera seeding drives gfx's CameraManager
+        // setTag/findByTag/resetSecondary (added in 1.26.0). Test-only + lazy —
+        // the engine module takes no direct gfx dep (the renderer arrives via
+        // RenderImpl), so the effective gfx floor is enforced at the consuming
+        // game's build; this pin only feeds the tilemap sub-package test.
         .labelle_gfx = .{
-            .url = "https://github.com/labelle-toolkit/labelle-gfx/archive/refs/tags/v1.24.0.tar.gz",
-            .hash = "labelle_gfx-1.24.0-nMpCPF3VBAANEcKU73ait49fJJ2rchmMJgsAW8gI2ntB",
+            .url = "https://github.com/labelle-toolkit/labelle-gfx/archive/refs/tags/v1.26.0.tar.gz",
+            .hash = "labelle_gfx-1.26.0-nMpCPMYYBQBBX_7Js1AHBQKWYeI7Hm8U2aEL8t9cOIJO",
             .lazy = true,
         },
     },

@@ -170,6 +170,15 @@ pub fn Mixin(comptime Game: type) type {
             return self.renderer.getCameraManager();
         }
 
+        /// The lowest ACTIVE camera slot carrying `tag`, or `null` if none
+        /// (camera-bound layers, labelle-engine#723/#724). `"main"` resolves to
+        /// slot 0 once a `Camera` component has seeded it; a secondary tag
+        /// resolves to whichever slot 1–3 the seed bound it to. Forwards to the
+        /// gfx camera manager's `findByTag`.
+        pub fn getCameraByTagImpl(self: *Game, tag: []const u8) ?*CameraType {
+            return self.renderer.getCameraManager().findByTag(tag);
+        }
+
         // ── Accessors ─────────────────────────────────────────────
 
         pub fn getRenderer(self: *Game) *RenderImpl {
