@@ -3,7 +3,7 @@
 **Issue:** labelle-toolkit/labelle-engine#237 (updated 2026-07 — re-scoped from "Lua module" to the language-plugin family)  
 **Status:** Draft  
 **Author:** Alexandre  
-**Date:** 2026-07-10 (rev 2 — POC validated: PR #734; rev 3 — single-repo packaging: `labelle-scripting` with language sub-modules; rev 4 — reference bindings: Lua queries, Ruby events; rev 5 — Ruby controllers: script-language domain owners; rev 6 — script-declared components: generate-time codegen, runtime tier for mods; rev 7 — native declaration idioms per language; rev 8 — policy: one language per project, enforced at generate; rev 9 — policy rationale: role-based, pack/mod carve-outs)
+**Date:** 2026-07-10 (rev 2 — POC validated: PR #734; rev 3 — single-repo packaging: `labelle-scripting` with language sub-modules; rev 4 — reference bindings: Lua queries, Ruby events; rev 5 — Ruby controllers: script-language domain owners; rev 6 — script-declared components: generate-time codegen, runtime tier for mods; rev 7 — native declaration idioms per language; rev 8 — policy: one language per project, enforced at generate; rev 9 — policy rationale: role-based, pack/mod carve-outs; rev 10 — Zig plugins in script-language projects)
 
 ## Problem
 
@@ -189,6 +189,17 @@ Two tiers, one DSL:
 - **Rust**: `#[labelle::component] struct Hunger { level: f32, starving: bool }` — the proc-macro emits schema JSON at build; the type system is the DSL.
 - **Crystal**: annotated struct, schema dumped by a declare-mode compile (same runner pattern as Ruby).
 - **C#**: `[LabelleComponent] record Hunger(float Level, bool Starving);`
+
+### 5. Zig plugins in script-language projects
+
+A "C# project" is still a **Zig binary whose scripts are C#** — the assembler generates `main.zig`, and every Zig plugin (pathfinding, fsm, imgui) compiles in unchanged: comptime hooks, controllers, zero-cost gates, full native speed. The CLR/VM is a guest. Interop is the pathfinder-triad, crossed once:
+
+- **Events — free by construction**: plugin events ride `GameEvents`; the contract's subscribe/poll drains the same bus. `Labelle.On("pathfinder__arrived", ev => …)`.
+- **Components — free by construction**: plugin components live in the shared registry; scripts read/write them by name like any component.
+- **Commands/queries — one seam, already designed once**: comptime calls (`pathfinder.Controller.navigate(game, …)`) are unreachable from a VM, so the contract adds `labelle_plugin_call(plugin, command, params_json) → json` — dispatched through the **same named-handler registry as `_editor_plugin_command`** (asset-plugins Phase 3, engine#729). A plugin registers its handlers once (~20 lines: parse params → call its own Controller) and becomes reachable from **studio panels and every scripting language simultaneously**. `Labelle.Command("pathfinder", "navigate", new { entity, x, y })`.
+- **Typed wrappers (polish tier)**: the handler manifest is introspectable, so `labelle generate` can emit per-language typed wrappers (`Pathfinder.Navigate(worker, 340, 186)`) — the component declare-mode codegen run in reverse.
+
+The performance framing is the architecture's best case: heavy machinery (graph, walkers, arrival detection) runs at full Zig speed inside the plugin; the script pays the JSON boundary only at orchestration points. Hot paths stay native — with plugins as the hot path.
 
 ## Backward compatibility
 
