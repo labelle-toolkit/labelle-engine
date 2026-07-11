@@ -68,6 +68,9 @@ const tilemap_mixin = @import("game/tilemap_mixin.zig");
 const camera_mod = @import("camera.zig");
 const image_component_mod = @import("image_component.zig");
 const camera_mixin = @import("game/camera_mixin.zig");
+const emitter_mod = @import("emitter.zig");
+const emitter_mixin = @import("game/emitter_mixin.zig");
+const particles_mod = @import("particles.zig");
 const frame_profiler_mod = @import("frame_profiler.zig");
 
 /// Full game configuration — the assembler fills ALL comptime slots.
@@ -318,6 +321,20 @@ pub fn GameConfigWithYAxis(
         pub const tilemap_percamera_background_supported = tilemap_interleave_supported and
             @hasDecl(RenderImpl, "renderWithLayerHooks");
 
+        // ── Particles / Emitter (#750) ───────────────────────────────
+        /// Engine built-in `Emitter` component (authors a particle emitter;
+        /// see `src/emitter.zig`). Handled by dedicated built-in channels
+        /// (scene loader, side-table runtime) — NOT a `ComponentRegistry`
+        /// component, unless a project registers its own `Emitter`, which
+        /// takes precedence (the scene-loader branch is gated on
+        /// `!Components.has("Emitter")`).
+        pub const EmitterComp = emitter_mod.Emitter;
+        /// True when the project did NOT register its own `Emitter` — i.e.
+        /// the engine's built-in emitter channel is active. Mirrors
+        /// `camera_is_builtin`.
+        pub const emitter_is_builtin =
+            !(@hasDecl(ComponentsType, "has") and ComponentsType.has("Emitter"));
+
         pub const Input = @import("input.zig").InputInterface(InputImpl);
 
         /// True when the active input backend itself declares
@@ -394,6 +411,7 @@ pub fn GameConfigWithYAxis(
         const RosterMixin = roster_mod.Mixin(Self);
         const TilemapMixin = tilemap_mixin.Mixin(Self);
         const CameraMixin = camera_mixin.Mixin(Self);
+        const EmitterMixin = emitter_mixin.Mixin(Self);
         // VideoImpl/AudioImpl are `GameConfig` fn params (not `Self`
         // decls), so the construction mixin takes them explicitly.
         const InitMixin = game_init_mod.Mixin(Self, VideoImpl, AudioImpl);
@@ -548,6 +566,13 @@ pub fn GameConfigWithYAxis(
         /// CURRENTLY active ECS. Proper per-world scoping (own the table on
         /// `World`, clean it in `destroyWorld`) is tracked in #704.
         tilemaps: if (tilemap_supported) std.AutoHashMap(Entity, *TilemapRuntimeType) else void,
+        /// Per-entity particle sims for `Emitter` components (#750), keyed by
+        /// entity. A `*ParticleSystem` owns a heap pool, so it can't live in
+        /// the ECS; the `particles_tick` creates one per emitter on first
+        /// sight. Renderer-agnostic (pure CPU sim), so — unlike `tilemaps` —
+        /// this is always present. `resetEcsBackend` clears it via
+        /// `clearParticleSystems` (entity ids die with the ECS reset).
+        particle_systems: std.AutoHashMap(Entity, *particles_mod.ParticleSystem),
         /// Runtime scene-source overrides (labelle-studio Play mode /
         /// `editor_api`). Keyed by scene NAME (e.g. `"main"`); the JSONC
         /// loader consults this map BEFORE the embedded/compiled source
@@ -771,6 +796,14 @@ pub fn GameConfigWithYAxis(
         /// halting the rest of the script loop. Only meaningful alongside
         /// `drive_sprite_animations`. Set via `setSpriteAnimationsPaused`.
         sprite_animations_paused: bool = false,
+        /// Opt-in: when true the engine steps every `Emitter`'s particle sim
+        /// each tick and draws the live particles in the render pass (#750).
+        /// Off by default so a game with no emitters is byte-identical; the
+        /// scene loader flips it on automatically when it loads an `Emitter`
+        /// (see `component_apply.applyEmitter`). Also settable via
+        /// `setDriveParticles`. Gated on `scaled_dt != 0` in the tick, so a
+        /// hard pause (`time_scale == 0`) freezes particles.
+        drive_particles: bool = false,
         frame_number: u64 = 0,
         /// Current game state (e.g. "menu", "playing", "paused").
         /// Set via setState() or queueStateChange(). Default is "running".
@@ -1058,6 +1091,15 @@ pub fn GameConfigWithYAxis(
         pub const addEmbeddedTilemapAsset = TilemapMixin.addEmbeddedTilemapAsset;
         pub const clearTilemaps = TilemapMixin.clearTilemaps;
         pub const deinitTilemaps = TilemapMixin.deinitTilemaps;
+
+        // ── Particles / Emitter side-table (#750) — `game/emitter_mixin.zig`
+        pub const setDriveParticles = EmitterMixin.setDriveParticles;
+        pub const particleSystem = EmitterMixin.particleSystem;
+        pub const acquireParticleSystem = EmitterMixin.acquireParticleSystem;
+        pub const releaseParticleSystem = EmitterMixin.releaseParticleSystem;
+        pub const clearParticleSystems = EmitterMixin.clearParticleSystems;
+        pub const reapGhostEmitters = EmitterMixin.reapGhostEmitters;
+        pub const deinitParticleSystems = EmitterMixin.deinitParticleSystems;
 
         // ── Roster cache (#653, #657) — `game/roster.zig` ─────────
         // Borrowed-slice lifetime contract + design rationale live in

@@ -90,6 +90,7 @@ pub fn Mixin(comptime Game: type, comptime VideoImpl: type, comptime AudioImpl: 
                 .tilemaps = if (Game.tilemap_supported)
                     std.AutoHashMap(Entity, *Game.TilemapRuntimeType).init(allocator)
                 else {},
+                .particle_systems = std.AutoHashMap(Entity, *@import("../particles.zig").ParticleSystem).init(allocator),
                 .scene_source_overrides = std.StringHashMap([]const u8).init(allocator),
                 .runtime_anim_defs = animation_def_runtime.RuntimeAnimDefs.init(allocator),
                 .gizmo_state = gizmo_draws_mod.GizmoState(Entity).init(allocator),

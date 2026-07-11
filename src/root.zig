@@ -736,6 +736,13 @@ pub const ParticleRamp = particles_mod.Ramp;
 pub const ParticleColor = particles_mod.Color;
 pub const ParticleRenderData = particles_mod.RenderData;
 pub const particle_presets = particles_mod.presets;
+// The `Emitter` ECS component (#750) + its per-frame tick/render glue. The
+// scene loader recognizes `Emitter` and auto-enables the phase; a game can
+// also drive it manually via `game.setDriveParticles(true)`.
+pub const emitter_mod = @import("emitter.zig");
+pub const Emitter = emitter_mod.Emitter;
+pub const EmitterPreset = emitter_mod.EmitterPreset;
+pub const particles_tick = @import("particles_tick.zig");
 
 // ── Atlas ──
 pub const SpriteData = atlas_mod.SpriteData;
