@@ -271,6 +271,19 @@ pub const Events = struct {
         dt: f32 = 0,
     };
 
+    /// Fired once per fixed-timestep step the accumulator runs inside a
+    /// single `tick` (#751) — 0..N times per frame at the stable
+    /// `Game.fixed_dt`, decoupled from render rate. Mirrors
+    /// `HookPayload.fixed_update`. Opt-in: a game enables the phase via
+    /// `Game.setFixedTimestepEnabled(true)`; with it off (no `fixed/`
+    /// systems) this never fires and behaviour is byte-identical. Wire a
+    /// flow / hook to `engine__fixed_tick` for physics / lockstep sim.
+    /// `step_index` is the monotonic global fixed-step counter.
+    pub const fixed_tick = struct {
+        step_index: u64 = 0,
+        dt: f32 = 0,
+    };
+
     /// Fired when the ECS façade creates an entity. Mirrors
     /// `HookPayload.entity_created`. Entity IDs above the u32 range
     /// are clipped — the engine's on-disk catalog convention assumes

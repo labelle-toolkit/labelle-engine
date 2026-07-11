@@ -55,6 +55,7 @@ const input_events_mixin = @import("game/input_events_mixin.zig");
 const events_mixin = @import("game/events_mixin.zig");
 const editor_command_mixin = @import("game/editor_command_mixin.zig");
 const loop_mixin = @import("game/loop_mixin.zig");
+const fixed_timestep_mixin = @import("game/fixed_timestep_mixin.zig");
 const misc_mixin = @import("game/misc_mixin.zig");
 const animation_runtime_mixin = @import("game/animation_runtime_mixin.zig");
 const animation_def_runtime = @import("animation_def_runtime.zig");
@@ -386,6 +387,7 @@ pub fn GameConfigWithYAxis(
         const EventsMixin = events_mixin.Mixin(Self);
         const EditorCommandMixin = editor_command_mixin.Mixin(Self);
         const LoopMixin = loop_mixin.Mixin(Self);
+        const FixedTimestepMixin = fixed_timestep_mixin.Mixin(Self);
         const MiscMixin = misc_mixin.Mixin(Self);
         const AnimationRuntimeMixin = animation_runtime_mixin.Mixin(Self);
         const PrefabRuntimeMixin = prefab_runtime_mixin.Mixin(Self);
@@ -806,6 +808,41 @@ pub fn GameConfigWithYAxis(
         /// Distinct from `game_log.elapsed_s`, which stays wall-time for
         /// log stamps.
         clock_s: f64 = 0,
+
+        // ── Fixed-timestep simulation phase (#751) ──────────────────────
+        // Bevy-`FixedUpdate` equivalent: an accumulator-driven phase that
+        // runs 0..N times per rendered frame at a stable dt, decoupled from
+        // render rate, so physics / lockstep sim is deterministic across fps
+        // caps. Fully additive — disabled by default, so a project with no
+        // `fixed/` systems is byte-identical. Driven from `tick` via
+        // `advanceFixedTimestep`; the machinery lives in
+        // `game/fixed_timestep_mixin.zig`.
+
+        /// Opt-in gate. While `false` (default) the fixed phase never runs
+        /// (no accumulation, no `fixed_update` hooks, `fixed_alpha` stays 0).
+        /// Flip via `setFixedTimestepEnabled`.
+        fixed_timestep_enabled: bool = false,
+        /// Fixed step length in seconds (default 1/60). Set via
+        /// `setFixedTimestep`; the drain loop advances the sim in slices of
+        /// exactly this size.
+        fixed_dt: f64 = 1.0 / 60.0,
+        /// Unconsumed (scaled) time carried between frames. Whole `fixed_dt`
+        /// slices are drained out of it each active tick; the sub-step
+        /// remainder becomes `fixed_alpha`. `f64` for stable long-session
+        /// summation.
+        fixed_accumulator: f64 = 0,
+        /// Monotonic count of fixed steps run since game start (never reset).
+        /// Read via `fixedStepCount()` — the lockstep / state-hash cursor.
+        fixed_step_count: u64 = 0,
+        /// Render-interpolation factor in `[0, 1)`: `fixed_accumulator /
+        /// fixed_dt` after the last drain. Read via `fixedAlpha()` to lerp
+        /// visual state between the previous and current fixed states.
+        fixed_alpha: f32 = 0,
+        /// Spiral-of-death clamp: the most fixed steps a single frame may
+        /// run before the remaining backlog is dropped (the sim slows rather
+        /// than freezing on an unbounded catch-up after a hitch). At the 1/60
+        /// default this caps a frame at ~83 ms of sim before it gives up.
+        max_fixed_steps_per_frame: u32 = 5,
 
         /// Runtime timer wheel (#25 Stage 2). Owns its pending list on the
         /// game allocator; initialized in `init`, drained in `deinit`. Flow
@@ -1244,6 +1281,16 @@ pub fn GameConfigWithYAxis(
         pub const armPostLoadRenderGate = SaveLoadMixin.armPostLoadRenderGate;
         pub const updatePostLoadRenderGate = SaveLoadMixin.updatePostLoadRenderGate;
         pub const releaseLoadAcquired = SaveLoadMixin.releaseLoadAcquired;
+
+        // ── Fixed-timestep phase (mixin, #751) ──────────────────────
+        // Full docs in `game/fixed_timestep_mixin.zig`.
+        pub const setFixedTimestepEnabled = FixedTimestepMixin.setFixedTimestepEnabled;
+        pub const isFixedTimestepEnabled = FixedTimestepMixin.isFixedTimestepEnabled;
+        pub const setFixedTimestep = FixedTimestepMixin.setFixedTimestep;
+        pub const fixedTimestep = FixedTimestepMixin.fixedTimestep;
+        pub const fixedAlpha = FixedTimestepMixin.fixedAlpha;
+        pub const fixedStepCount = FixedTimestepMixin.fixedStepCount;
+        pub const advanceFixedTimestep = FixedTimestepMixin.advanceFixedTimestep;
 
         // ── Game State Machine (mixin) ──────────────────────────────
         pub const setState = StateMixin.setState;

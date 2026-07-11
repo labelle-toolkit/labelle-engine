@@ -213,6 +213,15 @@ pub fn Mixin(comptime Game: type) type {
             // games (`GameEvents = void`).
             self.emitEngineEvent("engine__tick", .{ .frame_number = self.frame_number, .dt = scaled_dt });
 
+            // Fixed-timestep phase (#751). Drains whole `fixed_dt` slices out
+            // of the accumulator BEFORE the variable-dt update — matching
+            // Bevy's `FixedUpdate`-before-`Update` order, so gameplay reads a
+            // just-stepped sim. Fully additive: a no-op (zero cost past one
+            // bool check) unless `setFixedTimestepEnabled(true)` opted in, so
+            // the existing ordering the generated main pins around `tick` is
+            // undisturbed for projects without a `fixed/` phase.
+            self.advanceFixedTimestep(scaled_dt);
+
             if (self.active_scene_ptr) |scene_ptr| {
                 if (self.active_scene_update_fn) |update_fn| {
                     update_fn(scene_ptr, scaled_dt);
