@@ -189,6 +189,60 @@ test "burst emits immediately regardless of rate, clamped to the ceiling" {
     try testing.expect(s.particles.capacity == 50);
 }
 
+test "raising max_particles after init never spawns past the reserved pool" {
+    // config is publicly mutable; a caller can bump max_particles above what
+    // init reserved. Spawns must still be clamped to the reserved capacity
+    // (spawnCeiling) — appending past it would be UB / a safety panic.
+    const cfg: EmitterConfig = .{ .rate = 1000, .lifetime = 100, .speed = 0, .max_particles = 8, .seed = 1 };
+    var s = try ParticleSystem.init(testing.allocator, cfg);
+    defer s.deinit(testing.allocator);
+
+    const reserved = s.particles.capacity; // == 8
+    s.config.max_particles = 10_000; // raise beyond the reservation
+
+    var f: usize = 0;
+    while (f < 20) : (f += 1) {
+        s.step(0.1); // 100 due per frame, far over the reservation
+        try testing.expect(s.liveCount() <= reserved);
+        try testing.expectEqual(reserved, s.particles.capacity); // no realloc
+    }
+    // Same guard on the burst path.
+    s.burst(10_000);
+    try testing.expectEqual(reserved, s.particles.capacity);
+    try testing.expect(s.liveCount() <= reserved);
+}
+
+test "reset re-enables emission so a stopped emitter restarts cleanly" {
+    const cfg: EmitterConfig = .{ .rate = 60, .lifetime = 10, .speed = 0, .max_particles = 256, .seed = 4 };
+    var s = try ParticleSystem.init(testing.allocator, cfg);
+    defer s.deinit(testing.allocator);
+
+    // Stop emitting (e.g. to let existing particles dissipate before reuse).
+    s.setEmitting(false);
+    var i: usize = 0;
+    while (i < 10) : (i += 1) s.step(1.0 / 60.0);
+    try testing.expectEqual(@as(usize, 0), s.liveCount()); // nothing emitted while stopped
+
+    // reset() must return to the fresh initial state — including emitting=true.
+    s.reset();
+    i = 0;
+    while (i < 10) : (i += 1) s.step(1.0 / 60.0);
+    try testing.expect(s.liveCount() > 0); // emission resumed
+}
+
+test "a long frame ages continuous spawns instead of dumping them all at age 0" {
+    // rate=100, lifetime≈0.105s, one giant 1.0s frame. Only emissions within
+    // the last ~lifetime of the frame should still be alive — roughly 10-11,
+    // NOT the full 100 the naive (spawn-all-at-age-0) path would leave.
+    const cfg: EmitterConfig = .{ .rate = 100, .lifetime = 0.105, .speed = 0, .max_particles = 1000, .seed = 6 };
+    var s = try ParticleSystem.init(testing.allocator, cfg);
+    defer s.deinit(testing.allocator);
+
+    s.step(1.0);
+    try testing.expect(s.liveCount() > 0);
+    try testing.expect(s.liveCount() <= 15); // ~one lifetime's worth, not 100
+}
+
 // ── Render readback ─────────────────────────────────────────────────────────
 
 test "renderData applies size and alpha ramps over life" {
