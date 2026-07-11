@@ -699,6 +699,21 @@ pub const TweenBuilder = tween_mod.TweenBuilder;
 pub const tweenTick = tween_tick_mod.tick;
 pub const TweenAlwaysAlive = tween_tick_mod.AlwaysAlive;
 
+// ── Particles ──
+// CPU-simulated 2D particle core (#750, `labelle-particles` v1): a pooled,
+// seeded, deterministic emitter sim decoupled from Game/ECS/renderer.
+// `ParticleSystem.init(alloc, config)` then `step(dt)` each frame and
+// iterate `live()` / `renderData(i)` to draw through the sprite batcher.
+// Transient by design — never serialized. `presets` ships smoke/sparks/rain.
+pub const particles_mod = @import("particles.zig");
+pub const ParticleSystem = particles_mod.ParticleSystem;
+pub const EmitterConfig = particles_mod.EmitterConfig;
+pub const Particle = particles_mod.Particle;
+pub const ParticleRamp = particles_mod.Ramp;
+pub const ParticleColor = particles_mod.Color;
+pub const ParticleRenderData = particles_mod.RenderData;
+pub const particle_presets = particles_mod.presets;
+
 // ── Atlas ──
 pub const SpriteData = atlas_mod.SpriteData;
 pub const FindSpriteResult = atlas_mod.FindSpriteResult;
