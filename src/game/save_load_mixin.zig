@@ -9,6 +9,7 @@
 //!   * `save_load/save.zig`        — `saveGameState` (the serialization walk).
 //!   * `save_load/load.zig`        — `loadGameState` + its Phase 1a/1b/1c →
 //!     Phase 2 sequence (kept together) — the rehydration/load seams.
+//!     Its pure tag-checked JSON accessors live in `save_load/json_read.zig`.
 //!   * `save_load/render_gate.zig` — the transient post-load render-gate
 //!     machinery (`armPostLoadRenderGate`, `updatePostLoadRenderGate`,
 //!     `releaseLoadAcquired`) with its own per-frame lifecycle.

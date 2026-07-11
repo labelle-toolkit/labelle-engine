@@ -3,10 +3,15 @@
 //! Extracted verbatim from `save_load_mixin.zig`; behaviour is identical.
 //! Provides `loadGameState` (with its Phase 1a/1b/1c → Phase 2 sequence
 //! kept together here — the phases are load-bearing for understanding the
-//! load-path symmetry) plus the load-only JSON accessors. The transient
-//! post-load render gate (`armPostLoadRenderGate`, `updatePostLoadRenderGate`,
+//! load-path symmetry) plus the two `Game`-aware tree helpers
+//! (`findChildByLocalPath`, `markSubtreeRendererTracked`). The pure,
+//! tag-checked JSON accessors now live in `json_read.zig` (they're
+//! `std.json`-only, so extracting them leaves this file focused on the
+//! rehydration walk); they're re-aliased at mixin scope below so the call
+//! sites read unchanged. The transient post-load render gate
+//! (`armPostLoadRenderGate`, `updatePostLoadRenderGate`,
 //! `releaseLoadAcquired`) is a distinct concern with its own per-frame
-//! lifecycle, so it now lives in `render_gate.zig`; `loadGameState`'s final
+//! lifecycle, so it lives in `render_gate.zig`; `loadGameState`'s final
 //! step reaches it through `self.armPostLoadRenderGate(...)` (aliased onto
 //! `Game`). Shared helpers (`entityToU64`, `isRegistered`,
 //! `collectEntities`, `SAVE_VERSION`) live in `common.zig` and are reached
@@ -18,6 +23,7 @@ const io_helper = @import("../../io_helper.zig");
 const core = @import("labelle-core");
 const serde = core.serde;
 const common = @import("common.zig");
+const json_read = @import("json_read.zig");
 
 const SAVE_VERSION = common.SAVE_VERSION;
 const MAX_SAVE_SIZE = 256 * 1024 * 1024; // 256 MB
@@ -28,81 +34,19 @@ pub fn Mixin(comptime Game: type) type {
     const Common = common.Mixin(Game);
 
     return struct {
-        /// Read a boolean field out of a serialised Parent object,
-        /// defaulting to `false` for missing / non-bool values. Kept
-        /// local so the save and load sides of the built-in Parent
-        /// pathway stay symmetric and the call sites don't repeat the
-        /// `switch (v) { .bool => ... }` boilerplate.
-        fn parentFlag(parent_obj: std.json.ObjectMap, field: []const u8) bool {
-            const v = parent_obj.get(field) orelse return false;
-            return switch (v) {
-                .bool => |b| b,
-                else => false,
-            };
-        }
-
-        /// Safe JSON accessors for the load path. All return `null`
-        /// on a tag mismatch rather than panicking via `.object` /
-        /// `.integer` tag casts — so a malformed save file (wrong
-        /// type, missing field, `null` where an object is expected)
-        /// produces a logged warning and a skipped entity, not a
-        /// debug-assertion panic or release-mode memory corruption.
-        fn getComponentsObject(entry: std.json.Value) ?std.json.ObjectMap {
-            if (entry != .object) return null;
-            const comps_val = entry.object.get("components") orelse return null;
-            return switch (comps_val) {
-                .object => |o| o,
-                else => null,
-            };
-        }
-
-        fn getObjectField(obj: std.json.ObjectMap, name: []const u8) ?std.json.ObjectMap {
-            const v = obj.get(name) orelse return null;
-            return switch (v) {
-                .object => |o| o,
-                else => null,
-            };
-        }
-
-        fn getStringField(obj: std.json.ObjectMap, name: []const u8) ?[]const u8 {
-            const v = obj.get(name) orelse return null;
-            return switch (v) {
-                .string => |s| s,
-                else => null,
-            };
-        }
-
-        /// Read a non-negative integer field as `u64` (for entity IDs).
-        /// Clamps negative and out-of-range values to `null` so the
-        /// caller's `orelse continue` pattern gracefully drops malformed
-        /// entries.
-        fn getU64Field(obj: std.json.ObjectMap, name: []const u8) ?u64 {
-            const v = obj.get(name) orelse return null;
-            return switch (v) {
-                .integer => |i| if (i >= 0) @intCast(i) else null,
-                else => null,
-            };
-        }
-
-        /// Read the top-level `id` of a save entry as `u64`. Missing
-        /// or non-integer `id` fields return `null` so the caller can
-        /// skip the entry instead of panicking.
-        fn getSavedId(entry: std.json.Value) ?u64 {
-            if (entry != .object) return null;
-            return getU64Field(entry.object, "id");
-        }
-
-        /// Read a numeric field as `f32`, accepting both `.float` and
-        /// `.integer` JSON tags; returns 0 for missing or non-numeric
-        /// values. Used for the Position shim in Phase 1a.
-        fn getNumberField(obj: std.json.ObjectMap, name: []const u8) f32 {
-            const v = obj.get(name) orelse return 0;
-            return switch (v) {
-                .float => |f| @floatCast(f),
-                .integer => |i| @floatFromInt(i),
-                else => 0,
-            };
-        }
+        // Pure, tag-checked JSON accessors — extracted to `json_read.zig`
+        // (they're `std.json`-only) and re-aliased here so the load-path
+        // call sites below (`getComponentsObject(entry)`, `getObjectField(...)`,
+        // …) read exactly as they did when these were local `fn`s. See that
+        // module's doc for the "return null on tag mismatch, never panic"
+        // contract every one of these upholds.
+        const parentFlag = json_read.parentFlag;
+        const getComponentsObject = json_read.getComponentsObject;
+        const getObjectField = json_read.getObjectField;
+        const getStringField = json_read.getStringField;
+        const getU64Field = json_read.getU64Field;
+        const getSavedId = json_read.getSavedId;
+        const getNumberField = json_read.getNumberField;
 
         /// Walk a dotted `children[i]...` path from `root` through
         /// `game.getChildren`, returning the entity at the end or
