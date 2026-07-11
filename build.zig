@@ -239,6 +239,11 @@ pub fn build(b: *std.Build) void {
         // queries, event emit-by-name, and the subscribe/drain/poll FIFO
         // (incl. the two-arena payload lifetime).
         "test/script_contract_test.zig",
+        // labelle-gfx#305 Phase 2 Slice C — post-fx type re-exports
+        // (engine.PostPass/PostPassKind/PostPassUniforms are the SAME
+        // labelle-core types gfx re-exports, unified diamond) + the
+        // `Game.setPostFx/pushPostPass/clearPostFx` passthrough seam.
+        "test/post_fx_passthrough_test.zig",
     };
 
     for (test_files) |test_file| {
