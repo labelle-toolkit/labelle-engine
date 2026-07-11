@@ -127,9 +127,11 @@ fn findEntity(name: []const u8) u64 {
     return contract.labelle_entity_find(name.ptr, name.len);
 }
 
-/// Call plugin_call in its v1.1 fire-and-forward shape (NULL/0 out) —
-/// the shape response-less callers keep using under v1.2. The response
-/// tests drive `labelle_plugin_call` with a real out buffer directly.
+/// Call plugin_call in the exact v1.1 shape (NULL/0 out) — the shape
+/// the v1.1-compat fold pins to the v1.1 rc contract: 0 for EVERY
+/// dispatched call (a handler response is published for fetch, never
+/// returned as N here), sentinel for unroutable. The response tests
+/// drive `labelle_plugin_call` with a real out buffer (`pluginCallOut`).
 fn pluginCall(plugin: []const u8, command: []const u8, params: []const u8) usize {
     return contract.labelle_plugin_call(
         plugin.ptr,
@@ -2221,8 +2223,9 @@ test "plugin_call responses: fetch reads the most recently COMPLETED call — cl
     game.setHooks(&recorder);
     contract.bind(&game);
 
-    // Responded call stores (at completion)…
-    try testing.expectEqual(@as(usize, 13), pluginCall("pathfinder", "ping", "{}"));
+    // Responded call stores at completion (the NULL/0 v1.1 shape folds
+    // its rc to 0 — the fetch is where the response shows up)…
+    try testing.expectEqual(@as(usize, 0), pluginCall("pathfinder", "ping", "{}"));
     try testing.expectEqual(@as(usize, 13), contract.labelle_plugin_response_fetch(null, 0));
 
     // …a fire-and-forward call clears (0 = dispatched-no-response, and
@@ -2232,7 +2235,8 @@ test "plugin_call responses: fetch reads the most recently COMPLETED call — cl
 
     // …and so does a failed (unroutable) call: store again, then an
     // empty command name.
-    try testing.expectEqual(@as(usize, 13), pluginCall("pathfinder", "ping", "{}"));
+    try testing.expectEqual(@as(usize, 0), pluginCall("pathfinder", "ping", "{}"));
+    try testing.expectEqual(@as(usize, 13), contract.labelle_plugin_response_fetch(null, 0));
     try testing.expectEqual(contract.plugin_call_unroutable, pluginCall("pathfinder", "", "{}"));
     try testing.expectEqual(@as(usize, 0), contract.labelle_plugin_response_fetch(null, 0));
 }
@@ -2368,11 +2372,76 @@ test "plugin_call responses: payloads truncate at the channel cap" {
 
     // The handler writes cap+100 bytes; the channel truncates at the
     // cap — required size reports the STORED (truncated) length, so a
-    // right-sized fetch reads exactly what exists.
+    // right-sized fetch reads exactly what exists. Driven with a real
+    // (under-sized) out buffer so the return carries the size: the
+    // NULL/0 shape would fold it to the v1.1 rc 0.
     const cap = engine.plugin_command.max_response_len;
-    try testing.expectEqual(cap, pluginCall("pathfinder", "huge", "{}"));
+    var small: [8]u8 = undefined;
+    try testing.expectEqual(cap, pluginCallOut("pathfinder", "huge", "{}", &small));
     try testing.expectEqual(@as(?bool, true), recorder.respond_accepted);
     try testing.expectEqual(cap, contract.labelle_plugin_response_fetch(null, 0));
+}
+
+test "plugin_call v1.1 compat: the NULL/0 shape folds a responding dispatch to rc 0 (response still fetchable)" {
+    contract.unbind();
+    defer contract.unbind();
+
+    var recorder = RespondingRecorder{};
+    var game = RespondGame.init(testing.allocator);
+    defer game.deinit();
+    game.setHooks(&recorder);
+    contract.bind(&game);
+
+    // A binding built against v1.1 passes NULL/0 (the only shape that
+    // header sanctioned) and checks rc == 0 for a dispatched call.
+    // With a RESPONDING handler the fold keeps that contract: rc 0,
+    // never the response size.
+    try testing.expectEqual(@as(usize, 0), pluginCall("pathfinder", "ping", "{}"));
+    try testing.expectEqual(@as(usize, 1), recorder.count);
+    try testing.expectEqual(@as(?bool, true), recorder.respond_accepted);
+
+    // The fold discards nothing: the response was published, so a v1.2
+    // caller without a buffer sizes via the fetch probe and reads it —
+    // no re-execution (count pinned).
+    try testing.expectEqual(@as(usize, 13), contract.labelle_plugin_response_fetch(null, 0));
+    var buf: [32]u8 = undefined;
+    const n = contract.labelle_plugin_response_fetch(&buf, buf.len);
+    try testing.expectEqualStrings("{\"pong\":true}", buf[0..n]);
+    try testing.expectEqual(@as(usize, 1), recorder.count);
+
+    // Unroutable in the same NULL/0 shape keeps the v1.1 sentinel.
+    try testing.expectEqual(contract.plugin_call_unroutable, pluginCall("", "ping", "{}"));
+
+    // The fold's boundary is EXACTLY the promised shape. A real pointer
+    // with cap 0 is the v1.2 sizing leg: size returned, nothing written…
+    const plugin = "pathfinder";
+    const command = "ping";
+    const params = "{}";
+    var canary: [4]u8 = undefined;
+    @memset(&canary, 0xAA);
+    try testing.expectEqual(@as(usize, 13), contract.labelle_plugin_call(
+        plugin.ptr,
+        plugin.len,
+        command.ptr,
+        command.len,
+        params.ptr,
+        params.len,
+        &canary,
+        0,
+    ));
+    for (canary) |b| try testing.expectEqual(@as(u8, 0xAA), b);
+    // …and NULL with a nonzero cap (illegal per the conventions block,
+    // tolerated like component_get's NULL) sizes too — no fold.
+    try testing.expectEqual(@as(usize, 13), contract.labelle_plugin_call(
+        plugin.ptr,
+        plugin.len,
+        command.ptr,
+        command.len,
+        params.ptr,
+        params.len,
+        null,
+        16,
+    ));
 }
 
 test "plugin_call responses: second respond within one handler is refused (first-writer-wins)" {

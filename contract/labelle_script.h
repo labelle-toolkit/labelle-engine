@@ -326,13 +326,14 @@ void labelle_input_mouse(float *x_out, float *y_out);
  * Return (size_t):
  *   0                               dispatched into the handler
  *                                   channel; no handler responded (the
- *                                   v1.1 fire-and-forward outcome — a
- *                                   v1.1-style caller passing NULL/0
- *                                   observes the old contract
- *                                   verbatim). Also the outcome for an
- *                                   EMPTY response; handlers that want
- *                                   a bare ack respond "{}". Results
- *                                   can still arrive as game events
+ *                                   v1.1 fire-and-forward outcome).
+ *                                   Also the outcome for an EMPTY
+ *                                   response (handlers that want a
+ *                                   bare ack respond "{}"), and for
+ *                                   ANY dispatched call made in the
+ *                                   v1.1 NULL/0 shape — the compat
+ *                                   rule below. Results can still
+ *                                   arrive as game events
  *                                   (labelle_event_subscribe/poll).
  *   N                               a handler responded (since v1.2);
  *                                   the response requires N bytes and
@@ -344,6 +345,20 @@ void labelle_input_mouse(float *x_out, float *y_out);
  *                                   name, no plugin registered a
  *                                   handler in this build, or the host
  *                                   is not bound.
+ *
+ * V1.1-COMPAT RULE: a call with out == NULL and out_cap == 0 — the ONE
+ * shape the v1.1 header sanctioned ("v1.1 never writes to `out`; pass
+ * NULL/0") — keeps the exact v1.1 rc contract: it returns 0 for every
+ * dispatched call, EVEN when a handler responded, so a binding built
+ * against v1.1 that checks rc == 0 never misreads a successful
+ * responding dispatch as failure. The response is still stored: a
+ * caller without a buffer sizes/reads it via
+ * labelle_plugin_response_fetch (probe with NULL/0 THERE — never by
+ * re-calling here). The fold is exactly that shape and no wider:
+ * out != NULL with out_cap == 0 is the v1.2 sizing leg (N returned,
+ * nothing written), and NULL out with a nonzero cap — illegal per the
+ * conventions block (NULL only together with cap 0) — is tolerated as
+ * sizing too, matching labelle_component_get's NULL tolerance.
  *
  * DOUBLE-EXECUTION WARNING: unlike component_get, do not "retry
  * right-sized" (or NULL/cap-0 probe) by calling AGAIN — every call

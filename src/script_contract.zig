@@ -168,13 +168,19 @@
 //! convention's -1 in a usize) = empty plugin/command, no handler
 //! registered in this build (the variant never landed on the merged
 //! `GameEvents`), or not bound; 0 = dispatched, no handler responded
-//! (the v1.1 fire-and-forward outcome — a v1.1 caller passing NULL/0
-//! observes exactly the old contract); N = a handler RESPONDED (v1.2,
+//! (the v1.1 fire-and-forward outcome); N = a handler RESPONDED (v1.2,
 //! #758: `engine.plugin_command.respond` during the synchronous
 //! dispatch — one response per command, first-writer-wins, see the
 //! mixin), and N is the bytes the response requires, written into
 //! `out` all-or-nothing (`component_get`-style, exactly as v1.1
-//! reserved). The channel is a broadcast that handlers name-filter
+//! reserved). One deliberate exception keeps old bindings whole — the
+//! v1.1-COMPAT FOLD: a call in the exact shape the v1.1 header
+//! sanctioned (`out == NULL && out_cap == 0`, "pass NULL/0") returns
+//! the v1.1 rc even when a handler responded — 0, never N — so a
+//! v1.1-built binding checking `rc == 0` doesn't misread a successful
+//! responding dispatch as failure; the response is still published for
+//! `labelle_plugin_response_fetch` (the export doc pins the boundary
+//! shapes). The channel is a broadcast that handlers name-filter
 //! THEMSELVES, so the engine cannot tell an unknown plugin/command
 //! from a delivered-and-ignored one: both dispatch as 0 wherever a
 //! handler exists. Multi-event results and acks can still travel back
@@ -857,15 +863,33 @@ pub export fn labelle_input_mouse(x_out: ?*f32, y_out: ?*f32) void {
 /// `plugin_call_unroutable` (`maxInt(usize)`, C's `(size_t)-1`) =
 /// unroutable — empty plugin/command, no handler registered in this
 /// build, a game shape without the mixin, or not bound; 0 = dispatched
-/// into the handler channel, no handler responded (fire-and-forward — a
-/// v1.1 caller passing NULL/0 observes the old contract verbatim); N =
-/// a handler responded via `engine.plugin_command.respond` and the
-/// response requires N bytes, written into `out` ALL-OR-NOTHING (only
-/// when `N <= out_cap`, `labelle_component_get`-style — a truncated
-/// response is useless). Handlers name-filter the broadcast themselves,
-/// so a name no plugin claims still returns 0 wherever a handler exists
-/// — dispatched-and-ignored is indistinguishable from
+/// into the handler channel with no handler response (fire-and-forward)
+/// — OR any dispatched call made in the exact v1.1 shape, see the
+/// compat fold below; N = a handler responded via
+/// `engine.plugin_command.respond` and the response requires N bytes,
+/// written into `out` ALL-OR-NOTHING (only when `N <= out_cap`,
+/// `labelle_component_get`-style — a truncated response is useless).
+/// Handlers name-filter the broadcast themselves, so a name no plugin
+/// claims still returns 0 wherever a handler exists —
+/// dispatched-and-ignored is indistinguishable from
 /// handled-without-response BY DESIGN.
+///
+/// ## The v1.1-compat fold (NULL/0)
+///
+/// `out == NULL && out_cap == 0` — the ONE caller shape the v1.1
+/// header sanctioned ("v1.1 never writes to `out`; pass NULL/0") —
+/// keeps the exact v1.1 rc contract: a responding dispatch STILL
+/// returns 0, never N, so a v1.1-built binding checking `rc == 0`
+/// keeps working when a handler it dispatches to grows a response.
+/// The response is published all the same — a v1.2 caller without a
+/// buffer sizes/reads it through `labelle_plugin_response_fetch`
+/// (whose NULL/0 probe is the sanctioned sizing path anyway; probing
+/// by re-CALL is forbidden below). The boundary is exactly the
+/// promised shape: `out != NULL` with `out_cap == 0` is the v1.2
+/// sizing leg (required size returned, nothing written), and a NULL
+/// `out` with a nonzero cap — illegal per the conventions block (NULL
+/// only together with cap 0) — is tolerated as sizing too, matching
+/// `labelle_component_get`'s NULL tolerance.
 ///
 /// Do NOT sizing-probe or cap-retry THIS export: every call executes
 /// the handler again. The response is also stored as the call
@@ -907,7 +931,17 @@ pub export fn labelle_plugin_call(
     );
     if (n == 0 or n == plugin_call_unroutable) return n;
     // Responded: the impl deposited the bytes in `response_store` (and
-    // set `response_len = n`). All-or-nothing into the caller's buffer.
+    // set `response_len = n`).
+    if (out == null and out_cap == 0) {
+        // The v1.1-compat fold (export doc): the exact legacy shape
+        // keeps the legacy rc — 0, never the response size — while the
+        // publish above still serves labelle_plugin_response_fetch.
+        return 0;
+    }
+    // All-or-nothing into the caller's buffer; NULL out (with a
+    // nonzero cap — an illegal-but-tolerated shape) and the non-NULL
+    // cap-0 shape both fall through as pure sizing: N returned,
+    // nothing written.
     if (out) |p| {
         if (n <= out_cap) @memcpy(p[0..n], response_store[0..n]);
     }
