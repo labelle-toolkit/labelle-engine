@@ -65,8 +65,8 @@
         // RenderImpl), so the effective gfx floor is enforced at the consuming
         // game's build; this pin only feeds the tilemap sub-package test.
         .labelle_gfx = .{
-            .url = "https://github.com/labelle-toolkit/labelle-gfx/archive/refs/tags/v1.26.0.tar.gz",
-            .hash = "labelle_gfx-1.26.0-nMpCPMYYBQBBX_7Js1AHBQKWYeI7Hm8U2aEL8t9cOIJO",
+            .url = "https://github.com/labelle-toolkit/labelle-gfx/archive/refs/tags/v1.28.0.tar.gz",
+            .hash = "labelle_gfx-1.28.0-nMpCPE-eBQB1N-aZQGQMvyIA6XBB3CgiA3Wwkf2U9jbJ",
             .lazy = true,
         },
     },

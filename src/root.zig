@@ -846,3 +846,13 @@ pub const GizmoInterface = core.GizmoInterface;
 pub const StubGizmos = core.StubGizmos;
 pub const PhysicsInterface = core.PhysicsInterface;
 pub const StubPhysics = core.StubPhysics;
+
+// ── Post-fx stack (labelle-gfx#305) ──
+// Full-screen post-processing value types, re-exported from labelle-core (the
+// canonical home of the backend contract). gfx re-exports the SAME core types,
+// so surfacing them here keeps the core diamond unified — the engine takes no
+// gfx module dependency. The runtime mutators live on `Game`
+// (`setPostFx`/`pushPostPass`/`clearPostFx`, see game/post_fx_mixin.zig).
+pub const PostPass = core.backend_contract.PostPass;
+pub const PostPassKind = core.backend_contract.PostPassKind;
+pub const PostPassUniforms = core.backend_contract.PostPassUniforms;
