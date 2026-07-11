@@ -350,6 +350,15 @@ void labelle_input_mouse(float *x_out, float *y_out);
  * executes the handler again. On N > out_cap, read the stored response
  * via labelle_plugin_response_fetch instead; it never re-executes.
  *
+ * Calls may NEST: a handler may itself issue a labelle_plugin_call
+ * mid-dispatch (bounded only by the game's own recursion depth). Each
+ * call's response travels in per-call host storage — an inner call
+ * never corrupts the enclosing call's response — and each call
+ * publishes the fetch store as it COMPLETES, inner first, outer last,
+ * so a fetch made after the whole stack unwinds reads the OUTERMOST
+ * call's outcome. A handler that wants the inner response reads it
+ * from its own call's `out`, not from a later fetch.
+ *
  * The channel is a broadcast the handlers name-filter THEMSELVES, so
  * the host cannot tell an unknown plugin/command from a
  * delivered-and-ignored one: both return 0 wherever a handler exists.
@@ -360,17 +369,19 @@ size_t labelle_plugin_call(const char *plugin, size_t plugin_len,
                            const char *params_json, size_t params_len,
                            char *out, size_t out_cap);
 
-/* Read the response of the MOST RECENT labelle_plugin_call — the
- * side-effect-free half of the response channel (since v1.2): the
- * handler is NEVER re-executed, so the shared sizing convention's
+/* Read the response of the most recently COMPLETED labelle_plugin_call
+ * — the side-effect-free half of the response channel (since v1.2):
+ * the handler is NEVER re-executed, so the shared sizing convention's
  * probe/retry legs live here. NULL/cap-0 `out` is the pure sizing
  * probe; otherwise the write is ALL-OR-NOTHING and the return is the
  * bytes the complete response requires. 0 = nothing stored (no call
- * yet, or the last call was unroutable / produced no response). A
- * stored response is never empty, so a non-zero return cannot be
- * confused with nothing-stored. NON-consuming — fetch repeatedly; the
- * store is replaced (or cleared) by the next labelle_plugin_call,
- * whatever that call's outcome. */
+ * yet, or the last completed call was unroutable / produced no
+ * response). A stored response is never empty, so a non-zero return
+ * cannot be confused with nothing-stored. NON-consuming — fetch
+ * repeatedly; the store is replaced (or cleared) as each
+ * labelle_plugin_call COMPLETES, whatever that call's outcome —
+ * "completed" being the nesting rule above: after nested calls unwind,
+ * the store holds the OUTERMOST call's outcome. */
 size_t labelle_plugin_response_fetch(char *out, size_t out_cap);
 
 #ifdef __cplusplus

@@ -2211,7 +2211,7 @@ test "plugin_call responses: over-cap out is untouched; fetch retries without re
     try testing.expectEqual(@as(usize, 1), recorder.count);
 }
 
-test "plugin_call responses: fetch reads the MOST RECENT call — cleared by response-less and failed calls" {
+test "plugin_call responses: fetch reads the most recently COMPLETED call — cleared by response-less and failed calls" {
     contract.unbind();
     defer contract.unbind();
 
@@ -2221,7 +2221,7 @@ test "plugin_call responses: fetch reads the MOST RECENT call — cleared by res
     game.setHooks(&recorder);
     contract.bind(&game);
 
-    // Responded call stores…
+    // Responded call stores (at completion)…
     try testing.expectEqual(@as(usize, 13), pluginCall("pathfinder", "ping", "{}"));
     try testing.expectEqual(@as(usize, 13), contract.labelle_plugin_response_fetch(null, 0));
 
@@ -2234,6 +2234,104 @@ test "plugin_call responses: fetch reads the MOST RECENT call — cleared by res
     // empty command name.
     try testing.expectEqual(@as(usize, 13), pluginCall("pathfinder", "ping", "{}"));
     try testing.expectEqual(contract.plugin_call_unroutable, pluginCall("pathfinder", "", "{}"));
+    try testing.expectEqual(@as(usize, 0), contract.labelle_plugin_response_fetch(null, 0));
+}
+
+// ── Nested plugin calls (PR #760 review finding) ────────────────────
+//
+// A handler may itself issue a labelle_plugin_call mid-dispatch. Two
+// in-flight dispatches must not share response storage: with a shared
+// dispatch buffer the inner response scribbles over the outer one's
+// bytes while the outer window still reports its original length —
+// the outer caller reads a corrupted splice. The fix dispatches each
+// call into per-call stack storage and publishes the fetch store only
+// at completion (inner first, outer last), which this recorder pins
+// end to end.
+
+const NestedRecorder = struct {
+    outer_count: usize = 0,
+    inner_count: usize = 0,
+    /// What the NESTED labelle_plugin_call returned to the handler…
+    inner_rc: usize = 0,
+    /// …and what it wrote into the handler's own out buffer.
+    inner_buf: [64]u8 = undefined,
+
+    pub fn engine__editor_plugin_command(self: *NestedRecorder, info: anytype) void {
+        if (std.mem.eql(u8, info.command, "outer")) {
+            self.outer_count += 1;
+            // The corruption ordering: respond FIRST (the outer window
+            // now holds bytes), THEN issue the nested call.
+            _ = engine.plugin_command.respond("OUTER-RESPONSE");
+            self.inner_rc = pluginCallOut("nested", "inner", "{}", &self.inner_buf);
+        } else if (std.mem.eql(u8, info.command, "outer_silent")) {
+            self.outer_count += 1;
+            // No respond on the outer window — only the nested call.
+            self.inner_rc = pluginCallOut("nested", "inner", "{}", &self.inner_buf);
+        } else if (std.mem.eql(u8, info.command, "inner")) {
+            self.inner_count += 1;
+            _ = engine.plugin_command.respond("inner!!");
+        }
+    }
+};
+
+const NestedGame = engine.GameConfig(
+    core.StubRender(MockEcs.Entity),
+    MockEcs,
+    engine.StubInput,
+    engine.StubAudio,
+    engine.StubVideo,
+    engine.StubGui,
+    *NestedRecorder,
+    core.StubLogSink,
+    TestComponents,
+    &.{},
+    PluginCallEvents,
+);
+
+test "plugin_call responses: a nested call cannot corrupt the outer response; fetch reads the outermost outcome" {
+    contract.unbind();
+    defer contract.unbind();
+
+    var recorder = NestedRecorder{};
+    var game = NestedGame.init(testing.allocator);
+    defer game.deinit();
+    game.setHooks(&recorder);
+    contract.bind(&game);
+
+    // Outer call: handler responds "OUTER-RESPONSE" (14 bytes), then
+    // nests a call whose handler responds "inner!!" (7 bytes — shorter
+    // ON PURPOSE, so a shared dispatch buffer would splice the two).
+    var out: [64]u8 = undefined;
+    const n = pluginCallOut("nested", "outer", "{}", &out);
+    try testing.expectEqual(@as(usize, 1), recorder.outer_count);
+    try testing.expectEqual(@as(usize, 1), recorder.inner_count);
+
+    // (a) The outer caller's bytes are the OUTER response, uncorrupted.
+    try testing.expectEqual(@as(usize, 14), n);
+    try testing.expectEqualStrings("OUTER-RESPONSE", out[0..14]);
+
+    // (c) The handler (the inner caller) received the INNER response in
+    // ITS out buffer — the two responses never shared storage.
+    try testing.expectEqual(@as(usize, 7), recorder.inner_rc);
+    try testing.expectEqualStrings("inner!!", recorder.inner_buf[0..7]);
+
+    // (b) Fetch after the stack unwound: the most recently COMPLETED
+    // call is the OUTER one (it completes last), so its response is
+    // what's stored — not the inner one.
+    var fetched: [64]u8 = undefined;
+    const fn_ = contract.labelle_plugin_response_fetch(&fetched, fetched.len);
+    try testing.expectEqualStrings("OUTER-RESPONSE", fetched[0..fn_]);
+
+    // (d) Response-less outer around a RESPONDING inner: the outer call
+    // completes last and clears — a later fetch must not resurrect the
+    // stale inner bytes (the inner response was already delivered to
+    // the handler's own out buffer above).
+    recorder.inner_rc = 0;
+    try testing.expectEqual(@as(usize, 0), pluginCallOut("nested", "outer_silent", "{}", &out));
+    try testing.expectEqual(@as(usize, 2), recorder.outer_count);
+    try testing.expectEqual(@as(usize, 2), recorder.inner_count);
+    try testing.expectEqual(@as(usize, 7), recorder.inner_rc); // inner still served
+    try testing.expectEqualStrings("inner!!", recorder.inner_buf[0..7]);
     try testing.expectEqual(@as(usize, 0), contract.labelle_plugin_response_fetch(null, 0));
 }
 
