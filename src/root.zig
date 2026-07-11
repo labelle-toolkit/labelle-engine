@@ -566,6 +566,15 @@ pub const Events = struct {
     /// `command`, and `params` the field values as a JSON object. All three
     /// are borrowed from the studio's wasm buffers for the SYNCHRONOUS
     /// dispatch only — a handler that retains them must copy.
+    ///
+    /// A handler may RESPOND to the command it is handling (#758) by calling
+    /// `engine.plugin_command.respond(bytes)` (or `.respondFmt`) inside the
+    /// dispatch — the response travels back to the caller (studio bridge
+    /// v1.8 / script contract v1.2). One response per command,
+    /// first-writer-wins; see `game/editor_command_mixin.zig`. The field
+    /// set here is deliberately unchanged: the respond seam is a module
+    /// function, not a payload member, so already-generated projects (whose
+    /// assembler folded this struct before #758) can respond too.
     pub const editor_plugin_command = struct {
         plugin: []const u8,
         command: []const u8,
@@ -762,6 +771,18 @@ pub const editor_api = @import("editor_api.zig");
 // the file, so script-less builds emit no `labelle_*` symbols — the
 // same zero-cost gate as `editor_api` above.
 pub const script_contract = @import("script_contract.zig");
+
+// ── Plugin-command response channel (#758) ──
+// The handler-side seam of the plugin-command channel: a subscriber to
+// `engine__editor_plugin_command` calls `engine.plugin_command.respond`
+// (or `.respondFmt`) inside the synchronous dispatch to send a response
+// back to whoever issued the command — the studio's
+// `editor_plugin_command_out` (bridge v1.8) or a script's
+// `labelle_plugin_call`/`labelle_plugin_response_fetch` (contract v1.2).
+// Also home to the channel's shared constants (`max_response_len`) and
+// the dispatch `Result` type. The dispatch itself is the Game mixin
+// (`game.editorPluginCommandOut`); this namespace is what HANDLERS import.
+pub const plugin_command = @import("game/editor_command_mixin.zig");
 
 // ── Out-of-band screenshot request (labelle-cli#227) ──
 // Read by the assembler-generated `main.zig`'s frame loop after the
