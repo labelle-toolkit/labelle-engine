@@ -80,6 +80,7 @@ pub fn Mixin(comptime Game: type) type {
                     const camera = self.getCamera();
                     camera.setPosition(wp.x, wp.y);
                     camera.setZoom(cam.zoom);
+                    seedCameraViewport(camera, cam.viewport);
                     return;
                 }
                 return;
@@ -123,6 +124,7 @@ pub fn Mixin(comptime Game: type) type {
                     const camera = mgr.getCamera(0);
                     camera.setPosition(wp.x, wp.y);
                     camera.setZoom(cam.zoom);
+                    seedCameraViewport(camera, cam.viewport);
                     mgr.setTag(0, "main");
                     continue;
                 }
@@ -151,6 +153,7 @@ pub fn Mixin(comptime Game: type) type {
                 const scam = mgr.getCamera(slot);
                 scam.setPosition(wp.x, wp.y);
                 scam.setZoom(cam.zoom);
+                seedCameraViewport(scam, cam.viewport);
 
                 if (claimed_count < 3) {
                     const n = @min(tag.len, camera_mod.tag_capacity);
@@ -159,6 +162,28 @@ pub fn Mixin(comptime Game: type) type {
                     claimed_count += 1;
                 }
                 next_slot += 1;
+            }
+        }
+
+        /// Seed a live renderer camera's screen-space viewport from the
+        /// authored `Camera.viewport` (camera-bound layers Phase 2, #761).
+        /// This is what carries a per-camera split-screen / minimap / PiP
+        /// rect from scene authoring through to the renderer, whose
+        /// per-camera `applyViewport` then calls the backend's `setViewport`.
+        /// A `null` authored viewport clears any prior binding (fullscreen).
+        ///
+        /// Comptime-folds to nothing on a renderer whose camera type has no
+        /// `screen_viewport` field (stub / older gfx) — the authored value is
+        /// simply inert there, exactly as it was before this wiring. The
+        /// engine `Camera.Viewport` and the gfx camera's `ScreenViewport`
+        /// share the `{ x, y, width, height }` shape, so the anonymous struct
+        /// literal coerces to whatever the camera field's type is.
+        fn seedCameraViewport(camera: anytype, viewport: ?camera_mod.Viewport) void {
+            if (comptime !@hasField(@typeInfo(@TypeOf(camera)).pointer.child, "screen_viewport")) return;
+            if (viewport) |vp| {
+                camera.screen_viewport = .{ .x = vp.x, .y = vp.y, .width = vp.width, .height = vp.height };
+            } else {
+                camera.screen_viewport = null;
             }
         }
 
