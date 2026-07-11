@@ -63,6 +63,41 @@ pub fn Mixin(comptime Game: type) type {
             comptime tag: []const u8,
             payload: anytype,
         ) void {
+            emitEngineEventImpl(self, tag, payload, false);
+        }
+
+        /// Like `emitEngineEvent`, but dispatches the constructed variant
+        /// SYNCHRONOUSLY (via `emitSync`) instead of buffering it for the
+        /// end-of-frame `dispatchEvents` drain.
+        ///
+        /// Needed by the fixed-timestep phase (#751): the fixed steps run
+        /// inside `tick` BEFORE the variable update, but the buffered
+        /// `emit` path only delivers to flow/Event-node consumers when the
+        /// generated loop drains the buffer AFTER `tick`. A buffered
+        /// `engine__fixed_tick` would therefore reach flow-driven fixed
+        /// systems a phase late (after the variable update + `frame_end`),
+        /// defeating the "fixed before Update, in-phase" contract that
+        /// physics/lockstep needs. Emitting synchronously runs those
+        /// handlers in the same fixed slice, matching the `fixed_update`
+        /// HookPayload path. See `emitSync`'s caveats for the re-entrancy
+        /// / ordering trade-offs a synchronous dispatch carries.
+        pub inline fn emitEngineEventSync(
+            self: *Game,
+            comptime tag: []const u8,
+            payload: anytype,
+        ) void {
+            emitEngineEventImpl(self, tag, payload, true);
+        }
+
+        /// Shared body of `emitEngineEvent` / `emitEngineEventSync`. The
+        /// `sync` flag selects the dispatch: buffered `emit` (end-of-frame)
+        /// or immediate `emitSync`.
+        inline fn emitEngineEventImpl(
+            self: *Game,
+            comptime tag: []const u8,
+            payload: anytype,
+            comptime sync: bool,
+        ) void {
             // Comptime gate: when the project's `GameEvents` doesn't
             // carry the requested variant — e.g. unit-test games using
             // `GameWith(Hooks)` with `GameEvents = void`, or any
@@ -105,7 +140,8 @@ pub fn Mixin(comptime Game: type) type {
                     @compileError("emitEngineEvent: missing field '" ++ f.name ++ "' for variant '" ++ tag ++ "'");
                 }
             }
-            emit(self, @unionInit(GameEvents, tag, typed));
+            const event = @unionInit(GameEvents, tag, typed);
+            if (comptime sync) emitSync(self, event) else emit(self, event);
         }
 
         /// Emit a game event synchronously — dispatch to registered hooks

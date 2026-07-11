@@ -209,11 +209,29 @@ pub const ParticleSystem = struct {
 
     /// Kill every live particle and reseed to the config seed, returning the
     /// system to its exact initial state (retains pool capacity — no
-    /// allocation). Use to restart a deterministic replay.
+    /// allocation). Use to restart a deterministic replay. `emitting` is
+    /// restored to its `true` default so a system stopped via
+    /// `setEmitting(false)` (e.g. to let particles dissipate before reuse)
+    /// resumes continuous emission on the next `step` — otherwise an
+    /// identical post-reset `step` sequence would produce no particles,
+    /// breaking the deterministic-restart contract this method advertises.
     pub fn reset(self: *ParticleSystem) void {
         self.particles.clearRetainingCapacity();
         self.prng = std.Random.DefaultPrng.init(self.config.seed);
         self.spawn_accumulator = 0;
+        self.emitting = true;
+    }
+
+    /// Effective live-particle ceiling: the smaller of the authored
+    /// `config.max_particles` and the pool's RESERVED `capacity`. `config`
+    /// is publicly mutable, so a caller can raise `max_particles` after
+    /// `init` — but the pool was only reserved for the original ceiling, and
+    /// `appendAssumeCapacity` would append past the allocation (UB, or a
+    /// safety-build panic) if we honoured the raised value. Clamping to
+    /// `capacity` keeps every spawn within the reservation; lowering
+    /// `max_particles` is still respected (the smaller wins).
+    fn spawnCeiling(self: *const ParticleSystem) usize {
+        return @min(@as(usize, self.config.max_particles), self.particles.capacity);
     }
 
     /// Advance the simulation by `dt` seconds: integrate + age every live
@@ -245,53 +263,94 @@ pub const ParticleSystem = struct {
 
         if (!self.emitting or self.config.rate <= 0) return;
 
-        // Draw whole particles out of the fractional-spawn accumulator, so
-        // any rate (incl. < 1/frame) and any dt spawn the exact expected
-        // count over time. Capped at `max_particles` — surplus is dropped,
-        // never grows the pool.
-        self.spawn_accumulator += self.config.rate * dt;
-        while (self.spawn_accumulator >= 1) {
-            self.spawn_accumulator -= 1;
-            if (self.particles.items.len >= self.config.max_particles) {
+        // Continuous emission. Each particle due this frame is emitted at its
+        // precise sub-frame time and back-integrated to the frame's end, so a
+        // long (hitchy) frame doesn't dump the whole interval's worth of
+        // particles at age 0. `acc_start` is the fractional carry from prior
+        // frames (always in `[0, 1)`); adding `rate * dt` gives how many
+        // particle "credits" are available across `[0, dt]`. The k-th credit
+        // (k = 1, 2, …) is reached at frame-time `t_emit = (k - acc_start) /
+        // rate`, so that particle has already lived `dt - t_emit` seconds by
+        // the end of this step. Emissions older than their lifetime are
+        // skipped — that is exactly what caps a short-lived effect at ~one
+        // lifetime of live particles instead of one whole frame's worth.
+        const acc_start = self.spawn_accumulator;
+        const acc_end = acc_start + self.config.rate * dt;
+        const ceiling = self.spawnCeiling();
+        var k: f32 = 1;
+        while (k <= acc_end) : (k += 1) {
+            if (self.particles.items.len >= ceiling) {
                 // Pool full — discard the backlog so a starved frame can't
                 // burst past the ceiling once space frees up.
                 self.spawn_accumulator = 0;
-                break;
+                return;
             }
-            self.spawnOne();
+            const t_emit = (k - acc_start) / self.config.rate; // seconds into frame
+            const initial_age = dt - t_emit; // age at frame end
+            self.spawnOne(if (initial_age > 0) initial_age else 0);
         }
+        // Carry the sub-1 remainder to the next frame (acc_start was < 1, so
+        // `floor(acc_end)` is the count just emitted).
+        self.spawn_accumulator = acc_end - @floor(acc_end);
     }
 
     /// Emit `n` particles immediately (a one-shot burst — explosion, hit
     /// flash), independent of `rate`/`emitting`. Clamped to remaining pool
     /// space. No allocation.
     pub fn burst(self: *ParticleSystem, n: u32) void {
+        const ceiling = self.spawnCeiling();
         var k: u32 = 0;
         while (k < n) : (k += 1) {
-            if (self.particles.items.len >= self.config.max_particles) return;
-            self.spawnOne();
+            if (self.particles.items.len >= ceiling) return;
+            self.spawnOne(0);
         }
     }
 
-    /// Spawn a single particle at the origin with jittered lifetime, speed,
-    /// and direction drawn from the seeded PRNG. Assumes pool space (callers
-    /// check `max_particles`); `appendAssumeCapacity` keeps it alloc-free.
-    fn spawnOne(self: *ParticleSystem) void {
+    /// Spawn a single particle with jittered lifetime, speed, and direction
+    /// drawn from the seeded PRNG, then integrated forward by `initial_age`
+    /// seconds (0 for a burst / just-due particle; > 0 for one emitted
+    /// earlier within a long frame). A particle whose `initial_age` already
+    /// meets its lifetime is skipped — it would be born dead — which is what
+    /// keeps a long frame from over-spawning short-lived effects. Assumes
+    /// pool space (callers check `spawnCeiling`); `appendAssumeCapacity`
+    /// keeps it alloc-free. The RNG draws happen BEFORE the skip so the
+    /// sequence stays deterministic regardless of how many are skipped.
+    fn spawnOne(self: *ParticleSystem, initial_age: f32) void {
         const r = self.prng.random();
 
-        const life = self.config.lifetime * (1 + jitter(r, self.config.lifetime_jitter));
+        const life_raw = self.config.lifetime * (1 + jitter(r, self.config.lifetime_jitter));
         const speed = self.config.speed * (1 + jitter(r, self.config.speed_jitter));
         const angle = self.config.direction + jitter(r, 1) * self.config.spread;
 
+        // Guard a degenerate authored lifetime so `Particle.t` never divides
+        // by zero and the particle dies on its first step.
+        const life = if (life_raw > 0) life_raw else std.math.floatEps(f32);
+
+        // Emitted earlier in the frame than its own lifetime → already dead
+        // by frame end; don't occupy a pool slot for it.
+        if (initial_age >= life) return;
+
+        var vx = @cos(angle) * speed;
+        var vy = @sin(angle) * speed;
+        var x = self.origin_x;
+        var y = self.origin_y;
+        // Advance the sub-frame time already elapsed (semi-implicit Euler,
+        // matching `step`'s per-frame integration) so a back-in-time
+        // continuous spawn lands where it would have travelled to.
+        if (initial_age > 0) {
+            vx += self.config.gravity_x * initial_age;
+            vy += self.config.gravity_y * initial_age;
+            x += vx * initial_age;
+            y += vy * initial_age;
+        }
+
         self.particles.appendAssumeCapacity(.{
-            .x = self.origin_x,
-            .y = self.origin_y,
-            .vx = @cos(angle) * speed,
-            .vy = @sin(angle) * speed,
-            .age = 0,
-            // Guard a degenerate authored lifetime so `Particle.t` never
-            // divides by zero and the particle dies on its first step.
-            .lifetime = if (life > 0) life else std.math.floatEps(f32),
+            .x = x,
+            .y = y,
+            .vx = vx,
+            .vy = vy,
+            .age = initial_age,
+            .lifetime = life,
         });
     }
 

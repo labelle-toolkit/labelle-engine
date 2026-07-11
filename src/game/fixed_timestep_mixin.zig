@@ -45,6 +45,8 @@
 //! `advanceFixedTimestep` early-returns when it's off, so a project with no
 //! `fixed/` systems is byte-identical to before this landed.
 
+const std = @import("std");
+
 /// Returns the fixed-timestep mixin for a given Game type.
 pub fn Mixin(comptime Game: type) type {
     return struct {
@@ -63,12 +65,15 @@ pub fn Mixin(comptime Game: type) type {
         }
 
         /// Set the fixed step length in seconds (project-configurable;
-        /// default 1/60). Values ≤ 0 are ignored — a non-positive step
-        /// would make the drain loop diverge — so a bad call leaves the
-        /// previous step in place. Does not reset the accumulator or the
+        /// default 1/60). Non-positive AND non-finite (`NaN` / `Infinity`)
+        /// values are ignored — a non-positive step would make the drain
+        /// loop diverge, and a `NaN` would silently poison `fixed_dt`,
+        /// `fixed_accumulator`, and `fixed_alpha` (every `NaN` comparison is
+        /// false, so it slips past a bare `<= 0` guard). A bad call leaves
+        /// the previous step in place. Does not reset the accumulator or the
         /// step counter.
         pub fn setFixedTimestep(self: *Game, seconds: f64) void {
-            if (seconds <= 0) return;
+            if (seconds <= 0 or !std.math.isFinite(seconds)) return;
             self.fixed_dt = seconds;
         }
 
@@ -101,15 +106,35 @@ pub fn Mixin(comptime Game: type) type {
         /// module doc for the determinism / pause / spiral-guard contract.
         pub fn advanceFixedTimestep(self: *Game, scaled_dt: f32) void {
             if (!self.fixed_timestep_enabled) return;
-            // Defensive: a non-positive step (never set through
-            // `setFixedTimestep`, but a game could poke the field) would
-            // make the drain loop never terminate. Treat it as "no phase".
-            if (self.fixed_dt <= 0) return;
+            // Defensive: a non-positive OR non-finite step (never set through
+            // `setFixedTimestep`, but a game could poke the field directly)
+            // would make the drain loop never terminate or poison the
+            // accumulator with `NaN`. Treat it as "no phase". The
+            // `isFinite` half also covers a directly-set `NaN`/`Inf`, which
+            // slips past a bare `<= 0` compare.
+            if (self.fixed_dt <= 0 or !std.math.isFinite(self.fixed_dt)) return;
+            // Reject a negative / non-finite frame dt (time reversal, clock
+            // jitter, a NaN from upstream) before it corrupts the
+            // accumulator — a negative fold would push the accumulator below
+            // zero and skew every subsequent step boundary. A zero dt is a
+            // valid no-progress frame and falls through harmlessly.
+            if (!std.math.isFinite(scaled_dt) or scaled_dt < 0) return;
 
             self.fixed_accumulator += @as(f64, scaled_dt);
 
+            // Boundary tolerance: f32 frame-dt chunkings that should sum to a
+            // whole number of steps (e.g. 50×`tick(0.02)` or 100×`tick(0.01)`
+            // ≈ 1s at the 1/60 default) land the accumulator a hair below the
+            // next `fixed_dt` and would run one FEWER step than a 60 FPS
+            // chunking — breaking the advertised cross-FPS deterministic step
+            // count at boundary times. Draining when within `drain_eps` of a
+            // step edge closes that gap; the epsilon is far too small
+            // (1e-4 of a step) to ever manufacture a spurious extra step, and
+            // the resulting slightly-negative remainder is clamped below.
+            const drain_eps = self.fixed_dt * 1e-4;
+
             var steps: u32 = 0;
-            while (self.fixed_accumulator >= self.fixed_dt) {
+            while (self.fixed_accumulator + drain_eps >= self.fixed_dt) {
                 self.fixed_accumulator -= self.fixed_dt;
 
                 self.emitHook(.{ .fixed_update = .{
@@ -119,8 +144,12 @@ pub fn Mixin(comptime Game: type) type {
                 // Tolerant dual-emit (#578): folds to a no-op unless the
                 // project's `GameEvents` carries `engine__fixed_tick`
                 // (assembler-built games) — unit-test games with
-                // `GameEvents = void` skip it entirely.
-                self.emitEngineEvent("engine__fixed_tick", .{
+                // `GameEvents = void` skip it entirely. Emitted SYNCHRONOUSLY
+                // (not buffered) so flow-driven fixed systems run in this
+                // fixed slice, before the variable update — not a phase late
+                // after the end-of-frame buffer drain. See
+                // `emitEngineEventSync`.
+                self.emitEngineEventSync("engine__fixed_tick", .{
                     .step_index = self.fixed_step_count,
                     .dt = @as(f32, @floatCast(self.fixed_dt)),
                 });
@@ -143,7 +172,11 @@ pub fn Mixin(comptime Game: type) type {
                 }
             }
 
-            self.fixed_alpha = @floatCast(self.fixed_accumulator / self.fixed_dt);
+            // Clamp to `[0, ∞)`: the `drain_eps` boundary drain can leave the
+            // remainder a hair below zero, and any residual fp underflow must
+            // not surface as a negative `fixed_alpha` (the documented range
+            // is `[0, 1)`). `@max` keeps it a valid interpolation factor.
+            self.fixed_alpha = @max(0.0, @as(f32, @floatCast(self.fixed_accumulator / self.fixed_dt)));
         }
     };
 }

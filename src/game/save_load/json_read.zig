@@ -67,7 +67,11 @@ pub fn getStringField(obj: std.json.ObjectMap, name: []const u8) ?[]const u8 {
 pub fn getU64Field(obj: std.json.ObjectMap, name: []const u8) ?u64 {
     const v = obj.get(name) orelse return null;
     return switch (v) {
-        .integer => |i| if (i >= 0) @intCast(i) else null,
+        // `std.math.cast` returns null when the i64 doesn't fit u64
+        // (negatives, and — vacuously — any out-of-range value), so a
+        // negative / malformed entity id is dropped without an `@intCast`
+        // trap. Idiomatic replacement for the manual `i >= 0` guard.
+        .integer => |i| std.math.cast(u64, i),
         else => null,
     };
 }

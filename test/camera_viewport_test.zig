@@ -39,6 +39,17 @@ test "count clamps to the output buffer length" {
     try testing.expectEqual(@as(usize, 2), vps.len);
 }
 
+test "negative screen dimensions never produce negative viewport rects" {
+    var buf: [4]Viewport = undefined;
+    inline for (.{ SplitLayout.horizontal, .vertical, .grid }) |layout| {
+        const vps = splitScreen(-1920, -1080, 4, layout, &buf);
+        for (vps) |v| {
+            try testing.expect(v.width >= 0);
+            try testing.expect(v.height >= 0);
+        }
+    }
+}
+
 // ── Horizontal bands ───────────────────────────────────────────────────────
 
 test "horizontal 2-way splits into stacked top/bottom halves" {

@@ -965,6 +965,11 @@ pub fn GameConfigWithYAxis(
         /// `@FieldType(GameEvents, tag)`, mirroring how
         /// `dispatchEvents` reconstructs the union variant.
         pub const emitEngineEvent = EventsMixin.emitEngineEvent;
+        /// Synchronous variant of `emitEngineEvent` — dispatches in-phase
+        /// instead of buffering. Used by the fixed-timestep phase so
+        /// flow-driven fixed systems run in the fixed slice, not a phase
+        /// late. Full docs in `game/events_mixin.zig`.
+        pub const emitEngineEventSync = EventsMixin.emitEngineEventSync;
 
         /// Emit a game event synchronously — dispatch to registered hooks
         /// immediately, bypassing the end-of-frame buffer. Use when the
