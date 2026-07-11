@@ -93,6 +93,9 @@ pub fn Mixin(comptime Game: type) type {
             // (F1), so the renderer has to still be alive.
             self.deinitTilemaps();
 
+            // Particle sims (#750) — free the per-emitter pools + the table.
+            self.deinitParticleSystems();
+
             // Clean up active world
             self.active_world.deinit();
             self.allocator.destroy(self.active_world);

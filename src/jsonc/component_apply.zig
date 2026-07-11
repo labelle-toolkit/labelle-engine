@@ -166,6 +166,19 @@ pub fn ComponentApply(comptime GameType: type, comptime Components: type) type {
                 }
             }
 
+            // Emitter (particles, #750) — built-in, deserializes to a plain
+            // engine-local POD (`preset` enum + nested `config`) stored via
+            // `addComponent`; the per-frame `particles_tick` lazily spins up
+            // the pooled `ParticleSystem` in the Game side-table. Guarded
+            // `!Components.has("Emitter")` exactly like the other built-ins so
+            // a project-registered `Emitter` still wins.
+            if (comptime !Components.has("Emitter")) {
+                if (std.mem.eql(u8, name, "Emitter")) {
+                    _ = applyEmitter(game, entity, value);
+                    return;
+                }
+            }
+
             // All other components — comptime dispatch via
             // Components registry.
             const filtered = stripEntityArrayFields(value, game.allocator);
@@ -270,6 +283,20 @@ pub fn ComponentApply(comptime GameType: type, comptime Components: type) type {
             const comp_alloc = game.active_world.nested_entity_arena.allocator();
             const image = deserializer.deserialize(ImageComp, value, comp_alloc) orelse return false;
             game.addComponent(entity, image);
+            return true;
+        }
+
+        /// `Emitter` → `addComponent` of the engine-local POD (#750). The
+        /// generic struct deserializer maps the `preset` enum + the nested
+        /// `config` struct straight from JSONC. Loading an emitter flips
+        /// `drive_particles` on so the tick/draw run without the game having
+        /// to call `setDriveParticles` itself — scene-authored emitters just
+        /// work, while a project with no emitter stays byte-identical.
+        pub fn applyEmitter(game: *GameType, entity: Entity, value: Value) bool {
+            const comp_alloc = game.active_world.nested_entity_arena.allocator();
+            const emitter = deserializer.deserialize(GameType.EmitterComp, value, comp_alloc) orelse return false;
+            game.addComponent(entity, emitter);
+            game.drive_particles = true;
             return true;
         }
 

@@ -92,6 +92,13 @@ pub fn Mixin(comptime Game: type) type {
             if (self.drive_sprite_animations and !self.sprite_animations_paused and scaled_dt != 0) {
                 @import("../sprite_animation_tick.zig").tick(self, scaled_dt);
             }
+            // Particle sims (#750). Step each emitter's pooled ParticleSystem
+            // on the time-scaled dt; `scaled_dt != 0` freezes them under a
+            // hard pause. Folds to nothing when `drive_particles` is off (no
+            // emitter authored) — byte-identical for particle-less games.
+            if (self.drive_particles and scaled_dt != 0) {
+                @import("../particles_tick.zig").tick(self, scaled_dt);
+            }
             AtlasMixin.resolveAtlasSprites(self);
             self.renderer.sync(EcsImpl, self.ecs_backend);
 
@@ -307,6 +314,14 @@ pub fn Mixin(comptime Game: type) type {
                     // their tileset textures re-bind.
                     self.renderTilemaps();
                     self.renderer.render();
+                }
+
+                // Particles (#750) — composite the live particles OVER the
+                // world sprite pass via the `drawMesh` seam (a no-op on a
+                // renderer without it). Inside the post-load gate so restored
+                // emitters don't flash before their scene's atlases re-bind.
+                if (self.drive_particles) {
+                    @import("../particles_tick.zig").render(self);
                 }
             }
             self.renderGizmos();

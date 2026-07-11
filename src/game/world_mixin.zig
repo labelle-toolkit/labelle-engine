@@ -119,6 +119,9 @@ pub fn Mixin(comptime Game: type) type {
             // wiped, so every tilemap entity id becomes a dangling handle
             // (T2 Phase 2). Rehydrated by the incoming scene / load path.
             self.clearTilemaps();
+            // Free per-entity particle sims for the same reason (#750): the
+            // ECS wipe invalidates every emitter entity id in the side-table.
+            self.clearParticleSystems();
             self.active_world.ecs_backend.deinit();
             _ = self.active_world.nested_entity_arena.reset(.retain_capacity);
 
