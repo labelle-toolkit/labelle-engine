@@ -72,12 +72,17 @@ pub const SplitLayout = enum {
 /// == 0` returns an empty slice; `count == 1` is always the full screen
 /// regardless of layout.
 pub fn splitScreen(
-    screen_w: i32,
-    screen_h: i32,
+    screen_w_in: i32,
+    screen_h_in: i32,
     count: usize,
     layout: SplitLayout,
     out: []Viewport,
 ) []Viewport {
+    // Clamp negative screen dimensions to 0 so no rect can carry a negative
+    // width/height into the renderer (which panics / mis-scissors on one) —
+    // a degenerate empty screen yields empty viewports rather than garbage.
+    const screen_w = @max(0, screen_w_in);
+    const screen_h = @max(0, screen_h_in);
     const n = @min(count, out.len);
     if (n == 0) return out[0..0];
     if (n == 1) {
