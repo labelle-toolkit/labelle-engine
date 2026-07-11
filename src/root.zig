@@ -117,6 +117,16 @@ pub const PrefabResolver = asset_manifest_mod.PrefabResolver;
 pub const inferAssetsJsoncWithPrefabs = asset_manifest_mod.inferAssetsJsoncWithPrefabs;
 pub const inferAssetsFromSourceWithPrefabs = asset_manifest_mod.inferAssetsFromSourceWithPrefabs;
 
+// ── Camera viewport layout (camera-bound layers Phase 3, #761) ──
+// Renderer-agnostic split-screen composition math: `splitScreen(w, h, n,
+// layout, out)` tiles a screen into N viewport rects (horizontal /
+// vertical / grid) for multi-camera split-screen / minimap / PiP. The
+// engine computes the layout; the gfx per-layer viewport binding consumes
+// it (that wiring + real cross-backend `setViewport` remain gfx-side work).
+pub const camera_viewport_mod = @import("camera_viewport.zig");
+pub const SplitLayout = camera_viewport_mod.SplitLayout;
+pub const splitScreen = camera_viewport_mod.splitScreen;
+
 // ── Input ──
 pub const InputInterface = input_mod.InputInterface;
 pub const StubInput = input_mod.StubInput;
