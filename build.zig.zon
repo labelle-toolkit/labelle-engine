@@ -54,16 +54,21 @@
         // test (`test/tilemap_test.zig`) can decode a real `.tmx` through
         // gfx's std-only `tilemap` sub-package + drive gfx's
         // `TileMapRendererWith(MockBackend)` post-sprite, proving the whole
-        // path against the actually-shipped gfx 1.21.0 API rather than a
-        // hand-rolled stand-in. `lazy` so downstream consumers of the engine
-        // module never fetch it — it is reached only by the `test` step via
-        // `b.lazyDependency`, mirroring `zspec`.
-        // Bumped to gfx v1.26.0 for camera-bound layers (RFC #723): engine
-        // 1.83.0's tagged-camera seeding drives gfx's CameraManager
-        // setTag/findByTag/resetSecondary (added in 1.26.0). Test-only + lazy —
-        // the engine module takes no direct gfx dep (the renderer arrives via
-        // RenderImpl), so the effective gfx floor is enforced at the consuming
-        // game's build; this pin only feeds the tilemap sub-package test.
+        // path against the shipped gfx API rather than a hand-rolled stand-in.
+        // `lazy` so downstream consumers of the engine module never fetch it —
+        // it is reached only by the `test` step via `b.lazyDependency`,
+        // mirroring `zspec`.
+        // Pinned to gfx v1.28.0 for the post-fx passthrough (labelle-gfx#305
+        // Phase 2 Slice C): gfx v1.28.0 adds the `PostFxDriver` + the
+        // `setPostFx`/`pushPostPass`/`clearPostFx` runtime API that `Game`'s
+        // post-fx passthrough (`src/game/post_fx_mixin.zig`) forwards to via
+        // `renderer.inner`. (Supersedes the v1.26.0 camera-bound-layers pin,
+        // RFC #723, whose tagged-camera seeding drives gfx's CameraManager
+        // setTag/findByTag/resetSecondary — still present, floor now v1.28.0.)
+        // Test-only + lazy — the engine module takes no direct gfx dep (the
+        // renderer arrives via RenderImpl), so the effective gfx floor is
+        // enforced at the consuming game's build; this pin only feeds the
+        // tilemap sub-package test.
         .labelle_gfx = .{
             .url = "https://github.com/labelle-toolkit/labelle-gfx/archive/refs/tags/v1.28.0.tar.gz",
             .hash = "labelle_gfx-1.28.0-nMpCPE-eBQB1N-aZQGQMvyIA6XBB3CgiA3Wwkf2U9jbJ",
