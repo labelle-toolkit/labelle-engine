@@ -87,6 +87,15 @@ test "pre-bind: every export is a safe no-op" {
     // Play-time plugin command (v1.7) reports "not bound" pre-bind.
     try testing.expectEqual(@as(i32, -1), editor_api.editor_plugin_command("dungeon", 7, "generate", 8, "{}", 2));
 
+    // The response-aware sibling (v1.8, #758) reports its usize sentinel…
+    var cmd_out: [8]u8 = undefined;
+    try testing.expectEqual(
+        editor_api.plugin_command_unroutable,
+        editor_api.editor_plugin_command_out("dungeon", 7, "generate", 8, "{}", 2, &cmd_out, cmd_out.len),
+    );
+    // …while the response cap is pure and already answers.
+    try testing.expectEqual(engine.plugin_command.max_response_len, editor_api.editor_plugin_response_cap());
+
     // Pick is the documented v1 stub.
     try testing.expectEqual(@as(i64, -1), editor_api.editor_pick(10.0, 20.0));
 
@@ -2179,4 +2188,189 @@ test "editor_plugin_command: -1 pre-bind, with no subscriber (graceful), and on 
     try testing.expectEqual(@as(i32, -1), editor_api.editor_plugin_command("", 0, "generate", 8, "{}", 2));
     try testing.expectEqual(@as(i32, -1), editor_api.editor_plugin_command("dungeon", 7, "", 0, "{}", 2));
     try testing.expectEqual(@as(usize, 0), recorder.count);
+}
+
+// ── editor_plugin_command_out: response channel (v1.8, #758) ─────────
+//
+// The v1.8 sibling returns the handler's response to the studio (the
+// Script Console's eval round-trip, labelle-studio#78): usize wire
+// convention — sentinel = unroutable, 0 = dispatched-no-response, N =
+// response required size with an all-or-nothing write. The studio
+// pre-sizes its buffer from `editor_plugin_response_cap()` (pure), so
+// it never needs a probe/retry on an export that re-executes handlers.
+
+/// Handler that responds to `"eval"` commands and stays silent for the
+/// rest — the console shape.
+const EvalRecorder = struct {
+    count: usize = 0,
+    accepted: ?bool = null,
+
+    pub fn engine__editor_plugin_command(self: *EvalRecorder, info: anytype) void {
+        self.count += 1;
+        if (!std.mem.eql(u8, info.command, "eval")) return;
+        self.accepted = engine.plugin_command.respondFmt("{{\"result\":{s}}}", .{info.params});
+    }
+};
+
+const EvalGame = engine.game_mod.GameConfig(
+    core.StubRender(PluginCmdMockEcs.Entity),
+    PluginCmdMockEcs,
+    engine.input_mod.StubInput,
+    engine.audio_mod.StubAudio,
+    engine.StubVideo,
+    engine.gui_mod.StubGui,
+    *EvalRecorder,
+    core.StubLogSink,
+    PluginCmdComponents,
+    &.{},
+    PluginCmdEvents,
+);
+
+test "editor_plugin_command_out: returns the handler's response (all-or-nothing)" {
+    editor_api.unbind();
+    defer editor_api.unbind();
+
+    var recorder = EvalRecorder{};
+    var game = EvalGame.init(testing.allocator);
+    defer game.deinit();
+    game.setHooks(&recorder);
+    game.dispatchEvents(); // drain any buffered game_init
+    recorder = .{};
+    var runner = DummyRunner{};
+    editor_api.bind(&game, &runner);
+
+    // The studio's pre-sized buffer: never smaller than the cap, so the
+    // all-or-nothing write can never refuse.
+    var out: [4096]u8 = undefined;
+    const n = editor_api.editor_plugin_command_out("lua", 3, "eval", 4, "42", 2, &out, out.len);
+    try testing.expectEqualStrings("{\"result\":42}", out[0..n]);
+    try testing.expectEqual(@as(usize, 1), recorder.count);
+    try testing.expectEqual(@as(?bool, true), recorder.accepted);
+
+    // Dispatched-and-unclaimed (the handler name-filters "eval" only):
+    // rc 0, buffer untouched — a v1.7-style outcome on the v1.8 export.
+    @memset(out[0..8], 0xAA);
+    try testing.expectEqual(
+        @as(usize, 0),
+        editor_api.editor_plugin_command_out("lua", 3, "reset", 5, "{}", 2, &out, out.len),
+    );
+    for (out[0..8]) |b| try testing.expectEqual(@as(u8, 0xAA), b);
+    try testing.expectEqual(@as(usize, 2), recorder.count);
+
+    // An under-sized cap: required size returned, buffer untouched
+    // (all-or-nothing — no truncated JSON prefix reaches the studio).
+    var small: [4]u8 = undefined;
+    @memset(&small, 0xAA);
+    try testing.expectEqual(
+        @as(usize, 13),
+        editor_api.editor_plugin_command_out("lua", 3, "eval", 4, "42", 2, &small, small.len),
+    );
+    for (small) |b| try testing.expectEqual(@as(u8, 0xAA), b);
+}
+
+test "editor_plugin_command_out: unroutable sentinel pre-bind, without a channel, and on empty names" {
+    editor_api.unbind();
+    defer editor_api.unbind();
+
+    // Pre-bind.
+    var out: [16]u8 = undefined;
+    try testing.expectEqual(
+        editor_api.plugin_command_unroutable,
+        editor_api.editor_plugin_command_out("p", 1, "c", 1, "{}", 2, &out, out.len),
+    );
+
+    // Bound to a project with no editor-command channel: graceful degrade.
+    {
+        var game = PluginCmdNoChannelGame.init(testing.allocator);
+        defer game.deinit();
+        var runner = DummyRunner{};
+        editor_api.bind(&game, &runner);
+        try testing.expectEqual(
+            editor_api.plugin_command_unroutable,
+            editor_api.editor_plugin_command_out("p", 1, "c", 1, "{}", 2, &out, out.len),
+        );
+    }
+
+    // Bound WITH a channel: empty names refused before dispatch.
+    editor_api.unbind();
+    var recorder = EvalRecorder{};
+    var game = EvalGame.init(testing.allocator);
+    defer game.deinit();
+    game.setHooks(&recorder);
+    var runner = DummyRunner{};
+    editor_api.bind(&game, &runner);
+    try testing.expectEqual(
+        editor_api.plugin_command_unroutable,
+        editor_api.editor_plugin_command_out("", 0, "eval", 4, "{}", 2, &out, out.len),
+    );
+    try testing.expectEqual(
+        editor_api.plugin_command_unroutable,
+        editor_api.editor_plugin_command_out("lua", 3, "", 0, "{}", 2, &out, out.len),
+    );
+    try testing.expectEqual(@as(usize, 0), recorder.count);
+}
+
+test "editor_plugin_response_cap: pure, pre-bind, and an actual bound on responses" {
+    editor_api.unbind();
+    defer editor_api.unbind();
+
+    // Pure — callable before bind, and it IS the engine channel cap.
+    try testing.expectEqual(engine.plugin_command.max_response_len, editor_api.editor_plugin_response_cap());
+
+    // A handler over-writing the channel is truncated to the cap, so a
+    // cap-sized studio buffer always receives the whole (stored)
+    // response — the pre-sizing guarantee the export documents.
+    const Overflower = struct {
+        pub fn engine__editor_plugin_command(_: *@This(), _: anytype) void {
+            var big: [engine.plugin_command.max_response_len + 64]u8 = undefined;
+            @memset(&big, 'y');
+            _ = engine.plugin_command.respond(&big);
+        }
+    };
+    const OverflowGame = engine.game_mod.GameConfig(
+        core.StubRender(PluginCmdMockEcs.Entity),
+        PluginCmdMockEcs,
+        engine.input_mod.StubInput,
+        engine.audio_mod.StubAudio,
+        engine.StubVideo,
+        engine.gui_mod.StubGui,
+        *Overflower,
+        core.StubLogSink,
+        PluginCmdComponents,
+        &.{},
+        PluginCmdEvents,
+    );
+
+    var hooks = Overflower{};
+    var game = OverflowGame.init(testing.allocator);
+    defer game.deinit();
+    game.setHooks(&hooks);
+    var runner = DummyRunner{};
+    editor_api.bind(&game, &runner);
+
+    const cap = editor_api.editor_plugin_response_cap();
+    const buf = try testing.allocator.alloc(u8, cap);
+    defer testing.allocator.free(buf);
+    const n = editor_api.editor_plugin_command_out("any", 3, "cmd", 3, "{}", 2, buf.ptr, buf.len);
+    try testing.expectEqual(cap, n);
+    for (buf) |b| try testing.expectEqual(@as(u8, 'y'), b);
+}
+
+test "editor_plugin_command (v1.7) keeps its rc contract when the handler responds" {
+    editor_api.unbind();
+    defer editor_api.unbind();
+
+    var recorder = EvalRecorder{};
+    var game = EvalGame.init(testing.allocator);
+    defer game.deinit();
+    game.setHooks(&recorder);
+    var runner = DummyRunner{};
+    editor_api.bind(&game, &runner);
+
+    // A v1.7-era studio driving a RESPONDING handler: rc 0, response
+    // silently discarded, respond still accepted (no outside-window
+    // warn on the legacy export — the dispatch window exists there too).
+    try testing.expectEqual(@as(i32, 0), editor_api.editor_plugin_command("lua", 3, "eval", 4, "1", 1));
+    try testing.expectEqual(@as(usize, 1), recorder.count);
+    try testing.expectEqual(@as(?bool, true), recorder.accepted);
 }

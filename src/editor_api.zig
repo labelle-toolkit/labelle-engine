@@ -16,9 +16,11 @@
 //! they carry no comptime type information themselves.
 //!
 //! Before `bind` runs, every export is a safe no-op: `editor_scene_digest`
-//! writes `{}`, the i32-returning scene/state ops return -1, and the
+//! writes `{}`, the i32-returning scene/state ops return -1,
+//! `editor_plugin_command_out` returns its unroutable sentinel, and the
 //! void setters silently ignore. `editor_pause` / `editor_step` are pure
-//! editor-side state and work even before `bind`.
+//! editor-side state and work even before `bind`, as is
+//! `editor_plugin_response_cap` (a compile-time constant).
 //!
 //! ## No symbols in non-preview builds
 //!
@@ -54,6 +56,10 @@
 
 const std = @import("std");
 const core = @import("labelle-core");
+/// The plugin-command channel's shared pieces (#758): `max_response_len`
+/// is what `editor_plugin_response_cap` publishes (and what sizes the
+/// dispatch buffer in `pluginCommandOutImpl`).
+const plugin_command = @import("game/editor_command_mixin.zig");
 
 // ── Editor-local state (functional pre-bind) ────────────────────────
 
@@ -80,6 +86,9 @@ const VTable = struct {
     set_entity_position: *const fn (id: u64, x: f32, y: f32) void,
     set_component: *const fn (id: u64, name: []const u8, json: []const u8) i32,
     plugin_command: *const fn (plugin: []const u8, command: []const u8, params_json: []const u8) i32,
+    // v1.8 (#758): returns the export's wire value (sentinel / 0 /
+    // required size) and writes the response into `out` all-or-nothing.
+    plugin_command_out: *const fn (plugin: []const u8, command: []const u8, params_json: []const u8, out: []u8) usize,
     scene_digest: *const fn (out: []u8) usize,
     apply_camera: *const fn (x: f32, y: f32, zoom: f32) void,
 };
@@ -370,6 +379,68 @@ pub export fn editor_plugin_command(
     );
 }
 
+/// `editor_plugin_command_out`'s unroutable sentinel: the v1.7 rc's -1
+/// carried in the export's usize (C/JS: `(size_t)-1`; on wasm32 the
+/// bridge reads it as `0xFFFFFFFF`). Distinct from 0 = dispatched-no-
+/// response and from any response size, which is capped far below it.
+pub const plugin_command_unroutable: usize = std.math.maxInt(usize);
+
+/// `editor_plugin_command` with the response channel (editor-bridge
+/// contract **v1.8**, #758) — same dispatch, same payload, but a handler's
+/// response (written via `engine.plugin_command.respond` during the
+/// synchronous dispatch; one per command, first-writer-wins — see
+/// `game/editor_command_mixin.zig`) comes back to the studio. This is what
+/// the Script Console's eval round-trip rides (labelle-studio#78).
+///
+/// Returns (usize): `plugin_command_unroutable` = not bound / empty
+/// plugin/command / no plugin subscribed (v1.7's -1 legs, graceful
+/// degrade); 0 = dispatched, no handler responded (fire-and-forward — a
+/// handler responding EMPTY also reads as 0); N = a handler responded and
+/// the response requires N bytes, written into `out` ALL-OR-NOTHING (only
+/// when `N <= out_cap` — a truncated response payload is useless, the
+/// `editor_scene_digest` truncate-to-valid-JSON trick doesn't apply to
+/// opaque handler bytes).
+///
+/// Sizing: do NOT probe/retry this export — every call EXECUTES the
+/// handler again. Instead pre-size once: responses are hard-capped at
+/// `editor_plugin_response_cap()` bytes, so a studio that `editor_alloc`s
+/// that many can never overflow. (A NULL/cap-0 `out` is tolerated but is
+/// a dispatch-that-discards, not a probe.)
+///
+/// Optional on older builds, per the bridge's additive convention: a
+/// studio that finds no `editor_plugin_command_out` degrades to the v1.7
+/// dispatch-only export.
+pub export fn editor_plugin_command_out(
+    plugin_ptr: [*]const u8,
+    plugin_len: usize,
+    command_ptr: [*]const u8,
+    command_len: usize,
+    params_ptr: [*]const u8,
+    params_len: usize,
+    out: ?[*]u8,
+    out_cap: usize,
+) usize {
+    const vt = vtable orelse return plugin_command_unroutable;
+    const out_slice: []u8 = if (out) |p| p[0..out_cap] else &.{};
+    return vt.plugin_command_out(
+        plugin_ptr[0..plugin_len],
+        command_ptr[0..command_len],
+        params_ptr[0..params_len],
+        out_slice,
+    );
+}
+
+/// The plugin-command response size cap, in bytes (editor-bridge contract
+/// **v1.8**, #758). Pure — callable before `bind`. The studio allocates
+/// this many bytes once and passes them as `editor_plugin_command_out`'s
+/// `out`/`out_cap`; since every response is truncated to this cap at the
+/// WRITE side (the handler's `respond`), such a buffer can never see the
+/// all-or-nothing write refuse — the pre-sizing story that replaces
+/// probe/retry on an export that must not run twice.
+pub export fn editor_plugin_response_cap() usize {
+    return plugin_command.max_response_len;
+}
+
 /// v1: always -1 — the studio picks client-side from the scene digest.
 pub export fn editor_pick(x: f32, y: f32) i64 {
     _ = x;
@@ -469,6 +540,7 @@ fn Holder(comptime GP: type, comptime RP: type) type {
             .set_entity_position = &setEntityPositionImpl,
             .set_component = &setComponentImpl,
             .plugin_command = &pluginCommandImpl,
+            .plugin_command_out = &pluginCommandOutImpl,
             .scene_digest = &sceneDigestImpl,
             .apply_camera = &applyCameraImpl,
         };
@@ -623,6 +695,31 @@ fn Holder(comptime GP: type, comptime RP: type) type {
             // `game/editor_command_mixin.zig`.
             if (comptime !@hasDecl(G, "editorPluginCommand")) return -1;
             return game.editorPluginCommand(plugin, command, params_json);
+        }
+
+        /// The v1.8 response-aware dispatch (#758). The response lands in
+        /// an INTERMEDIATE cap-sized buffer, not straight in `out`:
+        /// dispatching into `out` would truncate an over-cap response at
+        /// `out.len` DURING the write, making the return equal `out.len` —
+        /// indistinguishable from an exact fit, a lying required-size. The
+        /// intermediate keeps the required size honest up to the channel
+        /// cap and gives `out` the all-or-nothing write the export
+        /// documents. (One extra memcpy on game-command scale — irrelevant,
+        /// same trade `stringifyInto`'s double serialization makes.)
+        fn pluginCommandOutImpl(plugin: []const u8, command: []const u8, params_json: []const u8, out: []u8) usize {
+            // Same duck-typed-stand-in belt as pluginCommandImpl.
+            if (comptime !@hasDecl(G, "editorPluginCommandOut")) return plugin_command_unroutable;
+            var buf: [plugin_command.max_response_len]u8 = undefined;
+            return switch (game.editorPluginCommandOut(plugin, command, params_json, &buf)) {
+                .unroutable => plugin_command_unroutable,
+                .dispatched => 0,
+                .responded => |r| blk: {
+                    // Never 0 bytes: the mixin folds empty responses to
+                    // `.dispatched`.
+                    if (r.bytes.len <= out.len) @memcpy(out[0..r.bytes.len], r.bytes);
+                    break :blk r.bytes.len;
+                },
+            };
         }
 
         fn applyCameraImpl(x: f32, y: f32, zoom: f32) void {

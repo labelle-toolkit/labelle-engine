@@ -24,7 +24,8 @@
 //! (incl. `labelle_entity_find`) return 0, rc-returning ops return -1
 //! (`labelle_plugin_call` its unroutable sentinel — the same -1, carried
 //! in its usize), `labelle_component_get` / `labelle_query` /
-//! `labelle_event_poll` write nothing and return 0, the void ops
+//! `labelle_event_poll` / `labelle_plugin_response_fetch` write nothing
+//! and return 0, the void ops
 //! silently ignore, the `labelle_input_key_*` reads report not-down (0),
 //! and `labelle_input_mouse` writes the origin.
 //! `labelle_contract_version` is pure and works even before `bind`.
@@ -124,6 +125,11 @@
 //! could not be retried; its sizing story is the paired NULL/cap-0
 //! probe instead — the NEXT entry's size, nothing read or consumed —
 //! so a sizing caller probes, grows its buffer, then polls.
+//! `labelle_plugin_call` (v1.2) is required-size / all-or-nothing
+//! like the get, but its probe/retry legs live on the PAIRED
+//! `labelle_plugin_response_fetch`: a call EXECUTES the handler, so
+//! re-calling to resize would double-execute (see "Plugin commands"
+//! below).
 //!
 //! ## Component name space (registry + scene built-ins)
 //!
@@ -143,7 +149,7 @@
 //! per-name `get` caveats (renderer-handle fields are omitted; `Camera`
 //! serializes `tag` as a string).
 //!
-//! ## Plugin commands (`labelle_plugin_call`, contract v1.1, #744)
+//! ## Plugin commands (`labelle_plugin_call`, contract v1.1 #744 / v1.2 #758)
 //!
 //! Scripts call Zig PLUGIN commands (pathfinder navigate, dungeon
 //! generate, …) through the SAME handler channel labelle-studio's
@@ -157,20 +163,54 @@
 //! after the handler ran, so the script's transient buffers stay valid
 //! with no copy).
 //!
-//! The mixin is fire-and-forward — handlers produce no return payload
-//! — so the export's usize return is an rc, not a size: 0 = dispatched
-//! into the channel; `plugin_call_unroutable` (`maxInt(usize)`, C's
-//! `(size_t)-1` — the rc convention's -1 in a usize) = empty
-//! plugin/command, no handler registered in this build (the variant
-//! never landed on the merged `GameEvents`), or not bound. The channel
-//! is a broadcast that handlers name-filter THEMSELVES, so the engine
-//! cannot tell an unknown plugin/command from a delivered-and-ignored
-//! one: both dispatch as 0 wherever a handler exists. Results and acks
-//! travel back as game events — the subscribe/poll tap above.
-//! `out`/`out_cap` are reserved for a future response payload
-//! (required-size return, all-or-nothing write, `component_get`-style;
-//! 0 would keep meaning dispatched-no-response and the sentinel
-//! unroutable) and are never written in v1.1.
+//! The usize return keeps the v1.1 rc encoding and grows a size leg:
+//! `plugin_call_unroutable` (`maxInt(usize)`, C's `(size_t)-1` — the rc
+//! convention's -1 in a usize) = empty plugin/command, no handler
+//! registered in this build (the variant never landed on the merged
+//! `GameEvents`), or not bound; 0 = dispatched, no handler responded
+//! (the v1.1 fire-and-forward outcome); N = a handler RESPONDED (v1.2,
+//! #758: `engine.plugin_command.respond` during the synchronous
+//! dispatch — one response per command, first-writer-wins, see the
+//! mixin), and N is the bytes the response requires, written into
+//! `out` all-or-nothing (`component_get`-style, exactly as v1.1
+//! reserved). One deliberate exception keeps old bindings whole — the
+//! v1.1-COMPAT FOLD: a call in the exact shape the v1.1 header
+//! sanctioned (`out == NULL && out_cap == 0`, "pass NULL/0") returns
+//! the v1.1 rc even when a handler responded — 0, never N — so a
+//! v1.1-built binding checking `rc == 0` doesn't misread a successful
+//! responding dispatch as failure; the response is still published for
+//! `labelle_plugin_response_fetch` (the export doc pins the boundary
+//! shapes). The channel is a broadcast that handlers name-filter
+//! THEMSELVES, so the engine cannot tell an unknown plugin/command
+//! from a delivered-and-ignored one: both dispatch as 0 wherever a
+//! handler exists. Multi-event results and acks can still travel back
+//! as game events — the subscribe/poll tap above.
+//!
+//! ### Why responses have a paired fetch (`labelle_plugin_response_fetch`)
+//!
+//! The shared sizing convention's "retry right-sized" leg is WRONG on
+//! `labelle_plugin_call` alone: a call EXECUTES the handler, so
+//! retrying an over-cap response (or NULL/0 sizing-probing it) would
+//! run the command twice — unacceptable for non-idempotent commands.
+//! So every responded call also STORES the response (module state,
+//! capped at `plugin_command.max_response_len`), and
+//! `labelle_plugin_response_fetch` reads the most recently COMPLETED
+//! call's response with the full sizing semantics and ZERO side
+//! effects: NULL/cap-0 probe, required-size return, all-or-nothing
+//! write, repeatable (non-consuming — the store is replaced/cleared as
+//! each `labelle_plugin_call` COMPLETES, and on unbind). This mirrors
+//! `labelle_event_poll`'s no-consume probe precedent: the
+//! side-effecting op stays single-shot, the sizing/read op is free.
+//!
+//! Calls NEST: a handler may itself issue a `labelle_plugin_call`
+//! (the mixin gives the inner dispatch its own response window). Each
+//! call dispatches into PER-CALL stack storage and publishes the
+//! module store only at its own completion — inner first, outer last —
+//! so concurrent in-flight responses never share bytes, and a fetch
+//! made after the stack unwinds reads the OUTERMOST call's outcome
+//! (the handler already received the inner response in its own call's
+//! `out` buffer). Publish-on-completion is what keeps both fetch
+//! semantics and response integrity honest under recursion.
 //!
 //! Single-threaded by design (main thread, during the plugin's tick);
 //! no atomics.
@@ -179,6 +219,10 @@ const std = @import("std");
 const core = @import("labelle-core");
 const jsonc = @import("jsonc");
 const component_apply = @import("jsonc/component_apply.zig");
+/// The plugin-command channel's shared pieces (#758): `max_response_len`
+/// sizes the response store below, and the mixin `Result` is what
+/// `editorPluginCommandOut` hands back through the vtable impl.
+const plugin_command = @import("game/editor_command_mixin.zig");
 
 /// Contract version consumers compile against — bumped on BREAKING ABI
 /// or semantic changes only. Language plugins check it via
@@ -188,7 +232,9 @@ const component_apply = @import("jsonc/component_apply.zig");
 /// "since v1.x" in `contract/labelle_script.h` and detected by probing
 /// for the symbol — the editor-bridge contract's exact convention
 /// (v1.1–v1.7). Current surface: v1.1 = v1 + `labelle_plugin_call`
-/// (#744).
+/// (#744); v1.2 = v1.1 + plugin-call responses — `out`/`out_cap`
+/// activated per their reserved semantics + `labelle_plugin_response_fetch`
+/// (#758).
 pub const CONTRACT_VERSION: u32 = 1;
 
 /// `labelle_plugin_call`'s unroutable sentinel: the rc convention's -1
@@ -248,6 +294,25 @@ var stamped_dt: ?f32 = null;
 /// at every `drainEvents`.
 var emit_arenas: [2]?std.heap.ArenaAllocator = .{ null, null };
 var emit_active: u1 = 0;
+/// The most recently COMPLETED `labelle_plugin_call`'s handler response
+/// (#758) — what `labelle_plugin_response_fetch` reads. A static
+/// buffer, not an allocation: the channel is capped at
+/// `plugin_command.max_response_len` by design, the store only exists
+/// in binaries that reference this module at all (the script-less
+/// zero-cost gate), and a static store removes the
+/// free-on-unbind/replace bug class entirely. `null` len = no stored
+/// response (pre-bind, never called, last completed call unroutable or
+/// fire-and-forward).
+///
+/// PUBLISH-ON-COMPLETION discipline: this is never the live dispatch
+/// target — each `labelle_plugin_call` dispatches into its own stack
+/// buffer and copies/clears here only as it COMPLETES (`pluginCallImpl`),
+/// plus an entry-clear in the export for the pre-dispatch failure legs.
+/// Nested calls (a handler calling `labelle_plugin_call`) therefore
+/// can't corrupt an in-flight outer response, and the store settles on
+/// the OUTERMOST call's outcome. Cleared on unbind.
+var response_store: [plugin_command.max_response_len]u8 = undefined;
+var response_len: ?usize = null;
 
 // ── Type-erased dispatch ────────────────────────────────────────────
 
@@ -268,7 +333,11 @@ const VTable = struct {
     input_key_down: *const fn (key: u32) bool,
     input_key_pressed: *const fn (key: u32) bool,
     input_mouse: *const fn () core.Position,
-    plugin_call: *const fn (plugin: []const u8, command: []const u8, params_json: []const u8) i32,
+    // Returns the export's wire value directly: `plugin_call_unroutable`,
+    // 0 (dispatched, no response), or the response's required size — the
+    // impl also deposits responded bytes into `response_store` (same
+    // module, so the plain fn ptr needs no out-slice threading).
+    plugin_call: *const fn (plugin: []const u8, command: []const u8, params_json: []const u8) usize,
 };
 
 // ── Generated-main API (non-export) ─────────────────────────────────
@@ -326,6 +395,10 @@ pub fn unbind() void {
     emit_active = 0;
     stamped_dt = null;
     bound_allocator = null;
+    // The stored plugin-call response belongs to the session too — a
+    // fetch after unbind (or across a re-bind) must not read a previous
+    // game's response.
+    response_len = null;
 }
 
 /// Per-frame event tap, called by the generated main AFTER `g.tick(dt)`
@@ -773,11 +846,11 @@ pub export fn labelle_input_mouse(x_out: ?*f32, y_out: ?*f32) void {
     if (y_out) |p| p.* = pos.y;
 }
 
-// ── Plugin commands (contract v1.1, #744) ───────────────────────────
+// ── Plugin commands (contract v1.1 #744 / v1.2 responses #758) ──────
 
 /// Call a named command on a Zig engine PLUGIN — the script-side entry
 /// to the handler channel labelle-studio's panels reach through
-/// `editor_plugin_command` (editor-bridge v1.7): the game's
+/// `editor_plugin_command` (editor-bridge v1.7/v1.8): the game's
 /// `editorPluginCommand` mixin `emitSync`s `engine__editor_plugin_command`
 /// to the handler the plugin registered by subscribing to that event,
 /// so ONE registration serves studio panels and every scripting
@@ -786,19 +859,50 @@ pub export fn labelle_input_mouse(x_out: ?*f32, y_out: ?*f32) void {
 /// is SYNCHRONOUS — the handler has run by the time this returns — and
 /// all three strings are borrowed for the call only.
 ///
-/// Fire-and-forward v1.1 rc, carried in the usize return: 0 =
-/// dispatched into the handler channel; `plugin_call_unroutable`
-/// (`maxInt(usize)`, C's `(size_t)-1`) = unroutable — empty
-/// plugin/command, no handler registered in this build, a game shape
-/// without the mixin, or not bound. Handlers name-filter the broadcast
-/// themselves, so a name no plugin claims still returns 0 wherever a
-/// handler exists — dispatched-and-ignored is indistinguishable from
-/// handled BY DESIGN; responses and acks arrive as game events through
-/// the subscribe/poll tap. `out`/`out_cap` are RESERVED for handler
-/// response payloads (a future minor revision: required-size return
-/// with `labelle_component_get`'s all-or-nothing write; 0 keeps its
-/// dispatched-no-response meaning, the sentinel stays unroutable);
-/// v1.1 never writes them — pass NULL/0.
+/// usize return (v1.2 activates the semantics v1.1 reserved):
+/// `plugin_call_unroutable` (`maxInt(usize)`, C's `(size_t)-1`) =
+/// unroutable — empty plugin/command, no handler registered in this
+/// build, a game shape without the mixin, or not bound; 0 = dispatched
+/// into the handler channel with no handler response (fire-and-forward)
+/// — OR any dispatched call made in the exact v1.1 shape, see the
+/// compat fold below; N = a handler responded via
+/// `engine.plugin_command.respond` and the response requires N bytes,
+/// written into `out` ALL-OR-NOTHING (only when `N <= out_cap`,
+/// `labelle_component_get`-style — a truncated response is useless).
+/// Handlers name-filter the broadcast themselves, so a name no plugin
+/// claims still returns 0 wherever a handler exists —
+/// dispatched-and-ignored is indistinguishable from
+/// handled-without-response BY DESIGN.
+///
+/// ## The v1.1-compat fold (NULL/0)
+///
+/// `out == NULL && out_cap == 0` — the ONE caller shape the v1.1
+/// header sanctioned ("v1.1 never writes to `out`; pass NULL/0") —
+/// keeps the exact v1.1 rc contract: a responding dispatch STILL
+/// returns 0, never N, so a v1.1-built binding checking `rc == 0`
+/// keeps working when a handler it dispatches to grows a response.
+/// The response is published all the same — a v1.2 caller without a
+/// buffer sizes/reads it through `labelle_plugin_response_fetch`
+/// (whose NULL/0 probe is the sanctioned sizing path anyway; probing
+/// by re-CALL is forbidden below). The boundary is exactly the
+/// promised shape: `out != NULL` with `out_cap == 0` is the v1.2
+/// sizing leg (required size returned, nothing written), and a NULL
+/// `out` with a nonzero cap — illegal per the conventions block (NULL
+/// only together with cap 0) — is tolerated as sizing too, matching
+/// `labelle_component_get`'s NULL tolerance.
+///
+/// Do NOT sizing-probe or cap-retry THIS export: every call executes
+/// the handler again. The response is also stored as the call
+/// COMPLETES — retry/probe through `labelle_plugin_response_fetch`,
+/// which is side-effect-free. Calls may NEST (a handler issuing its own
+/// `labelle_plugin_call` mid-dispatch): each call's response travels in
+/// per-call storage (no cross-talk with the enclosing call's `out`),
+/// and each publishes the store at its own completion — inner first,
+/// outer last — so a fetch afterwards reads the OUTERMOST call's
+/// outcome. An empty response reads as 0 (no response); handlers ack
+/// with `"{}"`. Responses are host-capped at 4096 bytes
+/// (`plugin_command.max_response_len`); a caller passing a buffer of
+/// that size never needs the fetch.
 pub export fn labelle_plugin_call(
     plugin_ptr: [*]const u8,
     plugin_len: usize,
@@ -809,18 +913,67 @@ pub export fn labelle_plugin_call(
     out: ?[*]u8,
     out_cap: usize,
 ) usize {
-    // Reserved for handler responses (see the doc above) — v1.1 never
-    // writes them.
-    _ = out;
-    _ = out_cap;
+    // Cover the PRE-DISPATCH failure legs (not bound / empty names):
+    // they complete this call too, so the previous response dies here —
+    // a fetch through them must find nothing, never stale bytes.
+    // Dispatched calls don't rely on this clear: `pluginCallImpl`
+    // PUBLISHES the store at completion on every outcome (see its doc
+    // for the nested-call rationale) — which is what makes fetch's
+    // "most recently COMPLETED call" contract hold even when a handler
+    // issues its own labelle_plugin_call mid-dispatch.
+    response_len = null;
     const vt = vtable orelse return plugin_call_unroutable;
     if (plugin_len == 0 or command_len == 0) return plugin_call_unroutable;
-    const rc = vt.plugin_call(
+    const n = vt.plugin_call(
         plugin_ptr[0..plugin_len],
         command_ptr[0..command_len],
         optionalJson(params_ptr, params_len, "{}"),
     );
-    return if (rc == 0) 0 else plugin_call_unroutable;
+    if (n == 0 or n == plugin_call_unroutable) return n;
+    // Responded: the impl deposited the bytes in `response_store` (and
+    // set `response_len = n`).
+    if (out == null and out_cap == 0) {
+        // The v1.1-compat fold (export doc): the exact legacy shape
+        // keeps the legacy rc — 0, never the response size — while the
+        // publish above still serves labelle_plugin_response_fetch.
+        return 0;
+    }
+    // All-or-nothing into the caller's buffer; NULL out (with a
+    // nonzero cap — an illegal-but-tolerated shape) and the non-NULL
+    // cap-0 shape both fall through as pure sizing: N returned,
+    // nothing written.
+    if (out) |p| {
+        if (n <= out_cap) @memcpy(p[0..n], response_store[0..n]);
+    }
+    return n;
+}
+
+/// Read the response of the most recently COMPLETED
+/// `labelle_plugin_call` — the side-effect-free half of the response
+/// channel (since v1.2, #758): the handler is NEVER re-executed, so
+/// this is where the shared sizing convention's probe/retry legs live.
+/// NULL or zero-capacity `out` is the pure sizing probe; otherwise the
+/// write is ALL-OR-NOTHING (`labelle_component_get`-style) and the
+/// return is the bytes the complete response requires. 0 = nothing
+/// stored: no call yet, the last completed call was unroutable or
+/// fire-and-forward (no handler responded, or it responded empty), or
+/// not bound. NON-consuming — fetch as many times as needed; the store
+/// is replaced/cleared as each `labelle_plugin_call` COMPLETES and on
+/// unbind. "Completed" carries the nesting semantics: when a handler
+/// itself issues a `labelle_plugin_call`, the inner call publishes
+/// first and the enclosing call — completing last — overwrites or
+/// clears it, so a fetch made after the whole stack unwinds reads the
+/// OUTERMOST call's outcome (a handler that wants the inner response
+/// reads it from its own call's `out`, not from a later fetch).
+pub export fn labelle_plugin_response_fetch(out: ?[*]u8, out_cap: usize) usize {
+    const n = response_len orelse return 0;
+    // The mixin folds empty responses to dispatched-no-response, so a
+    // stored response is never empty and a non-zero return can't be
+    // confused with "nothing stored" (the event_poll probe's argument).
+    const p = out orelse return n;
+    if (out_cap == 0) return n;
+    if (n <= out_cap) @memcpy(p[0..n], response_store[0..n]);
+    return n;
 }
 
 // ── Implementation ──────────────────────────────────────────────────
@@ -1502,19 +1655,59 @@ fn Holder(comptime GP: type) type {
 
         // ── Plugin commands ──────────────────────────────────────
 
-        /// Straight through the game's `editorPluginCommand` mixin —
-        /// the very dispatch the `editor_plugin_command` bridge export
-        /// uses, NOT a reimplementation: the routing/handler-channel
-        /// decision lives in `game/editor_command_mixin.zig` alone.
-        /// Every GameConfig-built Game carries the decl; the `@hasDecl`
-        /// belt keeps a minimal duck-typed stand-in compiling (it
-        /// degrades to the unroutable -1) — the same belt editor_api's
-        /// pluginCommandImpl wears. A game whose merged `GameEvents`
-        /// never consumed `engine__editor_plugin_command` folds to -1
-        /// INSIDE the mixin (the zero-cost no-handler gate).
-        fn pluginCallImpl(plugin: []const u8, command: []const u8, params_json: []const u8) i32 {
-            if (comptime !@hasDecl(G, "editorPluginCommand")) return -1;
-            return game.editorPluginCommand(plugin, command, params_json);
+        /// Straight through the game's `editorPluginCommandOut` mixin —
+        /// the very dispatch the `editor_plugin_command*` bridge exports
+        /// use, NOT a reimplementation: the routing/handler-channel/
+        /// response decisions live in `game/editor_command_mixin.zig`
+        /// alone. Every GameConfig-built Game carries the decl; the
+        /// `@hasDecl` belt keeps a minimal duck-typed stand-in compiling
+        /// (it degrades to unroutable) — the same belt editor_api's
+        /// impls wear. A game whose merged `GameEvents` never consumed
+        /// `engine__editor_plugin_command` folds to unroutable INSIDE
+        /// the mixin (the zero-cost no-handler gate).
+        ///
+        /// The dispatch lands in PER-CALL stack storage, never the
+        /// module `response_store` directly: a handler may itself issue
+        /// a nested `labelle_plugin_call` (the mixin gives it its own
+        /// response window), and two in-flight dispatches sharing one
+        /// buffer would let the inner response scribble over the outer
+        /// one's bytes while the outer window still reports its
+        /// original length — a corrupted outer response (review finding
+        /// on PR #760). One `max_response_len` frame per nesting level
+        /// is the bounded, cheap price (4 KiB; depth is the game's own
+        /// handler-recursion depth).
+        ///
+        /// The module store is PUBLISHED at completion, on every
+        /// outcome — responded → copied in, dispatched/unroutable →
+        /// cleared — so under nesting the inner call publishes first
+        /// and the outer call, completing last, overwrites or clears
+        /// it: a later `labelle_plugin_response_fetch` always reads the
+        /// most-recently-COMPLETED (i.e. outermost) call's outcome. The
+        /// return is already the export's wire value (sentinel / 0 /
+        /// required size).
+        fn pluginCallImpl(plugin: []const u8, command: []const u8, params_json: []const u8) usize {
+            if (comptime !@hasDecl(G, "editorPluginCommandOut")) return plugin_call_unroutable;
+            var buf: [plugin_command.max_response_len]u8 = undefined;
+            switch (game.editorPluginCommandOut(plugin, command, params_json, &buf)) {
+                .unroutable => {
+                    response_len = null;
+                    return plugin_call_unroutable;
+                },
+                .dispatched => {
+                    response_len = null;
+                    return 0;
+                },
+                .responded => |r| {
+                    // `r.bytes` aliases this call's stack frame —
+                    // publish a copy. Never 0 bytes (the mixin folds
+                    // empty responses to `.dispatched`) and never over
+                    // the cap (`buf` IS the cap; the mixin truncates at
+                    // `out.len`).
+                    @memcpy(response_store[0..r.bytes.len], r.bytes);
+                    response_len = r.bytes.len;
+                    return r.bytes.len;
+                },
+            }
         }
 
         // ── Helpers ──────────────────────────────────────────────

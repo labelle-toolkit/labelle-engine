@@ -964,6 +964,15 @@ pub fn GameConfigWithYAxis(
         /// declared handler. See `game/editor_command_mixin.zig`.
         pub const editorPluginCommand = EditorCommandMixin.editorPluginCommand;
 
+        /// Response-aware plugin-command dispatch (#758): same routing, plus
+        /// the caller receives the (at most one) response a handler wrote via
+        /// `engine.plugin_command.respond` during the synchronous dispatch.
+        /// Backs the `editor_plugin_command_out` bridge export (v1.8) and the
+        /// script contract's `labelle_plugin_call` out-buffer (v1.2). See
+        /// `game/editor_command_mixin.zig` for the channel's semantics
+        /// (first-writer-wins, bounded, empty-folds-to-dispatched).
+        pub const editorPluginCommandOut = EditorCommandMixin.editorPluginCommandOut;
+
         // ── Debug entity guards (#419, #420) ─────────────────────
 
         pub const recordTombstone = EntityMixin.recordTombstone;

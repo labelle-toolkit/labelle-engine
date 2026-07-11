@@ -127,9 +127,11 @@ fn findEntity(name: []const u8) u64 {
     return contract.labelle_entity_find(name.ptr, name.len);
 }
 
-/// Call plugin_call with the reserved out-buffer at its documented
-/// v1.1 shape (NULL/0). The reserved-buffer canary test drives
-/// `labelle_plugin_call` directly instead.
+/// Call plugin_call in the exact v1.1 shape (NULL/0 out) — the shape
+/// the v1.1-compat fold pins to the v1.1 rc contract: 0 for EVERY
+/// dispatched call (a handler response is published for fetch, never
+/// returned as N here), sentinel for unroutable. The response tests
+/// drive `labelle_plugin_call` with a real out buffer (`pluginCallOut`).
 fn pluginCall(plugin: []const u8, command: []const u8, params: []const u8) usize {
     return contract.labelle_plugin_call(
         plugin.ptr,
@@ -212,6 +214,8 @@ test "pre-bind: every export is a safe no-op" {
     try testing.expectEqual(@as(usize, 0), getComp(1, "Health", &buf).len);
     try testing.expectEqual(@as(usize, 0), query("[\"Health\"]", &buf).len);
     try testing.expectEqual(@as(usize, 0), poll(&buf).len);
+    // No plugin_call ever ran → nothing stored to fetch (v1.2).
+    try testing.expectEqual(@as(usize, 0), contract.labelle_plugin_response_fetch(&buf, buf.len));
 
     // Time: no game, no dt.
     try testing.expectEqual(@as(f32, 0), contract.labelle_time_dt());
@@ -1945,8 +1949,9 @@ test "plugin_call: routes through the editorPluginCommand mixin to the registere
     try testing.expectEqual(@as(usize, 2), recorder.count);
     try testing.expectEqualStrings("nonexistent_plugin", recorder.lastPlugin());
 
-    // out/out_cap are RESERVED in v1.1: never written even on a
-    // dispatched call (canary intact), and the return stays the rc.
+    // A dispatched call whose handlers never respond leaves out/out_cap
+    // untouched (canary intact) and returns the rc 0 — under v1.2 this
+    // is exactly the v1.1 reserved behavior, byte for byte.
     var out: [32]u8 = undefined;
     @memset(&out, 0xAA);
     const plugin = "pathfinder";
@@ -2058,4 +2063,557 @@ test "plugin_call: the minimal engine.Game shape compiles and degrades to unrout
         contract.plugin_call_unroutable,
         pluginCall("pathfinder", "navigate", "{}"),
     );
+}
+
+// ── plugin-call responses (contract v1.2, #758) ─────────────────────
+//
+// A handler may RESPOND to the command it is handling by calling
+// `engine.plugin_command.respond`/`respondFmt` inside the synchronous
+// dispatch window; the caller receives it through the activated
+// `out`/`out_cap` (required-size, all-or-nothing — the semantics v1.1
+// reserved) and, side-effect-free, through the paired
+// `labelle_plugin_response_fetch`. One response per command,
+// first-writer-wins across the broadcast. These tests register
+// responders through the REAL registration path (hooks subscribers to
+// the engine event) and pin every leg, including the load-bearing
+// negative: a response READ never re-executes the handler.
+
+/// `labelle_plugin_call` with a real out buffer (the v1.2 shape).
+fn pluginCallOut(plugin: []const u8, command: []const u8, params: []const u8, out: []u8) usize {
+    return contract.labelle_plugin_call(
+        plugin.ptr,
+        plugin.len,
+        command.ptr,
+        command.len,
+        params.ptr,
+        params.len,
+        out.ptr,
+        out.len,
+    );
+}
+
+/// Responding handler — command-selected behaviors so one recorder
+/// covers every respond flavor. `count` is the double-execution canary;
+/// `respond_accepted` records what the (last) respond call returned.
+const RespondingRecorder = struct {
+    count: usize = 0,
+    respond_accepted: ?bool = null,
+
+    pub fn engine__editor_plugin_command(self: *RespondingRecorder, info: anytype) void {
+        self.count += 1;
+        if (std.mem.eql(u8, info.command, "silent")) return; // fire-and-forward leg
+        if (std.mem.eql(u8, info.command, "empty")) {
+            self.respond_accepted = engine.plugin_command.respond("");
+            return;
+        }
+        if (std.mem.eql(u8, info.command, "huge")) {
+            var big: [engine.plugin_command.max_response_len + 100]u8 = undefined;
+            @memset(&big, 'x');
+            self.respond_accepted = engine.plugin_command.respond(&big);
+            return;
+        }
+        if (std.mem.eql(u8, info.command, "fmt")) {
+            self.respond_accepted = engine.plugin_command.respondFmt(
+                "{{\"echo\":{s}}}",
+                .{info.params},
+            );
+            return;
+        }
+        if (std.mem.eql(u8, info.command, "double")) {
+            _ = engine.plugin_command.respond("first");
+            self.respond_accepted = engine.plugin_command.respond("second");
+            return;
+        }
+        // Default ("ping" etc.): a fixed 13-byte JSON response.
+        self.respond_accepted = engine.plugin_command.respond("{\"pong\":true}");
+    }
+};
+
+const RespondGame = engine.GameConfig(
+    core.StubRender(MockEcs.Entity),
+    MockEcs,
+    engine.StubInput,
+    engine.StubAudio,
+    engine.StubVideo,
+    engine.StubGui,
+    *RespondingRecorder,
+    core.StubLogSink,
+    TestComponents,
+    &.{},
+    PluginCallEvents,
+);
+
+test "plugin_call responses: respond returns required size + all-or-nothing write" {
+    contract.unbind();
+    defer contract.unbind();
+
+    var recorder = RespondingRecorder{};
+    var game = RespondGame.init(testing.allocator);
+    defer game.deinit();
+    game.setHooks(&recorder);
+    contract.bind(&game);
+
+    // Fits: required size returned, response written, tail canary intact.
+    var out: [32]u8 = undefined;
+    @memset(&out, 0xAA);
+    const n = pluginCallOut("pathfinder", "ping", "{}", &out);
+    try testing.expectEqual(@as(usize, 13), n);
+    try testing.expectEqualStrings("{\"pong\":true}", out[0..13]);
+    for (out[13..]) |b| try testing.expectEqual(@as(u8, 0xAA), b);
+    try testing.expectEqual(@as(?bool, true), recorder.respond_accepted);
+
+    // respondFmt formats straight into the channel.
+    var out2: [64]u8 = undefined;
+    const n2 = pluginCallOut("pathfinder", "fmt", "{\"x\":1}", &out2);
+    try testing.expectEqualStrings("{\"echo\":{\"x\":1}}", out2[0..n2]);
+}
+
+test "plugin_call responses: over-cap out is untouched; fetch retries without re-executing" {
+    contract.unbind();
+    defer contract.unbind();
+
+    var recorder = RespondingRecorder{};
+    var game = RespondGame.init(testing.allocator);
+    defer game.deinit();
+    game.setHooks(&recorder);
+    contract.bind(&game);
+
+    // The 13-byte response doesn't fit a 4-byte buffer: required size
+    // still returned, buffer untouched (all-or-nothing).
+    var small: [4]u8 = undefined;
+    @memset(&small, 0xAA);
+    try testing.expectEqual(@as(usize, 13), pluginCallOut("pathfinder", "ping", "{}", &small));
+    for (small) |b| try testing.expectEqual(@as(u8, 0xAA), b);
+    try testing.expectEqual(@as(usize, 1), recorder.count);
+
+    // ── The double-execution negative-verify (#758) ──
+    // Every read of the stored response leaves the handler UN-re-run:
+    // the probe, the right-sized fetch, and a repeat fetch all leave
+    // `count` at the single dispatch above.
+    try testing.expectEqual(@as(usize, 13), contract.labelle_plugin_response_fetch(null, 0));
+    try testing.expectEqual(@as(usize, 1), recorder.count);
+
+    var right: [13]u8 = undefined;
+    try testing.expectEqual(@as(usize, 13), contract.labelle_plugin_response_fetch(&right, right.len));
+    try testing.expectEqualStrings("{\"pong\":true}", &right);
+    try testing.expectEqual(@as(usize, 1), recorder.count);
+
+    // Non-consuming: a second fetch reads the same response.
+    var again: [32]u8 = undefined;
+    const n = contract.labelle_plugin_response_fetch(&again, again.len);
+    try testing.expectEqualStrings("{\"pong\":true}", again[0..n]);
+    try testing.expectEqual(@as(usize, 1), recorder.count);
+
+    // Fetch's own all-or-nothing: an under-sized fetch sizes but writes
+    // nothing.
+    var tiny: [2]u8 = undefined;
+    @memset(&tiny, 0xAA);
+    try testing.expectEqual(@as(usize, 13), contract.labelle_plugin_response_fetch(&tiny, tiny.len));
+    for (tiny) |b| try testing.expectEqual(@as(u8, 0xAA), b);
+    try testing.expectEqual(@as(usize, 1), recorder.count);
+}
+
+test "plugin_call responses: fetch reads the most recently COMPLETED call — cleared by response-less and failed calls" {
+    contract.unbind();
+    defer contract.unbind();
+
+    var recorder = RespondingRecorder{};
+    var game = RespondGame.init(testing.allocator);
+    defer game.deinit();
+    game.setHooks(&recorder);
+    contract.bind(&game);
+
+    // Responded call stores at completion (the NULL/0 v1.1 shape folds
+    // its rc to 0 — the fetch is where the response shows up)…
+    try testing.expectEqual(@as(usize, 0), pluginCall("pathfinder", "ping", "{}"));
+    try testing.expectEqual(@as(usize, 13), contract.labelle_plugin_response_fetch(null, 0));
+
+    // …a fire-and-forward call clears (0 = dispatched-no-response, and
+    // the previous response must not linger for a stale fetch).
+    try testing.expectEqual(@as(usize, 0), pluginCall("pathfinder", "silent", "{}"));
+    try testing.expectEqual(@as(usize, 0), contract.labelle_plugin_response_fetch(null, 0));
+
+    // …and so does a failed (unroutable) call: store again, then an
+    // empty command name.
+    try testing.expectEqual(@as(usize, 0), pluginCall("pathfinder", "ping", "{}"));
+    try testing.expectEqual(@as(usize, 13), contract.labelle_plugin_response_fetch(null, 0));
+    try testing.expectEqual(contract.plugin_call_unroutable, pluginCall("pathfinder", "", "{}"));
+    try testing.expectEqual(@as(usize, 0), contract.labelle_plugin_response_fetch(null, 0));
+}
+
+// ── Nested plugin calls (PR #760 review finding) ────────────────────
+//
+// A handler may itself issue a labelle_plugin_call mid-dispatch. Two
+// in-flight dispatches must not share response storage: with a shared
+// dispatch buffer the inner response scribbles over the outer one's
+// bytes while the outer window still reports its original length —
+// the outer caller reads a corrupted splice. The fix dispatches each
+// call into per-call stack storage and publishes the fetch store only
+// at completion (inner first, outer last), which this recorder pins
+// end to end.
+
+const NestedRecorder = struct {
+    outer_count: usize = 0,
+    inner_count: usize = 0,
+    /// What the NESTED labelle_plugin_call returned to the handler…
+    inner_rc: usize = 0,
+    /// …and what it wrote into the handler's own out buffer.
+    inner_buf: [64]u8 = undefined,
+
+    pub fn engine__editor_plugin_command(self: *NestedRecorder, info: anytype) void {
+        if (std.mem.eql(u8, info.command, "outer")) {
+            self.outer_count += 1;
+            // The corruption ordering: respond FIRST (the outer window
+            // now holds bytes), THEN issue the nested call.
+            _ = engine.plugin_command.respond("OUTER-RESPONSE");
+            self.inner_rc = pluginCallOut("nested", "inner", "{}", &self.inner_buf);
+        } else if (std.mem.eql(u8, info.command, "outer_silent")) {
+            self.outer_count += 1;
+            // No respond on the outer window — only the nested call.
+            self.inner_rc = pluginCallOut("nested", "inner", "{}", &self.inner_buf);
+        } else if (std.mem.eql(u8, info.command, "inner")) {
+            self.inner_count += 1;
+            _ = engine.plugin_command.respond("inner!!");
+        }
+    }
+};
+
+const NestedGame = engine.GameConfig(
+    core.StubRender(MockEcs.Entity),
+    MockEcs,
+    engine.StubInput,
+    engine.StubAudio,
+    engine.StubVideo,
+    engine.StubGui,
+    *NestedRecorder,
+    core.StubLogSink,
+    TestComponents,
+    &.{},
+    PluginCallEvents,
+);
+
+test "plugin_call responses: a nested call cannot corrupt the outer response; fetch reads the outermost outcome" {
+    contract.unbind();
+    defer contract.unbind();
+
+    var recorder = NestedRecorder{};
+    var game = NestedGame.init(testing.allocator);
+    defer game.deinit();
+    game.setHooks(&recorder);
+    contract.bind(&game);
+
+    // Outer call: handler responds "OUTER-RESPONSE" (14 bytes), then
+    // nests a call whose handler responds "inner!!" (7 bytes — shorter
+    // ON PURPOSE, so a shared dispatch buffer would splice the two).
+    var out: [64]u8 = undefined;
+    const n = pluginCallOut("nested", "outer", "{}", &out);
+    try testing.expectEqual(@as(usize, 1), recorder.outer_count);
+    try testing.expectEqual(@as(usize, 1), recorder.inner_count);
+
+    // (a) The outer caller's bytes are the OUTER response, uncorrupted.
+    try testing.expectEqual(@as(usize, 14), n);
+    try testing.expectEqualStrings("OUTER-RESPONSE", out[0..14]);
+
+    // (c) The handler (the inner caller) received the INNER response in
+    // ITS out buffer — the two responses never shared storage.
+    try testing.expectEqual(@as(usize, 7), recorder.inner_rc);
+    try testing.expectEqualStrings("inner!!", recorder.inner_buf[0..7]);
+
+    // (b) Fetch after the stack unwound: the most recently COMPLETED
+    // call is the OUTER one (it completes last), so its response is
+    // what's stored — not the inner one.
+    var fetched: [64]u8 = undefined;
+    const fn_ = contract.labelle_plugin_response_fetch(&fetched, fetched.len);
+    try testing.expectEqualStrings("OUTER-RESPONSE", fetched[0..fn_]);
+
+    // (d) Response-less outer around a RESPONDING inner: the outer call
+    // completes last and clears — a later fetch must not resurrect the
+    // stale inner bytes (the inner response was already delivered to
+    // the handler's own out buffer above).
+    recorder.inner_rc = 0;
+    try testing.expectEqual(@as(usize, 0), pluginCallOut("nested", "outer_silent", "{}", &out));
+    try testing.expectEqual(@as(usize, 2), recorder.outer_count);
+    try testing.expectEqual(@as(usize, 2), recorder.inner_count);
+    try testing.expectEqual(@as(usize, 7), recorder.inner_rc); // inner still served
+    try testing.expectEqualStrings("inner!!", recorder.inner_buf[0..7]);
+    try testing.expectEqual(@as(usize, 0), contract.labelle_plugin_response_fetch(null, 0));
+}
+
+test "plugin_call responses: empty respond claims the channel but reads as no-response" {
+    contract.unbind();
+    defer contract.unbind();
+
+    var recorder = RespondingRecorder{};
+    var game = RespondGame.init(testing.allocator);
+    defer game.deinit();
+    game.setHooks(&recorder);
+    contract.bind(&game);
+
+    // respond("") is ACCEPTED (it claims first-writer-wins)…
+    var out: [8]u8 = undefined;
+    @memset(&out, 0xAA);
+    try testing.expectEqual(@as(usize, 0), pluginCallOut("pathfinder", "empty", "{}", &out));
+    try testing.expectEqual(@as(?bool, true), recorder.respond_accepted);
+    // …but the sized returns fold it to dispatched-no-response: 0,
+    // nothing written, nothing stored.
+    for (out) |b| try testing.expectEqual(@as(u8, 0xAA), b);
+    try testing.expectEqual(@as(usize, 0), contract.labelle_plugin_response_fetch(null, 0));
+}
+
+test "plugin_call responses: payloads truncate at the channel cap" {
+    contract.unbind();
+    defer contract.unbind();
+
+    var recorder = RespondingRecorder{};
+    var game = RespondGame.init(testing.allocator);
+    defer game.deinit();
+    game.setHooks(&recorder);
+    contract.bind(&game);
+
+    // The handler writes cap+100 bytes; the channel truncates at the
+    // cap — required size reports the STORED (truncated) length, so a
+    // right-sized fetch reads exactly what exists. Driven with a real
+    // (under-sized) out buffer so the return carries the size: the
+    // NULL/0 shape would fold it to the v1.1 rc 0.
+    const cap = engine.plugin_command.max_response_len;
+    var small: [8]u8 = undefined;
+    try testing.expectEqual(cap, pluginCallOut("pathfinder", "huge", "{}", &small));
+    try testing.expectEqual(@as(?bool, true), recorder.respond_accepted);
+    try testing.expectEqual(cap, contract.labelle_plugin_response_fetch(null, 0));
+}
+
+test "plugin_call v1.1 compat: the NULL/0 shape folds a responding dispatch to rc 0 (response still fetchable)" {
+    contract.unbind();
+    defer contract.unbind();
+
+    var recorder = RespondingRecorder{};
+    var game = RespondGame.init(testing.allocator);
+    defer game.deinit();
+    game.setHooks(&recorder);
+    contract.bind(&game);
+
+    // A binding built against v1.1 passes NULL/0 (the only shape that
+    // header sanctioned) and checks rc == 0 for a dispatched call.
+    // With a RESPONDING handler the fold keeps that contract: rc 0,
+    // never the response size.
+    try testing.expectEqual(@as(usize, 0), pluginCall("pathfinder", "ping", "{}"));
+    try testing.expectEqual(@as(usize, 1), recorder.count);
+    try testing.expectEqual(@as(?bool, true), recorder.respond_accepted);
+
+    // The fold discards nothing: the response was published, so a v1.2
+    // caller without a buffer sizes via the fetch probe and reads it —
+    // no re-execution (count pinned).
+    try testing.expectEqual(@as(usize, 13), contract.labelle_plugin_response_fetch(null, 0));
+    var buf: [32]u8 = undefined;
+    const n = contract.labelle_plugin_response_fetch(&buf, buf.len);
+    try testing.expectEqualStrings("{\"pong\":true}", buf[0..n]);
+    try testing.expectEqual(@as(usize, 1), recorder.count);
+
+    // Unroutable in the same NULL/0 shape keeps the v1.1 sentinel.
+    try testing.expectEqual(contract.plugin_call_unroutable, pluginCall("", "ping", "{}"));
+
+    // The fold's boundary is EXACTLY the promised shape. A real pointer
+    // with cap 0 is the v1.2 sizing leg: size returned, nothing written…
+    const plugin = "pathfinder";
+    const command = "ping";
+    const params = "{}";
+    var canary: [4]u8 = undefined;
+    @memset(&canary, 0xAA);
+    try testing.expectEqual(@as(usize, 13), contract.labelle_plugin_call(
+        plugin.ptr,
+        plugin.len,
+        command.ptr,
+        command.len,
+        params.ptr,
+        params.len,
+        &canary,
+        0,
+    ));
+    for (canary) |b| try testing.expectEqual(@as(u8, 0xAA), b);
+    // …and NULL with a nonzero cap (illegal per the conventions block,
+    // tolerated like component_get's NULL) sizes too — no fold.
+    try testing.expectEqual(@as(usize, 13), contract.labelle_plugin_call(
+        plugin.ptr,
+        plugin.len,
+        command.ptr,
+        command.len,
+        params.ptr,
+        params.len,
+        null,
+        16,
+    ));
+}
+
+test "plugin_call responses: second respond within one handler is refused (first-writer-wins)" {
+    contract.unbind();
+    defer contract.unbind();
+    // The refusal deliberately warns; keep the intentional trigger out
+    // of the test runner's stderr (asserted via the return value below).
+    const prev_log = std.testing.log_level;
+    std.testing.log_level = .err;
+    defer std.testing.log_level = prev_log;
+
+    var recorder = RespondingRecorder{};
+    var game = RespondGame.init(testing.allocator);
+    defer game.deinit();
+    game.setHooks(&recorder);
+    contract.bind(&game);
+
+    var out: [16]u8 = undefined;
+    const n = pluginCallOut("pathfinder", "double", "{}", &out);
+    try testing.expectEqualStrings("first", out[0..n]);
+    // The recorder stored the SECOND respond's return: refused.
+    try testing.expectEqual(@as(?bool, false), recorder.respond_accepted);
+}
+
+// Two-receiver broadcast: both handlers run (the v1.7 fan-out is
+// preserved), the FIRST responder's payload returns, the second's
+// respond is refused. Receivers are merged through core.MergeHooks —
+// the assembler-generated multi-plugin shape.
+const RespondAlpha = struct {
+    count: usize = 0,
+    accepted: ?bool = null,
+    pub fn engine__editor_plugin_command(self: *RespondAlpha, _: anytype) void {
+        self.count += 1;
+        self.accepted = engine.plugin_command.respond("alpha");
+    }
+};
+const RespondBeta = struct {
+    count: usize = 0,
+    accepted: ?bool = null,
+    pub fn engine__editor_plugin_command(self: *RespondBeta, _: anytype) void {
+        self.count += 1;
+        self.accepted = engine.plugin_command.respond("beta");
+    }
+};
+
+// The game's own merged payload shape, precomputed exactly as
+// `GameConfig` derives it (MergeHookPayloads over the engine payload +
+// the events union) so the MergeHooks instance type-checks against
+// `Game.PayloadExport` — the generated-main wiring order.
+const TwoRespPayload = core.MergeHookPayloads(.{ engine.HookPayload(u32), PluginCallEvents });
+const TwoRespHooks = core.MergeHooks(TwoRespPayload, .{ *RespondAlpha, *RespondBeta });
+
+const TwoResponderGame = engine.GameConfig(
+    core.StubRender(MockEcs.Entity),
+    MockEcs,
+    engine.StubInput,
+    engine.StubAudio,
+    engine.StubVideo,
+    engine.StubGui,
+    *TwoRespHooks,
+    core.StubLogSink,
+    TestComponents,
+    &.{},
+    PluginCallEvents,
+);
+
+test "plugin_call responses: broadcast preserved — first responder wins, second refused" {
+    contract.unbind();
+    defer contract.unbind();
+    // Beta's refusal warns by design; silence the intentional trigger.
+    const prev_log = std.testing.log_level;
+    std.testing.log_level = .err;
+    defer std.testing.log_level = prev_log;
+
+    var alpha = RespondAlpha{};
+    var beta = RespondBeta{};
+    var merged = TwoRespHooks{ .receivers = .{ &alpha, &beta } };
+    var game = TwoResponderGame.init(testing.allocator);
+    defer game.deinit();
+    game.setHooks(&merged);
+    contract.bind(&game);
+
+    var out: [16]u8 = undefined;
+    const n = pluginCallOut("anyplugin", "anycmd", "{}", &out);
+    try testing.expectEqualStrings("alpha", out[0..n]);
+    // BOTH handlers ran — a response does not consume the broadcast…
+    try testing.expectEqual(@as(usize, 1), alpha.count);
+    try testing.expectEqual(@as(usize, 1), beta.count);
+    // …but only the first respond was accepted (the second warns).
+    try testing.expectEqual(@as(?bool, true), alpha.accepted);
+    try testing.expectEqual(@as(?bool, false), beta.accepted);
+}
+
+test "plugin_command.respond outside a dispatch window is refused" {
+    // No game, no dispatch — the module seam refuses (and warns)
+    // instead of scribbling anywhere. Silence the intentional warns.
+    const prev_log = std.testing.log_level;
+    std.testing.log_level = .err;
+    defer std.testing.log_level = prev_log;
+
+    try testing.expect(!engine.plugin_command.respond("stray"));
+    try testing.expect(!engine.plugin_command.respondFmt("stray {d}", .{7}));
+}
+
+test "editorPluginCommandOut: responded bytes alias the caller's buffer; truncated flag on overflow" {
+    contract.unbind();
+    defer contract.unbind();
+
+    var recorder = RespondingRecorder{};
+    var game = RespondGame.init(testing.allocator);
+    defer game.deinit();
+    game.setHooks(&recorder);
+
+    // Mixin-level (no C surface): the Result's bytes are a slice OF the
+    // caller's out buffer, truncated at its length when the response
+    // overflows it.
+    var small: [8]u8 = undefined;
+    switch (game.editorPluginCommandOut("pathfinder", "ping", "{}", &small)) {
+        .responded => |r| {
+            try testing.expectEqual(@as([*]u8, &small), r.bytes.ptr);
+            try testing.expectEqualStrings("{\"pong\":", r.bytes);
+            try testing.expect(r.truncated);
+        },
+        else => return error.TestUnexpectedResult,
+    }
+
+    var fits: [64]u8 = undefined;
+    switch (game.editorPluginCommandOut("pathfinder", "ping", "{}", &fits)) {
+        .responded => |r| {
+            try testing.expectEqualStrings("{\"pong\":true}", r.bytes);
+            try testing.expect(!r.truncated);
+        },
+        else => return error.TestUnexpectedResult,
+    }
+
+    // respondFmt's overflow leg: formatting that outgrows the window is
+    // cut at the window's length and flagged, keeping the written
+    // prefix (the fixed-writer catch path).
+    var fmt_small: [10]u8 = undefined;
+    switch (game.editorPluginCommandOut("pathfinder", "fmt", "{\"long\":\"xxxxxxxxxxxxxxxx\"}", &fmt_small)) {
+        .responded => |r| {
+            try testing.expectEqualStrings("{\"echo\":{\"", r.bytes);
+            try testing.expect(r.truncated);
+        },
+        else => return error.TestUnexpectedResult,
+    }
+
+    // Fire-and-forward and unroutable legs of the mixin Result.
+    var buf: [8]u8 = undefined;
+    switch (game.editorPluginCommandOut("pathfinder", "silent", "{}", &buf)) {
+        .dispatched => {},
+        else => return error.TestUnexpectedResult,
+    }
+    switch (game.editorPluginCommandOut("", "ping", "{}", &buf)) {
+        .unroutable => {},
+        else => return error.TestUnexpectedResult,
+    }
+}
+
+test "editorPluginCommand (v1.7 rc): the dispatch window exists — a response is accepted and discarded" {
+    contract.unbind();
+    defer contract.unbind();
+
+    var recorder = RespondingRecorder{};
+    var game = RespondGame.init(testing.allocator);
+    defer game.deinit();
+    game.setHooks(&recorder);
+
+    // The legacy rc path dispatches with a zero-length window: the
+    // handler's respond is ACCEPTED (no spurious outside-window warn on
+    // v1.7 callers), the payload is discarded, and the rc stays 0.
+    try testing.expectEqual(@as(i32, 0), game.editorPluginCommand("pathfinder", "ping", "{}"));
+    try testing.expectEqual(@as(usize, 1), recorder.count);
+    try testing.expectEqual(@as(?bool, true), recorder.respond_accepted);
 }

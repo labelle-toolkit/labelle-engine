@@ -51,6 +51,11 @@
  *     poll consumes its entry, truncation included; its sizing story
  *     is the paired NULL/cap-0 probe, which returns the NEXT entry's
  *     size without consuming — probe, grow, then poll.
+ *     labelle_plugin_call (v1.2) is required-size / all-or-nothing
+ *     like the get, but do not probe or cap-retry IT — a call executes
+ *     the plugin's handler again; its probe/retry legs live on the
+ *     paired, side-effect-free labelle_plugin_response_fetch (see the
+ *     plugin-commands section).
  *   - Main-thread only; calls are valid during the plugin's tick.
  *   - Before the host binds its game (once, at startup, before plugin
  *     setup), every call is a safe no-op following the same
@@ -74,8 +79,11 @@ extern "C" {
  * is probed per-symbol (embedded VMs bind against the running host,
  * which either exports it or doesn't; native plugins find out at link
  * time) — the editor-bridge contract's exact convention (its v1.1–v1.7
- * were all additive). This header describes contract v1.1 = v1 +
- * labelle_plugin_call (labelle-engine#744). */
+ * were all additive). This header describes contract v1.2:
+ *   v1.1 = v1 + labelle_plugin_call (labelle-engine#744);
+ *   v1.2 = v1.1 + plugin-call responses — out/out_cap activated per
+ *          their reserved semantics + labelle_plugin_response_fetch
+ *          (labelle-engine#758; probe for the fetch symbol). */
 #define LABELLE_CONTRACT_VERSION 1u
 
 /* Contract version the host binary was built with. Pure — callable
@@ -285,20 +293,28 @@ int32_t labelle_input_key_pressed(uint32_t key);
  * may be NULL to skip that axis. 0 on backends with no mouse. */
 void labelle_input_mouse(float *x_out, float *y_out);
 
-/* ── Plugin commands (since v1.1, labelle-engine#744) ─────────────────
+/* ── Plugin commands (since v1.1 #744; responses since v1.2 #758) ─────
  *
  * Call a named command on a Zig engine PLUGIN (e.g. pathfinder
  * "navigate") — the script-side entry to the same handler channel
- * labelle-studio's plugin panels use (the editor-bridge v1.7
- * editor_plugin_command export): a plugin registers ONE handler by
+ * labelle-studio's plugin panels use (the editor-bridge v1.7/v1.8
+ * editor_plugin_command exports): a plugin registers ONE handler by
  * subscribing to the `engine__editor_plugin_command` engine event, and
  * that single registration is reachable from studio panels AND every
- * scripting language alike. */
+ * scripting language alike.
+ *
+ * Since v1.2 a handler may RESPOND (engine.plugin_command.respond,
+ * called inside the synchronous dispatch; one response per command,
+ * first-writer-wins) and the caller receives it — either directly in
+ * the call's `out` buffer, or afterwards through the side-effect-free
+ * labelle_plugin_response_fetch. Responses are host-capped (currently
+ * 4096 bytes); the fetch probe returns exact per-response sizes, so no
+ * caller needs to hard-code the cap. */
 
 /* labelle_plugin_call's failure sentinel: the rc convention's -1
  * carried in its size_t return. Distinct from 0 = dispatched — and
- * from any future response-size return, which could never require the
- * whole address space. */
+ * from any response-size return, which could never require the whole
+ * address space. */
 #define LABELLE_PLUGIN_CALL_UNROUTABLE ((size_t)-1)
 
 /* Dispatch command `command` of plugin `plugin` with `params_json` as
@@ -309,31 +325,79 @@ void labelle_input_mouse(float *x_out, float *y_out);
  *
  * Return (size_t):
  *   0                               dispatched into the handler
- *                                   channel. v1.1 dispatch is
- *                                   fire-and-forward — handlers
- *                                   produce no return payload; results
- *                                   and acks arrive as game events
+ *                                   channel; no handler responded (the
+ *                                   v1.1 fire-and-forward outcome).
+ *                                   Also the outcome for an EMPTY
+ *                                   response (handlers that want a
+ *                                   bare ack respond "{}"), and for
+ *                                   ANY dispatched call made in the
+ *                                   v1.1 NULL/0 shape — the compat
+ *                                   rule below. Results can still
+ *                                   arrive as game events
  *                                   (labelle_event_subscribe/poll).
+ *   N                               a handler responded (since v1.2);
+ *                                   the response requires N bytes and
+ *                                   was written into `out` only when
+ *                                   N <= out_cap (ALL-OR-NOTHING, like
+ *                                   labelle_component_get — otherwise
+ *                                   `out` is untouched).
  *   LABELLE_PLUGIN_CALL_UNROUTABLE  not routable: empty plugin/command
  *                                   name, no plugin registered a
  *                                   handler in this build, or the host
  *                                   is not bound.
  *
+ * V1.1-COMPAT RULE: a call with out == NULL and out_cap == 0 — the ONE
+ * shape the v1.1 header sanctioned ("v1.1 never writes to `out`; pass
+ * NULL/0") — keeps the exact v1.1 rc contract: it returns 0 for every
+ * dispatched call, EVEN when a handler responded, so a binding built
+ * against v1.1 that checks rc == 0 never misreads a successful
+ * responding dispatch as failure. The response is still stored: a
+ * caller without a buffer sizes/reads it via
+ * labelle_plugin_response_fetch (probe with NULL/0 THERE — never by
+ * re-calling here). The fold is exactly that shape and no wider:
+ * out != NULL with out_cap == 0 is the v1.2 sizing leg (N returned,
+ * nothing written), and NULL out with a nonzero cap — illegal per the
+ * conventions block (NULL only together with cap 0) — is tolerated as
+ * sizing too, matching labelle_component_get's NULL tolerance.
+ *
+ * DOUBLE-EXECUTION WARNING: unlike component_get, do not "retry
+ * right-sized" (or NULL/cap-0 probe) by calling AGAIN — every call
+ * executes the handler again. On N > out_cap, read the stored response
+ * via labelle_plugin_response_fetch instead; it never re-executes.
+ *
+ * Calls may NEST: a handler may itself issue a labelle_plugin_call
+ * mid-dispatch (bounded only by the game's own recursion depth). Each
+ * call's response travels in per-call host storage — an inner call
+ * never corrupts the enclosing call's response — and each call
+ * publishes the fetch store as it COMPLETES, inner first, outer last,
+ * so a fetch made after the whole stack unwinds reads the OUTERMOST
+ * call's outcome. A handler that wants the inner response reads it
+ * from its own call's `out`, not from a later fetch.
+ *
  * The channel is a broadcast the handlers name-filter THEMSELVES, so
  * the host cannot tell an unknown plugin/command from a
  * delivered-and-ignored one: both return 0 wherever a handler exists.
- * A caller that needs an acknowledgment listens for the plugin's
- * response event.
- *
- * `out`/`out_cap` are RESERVED for handler response payloads (a future
- * minor revision: the return becomes the bytes the response REQUIRES,
- * all-or-nothing like labelle_component_get, with 0 keeping its
- * dispatched-no-response meaning and the sentinel staying unroutable).
- * v1.1 never writes to `out`; pass NULL/0. */
+ * A caller that needs an acknowledgment asks the plugin to respond (or
+ * listens for its response event). */
 size_t labelle_plugin_call(const char *plugin, size_t plugin_len,
                            const char *command, size_t command_len,
                            const char *params_json, size_t params_len,
                            char *out, size_t out_cap);
+
+/* Read the response of the most recently COMPLETED labelle_plugin_call
+ * — the side-effect-free half of the response channel (since v1.2):
+ * the handler is NEVER re-executed, so the shared sizing convention's
+ * probe/retry legs live here. NULL/cap-0 `out` is the pure sizing
+ * probe; otherwise the write is ALL-OR-NOTHING and the return is the
+ * bytes the complete response requires. 0 = nothing stored (no call
+ * yet, or the last completed call was unroutable / produced no
+ * response). A stored response is never empty, so a non-zero return
+ * cannot be confused with nothing-stored. NON-consuming — fetch
+ * repeatedly; the store is replaced (or cleared) as each
+ * labelle_plugin_call COMPLETES, whatever that call's outcome —
+ * "completed" being the nesting rule above: after nested calls unwind,
+ * the store holds the OUTERMOST call's outcome. */
+size_t labelle_plugin_response_fetch(char *out, size_t out_cap);
 
 #ifdef __cplusplus
 }
