@@ -153,6 +153,7 @@ pub fn build(b: *std.Build) void {
         "test/entities_with_roster_test.zig",
         "test/set_sprite_flip_test.zig",
         "test/video_component_test.zig",
+        "test/camera_viewport_test.zig",
         // PIE viewport handshake (#543) — kept separate from
         // preview_mode_test.zig so the new coverage isn't gated on
         // that file's pre-existing 21-test subscription bug.
