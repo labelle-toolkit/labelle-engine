@@ -138,6 +138,54 @@ test "fixed-step count is identical regardless of frame chunking (30/60/144fps)"
     }
 }
 
+test "boundary FPS caps run the same step count as 60fps (drain tolerance)" {
+    // The default 1/60 step with 50 / 100 FPS chunking: 50×tick(0.02) or
+    // 100×tick(0.01) sum (in f32) to a hair under 1.0s. Without the drain
+    // tolerance the accumulator stops one step short (59) while a 60fps
+    // chunking runs 60 — breaking the cross-FPS determinism guarantee. With
+    // the tolerance all three caps agree at 60.
+    const Case = struct { chunk: f32, frames: usize };
+    const cases = [_]Case{
+        .{ .chunk = 0.02, .frames = 50 }, // 50 fps
+        .{ .chunk = 1.0 / 60.0, .frames = 60 }, // 60 fps
+        .{ .chunk = 0.01, .frames = 100 }, // 100 fps
+    };
+    for (cases) |c| {
+        var game = TestGame.init(testing.allocator);
+        defer game.deinit();
+        // Default fixed_dt (1/60); raise the spiral cap so no frame clamps.
+        game.max_fixed_steps_per_frame = 100;
+        game.setFixedTimestepEnabled(true);
+
+        var f: usize = 0;
+        while (f < c.frames) : (f += 1) game.tick(c.chunk);
+
+        try testing.expectEqual(@as(u64, 60), game.fixedStepCount());
+        // alpha stays a valid interpolation factor (never negative).
+        try testing.expect(game.fixedAlpha() >= 0);
+        try testing.expect(game.fixedAlpha() < 1.0);
+    }
+}
+
+test "setFixedTimestep rejects NaN and infinity" {
+    var game = TestGame.init(testing.allocator);
+    defer game.deinit();
+
+    game.setFixedTimestep(0.02);
+    game.setFixedTimestep(std.math.nan(f64));
+    try testing.expectApproxEqAbs(@as(f64, 0.02), game.fixedTimestep(), 1e-9);
+    game.setFixedTimestep(std.math.inf(f64));
+    try testing.expectApproxEqAbs(@as(f64, 0.02), game.fixedTimestep(), 1e-9);
+
+    // A non-finite fixed_dt poked directly must not poison alpha: the drain
+    // guard bails, leaving alpha untouched (0).
+    game.fixed_dt = std.math.nan(f64);
+    game.setFixedTimestepEnabled(true);
+    game.tick(1.0);
+    try testing.expectEqual(@as(f32, 0), game.fixedAlpha());
+    try testing.expectEqual(@as(u64, 0), game.fixedStepCount());
+}
+
 // ── Pause / time_scale interaction ─────────────────────────────────────────
 
 test "fixed phase freezes while paused and scales under slow-mo" {
