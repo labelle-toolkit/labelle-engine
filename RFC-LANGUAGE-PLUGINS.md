@@ -212,9 +212,11 @@ Components are comptime Zig types (typed ECS storage, reflection registry, save/
 
 ```json
 { "components": [ { "name": "Hunger", "persist": "persistent",
-                    "fields": [ { "name": "level", "type": "f32", "default": 0.875 } ] } ],
+                    "fields": [ { "name": "level", "type": "f32", "default": 0.875 },
+                                { "name": "starving", "type": "bool", "default": false } ] } ],
   "events":     [ { "name": "hunger__feed",
-                    "fields": [ { "name": "entity", "type": "u64", "default": 0 } ] } ] }
+                    "fields": [ { "name": "amount", "type": "f32", "default": 0.5 },
+                                { "name": "entity", "type": "u64", "default": 0 } ] } ] }
 ```
 
 - **Type vocabulary**: `f32` / `bool` / `i32` / `vec2` / `str` / `u64` — the last via the **`Labelle.id`** sentinel (event payloads carry entity ids; ids default to `0`; deliberately no value constructor in v1 — `Labelle.id` classifies, it does not wrap). Legal in component fields too. `"events"` is emitted **only when non-empty**, and events carry no `persist` (they aren't saved) — old assemblers read only `"components"` from the JSON Value tree, so the key was compat-safe by construction.
@@ -265,7 +267,7 @@ This completes the vendor story: a full content pack — atlases, prefabs, a gen
 
 Shipping five languages left per-language knowledge smeared across the assembler as built-in tables: the `DECLARE_RUNNERS` rows (declare tool step name, tool dir, extension, capability pins), the native-language splice rows (`NATIVE_LANGUAGES` wiring — which game dir stages over which module root), and the TS transpile phase's toolchain pins. Every row is data the assembler *consumes* but labelle-scripting *owns* — the same inversion the pluggable-backends RFC (labelle-assembler#378) applies to render backends, and rev 13's own rule ("plugin-specific options must never grow the assembler's config schema") applied to the assembler's internals instead of its config. The design: those tables migrate to **language capability rows in labelle-scripting's `plugin.labelle`**, and the assembler becomes a generic executor of rows.
 
-A row carries everything the assembler knows per language today: name, extension(s), family (`embedded` | `native`), the native module root (`mod.rs` / `game.cr`), the declare capability (tool step name + tool dir; the presence of an `.events` sub-capability is what "supports declared events" *means*), transpile needs (emitted extension + toolchain requirement), and the runtime embed wiring. Sketch, spelling aligned with the manifest's existing `params_schema` / `language_builds`:
+A row carries everything the assembler knows per language today: name, extension(s), kind (`embedded` | `native`), the native module root (`mod.rs` / `game.cr`), the declare capability (tool step name + tool dir; the presence of an `.events` sub-capability is what "supports declared events" *means*), transpile needs (emitted extension + toolchain requirement), and the runtime embed wiring. Sketch, spelling aligned with the manifest's existing `params_schema` / `language_builds`:
 
 ```zig
 .languages = .{
