@@ -51,12 +51,51 @@ const Stats = struct {
     seed: u64 = 0,
 };
 
+/// Narrow int fields — the packed SET's out-of-range refusal targets
+/// (a script i64/f32 that doesn't fit must refuse -1, never panic).
+const Tiny = struct { b: u8 = 7, w: i32 = -7 };
+
+/// bool + f32 — the batch stream's non-float scalar (bool rides as 0/1;
+/// a NaN stream float lands as true, since NaN != 0).
+const Flag = struct { on: bool = false, weight: f32 = 0 };
+
+/// 300 f32 fields — over the packed wire's u8 field_count limit (0xFF
+/// reserved as the sentinel), so it must comptime-classify as NOT
+/// packable (get → 0xFF, set → -1) instead of panicking the `@intCast`
+/// on packInto's count byte.
+const Wide300 = blk: {
+    @setEvalBranchQuota(1_000_000);
+    var names: [300][:0]const u8 = undefined;
+    var attrs: [300]std.builtin.Type.StructField.Attributes = undefined;
+    for (&names, &attrs, 0..) |*n, *a, i| {
+        n.* = std.fmt.comptimePrint("f{d}", .{i});
+        a.* = .{ .default_value_ptr = &@as(f32, 0) };
+    }
+    const cn = names;
+    const ca = attrs;
+    break :blk @Struct(.auto, null, &cn, &@splat(f32), &ca);
+};
+
+/// One field whose NAME is over the wire's u8 name_len limit — same
+/// comptime not-packable classification as Wide300.
+const LongName = @Struct(
+    .auto,
+    null,
+    &[_][:0]const u8{"x" ** 300},
+    &[_]type{f32},
+    &[_]std.builtin.Type.StructField.Attributes{.{ .default_value_ptr = &@as(f32, 0) }},
+);
+
 const TestComponents = engine.ComponentRegistry(.{
     .Health = Health,
     .Velocity = Velocity,
     .Doomed = Doomed,
     .Label = Label,
     .Stats = Stats,
+    .Tiny = Tiny,
+    .Flag = Flag,
+    .Wide300 = Wide300,
+    .LongName = LongName,
 });
 
 const TestEvents = union(enum) {
@@ -2984,4 +3023,118 @@ test "bulk access pre-bind: safe no-ops in each op's failure convention" {
     try testing.expectEqual(@as(i32, -1), setPacked(1, "Stats", buf[0..1]));
     try testing.expectEqual(@as(usize, 0), batchGet("[\"Position\"]", &buf));
     try testing.expectEqual(@as(i32, -1), batchSet("[\"Position\"]", buf[0..0]));
+}
+
+test "packed set: out-of-range / non-finite script values refuse -1, never panic" {
+    contract.unbind();
+    defer contract.unbind();
+
+    var game = ContractGame.init(testing.allocator);
+    defer game.deinit();
+    contract.bind(&game);
+
+    const id = contract.labelle_entity_create();
+    const ent: u32 = @intCast(id);
+    try testing.expectEqual(@as(i32, 0), setComp(id, "Tiny", "{\"b\":7,\"w\":-7}"));
+
+    // i64 tag that overflows the u8 target — refuse, entity untouched
+    // (the refusal happens before setComponent; JSON fallback owns it).
+    var over = PackedRecord.init(1);
+    over.i64Field("b", 300);
+    try testing.expectEqual(@as(i32, -1), setPacked(id, "Tiny", over.bytes()));
+    // Negative into unsigned — refuse.
+    var neg = PackedRecord.init(1);
+    neg.i64Field("b", -1);
+    try testing.expectEqual(@as(i32, -1), setPacked(id, "Tiny", neg.bytes()));
+    // u64 tag past maxInt(i64) into an i64 field — refuse.
+    var big = PackedRecord.init(1);
+    big.u64Field("score", std.math.maxInt(u64));
+    try testing.expectEqual(@as(i32, -1), setPacked(id, "Stats", big.bytes()));
+    // f32 tag into an int field: NaN / Inf / out-of-range all refuse…
+    inline for ([_]f32{
+        std.math.nan(f32),
+        std.math.inf(f32),
+        -std.math.inf(f32),
+        1e30,
+        -1e30,
+    }) |bad| {
+        var rec = PackedRecord.init(1);
+        rec.f32Field("w", bad);
+        try testing.expectEqual(@as(i32, -1), setPacked(id, "Tiny", rec.bytes()));
+    }
+    const untouched = game.getComponent(ent, Tiny).?;
+    try testing.expectEqual(@as(u8, 7), untouched.b);
+    try testing.expectEqual(@as(i32, -7), untouched.w);
+
+    // …while an in-range f32 truncates into the int field (the packed
+    // coercion's documented float→int semantics).
+    var ok = PackedRecord.init(2);
+    ok.i64Field("b", 200);
+    ok.f32Field("w", 42.9);
+    try testing.expectEqual(@as(i32, 0), setPacked(id, "Tiny", ok.bytes()));
+    const applied = game.getComponent(ent, Tiny).?;
+    try testing.expectEqual(@as(u8, 200), applied.b);
+    try testing.expectEqual(@as(i32, 42), applied.w);
+}
+
+test "batch set: NaN in the stream is defined behavior (float lands, bool reads true), no panic" {
+    contract.unbind();
+    defer contract.unbind();
+
+    var game = ContractGame.init(testing.allocator);
+    defer game.deinit();
+    contract.bind(&game);
+
+    const id = contract.labelle_entity_create();
+    const ent: u32 = @intCast(id);
+    try testing.expectEqual(@as(i32, 0), setComp(id, "Velocity", "{\"dx\":1,\"dy\":2}"));
+    try testing.expectEqual(@as(i32, 0), setComp(id, "Flag", "{\"on\":false,\"weight\":3}"));
+
+    const names = "[\"Velocity\",\"Flag\"]";
+    // Stream layout: dx, dy, on, weight — poison all four with NaN.
+    var stream: [16]u8 = undefined;
+    const nan: f32 = std.math.nan(f32);
+    for (0..4) |i| {
+        std.mem.writeInt(u32, stream[i * 4 ..][0..4], @bitCast(nan), .little);
+    }
+    try testing.expectEqual(@as(i32, 0), batchSet(names, &stream));
+    const vel = game.getComponent(ent, Velocity).?;
+    try testing.expect(std.math.isNan(vel.dx));
+    try testing.expect(std.math.isNan(vel.dy));
+    const flag = game.getComponent(ent, Flag).?;
+    try testing.expect(flag.on); // NaN != 0 → true
+    try testing.expect(std.math.isNan(flag.weight));
+
+    // Sanity: the bool round-trips as 0/1 through the whole batch cycle.
+    var buf: [64]u8 = @splat(0);
+    const required = batchGet("[\"Flag\"]", &buf);
+    try testing.expectEqual(@as(usize, 4 + 2 * 4), required);
+    try testing.expectEqual(@as(f32, 1), batchFloat(&buf, 4)); // on == true → 1.0
+}
+
+test "packed get/set: over-the-wire-limit structs comptime-classify as not packable" {
+    contract.unbind();
+    defer contract.unbind();
+
+    var game = ContractGame.init(testing.allocator);
+    defer game.deinit();
+    contract.bind(&game);
+
+    const id = contract.labelle_entity_create();
+    const ent: u32 = @intCast(id);
+    game.setComponent(ent, Wide300{});
+    game.setComponent(ent, LongName{});
+
+    // 300 fields > the u8 field_count wire limit (0xFF is the sentinel):
+    // the 0xFF/JSON path, decided at comptime — no runtime @intCast trap.
+    var buf: [64]u8 = @splat(0);
+    try testing.expectEqual(@as(usize, 1), getPacked(id, "Wide300", &buf));
+    try testing.expectEqual(@as(u8, 0xFF), buf[0]);
+    var rec = PackedRecord.init(0);
+    try testing.expectEqual(@as(i32, -1), setPacked(id, "Wide300", rec.bytes()));
+
+    // A 300-byte field name > the u8 name_len wire limit — same path.
+    try testing.expectEqual(@as(usize, 1), getPacked(id, "LongName", &buf));
+    try testing.expectEqual(@as(u8, 0xFF), buf[0]);
+    try testing.expectEqual(@as(i32, -1), setPacked(id, "LongName", rec.bytes()));
 }

@@ -2272,8 +2272,12 @@ fn Holder(comptime GP: type) type {
         /// Decode a packed record into `ptr.*` (already default-init),
         /// matching each field name to a struct field and COERCING the
         /// tagged value into that field's actual scalar type. Unknown
-        /// names / non-scalar target fields are skipped. Returns false on a
-        /// malformed record (a truncated field), true otherwise.
+        /// names / non-scalar target fields are skipped. Returns false —
+        /// the set refuses with -1 and the binding falls back to JSON —
+        /// on a malformed record (a truncated field) or on a value the
+        /// target field cannot represent (out-of-range int, NaN/Inf into
+        /// an int field): script-supplied bytes must never panic the
+        /// host, and must not be silently clamped either.
         fn applyPacked(comptime T: type, ptr: *T, buf: []const u8) bool {
             if (buf.len < 1) return false;
             const field_count = buf[0];
@@ -2296,7 +2300,8 @@ fn Holder(comptime GP: type) type {
                 inline for (@typeInfo(T).@"struct".fields) |f| {
                     if (comptime isPackableScalar(f.type)) {
                         if (std.mem.eql(u8, fname, f.name)) {
-                            @field(ptr.*, f.name) = coercePacked(f.type, tag, val_bytes);
+                            @field(ptr.*, f.name) =
+                                coercePacked(f.type, tag, val_bytes) orelse return false;
                         }
                     }
                 }
@@ -2318,10 +2323,18 @@ fn Holder(comptime GP: type) type {
 }
 
 /// A struct every field of which is a packable scalar (zero-field structs
-/// pack as an empty record — vacuously true).
+/// pack as an empty record — vacuously true) — AND that fits the wire's
+/// u8 headers, decided entirely at comptime: `field_count` is a u8 with
+/// 0xFF reserved as the "not packable" sentinel (so ≥ 255 fields cannot
+/// be represented), and each `name_len` is a u8 (so a > 255-byte field
+/// name cannot be). A struct beyond either limit simply takes the 0xFF
+/// sentinel / JSON path — never a runtime `@intCast` panic in `packInto`.
 fn isPackableStruct(comptime T: type) bool {
     if (@typeInfo(T) != .@"struct") return false;
-    inline for (@typeInfo(T).@"struct".fields) |f| {
+    const fields = @typeInfo(T).@"struct".fields;
+    if (fields.len >= 255) return false;
+    inline for (fields) |f| {
+        if (f.name.len > 255) return false;
         if (!isPackableScalar(f.type)) return false;
     }
     return true;
@@ -2386,32 +2399,61 @@ fn writePackedValue(comptime T: type, val: T, out: []u8) usize {
     }
 }
 
+/// Truncating float→int with REFUSAL (null) on NaN/Inf/out-of-range —
+/// the packed SET's safe cast. `@intFromFloat` panics on any of those,
+/// and the value is SCRIPT-SUPPLIED, so the host must refuse instead
+/// (never clamp/zero: a silently altered value is a corruption). The
+/// bounds are the exact powers of two 2^bits / ±2^(bits-1) — always
+/// representable in f64, unlike maxInt(T) itself, whose f64 rounding
+/// would re-admit the panicking boundary value for 64-bit targets.
+fn safeFloatToInt(comptime T: type, f: f32) ?T {
+    if (!std.math.isFinite(f)) return null;
+    const t: f64 = @trunc(@as(f64, f));
+    const info = @typeInfo(T).int;
+    // Degenerate 0-bit ints hold only 0 (and i0's bits-1 would underflow
+    // the shift below).
+    if (comptime info.bits == 0) return if (t == 0) @intFromFloat(t) else null;
+    const upper: f64 = comptime blk: {
+        const b: u7 = if (info.signedness == .signed) info.bits - 1 else info.bits;
+        break :blk @floatFromInt(@as(u128, 1) << b);
+    };
+    const lower: f64 = if (comptime info.signedness == .signed) -upper else 0;
+    if (t < lower or t >= upper) return null;
+    return @intFromFloat(t);
+}
+
 /// Coerce a tagged packed value into `T` (the target field's real type):
-/// widened ints narrow via @intCast, f32↔f64 via @floatCast, and a bool
-/// tag lands in an int/float field as 0/1 (the mirror of the write side's
-/// widening). Type mismatches degrade gracefully (a bool tag into a float
-/// field, etc.) rather than corrupting.
-fn coercePacked(comptime T: type, tag: u8, bytes: []const u8) T {
+/// f32↔f64 via @floatCast, ints via `std.math.cast`, and a bool tag
+/// lands in an int/float field as 0/1 (the mirror of the write side's
+/// widening). Returns null — the whole set REFUSES with -1 and the
+/// binding falls back to JSON — when the script value cannot represent
+/// itself in the field (out-of-range int, NaN/Inf/out-of-range float
+/// into an int field): the value is script-supplied, so the host must
+/// never panic on it, and must not silently clamp/zero it either — the
+/// JSON path surfaces the value faithfully (or refuses it visibly).
+fn coercePacked(comptime T: type, tag: u8, bytes: []const u8) ?T {
     return switch (@typeInfo(T)) {
         .float => switch (tag) {
             0 => @floatCast(@as(f32, @bitCast(std.mem.readInt(u32, bytes[0..4], .little)))),
+            // Int→float is total: may round (past 2^24/2^53) but can
+            // never trap, and rounding is inherent to a float target.
             1 => @floatFromInt(std.mem.readInt(i64, bytes[0..8], .little)),
             2 => if (bytes[0] != 0) 1 else 0,
             3 => @floatFromInt(std.mem.readInt(u64, bytes[0..8], .little)),
-            else => 0,
+            else => null,
         },
         .int => switch (tag) {
-            0 => @intFromFloat(@as(f32, @bitCast(std.mem.readInt(u32, bytes[0..4], .little)))),
-            1 => @intCast(std.mem.readInt(i64, bytes[0..8], .little)),
-            2 => @intFromBool(bytes[0] != 0),
-            3 => @intCast(std.mem.readInt(u64, bytes[0..8], .little)),
-            else => 0,
+            0 => safeFloatToInt(T, @as(f32, @bitCast(std.mem.readInt(u32, bytes[0..4], .little)))),
+            1 => std.math.cast(T, std.mem.readInt(i64, bytes[0..8], .little)),
+            2 => std.math.cast(T, @intFromBool(bytes[0] != 0)),
+            3 => std.math.cast(T, std.mem.readInt(u64, bytes[0..8], .little)),
+            else => null,
         },
         .bool => switch (tag) {
             2 => bytes[0] != 0,
             1 => std.mem.readInt(i64, bytes[0..8], .little) != 0,
             3 => std.mem.readInt(u64, bytes[0..8], .little) != 0,
-            else => false,
+            else => null,
         },
         else => unreachable,
     };
@@ -2425,8 +2467,11 @@ fn coercePacked(comptime T: type, tag: u8, bytes: []const u8) T {
 // the same way. Both iterate `@typeInfo(T).@"struct".fields` (declaration
 // order), emitting/consuming one f32 per scalar field and skipping
 // non-scalar fields identically. Int-carrying components never reach these
-// helpers — `batchEligible` refuses them upstream (`batch_int_refused`) —
-// but the int arms are kept total so the helpers stay usable on any struct.
+// helpers — `batchEligible` refuses them upstream (`batch_int_refused`).
+// The write/skip int arms stay total (`@floatFromInt` cannot trap), but
+// the READ side refuses int fields outright: an `@intFromFloat` there
+// could panic the host on a NaN/Inf/out-of-range script float, and no
+// reachable path needs it.
 
 /// A component type the BATCH codec accepts: no int-typed fields. Ints
 /// cannot survive the positional f32 stream (silent precision loss past
@@ -2474,26 +2519,32 @@ fn packFloatsInto(comptime T: type, value: T, out: []u8, pos: *usize) void {
     }
 }
 
-/// Read each scalar field of `ptr.*` from the f32 stream at `pos.*`,
-/// coercing the f32 back into the field's real type (int via
-/// `@intFromFloat`, bool via `!= 0`), advancing 4 per field. Non-scalar
-/// fields are skipped (no bytes consumed — the write side skipped them
-/// too). Returns false if the buffer runs out mid-layout.
+/// Read each scalar field of `ptr.*` from the f32 stream at `pos.*`
+/// (float via `@floatCast` — NaN/Inf land unchanged in a float field,
+/// which is defined and faithful; bool via `!= 0`, where NaN reads as
+/// true since NaN != 0), advancing 4 per field. Non-scalar fields are
+/// skipped (no bytes consumed — the write side skipped them too).
+/// Returns false if the buffer runs out mid-layout — or on an int field:
+/// int-carrying components are refused upstream by `batchEligible`
+/// before any entity walk, so that arm is unreachable through the batch
+/// exports, and it is kept as a REFUSAL rather than an `@intFromFloat`
+/// so no caller — present or future — can panic the host on a
+/// NaN/Inf/out-of-range script float.
 fn readFloatsFrom(comptime T: type, ptr: *T, buf: []const u8, pos: *usize) bool {
     if (comptime @typeInfo(T) != .@"struct") return true;
     inline for (@typeInfo(T).@"struct".fields) |f| {
         switch (@typeInfo(f.type)) {
-            .float, .int, .bool => {
+            .float, .bool => {
                 if (pos.* + 4 > buf.len) return false;
                 const fv: f32 = @bitCast(std.mem.readInt(u32, buf[pos.*..][0..4], .little));
                 pos.* += 4;
                 @field(ptr.*, f.name) = switch (@typeInfo(f.type)) {
                     .float => @floatCast(fv),
-                    .int => @intFromFloat(fv),
                     .bool => fv != 0,
                     else => unreachable,
                 };
             },
+            .int => return false,
             else => {},
         }
     }
