@@ -41,11 +41,22 @@ const Doomed = struct {
 /// returns).
 const Label = struct { text: []const u8 = "" };
 
+/// One field of each packed-codec scalar kind (f32/i64/bool/u64) — the
+/// v1.3 packed round-trip component. Declaration order IS the wire
+/// order, so the tests below hand-build the expected record.
+const Stats = struct {
+    power: f32 = 0,
+    score: i64 = 0,
+    alive: bool = false,
+    seed: u64 = 0,
+};
+
 const TestComponents = engine.ComponentRegistry(.{
     .Health = Health,
     .Velocity = Velocity,
     .Doomed = Doomed,
     .Label = Label,
+    .Stats = Stats,
 });
 
 const TestEvents = union(enum) {
@@ -2616,4 +2627,361 @@ test "editorPluginCommand (v1.7 rc): the dispatch window exists — a response i
     try testing.expectEqual(@as(i32, 0), game.editorPluginCommand("pathfinder", "ping", "{}"));
     try testing.expectEqual(@as(usize, 1), recorder.count);
     try testing.expectEqual(@as(?bool, true), recorder.respond_accepted);
+}
+
+// ── Bulk component access (v1.3, labelle-scripting#41) ──────────────
+//
+// The packed per-component codec (binary twin of get/set, 0xFF
+// sentinel → JSON fallback) and the batched whole-query f32 stream
+// (int-field refusal + the positional-coupling guard).
+
+fn getPacked(id: u64, name: []const u8, buf: []u8) usize {
+    return contract.labelle_component_get_packed(id, name.ptr, name.len, buf.ptr, buf.len);
+}
+
+fn setPacked(id: u64, name: []const u8, buf: []const u8) i32 {
+    return contract.labelle_component_set_packed(id, name.ptr, name.len, buf.ptr, buf.len);
+}
+
+fn batchGet(names_json: []const u8, buf: []u8) usize {
+    return contract.labelle_component_batch_get(names_json.ptr, names_json.len, buf.ptr, buf.len);
+}
+
+fn batchSet(names_json: []const u8, buf: []const u8) i32 {
+    return contract.labelle_component_batch_set(names_json.ptr, names_json.len, buf.ptr, buf.len);
+}
+
+/// Hand-builds packed records field by field — both the EXPECTED bytes
+/// for a get (declaration order, host-chosen tags) and the record a
+/// binding would send to a set (tags chosen by the script value's
+/// runtime type).
+const PackedRecord = struct {
+    buf: [128]u8 = undefined,
+    len: usize = 0,
+
+    fn init(field_count: u8) PackedRecord {
+        var r = PackedRecord{};
+        r.buf[0] = field_count;
+        r.len = 1;
+        return r;
+    }
+
+    fn name(self: *PackedRecord, n: []const u8) void {
+        self.buf[self.len] = @intCast(n.len);
+        self.len += 1;
+        @memcpy(self.buf[self.len..][0..n.len], n);
+        self.len += n.len;
+    }
+
+    fn f32Field(self: *PackedRecord, n: []const u8, v: f32) void {
+        self.name(n);
+        self.buf[self.len] = 0;
+        std.mem.writeInt(u32, self.buf[self.len + 1 ..][0..4], @bitCast(v), .little);
+        self.len += 5;
+    }
+
+    fn i64Field(self: *PackedRecord, n: []const u8, v: i64) void {
+        self.name(n);
+        self.buf[self.len] = 1;
+        std.mem.writeInt(i64, self.buf[self.len + 1 ..][0..8], v, .little);
+        self.len += 9;
+    }
+
+    fn boolField(self: *PackedRecord, n: []const u8, v: bool) void {
+        self.name(n);
+        self.buf[self.len] = 2;
+        self.buf[self.len + 1] = @intFromBool(v);
+        self.len += 2;
+    }
+
+    fn u64Field(self: *PackedRecord, n: []const u8, v: u64) void {
+        self.name(n);
+        self.buf[self.len] = 3;
+        std.mem.writeInt(u64, self.buf[self.len + 1 ..][0..8], v, .little);
+        self.len += 9;
+    }
+
+    fn bytes(self: *const PackedRecord) []const u8 {
+        return self.buf[0..self.len];
+    }
+};
+
+test "packed get/set: binary record round-trip over f32/i64/bool/u64 fields" {
+    contract.unbind();
+    defer contract.unbind();
+
+    var game = ContractGame.init(testing.allocator);
+    defer game.deinit();
+    contract.bind(&game);
+
+    const id = contract.labelle_entity_create();
+    const ent: u32 = @intCast(id);
+    try testing.expectEqual(@as(i32, 0), setComp(
+        id,
+        "Stats",
+        "{\"power\":1.5,\"score\":-42,\"alive\":true,\"seed\":9000000000000000000}",
+    ));
+
+    // GET — the host writes declaration order with the field's own tag
+    // (f32→0, i64→1, bool→2, u64→3).
+    var expected = PackedRecord.init(4);
+    expected.f32Field("power", 1.5);
+    expected.i64Field("score", -42);
+    expected.boolField("alive", true);
+    expected.u64Field("seed", 9_000_000_000_000_000_000);
+
+    // NULL/cap-0 sizing probe, then all-or-nothing: an under-sized cap
+    // writes nothing and still returns the required size.
+    const nm = "Stats";
+    const required = contract.labelle_component_get_packed(id, nm, nm.len, null, 0);
+    try testing.expectEqual(expected.len, required);
+    var buf: [128]u8 = @splat(0xAA);
+    try testing.expectEqual(required, getPacked(id, "Stats", buf[0 .. required - 1]));
+    try testing.expectEqual(@as(u8, 0xAA), buf[0]);
+    try testing.expectEqual(required, getPacked(id, "Stats", &buf));
+    try testing.expectEqualSlices(u8, expected.bytes(), buf[0..required]);
+
+    // SET — tags as a binding chooses them from the SCRIPT value's
+    // runtime type: an Integer travels as i64 even into a u64 field
+    // (the host coerces into the field's real type).
+    var record = PackedRecord.init(4);
+    record.f32Field("power", 2.5);
+    record.i64Field("score", 7);
+    record.boolField("alive", false);
+    record.i64Field("seed", 123);
+    try testing.expectEqual(@as(i32, 0), setPacked(id, "Stats", record.bytes()));
+    const stats = game.getComponent(ent, Stats).?;
+    try testing.expectEqual(@as(f32, 2.5), stats.power);
+    try testing.expectEqual(@as(i64, 7), stats.score);
+    try testing.expectEqual(false, stats.alive);
+    try testing.expectEqual(@as(u64, 123), stats.seed);
+
+    // REPLACE semantics: a partial record resets absent fields to the
+    // struct defaults, exactly like the JSON set.
+    var partial = PackedRecord.init(1);
+    partial.i64Field("score", 9);
+    try testing.expectEqual(@as(i32, 0), setPacked(id, "Stats", partial.bytes()));
+    const reset = game.getComponent(ent, Stats).?;
+    try testing.expectEqual(@as(i64, 9), reset.score);
+    try testing.expectEqual(@as(f32, 0), reset.power);
+    try testing.expectEqual(@as(u64, 0), reset.seed);
+
+    // Int-carrying components are PACKABLE here (unlike the batch
+    // stream): Health's i32 rides the i64 tag losslessly.
+    try testing.expectEqual(@as(i32, 0), setComp(id, "Health", "{\"hp\":250,\"regen\":0.5}"));
+    const hn = contract.labelle_component_get_packed(id, "Health", 6, null, 0);
+    try testing.expect(hn > 1); // a real record, not the sentinel
+}
+
+test "packed get: a non-scalar component writes the 0xFF sentinel (JSON-fallback signal)" {
+    contract.unbind();
+    defer contract.unbind();
+
+    var game = ContractGame.init(testing.allocator);
+    defer game.deinit();
+    contract.bind(&game);
+
+    const id = contract.labelle_entity_create();
+    try testing.expectEqual(@as(i32, 0), setComp(id, "Label", "{\"text\":\"hi\"}"));
+
+    var buf: [64]u8 = @splat(0);
+    try testing.expectEqual(@as(usize, 1), getPacked(id, "Label", &buf));
+    try testing.expectEqual(@as(u8, 0xFF), buf[0]);
+
+    // Absent / unknown / dead keep component_get's 0 sentinel.
+    try testing.expectEqual(@as(usize, 0), getPacked(id, "Velocity", &buf));
+    try testing.expectEqual(@as(usize, 0), getPacked(id, "NoSuch", &buf));
+    contract.labelle_entity_destroy(id);
+    try testing.expectEqual(@as(usize, 0), getPacked(id, "Label", &buf));
+}
+
+test "packed set: non-scalar targets, built-ins and malformed records refuse with -1" {
+    contract.unbind();
+    defer contract.unbind();
+
+    var game = ContractGame.init(testing.allocator);
+    defer game.deinit();
+    contract.bind(&game);
+
+    const id = contract.labelle_entity_create();
+
+    // Non-scalar target (Label carries a string) → JSON fallback.
+    var record = PackedRecord.init(0);
+    try testing.expectEqual(@as(i32, -1), setPacked(id, "Label", record.bytes()));
+
+    // Scene built-ins apply through the scene-loader JSON machinery
+    // only — the packed path refuses them.
+    try testing.expectEqual(@as(i32, -1), setPacked(id, "Sprite", record.bytes()));
+
+    // A buffer led by the 0xFF sentinel is never applicable.
+    const sentinel = [_]u8{0xFF};
+    try testing.expectEqual(@as(i32, -1), setPacked(id, "Stats", &sentinel));
+
+    // Truncated record (claims one field, carries none).
+    const truncated = [_]u8{1};
+    try testing.expectEqual(@as(i32, -1), setPacked(id, "Stats", &truncated));
+
+    // Unknown component / dead entity.
+    try testing.expectEqual(@as(i32, -1), setPacked(id, "NoSuch", record.bytes()));
+    contract.labelle_entity_destroy(id);
+    try testing.expectEqual(@as(i32, -1), setPacked(id, "Stats", record.bytes()));
+}
+
+/// Read the f32 at byte offset `off` of a batch buffer (unaligned-safe).
+fn batchFloat(buf: []const u8, off: usize) f32 {
+    return @bitCast(std.mem.readInt(u32, buf[off..][0..4], .little));
+}
+
+/// Overwrite the f32 at byte offset `off` of a batch buffer.
+fn batchFloatSet(buf: []u8, off: usize, v: f32) void {
+    std.mem.writeInt(u32, buf[off..][0..4], @bitCast(v), .little);
+}
+
+test "batch get/set: whole-query f32 stream round-trip" {
+    contract.unbind();
+    defer contract.unbind();
+
+    var game = ContractGame.init(testing.allocator);
+    defer game.deinit();
+    contract.bind(&game);
+
+    const names = "[\"Position\",\"Velocity\"]";
+
+    // Zero matching entities: the count-0 header alone — 4 bytes,
+    // distinct from the 0 malformed/not-bound sentinel.
+    var buf: [256]u8 = @splat(0);
+    try testing.expectEqual(@as(usize, 4), batchGet(names, &buf));
+    try testing.expectEqual(@as(u32, 0), std.mem.readInt(u32, buf[0..4], .little));
+    // ...and an empty stream applies cleanly (0 entities × anything = 0 bytes).
+    try testing.expectEqual(@as(i32, 0), batchSet(names, buf[4..4]));
+
+    // Three full entities + one Position-only (filtered out of the set).
+    const ids = [3]u64{
+        contract.labelle_entity_create(),
+        contract.labelle_entity_create(),
+        contract.labelle_entity_create(),
+    };
+    for (ids, 0..) |id, i| {
+        var jbuf: [128]u8 = undefined;
+        const fi: f32 = @floatFromInt(i);
+        const pj = try std.fmt.bufPrint(&jbuf, "{{\"x\":{d},\"y\":{d}}}", .{ fi + 1, fi + 2 });
+        try testing.expectEqual(@as(i32, 0), setComp(id, "Position", pj));
+        var jbuf2: [128]u8 = undefined;
+        const vj = try std.fmt.bufPrint(&jbuf2, "{{\"dx\":{d},\"dy\":{d}}}", .{ (fi + 1) * 10, (fi + 1) * -10 });
+        try testing.expectEqual(@as(i32, 0), setComp(id, "Velocity", vj));
+    }
+    const lone = contract.labelle_entity_create();
+    try testing.expectEqual(@as(i32, 0), setComp(lone, "Position", "{\"x\":7,\"y\":8}"));
+
+    // Sizing probe: [u32 count][3 entities × 4 fields × 4B].
+    const required = contract.labelle_component_batch_get(names, names.len, null, 0);
+    try testing.expectEqual(@as(usize, 4 + 3 * 4 * 4), required);
+    // Under-sized cap: same required-size return (snprintf-style retry).
+    try testing.expectEqual(required, batchGet(names, buf[0 .. required - 3]));
+
+    try testing.expectEqual(required, batchGet(names, &buf));
+    try testing.expectEqual(@as(u32, 3), std.mem.readInt(u32, buf[0..4], .little));
+
+    // The hot loop, host-free: +1.0 to every float in the stream.
+    var off: usize = 4;
+    while (off < required) : (off += 4) {
+        batchFloatSet(&buf, off, batchFloat(&buf, off) + 1.0);
+    }
+    try testing.expectEqual(@as(i32, 0), batchSet(names, buf[4..required]));
+
+    // Every matched entity moved by exactly +1 on all four fields
+    // (order-independent — the mock backend's view order is unspecified,
+    // but get and set walked it identically).
+    for (ids, 0..) |id, i| {
+        const ent: u32 = @intCast(id);
+        const fi: f32 = @floatFromInt(i);
+        const pos = game.getComponent(ent, core.Position).?;
+        try testing.expectEqual(fi + 2, pos.x);
+        try testing.expectEqual(fi + 3, pos.y);
+        const vel = game.getComponent(ent, Velocity).?;
+        try testing.expectEqual((fi + 1) * 10 + 1, vel.dx);
+        try testing.expectEqual((fi + 1) * -10 + 1, vel.dy);
+    }
+    // The filtered-out entity is untouched.
+    const lp = game.getComponent(@as(u32, @intCast(lone)), core.Position).?;
+    try testing.expectEqual(@as(f32, 7), lp.x);
+    try testing.expectEqual(@as(f32, 8), lp.y);
+}
+
+test "batch: an int-carrying component is refused (get sentinel, set -2)" {
+    contract.unbind();
+    defer contract.unbind();
+
+    var game = ContractGame.init(testing.allocator);
+    defer game.deinit();
+    contract.bind(&game);
+
+    const id = contract.labelle_entity_create();
+    try testing.expectEqual(@as(i32, 0), setComp(id, "Health", "{\"hp\":50,\"regen\":1}"));
+    try testing.expectEqual(@as(i32, 0), setComp(id, "Velocity", "{\"dx\":1,\"dy\":2}"));
+
+    // Health.hp is i32 → i64/u64-class corruption through f32; the
+    // whole batch is refused, alone or anywhere in the name list.
+    var buf: [128]u8 = @splat(0);
+    const health = "[\"Health\"]";
+    try testing.expectEqual(contract.batch_int_refused, batchGet(health, &buf));
+    const mixed = "[\"Velocity\",\"Health\"]";
+    try testing.expectEqual(contract.batch_int_refused, batchGet(mixed, &buf));
+    try testing.expectEqual(@as(i32, -2), batchSet(health, buf[0..8]));
+    try testing.expectEqual(@as(i32, -2), batchSet(mixed, buf[0..16]));
+
+    // The refusal is the component's, not the entity's: the float-only
+    // Velocity still batches.
+    const vel = "[\"Velocity\"]";
+    try testing.expectEqual(@as(usize, 4 + 2 * 4), batchGet(vel, &buf));
+}
+
+test "batch set: entity-count mismatch refuses -1 (positional-coupling guard)" {
+    contract.unbind();
+    defer contract.unbind();
+
+    var game = ContractGame.init(testing.allocator);
+    defer game.deinit();
+    contract.bind(&game);
+
+    const names = "[\"Position\",\"Velocity\"]";
+    const a = contract.labelle_entity_create();
+    const b = contract.labelle_entity_create();
+    for ([_]u64{ a, b }) |id| {
+        try testing.expectEqual(@as(i32, 0), setComp(id, "Position", "{\"x\":1,\"y\":1}"));
+        try testing.expectEqual(@as(i32, 0), setComp(id, "Velocity", "{\"dx\":1,\"dy\":1}"));
+    }
+
+    var buf: [256]u8 = @splat(0);
+    const required = batchGet(names, &buf);
+    try testing.expectEqual(@as(usize, 4 + 2 * 4 * 4), required);
+    const stream = buf[4..required];
+
+    // Same set → the stream applies.
+    try testing.expectEqual(@as(i32, 0), batchSet(names, stream));
+
+    // An entity DESTROYED since the get: the re-queried set consumes
+    // fewer bytes than the stream carries → refuse.
+    contract.labelle_entity_destroy(b);
+    try testing.expectEqual(@as(i32, -1), batchSet(names, stream));
+
+    // Entities SPAWNED since the get: the stream runs out mid-walk →
+    // refuse (the other half of the guard).
+    for (0..2) |_| {
+        const id = contract.labelle_entity_create();
+        try testing.expectEqual(@as(i32, 0), setComp(id, "Position", "{\"x\":2,\"y\":2}"));
+        try testing.expectEqual(@as(i32, 0), setComp(id, "Velocity", "{\"dx\":2,\"dy\":2}"));
+    }
+    try testing.expectEqual(@as(i32, -1), batchSet(names, stream));
+}
+
+test "bulk access pre-bind: safe no-ops in each op's failure convention" {
+    contract.unbind();
+    defer contract.unbind();
+
+    var buf: [32]u8 = @splat(0);
+    try testing.expectEqual(@as(usize, 0), getPacked(1, "Stats", &buf));
+    try testing.expectEqual(@as(i32, -1), setPacked(1, "Stats", buf[0..1]));
+    try testing.expectEqual(@as(usize, 0), batchGet("[\"Position\"]", &buf));
+    try testing.expectEqual(@as(i32, -1), batchSet("[\"Position\"]", buf[0..0]));
 }
