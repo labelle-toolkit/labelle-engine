@@ -74,6 +74,35 @@ const Bare = struct { x: f32, y: f32 };
 /// the precision).
 const Precise = struct { d: f64 = 0 };
 
+/// ZERO-WIDTH batch component (#782): string-only, so it contributes 0
+/// stream bytes — a pure query FILTER. The onSet counter pins that
+/// batch_set does NOT RMW-re-apply it (no hook/dirty churn for no
+/// data); the plain per-entity set path still fires it (the sanity leg).
+var marker_on_set_calls: u32 = 0;
+const Marker = struct {
+    note: []const u8 = "",
+
+    pub fn onSet(payload: engine.ComponentPayload) void {
+        _ = payload;
+        marker_on_set_calls += 1;
+    }
+};
+
+/// Hook-driven mid-apply mutation (#783 hole 2): applying a Reaper row
+/// DESTROYS the pair's other entity from inside onSet — through the
+/// contract's own export, exactly as a script-visible hook effect
+/// would. The id-tagged batch set must downgrade the destroyed
+/// entity's later row to a skip, never a partial-commit failure.
+var reaper_pair: [2]u64 = .{ 0, 0 };
+const Reaper = struct {
+    hp: f32 = 0,
+
+    pub fn onSet(payload: engine.ComponentPayload) void {
+        const other = if (payload.entity_id == reaper_pair[0]) reaper_pair[1] else reaper_pair[0];
+        contract.labelle_entity_destroy(other);
+    }
+};
+
 /// 300 f32 fields — over the packed wire's u8 field_count limit (0xFF
 /// reserved as the sentinel), so it must comptime-classify as NOT
 /// packable (get → 0xFF, set → -1) instead of panicking the `@intCast`
@@ -114,6 +143,8 @@ const TestComponents = engine.ComponentRegistry(.{
     .Precise = Precise,
     .Wide300 = Wide300,
     .LongName = LongName,
+    .Marker = Marker,
+    .Reaper = Reaper,
 });
 
 const TestEvents = union(enum) {
@@ -3054,6 +3085,9 @@ test "bulk access pre-bind: safe no-ops in each op's failure convention" {
     try testing.expectEqual(@as(i32, -1), setPacked(1, "Stats", buf[0..1]));
     try testing.expectEqual(@as(usize, 0), batchGet("[\"Position\"]", &buf));
     try testing.expectEqual(@as(i32, -1), batchSet("[\"Position\"]", buf[0..0]));
+    // The v1.4 id-tagged twins follow the same conventions.
+    try testing.expectEqual(@as(usize, 0), batchGetIds("[\"Position\"]", &buf));
+    try testing.expectEqual(@as(i32, -1), batchSetIds("[\"Position\"]", buf[0..0]));
 }
 
 test "packed set: out-of-range / non-finite script values refuse -1, never panic" {
@@ -3331,4 +3365,348 @@ test "packed: the 64-bit bitcast pair round-trips a bit-63 u64 losslessly" {
     rec2.u64Field("score", @bitCast(@as(i64, -42)));
     try testing.expectEqual(@as(i32, 0), setPacked(id, "Stats", rec2.bytes()));
     try testing.expectEqual(@as(i64, -42), game.getComponent(ent, Stats).?.score);
+}
+
+// ── v1.3 polish (#782) + the id-tagged batch variant (v1.4, #783) ───
+
+/// StubRender clone whose Shape is SCALAR-ONLY — the #782 GET/SET
+/// symmetry case: `packInto` alone would emit a real record for it,
+/// but the packed SET refuses ALL built-ins (they apply through the
+/// scene loader's JSON machinery), so the packed GET must emit the
+/// 0xFF sentinel for built-ins unconditionally or the two directions
+/// disagree.
+fn ScalarShapeRender(comptime Entity: type) type {
+    return struct {
+        const Self = @This();
+
+        pub const Sprite = struct {
+            sprite_name: []const u8 = "",
+            visible: bool = true,
+        };
+
+        pub const Shape = struct { width: f32 = 10, height: f32 = 10, visible: bool = true };
+
+        pub fn init(_: std.mem.Allocator) Self {
+            return .{};
+        }
+        pub fn deinit(_: *Self) void {}
+        pub fn trackEntity(_: *Self, _: Entity, _: core.VisualType) void {}
+        pub fn untrackEntity(_: *Self, _: Entity) void {}
+        pub fn markPositionDirty(_: *Self, _: Entity) void {}
+        pub fn markPositionDirtyWithChildren(_: *Self, comptime _: type, _: anytype, _: Entity) void {}
+        pub fn updateHierarchyFlag(_: *Self, _: Entity, _: bool) void {}
+        pub fn markVisualDirty(_: *Self, _: Entity) void {}
+        pub fn sync(_: *Self, comptime _: type, _: anytype) void {}
+        pub fn render(_: *Self) void {}
+        pub fn setScreenHeight(_: *Self, _: f32) void {}
+        pub fn clear(_: *Self) void {}
+        pub fn renderGizmoDraws(_: *Self, _: []const core.GizmoDraw) void {}
+        pub fn hasEntity(_: *const Self, _: Entity) bool {
+            return false;
+        }
+    };
+}
+
+const ScalarBuiltinGame = engine.GameConfig(
+    ScalarShapeRender(MockEcs.Entity),
+    MockEcs,
+    engine.StubInput,
+    engine.StubAudio,
+    engine.StubVideo,
+    engine.StubGui,
+    void,
+    core.StubLogSink,
+    TestComponents,
+    &.{},
+    TestEvents,
+);
+
+test "packed built-ins: a scalar-only built-in still gets the 0xFF sentinel — GET/SET agree (#782)" {
+    contract.unbind();
+    defer contract.unbind();
+
+    var game = ScalarBuiltinGame.init(testing.allocator);
+    defer game.deinit();
+    contract.bind(&game);
+
+    const id = contract.labelle_entity_create();
+    const ent: u32 = @intCast(id);
+    try testing.expectEqual(@as(i32, 0), setComp(id, "Shape", "{\"width\":3,\"height\":4}"));
+
+    // GET: the sentinel, never a record — the built-in POLICY, not a
+    // shape accident (this Shape would pack fine as a registry type).
+    var buf: [64]u8 = @splat(0);
+    try testing.expectEqual(@as(usize, 1), getPacked(id, "Shape", &buf));
+    try testing.expectEqual(@as(u8, 0xFF), buf[0]);
+
+    // …and the direction it must agree with: the packed SET refuses,
+    // so a binding lands on JSON for BOTH directions.
+    var rec = PackedRecord.init(1);
+    rec.f32Field("width", 9);
+    try testing.expectEqual(@as(i32, -1), setPacked(id, "Shape", rec.bytes()));
+    const shape = game.getComponent(ent, ScalarBuiltinGame.ShapeComp).?;
+    try testing.expectEqual(@as(f32, 3), shape.width);
+    try testing.expectEqual(@as(f32, 4), shape.height);
+
+    // Absent component keeps the 0 sentinel (never 0xFF for a
+    // component the entity doesn't carry).
+    const bare = contract.labelle_entity_create();
+    try testing.expectEqual(@as(usize, 0), getPacked(bare, "Shape", &buf));
+}
+
+test "batch set: zero-width (filter) components are skipped — no onSet churn (#782)" {
+    contract.unbind();
+    defer contract.unbind();
+
+    var game = ContractGame.init(testing.allocator);
+    defer game.deinit();
+    contract.bind(&game);
+
+    const id = contract.labelle_entity_create();
+    const ent: u32 = @intCast(id);
+    try testing.expectEqual(@as(i32, 0), setComp(id, "Position", "{\"x\":1,\"y\":2}"));
+    try testing.expectEqual(@as(i32, 0), setComp(id, "Marker", "{\"note\":\"keep\"}"));
+
+    // Sanity: the counter wires up — a per-entity UPDATE set fires onSet.
+    marker_on_set_calls = 0;
+    try testing.expectEqual(@as(i32, 0), setComp(id, "Marker", "{\"note\":\"keep\"}"));
+    try testing.expectEqual(@as(u32, 1), marker_on_set_calls);
+
+    // Marker contributes 0 stream bytes: the stream is Position alone.
+    const names = "[\"Position\",\"Marker\"]";
+    var buf: [64]u8 = @splat(0);
+    const required = batchGet(names, &buf);
+    try testing.expectEqual(@as(usize, 4 + 2 * 4), required);
+
+    batchFloatSet(&buf, 4, 10);
+    batchFloatSet(&buf, 8, 20);
+    marker_on_set_calls = 0;
+    try testing.expectEqual(@as(i32, 0), batchSet(names, buf[4..required]));
+    // The filter was NOT re-applied…
+    try testing.expectEqual(@as(u32, 0), marker_on_set_calls);
+    // …while the data-bearing component landed, and the filter's value
+    // survives untouched.
+    const pos = game.getComponent(ent, core.Position).?;
+    try testing.expectEqual(@as(f32, 10), pos.x);
+    try testing.expectEqual(@as(f32, 20), pos.y);
+    try testing.expectEqualStrings("keep", game.getComponent(ent, Marker).?.note);
+
+    // The id-tagged variant applies the identical skip.
+    const required_ids = batchGetIds(names, &buf);
+    try testing.expectEqual(@as(usize, 4 + (8 + 2 * 4)), required_ids);
+    marker_on_set_calls = 0;
+    try testing.expectEqual(@as(i32, 0), batchSetIds(names, buf[4..required_ids]));
+    try testing.expectEqual(@as(u32, 0), marker_on_set_calls);
+}
+
+fn batchGetIds(names_json: []const u8, buf: []u8) usize {
+    return contract.labelle_component_batch_get_ids(names_json.ptr, names_json.len, buf.ptr, buf.len);
+}
+
+fn batchSetIds(names_json: []const u8, buf: []const u8) i32 {
+    return contract.labelle_component_batch_set_ids(names_json.ptr, names_json.len, buf.ptr, buf.len);
+}
+
+/// Read a row's u64 entity id at byte offset `off` (unaligned-safe).
+fn rowId(buf: []const u8, off: usize) u64 {
+    return std.mem.readInt(u64, buf[off..][0..8], .little);
+}
+
+test "batch ids: id-tagged round-trip — rows carry ids, set matches BY ID, not position" {
+    contract.unbind();
+    defer contract.unbind();
+
+    var game = ContractGame.init(testing.allocator);
+    defer game.deinit();
+    contract.bind(&game);
+
+    // The wire's row prefix is pinned (and doubles as the v1.4
+    // comptime capability marker).
+    try testing.expectEqual(@as(usize, 8), contract.batch_id_row_prefix);
+
+    const names = "[\"Position\",\"Velocity\"]";
+    var buf: [256]u8 = @splat(0);
+
+    // Zero matches: the count-0 header alone, and an empty row buffer
+    // applies cleanly.
+    try testing.expectEqual(@as(usize, 4), batchGetIds(names, &buf));
+    try testing.expectEqual(@as(u32, 0), std.mem.readInt(u32, buf[0..4], .little));
+    try testing.expectEqual(@as(i32, 0), batchSetIds(names, buf[4..4]));
+
+    const ids = [3]u64{
+        contract.labelle_entity_create(),
+        contract.labelle_entity_create(),
+        contract.labelle_entity_create(),
+    };
+    for (ids) |id| {
+        try testing.expectEqual(@as(i32, 0), setComp(id, "Position", "{\"x\":1,\"y\":1}"));
+        try testing.expectEqual(@as(i32, 0), setComp(id, "Velocity", "{\"dx\":1,\"dy\":1}"));
+    }
+
+    // Sizing: [u32 count][3 rows × (u64 id + 4 fields × 4B)].
+    const row = 8 + 4 * 4;
+    const required = contract.labelle_component_batch_get_ids(names, names.len, null, 0);
+    try testing.expectEqual(@as(usize, 4 + 3 * row), required);
+    // Under-sized cap: required-size return, snprintf-style.
+    try testing.expectEqual(required, batchGetIds(names, buf[0 .. required - 3]));
+    try testing.expectEqual(required, batchGetIds(names, &buf));
+    try testing.expectEqual(@as(u32, 3), std.mem.readInt(u32, buf[0..4], .little));
+
+    // Every row's id is one of ours; write each row's floats as a
+    // FUNCTION OF ITS OWN ID — the only way these land right is
+    // match-by-id.
+    var off: usize = 4;
+    while (off < required) : (off += row) {
+        const id = rowId(&buf, off);
+        var known = false;
+        for (ids) |want| {
+            if (want == id) known = true;
+        }
+        try testing.expect(known);
+        const base: f32 = @floatFromInt(id * 100);
+        for (0..4) |i| batchFloatSet(&buf, off + 8 + i * 4, base + @as(f32, @floatFromInt(i)));
+    }
+    try testing.expectEqual(@as(i32, 0), batchSetIds(names, buf[4..required]));
+    for (ids) |id| {
+        const ent: u32 = @intCast(id);
+        const base: f32 = @floatFromInt(id * 100);
+        const pos = game.getComponent(ent, core.Position).?;
+        try testing.expectEqual(base + 0, pos.x);
+        try testing.expectEqual(base + 1, pos.y);
+        const vel = game.getComponent(ent, Velocity).?;
+        try testing.expectEqual(base + 2, vel.dx);
+        try testing.expectEqual(base + 3, vel.dy);
+    }
+}
+
+test "batch set ids: same-count destroy+spawn — vanished row skipped, spawned entity untouched (#783)" {
+    contract.unbind();
+    defer contract.unbind();
+
+    var game = ContractGame.init(testing.allocator);
+    defer game.deinit();
+    contract.bind(&game);
+
+    const names = "[\"Position\"]";
+    const a = contract.labelle_entity_create();
+    const b = contract.labelle_entity_create();
+    for ([_]u64{ a, b }) |id| {
+        try testing.expectEqual(@as(i32, 0), setComp(id, "Position", "{\"x\":1,\"y\":1}"));
+    }
+
+    var buf: [128]u8 = @splat(0);
+    const row = 8 + 2 * 4;
+    const required = batchGetIds(names, &buf);
+    try testing.expectEqual(@as(usize, 4 + 2 * row), required);
+
+    // The positional guard's blind spot: destroy + spawn keeps the
+    // COUNT identical while changing membership.
+    contract.labelle_entity_destroy(b);
+    const c = contract.labelle_entity_create();
+    try testing.expectEqual(@as(i32, 0), setComp(c, "Position", "{\"x\":50,\"y\":60}"));
+
+    var off: usize = 4;
+    while (off < required) : (off += row) {
+        const id = rowId(&buf, off);
+        const base: f32 = @floatFromInt(id * 10);
+        batchFloatSet(&buf, off + 8, base + 1);
+        batchFloatSet(&buf, off + 12, base + 2);
+    }
+    // BY ID: a's row lands on a, b's row is skipped (vanished), and the
+    // newcomer c — absent from the buffer — is untouched. No refusal,
+    // no cross-entity smear.
+    try testing.expectEqual(@as(i32, 0), batchSetIds(names, buf[4..required]));
+    const ap = game.getComponent(@as(u32, @intCast(a)), core.Position).?;
+    try testing.expectEqual(@as(f32, @floatFromInt(a * 10)) + 1, ap.x);
+    try testing.expectEqual(@as(f32, @floatFromInt(a * 10)) + 2, ap.y);
+    const cp = game.getComponent(@as(u32, @intCast(c)), core.Position).?;
+    try testing.expectEqual(@as(f32, 50), cp.x);
+    try testing.expectEqual(@as(f32, 60), cp.y);
+
+    // A live entity that merely LEFT the query since the get is the
+    // same skip: remove a's Position and re-apply the old rows.
+    try testing.expectEqual(@as(i32, 0), removeComp(a, "Position"));
+    try testing.expectEqual(@as(i32, 0), batchSetIds(names, buf[4..required]));
+    try testing.expect(game.getComponent(@as(u32, @intCast(a)), core.Position) == null);
+}
+
+test "batch set ids: an onSet hook destroying a queried entity mid-apply skips its row, never fails (#783)" {
+    contract.unbind();
+    defer contract.unbind();
+
+    var game = ContractGame.init(testing.allocator);
+    defer game.deinit();
+    contract.bind(&game);
+
+    const a = contract.labelle_entity_create();
+    const b = contract.labelle_entity_create();
+    try testing.expectEqual(@as(i32, 0), setComp(a, "Reaper", "{\"hp\":1}"));
+    try testing.expectEqual(@as(i32, 0), setComp(b, "Reaper", "{\"hp\":2}"));
+    reaper_pair = .{ a, b };
+
+    const names = "[\"Reaper\"]";
+    var buf: [64]u8 = @splat(0);
+    const row = 8 + 4;
+    const required = batchGetIds(names, &buf);
+    try testing.expectEqual(@as(usize, 4 + 2 * row), required);
+    var off: usize = 4;
+    while (off < required) : (off += row) {
+        const id = rowId(&buf, off);
+        batchFloatSet(&buf, off + 8, @as(f32, @floatFromInt(id)) + 0.5);
+    }
+
+    // Applying the FIRST row fires Reaper.onSet, which destroys the
+    // pair's other entity — the id-tagged set downgrades that entity's
+    // row to a skip (the positional preflight could never see this
+    // future) and completes cleanly.
+    try testing.expectEqual(@as(i32, 0), batchSetIds(names, buf[4..required]));
+    const a_alive = game.ecs_backend.entityExists(@as(u32, @intCast(a)));
+    const b_alive = game.ecs_backend.entityExists(@as(u32, @intCast(b)));
+    try testing.expect(a_alive != b_alive); // exactly one survivor
+    const surv: u64 = if (a_alive) a else b;
+    const hp = game.getComponent(@as(u32, @intCast(surv)), Reaper).?.hp;
+    try testing.expectEqual(@as(f32, @floatFromInt(surv)) + 0.5, hp);
+}
+
+test "batch ids: refusals and shapes — misaligned rows, int fields, unknown names, unknown ids" {
+    contract.unbind();
+    defer contract.unbind();
+
+    var game = ContractGame.init(testing.allocator);
+    defer game.deinit();
+    contract.bind(&game);
+
+    const id = contract.labelle_entity_create();
+    try testing.expectEqual(@as(i32, 0), setComp(id, "Position", "{\"x\":1,\"y\":2}"));
+    try testing.expectEqual(@as(i32, 0), setComp(id, "Health", "{\"hp\":50,\"regen\":1}"));
+
+    var buf: [128]u8 = @splat(0);
+
+    // Int-carrying components: the identical refusal as the positional
+    // pair — sentinel from get, -2 from set.
+    try testing.expectEqual(contract.batch_int_refused, batchGetIds("[\"Health\"]", &buf));
+    try testing.expectEqual(@as(i32, -2), batchSetIds("[\"Health\"]", buf[0..12]));
+
+    // A buffer that is not a whole number of rows refuses -1 with no
+    // writes (row size for ["Position"] is 8 + 8 = 16).
+    try testing.expectEqual(@as(i32, -1), batchSetIds("[\"Position\"]", buf[0..15]));
+    const p = game.getComponent(@as(u32, @intCast(id)), core.Position).?;
+    try testing.expectEqual(@as(f32, 1), p.x);
+
+    // Unknown names: get → the count-0 header (a valid empty result);
+    // set → -1 (nothing to resolve the rows against).
+    try testing.expectEqual(@as(usize, 4), batchGetIds("[\"NoSuch\"]", &buf));
+    try testing.expectEqual(@as(i32, -1), batchSetIds("[\"NoSuch\"]", buf[0..8]));
+
+    // Malformed names JSON: get 0, set -1 (the export conventions).
+    try testing.expectEqual(@as(usize, 0), batchGetIds("not json", &buf));
+    try testing.expectEqual(@as(i32, -1), batchSetIds("not json", buf[0..16]));
+
+    // A row naming an id that never existed is a SKIP, not an error.
+    var row: [16]u8 = @splat(0);
+    std.mem.writeInt(u64, row[0..8], 999_999, .little);
+    batchFloatSet(&row, 8, 42);
+    batchFloatSet(&row, 12, 43);
+    try testing.expectEqual(@as(i32, 0), batchSetIds("[\"Position\"]", &row));
+    try testing.expectEqual(@as(f32, 1), p.x);
 }

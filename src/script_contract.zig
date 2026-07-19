@@ -237,7 +237,11 @@ const plugin_command = @import("game/editor_command_mixin.zig");
 /// (#758); v1.3 = v1.2 + bulk component access — the packed component
 /// codec (`labelle_component_get_packed`/`_set_packed`) and the batched
 /// query (`labelle_component_batch_get`/`_batch_set`)
-/// (labelle-scripting#41; probe for the symbols).
+/// (labelle-scripting#41; probe for the symbols); v1.4 = v1.3 + the
+/// id-tagged batch variant (`labelle_component_batch_get_ids`/
+/// `_batch_set_ids`) — each row prefixed with its u64 entity id,
+/// applied BY ID on write (#783; probe for the symbols, or comptime
+/// via the `batch_id_row_prefix` marker decl below).
 pub const CONTRACT_VERSION: u32 = 1;
 
 /// `labelle_plugin_call`'s unroutable sentinel: the rc convention's -1
@@ -256,6 +260,18 @@ pub const plugin_call_unroutable: usize = std.math.maxInt(usize);
 /// i32 return. Distinct from 0 = malformed/not-bound and from any
 /// required-size return, which could never need that much space.
 pub const batch_int_refused: usize = std.math.maxInt(usize) - 1;
+
+/// The id-tagged batch variant's per-row prefix: each entity's f32
+/// stream is preceded by its entity id as a little-endian u64 — 8
+/// bytes — in both `labelle_component_batch_get_ids`'s output (after
+/// the u32 count header) and `labelle_component_batch_set_ids`'s
+/// input. Also the "since v1.4" COMPTIME CAPABILITY MARKER: language
+/// plugins detect the id-tagged exports by `@hasDecl(engine
+/// .script_contract, "batch_id_row_prefix")` — the exact convention
+/// `batch_int_refused` established for v1.3 (see labelle-scripting's
+/// `contract.host_has_bulk_access` probe; `@hasDecl` on externs cannot
+/// see host exports).
+pub const batch_id_row_prefix: usize = 8;
 
 /// Inbox back-pressure cap: pending (drained-but-unpolled) events beyond
 /// this are dropped NEWEST-first, matching the POC's fixed-ring behavior.
@@ -358,6 +374,16 @@ const VTable = struct {
     // writes on mismatch (the positional-coupling guard).
     component_batch_get: *const fn (names_json: []const u8, out: []u8) usize,
     component_batch_set: *const fn (names_json: []const u8, buf: []const u8) i32,
+    // ID-TAGGED batch twins (since v1.4, #783): the same f32 stream, but
+    // every entity's floats are prefixed by its u64 id —
+    // `_batch_get_ids` writes `[u32 count][rows: u64 id + floats]` and
+    // `_batch_set_ids` applies each row BY ID (vanished or
+    // no-longer-matching entities are SKIPPED, their floats consumed),
+    // closing the positional variant's two residual holes: a same-count
+    // entity swap between get and set, and an onSet-hook mutation of
+    // the entity set mid-apply.
+    component_batch_get_ids: *const fn (names_json: []const u8, out: []u8) usize,
+    component_batch_set_ids: *const fn (names_json: []const u8, buf: []const u8) i32,
     component_has: *const fn (id: u64, name: []const u8) i32,
     component_remove: *const fn (id: u64, name: []const u8) i32,
     query: *const fn (names_json: []const u8, out: []u8) usize,
@@ -730,7 +756,9 @@ pub export fn labelle_component_batch_get(
 /// NOTHING, so "re-run batch_get and recompute" can never double-apply a
 /// prefix. Do NOT spawn or destroy entities between the paired get and
 /// set: the layout is positional, so the guard can catch a count change
-/// but never a same-count membership/order change.
+/// but never a same-count membership/order change — the id-tagged
+/// `labelle_component_batch_get_ids`/`_batch_set_ids` pair (since v1.4)
+/// closes both holes by matching rows to entities BY ID.
 ///
 /// Returns 0 = ok; -1 = malformed names / entity-count mismatch (buffer
 /// size disagrees with the re-queried set) / not bound; -2 = a named
@@ -746,6 +774,62 @@ pub export fn labelle_component_batch_set(
     if (names_json_len == 0) return -1;
     const b: []const u8 = if (buf_ptr) |p| p[0..buf_len] else &.{};
     return vt.component_batch_set(names_json_ptr[0..names_json_len], b);
+}
+
+/// ID-TAGGED batched read — `labelle_component_batch_get`'s safer twin
+/// (since v1.4, #783; probe by symbol, additive). Resolves the same
+/// entity set and writes `[u32 count]` then, per entity in query order,
+/// `[u64 entity_id][f32 stream]`: the identical per-entity floats the
+/// positional variant emits, each row prefixed by the entity's id as a
+/// little-endian u64 (`batch_id_row_prefix` bytes). Everything else
+/// mirrors `_batch_get` exactly: int-field refusal (`batch_int_refused`),
+/// required-size return, 0 = malformed/not bound, NULL/cap-0 sizing
+/// probe, count-0 header for zero matches.
+pub export fn labelle_component_batch_get_ids(
+    names_json_ptr: [*]const u8,
+    names_json_len: usize,
+    out: ?[*]u8,
+    out_cap: usize,
+) usize {
+    const vt = vtable orelse return 0;
+    if (names_json_len == 0) return 0;
+    const buf: []u8 = if (out) |p| p[0..out_cap] else &.{};
+    return vt.component_batch_get_ids(names_json_ptr[0..names_json_len], buf);
+}
+
+/// ID-TAGGED batched write — applies `[u64 id][f32 stream]` rows (the
+/// exact layout `_batch_get_ids` emitted, minus the u32 count header)
+/// BY ID instead of positionally: each row's entity is resolved from
+/// its embedded id, and a row whose entity has VANISHED — or no longer
+/// carries every named component — is SKIPPED (its floats consumed,
+/// nothing written) rather than failing the batch. Rows apply
+/// independently through the same RMW channels as `_batch_set`
+/// (scalar fields overwritten, non-scalar preserved, hooks and
+/// dirty-tracking fire identically). Since v1.4, #783, additive.
+///
+/// This CLOSES the positional variant's residual holes: a same-count
+/// destroy+spawn between get and set can no longer shift rows onto the
+/// wrong entities (ids match or the row is skipped — spawned entities
+/// absent from the buffer are simply untouched), and an onSet hook
+/// destroying a queried entity mid-apply downgrades that entity's row
+/// to a skip instead of a partial-commit failure. The positional
+/// preflight is replaced by a shape check: `buf_len` must be a whole
+/// number of rows (count × (8 + stride)).
+///
+/// Returns 0 = ok (skipped rows included — a skip is not an error);
+/// -1 = malformed names / unknown component name / buf_len not a whole
+/// number of rows / not bound; -2 = int-field refusal (identical to
+/// `_batch_set`).
+pub export fn labelle_component_batch_set_ids(
+    names_json_ptr: [*]const u8,
+    names_json_len: usize,
+    buf_ptr: ?[*]const u8,
+    buf_len: usize,
+) i32 {
+    const vt = vtable orelse return -1;
+    if (names_json_len == 0) return -1;
+    const b: []const u8 = if (buf_ptr) |p| p[0..buf_len] else &.{};
+    return vt.component_batch_set_ids(names_json_ptr[0..names_json_len], b);
 }
 
 /// 1 when entity `id` carries component `name`; 0 otherwise (absent,
@@ -1268,6 +1352,8 @@ fn Holder(comptime GP: type) type {
             .component_set_packed = &componentSetPackedImpl,
             .component_batch_get = &componentBatchGetImpl,
             .component_batch_set = &componentBatchSetImpl,
+            .component_batch_get_ids = &componentBatchGetIdsImpl,
+            .component_batch_set_ids = &componentBatchSetIdsImpl,
             .component_has = &componentHasImpl,
             .component_remove = &componentRemoveImpl,
             .query = &queryImpl,
@@ -1500,10 +1586,12 @@ fn Holder(comptime GP: type) type {
         /// (Position → scene built-ins → registry `inline for`), but each
         /// arm writes the binary record via `packInto` instead of JSON.
         /// `packInto` self-selects: a component whose every field is a
-        /// supported scalar produces a real record; anything else (scene
-        /// built-ins carry renderer handles / strings / arrays) yields the
-        /// single 0xFF sentinel byte, so the binding transparently falls
-        /// back to the JSON path for those.
+        /// supported scalar produces a real record; anything else yields
+        /// the single 0xFF sentinel byte, so the binding transparently
+        /// falls back to the JSON path for those. Scene BUILT-INS emit
+        /// the sentinel UNCONDITIONALLY — even a scalar-only one — so
+        /// GET agrees with the packed SET's built-in refusal (#782,
+        /// see the arm below).
         fn componentGetPackedImpl(id: u64, name: []const u8, out: []u8) usize {
             const ent = castEntity(id) orelse return 0;
             if (!game.ecs_backend.entityExists(ent)) return 0;
@@ -1513,11 +1601,20 @@ fn Holder(comptime GP: type) type {
             }
             inline for (builtin_comps) |spec| {
                 if (std.mem.eql(u8, name, spec.name)) {
-                    const comp = game.getComponent(ent, spec.T) orelse return 0;
-                    // Built-ins never pack (Camera.tag / Sprite handles are
-                    // non-scalar) — packInto emits the sentinel and the
-                    // binding uses JSON. No Camera special-case needed here.
-                    return packInto(comp.*, out);
+                    if (game.getComponent(ent, spec.T) == null) return 0;
+                    // Built-ins take the 0xFF/JSON path in BOTH directions
+                    // (#782, GET/SET symmetry): the packed SET must refuse
+                    // them — a built-in write routes through the scene
+                    // loader's JSON apply fns (renderer tracking, tag
+                    // interning), so a packed set would only re-serialize
+                    // to JSON, gaining nothing — and GET must AGREE, so
+                    // even a scalar-only built-in (real ones carry
+                    // handles/strings, but the shape is legal) emits the
+                    // sentinel here instead of a record the paired set
+                    // would then bounce back to JSON. Absent/dead keep
+                    // component_get's 0 sentinel above.
+                    if (out.len >= 1) out[0] = 0xFF;
+                    return 1;
                 }
             }
             const comp_names = comptime Components.names();
@@ -1822,6 +1919,16 @@ fn Holder(comptime GP: type) type {
         // positional f32 layout depends on that order agreeing.
 
         fn componentBatchGetImpl(names_json: []const u8, out: []u8) usize {
+            return batchGetDispatch(false, names_json, out);
+        }
+
+        /// The id-tagged twin (v1.4): the identical walk, each row
+        /// prefixed with the entity's u64 id.
+        fn componentBatchGetIdsImpl(names_json: []const u8, out: []u8) usize {
+            return batchGetDispatch(true, names_json, out);
+        }
+
+        fn batchGetDispatch(comptime with_ids: bool, names_json: []const u8, out: []u8) usize {
             const parsed = std.json.parseFromSlice(
                 []const []const u8,
                 game.allocator,
@@ -1832,17 +1939,17 @@ fn Holder(comptime GP: type) type {
             const names = parsed.value;
             if (names.len == 0) return 0;
             if (std.mem.eql(u8, names[0], "Position")) {
-                return runBatchGet(core.Position, names, out);
+                return runBatchGet(core.Position, with_ids, names, out);
             }
             inline for (builtin_comps) |spec| {
                 if (std.mem.eql(u8, names[0], spec.name)) {
-                    return runBatchGet(spec.T, names, out);
+                    return runBatchGet(spec.T, with_ids, names, out);
                 }
             }
             const comp_names = comptime Components.names();
             inline for (comp_names) |comp_name| {
                 if (std.mem.eql(u8, names[0], comp_name)) {
-                    return runBatchGet(Components.getType(comp_name), names, out);
+                    return runBatchGet(Components.getType(comp_name), with_ids, names, out);
                 }
             }
             // Unknown first name → an empty (count-0) result, not an error —
@@ -1850,7 +1957,7 @@ fn Holder(comptime GP: type) type {
             return writeBatchCount0(out);
         }
 
-        fn runBatchGet(comptime ViewT: type, names: []const []const u8, out: []u8) usize {
+        fn runBatchGet(comptime ViewT: type, comptime with_ids: bool, names: []const []const u8, out: []u8) usize {
             // Int-typed fields cannot ride the f32 stream without silent
             // corruption — refuse the whole batch before any other outcome
             // (see `batch_int_refused`).
@@ -1875,6 +1982,15 @@ fn Holder(comptime GP: type) type {
                 };
                 if (!matches) continue;
                 count += 1;
+                // The id-tagged variant leads each row with the entity's
+                // u64 id (little-endian, `batch_id_row_prefix` bytes) —
+                // what `_batch_set_ids` matches rows by.
+                if (comptime with_ids) {
+                    if (pos + 8 <= out.len) {
+                        std.mem.writeInt(u64, out[pos..][0..8], entityId(ent), .little);
+                    }
+                    pos += 8;
+                }
                 // Each named component's scalar fields as f32, in name order
                 // then struct-declaration field order. `pos` advances even
                 // past the cap so the return is the full required size —
@@ -1990,12 +2106,91 @@ fn Holder(comptime GP: type) type {
                 };
                 if (!matches) continue;
                 for (names) |nm| {
+                    // ZERO-WIDTH components contribute no stream bytes —
+                    // they are query FILTERS (all their fields are
+                    // non-scalar, e.g. string-only), so there is nothing
+                    // to write back: skip the apply entirely rather than
+                    // RMW-re-apply the unchanged value, which would fire
+                    // onSet hooks and dirty-tracking for no data (#782).
+                    // The preflight above already sized them at 0.
+                    if (nameStreamBytes(nm) == 0) continue;
                     if (!applyEntityFloats(ent, nm, buf, &pos)) return -1;
                 }
             }
             // Belt on top of the preflight: the apply consumed exactly the
             // stream the preflight sized.
             if (pos != buf.len) return -1;
+            return 0;
+        }
+
+        /// The id-tagged batch write (v1.4, #783): `buf` is rows of
+        /// `[u64 id][stride × f32]` (the exact layout `_batch_get_ids`
+        /// emitted, minus the count header), applied BY ID — no view
+        /// walk, no positional trust. Per row: resolve the embedded id;
+        /// a row whose entity is dead/unknown — or no longer carries
+        /// every named component (it left the query since the get, or
+        /// an earlier row's onSet hook mutated it) — is SKIPPED, its
+        /// floats consumed; live matching rows apply through the same
+        /// RMW channels as the positional set (`applyEntityFloats`).
+        /// Rows are independent: a mid-row hook effect downgrades that
+        /// row to a skip (pos re-anchors at the row boundary), never a
+        /// partial-commit failure — which is how this variant closes
+        /// the same-count-swap and hook-mutation holes the positional
+        /// preflight cannot see. The preflight's place is taken by a
+        /// SHAPE check: `buf.len` must be a whole number of rows.
+        fn componentBatchSetIdsImpl(names_json: []const u8, buf: []const u8) i32 {
+            const parsed = std.json.parseFromSlice(
+                []const []const u8,
+                game.allocator,
+                names_json,
+                .{},
+            ) catch return -1;
+            defer parsed.deinit();
+            const names = parsed.value;
+            if (names.len == 0) return -1;
+            // Same refusal ladder as the positional set: int-carrying
+            // components -2, unresolvable names -1 (ANY name here — with
+            // no view dispatch the first name has no special role).
+            for (names) |nm| {
+                if (!nameBatchEligible(nm)) return -2;
+            }
+            for (names) |nm| {
+                if (!nameResolvable(nm)) return -1;
+            }
+            var stride: usize = 0;
+            for (names) |nm| stride += nameStreamBytes(nm);
+            const row_size = batch_id_row_prefix + stride;
+            if (buf.len % row_size != 0) return -1;
+            var pos: usize = 0;
+            while (pos < buf.len) {
+                const id = std.mem.readInt(u64, buf[pos..][0..8], .little);
+                pos += batch_id_row_prefix;
+                const row_end = pos + stride;
+                // Re-anchoring at the row boundary is what keeps rows
+                // independent: skipped rows and mid-row hook effects
+                // alike leave the NEXT row's floats aligned.
+                defer pos = row_end;
+                const ent = castEntity(id) orelse continue;
+                if (!game.ecs_backend.entityExists(ent)) continue; // vanished → skip
+                const still_matches = blk: {
+                    for (names) |nm| {
+                        if (!hasByName(ent, nm)) break :blk false;
+                    }
+                    break :blk true;
+                };
+                if (!still_matches) continue; // left the query → skip
+                for (names) |nm| {
+                    // Zero-width components are filters — no data, no
+                    // re-apply (#782, same skip as the positional set).
+                    if (nameStreamBytes(nm) == 0) continue;
+                    // A false here means an onSet hook fired by an
+                    // EARLIER name of this same row removed a later
+                    // component between the match check above and this
+                    // apply — skip the rest of the row (the defer
+                    // realigns), matching the vanished-row semantics.
+                    if (!applyEntityFloats(ent, nm, buf, &pos)) break;
+                }
+            }
             return 0;
         }
 
