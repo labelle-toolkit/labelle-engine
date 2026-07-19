@@ -40,6 +40,8 @@ const video_mixin = @import("game/video_mixin.zig");
 const gui_mixin = @import("game/gui_mixin.zig");
 const gizmo_mixin = @import("game/gizmo_mixin.zig");
 const mesh_mixin = @import("game/mesh_mixin.zig");
+const ui_kit_mixin = @import("game/ui_kit_mixin.zig");
+const ui_draw_list_mod = @import("ui_draw_list.zig");
 const render_target_mixin = @import("game/render_target_mixin.zig");
 const post_fx_mixin = @import("game/post_fx_mixin.zig");
 const scene_mixin = @import("game/scene_mixin.zig");
@@ -389,6 +391,7 @@ pub fn GameConfigWithYAxis(
         const GuiMixin = gui_mixin.Mixin(Self);
         const GizmoMixin = gizmo_mixin.Mixin(Self);
         const MeshMixin = mesh_mixin.Mixin(Self);
+        const UiKitMixin = ui_kit_mixin.Mixin(Self);
         const RenderTargetMixin = render_target_mixin.Mixin(Self);
         const PostFxMixin = post_fx_mixin.Mixin(Self);
         const SceneMixin = scene_mixin.Mixin(Self);
@@ -955,6 +958,14 @@ pub fn GameConfigWithYAxis(
         gizmos_enabled: bool = true,
         gizmo_state: gizmo_draws_mod.GizmoState(Entity),
 
+        // In-game UI kit (issue #771). Per-frame draw commands submitted by
+        // game code (`submitUiDrawList`), drained + drawn in `render()` after
+        // the world pass and before gizmos; baked fonts retained across
+        // frames for the renderer's text pass + the kit's FontResolver.
+        ui_draw_list: std.ArrayListUnmanaged(ui_draw_list_mod.UiDrawCmd) = .empty,
+        ui_render_opts: ui_draw_list_mod.UiRenderOptions = .{},
+        ui_fonts: ui_draw_list_mod.UiFontStore = .empty,
+
         // Debug-only: tombstone ring buffer (#420)
         tombstones: if (is_debug) [tombstone_size]?TombstoneEntry else void =
             if (is_debug) [_]?TombstoneEntry{null} ** tombstone_size else {},
@@ -1241,6 +1252,15 @@ pub fn GameConfigWithYAxis(
         /// on renderers/backends that don't declare it. Plugins call this from
         /// a `Systems.renderMeshes(game)` callback (see `SystemRegistry`).
         pub const drawMesh = MeshMixin.drawMesh;
+
+        // ── In-game UI kit (issue #771) ──
+        pub const submitUiDrawList = UiKitMixin.submitUiDrawList;
+        pub const renderSubmittedUi = UiKitMixin.renderSubmittedUi;
+        pub const clearSubmittedUi = UiKitMixin.clearSubmittedUi;
+        pub const bakeUiFont = UiKitMixin.bakeUiFont;
+        pub const uiFont = UiKitMixin.uiFont;
+        pub const resolveUiFrame = UiKitMixin.resolveUiFrame;
+        pub const reuploadUiFonts = UiKitMixin.reuploadUiFonts;
 
         // ── Offscreen render targets / transport mirror (mixin) ──
         /// Render a scene into a texture instead of the screen, then draw that

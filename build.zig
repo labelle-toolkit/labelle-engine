@@ -203,6 +203,12 @@ pub fn build(b: *std.Build) void {
         // plugin render callback (the seam `labelle-spine` submits skinned
         // meshes through).
         "test/render_mesh_test.zig",
+        // In-game UI-kit DrawList renderer loop + font pipeline (#771):
+        // the engine consumer of labelle-gui `ui_kit`'s backend-agnostic
+        // DrawList — UV→pixel src mapping, glyph-run text pass, focus ring,
+        // command conversion, and the full `bakeUiFont` + submit/render
+        // integration through a recording renderer + mock font backend.
+        "test/ui_draw_list_test.zig",
         // labelle-studio Play mode (Phase 3) — wasm editor control
         // surface: bind/dispatch vtable, pause/step tick gating, scene
         // digest JSON (+ truncation validity), camera override state

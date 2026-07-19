@@ -100,6 +100,11 @@ pub fn Mixin(comptime Game: type) type {
             self.active_world.deinit();
             self.allocator.destroy(self.active_world);
             self.gizmo_state.deinit(self.allocator);
+            // In-game UI kit (#771): free any commands submitted after the
+            // last render() drain, then the retained baked-font tables.
+            self.clearSubmittedUi();
+            self.ui_draw_list.deinit(self.allocator);
+            self.ui_fonts.deinit(self.allocator);
             self.scenes.deinit();
             self.jsonc_scenes.deinit();
             // Sprite-based asset inference (#563): free the reverse index and
@@ -350,6 +355,11 @@ pub fn Mixin(comptime Game: type) type {
         pub fn surfaceRestored(self: *Game) void {
             self.assets.reenqueueGpuResident();
             forcePumpCurrentScene(self);
+            // In-game UI-kit font atlases (#771) are uploaded directly through
+            // the renderer, not the catalog, so the re-enqueue above misses
+            // them — re-upload from their retained RGBA here or `text_line`s
+            // would sample a stale, destroyed GPU handle after resume.
+            self.reuploadUiFonts();
             std.log.info("surface_restored: re-enqueued + pumped to ready", .{});
             // Engine `Events` dual-emit (#578).
             self.emitEngineEvent("engine__surface_restored", .{});

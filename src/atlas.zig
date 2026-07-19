@@ -56,6 +56,11 @@ pub const FindSpriteResult = struct {
     texture_id: u32,
     texture_scale_x: f32 = 1.0,
     texture_scale_y: f32 = 1.0,
+    /// The owning atlas's logical dims (`meta.size`), null when the JSON
+    /// omitted a meta block. Used by #771's `resolveUiFrame` to normalise a
+    /// frame's UV without a renderer texture query. See `RuntimeAtlas`.
+    atlas_logical_width: ?u32 = null,
+    atlas_logical_height: ?u32 = null,
 };
 
 /// Compile-time atlas from a .zon frame definition.
@@ -146,6 +151,16 @@ pub const RuntimeAtlas = struct {
     /// nothing forces uniform scaling.
     texture_scale_x: f32 = 1.0,
     texture_scale_y: f32 = 1.0,
+    /// Logical atlas dims from the JSON's `meta.size` (null when the JSON
+    /// omitted a meta block, e.g. comptime atlases). Retained — unlike the
+    /// transient `AtlasMeta` — so screen-space consumers (the in-game
+    /// UI-kit `resolveUiFrame`, #771) can derive a frame's normalised UV
+    /// (`logical_rect / logical_dims`) without a renderer texture query.
+    /// That query returns null for catalog-uploaded atlases (they bypass
+    /// the renderer side-table), so the retained logical dims are the only
+    /// path that resolves UVs for both the legacy and streaming loads.
+    logical_width: ?u32 = null,
+    logical_height: ?u32 = null,
     /// Lazy-load state. When non-null, the atlas's JSON has been parsed
     /// into `sprites` but the PNG hasn't been decoded yet. Calling
     /// `Game.loadAtlasIfNeeded(name)` decodes the bytes, uploads the
@@ -428,6 +443,8 @@ pub const TextureManager = struct {
                     .texture_id = atlas.texture_id,
                     .texture_scale_x = atlas.texture_scale_x,
                     .texture_scale_y = atlas.texture_scale_y,
+                    .atlas_logical_width = atlas.logical_width,
+                    .atlas_logical_height = atlas.logical_height,
                 };
             }
         }
@@ -624,6 +641,11 @@ fn parseTexturePackerJsonContent(
 /// missing or zero the scale stays at `1.0` — preserving legacy
 /// behavior for callers that don't track texture dims.
 fn applyTextureScale(atlas: *RuntimeAtlas, meta: AtlasMeta, actual_dims: ?TextureManager.TextureDims) void {
+    // Retain the authored logical dims regardless of whether actual texture
+    // dims are known — the catalog upload path passes `null` actual_dims but
+    // still has `meta.size`, and #771's `resolveUiFrame` needs these.
+    atlas.logical_width = meta.logical_width;
+    atlas.logical_height = meta.logical_height;
     const dims = actual_dims orelse return;
     if (meta.logical_width) |lw| {
         if (lw > 0 and dims.width > 0) {
