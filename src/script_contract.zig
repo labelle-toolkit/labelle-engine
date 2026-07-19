@@ -234,7 +234,10 @@ const plugin_command = @import("game/editor_command_mixin.zig");
 /// (v1.1–v1.7). Current surface: v1.1 = v1 + `labelle_plugin_call`
 /// (#744); v1.2 = v1.1 + plugin-call responses — `out`/`out_cap`
 /// activated per their reserved semantics + `labelle_plugin_response_fetch`
-/// (#758).
+/// (#758); v1.3 = v1.2 + bulk component access — the packed component
+/// codec (`labelle_component_get_packed`/`_set_packed`) and the batched
+/// query (`labelle_component_batch_get`/`_batch_set`)
+/// (labelle-scripting#41; probe for the symbols).
 pub const CONTRACT_VERSION: u32 = 1;
 
 /// `labelle_plugin_call`'s unroutable sentinel: the rc convention's -1
@@ -242,6 +245,17 @@ pub const CONTRACT_VERSION: u32 = 1;
 /// from 0 = dispatched — and from any future response-size return,
 /// which could never require the whole address space.
 pub const plugin_call_unroutable: usize = std.math.maxInt(usize);
+
+/// `labelle_component_batch_get`'s int-field refusal sentinel: the rc
+/// convention's -2 carried in that export's usize return (C's
+/// `(size_t)-2`). Returned when ANY named component carries an
+/// int-typed field — i64/u64 values cannot ride the batch's f32 stream
+/// without silent corruption (f32's 24-bit mantissa truncates large
+/// ints), so the host refuses the whole batch instead of degrading the
+/// data. The same refusal is `-2` from `labelle_component_batch_set`'s
+/// i32 return. Distinct from 0 = malformed/not-bound and from any
+/// required-size return, which could never need that much space.
+pub const batch_int_refused: usize = std.math.maxInt(usize) - 1;
 
 /// Inbox back-pressure cap: pending (drained-but-unpolled) events beyond
 /// this are dropped NEWEST-first, matching the POC's fixed-ring behavior.
@@ -323,6 +337,27 @@ const VTable = struct {
     prefab_spawn: *const fn (name: []const u8, params_json: []const u8) u64,
     component_set: *const fn (id: u64, name: []const u8, json: []const u8) i32,
     component_get: *const fn (id: u64, name: []const u8, out: []u8) usize,
+    // PACKED (binary) codec twins of component_get/set — the JSON-free hot
+    // path for scalar-only components. `component_get_packed` writes the
+    // packed record (or the 0xFF "not packable" sentinel) into `out` with
+    // the same required-size/all-or-nothing semantics as component_get;
+    // `component_set_packed` parses a packed record and coerces each field
+    // into the target struct (rc -1 = refuse → binding falls back to JSON).
+    component_get_packed: *const fn (id: u64, name: []const u8, out: []u8) usize,
+    component_set_packed: *const fn (id: u64, name: []const u8, buf: []const u8) i32,
+    // BATCHED codec — the whole-query fast path: one call moves ALL
+    // matching entities' scalar component data across the boundary as a flat
+    // f32 buffer, collapsing the per-entity FFI crossings into 2 per tick.
+    // `component_batch_get` writes `[u32 count][f32 stream]` (f32/f64 + bool
+    // fields only — a named component with any INT field is refused with
+    // `batch_int_refused` / -2, because ints would silently corrupt through
+    // f32); `component_batch_set` re-queries and applies the f32 stream
+    // positionally, READ-MODIFY-WRITE (only scalar fields overwritten,
+    // non-scalar preserved — get/set symmetry), PREFLIGHTING the buffer
+    // length against the re-queried entity set and refusing -1 with NO
+    // writes on mismatch (the positional-coupling guard).
+    component_batch_get: *const fn (names_json: []const u8, out: []u8) usize,
+    component_batch_set: *const fn (names_json: []const u8, buf: []const u8) i32,
     component_has: *const fn (id: u64, name: []const u8) i32,
     component_remove: *const fn (id: u64, name: []const u8) i32,
     query: *const fn (names_json: []const u8, out: []u8) usize,
@@ -600,6 +635,117 @@ pub export fn labelle_component_get(
     // computation runs, nothing is written. Same shape as the query's.
     const buf: []u8 = if (out) |p| p[0..out_cap] else &.{};
     return vt.component_get(id, name_ptr[0..name_len], buf);
+}
+
+/// PACKED (binary) twin of `labelle_component_get` — serializes component
+/// `name` of entity `id` into `out` as a self-describing little-endian
+/// record (see `packInto`) rather than JSON text, so a language plugin can
+/// refill a scalar view without any JSON parse. Sizing mirrors
+/// `labelle_component_get` exactly: required-size return, all-or-nothing
+/// write, NULL/cap-0 sizing probe, 0 = absent/unknown/dead/not-bound.
+/// When the component carries any non-scalar field the impl writes the
+/// single sentinel byte 0xFF and returns 1 — the caller then falls back to
+/// the JSON `labelle_component_get` path. Since v1.3, additive (probe by
+/// symbol like the editor-bridge additions).
+pub export fn labelle_component_get_packed(
+    id: u64,
+    name_ptr: [*]const u8,
+    name_len: usize,
+    out: ?[*]u8,
+    out_cap: usize,
+) usize {
+    const vt = vtable orelse return 0;
+    if (name_len == 0) return 0;
+    const buf: []u8 = if (out) |p| p[0..out_cap] else &.{};
+    return vt.component_get_packed(id, name_ptr[0..name_len], buf);
+}
+
+/// PACKED (binary) twin of `labelle_component_set` — applies a packed
+/// record (`packInto`'s format) to component `name` of entity `id`,
+/// coercing each named field into the target struct's actual scalar type.
+/// REPLACE semantics like the JSON set (absent fields take struct
+/// defaults). Returns 0 = ok; -1 = unknown component / dead entity /
+/// non-scalar-or-non-default-constructible target (the binding then falls
+/// back to `labelle_component_set`) / malformed record / not bound. Since
+/// v1.3, additive.
+pub export fn labelle_component_set_packed(
+    id: u64,
+    name_ptr: [*]const u8,
+    name_len: usize,
+    buf_ptr: ?[*]const u8,
+    buf_len: usize,
+) i32 {
+    const vt = vtable orelse return -1;
+    if (name_len == 0) return -1;
+    const buf: []const u8 = if (buf_ptr) |p| p[0..buf_len] else &.{};
+    return vt.component_set_packed(id, name_ptr[0..name_len], buf);
+}
+
+/// BATCHED (binary) whole-query read — the spike's per-tick fast path.
+/// Resolves the SAME entity set as `labelle_query` (all entities carrying
+/// every named component) and writes `[u32 entity_count][f32 stream]` into
+/// `out`: for each entity in query order, each named component's scalar
+/// fields (given-name order, struct-declaration field order) as raw
+/// little-endian f32 (f32/f64 fields directly, bool as 0/1; non-scalar
+/// fields skipped identically on get and set).
+///
+/// INT-FIELD REFUSAL: a named component with ANY int-typed field is
+/// refused with `batch_int_refused` (`(size_t)-2`) — i64/u64 would
+/// silently corrupt through the f32 stream, so the batch path rejects
+/// the whole request and the binding must keep such components on the
+/// per-entity paths (packed codec carries ints losslessly).
+///
+/// Sizing mirrors `labelle_query`: the return is the bytes the COMPLETE
+/// buffer requires (retry right-sized on required > cap), 0 = malformed
+/// names / not bound, NULL/cap-0 `out` sizes only. Zero matching entities
+/// return the 4-byte header alone (count 0), distinct from the 0 sentinel.
+/// Since v1.3, additive (probe by symbol).
+pub export fn labelle_component_batch_get(
+    names_json_ptr: [*]const u8,
+    names_json_len: usize,
+    out: ?[*]u8,
+    out_cap: usize,
+) usize {
+    const vt = vtable orelse return 0;
+    if (names_json_len == 0) return 0;
+    const buf: []u8 = if (out) |p| p[0..out_cap] else &.{};
+    return vt.component_batch_get(names_json_ptr[0..names_json_len], buf);
+}
+
+/// BATCHED (binary) whole-query write — twin of `labelle_component_batch_get`.
+/// Re-queries the same entity set in the same order and reads `buf` (the
+/// pure f32 stream, NO count header) positionally, READ-MODIFY-WRITE per
+/// component: only the batch-eligible scalar fields are overwritten (the
+/// mirror of what `_batch_get` emitted — get/set symmetry), non-scalar
+/// fields keep their existing values, and the mutated copy applies
+/// through the same channels as the per-entity paths (`setPosition` /
+/// `setComponent` / the scene-loader apply fns for built-ins) so hooks
+/// and dirty-tracking fire identically.
+///
+/// POSITIONAL-COUPLING GUARD (PREFLIGHT): before writing anything, the
+/// host walks the re-resolved query and requires `buf_len` to EXACTLY
+/// match its stream size (count × stride × 4) — a mismatch means the
+/// entity set changed between `_batch_get` and `_batch_set` (or the
+/// caller sized the buffer wrong) and the call refuses -1 having written
+/// NOTHING, so "re-run batch_get and recompute" can never double-apply a
+/// prefix. Do NOT spawn or destroy entities between the paired get and
+/// set: the layout is positional, so the guard can catch a count change
+/// but never a same-count membership/order change.
+///
+/// Returns 0 = ok; -1 = malformed names / entity-count mismatch (buffer
+/// size disagrees with the re-queried set) / not bound; -2 = a named
+/// component carries an int-typed field (same refusal as `_batch_get`'s
+/// `(size_t)-2` — see `batch_int_refused`). Since v1.3, additive.
+pub export fn labelle_component_batch_set(
+    names_json_ptr: [*]const u8,
+    names_json_len: usize,
+    buf_ptr: ?[*]const u8,
+    buf_len: usize,
+) i32 {
+    const vt = vtable orelse return -1;
+    if (names_json_len == 0) return -1;
+    const b: []const u8 = if (buf_ptr) |p| p[0..buf_len] else &.{};
+    return vt.component_batch_set(names_json_ptr[0..names_json_len], b);
 }
 
 /// 1 when entity `id` carries component `name`; 0 otherwise (absent,
@@ -1118,6 +1264,10 @@ fn Holder(comptime GP: type) type {
             .prefab_spawn = &prefabSpawnImpl,
             .component_set = &componentSetImpl,
             .component_get = &componentGetImpl,
+            .component_get_packed = &componentGetPackedImpl,
+            .component_set_packed = &componentSetPackedImpl,
+            .component_batch_get = &componentBatchGetImpl,
+            .component_batch_set = &componentBatchSetImpl,
             .component_has = &componentHasImpl,
             .component_remove = &componentRemoveImpl,
             .query = &queryImpl,
@@ -1346,6 +1496,87 @@ fn Holder(comptime GP: type) type {
             return 0;
         }
 
+        /// PACKED twin of `componentGetImpl`: the exact same name-dispatch
+        /// (Position → scene built-ins → registry `inline for`), but each
+        /// arm writes the binary record via `packInto` instead of JSON.
+        /// `packInto` self-selects: a component whose every field is a
+        /// supported scalar produces a real record; anything else (scene
+        /// built-ins carry renderer handles / strings / arrays) yields the
+        /// single 0xFF sentinel byte, so the binding transparently falls
+        /// back to the JSON path for those.
+        fn componentGetPackedImpl(id: u64, name: []const u8, out: []u8) usize {
+            const ent = castEntity(id) orelse return 0;
+            if (!game.ecs_backend.entityExists(ent)) return 0;
+            if (std.mem.eql(u8, name, "Position")) {
+                const pos = game.getComponent(ent, core.Position) orelse return 0;
+                return packInto(pos.*, out);
+            }
+            inline for (builtin_comps) |spec| {
+                if (std.mem.eql(u8, name, spec.name)) {
+                    const comp = game.getComponent(ent, spec.T) orelse return 0;
+                    // Built-ins never pack (Camera.tag / Sprite handles are
+                    // non-scalar) — packInto emits the sentinel and the
+                    // binding uses JSON. No Camera special-case needed here.
+                    return packInto(comp.*, out);
+                }
+            }
+            const comp_names = comptime Components.names();
+            inline for (comp_names) |comp_name| {
+                if (std.mem.eql(u8, name, comp_name)) {
+                    const T = Components.getType(comp_name);
+                    const comp = game.getComponent(ent, T) orelse return 0;
+                    return packInto(comp.*, out);
+                }
+            }
+            return 0;
+        }
+
+        /// PACKED twin of `componentSetImpl`: the same name-dispatch, but
+        /// each arm decodes the binary record into a DEFAULT-initialized
+        /// component (REPLACE semantics — absent fields keep their struct
+        /// defaults, exactly like the JSON set's `ignore_unknown_fields`
+        /// path) and routes through the same `setPosition`/`setComponent`
+        /// as the JSON path so hooks/dirty-tracking fire identically.
+        /// Returns -1 (host refuses → binding falls back to JSON) for the
+        /// scene built-ins and for any registry component that is not a
+        /// scalar-only, default-constructible struct.
+        fn componentSetPackedImpl(id: u64, name: []const u8, buf: []const u8) i32 {
+            const ent = castEntity(id) orelse return -1;
+            if (!game.ecs_backend.entityExists(ent)) return -1;
+            // A record the binding itself marked unpackable — refuse so it
+            // falls back to JSON. (The binding never sends this, but a raw
+            // caller might.)
+            if (buf.len >= 1 and buf[0] == 0xFF) return -1;
+            if (std.mem.eql(u8, name, "Position")) {
+                var pos = core.Position{};
+                if (!applyPacked(core.Position, &pos, buf)) return -1;
+                game.setPosition(ent, pos);
+                return 0;
+            }
+            // Scene built-ins go through the scene-loader apply fns (JSON
+            // only) — refuse the packed path for them.
+            inline for (builtin_comps) |spec| {
+                if (std.mem.eql(u8, name, spec.name)) return -1;
+            }
+            const comp_names = comptime Components.names();
+            inline for (comp_names) |comp_name| {
+                if (std.mem.eql(u8, name, comp_name)) {
+                    const T = Components.getType(comp_name);
+                    if (comptime packableStruct(T)) {
+                        var comp: T = .{};
+                        if (!applyPacked(T, &comp, buf)) return -1;
+                        game.setComponent(ent, comp);
+                        return 0;
+                    } else {
+                        // Non-scalar or non-default-constructible: the
+                        // packed path can't represent it — JSON fallback.
+                        return -1;
+                    }
+                }
+            }
+            return -1;
+        }
+
         fn componentHasImpl(id: u64, name: []const u8) i32 {
             const ent = castEntity(id) orelse return 0;
             // Liveness guard — see componentGetImpl. Dead → 0 (absent).
@@ -1551,6 +1782,300 @@ fn Holder(comptime GP: type) type {
                 }
             }
             return false;
+        }
+
+        /// Runtime component name → "may this component ride the f32 batch
+        /// stream". False when the resolved type carries ANY int-typed
+        /// field: i64/u64 values would silently corrupt through the f32
+        /// coercion (24-bit mantissa), so the batch path refuses them
+        /// outright (`batch_int_refused` / -2) — the packed per-entity
+        /// codec carries ints losslessly instead. f32/f64 and bool fields
+        /// are fine; non-scalar fields are skipped by the codec and don't
+        /// disqualify. Unknown names are vacuously eligible — the
+        /// resolvability checks own that outcome.
+        fn nameBatchEligible(name: []const u8) bool {
+            if (std.mem.eql(u8, name, "Position")) {
+                return comptime batchEligible(core.Position);
+            }
+            inline for (builtin_comps) |spec| {
+                if (std.mem.eql(u8, name, spec.name)) {
+                    return comptime batchEligible(spec.T);
+                }
+            }
+            const comp_names = comptime Components.names();
+            inline for (comp_names) |comp_name| {
+                if (std.mem.eql(u8, name, comp_name)) {
+                    return comptime batchEligible(Components.getType(comp_name));
+                }
+            }
+            return true;
+        }
+
+        // ── Batched query codec ──────────────────────────────────
+        //
+        // The whole-query fast path: one `_batch_get` and one `_batch_set`
+        // per tick move ALL matching entities' scalar component data across
+        // the boundary as a flat f32 buffer, instead of 4 per-entity FFI
+        // crossings (get_into ×2 + set_from ×2). Both re-resolve the query
+        // the same way (`queryImpl`'s view-on-first-name, filter-the-rest),
+        // so get and set walk the SAME entities in the SAME order — the
+        // positional f32 layout depends on that order agreeing.
+
+        fn componentBatchGetImpl(names_json: []const u8, out: []u8) usize {
+            const parsed = std.json.parseFromSlice(
+                []const []const u8,
+                game.allocator,
+                names_json,
+                .{},
+            ) catch return 0;
+            defer parsed.deinit();
+            const names = parsed.value;
+            if (names.len == 0) return 0;
+            if (std.mem.eql(u8, names[0], "Position")) {
+                return runBatchGet(core.Position, names, out);
+            }
+            inline for (builtin_comps) |spec| {
+                if (std.mem.eql(u8, names[0], spec.name)) {
+                    return runBatchGet(spec.T, names, out);
+                }
+            }
+            const comp_names = comptime Components.names();
+            inline for (comp_names) |comp_name| {
+                if (std.mem.eql(u8, names[0], comp_name)) {
+                    return runBatchGet(Components.getType(comp_name), names, out);
+                }
+            }
+            // Unknown first name → an empty (count-0) result, not an error —
+            // mirrors queryImpl's unknown-name handling.
+            return writeBatchCount0(out);
+        }
+
+        fn runBatchGet(comptime ViewT: type, names: []const []const u8, out: []u8) usize {
+            // Int-typed fields cannot ride the f32 stream without silent
+            // corruption — refuse the whole batch before any other outcome
+            // (see `batch_int_refused`).
+            for (names) |nm| {
+                if (!nameBatchEligible(nm)) return batch_int_refused;
+            }
+            // An unknown FILTER name can never match — empty result, decided
+            // before the view walk (queryImpl's precedent).
+            for (names[1..]) |rn| {
+                if (!nameResolvable(rn)) return writeBatchCount0(out);
+            }
+            var count: u32 = 0;
+            var pos: usize = 4; // reserve the u32 count header
+            var v = game.ecs_backend.view(.{ViewT}, .{});
+            defer v.deinit();
+            while (v.next()) |ent| {
+                const matches = blk: {
+                    for (names[1..]) |rn| {
+                        if (!hasByName(ent, rn)) break :blk false;
+                    }
+                    break :blk true;
+                };
+                if (!matches) continue;
+                count += 1;
+                // Each named component's scalar fields as f32, in name order
+                // then struct-declaration field order. `pos` advances even
+                // past the cap so the return is the full required size —
+                // the binding grows and retries (snprintf-style).
+                for (names) |nm| writeEntityFloats(ent, nm, out, &pos);
+            }
+            if (out.len >= 4) std.mem.writeInt(u32, out[0..4], count, .little);
+            return pos;
+        }
+
+        /// Write one entity's component's scalar fields as raw f32 (runtime
+        /// name → comptime type dispatch, same name space as the component
+        /// ops). The query guaranteed the component is present; a null read
+        /// is defended as zero fields.
+        fn writeEntityFloats(ent: Entity, name: []const u8, out: []u8, pos: *usize) void {
+            if (std.mem.eql(u8, name, "Position")) {
+                if (game.getComponent(ent, core.Position)) |cmp| {
+                    packFloatsInto(core.Position, cmp.*, out, pos);
+                }
+                return;
+            }
+            inline for (builtin_comps) |spec| {
+                if (std.mem.eql(u8, name, spec.name)) {
+                    if (game.getComponent(ent, spec.T)) |cmp| {
+                        packFloatsInto(spec.T, cmp.*, out, pos);
+                    }
+                    return;
+                }
+            }
+            const comp_names = comptime Components.names();
+            inline for (comp_names) |comp_name| {
+                if (std.mem.eql(u8, name, comp_name)) {
+                    const T = Components.getType(comp_name);
+                    if (game.getComponent(ent, T)) |cmp| {
+                        packFloatsInto(T, cmp.*, out, pos);
+                    }
+                    return;
+                }
+            }
+        }
+
+        fn componentBatchSetImpl(names_json: []const u8, buf: []const u8) i32 {
+            const parsed = std.json.parseFromSlice(
+                []const []const u8,
+                game.allocator,
+                names_json,
+                .{},
+            ) catch return -1;
+            defer parsed.deinit();
+            const names = parsed.value;
+            if (names.len == 0) return -1;
+            if (std.mem.eql(u8, names[0], "Position")) {
+                return runBatchSet(core.Position, names, buf);
+            }
+            inline for (builtin_comps) |spec| {
+                if (std.mem.eql(u8, names[0], spec.name)) {
+                    return runBatchSet(spec.T, names, buf);
+                }
+            }
+            const comp_names = comptime Components.names();
+            inline for (comp_names) |comp_name| {
+                if (std.mem.eql(u8, names[0], comp_name)) {
+                    return runBatchSet(Components.getType(comp_name), names, buf);
+                }
+            }
+            return -1;
+        }
+
+        fn runBatchSet(comptime ViewT: type, names: []const []const u8, buf: []const u8) i32 {
+            // Same int-field refusal as the get side, as -2 in this i32
+            // return (see `batch_int_refused`).
+            for (names) |nm| {
+                if (!nameBatchEligible(nm)) return -2;
+            }
+            for (names[1..]) |rn| {
+                if (!nameResolvable(rn)) return -1;
+            }
+            // PREFLIGHT — the positional-coupling guard, decided BEFORE any
+            // write: walk the re-resolved query once, summing the stream
+            // bytes its entities require, and refuse on any disagreement
+            // with the incoming buffer (spawn/destroy since the paired get,
+            // or a caller-mis-sized buffer). A refused batch_set performs
+            // NO writes — there is no partial-commit-then-refuse, so the
+            // documented "re-run batch_get and recompute" retry can never
+            // double-apply a prefix.
+            var expected: usize = 0;
+            {
+                var pre = game.ecs_backend.view(.{ViewT}, .{});
+                defer pre.deinit();
+                while (pre.next()) |ent| {
+                    const matches = blk: {
+                        for (names[1..]) |rn| {
+                            if (!hasByName(ent, rn)) break :blk false;
+                        }
+                        break :blk true;
+                    };
+                    if (!matches) continue;
+                    for (names) |nm| expected += nameStreamBytes(nm);
+                }
+            }
+            if (expected != buf.len) return -1;
+            // APPLY — the same walk again (same view construction, so the
+            // order agrees with the preflight and with batch_get).
+            var pos: usize = 0; // set buffer has NO header — pure f32 stream
+            var v = game.ecs_backend.view(.{ViewT}, .{});
+            defer v.deinit();
+            while (v.next()) |ent| {
+                const matches = blk: {
+                    for (names[1..]) |rn| {
+                        if (!hasByName(ent, rn)) break :blk false;
+                    }
+                    break :blk true;
+                };
+                if (!matches) continue;
+                for (names) |nm| {
+                    if (!applyEntityFloats(ent, nm, buf, &pos)) return -1;
+                }
+            }
+            // Belt on top of the preflight: the apply consumed exactly the
+            // stream the preflight sized.
+            if (pos != buf.len) return -1;
+            return 0;
+        }
+
+        /// Stream bytes one component contributes per entity (its scalar
+        /// fields × 4) — runtime name → comptime `streamBytes` dispatch,
+        /// the sizing mirror of `writeEntityFloats`/`applyEntityFloats`.
+        /// Unknown names contribute nothing (they also emit nothing).
+        fn nameStreamBytes(name: []const u8) usize {
+            if (std.mem.eql(u8, name, "Position")) {
+                return comptime streamBytes(core.Position);
+            }
+            inline for (builtin_comps) |spec| {
+                if (std.mem.eql(u8, name, spec.name)) {
+                    return comptime streamBytes(spec.T);
+                }
+            }
+            const comp_names = comptime Components.names();
+            inline for (comp_names) |comp_name| {
+                if (std.mem.eql(u8, name, comp_name)) {
+                    return comptime streamBytes(Components.getType(comp_name));
+                }
+            }
+            return 0;
+        }
+
+        /// Apply one entity's component's scalar fields from the f32 stream
+        /// — READ-MODIFY-WRITE (get/set symmetry: everything `batch_get`
+        /// emits is writable). The existing component is copied, ONLY the
+        /// batch-eligible scalar fields are overwritten by the mirror walk
+        /// (`readFloatsFrom` — same dispatch and field layout as
+        /// `writeEntityFloats`), and the mutated copy applies through the
+        /// same channels as the per-entity paths: `setPosition` for
+        /// Position, `setComponent` for registry components (non-scalar
+        /// fields — strings, optionals, nested structs — are PRESERVED
+        /// from the existing value, and no default-constructibility is
+        /// required), and the scene-loader apply fns for built-ins (the
+        /// mutated copy is serialized with the SAME serializer the JSON
+        /// get uses and routed through `setBuiltinComponent`, so e.g. a
+        /// batched Camera zoom write is indistinguishable from a scene
+        /// author's). Returns false (refuse -1) on a missing component
+        /// (the entity set changed mid-walk) or an exhausted stream.
+        fn applyEntityFloats(ent: Entity, name: []const u8, buf: []const u8, pos: *usize) bool {
+            if (std.mem.eql(u8, name, "Position")) {
+                var p = (game.getComponent(ent, core.Position) orelse return false).*;
+                if (!readFloatsFrom(core.Position, &p, buf, pos)) return false;
+                game.setPosition(ent, p);
+                return true;
+            }
+            inline for (builtin_comps) |spec| {
+                if (std.mem.eql(u8, name, spec.name)) {
+                    var comp = (game.getComponent(ent, spec.T) orelse return false).*;
+                    if (!readFloatsFrom(spec.T, &comp, buf, pos)) return false;
+                    // Serialize the MUTATED copy exactly as the JSON get
+                    // serializes this built-in (Camera's tag as a string,
+                    // renderer handles omitted), then route it through the
+                    // scene apply machinery — the per-entity set's path.
+                    var jbuf: [4096]u8 = undefined;
+                    const n = if (comptime std.mem.eql(u8, spec.name, "Camera"))
+                        stringifyInto(.{
+                            .zoom = comp.zoom,
+                            .viewport = comp.viewport,
+                            .tag = comp.tagSlice(),
+                        }, &jbuf)
+                    else
+                        stringifyFilteredInto(comp, &jbuf);
+                    if (n == 0 or n > jbuf.len) return false;
+                    return setBuiltinComponent(spec.name, ent, jbuf[0..n]) == 0;
+                }
+            }
+            const comp_names = comptime Components.names();
+            inline for (comp_names) |comp_name| {
+                if (std.mem.eql(u8, name, comp_name)) {
+                    const T = Components.getType(comp_name);
+                    var comp = (game.getComponent(ent, T) orelse return false).*;
+                    if (!readFloatsFrom(T, &comp, buf, pos)) return false;
+                    game.setComponent(ent, comp);
+                    return true;
+                }
+            }
+            return true;
         }
 
         // ── Events ───────────────────────────────────────────────
@@ -1774,6 +2299,372 @@ fn Holder(comptime GP: type) type {
             }
             try jw.endObject();
         }
+
+        /// PACKED codec — `packInto` writes `value`'s scalar fields as the
+        /// self-describing little-endian record the binding decodes:
+        ///
+        ///   [u8 field_count]                (0xFF = "not packable")
+        ///   repeat: [u8 name_len][name][u8 type_tag][value bytes]
+        ///   type_tag: 0=f32(4B) 1=i64(8B) 2=bool(1B) 3=u64(8B)
+        ///
+        /// Same required-size / all-or-nothing contract as `stringifyInto`
+        /// (a counting pass sizes first). A struct with ANY non-scalar
+        /// field — or a non-struct type — writes a single 0xFF byte and
+        /// returns 1: the binding sees the sentinel and falls back to JSON.
+        fn packInto(value: anytype, out: []u8) usize {
+            const T = @TypeOf(value);
+            if (comptime !isPackableStruct(T)) {
+                if (out.len >= 1) out[0] = 0xFF;
+                return 1;
+            }
+            const fields = @typeInfo(T).@"struct".fields;
+            // Count-then-write: size the whole record so an over-cap value
+            // never scribbles a partial write (the get's all-or-nothing).
+            var required: usize = 1; // field_count byte
+            inline for (fields) |f| {
+                required += 1 + f.name.len + comptime packedFieldValueSize(f.type);
+            }
+            if (required > out.len) return required;
+            var pos: usize = 0;
+            out[pos] = @intCast(fields.len);
+            pos += 1;
+            inline for (fields) |f| {
+                out[pos] = @intCast(f.name.len);
+                pos += 1;
+                @memcpy(out[pos..][0..f.name.len], f.name);
+                pos += f.name.len;
+                pos += writePackedValue(f.type, @field(value, f.name), out[pos..]);
+            }
+            return required;
+        }
+
+        /// Decode a packed record into `ptr.*` (already default-init),
+        /// matching each field name to a struct field and COERCING the
+        /// tagged value into that field's actual scalar type. Unknown
+        /// names / non-scalar target fields are skipped. Returns false —
+        /// the set refuses with -1 and the binding falls back to JSON —
+        /// on a malformed record (a truncated field) or on a value the
+        /// target field cannot represent (out-of-range int, NaN/Inf into
+        /// an int field): script-supplied bytes must never panic the
+        /// host, and must not be silently clamped either.
+        fn applyPacked(comptime T: type, ptr: *T, buf: []const u8) bool {
+            if (buf.len < 1) return false;
+            const field_count = buf[0];
+            var pos: usize = 1;
+            var i: usize = 0;
+            while (i < field_count) : (i += 1) {
+                if (pos >= buf.len) return false;
+                const name_len = buf[pos];
+                pos += 1;
+                if (pos + name_len > buf.len) return false;
+                const fname = buf[pos..][0..name_len];
+                pos += name_len;
+                if (pos >= buf.len) return false;
+                const tag = buf[pos];
+                pos += 1;
+                const val_size = packedTagSize(tag) orelse return false;
+                if (pos + val_size > buf.len) return false;
+                const val_bytes = buf[pos..][0..val_size];
+                pos += val_size;
+                inline for (@typeInfo(T).@"struct".fields) |f| {
+                    if (comptime isPackableScalar(f.type)) {
+                        if (std.mem.eql(u8, fname, f.name)) {
+                            @field(ptr.*, f.name) =
+                                coercePacked(f.type, tag, val_bytes) orelse return false;
+                        }
+                    }
+                }
+            }
+            // Trailing bytes past the declared field records are a
+            // malformed buffer (e.g. a zero-count header ahead of field
+            // data) — refuse, don't half-accept.
+            if (pos != buf.len) return false;
+            return true;
+        }
+
+        // ── Packed codec helpers (comptime-pure, Holder-nested) ──────
+
+        /// A field/component type the packed codec can carry: f32, any int
+        /// ≤ 64 bits, or bool. f64 is deliberately NOT packable — the wire
+        /// has only an f32 tag, so packing an f64 field would silently
+        /// truncate its precision; such components take the 0xFF/JSON path,
+        /// which carries f64 faithfully.
+        fn isPackableScalar(comptime T: type) bool {
+    return switch (@typeInfo(T)) {
+        .float => |fl| fl.bits == 32,
+        .int => |i| i.bits <= 64,
+        .bool => true,
+        else => false,
+    };
+}
+
+/// A struct every field of which is a packable scalar (zero-field structs
+/// pack as an empty record — vacuously true) — AND that fits the wire's
+/// u8 headers, decided entirely at comptime: `field_count` is a u8 with
+/// 0xFF reserved as the "not packable" sentinel (so ≥ 255 fields cannot
+/// be represented), and each `name_len` is a u8 (so a > 255-byte field
+/// name cannot be). A struct beyond either limit simply takes the 0xFF
+/// sentinel / JSON path — never a runtime `@intCast` panic in `packInto`.
+fn isPackableStruct(comptime T: type) bool {
+    if (@typeInfo(T) != .@"struct") return false;
+    const fields = @typeInfo(T).@"struct".fields;
+    if (fields.len >= 255) return false;
+    inline for (fields) |f| {
+        if (f.name.len > 255) return false;
+        if (!isPackableScalar(f.type)) return false;
+    }
+    return true;
+}
+
+/// Additionally require default values so `var comp: T = .{}` compiles for
+/// the packed SET path (REPLACE semantics start from defaults).
+fn packableStruct(comptime T: type) bool {
+    if (!isPackableStruct(T)) return false;
+    inline for (@typeInfo(T).@"struct".fields) |f| {
+        if (f.default_value_ptr == null) return false;
+    }
+    return true;
+}
+
+/// Bytes one field occupies in the record: tag byte + payload.
+fn packedFieldValueSize(comptime T: type) usize {
+    return switch (@typeInfo(T)) {
+        .float => 1 + 4, // tag + f32
+        .int => 1 + 8, // tag + i64/u64
+        .bool => 1 + 1, // tag + byte
+        else => unreachable,
+    };
+}
+
+/// Payload byte count for a wire type_tag (null = unknown tag).
+fn packedTagSize(tag: u8) ?usize {
+    return switch (tag) {
+        0 => 4, // f32
+        1 => 8, // i64
+        2 => 1, // bool
+        3 => 8, // u64
+        else => null,
+    };
+}
+
+/// Write one field's [tag][value] slot; returns bytes written.
+fn writePackedValue(comptime T: type, val: T, out: []u8) usize {
+    switch (@typeInfo(T)) {
+        .float => {
+            out[0] = 0;
+            const f: f32 = @floatCast(val);
+            std.mem.writeInt(u32, out[1..][0..4], @bitCast(f), .little);
+            return 5;
+        },
+        .int => |i| {
+            if (i.signedness == .signed) {
+                out[0] = 1;
+                std.mem.writeInt(i64, out[1..][0..8], @intCast(val), .little);
+            } else {
+                out[0] = 3;
+                std.mem.writeInt(u64, out[1..][0..8], @intCast(val), .little);
+            }
+            return 9;
+        },
+        .bool => {
+            out[0] = 2;
+            out[1] = @intFromBool(val);
+            return 2;
+        },
+        else => unreachable,
+    }
+}
+
+/// Truncating float→int with REFUSAL (null) on NaN/Inf/out-of-range —
+/// the packed SET's safe cast. `@intFromFloat` panics on any of those,
+/// and the value is SCRIPT-SUPPLIED, so the host must refuse instead
+/// (never clamp/zero: a silently altered value is a corruption). The
+/// bounds are the exact powers of two 2^bits / ±2^(bits-1) — always
+/// representable in f64, unlike maxInt(T) itself, whose f64 rounding
+/// would re-admit the panicking boundary value for 64-bit targets.
+fn safeFloatToInt(comptime T: type, f: f32) ?T {
+    if (!std.math.isFinite(f)) return null;
+    const t: f64 = @trunc(@as(f64, f));
+    const info = @typeInfo(T).int;
+    // Degenerate 0-bit ints hold only 0 (and i0's bits-1 would underflow
+    // the shift below).
+    if (comptime info.bits == 0) return if (t == 0) @intFromFloat(t) else null;
+    const upper: f64 = comptime blk: {
+        const b: u7 = if (info.signedness == .signed) info.bits - 1 else info.bits;
+        break :blk @floatFromInt(@as(u128, 1) << b);
+    };
+    const lower: f64 = if (comptime info.signedness == .signed) -upper else 0;
+    if (t < lower or t >= upper) return null;
+    return @intFromFloat(t);
+}
+
+/// Coerce a tagged packed value into `T` (the target field's real type):
+/// floats via @floatCast, ints via `std.math.cast` — EXCEPT the 64-bit
+/// bitcast pair (an i64 tag into a u64 field and vice versa are
+/// two's-complement `@bitCast`, the documented lossless round trip for
+/// signed-only bindings) — and a bool tag lands in an int/float field as
+/// 0/1 (the mirror of the write side's widening). Returns null — the
+/// whole set REFUSES with -1 and the binding falls back to JSON — when
+/// the script value cannot represent itself in the field (out-of-range
+/// int into a narrower target, NaN/Inf/out-of-range float into an int
+/// field): the value is script-supplied, so the host must never panic on
+/// it, and must not silently clamp/zero it either — the JSON path
+/// surfaces the value faithfully (or refuses it visibly).
+fn coercePacked(comptime T: type, tag: u8, bytes: []const u8) ?T {
+    return switch (@typeInfo(T)) {
+        .float => switch (tag) {
+            0 => @floatCast(@as(f32, @bitCast(std.mem.readInt(u32, bytes[0..4], .little)))),
+            // Int→float is total: may round (past 2^24/2^53) but can
+            // never trap, and rounding is inherent to a float target.
+            1 => @floatFromInt(std.mem.readInt(i64, bytes[0..8], .little)),
+            2 => if (bytes[0] != 0) 1 else 0,
+            3 => @floatFromInt(std.mem.readInt(u64, bytes[0..8], .little)),
+            else => null,
+        },
+        .int => |ti| switch (tag) {
+            0 => safeFloatToInt(T, @as(f32, @bitCast(std.mem.readInt(u32, bytes[0..4], .little)))),
+            // 64-BIT BITCAST PAIR (documented in the header): a 64-bit int
+            // field accepts the OTHER 64-bit tag via two's-complement
+            // @bitCast. This is what makes the round trip lossless for a
+            // binding whose only integer is signed 64-bit (mruby): GET
+            // emits a u64 field as tag 3, the binding bitcasts it into its
+            // signed Integer, SET re-emits tag 1, and the host bitcasts it
+            // back — bit-exact even with bit 63 set. Narrower targets keep
+            // the range-checked refusal.
+            1 => blk: {
+                const v = std.mem.readInt(i64, bytes[0..8], .little);
+                if (comptime ti.signedness == .unsigned and ti.bits == 64) {
+                    break :blk @as(T, @bitCast(v));
+                }
+                break :blk std.math.cast(T, v);
+            },
+            2 => std.math.cast(T, @intFromBool(bytes[0] != 0)),
+            3 => blk: {
+                const v = std.mem.readInt(u64, bytes[0..8], .little);
+                if (comptime ti.signedness == .signed and ti.bits == 64) {
+                    break :blk @as(T, @bitCast(v));
+                }
+                break :blk std.math.cast(T, v);
+            },
+            else => null,
+        },
+        .bool => switch (tag) {
+            2 => bytes[0] != 0,
+            1 => std.mem.readInt(i64, bytes[0..8], .little) != 0,
+            3 => std.mem.readInt(u64, bytes[0..8], .little) != 0,
+            else => null,
+        },
+        else => unreachable,
+    };
+}
+
+// ── Batched f32 codec helpers (comptime-pure, positional) ────────────
+//
+// Unlike the packed codec these are NAMELESS/positional: the batch buffer
+// carries no field names or tags, only raw little-endian f32, so get and
+// set must agree on field COUNT and ORDER purely by walking the same struct
+// the same way. Both iterate `@typeInfo(T).@"struct".fields` (declaration
+// order), emitting/consuming one f32 per scalar field and skipping
+// non-scalar fields identically. Int-carrying components never reach these
+// helpers — `batchEligible` refuses them upstream (`batch_int_refused`).
+// The write/skip int arms stay total (`@floatFromInt` cannot trap), but
+// the READ side refuses int fields outright: an `@intFromFloat` there
+// could panic the host on a NaN/Inf/out-of-range script float, and no
+// reachable path needs it.
+
+/// A component type the BATCH codec accepts: no int-typed fields. Ints
+/// cannot survive the positional f32 stream (silent precision loss past
+/// 2^24), so components carrying them are refused rather than corrupted
+/// — use the per-entity packed codec (lossless i64/u64 tags) for those.
+/// f32/f64 and bool fields ride as f32 (bool as 0/1); non-scalar fields
+/// are skipped by both stream directions and don't disqualify.
+fn batchEligible(comptime T: type) bool {
+    if (@typeInfo(T) != .@"struct") return true;
+    inline for (@typeInfo(T).@"struct".fields) |f| {
+        if (@typeInfo(f.type) == .int) return false;
+    }
+    return true;
+}
+
+/// Empty batched result: the 4-byte `[u32 count = 0]` header alone,
+/// written only when it fits. Distinct from the 0 not-bound/malformed
+/// sentinel (queryImpl's `writeEmptyArray` analog).
+fn writeBatchCount0(out: []u8) usize {
+    if (out.len >= 4) std.mem.writeInt(u32, out[0..4], 0, .little);
+    return 4;
+}
+
+/// Write each scalar field of `value` as one raw little-endian f32 at
+/// `pos.*`, advancing `pos.*` by 4 per field. Int fields coerce via
+/// `@floatFromInt`, bool via 0/1; non-scalar fields are skipped (they
+/// contribute no float — get and set skip them identically). `pos.*`
+/// advances even past the cap so the caller's required-size return is
+/// exact (snprintf-style); the write itself is guarded by room.
+fn packFloatsInto(comptime T: type, value: T, out: []u8, pos: *usize) void {
+    if (comptime @typeInfo(T) != .@"struct") return;
+    inline for (@typeInfo(T).@"struct".fields) |f| {
+        const maybe: ?f32 = switch (@typeInfo(f.type)) {
+            .float => @floatCast(@field(value, f.name)),
+            .int => @floatFromInt(@field(value, f.name)),
+            .bool => if (@field(value, f.name)) @as(f32, 1) else @as(f32, 0),
+            else => null,
+        };
+        if (maybe) |fv| {
+            if (pos.* + 4 <= out.len) {
+                std.mem.writeInt(u32, out[pos.*..][0..4], @bitCast(fv), .little);
+            }
+            pos.* += 4;
+        }
+    }
+}
+
+/// Read each scalar field of `ptr.*` from the f32 stream at `pos.*`
+/// (float via `@floatCast` — NaN/Inf land unchanged in a float field,
+/// which is defined and faithful; bool via `!= 0`, where NaN reads as
+/// true since NaN != 0), advancing 4 per field. Non-scalar fields are
+/// skipped (no bytes consumed — the write side skipped them too).
+/// Returns false if the buffer runs out mid-layout — or on an int field:
+/// int-carrying components are refused upstream by `batchEligible`
+/// before any entity walk, so that arm is unreachable through the batch
+/// exports, and it is kept as a REFUSAL rather than an `@intFromFloat`
+/// so no caller — present or future — can panic the host on a
+/// NaN/Inf/out-of-range script float.
+fn readFloatsFrom(comptime T: type, ptr: *T, buf: []const u8, pos: *usize) bool {
+    if (comptime @typeInfo(T) != .@"struct") return true;
+    inline for (@typeInfo(T).@"struct".fields) |f| {
+        switch (@typeInfo(f.type)) {
+            .float, .bool => {
+                if (pos.* + 4 > buf.len) return false;
+                const fv: f32 = @bitCast(std.mem.readInt(u32, buf[pos.*..][0..4], .little));
+                pos.* += 4;
+                @field(ptr.*, f.name) = switch (@typeInfo(f.type)) {
+                    .float => @floatCast(fv),
+                    .bool => fv != 0,
+                    else => unreachable,
+                };
+            },
+            .int => return false,
+            else => {},
+        }
+    }
+    return true;
+}
+
+/// Stream bytes one component type contributes per entity: its scalar
+/// (float/int/bool) fields × 4 — the comptime sizing mirror of
+/// `packFloatsInto`/`readFloatsFrom`'s walks. Int fields count for
+/// totality, though int-carrying components are refused upstream.
+fn streamBytes(comptime T: type) usize {
+    if (@typeInfo(T) != .@"struct") return 0;
+    var n: usize = 0;
+    inline for (@typeInfo(T).@"struct".fields) |f| {
+        switch (@typeInfo(f.type)) {
+            .float, .int, .bool => n += 4,
+            else => {},
+        }
+    }
+    return n;
+}
 
         fn castEntity(id: u64) ?Entity {
             if (comptime @typeInfo(Entity) != .int) return null;

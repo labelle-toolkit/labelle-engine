@@ -35,9 +35,14 @@
  *   - rc convention: functions returning int32_t yield 0 = ok and
  *     -1 = failure (unknown name / unknown-or-dead entity / parse
  *     error / host not bound), except `labelle_component_has`, which
- *     is a boolean 1/0. labelle_plugin_call carries the same rc in a
- *     size_t: 0 = dispatched, LABELLE_PLUGIN_CALL_UNROUTABLE
- *     ((size_t)-1) = failure — see its section.
+ *     is a boolean 1/0 — and labelle_component_batch_set (v1.3), which
+ *     adds -2 = int-typed-field refusal on top of the 0/-1 pair.
+ *     labelle_plugin_call carries the same rc in a size_t: 0 =
+ *     dispatched, LABELLE_PLUGIN_CALL_UNROUTABLE ((size_t)-1) =
+ *     failure — see its section. labelle_component_batch_get (v1.3)
+ *     likewise carries its int-field refusal as
+ *     LABELLE_BATCH_INT_REFUSED ((size_t)-2) in its size_t return —
+ *     check it BEFORE treating the return as a required size.
  *   - Out-parameter sizing: labelle_component_get and labelle_query
  *     return the bytes the COMPLETE result REQUIRES (snprintf-style;
  *     required > out_cap is the truncation signal — retry right-sized;
@@ -79,11 +84,17 @@ extern "C" {
  * is probed per-symbol (embedded VMs bind against the running host,
  * which either exports it or doesn't; native plugins find out at link
  * time) — the editor-bridge contract's exact convention (its v1.1–v1.7
- * were all additive). This header describes contract v1.2:
+ * were all additive). This header describes contract v1.3:
  *   v1.1 = v1 + labelle_plugin_call (labelle-engine#744);
  *   v1.2 = v1.1 + plugin-call responses — out/out_cap activated per
  *          their reserved semantics + labelle_plugin_response_fetch
- *          (labelle-engine#758; probe for the fetch symbol). */
+ *          (labelle-engine#758; probe for the fetch symbol);
+ *   v1.3 = v1.2 + bulk component access — the packed component codec
+ *          (labelle_component_get_packed / _set_packed) and the
+ *          batched query (labelle_component_batch_get / _batch_set)
+ *          (labelle-scripting#41; probe for the symbols — an older
+ *          host simply doesn't export them and the binding keeps the
+ *          JSON / per-entity paths). */
 #define LABELLE_CONTRACT_VERSION 1u
 
 /* Contract version the host binary was built with. Pure — callable
@@ -398,6 +409,118 @@ size_t labelle_plugin_call(const char *plugin, size_t plugin_len,
  * "completed" being the nesting rule above: after nested calls unwind,
  * the store holds the OUTERMOST call's outcome. */
 size_t labelle_plugin_response_fetch(char *out, size_t out_cap);
+
+/* ── Bulk component access (since v1.3, labelle-scripting#41) ─────────
+ *
+ * Two additive fast paths over the per-entity JSON component ops.
+ * Both are probed BY SYMBOL (this contract's additive convention): an
+ * older host doesn't export them, and the binding keeps the JSON /
+ * per-entity paths as its degrade route.
+ *
+ * 1. PACKED CODEC — a binary twin of labelle_component_get/set for
+ *    scalar-only components, killing the JSON text round-trip. Wire
+ *    format (little-endian, self-describing):
+ *
+ *      [u8 field_count]                 ; 0xFF = "not packable"
+ *      repeat field_count times:
+ *        [u8 name_len][name bytes][u8 tag][value bytes]
+ *      tag: 0=f32(4B)  1=i64(8B)  2=bool(1B)  3=u64(8B)
+ *
+ *    GET writes the single sentinel byte 0xFF (return 1) for any
+ *    component the codec can't carry (non-scalar fields, f64 fields —
+ *    the wire only has an f32 tag, and silent precision loss is not
+ *    acceptable — built-ins with handles/strings, >=255 fields, a
+ *    >255-byte field name) — the caller falls back to
+ *    labelle_component_get, which carries all of those faithfully.
+ *    SET refuses with -1 (fall back to labelle_component_set); a
+ *    record with bytes past its declared fields is malformed (-1).
+ *    Lossless for i64/u64 (unlike the batch stream below), including
+ *    the 64-BIT BITCAST PAIR: a 64-bit int field accepts the OTHER
+ *    64-bit tag via two's-complement bitcast (i64 tag -> u64 field and
+ *    u64 tag -> i64 field), so a binding whose only integer type is
+ *    signed 64-bit (mruby) round-trips u64 values bit-exactly — GET
+ *    emits tag 3, the binding bitcasts to its signed integer, SET
+ *    re-emits tag 1, the host bitcasts back. Narrower int fields keep
+ *    the range-checked refusal (-1 on overflow — never clamped).
+ *
+ * 2. BATCHED QUERY — one call moves ALL matching entities' scalar
+ *    component data as a flat f32 stream, collapsing the 4-per-entity
+ *    FFI crossings of a hot loop into 2 per tick. The entity set is
+ *    the labelle_query set (all entities carrying every named
+ *    component), walked in query order; per entity, each named
+ *    component's scalar fields in given-name order then
+ *    struct-declaration field order, one little-endian f32 per field
+ *    (f64 narrows, bool is 0/1; non-scalar fields are skipped
+ *    identically in both directions).
+ *
+ *    INT-FIELD REFUSAL: a named component with ANY int-typed field is
+ *    refused outright (LABELLE_BATCH_INT_REFUSED from _batch_get, -2
+ *    from _batch_set) — i64/u64 would silently corrupt through f32's
+ *    24-bit mantissa. Keep int-carrying components on the per-entity
+ *    paths (the packed codec carries ints losslessly).
+ *
+ *    GET/SET SYMMETRY (read-modify-write): everything _batch_get emits
+ *    is writable. _batch_set fetches each queried component, overwrites
+ *    ONLY the scalar fields the stream carries (the exact mirror of the
+ *    get walk), preserves non-scalar fields, and applies through the
+ *    same channels as the per-entity set (built-ins included — a
+ *    batched Camera zoom write routes through the scene apply
+ *    machinery). No default-constructibility is required.
+ *
+ *    POSITIONAL COUPLING: the stream carries no entity ids; _batch_set
+ *    re-resolves the query and applies the floats positionally. Do NOT
+ *    spawn or destroy entities between a paired _batch_get and
+ *    _batch_set. As a cheap guard, _batch_set PREFLIGHTS: it sizes the
+ *    re-queried set FIRST and refuses -1 with NO writes unless buf_len
+ *    matches exactly (a count change since the get; a same-count
+ *    membership or order change is undetectable — hence the rule
+ *    above). On -1 nothing was applied: re-get and recompute. */
+
+/* labelle_component_batch_get's int-field refusal sentinel: the rc
+ * convention's -2 carried in its size_t return. Distinct from 0 =
+ * malformed/not-bound and from any required-size return. */
+#define LABELLE_BATCH_INT_REFUSED ((size_t)-2)
+
+/* Packed GET: serialize component `name` of entity `id` into `out` as
+ * the packed record above. Sizing/return conventions are EXACTLY
+ * labelle_component_get's: returns the bytes the complete record
+ * requires, all-or-nothing write, NULL/cap-0 sizing probe, 0 = absent
+ * / unknown name / dead entity / not bound. A non-packable component
+ * writes the 0xFF sentinel and returns 1. */
+size_t labelle_component_get_packed(uint64_t id,
+                                    const char *name, size_t name_len,
+                                    char *out, size_t out_cap);
+
+/* Packed SET: apply a packed record to component `name` of entity
+ * `id`, coercing each named field into the field's actual scalar type.
+ * REPLACE semantics like labelle_component_set (absent fields take the
+ * struct defaults). 0 = ok; -1 = refuse (unknown component / dead
+ * entity / non-scalar or non-default-constructible target / malformed
+ * record / not bound) — fall back to labelle_component_set. */
+int32_t labelle_component_set_packed(uint64_t id,
+                                     const char *name, size_t name_len,
+                                     const char *buf, size_t buf_len);
+
+/* Batched GET: `names_json` is the labelle_query names array (e.g.
+ * ["Position","Velocity"]). Writes [u32 entity_count][f32 stream] into
+ * `out`. Returns the bytes the COMPLETE buffer requires
+ * (snprintf-style — retry right-sized), LABELLE_BATCH_INT_REFUSED on
+ * an int-carrying named component, 0 = malformed names / not bound.
+ * Zero matching entities return the 4-byte count-0 header (distinct
+ * from the 0 sentinel). NULL/cap-0 `out` is a pure sizing probe. */
+size_t labelle_component_batch_get(const char *names_json,
+                                   size_t names_json_len,
+                                   char *out, size_t out_cap);
+
+/* Batched SET: `buf` is the pure f32 stream (NO count header) laid out
+ * exactly as _batch_get returned it. Re-resolves the query and applies
+ * positionally, routed through the same apply path as the per-entity
+ * set so hooks and dirty-tracking fire. 0 = ok; -1 = malformed names /
+ * entity-count mismatch (see the coupling guard above) / not bound;
+ * -2 = int-carrying named component. */
+int32_t labelle_component_batch_set(const char *names_json,
+                                    size_t names_json_len,
+                                    const char *buf, size_t buf_len);
 
 #ifdef __cplusplus
 }
