@@ -275,6 +275,59 @@ pub fn build(b: *std.Build) void {
         test_step.dependOn(&b.addRunArtifact(t).step);
     }
 
+    // `zig build bench` — the id-column (#783) host+binding
+    // micro-benchmark, forced ReleaseFast regardless of the top-level
+    // optimize so the measurement is meaningful. The MEASURED code lives
+    // in the engine module (`script_contract`), so the whole engine
+    // module graph must be ReleaseFast too — the default `core_module`/
+    // `engine_module` inherit the top-level `optimize` (Debug by
+    // default), which would silently measure Debug (#788 review). So
+    // re-derive the graph at ReleaseFast for the bench alone.
+    const bench_opt: std.builtin.OptimizeMode = .ReleaseFast;
+    const core_rf = b.dependency("labelle_core", .{ .target = target, .optimize = bench_opt }).module("labelle-core");
+    const scene_rf = b.dependency("scene", .{ .target = target, .optimize = bench_opt }).module("scene");
+    const jsonc_rf = b.dependency("jsonc", .{ .target = target, .optimize = bench_opt }).module("jsonc");
+    const audio_types_rf = b.createModule(.{
+        .root_source_file = b.path("src/audio_types.zig"),
+        .target = target,
+        .optimize = bench_opt,
+    });
+    const font_types_rf = b.createModule(.{
+        .root_source_file = b.path("src/font_types.zig"),
+        .target = target,
+        .optimize = bench_opt,
+    });
+    font_types_rf.addImport("labelle-core", core_rf);
+    const engine_rf = b.createModule(.{
+        .root_source_file = b.path("src/root.zig"),
+        .target = target,
+        .optimize = bench_opt,
+        .link_libc = true,
+    });
+    engine_rf.addImport("labelle-core", core_rf);
+    engine_rf.addImport("scene", scene_rf);
+    engine_rf.addImport("jsonc", jsonc_rf);
+    engine_rf.addImport("audio_types", audio_types_rf);
+    engine_rf.addImport("font_types", font_types_rf);
+    if (target.result.os.tag == .macos) {
+        engine_rf.linkFramework("IOSurface", .{});
+        engine_rf.linkFramework("CoreFoundation", .{});
+    }
+    const bench_step = b.step("bench", "Run the script-contract id-column benchmark (ReleaseFast)");
+    const bench_exe = b.addExecutable(.{
+        .name = "script_contract_bench",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("test/script_contract_bench.zig"),
+            .target = target,
+            .optimize = bench_opt,
+            .imports = &.{
+                .{ .name = "labelle-core", .module = core_rf },
+                .{ .name = "engine", .module = engine_rf },
+            },
+        }),
+    });
+    bench_step.dependOn(&b.addRunArtifact(bench_exe).step);
+
     // PIE viewport macOS IOSurface frame stream (#547). The test
     // binary itself is cross-platform — on non-macOS hosts every
     // `test` block early-returns — so we always wire it into the
