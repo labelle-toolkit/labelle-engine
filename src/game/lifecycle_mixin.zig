@@ -100,6 +100,11 @@ pub fn Mixin(comptime Game: type) type {
             self.active_world.deinit();
             self.allocator.destroy(self.active_world);
             self.gizmo_state.deinit(self.allocator);
+            // In-game UI kit (#771): free any commands submitted after the
+            // last render() drain, then the retained baked-font tables.
+            self.clearSubmittedUi();
+            self.ui_draw_list.deinit(self.allocator);
+            self.ui_fonts.deinit(self.allocator);
             self.scenes.deinit();
             self.jsonc_scenes.deinit();
             // Sprite-based asset inference (#563): free the reverse index and

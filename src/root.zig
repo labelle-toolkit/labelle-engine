@@ -180,6 +180,24 @@ pub const FontBakeParams = assets_mod.font_loader.FontBakeParams;
 pub const CodepointRange = assets_mod.font_loader.CodepointRange;
 pub const DecodedFont = assets_mod.font_loader.DecodedFont;
 
+// ── In-game UI kit DrawList renderer (issue #771) ──
+// The engine side of the labelle-gui `ui_kit` DrawList seam: converts the
+// kit's `DrawCmd`s into engine commands and issues screen-space draw calls,
+// plus the baked-font store the renderer's text pass and the kit's
+// `FontResolver` share. See `src/ui_draw_list.zig` and
+// `src/game/ui_kit_mixin.zig`.
+const ui_draw_list_mod = @import("ui_draw_list.zig");
+pub const UiDrawCmd = ui_draw_list_mod.UiDrawCmd;
+pub const UiRect = ui_draw_list_mod.UiRect;
+pub const UiRgba8 = ui_draw_list_mod.UiRgba8;
+pub const UiUvRect = ui_draw_list_mod.UiUvRect;
+pub const UiRenderOptions = ui_draw_list_mod.UiRenderOptions;
+pub const UiFontStore = ui_draw_list_mod.UiFontStore;
+pub const BakedUiFont = ui_draw_list_mod.BakedUiFont;
+pub const ResolvedUiFrame = ui_draw_list_mod.ResolvedUiFrame;
+pub const convertUiDrawCommand = ui_draw_list_mod.convertCommand;
+pub const renderUiCommands = ui_draw_list_mod.renderCommands;
+
 // ── GUI ──
 pub const GuiInterface = gui_mod.GuiInterface;
 pub const StubGui = gui_mod.StubGui;

@@ -324,6 +324,15 @@ pub fn Mixin(comptime Game: type) type {
                     @import("../particles_tick.zig").render(self);
                 }
             }
+            // In-game UI kit (issue #771). Composite the submitted UI
+            // DrawList OVER the world sprite pass + particles, and UNDER
+            // gizmos (debug overlays stay on top). Screen-space, no camera
+            // transform. Outside the post-load gate: UI is submitted fresh
+            // each frame by game code, never restored/gated. A no-op when
+            // nothing was submitted or the renderer lacks the screen-quad
+            // seam. Drains the retained commands.
+            self.renderSubmittedUi();
+
             self.renderGizmos();
             self.clearGizmos();
         }
