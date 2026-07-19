@@ -1,0 +1,33 @@
+.{
+    .name = .labelle_uikit_gpu_demo,
+    .version = "0.1.0",
+    .fingerprint = 0x20b54d427d249537,
+    .minimum_zig_version = "0.16.0",
+
+    // Cross-repo LOCAL-DEV example (labelle-engine#787). Assumes a flat
+    // toolkit checkout with sibling repos under the same parent:
+    //
+    //   labelle-toolkit/
+    //     labelle-engine/   (this repo — engine dep is `../..`)
+    //     labelle-core/
+    //     labelle-gfx/      (needs #311 screen-space primitives → v1.28.2+)
+    //     labelle-sokol/
+    //     labelle-gui/      (needs the ui_kit branch — labelle-gui#215)
+    //
+    // The `ui_kit` module itself is wired in build.zig via a cwd-relative
+    // path (labelle-gui does not export it as a build module). See README.
+    .dependencies = .{
+        .labelle_core = .{ .path = "../../../labelle-core" },
+        .labelle_gfx = .{ .path = "../../../labelle-gfx" },
+        .engine = .{ .path = "../.." },
+        .labelle_sokol = .{ .path = "../../../labelle-sokol" },
+    },
+
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "main.zig",
+        "assets",
+        "README.md",
+    },
+}
