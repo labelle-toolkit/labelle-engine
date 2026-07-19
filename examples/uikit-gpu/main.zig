@@ -91,6 +91,11 @@ var root_id: ui_kit.ElementId = ui_kit.invalid_id;
 var button_id: ui_kit.ElementId = ui_kit.invalid_id;
 var panel_texture: u32 = 0;
 
+/// Set when `initInner` fails — the frame loop reads it and exits instead of
+/// touching the half-initialised globals (`tree`/`body_metrics` are `undefined`
+/// until `initInner` runs to completion).
+var init_failed: bool = false;
+
 var screenshot_req: ?engine.ScreenshotRequest = null;
 var screenshot_start_ns: i128 = 0;
 var screenshot_initialized: bool = false;
@@ -337,10 +342,17 @@ export fn init() callconv(.c) void {
     g.setScreenHeight(@floatFromInt(screen_h));
     initInner() catch |err| {
         std.debug.print("uikit-gpu: init failed: {any}\n", .{err});
+        // Do NOT leave `tree`/`body_metrics`/etc. `undefined` and reachable —
+        // flag it so the first frame quits cleanly instead of hitting UB.
+        init_failed = true;
     };
 }
 
 export fn frame() callconv(.c) void {
+    if (init_failed) {
+        window.requestQuit();
+        return;
+    }
     BackendGfx.setScreenSize(window.width(), window.height());
     BackendGfx.setDesignSize(@intCast(screen_w), @intCast(screen_h));
 
@@ -362,7 +374,9 @@ export fn frame() callconv(.c) void {
     }
     if (screenshot_req) |req| {
         const now_ns: i128 = engine.nowNs();
-        const elapsed_sec: f32 = @as(f32, @floatFromInt(@as(i64, @intCast(now_ns - screenshot_start_ns)))) / 1_000_000_000.0;
+        // Both readings come from the monotonic `nowNs`, so the delta is
+        // non-negative; `@floatFromInt` takes the i128 directly.
+        const elapsed_sec: f32 = @as(f32, @floatFromInt(now_ns - screenshot_start_ns)) / 1_000_000_000.0;
         if (elapsed_sec >= req.after_sec) {
             window.takeScreenshot(req.path);
             screenshot_req = null;
