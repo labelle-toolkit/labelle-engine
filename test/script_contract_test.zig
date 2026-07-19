@@ -103,6 +103,28 @@ const Reaper = struct {
     }
 };
 
+/// Intra-row partial-commit guard (#788 review): `Trigger.onSet` removes
+/// a SIBLING component (`Payload`) on the SAME entity mid-apply. When a
+/// batch id-row names [Trigger, Payload, Keep], applying Trigger must not
+/// leave the row half-written — Payload's now-absent slot is skipped, but
+/// the still-present Keep still lands. `trigger_arm` gates the hook so it
+/// only fires during the dedicated test (Trigger updates in other tests
+/// stay inert).
+var trigger_arm: bool = false;
+const Trigger = struct {
+    v: f32 = 0,
+
+    pub fn onSet(payload: engine.ComponentPayload) void {
+        if (!trigger_arm) return;
+        _ = contract.labelle_component_remove(payload.entity_id, "Payload", 7);
+    }
+};
+/// Data-bearing sibling the `Trigger` hook removes mid-row.
+const Payload = struct { p: f32 = 0 };
+/// Bystander sibling that must STILL apply after `Payload` is skipped —
+/// proves the fix doesn't drop the row's remaining live components.
+const Keep = struct { k: f32 = 0 };
+
 /// 300 f32 fields — over the packed wire's u8 field_count limit (0xFF
 /// reserved as the sentinel), so it must comptime-classify as NOT
 /// packable (get → 0xFF, set → -1) instead of panicking the `@intCast`
@@ -145,6 +167,9 @@ const TestComponents = engine.ComponentRegistry(.{
     .LongName = LongName,
     .Marker = Marker,
     .Reaper = Reaper,
+    .Trigger = Trigger,
+    .Payload = Payload,
+    .Keep = Keep,
 });
 
 const TestEvents = union(enum) {
@@ -3709,4 +3734,289 @@ test "batch ids: refusals and shapes — misaligned rows, int fields, unknown na
     batchFloatSet(&row, 12, 43);
     try testing.expectEqual(@as(i32, 0), batchSetIds("[\"Position\"]", &row));
     try testing.expectEqual(@as(f32, 1), p.x);
+}
+
+test "batch set ids: intra-row partial commit — a sibling-removing onSet hook doesn't half-write the row (#788)" {
+    contract.unbind();
+    defer contract.unbind();
+
+    var game = ContractGame.init(testing.allocator);
+    defer game.deinit();
+    contract.bind(&game);
+
+    const id = contract.labelle_entity_create();
+    const ent: u32 = @intCast(id);
+    // Row layout: Trigger.v, Payload.p, Keep.k — three data-bearing
+    // scalars. Trigger's onSet (armed below) removes Payload mid-row.
+    try testing.expectEqual(@as(i32, 0), setComp(id, "Trigger", "{\"v\":1}"));
+    try testing.expectEqual(@as(i32, 0), setComp(id, "Payload", "{\"p\":2}"));
+    try testing.expectEqual(@as(i32, 0), setComp(id, "Keep", "{\"k\":3}"));
+
+    const names = "[\"Trigger\",\"Payload\",\"Keep\"]";
+    var buf: [64]u8 = @splat(0);
+    const required = batchGetIds(names, &buf);
+    try testing.expectEqual(@as(usize, 4 + (8 + 3 * 4)), required);
+
+    // New values for all three: floats at row offset 8 (after the id).
+    batchFloatSet(&buf, 4 + 8 + 0, 10); // Trigger.v
+    batchFloatSet(&buf, 4 + 8 + 4, 20); // Payload.p (its entity slot vanishes mid-apply)
+    batchFloatSet(&buf, 4 + 8 + 8, 30); // Keep.k
+
+    trigger_arm = true;
+    defer trigger_arm = false;
+    // Applying Trigger fires onSet → removes Payload. The set must not
+    // half-write: Payload's slot is skipped (removed by the hook), while
+    // Trigger AND the later Keep both land. No -1, no partial component.
+    try testing.expectEqual(@as(i32, 0), batchSetIds(names, buf[4..required]));
+
+    try testing.expectEqual(@as(f32, 10), game.getComponent(ent, Trigger).?.v);
+    // Payload was removed by the hook and NOT re-added by the set.
+    try testing.expect(game.getComponent(ent, Payload) == null);
+    // The bystander sibling AFTER the removed one still applied — the fix
+    // doesn't drop a row's remaining live components on a mid-row removal.
+    try testing.expectEqual(@as(f32, 30), game.getComponent(ent, Keep).?.k);
+}
+
+// ── Recycling ECS backend — a MockEcs twin whose freed slots are reused
+// with a bumped generation (the packed index+gen handle models the
+// production zig-ecs adapter: `Entity = u32`, `entityExists == valid()`).
+// It exists only to reproduce #788's recycled-id case, which the
+// monotonic MockEcs cannot. Everything but id allocation mirrors MockEcs.
+
+fn RecyclingEcs(comptime EntityType: type) type {
+    return struct {
+        pub const Entity = EntityType;
+        const CleanupFn = *const fn (*Self) void;
+        const Self = @This();
+
+        // Handle = (gen << 24) | index; index starts at 1 (0 is the
+        // engine's null sentinel). Freed indices recycle with gen+1, so a
+        // recycled slot ALWAYS yields a different full handle.
+        next_index: u32 = 1,
+        free: std.ArrayListUnmanaged(u32) = .empty,
+        gen_of: std.AutoHashMap(u32, u8),
+        alive: std.AutoHashMap(EntityType, void),
+        storages: std.AutoHashMap(usize, *anyopaque),
+        cleanups: std.ArrayListUnmanaged(CleanupFn) = .empty,
+        allocator: std.mem.Allocator,
+
+        pub fn init(allocator: std.mem.Allocator) Self {
+            return .{
+                .gen_of = std.AutoHashMap(u32, u8).init(allocator),
+                .alive = std.AutoHashMap(EntityType, void).init(allocator),
+                .storages = std.AutoHashMap(usize, *anyopaque).init(allocator),
+                .allocator = allocator,
+            };
+        }
+
+        pub fn deinit(self: *Self) void {
+            for (self.cleanups.items) |cleanup| cleanup(self);
+            self.cleanups.deinit(self.allocator);
+            self.storages.deinit();
+            self.alive.deinit();
+            self.gen_of.deinit();
+            self.free.deinit(self.allocator);
+        }
+
+        fn pack(gen: u8, index: u32) EntityType {
+            return @intCast((@as(u32, gen) << 24) | index);
+        }
+        fn indexOf(handle: EntityType) u32 {
+            return @as(u32, @intCast(handle)) & 0x00FF_FFFF;
+        }
+
+        pub fn createEntity(self: *Self) EntityType {
+            const index = self.free.pop() orelse blk: {
+                const i = self.next_index;
+                self.next_index += 1;
+                break :blk i;
+            };
+            const gen = self.gen_of.get(index) orelse 0;
+            const handle = pack(gen, index);
+            self.alive.put(handle, {}) catch @panic("OOM");
+            return handle;
+        }
+
+        pub fn destroyEntity(self: *Self, entity: EntityType) void {
+            if (!self.alive.contains(entity)) return;
+            _ = self.alive.remove(entity);
+            const index = indexOf(entity);
+            const gen = self.gen_of.get(index) orelse 0;
+            self.gen_of.put(index, gen +% 1) catch @panic("OOM");
+            self.free.append(self.allocator, index) catch @panic("OOM");
+        }
+
+        pub fn entityExists(self: *Self, entity: EntityType) bool {
+            return self.alive.contains(entity);
+        }
+
+        pub fn entityCount(self: *Self) usize {
+            return self.alive.count();
+        }
+
+        pub fn addComponent(self: *Self, entity: EntityType, component: anytype) void {
+            self.getOrCreateStorage(@TypeOf(component)).put(entity, component) catch @panic("OOM");
+        }
+
+        pub fn getComponent(self: *Self, entity: EntityType, comptime T: type) ?*T {
+            if (!self.alive.contains(entity)) return null;
+            const storage = self.getStorage(T) orelse return null;
+            return storage.getPtr(entity);
+        }
+
+        pub fn hasComponent(self: *Self, entity: EntityType, comptime T: type) bool {
+            if (!self.alive.contains(entity)) return false;
+            const storage = self.getStorage(T) orelse return false;
+            return storage.contains(entity);
+        }
+
+        pub fn removeComponent(self: *Self, entity: EntityType, comptime T: type) void {
+            const storage = self.getStorage(T) orelse return;
+            _ = storage.remove(entity);
+        }
+
+        pub fn View(comptime _includes: anytype, comptime _excludes: anytype) type {
+            return struct {
+                entities: []const EntityType,
+                index: usize = 0,
+                allocator: std.mem.Allocator,
+                const ViewSelf = @This();
+                const includes = _includes;
+                const excludes = _excludes;
+                pub fn next(self: *ViewSelf) ?EntityType {
+                    if (self.index < self.entities.len) {
+                        const e = self.entities[self.index];
+                        self.index += 1;
+                        return e;
+                    }
+                    return null;
+                }
+                pub fn deinit(self: *ViewSelf) void {
+                    self.allocator.free(self.entities);
+                }
+            };
+        }
+
+        pub fn view(self: *Self, comptime includes: anytype, comptime excludes: anytype) View(includes, excludes) {
+            var result: std.ArrayListUnmanaged(EntityType) = .empty;
+            var it = self.alive.keyIterator();
+            while (it.next()) |key_ptr| {
+                if (self.matchesAll(key_ptr.*, includes, excludes)) {
+                    result.append(self.allocator, key_ptr.*) catch @panic("OOM");
+                }
+            }
+            return .{
+                .entities = result.toOwnedSlice(self.allocator) catch @panic("OOM"),
+                .allocator = self.allocator,
+            };
+        }
+
+        fn matchesAll(self: *Self, entity: EntityType, comptime includes: anytype, comptime excludes: anytype) bool {
+            inline for (includes) |T| {
+                if (!self.hasComponent(entity, T)) return false;
+            }
+            inline for (excludes) |T| {
+                if (self.hasComponent(entity, T)) return false;
+            }
+            return true;
+        }
+
+        pub fn QueryIterator(comptime components: anytype) type {
+            return core.GenericQueryIterator(*Self, EntityType, components);
+        }
+
+        pub fn query(self: *Self, comptime components: anytype) QueryIterator(components) {
+            var entities: std.ArrayListUnmanaged(EntityType) = .empty;
+            var it = self.alive.keyIterator();
+            while (it.next()) |key| entities.append(self.allocator, key.*) catch @panic("OOM");
+            return .{ .backend = self, .entities = entities, .index = 0, .allocator = self.allocator };
+        }
+
+        fn getOrCreateStorage(self: *Self, comptime T: type) *std.AutoHashMap(EntityType, T) {
+            const tid = typeId(T);
+            if (self.storages.get(tid)) |raw| return @ptrCast(@alignCast(raw));
+            const storage = self.allocator.create(std.AutoHashMap(EntityType, T)) catch @panic("OOM");
+            storage.* = std.AutoHashMap(EntityType, T).init(self.allocator);
+            self.storages.put(tid, @ptrCast(storage)) catch @panic("OOM");
+            self.cleanups.append(self.allocator, &struct {
+                fn cleanup(s: *Self) void {
+                    if (s.storages.get(typeId(T))) |raw| {
+                        const typed: *std.AutoHashMap(EntityType, T) = @ptrCast(@alignCast(raw));
+                        typed.deinit();
+                        s.allocator.destroy(typed);
+                    }
+                }
+            }.cleanup) catch @panic("OOM");
+            return storage;
+        }
+
+        fn getStorage(self: *Self, comptime T: type) ?*std.AutoHashMap(EntityType, T) {
+            const raw = self.storages.get(typeId(T)) orelse return null;
+            return @ptrCast(@alignCast(raw));
+        }
+
+        fn typeId(comptime T: type) usize {
+            return @intFromPtr(&struct {
+                comptime {
+                    _ = T;
+                }
+                var x: u8 = 0;
+            }.x);
+        }
+    };
+}
+
+const RecyclingBackend = RecyclingEcs(u32);
+const RecyclingGame = engine.GameConfig(
+    core.StubRender(RecyclingBackend.Entity),
+    RecyclingBackend,
+    engine.StubInput,
+    engine.StubAudio,
+    engine.StubVideo,
+    engine.StubGui,
+    void,
+    core.StubLogSink,
+    TestComponents,
+    &.{},
+    TestEvents,
+);
+
+test "batch set ids: a recycled entity handle — the stale row does NOT write the new occupant (#788)" {
+    contract.unbind();
+    defer contract.unbind();
+
+    var game = RecyclingGame.init(testing.allocator);
+    defer game.deinit();
+    contract.bind(&game);
+
+    const names = "[\"Position\"]";
+    const a = contract.labelle_entity_create();
+    try testing.expectEqual(@as(i32, 0), setComp(a, "Position", "{\"x\":1,\"y\":2}"));
+
+    var buf: [64]u8 = @splat(0);
+    const required = batchGetIds(names, &buf);
+    try testing.expectEqual(@as(usize, 4 + (8 + 2 * 4)), required);
+    try testing.expectEqual(a, rowId(&buf, 4)); // the row carries a's full handle
+
+    // Destroy a and spawn b — the backend RECYCLES a's index with a
+    // bumped generation, so b shares a's index but is a DIFFERENT full
+    // handle (the recycled-id hazard #788 flags).
+    contract.labelle_entity_destroy(a);
+    const b = contract.labelle_entity_create();
+    try testing.expect(b != a); // different full handle…
+    try testing.expectEqual(a & 0x00FF_FFFF, b & 0x00FF_FFFF); // …SAME index (genuinely recycled)
+    try testing.expectEqual(@as(i32, 0), setComp(b, "Position", "{\"x\":50,\"y\":60}"));
+
+    // Apply the STALE row (id == a). a is dead; b occupies a's slot.
+    batchFloatSet(&buf, 4 + 8 + 0, 99);
+    batchFloatSet(&buf, 4 + 8 + 4, 99);
+    try testing.expectEqual(@as(i32, 0), batchSetIds(names, buf[4..required]));
+
+    // The generational entityExists gate rejected the stale handle: b —
+    // the new occupant of a's index — is UNTOUCHED, no cross-entity write.
+    const bp = game.getComponent(@as(u32, @intCast(b)), core.Position).?;
+    try testing.expectEqual(@as(f32, 50), bp.x);
+    try testing.expectEqual(@as(f32, 60), bp.y);
+    // a itself is gone.
+    try testing.expect(game.getComponent(@as(u32, @intCast(a)), core.Position) == null);
 }

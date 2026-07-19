@@ -45,12 +45,15 @@ const BenchGame = engine.GameConfig(
     void,
 );
 
+/// Portable monotonic clock. Zig 0.16 has NO `std.time.Timer`; the
+/// cross-platform primitive is `std.Io.Timestamp.now(io, .awake)` (the
+/// `io` is set up once in `main`). `.awake` is the monotonic,
+/// non-suspend-inclusive clock.
+var g_io: std.Io = undefined;
+
 fn nowNs() u64 {
-    var ts: std.posix.timespec = undefined;
-    if (std.posix.system.clock_gettime(.MONOTONIC, &ts) != 0) return 0;
-    const sec: u64 = @intCast(ts.sec);
-    const nsec: u64 = @intCast(ts.nsec);
-    return sec * std.time.ns_per_s + nsec;
+    const ts = std.Io.Timestamp.now(g_io, .awake);
+    return @intCast(ts.nanoseconds);
 }
 
 const N = 2000;
@@ -201,6 +204,11 @@ fn runGetIds() void {
 pub fn main() !void {
     const alloc = std.heap.page_allocator;
 
+    // Portable monotonic clock source (see nowNs). All-default options.
+    var threaded: std.Io.Threaded = .init(alloc, .{});
+    defer threaded.deinit();
+    g_io = threaded.io();
+
     contract.unbind();
     var game = BenchGame.init(alloc);
     defer game.deinit();
@@ -223,7 +231,9 @@ pub fn main() !void {
     }
 
     // Buffers: the id wire needs 8 extra bytes/entity over the positional.
-    g_bytebuf = try alloc.alloc(u8, 4 + N * (8 + STRIDE * 4));
+    // 4-byte aligned so the `@alignCast` to `[*]f32` at byte offset 4 is
+    // valid (gemini #788 review).
+    g_bytebuf = try alloc.alignedAlloc(u8, .@"4", 4 + N * (8 + STRIDE * 4));
     defer alloc.free(g_bytebuf);
     g_ids = try alloc.alloc(u64, N);
     defer alloc.free(g_ids);

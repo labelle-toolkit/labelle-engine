@@ -2128,16 +2128,38 @@ fn Holder(comptime GP: type) type {
         /// emitted, minus the count header), applied BY ID — no view
         /// walk, no positional trust. Per row: resolve the embedded id;
         /// a row whose entity is dead/unknown — or no longer carries
-        /// every named component (it left the query since the get, or
-        /// an earlier row's onSet hook mutated it) — is SKIPPED, its
-        /// floats consumed; live matching rows apply through the same
-        /// RMW channels as the positional set (`applyEntityFloats`).
-        /// Rows are independent: a mid-row hook effect downgrades that
-        /// row to a skip (pos re-anchors at the row boundary), never a
-        /// partial-commit failure — which is how this variant closes
-        /// the same-count-swap and hook-mutation holes the positional
-        /// preflight cannot see. The preflight's place is taken by a
-        /// SHAPE check: `buf.len` must be a whole number of rows.
+        /// every named component at row START (it left the query since
+        /// the get) — is SKIPPED whole, its floats consumed; live
+        /// matching rows apply through the same RMW channels as the
+        /// positional set (`applyEntityFloats`).
+        ///
+        /// RECYCLED-ID SAFETY (#788 review): the embedded id is the
+        /// FULL backend entity handle, not a bare index — on the
+        /// production zig-ecs adapter `Entity = u32` packs index +
+        /// generation (version), and `entityExists` is the adapter's
+        /// generational `valid()`. So a row carrying a STALE handle
+        /// whose slot was recycled to a new entity fails the
+        /// `entityExists` gate (the new occupant has a different
+        /// generation) and is skipped — it can never write to the new
+        /// occupant. Matching-by-full-handle IS the generational match;
+        /// the only residual is a backend that reuses the identical
+        /// index+generation (generation wrap, or a non-generational
+        /// handle), which the entityExists + per-name presence gate
+        /// still degrades to a same-entity write rather than a
+        /// cross-entity one.
+        ///
+        /// PARTIAL-COMMIT SAFETY (#788 review): a multi-component row's
+        /// components are RESOLVED (presence-checked) up front, and each
+        /// is re-checked immediately before its apply. If an earlier
+        /// component's onSet hook removes a LATER named component of the
+        /// SAME row mid-apply, that component is skipped (its floats
+        /// consumed to keep the stream aligned) WITHOUT dropping the
+        /// row's still-present components and WITHOUT a hard failure — so
+        /// the row never lands half-written: every component that exists
+        /// at its apply moment gets its stream value, the hook-removed
+        /// one stays removed. Rows are independent; `pos` re-anchors at
+        /// each row boundary. The positional preflight's place is taken
+        /// by a SHAPE check: `buf.len` must be a whole number of rows.
         fn componentBatchSetIdsImpl(names_json: []const u8, buf: []const u8) i32 {
             const parsed = std.json.parseFromSlice(
                 []const []const u8,
@@ -2171,7 +2193,13 @@ fn Holder(comptime GP: type) type {
                 // alike leave the NEXT row's floats aligned.
                 defer pos = row_end;
                 const ent = castEntity(id) orelse continue;
+                // Generational entityExists gate (see the recycled-id
+                // note above): a stale/recycled handle skips here.
                 if (!game.ecs_backend.entityExists(ent)) continue; // vanished → skip
+                // Resolve the WHOLE row up front: an entity that no
+                // longer carries every named component left the query
+                // since the get — skip the whole row atomically (no
+                // component of it is applied).
                 const still_matches = blk: {
                     for (names) |nm| {
                         if (!hasByName(ent, nm)) break :blk false;
@@ -2180,14 +2208,26 @@ fn Holder(comptime GP: type) type {
                 };
                 if (!still_matches) continue; // left the query → skip
                 for (names) |nm| {
+                    const nb = nameStreamBytes(nm);
                     // Zero-width components are filters — no data, no
                     // re-apply (#782, same skip as the positional set).
-                    if (nameStreamBytes(nm) == 0) continue;
-                    // A false here means an onSet hook fired by an
-                    // EARLIER name of this same row removed a later
-                    // component between the match check above and this
-                    // apply — skip the rest of the row (the defer
-                    // realigns), matching the vanished-row semantics.
+                    if (nb == 0) continue;
+                    // Re-check presence RIGHT before applying: an earlier
+                    // sibling's onSet hook may have removed this component
+                    // mid-row. Skip it — advancing past its floats so the
+                    // remaining siblings stay aligned — instead of
+                    // partial-applying or hard-failing. The row's
+                    // still-present components still land; the removed one
+                    // stays removed (the hook's intent wins). This is what
+                    // makes a multi-component row all-or-each, never
+                    // half-written.
+                    if (!hasByName(ent, nm)) {
+                        pos += nb;
+                        continue;
+                    }
+                    // A false now is only a truncated stream — impossible
+                    // given the row-size validation above; realign and
+                    // move on (the defer sets pos = row_end).
                     if (!applyEntityFloats(ent, nm, buf, &pos)) break;
                 }
             }
