@@ -2306,6 +2306,13 @@ fn Holder(comptime GP: type) type {
         ///   [u8 field_count]                (0xFF = "not packable")
         ///   repeat: [u8 name_len][name][u8 type_tag][value bytes]
         ///   type_tag: 0=f32(4B) 1=i64(8B) 2=bool(1B) 3=u64(8B)
+        ///             4=f64(8B, SET-side only — since v1.3)
+        /// GET emits only tags 0..3; the binding may SET tag 4 for a
+        /// float that would lose precision through f32's mantissa (a
+        /// Float destined for an int field past 2^24) — the host coerces
+        /// it at full f64 precision. A pre-tag-4 host reads tag 4 as an
+        /// unknown tag and refuses (-1), the binding then falls back to
+        /// JSON (which carries the f64 faithfully).
         ///
         /// Same required-size / all-or-nothing contract as `stringifyInto`
         /// (a counting pass sizes first). A struct with ANY non-scalar
@@ -2443,6 +2450,11 @@ fn packedTagSize(tag: u8) ?usize {
         1 => 8, // i64
         2 => 1, // bool
         3 => 8, // u64
+        4 => 8, // f64 — SET-side only (since v1.3): full-precision floats
+        // so a script Float destined for an int field lands exactly past
+        // f32's 24-bit mantissa. GET never emits it (f64 *fields* stay
+        // non-packable / 0xFF). An unknown tag stays null → applyPacked
+        // refuses (-1) and the binding falls back to JSON.
         else => null,
     };
 }
@@ -2482,9 +2494,9 @@ fn writePackedValue(comptime T: type, val: T, out: []u8) usize {
 /// bounds are the exact powers of two 2^bits / ±2^(bits-1) — always
 /// representable in f64, unlike maxInt(T) itself, whose f64 rounding
 /// would re-admit the panicking boundary value for 64-bit targets.
-fn safeFloatToInt(comptime T: type, f: f32) ?T {
+fn safeFloatToInt(comptime T: type, f: f64) ?T {
     if (!std.math.isFinite(f)) return null;
-    const t: f64 = @trunc(@as(f64, f));
+    const t: f64 = @trunc(f);
     const info = @typeInfo(T).int;
     // Degenerate 0-bit ints hold only 0 (and i0's bits-1 would underflow
     // the shift below).
@@ -2519,6 +2531,12 @@ fn coercePacked(comptime T: type, tag: u8, bytes: []const u8) ?T {
             1 => @floatFromInt(std.mem.readInt(i64, bytes[0..8], .little)),
             2 => if (bytes[0] != 0) 1 else 0,
             3 => @floatFromInt(std.mem.readInt(u64, bytes[0..8], .little)),
+            // f64 tag (SET-side, since v1.3): @floatCast narrows to the
+            // field's real float width (f32 fields aren't packable-f64,
+            // but an f32-declared field receiving an f64 tag narrows the
+            // same way JSON would parse-then-narrow — a defined
+            // conversion).
+            4 => @floatCast(@as(f64, @bitCast(std.mem.readInt(u64, bytes[0..8], .little)))),
             else => null,
         },
         .int => |ti| switch (tag) {
@@ -2546,12 +2564,18 @@ fn coercePacked(comptime T: type, tag: u8, bytes: []const u8) ?T {
                 }
                 break :blk std.math.cast(T, v);
             },
+            // f64 tag (SET-side, since v1.3): the whole point — a float
+            // beyond f32's 24-bit mantissa reaches an int field EXACTLY
+            // (16_777_217.0 no longer rounds), refusing (null) only on
+            // NaN/Inf/out-of-range, never clamping.
+            4 => safeFloatToInt(T, @as(f64, @bitCast(std.mem.readInt(u64, bytes[0..8], .little)))),
             else => null,
         },
         .bool => switch (tag) {
             2 => bytes[0] != 0,
             1 => std.mem.readInt(i64, bytes[0..8], .little) != 0,
             3 => std.mem.readInt(u64, bytes[0..8], .little) != 0,
+            4 => @as(f64, @bitCast(std.mem.readInt(u64, bytes[0..8], .little))) != 0,
             else => null,
         },
         else => unreachable,

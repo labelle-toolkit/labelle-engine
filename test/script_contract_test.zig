@@ -2758,6 +2758,15 @@ const PackedRecord = struct {
         self.len += 9;
     }
 
+    /// The SET-side f64 tag (4, since v1.3): a binding writes it for a
+    /// float that would lose precision through f32's mantissa.
+    fn f64Field(self: *PackedRecord, n: []const u8, v: f64) void {
+        self.name(n);
+        self.buf[self.len] = 4;
+        std.mem.writeInt(u64, self.buf[self.len + 1 ..][0..8], @bitCast(v), .little);
+        self.len += 9;
+    }
+
     fn bytes(self: *const PackedRecord) []const u8 {
         return self.buf[0..self.len];
     }
@@ -3107,6 +3116,61 @@ test "packed set: out-of-range / non-finite script values refuse -1, never panic
     const applied = game.getComponent(ent, Tiny).?;
     try testing.expectEqual(@as(u8, 200), applied.b);
     try testing.expectEqual(@as(i32, 42), applied.w);
+}
+
+test "packed set: the SET-side f64 tag (v1.3) reaches int fields past f32 precision, exactly" {
+    contract.unbind();
+    defer contract.unbind();
+
+    var game = ContractGame.init(testing.allocator);
+    defer game.deinit();
+    contract.bind(&game);
+
+    const id = contract.labelle_entity_create();
+    const ent: u32 = @intCast(id);
+    try testing.expectEqual(@as(i32, 0), setComp(id, "Tiny", "{\"b\":0,\"w\":0}"));
+
+    // 16_777_217 (2^24 + 1) is the first integer f32 cannot hold: the
+    // f32 tag rounds it to 16_777_216 BEFORE the host sees it. The f64
+    // tag carries it whole, and coercePacked lands it in the i32 field
+    // EXACTLY — the precision fix's whole point (#45).
+    var exact = PackedRecord.init(2);
+    exact.i64Field("b", 1);
+    exact.f64Field("w", 16_777_217.0);
+    try testing.expectEqual(@as(i32, 0), setPacked(id, "Tiny", exact.bytes()));
+    const applied = game.getComponent(ent, Tiny).?;
+    try testing.expectEqual(@as(i32, 16_777_217), applied.w);
+
+    // The old f32 tag would have rounded to 16_777_216 — prove the wire
+    // difference is real (this is what the binding avoids by sending 4).
+    var lossy = PackedRecord.init(1);
+    lossy.f32Field("w", 16_777_217.0);
+    try testing.expectEqual(@as(i32, 0), setPacked(id, "Tiny", lossy.bytes()));
+    try testing.expectEqual(@as(i32, 16_777_216), game.getComponent(ent, Tiny).?.w);
+
+    // f64 tag keeps the SAME refusal discipline as f32: NaN / Inf /
+    // out-of-range refuse (-1, entity untouched), never clamp or panic.
+    try testing.expectEqual(@as(i32, 0), setComp(id, "Tiny", "{\"b\":5,\"w\":5}"));
+    inline for ([_]f64{
+        std.math.nan(f64),
+        std.math.inf(f64),
+        1e100, // finite but far past i32 range
+        -1e100,
+    }) |bad| {
+        var rec = PackedRecord.init(1);
+        rec.f64Field("w", bad);
+        try testing.expectEqual(@as(i32, -1), setPacked(id, "Tiny", rec.bytes()));
+    }
+    const untouched = game.getComponent(ent, Tiny).?;
+    try testing.expectEqual(@as(i32, 5), untouched.w);
+
+    // A finite f64 into an f32 FIELD narrows the field's width (defined,
+    // like the JSON parse-then-narrow route). Velocity.dx is f32.
+    try testing.expectEqual(@as(i32, 0), setComp(id, "Velocity", "{\"dx\":0,\"dy\":0}"));
+    var flt = PackedRecord.init(1);
+    flt.f64Field("dx", 0.1); // f32 cannot hold 0.1 exactly — nearest f32 lands
+    try testing.expectEqual(@as(i32, 0), setPacked(id, "Velocity", flt.bytes()));
+    try testing.expectEqual(@as(f32, 0.1), game.getComponent(ent, Velocity).?.dx);
 }
 
 test "batch set: NaN in the stream is defined behavior (float lands, bool reads true), no panic" {

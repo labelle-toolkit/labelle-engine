@@ -425,6 +425,16 @@ size_t labelle_plugin_response_fetch(char *out, size_t out_cap);
  *      repeat field_count times:
  *        [u8 name_len][name bytes][u8 tag][value bytes]
  *      tag: 0=f32(4B)  1=i64(8B)  2=bool(1B)  3=u64(8B)
+ *           4=f64(8B, SET-side only — since v1.3)
+ *
+ *    GET emits only tags 0..3. The binding may SET tag 4 for a float
+ *    that would lose precision through f32's 24-bit mantissa (a Float
+ *    destined for an int field past 2^24) — the host coerces it at
+ *    full f64 precision (float->int exact, under the same range
+ *    refusal). A pre-tag-4 host reads tag 4 as an unknown tag and
+ *    refuses (-1); the binding then falls back to labelle_component_set
+ *    (JSON), which carries the f64 faithfully. Additive, no version
+ *    bump.
  *
  *    GET writes the single sentinel byte 0xFF (return 1) for any
  *    component the codec can't carry (non-scalar fields, f64 fields —
