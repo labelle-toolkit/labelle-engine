@@ -2758,6 +2758,15 @@ const PackedRecord = struct {
         self.len += 9;
     }
 
+    /// The SET-side f64 tag (4, since v1.3): a binding writes it for a
+    /// float that would lose precision through f32's mantissa.
+    fn f64Field(self: *PackedRecord, n: []const u8, v: f64) void {
+        self.name(n);
+        self.buf[self.len] = 4;
+        std.mem.writeInt(u64, self.buf[self.len + 1 ..][0..8], @bitCast(v), .little);
+        self.len += 9;
+    }
+
     fn bytes(self: *const PackedRecord) []const u8 {
         return self.buf[0..self.len];
     }
@@ -3107,6 +3116,123 @@ test "packed set: out-of-range / non-finite script values refuse -1, never panic
     const applied = game.getComponent(ent, Tiny).?;
     try testing.expectEqual(@as(u8, 200), applied.b);
     try testing.expectEqual(@as(i32, 42), applied.w);
+}
+
+test "packed set: the SET-side f64 tag (v1.3) reaches int fields past f32 precision, exactly" {
+    contract.unbind();
+    defer contract.unbind();
+
+    var game = ContractGame.init(testing.allocator);
+    defer game.deinit();
+    contract.bind(&game);
+
+    const id = contract.labelle_entity_create();
+    const ent: u32 = @intCast(id);
+    try testing.expectEqual(@as(i32, 0), setComp(id, "Tiny", "{\"b\":0,\"w\":0}"));
+
+    // 16_777_217 (2^24 + 1) is the first integer f32 cannot hold: the
+    // f32 tag rounds it to 16_777_216 BEFORE the host sees it. The f64
+    // tag carries it whole, and coercePacked lands it in the i32 field
+    // EXACTLY — the precision fix's whole point (#45).
+    var exact = PackedRecord.init(2);
+    exact.i64Field("b", 1);
+    exact.f64Field("w", 16_777_217.0);
+    try testing.expectEqual(@as(i32, 0), setPacked(id, "Tiny", exact.bytes()));
+    const applied = game.getComponent(ent, Tiny).?;
+    try testing.expectEqual(@as(i32, 16_777_217), applied.w);
+
+    // The old f32 tag would have rounded to 16_777_216 — prove the wire
+    // difference is real (this is what the binding avoids by sending 4).
+    var lossy = PackedRecord.init(1);
+    lossy.f32Field("w", 16_777_217.0);
+    try testing.expectEqual(@as(i32, 0), setPacked(id, "Tiny", lossy.bytes()));
+    try testing.expectEqual(@as(i32, 16_777_216), game.getComponent(ent, Tiny).?.w);
+
+    // f64 tag keeps the SAME refusal discipline as f32: NaN / Inf /
+    // out-of-range refuse (-1, entity untouched), never clamp or panic.
+    try testing.expectEqual(@as(i32, 0), setComp(id, "Tiny", "{\"b\":5,\"w\":5}"));
+    inline for ([_]f64{
+        std.math.nan(f64),
+        std.math.inf(f64),
+        1e100, // finite but far past i32 range
+        -1e100,
+    }) |bad| {
+        var rec = PackedRecord.init(1);
+        rec.f64Field("w", bad);
+        try testing.expectEqual(@as(i32, -1), setPacked(id, "Tiny", rec.bytes()));
+    }
+    const untouched = game.getComponent(ent, Tiny).?;
+    try testing.expectEqual(@as(i32, 5), untouched.w);
+
+    // A finite f64 into an f32 FIELD narrows the field's width (defined,
+    // like the JSON parse-then-narrow route). Velocity.dx is f32.
+    try testing.expectEqual(@as(i32, 0), setComp(id, "Velocity", "{\"dx\":0,\"dy\":0}"));
+    var flt = PackedRecord.init(1);
+    flt.f64Field("dx", 0.1); // f32 cannot hold 0.1 exactly — nearest f32 lands
+    try testing.expectEqual(@as(i32, 0), setPacked(id, "Velocity", flt.bytes()));
+    try testing.expectEqual(@as(f32, 0.1), game.getComponent(ent, Velocity).?.dx);
+}
+
+test "packed set: a bool field accepts ONLY the bool tag; every numeric tag refuses" {
+    contract.unbind();
+    defer contract.unbind();
+
+    var game = ContractGame.init(testing.allocator);
+    defer game.deinit();
+    contract.bind(&game);
+
+    const id = contract.labelle_entity_create();
+    const ent: u32 = @intCast(id);
+    // Flag = { on: bool, weight: f32 }. Seed a known state.
+    try testing.expectEqual(@as(i32, 0), setComp(id, "Flag", "{\"on\":true,\"weight\":9}"));
+
+    // The bool tag (2) is the ONLY tag a bool field accepts — true and
+    // false both round-trip.
+    var t = PackedRecord.init(1);
+    t.boolField("on", false);
+    try testing.expectEqual(@as(i32, 0), setPacked(id, "Flag", t.bytes()));
+    try testing.expect(!game.getComponent(ent, Flag).?.on);
+    var t2 = PackedRecord.init(1);
+    t2.boolField("on", true);
+    try testing.expectEqual(@as(i32, 0), setPacked(id, "Flag", t2.bytes()));
+    try testing.expect(game.getComponent(ent, Flag).?.on);
+
+    // Every NUMERIC tag targeting the bool `on` field REFUSES (-1) —
+    // type confusion (`alive = 1` / `= 16_777_217.0`) is surfaced, not
+    // silently collapsed to true. Reset to a known `on:true` before each
+    // so a wrongly-accepted coercion would be visible AND the field is
+    // left untouched by the refusal.
+    const NumberTag = union(enum) { i64: i64, u64: u64, f32: f32, f64: f64 };
+    inline for ([_]NumberTag{
+        .{ .i64 = 1 }, // a truthy int — the old silent 1→true path
+        .{ .i64 = 0 }, // a falsy int — would have flipped it to false
+        .{ .u64 = 1 },
+        .{ .f32 = 1.0 },
+        .{ .f64 = 16_777_217.0 }, // codex's type-confusion example
+    }) |nt| {
+        try testing.expectEqual(@as(i32, 0), setComp(id, "Flag", "{\"on\":true,\"weight\":9}"));
+        var rec = PackedRecord.init(1);
+        switch (nt) {
+            .i64 => |v| rec.i64Field("on", v),
+            .u64 => |v| rec.u64Field("on", v),
+            .f32 => |v| rec.f32Field("on", v),
+            .f64 => |v| rec.f64Field("on", v),
+        }
+        try testing.expectEqual(@as(i32, -1), setPacked(id, "Flag", rec.bytes()));
+        // Refused → entity untouched (the JSON fallback owns the value).
+        try testing.expect(game.getComponent(ent, Flag).?.on);
+    }
+
+    // The REVERSE stays allowed: a bool tag WIDENS into a number field
+    // (true/false → 1/0) — the documented, lossless, unambiguous mirror.
+    var w = PackedRecord.init(1);
+    w.boolField("weight", true);
+    try testing.expectEqual(@as(i32, 0), setPacked(id, "Flag", w.bytes()));
+    try testing.expectEqual(@as(f32, 1), game.getComponent(ent, Flag).?.weight);
+    var w0 = PackedRecord.init(1);
+    w0.boolField("weight", false);
+    try testing.expectEqual(@as(i32, 0), setPacked(id, "Flag", w0.bytes()));
+    try testing.expectEqual(@as(f32, 0), game.getComponent(ent, Flag).?.weight);
 }
 
 test "batch set: NaN in the stream is defined behavior (float lands, bool reads true), no panic" {
