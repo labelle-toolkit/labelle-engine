@@ -125,6 +125,23 @@ const Payload = struct { p: f32 = 0 };
 /// proves the fix doesn't drop the row's remaining live components.
 const Keep = struct { k: f32 = 0 };
 
+/// Intra-row entity DESTRUCTION guard (#788 review, round 2): `SelfDestruct`'s
+/// onSet destroys its OWN entity mid-row (not just a sibling component).
+/// A later component's apply on the now-dead entity must be skipped via a
+/// LIVENESS recheck (`entityExists`), never a use-after-destroy. Gated to
+/// `self_destruct_target` so a bystander entity in the same batch still
+/// applies its whole row (proving rows stay independent).
+var self_destruct_target: u64 = 0;
+const SelfDestruct = struct {
+    v: f32 = 0,
+
+    pub fn onSet(payload: engine.ComponentPayload) void {
+        if (payload.entity_id == self_destruct_target) {
+            contract.labelle_entity_destroy(payload.entity_id);
+        }
+    }
+};
+
 /// 300 f32 fields — over the packed wire's u8 field_count limit (0xFF
 /// reserved as the sentinel), so it must comptime-classify as NOT
 /// packable (get → 0xFF, set → -1) instead of panicking the `@intCast`
@@ -170,6 +187,7 @@ const TestComponents = engine.ComponentRegistry(.{
     .Trigger = Trigger,
     .Payload = Payload,
     .Keep = Keep,
+    .SelfDestruct = SelfDestruct,
 });
 
 const TestEvents = union(enum) {
@@ -3775,6 +3793,55 @@ test "batch set ids: intra-row partial commit — a sibling-removing onSet hook 
     // The bystander sibling AFTER the removed one still applied — the fix
     // doesn't drop a row's remaining live components on a mid-row removal.
     try testing.expectEqual(@as(f32, 30), game.getComponent(ent, Keep).?.k);
+}
+
+test "batch set ids: an onSet hook destroying its own entity mid-row skips the rest cleanly, no use-after-destroy (#788)" {
+    contract.unbind();
+    defer contract.unbind();
+
+    var game = ContractGame.init(testing.allocator);
+    defer game.deinit();
+    contract.bind(&game);
+
+    // Two entities carrying [SelfDestruct, Keep]. `a`'s SelfDestruct
+    // onSet DESTROYS `a` mid-row; `b`'s does not (gated on the target).
+    const a = contract.labelle_entity_create();
+    const b = contract.labelle_entity_create();
+    for ([_]u64{ a, b }) |id| {
+        try testing.expectEqual(@as(i32, 0), setComp(id, "SelfDestruct", "{\"v\":1}"));
+        try testing.expectEqual(@as(i32, 0), setComp(id, "Keep", "{\"k\":1}"));
+    }
+
+    const names = "[\"SelfDestruct\",\"Keep\"]";
+    var buf: [128]u8 = @splat(0);
+    const required = batchGetIds(names, &buf);
+    const row = 8 + 2 * 4;
+    try testing.expectEqual(@as(usize, 4 + 2 * row), required);
+
+    // Set each row's floats as a function of its id so we can tell which
+    // entity a landed write belongs to.
+    var off: usize = 4;
+    while (off < required) : (off += row) {
+        const id = rowId(&buf, off);
+        const base: f32 = @floatFromInt(id * 10);
+        batchFloatSet(&buf, off + 8, base + 1); // SelfDestruct.v
+        batchFloatSet(&buf, off + 12, base + 2); // Keep.k
+    }
+
+    self_destruct_target = a;
+    defer self_destruct_target = 0;
+    // Applying a's SelfDestruct fires onSet → destroys a. The later Keep
+    // on a must be skipped via the liveness recheck (no use-after-destroy),
+    // while b's row applies in full — rows stay independent, call is ok.
+    try testing.expectEqual(@as(i32, 0), batchSetIds(names, buf[4..required]));
+
+    // a is gone; its would-be Keep write never touched a dead slot.
+    try testing.expect(!game.ecs_backend.entityExists(@as(u32, @intCast(a))));
+    try testing.expect(game.getComponent(@as(u32, @intCast(a)), Keep) == null);
+    // b (never targeted) applied its whole row.
+    const bbase: f32 = @floatFromInt(b * 10);
+    try testing.expectEqual(bbase + 1, game.getComponent(@as(u32, @intCast(b)), SelfDestruct).?.v);
+    try testing.expectEqual(bbase + 2, game.getComponent(@as(u32, @intCast(b)), Keep).?.k);
 }
 
 // ── Recycling ECS backend — a MockEcs twin whose freed slots are reused

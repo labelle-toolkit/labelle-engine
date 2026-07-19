@@ -501,15 +501,27 @@ size_t labelle_plugin_response_fetch(char *out, size_t out_cap);
  *                          NO count header
  *
  *    _batch_set_ids applies each row BY ID: a row whose entity has
- *    vanished — or no longer carries every named component (destroyed
- *    or mutated since the get, including by an onSet hook firing
- *    mid-apply) — is SKIPPED (floats consumed, nothing written, not an
- *    error), and entities spawned since the get are simply untouched.
- *    Rows apply independently; there is no partial-commit failure
- *    mode. The positional preflight is replaced by a shape check:
- *    buf_len must be a whole number of rows (count x (8 + stride)),
- *    else -1 with no writes. Spawning/destroying between the paired
- *    calls is SAFE on this variant. */
+ *    vanished — or no longer carries every named component at row start
+ *    (it left the query since the get) — is SKIPPED (floats consumed,
+ *    nothing written, not an error), and entities spawned since the get
+ *    are simply untouched. Rows apply independently.
+ *
+ *    ONSET HOOKS MID-ROW: within a multi-component row, each component
+ *    is gated on the entity's liveness AND that component's presence
+ *    immediately before its apply. So if an earlier component's onSet
+ *    hook, mid-row, REMOVES a later named component (entity still
+ *    alive), only that component is skipped — the row's other
+ *    still-present components still land, and the removed one stays
+ *    removed (the hook wins); if the hook DESTROYS the whole entity,
+ *    the rest of the row is skipped and nothing it held persists. Both
+ *    are skips, not failures — a row never persists half-written.
+ *
+ *    The positional preflight is replaced by a shape check: buf_len
+ *    must be a whole number of rows (count x (8 + stride)), else -1
+ *    with no writes. -1 is ALSO returned on a genuine apply failure of
+ *    a live, present component (a built-in scene-apply rejection —
+ *    surfaced, not masked as success). Spawning/destroying between the
+ *    paired calls is SAFE on this variant. */
 
 /* labelle_component_batch_get's int-field refusal sentinel: the rc
  * convention's -2 carried in its size_t return. Distinct from 0 =
@@ -568,11 +580,14 @@ size_t labelle_component_batch_get_ids(const char *names_json,
 
 /* Id-tagged batched SET (since v1.4): `buf` is [u64 id][f32 stream]
  * rows (NO count header) exactly as _batch_get_ids returned them,
- * applied BY ID — vanished / no-longer-matching rows are skipped, rows
+ * applied BY ID — vanished / no-longer-matching rows are skipped, a
+ * mid-row onSet hook removing a component or destroying the entity
+ * skips only the affected component(s) (never a half-written row), rows
  * are independent, spawn/destroy between the paired calls is safe.
  * 0 = ok (skips included); -1 = malformed names / unknown component
- * name / buf_len not a whole number of rows / not bound; -2 =
- * int-carrying named component. */
+ * name / buf_len not a whole number of rows / not bound / a genuine
+ * apply failure on a live, present component; -2 = int-carrying named
+ * component. */
 int32_t labelle_component_batch_set_ids(const char *names_json,
                                         size_t names_json_len,
                                         const char *buf, size_t buf_len);

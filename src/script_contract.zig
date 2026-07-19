@@ -811,15 +811,21 @@ pub export fn labelle_component_batch_get_ids(
 /// destroy+spawn between get and set can no longer shift rows onto the
 /// wrong entities (ids match or the row is skipped — spawned entities
 /// absent from the buffer are simply untouched), and an onSet hook
-/// destroying a queried entity mid-apply downgrades that entity's row
-/// to a skip instead of a partial-commit failure. The positional
-/// preflight is replaced by a shape check: `buf_len` must be a whole
-/// number of rows (count × (8 + stride)).
+/// mutating the queried set mid-apply downgrades to a skip instead of a
+/// partial-commit failure. Within a multi-component row, each component
+/// is gated on the ENTITY's liveness and the COMPONENT's presence right
+/// before its apply, so a hook that removes a later component — or
+/// destroys the whole entity — mid-row skips the affected component(s)
+/// cleanly while the row's other still-present components still land;
+/// the row never persists half-written. The positional preflight is
+/// replaced by a shape check: `buf_len` must be a whole number of rows
+/// (count × (8 + stride)).
 ///
-/// Returns 0 = ok (skipped rows included — a skip is not an error);
-/// -1 = malformed names / unknown component name / buf_len not a whole
-/// number of rows / not bound; -2 = int-field refusal (identical to
-/// `_batch_set`).
+/// Returns 0 = ok (skipped rows/components included — a skip is not an
+/// error); -1 = malformed names / unknown component name / buf_len not a
+/// whole number of rows / not bound / a GENUINE apply failure on a live,
+/// present component (a built-in scene-apply rejection — surfaced, not
+/// masked); -2 = int-field refusal (identical to `_batch_set`).
 pub export fn labelle_component_batch_set_ids(
     names_json_ptr: [*]const u8,
     names_json_len: usize,
@@ -2149,17 +2155,24 @@ fn Holder(comptime GP: type) type {
         /// cross-entity one.
         ///
         /// PARTIAL-COMMIT SAFETY (#788 review): a multi-component row's
-        /// components are RESOLVED (presence-checked) up front, and each
-        /// is re-checked immediately before its apply. If an earlier
-        /// component's onSet hook removes a LATER named component of the
-        /// SAME row mid-apply, that component is skipped (its floats
-        /// consumed to keep the stream aligned) WITHOUT dropping the
-        /// row's still-present components and WITHOUT a hard failure — so
-        /// the row never lands half-written: every component that exists
-        /// at its apply moment gets its stream value, the hook-removed
-        /// one stays removed. Rows are independent; `pos` re-anchors at
-        /// each row boundary. The positional preflight's place is taken
-        /// by a SHAPE check: `buf.len` must be a whole number of rows.
+        /// components are RESOLVED (presence-checked) up front, and before
+        /// EACH component's apply both the ENTITY's liveness
+        /// (`entityExists`) and the COMPONENT's presence (`hasByName`) are
+        /// re-checked. So if an earlier component's onSet hook, mid-row:
+        ///   - REMOVES a later named component (entity still alive) — that
+        ///     component is skipped (its floats consumed to keep the
+        ///     stream aligned); the row's other still-present components
+        ///     still land, the removed one stays removed (the hook wins);
+        ///   - DESTROYS the whole entity — the rest of the row is skipped
+        ///     (no apply touches the dead entity); nothing it held
+        ///     persists, so there is no half-written entity.
+        /// Both are expected SKIPS, not errors. A false from
+        /// `applyEntityFloats` AFTER those two checks pass is a genuine
+        /// apply failure (a built-in scene-apply rejection) and is
+        /// surfaced as -1, never masked as success. Rows are independent;
+        /// `pos` re-anchors at each row boundary. The positional
+        /// preflight's place is taken by a SHAPE check: `buf.len` must be
+        /// a whole number of rows.
         fn componentBatchSetIdsImpl(names_json: []const u8, buf: []const u8) i32 {
             const parsed = std.json.parseFromSlice(
                 []const []const u8,
@@ -2212,23 +2225,32 @@ fn Holder(comptime GP: type) type {
                     // Zero-width components are filters — no data, no
                     // re-apply (#782, same skip as the positional set).
                     if (nb == 0) continue;
-                    // Re-check presence RIGHT before applying: an earlier
-                    // sibling's onSet hook may have removed this component
-                    // mid-row. Skip it — advancing past its floats so the
-                    // remaining siblings stay aligned — instead of
-                    // partial-applying or hard-failing. The row's
-                    // still-present components still land; the removed one
-                    // stays removed (the hook's intent wins). This is what
-                    // makes a multi-component row all-or-each, never
-                    // half-written.
+                    // LIVENESS recheck (#788 review): an earlier
+                    // component's onSet hook may have DESTROYED the whole
+                    // entity mid-row (not just removed a sibling). Applying
+                    // a later component to a dead entity is unsafe on a
+                    // backend whose lookups don't gate on liveness — stop
+                    // the row here (the defer realigns pos to the next
+                    // row). The entity is gone, so nothing it held is
+                    // half-written; this is an expected skip, NOT an error.
+                    if (!game.ecs_backend.entityExists(ent)) break;
+                    // PRESENCE recheck: an earlier sibling's onSet hook may
+                    // have removed just THIS component (entity still alive).
+                    // Skip it — advancing past its floats so the remaining
+                    // siblings stay aligned — while the row's still-present
+                    // components still land (the removed one stays removed;
+                    // the hook's intent wins). This is what makes a
+                    // multi-component row all-or-each, never half-written.
                     if (!hasByName(ent, nm)) {
                         pos += nb;
                         continue;
                     }
-                    // A false now is only a truncated stream — impossible
-                    // given the row-size validation above; realign and
-                    // move on (the defer sets pos = row_end).
-                    if (!applyEntityFloats(ent, nm, buf, &pos)) break;
+                    // Entity live AND component present, so a false here is
+                    // a REAL apply failure (a built-in scene-apply rejection,
+                    // or — impossible given the row-size validation — a
+                    // truncated stream), NOT a vanished-skip. Surface it as
+                    // -1 rather than masking a genuine failure as success.
+                    if (!applyEntityFloats(ent, nm, buf, &pos)) return -1;
                 }
             }
             return 0;
