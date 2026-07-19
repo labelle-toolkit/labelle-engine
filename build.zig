@@ -269,6 +269,24 @@ pub fn build(b: *std.Build) void {
         test_step.dependOn(&b.addRunArtifact(t).step);
     }
 
+    // `zig build bench` — the id-column (#783) host+binding
+    // micro-benchmark, forced ReleaseFast regardless of the top-level
+    // optimize so the measurement is meaningful.
+    const bench_step = b.step("bench", "Run the script-contract id-column benchmark (ReleaseFast)");
+    const bench_exe = b.addExecutable(.{
+        .name = "script_contract_bench",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("test/script_contract_bench.zig"),
+            .target = target,
+            .optimize = .ReleaseFast,
+            .imports = &.{
+                .{ .name = "labelle-core", .module = core_module },
+                .{ .name = "engine", .module = engine_module },
+            },
+        }),
+    });
+    bench_step.dependOn(&b.addRunArtifact(bench_exe).step);
+
     // PIE viewport macOS IOSurface frame stream (#547). The test
     // binary itself is cross-platform — on non-macOS hosts every
     // `test` block early-returns — so we always wire it into the
