@@ -214,6 +214,33 @@ pub fn Mixin(comptime Game: type) type {
             return self.frame_profiler.stats();
         }
 
+        /// Copy the recent frame-time history (ms, oldest-first) into
+        /// `dst` for the inspector's mini-graph. Returns the filled
+        /// prefix; a short `dst` keeps the newest frames.
+        pub fn frameHistory(self: *const Game, dst: []f32) []f32 {
+            return self.frame_profiler.history(dst);
+        }
+
+        /// Force per-script / per-plugin capture on (`true`), off
+        /// (`false`), or defer to the `LABELLE_PROFILE` env gate
+        /// (`null`). The debug inspector passes `true` while its
+        /// Performance section is open and `null` when it closes, so an
+        /// env-enabled headless dump keeps running regardless of panel
+        /// state. Zero-cost when off: the dispatch loops still branch on
+        /// one cached bool per frame.
+        pub fn setProfilingCapture(self: *const Game, on: ?bool) void {
+            _ = self;
+            profiler.setRecording(on);
+        }
+
+        /// Whether per-unit capture is currently active (override or
+        /// `LABELLE_PROFILE`). The inspector uses this to label stale
+        /// rows when capture is off.
+        pub fn profilingCaptureActive(self: *const Game) bool {
+            _ = self;
+            return profiler.recording();
+        }
+
         /// The live per-script profile rows (`tick` + `drawGui` timings),
         /// or an empty slice when the generated `main` hasn't wired the
         /// pointer (unit-test games, or a build without scripts). The Game

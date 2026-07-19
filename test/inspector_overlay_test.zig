@@ -123,3 +123,60 @@ test "game: profile row accessors round-trip the opaque pointer" {
     try testing.expectEqual(@as(usize, 2), overlay.len);
     try testing.expectApproxEqAbs(@as(f32, 0.45), overlay[0].tick_ms, 0.001);
 }
+
+test "profiler.setRecording overrides the env gate and null restores it" {
+    // Whatever the env says (LABELLE_PROFILE may or may not be set in the
+    // test runner), the override must win in both directions and `null`
+    // must fall back to the env-derived baseline.
+    const env_base = profiler.recording();
+
+    profiler.setRecording(true);
+    defer profiler.setRecording(null); // never leak the override
+    try testing.expect(profiler.recording());
+
+    profiler.setRecording(false);
+    try testing.expect(!profiler.recording());
+
+    profiler.setRecording(null);
+    try testing.expectEqual(env_base, profiler.recording());
+}
+
+test "game: setProfilingCapture round-trips through profilingCaptureActive" {
+    var game = Game.init(testing.allocator);
+    defer game.deinit();
+
+    game.setProfilingCapture(true);
+    defer game.setProfilingCapture(null);
+    try testing.expect(game.profilingCaptureActive());
+
+    game.setProfilingCapture(false);
+    try testing.expect(!game.profilingCaptureActive());
+}
+
+test "game: frameHistory exposes the frame-time ring oldest-first in ms" {
+    var game = Game.init(testing.allocator);
+    defer game.deinit();
+
+    game.frame_profiler.record(0.010);
+    game.frame_profiler.record(0.020);
+    game.frame_profiler.record(0.030);
+
+    var buf: [8]f32 = undefined;
+    const hist = game.frameHistory(&buf);
+    try testing.expectEqual(@as(usize, 3), hist.len);
+    try testing.expectApproxEqAbs(@as(f32, 10.0), hist[0], 0.01);
+    try testing.expectApproxEqAbs(@as(f32, 30.0), hist[2], 0.01);
+}
+
+test "profile rows carry setup and plugin drawGui phases" {
+    // New phases (#380 follow-up): setup on both row kinds, drawGui on
+    // plugins. Defaults must be zeroed so untimed phases render as 0.
+    const s = profiler.ScriptRow{ .name = "boot_heavy", .setup = stat(2_000_000) };
+    try testing.expectEqual(@as(u64, 2_000_000), s.setup.last_ns);
+    try testing.expectEqual(@as(u64, 0), s.tick.last_ns);
+
+    const p = profiler.PluginRow{ .name = "debug", .draw_gui = stat(80_000) };
+    try testing.expectEqual(@as(u64, 80_000), p.draw_gui.last_ns);
+    try testing.expectEqual(@as(u64, 0), p.setup.last_ns);
+    try testing.expectEqual(profiler.Severity.good, profiler.severityForNs(p.draw_gui.last_ns));
+}

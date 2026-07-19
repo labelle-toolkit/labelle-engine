@@ -173,10 +173,21 @@ pub fn ScriptRunner(
         /// loading or the first tick.
         pub fn setup(self: *Self, game: anytype) void {
             const decls = @typeInfo(AllScripts).@"struct".decls;
+            comptime var profile_idx: usize = 0;
             inline for (decls) |d| {
                 const mod = @field(AllScripts, d.name);
-                if (comptime isFnDecl(mod, "setup")) {
-                    dispatchCall(mod.setup, game, self, d.name);
+                if (comptime isGameScript(mod)) {
+                    if (comptime isFnDecl(mod, "setup")) {
+                        // Setup is timed unconditionally (not gated on
+                        // `profiler.recording()`): it runs once at boot —
+                        // before the inspector could possibly enable
+                        // capture — and two clock reads per script, once,
+                        // is free. Lets the inspector show boot cost.
+                        const t0 = profiler.nowNs();
+                        dispatchCall(mod.setup, game, self, d.name);
+                        self.profile[profile_idx].setup.record(profiler.nowNs() - t0);
+                    }
+                    profile_idx += 1;
                 }
             }
         }

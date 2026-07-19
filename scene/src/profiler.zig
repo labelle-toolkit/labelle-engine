@@ -82,8 +82,23 @@ extern "c" fn getenv(name: [*:0]const u8) ?[*:0]const u8;
 
 var _recording: ?bool = null;
 
-/// True when `LABELLE_PROFILE` is set and non-empty. The env read is
-/// cached so this is a cheap branch in the per-frame hot path.
+/// Runtime override of the `LABELLE_PROFILE` gate, set via
+/// `setRecording`. `null` = no override (env decides). This is what the
+/// debug inspector flips when its Performance section opens/closes, so
+/// live per-unit capture works without relaunching with the env var.
+var _override: ?bool = null;
+
+/// Force per-unit capture on (`true`), off (`false`), or defer back to
+/// the `LABELLE_PROFILE` env gate (`null`). Passing `null` on close is
+/// what keeps a user's env-enabled headless dump running when the
+/// inspector panel merely toggled itself away.
+pub fn setRecording(on: ?bool) void {
+    _override = on;
+}
+
+/// True when `LABELLE_PROFILE` is set and non-empty, unless overridden
+/// by `setRecording`. The env read is cached so this is a cheap branch
+/// in the per-frame hot path.
 ///
 /// The env lookup goes through libc `getenv` when libc is linked (the
 /// case for every shipped desktop build — raylib pulls in libc). Without
@@ -92,6 +107,7 @@ var _recording: ?bool = null;
 /// `main` only), so the profiler stays off rather than forcing an
 /// unresolved `getenv` symbol at link time on no-libc builds.
 pub fn recording() bool {
+    if (_override) |v| return v;
     if (_recording) |v| return v;
     const v = blk: {
         if (comptime is_wasm) break :blk false;
@@ -142,18 +158,26 @@ pub const Row = struct { name: []const u8, worst_ns: u64, avg_ns: u64 };
 
 /// One game script's live timing. Layout-shared with
 /// `ScriptRunner.ProfileEntry` so the Game's opaque pointer casts cleanly.
+/// `setup` is recorded once at boot (unconditionally — two clock reads
+/// per script, one time) and never window-reset, so the inspector can
+/// always show boot cost.
 pub const ScriptRow = struct {
     name: []const u8,
+    setup: Stat = .{},
     tick: Stat = .{},
     draw_gui: Stat = .{},
 };
 
 /// One plugin system's live timing. Layout-shared with
-/// `SystemRegistry.PluginProfileEntry`.
+/// `SystemRegistry.PluginProfileEntry`. `setup` as in `ScriptRow`;
+/// `draw_gui` covers the plugin's `Systems.drawGui` phase (e.g. the
+/// debug inspector's own rendering cost shows up here).
 pub const PluginRow = struct {
     name: []const u8,
+    setup: Stat = .{},
     tick: Stat = .{},
     post_tick: Stat = .{},
+    draw_gui: Stat = .{},
 };
 
 /// Traffic-light bucket for the inspector's color coding: green < 1 ms,

@@ -1568,6 +1568,9 @@ pub fn GameConfigWithYAxis(
         pub const frameStats = MiscMixin.frameStats;
         pub const scriptProfileRows = MiscMixin.scriptProfileRows;
         pub const pluginProfileRows = MiscMixin.pluginProfileRows;
+        pub const frameHistory = MiscMixin.frameHistory;
+        pub const setProfilingCapture = MiscMixin.setProfilingCapture;
+        pub const profilingCaptureActive = MiscMixin.profilingCaptureActive;
     };
 }
 
