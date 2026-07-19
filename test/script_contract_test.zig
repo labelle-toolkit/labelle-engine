@@ -59,6 +59,21 @@ const Tiny = struct { b: u8 = 7, w: i32 = -7 };
 /// a NaN stream float lands as true, since NaN != 0).
 const Flag = struct { on: bool = false, weight: f32 = 0 };
 
+/// Non-scalar field beside batch-eligible scalars — the batch
+/// read-modify-write test component (the string must SURVIVE a batch
+/// write that only carries x/on).
+const Mixed = struct { text: []const u8 = "", x: f32 = 0, on: bool = false };
+
+/// All-scalar but NO field defaults — RMW needs no `.{}` construction,
+/// so this batches on both sides (the packed SET still refuses it:
+/// REPLACE-from-defaults can't exist without defaults).
+const Bare = struct { x: f32, y: f32 };
+
+/// An f64 field — packable-looking but the packed wire only has an f32
+/// tag, so it must comptime-classify as NOT packable (0xFF/JSON keeps
+/// the precision).
+const Precise = struct { d: f64 = 0 };
+
 /// 300 f32 fields — over the packed wire's u8 field_count limit (0xFF
 /// reserved as the sentinel), so it must comptime-classify as NOT
 /// packable (get → 0xFF, set → -1) instead of panicking the `@intCast`
@@ -94,6 +109,9 @@ const TestComponents = engine.ComponentRegistry(.{
     .Stats = Stats,
     .Tiny = Tiny,
     .Flag = Flag,
+    .Mixed = Mixed,
+    .Bare = Bare,
+    .Precise = Precise,
     .Wide300 = Wide300,
     .LongName = LongName,
 });
@@ -2999,19 +3017,32 @@ test "batch set: entity-count mismatch refuses -1 (positional-coupling guard)" {
     // Same set → the stream applies.
     try testing.expectEqual(@as(i32, 0), batchSet(names, stream));
 
-    // An entity DESTROYED since the get: the re-queried set consumes
-    // fewer bytes than the stream carries → refuse.
+    // An entity DESTROYED since the get: the re-queried set needs fewer
+    // bytes than the stream carries → the PREFLIGHT refuses with NO
+    // writes — poison every float first and verify the survivor is
+    // untouched (a refused batch_set must never commit a prefix, or the
+    // documented "re-get and recompute" retry would double-apply).
     contract.labelle_entity_destroy(b);
+    var off: usize = 0;
+    while (off < stream.len) : (off += 4) batchFloatSet(stream, off, 99);
     try testing.expectEqual(@as(i32, -1), batchSet(names, stream));
+    const surv = game.getComponent(@as(u32, @intCast(a)), core.Position).?;
+    try testing.expectEqual(@as(f32, 1), surv.x);
+    try testing.expectEqual(@as(f32, 1), surv.y);
+    const surv_vel = game.getComponent(@as(u32, @intCast(a)), Velocity).?;
+    try testing.expectEqual(@as(f32, 1), surv_vel.dx);
+    try testing.expectEqual(@as(f32, 1), surv_vel.dy);
 
-    // Entities SPAWNED since the get: the stream runs out mid-walk →
-    // refuse (the other half of the guard).
+    // Entities SPAWNED since the get: the re-queried set needs MORE
+    // bytes → same preflight refusal, still nothing written.
     for (0..2) |_| {
         const id = contract.labelle_entity_create();
         try testing.expectEqual(@as(i32, 0), setComp(id, "Position", "{\"x\":2,\"y\":2}"));
         try testing.expectEqual(@as(i32, 0), setComp(id, "Velocity", "{\"dx\":2,\"dy\":2}"));
     }
     try testing.expectEqual(@as(i32, -1), batchSet(names, stream));
+    const still = game.getComponent(@as(u32, @intCast(a)), core.Position).?;
+    try testing.expectEqual(@as(f32, 1), still.x);
 }
 
 test "bulk access pre-bind: safe no-ops in each op's failure convention" {
@@ -3042,14 +3073,15 @@ test "packed set: out-of-range / non-finite script values refuse -1, never panic
     var over = PackedRecord.init(1);
     over.i64Field("b", 300);
     try testing.expectEqual(@as(i32, -1), setPacked(id, "Tiny", over.bytes()));
-    // Negative into unsigned — refuse.
+    // Negative into a NARROW unsigned — refuse (the 64-bit bitcast pair
+    // below is exactly 64-bit-to-64-bit, never a narrowing escape hatch).
     var neg = PackedRecord.init(1);
     neg.i64Field("b", -1);
     try testing.expectEqual(@as(i32, -1), setPacked(id, "Tiny", neg.bytes()));
-    // u64 tag past maxInt(i64) into an i64 field — refuse.
+    // u64 tag past the range of a NARROW signed target — refuse.
     var big = PackedRecord.init(1);
-    big.u64Field("score", std.math.maxInt(u64));
-    try testing.expectEqual(@as(i32, -1), setPacked(id, "Stats", big.bytes()));
+    big.u64Field("w", std.math.maxInt(u64));
+    try testing.expectEqual(@as(i32, -1), setPacked(id, "Tiny", big.bytes()));
     // f32 tag into an int field: NaN / Inf / out-of-range all refuse…
     inline for ([_]f32{
         std.math.nan(f32),
@@ -3137,4 +3169,166 @@ test "packed get/set: over-the-wire-limit structs comptime-classify as not packa
     try testing.expectEqual(@as(usize, 1), getPacked(id, "LongName", &buf));
     try testing.expectEqual(@as(u8, 0xFF), buf[0]);
     try testing.expectEqual(@as(i32, -1), setPacked(id, "LongName", rec.bytes()));
+}
+
+test "batch set: read-modify-write — mixed components keep non-scalar fields, no defaults needed" {
+    contract.unbind();
+    defer contract.unbind();
+
+    var game = ContractGame.init(testing.allocator);
+    defer game.deinit();
+    contract.bind(&game);
+
+    const id = contract.labelle_entity_create();
+    const ent: u32 = @intCast(id);
+    // Mixed: a string beside batch-eligible scalars.
+    try testing.expectEqual(
+        @as(i32, 0),
+        setComp(id, "Mixed", "{\"text\":\"keep\",\"x\":1,\"on\":false}"),
+    );
+    // Bare: all-scalar, NO field defaults — set through the typed path
+    // (the JSON REPLACE path would demand every field anyway).
+    game.setComponent(ent, Bare{ .x = 10, .y = 20 });
+
+    const names = "[\"Mixed\",\"Bare\"]";
+    var buf: [64]u8 = @splat(0);
+    // Stream: Mixed.x, Mixed.on, Bare.x, Bare.y — 4 floats.
+    const required = batchGet(names, &buf);
+    try testing.expectEqual(@as(usize, 4 + 4 * 4), required);
+    try testing.expectEqual(@as(f32, 1), batchFloat(&buf, 4));
+    try testing.expectEqual(@as(f32, 0), batchFloat(&buf, 8)); // on=false
+    try testing.expectEqual(@as(f32, 10), batchFloat(&buf, 12));
+    try testing.expectEqual(@as(f32, 20), batchFloat(&buf, 16));
+
+    // Mutate every scalar, flip the bool, write back.
+    batchFloatSet(&buf, 4, 2);
+    batchFloatSet(&buf, 8, 1); // on=true
+    batchFloatSet(&buf, 12, 11);
+    batchFloatSet(&buf, 16, 21);
+    try testing.expectEqual(@as(i32, 0), batchSet(names, buf[4..required]));
+
+    const mixed = game.getComponent(ent, Mixed).?;
+    try testing.expectEqual(@as(f32, 2), mixed.x);
+    try testing.expectEqual(true, mixed.on);
+    // The RMW promise: the non-scalar field SURVIVED the batch write.
+    try testing.expectEqualStrings("keep", mixed.text);
+    const bare = game.getComponent(ent, Bare).?;
+    try testing.expectEqual(@as(f32, 11), bare.x);
+    try testing.expectEqual(@as(f32, 21), bare.y);
+}
+
+test "batch set: a built-in Camera zoom round-trips through the scene apply path" {
+    contract.unbind();
+    defer contract.unbind();
+
+    var game = ContractGame.init(testing.allocator);
+    defer game.deinit();
+    contract.bind(&game);
+
+    const id = contract.labelle_entity_create();
+    try testing.expectEqual(
+        @as(i32, 0),
+        setComp(id, "Camera", "{\"zoom\":2,\"tag\":\"main\"}"),
+    );
+
+    // Camera's only batch-eligible scalar is zoom (viewport is optional,
+    // tag is a string) — stride 1.
+    const names = "[\"Camera\"]";
+    var buf: [16]u8 = @splat(0);
+    const required = batchGet(names, &buf);
+    try testing.expectEqual(@as(usize, 4 + 4), required);
+    try testing.expectEqual(@as(f32, 2), batchFloat(&buf, 4));
+
+    batchFloatSet(&buf, 4, 3.5);
+    try testing.expectEqual(@as(i32, 0), batchSet(names, buf[4..required]));
+
+    // Applied — and through the same scene apply machinery as the JSON
+    // set, preserving the non-scalar tag.
+    var jbuf: [256]u8 = undefined;
+    const json = getComp(id, "Camera", &jbuf);
+    try testing.expect(std.mem.indexOf(u8, json, "\"zoom\":3.5") != null);
+    try testing.expect(std.mem.indexOf(u8, json, "\"tag\":\"main\"") != null);
+}
+
+test "packed: an f64 field comptime-classifies as not packable (precision over speed)" {
+    contract.unbind();
+    defer contract.unbind();
+
+    var game = ContractGame.init(testing.allocator);
+    defer game.deinit();
+    contract.bind(&game);
+
+    const id = contract.labelle_entity_create();
+    // A value an f32 cannot hold exactly.
+    try testing.expectEqual(@as(i32, 0), setComp(id, "Precise", "{\"d\":1.0000000116860974}"));
+
+    var buf: [64]u8 = @splat(0);
+    try testing.expectEqual(@as(usize, 1), getPacked(id, "Precise", &buf));
+    try testing.expectEqual(@as(u8, 0xFF), buf[0]);
+    var rec = PackedRecord.init(0);
+    try testing.expectEqual(@as(i32, -1), setPacked(id, "Precise", rec.bytes()));
+    // …and the JSON path the sentinel redirects to carries the f64
+    // faithfully.
+    var jbuf: [128]u8 = undefined;
+    const json = getComp(id, "Precise", &jbuf);
+    try testing.expect(std.mem.indexOf(u8, json, "1.0000000116860974") != null);
+}
+
+test "packed set: trailing bytes after the declared fields refuse -1" {
+    contract.unbind();
+    defer contract.unbind();
+
+    var game = ContractGame.init(testing.allocator);
+    defer game.deinit();
+    contract.bind(&game);
+
+    const id = contract.labelle_entity_create();
+    try testing.expectEqual(@as(i32, 0), setComp(id, "Tiny", "{\"b\":7,\"w\":-7}"));
+
+    // A well-formed record with appended garbage — malformed as a whole.
+    var rec = PackedRecord.init(1);
+    rec.i64Field("b", 5);
+    var padded: [64]u8 = undefined;
+    @memcpy(padded[0..rec.len], rec.bytes());
+    padded[rec.len] = 0xAB;
+    try testing.expectEqual(@as(i32, -1), setPacked(id, "Tiny", padded[0 .. rec.len + 1]));
+    // A zero-field header ahead of data is the same refusal.
+    const zero_then_junk = [_]u8{ 0, 1, 2, 3 };
+    try testing.expectEqual(@as(i32, -1), setPacked(id, "Tiny", &zero_then_junk));
+    // The entity kept its values through both.
+    const t = game.getComponent(@as(u32, @intCast(id)), Tiny).?;
+    try testing.expectEqual(@as(u8, 7), t.b);
+}
+
+test "packed: the 64-bit bitcast pair round-trips a bit-63 u64 losslessly" {
+    contract.unbind();
+    defer contract.unbind();
+
+    var game = ContractGame.init(testing.allocator);
+    defer game.deinit();
+    contract.bind(&game);
+
+    const id = contract.labelle_entity_create();
+    const ent: u32 = @intCast(id);
+    const hi: u64 = 0x8000_0000_0000_0001; // bit 63 set
+    var jset: [128]u8 = undefined;
+    const set_json = try std.fmt.bufPrint(&jset, "{{\"seed\":{d}}}", .{hi});
+    try testing.expectEqual(@as(i32, 0), setComp(id, "Stats", set_json));
+
+    // GET emits the u64 as tag 3…
+    var buf: [128]u8 = @splat(0);
+    const n = getPacked(id, "Stats", &buf);
+    try testing.expect(n > 1);
+    // …a signed-only binding (mruby) bitcasts it into its Integer and
+    // re-emits tag 1 on SET; the host bitcasts back — bit-exact.
+    var rec = PackedRecord.init(1);
+    rec.i64Field("seed", @bitCast(hi));
+    try testing.expectEqual(@as(i32, 0), setPacked(id, "Stats", rec.bytes()));
+    try testing.expectEqual(hi, game.getComponent(ent, Stats).?.seed);
+
+    // The reverse pair: a u64 tag lands in an i64 field the same way.
+    var rec2 = PackedRecord.init(1);
+    rec2.u64Field("score", @bitCast(@as(i64, -42)));
+    try testing.expectEqual(@as(i32, 0), setPacked(id, "Stats", rec2.bytes()));
+    try testing.expectEqual(@as(i64, -42), game.getComponent(ent, Stats).?.score);
 }

@@ -351,9 +351,11 @@ const VTable = struct {
     // `component_batch_get` writes `[u32 count][f32 stream]` (f32/f64 + bool
     // fields only — a named component with any INT field is refused with
     // `batch_int_refused` / -2, because ints would silently corrupt through
-    // f32); `component_batch_set` re-queries and reads the f32 stream
-    // positionally, refusing -1 unless the buffer length exactly matches the
-    // re-queried entity set (the positional-coupling guard).
+    // f32); `component_batch_set` re-queries and applies the f32 stream
+    // positionally, READ-MODIFY-WRITE (only scalar fields overwritten,
+    // non-scalar preserved — get/set symmetry), PREFLIGHTING the buffer
+    // length against the re-queried entity set and refusing -1 with NO
+    // writes on mismatch (the positional-coupling guard).
     component_batch_get: *const fn (names_json: []const u8, out: []u8) usize,
     component_batch_set: *const fn (names_json: []const u8, buf: []const u8) i32,
     component_has: *const fn (id: u64, name: []const u8) i32,
@@ -712,19 +714,23 @@ pub export fn labelle_component_batch_get(
 
 /// BATCHED (binary) whole-query write — twin of `labelle_component_batch_get`.
 /// Re-queries the same entity set in the same order and reads `buf` (the
-/// pure f32 stream, NO count header) positionally, converting each f32
-/// back into its field's real scalar type (REPLACE semantics), routed
-/// through the same `setPosition`/`setComponent` as the per-entity path so
-/// hooks and dirty-tracking fire identically.
+/// pure f32 stream, NO count header) positionally, READ-MODIFY-WRITE per
+/// component: only the batch-eligible scalar fields are overwritten (the
+/// mirror of what `_batch_get` emitted — get/set symmetry), non-scalar
+/// fields keep their existing values, and the mutated copy applies
+/// through the same channels as the per-entity paths (`setPosition` /
+/// `setComponent` / the scene-loader apply fns for built-ins) so hooks
+/// and dirty-tracking fire identically.
 ///
-/// POSITIONAL-COUPLING GUARD: `buf_len` must be EXACTLY the re-queried
-/// entity set's stream size (count × stride × 4) — a mismatch means the
-/// entity set changed between `_batch_get` and `_batch_set` (or the caller
-/// sized the buffer wrong) and the whole write is refused with -1 (entities
-/// walked before the mismatch was detected keep the partial write; treat -1
-/// as "re-get and recompute"). Do NOT spawn or destroy entities between the
-/// paired get and set: the layout is positional, so the guard can catch a
-/// count change but never a same-count membership/order change.
+/// POSITIONAL-COUPLING GUARD (PREFLIGHT): before writing anything, the
+/// host walks the re-resolved query and requires `buf_len` to EXACTLY
+/// match its stream size (count × stride × 4) — a mismatch means the
+/// entity set changed between `_batch_get` and `_batch_set` (or the
+/// caller sized the buffer wrong) and the call refuses -1 having written
+/// NOTHING, so "re-run batch_get and recompute" can never double-apply a
+/// prefix. Do NOT spawn or destroy entities between the paired get and
+/// set: the layout is positional, so the guard can catch a count change
+/// but never a same-count membership/order change.
 ///
 /// Returns 0 = ok; -1 = malformed names / entity-count mismatch (buffer
 /// size disagrees with the re-queried set) / not bound; -2 = a named
@@ -1946,6 +1952,32 @@ fn Holder(comptime GP: type) type {
             for (names[1..]) |rn| {
                 if (!nameResolvable(rn)) return -1;
             }
+            // PREFLIGHT — the positional-coupling guard, decided BEFORE any
+            // write: walk the re-resolved query once, summing the stream
+            // bytes its entities require, and refuse on any disagreement
+            // with the incoming buffer (spawn/destroy since the paired get,
+            // or a caller-mis-sized buffer). A refused batch_set performs
+            // NO writes — there is no partial-commit-then-refuse, so the
+            // documented "re-run batch_get and recompute" retry can never
+            // double-apply a prefix.
+            var expected: usize = 0;
+            {
+                var pre = game.ecs_backend.view(.{ViewT}, .{});
+                defer pre.deinit();
+                while (pre.next()) |ent| {
+                    const matches = blk: {
+                        for (names[1..]) |rn| {
+                            if (!hasByName(ent, rn)) break :blk false;
+                        }
+                        break :blk true;
+                    };
+                    if (!matches) continue;
+                    for (names) |nm| expected += nameStreamBytes(nm);
+                }
+            }
+            if (expected != buf.len) return -1;
+            // APPLY — the same walk again (same view construction, so the
+            // order agrees with the preflight and with batch_get).
             var pos: usize = 0; // set buffer has NO header — pure f32 stream
             var v = game.ecs_backend.view(.{ViewT}, .{});
             defer v.deinit();
@@ -1958,52 +1990,89 @@ fn Holder(comptime GP: type) type {
                 };
                 if (!matches) continue;
                 for (names) |nm| {
-                    // A buffer exhausted mid-walk = MORE entities now than the
-                    // buffer was computed for (spawn since the paired get) —
-                    // half of the positional-coupling guard.
                     if (!applyEntityFloats(ent, nm, buf, &pos)) return -1;
                 }
             }
-            // The other half: leftover bytes = FEWER entities now than the
-            // buffer was computed for (destroy since the paired get). The
-            // caller must re-get and recompute; entities already walked keep
-            // their (positionally suspect) writes — documented on the export.
+            // Belt on top of the preflight: the apply consumed exactly the
+            // stream the preflight sized.
             if (pos != buf.len) return -1;
             return 0;
         }
 
-        /// Read one entity's component's scalar fields from the f32 stream
-        /// (same name dispatch as `writeEntityFloats`, so get/set consume the
-        /// SAME field layout). Position and packable registry structs are
-        /// applied through `setPosition`/`setComponent`; scene built-ins (and
-        /// non-packable registry types) only advance `pos` past their scalar
-        /// fields to keep the positional stream aligned. Returns false on a
-        /// buffer too short for the layout.
+        /// Stream bytes one component contributes per entity (its scalar
+        /// fields × 4) — runtime name → comptime `streamBytes` dispatch,
+        /// the sizing mirror of `writeEntityFloats`/`applyEntityFloats`.
+        /// Unknown names contribute nothing (they also emit nothing).
+        fn nameStreamBytes(name: []const u8) usize {
+            if (std.mem.eql(u8, name, "Position")) {
+                return comptime streamBytes(core.Position);
+            }
+            inline for (builtin_comps) |spec| {
+                if (std.mem.eql(u8, name, spec.name)) {
+                    return comptime streamBytes(spec.T);
+                }
+            }
+            const comp_names = comptime Components.names();
+            inline for (comp_names) |comp_name| {
+                if (std.mem.eql(u8, name, comp_name)) {
+                    return comptime streamBytes(Components.getType(comp_name));
+                }
+            }
+            return 0;
+        }
+
+        /// Apply one entity's component's scalar fields from the f32 stream
+        /// — READ-MODIFY-WRITE (get/set symmetry: everything `batch_get`
+        /// emits is writable). The existing component is copied, ONLY the
+        /// batch-eligible scalar fields are overwritten by the mirror walk
+        /// (`readFloatsFrom` — same dispatch and field layout as
+        /// `writeEntityFloats`), and the mutated copy applies through the
+        /// same channels as the per-entity paths: `setPosition` for
+        /// Position, `setComponent` for registry components (non-scalar
+        /// fields — strings, optionals, nested structs — are PRESERVED
+        /// from the existing value, and no default-constructibility is
+        /// required), and the scene-loader apply fns for built-ins (the
+        /// mutated copy is serialized with the SAME serializer the JSON
+        /// get uses and routed through `setBuiltinComponent`, so e.g. a
+        /// batched Camera zoom write is indistinguishable from a scene
+        /// author's). Returns false (refuse -1) on a missing component
+        /// (the entity set changed mid-walk) or an exhausted stream.
         fn applyEntityFloats(ent: Entity, name: []const u8, buf: []const u8, pos: *usize) bool {
             if (std.mem.eql(u8, name, "Position")) {
-                var p = core.Position{};
+                var p = (game.getComponent(ent, core.Position) orelse return false).*;
                 if (!readFloatsFrom(core.Position, &p, buf, pos)) return false;
                 game.setPosition(ent, p);
                 return true;
             }
             inline for (builtin_comps) |spec| {
                 if (std.mem.eql(u8, name, spec.name)) {
-                    // Built-ins apply through the scene-loader fns (JSON only)
-                    // — consume their scalar floats to stay aligned, no apply.
-                    return skipFloats(spec.T, buf, pos);
+                    var comp = (game.getComponent(ent, spec.T) orelse return false).*;
+                    if (!readFloatsFrom(spec.T, &comp, buf, pos)) return false;
+                    // Serialize the MUTATED copy exactly as the JSON get
+                    // serializes this built-in (Camera's tag as a string,
+                    // renderer handles omitted), then route it through the
+                    // scene apply machinery — the per-entity set's path.
+                    var jbuf: [4096]u8 = undefined;
+                    const n = if (comptime std.mem.eql(u8, spec.name, "Camera"))
+                        stringifyInto(.{
+                            .zoom = comp.zoom,
+                            .viewport = comp.viewport,
+                            .tag = comp.tagSlice(),
+                        }, &jbuf)
+                    else
+                        stringifyFilteredInto(comp, &jbuf);
+                    if (n == 0 or n > jbuf.len) return false;
+                    return setBuiltinComponent(spec.name, ent, jbuf[0..n]) == 0;
                 }
             }
             const comp_names = comptime Components.names();
             inline for (comp_names) |comp_name| {
                 if (std.mem.eql(u8, name, comp_name)) {
                     const T = Components.getType(comp_name);
-                    if (comptime packableStruct(T)) {
-                        var cmp: T = .{};
-                        if (!readFloatsFrom(T, &cmp, buf, pos)) return false;
-                        game.setComponent(ent, cmp);
-                        return true;
-                    }
-                    return skipFloats(T, buf, pos);
+                    var comp = (game.getComponent(ent, T) orelse return false).*;
+                    if (!readFloatsFrom(T, &comp, buf, pos)) return false;
+                    game.setComponent(ent, comp);
+                    return true;
                 }
             }
             return true;
@@ -2306,16 +2375,23 @@ fn Holder(comptime GP: type) type {
                     }
                 }
             }
+            // Trailing bytes past the declared field records are a
+            // malformed buffer (e.g. a zero-count header ahead of field
+            // data) — refuse, don't half-accept.
+            if (pos != buf.len) return false;
             return true;
         }
 
         // ── Packed codec helpers (comptime-pure, Holder-nested) ──────
 
-        /// A field/component type the packed codec can carry: 32/64-bit
-        /// float, any int ≤ 64 bits, or bool.
+        /// A field/component type the packed codec can carry: f32, any int
+        /// ≤ 64 bits, or bool. f64 is deliberately NOT packable — the wire
+        /// has only an f32 tag, so packing an f64 field would silently
+        /// truncate its precision; such components take the 0xFF/JSON path,
+        /// which carries f64 faithfully.
         fn isPackableScalar(comptime T: type) bool {
     return switch (@typeInfo(T)) {
-        .float => |fl| fl.bits == 32 or fl.bits == 64,
+        .float => |fl| fl.bits == 32,
         .int => |i| i.bits <= 64,
         .bool => true,
         else => false,
@@ -2423,14 +2499,17 @@ fn safeFloatToInt(comptime T: type, f: f32) ?T {
 }
 
 /// Coerce a tagged packed value into `T` (the target field's real type):
-/// f32↔f64 via @floatCast, ints via `std.math.cast`, and a bool tag
-/// lands in an int/float field as 0/1 (the mirror of the write side's
-/// widening). Returns null — the whole set REFUSES with -1 and the
-/// binding falls back to JSON — when the script value cannot represent
-/// itself in the field (out-of-range int, NaN/Inf/out-of-range float
-/// into an int field): the value is script-supplied, so the host must
-/// never panic on it, and must not silently clamp/zero it either — the
-/// JSON path surfaces the value faithfully (or refuses it visibly).
+/// floats via @floatCast, ints via `std.math.cast` — EXCEPT the 64-bit
+/// bitcast pair (an i64 tag into a u64 field and vice versa are
+/// two's-complement `@bitCast`, the documented lossless round trip for
+/// signed-only bindings) — and a bool tag lands in an int/float field as
+/// 0/1 (the mirror of the write side's widening). Returns null — the
+/// whole set REFUSES with -1 and the binding falls back to JSON — when
+/// the script value cannot represent itself in the field (out-of-range
+/// int into a narrower target, NaN/Inf/out-of-range float into an int
+/// field): the value is script-supplied, so the host must never panic on
+/// it, and must not silently clamp/zero it either — the JSON path
+/// surfaces the value faithfully (or refuses it visibly).
 fn coercePacked(comptime T: type, tag: u8, bytes: []const u8) ?T {
     return switch (@typeInfo(T)) {
         .float => switch (tag) {
@@ -2442,11 +2521,31 @@ fn coercePacked(comptime T: type, tag: u8, bytes: []const u8) ?T {
             3 => @floatFromInt(std.mem.readInt(u64, bytes[0..8], .little)),
             else => null,
         },
-        .int => switch (tag) {
+        .int => |ti| switch (tag) {
             0 => safeFloatToInt(T, @as(f32, @bitCast(std.mem.readInt(u32, bytes[0..4], .little)))),
-            1 => std.math.cast(T, std.mem.readInt(i64, bytes[0..8], .little)),
+            // 64-BIT BITCAST PAIR (documented in the header): a 64-bit int
+            // field accepts the OTHER 64-bit tag via two's-complement
+            // @bitCast. This is what makes the round trip lossless for a
+            // binding whose only integer is signed 64-bit (mruby): GET
+            // emits a u64 field as tag 3, the binding bitcasts it into its
+            // signed Integer, SET re-emits tag 1, and the host bitcasts it
+            // back — bit-exact even with bit 63 set. Narrower targets keep
+            // the range-checked refusal.
+            1 => blk: {
+                const v = std.mem.readInt(i64, bytes[0..8], .little);
+                if (comptime ti.signedness == .unsigned and ti.bits == 64) {
+                    break :blk @as(T, @bitCast(v));
+                }
+                break :blk std.math.cast(T, v);
+            },
             2 => std.math.cast(T, @intFromBool(bytes[0] != 0)),
-            3 => std.math.cast(T, std.mem.readInt(u64, bytes[0..8], .little)),
+            3 => blk: {
+                const v = std.mem.readInt(u64, bytes[0..8], .little);
+                if (comptime ti.signedness == .signed and ti.bits == 64) {
+                    break :blk @as(T, @bitCast(v));
+                }
+                break :blk std.math.cast(T, v);
+            },
             else => null,
         },
         .bool => switch (tag) {
@@ -2551,21 +2650,20 @@ fn readFloatsFrom(comptime T: type, ptr: *T, buf: []const u8, pos: *usize) bool 
     return true;
 }
 
-/// Advance `pos.*` past one component's scalar fields WITHOUT applying —
-/// keeps the positional stream aligned for component types the batch set
-/// can't reconstruct (scene built-ins, non-packable registry structs).
-fn skipFloats(comptime T: type, buf: []const u8, pos: *usize) bool {
-    if (comptime @typeInfo(T) != .@"struct") return true;
+/// Stream bytes one component type contributes per entity: its scalar
+/// (float/int/bool) fields × 4 — the comptime sizing mirror of
+/// `packFloatsInto`/`readFloatsFrom`'s walks. Int fields count for
+/// totality, though int-carrying components are refused upstream.
+fn streamBytes(comptime T: type) usize {
+    if (@typeInfo(T) != .@"struct") return 0;
+    var n: usize = 0;
     inline for (@typeInfo(T).@"struct".fields) |f| {
         switch (@typeInfo(f.type)) {
-            .float, .int, .bool => {
-                if (pos.* + 4 > buf.len) return false;
-                pos.* += 4;
-            },
+            .float, .int, .bool => n += 4,
             else => {},
         }
     }
-    return true;
+    return n;
 }
 
         fn castEntity(id: u64) ?Entity {
