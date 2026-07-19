@@ -81,13 +81,20 @@ pub fn SystemRegistry(comptime plugin_modules: anytype) type {
 
         /// Call setup() on all plugin systems that declare it.
         pub fn setup(game: anytype) void {
+            comptime var pidx: usize = 0;
             inline for (info.@"struct".fields) |field| {
                 const mod = @field(plugin_modules, field.name);
                 if (@hasDecl(mod, "Systems")) {
                     const Sys = @field(mod, "Systems");
                     if (@hasDecl(Sys, "setup")) {
+                        // Unconditionally timed (one-shot at boot; the
+                        // inspector can't have enabled capture yet) so
+                        // boot cost is always visible in the overlay.
+                        const t0 = profiler.nowNs();
                         Sys.setup(game);
+                        plugin_profile[pidx].setup.record(profiler.nowNs() - t0);
                     }
+                    pidx += 1;
                 }
             }
         }
@@ -134,6 +141,8 @@ pub fn SystemRegistry(comptime plugin_modules: anytype) type {
                 rows[i] = .{ .name = e.name, .worst_ns = e.tick.worst_ns, .avg_ns = e.tick.avgNs() };
                 e.tick.resetWindow();
                 e.post_tick.resetWindow();
+                e.draw_gui.resetWindow();
+                // `setup` is deliberately NOT reset: one-shot boot cost.
             }
             profiler.report("plugin", &rows);
         }
@@ -166,6 +175,7 @@ pub fn SystemRegistry(comptime plugin_modules: anytype) type {
         /// Call drawGui() on all plugin systems that declare it.
         pub fn drawGui(game: anytype) void {
             const current_state = getGameState(game);
+            const rec = profiler.recording();
             comptime var pidx: usize = 0;
             inline for (info.@"struct".fields) |field| {
                 const mod = @field(plugin_modules, field.name);
@@ -173,7 +183,13 @@ pub fn SystemRegistry(comptime plugin_modules: anytype) type {
                     const Sys = @field(mod, "Systems");
                     if (@hasDecl(Sys, "drawGui")) {
                         if (isStateAllowed(Sys, current_state)) {
-                            Sys.drawGui(game);
+                            if (rec) {
+                                const t0 = profiler.nowNs();
+                                Sys.drawGui(game);
+                                plugin_profile[pidx].draw_gui.record(profiler.nowNs() - t0);
+                            } else {
+                                Sys.drawGui(game);
+                            }
                         }
                     }
                     pidx += 1;
