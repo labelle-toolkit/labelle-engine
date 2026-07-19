@@ -10,12 +10,14 @@ submits it to the engine via **`game.submitUiDrawList`** — so the engine's
 The capture above shows all four DrawList command kinds rendered on the GPU
 (offscreen Metal), not a mock recording sink:
 
-- **`textured_quad` (9-slice)** — the panel border/interior, resolved from a
-  procedural theme atlas through `game.resolveUiFrame`.
+- **`textured_quad` (9-slice)** — the panel border/interior + the "Start"
+  button panel, resolved from a procedural theme atlas through
+  `game.resolveUiFrame`.
 - **`text_line`** — the "LaBelle UI Kit" title + the wrapped body line, real
   Roboto glyphs baked by `game.bakeUiFont` (stb_truetype behind the engine's
   `FontBackend` seam) and resolved through the kit's `FontResolver`.
-- **`solid_quad` / `textured_quad`** — the "Start" button panel.
+- **`solid_quad`** — the green swatch (a panel whose sprite intentionally does
+  not resolve, so the kit emits its solid fallback).
 - **`focus_highlight`** — the yellow focus ring around the focused button.
 
 This is the acceptance evidence the headless #771 integration test could not
@@ -66,6 +68,9 @@ depends on code that is not all released/merged yet:
 - **labelle-sokol** — the sokol backend (gfx/input/audio/window + sokol_clib).
 
 `build.zig.zon` assumes a flat sibling checkout under one parent directory.
+
+The bundled `assets/Roboto-Medium.ttf` is Google Roboto, licensed under
+Apache-2.0 — see `assets/Roboto-LICENSE.txt`.
 
 ### The gfx fix this demo surfaced
 

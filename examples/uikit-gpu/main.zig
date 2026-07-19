@@ -223,6 +223,14 @@ fn buildTree() !void {
         },
     });
 
+    // A swatch whose sprite intentionally does NOT resolve, so the kit emits
+    // its `solid_quad` fallback (tinted with `panel.tint`) — the one DrawList
+    // command kind the 9-slice panels above don't exercise.
+    _ = try tree.add(root_id, .{
+        .size = .{ .x = 320, .y = 10 },
+        .panel = .{ .sprite_name = "", .tint = .{ .r = 0.30, .g = 0.78, .b = 0.55, .a = 1.0 } },
+    });
+
     button_id = try tree.add(root_id, .{
         .size = .{ .x = 200, .y = 56 },
         .focusable = true,
@@ -392,7 +400,11 @@ fn sokolEvent(ev: [*c]const BackendInput.Event) callconv(.c) void {
 }
 
 export fn cleanup() callconv(.c) void {
-    tree.deinit();
+    // `tree` is only assigned once `initInner` reaches `buildTree`; on an init
+    // failure it is still `undefined`, so guard its teardown. `g` was created
+    // in `init()` before `initInner`, so it (and any baked font / texture it
+    // owns) always deinits.
+    if (!init_failed) tree.deinit();
     g.deinit();
     window.shutdownGfx();
     _ = gpa.deinit();
