@@ -194,15 +194,30 @@ pub fn severityForNs(ns: u64) Severity {
 }
 
 /// A flattened, render-ready row for the overlay: the live (`last_ns`)
-/// per-frame cost of an entry's primary phase (`tick`) and secondary
-/// phase (`drawGui` for scripts, `postTick` for plugins), already in ms
-/// with a severity bucket for coloring. Backend-agnostic — the debug
+/// per-frame cost of an entry, one field per lifecycle phase, already in
+/// ms with a severity bucket for coloring. Backend-agnostic — the debug
 /// plugin walks these and emits imgui/text; the shape is what makes the
 /// collector headless-testable.
+///
+/// All four phases are surfaced so a consumer of the collector sees the
+/// full breakdown: scripts populate `setup`/`tick`/`draw_gui`
+/// (`post_tick` stays 0 — scripts have no postTick phase); plugins
+/// populate all four. `setup` is the one-shot boot cost (never
+/// window-reset); the others are per-frame.
+///
+/// `aux_*` is a back-compat secondary-phase view (drawGui for scripts,
+/// postTick for plugins) mirroring the pre-#380-follow-up shape; new
+/// consumers should read the named per-phase fields instead.
 pub const OverlayRow = struct {
     name: []const u8,
+    setup_ms: f32 = 0,
+    setup_severity: Severity = .good,
     tick_ms: f32 = 0,
     tick_severity: Severity = .good,
+    post_tick_ms: f32 = 0,
+    post_tick_severity: Severity = .good,
+    draw_gui_ms: f32 = 0,
+    draw_gui_severity: Severity = .good,
     /// Secondary phase label ("drawGui" or "postTick").
     aux_label: []const u8 = "",
     aux_ms: f32 = 0,
@@ -220,8 +235,13 @@ pub fn collectScriptRows(dst: []OverlayRow, src: []const ScriptRow) []OverlayRow
     for (src[0..n], 0..) |e, i| {
         dst[i] = .{
             .name = e.name,
+            .setup_ms = nsToMs(e.setup.last_ns),
+            .setup_severity = severityForNs(e.setup.last_ns),
             .tick_ms = nsToMs(e.tick.last_ns),
             .tick_severity = severityForNs(e.tick.last_ns),
+            .draw_gui_ms = nsToMs(e.draw_gui.last_ns),
+            .draw_gui_severity = severityForNs(e.draw_gui.last_ns),
+            // Back-compat secondary view: scripts' aux is drawGui.
             .aux_label = "drawGui",
             .aux_ms = nsToMs(e.draw_gui.last_ns),
             .aux_severity = severityForNs(e.draw_gui.last_ns),
@@ -237,8 +257,15 @@ pub fn collectPluginRows(dst: []OverlayRow, src: []const PluginRow) []OverlayRow
     for (src[0..n], 0..) |e, i| {
         dst[i] = .{
             .name = e.name,
+            .setup_ms = nsToMs(e.setup.last_ns),
+            .setup_severity = severityForNs(e.setup.last_ns),
             .tick_ms = nsToMs(e.tick.last_ns),
             .tick_severity = severityForNs(e.tick.last_ns),
+            .post_tick_ms = nsToMs(e.post_tick.last_ns),
+            .post_tick_severity = severityForNs(e.post_tick.last_ns),
+            .draw_gui_ms = nsToMs(e.draw_gui.last_ns),
+            .draw_gui_severity = severityForNs(e.draw_gui.last_ns),
+            // Back-compat secondary view: plugins' aux is postTick.
             .aux_label = "postTick",
             .aux_ms = nsToMs(e.post_tick.last_ns),
             .aux_severity = severityForNs(e.post_tick.last_ns),
@@ -247,11 +274,14 @@ pub fn collectPluginRows(dst: []OverlayRow, src: []const PluginRow) []OverlayRow
     return dst[0..n];
 }
 
-/// Sum of the primary + secondary live cost across `rows`, in ms — the
-/// "Total scripts" / "Total plugins" footer line.
+/// Sum of the recurring per-frame live cost across `rows`, in ms — the
+/// "Total scripts" / "Total plugins" footer line. Covers every per-frame
+/// phase (`tick` + `post_tick` + `draw_gui`); the one-shot `setup` boot
+/// cost is deliberately excluded so the total reflects steady-state
+/// frame cost.
 pub fn totalMs(rows: []const OverlayRow) f32 {
     var sum: f32 = 0;
-    for (rows) |r| sum += r.tick_ms + r.aux_ms;
+    for (rows) |r| sum += r.tick_ms + r.post_tick_ms + r.draw_gui_ms;
     return sum;
 }
 

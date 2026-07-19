@@ -24,9 +24,9 @@ test "severity: green < 1ms, yellow 1-5ms, red > 5ms" {
     try testing.expectEqual(profiler.Severity.bad, profiler.severityForNs(12_000_000));
 }
 
-test "collectScriptRows: flattens live tick + drawGui into ms rows" {
+test "collectScriptRows: flattens live setup + tick + drawGui into ms rows" {
     const src = [_]profiler.ScriptRow{
-        .{ .name = "physics", .tick = stat(450_000), .draw_gui = stat(120_000) },
+        .{ .name = "physics", .setup = stat(2_000_000), .tick = stat(450_000), .draw_gui = stat(120_000) },
         .{ .name = "worker_movement", .tick = stat(220_000) },
     };
     var dst: [8]profiler.OverlayRow = undefined;
@@ -35,19 +35,27 @@ test "collectScriptRows: flattens live tick + drawGui into ms rows" {
     try testing.expectEqual(@as(usize, 2), rows.len);
     try testing.expectEqualStrings("physics", rows[0].name);
     try testing.expectApproxEqAbs(@as(f32, 0.45), rows[0].tick_ms, 0.001);
+    // New named per-phase fields carry the full breakdown.
+    try testing.expectApproxEqAbs(@as(f32, 2.0), rows[0].setup_ms, 0.001);
+    try testing.expectEqual(profiler.Severity.warn, rows[0].setup_severity); // 2ms → yellow
+    try testing.expectApproxEqAbs(@as(f32, 0.12), rows[0].draw_gui_ms, 0.001);
+    // Scripts have no postTick phase.
+    try testing.expectApproxEqAbs(@as(f32, 0.0), rows[0].post_tick_ms, 0.001);
+    // Back-compat secondary view still points at drawGui.
     try testing.expectEqualStrings("drawGui", rows[0].aux_label);
     try testing.expectApproxEqAbs(@as(f32, 0.12), rows[0].aux_ms, 0.001);
     try testing.expectEqual(profiler.Severity.good, rows[0].tick_severity);
 
     try testing.expectEqualStrings("worker_movement", rows[1].name);
     try testing.expectApproxEqAbs(@as(f32, 0.22), rows[1].tick_ms, 0.001);
-    try testing.expectApproxEqAbs(@as(f32, 0.0), rows[1].aux_ms, 0.001);
+    try testing.expectApproxEqAbs(@as(f32, 0.0), rows[1].draw_gui_ms, 0.001);
+    try testing.expectApproxEqAbs(@as(f32, 0.0), rows[1].setup_ms, 0.001);
 }
 
-test "collectPluginRows: flattens tick + postTick with correct label" {
+test "collectPluginRows: flattens setup + tick + postTick + drawGui" {
     const src = [_]profiler.PluginRow{
         .{ .name = "box2d", .tick = stat(1_200_000), .post_tick = stat(300_000) },
-        .{ .name = "debug", .tick = stat(6_000_000) },
+        .{ .name = "debug", .tick = stat(6_000_000), .draw_gui = stat(80_000), .setup = stat(500_000) },
     };
     var dst: [8]profiler.OverlayRow = undefined;
     const rows = profiler.collectPluginRows(&dst, &src);
@@ -56,11 +64,15 @@ test "collectPluginRows: flattens tick + postTick with correct label" {
     try testing.expectEqualStrings("box2d", rows[0].name);
     try testing.expectApproxEqAbs(@as(f32, 1.2), rows[0].tick_ms, 0.001);
     try testing.expectEqual(profiler.Severity.warn, rows[0].tick_severity); // 1.2ms → yellow
+    try testing.expectApproxEqAbs(@as(f32, 0.3), rows[0].post_tick_ms, 0.001);
+    // Back-compat secondary view still points at postTick.
     try testing.expectEqualStrings("postTick", rows[0].aux_label);
     try testing.expectApproxEqAbs(@as(f32, 0.3), rows[0].aux_ms, 0.001);
 
-    // 6ms tick → red.
+    // 6ms tick → red; new setup/draw_gui phases surface through the collector.
     try testing.expectEqual(profiler.Severity.bad, rows[1].tick_severity);
+    try testing.expectApproxEqAbs(@as(f32, 0.08), rows[1].draw_gui_ms, 0.001);
+    try testing.expectApproxEqAbs(@as(f32, 0.5), rows[1].setup_ms, 0.001);
 }
 
 test "collectScriptRows: respects destination bound" {
@@ -74,12 +86,13 @@ test "collectScriptRows: respects destination bound" {
     try testing.expectEqual(@as(usize, 2), rows.len);
 }
 
-test "totalMs: sums primary + secondary phase across rows" {
+test "totalMs: sums recurring phases (tick+postTick+drawGui), excludes setup" {
     const rows = [_]profiler.OverlayRow{
-        .{ .name = "a", .tick_ms = 0.45, .aux_ms = 0.12 },
-        .{ .name = "b", .tick_ms = 0.22, .aux_ms = 0.0 },
+        .{ .name = "a", .tick_ms = 0.45, .post_tick_ms = 0.1, .draw_gui_ms = 0.12, .setup_ms = 9.0 },
+        .{ .name = "b", .tick_ms = 0.22, .draw_gui_ms = 0.0 },
     };
-    try testing.expectApproxEqAbs(@as(f32, 0.79), profiler.totalMs(&rows), 0.001);
+    // 0.45+0.1+0.12 + 0.22 = 0.89; the 9ms setup must NOT be counted.
+    try testing.expectApproxEqAbs(@as(f32, 0.89), profiler.totalMs(&rows), 0.001);
 }
 
 test "game: scriptProfileRows/pluginProfileRows are empty when unwired" {
