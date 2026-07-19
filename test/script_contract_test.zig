@@ -3173,6 +3173,68 @@ test "packed set: the SET-side f64 tag (v1.3) reaches int fields past f32 precis
     try testing.expectEqual(@as(f32, 0.1), game.getComponent(ent, Velocity).?.dx);
 }
 
+test "packed set: a bool field accepts ONLY the bool tag; every numeric tag refuses" {
+    contract.unbind();
+    defer contract.unbind();
+
+    var game = ContractGame.init(testing.allocator);
+    defer game.deinit();
+    contract.bind(&game);
+
+    const id = contract.labelle_entity_create();
+    const ent: u32 = @intCast(id);
+    // Flag = { on: bool, weight: f32 }. Seed a known state.
+    try testing.expectEqual(@as(i32, 0), setComp(id, "Flag", "{\"on\":true,\"weight\":9}"));
+
+    // The bool tag (2) is the ONLY tag a bool field accepts — true and
+    // false both round-trip.
+    var t = PackedRecord.init(1);
+    t.boolField("on", false);
+    try testing.expectEqual(@as(i32, 0), setPacked(id, "Flag", t.bytes()));
+    try testing.expect(!game.getComponent(ent, Flag).?.on);
+    var t2 = PackedRecord.init(1);
+    t2.boolField("on", true);
+    try testing.expectEqual(@as(i32, 0), setPacked(id, "Flag", t2.bytes()));
+    try testing.expect(game.getComponent(ent, Flag).?.on);
+
+    // Every NUMERIC tag targeting the bool `on` field REFUSES (-1) —
+    // type confusion (`alive = 1` / `= 16_777_217.0`) is surfaced, not
+    // silently collapsed to true. Reset to a known `on:true` before each
+    // so a wrongly-accepted coercion would be visible AND the field is
+    // left untouched by the refusal.
+    const NumberTag = union(enum) { i64: i64, u64: u64, f32: f32, f64: f64 };
+    inline for ([_]NumberTag{
+        .{ .i64 = 1 }, // a truthy int — the old silent 1→true path
+        .{ .i64 = 0 }, // a falsy int — would have flipped it to false
+        .{ .u64 = 1 },
+        .{ .f32 = 1.0 },
+        .{ .f64 = 16_777_217.0 }, // codex's type-confusion example
+    }) |nt| {
+        try testing.expectEqual(@as(i32, 0), setComp(id, "Flag", "{\"on\":true,\"weight\":9}"));
+        var rec = PackedRecord.init(1);
+        switch (nt) {
+            .i64 => |v| rec.i64Field("on", v),
+            .u64 => |v| rec.u64Field("on", v),
+            .f32 => |v| rec.f32Field("on", v),
+            .f64 => |v| rec.f64Field("on", v),
+        }
+        try testing.expectEqual(@as(i32, -1), setPacked(id, "Flag", rec.bytes()));
+        // Refused → entity untouched (the JSON fallback owns the value).
+        try testing.expect(game.getComponent(ent, Flag).?.on);
+    }
+
+    // The REVERSE stays allowed: a bool tag WIDENS into a number field
+    // (true/false → 1/0) — the documented, lossless, unambiguous mirror.
+    var w = PackedRecord.init(1);
+    w.boolField("weight", true);
+    try testing.expectEqual(@as(i32, 0), setPacked(id, "Flag", w.bytes()));
+    try testing.expectEqual(@as(f32, 1), game.getComponent(ent, Flag).?.weight);
+    var w0 = PackedRecord.init(1);
+    w0.boolField("weight", false);
+    try testing.expectEqual(@as(i32, 0), setPacked(id, "Flag", w0.bytes()));
+    try testing.expectEqual(@as(f32, 0), game.getComponent(ent, Flag).?.weight);
+}
+
 test "batch set: NaN in the stream is defined behavior (float lands, bool reads true), no panic" {
     contract.unbind();
     defer contract.unbind();

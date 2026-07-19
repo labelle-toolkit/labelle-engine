@@ -2522,6 +2522,17 @@ fn safeFloatToInt(comptime T: type, f: f64) ?T {
 /// field): the value is script-supplied, so the host must never panic on
 /// it, and must not silently clamp/zero it either — the JSON path
 /// surfaces the value faithfully (or refuses it visibly).
+///
+/// BOOL-FIELD RULE (asymmetric on purpose): a bool field accepts ONLY
+/// the bool tag (2). Every NUMERIC tag (f32/i64/u64/f64) targeting a
+/// bool field is a type error — a script value of the wrong kind
+/// mis-addressing the field (e.g. `alive = 16_777_217.0`) — and REFUSES
+/// (null → -1), so the JSON path surfaces the real value or its parse
+/// error instead of silently collapsing it to true/false (which would
+/// discard the value entirely). The reverse — a bool tag WIDENING into a
+/// number field (true/false → 1/0) — stays allowed: it is total,
+/// lossless and unambiguous, the documented write-side mirror.
+/// Narrowing a number to a bool is none of those, hence the asymmetry.
 fn coercePacked(comptime T: type, tag: u8, bytes: []const u8) ?T {
     return switch (@typeInfo(T)) {
         .float => switch (tag) {
@@ -2571,11 +2582,12 @@ fn coercePacked(comptime T: type, tag: u8, bytes: []const u8) ?T {
             4 => safeFloatToInt(T, @as(f64, @bitCast(std.mem.readInt(u64, bytes[0..8], .little)))),
             else => null,
         },
+        // A bool field accepts ONLY the bool tag — every numeric tag
+        // (0/1/3/4) is type confusion and refuses (see the fn doc's
+        // BOOL-FIELD RULE). No silent number→bool collapse in EITHER
+        // direction; the JSON fallback surfaces the real value/error.
         .bool => switch (tag) {
             2 => bytes[0] != 0,
-            1 => std.mem.readInt(i64, bytes[0..8], .little) != 0,
-            3 => std.mem.readInt(u64, bytes[0..8], .little) != 0,
-            4 => @as(f64, @bitCast(std.mem.readInt(u64, bytes[0..8], .little))) != 0,
             else => null,
         },
         else => unreachable,

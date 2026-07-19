@@ -452,6 +452,12 @@ size_t labelle_plugin_response_fetch(char *out, size_t out_cap);
  *    emits tag 3, the binding bitcasts to its signed integer, SET
  *    re-emits tag 1, the host bitcasts back. Narrower int fields keep
  *    the range-checked refusal (-1 on overflow — never clamped).
+ *    A BOOL field accepts ONLY the bool tag (2): every numeric tag
+ *    (0/1/3/4) targeting a bool field is type confusion and refuses
+ *    (-1 -> JSON fallback), so a number mis-addressing a bool field
+ *    surfaces rather than silently collapsing to true/false. The
+ *    reverse — a bool tag widening into a number field (true/false ->
+ *    1/0) — is allowed (total, lossless, unambiguous).
  *
  * 2. BATCHED QUERY — one call moves ALL matching entities' scalar
  *    component data as a flat f32 stream, collapsing the 4-per-entity
