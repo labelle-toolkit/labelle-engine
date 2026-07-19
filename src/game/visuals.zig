@@ -1,6 +1,14 @@
 /// Visuals mixin — sprite, shape, text, icon, and gizmo management + z-index.
+const std = @import("std");
 const core = @import("labelle-core");
 const Position = core.Position;
+
+/// Curated per-entity material effect + uniforms (labelle-gfx#305). Sourced
+/// from `labelle-core` so the engine, the renderer plugin's `Sprite.material`
+/// field, and game code all name ONE nominal type (gfx re-exports the same
+/// `backend_contract.Material`). Re-exported at the module root as
+/// `engine.Material`. See `setMaterial` / `clearMaterial` below.
+const Material = core.backend_contract.Material;
 
 /// Returns the visual management mixin for a given Game type.
 pub fn Mixin(comptime Game: type) type {
@@ -120,6 +128,56 @@ pub fn Mixin(comptime Game: type) type {
             if (sprite.flip_x == flip_x) return;
             sprite.flip_x = flip_x;
             self.renderer.markVisualDirty(entity);
+        }
+
+        /// Apply a curated per-entity material effect (flash / palette_swap /
+        /// dissolve / outline — labelle-gfx#305) to a sprite entity, then mark
+        /// its visuals dirty so the renderer picks up the change on the next
+        /// sync.
+        ///
+        /// The runtime mirror of the declarative `.Sprite = .{ .material = … }`
+        /// scene/prefab authoring path: material rides INLINE on the sprite
+        /// component (exactly like `tint` / `flip_x`), so there is no separate
+        /// `Material` component to register — this setter and the scene loader's
+        /// generic field coercion feed the very same `Sprite.material` field.
+        ///
+        /// Bundles the `sprite.material = m` + `renderer.markVisualDirty(entity)`
+        /// pair (forgetting the dirty-mark leaves the visual stale — the same
+        /// silent bug `setSpriteFlip` was created to prevent). Short-circuits
+        /// when the material already matches, avoiding a wasted dirty-mark and
+        /// the batch-breaking material re-submit it would provoke.
+        ///
+        /// GRACEFUL DEGRADE — two layers, no crash on either:
+        ///  1. Comptime: a no-op on renderers whose `Sprite` carries no
+        ///     `material` field (`StubRender`, mock renderers, and gfx builds
+        ///     predating the material seam). The `@hasField` guard short-circuits
+        ///     before any field access, so the setter is safe to call uniformly.
+        ///  2. Runtime: on a backend that lacks the specific effect's shader,
+        ///     the renderer's `materialSupported` gate draws the plain sprite
+        ///     (`labelle-gfx#305`). Setting an unsupported material never
+        ///     crashes — it simply has no visible effect on that backend.
+        ///
+        /// Returns silently if the entity has no `Sprite` component — callers
+        /// that need to assert presence should `getComponent` themselves first
+        /// (matches `setSpriteFlip` / `setZIndex`).
+        pub fn setMaterial(self: *Game, entity: Entity, material: Material) void {
+            if (comptime !@hasField(Sprite, "material")) return;
+            self.assertEntityAlive(entity, "setMaterial");
+            const sprite = self.ecs_backend.getComponent(entity, Sprite) orelse return;
+            if (std.meta.eql(sprite.material, material)) return;
+            sprite.material = material;
+            self.renderer.markVisualDirty(entity);
+        }
+
+        /// Remove any material effect from a sprite entity, restoring the plain
+        /// (fast-path, fully batchable) sprite draw. Equivalent to
+        /// `setMaterial(entity, .{})` — `Material.effect == .none` is the
+        /// no-material default that never touches the renderer's material path.
+        ///
+        /// Same graceful-degrade + missing-`Sprite` + short-circuit semantics as
+        /// `setMaterial`.
+        pub fn clearMaterial(self: *Game, entity: Entity) void {
+            self.setMaterial(entity, .{});
         }
     };
 }

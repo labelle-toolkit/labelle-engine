@@ -156,6 +156,7 @@ pub fn build(b: *std.Build) void {
         "test/collect_entities_test.zig",
         "test/entities_with_roster_test.zig",
         "test/set_sprite_flip_test.zig",
+        "test/set_material_test.zig",
         "test/video_component_test.zig",
         "test/camera_viewport_test.zig",
         "test/camera_viewport_seed_test.zig",

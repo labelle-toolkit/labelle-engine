@@ -1091,6 +1091,8 @@ pub fn GameConfigWithYAxis(
         pub const removeText = Visuals.removeText;
         pub const setZIndex = Visuals.setZIndex;
         pub const setSpriteFlip = Visuals.setSpriteFlip;
+        pub const setMaterial = Visuals.setMaterial;
+        pub const clearMaterial = Visuals.clearMaterial;
 
         // ── Tilemap (mixin, T2 Phase 2) ──────────────────────────
         pub const addTilemap = TilemapMixin.addTilemap;
