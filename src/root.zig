@@ -220,6 +220,21 @@ pub const ValueState = gui_runtime_state_mod.ValueState;
 pub const FormBinder = form_binder_mod.FormBinder;
 pub const GuiEvent = form_binder_mod.GuiEvent;
 
+// ── Material seam (per-entity curated shader effects, labelle-gfx#305) ──
+//
+// The game-facing authoring types for the material seam. `Material` rides
+// INLINE on the renderer plugin's `Sprite` component (like `tint` / `flip_x`),
+// so there is no separate ECS component — games author it declaratively as
+// `.Sprite = .{ .material = .{ .effect = .flash, .uniforms = .{ … } } }` in a
+// scene/prefab `.zon`, or at runtime via `game.setMaterial(entity, .{ … })` /
+// `game.clearMaterial(entity)` (see `src/game/visuals.zig`). Sourced from
+// `labelle-core` so the engine, gfx's `Sprite.material`, and game code all name
+// the one nominal `backend_contract.Material` type. A backend lacking a given
+// effect's shader draws the plain sprite (graceful degrade, never a crash).
+pub const Material = core.backend_contract.Material;
+pub const MaterialEffect = core.backend_contract.MaterialEffect;
+pub const MaterialUniforms = core.backend_contract.MaterialUniforms;
+
 // ── Core Utilities ──
 pub const SparseSet = sparse_set_mod.SparseSet;
 pub const separateComponents = query_mod.separateComponents;
