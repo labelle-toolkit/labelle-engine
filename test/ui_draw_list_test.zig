@@ -65,6 +65,7 @@ fn fixtureFont() BakedUiFont {
         .texture_id = 99,
         .atlas_width = 16,
         .atlas_height = 10,
+        .atlas_rgba = &.{}, // fixture: no reupload path exercised here.
         .glyphs = @constCast(glyphs),
         .codepoint_index = cps,
         .kerning = kern,
@@ -211,6 +212,82 @@ test "focus_rect emits four edge strips around the rect" {
     };
     engine.renderUiCommands(RecordingSink{ .tex = &tex, .rect = &rect, .alloc = testing.allocator }, &fonts, &cmds, .{ .focus_thickness = 2 });
     try testing.expectEqual(@as(usize, 4), rect.items.len);
+}
+
+test "textured_quad still draws when the atlas is bound at handle 0" {
+    var tex: std.ArrayListUnmanaged(TexCall) = .empty;
+    var rect: std.ArrayListUnmanaged(RectCall) = .empty;
+    defer tex.deinit(testing.allocator);
+    defer rect.deinit(testing.allocator);
+    var fonts: UiFontStore = .empty;
+    const cmds = [_]UiDrawCmd{
+        .{ .textured_quad = .{ .dst = .{ .w = 10, .h = 10 }, .uv = .{ .u1 = 1, .v1 = 1 }, .tint = .{} } },
+    };
+    // atlas_texture = 0 is a VALID handle (bgfx), not "missing".
+    engine.renderUiCommands(
+        RecordingSink{ .tex = &tex, .rect = &rect, .alloc = testing.allocator },
+        &fonts,
+        &cmds,
+        .{ .atlas_texture = 0, .atlas_width = 64, .atlas_height = 64 },
+    );
+    try testing.expectEqual(@as(usize, 1), tex.items.len);
+    try testing.expectEqual(@as(u32, 0), tex.items[0].tex);
+}
+
+test "NaN color components quantise to 0 instead of panicking" {
+    // A 0/0 in layout can produce a NaN color; convertCommand must not crash.
+    const nan = std.math.nan(f32);
+    const converted = engine.convertUiDrawCommand(KitDrawCmd{
+        .solid_quad = .{ .dst = .{ .x = 0, .y = 0, .w = 1, .h = 1 }, .color = .{ .r = nan, .g = 0.5, .b = nan, .a = 1 } },
+    }).?;
+    try testing.expectEqual(@as(u8, 0), converted.solid_quad.color.r);
+    try testing.expectEqual(@as(u8, 128), converted.solid_quad.color.g);
+    try testing.expectEqual(@as(u8, 0), converted.solid_quad.color.b);
+    try testing.expectEqual(@as(u8, 255), converted.solid_quad.color.a);
+}
+
+test "corrupt glyph metrics (u1<u0) are skipped without underflow-panicking" {
+    var tex: std.ArrayListUnmanaged(TexCall) = .empty;
+    var rect: std.ArrayListUnmanaged(RectCall) = .empty;
+    defer tex.deinit(testing.allocator);
+    defer rect.deinit(testing.allocator);
+
+    // A font whose only glyph 'X' has inverted UV (u1 < u0) — a malformed
+    // bake. It must be skipped, not underflow-panic; the good glyph 'i'
+    // after it still draws, proving the pen kept advancing.
+    const glyphs = &[_]engine.Glyph{
+        .{ .u0 = 10, .v0 = 0, .u1 = 2, .v1 = 10, .xoff = 0, .yoff = -8, .advance = 6 }, // 'X' corrupt
+        .{ .u0 = 0, .v0 = 0, .u1 = 4, .v1 = 10, .xoff = 0, .yoff = -8, .advance = 4 }, // 'i' good
+    };
+    const cps = &[_]engine.CodepointEntry{
+        .{ .codepoint = 'X', .glyph_index = 0 },
+        .{ .codepoint = 'i', .glyph_index = 1 },
+    };
+    var fonts: UiFontStore = .empty;
+    try fonts.fonts.put(testing.allocator, "bad", .{
+        .texture_id = 99,
+        .atlas_width = 16,
+        .atlas_height = 10,
+        .atlas_rgba = &.{},
+        .glyphs = @constCast(glyphs),
+        .codepoint_index = cps,
+        .kerning = &.{},
+        .pixel_height = 10,
+        .ascent = 8,
+        .descent = -2,
+        .line_gap = 0,
+        .line_height = 10,
+    });
+    defer fonts.fonts.deinit(testing.allocator);
+
+    const cmds = [_]UiDrawCmd{
+        .{ .text_line = .{ .dst = .{ .x = 0, .y = 0, .w = 100, .h = 10 }, .content = "Xi", .color = .{}, .size_px = 10, .font_name = "bad" } },
+    };
+    engine.renderUiCommands(RecordingSink{ .tex = &tex, .rect = &rect, .alloc = testing.allocator }, &fonts, &cmds, .{});
+    // 'X' skipped, 'i' drawn → exactly one glyph quad.
+    try testing.expectEqual(@as(usize, 1), tex.items.len);
+    // 'i' sits at pen 0 + advance('X')=6 (the corrupt glyph still advanced).
+    try testing.expectApproxEqAbs(@as(f32, 6), tex.items[0].dst.x, 0.001);
 }
 
 // ─── convertUiDrawCommand ──────────────────────────────────────────────────
@@ -445,6 +522,66 @@ test "multiple submits in one frame accumulate without leaking the default-font 
     game.render();
     // Both panels accumulated (submit order).
     try testing.expectEqual(@as(usize, 2), game.renderer.rect_calls.items.len);
+}
+
+test "resolveUiFrame derives UVs from logical dims (catalog-atlas path, no renderer query)" {
+    const RGame = RecordingGame();
+    var game = RGame.init(testing.allocator);
+    defer game.deinit();
+
+    // Simulate a CATALOG-loaded atlas: seed the atlas manager directly with
+    // a sprite + logical dims + a texture handle, WITHOUT a renderer
+    // side-table entry (catalog uploads bypass it). resolveUiFrame must still
+    // resolve — the pre-fix code queried getTextureInfo and got null here.
+    const mgr = game.getTextureManager();
+    const atlas = try mgr.addAtlas("theme");
+    atlas.texture_id = 0; // bound at handle 0 — also the #1 case.
+    atlas.logical_width = 256;
+    atlas.logical_height = 128;
+    atlas.texture_scale_x = 1.0;
+    atlas.texture_scale_y = 1.0;
+    try atlas.addSprite("panel_bg", .{ .x = 64, .y = 32, .width = 32, .height = 16 });
+
+    const frame = game.resolveUiFrame("panel_bg").?;
+    // uv = logical_rect / logical_dims.
+    try testing.expectApproxEqAbs(@as(f32, 64.0 / 256.0), frame.uv.u0, 0.0001);
+    try testing.expectApproxEqAbs(@as(f32, 32.0 / 128.0), frame.uv.v0, 0.0001);
+    try testing.expectApproxEqAbs(@as(f32, 96.0 / 256.0), frame.uv.u1, 0.0001);
+    try testing.expectApproxEqAbs(@as(f32, 48.0 / 128.0), frame.uv.v1, 0.0001);
+    // physical atlas dims = logical × scale (scale 1 here).
+    try testing.expectApproxEqAbs(@as(f32, 256), frame.atlas_width, 0.001);
+    try testing.expectApproxEqAbs(@as(f32, 128), frame.atlas_height, 0.001);
+    try testing.expectEqual(@as(u32, 0), frame.texture_id);
+}
+
+test "resolveUiFrame returns null when the atlas JSON omitted meta.size" {
+    const RGame = RecordingGame();
+    var game = RGame.init(testing.allocator);
+    defer game.deinit();
+    const mgr = game.getTextureManager();
+    const atlas = try mgr.addAtlas("nometa");
+    // logical_width/height left null (comptime atlas / no meta block).
+    try atlas.addSprite("x", .{ .x = 0, .y = 0, .width = 8, .height = 8 });
+    try testing.expect(game.resolveUiFrame("x") == null);
+}
+
+test "reuploadUiFonts re-mints texture ids from the retained RGBA after surface loss" {
+    const RGame = RecordingGame();
+    var game = RGame.init(testing.allocator);
+    defer game.deinit();
+
+    font_loader.setBackend(MockFontBackend.backend);
+    defer font_loader.clearBackend();
+    try game.bakeUiFont("body", "ttf", "x", .{ .pixel_height = 2 });
+
+    const before = game.uiFont("body").?.texture_id;
+    // Simulate the GPU surface loss/restore re-upload.
+    game.reuploadUiFonts();
+    const after = game.uiFont("body").?.texture_id;
+    // A fresh handle was minted (RecordingRender increments), proving the
+    // retained RGBA drove a real re-upload rather than a stale handle.
+    try testing.expect(after != before);
+    try testing.expect(after >= 1000);
 }
 
 test "submit + render draws the UI DrawList after the world pass, then drains" {

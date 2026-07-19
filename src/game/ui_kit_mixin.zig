@@ -207,8 +207,8 @@ pub fn Mixin(comptime Game: type) type {
                 return error.FontBackendNotInitialized;
 
             const decoded = try backend.decode(file_type, data, params, self.allocator);
-            // Bitmap is consumed here; tables are retained (ownership moves
-            // into the store on success).
+            // Bitmap is consumed here; tables + the expanded RGBA are retained
+            // (ownership moves into the store on success).
             defer self.allocator.free(decoded.bitmap);
             errdefer {
                 self.allocator.free(decoded.glyphs);
@@ -219,10 +219,11 @@ pub fn Mixin(comptime Game: type) type {
             // Expand the 8-bit coverage atlas to straight-alpha white RGBA:
             // draws through the ordinary textured-quad pipeline on every
             // backend (no R8 sampler support needed) and tints with the
-            // text color at draw time.
+            // text color at draw time. RETAINED (not a scratch buffer) so a
+            // GPU surface loss can re-upload it without re-baking.
             const pixel_count = @as(usize, decoded.width) * @as(usize, decoded.height);
             const rgba = try self.allocator.alloc(u8, pixel_count * 4);
-            defer self.allocator.free(rgba);
+            errdefer self.allocator.free(rgba);
             for (decoded.bitmap[0..pixel_count], 0..) |alpha, i| {
                 rgba[i * 4 + 0] = 255;
                 rgba[i * 4 + 1] = 255;
@@ -240,6 +241,7 @@ pub fn Mixin(comptime Game: type) type {
                 .texture_id = texture_id,
                 .atlas_width = decoded.width,
                 .atlas_height = decoded.height,
+                .atlas_rgba = rgba,
                 .glyphs = decoded.glyphs,
                 .codepoint_index = decoded.codepoint_index,
                 .kerning = decoded.kerning,
@@ -251,6 +253,28 @@ pub fn Mixin(comptime Game: type) type {
             });
         }
 
+        /// Re-upload every retained UI font atlas after a GPU surface loss
+        /// (Android TERM_WINDOW destroys all textures). Called from
+        /// `surfaceRestored` alongside the asset catalog / atlas manager
+        /// re-upload: `bakeUiFont` retains the expanded RGBA, so this mints a
+        /// fresh `texture_id` per font from the kept pixels — no re-decode.
+        /// A no-op (and a silent skip per font) when the renderer lacks the
+        /// upload seam. Errors are swallowed per font so one failure can't
+        /// abort the whole restore.
+        pub fn reuploadUiFonts(self: *Game) void {
+            const Renderer = @TypeOf(self.renderer.*);
+            if (comptime !@hasDecl(Renderer, "createTextureFromPixels")) return;
+            var it = self.ui_fonts.fonts.valueIterator();
+            while (it.next()) |font| {
+                const new_id = self.renderer.createTextureFromPixels(
+                    font.atlas_width,
+                    font.atlas_height,
+                    font.atlas_rgba,
+                ) catch continue;
+                font.texture_id = new_id;
+            }
+        }
+
         /// Baked-font lookup — the engine half of the kit's `FontResolver`.
         /// Game-side glue wraps the returned tables in a
         /// `ui_kit.font.FontMetrics` (slice casts + scalar copies).
@@ -259,38 +283,57 @@ pub fn Mixin(comptime Game: type) type {
         }
 
         /// Resolve an atlas sprite frame for the UI kit — the engine half
-        /// of the kit's `FrameResolver`. Wraps `findSprite` + the
-        /// renderer's texture dims into normalised UVs.
+        /// of the kit's `FrameResolver`.
         ///
-        /// Returns null when the sprite is unknown, its atlas texture dims
-        /// can't be queried, or the frame is 90°-rotated in the atlas (the
-        /// kit's `UvRect` cannot express rotation — v1 limitation; pack UI
-        /// themes with rotation disabled).
+        /// UVs are derived from the atlas's LOGICAL dims (`meta.size`,
+        /// retained on the `RuntimeAtlas`), NOT a renderer texture query:
+        ///
+        ///   uv = logical_rect / logical_dims
+        ///
+        /// The `texture_scale` factor (logical→physical) cancels — physical
+        /// footprint (`logical_rect × scale`) over physical texture dims
+        /// (`logical_dims × scale`) reduces to `logical_rect / logical_dims`.
+        /// This resolves frames for CATALOG-loaded atlases too: those bypass
+        /// the renderer texture side-table, so `getTextureInfo` returns null,
+        /// but their logical dims come straight from the manifest JSON — the
+        /// streaming path this API targets (#771 review, P1). It also avoids
+        /// the `TextureId`-vs-`u32` mismatch that a `getTextureInfo` call
+        /// would hit (the atlas manager's `texture_id` is a normalised `u32`,
+        /// not the renderer's native handle).
+        ///
+        /// `atlas_width`/`atlas_height` return the PHYSICAL texture pixel
+        /// dims (`logical × texture_scale`) — what `renderCommands` needs to
+        /// map the normalised UV into a `drawTexturePro` pixel source rect.
+        ///
+        /// Returns null when the sprite is unknown, the frame is 90°-rotated
+        /// (the kit's `UvRect` can't express rotation — pack UI themes with
+        /// rotation off), or the atlas JSON omitted `meta.size` (no logical
+        /// dims → UI theme atlases must ship a meta block).
         pub fn resolveUiFrame(self: *Game, sprite_name: []const u8) ?ui_draw_list.ResolvedUiFrame {
             const found = self.findSprite(sprite_name) orelse return null;
             if (found.sprite.rotated) return null;
-            const dims = self.queryTextureDims(found.texture_id) orelse return null;
-            if (dims.width == 0 or dims.height == 0) return null;
-            const aw: f32 = @floatFromInt(dims.width);
-            const ah: f32 = @floatFromInt(dims.height);
-            // Physical atlas footprint: logical grid × texture_scale (same
-            // mapping `resolveAtlasSprites` applies for sprite draws).
-            const px = @as(f32, @floatFromInt(found.sprite.x)) * found.texture_scale_x;
-            const py = @as(f32, @floatFromInt(found.sprite.y)) * found.texture_scale_y;
-            const pw = @as(f32, @floatFromInt(found.sprite.width)) * found.texture_scale_x;
-            const ph = @as(f32, @floatFromInt(found.sprite.height)) * found.texture_scale_y;
+            const lw = found.atlas_logical_width orelse return null;
+            const lh = found.atlas_logical_height orelse return null;
+            if (lw == 0 or lh == 0) return null;
+            const lwf: f32 = @floatFromInt(lw);
+            const lhf: f32 = @floatFromInt(lh);
+            const sx: f32 = @floatFromInt(found.sprite.x);
+            const sy: f32 = @floatFromInt(found.sprite.y);
+            const sw: f32 = @floatFromInt(found.sprite.width);
+            const sh: f32 = @floatFromInt(found.sprite.height);
             return .{
                 .uv = .{
-                    .u0 = px / aw,
-                    .v0 = py / ah,
-                    .u1 = (px + pw) / aw,
-                    .v1 = (py + ph) / ah,
+                    .u0 = sx / lwf,
+                    .v0 = sy / lhf,
+                    .u1 = (sx + sw) / lwf,
+                    .v1 = (sy + sh) / lhf,
                 },
                 .frame_w = @floatFromInt(found.sprite.getWidth()),
                 .frame_h = @floatFromInt(found.sprite.getHeight()),
                 .texture_id = found.texture_id,
-                .atlas_width = aw,
-                .atlas_height = ah,
+                // Physical texture dims = logical × per-axis scale.
+                .atlas_width = lwf * found.texture_scale_x,
+                .atlas_height = lhf * found.texture_scale_y,
             };
         }
     };

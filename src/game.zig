@@ -1260,6 +1260,7 @@ pub fn GameConfigWithYAxis(
         pub const bakeUiFont = UiKitMixin.bakeUiFont;
         pub const uiFont = UiKitMixin.uiFont;
         pub const resolveUiFrame = UiKitMixin.resolveUiFrame;
+        pub const reuploadUiFonts = UiKitMixin.reuploadUiFonts;
 
         // ── Offscreen render targets / transport mirror (mixin) ──
         /// Render a scene into a texture instead of the screen, then draw that

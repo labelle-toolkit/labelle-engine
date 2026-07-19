@@ -89,6 +89,10 @@ pub const UiDrawCmd = union(enum) {
 };
 
 fn quantColor(v: f32) u8 {
+    // `@intFromFloat` panics on NaN in Debug/ReleaseSafe. A UI color can go
+    // NaN through a 0/0 in layout/animation math — treat it as 0 (fully
+    // transparent / black component) rather than crash the game.
+    if (std.math.isNan(v)) return 0;
     const clamped = @max(0.0, @min(1.0, v));
     return @intFromFloat(@round(clamped * 255.0));
 }
@@ -164,9 +168,18 @@ pub fn convertCommand(cmd: anytype) ?UiDrawCmd {
 /// them straight off this struct.
 pub const BakedUiFont = struct {
     /// Renderer texture handle (`u32`, the engine-wide texture id shape).
+    /// Re-minted by `reuploadUiFonts` after a GPU surface loss.
     texture_id: u32,
     atlas_width: u32,
     atlas_height: u32,
+
+    /// The expanded white-RGBA atlas pixels (`atlas_width*atlas_height*4`),
+    /// owned. Retained — NOT freed after the initial upload — so the atlas
+    /// can be re-uploaded verbatim after an Android GPU surface loss
+    /// (TERM_WINDOW destroys every texture). The bitmap→RGBA expansion and
+    /// stb_truetype bake are the expensive parts; keeping the small RGBA
+    /// buffer trades ~atlas_bytes of RAM for a decode-free restore.
+    atlas_rgba: []u8,
 
     /// Dense glyph table, addressed via `codepoint_index`. Owned.
     glyphs: []font_types.Glyph,
@@ -210,6 +223,7 @@ pub const BakedUiFont = struct {
         allocator.free(self.glyphs);
         allocator.free(self.codepoint_index);
         allocator.free(self.kerning);
+        allocator.free(self.atlas_rgba);
     }
 };
 
@@ -287,8 +301,11 @@ pub const ResolvedUiFrame = struct {
 pub const UiRenderOptions = struct {
     /// Renderer texture id of the theme atlas every `textured_quad`'s UV
     /// rect indexes into (the kit's FrameResolver resolved against ONE
-    /// host-known atlas). `0` = unknown → textured quads are skipped.
-    atlas_texture: u32 = 0,
+    /// host-known atlas). `null` = unknown → textured quads are skipped.
+    /// Optional (not a `0` sentinel): `0` is a VALID texture handle on some
+    /// backends (bgfx can bind an atlas at handle 0), so treating it as
+    /// "missing" would drop every themed quad — see #771 review.
+    atlas_texture: ?u32 = null,
     /// Pixel dims of that atlas texture — needed to turn the kit's
     /// normalised UVs into the pixel-space source rects the backend's
     /// `drawTexturePro` takes. `0` → textured quads are skipped.
@@ -325,7 +342,7 @@ pub fn renderCommands(
 ) void {
     for (cmds) |cmd| switch (cmd) {
         .textured_quad => |q| {
-            if (opts.atlas_texture == 0) continue;
+            const tex = opts.atlas_texture orelse continue;
             if (opts.atlas_width <= 0 or opts.atlas_height <= 0) continue;
             const src: UiRect = .{
                 .x = q.uv.u0 * opts.atlas_width,
@@ -333,7 +350,7 @@ pub fn renderCommands(
                 .w = (q.uv.u1 - q.uv.u0) * opts.atlas_width,
                 .h = (q.uv.v1 - q.uv.v0) * opts.atlas_height,
             };
-            sink.drawTexturedQuad(opts.atlas_texture, src, q.dst, q.tint);
+            sink.drawTexturedQuad(tex, src, q.dst, q.tint);
         },
         .solid_quad => |q| sink.drawSolidRect(q.dst, q.color),
         .text_line => |line| drawTextLine(sink, fonts, line, opts),
@@ -368,6 +385,14 @@ fn drawTextLine(
         const gi = font.glyphIndex(cp) orelse continue;
         if (gi >= font.glyphs.len) continue;
         const g = font.glyphs[gi];
+        // Guard corrupt glyph metrics: a malformed font with `u1 < u0` or
+        // `v1 < v0` would underflow the unsigned subtraction and panic in
+        // Debug/ReleaseSafe. Skip the degenerate glyph — the pen still
+        // advances below so the rest of the line stays aligned.
+        if (g.u1 < g.u0 or g.v1 < g.v0) {
+            pen_x += g.advance * scale;
+            continue;
+        }
         const gw: f32 = @floatFromInt(@as(u32, g.u1) - @as(u32, g.u0));
         const gh: f32 = @floatFromInt(@as(u32, g.v1) - @as(u32, g.v0));
         if (gw > 0 and gh > 0) {
