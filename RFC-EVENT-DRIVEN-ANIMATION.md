@@ -2,8 +2,8 @@
 
 ## Summary
 
-Four incremental changes that let sprite animations be authored as **prefab
-data** instead of per-game driver scripts:
+Five incremental changes that let sprite animations be authored as **prefab
+data** instead of per-game driver scripts, and unify how they pause:
 
 1. **Drive animations by default** — retire the one-line opt-in every game
    copies (`00_sprite_animation_driver.zig`).
@@ -14,6 +14,10 @@ data** instead of per-game driver scripts:
 4. **Named + crossing-accurate frame markers** — `"emit footstep at frame
    3"`, firing a *named* game event (not a generic frame-index event) and
    never dropped by a `dt` spike.
+5. **Unify pause on the time scale** — Unity-style: pause zeroes the scaled
+   game clock and everything scaled freezes for free; a per-animation
+   `scaled | unscaled` update mode keeps menu/UI animations running. Removes
+   the separate `sprite_animations_paused` flag and per-script pause checks.
 
 Together they make animations **fully symmetric event participants** —
 triggered *by* events and emitting *named* events at specific frames — so the
@@ -171,6 +175,59 @@ this right is what makes the feature replace scripts instead of adding footguns.
   marker path should use crossing detection so a footstep/hit never silently
   drops. Keep the legacy `event_frames` field working (landed-on) for compat.
 
+### 5. Unify pause on the time scale (scaled / unscaled update mode)
+
+Pause is the piece that makes §1 fully clean — and it's currently fragmented.
+Today the engine has **three** overlapping pause concepts, and the game adds a
+fourth:
+
+- `time_scale` → `scaled_dt = dt * time_scale` (`game/loop_mixin.zig:26`).
+- a separate `paused` flag (#465): `isPaused() = paused OR time_scale==0`
+  (`loop_mixin.zig:197`), halts the tick independently.
+- `sprite_animations_paused` — a flag *just* for `SpriteAnimation`
+  (`loop_mixin.zig:86` gates on `!sprite_animations_paused and scaled_dt != 0`).
+- flying-platform's own `GamePaused` singleton, which every custom animation
+  script (`worker_animation`, `ship_animation`, …) checks via
+  `pause_state.isPaused`.
+
+The kicker: a `time_scale == 0` pause **already** zeroes `scaled_dt`, which
+**already** freezes `SpriteAnimation` — so `sprite_animations_paused` is largely
+redundant, and the per-script `GamePaused` checks re-implement "am I paused"
+everywhere. Every animated thing has to know about pause independently.
+
+**How Unity 3D does it** (the target model): one global knob, `Time.timeScale`.
+Pause = `timeScale = 0`; everything reading **scaled** time freezes for free —
+movement (`Time.deltaTime`), the Animator (Update Mode `Normal`), physics,
+particles. Things that must keep moving during pause opt into **unscaled** time:
+`Time.unscaledDeltaTime`, or Animator Update Mode `Unscaled Time` (menus, UI).
+One time scale + a per-system scaled/unscaled choice — no per-system pause flag.
+
+**Proposal — collapse labelle onto the time scale, exactly like Unity:**
+
+1. **Pause = zero the scaled game clock.** `isPaused` ⇒ `scaled_dt == 0` as the
+   single source of truth. flying-platform's `GamePaused` *sets* that (or the
+   engine `paused` flag zeroes the effective game dt), instead of being a
+   parallel mechanism.
+2. **Systems advance on scaled `dt`.** Expose `game.dt()` (scaled) vs
+   `game.realDt()` (unscaled). Anything using scaled dt — `SpriteAnimation`
+   *and* the custom worker/ship animators — freezes on pause with **zero
+   pause-aware code**, deleting the per-script `pause_state.isPaused` early-outs.
+3. **Per-animation update mode** = Unity's Animator UpdateMode:
+   `SpriteAnimation.update: scaled | unscaled` (default `scaled`). Menu spinners
+   / pause-screen effects set `unscaled` and keep running while the game freezes.
+
+**Removes:** the `sprite_animations_paused` flag, the `setSpriteAnimationsPaused`
+wiring in `97_pause_menu.zig`, and the copy-pasted `isPaused` checks in every
+animation script. Pause becomes "set timeScale 0"; `scaled` things freeze,
+`unscaled` things don't. This generalizes beyond animation to *all* time-based
+systems, and it's what lets §1's "drive by default" ship without a leftover
+pause flag.
+
+**Compat:** `unscaled` defaults to off (today's behavior — everything is
+effectively scaled). Keep `setSpriteAnimationsPaused` as a deprecated shim that
+maps to a pause of the animation subsystem's scaled clock, so callers don't
+break during migration.
+
 ## The combined model
 
 Put §3 and §4 together and animations become event-symmetric, entirely in data:
@@ -242,4 +299,7 @@ Independent, shippable in order:
 1. §2 frame-range shorthand — smallest, immediate authoring win, zero risk.
 2. §4 named + crossing-accurate markers — additive; upgrades #625.
 3. §3 event-triggered playback + targeting — the main feature.
-4. §1 default-on driver — the breaking-default cleanup, batched into a major.
+4. §5 pause unification (scaled/unscaled update mode) — the cross-cutting
+   cleanup; deprecate `sprite_animations_paused` and the per-script checks.
+5. §1 default-on driver — the breaking-default cleanup; batch with §5 into a
+   major (both remove leftover flags/boilerplate).
