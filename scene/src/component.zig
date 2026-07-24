@@ -418,6 +418,14 @@ pub fn PackView(comptime FullRegistry: type, comptime own_names: []const []const
     // comptime block, whose temporary array goes out of scope with the block.
     const Holder = struct {
         const allowed = blk: {
+            // Building the allow-list is O(own_names × globals): the dedup
+            // loop below runs `nameAllowed` (a linear scan over `globals`)
+            // once per own component. With enough global components a pack's
+            // own-name loop overruns the default 1000 backwards-branch budget
+            // (a game hit it at the 10th global). Raise the ceiling well
+            // above any realistic registry so registering more components
+            // can't trip it — this is a comptime-only bound, free at runtime.
+            @setEvalBranchQuota(1_000_000);
             const globals = globalNames(FullRegistry);
             var buf: [globals.len + own_names.len][]const u8 = undefined;
             var n: usize = 0;
