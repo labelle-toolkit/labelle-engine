@@ -1,16 +1,16 @@
 .{
     .fingerprint = 0xe8a81a8dc7f48c87,
     .name = .engine,
-    .version = "2.4.0",
+    .version = "2.8.0",
     .minimum_zig_version = "0.16.0",
     .dependencies = .{
-        // Requires labelle-core >= v1.20.0 — font_types aliases core's
-        // canonical Glyph/CodepointEntry/KernPair value types
-        // (labelle-engine#647), which supersede the earlier >= v1.18.0 YAxis
-        // floor (the YAxis enum + `toScreenY`/`screenToLogicalY` transforms the
-        // `screenToLogical` picking path routes through, labelle-engine#639).
-        // A path dependency, so CI clones core `main` (>= v1.20.0) as the
-        // sibling `../labelle-core`.
+        // Requires labelle-core >= v1.27.0 — core's `ChildrenComponent` is now
+        // ArrayList-backed (no MAX_CHILDREN) and `addChild` takes an allocator;
+        // this engine owns the child-list deinit lifecycle (labelle-core#65/#66).
+        // Supersedes the earlier >= v1.20.0 floor (font_types aliasing core's
+        // canonical Glyph/CodepointEntry/KernPair value types, #647) and the
+        // >= v1.18.0 YAxis floor (#639). A path dependency, so CI clones core
+        // `main` as the sibling `../labelle-core`.
         //
         // The render-phase `drawMesh` seam (labelle-gfx#290 Stage 4) re-exports
         // core's `BlendMode` and rides core's optional backend `drawMesh`
