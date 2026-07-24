@@ -228,6 +228,25 @@ pub fn Mixin(comptime Game: type) type {
         }
 
         pub fn destroyEntity(self: *Game, entity: Entity) void {
+            // Idempotence guard — make the cascade panic-safe against an
+            // already-dead descendant. The cascade below recurses over a
+            // by-value snapshot of child ids (`kids`), and by the time the
+            // walk reaches a given id that entity may already be gone:
+            //   • a consumer destroyed some entities first, then cascades a
+            //     surviving ancestor (flying-platform room teardown);
+            //   • the same entity is reachable twice in the walk (a child
+            //     that appears under two parents, or a re-parent remnant);
+            //   • a sibling's `entity_destroyed` hook destroyed it mid-cascade.
+            // Every step past this point (backend `destroyEntity`, the
+            // `Children` ArrayList free, `detachFromParent`, tombstone,
+            // hooks, preview telemetry) assumes a LIVE entity — re-running
+            // them on a dead id double-frees the heap-backed `Children`
+            // list, re-emits `entity_destroyed`, and traps the backend
+            // destroy on sparse-set backends. A dead entity already ran its
+            // own full teardown (including freeing its `Children` list), so
+            // bailing here is a leak-free no-op. `entityExists` is the same
+            // liveness oracle `detachFromParent` trusts.
+            if (!self.ecs_backend.entityExists(entity)) return;
             if (self.ecs_backend.getComponent(entity, Children)) |children_comp| {
                 // Cascade over an INDEPENDENT copy of the child ids. Each
                 // child's destroy unlinks it from THIS live list via
@@ -245,6 +264,17 @@ pub fn Mixin(comptime Game: type) type {
                     destroyEntity(self, child);
                 }
             }
+            // Re-check liveness after the cascade. The entry guard only proved
+            // `entity` was alive at the START; a child's synchronous
+            // `entity_destroyed` hook can call back into the Game and destroy
+            // THIS entity mid-cascade (e.g. a teardown hook that removes an
+            // owner/room when one of its children dies). If it did, the entity
+            // has already run its full destroy — including freeing its own
+            // `Children` allocation — so the tail below (preview, the
+            // `Children` free, backend destroy, tombstone, hooks) must NOT run
+            // again on a dead id or it double-frees / re-emits. (`kids` is our
+            // independent dupe, freed by the defer above regardless.)
+            if (!self.ecs_backend.entityExists(entity)) return;
             // Preview telemetry emits BEFORE the actual destroy so any
             // editor-side consumer can still introspect the entity from
             // a `getComponent` style API while reacting to the frame — so the
@@ -279,6 +309,23 @@ pub fn Mixin(comptime Game: type) type {
         }
 
         pub fn destroyEntityOnly(self: *Game, entity: Entity) void {
+            // Idempotence guard — mirror `destroyEntity` so both public
+            // destroy entry points are safe no-ops on a dead id.
+            //
+            // Reasoning on whether this is *needed*: unlike `destroyEntity`,
+            // this variant does NOT cascade, so a single call never re-hits
+            // an entity of its own accord, and its main caller (the scene
+            // drain) pops each tracked entity exactly once and dedups via
+            // `untrackSceneEntity`. So under today's callers it wouldn't
+            // trap. It's added anyway because (1) it's a public API and a
+            // consumer that double-destroys — or destroys an entity that a
+            // prior `destroyEntity` cascade already reaped — must get the
+            // same idempotent behaviour rather than a double-free of the
+            // `Children` list + duplicate hooks, and (2) equal guarantees on
+            // both entry points remove a footgun when code switches between
+            // them. It does NOT change the contract: the listed children
+            // still stay alive; a dead entity simply has nothing left to do.
+            if (!self.ecs_backend.entityExists(entity)) return;
             if (self.preview) |*p| p.emitEntityDestroyed(@intCast(entity)) catch {};
             // #701 — same parent-unlink as `destroyEntity`. This variant
             // deliberately leaves the entity's own children alive (its

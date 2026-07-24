@@ -248,6 +248,146 @@ test "#701: re-parent then destroy touches only the current parent's list" {
     try testing.expect(game.ecs_backend.entityExists(p2));
 }
 
+// ── Cascade panic-safety against already-dead descendants ───────────────
+//
+// A consumer (flying-platform room teardown) wants to cascade-destroy an
+// ancestor AFTER having already destroyed some of its descendants directly.
+// Before the idempotence guard the cascade re-hit those dead ids: it
+// double-freed the heap-backed `Children` list, re-emitted
+// `entity_destroyed`, and trapped the backend destroy. These tests pin that
+// re-hitting a dead entity anywhere in the walk is a leak-free no-op
+// (`testing.allocator` via `game.deinit` fails on any leaked child list).
+
+test "cascade: destroying a subtree whose child was already destroyed is a safe no-op" {
+    var game = Game.init(testing.allocator);
+    defer game.deinit();
+
+    const parent = game.createEntity();
+    const child_a = game.createEntity();
+    const child_b = game.createEntity();
+    game.setParent(child_a, parent, .{});
+    game.setParent(child_b, parent, .{});
+
+    // Consumer destroys one child up front (it unlinks from parent's list).
+    game.destroyEntity(child_a);
+    try testing.expect(!game.ecs_backend.entityExists(child_a));
+
+    // Now cascade the ancestor. child_a is already dead — the cascade must
+    // NOT re-hit it (double-free / trap). The rest is still cleaned up.
+    game.destroyEntity(parent);
+
+    try testing.expect(!game.ecs_backend.entityExists(parent));
+    try testing.expect(!game.ecs_backend.entityExists(child_b));
+    try testing.expectEqual(@as(usize, 0), game.entityCount());
+}
+
+test "cascade: a grandchild destroyed before its parent's cascade is skipped" {
+    var game = Game.init(testing.allocator);
+    defer game.deinit();
+
+    // G → M → L. Kill the leaf first, then cascade the grandparent: the
+    // walk descends G → M → L and must early-return on the dead L.
+    const grandparent = game.createEntity();
+    const middle = game.createEntity();
+    const leaf = game.createEntity();
+    game.setParent(middle, grandparent, .{});
+    game.setParent(leaf, middle, .{});
+
+    game.destroyEntity(leaf);
+    try testing.expect(!game.ecs_backend.entityExists(leaf));
+    // Middle survives (only the leaf died) and its list is now empty.
+    try testing.expect(game.ecs_backend.entityExists(middle));
+    try testing.expectEqual(@as(usize, 0), game.getChildren(middle).len);
+
+    // Cascade the whole remaining tree — the dead leaf must not re-trap.
+    game.destroyEntity(grandparent);
+
+    try testing.expect(!game.ecs_backend.entityExists(grandparent));
+    try testing.expect(!game.ecs_backend.entityExists(middle));
+    try testing.expectEqual(@as(usize, 0), game.entityCount());
+}
+
+test "cascade: destroying an already-dead entity directly is a no-op" {
+    var game = Game.init(testing.allocator);
+    defer game.deinit();
+
+    const bystander = game.createEntity();
+    const entity = game.createEntity();
+
+    game.destroyEntity(entity);
+    try testing.expect(!game.ecs_backend.entityExists(entity));
+    const count_after_first = game.entityCount();
+
+    // A second destroy of the same id must not re-emit hooks, double-free,
+    // or disturb the count / the bystander.
+    game.destroyEntity(entity);
+    try testing.expectEqual(count_after_first, game.entityCount());
+    try testing.expect(game.ecs_backend.entityExists(bystander));
+}
+
+test "cascade: an already-destroyed subtree with grandchildren does not double-free" {
+    var game = Game.init(testing.allocator);
+    defer game.deinit();
+
+    // parent → mid (→ leaf), and a sibling under parent. Destroy `mid`
+    // (cascading leaf) up front, THEN cascade parent. The parent's walk
+    // reaches the dead `mid`, which must be skipped whole — its already-
+    // freed `Children` list must not be freed again.
+    const parent = game.createEntity();
+    const mid = game.createEntity();
+    const leaf = game.createEntity();
+    const sibling = game.createEntity();
+    game.setParent(mid, parent, .{});
+    game.setParent(leaf, mid, .{});
+    game.setParent(sibling, parent, .{});
+
+    game.destroyEntity(mid);
+    try testing.expect(!game.ecs_backend.entityExists(mid));
+    try testing.expect(!game.ecs_backend.entityExists(leaf)); // cascaded
+
+    game.destroyEntity(parent);
+    try testing.expect(!game.ecs_backend.entityExists(parent));
+    try testing.expect(!game.ecs_backend.entityExists(sibling));
+    try testing.expectEqual(@as(usize, 0), game.entityCount());
+}
+
+test "cascade: a normal (all-live) destroy still cleans up and keeps entityCount correct" {
+    var game = Game.init(testing.allocator);
+    defer game.deinit();
+
+    const keep_a = game.createEntity();
+    const keep_b = game.createEntity();
+    const parent = game.createEntity();
+    var kids: [3]Entity = undefined;
+    for (&kids) |*k| {
+        k.* = game.createEntity();
+        game.setParent(k.*, parent, .{});
+    }
+    try testing.expectEqual(@as(usize, 6), game.entityCount());
+
+    game.destroyEntity(parent);
+
+    try testing.expect(!game.ecs_backend.entityExists(parent));
+    for (kids) |k| try testing.expect(!game.ecs_backend.entityExists(k));
+    // Unrelated entities untouched; count reflects exactly the 4 removed.
+    try testing.expect(game.ecs_backend.entityExists(keep_a));
+    try testing.expect(game.ecs_backend.entityExists(keep_b));
+    try testing.expectEqual(@as(usize, 2), game.entityCount());
+}
+
+test "destroyEntityOnly: destroying an already-dead entity is a no-op" {
+    var game = Game.init(testing.allocator);
+    defer game.deinit();
+
+    const entity = game.createEntity();
+    game.destroyEntityOnly(entity);
+    const count_after = game.entityCount();
+
+    // Idempotent second call — no double-free, no duplicate hooks.
+    game.destroyEntityOnly(entity);
+    try testing.expectEqual(count_after, game.entityCount());
+}
+
 test "#701: repeated child destroys don't leak Children slots" {
     var game = Game.init(testing.allocator);
     defer game.deinit();
