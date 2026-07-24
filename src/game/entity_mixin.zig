@@ -228,6 +228,18 @@ pub fn Mixin(comptime Game: type) type {
         }
 
         pub fn destroyEntity(self: *Game, entity: Entity) void {
+            // Idempotence guard — make the cascade panic-safe against an
+            // already-dead descendant. The cascade below recurses through
+            // `destroyEntity(self, child)`, and by the time the walk reaches a
+            // given id that entity may already be gone: a consumer destroyed
+            // some entities first then cascades a surviving ancestor (the
+            // flying-platform room teardown), the same id is reachable twice
+            // (a re-parent remnant), or a sibling's `entity_destroyed` hook
+            // killed it mid-cascade. Every step past this point (backend
+            // destroy, `detachFromParent`, tombstone, hooks, preview) would
+            // double-destroy / re-emit / trap on a dead id. `entityExists` is
+            // the alive-set oracle `detachFromParent` already trusts.
+            if (!self.ecs_backend.entityExists(entity)) return;
             if (self.ecs_backend.getComponent(entity, Children)) |children_comp| {
                 // Cascade over a by-value snapshot of the children list.
                 // Each child's destroy unlinks it from THIS live list via
@@ -244,6 +256,14 @@ pub fn Mixin(comptime Game: type) type {
                     destroyEntity(self, child);
                 }
             }
+            // Re-check liveness after the cascade. The entry guard only proved
+            // `entity` was alive at the START; a child's synchronous
+            // `entity_destroyed` hook can call back into the Game and destroy
+            // THIS entity mid-cascade (a teardown hook that removes an
+            // owner/room when a child dies). If it did, the entity already ran
+            // its full destroy, so the tail below must not run again on a dead
+            // id or it double-frees / re-emits.
+            if (!self.ecs_backend.entityExists(entity)) return;
             // Preview telemetry emits BEFORE the actual destroy so any
             // editor-side consumer can still introspect the entity from
             // a `getComponent` style API while reacting to the frame.
@@ -269,6 +289,12 @@ pub fn Mixin(comptime Game: type) type {
         }
 
         pub fn destroyEntityOnly(self: *Game, entity: Entity) void {
+            // Idempotence guard — mirror `destroyEntity` so both public destroy
+            // entry points no-op on an already-dead id rather than
+            // double-freeing / re-emitting hooks. Does not change the
+            // contract: this variant still leaves the entity's children alive;
+            // a dead entity simply has nothing left to do.
+            if (!self.ecs_backend.entityExists(entity)) return;
             if (self.preview) |*p| p.emitEntityDestroyed(@intCast(entity)) catch {};
             // #701 — same parent-unlink as `destroyEntity`. This variant
             // deliberately leaves the entity's own children alive (its
