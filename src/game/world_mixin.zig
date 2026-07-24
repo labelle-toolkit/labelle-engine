@@ -122,6 +122,20 @@ pub fn Mixin(comptime Game: type) type {
             // Free per-entity particle sims for the same reason (#750): the
             // ECS wipe invalidates every emitter entity id in the side-table.
             self.clearParticleSystems();
+            // Free every `ChildrenComponent`'s backing allocation before the
+            // ECS is torn down: the backend drops components by value with no
+            // destructor, so their heap-backed child lists would otherwise
+            // leak on every scene swap / load. Entities already destroyed via
+            // destroyEntity[Only] freed theirs; this catches the survivors the
+            // wipe is about to drop.
+            {
+                const Children = Game.ChildrenComp;
+                var v = self.active_world.ecs_backend.view(.{Children}, .{});
+                defer v.deinit();
+                while (v.next()) |e| {
+                    if (self.active_world.ecs_backend.getComponent(e, Children)) |cc| cc.deinit(self.allocator);
+                }
+            }
             self.active_world.ecs_backend.deinit();
             _ = self.active_world.nested_entity_arena.reset(.retain_capacity);
 

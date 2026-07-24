@@ -367,10 +367,10 @@ pub fn NestedSpawn(comptime GameType: type, comptime Components: type, comptime 
                 for (ids) |child_id| {
                     const child_entity: Entity = @intCast(child_id);
                     if (game.ecs_backend.getComponent(parent_entity, ChildrenComp)) |children_comp| {
-                        children_comp.addChild(child_entity);
+                        children_comp.addChild(game.allocator, child_entity);
                     } else {
                         var new_children = ChildrenComp{};
-                        new_children.addChild(child_entity);
+                        new_children.addChild(game.allocator, child_entity);
                         game.ecs_backend.addComponent(parent_entity, new_children);
                     }
                 }

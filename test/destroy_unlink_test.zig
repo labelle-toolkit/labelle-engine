@@ -53,6 +53,37 @@ test "#701: destroying a child unlinks it from the parent's Children" {
     try testing.expectEqual(@as(usize, 0), game.entityCount());
 }
 
+test "#797: direct removeComponent / set / add of Children don't leak the list" {
+    // The generic component API is a public path that bypasses the hierarchy
+    // choke points: removing or overwriting a `Children` by value would drop
+    // its heap list without freeing it. `game.deinit` runs under
+    // `testing.allocator`, so any leaked child-list allocation fails here.
+    var game = Game.init(testing.allocator);
+    defer game.deinit();
+    const Children = Game.ChildrenComp;
+
+    const parent = game.createEntity();
+    var i: usize = 0;
+    while (i < 20) : (i += 1) game.setParent(game.createEntity(), parent, .{});
+    try testing.expectEqual(@as(usize, 20), game.getChildren(parent).len);
+
+    // Direct generic removal must free the backing list.
+    game.removeComponent(parent, Children);
+    try testing.expect(!game.hasComponent(parent, Children));
+
+    // setComponent overwrite must free the replaced list.
+    i = 0;
+    while (i < 20) : (i += 1) game.setParent(game.createEntity(), parent, .{});
+    game.setComponent(parent, Children{});
+    try testing.expectEqual(@as(usize, 0), game.getChildren(parent).len);
+
+    // addComponent overwrite must free the replaced list.
+    i = 0;
+    while (i < 20) : (i += 1) game.setParent(game.createEntity(), parent, .{});
+    game.addComponent(parent, Children{});
+    try testing.expectEqual(@as(usize, 0), game.getChildren(parent).len);
+}
+
 test "#701: destroying the middle child leaves the siblings listed" {
     var game = Game.init(testing.allocator);
     defer game.deinit();
@@ -221,13 +252,15 @@ test "#701: repeated child destroys don't leak Children slots" {
     var game = Game.init(testing.allocator);
     defer game.deinit();
 
-    // Consequence 3 of the bug: MAX_CHILDREN slots with silent drop in
-    // addChild — every leaked stale id permanently consumed a slot, so
-    // after enough destroys new children silently failed to register.
+    // Consequence 3 of the bug: a leaked stale id used to linger in the
+    // parent's child list after each destroy. With dynamic children there's
+    // no cap, so this instead pins that repeated parent+destroy cycles leave
+    // the list correct (each destroy unlinks the child) and leak nothing —
+    // `testing.allocator` (via `game.deinit`) fails the test on any leaked
+    // child-list allocation. Loop well past the old 16 cap.
     const parent = game.createEntity();
-    const max = Game.ChildrenComp.MAX_CHILDREN;
     var i: usize = 0;
-    while (i < max + 4) : (i += 1) {
+    while (i < 40) : (i += 1) {
         const child = game.createEntity();
         game.setParent(child, parent, .{});
         game.destroyEntity(child);

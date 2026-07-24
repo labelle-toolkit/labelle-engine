@@ -229,24 +229,28 @@ pub fn Mixin(comptime Game: type) type {
 
         pub fn destroyEntity(self: *Game, entity: Entity) void {
             if (self.ecs_backend.getComponent(entity, Children)) |children_comp| {
-                // Cascade over a by-value snapshot of the children list.
-                // Each child's destroy unlinks it from THIS live list via
-                // `detachFromParent` (a swap-remove), so iterating the
-                // live slice would shrink and reorder it under the loop —
-                // skipping children and double-destroying swap remnants.
-                // The snapshot (a 16-slot inline array, cheap stack copy)
-                // also shields the walk from `entity_destroyed` hooks
-                // re-parenting into this list mid-cascade, and from the
-                // component pool reshuffling under the held pointer while
-                // descendants' own `Children` components are removed.
-                const children_snapshot = children_comp.*;
-                for (children_snapshot.getChildren()) |child| {
+                // Cascade over an INDEPENDENT copy of the child ids. Each
+                // child's destroy unlinks it from THIS live list via
+                // `detachFromParent` (a swap-remove), and the list's backing
+                // allocation is freed just below — so iterating the live
+                // buffer, or a shallow struct copy that shares it (the list
+                // is now a heap-backed `ArrayList`, not an inline buffer),
+                // would read shrunk / reordered / freed memory. Copy the ids
+                // onto their own allocation first. This also shields the walk
+                // from `entity_destroyed` hooks re-parenting into this list
+                // and from the component pool reshuffling mid-cascade.
+                const kids = self.allocator.dupe(Entity, children_comp.getChildren()) catch @panic("OOM: destroyEntity children snapshot");
+                defer self.allocator.free(kids);
+                for (kids) |child| {
                     destroyEntity(self, child);
                 }
             }
             // Preview telemetry emits BEFORE the actual destroy so any
             // editor-side consumer can still introspect the entity from
-            // a `getComponent` style API while reacting to the frame.
+            // a `getComponent` style API while reacting to the frame — so the
+            // `Children` free below must stay AFTER this: freeing the list
+            // first would hand a preview `getChildren` a slice into a freed
+            // allocation.
             if (self.preview) |*p| p.emitEntityDestroyed(@intCast(entity)) catch {};
             // #701 — unlink from the parent's `Children` before the
             // backend destroy (after it, the `Parent` component is
@@ -260,6 +264,12 @@ pub fn Mixin(comptime Game: type) type {
             self.active_world.sprite_cache.invalidate(@intCast(entity));
             self.renderer.untrackEntity(entity);
             self.releaseTilemap(entity);
+            // Free this entity's own `Children` backing allocation just before
+            // the backend drops the component by value (the ECS runs no
+            // destructor). Kept here — after the preview telemetry above — so
+            // a preview `getChildren` never reads a freed list. Re-fetch: the
+            // cascade may have relocated the Children pool under an old pointer.
+            if (self.ecs_backend.getComponent(entity, Children)) |cc| cc.deinit(self.allocator);
             self.ecs_backend.destroyEntity(entity);
             self.bumpRoster();
             recordTombstone(self, entity);
@@ -278,6 +288,12 @@ pub fn Mixin(comptime Game: type) type {
             // already be destroyed — `detachFromParent` guards with
             // `entityExists` before touching the parent's list.
             self.detachFromParent(entity);
+            // Free this entity's own `Children` backing allocation. This
+            // variant leaves the listed children ALIVE (its contract), but
+            // the `Children` component itself dies with the entity, so its
+            // ArrayList must be freed or it leaks (the ECS runs no
+            // destructor).
+            if (self.ecs_backend.getComponent(entity, Children)) |cc| cc.deinit(self.allocator);
             untrackSceneEntity(self, entity);
             self.active_world.sprite_cache.invalidate(@intCast(entity));
             self.renderer.untrackEntity(entity);
