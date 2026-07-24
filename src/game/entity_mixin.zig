@@ -264,6 +264,17 @@ pub fn Mixin(comptime Game: type) type {
                     destroyEntity(self, child);
                 }
             }
+            // Re-check liveness after the cascade. The entry guard only proved
+            // `entity` was alive at the START; a child's synchronous
+            // `entity_destroyed` hook can call back into the Game and destroy
+            // THIS entity mid-cascade (e.g. a teardown hook that removes an
+            // owner/room when one of its children dies). If it did, the entity
+            // has already run its full destroy — including freeing its own
+            // `Children` allocation — so the tail below (preview, the
+            // `Children` free, backend destroy, tombstone, hooks) must NOT run
+            // again on a dead id or it double-frees / re-emits. (`kids` is our
+            // independent dupe, freed by the defer above regardless.)
+            if (!self.ecs_backend.entityExists(entity)) return;
             // Preview telemetry emits BEFORE the actual destroy so any
             // editor-side consumer can still introspect the entity from
             // a `getComponent` style API while reacting to the frame — so the
