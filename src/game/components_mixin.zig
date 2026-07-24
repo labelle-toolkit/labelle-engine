@@ -104,10 +104,10 @@ pub fn Mixin(comptime Game: type) type {
             });
 
             if (self.ecs_backend.getComponent(parent_entity, Children)) |children_comp| {
-                children_comp.addChild(child);
+                children_comp.addChild(self.allocator, child);
             } else {
                 var new_children = Children{};
-                new_children.addChild(child);
+                new_children.addChild(self.allocator, child);
                 self.ecs_backend.addComponent(parent_entity, new_children);
             }
 

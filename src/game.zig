@@ -482,6 +482,10 @@ pub fn GameConfigWithYAxis(
             renderer: RenderImpl,
             sprite_cache: atlas_mod.SpriteCache,
             nested_entity_arena: std.heap.ArenaAllocator,
+            /// Retained so `deinit` can free heap-owning components (the
+            /// `ChildrenComponent` ArrayLists) before the ECS is torn down —
+            /// the backend drops components by value with no destructor.
+            allocator: std.mem.Allocator,
 
             pub fn init(allocator: std.mem.Allocator) World {
                 return .{
@@ -489,10 +493,21 @@ pub fn GameConfigWithYAxis(
                     .renderer = RenderImpl.init(allocator),
                     .sprite_cache = atlas_mod.SpriteCache.init(allocator),
                     .nested_entity_arena = std.heap.ArenaAllocator.init(allocator),
+                    .allocator = allocator,
                 };
             }
 
             pub fn deinit(self: *World) void {
+                // Free every `ChildrenComponent`'s backing allocation before
+                // the ECS wipe drops the components by value (no destructor)
+                // — otherwise the child lists leak on final teardown.
+                {
+                    var v = self.ecs_backend.view(.{Children}, .{});
+                    defer v.deinit();
+                    while (v.next()) |e| {
+                        if (self.ecs_backend.getComponent(e, Children)) |cc| cc.deinit(self.allocator);
+                    }
+                }
                 self.nested_entity_arena.deinit();
                 self.sprite_cache.deinit();
                 self.renderer.deinit();

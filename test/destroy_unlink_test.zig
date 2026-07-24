@@ -221,13 +221,15 @@ test "#701: repeated child destroys don't leak Children slots" {
     var game = Game.init(testing.allocator);
     defer game.deinit();
 
-    // Consequence 3 of the bug: MAX_CHILDREN slots with silent drop in
-    // addChild — every leaked stale id permanently consumed a slot, so
-    // after enough destroys new children silently failed to register.
+    // Consequence 3 of the bug: a leaked stale id used to linger in the
+    // parent's child list after each destroy. With dynamic children there's
+    // no cap, so this instead pins that repeated parent+destroy cycles leave
+    // the list correct (each destroy unlinks the child) and leak nothing —
+    // `testing.allocator` (via `game.deinit`) fails the test on any leaked
+    // child-list allocation. Loop well past the old 16 cap.
     const parent = game.createEntity();
-    const max = Game.ChildrenComp.MAX_CHILDREN;
     var i: usize = 0;
-    while (i < max + 4) : (i += 1) {
+    while (i < 40) : (i += 1) {
         const child = game.createEntity();
         game.setParent(child, parent, .{});
         game.destroyEntity(child);
