@@ -192,6 +192,12 @@ pub fn Mixin(comptime Game: type) type {
         // ── Generic Component Access ──────────────────────────────
 
         pub fn addComponent(self: *Game, entity: Entity, component: anytype) void {
+            // `Children` owns a heap list; overwriting it by value would leak
+            // the old allocation. The engine manages it via setParent/destroy,
+            // but this is a public path — free any existing one first.
+            if (@TypeOf(component) == Children) {
+                if (self.ecs_backend.getComponent(entity, Children)) |old| old.deinit(self.allocator);
+            }
             self.ecs_backend.addComponent(entity, component);
             // Tag-set membership may have changed — invalidate rosters
             // (#653). Over-invalidation on a re-add is safe: it just
@@ -207,6 +213,11 @@ pub fn Mixin(comptime Game: type) type {
         pub fn setComponent(self: *Game, entity: Entity, component: anytype) void {
             const T = @TypeOf(component);
             const is_update = self.ecs_backend.hasComponent(entity, T);
+            // Overwriting a `Children` by value would leak its old heap list
+            // (see `addComponent`) — free it first on a genuine replace.
+            if (T == Children and is_update) {
+                if (self.ecs_backend.getComponent(entity, Children)) |old| old.deinit(self.allocator);
+            }
             self.ecs_backend.addComponent(entity, component);
             // A genuine add changes tag-set membership; an in-place
             // update does not — only invalidate rosters in the former
@@ -268,6 +279,11 @@ pub fn Mixin(comptime Game: type) type {
         pub fn removeComponent(self: *Game, entity: Entity, comptime T: type) void {
             if (@typeInfo(T) == .@"struct" and @hasDecl(T, "onRemove")) {
                 T.onRemove(ComponentPayload{ .entity_id = @intCast(entity), .game_ptr = @ptrCast(self) });
+            }
+            // Free `Children`'s heap list before the by-value drop — the
+            // engine strips it via detach/destroy, but this is a public path.
+            if (T == Children) {
+                if (self.ecs_backend.getComponent(entity, Children)) |old| old.deinit(self.allocator);
             }
             self.ecs_backend.removeComponent(entity, T);
             // Tag-set membership changed — invalidate rosters (#653).

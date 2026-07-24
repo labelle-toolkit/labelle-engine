@@ -53,6 +53,37 @@ test "#701: destroying a child unlinks it from the parent's Children" {
     try testing.expectEqual(@as(usize, 0), game.entityCount());
 }
 
+test "#797: direct removeComponent / set / add of Children don't leak the list" {
+    // The generic component API is a public path that bypasses the hierarchy
+    // choke points: removing or overwriting a `Children` by value would drop
+    // its heap list without freeing it. `game.deinit` runs under
+    // `testing.allocator`, so any leaked child-list allocation fails here.
+    var game = Game.init(testing.allocator);
+    defer game.deinit();
+    const Children = Game.ChildrenComp;
+
+    const parent = game.createEntity();
+    var i: usize = 0;
+    while (i < 20) : (i += 1) game.setParent(game.createEntity(), parent, .{});
+    try testing.expectEqual(@as(usize, 20), game.getChildren(parent).len);
+
+    // Direct generic removal must free the backing list.
+    game.removeComponent(parent, Children);
+    try testing.expect(!game.hasComponent(parent, Children));
+
+    // setComponent overwrite must free the replaced list.
+    i = 0;
+    while (i < 20) : (i += 1) game.setParent(game.createEntity(), parent, .{});
+    game.setComponent(parent, Children{});
+    try testing.expectEqual(@as(usize, 0), game.getChildren(parent).len);
+
+    // addComponent overwrite must free the replaced list.
+    i = 0;
+    while (i < 20) : (i += 1) game.setParent(game.createEntity(), parent, .{});
+    game.addComponent(parent, Children{});
+    try testing.expectEqual(@as(usize, 0), game.getChildren(parent).len);
+}
+
 test "#701: destroying the middle child leaves the siblings listed" {
     var game = Game.init(testing.allocator);
     defer game.deinit();
