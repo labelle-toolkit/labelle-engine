@@ -245,14 +245,12 @@ pub fn Mixin(comptime Game: type) type {
                     destroyEntity(self, child);
                 }
             }
-            // Free this entity's own `Children` backing allocation before the
-            // backend drops the component by value (the ECS runs no
-            // destructor). Re-fetch: the cascade above may have relocated the
-            // Children pool under any pointer held before it.
-            if (self.ecs_backend.getComponent(entity, Children)) |cc| cc.deinit(self.allocator);
             // Preview telemetry emits BEFORE the actual destroy so any
             // editor-side consumer can still introspect the entity from
-            // a `getComponent` style API while reacting to the frame.
+            // a `getComponent` style API while reacting to the frame — so the
+            // `Children` free below must stay AFTER this: freeing the list
+            // first would hand a preview `getChildren` a slice into a freed
+            // allocation.
             if (self.preview) |*p| p.emitEntityDestroyed(@intCast(entity)) catch {};
             // #701 — unlink from the parent's `Children` before the
             // backend destroy (after it, the `Parent` component is
@@ -266,6 +264,12 @@ pub fn Mixin(comptime Game: type) type {
             self.active_world.sprite_cache.invalidate(@intCast(entity));
             self.renderer.untrackEntity(entity);
             self.releaseTilemap(entity);
+            // Free this entity's own `Children` backing allocation just before
+            // the backend drops the component by value (the ECS runs no
+            // destructor). Kept here — after the preview telemetry above — so
+            // a preview `getChildren` never reads a freed list. Re-fetch: the
+            // cascade may have relocated the Children pool under an old pointer.
+            if (self.ecs_backend.getComponent(entity, Children)) |cc| cc.deinit(self.allocator);
             self.ecs_backend.destroyEntity(entity);
             self.bumpRoster();
             recordTombstone(self, entity);
