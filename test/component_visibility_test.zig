@@ -235,3 +235,62 @@ test "PackView composes over a ComponentRegistryMulti" {
     try testing.expect(!CitizensMulti.has("ships__Ship"));
     try testing.expect(!CitizensMulti.isAllowed("ships__Ship"));
 }
+
+// ─── Comptime branch-quota headroom at large registries (#795) ──────────────
+//
+// Registry resolution (`names()`, `globalNames`, `PackView`, `ComponentView`)
+// runs nested comptime `inline for` walks whose branch count scales with
+// (component count × map count). A large pack-composed game overran Zig's
+// default 1000 backwards-branch budget deep in engine code — with the engine
+// shipped as a pinned source tarball there was no game-side fix (#795, real
+// hit in flying-platform-labelle). The fix raises the comptime quota at those
+// entry points.
+//
+// This test instantiates a registry far past the count that previously tripped
+// the ceiling (pre-fix it broke around ~240 components at `names()`; here we
+// build 800). If the quota bumps are ever removed this file fails to COMPILE
+// with "evaluation exceeded 1000 backwards branches" — i.e. the proof is that
+// the module builds at all, plus the runtime assertions below.
+
+const BigN = 200; // components per map → 400 globals + 400 privates = 800 total
+
+/// Synthesize a component map VALUE with `n` comptime `type` fields named
+/// `<prefix>{start..}`, each defaulting to `T`. Mirrors the `@Struct`-based
+/// wide-type construction used in `script_contract_test.zig`; the registry
+/// only cares about field name→type, so reusing one type per field is fine.
+fn manyMap(comptime prefix: []const u8, comptime start: usize, comptime n: usize, comptime T: type) type {
+    @setEvalBranchQuota(1_000_000);
+    var field_names: [n][:0]const u8 = undefined;
+    var attrs: [n]std.builtin.Type.StructField.Attributes = undefined;
+    for (&field_names, &attrs, 0..) |*nm, *a, i| {
+        nm.* = std.fmt.comptimePrint("{s}{d}", .{ prefix, start + i });
+        a.* = .{ .@"comptime" = true, .default_value_ptr = @as(*const type, &T) };
+    }
+    const cn = field_names;
+    const ca = attrs;
+    return @Struct(.auto, null, &cn, &@splat(type), &ca);
+}
+
+// Map 0: BigN `.global` components (Locked). Map 1: BigN private ones (Worker).
+const BigGlobals = manyMap("g", 0, BigN, Locked){};
+const BigPrivates = manyMap("p", 0, BigN, Worker){};
+const BigRegistry = ComponentRegistryMulti(.{ BigGlobals, BigPrivates });
+
+test "large registry: names() stays under the raised quota" {
+    // Pre-fix this call alone overran the 1000-branch budget at ~240 names.
+    try testing.expectEqual(@as(usize, 2 * BigN), BigRegistry.names().len);
+}
+
+test "large registry: globalNames stays under the raised quota" {
+    // Only the `g*` (Locked) map is `.global`.
+    try testing.expectEqual(@as(usize, BigN), engine.globalComponentNames(BigRegistry).len);
+}
+
+test "large registry: PackView + ComponentView.names stay under the raised quota" {
+    const BigView = PackView(BigRegistry, &.{ "p0", "p1", "p199" });
+    // All globals (BigN) + the 3 own privates resolve.
+    try testing.expectEqual(@as(usize, BigN + 3), BigView.names().len);
+    try testing.expect(BigView.has("g0")); // a global facet
+    try testing.expect(BigView.has("p0")); // own private
+    try testing.expect(!BigView.has("p50")); // foreign private (not listed)
+}

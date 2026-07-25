@@ -112,6 +112,10 @@ pub fn ComponentRegistryMulti(comptime component_maps: anytype) type {
 
     return struct {
         pub fn has(comptime name: []const u8) bool {
+            // Comptime-only branch headroom (#795): a caller resolving many
+            // names against a many-map registry drives this walk O(maps) per
+            // name and overruns the default 1000-branch budget. Free at runtime.
+            @setEvalBranchQuota(1_000_000);
             inline for (maps_info.@"struct".fields) |field| {
                 const Map = @field(component_maps, field.name);
                 if (@hasField(@TypeOf(Map), name)) return true;
@@ -120,6 +124,7 @@ pub fn ComponentRegistryMulti(comptime component_maps: anytype) type {
         }
 
         pub fn getType(comptime name: []const u8) type {
+            @setEvalBranchQuota(1_000_000); // see `has` (#795)
             inline for (maps_info.@"struct".fields) |field| {
                 const Map = @field(component_maps, field.name);
                 if (@hasField(@TypeOf(Map), name)) {
@@ -147,6 +152,12 @@ pub fn ComponentRegistryMulti(comptime component_maps: anytype) type {
         /// by a container-scoped const so the slice has static storage and is
         /// valid when `names()` is called at runtime.
         const _names = blk: {
+            // Building the deduped name union is O(maps × fields × earlier
+            // maps) — every field runs `nameInEarlierMap`, itself a walk over
+            // the preceding maps. A large pack-composed registry blows the
+            // default 1000-branch budget here (#795); this is the path a real
+            // game hit. Comptime-only bound, free at runtime.
+            @setEvalBranchQuota(1_000_000);
             // First pass: count the unique names.
             var count: usize = 0;
             for (maps_info.@"struct".fields, 0..) |field, mi| {
@@ -203,6 +214,10 @@ pub fn ComponentRegistryWithPlugins(comptime local_map: anytype, comptime plugin
 
     return struct {
         pub fn has(comptime name: []const u8) bool {
+            // Comptime-only branch headroom (#795): resolving many names
+            // against many plugin modules overruns the default 1000-branch
+            // budget. Free at runtime.
+            @setEvalBranchQuota(1_000_000);
             if (@hasField(@TypeOf(local_map), name)) return true;
             inline for (plugins_info.@"struct".fields) |field| {
                 const mod = @field(plugin_modules, field.name);
@@ -214,6 +229,7 @@ pub fn ComponentRegistryWithPlugins(comptime local_map: anytype, comptime plugin
         }
 
         pub fn getType(comptime name: []const u8) type {
+            @setEvalBranchQuota(1_000_000); // see `has` (#795)
             if (@hasField(@TypeOf(local_map), name)) {
                 return @field(local_map, name);
             }
@@ -232,6 +248,10 @@ pub fn ComponentRegistryWithPlugins(comptime local_map: anytype, comptime plugin
         /// Returns a comptime slice of all registered component names.
         pub fn names() []const []const u8 {
             comptime {
+                // Comptime-only branch headroom (#795): the two nested walks
+                // below scale with (local + plugins × their components) and
+                // overrun the default 1000-branch budget for a large game.
+                @setEvalBranchQuota(1_000_000);
                 var count: usize = 0;
 
                 // Count local components
@@ -301,6 +321,9 @@ pub fn ComponentRegistryWithPlugins(comptime local_map: anytype, comptime plugin
 
 /// Comptime membership test for an allow-list of component names.
 fn nameAllowed(comptime allowed_names: []const []const u8, comptime name: []const u8) bool {
+    // Comptime-only branch headroom (#795): callers scan this over a large
+    // allow-list once per lookup; raise the budget for the whole evaluation.
+    @setEvalBranchQuota(1_000_000);
     inline for (allowed_names) |allowed| {
         if (comptime std.mem.eql(u8, allowed, name)) return true;
     }
@@ -346,6 +369,10 @@ pub fn ComponentView(comptime FullRegistry: type, comptime allowed_names: []cons
         /// Backed by a container-scoped const so the slice has static storage
         /// and is valid when `names()` is called at runtime.
         const _names = blk: {
+            // Comptime-only branch headroom (#795): this filters the
+            // allow-list through `FullRegistry.has`, itself a per-name walk
+            // over every map/plugin — O(allowed × registry). Free at runtime.
+            @setEvalBranchQuota(1_000_000);
             var buf: [allowed_names.len][]const u8 = undefined;
             var n: usize = 0;
             for (allowed_names) |name| {
@@ -387,6 +414,11 @@ pub fn globalNames(comptime FullRegistry: type) []const []const u8 {
     // the computed list static storage so the slice survives a runtime call.
     const Holder = struct {
         const list = blk: {
+            // Comptime-only branch headroom (#795): this walks every
+            // registered name and resolves each through `getType` (a per-name
+            // map/plugin walk) — O(names × registry). A large registry blows
+            // the default 1000-branch budget here. Free at runtime.
+            @setEvalBranchQuota(1_000_000);
             const all = FullRegistry.names();
             var buf: [all.len][]const u8 = undefined;
             var n: usize = 0;
