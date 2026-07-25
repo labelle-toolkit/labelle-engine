@@ -252,7 +252,7 @@ test "PackView composes over a ComponentRegistryMulti" {
 // with "evaluation exceeded 1000 backwards branches" — i.e. the proof is that
 // the module builds at all, plus the runtime assertions below.
 
-const BigN = 200; // components per map → 400 globals + 400 privates = 800 total
+const BigN = 400; // components per map → 400 globals + 400 privates = 800 total
 
 /// Synthesize a component map VALUE with `n` comptime `type` fields named
 /// `<prefix>{start..}`, each defaulting to `T`. Mirrors the `@Struct`-based
