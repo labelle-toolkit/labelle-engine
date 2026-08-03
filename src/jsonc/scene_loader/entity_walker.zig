@@ -249,7 +249,7 @@ pub fn EntityWalker(comptime GameType: type, comptime Components: type, comptime
             if (prefab_components) |pc| {
                 for (pc.entries) |entry| {
                     if (uf.isTargetKey(entry.key)) {
-                        warnPrefabRootTarget(game, entity_obj, entry.key);
+                        to.warnPrefabRootTarget(game.log, entity_obj.getString("prefab") orelse "<inline>", entry.key);
                         continue;
                     }
                     if (!applied.contains(entry.key)) {
@@ -435,17 +435,6 @@ pub fn EntityWalker(comptime GameType: type, comptime Components: type, comptime
             game.setWorldPosition(child, world_pos);
         }
 
-        /// Warn once per (prefab, key): a `@` key on a prefab ROOT is
-        /// skipped, not applied — target keys only mean something on
-        /// a *reference* (#801). Visible because a silent drop is the
-        /// failure mode this feature exists to kill.
-        fn warnPrefabRootTarget(game: *GameType, entity_obj: Value.Object, key: []const u8) void {
-            const pname = entity_obj.getString("prefab") orelse "<inline>";
-            var buf: [256]u8 = undefined;
-            const dedup = std.fmt.bufPrint(&buf, "prefab-root-target:{s}:{s}", .{ pname, key }) catch return;
-            uf.warnOnceKey(game.log, dedup, "[target-override] prefab '{s}' declares \"{s}\" on its ROOT — `@` targets belong on a reference's overrides, not a prefab root; skipped (#801).", .{ pname, key });
-        }
-
         /// A logger that swallows everything — the nested-component
         /// scan below re-parses patch views purely to read key names;
         /// the instantiation pass already emitted any warnings.
@@ -513,6 +502,22 @@ pub fn EntityWalker(comptime GameType: type, comptime Components: type, comptime
                 }
             }
             if (!any_orphan) return;
+
+            // The walk below is pure diagnostics — skip it when every
+            // orphan key has already produced its (deduplicated)
+            // warning, so N instances of one prefab pay for one walk,
+            // not N (CodeRabbit on #802).
+            var any_unwarned = false;
+            for (sc.entries) |e| {
+                if (e.value == .null_value) continue;
+                var kbuf: [256]u8 = undefined;
+                const k = std.fmt.bufPrint(&kbuf, "override-root-attach:{s}:{s}", .{ pname, e.key }) catch continue;
+                if (!uf.alreadyWarnedKey(k)) {
+                    any_unwarned = true;
+                    break;
+                }
+            }
+            if (!any_unwarned) return;
 
             const prefab_val = prefab_cache.get(pname) orelse return;
 

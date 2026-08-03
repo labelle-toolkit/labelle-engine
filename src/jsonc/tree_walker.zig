@@ -364,11 +364,16 @@ fn effectiveComponents(
     patch: ?Value.Object,
 ) error{OutOfMemory}!?Value.Object {
     // Inline entry (no prefab) — its `components` ARE the effective
-    // set; nothing to merge.
+    // set; nothing to merge. (The caller already stripped `@` keys
+    // from the patch via `splitPatch`, so this path is `@`-free.)
     const pc = prefab_components orelse return patch;
-    // Reference entry with no `overrides` — the prefab components
-    // are the effective set unchanged.
-    const ov = patch orelse return pc;
+    // Reference entry with no `overrides` — route through the merge
+    // loop with an EMPTY patch rather than returning `pc` verbatim:
+    // the loop is where prefab-root `@` keys get filtered, and an
+    // unfiltered return would let `walkComponentFields` descend into
+    // a `@` value the loader never instantiates — a spurious
+    // `PrefabCycle` source (codex P2 + CodeRabbit on #802).
+    const ov = patch orelse Value.Object{ .entries = &.{} };
 
     const a = merge_arena.allocator();
     var entries: std.ArrayListUnmanaged(Value.Object.Entry) = .empty;

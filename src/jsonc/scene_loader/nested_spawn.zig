@@ -304,11 +304,17 @@ pub fn NestedSpawn(comptime GameType: type, comptime Components: type, comptime 
                             }
                             // Prefab defaults. `@` keys on a prefab
                             // ROOT are meaningless (targets belong on
-                            // a reference, #801) — skip them here;
-                            // the top-level walker warns once.
+                            // a reference, #801) — warn once and skip.
+                            // The warning must live HERE too: a prefab
+                            // referenced only from a component array
+                            // never passes through the top-level
+                            // walker's apply pass (CodeRabbit on #802).
                             if (child_prefab_comps) |pc| {
                                 for (pc.entries) |e| {
-                                    if (uf.isTargetKey(e.key)) continue;
+                                    if (uf.isTargetKey(e.key)) {
+                                        to.warnPrefabRootTarget(game.log, child_obj.getString("prefab") orelse "<inline>", e.key);
+                                        continue;
+                                    }
                                     const already_set = if (child_scene_comps) |sc| blk: {
                                         for (sc.entries) |se| {
                                             if (std.mem.eql(u8, se.key, e.key)) break :blk true;

@@ -105,6 +105,14 @@ fn warnOnce(log: anytype, comptime msg: []const u8) void {
 // above — load is single-threaded today.
 var warned_runtime: ?std.StringHashMap(void) = null;
 
+/// True iff `warnOnceKey` has already fired for `key` — lets a caller
+/// skip EXPENSIVE diagnostic work (a tree walk) whose only output would
+/// be a deduplicated log line (CodeRabbit on #802).
+pub fn alreadyWarnedKey(key: []const u8) bool {
+    const set = warned_runtime orelse return false;
+    return set.contains(key);
+}
+
 /// Warn-once for a runtime-formatted message. The first call with a
 /// given `key` logs `msg`; later calls with an equal `key` are
 /// suppressed. `key` is duped into the process-lifetime allocator on
@@ -377,15 +385,15 @@ pub fn entityPatch(entity_obj: Value.Object, allocator: std.mem.Allocator, log: 
             return error.InvalidFormat;
         }
         if (entity_obj.getObject("overrides")) |overrides| {
-            if (hasPascalCaseKey(entity_obj)) {
-                warnOnce(log, "[unified-format] reference entry has both an \"overrides\" wrapper and flat PascalCase keys — \"overrides\" wins. Drop one shape (RFC #596).");
+            if (hasFlatPatchKey(entity_obj)) {
+                warnOnce(log, "[unified-format] reference entry has both an \"overrides\" wrapper and flat PascalCase/`@` keys — \"overrides\" wins and the flat keys are DROPPED. Drop one shape (RFC #596, #801).");
             }
             return overrides;
         }
     } else {
         if (entity_obj.getObject("components")) |components| {
-            if (hasPascalCaseKey(entity_obj)) {
-                warnOnce(log, "[unified-format] inline entity has both a \"components\" wrapper and flat PascalCase keys — wrapper wins. Drop one shape (RFC #596).");
+            if (hasFlatPatchKey(entity_obj)) {
+                warnOnce(log, "[unified-format] inline entity has both a \"components\" wrapper and flat PascalCase/`@` keys — wrapper wins and the flat keys are DROPPED. Drop one shape (RFC #596, #801).");
             }
             return components;
         }
@@ -403,7 +411,7 @@ pub fn entityPatch(entity_obj: Value.Object, allocator: std.mem.Allocator, log: 
 /// PascalCase component (RFC #596 Axis 2) or `@`-target (#801) — at
 /// its top level. Used to detect the flat shape without allocating a
 /// synthetic Object — and to warn when wrapped + flat are mixed.
-fn hasPascalCaseKey(entity_obj: Value.Object) bool {
+fn hasFlatPatchKey(entity_obj: Value.Object) bool {
     for (entity_obj.entries) |e| {
         if (isFlatComponentKey(e.key)) return true;
     }
@@ -463,8 +471,8 @@ fn synthesizeFlatComponents(entity_obj: Value.Object, allocator: std.mem.Allocat
 /// inline entries.
 pub fn prefabComponents(prefab_root: Value.Object, allocator: std.mem.Allocator, log: anytype) error{OutOfMemory}!?Value.Object {
     if (prefab_root.getObject("components")) |c| {
-        if (hasPascalCaseKey(prefab_root)) {
-            warnOnce(log, "[unified-format] prefab root has both a \"components\" wrapper and flat PascalCase keys — wrapper wins. Drop one shape (RFC #596).");
+        if (hasFlatPatchKey(prefab_root)) {
+            warnOnce(log, "[unified-format] prefab root has both a \"components\" wrapper and flat PascalCase/`@` keys — wrapper wins and the flat keys are DROPPED. Drop one shape (RFC #596, #801).");
         }
         return c;
     }

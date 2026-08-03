@@ -140,6 +140,20 @@ pub fn buildCtx(
                 );
                 return error.InvalidFormat;
             }
+            // A target patch's keys are component names: PascalCase
+            // (RFC #596) or pack-namespaced (`industry__Workstation`,
+            // #440 — these start lowercase, so PascalCase alone is
+            // the wrong test). A bare data key like `"capacity"`
+            // would silently no-op through `applyComponent` — the
+            // exact silence #801 kills — so reject it loudly (codex
+            // P2 on #802).
+            if (!uf.isPascalCase(pe.key) and std.mem.indexOf(u8, pe.key, "__") == null) {
+                log.err(
+                    "[target-override] \"{s}\" inside \"{s}\" on prefab '{s}' is not a component name (PascalCase or pack-namespaced) — did you mean \"{s}\": {{ \"SomeComponent\": {{ \"{s}\": ... }} }}? (#801)",
+                    .{ pe.key, e.key, prefab_name, e.key, pe.key },
+                );
+                return error.InvalidFormat;
+            }
         }
         entries[i] = .{ .name = e.key[1..], .patch = e.value };
     }
@@ -184,6 +198,20 @@ pub fn foldMatches(
         }
     }
     return .{ .patch = current, .matched = matched };
+}
+
+/// Warn once per (prefab, key): a `@` key on a prefab ROOT is
+/// skipped, not applied — target keys only mean something on a
+/// *reference* (#801). Shared by every loader path that consumes
+/// prefab-root components (entity_walker, nested_spawn,
+/// prefab_spawn), because a prefab referenced only from a component
+/// array or runtime spawn never passes through the top-level apply
+/// pass (CodeRabbit on #802). Visible because a silent drop is the
+/// failure mode this feature exists to kill.
+pub fn warnPrefabRootTarget(log: anytype, prefab_name: []const u8, key: []const u8) void {
+    var buf: [256]u8 = undefined;
+    const dedup = std.fmt.bufPrint(&buf, "prefab-root-target:{s}:{s}", .{ prefab_name, key }) catch return;
+    uf.warnOnceKey(log, dedup, "[target-override] prefab '{s}' declares \"{s}\" on its ROOT — `@` targets belong on a reference's overrides, not a prefab root; skipped (#801).", .{ prefab_name, key });
 }
 
 /// After the declaring reference's body has fully loaded: every

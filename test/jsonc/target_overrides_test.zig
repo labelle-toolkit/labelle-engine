@@ -34,10 +34,15 @@ const Storage = struct {
     capacity: u32 = 5,
 };
 
+const NamespacedStorage = struct {
+    capacity: u32 = 5,
+};
+
 const Components = engine.ComponentRegistry(.{
     .Machine = Machine,
     .Room = Room,
     .Storage = Storage,
+    .industry__Storage = NamespacedStorage,
 });
 
 const Game = engine.Game;
@@ -435,4 +440,114 @@ test "an override-only bare component still attaches to the root (now warned, #8
         const s = game.ecs_backend.getComponent(@intCast(sid), Storage).?;
         try testing.expectEqual(@as(u32, 5), s.capacity);
     }
+}
+
+// ── Round 2 (bot-review hardening) ─────────────────────────────────
+
+test "a bare data key inside a @ patch is rejected" {
+    var game = Game.init(testing.allocator);
+    defer game.deinit();
+    const result = loadWithPrefabs(&game, &.{
+        .{ .name = "machine", .data = machine_prefab },
+        .{ .name = "storage_slot", .data = storage_slot_prefab },
+    },
+        // `capacity` is component DATA, not a component — applying it
+        // would silently no-op. Hard error with a did-you-mean.
+        \\{ "children": [
+        \\  { "prefab": "machine", "@slot": { "capacity": 12 } }
+        \\] }
+    );
+    try testing.expectError(error.InvalidFormat, result);
+}
+
+test "a pack-namespaced component key inside a @ patch is accepted" {
+    var game = Game.init(testing.allocator);
+    defer game.deinit();
+    try loadWithPrefabs(&game, &.{
+        .{
+            .name = "nmachine",
+            .data =
+            \\{ "Machine": { "slots": [ { "prefab": "nslot" } ] } }
+            ,
+        },
+        .{
+            // Namespaced keys start lowercase, so the wrapped form is
+            // required prefab-side (flat keeps PascalCase + `@` only).
+            .name = "nslot",
+            .data =
+            \\{ "ref": "nslot", "components": { "industry__Storage": { "capacity": 5 } } }
+            ,
+        },
+    },
+        \\{ "children": [
+        \\  { "prefab": "nmachine", "@nslot": { "industry__Storage": { "capacity": 12 } } }
+        \\] }
+    );
+    var view = game.ecs_backend.view(.{NamespacedStorage}, .{});
+    defer view.deinit();
+    const e = view.next() orelse return error.TestExpectedEntity;
+    try testing.expectEqual(@as(u32, 12), game.ecs_backend.getComponent(e, NamespacedStorage).?.capacity);
+    try testing.expect(view.next() == null);
+}
+
+test "prefab-root @ keys are skipped without spawning or cycling" {
+    var game = Game.init(testing.allocator);
+    defer game.deinit();
+    // The root-level `@junk` even references the prefab itself — the
+    // loader must neither spawn from it nor report a cycle, because
+    // that content is never instantiated. Exercises BOTH the merged
+    // path (entry with overrides) and the no-patch early return.
+    const selfy =
+        \\{ "Storage": { "capacity": 3 },
+        \\  "@junk": { "Machine": { "slots": [ { "prefab": "selfy" } ] } } }
+    ;
+    try loadWithPrefabs(&game, &.{.{ .name = "selfy", .data = selfy }},
+        \\{ "children": [
+        \\  { "prefab": "selfy" },
+        \\  { "prefab": "selfy", "Storage": { "capacity": 4 } }
+        \\] }
+    );
+    var buf: [8]u32 = undefined;
+    try testing.expectEqualSlices(u32, &.{ 3, 4 }, storageCapacities(&game, &buf));
+    var view = game.ecs_backend.view(.{Machine}, .{});
+    defer view.deinit();
+    try testing.expect(view.next() == null);
+}
+
+test "runtime spawnFromPrefab fails loudly (and cleanly) on an unmatched @ in the body" {
+    var tmp_dir = testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    try tmp_dir.dir.createDir(std.testing.io, "prefabs", .default_dir);
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "prefabs/machine.jsonc",
+        .data = machine_prefab,
+    });
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "prefabs/storage_slot.jsonc",
+        .data = storage_slot_prefab,
+    });
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "prefabs/broken.jsonc",
+        .data =
+        \\{ "children": [
+        \\  { "prefab": "machine", "@nosuch": { "Storage": { "capacity": 12 } } }
+        \\] }
+        ,
+    });
+    var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const len = try tmp_dir.dir.realPath(std.testing.io, &path_buf);
+    const prefab_path = try std.fmt.allocPrint(testing.allocator, "{s}/prefabs", .{path_buf[0..len]});
+    defer testing.allocator.free(prefab_path);
+
+    var game = Game.init(testing.allocator);
+    defer game.deinit();
+    try Bridge.loadSceneFromSource(&game,
+        \\{ "children": [] }
+    , prefab_path);
+
+    try testing.expect(game.spawnFromPrefab("broken", .{ .x = 0, .y = 0 }) == null);
+    // Nothing half-built stays behind: no Storage entities linger.
+    var view = game.ecs_backend.view(.{Storage}, .{});
+    defer view.deinit();
+    try testing.expect(view.next() == null);
 }

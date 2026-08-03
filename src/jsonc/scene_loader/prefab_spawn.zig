@@ -16,6 +16,7 @@ const Position = core.Position;
 const prefab_cache_mod = @import("../prefab_cache.zig");
 const PrefabCache = prefab_cache_mod.PrefabCache;
 const uf = @import("../unified_format.zig");
+const to = @import("../target_overrides.zig");
 const tree_walker = @import("../tree_walker.zig");
 const component_apply_mod = @import("../component_apply.zig");
 const on_ready_mod = @import("../on_ready.zig");
@@ -97,6 +98,13 @@ pub fn PrefabSpawn(comptime GameType: type, comptime Components: type, comptime 
             // parent_offset so prefab positions are relative to the
             // spawn point.
             for (prefab_components.entries) |entry| {
+                // `@` keys on a prefab ROOT are never applied (#801)
+                // — warn once and skip, same rule as the scene-load
+                // paths (CodeRabbit on #802).
+                if (uf.isTargetKey(entry.key)) {
+                    to.warnPrefabRootTarget(game.log, name, entry.key);
+                    continue;
+                }
                 ApplyHelpers.applyComponent(game, entity, entry.key, entry.value, pos);
             }
 
@@ -108,8 +116,15 @@ pub fn PrefabSpawn(comptime GameType: type, comptime Components: type, comptime 
             // malformed and shouldn't appear in the world).
             const entity_pos = game.getPosition(entity);
             for (prefab_components.entries) |entry| {
+                if (uf.isTargetKey(entry.key)) continue; // warned in the apply loop
                 Self.spawnAndLinkNestedEntities(game, entity, entry.key, entry.value, entity_pos, prefab_cache, 0, null, null) catch |err| {
                     game.log.err("[spawnPrefab] '{s}' nested-entity load failed: {s}", .{ name, @errorName(err) });
+                    // The nested loader already destroyed its own
+                    // untransferred children — but the ROOT was
+                    // created and tracked above and would otherwise
+                    // linger as a half-built entity behind a `null`
+                    // return (codex P2 on #802).
+                    game.destroyEntity(entity);
                     return null;
                 };
             }
@@ -124,7 +139,20 @@ pub fn PrefabSpawn(comptime GameType: type, comptime Components: type, comptime 
             // Process children — save world pos, set parent, restore (#417).
             if (prefab_root.getArray("children")) |children| {
                 for (children.items) |child_val| {
-                    const child = Self.loadEntityInternal(game, child_val, prefab_cache, 1, entity_pos, null, null) catch continue;
+                    const child = Self.loadEntityInternal(game, child_val, prefab_cache, 1, entity_pos, null, null) catch |err| switch (err) {
+                        // `@`-target semantics are hard errors (#801)
+                        // — a runtime spawn must not report a
+                        // successful-looking root while silently
+                        // omitting the failed child (codex P2 on
+                        // #802). Destroy the root (cascades through
+                        // already-attached children) and bail.
+                        error.InvalidFormat => {
+                            game.log.err("[spawnPrefab] '{s}' child load failed: {s}", .{ name, @errorName(err) });
+                            game.destroyEntity(entity);
+                            return null;
+                        },
+                        else => continue,
+                    };
                     const world_pos = game.getPosition(child);
                     game.setParent(child, entity, .{});
                     game.setWorldPosition(child, world_pos);
