@@ -551,3 +551,44 @@ test "runtime spawnFromPrefab fails loudly (and cleanly) on an unmatched @ in th
     defer view.deinit();
     try testing.expect(view.next() == null);
 }
+
+test "a namespaced-looking key with a non-Pascal suffix is rejected" {
+    var game = Game.init(testing.allocator);
+    defer game.deinit();
+    const result = loadWithPrefabs(&game, &.{
+        .{ .name = "machine", .data = machine_prefab },
+        .{ .name = "storage_slot", .data = storage_slot_prefab },
+    },
+        // `capacity__oops` has the namespace delimiter but no Pascal
+        // suffix — it can never match a registered component, so
+        // accepting it would be a silent no-op (codex round 3).
+        \\{ "children": [
+        \\  { "prefab": "machine", "@slot": { "capacity__oops": 12 } }
+        \\] }
+    );
+    try testing.expectError(error.InvalidFormat, result);
+}
+
+test "@ works against a root-wrapped (unified v1.x) prefab" {
+    // `{ "root": { ... } }` files must unwrap on every path — the
+    // diagnostic walk included (codex round 3).
+    var game = Game.init(testing.allocator);
+    defer game.deinit();
+    try loadWithPrefabs(&game, &.{
+        .{
+            .name = "wrapped",
+            .data =
+            \\{ "root": { "Machine": { "slots": [
+            \\    { "prefab": "storage_slot" }
+            \\] } } }
+            ,
+        },
+        .{ .name = "storage_slot", .data = storage_slot_prefab },
+    },
+        \\{ "children": [
+        \\  { "prefab": "wrapped", "@slot": { "Storage": { "capacity": 12 } } }
+        \\] }
+    );
+    var buf: [8]u32 = undefined;
+    try testing.expectEqualSlices(u32, &.{12}, storageCapacities(&game, &buf));
+}

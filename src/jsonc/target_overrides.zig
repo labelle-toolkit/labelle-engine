@@ -143,11 +143,12 @@ pub fn buildCtx(
             // A target patch's keys are component names: PascalCase
             // (RFC #596) or pack-namespaced (`industry__Workstation`,
             // #440 — these start lowercase, so PascalCase alone is
-            // the wrong test). A bare data key like `"capacity"`
-            // would silently no-op through `applyComponent` — the
-            // exact silence #801 kills — so reject it loudly (codex
-            // P2 on #802).
-            if (!uf.isPascalCase(pe.key) and std.mem.indexOf(u8, pe.key, "__") == null) {
+            // the wrong test). A bare data key like `"capacity"` —
+            // or a namespaced-looking one with a non-Pascal suffix
+            // like `"capacity__oops"` — would silently no-op through
+            // `applyComponent`, the exact silence #801 kills; reject
+            // loudly (codex P2 ×2 on #802).
+            if (!isComponentKeyShape(pe.key)) {
                 log.err(
                     "[target-override] \"{s}\" inside \"{s}\" on prefab '{s}' is not a component name (PascalCase or pack-namespaced) — did you mean \"{s}\": {{ \"SomeComponent\": {{ \"{s}\": ... }} }}? (#801)",
                     .{ pe.key, e.key, prefab_name, e.key, pe.key },
@@ -160,6 +161,17 @@ pub fn buildCtx(
     const ctx = try allocator.create(TargetCtx);
     ctx.* = .{ .parent = parent, .entries = entries, .prefab_name = prefab_name };
     return ctx;
+}
+
+/// A key shaped like a component name: PascalCase (RFC #596), or the
+/// pack-namespaced `<prefix>__<Pascal>` form (#440) — nonempty prefix,
+/// PascalCase suffix after the LAST `__` (so `capacity__oops` is
+/// rejected, `industry__TendableWorkstation` accepted).
+fn isComponentKeyShape(key: []const u8) bool {
+    if (uf.isPascalCase(key)) return true;
+    const i = std.mem.lastIndexOf(u8, key, "__") orelse return false;
+    if (i == 0) return false;
+    return uf.isPascalCase(key[i + 2 ..]);
 }
 
 /// Result of folding matched target patches into an entity's own

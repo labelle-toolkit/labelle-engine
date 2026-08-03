@@ -486,9 +486,12 @@ pub fn EntityWalker(comptime GameType: type, comptime Components: type, comptime
 
             // Fast path: every override key is declared on the root
             // (the overwhelmingly common case) — no walk needed.
+            // `null` removals are NOT skipped: removing a component
+            // the root never carried is the same trap in removal
+            // clothing — the nested entity keeps its component while
+            // the scene reads like it was removed (codex P2 on #802).
             var any_orphan = false;
             for (sc.entries) |e| {
-                if (e.value == .null_value) continue;
                 const on_root = blk: {
                     const pc = prefab_components orelse break :blk false;
                     for (pc.entries) |pe| {
@@ -509,7 +512,6 @@ pub fn EntityWalker(comptime GameType: type, comptime Components: type, comptime
             // not N (CodeRabbit on #802).
             var any_unwarned = false;
             for (sc.entries) |e| {
-                if (e.value == .null_value) continue;
                 var kbuf: [256]u8 = undefined;
                 const k = std.fmt.bufPrint(&kbuf, "override-root-attach:{s}:{s}", .{ pname, e.key }) catch continue;
                 if (!uf.alreadyWarnedKey(k)) {
@@ -519,7 +521,17 @@ pub fn EntityWalker(comptime GameType: type, comptime Components: type, comptime
             }
             if (!any_unwarned) return;
 
-            const prefab_val = prefab_cache.get(pname) orelse return;
+            // Walk a SYNTHETIC reference to the prefab rather than
+            // the raw cached file value: the walker only unwraps the
+            // unified `{ "root": { ... } }` shape when it resolves a
+            // reference, so a raw wrapped file would scan as empty
+            // and the diagnostic would silently never fire for
+            // root-wrapped prefabs (codex P2 on #802). Mirrors the
+            // synthetic-entry trick in `prefab_spawn`'s cycle check.
+            var ref_entries = [_]Value.Object.Entry{
+                .{ .key = "prefab", .value = .{ .string = pname } },
+            };
+            const ref_entry = Value{ .object = .{ .entries = &ref_entries } };
 
             var arena = std.heap.ArenaAllocator.init(game.allocator);
             defer arena.deinit();
@@ -527,10 +539,9 @@ pub fn EntityWalker(comptime GameType: type, comptime Components: type, comptime
             var wctx = tree_walker.WalkContext.init(arena.allocator());
             defer wctx.deinit();
             const collector = NestedComponentNames{ .set = &names, .arena = arena.allocator() };
-            tree_walker.walk(&wctx, cycle_detect.prefabResolver(prefab_cache), prefab_val, collector) catch return;
+            tree_walker.walk(&wctx, cycle_detect.prefabResolver(prefab_cache), ref_entry, collector) catch return;
 
             for (sc.entries) |e| {
-                if (e.value == .null_value) continue;
                 const on_root = blk: {
                     const pc = prefab_components orelse break :blk false;
                     for (pc.entries) |pe| {
@@ -541,12 +552,21 @@ pub fn EntityWalker(comptime GameType: type, comptime Components: type, comptime
                 if (on_root or !names.contains(e.key)) continue;
                 var buf: [256]u8 = undefined;
                 const dedup = std.fmt.bufPrint(&buf, "override-root-attach:{s}:{s}", .{ pname, e.key }) catch continue;
-                uf.warnOnceKey(
-                    game.log,
-                    dedup,
-                    "[SceneLoader] override on prefab '{s}' names component '{s}', which the prefab root does not declare — it is ADDED to the root entity. An entity nested in the prefab's body does carry this component; use \"@<ref>\": {{ \"{s}\": ... }} to target it (#801).",
-                    .{ pname, e.key, e.key },
-                );
+                if (e.value == .null_value) {
+                    uf.warnOnceKey(
+                        game.log,
+                        dedup,
+                        "[SceneLoader] override on prefab '{s}' removes component '{s}', which the prefab root does not declare — the removal is a NO-OP. An entity nested in the prefab's body does carry this component; use \"@<ref>\": {{ \"{s}\": null }} to remove it there (#801).",
+                        .{ pname, e.key, e.key },
+                    );
+                } else {
+                    uf.warnOnceKey(
+                        game.log,
+                        dedup,
+                        "[SceneLoader] override on prefab '{s}' names component '{s}', which the prefab root does not declare — it is ADDED to the root entity. An entity nested in the prefab's body does carry this component; use \"@<ref>\": {{ \"{s}\": ... }} to target it (#801).",
+                        .{ pname, e.key, e.key },
+                    );
+                }
             }
         }
     };
