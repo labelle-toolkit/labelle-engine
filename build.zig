@@ -91,6 +91,7 @@ pub fn build(b: *std.Build) void {
         "test/save_load_mixin_test.zig",
         "test/jsonc/bridge_leak_test.zig",
         "test/jsonc/nested_lifecycle_test.zig",
+        "test/jsonc/target_overrides_test.zig",
         // C2 — a project-registered component named `Tilemap` must win over
         // the engine built-in in the scene loader (no silent shadowing).
         "test/jsonc/tilemap_precedence_test.zig",

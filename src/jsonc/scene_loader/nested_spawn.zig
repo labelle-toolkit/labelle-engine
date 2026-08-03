@@ -18,6 +18,7 @@ const Position = core.Position;
 const prefab_cache_mod = @import("../prefab_cache.zig");
 const PrefabCache = prefab_cache_mod.PrefabCache;
 const uf = @import("../unified_format.zig");
+const to = @import("../target_overrides.zig");
 const ref_resolver_mod = @import("../ref_resolver.zig");
 const component_apply_mod = @import("../component_apply.zig");
 const on_ready_mod = @import("../on_ready.zig");
@@ -47,6 +48,11 @@ pub fn NestedSpawn(comptime GameType: type, comptime Components: type, comptime 
         /// Spawn entity-like objects nested inside a component's
         /// fields, collect their entity IDs, and patch them back
         /// into the component's `[]const u64` fields.
+        ///
+        /// `targets` is the chain of enclosing references' `@`-target
+        /// patches (#801): a nested entity whose effective `ref`
+        /// matches a chain entry gets that patch folded onto its own
+        /// (outermost author wins) before components apply.
         pub fn spawnAndLinkNestedEntities(
             game: *GameType,
             parent_entity: Entity,
@@ -56,6 +62,7 @@ pub fn NestedSpawn(comptime GameType: type, comptime Components: type, comptime 
             prefab_cache: *PrefabCache,
             depth: usize,
             ref_ctx: ?*RefContext,
+            targets: ?*to.TargetCtx,
         ) Self.LoadEntityError!void {
             const obj = comp_value.asObject() orelse return;
 
@@ -104,10 +111,12 @@ pub fn NestedSpawn(comptime GameType: type, comptime Components: type, comptime 
                         if (item.asObject()) |child_obj| {
                             var child_prefab_comps: ?Value.Object = null;
                             var child_prefab_children: ?Value.Array = null;
+                            var child_prefab_ref: ?[]const u8 = null;
                             if (child_obj.getString("prefab")) |pname| {
                                 if (prefab_cache.get(pname)) |pval| {
                                     if (pval.asObject()) |pobj| {
                                         const proot = uf.rootObject(pobj);
+                                        child_prefab_ref = proot.getString("ref");
                                         // RFC #560 §B2: re-validate
                                         // the resolved prefab's own
                                         // root for the
@@ -178,14 +187,7 @@ pub fn NestedSpawn(comptime GameType: type, comptime Components: type, comptime 
                             {
                                 const entity_id: u64 = @intCast(child);
                                 const scene_ref = child_obj.getString("ref");
-                                var prefab_ref: ?[]const u8 = null;
-                                if (child_obj.getString("prefab")) |pname| {
-                                    if (prefab_cache.get(pname)) |pval| {
-                                        if (pval.asObject()) |pobj| {
-                                            prefab_ref = uf.rootObject(pobj).getString("ref");
-                                        }
-                                    }
-                                }
+                                const prefab_ref: ?[]const u8 = child_prefab_ref;
                                 if (prefab_ref) |prn| {
                                     local_ref_ctx.ref_map.put(prn, entity_id) catch {};
                                 }
@@ -199,14 +201,49 @@ pub fn NestedSpawn(comptime GameType: type, comptime Components: type, comptime 
 
                             // Reference entry → `overrides`; inline → `components`.
                             // Flat shape (RFC #596) synthesizes the
-                            // view from PascalCase keys; the entries
-                            // slice lives in `merge_arena` (declared
-                            // at the top of `spawnAndLinkNestedEntities`).
-                            const child_scene_comps = try uf.entityPatch(child_obj, merge_arena.allocator(), game.log);
+                            // view from PascalCase + `@` keys; the
+                            // entries slice lives in `merge_arena`
+                            // (declared at the top of
+                            // `spawnAndLinkNestedEntities`).
+                            const child_raw_patch = try uf.entityPatch(child_obj, merge_arena.allocator(), game.log);
+
+                            const child_is_reference = child_obj.getString("prefab") != null;
+
+                            // ── `@`-target overrides (#801) ─────
+                            // Partition off this entry's own `@`
+                            // keys, then fold enclosing references'
+                            // matching patches onto its component
+                            // half (outermost author wins). The
+                            // entry's effective ref uses the same
+                            // precedence ref registration does:
+                            // entry-level `ref`, else the referenced
+                            // prefab root's.
+                            const child_parts = try to.splitPatch(child_raw_patch, merge_arena.allocator());
+                            if (child_parts.targets != null and !child_is_reference) {
+                                game.log.err(
+                                    "[target-override] `@` keys are only valid on a prefab reference (#801) — an inline nested entity authors its content directly, so put the override on the entry itself.",
+                                    .{},
+                                );
+                                return error.InvalidFormat;
+                            }
+                            const child_effective_ref: ?[]const u8 = child_obj.getString("ref") orelse child_prefab_ref;
+                            const child_fold = try to.foldMatches(targets, child_effective_ref, child_parts.components, merge_arena.allocator());
+                            const child_scene_comps = child_fold.patch;
 
                             // `null`-as-removal is scoped to a
-                            // reference entry's `overrides` (RFC #562).
-                            const child_is_reference = child_obj.getString("prefab") != null;
+                            // reference entry's `overrides` (RFC
+                            // #562) — and (#801) to any patch a `@`
+                            // target contributed.
+                            const child_removal_active = child_is_reference or child_fold.matched;
+
+                            const child_own_targets: ?*to.TargetCtx = try to.buildCtx(
+                                child_parts.targets,
+                                child_obj.getString("prefab") orelse "<inline>",
+                                targets,
+                                merge_arena.allocator(),
+                                game.log,
+                            );
+                            const child_targets = child_own_targets orelse targets;
 
                             // Precompute the effective (merged) value
                             // for each override entry once, in
@@ -218,7 +255,7 @@ pub fn NestedSpawn(comptime GameType: type, comptime Components: type, comptime 
                             const child_effective: ?[]?Value = if (child_scene_comps) |sc| blk: {
                                 const slice = merge_arena.allocator().alloc(?Value, sc.entries.len) catch break :blk null;
                                 for (sc.entries, 0..) |e, i| {
-                                    if (child_is_reference and e.value == .null_value) {
+                                    if (child_removal_active and e.value == .null_value) {
                                         slice[i] = null;
                                     } else if (uf.mergedOverride(child_prefab_comps, e.key, e.value, merge_arena.allocator())) |eff| {
                                         slice[i] = eff;
@@ -246,9 +283,13 @@ pub fn NestedSpawn(comptime GameType: type, comptime Components: type, comptime 
                                     };
                                 }
                             }
-                            // Prefab defaults.
+                            // Prefab defaults. `@` keys on a prefab
+                            // ROOT are meaningless (targets belong on
+                            // a reference, #801) — skip them here;
+                            // the top-level walker warns once.
                             if (child_prefab_comps) |pc| {
                                 for (pc.entries) |e| {
+                                    if (uf.isTargetKey(e.key)) continue;
                                     const already_set = if (child_scene_comps) |sc| blk: {
                                         for (sc.entries) |se| {
                                             if (std.mem.eql(u8, se.key, e.key)) break :blk true;
@@ -270,11 +311,12 @@ pub fn NestedSpawn(comptime GameType: type, comptime Components: type, comptime 
                             if (child_scene_comps) |sc| {
                                 for (sc.entries, 0..) |e, i| {
                                     const effective = (child_effective orelse break)[i] orelse continue;
-                                    try spawnAndLinkNestedEntities(game, child, e.key, effective, child_pos, prefab_cache, depth + 1, nested_ref_ctx);
+                                    try spawnAndLinkNestedEntities(game, child, e.key, effective, child_pos, prefab_cache, depth + 1, nested_ref_ctx, child_targets);
                                 }
                             }
                             if (child_prefab_comps) |pc| {
                                 for (pc.entries) |e| {
+                                    if (uf.isTargetKey(e.key)) continue;
                                     const already_set = if (child_scene_comps) |sc| blk: {
                                         for (sc.entries) |se| {
                                             if (std.mem.eql(u8, se.key, e.key)) break :blk true;
@@ -282,7 +324,7 @@ pub fn NestedSpawn(comptime GameType: type, comptime Components: type, comptime 
                                         break :blk false;
                                     } else false;
                                     if (!already_set) {
-                                        try spawnAndLinkNestedEntities(game, child, e.key, e.value, child_pos, prefab_cache, depth + 1, nested_ref_ctx);
+                                        try spawnAndLinkNestedEntities(game, child, e.key, e.value, child_pos, prefab_cache, depth + 1, nested_ref_ctx, child_targets);
                                     }
                                 }
                             }
@@ -293,7 +335,7 @@ pub fn NestedSpawn(comptime GameType: type, comptime Components: type, comptime 
                             // avoid double-offset (#417).
                             if (child_prefab_children) |children| {
                                 for (children.items) |child_val| {
-                                    const grandchild = Self.loadEntityInternal(game, child_val, prefab_cache, depth + 1, child_pos, nested_ref_ctx) catch |err| {
+                                    const grandchild = Self.loadEntityInternal(game, child_val, prefab_cache, depth + 1, child_pos, nested_ref_ctx, child_targets) catch |err| {
                                         game.log.err("[NestedEntity] Failed to load child: {s}", .{@errorName(err)});
                                         continue;
                                     };
@@ -304,7 +346,7 @@ pub fn NestedSpawn(comptime GameType: type, comptime Components: type, comptime 
                             }
                             if (child_obj.getArray("children")) |children| {
                                 for (children.items) |child_val| {
-                                    const grandchild = Self.loadEntityInternal(game, child_val, prefab_cache, depth + 1, child_pos, nested_ref_ctx) catch |err| {
+                                    const grandchild = Self.loadEntityInternal(game, child_val, prefab_cache, depth + 1, child_pos, nested_ref_ctx, child_targets) catch |err| {
                                         game.log.err("[NestedEntity] Failed to load child: {s}", .{@errorName(err)});
                                         continue;
                                     };
@@ -313,6 +355,11 @@ pub fn NestedSpawn(comptime GameType: type, comptime Components: type, comptime 
                                     game.setWorldPosition(grandchild, gc_world);
                                 }
                             }
+
+                            // This nested reference's body is fully
+                            // instantiated — its own `@` targets must
+                            // all have matched (#801).
+                            if (child_own_targets) |tctx| try to.checkAllMatched(tctx, game.log);
 
                             // Patch deferred refs from the local
                             // context. Lookups walk up the parent
@@ -349,7 +396,7 @@ pub fn NestedSpawn(comptime GameType: type, comptime Components: type, comptime 
                                     nested_applied.put(e.key, {}) catch {};
                                 }
                             }
-                            OnReadyHelpers.fireOnReadyAll(game, child, child_scene_comps, child_prefab_comps, &nested_applied, child_is_reference);
+                            OnReadyHelpers.fireOnReadyAll(game, child, child_scene_comps, child_prefab_comps, &nested_applied, child_removal_active);
                         }
 
                         ids[idx] = @intCast(child);

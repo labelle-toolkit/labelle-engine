@@ -202,6 +202,7 @@ pub fn PrefabRefresh(comptime GameType: type, comptime Components: type) type {
                 return &.{};
             var list: std.ArrayList(Declared) = .empty;
             for (comps.entries) |entry| {
+                if (uf.isTargetKey(entry.key)) continue; // `@` targets are not components (#801)
                 if (entry.value == .null_value) continue;
                 list.append(a, .{ .key = entry.key, .value = entry.value }) catch return null;
             }
@@ -222,6 +223,7 @@ pub fn PrefabRefresh(comptime GameType: type, comptime Components: type) type {
                 const comps = patch orelse return &.{};
                 var list: std.ArrayList(Declared) = .empty;
                 for (comps.entries) |entry| {
+                    if (uf.isTargetKey(entry.key)) continue; // `@` targets are not components (#801)
                     if (entry.value == .null_value) continue;
                     list.append(a, .{ .key = entry.key, .value = entry.value }) catch return null;
                 }
@@ -235,6 +237,13 @@ pub fn PrefabRefresh(comptime GameType: type, comptime Components: type) type {
             var list: std.ArrayList(Declared) = .empty;
             if (patch) |p| {
                 for (p.entries) |entry| {
+                    // `@` targets patch entities NESTED in the
+                    // referenced prefab, not this node (#801). The
+                    // refresh diff tracks only the node's own
+                    // components; live re-application of refreshed
+                    // `@` patches to already-spawned nested entities
+                    // is a follow-up.
+                    if (uf.isTargetKey(entry.key)) continue;
                     handled.put(entry.key, {}) catch return null;
                     if (entry.value == .null_value) continue; // removal
                     const merged = uf.mergedOverride(base, entry.key, entry.value, a) catch return null;
@@ -243,6 +252,7 @@ pub fn PrefabRefresh(comptime GameType: type, comptime Components: type) type {
             }
             if (base) |b| {
                 for (b.entries) |entry| {
+                    if (uf.isTargetKey(entry.key)) continue; // `@` on a prefab root is never applied (#801)
                     if (handled.contains(entry.key)) continue;
                     if (entry.value == .null_value) continue;
                     list.append(a, .{ .key = entry.key, .value = entry.value }) catch return null;

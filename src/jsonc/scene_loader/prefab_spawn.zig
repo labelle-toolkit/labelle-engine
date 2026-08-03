@@ -108,7 +108,7 @@ pub fn PrefabSpawn(comptime GameType: type, comptime Components: type, comptime 
             // malformed and shouldn't appear in the world).
             const entity_pos = game.getPosition(entity);
             for (prefab_components.entries) |entry| {
-                Self.spawnAndLinkNestedEntities(game, entity, entry.key, entry.value, entity_pos, prefab_cache, 0, null) catch |err| {
+                Self.spawnAndLinkNestedEntities(game, entity, entry.key, entry.value, entity_pos, prefab_cache, 0, null, null) catch |err| {
                     game.log.err("[spawnPrefab] '{s}' nested-entity load failed: {s}", .{ name, @errorName(err) });
                     return null;
                 };
@@ -124,7 +124,7 @@ pub fn PrefabSpawn(comptime GameType: type, comptime Components: type, comptime 
             // Process children — save world pos, set parent, restore (#417).
             if (prefab_root.getArray("children")) |children| {
                 for (children.items) |child_val| {
-                    const child = Self.loadEntityInternal(game, child_val, prefab_cache, 1, entity_pos, null) catch continue;
+                    const child = Self.loadEntityInternal(game, child_val, prefab_cache, 1, entity_pos, null, null) catch continue;
                     const world_pos = game.getPosition(child);
                     game.setParent(child, entity, .{});
                     game.setWorldPosition(child, world_pos);
