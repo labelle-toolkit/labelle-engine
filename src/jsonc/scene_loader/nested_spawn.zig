@@ -103,10 +103,29 @@ pub fn NestedSpawn(comptime GameType: type, comptime Components: type, comptime 
                 // the game's lifetime.
                 const ids = persistent_id_allocator.alloc(u64, entity_count) catch continue;
                 var idx: usize = 0;
+                // The `@`-target hard errors below (#801: malformed
+                // map, unmatched target) can abort mid-array — after
+                // children were created but BEFORE the ids are patched
+                // into the parent and registered for cascade
+                // destruction. Destroy the already-spawned children
+                // (and free the never-transferred id array) so a
+                // failed load doesn't strand live, tracked entities
+                // (codex P2 on #802).
+                errdefer {
+                    for (ids[0..idx]) |cid| {
+                        const c: Entity = @intCast(cid);
+                        game.destroyEntity(c);
+                    }
+                    persistent_id_allocator.free(ids);
+                }
                 for (arr.items) |item| {
                     if (ApplyHelpers.isEntityLike(item)) {
                         const child = game.createEntity();
                         game.trackSceneEntity(child);
+                        // Covers an error raised later in THIS
+                        // iteration, before `child` lands in `ids`
+                        // (the outer errdefer only sees ids[0..idx]).
+                        errdefer game.destroyEntity(child);
 
                         if (item.asObject()) |child_obj| {
                             var child_prefab_comps: ?Value.Object = null;
@@ -335,9 +354,17 @@ pub fn NestedSpawn(comptime GameType: type, comptime Components: type, comptime 
                             // avoid double-offset (#417).
                             if (child_prefab_children) |children| {
                                 for (children.items) |child_val| {
-                                    const grandchild = Self.loadEntityInternal(game, child_val, prefab_cache, depth + 1, child_pos, nested_ref_ctx, child_targets) catch |err| {
-                                        game.log.err("[NestedEntity] Failed to load child: {s}", .{@errorName(err)});
-                                        continue;
+                                    const grandchild = Self.loadEntityInternal(game, child_val, prefab_cache, depth + 1, child_pos, nested_ref_ctx, child_targets) catch |err| switch (err) {
+                                        // `@`-target semantics are hard
+                                        // errors (#801) — degrading to a
+                                        // partial load here would report
+                                        // success while silently omitting
+                                        // the child (codex P2 on #802).
+                                        error.InvalidFormat => return err,
+                                        else => {
+                                            game.log.err("[NestedEntity] Failed to load child: {s}", .{@errorName(err)});
+                                            continue;
+                                        },
                                     };
                                     const gc_world = game.getPosition(grandchild);
                                     game.setParent(grandchild, child, .{});
@@ -346,9 +373,17 @@ pub fn NestedSpawn(comptime GameType: type, comptime Components: type, comptime 
                             }
                             if (child_obj.getArray("children")) |children| {
                                 for (children.items) |child_val| {
-                                    const grandchild = Self.loadEntityInternal(game, child_val, prefab_cache, depth + 1, child_pos, nested_ref_ctx, child_targets) catch |err| {
-                                        game.log.err("[NestedEntity] Failed to load child: {s}", .{@errorName(err)});
-                                        continue;
+                                    const grandchild = Self.loadEntityInternal(game, child_val, prefab_cache, depth + 1, child_pos, nested_ref_ctx, child_targets) catch |err| switch (err) {
+                                        // `@`-target semantics are hard
+                                        // errors (#801) — degrading to a
+                                        // partial load here would report
+                                        // success while silently omitting
+                                        // the child (codex P2 on #802).
+                                        error.InvalidFormat => return err,
+                                        else => {
+                                            game.log.err("[NestedEntity] Failed to load child: {s}", .{@errorName(err)});
+                                            continue;
+                                        },
                                     };
                                     const gc_world = game.getPosition(grandchild);
                                     game.setParent(grandchild, child, .{});
