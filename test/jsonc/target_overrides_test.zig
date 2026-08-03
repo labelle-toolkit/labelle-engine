@@ -376,3 +376,63 @@ test "a cycle spliced in via a @ patch is caught as PrefabCycle" {
     );
     try testing.expectError(error.PrefabCycle, result);
 }
+
+// ── Regression: the pre-@ workarounds keep working ─────────────────
+
+test "array restatement in a scene override still works (the pre-@ workaround)" {
+    // Verified against v2.10.0 before this feature: a scene may
+    // restate a prefab's entity-bearing array outright (arrays
+    // replace in mergeValues), with entry-level overrides on the
+    // restated entries. The @ fold sits upstream of that path now —
+    // this pins that it changed nothing.
+    var game = Game.init(testing.allocator);
+    defer game.deinit();
+    try loadWithPrefabs(&game, &.{
+        .{ .name = "machine", .data = machine_prefab },
+        .{ .name = "storage_slot", .data = storage_slot_prefab },
+    },
+        \\{ "children": [
+        \\  { "prefab": "machine",
+        \\    "Machine": { "slots": [
+        \\      { "prefab": "storage_slot", "ref": "input" },
+        \\      { "prefab": "storage_slot", "Storage": { "capacity": 12 } }
+        \\    ] } }
+        \\] }
+    );
+    var buf: [8]u32 = undefined;
+    try testing.expectEqualSlices(u32, &.{ 5, 12 }, storageCapacities(&game, &buf));
+
+    var view = game.ecs_backend.view(.{Machine}, .{});
+    defer view.deinit();
+    const m = game.ecs_backend.getComponent(view.next().?, Machine).?;
+    try testing.expectEqual(@as(usize, 2), m.slots.len);
+}
+
+test "an override-only bare component still attaches to the root (now warned, #801)" {
+    // The original trap's BEHAVIOR is unchanged — adding a component
+    // to the reference root stays legal — it just warns now when a
+    // nested entity carries the component. This pins the behavior;
+    // the warning is a log line.
+    var game = Game.init(testing.allocator);
+    defer game.deinit();
+    try loadWithPrefabs(&game, &.{
+        .{ .name = "machine", .data = machine_prefab },
+        .{ .name = "storage_slot", .data = storage_slot_prefab },
+    },
+        \\{ "children": [
+        \\  { "prefab": "machine", "Storage": { "capacity": 12 } }
+        \\] }
+    );
+
+    var view = game.ecs_backend.view(.{Machine}, .{});
+    defer view.deinit();
+    const machine = view.next().?;
+    const root_storage = game.ecs_backend.getComponent(machine, Storage) orelse return error.TestExpectedEntity;
+    try testing.expectEqual(@as(u32, 12), root_storage.capacity);
+    // Nested slots keep their defaults — the override did NOT reach them.
+    const m = game.ecs_backend.getComponent(machine, Machine).?;
+    for (m.slots) |sid| {
+        const s = game.ecs_backend.getComponent(@intCast(sid), Storage).?;
+        try testing.expectEqual(@as(u32, 5), s.capacity);
+    }
+}
