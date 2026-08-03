@@ -221,7 +221,7 @@ pub fn SceneProcess(comptime GameType: type, comptime Components: type, comptime
             // Pass 1: create entities, apply components (with
             // `@ref` → 0), collect refs.
             for (entities_arr.items) |entity_val| {
-                _ = try Self.loadEntityInternal(game, entity_val, prefab_cache, 0, .{ .x = 0, .y = 0 }, ref_ctx);
+                _ = try Self.loadEntityInternal(game, entity_val, prefab_cache, 0, .{ .x = 0, .y = 0 }, ref_ctx, null);
             }
 
             // Pass 2: patch `@ref` fields with resolved entity IDs.

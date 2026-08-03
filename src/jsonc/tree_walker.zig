@@ -54,6 +54,7 @@ const std = @import("std");
 const jsonc = @import("jsonc");
 const Value = jsonc.Value;
 const uf = @import("unified_format.zig");
+const to = @import("target_overrides.zig");
 
 /// Per-walk scratch allocations — the merged effective-component
 /// trees built while reasoning about `overrides` (RFC #562). Owned by
@@ -191,7 +192,7 @@ pub fn walk(
 ) (WalkError || @TypeOf(visitor).VisitError)!void {
     var merge_arena = MergeArena.init(ctx.allocator);
     defer merge_arena.deinit();
-    try walkEntry(ctx, &merge_arena, resolver, root_value, .root, 0, null, visitor);
+    try walkEntry(ctx, &merge_arena, resolver, root_value, .root, 0, null, null, visitor);
 }
 
 fn walkEntry(
@@ -202,6 +203,7 @@ fn walkEntry(
     origin: Origin,
     depth: usize,
     component_name: ?[]const u8,
+    targets: ?*to.TargetCtx,
     visitor: anytype,
 ) (WalkError || @TypeOf(visitor).VisitError)!void {
     const VisitError = @TypeOf(visitor).VisitError;
@@ -259,11 +261,42 @@ fn walkEntry(
     };
     try visitor.visit(node);
 
+    // ── `@`-target overrides (#801) ─────────────────────────────
+    // The walk must model the same tree the loader instantiates: a
+    // matched `@` patch merges onto this entry's own patch (arrays
+    // replace outright, so a patch can splice a NEW prefab reference
+    // into an entity-bearing field — a cycle source the raw tree
+    // doesn't show), and this entry's own `@` keys extend the chain
+    // for its body. Format errors in the `@` shape are the loader's
+    // to report — the walker degrades to "no targets" and keeps
+    // detecting cycles in the rest of the tree.
+    const parts: to.PatchParts = blk: {
+        const raw_patch = uf.entityPatch(obj, merge_arena.allocator(), NoopLog{}) catch |e| switch (e) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.InvalidFormat => break :blk .{ .components = null, .targets = null },
+        };
+        break :blk try to.splitPatch(raw_patch, merge_arena.allocator());
+    };
+    const own_ref: ?[]const u8 = obj.getString("ref") orelse
+        if (prefab_root) |proot| proot.getString("ref") else null;
+    const fold = try to.foldMatches(targets, own_ref, parts.components, merge_arena.allocator());
+    const own_targets: ?*to.TargetCtx = to.buildCtx(
+        parts.targets,
+        obj.getString("prefab") orelse "<inline>",
+        targets,
+        merge_arena.allocator(),
+        NoopLog{},
+    ) catch |e| switch (e) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.InvalidFormat => null, // loader reports; stay structural
+    };
+    const child_targets = own_targets orelse targets;
+
     // ── 1. prefab-defined children ──────────────────────────────
     if (prefab_root) |proot| {
         if (proot.getArray("children")) |children| {
             for (children.items) |child_val| {
-                try walkEntry(ctx, merge_arena, resolver, child_val, .prefab_child, depth + 1, null, visitor);
+                try walkEntry(ctx, merge_arena, resolver, child_val, .prefab_child, depth + 1, null, child_targets, visitor);
             }
         }
     }
@@ -287,20 +320,14 @@ fn walkEntry(
         // expose their components as flat PascalCase keys (no
         // `"components"` / `"overrides"` wrapper). Synthesize the
         // views into `merge_arena` so the cycle walk sees the same
-        // effective component tree the loader will instantiate.
+        // effective component tree the loader will instantiate. The
+        // entry's patch was already computed (and `@`-target-folded)
+        // above — `fold.patch` carries only bare component keys, so
+        // no `@` key can masquerade as an override-only component.
         const prefab_components: ?Value.Object =
             if (prefab_root) |proot| try uf.prefabComponents(proot, merge_arena.allocator(), NoopLog{}) else null;
-        // This is the cycle-detection pre-pass, not the loader. A
-        // legacy `"components"`-on-reference form (rejected in v2.0,
-        // #592) surfaces its `error.InvalidFormat` from the real
-        // loader; here we treat it as "no patch" so cycle detection
-        // still runs over the rest of the tree.
-        const patch = uf.entityPatch(obj, merge_arena.allocator(), NoopLog{}) catch |e| switch (e) {
-            error.OutOfMemory => return error.OutOfMemory,
-            error.InvalidFormat => null,
-        };
-        if (try effectiveComponents(merge_arena, prefab_components, patch)) |eff| {
-            try walkComponentFields(ctx, merge_arena, resolver, eff, depth, visitor);
+        if (try effectiveComponents(merge_arena, prefab_components, fold.patch)) |eff| {
+            try walkComponentFields(ctx, merge_arena, resolver, eff, depth, child_targets, visitor);
         }
     }
 
@@ -315,7 +342,7 @@ fn walkEntry(
     // ── 3. the entry's own children array ───────────────────────
     if (obj.getArray("children")) |children| {
         for (children.items) |child_val| {
-            try walkEntry(ctx, merge_arena, resolver, child_val, .child, depth + 1, null, visitor);
+            try walkEntry(ctx, merge_arena, resolver, child_val, .child, depth + 1, null, child_targets, visitor);
         }
     }
 }
@@ -337,18 +364,27 @@ fn effectiveComponents(
     patch: ?Value.Object,
 ) error{OutOfMemory}!?Value.Object {
     // Inline entry (no prefab) — its `components` ARE the effective
-    // set; nothing to merge.
+    // set; nothing to merge. (The caller already stripped `@` keys
+    // from the patch via `splitPatch`, so this path is `@`-free.)
     const pc = prefab_components orelse return patch;
-    // Reference entry with no `overrides` — the prefab components
-    // are the effective set unchanged.
-    const ov = patch orelse return pc;
+    // Reference entry with no `overrides` — route through the merge
+    // loop with an EMPTY patch rather than returning `pc` verbatim:
+    // the loop is where prefab-root `@` keys get filtered, and an
+    // unfiltered return would let `walkComponentFields` descend into
+    // a `@` value the loader never instantiates — a spurious
+    // `PrefabCycle` source (codex P2 + CodeRabbit on #802).
+    const ov = patch orelse Value.Object{ .entries = &.{} };
 
     const a = merge_arena.allocator();
     var entries: std.ArrayListUnmanaged(Value.Object.Entry) = .empty;
 
     // Start from the prefab components, dropping any the override
     // removes via a JSONC `null` (component-level removal, #562).
+    // `@` keys on a prefab ROOT are skipped — the loader never
+    // applies them (#801), so walking their contents would descend a
+    // tree the runtime doesn't instantiate.
     for (pc.entries) |pe| {
+        if (uf.isTargetKey(pe.key)) continue;
         const removed = blk: {
             for (ov.entries) |oe| {
                 if (std.mem.eql(u8, oe.key, pe.key))
@@ -397,6 +433,7 @@ fn walkComponentFields(
     resolver: Resolver,
     components: Value.Object,
     depth: usize,
+    targets: ?*to.TargetCtx,
     visitor: anytype,
 ) (WalkError || @TypeOf(visitor).VisitError)!void {
     for (components.entries) |entry| {
@@ -406,7 +443,7 @@ fn walkComponentFields(
             if (arr.items.len == 0) continue;
             for (arr.items) |item| {
                 if (!isEntityLike(item)) continue;
-                try walkEntry(ctx, merge_arena, resolver, item, .component_field, depth + 1, entry.key, visitor);
+                try walkEntry(ctx, merge_arena, resolver, item, .component_field, depth + 1, entry.key, targets, visitor);
             }
         }
     }
