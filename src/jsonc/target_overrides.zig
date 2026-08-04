@@ -171,6 +171,12 @@ pub fn buildCtx(
 pub const FoldResult = struct {
     patch: ?Value.Object,
     matched: bool,
+    /// The matched target patches, in application (inner→outer)
+    /// order. Diagnostics need them: an inner patch may ADD a
+    /// component that an outer patch legitimately removes, which the
+    /// merged map alone cannot distinguish from a removal that never
+    /// matched anything (codex on #806).
+    matched_patches: []const Value = &.{},
 };
 
 /// Fold every target patch in the chain whose name equals `ref_name`
@@ -187,18 +193,20 @@ pub fn foldMatches(
     const name = ref_name orelse return .{ .patch = own_patch, .matched = false };
     var matched = false;
     var current: ?Value.Object = own_patch;
+    var patches: std.ArrayListUnmanaged(Value) = .empty;
     var c = ctx;
     while (c) |chain| : (c = chain.parent) {
         for (chain.entries) |*entry| {
             if (!std.mem.eql(u8, entry.name, name)) continue;
             entry.hits += 1;
             matched = true;
+            try patches.append(arena, entry.patch);
             const base: Value = .{ .object = current orelse Value.Object{ .entries = &.{} } };
             const merged = try uf.mergeValues(base, entry.patch, arena);
             current = merged.asObject().?;
         }
     }
-    return .{ .patch = current, .matched = matched };
+    return .{ .patch = current, .matched = matched, .matched_patches = patches.items };
 }
 
 /// Warn once per (prefab, key): a `@` key on a prefab ROOT is
@@ -227,7 +235,13 @@ pub fn warnNoopRemoval(
     key: []const u8,
     prefab_components: ?Value.Object,
     own_pre_fold: ?Value.Object,
+    fold_contributions: []const Value,
 ) void {
+    // Only component-shaped keys participate — the widened unknown-
+    // component policy deliberately keeps data-shaped lowercase keys
+    // silent, and a `null` value must not change that classification
+    // (codex on #806).
+    if (!uf.isComponentKeyShape(key)) return;
     if (prefab_components) |pc| {
         for (pc.entries) |pe| {
             if (std.mem.eql(u8, pe.key, key) and pe.value != .null_value) return;
@@ -236,6 +250,16 @@ pub fn warnNoopRemoval(
     if (own_pre_fold) |own| {
         for (own.entries) |oe| {
             if (std.mem.eql(u8, oe.key, key) and oe.value != .null_value) return;
+        }
+    }
+    // An INNER matched target patch may have added the component the
+    // outer (higher-precedence) patch is removing — that removal
+    // matched something real (codex on #806).
+    for (fold_contributions) |patch| {
+        if (patch.asObject()) |po| {
+            for (po.entries) |fe| {
+                if (std.mem.eql(u8, fe.key, key) and fe.value != .null_value) return;
+            }
         }
     }
     var buf: [256]u8 = undefined;

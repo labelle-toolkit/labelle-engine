@@ -21,8 +21,13 @@ const Storage = struct {
     capacity: u32 = 5,
 };
 
+const Widget = struct {
+    size: u32 = 1,
+};
+
 const Components = engine.ComponentRegistry(.{
     .industry__Storage = Storage,
+    .industry__Widget806 = Widget,
 });
 
 const Game = engine.Game;
@@ -151,4 +156,71 @@ test "a removal matching nothing warns; a legitimate removal stays silent" {
     defer view.deinit();
     while (view.next()) |_| count += 1;
     try testing.expectEqual(@as(u32, 1), count);
+}
+
+test "outer @ removal of an inner-@-added component is not a no-op warning (#806 round 2)" {
+    var tmp_dir = testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    try tmp_dir.dir.createDir(std.testing.io, "prefabs", .default_dir);
+    // P: a machine-like prefab whose slot entity is ref-named.
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "prefabs/p806.jsonc",
+        .data =
+        \\{ "children": [ { "ref": "s806", "components": { "industry__Storage": { "capacity": 1 } } } ] }
+        ,
+    });
+    // W: wrapper whose child reference ADDS Widget to @s806.
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "prefabs/w806.jsonc",
+        .data =
+        \\{ "children": [
+        \\  { "prefab": "p806", "@s806": { "industry__Widget806": { "size": 7 } } }
+        \\] }
+        ,
+    });
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    const len = try tmp_dir.dir.realPath(std.testing.io, &buf);
+    const prefab_path = try std.fmt.allocPrint(testing.allocator, "{s}/prefabs", .{buf[0..len]});
+    defer testing.allocator.free(prefab_path);
+
+    var game = Game.init(testing.allocator);
+    defer game.deinit();
+    // Scene removes, at higher precedence, what the inner patch added.
+    try Bridge.loadSceneFromSource(&game,
+        \\{ "children": [
+        \\  { "prefab": "w806", "@s806": { "industry__Widget806": null } }
+        \\] }
+    , prefab_path);
+
+    // The removal matched a real (inner-added) component: no Widget
+    // spawned, and NO false no-op warning.
+    var view = game.ecs_backend.view(.{Widget}, .{});
+    defer view.deinit();
+    try testing.expect(view.next() == null);
+    try testing.expect(!uf.alreadyWarnedKey("noop-removal:industry__Widget806"));
+}
+
+test "a lowercase data-shaped removal key stays outside the warning gate (#806 round 2)" {
+    var tmp_dir = testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    try tmp_dir.dir.createDir(std.testing.io, "prefabs", .default_dir);
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "prefabs/crate806c.jsonc",
+        .data =
+        \\{ "industry__Storage": { "capacity": 5 } }
+        ,
+    });
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    const len = try tmp_dir.dir.realPath(std.testing.io, &buf);
+    const prefab_path = try std.fmt.allocPrint(testing.allocator, "{s}/prefabs", .{buf[0..len]});
+    defer testing.allocator.free(prefab_path);
+
+    var game = Game.init(testing.allocator);
+    defer game.deinit();
+    try Bridge.loadSceneFromSource(&game,
+        \\{ "children": [
+        \\  { "prefab": "crate806c", "some_data_806": null }
+        \\] }
+    , prefab_path);
+    try testing.expect(!uf.alreadyWarnedKey("noop-removal:some_data_806"));
 }
