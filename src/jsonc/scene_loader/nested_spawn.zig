@@ -247,6 +247,9 @@ pub fn NestedSpawn(comptime GameType: type, comptime Components: type, comptime 
                             }
                             const child_effective_ref: ?[]const u8 = child_obj.getString("ref") orelse child_prefab_ref;
                             const child_fold = try to.foldMatches(targets, child_effective_ref, child_parts.components, merge_arena.allocator());
+                            // Removal-landing aggregation (#806) —
+                            // see `noteRemovalsCarried`.
+                            to.noteRemovalsCarried(child_fold, child_prefab_comps, child_parts.components);
                             const child_scene_comps = child_fold.patch;
 
                             // `null`-as-removal is scoped to a
@@ -275,6 +278,16 @@ pub fn NestedSpawn(comptime GameType: type, comptime Components: type, comptime 
                                 const slice = merge_arena.allocator().alloc(?Value, sc.entries.len) catch break :blk null;
                                 for (sc.entries, 0..) |e, i| {
                                     if (child_removal_active and e.value == .null_value) {
+                                        // Removal diagnostics are
+                                        // aggregated across the fan-out
+                                        // (`noteRemovalsCarried` /
+                                        // `checkAllMatched`, #806); a
+                                        // child's OWN typo'd removal is
+                                        // caught by the top-level
+                                        // reference's specialized walk
+                                        // when reachable, and stays a
+                                        // silent no-op otherwise —
+                                        // matching pre-#806 behavior.
                                         slice[i] = null;
                                     } else if (uf.mergedOverride(child_prefab_comps, e.key, e.value, merge_arena.allocator())) |eff| {
                                         slice[i] = eff;

@@ -204,16 +204,19 @@ pub fn ComponentApply(comptime GameType: type, comptime Components: type) type {
                 }
             }
 
-            // RFC #596 Axis 4: unknown PascalCase keys on an entity
-            // are treated as components, but we warn-once so typos
-            // (`Posiiton`) surface visibly. Lowercase names that
-            // reach here (e.g. legacy embedded structural keys that
-            // bypassed the structural / component split) are
+            // RFC #596 Axis 4: unknown component-shaped keys on an
+            // entity are treated as no-ops, but we warn-once so typos
+            // surface visibly — PascalCase (`Posiiton`) AND
+            // pack-namespaced (`industry__Storag`, #803: every pack
+            // component starts lowercase, so PascalCase alone missed
+            // the entire namespaced registry). Other lowercase names
+            // that reach here (e.g. legacy embedded structural keys
+            // that bypassed the structural / component split) stay
             // silently ignored — they're not authoring mistakes the
             // RFC catches. Position / Sprite / Shape are handled
             // above and returned before reaching this gate, so the
             // built-in components don't false-warn.
-            if (uf.isPascalCase(name)) {
+            if (uf.isComponentKeyShape(name)) {
                 uf.warnUnknownComponent(game.log, name);
             }
         }

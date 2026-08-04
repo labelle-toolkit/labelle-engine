@@ -141,6 +141,11 @@ pub fn EntityWalker(comptime GameType: type, comptime Components: type, comptime
             // Fold enclosing references' matching `@` patches onto
             // this entity's own patch, outermost author last (wins).
             const fold = try to.foldMatches(inherited_targets, own_ref, parts.components, merge_arena.allocator());
+            // Removal-landing aggregation (#806): record whether THIS
+            // entity carried each matched removal's component; the
+            // declaring reference diagnoses never-landed removals
+            // once, after its whole fan-out resolved.
+            to.noteRemovalsCarried(fold, prefab_components, parts.components);
             const scene_components = fold.patch;
 
             // RFC #562 `null`-removal is scoped to reference
@@ -218,6 +223,15 @@ pub fn EntityWalker(comptime GameType: type, comptime Components: type, comptime
                 const slice = try merge_arena.allocator().alloc(?Value, sc.entries.len);
                 for (sc.entries, 0..) |entry, i| {
                     if (removal_active and entry.value == .null_value) {
+                        // Removal diagnostics live elsewhere: entries
+                        // the reference authored itself are owned by
+                        // the specialized nested-component walker
+                        // (`@ref` guidance / no-op message), and
+                        // fold-CONTRIBUTED removals are aggregated
+                        // across the whole fan-out via
+                        // `noteRemovalsCarried` + `checkAllMatched`
+                        // (per-entity warnings misreport partial
+                        // fan-out removals — codex on #806).
                         slice[i] = null;
                     } else {
                         slice[i] = try uf.mergedOverride(prefab_components, entry.key, entry.value, merge_arena.allocator());
@@ -513,7 +527,10 @@ pub fn EntityWalker(comptime GameType: type, comptime Components: type, comptime
             var any_unwarned = false;
             for (sc.entries) |e| {
                 var kbuf: [256]u8 = undefined;
-                const k = std.fmt.bufPrint(&kbuf, "override-root-attach:{s}:{s}", .{ pname, e.key }) catch continue;
+                const k = if (e.value == .null_value)
+                    std.fmt.bufPrint(&kbuf, "noop-removal:{s}", .{e.key}) catch continue
+                else
+                    std.fmt.bufPrint(&kbuf, "override-root-attach:{s}:{s}", .{ pname, e.key }) catch continue;
                 if (!uf.alreadyWarnedKey(k)) {
                     any_unwarned = true;
                     break;
@@ -549,7 +566,17 @@ pub fn EntityWalker(comptime GameType: type, comptime Components: type, comptime
                     }
                     break :blk false;
                 };
-                if (on_root or !names.contains(e.key)) continue;
+                if (on_root) continue;
+                if (!names.contains(e.key)) {
+                    // Carried NOWHERE in the prefab: a removal here is
+                    // a pure no-op (typo shape) — one generic warning,
+                    // shape-gated inside the helper. Additions stay
+                    // silent (adding a novel component is legal).
+                    if (e.value == .null_value) {
+                        to.warnNoopRemoval(game.log, e.key, null, null);
+                    }
+                    continue;
+                }
                 var buf: [256]u8 = undefined;
                 const dedup = std.fmt.bufPrint(&buf, "override-root-attach:{s}:{s}", .{ pname, e.key }) catch continue;
                 if (e.value == .null_value) {
