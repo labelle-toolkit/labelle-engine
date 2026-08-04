@@ -48,6 +48,18 @@ pub const TargetEntry = struct {
     name: []const u8,
     patch: Value,
     hits: usize = 0,
+    /// One tracker per `null`-valued key in `patch`. A removal
+    /// "lands" when ANY matched entity carries the component —
+    /// multi-match fan-out means per-entity checks misreport a
+    /// partially-applying removal as a no-op (codex on #806); the
+    /// verdict is aggregated here and diagnosed once, in
+    /// `checkAllMatched`.
+    removals: []RemovalTrack = &.{},
+};
+
+pub const RemovalTrack = struct {
+    key: []const u8,
+    landed: bool = false,
 };
 
 /// The targets a single reference entry declared, chained to the
@@ -156,7 +168,22 @@ pub fn buildCtx(
                 return error.InvalidFormat;
             }
         }
-        entries[i] = .{ .name = e.key[1..], .patch = e.value };
+        var removal_count: usize = 0;
+        for (patch_obj.entries) |pe| {
+            if (pe.value == .null_value) removal_count += 1;
+        }
+        var removals: []RemovalTrack = &.{};
+        if (removal_count > 0) {
+            removals = try allocator.alloc(RemovalTrack, removal_count);
+            var ri: usize = 0;
+            for (patch_obj.entries) |pe| {
+                if (pe.value == .null_value) {
+                    removals[ri] = .{ .key = pe.key };
+                    ri += 1;
+                }
+            }
+        }
+        entries[i] = .{ .name = e.key[1..], .patch = e.value, .removals = removals };
     }
     const ctx = try allocator.create(TargetCtx);
     ctx.* = .{ .parent = parent, .entries = entries, .prefab_name = prefab_name };
@@ -171,12 +198,12 @@ pub fn buildCtx(
 pub const FoldResult = struct {
     patch: ?Value.Object,
     matched: bool,
-    /// The matched target patches, in application (inner→outer)
+    /// The matched target ENTRIES, in application (inner→outer)
     /// order. Diagnostics need them: an inner patch may ADD a
-    /// component that an outer patch legitimately removes, which the
-    /// merged map alone cannot distinguish from a removal that never
-    /// matched anything (codex on #806).
-    matched_patches: []const Value = &.{},
+    /// component that an outer patch legitimately removes, and
+    /// removal-landing is aggregated per entry across every matched
+    /// entity (codex on #806).
+    matched_entries: []const *TargetEntry = &.{},
 };
 
 /// Fold every target patch in the chain whose name equals `ref_name`
@@ -193,20 +220,62 @@ pub fn foldMatches(
     const name = ref_name orelse return .{ .patch = own_patch, .matched = false };
     var matched = false;
     var current: ?Value.Object = own_patch;
-    var patches: std.ArrayListUnmanaged(Value) = .empty;
+    var matched_entries: std.ArrayListUnmanaged(*TargetEntry) = .empty;
     var c = ctx;
     while (c) |chain| : (c = chain.parent) {
         for (chain.entries) |*entry| {
             if (!std.mem.eql(u8, entry.name, name)) continue;
             entry.hits += 1;
             matched = true;
-            try patches.append(arena, entry.patch);
+            try matched_entries.append(arena, entry);
             const base: Value = .{ .object = current orelse Value.Object{ .entries = &.{} } };
             const merged = try uf.mergeValues(base, entry.patch, arena);
             current = merged.asObject().?;
         }
     }
-    return .{ .patch = current, .matched = matched, .matched_patches = patches.items };
+    return .{ .patch = current, .matched = matched, .matched_entries = matched_entries.items };
+}
+
+/// After a fold: mark, for every matched entry's removal keys, whether
+/// THIS entity carried the component — from its prefab, its own
+/// pre-fold patch, or another matched patch's non-null contribution.
+/// The aggregate verdict is diagnosed once per declaring reference in
+/// `checkAllMatched`.
+pub fn noteRemovalsCarried(
+    fold: FoldResult,
+    prefab_components: ?Value.Object,
+    own_pre_fold: ?Value.Object,
+) void {
+    for (fold.matched_entries) |entry| {
+        key_loop: for (entry.removals) |*track| {
+            if (track.landed) continue;
+            if (carriesNonNull(prefab_components, track.key) or
+                carriesNonNull(own_pre_fold, track.key))
+            {
+                track.landed = true;
+                continue;
+            }
+            for (fold.matched_entries) |other| {
+                if (other == entry) continue;
+                if (other.patch.asObject()) |po| {
+                    for (po.entries) |pe| {
+                        if (std.mem.eql(u8, pe.key, track.key) and pe.value != .null_value) {
+                            track.landed = true;
+                            continue :key_loop;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn carriesNonNull(obj: ?Value.Object, key: []const u8) bool {
+    const o = obj orelse return false;
+    for (o.entries) |e| {
+        if (std.mem.eql(u8, e.key, key) and e.value != .null_value) return true;
+    }
+    return false;
 }
 
 /// Warn once per (prefab, key): a `@` key on a prefab ROOT is
@@ -235,7 +304,6 @@ pub fn warnNoopRemoval(
     key: []const u8,
     prefab_components: ?Value.Object,
     own_pre_fold: ?Value.Object,
-    fold_contributions: []const Value,
 ) void {
     // Only component-shaped keys participate — the widened unknown-
     // component policy deliberately keeps data-shaped lowercase keys
@@ -252,16 +320,6 @@ pub fn warnNoopRemoval(
             if (std.mem.eql(u8, oe.key, key) and oe.value != .null_value) return;
         }
     }
-    // An INNER matched target patch may have added the component the
-    // outer (higher-precedence) patch is removing — that removal
-    // matched something real (codex on #806).
-    for (fold_contributions) |patch| {
-        if (patch.asObject()) |po| {
-            for (po.entries) |fe| {
-                if (std.mem.eql(u8, fe.key, key) and fe.value != .null_value) return;
-            }
-        }
-    }
     var buf: [256]u8 = undefined;
     const dedup = std.fmt.bufPrint(&buf, "noop-removal:{s}", .{key}) catch return;
     uf.warnOnceKey(log, dedup, "[SceneLoader] removal \"{s}\": null matches nothing — neither the prefab nor the entity carries that component, so the removal is a NO-OP. Check the spelling (#803).", .{key});
@@ -274,6 +332,14 @@ pub fn warnNoopRemoval(
 pub fn checkAllMatched(ctx: *const TargetCtx, log: anytype) error{InvalidFormat}!void {
     var failed = false;
     for (ctx.entries) |entry| {
+        // Removal keys that landed on NO matched entity: the authored
+        // removal is a no-op everywhere — a typo shape. One warning
+        // for the whole fan-out (codex on #806); shape-gated inside.
+        if (entry.hits != 0) {
+            for (entry.removals) |track| {
+                if (!track.landed) warnNoopRemoval(log, track.key, null, null);
+            }
+        }
         if (entry.hits != 0) continue;
         log.err(
             "[target-override] \"@{s}\" on prefab '{s}' matched no entity — no `ref: \"{s}\"` anywhere in the prefab's body. Check the ref names inside the prefab (#801).",

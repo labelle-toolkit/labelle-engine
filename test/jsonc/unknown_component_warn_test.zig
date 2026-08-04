@@ -224,3 +224,66 @@ test "a lowercase data-shaped removal key stays outside the warning gate (#806 r
     , prefab_path);
     try testing.expect(!uf.alreadyWarnedKey("noop-removal:some_data_806"));
 }
+
+test "fan-out removal that lands on SOME matches is not a no-op (#806 round 3)" {
+    var tmp_dir = testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    try tmp_dir.dir.createDir(std.testing.io, "prefabs", .default_dir);
+    // Two entities share the ref; only the first carries Storage.
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "prefabs/rack806.jsonc",
+        .data =
+        \\{ "children": [
+        \\  { "ref": "cell806", "components": { "industry__Storage": { "capacity": 1 } } },
+        \\  { "ref": "cell806", "components": { "industry__Widget806": { "size": 1 } } }
+        \\] }
+        ,
+    });
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    const len = try tmp_dir.dir.realPath(std.testing.io, &buf);
+    const prefab_path = try std.fmt.allocPrint(testing.allocator, "{s}/prefabs", .{buf[0..len]});
+    defer testing.allocator.free(prefab_path);
+
+    var game = Game.init(testing.allocator);
+    defer game.deinit();
+    try Bridge.loadSceneFromSource(&game,
+        \\{ "children": [
+        \\  { "prefab": "rack806", "@cell806": { "industry__Storage": null } }
+        \\] }
+    , prefab_path);
+
+    // The removal landed on match #1 → no Storage anywhere, and NO
+    // "matches nothing" warning despite match #2 lacking the component.
+    var view = game.ecs_backend.view(.{Storage}, .{});
+    defer view.deinit();
+    try testing.expect(view.next() == null);
+    try testing.expect(!uf.alreadyWarnedKey("noop-removal:industry__Storage"));
+}
+
+test "a @ removal landing on NO match warns once for the whole fan-out (#806 round 3)" {
+    var tmp_dir = testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    try tmp_dir.dir.createDir(std.testing.io, "prefabs", .default_dir);
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "prefabs/rack806b.jsonc",
+        .data =
+        \\{ "children": [
+        \\  { "ref": "cell806b", "components": { "industry__Widget806": { "size": 1 } } },
+        \\  { "ref": "cell806b", "components": { "industry__Widget806": { "size": 2 } } }
+        \\] }
+        ,
+    });
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    const len = try tmp_dir.dir.realPath(std.testing.io, &buf);
+    const prefab_path = try std.fmt.allocPrint(testing.allocator, "{s}/prefabs", .{buf[0..len]});
+    defer testing.allocator.free(prefab_path);
+
+    var game = Game.init(testing.allocator);
+    defer game.deinit();
+    try Bridge.loadSceneFromSource(&game,
+        \\{ "children": [
+        \\  { "prefab": "rack806b", "@cell806b": { "industry__Storag806c": null } }
+        \\] }
+    , prefab_path);
+    try testing.expect(uf.alreadyWarnedKey("noop-removal:industry__Storag806c"));
+}

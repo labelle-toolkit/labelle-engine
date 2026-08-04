@@ -141,6 +141,11 @@ pub fn EntityWalker(comptime GameType: type, comptime Components: type, comptime
             // Fold enclosing references' matching `@` patches onto
             // this entity's own patch, outermost author last (wins).
             const fold = try to.foldMatches(inherited_targets, own_ref, parts.components, merge_arena.allocator());
+            // Removal-landing aggregation (#806): record whether THIS
+            // entity carried each matched removal's component; the
+            // declaring reference diagnoses never-landed removals
+            // once, after its whole fan-out resolved.
+            to.noteRemovalsCarried(fold, prefab_components, parts.components);
             const scene_components = fold.patch;
 
             // RFC #562 `null`-removal is scoped to reference
@@ -218,25 +223,15 @@ pub fn EntityWalker(comptime GameType: type, comptime Components: type, comptime
                 const slice = try merge_arena.allocator().alloc(?Value, sc.entries.len);
                 for (sc.entries, 0..) |entry, i| {
                     if (removal_active and entry.value == .null_value) {
-                        // Removal diagnostics: entries the reference
-                        // authored itself are owned by the
-                        // specialized nested-component walker (which
-                        // also handles the nested-carried case with
-                        // `@ref` guidance — avoid double-warning,
-                        // codex on #806). Only fold-CONTRIBUTED
-                        // removals (not in the pre-fold patch) are
-                        // checked here, with the fold's own
-                        // contributions as context.
-                        const in_own = own_blk: {
-                            const own = parts.components orelse break :own_blk false;
-                            for (own.entries) |oe| {
-                                if (std.mem.eql(u8, oe.key, entry.key)) break :own_blk true;
-                            }
-                            break :own_blk false;
-                        };
-                        if (!is_reference or !in_own) {
-                            to.warnNoopRemoval(game.log, entry.key, prefab_components, parts.components, fold.matched_patches);
-                        }
+                        // Removal diagnostics live elsewhere: entries
+                        // the reference authored itself are owned by
+                        // the specialized nested-component walker
+                        // (`@ref` guidance / no-op message), and
+                        // fold-CONTRIBUTED removals are aggregated
+                        // across the whole fan-out via
+                        // `noteRemovalsCarried` + `checkAllMatched`
+                        // (per-entity warnings misreport partial
+                        // fan-out removals — codex on #806).
                         slice[i] = null;
                     } else {
                         slice[i] = try uf.mergedOverride(prefab_components, entry.key, entry.value, merge_arena.allocator());
@@ -578,7 +573,7 @@ pub fn EntityWalker(comptime GameType: type, comptime Components: type, comptime
                     // shape-gated inside the helper. Additions stay
                     // silent (adding a novel component is legal).
                     if (e.value == .null_value) {
-                        to.warnNoopRemoval(game.log, e.key, null, null, &.{});
+                        to.warnNoopRemoval(game.log, e.key, null, null);
                     }
                     continue;
                 }
