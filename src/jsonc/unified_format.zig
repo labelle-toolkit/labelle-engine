@@ -148,6 +148,20 @@ pub fn isPascalCase(name: []const u8) bool {
     return name[0] >= 'A' and name[0] <= 'Z';
 }
 
+/// A key shaped like a component name: PascalCase (RFC #596), or the
+/// pack-namespaced `<prefix>__<Pascal>` form (#440) — nonempty prefix,
+/// PascalCase suffix after the LAST `__` (`industry__TendableWorkstation`
+/// accepted, `capacity__oops` rejected). Promoted from
+/// `target_overrides.zig` so the unknown-component diagnostic can share
+/// it (#803): namespaced keys start lowercase, so PascalCase alone
+/// misses every pack component.
+pub fn isComponentKeyShape(name: []const u8) bool {
+    if (isPascalCase(name)) return true;
+    const i = std.mem.lastIndexOf(u8, name, "__") orelse return false;
+    if (i == 0) return false;
+    return isPascalCase(name[i + 2 ..]);
+}
+
 /// True if `name` is a target-override key (#801): a leading `@`
 /// followed by a ref name. On a prefab reference's override map,
 /// `"@tender": { ... }` patches the entity (or entities) inside the

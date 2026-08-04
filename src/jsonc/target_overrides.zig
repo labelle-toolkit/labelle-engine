@@ -148,7 +148,7 @@ pub fn buildCtx(
             // like `"capacity__oops"` — would silently no-op through
             // `applyComponent`, the exact silence #801 kills; reject
             // loudly (codex P2 ×2 on #802).
-            if (!isComponentKeyShape(pe.key)) {
+            if (!uf.isComponentKeyShape(pe.key)) {
                 log.err(
                     "[target-override] \"{s}\" inside \"{s}\" on prefab '{s}' is not a component name (PascalCase or pack-namespaced) — did you mean \"{s}\": {{ \"SomeComponent\": {{ \"{s}\": ... }} }}? (#801)",
                     .{ pe.key, e.key, prefab_name, e.key, pe.key },
@@ -161,17 +161,6 @@ pub fn buildCtx(
     const ctx = try allocator.create(TargetCtx);
     ctx.* = .{ .parent = parent, .entries = entries, .prefab_name = prefab_name };
     return ctx;
-}
-
-/// A key shaped like a component name: PascalCase (RFC #596), or the
-/// pack-namespaced `<prefix>__<Pascal>` form (#440) — nonempty prefix,
-/// PascalCase suffix after the LAST `__` (so `capacity__oops` is
-/// rejected, `industry__TendableWorkstation` accepted).
-fn isComponentKeyShape(key: []const u8) bool {
-    if (uf.isPascalCase(key)) return true;
-    const i = std.mem.lastIndexOf(u8, key, "__") orelse return false;
-    if (i == 0) return false;
-    return uf.isPascalCase(key[i + 2 ..]);
 }
 
 /// Result of folding matched target patches into an entity's own

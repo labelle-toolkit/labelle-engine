@@ -894,6 +894,13 @@ pub const jsonc_deserializer = @import("jsonc/deserializer.zig");
 // downstream tooling (asset inference, editors) use one walker.
 pub const tree_walker = @import("jsonc/tree_walker.zig");
 
+// ── Unified-format accessors (RFC #560/#594/#596) ──
+// Key classification (`isPascalCase`, `isComponentKeyShape`,
+// `isTargetKey`) and the warn-once diagnostics dedup probe
+// (`alreadyWarnedKey`) — re-exported for tests and tooling that
+// need to agree with the loader's shape rules (#803).
+pub const unified_format = @import("jsonc/unified_format.zig");
+
 // ── Scene Value & JSONC Parser ──
 pub const SceneValue = jsonc_mod.Value;
 pub const JsoncParser = jsonc_mod.JsoncParser;
