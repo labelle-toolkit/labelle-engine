@@ -88,3 +88,67 @@ test "a data-shaped lowercase key stays silent (not an authoring-mistake shape)"
     );
     try testing.expect(!uf.alreadyWarnedKey("unknown-component:just_data_803"));
 }
+
+test "flat-form typo'd namespaced key warns too (#806 round 1)" {
+    var game = Game.init(testing.allocator);
+    defer game.deinit();
+    try loadScene(&game,
+        \\{ "children": [
+        \\  { "industry__Storag806": { "capacity": 12 } }
+        \\] }
+    );
+    try testing.expect(uf.alreadyWarnedKey("unknown-component:industry__Storag806"));
+}
+
+test "flat-form REGISTERED namespaced components now apply (#806 round 1)" {
+    // Before the isFlatComponentKey widening, a flat namespaced key
+    // was silently dropped by synthesizeFlatComponents — a registered
+    // pack component authored flat never attached.
+    var game = Game.init(testing.allocator);
+    defer game.deinit();
+    try loadScene(&game,
+        \\{ "children": [
+        \\  { "industry__Storage": { "capacity": 21 } }
+        \\] }
+    );
+    var view = game.ecs_backend.view(.{Storage}, .{});
+    defer view.deinit();
+    const e = view.next() orelse return error.TestExpectedEntity;
+    try testing.expectEqual(@as(u32, 21), game.ecs_backend.getComponent(e, Storage).?.capacity);
+}
+
+test "a removal matching nothing warns; a legitimate removal stays silent" {
+    var tmp_dir = testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    try tmp_dir.dir.createDir(std.testing.io, "prefabs", .default_dir);
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "prefabs/crate806.jsonc",
+        .data =
+        \\{ "industry__Storage": { "capacity": 5 } }
+        ,
+    });
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    const len = try tmp_dir.dir.realPath(std.testing.io, &buf);
+    const prefab_path = try std.fmt.allocPrint(testing.allocator, "{s}/prefabs", .{buf[0..len]});
+    defer testing.allocator.free(prefab_path);
+
+    var game = Game.init(testing.allocator);
+    defer game.deinit();
+    try Bridge.loadSceneFromSource(&game,
+        \\{ "children": [
+        \\  { "prefab": "crate806", "industry__Storage": null },
+        \\  { "prefab": "crate806", "industry__Storag806b": null }
+        \\] }
+    , prefab_path);
+
+    // Typo'd removal (matches nothing) → warned.
+    try testing.expect(uf.alreadyWarnedKey("noop-removal:industry__Storag806b"));
+    // Legitimate removal of a prefab-carried component → silent…
+    try testing.expect(!uf.alreadyWarnedKey("noop-removal:industry__Storage"));
+    // …and it actually removed on entity 1 while entity 2 kept it.
+    var count: u32 = 0;
+    var view = game.ecs_backend.view(.{Storage}, .{});
+    defer view.deinit();
+    while (view.next()) |_| count += 1;
+    try testing.expectEqual(@as(u32, 1), count);
+}

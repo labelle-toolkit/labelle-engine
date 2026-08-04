@@ -218,6 +218,7 @@ pub fn EntityWalker(comptime GameType: type, comptime Components: type, comptime
                 const slice = try merge_arena.allocator().alloc(?Value, sc.entries.len);
                 for (sc.entries, 0..) |entry, i| {
                     if (removal_active and entry.value == .null_value) {
+                        to.warnNoopRemoval(game.log, entry.key, prefab_components, parts.components);
                         slice[i] = null;
                     } else {
                         slice[i] = try uf.mergedOverride(prefab_components, entry.key, entry.value, merge_arena.allocator());

@@ -173,12 +173,18 @@ pub fn isTargetKey(name: []const u8) bool {
 }
 
 /// True if `name` participates in the flat override/component shape
-/// at entity scope: PascalCase component keys (RFC #596 Axis 2) plus
-/// `@`-target keys (#801). Both are patch *content* — everything
-/// else at entity scope is structural (`prefab`, `children`, `meta`,
+/// at entity scope: component-shaped keys — PascalCase (RFC #596
+/// Axis 2) AND pack-namespaced `<prefix>__<Pascal>` (#803) — plus
+/// `@`-target keys (#801). All are patch *content*; everything else
+/// at entity scope is structural (`prefab`, `children`, `meta`,
 /// `ref`).
+///
+/// Before #803 this accepted PascalCase only, which silently DROPPED
+/// flat namespaced keys in `synthesizeFlatComponents` — a registered
+/// `rooms__Room` authored flat on an entity never attached, and a
+/// typo'd one could never reach the unknown-component warning.
 pub fn isFlatComponentKey(name: []const u8) bool {
-    return isPascalCase(name) or isTargetKey(name);
+    return isComponentKeyShape(name) or isTargetKey(name);
 }
 
 /// Warn once that an unknown PascalCase component appeared on an

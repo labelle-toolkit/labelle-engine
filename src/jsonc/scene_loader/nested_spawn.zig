@@ -275,6 +275,7 @@ pub fn NestedSpawn(comptime GameType: type, comptime Components: type, comptime 
                                 const slice = merge_arena.allocator().alloc(?Value, sc.entries.len) catch break :blk null;
                                 for (sc.entries, 0..) |e, i| {
                                     if (child_removal_active and e.value == .null_value) {
+                                        to.warnNoopRemoval(game.log, e.key, child_prefab_comps, child_parts.components);
                                         slice[i] = null;
                                     } else if (uf.mergedOverride(child_prefab_comps, e.key, e.value, merge_arena.allocator())) |eff| {
                                         slice[i] = eff;

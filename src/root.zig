@@ -900,6 +900,7 @@ pub const tree_walker = @import("jsonc/tree_walker.zig");
 // (`alreadyWarnedKey`) — re-exported for tests and tooling that
 // need to agree with the loader's shape rules (#803).
 pub const unified_format = @import("jsonc/unified_format.zig");
+pub const isComponentKeyShape = unified_format.isComponentKeyShape;
 
 // ── Scene Value & JSONC Parser ──
 pub const SceneValue = jsonc_mod.Value;

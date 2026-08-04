@@ -215,6 +215,34 @@ pub fn warnPrefabRootTarget(log: anytype, prefab_name: []const u8, key: []const 
     uf.warnOnceKey(log, dedup, "[target-override] prefab '{s}' declares \"{s}\" on its ROOT — `@` targets belong on a reference's overrides, not a prefab root; skipped (#801).", .{ prefab_name, key });
 }
 
+/// Warn once when a `null` removal names a component that neither the
+/// resolved prefab nor the entity's own pre-fold patch carries with a
+/// value — the removal is a NO-OP, which for a typo'd key
+/// (`industry__Storag: null`) reads exactly like success (#803,
+/// codex on #806). `own_pre_fold` is the entity's own patch BEFORE
+/// `@` folds, so a legitimate removal of a component the entity
+/// declared itself stays silent.
+pub fn warnNoopRemoval(
+    log: anytype,
+    key: []const u8,
+    prefab_components: ?Value.Object,
+    own_pre_fold: ?Value.Object,
+) void {
+    if (prefab_components) |pc| {
+        for (pc.entries) |pe| {
+            if (std.mem.eql(u8, pe.key, key) and pe.value != .null_value) return;
+        }
+    }
+    if (own_pre_fold) |own| {
+        for (own.entries) |oe| {
+            if (std.mem.eql(u8, oe.key, key) and oe.value != .null_value) return;
+        }
+    }
+    var buf: [256]u8 = undefined;
+    const dedup = std.fmt.bufPrint(&buf, "noop-removal:{s}", .{key}) catch return;
+    uf.warnOnceKey(log, dedup, "[SceneLoader] removal \"{s}\": null matches nothing — neither the prefab nor the entity carries that component, so the removal is a NO-OP. Check the spelling (#803).", .{key});
+}
+
 /// After the declaring reference's body has fully loaded: every
 /// target must have matched at least one entity. An unmatched `@` is
 /// a typo or a prefab that renamed/removed the ref — fail loudly
