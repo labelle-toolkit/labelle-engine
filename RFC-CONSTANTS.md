@@ -29,7 +29,17 @@ Decay rates cluster in `libs/needs_machine/src/config.zig`, which is the closest
 
 1. **One folder.** `constants/` at project root; every tuning value in the game reachable from one place.
 2. **One file per domain**, named for the domain — `construction.yaml`, `decay.yaml` — so related values sit together and a diff reads as a balance change.
-3. **YAML**, for hand-editing by whoever is balancing the game.
+3. **YAML**, for hand-editing by whoever is balancing the game. This is a
+   deliberate divergence from [RFC-I18N](./RFC-I18N.md) §1, whose argument —
+   "a second config dialect and a new parser dependency for one feature" —
+   applies here too and is overridden, decided, for two reasons. A balance
+   file is the one place the toolkit's files are edited by someone tuning
+   numbers rather than writing code, and `rate: 0.02` with no quotes or
+   braces is the shape that audience edits without breaking. And the parser
+   is not a dependency: it is a hand-written strict subset (§2, Open
+   Question 1 — resolved), small enough that the "new parser" cost is a few
+   hundred lines the assembler owns. The remaining cost is honest: §6's
+   shared pass runs two parsers, one per dialect.
 4. **Zero runtime cost.** Values inline exactly as the `const` literals they replace. A shipped game reads no files and carries no parser.
 5. **A misspelled constant does not compile**, the same property [RFC-I18N](./RFC-I18N.md) §3 gives keys.
 6. **Packs bring their own**, namespaced, so a pack stays drop-in.
@@ -180,7 +190,7 @@ The door is not closed, and it is worth recording the shape now so the decision 
 
 Mirroring [RFC-I18N](./RFC-I18N.md) §3.1: the assembler scans game and pack sources for `C.<path>` references and **warns on constants nothing reads**. A tuning value no code consumes is either dead or a symptom of a rename that missed a call site, and in a folder whose purpose is discoverability, stale entries are the main way it would rot.
 
-Sound for the same reason it is sound there — the accessor path is the only way to name a constant, and it cannot be assembled from a runtime string.
+Sound for the same reason it is sound there — the accessor path is the only way to name a constant, and it cannot be assembled from a runtime string — **with one caveat the scanner must handle: namespace aliasing.** `const cfg = C.decay.hunger;` followed by `cfg.rate` is ordinary Zig, and a textual scan for `C.<path>` misses it, producing a false "unused" warning that trains people to ignore the lint. Ruled: **conservative alias widening** — the scanner detects `= C`-rooted aliases and marks the aliased subtree used. Sound (no warning is wrongly suppressed, no false positive fires); the cost is precision, since an aliased subtree's genuinely dead entries go unreported. The same ruling covers RFC-I18N's `K` (its §3.1).
 
 ### 6. Shared machinery with RFC-I18N
 
@@ -205,7 +215,7 @@ Phase 4 is deliberately last and deliberately incremental. New tuning values go 
 
 ## Open questions
 
-1. **Which YAML library?** The assembler has no YAML dependency today (checked). A pure-Zig parser keeps the toolchain dependency-free and cross-compiles trivially; libyaml through C is more battle-tested but adds a C dependency to a build tool. The strict subset in §2 is small enough that a hand-written parser is also credible — and would make the subset enforceable by construction rather than by post-validation.
+1. ~~**Which YAML library?**~~ **Resolved** (assembler#656): none. The parser is hand-written against the strict subset, which makes §2 enforceable by construction rather than by post-validation — nothing implements YAML 1.1 implicit typing, so nothing can silently apply it. The toolchain stays dependency-free and the subset's rejections are errors that name what was written.
 2. **Do constants and prefab data overlap?** `build_time` as a global vs. a per-workstation override in `prefabs/*.jsonc`. Declared a non-goal here, but the boundary will be contested the first time a designer wants one fast-building room.
 3. **Sequences.** Rejected in phase 1. But tiered values (`upgrade_costs: [10, 25, 60]`) are a natural fit and would generate a comptime array. Worth it, or does it invite structure that belongs in prefabs?
 4. **Units.** `build_time: 5.0` is seconds by convention and comment only. A suffix convention (`_s`, `_px`, `_per_s`) is nearly free and self-documenting; a real unit type is not. Is the convention worth mandating?

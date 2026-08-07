@@ -220,7 +220,7 @@ The diagnostic lands on the exact line that would have rendered the missing stri
 
 So: **comptime enforces, the assembler advises.** Strict flips the policy from (b) to (a).
 
-The soundness of (b) rests on the closed key space — worth stating its one hole plainly: `@enumFromInt` can forge a `Key` that no `K.` path names, which would evade the scan. That is pathological, has no legitimate use, and is out of contract.
+The soundness of (b) rests on the closed key space — worth stating its two holes plainly. `@enumFromInt` can forge a `Key` that no `K.` path names; that is pathological, has no legitimate use, and is out of contract. **Namespace aliasing is not**: `const S = K.settings;` then `t(S.volume)` is ordinary Zig that a textual `K.<path>` scan misses, silently suppressing exactly the missing-translation warning this section exists to give. Ruled: **conservative alias widening** — the scanner detects `= K`-rooted aliases and marks the aliased subtree used. No warning is wrongly suppressed; the cost is precision (an aliased subtree's unused keys go unreported). The comptime path (a) is unaffected either way, since `t` instantiates per real key regardless of how it was spelled. Same ruling for RFC-CONSTANTS `C` (its §5).
 
 **No runtime fallback logic is needed either way.** When a locale is missing a used key, codegen fills that table slot with the **reference locale's string** — the pack's own reference for a `<pack>__` key, the project's otherwise (§2.2). The table is always rectangular and always complete, so §5's guarantee holds unchanged — the warning tells you a slot was backfilled, and the game renders reference-language text there rather than a blank or a `translation missing` marker.
 
