@@ -88,6 +88,19 @@ the override site it is `citizens__hunger.starving`. Both are true; the packs RF
 should say so, because it currently reads as "authors never type or see the
 prefix" without qualification.
 
+In file form, a pack's keys sit at the top level of the game's locale file
+under the prefixed name — the `__` form is exactly how the outside names them:
+
+```jsonc
+// locales/pt.jsonc — the game's own file
+{
+  "menu": { "new_game": "Novo Jogo" },   // the game's key
+  "citizens__hunger": {
+    "starving": "Faminto",               // a pack key: override, or pt addition
+  },
+}
+```
+
 **Overriding asserts the key exists; adding does not.** These are different
 operations and only one of them is a claim about the pack:
 
@@ -233,6 +246,19 @@ tf(K.hud.stock, .{ .cnt = 5, .max = 10 })     // compile error: no field 'cnt'
 
 Splitting them keeps the zero-cost path honest instead of hiding an allocation behind a uniform API. Codegen knows which keys have placeholders, so calling `t` on an interpolated key is itself a compile error.
 
+**Formatting is a per-locale segment walk, not a comptime format string.** Word
+order is the thing translation changes: `en` says `"{count} of {max} items"`,
+`de` says `"Von {max} Artikeln: {count}"`. The string is selected at *runtime*
+(the active locale) while the arguments are comptime, so the reference locale's
+placeholder order proves nothing about any other locale's — a naïve
+implementation that bakes the reference string into a comptime `std.fmt` format
+renders every reordering locale wrong. Codegen therefore emits, per
+(key, locale), a list of literal-and-placeholder segments, and `tf` walks the
+active locale's list. §3's parity check compares placeholder *sets*, never
+order: reordering is legitimate translation, not drift.
+
+A literal `{` is written `{{` (and `}` as `}}`), matching `std.fmt`.
+
 `tf`'s buffer comes from a **frame arena** reset once per frame. UI strings are per-frame and short-lived; an arena avoids both a per-call allocation and any free discipline at the call site. The returned slice is valid until the next frame — documented, and the reason `tf` results must never be stored in a component. (Ownership is Open Question 1.)
 
 ### 5. Storage and runtime switching
@@ -313,7 +339,20 @@ Phase 1 alone converts the FP menu and is independently useful.
 | gettext | `.po`/`.mo` | Runtime, falls back to msgid | Mature tooling, C-oriented |
 | Unity Localization | Asset tables | Runtime (editor warns) | GUI-driven table editing |
 | Mozilla Fluent | `.ftl` | Runtime | Richest grammar (genders, plurals as first-class) |
+| Android resources | XML per locale | **Compile time** — `R.string.foo` is a generated constant | Untranslated keys are lint warnings; default-locale fallback baked at build |
 
-All four check keys at runtime, because all four load translations at runtime. labelle's build already generates the game's wiring, so it can check at compile time instead — that is the one thing this design does that none of the prior art can.
+The first four check keys at runtime, because they load translations at
+runtime. **Android is the exception, and the validation**: `R.string.new_game`
+is a generated constant, so a missing key is a compile error while an
+untranslated string is a lint warning with default-locale fallback baked in —
+the same two-severity split §3 argues for, shipped at scale for fifteen years.
+Compile-checked keys are not novel; they are proven.
 
-The sharper distinction is §3.1. Every system above can report "locale *L* is missing key *k*"; none can reliably answer "…and is *k* actually rendered anywhere?", because in all four the key space is open — keys are strings assembled at runtime. labelle's keys are comptime symbols from a closed set, which turns coverage from a list you skim into a diagnostic that only fires on holes a player could see.
+What remains novel is §3.1. Every system above can report "locale *L* is
+missing key *k*"; none can reliably answer "…and is *k* actually rendered
+anywhere?". In the first four the key space is open — keys are strings
+assembled at runtime. Android generates constants but leaves the question open
+anyway: `getIdentifier()` resolves resources from runtime strings, so its lint
+must assume any string might be used. labelle's keys are comptime symbols from
+a closed set with no runtime lookup, which turns coverage from a list you skim
+into a diagnostic that only fires on holes a player could see.

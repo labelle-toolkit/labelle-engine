@@ -108,6 +108,19 @@ simpler than i18n's — no "unless it is a new locale" branch — and it is what
 turns a pack renaming a constant in v2 into a build failure rather than a game's
 tuning silently reverting to the pack's default.
 
+In file form the rule follows from §1 — the filename is the namespace, and a
+pack's namespace is `<pack>__<file>` — so the game overrides by carrying the
+prefixed name as a filename:
+
+```yaml
+# constants/citizens__hunger.yaml — the game retuning the citizens pack
+drain_rate: 0.015
+```
+
+The `__` filename is deliberate, not pretty. It keeps "filename is the
+namespace" a single rule with no override-specific carve-out, and a directory
+listing of `constants/` then shows exactly which packs this game has retuned.
+
 An override must also keep the **scalar kind** it replaces: `5.0` stays `5.0`,
 not `5`. Values are emitted untyped and coerce at the use site (§3), so an
 int-for-float override can change behaviour without changing the number — the
