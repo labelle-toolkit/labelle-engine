@@ -57,6 +57,39 @@ Flat, scanned like `scripts/` and `locales/`. Filename is the namespace; adding 
 
 Packs use `packs/<name>/constants/*.yaml`, namespaced `<pack>__` exactly as pack components, scripts, prefabs, and locales already are — so `packs/combat/constants/ship.yaml` surfaces as `C.combat__ship.*`.
 
+### 1.1 The game takes precedence over the pack
+
+Same rule as [RFC-I18N](./RFC-I18N.md) §2.1: a game overrides any of a pack's
+constants, and the game wins. A `C.citizens__hunger.drain_rate` defined in the
+game's `constants/` replaces the pack's.
+
+No visibility gate — every pack constant is overridable. A gate would ask a pack
+author to predict which values a game will want to tune, and each wrong guess
+sends that game back to forking the pack or redefining the value somewhere else,
+which is the drift this RFC exists to remove. The evidence in §Problem is
+entirely of that shape: five construction timings across four files, `SHIP_SPEED`
+defined twice, `health_drain_rate` stranded in a plugin's `config.zig`.
+
+**The consequence, accepted deliberately: a pack's constant names are part of its
+compatibility surface.** Once a game overrides `citizens__hunger.drain_rate`,
+renaming it in the pack is a breaking change for that game. Packs already take
+this bargain elsewhere — RFC-packs makes a pack's `name` save-stable because it
+is the component prefix, so renaming a shipped pack is a save migration. Constant
+names join that list.
+
+**Every write under a pack's namespace is an override, and one that matches
+nothing is an error.** Constants have no counterpart to i18n's *adding* case:
+there is no second axis, so a value a pack does not define is simply the game's
+own constant in the game's own namespace. That makes the rule here strictly
+simpler than i18n's — no "unless it is a new locale" branch — and it is what
+turns a pack renaming a constant in v2 into a build failure rather than a game's
+tuning silently reverting to the pack's default.
+
+An override must also keep the **scalar kind** it replaces: `5.0` stays `5.0`,
+not `5`. Values are emitted untyped and coerce at the use site (§3), so an
+int-for-float override can change behaviour without changing the number — the
+same class of silent failure the strict scalar policy in §2 exists to prevent.
+
 ```yaml
 # constants/construction.yaml
 # How long a room takes to go from carcase to finished, in seconds.
@@ -140,7 +173,11 @@ Sound for the same reason it is sound there — the accessor path is the only wa
 
 These two RFCs are the same shape: *scan a convention-named folder → generate nested namespaces of comptime-checked accessors → warn on entries nothing uses.* They should share one assembler pass — one directory scanner, one nested-namespace emitter, one `X.<path>` usage scanner parameterised by root symbol — rather than growing two near-identical implementations. Whichever lands first should be built with the second in mind.
 
-They differ in exactly one respect: locales need a runtime-selectable table because the active language changes while the game runs, whereas constants resolve to a single value at build time.
+They differ in two respects, and both are small enough to be parameters of the shared pass rather than reasons to fork it.
+
+**Runtime selection.** Locales need a runtime-selectable table because the active language changes while the game runs; constants resolve to a single value at build time.
+
+**Override versus add.** Both share the precedence rule — the game beats the pack (§1.1, RFC-I18N §2.1) — and the check that a write under a pack's namespace must match a key the pack defines. i18n needs one branch constants do not: a game may *add* a locale a pack never shipped, so a `<pack>__` key appearing in a locale file the pack has no counterpart for is legitimate. Constants have no second axis and therefore no such case, which makes the constants rule a strict subset of the i18n one. Build the general form once and let constants use the simpler half.
 
 ## Phasing
 
@@ -148,7 +185,7 @@ They differ in exactly one respect: locales need a runtime-selectable table beca
 |---|---|
 | 1 | `constants/` scan, strict-scalar YAML subset, codegen, `C.*` accessors |
 | 2 | Usage-awareness warnings (§5), shared with RFC-I18N's scanner |
-| 3 | Pack-scoped constants (`packs/<name>/constants/`, `<pack>__` namespacing) |
+| 3 | Pack-scoped constants (`packs/<name>/constants/`, `<pack>__` namespacing), game override precedence and the must-exist check (§1.1) |
 | 4 | Migrate FP's 38 existing constants, domain by domain |
 
 Phase 4 is deliberately last and deliberately incremental. New tuning values go in `constants/` from phase 1; existing ones move when their domain is next touched. A big-bang migration of 17 files would be a large, untestable diff over gameplay-affecting values.

@@ -71,6 +71,71 @@ Flat, not recursive. Filename is the BCP-47 tag and the only place a locale is d
 
 **Packs ship their own.** `packs/<name>/locales/*.jsonc` is scanned too, with keys namespaced `<pack>__` exactly as pack components, scripts, and prefabs already are. A pack stays self-contained and drop-in.
 
+### 2.1 The game takes precedence over the pack
+
+A pack ships the languages its author had. A game shipping to a market the pack
+never considered cannot be made to fork it, so:
+
+- **The game overrides.** A `<pack>__` key defined in the game's `locales/` wins
+  over the pack's. Same for constants (RFC-CONSTANTS §5.1).
+- **The game adds.** A pack shipping `en` and `fr` does not stop a game adding
+  `pt`. The game writes the pack's keys into its own `pt.jsonc`.
+
+**The namespace is invisible inside a pack and explicit outside it.** Inside
+`packs/citizens` you write `hunger.starving` and never see the prefix, as
+RFC-packs promises. A game addressing that key has no other way to name it, so at
+the override site it is `citizens__hunger.starving`. Both are true; the packs RFC
+should say so, because it currently reads as "authors never type or see the
+prefix" without qualification.
+
+**Overriding asserts the key exists; adding does not.** These are different
+operations and only one of them is a claim about the pack:
+
+| the game writes | means | if no such key in the pack |
+|---|---|---|
+| a `<pack>__` key in a locale the pack ships | override | **error** |
+| a `<pack>__` key in a locale the pack lacks | add | **error** |
+
+Both error, and for the same reason: writing under a pack's namespace is a claim
+that the pack defines that key. §3.1 makes *unused* keys silent, which is right
+for pack-authored keys and wrong here — if a game writes
+`citizens__hunger.starvng`, or the pack renames the key in v2, the game silently
+gets the pack's string while believing it had replaced it. This check is the only
+thing that turns a pack upgrade breaking a game's translations into a build
+failure instead of a surprise in front of a player.
+
+What *adding* changes is coverage, not existence: a `pt` file for a pack that
+ships `en`/`fr` is new-locale-for-existing-key, so it is measured against the
+pack's key space rather than against a `pt` that does not exist yet.
+
+Placeholder parity (§4) applies unchanged, because overrides and additions go
+through the same codegen: a `pt` string that drops `{count}` fails exactly as a
+game's own would.
+
+### 2.2 A pack declares its own reference locale
+
+`.reference` in `project.labelle` (§8) is the backfill source that makes §3.1's
+table rectangular, and that is what lets §5 promise **no runtime fallback code
+needs to exist**. That promise assumes the reference locale contains every used
+key.
+
+For a pack's keys it does not. A pack ships `en` and `fr`; a studio authoring in
+Portuguese sets `.reference = "pt"`; the pack's keys are in neither the game's
+`pt` nor anywhere the project reference can see. There is nothing to backfill
+from and the table cannot be made rectangular.
+
+So `pack.labelle` declares its own `.reference`, and backfill resolves:
+
+```
+locale → pack reference → project reference
+```
+
+A `pt` player then reads the pack's English for strings nobody has translated
+yet, which is the right outcome, and the no-runtime-failure guarantee survives
+contact with a pack the game does not control. A pack that declares no
+`.reference` falls back to the project's, which is correct for in-tree packs
+authored alongside the game.
+
 ### 3. Key generation — the part Rails structurally cannot do
 
 The assembler scans `locales/`, reads the **reference locale** from `project.labelle` (§8), and generates a key type plus a string table.
@@ -144,7 +209,7 @@ So: **comptime enforces, the assembler advises.** Strict flips the policy from (
 
 The soundness of (b) rests on the closed key space — worth stating its one hole plainly: `@enumFromInt` can forge a `Key` that no `K.` path names, which would evade the scan. That is pathological, has no legitimate use, and is out of contract.
 
-**No runtime fallback logic is needed either way.** When a locale is missing a used key, codegen fills that table slot with the **reference locale's string**. The table is always rectangular and always complete, so §5's guarantee holds unchanged — the warning tells you a slot was backfilled, and the game renders reference-language text there rather than a blank or a `translation missing` marker.
+**No runtime fallback logic is needed either way.** When a locale is missing a used key, codegen fills that table slot with the **reference locale's string** — the pack's own reference for a `<pack>__` key, the project's otherwise (§2.2). The table is always rectangular and always complete, so §5's guarantee holds unchanged — the warning tells you a slot was backfilled, and the game renders reference-language text there rather than a blank or a `translation missing` marker.
 
 ### 4. Interpolation and argument checking
 
@@ -226,7 +291,7 @@ OS detection is deliberately absent (see Non-goals). If it lands later it slots 
 |---|---|
 | 1 | `locales/` scan, key codegen, static `t()`, usage-aware coverage diagnostics (§3.1), `setLocale` |
 | 2 | Interpolation: `tf()`, per-key `Args`, frame arena, placeholder-parity validation |
-| 3 | Pack-scoped locales (`packs/<name>/locales/`, `<pack>__` namespacing) |
+| 3 | Pack-scoped locales (`packs/<name>/locales/`, `<pack>__` namespacing), game override/add precedence and the must-exist check (§2.1), per-pack `.reference` (§2.2) |
 | 4 | Plurals — CLDR categories (`zero`/`one`/`two`/`few`/`many`/`other`) as a nested key convention with per-locale category sets |
 
 Phase 1 alone converts the FP menu and is independently useful.
@@ -236,7 +301,7 @@ Phase 1 alone converts the FP menu and is independently useful.
 1. **Frame arena ownership.** Engine-owned and reset in the frame loop, or game-owned and passed in? Engine-owned is less ceremony but puts an allocator in the i18n module that single-language games never touch.
 2. ~~**Strict by default?**~~ **Resolved** (§3 / §3.1): default is a *warning*, scoped to keys actually used in code; `i18n.strict = true` promotes it to a comptime error for release builds. Unused untranslated keys are silent. Remaining sub-question: should `strict` also be settable per-locale, so a game can ship `pt-BR` strictly while `fr` is still in progress?
 3. **Key type stability.** `@enumFromInt` indices are assigned by scan order. Reordering a locale file must not silently change what a key means — sort keys deterministically before assigning, and confirm nothing persists a `Key` value to disk.
-4. **Pack key collisions.** Two packs both defining `ui.title` namespace to `a__ui.title` / `b__ui.title` — but should a *game* be able to override a pack's string without forking the pack?
+4. ~~**Pack key collisions.**~~ **Resolved** (§2.1): two packs both defining `ui.title` namespace to `a__ui.title` / `b__ui.title`. And yes — a game overrides a pack's string without forking it, and may add locales the pack never shipped. The game takes precedence.
 5. **Binary-size ceiling** for strategy (a). At what locale count does baking everything stop being obviously right?
 6. **Font coverage interaction.** A locale needing glyphs outside the baked atlas renders blanks. Should the assembler cross-check locale codepoints against `FontBakeParams.ranges` (RFC-FONT-LOADER §2) and fail the build? That would be a genuinely novel check — and cheap, since both are build-time data.
 
