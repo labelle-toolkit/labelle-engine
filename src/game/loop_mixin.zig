@@ -23,6 +23,18 @@ pub fn Mixin(comptime Game: type) type {
 
     return struct {
         pub fn tick(self: *Game, dt: f32) void {
+            // Frame boundary (RFC-I18N §4). First thing in the frame, BEFORE
+            // the pause gate below, so it fires exactly once per frame on
+            // every frame — a paused game still renders translated UI, and
+            // the i18n frame arena's "results live for the current frame"
+            // contract has to hold there too. Runs before anything that
+            // could produce a `tf()` result this frame (scripts, GUI, and
+            // the post-`tick` render all come later in the frame). `null`
+            // (no generated module registered) is a single branch.
+            if (self.frame_boundary_fn) |frame_boundary_fn| {
+                frame_boundary_fn();
+            }
+
             // FPS / frame-time tracking for the debug inspector (#380).
             // Record the REAL (unscaled) dt every frame — including paused
             // frames that early-return below — so the inspector's FPS

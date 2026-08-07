@@ -130,6 +130,10 @@ pub fn build(b: *std.Build) void {
         "test/sprite_by_field_tick_test.zig",
         "test/scene_assets_hooks_test.zig",
         "test/pause_hook_test.zig",
+        // RFC-I18N §4 — frame-boundary hook: the generated main wires the
+        // i18n module's `resetFrameArena` into the top of `tick` (every
+        // frame, paused included) via `setFrameBoundaryFn`.
+        "test/frame_boundary_test.zig",
         "test/fixed_timestep_test.zig",
         // #578 — `pub const Events` on the engine, dual-emit through
         // the buffered event path so flows can listen to lifecycle
