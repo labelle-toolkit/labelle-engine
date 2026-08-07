@@ -259,7 +259,29 @@ order: reordering is legitimate translation, not drift.
 
 A literal `{` is written `{{` (and `}` as `}}`), matching `std.fmt`.
 
-`tf`'s buffer comes from a **frame arena** reset once per frame. UI strings are per-frame and short-lived; an arena avoids both a per-call allocation and any free discipline at the call site. The returned slice is valid until the next frame — documented, and the reason `tf` results must never be stored in a component. (Ownership is Open Question 1.)
+`tf`'s buffer comes from a **frame arena** reset once per frame. UI strings are per-frame and short-lived; an arena avoids both a per-call allocation and any free discipline at the call site. The returned slice is valid until the next frame — documented, and the reason `tf` results must never be stored in a component.
+
+**Ownership — resolved (Open Question 1): module-owned buffer, engine-owned
+reset.** The arena is a fixed 16 KiB ring inside the generated `i18n` module
+(no allocator, no wiring needed just to *call* `tf` — it degrades to
+wrap-between-results standalone), and the per-frame reset splices in through
+the engine's **frame-boundary hook** (labelle-engine `Game.setFrameBoundaryFn`):
+a single `?*const fn () void` slot fired as the first thing in `Game.tick()`,
+*before* the pause gate — so it runs exactly once per frame on every frame,
+paused ones included, which matters because the pause menu is the
+i18n-heaviest screen. The generated `main.zig` wires it with one line:
+
+```zig
+game.setFrameBoundaryFn(i18n.resetFrameArena);
+```
+
+Not the `frame_start` lifecycle hook, which fires only on unpaused frames and
+routes through the game's script-hook receivers; and deliberately a single
+slot rather than a registry — the registrant is generated code with one
+author (the assembler), which composes multiple per-frame resets into one
+generated function if a second concern ever appears. Games without a
+`locales/` directory never call `setFrameBoundaryFn`; the `null` slot costs
+one branch per frame, preserving Goal 6.
 
 ### 5. Storage and runtime switching
 
@@ -324,7 +346,7 @@ Phase 1 alone converts the FP menu and is independently useful.
 
 ## Open questions
 
-1. **Frame arena ownership.** Engine-owned and reset in the frame loop, or game-owned and passed in? Engine-owned is less ceremony but puts an allocator in the i18n module that single-language games never touch.
+1. ~~**Frame arena ownership.**~~ **Resolved** (§4): neither engine-owned nor game-owned — the buffer is a fixed ring *inside the generated module* (no allocator at all, so single-language games touch nothing), and the once-per-frame reset is the engine's job via the frame-boundary hook: the generated main registers `i18n.resetFrameArena` with `Game.setFrameBoundaryFn`, fired at the top of every `tick` (paused frames included).
 2. ~~**Strict by default?**~~ **Resolved** (§3 / §3.1): default is a *warning*, scoped to keys actually used in code; `i18n.strict = true` promotes it to a comptime error for release builds. Unused untranslated keys are silent. Remaining sub-question: should `strict` also be settable per-locale, so a game can ship `pt-BR` strictly while `fr` is still in progress?
 3. **Key type stability.** `@enumFromInt` indices are assigned by scan order. Reordering a locale file must not silently change what a key means — sort keys deterministically before assigning, and confirm nothing persists a `Key` value to disk.
 4. ~~**Pack key collisions.**~~ **Resolved** (§2.1): two packs both defining `ui.title` namespace to `a__ui.title` / `b__ui.title`. And yes — a game overrides a pack's string without forking it, and may add locales the pack never shipped. The game takes precedence.
