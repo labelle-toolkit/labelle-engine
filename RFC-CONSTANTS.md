@@ -57,6 +57,29 @@ Flat, scanned like `scripts/` and `locales/`. Filename is the namespace; adding 
 
 Packs use `packs/<name>/constants/*.yaml`, namespaced `<pack>__` exactly as pack components, scripts, prefabs, and locales already are — so `packs/combat/constants/ship.yaml` surfaces as `C.combat__ship.*`.
 
+```yaml
+# constants/construction.yaml
+# How long a room takes to go from carcase to finished, in seconds.
+build_time: 5.0
+repair_time: 5.0
+per_piece_time: 5.0
+deconstruct_time: 4.0
+```
+
+Nesting is allowed one or more levels and maps onto the accessor path:
+
+```yaml
+# constants/decay.yaml
+hunger:
+  rate: 0.02          # need units per second
+  yellow_threshold: 0.5
+  red_threshold: 0.2
+health:
+  drain_rate: 0.0     # DISABLED — see CLAUDE.md §Needs System
+```
+
+→ `C.decay.hunger.rate`, `C.decay.health.drain_rate`.
+
 ### 1.1 The game takes precedence over the pack
 
 Same rule as [RFC-I18N](./RFC-I18N.md) §2.1: a game overrides any of a pack's
@@ -89,29 +112,6 @@ An override must also keep the **scalar kind** it replaces: `5.0` stays `5.0`,
 not `5`. Values are emitted untyped and coerce at the use site (§3), so an
 int-for-float override can change behaviour without changing the number — the
 same class of silent failure the strict scalar policy in §2 exists to prevent.
-
-```yaml
-# constants/construction.yaml
-# How long a room takes to go from carcase to finished, in seconds.
-build_time: 5.0
-repair_time: 5.0
-per_piece_time: 5.0
-deconstruct_time: 4.0
-```
-
-Nesting is allowed one or more levels and maps onto the accessor path:
-
-```yaml
-# constants/decay.yaml
-hunger:
-  rate: 0.02          # need units per second
-  yellow_threshold: 0.5
-  red_threshold: 0.2
-health:
-  drain_rate: 0.0     # DISABLED — see CLAUDE.md §Needs System
-```
-
-→ `C.decay.hunger.rate`, `C.decay.health.drain_rate`.
 
 ### 2. YAML subset, and strict scalars
 

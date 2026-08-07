@@ -77,7 +77,7 @@ A pack ships the languages its author had. A game shipping to a market the pack
 never considered cannot be made to fork it, so:
 
 - **The game overrides.** A `<pack>__` key defined in the game's `locales/` wins
-  over the pack's. Same for constants (RFC-CONSTANTS §5.1).
+  over the pack's. Same for constants (RFC-CONSTANTS §1.1).
 - **The game adds.** A pack shipping `en` and `fr` does not stop a game adding
   `pt`. The game writes the pack's keys into its own `pt.jsonc`.
 
