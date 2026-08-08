@@ -170,4 +170,11 @@ test "preview: a paused, tick-skipped frame still fires the boundary via editor_
     game.tick(0.016);
     editor_api.frame(&game);
     try testing.expectEqual(@as(usize, 3), boundary_count);
+
+    // Clear ALL editor module state, not just the pause flag: the deferred
+    // editor_pause(0) discards pending steps, but `stepped_this_frame`
+    // stays true until the next unpaused shouldTick() — run one here so a
+    // later test in this binary starts from the module's resting state.
+    editor_api.editor_pause(0);
+    try testing.expect(editor_api.shouldTick());
 }
