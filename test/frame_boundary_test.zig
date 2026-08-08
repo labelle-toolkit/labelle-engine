@@ -142,3 +142,32 @@ test "generated-main wiring shape: i18n.resetFrameArena through the hook" {
     game.tick(0.016);
     try testing.expectEqual(@as(usize, 0), mock_i18n.frame_len);
 }
+
+test "preview: a paused, tick-skipped frame still fires the boundary via editor_api.frame (codex on #812)" {
+    boundary_count = 0;
+    var game = Game.init(testing.allocator);
+    defer game.deinit();
+    game.setFrameBoundaryFn(countBoundary);
+
+    const editor_api = engine.editor_api;
+    editor_api.editor_pause(1);
+    defer editor_api.editor_pause(0);
+
+    // Paused, no pending step: the generated preview loop skips g.tick()
+    // but still runs editor_api.frame + g.render — the boundary must come
+    // from frame() on those frames.
+    try testing.expect(!editor_api.shouldTick());
+    editor_api.frame(&game);
+    try testing.expectEqual(@as(usize, 1), boundary_count);
+    try testing.expect(!editor_api.shouldTick());
+    editor_api.frame(&game);
+    try testing.expectEqual(@as(usize, 2), boundary_count);
+
+    // A stepped frame ticks: tick() fires the boundary, frame() must NOT
+    // fire it again (double reset would free the frame's strings).
+    editor_api.editor_step(1);
+    try testing.expect(editor_api.shouldTick());
+    game.tick(0.016);
+    editor_api.frame(&game);
+    try testing.expectEqual(@as(usize, 3), boundary_count);
+}

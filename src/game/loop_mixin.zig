@@ -31,6 +31,11 @@ pub fn Mixin(comptime Game: type) type {
             // could produce a `tf()` result this frame (scripts, GUI, and
             // the post-`tick` render all come later in the frame). `null`
             // (no generated module registered) is a single branch.
+            //
+            // Studio preview is the one loop that renders frames WITHOUT
+            // ticking (paused, no pending step) — `editor_api.frame`
+            // fires the boundary for those frames, gated so a ticked
+            // frame never fires twice.
             if (self.frame_boundary_fn) |frame_boundary_fn| {
                 frame_boundary_fn();
             }
