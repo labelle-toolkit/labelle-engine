@@ -183,6 +183,17 @@ pub fn Mixin(comptime Game: type) type {
 
         // ── Game Loop ─────────────────────────────────────────────
 
+        /// Register (or clear, with `null`) the frame-boundary callback —
+        /// fired at the very top of `tick()`, before the pause gate, once
+        /// per frame on every frame. The splice point for per-frame resets
+        /// owned by assembler-generated modules; the canonical registrant is
+        /// the generated `main.zig` wiring the i18n module's
+        /// `resetFrameArena` (RFC-I18N §4). See the `frame_boundary_fn`
+        /// field doc in `game.zig` for why this is a single slot.
+        pub fn setFrameBoundaryFn(self: *Game, callback: ?*const fn () void) void {
+            self.frame_boundary_fn = callback;
+        }
+
         pub fn quit(self: *Game) void {
             self.running = false;
         }

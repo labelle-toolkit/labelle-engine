@@ -763,6 +763,24 @@ pub fn GameConfigWithYAxis(
 
         gizmo_reconcile_fn: ?*const fn (*Self) void = null,
 
+        /// Frame-boundary callback (RFC-I18N §4 / Open Question 1). Fired at
+        /// the very TOP of `tick()` — before the pause gate, so it runs
+        /// exactly once per frame on EVERY frame, paused ones included (a
+        /// pause menu still renders `tf()` text). This is the splice point
+        /// for per-frame resets owned by assembler-generated modules: the
+        /// generated `main.zig` wires the i18n module's frame arena with
+        /// `game.setFrameBoundaryFn(i18n.resetFrameArena)` so `tf()` results
+        /// get the documented "valid for the current frame" lifetime.
+        ///
+        /// Deliberately a SINGLE `fn () void` slot, not a registry: the only
+        /// registrant is generated code, which has one author (the
+        /// assembler) and can compose multiple per-frame resets into one
+        /// generated function if a second concern ever appears. Same
+        /// generated-code splice idiom as `gizmo_reconcile_fn` /
+        /// `spawn_prefab_fn` above. `null` (the default) costs one branch
+        /// per frame — zero-cost for games without i18n.
+        frame_boundary_fn: ?*const fn () void = null,
+
         // Prefab spawning — set by JSONC scene bridge during loadScene.
         prefab_dir: ?[]const u8 = null,
         spawn_prefab_fn: ?*const fn (*Self, []const u8, Position) ?Entity = null,
@@ -1434,6 +1452,10 @@ pub fn GameConfigWithYAxis(
         // fullscreen flag — the generated `main.zig` drains
         // `takeFullscreenRequest()` and forwards it to the window backend,
         // keeping the library backend-agnostic.
+        // Frame-boundary hook (RFC-I18N §4): the generated main wires
+        // per-frame module resets (i18n frame arena) through this; fired
+        // at the top of every `tick`, paused frames included.
+        pub const setFrameBoundaryFn = LifecycleMixin.setFrameBoundaryFn;
         pub const quit = LifecycleMixin.quit;
         pub const isRunning = LifecycleMixin.isRunning;
         pub const setFullscreen = LifecycleMixin.setFullscreen;

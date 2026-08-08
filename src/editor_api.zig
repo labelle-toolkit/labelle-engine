@@ -165,6 +165,20 @@ pub fn shouldTick() bool {
 /// A no-op when neither is active, and a comptime no-op for games whose
 /// renderer has no camera (or no `Camera` seed path).
 pub fn frame(g: anytype) void {
+    // Frame boundary on TICK-SKIPPED frames (RFC-I18N §4; codex on #812):
+    // a paused preview still runs this pass and `g.render()`, and editor-
+    // drawn translated UI produces `tf()` results on those frames too —
+    // without a reset here the arena's once-per-frame lifetime breaks on
+    // exactly the pause the editor lives in. Ticked frames (unpaused, or a
+    // consumed `editor_step`) already fired it first-thing in `tick()`, and
+    // firing twice would free that frame's strings before render reads them.
+    // `@hasField`-gated like the camera paths below: editor_api's tests
+    // (and any embedder) may drive `frame` with a reduced game fixture.
+    if (comptime @hasField(@TypeOf(g.*), "frame_boundary_fn")) {
+        if (editor_paused and !stepped_this_frame) {
+            if (g.frame_boundary_fn) |frame_boundary_fn| frame_boundary_fn();
+        }
+    }
     if (editor_paused and camera_override == null and !stepped_this_frame) applyCameraComponentTo(g);
     if (camera_override) |c| applyCameraTo(g, c);
 }
