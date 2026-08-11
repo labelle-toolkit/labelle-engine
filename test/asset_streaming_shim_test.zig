@@ -100,6 +100,14 @@ fn MockRenderer(comptime Entity: type) type {
         pub fn getTextureInfo(_: *const Self, _: TextureId) ?TextureInfo {
             return null;
         }
+
+        // #328 phase 4: the seam `game.nativeTextureId` forwards to. Present
+        // here so the gate flips true and the engine's accessor is compiled
+        // and exercised, not merely declared.
+        pub const mock_backend_id: u32 = 4242;
+        pub fn nativeTextureId(_: *const Self, _: TextureId) ?core.BackendTextureId {
+            return @enumFromInt(mock_backend_id);
+        }
     };
 }
 
@@ -636,4 +644,38 @@ test "font shim: distinct registrations with different params produce distinct e
     try testing.expect(game.assets.isReady("font_large"));
     try testing.expectEqual(@as(u32, 2), MockFont.decode_calls);
     try testing.expectEqual(@as(u32, 2), MockFont.upload_calls);
+}
+
+// ── #328 phase 4: game.nativeTextureId ────────────────────────────────
+//
+// The seam exists so a game script stops doing
+// `game.renderer.getTextureInfo(...).backend_texture.id` — reaching around
+// the engine boundary, legal only because Zig has no per-field privacy. A
+// downstream UI kit did exactly that once gfx began minting its own keys
+// (labelle-gfx#326).
+//
+// Driven through a real `Game`, NOT a bare mock: an accessor tested only
+// against its own test double proves nothing about what the engine compiles.
+
+test "game.nativeTextureId forwards to the renderer's seam" {
+    var game = TestGame.init(testing.allocator);
+    defer game.deinit();
+
+    // A BARE u32 — the engine's public texture handle, what
+    // `game.loadTextureFromMemory` and `AssetTexture` actually hand a caller.
+    // Passing the renderer's own `TextureId` here would test a path no
+    // engine-facing caller takes (both review bots caught that on #814).
+    const Renderer = MockRenderer(MockEcs.Entity);
+    const engine_handle: u32 = 1 << 31;
+    const backend_id = game.nativeTextureId(engine_handle).?;
+
+    try testing.expectEqual(@as(u32, Renderer.mock_backend_id), backend_id.toInt());
+
+    // Engine handle and backend id are different numbers AND different types.
+    try testing.expect(backend_id.toInt() != engine_handle);
+    try testing.expect(@TypeOf(backend_id) != @TypeOf(engine_handle));
+
+    // And an already-typed handle still works, so both spellings are accepted.
+    const typed: Renderer.TextureId = @enumFromInt(1 << 31);
+    try testing.expectEqual(backend_id.toInt(), game.nativeTextureId(typed).?.toInt());
 }

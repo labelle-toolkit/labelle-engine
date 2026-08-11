@@ -9,6 +9,7 @@
 /// bodies plus the always-available helpers.
 const std = @import("std");
 const atlas_mod = @import("../atlas.zig");
+const core = @import("labelle-core");
 const assets_mod = @import("../assets/mod.zig");
 
 /// Returns the atlas/asset management mixin for a given Game type.
@@ -158,18 +159,26 @@ pub fn Mixin(comptime Game: type) type {
                 else => return error.WrongAssetKind,
             };
 
-            // The catalog-managed upload path does NOT populate the
-            // renderer's texture side-table — the assembler-generated
-            // adapter uploads directly to the GPU backend, bypassing
-            // `renderer.loadTextureFromMemory`. `getTextureInfo` would
-            // therefore return null for catalog-uploaded textures, so
-            // `markPendingLoaded` gets `null` dims and falls back to
-            // scale=1.0. Matches the legacy fallback behavior when the
-            // renderer doesn't expose `getTextureInfo` at all. Atlases
-            // that shipped a downscaled PNG and relied on automatic
-            // texture_scale derivation will need an explicit workflow
-            // once Phase 2 takes over the cold-start path — out of
-            // scope for #443.
+            // `markPendingLoaded` gets `null` dims, so texture_scale falls
+            // back to 1.0. Atlases that shipped a downscaled PNG and relied
+            // on automatic scale derivation need an explicit workflow — out
+            // of scope for #443.
+            //
+            // STALE UNTIL 2026-08: this comment used to claim the catalog
+            // path does not populate the renderer's texture side-table, and
+            // that `getTextureInfo` therefore returns null for
+            // catalog-uploaded textures. That stopped being true with
+            // labelle-gfx#248: the assembler-emitted `ImageBackendAdapter`
+            // calls `renderer.registerCatalogTexture(handle, tex)`
+            // immediately after `uploadTexture`, which puts the handle in
+            // the very map `getTextureInfo` / `nativeTextureId` read.
+            //
+            // The claim outlived the fix and misled a reviewer of #814 into
+            // reporting that the backend-handle seam cannot resolve catalog
+            // handles. It can. Passing `null` here is now a missed
+            // opportunity rather than a necessity — deriving real dims for
+            // catalog atlases is a behaviour change, so it is left as
+            // follow-up rather than folded into this PR.
             try self.atlas_manager.markPendingLoaded(name, id, null);
             return true;
         }
@@ -240,6 +249,40 @@ pub fn Mixin(comptime Game: type) type {
         pub fn isAtlasLoaded(self: *Game, name: []const u8) bool {
             const atlas = self.atlas_manager.getAtlas(name) orelse return false;
             return atlas.isLoaded();
+        }
+
+        /// Resolve an engine texture handle to the BACKEND's own texture id —
+        /// the value a backend-native accessor is keyed by (labelle-bgfx's
+        /// `nativeTextureHandle`, and anything else reaching past the renderer
+        /// into backend state).
+        ///
+        /// This exists so game scripts stop doing it themselves. Before it,
+        /// the only way to get there was
+        /// `game.renderer.getTextureInfo(...).backend_texture.id` — a script
+        /// reaching around the engine boundary, legal only because Zig has no
+        /// per-field privacy. A downstream UI kit did exactly that after
+        /// gfx started minting its own keys (labelle-gfx#326).
+        ///
+        /// Null when the renderer exposes no `nativeTextureId` (older gfx, or
+        /// a renderer without a texture registry) or the handle is unknown, so
+        /// callers degrade rather than fabricate a handle.
+        ///
+        ///     const backend_id = game.nativeTextureId(handle) orelse return;
+        ///     const native = backend_gfx.nativeTextureHandle(backend_id);
+        pub fn nativeTextureId(self: *Game, tex_id: anytype) ?core.BackendTextureId {
+            const Renderer = @TypeOf(self.renderer.*);
+            if (!@hasDecl(Renderer, "nativeTextureId")) return null;
+            // Normalize to the renderer's handle type. The engine's PUBLIC
+            // texture handle is a bare `u32` — `loadTextureFromMemory` and
+            // `AssetTexture` both hand one out — while the renderer's seam
+            // takes its own `TextureId`. Forwarding unchanged compiled only
+            // when a caller happened to pass an already-typed handle, which
+            // no engine-facing caller has.
+            const typed: Renderer.TextureId = switch (@typeInfo(@TypeOf(tex_id))) {
+                .int, .comptime_int => @enumFromInt(tex_id),
+                else => tex_id,
+            };
+            return self.renderer.nativeTextureId(typed);
         }
 
         pub fn queryTextureDims(self: *Game, tex_id: anytype) ?atlas_mod.TextureManager.TextureDims {
