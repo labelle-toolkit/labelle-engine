@@ -262,8 +262,19 @@ pub fn Mixin(comptime Game: type) type {
         ///     const backend_id = game.nativeTextureId(handle) orelse return;
         ///     const native = backend_gfx.nativeTextureHandle(backend_id);
         pub fn nativeTextureId(self: *Game, tex_id: anytype) ?core.BackendTextureId {
-            if (!@hasDecl(@TypeOf(self.renderer.*), "nativeTextureId")) return null;
-            return self.renderer.nativeTextureId(tex_id);
+            const Renderer = @TypeOf(self.renderer.*);
+            if (!@hasDecl(Renderer, "nativeTextureId")) return null;
+            // Normalize to the renderer's handle type. The engine's PUBLIC
+            // texture handle is a bare `u32` — `loadTextureFromMemory` and
+            // `AssetTexture` both hand one out — while the renderer's seam
+            // takes its own `TextureId`. Forwarding unchanged compiled only
+            // when a caller happened to pass an already-typed handle, which
+            // no engine-facing caller has.
+            const typed: Renderer.TextureId = switch (@typeInfo(@TypeOf(tex_id))) {
+                .int, .comptime_int => @enumFromInt(tex_id),
+                else => tex_id,
+            };
+            return self.renderer.nativeTextureId(typed);
         }
 
         pub fn queryTextureDims(self: *Game, tex_id: anytype) ?atlas_mod.TextureManager.TextureDims {

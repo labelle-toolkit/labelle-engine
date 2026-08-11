@@ -661,15 +661,21 @@ test "game.nativeTextureId forwards to the renderer's seam" {
     var game = TestGame.init(testing.allocator);
     defer game.deinit();
 
-    // Typed as the RENDERER's handle type, which is what the seam takes —
-    // real gfx uses core.TextureId here; this mock declares its own.
+    // A BARE u32 — the engine's public texture handle, what
+    // `game.loadTextureFromMemory` and `AssetTexture` actually hand a caller.
+    // Passing the renderer's own `TextureId` here would test a path no
+    // engine-facing caller takes (both review bots caught that on #814).
     const Renderer = MockRenderer(MockEcs.Entity);
-    const engine_handle: Renderer.TextureId = @enumFromInt(1 << 31);
+    const engine_handle: u32 = 1 << 31;
     const backend_id = game.nativeTextureId(engine_handle).?;
 
     try testing.expectEqual(@as(u32, Renderer.mock_backend_id), backend_id.toInt());
 
     // Engine handle and backend id are different numbers AND different types.
-    try testing.expect(backend_id.toInt() != @intFromEnum(engine_handle));
+    try testing.expect(backend_id.toInt() != engine_handle);
     try testing.expect(@TypeOf(backend_id) != @TypeOf(engine_handle));
+
+    // And an already-typed handle still works, so both spellings are accepted.
+    const typed: Renderer.TextureId = @enumFromInt(1 << 31);
+    try testing.expectEqual(backend_id.toInt(), game.nativeTextureId(typed).?.toInt());
 }
