@@ -1600,6 +1600,13 @@ pub fn GameConfigWithYAxis(
         pub const loadTextureFromMemory = if (has_load_from_memory) AtlasMixin.loadTextureFromMemoryU32 else @compileError("Renderer does not support loadTextureFromMemory");
 
         // ── Audio asset shims (Phase 4 of Asset Streaming RFC, #447) ──
+        /// Resolve an engine texture handle to the BACKEND's own texture id
+        /// (#328 phase 4). Unconditional — the mixin's own `@hasDecl` gate
+        /// returns null on a renderer that predates the seam, so this stays
+        /// callable against any gfx rather than vanishing from the Game type
+        /// and turning a graceful degrade into a compile error.
+        pub const nativeTextureId = AtlasMixin.nativeTextureId;
+
         pub const registerSoundFromMemory = AtlasMixin.registerSoundFromMemory;
         pub const loadSoundFromMemory = AtlasMixin.loadSoundFromMemory;
         pub const loadSoundIfNeeded = AtlasMixin.loadSoundIfNeeded;

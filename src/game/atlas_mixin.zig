@@ -9,6 +9,7 @@
 /// bodies plus the always-available helpers.
 const std = @import("std");
 const atlas_mod = @import("../atlas.zig");
+const core = @import("labelle-core");
 const assets_mod = @import("../assets/mod.zig");
 
 /// Returns the atlas/asset management mixin for a given Game type.
@@ -240,6 +241,29 @@ pub fn Mixin(comptime Game: type) type {
         pub fn isAtlasLoaded(self: *Game, name: []const u8) bool {
             const atlas = self.atlas_manager.getAtlas(name) orelse return false;
             return atlas.isLoaded();
+        }
+
+        /// Resolve an engine texture handle to the BACKEND's own texture id —
+        /// the value a backend-native accessor is keyed by (labelle-bgfx's
+        /// `nativeTextureHandle`, and anything else reaching past the renderer
+        /// into backend state).
+        ///
+        /// This exists so game scripts stop doing it themselves. Before it,
+        /// the only way to get there was
+        /// `game.renderer.getTextureInfo(...).backend_texture.id` — a script
+        /// reaching around the engine boundary, legal only because Zig has no
+        /// per-field privacy. A downstream UI kit did exactly that after
+        /// gfx started minting its own keys (labelle-gfx#326).
+        ///
+        /// Null when the renderer exposes no `nativeTextureId` (older gfx, or
+        /// a renderer without a texture registry) or the handle is unknown, so
+        /// callers degrade rather than fabricate a handle.
+        ///
+        ///     const backend_id = game.nativeTextureId(handle) orelse return;
+        ///     const native = backend_gfx.nativeTextureHandle(backend_id);
+        pub fn nativeTextureId(self: *Game, tex_id: anytype) ?core.BackendTextureId {
+            if (!@hasDecl(@TypeOf(self.renderer.*), "nativeTextureId")) return null;
+            return self.renderer.nativeTextureId(tex_id);
         }
 
         pub fn queryTextureDims(self: *Game, tex_id: anytype) ?atlas_mod.TextureManager.TextureDims {
