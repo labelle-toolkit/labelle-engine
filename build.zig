@@ -87,6 +87,10 @@ pub fn build(b: *std.Build) void {
         "test/fullscreen_api_test.zig",
         "test/vsync_api_test.zig",
         "test/engine_sprite_anim_test.zig",
+        // The atlas -> source_rect mapping, trim geometry included: the
+        // seam where a parsed-but-unread `spriteSourceSize` silently
+        // became a per-frame positional error.
+        "test/atlas_source_rect_test.zig",
         "test/save_policy_test.zig",
         "test/save_load_mixin_test.zig",
         "test/jsonc/bridge_leak_test.zig",

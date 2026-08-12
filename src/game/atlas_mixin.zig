@@ -12,6 +12,94 @@ const atlas_mod = @import("../atlas.zig");
 const core = @import("labelle-core");
 const assets_mod = @import("../assets/mod.zig");
 
+/// The rect type a renderer's `Sprite.source_rect` holds, whether the field
+/// is declared as `?SourceRect` (the common case) or as the rect directly.
+///
+/// A renderer is free to do either — `Sprite` is the renderer's own type and
+/// the engine only requires the field to exist — so unwrapping the optional
+/// unconditionally would refuse to compile against a perfectly valid
+/// renderer (`test/asset_streaming_shim_test.zig` declares it non-optional).
+pub fn SourceRectOf(comptime SpriteType: type) type {
+    const Field = @FieldType(SpriteType, "source_rect");
+    return switch (@typeInfo(Field)) {
+        .optional => |o| o.child,
+        else => Field,
+    };
+}
+
+/// Map a resolved atlas lookup onto the renderer's `source_rect` type.
+///
+/// Split out of `resolveAtlasSprites` because this mapping is where the
+/// atlas JSON stops being data and becomes geometry, and it is the seam
+/// that silently went unread: `atlas.zig` parsed `spriteSourceSize` into
+/// `offset_x/offset_y` and for a long time NOTHING read those fields
+/// back, so trimmed frames were drawn centred on their own silhouette.
+/// A pure function over a `FindSpriteResult` can be tested without a
+/// renderer, an ECS, or a loaded atlas — which is what makes that class
+/// of bug catchable.
+///
+/// Two distinct coordinate mappings are involved:
+///
+///   * The PHYSICAL atlas footprint (`sprite.x/y`, `sprite.width/height`)
+///     is in texture-pixel coordinates regardless of rotation, so it is
+///     scaled per-axis by `texture_scale_x/y` — which is `1.0` in the
+///     common case and `< 1` when the user shipped a downscaled PNG
+///     without re-running TexturePacker.
+///   * The DISPLAY dimensions (`getWidth/Height`) are design-space and
+///     stay UN-scaled; they swap when the sprite was rotated 90° in the
+///     atlas. Mixing the two (multiplying `getWidth()` by
+///     `texture_scale_x`) is wrong for a rotated sprite, because
+///     `getWidth()` then returns a vertical dimension.
+///
+/// The trim fields are design-space like `display_*`. They are gated on
+/// `@hasField` so this still compiles against a gfx whose `SourceRect`
+/// predates them (the offsets are simply not applied there — the
+/// pre-fix behaviour).
+pub fn sourceRectFor(comptime SourceRect: type, result: atlas_mod.FindSpriteResult) SourceRect {
+    const phys_x: f32 = @floatFromInt(result.sprite.x);
+    const phys_y: f32 = @floatFromInt(result.sprite.y);
+    const phys_w: f32 = @floatFromInt(result.sprite.width);
+    const phys_h: f32 = @floatFromInt(result.sprite.height);
+    const scaled_w = phys_w * result.texture_scale_x;
+    const scaled_h = phys_h * result.texture_scale_y;
+
+    var rect: SourceRect = .{
+        .x = phys_x * result.texture_scale_x,
+        .y = phys_y * result.texture_scale_y,
+        // Same post-rotation orientation the renderer expects (matching
+        // `getWidth/Height`), so swap when the sprite was rotated.
+        .width = if (result.sprite.rotated) scaled_h else scaled_w,
+        .height = if (result.sprite.rotated) scaled_w else scaled_h,
+        .display_width = @floatFromInt(result.sprite.getWidth()),
+        .display_height = @floatFromInt(result.sprite.getHeight()),
+    };
+
+    if (comptime @hasField(SourceRect, "trim_offset_x")) {
+        // A trimmed frame's kept pixels sit at `offset_x/offset_y` inside
+        // the canvas the art was authored on, and the renderer needs both
+        // to pivot on that canvas instead of on the cropped silhouette.
+        //
+        // Rotated frames are left at zero (the pre-fix geometry).
+        // `offset_*` is expressed in the UNROTATED canvas, so it would
+        // have to be transformed for the rotation rather than copied —
+        // but there is nothing to transform it FOR: no renderer in the
+        // toolkit rotates a frame's UVs. `width`/`height` are swapped
+        // below so the quad has the right shape, and the pixels are then
+        // drawn unrotated, which is wrong independently of trimming. So
+        // atlas rotation is unsupported end to end, and inventing a trim
+        // mapping for it would be untestable guesswork. `labelle pack`
+        // never rotates; if a rotating packer is ever supported, the UV
+        // rotation and this mapping have to land together.
+        if (!result.sprite.rotated) {
+            rect.trim_offset_x = @floatFromInt(result.sprite.offset_x);
+            rect.trim_offset_y = @floatFromInt(result.sprite.offset_y);
+            rect.canvas_width = @floatFromInt(result.sprite.getSourceWidth());
+            rect.canvas_height = @floatFromInt(result.sprite.getSourceHeight());
+        }
+    }
+    return rect;
+}
+
 /// Returns the atlas/asset management mixin for a given Game type.
 /// Convert a caller's texture handle to whatever type a renderer seam
 /// takes. Both directions are real: a renderer may key on an ENUM
@@ -402,51 +490,7 @@ pub fn Mixin(comptime Game: type) type {
                     // Only update and mark dirty on cache miss (new sprite or atlas changed)
                     if (self.active_world.sprite_cache.misses != misses_before) {
                         sprite.texture = @enumFromInt(result.texture_id);
-                        // The atlas data is in the JSON's logical pixel
-                        // grid. `texture_scale_*` maps that grid onto the
-                        // actual texture pixels — `1.0` for the common
-                        // case, `< 1` when the user shipped a downscaled
-                        // PNG without re-running TexturePacker.
-                        //
-                        // Two distinct mappings are needed:
-                        //
-                        //   * The PHYSICAL atlas footprint (`sprite.x/y`,
-                        //     `sprite.width/height`) is in texture-pixel
-                        //     coordinates regardless of rotation. Each
-                        //     axis scales independently, so x/width go
-                        //     through `texture_scale_x` and y/height go
-                        //     through `texture_scale_y`.
-                        //
-                        //   * The DISPLAY dimensions (`getWidth/Height`)
-                        //     swap when the sprite was rotated 90° in the
-                        //     atlas — that's the on-screen size. They
-                        //     stay un-scaled.
-                        //
-                        // Mixing the two (multiplying `getWidth()` by
-                        // `texture_scale_x`) is wrong for rotated sprites
-                        // because `getWidth()` returns the post-rotation
-                        // height — a vertical dimension scaled by a
-                        // horizontal factor.
-                        const phys_x: f32 = @floatFromInt(result.sprite.x);
-                        const phys_y: f32 = @floatFromInt(result.sprite.y);
-                        const phys_w: f32 = @floatFromInt(result.sprite.width);
-                        const phys_h: f32 = @floatFromInt(result.sprite.height);
-                        const display_w: f32 = @floatFromInt(result.sprite.getWidth());
-                        const display_h: f32 = @floatFromInt(result.sprite.getHeight());
-                        const scaled_w = phys_w * result.texture_scale_x;
-                        const scaled_h = phys_h * result.texture_scale_y;
-                        sprite.source_rect = .{
-                            .x = phys_x * result.texture_scale_x,
-                            .y = phys_y * result.texture_scale_y,
-                            // `source_rect.width/height` are in the same
-                            // post-rotation orientation that the renderer
-                            // expects (matching `getWidth/Height`),
-                            // so swap when the sprite was rotated.
-                            .width = if (result.sprite.rotated) scaled_h else scaled_w,
-                            .height = if (result.sprite.rotated) scaled_w else scaled_h,
-                            .display_width = display_w,
-                            .display_height = display_h,
-                        };
+                        sprite.source_rect = sourceRectFor(SourceRectOf(Sprite), result);
                         self.renderer.markVisualDirty(entity);
                     }
                 }
