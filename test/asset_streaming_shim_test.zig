@@ -105,7 +105,12 @@ fn MockRenderer(comptime Entity: type) type {
         // here so the gate flips true and the engine's accessor is compiled
         // and exercised, not merely declared.
         pub const mock_backend_id: u32 = 4242;
-        pub fn nativeTextureId(_: *const Self, _: TextureId) ?core.BackendTextureId {
+        // Takes core's `TextureId`, like the real `GfxRenderer` seam — and
+        // note the wrapper deliberately exposes NO `TextureId` decl of its
+        // own, because the real one does not either. An earlier version of
+        // this mock declared one, which let the engine's normalization
+        // compile here and fail in an actual game.
+        pub fn nativeTextureId(_: *const Self, _: core.TextureId) ?core.BackendTextureId {
             return @enumFromInt(mock_backend_id);
         }
     };
@@ -676,6 +681,7 @@ test "game.nativeTextureId forwards to the renderer's seam" {
     try testing.expect(@TypeOf(backend_id) != @TypeOf(engine_handle));
 
     // And an already-typed handle still works, so both spellings are accepted.
-    const typed: Renderer.TextureId = @enumFromInt(1 << 31);
+    // Typed as core's `TextureId` — what the real gfx seam takes.
+    const typed: core.TextureId = @enumFromInt(1 << 31);
     try testing.expectEqual(backend_id.toInt(), game.nativeTextureId(typed).?.toInt());
 }

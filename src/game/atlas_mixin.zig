@@ -278,7 +278,12 @@ pub fn Mixin(comptime Game: type) type {
             // takes its own `TextureId`. Forwarding unchanged compiled only
             // when a caller happened to pass an already-typed handle, which
             // no engine-facing caller has.
-            const typed: Renderer.TextureId = switch (@typeInfo(@TypeOf(tex_id))) {
+            // Derive the handle type from the SEAM's own signature rather
+            // than a `Renderer.TextureId` decl. The real `GfxRenderer`
+            // wrapper does not declare one — only the test mock did, which
+            // is why this compiled here and failed in a game.
+            const Param = @typeInfo(@TypeOf(Renderer.nativeTextureId)).@"fn".params[1].type.?;
+            const typed: Param = switch (@typeInfo(@TypeOf(tex_id))) {
                 .int, .comptime_int => @enumFromInt(tex_id),
                 else => tex_id,
             };
