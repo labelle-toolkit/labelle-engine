@@ -13,6 +13,28 @@ const core = @import("labelle-core");
 const assets_mod = @import("../assets/mod.zig");
 
 /// Returns the atlas/asset management mixin for a given Game type.
+/// Convert a caller's texture handle to whatever type a renderer seam
+/// takes. Both directions are real: a renderer may key on an ENUM
+/// (labelle-gfx's `TextureId`) or a plain INTEGER (the tilemap
+/// renderers in `test/tilemap_test.zig` use `unloadTexture(id: u32)`),
+/// and a caller may hold either the engine's public `u32` or an
+/// already-typed handle.
+///
+/// The earlier version assumed the target was always an enum and did
+/// `@enumFromInt` unconditionally, which fails to compile against an
+/// integer-handle renderer — `@enumFromInt` requires an enum result.
+pub fn normalizeHandle(comptime Target: type, tex_id: anytype) Target {
+    const src_is_int = switch (@typeInfo(@TypeOf(tex_id))) {
+        .int, .comptime_int => true,
+        else => false,
+    };
+    return switch (@typeInfo(Target)) {
+        .@"enum" => if (src_is_int) @enumFromInt(tex_id) else tex_id,
+        .int => if (src_is_int) @intCast(tex_id) else @intFromEnum(tex_id),
+        else => tex_id,
+    };
+}
+
 pub fn Mixin(comptime Game: type) type {
     const Sprite = Game.SpriteComp;
 
@@ -269,6 +291,8 @@ pub fn Mixin(comptime Game: type) type {
         ///
         ///     const backend_id = game.nativeTextureId(handle) orelse return;
         ///     const native = backend_gfx.nativeTextureHandle(backend_id);
+
+
         pub fn nativeTextureId(self: *Game, tex_id: anytype) ?core.BackendTextureId {
             const Renderer = @TypeOf(self.renderer.*);
             if (!@hasDecl(Renderer, "nativeTextureId")) return null;
@@ -283,11 +307,37 @@ pub fn Mixin(comptime Game: type) type {
             // wrapper does not declare one — only the test mock did, which
             // is why this compiled here and failed in a game.
             const Param = @typeInfo(@TypeOf(Renderer.nativeTextureId)).@"fn".params[1].type.?;
-            const typed: Param = switch (@typeInfo(@TypeOf(tex_id))) {
-                .int, .comptime_int => @enumFromInt(tex_id),
-                else => tex_id,
-            };
+            const typed: Param = normalizeHandle(Param, tex_id);
             return self.renderer.nativeTextureId(typed);
+        }
+
+        /// Release a texture the game acquired through the engine (#817).
+        ///
+        /// The counterpart to `loadTextureFromMemory`. Without it a game could
+        /// *acquire* a texture through the engine but only *release* it by
+        /// reaching past the engine boundary —
+        /// `game.renderer.unloadTexture(@enumFromInt(handle))` — legal only
+        /// because Zig has no per-field privacy. That is the same shape of
+        /// problem #814 solved for the backend-id conversion, one method over.
+        ///
+        /// Accepts the engine's PUBLIC bare `u32` handle (what
+        /// `loadTextureFromMemory` returns) as well as an already-typed one.
+        ///
+        /// A renderer that exposes no `unloadTexture` degrades to a silent
+        /// no-op rather than failing to compile, matching `nativeTextureId`.
+        ///
+        ///     const handle = try game.loadTextureFromMemory("png", bytes);
+        ///     defer game.unloadTexture(handle);
+        pub fn unloadTexture(self: *Game, tex_id: anytype) void {
+            const Renderer = @TypeOf(self.renderer.*);
+            if (!@hasDecl(Renderer, "unloadTexture")) return;
+            // Normalize to the renderer's handle type, derived from the SEAM's
+            // OWN signature rather than a `Renderer.TextureId` decl — the real
+            // `GfxRenderer` wrapper declares no such type, and keying on one is
+            // exactly what shipped a broken v2.12.0 for `nativeTextureId`.
+            const Param = @typeInfo(@TypeOf(Renderer.unloadTexture)).@"fn".params[1].type.?;
+            const typed: Param = normalizeHandle(Param, tex_id);
+            self.renderer.unloadTexture(typed);
         }
 
         pub fn queryTextureDims(self: *Game, tex_id: anytype) ?atlas_mod.TextureManager.TextureDims {

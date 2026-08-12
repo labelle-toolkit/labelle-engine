@@ -48,6 +48,12 @@ pub const runtime_env = @import("runtime_env.zig");
 pub const requestedScene = runtime_env.requestedScene;
 
 // ── Game ──
+/// Comptime helper that converts a texture handle to whatever type a
+/// renderer seam takes (enum or integer). Exported so `test/` can exercise
+/// it directly — inline tests in `src/*.zig` are NOT collected by this
+/// suite, so a test beside the implementation would never run.
+pub const normalizeTextureHandle = @import("game/atlas_mixin.zig").normalizeHandle;
+
 pub const GameConfig = game_mod.GameConfig;
 /// Y-axis-aware game configuration — `GameConfig` plus an explicit trailing
 /// `core.YAxis` slot. The assembler adopts this once it parses `.y_axis`

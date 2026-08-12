@@ -60,7 +60,12 @@ fn MockRenderer(comptime Entity: type) type {
             layer: enum { default } = .default,
         };
 
-        pub const TextureId = enum(u32) { invalid = 0, _ };
+        // NO `pub const TextureId` here, deliberately. The real `GfxRenderer`
+        // wrapper (labelle-gfx/src/renderer.zig) declares none — its texture
+        // methods are spelled in terms of core's `TextureId` — and every mock
+        // that invented one let engine code compile here and fail in a real
+        // game (#816, and the v2.12.0 release it broke). This mock stays
+        // shaped like the real thing even where that is less convenient.
         pub const TextureInfo = struct { width: f32, height: f32 };
 
         pub fn init(_: std.mem.Allocator) Self {
@@ -89,7 +94,7 @@ fn MockRenderer(comptime Entity: type) type {
         // forward straight to it, so return a recognisable non-invalid
         // id the round-trip test can assert against.
         pub const mock_tex_id: u32 = 77;
-        pub fn loadTextureFromMemory(_: *Self, _: [:0]const u8, _: []const u8) !TextureId {
+        pub fn loadTextureFromMemory(_: *Self, _: [:0]const u8, _: []const u8) !core.TextureId {
             return @enumFromInt(mock_tex_id);
         }
 
@@ -97,7 +102,7 @@ fn MockRenderer(comptime Entity: type) type {
         // bypasses the renderer's texture side-table), but the shim
         // compiles the `queryTextureDims` call against it. Returning
         // `null` matches the adapter-uploaded-texture reality.
-        pub fn getTextureInfo(_: *const Self, _: TextureId) ?TextureInfo {
+        pub fn getTextureInfo(_: *const Self, _: core.TextureId) ?TextureInfo {
             return null;
         }
 
@@ -112,6 +117,18 @@ fn MockRenderer(comptime Entity: type) type {
         // compile here and fail in an actual game.
         pub fn nativeTextureId(_: *const Self, _: core.TextureId) ?core.BackendTextureId {
             return @enumFromInt(mock_backend_id);
+        }
+
+        // #817: the seam `game.unloadTexture` forwards to. Same shape as the
+        // real `GfxRenderer.unloadTexture` — `*Self`, core's `TextureId`,
+        // returns void. The counters are INSTANCE state (not container-level
+        // `var`s) so a test asserts what this Game's renderer was actually
+        // told, with no leakage between tests.
+        unload_calls: u32 = 0,
+        last_unloaded: ?core.TextureId = null,
+        pub fn unloadTexture(self: *Self, id: core.TextureId) void {
+            self.unload_calls += 1;
+            self.last_unloaded = id;
         }
     };
 }
@@ -684,4 +701,148 @@ test "game.nativeTextureId forwards to the renderer's seam" {
     // Typed as core's `TextureId` — what the real gfx seam takes.
     const typed: core.TextureId = @enumFromInt(1 << 31);
     try testing.expectEqual(backend_id.toInt(), game.nativeTextureId(typed).?.toInt());
+}
+
+// ── #817: game.unloadTexture ──────────────────────────────────────────
+//
+// The release half of the texture seam. A game could acquire a texture
+// through `game.loadTextureFromMemory` but could only release it via
+// `game.renderer.unloadTexture(@enumFromInt(handle))` — reaching past the
+// engine boundary, legal only because Zig has no per-field privacy.
+//
+// Same testing rules as the phase-4 seam above, for the same reason: driven
+// through a real `Game` against a mock shaped like the real `GfxRenderer`
+// (no `TextureId` decl of its own, methods take core's), and the mock
+// RECORDS the call so these assert forwarding rather than compilation.
+
+test "game.unloadTexture forwards a bare u32 handle to the renderer" {
+    var game = TestGame.init(testing.allocator);
+    defer game.deinit();
+
+    try testing.expectEqual(@as(u32, 0), game.renderer.unload_calls);
+
+    // A BARE u32 — the engine's public texture handle, exactly what
+    // `game.loadTextureFromMemory` hands a caller. This is the spelling that
+    // matters and the one a convenient mock most easily gets wrong (#816).
+    const engine_handle: u32 = 1 << 31;
+    game.unloadTexture(engine_handle);
+
+    try testing.expectEqual(@as(u32, 1), game.renderer.unload_calls);
+    // Forwarded, not merely counted: the renderer saw THIS handle, widened
+    // into core's `TextureId` rather than reinterpreted or truncated.
+    try testing.expectEqual(engine_handle, @intFromEnum(game.renderer.last_unloaded.?));
+}
+
+test "game.unloadTexture accepts an already-typed handle too" {
+    var game = TestGame.init(testing.allocator);
+    defer game.deinit();
+
+    const typed: core.TextureId = @enumFromInt(4242);
+    game.unloadTexture(typed);
+
+    try testing.expectEqual(@as(u32, 1), game.renderer.unload_calls);
+    try testing.expectEqual(typed, game.renderer.last_unloaded.?);
+}
+
+test "game.unloadTexture round-trips the handle loadTextureFromMemory returned" {
+    // The acquire/release pair the seam exists for, end to end through the
+    // public API only — `game.renderer` appears nowhere but the assertions.
+    var game = TestGame.init(testing.allocator);
+    defer game.deinit();
+
+    const handle = try game.loadTextureFromMemory("png", fake_png);
+    try testing.expectEqual(@as(u32, MockRenderer(MockEcs.Entity).mock_tex_id), handle);
+    try testing.expectEqual(@TypeOf(handle), u32);
+
+    game.unloadTexture(handle);
+
+    try testing.expectEqual(@as(u32, 1), game.renderer.unload_calls);
+    try testing.expectEqual(handle, @intFromEnum(game.renderer.last_unloaded.?));
+}
+
+test "game.unloadTexture is a silent no-op on a renderer without the seam" {
+    // The graceful degrade: `Game` surfaces `unloadTexture` unconditionally,
+    // and the mixin's `@hasDecl` gate — not a `@compileError` — decides. A
+    // renderer that predates the seam must still compile and simply do
+    // nothing, which is why the re-export in `game.zig` is unguarded.
+    const NoUnload = struct {
+        const Self = @This();
+        pub const Sprite = MockRenderer(MockEcs.Entity).Sprite;
+        pub const Shape = MockRenderer(MockEcs.Entity).Shape;
+        pub fn init(_: std.mem.Allocator) Self {
+            return .{};
+        }
+        pub fn deinit(_: *Self) void {}
+        pub fn trackEntity(_: *Self, _: MockEcs.Entity, _: core.VisualType) void {}
+        pub fn untrackEntity(_: *Self, _: MockEcs.Entity) void {}
+        pub fn markPositionDirty(_: *Self, _: MockEcs.Entity) void {}
+        pub fn markPositionDirtyWithChildren(_: *Self, comptime _: type, _: anytype, _: MockEcs.Entity) void {}
+        pub fn updateHierarchyFlag(_: *Self, _: MockEcs.Entity, _: bool) void {}
+        pub fn markVisualDirty(_: *Self, _: MockEcs.Entity) void {}
+        pub fn sync(_: *Self, comptime _: type, _: anytype) void {}
+        pub fn render(_: *Self) void {}
+        pub fn setScreenHeight(_: *Self, _: f32) void {}
+        pub fn clear(_: *Self) void {}
+        pub fn renderGizmoDraws(_: *Self, _: []const core.GizmoDraw) void {}
+        pub fn hasEntity(_: *const Self, _: MockEcs.Entity) bool {
+            return false;
+        }
+    };
+    const NoUnloadGame = engine.GameConfig(
+        NoUnload,
+        MockEcs,
+        engine.input_mod.StubInput,
+        engine.audio_mod.StubAudio,
+        engine.StubVideo,
+        engine.gui_mod.StubGui,
+        void,
+        core.StubLogSink,
+        EmptyComponents,
+        &.{},
+        void,
+    );
+
+    var game = NoUnloadGame.init(testing.allocator);
+    defer game.deinit();
+
+    // Compiles and returns; no `@compileError`, no crash.
+    game.unloadTexture(@as(u32, 7));
+}
+
+// ── normalizeHandle (#818 review) ─────────────────────────────────────
+//
+// A renderer seam may take an ENUM handle (labelle-gfx's `TextureId`) or a
+// plain INTEGER — the tilemap renderers in `test/tilemap_test.zig` declare
+// `unloadTexture(id: u32)`. A caller may hold either the engine's public
+// `u32` or an already-typed handle. All four combinations must work.
+//
+// The first version assumed the target was always an enum and called
+// `@enumFromInt` unconditionally, which does not compile against an
+// integer-handle renderer.
+
+test "normalizeHandle: int caller -> enum target" {
+    const E = enum(u32) { invalid = 0, _ };
+    const out = engine.normalizeTextureHandle(E, @as(u32, 4242));
+    try testing.expectEqual(@as(u32, 4242), @intFromEnum(out));
+    try testing.expectEqual(E, @TypeOf(out));
+}
+
+test "normalizeHandle: enum caller -> enum target passes through" {
+    const E = enum(u32) { invalid = 0, _ };
+    const in: E = @enumFromInt(1 << 31);
+    const out = engine.normalizeTextureHandle(E, in);
+    try testing.expectEqual(@as(u32, 1 << 31), @intFromEnum(out));
+}
+
+test "normalizeHandle: int caller -> INT target (the case that would not compile)" {
+    const out = engine.normalizeTextureHandle(u32, @as(u32, 4242));
+    try testing.expectEqual(@as(u32, 4242), out);
+    try testing.expectEqual(u32, @TypeOf(out));
+}
+
+test "normalizeHandle: enum caller -> INT target" {
+    const E = enum(u32) { invalid = 0, _ };
+    const in: E = @enumFromInt(77);
+    const out = engine.normalizeTextureHandle(u32, in);
+    try testing.expectEqual(@as(u32, 77), out);
 }
