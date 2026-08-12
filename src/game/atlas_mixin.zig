@@ -290,6 +290,38 @@ pub fn Mixin(comptime Game: type) type {
             return self.renderer.nativeTextureId(typed);
         }
 
+        /// Release a texture the game acquired through the engine (#817).
+        ///
+        /// The counterpart to `loadTextureFromMemory`. Without it a game could
+        /// *acquire* a texture through the engine but only *release* it by
+        /// reaching past the engine boundary —
+        /// `game.renderer.unloadTexture(@enumFromInt(handle))` — legal only
+        /// because Zig has no per-field privacy. That is the same shape of
+        /// problem #814 solved for the backend-id conversion, one method over.
+        ///
+        /// Accepts the engine's PUBLIC bare `u32` handle (what
+        /// `loadTextureFromMemory` returns) as well as an already-typed one.
+        ///
+        /// A renderer that exposes no `unloadTexture` degrades to a silent
+        /// no-op rather than failing to compile, matching `nativeTextureId`.
+        ///
+        ///     const handle = try game.loadTextureFromMemory("png", bytes);
+        ///     defer game.unloadTexture(handle);
+        pub fn unloadTexture(self: *Game, tex_id: anytype) void {
+            const Renderer = @TypeOf(self.renderer.*);
+            if (!@hasDecl(Renderer, "unloadTexture")) return;
+            // Normalize to the renderer's handle type, derived from the SEAM's
+            // OWN signature rather than a `Renderer.TextureId` decl — the real
+            // `GfxRenderer` wrapper declares no such type, and keying on one is
+            // exactly what shipped a broken v2.12.0 for `nativeTextureId`.
+            const Param = @typeInfo(@TypeOf(Renderer.unloadTexture)).@"fn".params[1].type.?;
+            const typed: Param = switch (@typeInfo(@TypeOf(tex_id))) {
+                .int, .comptime_int => @enumFromInt(tex_id),
+                else => tex_id,
+            };
+            self.renderer.unloadTexture(typed);
+        }
+
         pub fn queryTextureDims(self: *Game, tex_id: anytype) ?atlas_mod.TextureManager.TextureDims {
             if (!@hasDecl(@TypeOf(self.renderer.*), "getTextureInfo")) return null;
             const info = self.renderer.getTextureInfo(tex_id) orelse return null;

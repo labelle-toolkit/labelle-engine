@@ -1607,6 +1607,13 @@ pub fn GameConfigWithYAxis(
         /// and turning a graceful degrade into a compile error.
         pub const nativeTextureId = AtlasMixin.nativeTextureId;
 
+        /// Release a texture acquired through `loadTextureFromMemory` (#817).
+        /// Unconditional for the same reason as `nativeTextureId` above: the
+        /// mixin's own `@hasDecl` gate makes it a silent no-op on a renderer
+        /// without the seam, so this stays callable against any gfx instead of
+        /// turning a graceful degrade into a compile error.
+        pub const unloadTexture = AtlasMixin.unloadTexture;
+
         pub const registerSoundFromMemory = AtlasMixin.registerSoundFromMemory;
         pub const loadSoundFromMemory = AtlasMixin.loadSoundFromMemory;
         pub const loadSoundIfNeeded = AtlasMixin.loadSoundIfNeeded;
