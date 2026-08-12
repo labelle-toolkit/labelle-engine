@@ -122,6 +122,18 @@ test "a legacy source rect without trim fields still maps" {
     try testing.expectEqual(@as(f32, 40), rect.display_width);
 }
 
+test "the rect type resolves whether source_rect is optional or not" {
+    // A renderer owns its own `Sprite`, and the engine only requires the
+    // field to exist — some declare `source_rect: ?SourceRect`, others the
+    // rect directly (`test/asset_streaming_shim_test.zig` does). Both must
+    // instantiate; unwrapping the optional unconditionally refused to
+    // compile against the second kind.
+    const Optional = struct { source_rect: ?TrimAware = null };
+    const Direct = struct { source_rect: TrimAware = .{ .x = 0, .y = 0, .width = 0, .height = 0 } };
+    try testing.expectEqual(TrimAware, engine.SourceRectOf(Optional));
+    try testing.expectEqual(TrimAware, engine.SourceRectOf(Direct));
+}
+
 test "texture scale applies to the atlas footprint but not the trim geometry" {
     // A downscaled PNG shrinks the texture sub-rect (UV sampling follows
     // the smaller texture) while design-space values — display size AND

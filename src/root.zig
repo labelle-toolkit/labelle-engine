@@ -789,6 +789,10 @@ pub const SpriteCache = atlas_mod.SpriteCache;
 /// and the alternative — driving it through a Game — needs a renderer whose
 /// Sprite carries `source_rect`, which the test stubs do not have.
 pub const sourceRectFor = @import("game/atlas_mixin.zig").sourceRectFor;
+/// Resolves a renderer `Sprite`'s `source_rect` field to its rect type,
+/// tolerating both the optional and non-optional spellings. Exposed for the
+/// test that pins that tolerance.
+pub const SourceRectOf = @import("game/atlas_mixin.zig").SourceRectOf;
 
 // ── Assets (Asset Streaming RFC — #437) ──
 // `AssetCatalog` is reachable from games both as this module-level

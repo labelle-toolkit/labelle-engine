@@ -12,6 +12,21 @@ const atlas_mod = @import("../atlas.zig");
 const core = @import("labelle-core");
 const assets_mod = @import("../assets/mod.zig");
 
+/// The rect type a renderer's `Sprite.source_rect` holds, whether the field
+/// is declared as `?SourceRect` (the common case) or as the rect directly.
+///
+/// A renderer is free to do either — `Sprite` is the renderer's own type and
+/// the engine only requires the field to exist — so unwrapping the optional
+/// unconditionally would refuse to compile against a perfectly valid
+/// renderer (`test/asset_streaming_shim_test.zig` declares it non-optional).
+pub fn SourceRectOf(comptime SpriteType: type) type {
+    const Field = @FieldType(SpriteType, "source_rect");
+    return switch (@typeInfo(Field)) {
+        .optional => |o| o.child,
+        else => Field,
+    };
+}
+
 /// Map a resolved atlas lookup onto the renderer's `source_rect` type.
 ///
 /// Split out of `resolveAtlasSprites` because this mapping is where the
@@ -64,11 +79,17 @@ pub fn sourceRectFor(comptime SourceRect: type, result: atlas_mod.FindSpriteResu
         // the canvas the art was authored on, and the renderer needs both
         // to pivot on that canvas instead of on the cropped silhouette.
         //
-        // Rotated frames are left at zero (the pre-fix geometry):
-        // `offset_*` is expressed in the UNROTATED canvas, so applying it
-        // to a frame the packer turned 90° would displace it along the
-        // wrong axis. No labelle-packed atlas rotates, and a wrong
-        // correction is worse than none.
+        // Rotated frames are left at zero (the pre-fix geometry).
+        // `offset_*` is expressed in the UNROTATED canvas, so it would
+        // have to be transformed for the rotation rather than copied —
+        // but there is nothing to transform it FOR: no renderer in the
+        // toolkit rotates a frame's UVs. `width`/`height` are swapped
+        // below so the quad has the right shape, and the pixels are then
+        // drawn unrotated, which is wrong independently of trimming. So
+        // atlas rotation is unsupported end to end, and inventing a trim
+        // mapping for it would be untestable guesswork. `labelle pack`
+        // never rotates; if a rotating packer is ever supported, the UV
+        // rotation and this mapping have to land together.
         if (!result.sprite.rotated) {
             rect.trim_offset_x = @floatFromInt(result.sprite.offset_x);
             rect.trim_offset_y = @floatFromInt(result.sprite.offset_y);
@@ -414,10 +435,7 @@ pub fn Mixin(comptime Game: type) type {
                     // Only update and mark dirty on cache miss (new sprite or atlas changed)
                     if (self.active_world.sprite_cache.misses != misses_before) {
                         sprite.texture = @enumFromInt(result.texture_id);
-                        sprite.source_rect = sourceRectFor(
-                            @TypeOf(sprite.source_rect.?),
-                            result,
-                        );
+                        sprite.source_rect = sourceRectFor(SourceRectOf(Sprite), result);
                         self.renderer.markVisualDirty(entity);
                     }
                 }
