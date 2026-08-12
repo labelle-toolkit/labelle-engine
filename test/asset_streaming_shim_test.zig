@@ -808,3 +808,41 @@ test "game.unloadTexture is a silent no-op on a renderer without the seam" {
     // Compiles and returns; no `@compileError`, no crash.
     game.unloadTexture(@as(u32, 7));
 }
+
+// ── normalizeHandle (#818 review) ─────────────────────────────────────
+//
+// A renderer seam may take an ENUM handle (labelle-gfx's `TextureId`) or a
+// plain INTEGER — the tilemap renderers in `test/tilemap_test.zig` declare
+// `unloadTexture(id: u32)`. A caller may hold either the engine's public
+// `u32` or an already-typed handle. All four combinations must work.
+//
+// The first version assumed the target was always an enum and called
+// `@enumFromInt` unconditionally, which does not compile against an
+// integer-handle renderer.
+
+test "normalizeHandle: int caller -> enum target" {
+    const E = enum(u32) { invalid = 0, _ };
+    const out = engine.normalizeTextureHandle(E, @as(u32, 4242));
+    try testing.expectEqual(@as(u32, 4242), @intFromEnum(out));
+    try testing.expectEqual(E, @TypeOf(out));
+}
+
+test "normalizeHandle: enum caller -> enum target passes through" {
+    const E = enum(u32) { invalid = 0, _ };
+    const in: E = @enumFromInt(1 << 31);
+    const out = engine.normalizeTextureHandle(E, in);
+    try testing.expectEqual(@as(u32, 1 << 31), @intFromEnum(out));
+}
+
+test "normalizeHandle: int caller -> INT target (the case that would not compile)" {
+    const out = engine.normalizeTextureHandle(u32, @as(u32, 4242));
+    try testing.expectEqual(@as(u32, 4242), out);
+    try testing.expectEqual(u32, @TypeOf(out));
+}
+
+test "normalizeHandle: enum caller -> INT target" {
+    const E = enum(u32) { invalid = 0, _ };
+    const in: E = @enumFromInt(77);
+    const out = engine.normalizeTextureHandle(u32, in);
+    try testing.expectEqual(@as(u32, 77), out);
+}
