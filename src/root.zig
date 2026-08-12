@@ -784,6 +784,11 @@ pub const ComptimeAtlas = atlas_mod.ComptimeAtlas;
 pub const RuntimeAtlas = atlas_mod.RuntimeAtlas;
 pub const TextureManager = atlas_mod.TextureManager;
 pub const SpriteCache = atlas_mod.SpriteCache;
+/// The atlas-lookup → renderer `source_rect` mapping, including the trim
+/// geometry. Exposed so it can be tested directly: it is a pure function,
+/// and the alternative — driving it through a Game — needs a renderer whose
+/// Sprite carries `source_rect`, which the test stubs do not have.
+pub const sourceRectFor = @import("game/atlas_mixin.zig").sourceRectFor;
 
 // ── Assets (Asset Streaming RFC — #437) ──
 // `AssetCatalog` is reachable from games both as this module-level
