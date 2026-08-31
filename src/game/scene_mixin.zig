@@ -273,7 +273,22 @@ fn gateOrDefer(
 /// of both `setScene` variants with the outgoing scene's manifest
 /// slice (looked up once by the caller — no second `scenes.get`).
 fn releasePreviousAssets(game: anytype, assets: []const []const u8) void {
-    for (assets) |asset_name| game.assets.release(asset_name);
+    for (assets) |asset_name| {
+        game.assets.release(asset_name);
+        // engine#821: if that release dropped the asset to refcount 0,
+        // its texture is freed and its catalog slot is up for grabs by
+        // the next scene's uploads — the atlas's latched texture_id
+        // must not survive it. Re-arm the binding (mirror of the
+        // surface-loss path) so the bridge rebinds a fresh handle on
+        // the next upload instead of AtlasNotPending-ing into a stale
+        // id that may now belong to a different atlas. Assets still
+        // referenced (shared with the incoming scene, e.g. the sky
+        // atlases) keep their live binding untouched.
+        const entry = game.assets.entries.getPtr(asset_name) orelse continue;
+        if (entry.refcount == 0) {
+            game.atlas_manager.invalidateAtlasBinding(asset_name);
+        }
+    }
 }
 
 /// Consults `game.asset_failure_policy` when the manifest gate

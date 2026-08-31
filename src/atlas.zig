@@ -433,6 +433,25 @@ pub const TextureManager = struct {
         self.version += 1;
     }
 
+    /// Per-atlas variant of `invalidateUploadedTextures` for the scene
+    /// UNLOAD path (engine#821). When a scene release drops an image
+    /// asset to refcount 0, its GPU texture is freed and its catalog
+    /// slot becomes recyclable — the next scene's uploads land in
+    /// completion order and can re-take that slot for a DIFFERENT
+    /// atlas, overwriting the old registry key. Without a re-arm,
+    /// `markPendingLoaded` refuses the rebind (`AtlasNotPending`) and
+    /// the atlas keeps a `texture_id` that now resolves to someone
+    /// else's texture: sprites silently draw the wrong atlas. Re-arming
+    /// lets the per-tick bridge rebind a fresh handle exactly like the
+    /// surface-loss path does.
+    pub fn invalidateAtlasBinding(self: *TextureManager, name: []const u8) void {
+        const atlas = self.atlases.getPtr(name) orelse return;
+        const retained = atlas.loaded_image orelse return;
+        atlas.texture_id = 0;
+        atlas.pending = retained;
+        self.version += 1;
+    }
+
     /// Search all atlases for a sprite by name.
     pub fn findSprite(self: *const TextureManager, sprite_name: []const u8) ?FindSpriteResult {
         var it = self.atlases.valueIterator();
