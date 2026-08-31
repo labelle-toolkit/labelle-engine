@@ -1,7 +1,7 @@
 .{
     .fingerprint = 0xe8a81a8dc7f48c87,
     .name = .engine,
-    .version = "2.12.2",
+    .version = "2.12.3",
     .minimum_zig_version = "0.16.0",
     .dependencies = .{
         // Requires labelle-core >= v1.27.0 — core's `ChildrenComponent` is now
@@ -70,8 +70,8 @@
         // enforced at the consuming game's build; this pin only feeds the
         // tilemap sub-package test.
         .labelle_gfx = .{
-            .url = "https://github.com/labelle-toolkit/labelle-gfx/archive/refs/tags/v1.30.1.tar.gz",
-            .hash = "labelle_gfx-1.30.1-nMpCPCc9CgBUq-BvuCQBwCk3Fs3mM1CRNNl6piBY6InU",
+            .url = "https://github.com/labelle-toolkit/labelle-gfx/archive/refs/tags/v1.30.2.tar.gz",
+            .hash = "labelle_gfx-1.30.2-nMpCPI0_CgC5_zU8hYlqCkn2AZ40FkrmnlHI8m4_Y4n5",
             .lazy = true,
         },
     },
