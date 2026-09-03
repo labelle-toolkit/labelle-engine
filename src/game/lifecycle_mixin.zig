@@ -365,7 +365,7 @@ pub fn Mixin(comptime Game: type) type {
         /// textures uploaded straight through `loadTextureFromMemory`
         /// (the catalog re-uploads ITS assets and `reuploadUiFonts` covers
         /// the engine's own fonts; direct uploads belong to the caller),
-        /// lends handed to a GUI bridge by backend handle, and so on.
+        /// textures lent to a GUI bridge by backend handle, and so on.
         /// Contract: **direct uploads die with the surface** — release them
         /// (`game.unloadTexture`) in an `engine__surface_lost` hook and
         /// re-create them after `engine__surface_restored`. The handler
@@ -391,10 +391,19 @@ pub fn Mixin(comptime Game: type) type {
         /// frames. Bounded so a wedged decode can't hang the restore.
         ///
         /// Emits `engine__surface_restored` SYNCHRONOUSLY, after the
-        /// engine's own re-uploads, so a hook can re-create what it
+        /// engine's own re-upload pass, so a hook can re-create what it
         /// released in `engine__surface_lost` before the first restored
         /// frame draws — a buffered emit would leave that frame sampling
         /// whatever the hook had not yet re-created (#820).
+        ///
+        /// What the event guarantees is a LIVE GPU context (bgfx has
+        /// re-inited; uploads work), not catalog readiness: the pump above
+        /// is bounded, so a slow or wedged decode leaves a tail that the
+        /// ordinary per-tick pump finishes. Deferring the event until
+        /// `allReady` would hold a hook's re-creation hostage to an
+        /// unrelated asset — and on a wedged decode, forever — which is the
+        /// exact hang the cap exists to prevent. Hooks that need a specific
+        /// catalog asset resident should check the catalog, not this event.
         pub fn surfaceRestored(self: *Game) void {
             self.assets.reenqueueGpuResident();
             forcePumpCurrentScene(self);

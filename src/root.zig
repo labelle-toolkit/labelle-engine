@@ -604,8 +604,8 @@ pub const Events = struct {
     // the new surface was already up — too late to release anything.
     //
     // Contract for GPU objects the engine does not track — textures
-    // uploaded straight through `game.loadTextureFromMemory`, lends handed
-    // to a GUI bridge by backend handle: they DIE with the surface.
+    // uploaded straight through `game.loadTextureFromMemory`, textures
+    // lent to a GUI bridge by backend handle: they DIE with the surface.
     // Release them in an `engine__surface_lost` hook (handles are still
     // alive there — `game.unloadTexture` is safe) and re-create them after
     // `engine__surface_restored`. Never release through a handle after
@@ -618,10 +618,14 @@ pub const Events = struct {
     /// synchronously. No new GPU work should run until `surface_restored`.
     pub const surface_lost = struct {};
 
-    /// Fired after the GPU surface is restored, the catalog has
-    /// re-enqueued its GPU-resident assets, and the first frame has been
-    /// pumped back to `.ready`. Delivered synchronously, before the first
-    /// restored frame draws.
+    /// Fired after the GPU surface is restored and the engine has run its
+    /// own re-upload pass: the catalog's GPU-resident assets are
+    /// re-enqueued and pumped towards `.ready` (BOUNDED, so a wedged decode
+    /// cannot hang the restore — a slow tail finishes over the next ticks)
+    /// and the engine's UI fonts are re-uploaded. Delivered synchronously,
+    /// before the first restored frame draws. The guarantee a hook gets is
+    /// a LIVE GPU context to re-create its own objects against — not that
+    /// every catalog asset is already resident.
     pub const surface_restored = struct {};
 
     // ── Studio plugin panels: play-time action channel (Asset Plugins ──
