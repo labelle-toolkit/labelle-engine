@@ -214,7 +214,20 @@ const tiny_atlas_json: []const u8 =
     \\  "meta": { "size": { "w": 1, "h": 1 } } }
 ;
 const fake_png: []const u8 = "fake-png-bytes";
-const file_type: [:0]const u8 = "png";
+
+// IMAGE `file_type` carries the LEADING DOT. This constant used to read
+// `"png"`, which is harmless here (the mock renderer / mock ImageBackend
+// ignore the argument) but WRONG against a real backend and — as #832's
+// review showed — it reads as a repo-wide convention it is not.
+//
+// The producer is labelle-assembler (#676, merged): both its atlas arm and
+// its `.image` arm emit `".png"`. The consumer that reads it is raylib's
+// `LoadImageFromMemory`, which `strcmp`s against `".png"` and returns an
+// empty image for `"png"`. Audio and font `file_type` are the opposite —
+// `"wav"` / `"ogg"` / `"ttf"`, no dot (see `audio_file_type` /
+// `font_file_type` below), because their decoders dispatch on exactly
+// those tokens.
+const file_type: [:0]const u8 = ".png";
 
 // ── Tests ──
 
@@ -339,7 +352,11 @@ test "shim: deadlock regression — decode error surfaces within 200ms, no hang"
     const step_ns: u64 = 1 * std.time.ns_per_ms;
     while (waited_ns < deadline_ns) : (waited_ns += step_ns) {
         if (runner.done.load(.acquire)) break;
-        { var _req: std.c.timespec = .{ .sec = (step_ns / std.time.ns_per_s), .nsec = (step_ns % std.time.ns_per_s) }; var _rem: std.c.timespec = undefined; _ = std.c.nanosleep(&_req, &_rem); }
+        {
+            var _req: std.c.timespec = .{ .sec = (step_ns / std.time.ns_per_s), .nsec = (step_ns % std.time.ns_per_s) };
+            var _rem: std.c.timespec = undefined;
+            _ = std.c.nanosleep(&_req, &_rem);
+        }
     }
     const terminated = runner.done.load(.acquire);
     handle.join();

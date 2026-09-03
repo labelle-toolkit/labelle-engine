@@ -340,12 +340,33 @@ pub fn Mixin(comptime Game: type) type {
         /// catalog's `@embedFile` lifetime contract: all three must outlive
         /// the entry. `AssetAlreadyRegistered` is swallowed, matching every
         /// other `register*FromMemory` shim — a name a scene manifest
-        /// already registered is not a hard failure.
+        /// already registered is not a hard failure — but ONLY when the
+        /// entry holding that name is itself an image; a collision with a
+        /// sound or font is `error.WrongAssetKind`, never a silent alias.
         pub fn registerImageFromMemory(self: *Game, name: []const u8, file_type: [:0]const u8, image_data: []const u8) !void {
             self.assets.register(name, .image, file_type, image_data) catch |err| switch (err) {
-                error.AssetAlreadyRegistered => {},
+                // Tolerating the duplicate is only correct when the entry
+                // that already owns the name IS an image. If a sound or a
+                // font got there first, swallowing the error would alias
+                // two resources onto one catalog slot: the kind-agnostic
+                // loader would happily decode the WAV/TTF, this shim would
+                // report success, and the `Image` component would then find
+                // no `.image` handle and silently draw nothing. Surface the
+                // collision instead — same error the atlas shim already
+                // raises one step later when `entry.resource` turns out not
+                // to be an image.
+                error.AssetAlreadyRegistered => try requireImageEntry(self, name),
                 else => return err,
             };
+        }
+
+        /// `error.WrongAssetKind` unless `name` is registered under
+        /// `LoaderKind.image`. Shared by the register and load halves so a
+        /// resource-name collision fails on BOTH — the lazy arm must not be
+        /// able to plant an alias the eager arm later blesses.
+        fn requireImageEntry(self: *Game, name: []const u8) !void {
+            const entry = self.assets.entries.getPtr(name) orelse return error.AssetNotRegistered;
+            if (entry.loader_kind != .image) return error.WrongAssetKind;
         }
 
         /// Register AND load a standalone image, BLOCKING until the GPU
@@ -369,12 +390,18 @@ pub fn Mixin(comptime Game: type) type {
         /// it was already `.ready`. The image counterpart to
         /// `loadSoundIfNeeded` / `loadFontIfNeeded`.
         ///
-        /// Blocking is the same same-thread mechanism the other kinds use
-        /// (`loadAssetIfNeededInternal`): `acquire` enqueues the decode on a
-        /// worker, then the calling thread pumps the catalog itself until
-        /// the upload lands. Exits on ready, on a decode/upload error
-        /// (rewound to `.registered` so the next call retries), or on a
-        /// dropped enqueue — never spins unbounded.
+        /// Blocking uses the same mechanism the other kinds do
+        /// (`loadAssetIfNeededInternal`), on the calling thread: `acquire`
+        /// enqueues the decode on a worker, then this thread pumps the
+        /// catalog itself until the upload lands. Exits on ready, on a
+        /// decode/upload error, on a dropped enqueue, or immediately while
+        /// the GPU surface is down — never spins unbounded.
+        ///
+        /// `error.WrongAssetKind` if `name` is registered as a sound or a
+        /// font: the underlying loader is kind-agnostic and would "load"
+        /// it successfully, leaving an `Image` component with nothing to
+        /// draw. `error.GpuSurfaceUnavailable` while the surface is lost —
+        /// see `loadAssetIfNeededInternal`.
         ///
         /// After the asset reaches `.ready` this also runs the standard
         /// bridge walk. A loose PNG needs no bridging (the `Image` seam
@@ -388,6 +415,7 @@ pub fn Mixin(comptime Game: type) type {
         /// would reintroduce the half-bound-manifest window the gate exists
         /// to close.
         pub fn loadImageIfNeeded(self: *Game, name: []const u8) !bool {
+            try requireImageEntry(self, name);
             const did_load = try loadAssetIfNeededInternal(self, name);
             self.bridgeAllReadyImageAssets();
             return did_load;
@@ -409,6 +437,36 @@ pub fn Mixin(comptime Game: type) type {
 
         pub fn loadAssetIfNeededInternal(self: *Game, name: []const u8) !bool {
             if (self.assets.isReady(name)) return false;
+
+            // Surface-loss deadlock guard (#832 review).
+            //
+            // While the GPU surface is down (`invalidateGpuResources` →
+            // `gpu_alive = false`) `pump()` deliberately PARKS a successful
+            // image result on the ring rather than uploading into a dead
+            // context — see `AssetCatalog.isGpuUploadResult`. The entry
+            // therefore never reaches `.ready` and never reaches `.failed`,
+            // so the busy-wait below would spin forever.
+            //
+            // That is not a theoretical window: `surfaceLost` emits
+            // `engine__surface_lost` SYNCHRONOUSLY (#820/#823), so a hook
+            // that re-registers or re-loads an image runs with the gate
+            // already closed. Blocking there wedges `surfaceLost` itself,
+            // which means `surfaceRestored` — the only thing that reopens
+            // the gate — can never run. The lifecycle contract on
+            // `Events.surface_lost` already says it outright: "No new GPU
+            // work should run until `surface_restored`." Say so with an
+            // error instead of hanging; a hook can retry after
+            // `engine__surface_restored`.
+            //
+            // Only `.image` entries are parked (audio and font uploads
+            // don't touch the lost surface and drain normally), so the
+            // guard is keyed on the entry's kind rather than applied to
+            // every caller of this helper.
+            const pending = self.assets.entries.getPtr(name) orelse return error.AssetNotRegistered;
+            if (pending.loader_kind == .image and !self.assets.gpu_alive) {
+                return error.GpuSurfaceUnavailable;
+            }
+
             _ = try self.assets.acquire(name);
             errdefer self.assets.release(name);
 
@@ -438,7 +496,25 @@ pub fn Mixin(comptime Game: type) type {
 
             while (!self.assets.isReady(name)) {
                 if (self.assets.lastError(name)) |err| {
-                    self.assets.resetFailed(name);
+                    // Do NOT `resetFailed` here. The rewind belongs to the
+                    // FINAL release, and `AssetCatalog.release` already
+                    // performs it: at refcount 0 its `.failed` branch moves
+                    // the entry back to `.registered` and clears
+                    // `last_error`, so the sole-holder retry below still
+                    // re-enqueues a fresh decode.
+                    //
+                    // Resetting here breaks the SHARED case (#832 review).
+                    // When a scene or another async path already holds the
+                    // asset, our `acquire` bumped refcount 1 → 2, so the
+                    // `errdefer` above only drops it back to 1 — the entry
+                    // stays alive at `.registered` with a nonzero refcount.
+                    // `acquire` enqueues only on the 0 → 1 transition, so
+                    // nothing would ever re-queue that entry: every retry
+                    // would acquire, find `.registered`, and return
+                    // `AssetDecodeNotQueued` forever. Leaving it `.failed`
+                    // keeps reporting the REAL error until the other holder
+                    // releases, at which point the entry rewinds and a
+                    // retry decodes again.
                     return err;
                 }
                 self.assets.pump();
@@ -537,7 +613,7 @@ pub fn Mixin(comptime Game: type) type {
         /// A renderer that exposes no `unloadTexture` degrades to a silent
         /// no-op rather than failing to compile, matching `nativeTextureId`.
         ///
-        ///     const handle = try game.loadTextureFromMemory("png", bytes);
+        ///     const handle = try game.loadTextureFromMemory(".png", bytes);
         ///     defer game.unloadTexture(handle);
         pub fn unloadTexture(self: *Game, tex_id: anytype) void {
             const Renderer = @TypeOf(self.renderer.*);
