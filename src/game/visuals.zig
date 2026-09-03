@@ -3,6 +3,12 @@ const std = @import("std");
 const core = @import("labelle-core");
 const Position = core.Position;
 
+/// `sourceRectFor` / `SourceRectOf` / `normalizeHandle` — the atlas→geometry
+/// mapping shared with `resolveAtlasSprites`. `setSpriteFrame` MUST go through
+/// the same function the per-frame resolver uses, or the two paths would drift
+/// (that drift is exactly what issue #826 documents in the wild).
+const atlas_mixin = @import("atlas_mixin.zig");
+
 /// Curated per-entity material effect + uniforms (labelle-gfx#305). Sourced
 /// from `labelle-core` so the engine, the renderer plugin's `Sprite.material`
 /// field, and game code all name ONE nominal type (gfx re-exports the same
@@ -18,6 +24,16 @@ pub fn Mixin(comptime Game: type) type {
     const Text = Game.TextComp;
     const Icon = Game.IconComp;
     const Gizmo = core.GizmoComponent(Entity);
+
+    // The three fields `setSpriteFrame` writes. Same predicate
+    // `atlas_mixin.resolveAtlasSprites` gates on — a renderer is free to
+    // ship a `Sprite` without any of them (`StubRender`, test mocks).
+    const has_atlas_sprite_fields = @hasField(Sprite, "sprite_name") and
+        @hasField(Sprite, "source_rect") and @hasField(Sprite, "texture");
+
+    // A renderer keys textures on either an enum handle (labelle-gfx's
+    // `TextureId`) or a plain integer; `normalizeHandle` bridges both.
+    const TextureHandle = if (has_atlas_sprite_fields) @FieldType(Sprite, "texture") else void;
 
     return struct {
         pub fn addSprite(self: *Game, entity: Entity, sprite: Sprite) void {
@@ -127,6 +143,74 @@ pub fn Mixin(comptime Game: type) type {
             const sprite = self.ecs_backend.getComponent(entity, Sprite) orelse return;
             if (sprite.flip_x == flip_x) return;
             sprite.flip_x = flip_x;
+            self.renderer.markVisualDirty(entity);
+        }
+
+        // ── Atlas frame swap ──────────────────────────────────────
+
+        /// Point a sprite entity at a different atlas frame by name: stamps
+        /// `sprite_name`, re-resolves `source_rect` + `texture` through the
+        /// per-entity sprite cache, and marks the visual dirty. One call for
+        /// the whole "advance an animation frame" operation.
+        ///
+        /// WHY THIS EXISTS (#826): assigning `sprite.sprite_name = "other.png"`
+        /// alone renders the OLD frame — the renderer draws from `source_rect`
+        /// + `texture`, and nothing re-resolves those until the next
+        /// `resolveAtlasSprites` pass. So every animation script grew its own
+        /// `resolveSprite` helper reaching into the atlas manager by hand. Five
+        /// copies of those twelve lines exist across two games and a demo.
+        ///
+        /// WHY `texture_scale_*` IS THE LOAD-BEARING PART: `FindSpriteResult`
+        /// carries `texture_scale_x` / `texture_scale_y`, which are `1.0` for a
+        /// 1:1 atlas and `< 1` when the shipped PNG was downscaled without
+        /// re-running TexturePacker (a workflow the engine supports — see the
+        /// `FindSpriteResult` doc comment in `src/atlas.zig`). The source rect's
+        /// x/y/w/h are TEXTURE-pixel coordinates and must be multiplied by that
+        /// scale, while the DISPLAY dimensions are design-space and must stay
+        /// un-scaled. Every one of the five hand-rolled copies reads
+        /// `found.sprite.x/y/getWidth()/getHeight()` raw, so all five silently
+        /// mis-sample a downscaled atlas — sampling from beyond the texture's
+        /// real extent and drawing the wrong pixels, with nothing logged. This
+        /// helper delegates to `sourceRectFor`, the same pure mapping
+        /// `resolveAtlasSprites` uses, so the scale (and trim geometry, and
+        /// rotation) can only ever be applied one way.
+        ///
+        /// Resolves via `findSpriteCached` rather than `findSprite`: this is the
+        /// per-frame animation path, so the entity-keyed cache turns a repeated
+        /// hash walk over every loaded atlas into a version+hash compare.
+        ///
+        /// FAILURE POSTURE — silent, matching `setSpriteFlip` / `setMaterial`
+        /// (and `resolveAtlasSprites`, which skips unresolved names without a
+        /// word). No `log.warn`: this is called every frame by animation
+        /// scripts, so a warn on an unresolved name would be an unbounded log
+        /// flood rather than a diagnostic.
+        ///  * Entity has no `Sprite` component → returns without touching
+        ///    anything. Callers needing an assertion should `getComponent` first.
+        ///  * Name doesn't resolve → `sprite_name` IS still stamped, but
+        ///    `source_rect` / `texture` are left alone and the visual is NOT
+        ///    marked dirty. Stamping the name is deliberate: it mirrors the
+        ///    hand-rolled helpers, and it lets the per-frame `resolveAtlasSprites`
+        ///    pass pick the frame up on its own once the atlas finishes loading
+        ///    (a deferred-load swap self-heals instead of sticking forever). The
+        ///    alternative — a total no-op that leaves the old name in place —
+        ///    would be more literally "no-op safe" but would strand any caller
+        ///    that swaps a frame before its atlas is resident.
+        ///
+        /// Comptime no-op on renderers whose `Sprite` lacks the atlas trio
+        /// (`sprite_name` / `source_rect` / `texture`) — `StubRender` and mock
+        /// renderers in downstream tests — so the helper stays safe to call
+        /// uniformly, exactly like `setSpriteFlip`'s `flip_x` guard.
+        pub fn setSpriteFrame(self: *Game, entity: Entity, name: []const u8) void {
+            if (comptime !has_atlas_sprite_fields) return;
+            self.assertEntityAlive(entity, "setSpriteFrame");
+            const sprite = self.ecs_backend.getComponent(entity, Sprite) orelse return;
+
+            sprite.sprite_name = name;
+
+            const result = self.findSpriteCached(@intCast(entity), name) orelse return;
+
+            sprite.source_rect = atlas_mixin.sourceRectFor(atlas_mixin.SourceRectOf(Sprite), result);
+            sprite.texture = atlas_mixin.normalizeHandle(TextureHandle, result.texture_id);
             self.renderer.markVisualDirty(entity);
         }
 
