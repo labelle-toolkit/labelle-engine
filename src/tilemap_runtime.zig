@@ -23,6 +23,8 @@
 
 const std = @import("std");
 
+const TileLayerSize = @import("tilemap.zig").TileLayerSize;
+
 /// True when `RenderImpl` exposes the gfx 1.21.0 tilemap seam: the
 /// per-backend `TileMapRenderer` type plus the shared texture path the
 /// resolver bridges through. `GfxRendererWith` satisfies all of it.
@@ -294,6 +296,58 @@ pub fn Runtime(comptime RenderImpl: type) type {
         /// `layer_bindings` to decide where the layer draws (T3).
         pub fn layerName(self: *const Self, i: usize) []const u8 {
             return self.map.tile_layers[i].name;
+        }
+
+        // ── Runtime tile mutation (#825) ────────────────────────────
+
+        /// Grid size (in TILES) of the i-th `.tmx` tile layer. The bound a
+        /// caller needs before pushing a whole grid through
+        /// `setLayerTiles` (which requires an exact `width * height`
+        /// slice).
+        pub fn layerSize(self: *const Self, i: usize) TileLayerSize {
+            const layer = &self.map.tile_layers[i];
+            return .{ .width = layer.width, .height = layer.height };
+        }
+
+        /// Overwrite ONE tile of the i-th tile layer in the decoded map.
+        /// Returns `false` (writing nothing) when `x`/`y` fall outside the
+        /// layer's grid.
+        ///
+        /// `gid` is the RAW TMX global tile id: `0` clears the cell, and
+        /// the three high flip bits (`TileFlags.*`, `0xE0000000`) are
+        /// preserved verbatim — the draw pass decodes them itself.
+        ///
+        /// Safe to call at any time outside a draw: gfx's tilemap renderer
+        /// is IMMEDIATE-mode (it reads `TileLayer.data` afresh every
+        /// `drawLayerDirect`), so there is no cached geometry to invalidate
+        /// and no dirty flag to raise — the next frame shows the new tile.
+        ///
+        /// **Not persisted.** The save/load contract stores only the
+        /// component's `asset_name` and rehydrates by RE-DECODING the
+        /// `.tmx`, so every runtime mutation is lost across a save/load or
+        /// a scene reload. See `src/tilemap.zig`.
+        pub fn setTile(self: *Self, i: usize, x: u32, y: u32, gid: u32) bool {
+            const layer = &self.map.tile_layers[i];
+            if (x >= layer.width or y >= layer.height) return false;
+            const idx = @as(usize, y) * @as(usize, layer.width) + @as(usize, x);
+            if (idx >= layer.data.len) return false; // defensive: malformed decode
+            layer.data[idx] = gid;
+            return true;
+        }
+
+        /// Replace the ENTIRE tile grid of the i-th tile layer in one call —
+        /// the bulk form a procedural generator uses to push a freshly
+        /// computed grid without a `.tmx` round-trip. `gids` is row-major
+        /// (`y * width + x`), raw TMX gids, and MUST be exactly
+        /// `width * height` long; a mismatched length writes nothing and
+        /// returns `false`.
+        ///
+        /// Same immediacy and same non-persistence as `setTile`.
+        pub fn setLayerTiles(self: *Self, i: usize, gids: []const u32) bool {
+            const layer = &self.map.tile_layers[i];
+            if (gids.len != layer.data.len) return false;
+            @memcpy(layer.data, gids);
+            return true;
         }
 
         /// Draw a SINGLE `.tmx` tile layer by document index (T3

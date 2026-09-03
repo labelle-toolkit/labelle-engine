@@ -482,6 +482,25 @@ pub fn build(b: *std.Build) void {
             }),
         });
         test_step.dependOn(&b.addRunArtifact(tilemap_percamera_test).step);
+
+        // Runtime tile mutation (#825) — `setTile` / `setTiles` /
+        // `tilemapLayerSize` write into the DECODED map, which gfx's
+        // immediate-mode pass re-reads each frame. Shares the mocks with the
+        // interleave suite via `tilemap_interleave_support.zig`.
+        const tilemap_mutation_test = b.addTest(.{
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("test/tilemap_mutation_test.zig"),
+                .target = target,
+                .optimize = optimize,
+                .imports = &.{
+                    .{ .name = "labelle-core", .module = core_module },
+                    .{ .name = "engine", .module = engine_module },
+                    .{ .name = "scene", .module = scene_module },
+                    .{ .name = "tilemap", .module = tilemap_module },
+                },
+            }),
+        });
+        test_step.dependOn(&b.addRunArtifact(tilemap_mutation_test).step);
     }
 
     // zspec BDD specs — mirrors the `spec` step in labelle-pathfinding.

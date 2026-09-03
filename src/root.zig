@@ -73,6 +73,10 @@ pub const Tilemap = @import("tilemap.zig").Tilemap;
 /// An explicit `.tmx`-layer → engine-layer binding for the T3 Z-interleave
 /// (`Tilemap.layer_bindings`). See `src/tilemap.zig`.
 pub const TilemapLayerBinding = @import("tilemap.zig").LayerBinding;
+/// Grid size (in tiles) of one `.tmx` tile layer — returned by
+/// `Game.tilemapLayerSize`, the bound a procedural generator sizes its
+/// `Game.setTiles` slice against (#825). See `src/tilemap.zig`.
+pub const TilemapLayerSize = @import("tilemap.zig").TileLayerSize;
 /// True when a renderer plugin exposes a CONCRETELY reflectable gfx tilemap
 /// seam. Gates `Game.tilemap_supported` / `Game.TilemapRuntimeType`; exposed
 /// so consumers (and tests) can probe a renderer without configuring a whole

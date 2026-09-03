@@ -28,6 +28,7 @@ pub fn Mixin(comptime Game: type) type {
     // they are never analyzed when `LayerEnum` is `void`.
     const LayerEnum = Game.RenderLayerEnum;
     const LayerBinding = tilemap_mod.LayerBinding;
+    const TileLayerSize = tilemap_mod.TileLayerSize;
 
     // Whether the renderer plugin exposes a world camera the tilemap pass
     // can render through: a `begin()/end()` camera reached via
@@ -489,6 +490,105 @@ pub fn Mixin(comptime Game: type) type {
         pub fn tilemapRuntime(self: *Game, entity: Entity) ?*Runtime {
             if (comptime !supported) return null;
             return self.tilemaps.get(entity);
+        }
+
+        // ── Runtime tile mutation (#825) ─────────────────────────────
+
+        /// Document index of the `.tmx` tile layer named `layer_name` on an
+        /// already-resolved runtime, or `null` when the map has no such
+        /// layer. Linear over `layerCount()` — maps carry a handful of
+        /// layers, and this keeps gfx's `TileLayer` type unnamed here
+        /// (all the reflection lives in `tilemap_runtime.zig`).
+        fn tilemapLayerIndex(rt: *Runtime, layer_name: []const u8) ?usize {
+            var i: usize = 0;
+            while (i < rt.layerCount()) : (i += 1) {
+                if (std.mem.eql(u8, rt.layerName(i), layer_name)) return i;
+            }
+            return null;
+        }
+
+        /// Grid size (in TILES) of `layer_name` on `entity`'s decoded map,
+        /// or `null` when the entity has no tilemap runtime or the map has
+        /// no layer by that name. The bound a generator sizes its
+        /// `setTiles` slice against. Always `null` on a renderer without
+        /// the tilemap seam.
+        pub fn tilemapLayerSize(self: *Game, entity: Entity, layer_name: []const u8) ?TileLayerSize {
+            if (comptime !supported) return null;
+            const rt = self.tilemaps.get(entity) orelse return null;
+            const i = tilemapLayerIndex(rt, layer_name) orelse return null;
+            return rt.layerSize(i);
+        }
+
+        /// Write ONE tile of `layer_name` on `entity`'s decoded map.
+        /// `gid` is the RAW TMX global tile id: `0` clears the cell, and the
+        /// three high flip bits are preserved verbatim.
+        ///
+        /// No-op (with a `log.warn`) when the entity has no tilemap runtime,
+        /// the map has no layer named `layer_name`, or `x`/`y` is outside
+        /// the layer's grid — the mixin's usual "degrade, don't fail"
+        /// failure style. Compiles away entirely on a renderer without the
+        /// tilemap seam, like the rest of this mixin.
+        ///
+        /// The change is visible on the NEXT frame with no further call:
+        /// gfx's tilemap draw pass is immediate-mode and re-reads the
+        /// layer's grid every frame, so there is nothing to mark dirty.
+        ///
+        /// **NOT persisted (the main caveat).** Save/load stores only the
+        /// component's `asset_name` and rebuilds the decoded map by
+        /// re-decoding that `.tmx`, so every tile written here is LOST
+        /// across a save/load, a scene swap, or any `acquireTilemap`
+        /// re-decode. A procedurally generated map must be re-applied by
+        /// the game after load (keep the seed/grid in your own save data).
+        /// See the header of `src/tilemap.zig`.
+        pub fn setTile(self: *Game, entity: Entity, layer_name: []const u8, x: u32, y: u32, gid: u32) void {
+            if (comptime !supported) return;
+            const rt = self.tilemaps.get(entity) orelse {
+                self.log.warn("setTile: entity has no tilemap runtime — ignored", .{});
+                return;
+            };
+            const i = tilemapLayerIndex(rt, layer_name) orelse {
+                self.log.warn("setTile: no tilemap layer named '{s}' — ignored", .{layer_name});
+                return;
+            };
+            if (!rt.setTile(i, x, y, gid)) {
+                const size = rt.layerSize(i);
+                self.log.warn(
+                    "setTile: ({d},{d}) out of bounds for layer '{s}' ({d}x{d}) — ignored",
+                    .{ x, y, layer_name, size.width, size.height },
+                );
+            }
+        }
+
+        /// Replace the ENTIRE tile grid of `layer_name` on `entity`'s
+        /// decoded map in ONE call — the bulk form a procedural generator
+        /// (WFC, dungeon, cellular-automata cave) uses to push a freshly
+        /// computed grid without synthesising `.tmx` XML and re-decoding it.
+        ///
+        /// `gids` is ROW-MAJOR (`y * width + x`), raw TMX gids, and must be
+        /// exactly `width * height` long — query `tilemapLayerSize` for
+        /// those. A length mismatch writes NOTHING (partial grids are
+        /// rejected rather than half-applied) and warns.
+        ///
+        /// Same no-op-and-warn failure style, same next-frame immediacy,
+        /// and the same "NOT persisted across save/load" caveat as
+        /// `setTile` — see its doc comment.
+        pub fn setTiles(self: *Game, entity: Entity, layer_name: []const u8, gids: []const u32) void {
+            if (comptime !supported) return;
+            const rt = self.tilemaps.get(entity) orelse {
+                self.log.warn("setTiles: entity has no tilemap runtime — ignored", .{});
+                return;
+            };
+            const i = tilemapLayerIndex(rt, layer_name) orelse {
+                self.log.warn("setTiles: no tilemap layer named '{s}' — ignored", .{layer_name});
+                return;
+            };
+            if (!rt.setLayerTiles(i, gids)) {
+                const size = rt.layerSize(i);
+                self.log.warn(
+                    "setTiles: got {d} gids for layer '{s}' ({d}x{d} = {d} tiles) — ignored",
+                    .{ gids.len, layer_name, size.width, size.height, @as(usize, size.width) * @as(usize, size.height) },
+                );
+            }
         }
 
         /// Free every tilemap runtime but keep the (empty) side table
