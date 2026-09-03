@@ -990,6 +990,13 @@ pub const ParentComponent = core.ParentComponent;
 pub const ChildrenComponent = core.ChildrenComponent;
 pub const GizmoInterface = core.GizmoInterface;
 pub const StubGizmos = core.StubGizmos;
+
+// ── Gizmo text payloads (#827) ──
+// `GizmoDraw` (labelle-core) carries no text field, so a `.text` gizmo's
+// characters live in the game's per-frame arena and are joined to their draw by
+// index. Games read them back with `Game.getGizmoText(i)`; this record is the
+// join itself, surfaced for tooling that walks the raw draw list.
+pub const GizmoTextSpan = @import("game/gizmo_draws.zig").GizmoTextSpan;
 pub const PhysicsInterface = core.PhysicsInterface;
 pub const StubPhysics = core.StubPhysics;
 
