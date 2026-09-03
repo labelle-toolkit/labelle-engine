@@ -1620,6 +1620,19 @@ pub fn GameConfigWithYAxis(
         /// turning a graceful degrade into a compile error.
         pub const unloadTexture = AtlasMixin.unloadTexture;
 
+        // ── Standalone image asset shims (#831) ──
+        //
+        // The `.image` resource kind's counterpart to the atlas / sound /
+        // font pairs — `loadImageFromMemory` blocks until the image is
+        // resident so an eager (`lazy = false`) image is drawable on the
+        // FIRST frame, which `assets.acquire` alone does not guarantee.
+        // Unconditional (not gated on `has_load_from_memory`): the catalog
+        // uploads images through the injected `ImageBackend`, not through
+        // the renderer's texture seam.
+        pub const registerImageFromMemory = AtlasMixin.registerImageFromMemory;
+        pub const loadImageFromMemory = AtlasMixin.loadImageFromMemory;
+        pub const loadImageIfNeeded = AtlasMixin.loadImageIfNeeded;
+
         pub const registerSoundFromMemory = AtlasMixin.registerSoundFromMemory;
         pub const loadSoundFromMemory = AtlasMixin.loadSoundFromMemory;
         pub const loadSoundIfNeeded = AtlasMixin.loadSoundIfNeeded;
