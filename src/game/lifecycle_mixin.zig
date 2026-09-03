@@ -342,17 +342,43 @@ pub fn Mixin(comptime Game: type) type {
         ///      asset's holders stay valid.
         ///   2. Re-arm every atlas's `texture_id` so the idempotent
         ///      per-tick bridge re-wires fresh handles after restore.
-        ///   3. Emit `engine__surface_lost` for flow/script listeners.
+        ///   3. Emit `engine__surface_lost` — SYNCHRONOUSLY — for hook
+        ///      listeners, while every GPU handle is still alive.
         ///
         /// `reenqueueGpuResident` + `surfaceRestored` do the inverse once
         /// INIT_WINDOW recreates the surface.
+        ///
+        /// ## Why the emit is synchronous (#820)
+        ///
+        /// The backend calls this from its TERM_WINDOW handler and tears
+        /// the GPU context down the moment it returns; the game loop is
+        /// parked from here until after restore. A BUFFERED emit would
+        /// therefore drain at the first post-restore frame — measured six
+        /// seconds late on-device — by which point every handle the game
+        /// held is dead or, worse, recycled by the restore's re-uploads.
+        /// Releasing through such a handle destroys somebody else's live
+        /// texture (flying-platform's sky atlas drew menu icons).
+        ///
+        /// Delivering the event here, via `emitEngineEventSync`, gives a
+        /// game hook the one moment where releasing GPU-resident objects
+        /// the engine does not track is both possible and correct:
+        /// textures uploaded straight through `loadTextureFromMemory`
+        /// (the catalog re-uploads ITS assets and `reuploadUiFonts` covers
+        /// the engine's own fonts; direct uploads belong to the caller),
+        /// lends handed to a GUI bridge by backend handle, and so on.
+        /// Contract: **direct uploads die with the surface** — release them
+        /// (`game.unloadTexture`) in an `engine__surface_lost` hook and
+        /// re-create them after `engine__surface_restored`. The handler
+        /// runs on the backend's app thread, the same one the parked game
+        /// loop lives on, so the usual `emitSync` re-entrancy caveats
+        /// apply (no nested emits into the same drain).
         pub fn surfaceLost(self: *Game) void {
             self.assets.invalidateGpuResources();
             self.atlas_manager.invalidateUploadedTextures();
             std.log.info("surface_lost: invalidated gpu-resident assets, refcounts preserved", .{});
             // Engine `Events` dual-emit (#578); folds away when the game
-            // doesn't subscribe.
-            self.emitEngineEvent("engine__surface_lost", .{});
+            // doesn't subscribe. Sync, not buffered — see the doc above.
+            self.emitEngineEventSync("engine__surface_lost", .{});
         }
 
         /// Backend entry point for GPU surface restore (Android
@@ -363,6 +389,12 @@ pub fn Mixin(comptime Game: type) type {
         /// upload, so the re-upload requires a re-decode round-trip the
         /// async per-tick pump would otherwise spread across several
         /// frames. Bounded so a wedged decode can't hang the restore.
+        ///
+        /// Emits `engine__surface_restored` SYNCHRONOUSLY, after the
+        /// engine's own re-uploads, so a hook can re-create what it
+        /// released in `engine__surface_lost` before the first restored
+        /// frame draws — a buffered emit would leave that frame sampling
+        /// whatever the hook had not yet re-created (#820).
         pub fn surfaceRestored(self: *Game) void {
             self.assets.reenqueueGpuResident();
             forcePumpCurrentScene(self);
@@ -372,8 +404,8 @@ pub fn Mixin(comptime Game: type) type {
             // would sample a stale, destroyed GPU handle after resume.
             self.reuploadUiFonts();
             std.log.info("surface_restored: re-enqueued + pumped to ready", .{});
-            // Engine `Events` dual-emit (#578).
-            self.emitEngineEvent("engine__surface_restored", .{});
+            // Engine `Events` dual-emit (#578). Sync — see the doc above.
+            self.emitEngineEventSync("engine__surface_restored", .{});
         }
 
         /// Synchronously pump the catalog until the current scene's

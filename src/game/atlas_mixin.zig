@@ -163,6 +163,20 @@ pub fn Mixin(comptime Game: type) type {
         /// backend decode+upload path) and normalises the returned `TextureId`
         /// enum/int to `u32` so the caller can hand it back to `game.drawMesh`.
         /// Same `TextureId` → `u32` conversion the atlas loaders use.
+        ///
+        /// ## Surface-loss contract (#820)
+        ///
+        /// This is a DIRECT upload: it bypasses the asset catalog, so the
+        /// engine neither retains the bytes nor re-uploads it when the GPU
+        /// surface is lost and restored (Android TERM_WINDOW / INIT_WINDOW).
+        /// The texture dies with the surface. Callers that must survive a
+        /// resume own that lifecycle: release the handle with
+        /// `game.unloadTexture` from an `engine__surface_lost` hook (delivered
+        /// synchronously while the handle is still alive) and upload again
+        /// after `engine__surface_restored`. Do NOT release after restore —
+        /// the backend recycles handle slots, so the stale handle by then
+        /// names one of the catalog's re-uploaded textures. See
+        /// `lifecycle_mixin.surfaceLost`.
         pub fn loadTextureFromMemoryU32(self: *Game, file_type: [:0]const u8, data: []const u8) !u32 {
             const tex_id = try self.renderer.loadTextureFromMemory(file_type, data);
             return if (@typeInfo(@TypeOf(tex_id)) == .@"enum") @intFromEnum(tex_id) else tex_id;
