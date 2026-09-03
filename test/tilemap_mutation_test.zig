@@ -265,6 +265,29 @@ test "setTiles on an unknown layer / missing runtime is a no-op" {
     game.setTiles(bare, "ground", &[_]u32{ 9, 9, 9, 9, 9, 9 });
 }
 
+test "setTiles accepts a slice that ALIASES the live grid" {
+    const G = InterleaveGame();
+    var game = G.init(testing.allocator);
+    defer game.deinit();
+    try groundGame(&game);
+
+    const e = game.createEntity();
+    game.addTilemap(e, .{ .asset_name = "level.tmx" });
+
+    // `tilemapRuntime` is public, so "read the grid, tweak it in place,
+    // push it back" is a reachable caller shape. `@memcpy` would trip its
+    // non-aliasing precondition here (panic in safety builds, UB when
+    // optimized) — codex #829.
+    const live = game.tilemapRuntime(e).?.map.tile_layers[0].data;
+    live[0] = 9;
+    game.setTiles(e, "ground", live); // dest and source are the SAME slice
+
+    // The self-assignment is a no-op that leaves the grid intact.
+    try testing.expectEqual(@as(u32, 9), tileAt(&game, e, 0, 0, 0));
+    try testing.expectEqual(@as(u32, 2), tileAt(&game, e, 0, 1, 0));
+    try testing.expectEqual(@as(u32, 6), tileAt(&game, e, 0, 2, 1));
+}
+
 test "a fully generated grid draws every non-zero cell on the next frame" {
     const G = InterleaveGame();
     var game = G.init(testing.allocator);

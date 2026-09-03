@@ -572,6 +572,10 @@ pub fn Mixin(comptime Game: type) type {
         /// Same no-op-and-warn failure style, same next-frame immediacy,
         /// and the same "NOT persisted across save/load" caveat as
         /// `setTile` — see its doc comment.
+        ///
+        /// `gids` MAY alias the live grid: reading it through
+        /// `tilemapRuntime` and handing that slice back is safe (the copy
+        /// is overlap-tolerant, and an identical slice is a no-op).
         pub fn setTiles(self: *Game, entity: Entity, layer_name: []const u8, gids: []const u32) void {
             if (comptime !supported) return;
             const rt = self.tilemaps.get(entity) orelse {

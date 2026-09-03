@@ -343,10 +343,24 @@ pub fn Runtime(comptime RenderImpl: type) type {
         /// returns `false`.
         ///
         /// Same immediacy and same non-persistence as `setTile`.
+        ///
+        /// ALIASING IS ALLOWED. `Game.tilemapRuntime` is public, so a
+        /// caller can reach `layer.data` and hand that very slice (or a
+        /// same-length view into the same decode allocation) straight
+        /// back — a natural "read the grid, tweak it in place, push it
+        /// back" loop. `@memcpy` forbids that (safety builds panic,
+        /// optimized builds are UB), so the copy runs in whichever
+        /// direction tolerates an overlap, and an identical slice is a
+        /// no-op that still reports success.
         pub fn setLayerTiles(self: *Self, i: usize, gids: []const u32) bool {
             const layer = &self.map.tile_layers[i];
             if (gids.len != layer.data.len) return false;
-            @memcpy(layer.data, gids);
+            if (layer.data.ptr == gids.ptr) return true; // self-assignment
+            if (@intFromPtr(layer.data.ptr) < @intFromPtr(gids.ptr)) {
+                std.mem.copyForwards(u32, layer.data, gids);
+            } else {
+                std.mem.copyBackwards(u32, layer.data, gids);
+            }
             return true;
         }
 
