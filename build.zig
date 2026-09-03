@@ -110,6 +110,10 @@ pub fn build(b: *std.Build) void {
         "test/font_types_test.zig",
         "test/font_loader_test.zig",
         "test/asset_streaming_shim_test.zig",
+        // #831 — standalone `.image` load shims: `loadImageFromMemory`
+        // blocks so an eager image is drawable on the FIRST frame, which
+        // `assets.acquire` alone does not guarantee.
+        "test/image_load_shim_test.zig",
         // #563 — sprite-based asset inference: reverse index (sprite/image →
         // resource bundle) + entity-tree walker that derives the `meta.assets`
         // set, plus the `AssetManifest` escape hatch. Engine half of the RFC

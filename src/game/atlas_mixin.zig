@@ -307,6 +307,92 @@ pub fn Mixin(comptime Game: type) type {
             return true;
         }
 
+        // ── Standalone image asset shims (#831) ──
+        //
+        // The `.image` counterpart to the atlas / sound / font pairs, for
+        // a LOOSE PNG declared as `.{ .name = "portrait", .image = "…" }`
+        // (labelle-assembler#676) and drawn by the standalone `Image`
+        // component (`src/image_component.zig`).
+        //
+        // Why these exist even though `AssetCatalog.register` + `acquire`
+        // already "work": every other resource kind honours `lazy = false`
+        // by loading BLOCKING at init, so the asset is resident before the
+        // first frame is drawn. `acquire` alone only *starts* the worker
+        // decode; the per-tick `pump()` finishes it, which means an eager
+        // image can still be missing on frame 0 — `Image` skips rendering
+        // while its asset is not ready. That asymmetry is issue #831.
+        //
+        // Deliberately NOT gated on the renderer's `loadTextureFromMemory`
+        // (unlike the atlas shims): the catalog's image loader uploads
+        // through the injected `ImageBackend` function pointers, never
+        // through the renderer seam, so these compile against any renderer
+        // — the same way the sound and font shims do.
+
+        /// Register a standalone image's bytes with the catalog WITHOUT
+        /// decoding them — the `lazy = true` half of the pair, and the
+        /// image counterpart to `registerSoundFromMemory`.
+        ///
+        /// `file_type` is the extension the backend's `decodeImage` is
+        /// written against, carrying its leading dot (`".png"`) — the
+        /// spelling `registerAtlasFromMemory` already passes through.
+        ///
+        /// `name`, `file_type` and `image_data` are BORROWED under the
+        /// catalog's `@embedFile` lifetime contract: all three must outlive
+        /// the entry. `AssetAlreadyRegistered` is swallowed, matching every
+        /// other `register*FromMemory` shim — a name a scene manifest
+        /// already registered is not a hard failure.
+        pub fn registerImageFromMemory(self: *Game, name: []const u8, file_type: [:0]const u8, image_data: []const u8) !void {
+            self.assets.register(name, .image, file_type, image_data) catch |err| switch (err) {
+                error.AssetAlreadyRegistered => {},
+                else => return err,
+            };
+        }
+
+        /// Register AND load a standalone image, BLOCKING until the GPU
+        /// upload has landed — the `lazy = false` half of the pair, and the
+        /// image counterpart to `loadAtlasFromMemory` / `loadSoundFromMemory`
+        /// / `loadFontFromMemory`.
+        ///
+        /// When this returns, `game.assets.isReady(name)` is true and the
+        /// entry's `resource.image` holds the backend texture handle the
+        /// `Image` render seam reads — so an `Image` entity naming this
+        /// asset draws on the very first frame instead of popping in a few
+        /// frames later. That first-frame guarantee is the whole point of
+        /// this function; `acquire` alone does not provide it.
+        pub fn loadImageFromMemory(self: *Game, name: []const u8, file_type: [:0]const u8, image_data: []const u8) !void {
+            try self.registerImageFromMemory(name, file_type, image_data);
+            _ = try self.loadImageIfNeeded(name);
+        }
+
+        /// Block until an already-registered image asset is resident,
+        /// returning `true` when this call did the loading and `false` when
+        /// it was already `.ready`. The image counterpart to
+        /// `loadSoundIfNeeded` / `loadFontIfNeeded`.
+        ///
+        /// Blocking is the same same-thread mechanism the other kinds use
+        /// (`loadAssetIfNeededInternal`): `acquire` enqueues the decode on a
+        /// worker, then the calling thread pumps the catalog itself until
+        /// the upload lands. Exits on ready, on a decode/upload error
+        /// (rewound to `.registered` so the next call retries), or on a
+        /// dropped enqueue — never spins unbounded.
+        ///
+        /// After the asset reaches `.ready` this also runs the standard
+        /// bridge walk. A loose PNG needs no bridging (the `Image` seam
+        /// resolves straight off the catalog, and `markPendingLoaded`
+        /// simply reports `AtlasNotFound`, which the walk swallows), but a
+        /// name that IS a registered pending atlas gets its `texture_id`
+        /// wired here rather than one tick later. `bridgeAllReadyImageAssets`
+        /// is reused instead of a direct `markPendingLoaded` precisely
+        /// because it already encodes the post-load render gate's
+        /// all-at-once rule (#638) — binding a gated atlas early from here
+        /// would reintroduce the half-bound-manifest window the gate exists
+        /// to close.
+        pub fn loadImageIfNeeded(self: *Game, name: []const u8) !bool {
+            const did_load = try loadAssetIfNeededInternal(self, name);
+            self.bridgeAllReadyImageAssets();
+            return did_load;
+        }
+
         // ── Audio asset shims (Phase 4 of Asset Streaming RFC, #447) ──
 
         pub fn registerSoundFromMemory(self: *Game, name: []const u8, file_type: [:0]const u8, audio_data: []const u8) !void {
@@ -325,6 +411,31 @@ pub fn Mixin(comptime Game: type) type {
             if (self.assets.isReady(name)) return false;
             _ = try self.assets.acquire(name);
             errdefer self.assets.release(name);
+
+            // Deterministic stuck-decode guard (#831). `acquire` only
+            // enqueues a `WorkRequest` on the 0 → 1 refcount transition,
+            // and `enqueueDecode` *tolerates* a full request ring: it
+            // logs, leaves the state at `.registered`, and nothing
+            // re-enqueues it — not `pump()`, not any other layer. The
+            // busy-wait below would then spin forever on an asset that
+            // will never become ready, with no error to surface.
+            //
+            // After a successful `acquire` the only state that means "no
+            // work is in flight" is `.registered`: `.queued` / `.decoding`
+            // are mid-flight, `.ready` returned above, `.failed` is caught
+            // by the `lastError` branch. The entry cannot fall BACK to
+            // `.registered` inside the loop either — the only path that
+            // does that is `pump`'s zombie-drop, which requires refcount 0,
+            // and we hold a reference. So one check here is sufficient and
+            // needs no per-iteration cost.
+            //
+            // Not reachable on current workloads (64-slot ring vs.
+            // single-digit asset counts per frame), but "the game hangs"
+            // is the wrong failure mode for a full queue — a caller can
+            // retry an error, it cannot retry a deadlock.
+            const acquired = self.assets.entries.getPtr(name) orelse return error.AssetNotRegistered;
+            if (acquired.state == .registered) return error.AssetDecodeNotQueued;
+
             while (!self.assets.isReady(name)) {
                 if (self.assets.lastError(name)) |err| {
                     self.assets.resetFailed(name);
@@ -393,8 +504,6 @@ pub fn Mixin(comptime Game: type) type {
         ///
         ///     const backend_id = game.nativeTextureId(handle) orelse return;
         ///     const native = backend_gfx.nativeTextureHandle(backend_id);
-
-
         pub fn nativeTextureId(self: *Game, tex_id: anytype) ?core.BackendTextureId {
             const Renderer = @TypeOf(self.renderer.*);
             if (!@hasDecl(Renderer, "nativeTextureId")) return null;
