@@ -1124,6 +1124,7 @@ pub fn GameConfigWithYAxis(
         pub const removeText = Visuals.removeText;
         pub const setZIndex = Visuals.setZIndex;
         pub const setSpriteFlip = Visuals.setSpriteFlip;
+        pub const setSpriteFrame = Visuals.setSpriteFrame;
         pub const setMaterial = Visuals.setMaterial;
         pub const clearMaterial = Visuals.clearMaterial;
 

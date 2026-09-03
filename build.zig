@@ -166,6 +166,10 @@ pub fn build(b: *std.Build) void {
         "test/collect_entities_test.zig",
         "test/entities_with_roster_test.zig",
         "test/set_sprite_flip_test.zig",
+        // #826 — `setSpriteFrame`: the atlas frame swap that five games
+        // hand-rolled, including the `texture_scale_*` application all five
+        // copies omitted (silently mis-sampling a downscaled atlas).
+        "test/set_sprite_frame_test.zig",
         "test/set_material_test.zig",
         "test/video_component_test.zig",
         "test/camera_viewport_test.zig",
