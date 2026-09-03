@@ -44,7 +44,9 @@ pub fn Mixin(comptime Game: type) type {
         /// is fine). The copy — like the draw itself — lives until the next
         /// `clearGizmos()`, and `getGizmoText()` slices point into that arena,
         /// so they are invalidated by `clearGizmos()` or by a later
-        /// `drawGizmoText*` call that grows the arena.
+        /// `drawGizmoText*` call that grows the arena. Handing such a slice
+        /// straight back to a `drawGizmoText*` call is still safe: the copy is
+        /// taken from the arena the growth leaves behind, not from the slice.
         ///
         /// **Reaching the string**: `GizmoDraw` (labelle-core) has no text
         /// payload field, so the string is NOT on the draw. Resolve it by index

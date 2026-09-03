@@ -5,7 +5,7 @@
 //! (`kind, x1, y1, x2, y2, color, group, space, category`), so the string
 //! cannot ride on the draw. It is copied into a per-frame byte arena on the
 //! game's gizmo state and joined to its draw by index — `getGizmoText(i)`.
-//! These tests pin the two things that makes contractual: the draw carries the
+//! These tests pin the two things that make contractual: the draw carries the
 //! right geometry/kind/space/category, and the COPY outlives the caller's
 //! buffer but not the frame's `clearGizmos()`.
 
@@ -42,6 +42,65 @@ test "gizmo text: the string is copied, so a reused caller buffer is safe" {
     @memset(&buf, 'x');
 
     try testing.expectEqualStrings("fps 60", game.getGizmoText(0).?);
+}
+
+/// An allocator that never grows in place and scribbles `0xAA` over every
+/// block it frees. Any `ArrayList` growth therefore MOVES the buffer and
+/// poisons the old one, so a copy whose source still points into the pre-growth
+/// buffer reads garbage instead of quietly surviving on stale-but-intact heap.
+const MovingAllocator = struct {
+    child: std.mem.Allocator,
+
+    fn allocator(self: *MovingAllocator) std.mem.Allocator {
+        return .{ .ptr = self, .vtable = &.{
+            .alloc = alloc,
+            .resize = resize,
+            .remap = remap,
+            .free = free,
+        } };
+    }
+
+    fn alloc(ctx: *anyopaque, len: usize, alignment: std.mem.Alignment, ret_addr: usize) ?[*]u8 {
+        const self: *MovingAllocator = @ptrCast(@alignCast(ctx));
+        return self.child.rawAlloc(len, alignment, ret_addr);
+    }
+
+    fn resize(_: *anyopaque, _: []u8, _: std.mem.Alignment, _: usize, _: usize) bool {
+        return false;
+    }
+
+    fn remap(_: *anyopaque, _: []u8, _: std.mem.Alignment, _: usize, _: usize) ?[*]u8 {
+        return null;
+    }
+
+    fn free(ctx: *anyopaque, memory: []u8, alignment: std.mem.Alignment, ret_addr: usize) void {
+        const self: *MovingAllocator = @ptrCast(@alignCast(ctx));
+        @memset(memory, 0xAA);
+        self.child.rawFree(memory, alignment, ret_addr);
+    }
+};
+
+test "gizmo text: a getGizmoText slice fed back in survives the arena moving" {
+    var moving = MovingAllocator{ .child = testing.allocator };
+    var game = Game.init(moving.allocator());
+    defer game.deinit();
+
+    game.drawGizmoText(0, 0, "aliased", 0xFF00FF00);
+
+    // Each round hands the previous draw's arena slice straight back to
+    // `drawGizmoText`, so the copy's source lives in the very buffer the append
+    // has to grow — and this allocator guarantees that the growth relocates and
+    // poisons that source. 40 rounds because `ArrayList`'s initial capacity for
+    // `u8` is a cache line (64 B): fewer rounds never reallocate at all.
+    var i: usize = 0;
+    while (i < 40) : (i += 1) {
+        game.drawGizmoText(0, 0, game.getGizmoText(i).?, 0xFF00FF00);
+    }
+
+    var j: usize = 0;
+    while (j <= 40) : (j += 1) {
+        try testing.expectEqualStrings("aliased", game.getGizmoText(j).?);
+    }
 }
 
 test "gizmo text: drawGizmoTextScreen marks the draw screen-space" {

@@ -141,9 +141,25 @@ pub fn GizmoState(comptime Entity: type) type {
         /// string. All-or-nothing: if either the bytes, the draw or the span
         /// fails to allocate, everything is rolled back so `draws` never holds
         /// a `.text` entry whose string cannot be resolved.
+        ///
+        /// `text` is allowed to alias the arena itself — a slice handed back by
+        /// `getText()` fed straight into another text draw. Growing
+        /// `text_bytes` can move the buffer out from under such a source, so
+        /// its offset is captured before the growth and the copy reads from the
+        /// buffer the growth left behind.
         fn appendText(self: *Self, allocator: std.mem.Allocator, draw: GizmoDraw, text: []const u8) void {
             const start = self.text_bytes.items.len;
-            self.text_bytes.appendSlice(allocator, text) catch return;
+            const alias_offset = self.arenaOffsetOf(text);
+            self.text_bytes.ensureUnusedCapacity(allocator, text.len) catch return;
+            // An arena-backed source is re-derived from the (possibly moved)
+            // buffer; a foreign slice is untouched by the growth. The alias
+            // always lies in `items`, i.e. before `start`, so the copy into
+            // `[start..]` never overlaps it.
+            const source = if (alias_offset) |offset|
+                self.text_bytes.allocatedSlice()[offset..][0..text.len]
+            else
+                text;
+            self.text_bytes.appendSliceAssumeCapacity(source);
             self.draws.append(allocator, draw) catch {
                 self.text_bytes.shrinkRetainingCapacity(start);
                 return;
@@ -158,6 +174,19 @@ pub fn GizmoState(comptime Entity: type) type {
             };
         }
 
+        /// Byte offset of `text` inside `text_bytes`' current allocation, or
+        /// `null` when it points anywhere else. An empty slice is never an
+        /// alias — it copies nothing, so it cannot dangle.
+        fn arenaOffsetOf(self: *const Self, text: []const u8) ?usize {
+            if (text.len == 0) return null;
+            const buf = self.text_bytes.allocatedSlice();
+            if (buf.len == 0) return null;
+            const base = @intFromPtr(buf.ptr);
+            const ptr = @intFromPtr(text.ptr);
+            if (ptr < base or ptr + text.len > base + buf.len) return null;
+            return ptr - base;
+        }
+
         /// The string of the `.text` draw at `draw_index` in `getDraws()`, or
         /// `null` for any other kind. The slice points into the frame arena and
         /// is invalidated by the next `clear()` or `drawText*` call.
@@ -167,7 +196,10 @@ pub fn GizmoState(comptime Entity: type) type {
         pub fn getText(self: *const Self, draw_index: usize) ?[]const u8 {
             for (self.text_spans.items) |span| {
                 if (span.draw_index == draw_index) {
-                    return self.text_bytes.items[span.start .. span.start + span.len];
+                    // Index in `usize`: `start + len` in `u32` would trap in a
+                    // safe build on a hypothetical 4 GiB frame arena.
+                    const start: usize = span.start;
+                    return self.text_bytes.items[start..][0..span.len];
                 }
             }
             return null;
