@@ -40,6 +40,10 @@ const EngineEvents = union(enum) {
     engine__scene_assets_release: engine.Events.scene_assets_release,
     engine__state_changed: engine.Events.state_changed,
     engine__pause_changed: engine.Events.pause_changed,
+    // GPU surface lifecycle (#820) — delivered synchronously, see the
+    // dedicated test below.
+    engine__surface_lost: engine.Events.surface_lost,
+    engine__surface_restored: engine.Events.surface_restored,
 };
 
 // Recorder hook — implements one method per `engine__*` variant so
@@ -56,6 +60,8 @@ const EventRecorder = struct {
     scene_unloaded_count: usize = 0,
     pause_changed_count: usize = 0,
     state_changed_count: usize = 0,
+    surface_lost_count: usize = 0,
+    surface_restored_count: usize = 0,
     last_tick_dt: f32 = 0,
     last_entity: u32 = 0,
     last_paused: bool = false,
@@ -88,6 +94,12 @@ const EventRecorder = struct {
     pub fn engine__state_changed(self: *EventRecorder, info: anytype) void {
         self.state_changed_count += 1;
         self.last_state = info.new_state;
+    }
+    pub fn engine__surface_lost(self: *EventRecorder, _: anytype) void {
+        self.surface_lost_count += 1;
+    }
+    pub fn engine__surface_restored(self: *EventRecorder, _: anytype) void {
+        self.surface_restored_count += 1;
     }
 };
 
@@ -218,6 +230,33 @@ test "state_changed fires on post-transition edge" {
 
     try testing.expectEqual(@as(usize, 2), recorder.state_changed_count);
     try testing.expectEqualStrings("paused", recorder.last_state);
+}
+
+test "surface_lost / surface_restored are delivered synchronously, not buffered (#820)" {
+    // The backend calls `surfaceLost` from its TERM_WINDOW handler and
+    // tears the GPU context down the moment it returns; the game loop —
+    // and with it `dispatchEvents` — is parked until after restore. A
+    // buffered emit would therefore reach the hook only once the new
+    // surface was up, when every handle the game held is dead or
+    // recycled. Both events must land in the hook BEFORE the call
+    // returns, with no `dispatchEvents` drain in between.
+    var recorder = EventRecorder{};
+    var game = TestGame.init(testing.allocator);
+    defer game.deinit();
+    game.setHooks(&recorder);
+
+    game.surfaceLost();
+    try testing.expectEqual(@as(usize, 1), recorder.surface_lost_count);
+    try testing.expectEqual(@as(usize, 0), recorder.surface_restored_count);
+
+    game.surfaceRestored();
+    try testing.expectEqual(@as(usize, 1), recorder.surface_restored_count);
+
+    // And the drain must NOT deliver them a second time — sync delivery
+    // means they were never buffered.
+    game.dispatchEvents();
+    try testing.expectEqual(@as(usize, 1), recorder.surface_lost_count);
+    try testing.expectEqual(@as(usize, 1), recorder.surface_restored_count);
 }
 
 // ── No-op safety test ─────────────────────────────────────────────────

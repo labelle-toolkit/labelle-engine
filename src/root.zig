@@ -597,15 +597,35 @@ pub const Events = struct {
     // work across the gap. Both carry no payload — the transition itself
     // is the signal. Zero-cost when no listener subscribes (same gate
     // `emitEngineEvent` uses for every other engine event).
+    //
+    // Unlike the other lifecycle events, BOTH are delivered SYNCHRONOUSLY
+    // to hooks (`emitEngineEventSync`, #820): the game loop is parked from
+    // loss until after restore, so a buffered emit would only drain once
+    // the new surface was already up — too late to release anything.
+    //
+    // Contract for GPU objects the engine does not track — textures
+    // uploaded straight through `game.loadTextureFromMemory`, textures
+    // lent to a GUI bridge by backend handle: they DIE with the surface.
+    // Release them in an `engine__surface_lost` hook (handles are still
+    // alive there — `game.unloadTexture` is safe) and re-create them after
+    // `engine__surface_restored`. Never release through a handle after
+    // restore: the backend recycles handle slots, so a stale handle now
+    // names one of the catalog's freshly re-uploaded textures.
 
     /// Fired when the GPU surface is lost and the catalog has dropped its
-    /// stale texture handles (refcounts preserved). No new GPU work
-    /// should run until `surface_restored`.
+    /// stale texture handles (refcounts preserved), BEFORE the backend
+    /// tears the context down — every handle is still alive. Delivered
+    /// synchronously. No new GPU work should run until `surface_restored`.
     pub const surface_lost = struct {};
 
-    /// Fired after the GPU surface is restored, the catalog has
-    /// re-enqueued its GPU-resident assets, and the first frame has been
-    /// pumped back to `.ready`.
+    /// Fired after the GPU surface is restored and the engine has run its
+    /// own re-upload pass: the catalog's GPU-resident assets are
+    /// re-enqueued and pumped towards `.ready` (BOUNDED, so a wedged decode
+    /// cannot hang the restore — a slow tail finishes over the next ticks)
+    /// and the engine's UI fonts are re-uploaded. Delivered synchronously,
+    /// before the first restored frame draws. The guarantee a hook gets is
+    /// a LIVE GPU context to re-create its own objects against — not that
+    /// every catalog asset is already resident.
     pub const surface_restored = struct {};
 
     // ── Studio plugin panels: play-time action channel (Asset Plugins ──
