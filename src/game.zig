@@ -1135,6 +1135,11 @@ pub fn GameConfigWithYAxis(
         pub const removeTilemap = TilemapMixin.removeTilemap;
         pub const renderTilemaps = TilemapMixin.renderTilemaps;
         pub const tilemapRuntime = TilemapMixin.tilemapRuntime;
+        // Runtime tile mutation (#825) — writes into the decoded map; NOT
+        // persisted across save/load (only `asset_name` is; see tilemap.zig).
+        pub const setTile = TilemapMixin.setTile;
+        pub const setTiles = TilemapMixin.setTiles;
+        pub const tilemapLayerSize = TilemapMixin.tilemapLayerSize;
         pub const addEmbeddedTilemapAsset = TilemapMixin.addEmbeddedTilemapAsset;
         pub const clearTilemaps = TilemapMixin.clearTilemaps;
         pub const deinitTilemaps = TilemapMixin.deinitTilemaps;

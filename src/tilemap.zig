@@ -5,13 +5,23 @@
 //! decoded map + its per-entity draw-pass renderer live engine-side in a
 //! side table on `Game` (see `game/tilemap_mixin.zig`), keyed by entity.
 //!
-//! **Immutable at runtime (T2).** A tilemap is fully deterministic from
-//! its `.tmx` asset: there are no runtime tile mutations and no dirty
-//! tracking. Consequently the save/load contract persists ONLY
-//! `asset_name` (via the engine's built-in save channel, alongside
-//! `Position`/`PrefabInstance` — see `game/save_load/`), and load
-//! rehydrates the decoded map by re-decoding the asset. The decoded map
-//! is never serialized.
+//! **Structure is fixed by the asset; TILES are mutable (#825).** The
+//! map's shape — size, tile size, tilesets, layer set — is fully
+//! deterministic from the `.tmx` asset. The per-cell tile ids are not:
+//! `Game.setTile` / `Game.setTiles` (see `game/tilemap_mixin.zig`) write
+//! straight into the decoded layer's grid, which the immediate-mode gfx
+//! draw pass re-reads every frame — so there is still no dirty tracking
+//! and none is needed.
+//!
+//! **Mutations do NOT survive save/load.** The save/load contract
+//! persists ONLY `asset_name` (via the engine's built-in save channel,
+//! alongside `Position`/`PrefabInstance` — see `game/save_load/`), and
+//! load rehydrates the decoded map by RE-DECODING the asset. The decoded
+//! map is never serialized, so a snapshot restores the tiles the `.tmx`
+//! shipped with, not the ones written at runtime. A game that generates
+//! its map procedurally must persist its own generator input (a seed, a
+//! grid) in its own save data and re-apply it after load — typically by
+//! calling `setTiles` again from a load hook.
 //!
 //! **Engine built-in, NOT a `ComponentRegistry` component.** Like
 //! `Position` and `PrefabInstance`, `Tilemap` is handled by dedicated
@@ -35,6 +45,17 @@ pub const LayerBinding = struct {
     /// to a screen-space (or unknown) engine layer is ignored and the
     /// `.tmx` layer falls back to the background pass.
     engine_layer: []const u8 = "",
+};
+
+/// Grid size, in TILES, of a single `.tmx` tile layer of a decoded map
+/// (#825). Reported by `Game.tilemapLayerSize` so a procedural generator
+/// can size the `[]const u32` it pushes through `Game.setTiles` without
+/// naming any labelle-gfx type.
+pub const TileLayerSize = struct {
+    /// Columns (tiles along X).
+    width: u32 = 0,
+    /// Rows (tiles along Y).
+    height: u32 = 0,
 };
 
 /// The `Tilemap` component. Reachable on a configured game as
