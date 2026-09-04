@@ -144,99 +144,17 @@ fn drawableHandle(game: *TestGame, name: []const u8) ?engine.AssetTexture {
 
 // ── Hard-deadline harness ──
 //
-// Two bots flagged the original shape of the timeout below: it `join()`ed
-// the worker unconditionally, so a loader that regressed into an unbounded
-// spin HUNG CI instead of failing at the deadline. A test that cannot fail
-// is worse than no test, so the deadline is now real.
-//
-// There is no SAFE in-process recovery from a wedged loader. The worker
-// thread owns `*TestGame`: joining it waits forever by construction, and
-// returning without joining lets the caller's `defer game.deinit()` free the
-// catalog out from under a thread that is still pumping it (and leaves
-// `testing.allocator`'s leak check racing a live thread). Full process
-// isolation — fork a child, watchdog it, reap it — is the textbook answer
-// and is out of proportion to one regression guard in a unit-test binary.
-//
-// So the deadline is enforced by killing the process: print exactly what
-// wedged, then `abort()`. CI fails LOUDLY at 200 ms with a named regression
-// instead of stalling until the job timeout. Nothing but a genuine
-// regression can reach that branch.
+// Lives in `test/load_deadline.zig` since #833, where the atlas shim's
+// deadlock test needed the same guarantee. See that file for why the
+// deadline aborts the process rather than reporting a failure.
 
-const DeadlineOutcome = union(enum) {
-    ok: bool,
-    err: anyerror,
-};
+const deadline = @import("load_deadline.zig");
 
-const deadline_ns: u64 = 200 * std.time.ns_per_ms;
-
-/// `game.loadImageIfNeeded(name)` on a worker thread under a hard deadline.
-/// Returns its outcome, or aborts the process if it does not return in time.
-fn loadImageWithDeadline(game: *TestGame, name: []const u8) DeadlineOutcome {
-    const Runner = struct {
-        outcome: DeadlineOutcome = .{ .err = error.RunnerNeverRan },
-        done: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
-
-        fn run(self: *@This(), g: *TestGame, n: []const u8) void {
-            if (g.loadImageIfNeeded(n)) |did_load| {
-                self.outcome = .{ .ok = did_load };
-            } else |err| {
-                self.outcome = .{ .err = err };
-            }
-            self.done.store(true, .release);
-        }
-    };
-
-    var runner = Runner{};
-    const handle = std.Thread.spawn(.{}, Runner.run, .{ &runner, game, name }) catch |err| {
-        std.debug.print("image_load_shim_test: thread spawn failed: {s}\n", .{@errorName(err)});
-        std.process.abort();
-    };
-
-    // Zig 0.16 has neither `std.Thread.sleep` nor `std.time.Timer`, so the
-    // deadline is counted in libc `nanosleep` steps — the same primitive
-    // every other timing-sensitive test in this repo falls back to.
-    const step_ns: u64 = 1 * std.time.ns_per_ms;
-    var waited_ns: u64 = 0;
-    while (waited_ns < deadline_ns) : (waited_ns += step_ns) {
-        if (runner.done.load(.acquire)) break;
-        var req: std.c.timespec = .{
-            .sec = @intCast(step_ns / std.time.ns_per_s),
-            .nsec = @intCast(step_ns % std.time.ns_per_s),
-        };
-        var rem: std.c.timespec = undefined;
-        _ = std.c.nanosleep(&req, &rem);
-    }
-
-    if (!runner.done.load(.acquire)) {
-        std.debug.print(
-            "\n" ++
-                "image_load_shim_test: REGRESSION — loadImageIfNeeded(\"{s}\") did not return\n" ++
-                "within {d}ms. The blocking loop is wedged (see src/game/atlas_mixin.zig\n" ++
-                "loadAssetIfNeededInternal). Aborting so this FAILS CI now rather than\n" ++
-                "hanging it; the worker owns the Game, so there is no safe way to unwind.\n",
-            .{ name, deadline_ns / std.time.ns_per_ms },
-        );
-        std.process.abort();
-    }
-
-    // `join` establishes happens-before with the worker's writes, so the
-    // plain read of `runner.outcome` below is well-defined.
-    handle.join();
-    return runner.outcome;
+fn loadImageWithDeadline(game: *TestGame, name: []const u8) deadline.Outcome {
+    return deadline.callWithDeadline(TestGame, "loadImageIfNeeded", game, name);
 }
 
-fn expectDeadlineError(outcome: DeadlineOutcome, expected: anyerror) !void {
-    switch (outcome) {
-        .ok => |did_load| {
-            std.debug.print(
-                "expected {s}, but the load SUCCEEDED (did_load = {})\n",
-                .{ @errorName(expected), did_load },
-            );
-            return error.TestUnexpectedResult;
-        },
-        .err => |err| try testing.expectEqual(expected, err),
-    }
-}
+const expectDeadlineError = deadline.expectError;
 
 // ── Tests ──
 

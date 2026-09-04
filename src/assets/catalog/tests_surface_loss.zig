@@ -31,7 +31,7 @@ const audio_loader = @import("../loaders/audio.zig");
 
 /// Spin `pump()` until `name` reaches `.ready` or a bounded cap elapses
 /// (a failed/wedged decode must not hang the test). Mirrors the
-/// busy-pump in `loadAtlasIfNeededImpl`.
+/// busy-pump in `Game.loadAssetIfNeededInternal`.
 fn pumpUntilReady(catalog: *AssetCatalog, name: []const u8) !void {
     var spins: usize = 0;
     while (spins < 4096) : (spins += 1) {

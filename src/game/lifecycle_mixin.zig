@@ -439,7 +439,7 @@ pub fn Mixin(comptime Game: type) type {
         /// Synchronously pump the catalog until the current scene's
         /// manifest assets are all `.ready`, or a bounded iteration cap
         /// elapses (so a failed/wedged decode can't spin forever). Mirrors
-        /// the busy-pump pattern in `loadAtlasIfNeededImpl` /
+        /// the busy-pump pattern in `loadAssetIfNeededInternal` /
         /// `acquireImmediately`: `pump()` + `bridgeAllReadyImageAssets()`
         /// + `Thread.yield()` per spin. When the current scene has no
         /// declared manifest, falls through to the bounded cap after one
