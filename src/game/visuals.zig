@@ -41,6 +41,13 @@ pub fn Mixin(comptime Game: type) type {
     // `TextureId`) or a plain integer; `normalizeHandle` bridges both.
     const TextureHandle = if (has_atlas_sprite_fields) @FieldType(Sprite, "texture") else void;
 
+    // The type that renderer's `Text.font` field holds. The engine's `FontId`
+    // is a generational `{ index, generation }` struct; labelle-gfx's is an
+    // `enum(u32)` (and labelle-gfx#349 is what puts it on `TextComponent`), so
+    // the two are NOT assignable. `normalizeFontHandle` bridges them the same
+    // way `normalizeHandle` bridges texture handles — see engine#848.
+    const FontHandle = if (has_text_font) @FieldType(Text, "font") else void;
+
     return struct {
         pub fn addSprite(self: *Game, entity: Entity, sprite: Sprite) void {
             self.ecs_backend.addComponent(entity, sprite);
@@ -279,8 +286,11 @@ pub fn Mixin(comptime Game: type) type {
             self.assertEntityAlive(entity, "setTextFont");
             const text = self.ecs_backend.getComponent(entity, Text) orelse return;
             const id = self.fontId(name) orelse return;
-            if (std.meta.eql(text.font, id)) return;
-            text.font = id;
+            // Compare and store in the RENDERER's handle type, never the
+            // engine's: `text.font` is whatever the renderer declared.
+            const handle = atlas_mixin.normalizeFontHandle(FontHandle, id);
+            if (std.meta.eql(text.font, handle)) return;
+            text.font = handle;
             self.renderer.markVisualDirty(entity);
         }
 
