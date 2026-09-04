@@ -7,11 +7,21 @@
 /// gate (`has_camera`) and the `getCamera`/`getCameraManager` `pub const`
 /// shells stay on `Game` — they fold to `void` on cameraless renderers —
 /// and forward here for the impl bodies.
-
 const std = @import("std");
 const core = @import("labelle-core");
 const frame_profiler_mod = @import("../frame_profiler.zig");
 const profiler = @import("scene").profiler;
+
+/// A pair of screen dimensions in one explicit coordinate space.
+///
+/// Returned by `Game.framebufferSize` (physical / backend-native pixels)
+/// and `Game.designSize` (the logical canvas the game draws into). Both
+/// are optional at the call site: a renderer that doesn't distinguish the
+/// two spaces reports `null` rather than a plausible-looking lie.
+pub const ScreenSize = struct {
+    width: f32,
+    height: f32,
+};
 
 /// Returns the misc-accessors mixin for a given Game type.
 pub fn Mixin(comptime Game: type) type {
@@ -49,6 +59,93 @@ pub fn Mixin(comptime Game: type) type {
             var p = self.renderer.screenToDesign(px, py);
             p.y = core.screenToLogicalY(Game.y_axis, p.y, renderScreenHeight(self));
             return p;
+        }
+
+        /// The cursor position in **design** pixels — the space
+        /// `screenToDesign` maps into, i.e. the canvas the game draws
+        /// into before the backend's aspect-fit and HiDPI scale.
+        ///
+        /// `getMouseX`/`getMouseY` report the backend's OWN space, which
+        /// is *not* the same across backends: bgfx / wgpu / sokol deliver
+        /// physical framebuffer pixels (2x the window on a Retina
+        /// display), while raylib / SDL deliver logical window points.
+        /// This accessor is the portable one — it runs the backend's own
+        /// `screenToDesign` (a no-op passthrough on backends with no
+        /// design/physical distinction), so it lands on the same pixel a
+        /// sprite was drawn at on every backend and every DPI.
+        ///
+        /// Prefer this (or `getMouseLogical`) over raw `getMouseX/Y` for
+        /// any hit-testing (labelle-engine#852).
+        pub fn getMouseDesign(self: *Game) RenderImpl.ScreenPoint {
+            return screenToDesign(self, Game.Input.getMouseX(), Game.Input.getMouseY());
+        }
+
+        /// The cursor position in the project's **logical** space — the
+        /// same space as `Position` / `setPosition`, with `Game.y_axis`
+        /// applied. This is what axis-aware picking, drag-selection and
+        /// clickable HUD widgets want: compare it directly against an
+        /// entity's `Position`.
+        ///
+        /// Under `.down` this is identical to `getMouseDesign`; under
+        /// `.up` the Y is flipped (`height - design_y`).
+        pub fn getMouseLogical(self: *Game) RenderImpl.ScreenPoint {
+            return screenToLogical(self, Game.Input.getMouseX(), Game.Input.getMouseY());
+        }
+
+        /// Inverse of `screenToDesign`: a design-pixel coordinate back to
+        /// the backend's physical screen space (the space `getMouseX/Y`
+        /// and touch events arrive in).
+        ///
+        /// Forwards to the renderer's `designToPhysical` when the backend
+        /// provides one (bgfx / sokol / wgpu); backends without a
+        /// design/physical distinction get a passthrough, matching
+        /// `screenToDesign`'s own fallback so the two stay exact inverses.
+        pub fn designToScreen(self: *Game, dx: f32, dy: f32) RenderImpl.ScreenPoint {
+            if (comptime @hasDecl(RenderImpl, "designToPhysical")) {
+                const p = self.renderer.designToPhysical(dx, dy);
+                return .{ .x = p.x, .y = p.y };
+            }
+            return .{ .x = dx, .y = dy };
+        }
+
+        /// Inverse of `screenToLogical`: a coordinate in the project's
+        /// logical (`Position`) space back to physical screen pixels.
+        /// Un-applies `Game.y_axis` first, then `designToScreen`.
+        pub fn logicalToScreen(self: *Game, lx: f32, ly: f32) RenderImpl.ScreenPoint {
+            const design_y = core.toScreenY(Game.y_axis, ly, renderScreenHeight(self));
+            return designToScreen(self, lx, design_y);
+        }
+
+        /// The **physical** framebuffer size in backend-native pixels —
+        /// what the backend reported via `setScreenSize`. On a HiDPI /
+        /// Retina display this is a multiple of `designSize`.
+        ///
+        /// `null` when the renderer doesn't report it (a backend with no
+        /// design/physical distinction, or a stub/mock renderer). Callers
+        /// that only need to map coordinates between the two spaces should
+        /// use `screenToDesign` / `designToScreen` instead of deriving a
+        /// ratio from these — those handle letterboxing too, which a bare
+        /// ratio does not.
+        pub fn framebufferSize(self: *Game) ?ScreenSize {
+            if (comptime @hasDecl(RenderImpl, "framebufferSize")) {
+                const s = self.renderer.framebufferSize();
+                return .{ .width = s.width, .height = s.height };
+            }
+            return null;
+        }
+
+        /// The **design** (logical) canvas size — the project's declared
+        /// `.width` / `.height`, the space sprite `Position`s and
+        /// `drawGizmoRectScreen` are expressed in.
+        ///
+        /// `null` when the renderer doesn't report it. See
+        /// `framebufferSize` for the physical counterpart.
+        pub fn designSize(self: *Game) ?ScreenSize {
+            if (comptime @hasDecl(RenderImpl, "designSize")) {
+                const s = self.renderer.designSize();
+                return .{ .width = s.width, .height = s.height };
+            }
+            return null;
         }
 
         /// The screen height the renderer flips against. The renderer owns

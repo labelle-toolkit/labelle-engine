@@ -59,6 +59,11 @@ const editor_command_mixin = @import("game/editor_command_mixin.zig");
 const loop_mixin = @import("game/loop_mixin.zig");
 const fixed_timestep_mixin = @import("game/fixed_timestep_mixin.zig");
 const misc_mixin = @import("game/misc_mixin.zig");
+
+/// Screen dimensions in one explicit coordinate space — see
+/// `Game.framebufferSize` / `Game.designSize` (labelle-engine#852).
+pub const ScreenSize = misc_mixin.ScreenSize;
+
 const animation_runtime_mixin = @import("game/animation_runtime_mixin.zig");
 const animation_def_runtime = @import("animation_def_runtime.zig");
 const prefab_runtime_mixin = @import("game/prefab_runtime_mixin.zig");
@@ -1257,6 +1262,54 @@ pub fn GameConfigWithYAxis(
         /// the comptime `Game.y_axis` constant for callers that prefer an
         /// accessor (RFC §3).
         pub const yAxis = MiscMixin.yAxis;
+
+        // ── Screen coordinate spaces (labelle-engine#852) ────────
+        //
+        // Three spaces are in play, and only two of them are the same on
+        // a 1x display:
+        //
+        //   physical — what `getMouseX/Y` and touch events report. This
+        //              is the BACKEND's own space and it is not uniform:
+        //              bgfx / wgpu / sokol deliver framebuffer pixels
+        //              (2x the window on Retina), raylib / SDL deliver
+        //              logical window points.
+        //   design   — the project's declared `.width`/`.height` canvas,
+        //              after the backend's aspect-fit / letterbox.
+        //   logical  — design with `Game.y_axis` applied; the space of
+        //              `Position` and `setPosition`.
+        //
+        // `screenToDesign` / `screenToLogical` and their inverses
+        // `designToScreen` / `logicalToScreen` are the ONLY portable way
+        // to cross between them — they route through the backend's own
+        // mapping, so they handle both the HiDPI scale and the letterbox
+        // bars. Deriving a ratio from `framebufferSize` / `designSize`
+        // ignores the bars and is wrong whenever the aspect ratios differ.
+
+        /// The cursor in design pixels — `screenToDesign` applied to
+        /// `getMouseX/Y`. Portable across backends and DPIs; prefer it
+        /// (or `getMouseLogical`) over raw `getMouseX/Y` for hit-testing.
+        pub const getMouseDesign = MiscMixin.getMouseDesign;
+
+        /// The cursor in the project's logical (`Position`) space —
+        /// `screenToLogical` applied to `getMouseX/Y`. This is what
+        /// picking / drag-selection / clickable HUD widgets want.
+        pub const getMouseLogical = MiscMixin.getMouseLogical;
+
+        /// Inverse of `screenToDesign`: design pixels → physical screen
+        /// pixels. Passthrough on backends with no design/physical split.
+        pub const designToScreen = MiscMixin.designToScreen;
+
+        /// Inverse of `screenToLogical`: logical (`Position`) space →
+        /// physical screen pixels.
+        pub const logicalToScreen = MiscMixin.logicalToScreen;
+
+        /// The physical framebuffer size in backend-native pixels, or
+        /// `null` when the renderer doesn't report it.
+        pub const framebufferSize = MiscMixin.framebufferSize;
+
+        /// The design (logical) canvas size, or `null` when the renderer
+        /// doesn't report it.
+        pub const designSize = MiscMixin.designSize;
 
         // ── Audio (mixin) ────────────────────────────────────────
         pub const playSound = AudioMixin.playSound;
