@@ -230,6 +230,12 @@ pub fn build(b: *std.Build) void {
         // `yAxis()` accessor + additive `screenToLogical` picking path
         // (RFC §3, Q1→(b), Q3). Raw `screenToDesign` stays unchanged.
         "test/y_axis_test.zig",
+        // #852 — screen coordinate spaces: `getMouseDesign` /
+        // `getMouseLogical` (input mapped out of the backend's own space),
+        // `designToScreen` / `logicalToScreen` (the inverse), and the
+        // `framebufferSize` / `designSize` accessors. Covers a 2x
+        // framebuffer, a 1x one, and a renderer with none of the decls.
+        "test/screen_space_test.zig",
         // labelle-gfx#290 Stage 4 — render-phase custom-mesh seam:
         // `game.drawMesh(...)` forwarding + `SystemRegistry.renderMeshes`
         // plugin render callback (the seam `labelle-spine` submits skinned

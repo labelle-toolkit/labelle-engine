@@ -75,6 +75,11 @@ pub const StderrLogSink = core.StderrLogSink;
 pub const GameWith = game_mod.GameWith;
 pub const Game = game_mod.Game;
 
+/// Screen dimensions in one explicit coordinate space — the return type of
+/// `Game.framebufferSize` (physical pixels) and `Game.designSize` (the
+/// logical canvas). See labelle-engine#852.
+pub const ScreenSize = game_mod.ScreenSize;
+
 // ── Tilemap (T2 Phase 2) ──
 /// Engine built-in `Tilemap` component — references an embedded `.tmx`
 /// asset by name. Reachable on a configured game as `Game.TilemapComp`.
