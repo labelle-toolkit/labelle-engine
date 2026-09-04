@@ -296,6 +296,15 @@ pub fn build(b: *std.Build) void {
         // copy-not-borrow lifetime, the category gate, and the arena reset
         // at `clearGizmos`.
         "test/gizmo_text_test.zig",
+        // #841 (companion to labelle-gfx#343) — collection-of-images
+        // tilesets: one texture per per-tile `<image>` instead of one per
+        // tileset, deduped by `source`, unloaded once each. Drives a
+        // renderer seam shaped like gfx's in BOTH the post-#343 and
+        // pre-#343 shapes rather than the pinned gfx `tilemap` package
+        // (which predates the `tile_images`/`resolveTileFn` fields), so it
+        // needs only the standard core/engine/scene imports — and it pins
+        // that an engine on OLDER gfx keeps full tilemap support.
+        "test/tilemap_collection_test.zig",
     };
 
     for (test_files) |test_file| {
