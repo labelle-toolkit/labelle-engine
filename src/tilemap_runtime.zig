@@ -229,7 +229,17 @@ pub fn Runtime(comptime RenderImpl: type) type {
                 defer allocator.free(ft);
                 // A missing/undecodable tileset image degrades to "this
                 // tileset draws nothing" rather than failing the whole map.
-                ids[i] = renderer.loadTextureFromMemory(ft, bytes) catch null;
+                // But say so: a silent `catch null` made a decode FAILURE
+                // indistinguishable from a tileset that legitimately draws
+                // nothing, which is precisely what hid the dotless
+                // `file_type` bug for as long as it did (#835).
+                ids[i] = renderer.loadTextureFromMemory(ft, bytes) catch |err| blk: {
+                    std.log.warn(
+                        "tilemap: tileset image '{s}' ({s}, {d} bytes) failed to decode: {s} — this tileset will draw nothing",
+                        .{ tileset.image_source, ft, bytes.len, @errorName(err) },
+                    );
+                    break :blk null;
+                };
             }
 
             self.* = .{
@@ -425,13 +435,37 @@ pub fn Runtime(comptime RenderImpl: type) type {
     };
 }
 
-/// Allocator-owned, null-terminated lowercase-ish file-type token derived
-/// from an `image_source` extension (e.g. `"tiles.png"` → `"png"`).
-/// Defaults to `"png"` when there is no extension. Caller frees.
+/// Allocator-owned, null-terminated lowercase file-type token derived from
+/// an `image_source` extension, KEEPING its leading dot (e.g.
+/// `"tiles.png"` → `".png"`). Defaults to `".png"` when there is no
+/// extension. Caller frees.
+///
+/// The dot is load-bearing (#835). labelle-raylib's `decodeImage` forwards
+/// this token straight to raylib's `LoadImageFromMemory`, which dispatches
+/// through a chain of `strcmp(fileType, ".png")` — WITH the dot. A dotless
+/// `"png"` matches no arm, falls out to raylib's "Data format not supported"
+/// warning and returns an EMPTY image, which the caller's `catch null`
+/// then degrades to a silently blank tileset. It stayed invisible because
+/// `decodeImage` returns from its pre-baked `LRGBA` fast path before
+/// `file_type` is ever read (so a baked project never reaches the strcmp),
+/// and labelle-sokol discards the argument entirely (stb_image sniffs the
+/// magic bytes) — leaving raylib + an UNBAKED tileset image as the only
+/// combination that bit.
+///
+/// Dotted is the IMAGE spelling across the toolkit: it is what
+/// labelle-assembler emits for atlases (`loadAtlasFromMemory(…, ".png")`)
+/// and what `registerImageFromMemory` documents. It is deliberately NOT the
+/// sound/font spelling — `labelle-audio/src/decode.zig` dispatches on
+/// `std.mem.eql(u8, file_type, "wav")`, dotless, and the assembler emits an
+/// `extWithoutDot` token for those two kinds. The kinds genuinely differ;
+/// do not "unify" them.
 fn fileTypeZ(allocator: std.mem.Allocator, image_source: []const u8) ![:0]const u8 {
     const dot = std.mem.lastIndexOfScalar(u8, image_source, '.');
-    const ext = if (dot) |d| image_source[d + 1 ..] else "";
-    const chosen = if (ext.len == 0) "png" else ext;
+    // Slice FROM the dot, not past it, so the token keeps its leading dot.
+    // A bare trailing dot (`"tiles."`) carries no extension, so it falls
+    // back the same way a dotless source does.
+    const ext = if (dot) |d| image_source[d..] else "";
+    const chosen = if (ext.len <= 1) ".png" else ext;
     const out = try allocator.dupeZ(u8, chosen);
     // Normalise to lowercase so a `.PNG` tileset resolves the same decoder
     // as `.png` (the image loaders dispatch on a lowercase file type).
