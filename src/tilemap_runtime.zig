@@ -27,6 +27,25 @@
 //! one texture per per-tile `source`, in the flat `tile_ids`. The second is
 //! gated at comptime on gfx carrying labelle-gfx#343; see
 //! `collection_supported` in `Runtime`.
+//!
+//! ## Known gap: tilemap textures do NOT survive surface loss (#847)
+//!
+//! Both passes upload through `RenderImpl.loadTextureFromMemory` — the
+//! RENDERER's entry point, not `Game.loadTextureFromMemoryU32`. Only the
+//! latter retains the file type + bytes in `World.direct_textures`
+//! (`atlas_mixin.retainDirectTexture`), and `surfaceLost` /
+//! `surfaceRestored` re-arm exactly that store (#820). So after an Android
+//! TERM_WINDOW/INIT_WINDOW cycle a tilemap's ids resolve to nothing and its
+//! layers draw blank until the runtime is rebuilt (`acquireTilemap`).
+//!
+//! This is NOT specific to the per-tile textures of a collection tileset:
+//! the sheet upload in pass 1 predates #841 and has always taken the same
+//! direct path, so every tilemap texture is affected identically. Fixing it
+//! is a lifecycle change, not an upload change — `Runtime.deinit` calls
+//! `renderer.unloadTexture` on ids whose backend handles are already dead
+//! by the time `surfaceLost` runs, which is the exact recycled-slot free
+//! #820 exists to prevent — so it belongs to #847, which covers sheet and
+//! per-tile textures together, rather than to either pass here.
 
 const std = @import("std");
 
@@ -472,6 +491,19 @@ pub fn Runtime(comptime RenderImpl: type) type {
             // was dead while every tileset uploaded its own sheet — and that
             // would now be quadratic in the number of per-tile textures a
             // collection map can hold.
+            //
+            // No dedup is owed to a "renderer that caches uploads and hands
+            // the same handle back twice" either. A `TextureId` is minted by
+            // the renderer's REGISTRY — labelle-core's `TextureId` doc is
+            // explicit that it is "NOT derived from any backend value", and
+            // gfx's `mintTextureKey` is a monotonic counter that caches
+            // nothing — so two live uploads can never share one handle: the
+            // second `textures.put` would clobber the first entry and strand
+            // its backend texture. And were a renderer ever to intern
+            // uploads, it would have to refcount them, which makes one
+            // `unloadTexture` per successful `loadTextureFromMemory` the
+            // CORRECT pairing and a dedup here a leak. gfx's `unloadTexture`
+            // is `fetchRemove`-based and idempotent regardless.
             for (self.owned_ids) |id| self.renderer.unloadTexture(id);
             self.map.deinit();
             self.allocator.free(self.tileset_ids);
