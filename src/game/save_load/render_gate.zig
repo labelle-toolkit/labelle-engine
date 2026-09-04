@@ -48,7 +48,14 @@ pub fn Mixin(comptime Game: type) type {
             for (prev) |name| {
                 const e = self.assets.entries.getPtr(name) orelse continue;
                 if (e.loader_kind != .image) continue;
-                self.assets.release(name);
+                // `releaseAsset`, not `assets.release` (engine#821): a
+                // menu → Load A → quit → Load B drops A's pin to 0 here,
+                // the catalog frees the textures, and B's re-acquire below
+                // re-uploads them into the freed slots in completion
+                // order. A bare release left every atlas latched on its
+                // old handle — `bridgeManifest` then saw `AtlasNotPending`
+                // and rooms drew whichever atlas took their slot.
+                self.releaseAsset(name);
             }
         }
 

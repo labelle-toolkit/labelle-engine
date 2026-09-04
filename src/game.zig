@@ -1378,6 +1378,7 @@ pub fn GameConfigWithYAxis(
         pub const pendingSceneName = SceneMixin.pendingSceneName;
         pub const bridgeAllReadyImageAssets = SceneMixin.bridgeAllReadyImageAssets;
         pub const bridgeManifest = SceneMixin.bridgeManifest;
+        pub const releaseAsset = SceneMixin.releaseAsset;
 
         /// Register a runtime JSONC scene by name.
         /// The scene file is loaded from disk when setScene() is called.

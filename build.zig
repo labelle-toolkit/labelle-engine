@@ -110,6 +110,10 @@ pub fn build(b: *std.Build) void {
         "test/font_types_test.zig",
         "test/font_loader_test.zig",
         "test/asset_streaming_shim_test.zig",
+        // #821 — atlas→texture binding integrity across scene swaps and GPU
+        // surface loss: every atlas must rebind to ITS OWN freshly uploaded
+        // texture, never a recycled slot (models the assembler adapter).
+        "test/atlas_surface_crosswire_test.zig",
         // #831 — standalone `.image` load shims: `loadImageFromMemory`
         // blocks so an eager image is drawable on the FIRST frame, which
         // `assets.acquire` alone does not guarantee.
