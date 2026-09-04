@@ -338,3 +338,64 @@ test "repeated loads release the prior manifest — no refcount leak (#638)" {
     try testing.expectEqual(@as(u32, 0), game.assets.entries.getPtr("shared").?.refcount);
     try testing.expectEqual(@as(u32, 0), game.assets.entries.getPtr("b_only").?.refcount);
 }
+
+test "a repeat load whose re-decode FAILS releases the gate at once, not at the deadline (#821)" {
+    // engine#821 blanks an atlas's binding when a release takes its
+    // catalog entry to refcount 0 (`releaseAsset` / the per-tick bridge),
+    // because the texture that binding named has just been destroyed.
+    // That turns a failed RE-decode into a state pass 3 could wait on
+    // forever: the atlas is un-`isLoaded()` and the entry is `.failed`,
+    // so it can never bind. Pass 1 already ships `.failed` as terminal;
+    // pass 3 must too, or the world stays hidden for the full 180-frame
+    // deadline instead of rendering under `asset_failure_policy`
+    // immediately.
+    var game = Game.init(testing.allocator);
+    defer game.deinit();
+
+    const manifest: []const []const u8 = &.{ "characters", "rooms" };
+    try registerPendingImage(&game, "characters");
+    try registerPendingImage(&game, "rooms");
+    enterScene(&game, "main", manifest);
+
+    // A first load bound both atlases (what the bridge does once their
+    // uploads land).
+    try bindAtlas(&game, "characters", 7);
+    try bindAtlas(&game, "rooms", 8);
+
+    // Quit to the menu: the load pin drops `rooms` to refcount 0, its
+    // texture dies and its binding is blanked (the engine#821 behaviour
+    // this test guards).
+    game.releaseAsset("rooms");
+    try testing.expectEqual(@as(u32, 0), game.assets.entries.getPtr("rooms").?.refcount);
+    try testing.expect(!game.atlas_manager.getAtlas("rooms").?.isLoaded());
+
+    // Second load: `rooms` re-decodes and the decode FAILS. The entry is
+    // terminal `.failed` with the error visible to the caller's policy;
+    // the atlas can never bind again.
+    const rooms = game.assets.entries.getPtr("rooms").?;
+    rooms.state = .failed;
+    rooms.last_error = error.TestInjectedFailure;
+    rooms.refcount = 1;
+
+    const frame_before = game.frame_number;
+    game.armPostLoadRenderGate(null);
+
+    // Gate released on the arming frame — the world renders now, with
+    // the failed atlas unbound, exactly as the scene gate ships a failed
+    // asset. NOT at `post_load_render_gate_deadline` frames from now.
+    try testing.expect(game.post_load_render_gate == null);
+    try testing.expectEqual(frame_before, game.frame_number);
+    try testing.expect(!game.atlas_manager.getAtlas("rooms").?.isLoaded());
+    // The failure is still reportable — the gate ships the frame, it does
+    // not swallow the error the policy acts on.
+    try testing.expectEqual(
+        @as(?anyerror, error.TestInjectedFailure),
+        game.assets.lastError("rooms"),
+    );
+
+    // And a later tick keeps it released rather than re-arming on the
+    // never-binding atlas.
+    game.frame_number += 1;
+    game.updatePostLoadRenderGate();
+    try testing.expect(game.post_load_render_gate == null);
+}

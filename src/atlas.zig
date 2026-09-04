@@ -385,11 +385,40 @@ pub const TextureManager = struct {
         self.version += 1;
     }
 
-    /// Promote a pending atlas to "loaded" once the renderer has
-    /// decoded its PNG and returned the actual texture id + dims.
-    /// Called by `Game.loadAtlasIfNeeded` after the renderer call.
-    /// Returns `error.AtlasNotPending` if the atlas was already loaded
-    /// (idempotent caller-side: just check `isLoaded` first).
+    /// Bind a catalog-loaded atlas to the texture the catalog currently
+    /// holds for it. Called by `Game.loadAtlasIfNeeded` after the busy
+    /// pump and by the per-tick / manifest bridges with the catalog
+    /// entry's `resource` handle for THIS asset name.
+    ///
+    /// Two cases bind:
+    ///   * the atlas is `pending` (first load, or re-armed by a surface
+    ///     loss / scene release) — promote it to loaded;
+    ///   * the atlas is already loaded but `texture_id` differs from the
+    ///     handle the catalog now holds for the same asset — REBIND.
+    ///
+    /// The second case is what keys the binding to the asset's identity
+    /// rather than to a one-shot latch (engine#821). The catalog frees an
+    /// image's texture whenever its refcount hits 0 (scene swap, a
+    /// second `loadGameState`, a gate rollback, …) and re-uploads it on
+    /// the next acquire into whichever slot is free — the assembler
+    /// adapter hands out slots lowest-free-first, in decode-completion
+    /// order, so the same atlas routinely comes back under a DIFFERENT
+    /// handle while its old handle is re-issued to a different atlas.
+    /// Before this, the binding survived only if every release site
+    /// remembered to re-arm `pending` (#822 covered the scene-swap
+    /// release; the load-path release did not), and a missed site left
+    /// the atlas latched onto a handle that now resolved to someone
+    /// else's texture: rooms drew hull slices. Now the bridge walk,
+    /// which passes the catalog's CURRENT handle for the name every
+    /// tick, converges the binding on its own — the re-arms are still
+    /// done (they blank the atlas the instant its texture dies instead
+    /// of one tick later) but no longer load-bearing for correctness.
+    ///
+    /// Returns `error.AtlasNotPending` when nothing changed (already
+    /// bound to `texture_id`), so callers can treat it as the routine
+    /// "no-op" it always was. Eager atlases (`loaded_image == null`,
+    /// bound by `loadAtlasFromJson` / `loadAtlasComptime` to a renderer
+    /// texture the catalog does not manage) never rebind here.
     pub fn markPendingLoaded(
         self: *TextureManager,
         name: []const u8,
@@ -397,13 +426,21 @@ pub const TextureManager = struct {
         actual_dims: ?TextureDims,
     ) !void {
         const atlas = self.atlases.getPtr(name) orelse return error.AtlasNotFound;
-        const pending = atlas.pending orelse return error.AtlasNotPending;
+        const image = atlas.pending orelse blk: {
+            // Already loaded. Same handle → genuine no-op. A different
+            // handle from the catalog for the same name → the texture
+            // was re-uploaded behind our back: rebind (see doc above).
+            const retained = atlas.loaded_image orelse return error.AtlasNotPending;
+            if (atlas.texture_id == texture_id) return error.AtlasNotPending;
+            break :blk retained;
+        };
         atlas.texture_id = texture_id;
-        applyTextureScale(atlas, pending.meta, actual_dims);
-        // Retain the pending descriptor so a GPU context loss can re-arm
-        // it (`invalidateUploadedTextures`). The slices it holds are
+        applyTextureScale(atlas, image.meta, actual_dims);
+        // Retain the descriptor so a GPU context loss / scene release
+        // can re-arm it (`invalidateUploadedTextures` /
+        // `invalidateAtlasBinding`). The slices it holds are
         // program-lifetime, so this is just a value copy.
-        atlas.loaded_image = pending;
+        atlas.loaded_image = image;
         atlas.pending = null;
         self.version += 1;
     }
@@ -444,9 +481,15 @@ pub const TextureManager = struct {
     /// else's texture: sprites silently draw the wrong atlas. Re-arming
     /// lets the per-tick bridge rebind a fresh handle exactly like the
     /// surface-loss path does.
+    ///
+    /// Idempotent and cheap when the atlas is already pending — the
+    /// per-tick bridge calls this for every image entry whose catalog
+    /// resource is gone (engine#821), so it must not bump `version`
+    /// (and thereby flush the sprite cache) frame after frame.
     pub fn invalidateAtlasBinding(self: *TextureManager, name: []const u8) void {
         const atlas = self.atlases.getPtr(name) orelse return;
         const retained = atlas.loaded_image orelse return;
+        if (atlas.pending != null and atlas.texture_id == 0) return;
         atlas.texture_id = 0;
         atlas.pending = retained;
         self.version += 1;

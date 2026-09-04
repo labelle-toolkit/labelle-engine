@@ -193,7 +193,7 @@ fn acquireBatch(game: anytype, target_name: []const u8, target_assets: []const [
             // Roll back any prior acquires in this batch.
             for (target_assets) |rb| {
                 if (game.assets.entries.getPtr(rb)) |e| {
-                    if (e.refcount > 0) game.assets.release(rb);
+                    if (e.refcount > 0) releaseAssetImpl(game, rb);
                 }
             }
             return err;
@@ -269,26 +269,38 @@ fn gateOrDefer(
     }
 }
 
+/// Release one catalog reference and, if that was the last one, blank
+/// the atlas binding that pointed at the texture just freed.
+///
+/// engine#821/#822: at refcount 0 the catalog destroys the image's
+/// texture and its slot is up for grabs by the next upload of ANY
+/// asset — the atlas's latched `texture_id` must not survive it, or it
+/// resolves to whichever atlas recycles the slot. Re-arming here (the
+/// mirror of the surface-loss path) blanks the atlas the same frame,
+/// and the per-tick bridge rebinds a fresh handle when the asset's own
+/// upload lands. Assets still referenced elsewhere (a manifest shared
+/// with the incoming scene, a load pin) keep their live binding.
+///
+/// EVERY path that can take an image to refcount 0 must go through
+/// here — the scene-swap release, the load-pin release
+/// (`releaseLoadAcquired`), and the gate rollbacks — which is why it is
+/// a `Game` method rather than a scene-swap local. The bridge's
+/// identity-keyed rebind (`TextureManager.markPendingLoaded`) is the
+/// safety net for any release this does not reach; this is what keeps
+/// the blank-out immediate rather than one tick late.
+fn releaseAssetImpl(game: anytype, asset_name: []const u8) void {
+    game.assets.release(asset_name);
+    const entry = game.assets.entries.getPtr(asset_name) orelse return;
+    if (entry.refcount == 0) {
+        game.atlas_manager.invalidateAtlasBinding(asset_name);
+    }
+}
+
 /// Release every asset in `assets`. Called from the success path
 /// of both `setScene` variants with the outgoing scene's manifest
 /// slice (looked up once by the caller — no second `scenes.get`).
 fn releasePreviousAssets(game: anytype, assets: []const []const u8) void {
-    for (assets) |asset_name| {
-        game.assets.release(asset_name);
-        // engine#821: if that release dropped the asset to refcount 0,
-        // its texture is freed and its catalog slot is up for grabs by
-        // the next scene's uploads — the atlas's latched texture_id
-        // must not survive it. Re-arm the binding (mirror of the
-        // surface-loss path) so the bridge rebinds a fresh handle on
-        // the next upload instead of AtlasNotPending-ing into a stale
-        // id that may now belong to a different atlas. Assets still
-        // referenced (shared with the incoming scene, e.g. the sky
-        // atlases) keep their live binding untouched.
-        const entry = game.assets.entries.getPtr(asset_name) orelse continue;
-        if (entry.refcount == 0) {
-            game.atlas_manager.invalidateAtlasBinding(asset_name);
-        }
-    }
+    for (assets) |asset_name| releaseAssetImpl(game, asset_name);
 }
 
 /// Consults `game.asset_failure_policy` when the manifest gate
@@ -320,7 +332,7 @@ fn handleAssetFailure(game: anytype, caller_tag: []const u8, target_name: []cons
 fn rollbackPendingAssets(game: anytype) void {
     const target_name = game.pending_scene_assets orelse return;
     if (game.scenes.get(target_name)) |entry| {
-        for (entry.assets) |asset_name| game.assets.release(asset_name);
+        for (entry.assets) |asset_name| releaseAssetImpl(game, asset_name);
     }
     game.allocator.free(target_name);
     game.pending_scene_assets = null;
@@ -408,19 +420,32 @@ fn bridgeAllReadyImageAssets_impl(game: anytype) void {
     while (iter.next()) |kv| {
         const entry = kv.value_ptr;
         if (entry.loader_kind != .image) continue;
-        if (entry.state != .ready) continue;
+        if (entry.state != .ready) {
+            // The catalog holds no texture for this asset right now
+            // (freed at refcount 0, dropped by a surface loss, mid
+            // re-decode, failed). Whatever handle the atlas still
+            // carries is dead and its slot may already belong to another
+            // atlas — blank it (engine#821). No-op when already pending,
+            // so the steady state costs nothing; this only catches a
+            // release path that did not go through `releaseAsset`.
+            game.atlas_manager.invalidateAtlasBinding(kv.key_ptr.*);
+            continue;
+        }
         if (isInManifest(gated, kv.key_ptr.*)) continue;
         const resource = entry.resource orelse continue;
         const handle = switch (resource) {
             .image => |t| t,
             else => continue,
         };
-        // Idempotent per-tick walk: AtlasNotPending (already bridged)
-        // and AtlasNotFound are expected and swallowed. Anything else
-        // is a genuine bind failure — surface it rather than letting a
-        // blanket `catch {}` hide it (#697). The guard keeps the normal
-        // per-frame path silent (no log spam), since those two are the
-        // only errors `markPendingLoaded` returns today.
+        // Idempotent per-tick walk: AtlasNotPending (already bound to
+        // this very handle) and AtlasNotFound are expected and swallowed.
+        // A bound atlas whose catalog handle CHANGED (texture freed and
+        // re-uploaded into another slot) is rebound here — that is the
+        // identity-keyed half of the #821 fix, see `markPendingLoaded`.
+        // Anything else is a genuine bind failure — surface it rather
+        // than letting a blanket `catch {}` hide it (#697). The guard
+        // keeps the normal per-frame path silent (no log spam), since
+        // those two are the only errors `markPendingLoaded` returns today.
         game.atlas_manager.markPendingLoaded(kv.key_ptr.*, handle, null) catch |err| {
             if (err != error.AtlasNotPending and err != error.AtlasNotFound) {
                 game.log.err(
@@ -501,6 +526,14 @@ pub fn Mixin(comptime Game: type) type {
         /// pass after all uploads land.
         pub fn bridgeManifest(self: *Game, assets: []const []const u8) void {
             bridgeImageAssetsToAtlasManager(self, assets);
+        }
+
+        /// Drop one catalog reference; at refcount 0 also blank the atlas
+        /// binding whose texture just died (engine#821). The ONE way to
+        /// release an image asset from `Game` code — see `releaseAssetImpl`
+        /// for why every release site must use it.
+        pub fn releaseAsset(self: *Game, name: []const u8) void {
+            releaseAssetImpl(self, name);
         }
 
         /// Register a scene together with its declared asset manifest.
