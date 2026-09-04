@@ -65,7 +65,9 @@ pub fn Mixin(comptime Game: type) type {
         /// Register raw bytes for a tilemap-related embedded asset — the
         /// `.tmx` document itself AND each tileset image it references,
         /// both keyed by their asset name (the `.tmx` file name and each
-        /// tileset's `image_source`). The assembler emits these calls in
+        /// tileset's `image_source`; for a collection-of-images tileset,
+        /// which has no sheet, each per-tile `<image source=…>` instead —
+        /// same key shape, just more keys). The assembler emits these calls in
         /// `init()` for embedded builds (Phase 4); tests register fixtures
         /// directly. `name` is owned (dup'd); `bytes` is a program-lifetime
         /// borrow (`@embedFile`), stored by reference and never freed.

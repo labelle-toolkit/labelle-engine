@@ -580,7 +580,9 @@ pub fn GameConfigWithYAxis(
         embedded_scene_sources: std.StringHashMap([]const u8),
         /// Embedded tilemap-asset bytes (T2 Phase 2), keyed by asset name:
         /// both the `.tmx` documents (looked up by `Tilemap.asset_name`)
-        /// and each tileset image (looked up by its `image_source`). Keys
+        /// and each tileset image (looked up by its `image_source`, or —
+        /// for a collection-of-images tileset, which has no sheet — by each
+        /// per-tile `<image source=…>`; the same key shape either way). Keys
         /// are owned (dup'd); values are program-lifetime `@embedFile`
         /// borrows, never freed by the map. The assembler emits registration
         /// calls in `init()` (Phase 4); see `addEmbeddedTilemapAsset`.

@@ -20,6 +20,13 @@
 //! seam hands them over as unowned. They are freed when the renderer is
 //! deinited (scene teardown / shutdown), so `Runtime.deinit` does not
 //! unload them (see `TileMapRenderer.TextureEntry.owned`).
+//!
+//! Two tileset layouts are served. A **sheet** is one image sliced by a
+//! uniform grid — one texture per tileset, in `tileset_ids`. A **collection
+//! of images** (`columns="0"`) has one `<image>` per `<tile>` and no sheet —
+//! one texture per per-tile `source`, in the flat `tile_ids`. The second is
+//! gated at comptime on gfx carrying labelle-gfx#343; see
+//! `collection_supported` in `Runtime`.
 
 const std = @import("std");
 
@@ -144,6 +151,34 @@ pub fn Runtime(comptime RenderImpl: type) type {
     const ResolveRet = @typeInfo(@typeInfo(ResolveFnPtr).pointer.child).@"fn".return_type.?;
     const Texture = @typeInfo(ResolveRet).optional.child;
 
+    // ── Collection-of-images tilesets (#841 / labelle-gfx#343) ──────────
+    //
+    // A Tiled "collection of images" tileset has NO sheet: each `<tile>`
+    // carries its own `<image>`, so one tileset needs N textures rather
+    // than one. gfx grows `Tileset.tile_images` (a `[]const TileImage`)
+    // and an OPTIONAL `TextureResolver.resolveTileFn` for it.
+    //
+    // The gate is a pair of `@hasField` checks on the two shapes this
+    // module actually reflects — deliberately NOT a new clause in
+    // `hasReflectableSeam` (and therefore not in `supported()`). An engine
+    // built against an OLDER gfx must keep its tilemaps: widening
+    // `supported()` would make every such build report the whole tilemap
+    // feature as absent (`void` side table, no `.tmx` renders at all)
+    // rather than merely losing collection support, which is the strictly
+    // additive degrade this is meant to be. Older gfx therefore still
+    // compiles, still draws sheet tilesets, and skips collection ones
+    // exactly as it does today.
+    const collection_supported = @hasField(Tileset, "tile_images") and
+        @hasField(Resolver, "resolveTileFn");
+
+    // Element of `Tileset.tile_images` — gfx's `TileImage` (`local_id`,
+    // `source`, `width`, `height`). `void` when gfx predates #343; the
+    // branch is comptime-dead there and never analyzed.
+    const TileImage = if (collection_supported)
+        @typeInfo(@FieldType(Tileset, "tile_images")).pointer.child
+    else
+        void;
+
     return struct {
         const Self = @This();
 
@@ -158,7 +193,30 @@ pub fn Runtime(comptime RenderImpl: type) type {
         tm: TmRenderer,
         /// Per-tileset catalog texture id (null = image unresolved →
         /// that tileset draws nothing). Read by the resolver trampoline.
+        /// SHEET tilesets only — a collection tileset has no sheet and its
+        /// slot stays null.
         tileset_ids: []?TextureId,
+        /// Per-TILE catalog texture ids for collection-of-images tilesets
+        /// (#841), FLAT and index-addressed: tileset `i`'s image `j` lives
+        /// at `tile_ids[tile_offsets[i] + j]`. Flat because gfx hands the
+        /// resolver `(tileset_index, image_index)` directly, so one
+        /// allocation covers the whole map and lookup is two loads — no
+        /// slice-of-slices, no hash map on the draw path. Empty when gfx
+        /// predates labelle-gfx#343 or the map holds no collection tileset.
+        tile_ids: []?TextureId,
+        /// Start of each tileset's run inside `tile_ids`; length
+        /// `tilesets.len + 1`, so tileset `i` owns
+        /// `tile_ids[tile_offsets[i]..tile_offsets[i + 1]]`. Empty
+        /// alongside `tile_ids`.
+        tile_offsets: []usize,
+        /// Every texture id this runtime UPLOADED, each exactly once — the
+        /// unload list. Distinct from `tileset_ids`/`tile_ids`, which are
+        /// lookup tables and may repeat an id (several tiles sharing one
+        /// `source` share one texture). Unloading a shared id twice is a
+        /// use-after-free, so ownership is tracked here and nowhere else,
+        /// which also makes `deinit` O(n) instead of the O(n²) dedup scan
+        /// it replaces.
+        owned_ids: []TextureId,
         /// Resolver context, stored inline so its address is heap-stable
         /// (matches the `Game`-heap-allocated `Runtime`). gfx resolves
         /// textures eagerly inside `initWithOptions` today — but keeping
@@ -170,6 +228,8 @@ pub fn Runtime(comptime RenderImpl: type) type {
         const ResolverCtx = struct {
             renderer: *RenderImpl,
             ids: []const ?TextureId,
+            tile_ids: []const ?TextureId = &.{},
+            tile_offsets: []const usize = &.{},
         };
 
         fn resolveTexture(context: ?*anyopaque, index: usize, tileset: *const Tileset) ?Texture {
@@ -177,6 +237,38 @@ pub fn Runtime(comptime RenderImpl: type) type {
             const ctx: *const ResolverCtx = @ptrCast(@alignCast(context.?));
             if (index >= ctx.ids.len) return null;
             const id = ctx.ids[index] orelse return null;
+            const info = ctx.renderer.getTextureInfo(id) orelse return null;
+            return info.backend_texture;
+        }
+
+        /// Per-tile counterpart of `resolveTexture` (#841): answers gfx's
+        /// `TextureResolver.resolveTileFn` for a collection-of-images
+        /// tileset. Only ever installed when `collection_supported`.
+        ///
+        /// Like `resolveTexture` this calls `getTextureInfo` at RUNTIME
+        /// only — the wrapper's return type references its `self`
+        /// parameter, which makes it a GENERIC function whose
+        /// `return_type` reflects as `null`; reflecting it is the
+        /// v1.75.1 null-backend regression (see `hasReflectableSeam`).
+        /// The trampoline exists precisely so the id → `Texture`
+        /// conversion stays behind a call rather than a type derivation.
+        fn resolveTileTexture(
+            context: ?*anyopaque,
+            tileset_index: usize,
+            tileset: *const Tileset,
+            image_index: usize,
+            image: *const TileImage,
+        ) ?Texture {
+            _ = tileset;
+            _ = image;
+            const ctx: *const ResolverCtx = @ptrCast(@alignCast(context.?));
+            // `tile_offsets` is empty for a map with no collection tileset
+            // (and on older gfx), so the bound check covers both.
+            if (tileset_index + 1 >= ctx.tile_offsets.len) return null;
+            const base = ctx.tile_offsets[tileset_index];
+            const end = ctx.tile_offsets[tileset_index + 1];
+            if (image_index >= end - base) return null;
+            const id = ctx.tile_ids[base + image_index] orelse return null;
             const info = ctx.renderer.getTextureInfo(id) orelse return null;
             return info.backend_texture;
         }
@@ -222,6 +314,28 @@ pub fn Runtime(comptime RenderImpl: type) type {
             errdefer allocator.free(ids);
             for (ids) |*slot| slot.* = null;
 
+            // Total per-tile images across the map — 0 for a sheet-only map
+            // (and on gfx without #343), which keeps every allocation and
+            // loop below a no-op on the sheet path.
+            const tile_total: usize = if (comptime collection_supported) blk: {
+                var n: usize = 0;
+                for (map.tilesets) |*tileset| n += tileset.tile_images.len;
+                break :blk n;
+            } else 0;
+
+            // The unload list (see `owned_ids`). Capacity is reserved up
+            // front — one sheet per tileset plus every per-tile image — so
+            // no append inside the upload loops can fail after a texture is
+            // already on the GPU.
+            var owned: std.ArrayList(TextureId) = .empty;
+            errdefer owned.deinit(allocator);
+            try owned.ensureTotalCapacity(allocator, map.tilesets.len + tile_total);
+            // Every texture uploaded so far is released if a LATER step
+            // fails; without this the map's textures would outlive the
+            // half-built runtime that owns them.
+            errdefer for (owned.items) |id| renderer.unloadTexture(id);
+
+            // ── Pass 1: one sheet texture per tileset (unchanged) ───────
             for (map.tilesets, 0..) |*tileset, i| {
                 if (tileset.image_source.len == 0) continue;
                 const bytes = images.get(tileset.image_source) orelse continue;
@@ -240,6 +354,72 @@ pub fn Runtime(comptime RenderImpl: type) type {
                     );
                     break :blk null;
                 };
+                if (ids[i]) |id| owned.appendAssumeCapacity(id);
+            }
+
+            // ── Pass 2: one texture per per-tile image (#841) ───────────
+            //
+            // Deduplicated by `source`, and that is CORRECTNESS, not an
+            // optimisation: gfx's `recordTexture` mints a fresh key on
+            // every call and caches nothing, so N tiles naming one image
+            // would become N GPU textures — and the ids would then all be
+            // distinct, so `deinit` would unload the same image N times.
+            // The map is init-time scaffolding only; the draw path reads
+            // the flat `tile_ids` array.
+            var tile_ids: []?TextureId = &.{};
+            var tile_offsets: []usize = &.{};
+            if (comptime collection_supported) {
+                tile_offsets = try allocator.alloc(usize, map.tilesets.len + 1);
+                errdefer allocator.free(tile_offsets);
+                tile_ids = try allocator.alloc(?TextureId, tile_total);
+                errdefer allocator.free(tile_ids);
+
+                var by_source = std.StringHashMap(TextureId).init(allocator);
+                defer by_source.deinit();
+                try by_source.ensureTotalCapacity(@intCast(tile_total));
+
+                var cursor: usize = 0;
+                for (map.tilesets, 0..) |*tileset, i| {
+                    tile_offsets[i] = cursor;
+                    for (tileset.tile_images) |*image| {
+                        defer cursor += 1;
+                        tile_ids[cursor] = null;
+                        if (image.source.len == 0) continue;
+                        if (by_source.get(image.source)) |shared| {
+                            tile_ids[cursor] = shared;
+                            continue;
+                        }
+                        const bytes = images.get(image.source) orelse continue;
+                        const ft = try fileTypeZ(allocator, image.source);
+                        defer allocator.free(ft);
+                        // Same degrade-don't-fail contract as a sheet: an
+                        // unresolvable tile image draws nothing, the rest
+                        // of the map still renders.
+                        const id = renderer.loadTextureFromMemory(ft, bytes) catch |err| {
+                            std.log.warn(
+                                "tilemap: tile image '{s}' ({s}, {d} bytes) failed to decode: {s} — this tile will draw nothing",
+                                .{ image.source, ft, bytes.len, @errorName(err) },
+                            );
+                            continue;
+                        };
+                        tile_ids[cursor] = id;
+                        owned.appendAssumeCapacity(id);
+                        // Keyed by the `source` slice, which the decoded
+                        // `TileMap` owns and outlives this init.
+                        by_source.putAssumeCapacity(image.source, id);
+                    }
+                }
+                tile_offsets[map.tilesets.len] = cursor;
+            }
+            errdefer allocator.free(tile_offsets);
+            errdefer allocator.free(tile_ids);
+
+            // `toOwnedSlice` empties `owned`, so the unload errdefer above
+            // no longer covers these ids — carry the same guarantee over.
+            const owned_ids = try owned.toOwnedSlice(allocator);
+            errdefer {
+                for (owned_ids) |id| renderer.unloadTexture(id);
+                allocator.free(owned_ids);
             }
 
             self.* = .{
@@ -248,14 +428,26 @@ pub fn Runtime(comptime RenderImpl: type) type {
                 .map = map,
                 .tm = undefined,
                 .tileset_ids = ids,
+                .tile_ids = tile_ids,
+                .tile_offsets = tile_offsets,
+                .owned_ids = owned_ids,
                 .resolver_ctx = undefined,
             };
 
             // Point the resolver at the heap-stable field (not a stack local),
             // so the context outlives `initInPlace` for any resolution timing.
-            self.resolver_ctx = .{ .renderer = renderer, .ids = self.tileset_ids };
+            self.resolver_ctx = .{
+                .renderer = renderer,
+                .ids = self.tileset_ids,
+                .tile_ids = self.tile_ids,
+                .tile_offsets = self.tile_offsets,
+            };
+            var resolver = Resolver{ .context = &self.resolver_ctx, .resolveFn = resolveTexture };
+            // Additive: `resolveTileFn` does not exist on gfx before #343,
+            // and a resolver that leaves it null behaves exactly as today.
+            if (comptime collection_supported) resolver.resolveTileFn = resolveTileTexture;
             self.tm = try TmRenderer.initWithOptions(allocator, &self.map, .{
-                .resolver = Resolver{ .context = &self.resolver_ctx, .resolveFn = resolveTexture },
+                .resolver = resolver,
                 // Embedded env: never touch the filesystem for unresolved
                 // tilesets — the resolver is the only texture source.
                 .load_unresolved_from_filesystem = false,
@@ -267,23 +459,19 @@ pub fn Runtime(comptime RenderImpl: type) type {
             // Release the tileset textures this runtime uploaded (F1). gfx
             // received them through the resolver as UNOWNED, so `tm.deinit`
             // does NOT free them — the runtime that uploaded them owns them.
-            // Dedup so a tileset id that (in a future engine that dedups
-            // uploads by content) backs two tilesets is never double-unloaded.
-            for (self.tileset_ids, 0..) |maybe_id, i| {
-                const id = maybe_id orelse continue;
-                var already = false;
-                for (self.tileset_ids[0..i]) |prev| {
-                    if (prev) |p| {
-                        if (p == id) {
-                            already = true;
-                            break;
-                        }
-                    }
-                }
-                if (!already) self.renderer.unloadTexture(id);
-            }
+            //
+            // `owned_ids` already holds each uploaded id EXACTLY ONCE (init
+            // dedups per-tile images by `source`), so this is a flat O(n)
+            // walk. It replaces an O(n²) dedup scan over `tileset_ids` that
+            // was dead while every tileset uploaded its own sheet — and that
+            // would now be quadratic in the number of per-tile textures a
+            // collection map can hold.
+            for (self.owned_ids) |id| self.renderer.unloadTexture(id);
             self.map.deinit();
             self.allocator.free(self.tileset_ids);
+            self.allocator.free(self.tile_ids);
+            self.allocator.free(self.tile_offsets);
+            self.allocator.free(self.owned_ids);
         }
 
         /// The map's height in pixels (`tile_height * rows`). Used by the
