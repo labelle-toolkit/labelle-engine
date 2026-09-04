@@ -482,6 +482,20 @@ pub fn GameConfigWithYAxis(
             renderer: RenderImpl,
             sprite_cache: atlas_mod.SpriteCache,
             nested_entity_arena: std.heap.ArenaAllocator,
+            /// Direct `loadTextureFromMemory` uploads retained for a GPU
+            /// surface restore (#820): renderer texture id → an owned copy
+            /// of the bytes it was decoded from.
+            ///
+            /// PER-WORLD, not per-Game, because the texture registry it
+            /// keys into is per-world: every `World` owns its own
+            /// `renderer`, each minting ids from the same base — so world A
+            /// and world B routinely hand out the SAME `u32`. A game-global
+            /// map would let a load/unload in B replace or free A's entry,
+            /// and a surface cycle while B is active would re-upload A's
+            /// bytes through B's renderer, clobbering an unrelated texture.
+            /// Living here, the retention travels with the renderer it
+            /// belongs to and is torn down with the world.
+            direct_textures: atlas_mixin.DirectTextureStore = .empty,
             /// Retained so `deinit` can free heap-owning components (the
             /// `ChildrenComponent` ArrayLists) before the ECS is torn down —
             /// the backend drops components by value with no destructor.
@@ -498,6 +512,9 @@ pub fn GameConfigWithYAxis(
             }
 
             pub fn deinit(self: *World) void {
+                // Retained direct uploads (#820) — the CPU copies; their
+                // GPU side goes with `self.renderer.deinit()` below.
+                AtlasMixin.freeWorldDirectTextures(self);
                 // Free every `ChildrenComponent`'s backing allocation before
                 // the ECS wipe drops the components by value (no destructor)
                 // — otherwise the child lists leak on final teardown.
@@ -1625,6 +1642,16 @@ pub fn GameConfigWithYAxis(
         /// without the seam, so this stays callable against any gfx instead of
         /// turning a graceful degrade into a compile error.
         pub const unloadTexture = AtlasMixin.unloadTexture;
+
+        /// True when the renderer can re-arm a minted texture key across a
+        /// surface loss (gfx >= 1.31: `invalidateTexture` +
+        /// `reuploadTextureFromMemory` on `GfxRenderer`). Governs whether
+        /// `loadTextureFromMemory` retains its bytes for `surfaceRestored`
+        /// (#820). False → the v2.13.0 contract: direct uploads die with the
+        /// surface and the game owns their lifecycle.
+        pub const tracks_direct_uploads = AtlasMixin.tracks_direct_uploads;
+        pub const invalidateDirectTextures = AtlasMixin.invalidateDirectTextures;
+        pub const reuploadDirectTextures = AtlasMixin.reuploadDirectTextures;
 
         // ── Standalone image asset shims (#831) ──
         //

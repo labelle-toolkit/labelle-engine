@@ -607,11 +607,27 @@ pub const Events = struct {
     // loss until after restore, so a buffered emit would only drain once
     // the new surface was already up — too late to release anything.
     //
-    // Contract for GPU objects the engine does not track — textures
-    // uploaded straight through `game.loadTextureFromMemory`, textures
-    // lent to a GUI bridge by backend handle: they DIE with the surface.
-    // Release them in an `engine__surface_lost` hook (handles are still
-    // alive there — `game.unloadTexture` is safe) and re-create them after
+    // What the engine carries across the gap by itself: the catalog's
+    // assets, its own UI fonts, and — when the renderer has gfx's re-arm
+    // seam (`Game.tracks_direct_uploads`, gfx >= 1.31) — every DIRECT
+    // `game.loadTextureFromMemory` upload, re-uploaded under the SAME
+    // `u32` before `surface_restored` is delivered. A game holding such an
+    // id has nothing to do on either event.
+    //
+    // What it cannot carry: anything derived from a texture by BACKEND
+    // handle and lent elsewhere — a `game.nativeTextureId` → bgfx handle
+    // registered with the imgui bridge, say. The re-upload puts a new
+    // backend texture behind the engine id, so the lend goes stale:
+    // unregister it in `engine__surface_lost` (the bridge clears borrowed
+    // slots itself on device loss; a stale registration may later name its
+    // recycled font slot) and re-resolve + re-register after
+    // `engine__surface_restored`. Do NOT `game.unloadTexture` the engine id
+    // on loss — that forfeits the tracking.
+    //
+    // Without the seam (`tracks_direct_uploads == false`) the v2.13.0
+    // contract stands: direct uploads DIE with the surface. Release them
+    // in an `engine__surface_lost` hook (handles are still alive there —
+    // `game.unloadTexture` is safe) and re-create them after
     // `engine__surface_restored`. Never release through a handle after
     // restore: the backend recycles handle slots, so a stale handle now
     // names one of the catalog's freshly re-uploaded textures.
@@ -625,8 +641,9 @@ pub const Events = struct {
     /// Fired after the GPU surface is restored and the engine has run its
     /// own re-upload pass: the catalog's GPU-resident assets are
     /// re-enqueued and pumped towards `.ready` (BOUNDED, so a wedged decode
-    /// cannot hang the restore — a slow tail finishes over the next ticks)
-    /// and the engine's UI fonts are re-uploaded. Delivered synchronously,
+    /// cannot hang the restore — a slow tail finishes over the next ticks),
+    /// the engine's UI fonts are re-uploaded, and every tracked direct
+    /// upload is back under its original id. Delivered synchronously,
     /// before the first restored frame draws. The guarantee a hook gets is
     /// a LIVE GPU context to re-create its own objects against — not that
     /// every catalog asset is already resident.

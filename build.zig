@@ -151,6 +151,10 @@ pub fn build(b: *std.Build) void {
         // the buffered event path so flows can listen to lifecycle
         // hooks as Event-node variants.
         "test/engine_events_test.zig",
+        // #820 — direct `loadTextureFromMemory` uploads carried across a
+        // GPU surface loss under their original ids (retain / invalidate /
+        // re-upload / free), gated on the gfx re-arm seam.
+        "test/direct_upload_lifecycle_test.zig",
         // labelle-gui#208 — engine-hosted input events scanned in
         // `Game.tick` through the unified `InputInterface`, dual-emitted
         // on the buffered event path so flows can listen via `OnEvent`.
