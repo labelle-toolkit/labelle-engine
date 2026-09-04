@@ -149,6 +149,9 @@ const fake_png = "\x89PNG\r\n\x1a\n fake pixels";
 
 var upload_count: usize = 0;
 var unloads: std.ArrayList(u32) = .empty;
+/// The `file_type` handed to the backend for each upload, in order. A real
+/// backend dispatches its decoder on this, so a wrong one renders blank.
+var file_types: std.ArrayList([]const u8) = .empty;
 
 /// Frees the ledger AND resets it for the next test. Registered as the
 /// FIRST `defer` in each test so it runs LAST — after `game.deinit()`,
@@ -156,6 +159,9 @@ var unloads: std.ArrayList(u32) = .empty;
 fn clearLedger() void {
     unloads.deinit(testing.allocator);
     unloads = .empty;
+    for (file_types.items) |ft| testing.allocator.free(ft);
+    file_types.deinit(testing.allocator);
+    file_types = .empty;
     upload_count = 0;
 }
 
@@ -553,8 +559,10 @@ fn FakeRender(comptime with_collection: bool) type {
         }
 
         pub fn loadTextureFromMemory(self: *Self, file_type: [:0]const u8, data: []const u8) !u32 {
-            _ = file_type;
             _ = data;
+            // Copied: the caller frees `ft` as soon as this returns.
+            const kept = testing.allocator.dupe(u8, file_type) catch @panic("OOM");
+            file_types.append(testing.allocator, kept) catch @panic("OOM");
             const id = self.next_id;
             self.next_id += 1;
             try self.live.put(self.alloc, id, {});
@@ -936,4 +944,59 @@ test "parseTmx frees what it took at EVERY allocation failure point" {
         parseThenFree,
         .{mixed_tmx},
     );
+}
+
+/// A collection tileset whose images live in a DOTTED directory and whose
+/// basenames carry no extension — the shape that made `fileTypeZ` return
+/// the directory suffix instead of falling back. The sheet tileset shares
+/// the same helper, so it pins both call sites at once.
+const dotted_dir_tmx =
+    \\<?xml version="1.0" encoding="UTF-8"?>
+    \\<map version="1.10" orientation="orthogonal" width="2" height="1" tilewidth="16" tileheight="16">
+    \\ <tileset firstgid="1" name="terrain" tilewidth="16" tileheight="16" columns="4" tilecount="4">
+    \\  <image source="packs.v2/terrain" width="64" height="16"/>
+    \\ </tileset>
+    \\ <tileset firstgid="5" name="props" tilewidth="16" tileheight="16" columns="0" tilecount="2">
+    \\  <tile id="0">
+    \\   <image source="props.v2/tree" width="16" height="16"/>
+    \\  </tile>
+    \\  <tile id="1">
+    \\   <image source="props.v2/rock.PNG" width="16" height="16"/>
+    \\  </tile>
+    \\ </tileset>
+    \\ <layer name="ground" width="2" height="1">
+    \\  <data encoding="csv">
+    \\1,5,
+    \\</data>
+    \\ </layer>
+    \\</map>
+;
+
+test "a dot in the DIRECTORY is not an extension" {
+    defer clearLedger();
+
+    var game = ModernGame.init(testing.allocator);
+    defer game.deinit();
+    try game.addEmbeddedTilemapAsset("level.tmx", dotted_dir_tmx);
+    try game.addEmbeddedTilemapAsset("packs.v2/terrain", fake_png);
+    try game.addEmbeddedTilemapAsset("props.v2/tree", fake_png);
+    try game.addEmbeddedTilemapAsset("props.v2/rock.PNG", fake_png);
+
+    const e = game.createEntity();
+    game.addTilemap(e, .{ .asset_name = "level.tmx" });
+    const rt = game.tilemapRuntime(e) orelse return error.NoTilemapRuntime;
+
+    // Every image uploaded — none rejected for an unusable file type.
+    try testing.expectEqual(@as(usize, 3), upload_count);
+    try testing.expect(rt.tileset_ids[0] != null);
+    for (rt.tile_ids) |id| try testing.expect(id != null);
+
+    // The sheet (pass 1) and the extensionless tile both fall back to
+    // `.png`; the `.PNG` tile keeps its real extension, lowercased.
+    // Taking the last dot of the whole path would have produced
+    // `.v2/terrain` and `.v2/tree` here.
+    try testing.expectEqual(@as(usize, 3), file_types.items.len);
+    try testing.expectEqualStrings(".png", file_types.items[0]);
+    try testing.expectEqualStrings(".png", file_types.items[1]);
+    try testing.expectEqualStrings(".png", file_types.items[2]);
 }

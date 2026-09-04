@@ -686,11 +686,18 @@ pub fn Runtime(comptime RenderImpl: type) type {
 /// `extWithoutDot` token for those two kinds. The kinds genuinely differ;
 /// do not "unify" them.
 fn fileTypeZ(allocator: std.mem.Allocator, image_source: []const u8) ![:0]const u8 {
-    const dot = std.mem.lastIndexOfScalar(u8, image_source, '.');
+    // Scan the BASENAME only. A dot in a DIRECTORY (`props.v2/tree`) is not
+    // an extension, and taking the last dot of the whole path would hand the
+    // backend `.v2/tree` — rejected, tile blank — instead of the documented
+    // `.png` fallback. TMX sources are `/`-separated, but a hand-written one
+    // on Windows can arrive with `\\`, so both separators end the search.
+    const sep = std.mem.lastIndexOfAny(u8, image_source, "/\\");
+    const base = if (sep) |i| image_source[i + 1 ..] else image_source;
+    const dot = std.mem.lastIndexOfScalar(u8, base, '.');
     // Slice FROM the dot, not past it, so the token keeps its leading dot.
     // A bare trailing dot (`"tiles."`) carries no extension, so it falls
     // back the same way a dotless source does.
-    const ext = if (dot) |d| image_source[d..] else "";
+    const ext = if (dot) |d| base[d..] else "";
     const chosen = if (ext.len <= 1) ".png" else ext;
     const out = try allocator.dupeZ(u8, chosen);
     // Normalise to lowercase so a `.PNG` tileset resolves the same decoder
