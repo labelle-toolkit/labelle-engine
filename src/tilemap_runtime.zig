@@ -542,6 +542,29 @@ pub fn Runtime(comptime RenderImpl: type) type {
             });
         }
 
+        /// Advance this map's per-tile animations by `dt` SECONDS
+        /// (labelle-gfx#351): Tiled's `<tile><animation>` — water,
+        /// shorelines, torches, waterfalls.
+        ///
+        /// gfx's tilemap renderer deliberately owns NO clock, so nothing
+        /// animates unless a caller ticks it; `Game.tick` does, on the same
+        /// time-scaled dt the sprite and particle ticks use, which is what
+        /// makes a paused game's water stand still.
+        ///
+        /// Gated on the decl, like every other cross-repo seam here: an
+        /// engine built against a gfx WITHOUT `advanceAnimations` compiles
+        /// unchanged and this is a no-op — tilemaps keep rendering, they
+        /// just don't animate. Purely additive.
+        pub fn advanceAnimations(self: *Self, dt: f32) void {
+            if (comptime !@hasDecl(TmRenderer, "advanceAnimations")) return;
+            self.tm.advanceAnimations(dt);
+        }
+
+        /// Whether gfx exposes the animation tick at all — i.e. whether
+        /// `advanceAnimations` does anything. Comptime; lets the frame tick
+        /// fold the whole walk away on an older gfx.
+        pub const animations_supported = @hasDecl(TmRenderer, "advanceAnimations");
+
         /// Number of `.tmx` tile layers in this map (T3 Z-interleave). The
         /// engine iterates these to resolve each layer's engine-layer
         /// binding without naming gfx's `TileLayer` type directly.

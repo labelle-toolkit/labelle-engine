@@ -56,6 +56,15 @@ pub fn Mixin(comptime Game: type) type {
         break :blk @hasDecl(Game.CameraType, "getViewport");
     };
 
+    // Whether the per-tile animation tick is available end to end: the
+    // tilemap seam exists AND the gfx behind it ships `advanceAnimations`
+    // (labelle-gfx#351). A `blk` rather than a flat `and` because `Runtime`
+    // is `void` when the seam is absent, and `void` has no decls to read.
+    const anim_tick_supported = blk: {
+        if (!supported) break :blk false;
+        break :blk Runtime.animations_supported;
+    };
+
     // World-unit margin added on every side of the per-camera cull rect so a
     // tile straddling the viewport edge is never clipped (mirrors the
     // renderer's own `cull_margin` for sprite viewport culling).
@@ -223,6 +232,35 @@ pub fn Mixin(comptime Game: type) type {
                 const off = tilemapWorldOffset(self, entity, rt);
                 rt.draw(0, 0, off.x, off.y, null, null);
             }
+        }
+
+        /// Advance every live tilemap's per-tile animations by `dt`
+        /// (labelle-gfx#351) — Tiled's `<tile><animation>`: water,
+        /// shorelines, torches, waterfalls.
+        ///
+        /// Called once per frame from `loop_mixin.tick`, on the SAME
+        /// time-scaled dt `sprite_animation_tick` and `particles_tick`
+        /// take, so a pause or a slowed time-scale reaches tilemap
+        /// animation exactly as it reaches sprite animation. gfx's tilemap
+        /// renderer owns no clock of its own — this call IS its clock.
+        ///
+        /// Costs nothing when there is nothing to do: it folds away
+        /// entirely at comptime without the tilemap seam or without gfx's
+        /// `advanceAnimations`, and returns on an empty table otherwise.
+        /// A map that declares no `<animation>` then makes gfx's own tick
+        /// an early return, so a tilemap game without animated tiles pays
+        /// one call per map per frame and nothing more.
+        ///
+        /// Deliberately NOT part of the render pass: state advances once a
+        /// frame, while the render pass can run several times per frame
+        /// (once per active camera under split-screen), which would make
+        /// the water run N× faster on a two-player screen.
+        pub fn tickTilemapAnimations(self: *Game, dt: f32) void {
+            if (comptime !anim_tick_supported) return;
+            if (self.tilemaps.count() == 0) return;
+
+            var it = self.tilemaps.iterator();
+            while (it.next()) |e| e.value_ptr.*.advanceAnimations(dt);
         }
 
         /// The map's world-space draw offset for `entity` (T2/T3). `x` is
