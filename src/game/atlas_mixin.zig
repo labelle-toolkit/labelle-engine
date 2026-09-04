@@ -372,70 +372,46 @@ pub fn Mixin(comptime Game: type) type {
             const atlas = self.atlas_manager.getAtlasMut(name) orelse return error.AtlasNotFound;
             if (atlas.isLoaded()) return false;
 
-            // Bump refcount on the catalog. First acquire on a fresh
-            // entry enqueues the decode; subsequent acquires just pin
-            // the refcount so the zombie-drop path in `pump()` can't
-            // rewind us while we are waiting for the upload to land.
+            // The blocking wait is `loadAssetIfNeededInternal` — the SAME
+            // loop `loadImageIfNeeded` / `loadSoundIfNeeded` /
+            // `loadFontIfNeeded` block on (#833).
             //
-            // `errdefer release` guarantees the shim returns the
-            // refcount on every failure path (lastError, missing
-            // entry, wrong asset kind, markPendingLoaded error, …).
-            // Without it, a failed load leaks a phantom refcount that
-            // keeps the entry acquired forever — and since `acquire`
-            // only re-enqueues on the 0→1 transition, a retry after
-            // failure would just bump the leak without re-triggering
-            // a decode.
-            _ = try self.assets.acquire(name);
-            // Mirror of the acquire above. Runs on any error path so
-            // the catalog refcount stays consistent. On the happy path
-            // — when `markPendingLoaded` succeeds and we `return true`
-            // — the defer does NOT fire, intentionally leaving the
-            // refcount at 1 to keep the loaded entry pinned in the
-            // catalog (prevents the zombie-drop path from rewinding
+            // It used to be an inline copy here, and that duplication is
+            // precisely how #832's three fixes landed on one loop and not
+            // the other: the ring-full `error.AssetDecodeNotQueued` guard,
+            // the surface-loss `error.GpuSurfaceUnavailable` guard, and
+            // "the `.failed` → `.registered` rewind belongs to the FINAL
+            // `release`, not to the waiter". Atlases are the most-used
+            // resource kind, so the copy that inherited none of them was
+            // also the one most likely to hang a real game. There is now
+            // one wait implementation.
+            //
+            // What stays here is what the shared helper has no business
+            // knowing: the TextureManager's own loaded/pending state
+            // (checked above) and the catalog-handle → `RuntimeAtlas`
+            // bridge (below).
+            const did_load = try loadAssetIfNeededInternal(self, name);
+            if (!did_load) {
+                // The one path where the helper returns WITHOUT acquiring:
+                // the catalog entry was already `.ready` while the atlas
+                // manager still had it pending (a scene manifest acquired
+                // and pumped it, nothing bridged it yet). Take the
+                // reference here so the pin below is unconditional — the
+                // handle we are about to hand `markPendingLoaded` must not
+                // be freed under the atlas manager by an unrelated
+                // holder's `release`.
+                _ = try self.assets.acquire(name);
+            }
+            // Mirror of the acquire the helper (or the branch above) took.
+            // It covers the BRIDGING failures below — `AssetNotReady`,
+            // `WrongAssetKind`, a `markPendingLoaded` error — which happen
+            // after the helper's own `errdefer` has already gone out of
+            // scope. On the happy path it does NOT fire, intentionally
+            // leaving the refcount at 1 to keep the loaded entry pinned in
+            // the catalog (prevents `pump`'s zombie-drop path from rewinding
             // the state back to `.registered` if Phase 2 ever calls
             // `release` for an unrelated scene transition).
             errdefer self.assets.release(name);
-
-            // Busy-pump until the decode + upload complete OR the
-            // catalog surfaces an error via `lastError`. Same-thread
-            // async-under-the-hood, sync-at-the-surface: no visible
-            // UX change from the legacy path that called
-            // `renderer.loadTextureFromMemory` directly on the main
-            // thread.
-            //
-            // Known limitation (pre-existing from #450's acquire
-            // design): if the request ring was full when `acquire`
-            // fired, the work request is dropped, state stays
-            // `.registered`, refcount is bumped, and neither `pump()`
-            // nor any other layer re-enqueues it. This loop would
-            // then spin forever. Not reachable on current workloads
-            // (64-slot ring vs single-digit asset counts), but a
-            // follow-up should either make `acquire` fail on
-            // QueueFull or add retry logic to `pump()`.
-            while (!self.assets.isReady(name)) {
-                if (self.assets.lastError(name)) |err| {
-                    // Rewind .failed → .registered so the next
-                    // loadAtlasIfNeeded retries the decode instead of
-                    // returning the stale error forever. Without this,
-                    // any decode/upload failure becomes permanent: the
-                    // errdefer above drops refcount to 0, but state
-                    // stays .failed, and `acquire` only re-enqueues
-                    // from .registered. So the retry would hit the
-                    // already-set lastError and immediately return
-                    // the old error without re-triggering work — a
-                    // regression from the legacy direct-decode path
-                    // which simply re-attempted the call.
-                    self.assets.resetFailed(name);
-                    return err;
-                }
-                self.assets.pump();
-                // Don't bridge here — `loadAtlasIfNeeded` (the shim
-                // calling this loop) does its own `markPendingLoaded`
-                // after the asset reaches .ready, and double-bridging
-                // returns AtlasNotPending. The main tick loop catches
-                // late-uploaded atlases for the eager-fallback path.
-                std.Thread.yield() catch {};
-            }
 
             // Upload done — the catalog has a valid `UploadedResource`
             // for the entry. Pull the backend-assigned texture handle
@@ -601,6 +577,22 @@ pub fn Mixin(comptime Game: type) type {
             _ = try self.loadSoundIfNeeded(name);
         }
 
+        /// The ONE blocking wait shared by every resource kind — images,
+        /// sounds, fonts and (since #833) atlases. `true` when this call
+        /// did the loading, `false` when the entry was already `.ready`.
+        ///
+        /// `acquire` enqueues the decode on a worker, then this thread
+        /// pumps the catalog itself until the upload lands. It exits on
+        /// ready, on a decode/upload error, on a dropped enqueue
+        /// (`error.AssetDecodeNotQueued`), or immediately while the GPU
+        /// surface is down (`error.GpuSurfaceUnavailable`) — never spins
+        /// unbounded. Keep it that way: any new exit condition belongs
+        /// HERE, not in a second copy at a call site. Two copies are what
+        /// let #832's fixes miss the atlas path entirely (#833).
+        ///
+        /// On success the caller is left HOLDING a reference (the
+        /// `errdefer` only fires on failure), which pins the loaded entry
+        /// against `pump`'s zombie-drop path.
         pub fn loadAssetIfNeededInternal(self: *Game, name: []const u8) !bool {
             if (self.assets.isReady(name)) return false;
 

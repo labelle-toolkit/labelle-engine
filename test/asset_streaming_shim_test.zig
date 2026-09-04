@@ -308,14 +308,30 @@ test "shim: isAtlasLoaded is false for unregistered and pending, true after load
     try testing.expect(game.isAtlasLoaded("pending"));
 }
 
+// ── Hard-deadline harness ──
+//
+// Shared with `image_load_shim_test.zig` (#832/#833). The atlas test below
+// used to `join()` its worker unconditionally, which meant a real
+// regression HUNG CI instead of failing at its deadline — a test that
+// cannot fail. `load_deadline.zig` prints the wedged call and aborts.
+
+const deadline = @import("load_deadline.zig");
+
+fn loadAtlasWithDeadline(game: *TestGame, name: []const u8) deadline.Outcome {
+    return deadline.callWithDeadline(TestGame, "loadAtlasIfNeeded", game, name);
+}
+
+const expectDeadlineError = deadline.expectError;
+
 test "shim: deadlock regression — decode error surfaces within 200ms, no hang" {
     // The core sync-shim invariant: without the `pump()` call inside
     // the busy-wait, `isReady` never flips and the loop spins forever.
     // A forced decode error proves the loop terminates on the error
     // path; combined with `shim: loadAtlasIfNeeded twice is idempotent`
     // above (which proves the loop terminates on the happy path), we
-    // cover both exits. The 200ms timeout bounds runaway-spin failures
-    // so a regression fails CI instead of stalling it.
+    // cover both exits. The deadline is ENFORCED — `loadAtlasWithDeadline`
+    // aborts rather than joining a wedged worker — so a regression fails
+    // CI at 200ms with a named message instead of stalling it.
 
     Mock.reset();
     Mock.decode_fails = true;
@@ -327,49 +343,98 @@ test "shim: deadlock regression — decode error surfaces within 200ms, no hang"
 
     try game.registerAtlasFromMemory("dead", tiny_atlas_json, fake_png, file_type);
 
-    // Run the shim on a background thread so the main thread can
-    // impose a deadline. A deadlock manifests as the worker never
-    // finishing — the 200ms wait below expires while
-    // `loadAtlasIfNeeded` is still spinning.
-    const Runner = struct {
-        result: ?anyerror = null,
-        done: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
-
-        fn run(self: *@This(), g: *TestGame) void {
-            if (g.loadAtlasIfNeeded("dead")) |_| {
-                self.result = null;
-            } else |err| {
-                self.result = err;
-            }
-            self.done.store(true, .release);
-        }
-    };
-    var runner = Runner{};
-    const handle = try std.Thread.spawn(.{}, Runner.run, .{ &runner, &game });
-
-    const deadline_ns: u64 = 200 * std.time.ns_per_ms;
-    var waited_ns: u64 = 0;
-    const step_ns: u64 = 1 * std.time.ns_per_ms;
-    while (waited_ns < deadline_ns) : (waited_ns += step_ns) {
-        if (runner.done.load(.acquire)) break;
-        {
-            var _req: std.c.timespec = .{ .sec = (step_ns / std.time.ns_per_s), .nsec = (step_ns % std.time.ns_per_s) };
-            var _rem: std.c.timespec = undefined;
-            _ = std.c.nanosleep(&_req, &_rem);
-        }
-    }
-    const terminated = runner.done.load(.acquire);
-    handle.join();
-    try testing.expect(terminated);
     // The error surfaced through the catalog's `lastError` path —
     // not a successful load, not a hang.
-    try testing.expectEqual(
-        @as(?anyerror, error.MockDecodeFailure),
-        runner.result,
-    );
+    try expectDeadlineError(loadAtlasWithDeadline(&game, "dead"), error.MockDecodeFailure);
     // Atlas still reports unloaded — the failure did NOT accidentally
     // flip the TextureManager's pending→loaded transition.
     try testing.expect(!game.isAtlasLoaded("dead"));
+}
+
+test "shim: a blocking atlas load while the GPU surface is lost fails fast, not deadlocks" {
+    // #833 hang #2, inherited from #832's fix the moment `loadAtlasIfNeeded`
+    // started going through `loadAssetIfNeededInternal`.
+    //
+    // `surfaceLost` clears the catalog's `gpu_alive` gate and then emits
+    // `engine__surface_lost` SYNCHRONOUSLY (#820/#823), so a hook that
+    // (re-)loads an atlas runs with image uploads already PARKED on the
+    // result ring. The old inline loop entered the busy-wait there and
+    // could never leave it: `pump` refuses to upload into a dead context,
+    // so the entry reaches neither `.ready` nor `.failed`. That wedges
+    // `surfaceLost` itself — and `surfaceRestored`, the only thing that
+    // reopens the gate, can then never run.
+    //
+    // Without the fix this test does not "fail slowly", it hangs; the
+    // harness is what turns that into a fast, named CI failure.
+    Mock.reset();
+    engine.ImageLoader.setBackend(Mock.backend);
+    defer engine.ImageLoader.clearBackend();
+
+    var game = TestGame.init(testing.allocator);
+    defer game.deinit();
+
+    try game.registerAtlasFromMemory("hud_atlas", tiny_atlas_json, fake_png, file_type);
+
+    game.surfaceLost();
+    try testing.expect(!game.assets.gpu_alive);
+
+    try expectDeadlineError(loadAtlasWithDeadline(&game, "hud_atlas"), error.GpuSurfaceUnavailable);
+    // Nothing was uploaded into the dead context, and the guard fires
+    // BEFORE `acquire`, so no phantom refcount is left pinning the entry.
+    try testing.expectEqual(@as(u32, 0), Mock.upload_calls);
+    try testing.expectEqual(@as(u32, 0), game.assets.entries.get("hud_atlas").?.refcount);
+    try testing.expect(!game.isAtlasLoaded("hud_atlas"));
+
+    // INIT_WINDOW reopens the gate; the very same call now works.
+    game.surfaceRestored();
+    try testing.expect(game.assets.gpu_alive);
+    try testing.expect(try game.loadAtlasIfNeeded("hud_atlas"));
+    try testing.expect(game.isAtlasLoaded("hud_atlas"));
+}
+
+test "shim: an atlas whose decode was never queued errors instead of spinning forever" {
+    // #833 hang #1, the issue's original subject, inherited from #832's
+    // fix by the same collapse.
+    //
+    // `AssetCatalog.enqueueDecode` TOLERATES a full request ring: it logs,
+    // leaves the entry at `.registered`, and nothing re-enqueues it — not
+    // `pump`, not any other layer. `acquire` then bumps the refcount and
+    // returns happily, so the old inline loop span forever on an asset
+    // that would never become ready, with no error, no log and no crash.
+    //
+    // The post-acquire state is what makes that deterministic, so that is
+    // what this test constructs: an entry sitting at `.registered` with a
+    // nonzero refcount and nothing in flight — byte for byte what a
+    // ring-full `enqueueDecode` leaves behind. Reproducing it by actually
+    // filling the ring would mean registering 64+ assets per worker ring
+    // and stalling three worker threads mid-decode to keep them full: not
+    // deterministic, and not cheaper than saying the invariant outright.
+    // (`acquire` only enqueues on the 0 → 1 refcount transition, which is
+    // exactly why a bumped-but-unqueued entry can never recover.)
+    Mock.reset();
+    engine.ImageLoader.setBackend(Mock.backend);
+    defer engine.ImageLoader.clearBackend();
+
+    var game = TestGame.init(testing.allocator);
+    defer game.deinit();
+
+    try game.registerAtlasFromMemory("unqueued", tiny_atlas_json, fake_png, file_type);
+
+    // Reaching into `.entries` is intentional — there is no higher-level
+    // API that can put an entry in the post-ring-full state.
+    const entry = game.assets.entries.getPtr("unqueued").?;
+    try testing.expectEqual(engine.AssetState.registered, entry.state);
+    entry.refcount = 1;
+
+    try expectDeadlineError(loadAtlasWithDeadline(&game, "unqueued"), error.AssetDecodeNotQueued);
+    // Our reference was returned; the simulated holder still owns theirs,
+    // and no decode was ever attempted.
+    try testing.expectEqual(@as(u32, 1), game.assets.entries.get("unqueued").?.refcount);
+    try testing.expectEqual(@as(u32, 0), Mock.decode_calls);
+    try testing.expect(!game.isAtlasLoaded("unqueued"));
+
+    // Hand back the simulated holder's reference so teardown is clean.
+    game.assets.release("unqueued");
 }
 
 test "shim: acquire refcount is released when decode fails" {
