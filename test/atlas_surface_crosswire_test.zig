@@ -134,27 +134,54 @@ const Adapter = struct {
     const MAX_SLOTS = 64;
     const BASE: u32 = 1 << 24;
 
+    // ── Threading ──
+    //
+    // `decode` runs on the catalog's THREE worker threads; `upload` /
+    // `unload` run on the main thread (from `pump` / `release`), and so
+    // does every assertion. State the workers touch is therefore atomic;
+    // the slot table below stays plain because it is main-thread-confined
+    // (making it atomic would only hide that fact).
+
+    /// Which atlas's pixels each slot holds, and the surface epoch it was
+    /// uploaded in. Written by `upload`/`unload`, read by the assertions —
+    /// all on the main thread.
     var slot_tag: [MAX_SLOTS]?u8 = [_]?u8{null} ** MAX_SLOTS;
     var slot_epoch: [MAX_SLOTS]u32 = [_]u32{0} ** MAX_SLOTS;
     var epoch: u32 = 0;
-    var decode_calls: u32 = 0;
     var upload_calls: u32 = 0;
     var unload_calls: u32 = 0;
-    /// When set, decodes of this tag sleep `slow_ns` first — the knob
-    /// that makes "atlas X is still in flight when the surface goes"
-    /// deterministic instead of a race.
-    var slow_tag: ?u8 = null;
-    var slow_ns: u64 = 0;
+
+    /// Bumped from every worker thread, so atomic.
+    var decode_calls: std.atomic.Value(u32) = .init(0);
+    /// The "make this atlas's decode slow" knob: the test writes it from
+    /// the main thread while workers are running, and every worker reads
+    /// it on each decode. Atomic for that reason. `no_slow_tag` is the
+    /// "unset" sentinel — the tags are image bytes, so a value outside
+    /// `u8` can never collide with one.
+    const no_slow_tag: u16 = 0x100;
+    var slow_tag: std.atomic.Value(u16) = .init(no_slow_tag);
+    var slow_ns: std.atomic.Value(u64) = .init(0);
 
     fn reset() void {
         slot_tag = [_]?u8{null} ** MAX_SLOTS;
         slot_epoch = [_]u32{0} ** MAX_SLOTS;
         epoch = 0;
-        decode_calls = 0;
         upload_calls = 0;
         unload_calls = 0;
-        slow_tag = null;
-        slow_ns = 0;
+        decode_calls.store(0, .monotonic);
+        clearSlow();
+    }
+
+    /// Slow every decode of `tag` down by `ns`, so "atlas X is still in
+    /// flight when the surface goes" is deterministic instead of a race.
+    fn setSlow(tag: u8, ns: u64) void {
+        slow_ns.store(ns, .monotonic);
+        slow_tag.store(tag, .monotonic);
+    }
+
+    fn clearSlow() void {
+        slow_tag.store(no_slow_tag, .monotonic);
+        slow_ns.store(0, .monotonic);
     }
 
     /// The GPU context died: every texture uploaded so far is gone. The
@@ -166,9 +193,10 @@ const Adapter = struct {
     }
 
     fn decodeFn(_: [:0]const u8, data: []const u8, allocator: std.mem.Allocator) anyerror!engine.DecodedImage {
-        decode_calls += 1;
-        if (slow_tag) |t| {
-            if (data.len > 0 and data[0] == t) sleepNs(slow_ns);
+        _ = decode_calls.fetchAdd(1, .monotonic);
+        const tag = slow_tag.load(.monotonic);
+        if (tag != no_slow_tag and data.len > 0 and data[0] == @as(u8, @intCast(tag))) {
+            sleepNs(slow_ns.load(.monotonic));
         }
         const pixels = try allocator.alloc(u8, 4);
         @memset(pixels, 0);
@@ -400,8 +428,7 @@ test "#821: surface cycle lands while the New Game load is in flight (partially 
     // have re-uploaded and (per the per-tick bridge) may be bound while
     // `c` is still decoding — the "uploads in flight / partially ready"
     // window of the report.
-    Adapter.slow_tag = tagOf("c");
-    Adapter.slow_ns = 40 * std.time.ns_per_ms;
+    Adapter.setSlow(tagOf("c"), 40 * std.time.ns_per_ms);
     game.queueSceneChangeAtomic("main");
     var frames: usize = 0;
     while (frames < 200) : (frames += 1) {
@@ -413,7 +440,7 @@ test "#821: surface cycle lands while the New Game load is in flight (partially 
     try testing.expect(game.pending_scene_change != null); // gate still deferring
 
     surfaceCycle(&game);
-    Adapter.slow_tag = null;
+    Adapter.clearSlow();
 
     try driveSceneChange(&game);
     try driveUntilSettled(&game, main_manifest);
@@ -436,8 +463,7 @@ test "#821: surface cycle sweep — pulled at every frame offset of a New Game r
     // frames into the reload, pull the surface, finish, verify. Sweeping
     // `k` across a modest decode latency hits "nothing landed", "some
     // landed", and "all landed but not yet committed".
-    Adapter.slow_tag = tagOf("b");
-    Adapter.slow_ns = 3 * std.time.ns_per_ms;
+    Adapter.setSlow(tagOf("b"), 3 * std.time.ns_per_ms);
     var k: usize = 0;
     while (k < 12) : (k += 1) {
         game.queueSceneChangeAtomic("main");

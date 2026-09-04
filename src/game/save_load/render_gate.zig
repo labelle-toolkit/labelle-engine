@@ -251,7 +251,21 @@ pub fn Mixin(comptime Game: type) type {
             // readiness note above). Normally true the same frame as the
             // bridge; the loop guards against an atlas the manager doesn't
             // track by the catalog name (satisfied on catalog `.ready`).
+            //
+            // A `.failed` entry is skipped here for the same reason pass 1
+            // skips it — and, since engine#821, this is load-bearing rather
+            // than symmetric tidiness. A release that takes an image to
+            // refcount 0 now BLANKS its atlas binding (`releaseAsset` /
+            // the per-tick bridge), so a repeat load whose re-decode then
+            // fails leaves the atlas permanently un-`isLoaded()`. Without
+            // this skip, pass 3 would wait on a state that can never
+            // arrive and the world would stay hidden for the whole
+            // 180-frame deadline instead of shipping under the configured
+            // `asset_failure_policy` immediately.
             for (gated) |name| {
+                if (self.assets.entries.getPtr(name)) |e| {
+                    if (e.state == .failed) continue;
+                }
                 if (self.atlas_manager.getAtlas(name)) |atlas| {
                     if (!atlas.isLoaded()) return;
                 }
