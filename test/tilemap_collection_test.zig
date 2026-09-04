@@ -453,6 +453,10 @@ fn parseTmx(comptime Gfx: type, allocator: std.mem.Allocator, bytes: []const u8)
         } else {
             images.deinit(allocator);
         }
+        // `toOwnedSlice` emptied `images`, so its errdefer above no longer
+        // covers these bytes and the list errdefer cannot yet — `ts` is not
+        // appended. This window is exactly one fallible call wide.
+        errdefer if (comptime with_collection) allocator.free(ts.tile_images);
         try tilesets.append(allocator, ts);
     }
     map.tilesets = try tilesets.toOwnedSlice(allocator);
@@ -909,4 +913,27 @@ test "a tileset parsed before a malformed layer does not leak" {
         \\</map>
     ;
     try std.testing.expectError(error.InvalidTmx, parseTmx(Gfx, std.testing.allocator, tmx));
+}
+
+/// Parses and immediately tears down — the shape `checkAllAllocationFailures`
+/// needs. Any block an error path fails to release shows up as a leak.
+fn parseThenFree(allocator: std.mem.Allocator, tmx: []const u8) !void {
+    var map = try parseTmx(FakeGfx(true), allocator, tmx);
+    map.deinit();
+}
+
+test "parseTmx frees what it took at EVERY allocation failure point" {
+    // Covers the whole ladder rather than one hand-picked failure: the
+    // per-tile image list, its `toOwnedSlice`, the handover window before
+    // `tilesets.append`, the layer gids, and both outer lists.
+    try std.testing.checkAllAllocationFailures(
+        std.testing.allocator,
+        parseThenFree,
+        .{collection_tmx},
+    );
+    try std.testing.checkAllAllocationFailures(
+        std.testing.allocator,
+        parseThenFree,
+        .{mixed_tmx},
+    );
 }
