@@ -874,3 +874,105 @@ test "findChildByLocalPath: doubled separator children[0]..children[0] stays rej
     // dot runs.
     try runLocalPathSeparatorCase("test_localpath_doubledot.json", "children[0]..children[0]", 30, 4);
 }
+
+// ── #844: children-only prefab roots ────────────────────────────
+//
+// `uf.prefabComponents` documents `null` as "this root declares no
+// components" — a root carrying only `"children"` is well-formed per
+// RFC #596 and is exactly the shape of a purely-visual dressing
+// prefab (a bare anchor + sprite children). `spawnPrefabImpl` used to
+// collapse that `null` into the same `return null` it uses for
+// "prefab not found", so such a prefab loaded fine from a scene (the
+// `entity_walker` path keeps the view optional) but Phase 1a's
+// `spawnFromPrefab` failed, Phase 1b dropped every child with "not in
+// id_map", and Phase 1c's bare fallback entities were refilled by
+// Phase 2 with only the SAVEABLE components — the non-saveable
+// visuals were gone (Flying-Platform/flying-platform-labelle#857).
+
+test "two-phase load: #844 children-only prefab root round-trips with its children" {
+    var tmp_dir = testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    // No `components` wrapper and no flat PascalCase keys at the root.
+    var fixture = try setupFixture(&tmp_dir, .{
+        .dressing =
+        \\{
+        \\  "children": [
+        \\    { "components": { "Health": { "current": 10, "max": 10 } } },
+        \\    { "components": { "Health": { "current": 20, "max": 20 } } }
+        \\  ]
+        \\}
+        ,
+    });
+    defer fixture.deinit();
+
+    // 1. The runtime spawn must SUCCEED — `null` here is the bug.
+    const root = fixture.game.spawnFromPrefab("dressing", .{ .x = 100, .y = 200 }) orelse {
+        std.debug.print("spawnFromPrefab returned null for a children-only prefab (#844)\n", .{});
+        return error.TestUnexpectedResult;
+    };
+
+    const pre_children = fixture.game.getChildren(root);
+    try testing.expectEqual(@as(usize, 2), pre_children.len);
+
+    // Mutate a saved value so "came back from the save" is
+    // distinguishable from "re-spawned at the prefab default".
+    fixture.game.active_world.ecs_backend.getComponent(pre_children[1], Health).?.current = 7;
+
+    const save_path = "test_save_children_only_prefab.json";
+    try fixture.game.saveGameState(save_path);
+    defer std.Io.Dir.cwd().deleteFile(std.testing.io, save_path) catch {};
+
+    // 2. Reset + load. Phase 1a respawns through the same runtime
+    //    path, so this is where the bug ate the tree.
+    fixture.game.resetEcsBackend();
+    try fixture.game.loadGameState(save_path);
+
+    const loaded_root = blk: {
+        var view = fixture.game.active_world.ecs_backend.view(.{PrefabInstance}, .{});
+        defer view.deinit();
+        const first = view.next() orelse return error.TestUnexpectedResult;
+        try testing.expect(view.next() == null);
+        break :blk first;
+    };
+    try testing.expectEqualStrings(
+        "dressing",
+        fixture.game.active_world.ecs_backend.getComponent(loaded_root, PrefabInstance).?.path,
+    );
+
+    // 3. Both children are back, re-parented, and matched by
+    //    `local_path` — not recreated as bare Phase 1c orphans.
+    const loaded_children = fixture.game.getChildren(loaded_root);
+    try testing.expectEqual(@as(usize, 2), loaded_children.len);
+
+    var child_count: usize = 0;
+    {
+        var view = fixture.game.active_world.ecs_backend.view(.{PrefabChild}, .{});
+        defer view.deinit();
+        while (view.next()) |ent| {
+            const pc = fixture.game.active_world.ecs_backend.getComponent(ent, PrefabChild).?;
+            if (pc.root == loaded_root) child_count += 1;
+        }
+    }
+    try testing.expectEqual(@as(usize, 2), child_count);
+
+    // Phase 2's saved value landed on the right child, and the other
+    // kept its prefab default.
+    try testing.expectApproxEqAbs(
+        @as(f32, 10),
+        fixture.game.active_world.ecs_backend.getComponent(loaded_children[0], Health).?.current,
+        0.01,
+    );
+    try testing.expectApproxEqAbs(
+        @as(f32, 7),
+        fixture.game.active_world.ecs_backend.getComponent(loaded_children[1], Health).?.current,
+        0.01,
+    );
+
+    // No stray orphan entities from a Phase 1c fallback.
+    var total: usize = 0;
+    var hv = fixture.game.active_world.ecs_backend.view(.{Health}, .{});
+    defer hv.deinit();
+    while (hv.next()) |_| total += 1;
+    try testing.expectEqual(@as(usize, 2), total);
+}

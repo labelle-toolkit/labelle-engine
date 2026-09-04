@@ -48,7 +48,8 @@ fn bootGameWithPrefab(
     try tmp_dir.dir.writeFile(std.testing.io, .{ .sub_path = prefab_sub, .data = prefab_source });
 
     var buf: [std.fs.max_path_bytes]u8 = undefined;
-    const _len = try tmp_dir.dir.realPath(std.testing.io, &buf); const dir_path = buf[0.._len];
+    const _len = try tmp_dir.dir.realPath(std.testing.io, &buf);
+    const dir_path = buf[0.._len];
     const prefab_dir = try std.fmt.allocPrint(testing.allocator, "{s}/prefabs", .{dir_path});
     errdefer testing.allocator.free(prefab_dir);
 
@@ -194,4 +195,82 @@ test "spawnFromPrefab: multiple spawns get independent roots" {
 
     try testing.expectEqual(@as(usize, 1), a_children);
     try testing.expectEqual(@as(usize, 1), b_children);
+}
+
+// ── #844: children-only prefab roots ────────────────────────────
+//
+// `uf.prefabComponents` documents `null` as "this root declares no
+// components" — a root carrying only `"children"` is well-formed per
+// RFC #596. `spawnPrefabImpl` used to collapse that `null` into the
+// same `return null` it uses for "prefab not found", so a purely
+// visual dressing prefab spawned fine from a scene but never at
+// runtime. Save/load Phase 1a respawns through the runtime path, so
+// the whole subtree came back missing after a load
+// (Flying-Platform/flying-platform-labelle#857).
+
+test "spawnFromPrefab: #844 root with ONLY children spawns with its children" {
+    var tmp_dir = testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    // No `components` wrapper and no flat PascalCase keys at the
+    // root — the exact shape of a bare anchor + sprite children.
+    var fixture = try bootGameWithPrefab(&tmp_dir, "dressing",
+        \\{
+        \\  "children": [
+        \\    { "components": { "Health": { "current": 11, "max": 11 } } },
+        \\    { "components": { "Health": { "current": 22, "max": 22 } } },
+        \\    {
+        \\      "components": { "Health": { "current": 33, "max": 33 } },
+        \\      "children": [
+        \\        { "components": { "Health": { "current": 44, "max": 44 } } }
+        \\      ]
+        \\    }
+        \\  ]
+        \\}
+    );
+    defer fixture.deinit();
+
+    // 1. The spawn must SUCCEED — `null` here is the bug.
+    const root = fixture.game.spawnFromPrefab("dressing", .{ .x = 10, .y = 20 }) orelse {
+        std.debug.print("spawnFromPrefab returned null for a children-only prefab (#844)\n", .{});
+        return error.TestUnexpectedResult;
+    };
+
+    // 2. The root is still tagged as a prefab instance, so save/load
+    //    Phase 1a can re-instantiate it from the path.
+    const pi = fixture.game.ecs_backend.getComponent(root, PrefabInstance).?;
+    try testing.expectEqualStrings("dressing", pi.path);
+    try testing.expect(!fixture.game.ecs_backend.hasComponent(root, PrefabChild));
+
+    // 3. Every child (and grand-child) exists, is tagged `PrefabChild`
+    //    with THIS root, and carries its component. Phase 1b matches
+    //    saved children to respawned ones by `local_path`, so those
+    //    paths are the save/load contract, not a detail.
+    var found = [_]bool{false} ** 4;
+    var tagged: usize = 0;
+
+    var view = fixture.game.ecs_backend.view(.{PrefabChild}, .{});
+    defer view.deinit();
+    while (view.next()) |ent| {
+        tagged += 1;
+        const pc = fixture.game.ecs_backend.getComponent(ent, PrefabChild).?;
+        try testing.expectEqual(@as(u32, @intCast(root)), @as(u32, @intCast(pc.root)));
+        const h = fixture.game.ecs_backend.getComponent(ent, Health).?;
+        if (std.mem.eql(u8, pc.local_path, "children[0]")) {
+            found[0] = true;
+            try testing.expectApproxEqAbs(@as(f32, 11), h.current, 0.01);
+        } else if (std.mem.eql(u8, pc.local_path, "children[1]")) {
+            found[1] = true;
+            try testing.expectApproxEqAbs(@as(f32, 22), h.current, 0.01);
+        } else if (std.mem.eql(u8, pc.local_path, "children[2]")) {
+            found[2] = true;
+            try testing.expectApproxEqAbs(@as(f32, 33), h.current, 0.01);
+        } else if (std.mem.eql(u8, pc.local_path, "children[2].children[0]")) {
+            found[3] = true;
+            try testing.expectApproxEqAbs(@as(f32, 44), h.current, 0.01);
+        }
+    }
+
+    try testing.expectEqual(@as(usize, 4), tagged);
+    for (found) |f| try testing.expect(f);
 }
