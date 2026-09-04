@@ -54,6 +54,16 @@ pub const requestedScene = runtime_env.requestedScene;
 /// suite, so a test beside the implementation would never run.
 pub const normalizeTextureHandle = @import("game/atlas_mixin.zig").normalizeHandle;
 
+/// The font twin of `normalizeTextureHandle` (engine#848): converts the
+/// engine's generational `FontId` to whatever type a renderer's `Text.font`
+/// field holds — labelle-gfx's `enum(u32)`, a plain integer, or the engine's
+/// own struct. `packFontId` / `unpackFontId` are the `u32` transport encoding
+/// it uses (index low, generation high), exported so the assembler adapter,
+/// a backend, and `test/` can all agree on one layout.
+pub const normalizeFontHandle = @import("game/atlas_mixin.zig").normalizeFontHandle;
+pub const packFontId = @import("game/atlas_mixin.zig").packFontId;
+pub const unpackFontId = @import("game/atlas_mixin.zig").unpackFontId;
+
 pub const GameConfig = game_mod.GameConfig;
 /// Y-axis-aware game configuration — `GameConfig` plus an explicit trailing
 /// `core.YAxis` slot. The assembler adopts this once it parses `.y_axis`

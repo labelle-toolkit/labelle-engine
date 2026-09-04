@@ -149,6 +149,73 @@ fn FontlessTextRenderer(comptime Entity: type) type {
     };
 }
 
+/// The shape labelle-gfx#349 ships: `Text.font` is gfx's OWN handle type,
+/// `enum(u32) { invalid = 0, _ }`, NOT the engine's `{ index, generation }`
+/// struct. Before engine#848 this renderer did not compile at all — the
+/// `text.font = id` in `setTextFont` is a plain type error against it — which
+/// is why `TextRenderer` above had to declare `font: engine.FontId` and why
+/// the whole bug stayed invisible: every released gfx had no `font` field, so
+/// `has_text_font` was false and the body was comptime-dead.
+fn GfxTextRenderer(comptime Entity: type) type {
+    return struct {
+        const Self = @This();
+
+        /// Byte-for-byte labelle-gfx's `types.FontId`.
+        pub const FontId = enum(u32) {
+            invalid = 0,
+            _,
+
+            pub fn from(id: u32) FontId {
+                return @enumFromInt(id);
+            }
+            pub fn toInt(self: FontId) u32 {
+                return @intFromEnum(self);
+            }
+        };
+
+        pub const Sprite = struct {
+            visible: bool = true,
+            z_index: i16 = 0,
+            layer: enum { default } = .default,
+        };
+        pub const Shape = struct {
+            visible: bool = true,
+            z_index: i16 = 0,
+            layer: enum { default } = .default,
+        };
+        pub const Text = struct {
+            content: []const u8 = "",
+            font: FontId = .invalid,
+            visible: bool = true,
+            z_index: i16 = 0,
+            layer: enum { default } = .default,
+        };
+
+        visual_dirty_count: usize = 0,
+
+        pub fn init(_: std.mem.Allocator) Self {
+            return .{};
+        }
+        pub fn deinit(_: *Self) void {}
+        pub fn trackEntity(_: *Self, _: Entity, _: core.VisualType) void {}
+        pub fn untrackEntity(_: *Self, _: Entity) void {}
+        pub fn markPositionDirty(_: *Self, _: Entity) void {}
+        pub fn markPositionDirtyWithChildren(_: *Self, comptime _: type, _: anytype, _: Entity) void {}
+        pub fn updateHierarchyFlag(_: *Self, _: Entity, _: bool) void {}
+        pub fn markVisualDirty(self: *Self, _: Entity) void {
+            self.visual_dirty_count += 1;
+        }
+        pub fn sync(_: *Self, comptime _: type, _: anytype) void {}
+        pub fn render(_: *Self) void {}
+        pub fn setScreenHeight(_: *Self, _: f32) void {}
+        pub fn clear(_: *Self) void {}
+        pub fn renderGizmoDraws(_: *Self, _: []const core.GizmoDraw) void {}
+        pub fn hasEntity(_: *const Self, _: Entity) bool {
+            return false;
+        }
+    };
+}
+
 /// No `Text` decl at all, so `Game.TextComp == void` — the `StubRender`
 /// shape. `has_text_font` must short-circuit on `Text != void` BEFORE the
 /// `@hasField`, which would be a compile error on a non-struct.
@@ -220,6 +287,10 @@ fn GameFor(comptime Renderer: type) type {
 const TestGame = GameFor(TextRenderer(MockEcs.Entity));
 const FontlessGame = GameFor(FontlessTextRenderer(MockEcs.Entity));
 const TextlessGame = GameFor(TextlessRenderer(MockEcs.Entity));
+const GfxRenderer = GfxTextRenderer(MockEcs.Entity);
+const GfxGame = GameFor(GfxRenderer);
+const GfxFontId = GfxRenderer.FontId;
+const GfxText = GfxGame.TextComp;
 
 const Text = TestGame.TextComp;
 
@@ -589,4 +660,156 @@ test "fontId is available on a renderer with no Text component" {
     try game.loadFontFromMemory("ui", font_file_type, fake_ttf, &params);
 
     try testing.expect(game.fontId("ui").?.isValid());
+}
+
+// ── engine FontId → renderer handle bridge (engine#848) ───────────────
+//
+// Regression cover for the LATENT break gfx#349 arms: the engine mints a
+// `{ index, generation }` struct, gfx's `TextComponent.font` is an
+// `enum(u32)`, and `setTextFont` used to assign one straight to the other.
+// It only ever compiled because no released gfx had the field.
+
+test "setTextFont: works against a gfx-shaped enum(u32) Text.font" {
+    MockFont.reset();
+    engine.FontLoader.setBackend(MockFont.backend);
+    defer engine.FontLoader.clearBackend();
+
+    var game = GfxGame.init(testing.allocator);
+    defer game.deinit();
+
+    const params: engine.FontBakeParams = .{ .pixel_height = 24 };
+    try game.loadFontFromMemory("ui", font_file_type, fake_ttf, &params);
+
+    const entity = game.createEntity();
+    game.addText(entity, .{ .content = "score" });
+    try testing.expectEqual(GfxFontId.invalid, game.getComponent(entity, GfxText).?.font);
+    const dirty_before = game.renderer.visual_dirty_count;
+
+    game.setTextFont(entity, "ui");
+
+    const id = game.fontId("ui").?;
+    const stored = game.getComponent(entity, GfxText).?.font;
+    try testing.expect(stored != GfxFontId.invalid);
+    // The stored enum is the engine handle packed, and it decodes back to
+    // exactly the id the backend minted — generation included.
+    try testing.expectEqual(engine.packFontId(id), stored.toInt());
+    try testing.expectEqual(id, engine.unpackFontId(stored.toInt()));
+    try testing.expectEqual(dirty_before + 1, game.renderer.visual_dirty_count);
+}
+
+test "setTextFont: enum Text.font short-circuits on a repeat and swaps on a change" {
+    MockFont.reset();
+    engine.FontLoader.setBackend(MockFont.backend);
+    defer engine.FontLoader.clearBackend();
+
+    var game = GfxGame.init(testing.allocator);
+    defer game.deinit();
+
+    const small: engine.FontBakeParams = .{ .pixel_height = 12 };
+    const large: engine.FontBakeParams = .{ .pixel_height = 48 };
+    try game.loadFontFromMemory("ui_small", font_file_type, fake_ttf, &small);
+    try game.loadFontFromMemory("ui_large", font_file_type, fake_ttf, &large);
+
+    const entity = game.createEntity();
+    game.addText(entity, .{ .content = "hp" });
+
+    game.setTextFont(entity, "ui_small");
+    const after_first = game.renderer.visual_dirty_count;
+    // The comparison now happens in the RENDERER's type; comparing the
+    // engine struct against the enum is what used to be the type error.
+    game.setTextFont(entity, "ui_small");
+    try testing.expectEqual(after_first, game.renderer.visual_dirty_count);
+
+    game.setTextFont(entity, "ui_large");
+    try testing.expectEqual(after_first + 1, game.renderer.visual_dirty_count);
+    try testing.expectEqual(
+        game.fontId("ui_large").?,
+        engine.unpackFontId(game.getComponent(entity, GfxText).?.font.toInt()),
+    );
+}
+
+test "setTextFont: unresolved name leaves an enum Text.font alone" {
+    MockFont.reset();
+    engine.FontLoader.setBackend(MockFont.backend);
+    defer engine.FontLoader.clearBackend();
+
+    var game = GfxGame.init(testing.allocator);
+    defer game.deinit();
+
+    const params: engine.FontBakeParams = .{ .pixel_height = 24 };
+    try game.loadFontFromMemory("ui", font_file_type, fake_ttf, &params);
+
+    const entity = game.createEntity();
+    game.addText(entity, .{ .content = "score" });
+    game.setTextFont(entity, "ui");
+    const before = game.getComponent(entity, GfxText).?.font;
+    const dirty_before = game.renderer.visual_dirty_count;
+
+    game.setTextFont(entity, "never_declared");
+
+    try testing.expectEqual(before, game.getComponent(entity, GfxText).?.font);
+    try testing.expectEqual(dirty_before, game.renderer.visual_dirty_count);
+}
+
+test "setTextFont: comptime no-op when the renderer ships no Text at all" {
+    // `Text == void`, the `StubRender` shape. `has_text_font` must
+    // short-circuit before `@FieldType(Text, \"font\")` is ever evaluated.
+    var game = TextlessGame.init(testing.allocator);
+    defer game.deinit();
+
+    const entity = game.createEntity();
+    const dirty_before = game.renderer.visual_dirty_count;
+
+    game.setTextFont(entity, "ui");
+
+    try testing.expectEqual(dirty_before, game.renderer.visual_dirty_count);
+}
+
+// ── packFontId / normalizeFontHandle ──────────────────────────────────
+
+test "packFontId: round-trips index AND generation, invalid maps to 0" {
+    const id: engine.FontId = .{ .index = 517, .generation = 9 };
+    const bits = engine.packFontId(id);
+    // Index in the LOW half: a consumer keyed on the slot index (the
+    // assembler's `FontBackendAdapter`) can truncate to `u16`.
+    try testing.expectEqual(@as(u16, 517), @as(u16, @truncate(bits)));
+    try testing.expectEqual(@as(u16, 9), @as(u16, @truncate(bits >> 16)));
+    try testing.expectEqual(id, engine.unpackFontId(bits));
+
+    // The two sentinels agree, so a default-constructed gfx `TextComponent`
+    // and an engine `FontId.invalid` mean the same thing.
+    try testing.expectEqual(@as(u32, 0), engine.packFontId(engine.FontId.invalid));
+    try testing.expect(!engine.unpackFontId(0).isValid());
+}
+
+test "packFontId: generation is never dropped, so a stale handle stays detectable" {
+    // Two handles for the same recycled SLOT differ only in generation.
+    // Packing only the index would collapse them and defeat the whole point
+    // of a generational handle.
+    const first: engine.FontId = .{ .index = 3, .generation = 1 };
+    const recycled: engine.FontId = .{ .index = 3, .generation = 2 };
+    try testing.expect(engine.packFontId(first) != engine.packFontId(recycled));
+}
+
+test "normalizeFontHandle: engine struct -> gfx enum target" {
+    const E = enum(u32) { invalid = 0, _ };
+    const id: engine.FontId = .{ .index = 12, .generation = 3 };
+    const out = engine.normalizeFontHandle(E, id);
+    try testing.expectEqual(E, @TypeOf(out));
+    try testing.expectEqual(id, engine.unpackFontId(@intFromEnum(out)));
+}
+
+test "normalizeFontHandle: engine struct target passes through untouched" {
+    const id: engine.FontId = .{ .index = 12, .generation = 3 };
+    try testing.expectEqual(id, engine.normalizeFontHandle(engine.FontId, id));
+}
+
+test "normalizeFontHandle: integer targets" {
+    const id: engine.FontId = .{ .index = 12, .generation = 3 };
+    // Wide enough for both halves: full packed value.
+    try testing.expectEqual(engine.packFontId(id), engine.normalizeFontHandle(u32, id));
+    try testing.expectEqual(@as(u64, engine.packFontId(id)), engine.normalizeFontHandle(u64, id));
+    // Too narrow to hold a generation by construction — index only, and
+    // explicitly, rather than an `@intCast` panic in a release-safe build.
+    try testing.expectEqual(@as(u16, 12), engine.normalizeFontHandle(u16, id));
 }

@@ -124,6 +124,66 @@ pub fn normalizeHandle(comptime Target: type, tex_id: anytype) Target {
     };
 }
 
+/// Pack an engine `FontId` — the generational `{ index: u16, generation: u16 }`
+/// handle minted by `FontLoader`/the assembler's `FontBackendAdapter` — into a
+/// flat `u32`, index in the low half, generation in the high half.
+///
+/// The layout is chosen so BOTH halves survive and so the two sentinel values
+/// agree: `FontId.invalid` (`{ 0, 0 }`) packs to `0`, which is exactly
+/// labelle-gfx's `FontId.invalid`. Index-in-the-low-half also means a consumer
+/// that only needs the slot key can `@truncate` to `u16` and get it — the
+/// assembler's `FontBackendAdapter` keys its slot table on `font.index`, so
+/// that is the half a resolver reaches for first.
+///
+/// Nothing is lost: 16 + 16 bits fit a `u32` exactly. That matters because
+/// `generation` is the whole point of a generational handle — dropping it
+/// would let a stale font handle silently resolve to a recycled slot, which is
+/// the use-after-free `FontId.isValid` exists to catch.
+pub fn packFontId(id: font_types.FontId) u32 {
+    return @as(u32, id.index) | (@as(u32, id.generation) << 16);
+}
+
+/// Inverse of `packFontId`. Round-trips every `FontId`, `invalid` included.
+pub fn unpackFontId(bits: u32) font_types.FontId {
+    return .{
+        .index = @truncate(bits),
+        .generation = @truncate(bits >> 16),
+    };
+}
+
+/// Convert an engine `FontId` to whatever type a renderer's `Text.font` field
+/// holds. The font twin of `normalizeHandle`, and it exists for the same
+/// reason: the engine owns ONE font handle type while each renderer names its
+/// own.
+///
+/// The concrete mismatch (engine#848): the engine's `FontId` is a
+/// `{ index, generation }` struct, labelle-gfx's is `enum(u32) { invalid = 0, _ }`,
+/// and labelle-gfx#349 adds `font: FontId` to `TextComponent` — so from that
+/// release on, `Game.setTextFont`'s `text.font = id` is a plain type error.
+/// The conversion belongs HERE, on the engine side, because the engine is the
+/// only party that holds both types at once: it mints the struct handle and it
+/// learns the renderer's field type via `@FieldType`. Widening gfx's enum would
+/// break gfx's own public `from`/`toInt` API and labelle-core#76's
+/// `FontHandle = u32` transport; the assembler's adapter sits on the
+/// upload path (`DecodedFont` → `FontId`) and never sees a component write.
+///
+/// Supported targets:
+///  * the engine's own `FontId` (a renderer that reuses it) — identity;
+///  * an enum handle (labelle-gfx) — `@enumFromInt(packFontId(id))`;
+///  * a plain integer handle — the packed bits, or, when the field is
+///    physically too narrow to hold both halves (< 32 bits), the `index`
+///    alone. A narrower field cannot carry a generation by construction; the
+///    truncation is explicit here rather than an `@intCast` panic at runtime.
+pub fn normalizeFontHandle(comptime Target: type, id: font_types.FontId) Target {
+    if (Target == font_types.FontId) return id;
+    const bits = packFontId(id);
+    return switch (@typeInfo(Target)) {
+        .@"enum" => @enumFromInt(bits),
+        .int => if (@bitSizeOf(Target) >= 32) @intCast(bits) else @intCast(id.index),
+        else => @compileError("unsupported renderer font handle type: " ++ @typeName(Target)),
+    };
+}
+
 /// One retained direct upload (#820): the arguments `loadTextureFromMemory`
 /// was called with, copied onto the game allocator so the engine can replay
 /// the upload under the same id after a GPU surface restore. Freed by
