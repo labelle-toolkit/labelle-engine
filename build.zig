@@ -524,6 +524,25 @@ pub fn build(b: *std.Build) void {
             }),
         });
         test_step.dependOn(&b.addRunArtifact(tilemap_mutation_test).step);
+
+        // External `.tsx` resolution (#834) — the runtime now hands gfx a
+        // resolver backed by the same embedded registry that serves tileset
+        // images, so a `<tileset source="…tsx"/>` decodes in an embedded
+        // build instead of failing into a warning.
+        const tilemap_external_tsx_test = b.addTest(.{
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("test/tilemap_external_tsx_test.zig"),
+                .target = target,
+                .optimize = optimize,
+                .imports = &.{
+                    .{ .name = "labelle-core", .module = core_module },
+                    .{ .name = "engine", .module = engine_module },
+                    .{ .name = "scene", .module = scene_module },
+                    .{ .name = "tilemap", .module = tilemap_module },
+                },
+            }),
+        });
+        test_step.dependOn(&b.addRunArtifact(tilemap_external_tsx_test).step);
     }
 
     // zspec BDD specs — mirrors the `spec` step in labelle-pathfinding.

@@ -191,9 +191,31 @@ pub fn Runtime(comptime RenderImpl: type) type {
             tmx_bytes: []const u8,
             images: ImageProvider,
         ) !void {
-            // base_path "" — embedded env: the resolver supplies textures,
-            // and the filesystem fallback is disabled below.
-            var map = try TileMap.loadFromMemoryWithBasePath(allocator, tmx_bytes, "");
+            // base_path "" — embedded env: there is no directory to resolve
+            // against, so gfx forces its filesystem fallback off and a
+            // `<tileset source="…tsx"/>` can only come from the resolver.
+            //
+            // The SAME provider serves both: the engine keeps one registry
+            // (`embedded_tilemap_sources`) holding the `.tmx`, each tileset
+            // image, and each external `.tsx`, and gfx keys the `.tsx` off the
+            // `source` attribute exactly as written — which is the key
+            // labelle-assembler registers it under. The two callbacks have an
+            // identical signature, so the resolver is the same function.
+            //
+            // Gated on the decl: gfx before labelle-gfx#336 has no
+            // options-taking entry point, and an engine built against it must
+            // still compile (external tilesets then keep failing with
+            // `error.ExternalTilesetUnsupported`, exactly as before).
+            var map = if (comptime @hasDecl(TileMap, "loadFromMemoryWithOptions")) blk: {
+                const LoadOptions = @typeInfo(@TypeOf(TileMap.loadFromMemoryWithOptions)).@"fn".params[3].type.?;
+                const TsxResolver = @typeInfo(@FieldType(LoadOptions, "tsx_resolver")).optional.child;
+                break :blk try TileMap.loadFromMemoryWithOptions(allocator, tmx_bytes, "", LoadOptions{
+                    .tsx_resolver = TsxResolver{
+                        .context = images.context,
+                        .resolveFn = images.getFn,
+                    },
+                });
+            } else try TileMap.loadFromMemoryWithBasePath(allocator, tmx_bytes, "");
             errdefer map.deinit();
 
             const ids = try allocator.alloc(?TextureId, map.tilesets.len);
