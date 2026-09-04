@@ -7,11 +7,35 @@ pub const GizmoDraw = core.GizmoDraw;
 /// Max gizmo categories supported.
 pub const MAX_GIZMO_CATEGORIES: usize = 32;
 
+/// Joins one `.text` gizmo to its string inside the frame's byte arena.
+///
+/// `GizmoDraw` is labelle-core's type and carries no text payload
+/// (`kind, x1, y1, x2, y2, color, group, space, category`), so a text gizmo's
+/// characters cannot live on the draw itself. They live in `GizmoState`'s
+/// `text_bytes` arena instead, and this span records which draw they belong to
+/// — by index into `draws`, not by pointer, so the arena is free to reallocate
+/// as it grows. Both are reset together by `clear()`.
+pub const GizmoTextSpan = struct {
+    /// Index into `GizmoState.draws` of the `.text` draw this string is for.
+    draw_index: u32,
+    /// Byte offset into `GizmoState.text_bytes`.
+    start: u32,
+    /// Byte length of the string.
+    len: u32,
+};
+
 pub fn GizmoState(comptime Entity: type) type {
     return struct {
         const Self = @This();
 
         draws: std.ArrayListUnmanaged(GizmoDraw) = .empty,
+        /// Per-frame byte arena holding every `.text` gizmo's characters.
+        /// Strings are COPIED in at draw time and stay valid until `clear()`
+        /// (the frame's `clearGizmos`), so a caller may reuse or free its own
+        /// buffer the moment the draw call returns.
+        text_bytes: std.ArrayListUnmanaged(u8) = .empty,
+        /// One entry per live `.text` draw, joining it to its bytes.
+        text_spans: std.ArrayListUnmanaged(GizmoTextSpan) = .empty,
         selected: std.AutoHashMap(Entity, void),
         /// Per-category enable/disable. Index 0 = "all" (always enabled by default).
         category_enabled: [MAX_GIZMO_CATEGORIES]bool = [_]bool{true} ** MAX_GIZMO_CATEGORIES,
@@ -33,6 +57,8 @@ pub fn GizmoState(comptime Entity: type) type {
 
         pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
             self.draws.deinit(allocator);
+            self.text_bytes.deinit(allocator);
+            self.text_spans.deinit(allocator);
             self.selected.deinit();
         }
 
@@ -52,6 +78,12 @@ pub fn GizmoState(comptime Entity: type) type {
 
         pub fn drawArrow(self: *Self, allocator: std.mem.Allocator, x1: f32, y1: f32, x2: f32, y2: f32, color: u32) void {
             self.draws.append(allocator, .{ .kind = .arrow, .x1 = x1, .y1 = y1, .x2 = x2, .y2 = y2, .color = color }) catch {};
+        }
+
+        /// Append a `.text` draw at (x, y). `text` is copied into `text_bytes`
+        /// and is valid until `clear()`.
+        pub fn drawText(self: *Self, allocator: std.mem.Allocator, x: f32, y: f32, text: []const u8, color: u32) void {
+            self.appendText(allocator, .{ .kind = .text, .x1 = x, .y1 = y, .color = color }, text);
         }
 
         // Category-aware variants
@@ -76,6 +108,11 @@ pub fn GizmoState(comptime Entity: type) type {
             self.draws.append(allocator, .{ .kind = .circle, .x1 = x, .y1 = y, .x2 = radius, .color = color, .category = cat }) catch {};
         }
 
+        pub fn drawTextWithCategory(self: *Self, allocator: std.mem.Allocator, cat: u8, x: f32, y: f32, text: []const u8, color: u32) void {
+            if (cat >= MAX_GIZMO_CATEGORIES or !self.category_enabled[cat]) return;
+            self.appendText(allocator, .{ .kind = .text, .x1 = x, .y1 = y, .color = color, .category = cat }, text);
+        }
+
         // Screen-space variants (for HUD overlays, debug text, etc.)
 
         pub fn drawLineScreen(self: *Self, allocator: std.mem.Allocator, x1: f32, y1: f32, x2: f32, y2: f32, color: u32) void {
@@ -94,8 +131,84 @@ pub fn GizmoState(comptime Entity: type) type {
             self.draws.append(allocator, .{ .kind = .arrow, .x1 = x1, .y1 = y1, .x2 = x2, .y2 = y2, .color = color, .space = .screen }) catch {};
         }
 
+        pub fn drawTextScreen(self: *Self, allocator: std.mem.Allocator, x: f32, y: f32, text: []const u8, color: u32) void {
+            self.appendText(allocator, .{ .kind = .text, .x1 = x, .y1 = y, .color = color, .space = .screen }, text);
+        }
+
+        // ── Text Payloads ────────────────────────────────────────
+
+        /// Append `draw` (always `kind == .text`) together with a copy of its
+        /// string. All-or-nothing: if either the bytes, the draw or the span
+        /// fails to allocate, everything is rolled back so `draws` never holds
+        /// a `.text` entry whose string cannot be resolved.
+        ///
+        /// `text` is allowed to alias the arena itself — a slice handed back by
+        /// `getText()` fed straight into another text draw. Growing
+        /// `text_bytes` can move the buffer out from under such a source, so
+        /// its offset is captured before the growth and the copy reads from the
+        /// buffer the growth left behind.
+        fn appendText(self: *Self, allocator: std.mem.Allocator, draw: GizmoDraw, text: []const u8) void {
+            const start = self.text_bytes.items.len;
+            const alias_offset = self.arenaOffsetOf(text);
+            self.text_bytes.ensureUnusedCapacity(allocator, text.len) catch return;
+            // An arena-backed source is re-derived from the (possibly moved)
+            // buffer; a foreign slice is untouched by the growth. The alias
+            // always lies in `items`, i.e. before `start`, so the copy into
+            // `[start..]` never overlaps it.
+            const source = if (alias_offset) |offset|
+                self.text_bytes.allocatedSlice()[offset..][0..text.len]
+            else
+                text;
+            self.text_bytes.appendSliceAssumeCapacity(source);
+            self.draws.append(allocator, draw) catch {
+                self.text_bytes.shrinkRetainingCapacity(start);
+                return;
+            };
+            self.text_spans.append(allocator, .{
+                .draw_index = @intCast(self.draws.items.len - 1),
+                .start = @intCast(start),
+                .len = @intCast(text.len),
+            }) catch {
+                _ = self.draws.pop();
+                self.text_bytes.shrinkRetainingCapacity(start);
+            };
+        }
+
+        /// Byte offset of `text` inside `text_bytes`' current allocation, or
+        /// `null` when it points anywhere else. An empty slice is never an
+        /// alias — it copies nothing, so it cannot dangle.
+        fn arenaOffsetOf(self: *const Self, text: []const u8) ?usize {
+            if (text.len == 0) return null;
+            const buf = self.text_bytes.allocatedSlice();
+            if (buf.len == 0) return null;
+            const base = @intFromPtr(buf.ptr);
+            const ptr = @intFromPtr(text.ptr);
+            if (ptr < base or ptr + text.len > base + buf.len) return null;
+            return ptr - base;
+        }
+
+        /// The string of the `.text` draw at `draw_index` in `getDraws()`, or
+        /// `null` for any other kind. The slice points into the frame arena and
+        /// is invalidated by the next `clear()` or `drawText*` call.
+        ///
+        /// This index join is what stands in for the `text: []const u8` field
+        /// `GizmoDraw` does not have — see `GizmoTextSpan`.
+        pub fn getText(self: *const Self, draw_index: usize) ?[]const u8 {
+            for (self.text_spans.items) |span| {
+                if (span.draw_index == draw_index) {
+                    // Index in `usize`: `start + len` in `u32` would trap in a
+                    // safe build on a hypothetical 4 GiB frame arena.
+                    const start: usize = span.start;
+                    return self.text_bytes.items[start..][0..span.len];
+                }
+            }
+            return null;
+        }
+
         pub fn clear(self: *Self) void {
             self.draws.clearRetainingCapacity();
+            self.text_bytes.clearRetainingCapacity();
+            self.text_spans.clearRetainingCapacity();
         }
 
         pub fn clearGroup(self: *Self, group: []const u8) void {
@@ -103,9 +216,48 @@ pub fn GizmoState(comptime Entity: type) type {
             while (i < self.draws.items.len) {
                 if (std.mem.eql(u8, self.draws.items[i].group, group)) {
                     _ = self.draws.orderedRemove(i);
+                    self.dropTextSpan(i);
                 } else {
                     i += 1;
                 }
+            }
+        }
+
+        /// Re-join `text_spans` to `draws` after `orderedRemove(removed_index)`:
+        /// drop the removed draw's span and shift every later `draw_index` down
+        /// by one. The orphaned bytes stay in `text_bytes` until `clear()` —
+        /// it is a frame arena, not a heap, so nothing is compacted mid-frame.
+        fn dropTextSpan(self: *Self, removed_index: usize) void {
+            var i: usize = 0;
+            while (i < self.text_spans.items.len) {
+                const span = &self.text_spans.items[i];
+                if (span.draw_index == removed_index) {
+                    _ = self.text_spans.orderedRemove(i);
+                    continue;
+                }
+                if (span.draw_index > removed_index) span.draw_index -= 1;
+                i += 1;
+            }
+        }
+
+        /// Point every `.text` draw's `GizmoDraw.text` at its bytes in the
+        /// arena, immediately before the list is handed to the renderer.
+        ///
+        /// The spans are stored by draw INDEX rather than by pointer because
+        /// `text_bytes` reallocates as it grows: binding inside `appendText`
+        /// would leave every earlier draw's slice dangling the moment a later
+        /// `drawGizmoText` outgrew the buffer. By the time the frame renders,
+        /// no further appends can occur, so the arena is stable and the
+        /// slices are valid for exactly as long as core's `GizmoDraw.text`
+        /// contract requires — the duration of the `renderGizmoDraws` call.
+        ///
+        /// Any subsequent append or `clear()` invalidates them again, which
+        /// is why this runs per frame rather than once.
+        pub fn bindText(self: *Self) void {
+            for (self.text_spans.items) |span| {
+                if (span.draw_index >= self.draws.items.len) continue;
+                self.draws.items[span.draw_index].text =
+                    self.text_bytes.items[span.start..][0..span.len];
             }
         }
 

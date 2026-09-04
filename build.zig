@@ -276,6 +276,13 @@ pub fn build(b: *std.Build) void {
         // labelle-core types gfx re-exports, unified diamond) + the
         // `Game.setPostFx/pushPostPass/clearPostFx` passthrough seam.
         "test/post_fx_passthrough_test.zig",
+        // #827 — `drawGizmoText` + `…Screen`/`…Category` on the Game gizmo
+        // mixin. `GizmoDraw` (labelle-core) has no text payload, so the
+        // string is copied into a per-frame arena on the gizmo state and
+        // joined to its draw by index (`getGizmoText`); these cover the
+        // copy-not-borrow lifetime, the category gate, and the arena reset
+        // at `clearGizmos`.
+        "test/gizmo_text_test.zig",
     };
 
     for (test_files) |test_file| {
