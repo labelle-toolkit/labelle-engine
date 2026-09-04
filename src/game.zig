@@ -482,6 +482,20 @@ pub fn GameConfigWithYAxis(
             renderer: RenderImpl,
             sprite_cache: atlas_mod.SpriteCache,
             nested_entity_arena: std.heap.ArenaAllocator,
+            /// Direct `loadTextureFromMemory` uploads retained for a GPU
+            /// surface restore (#820): renderer texture id → an owned copy
+            /// of the bytes it was decoded from.
+            ///
+            /// PER-WORLD, not per-Game, because the texture registry it
+            /// keys into is per-world: every `World` owns its own
+            /// `renderer`, each minting ids from the same base — so world A
+            /// and world B routinely hand out the SAME `u32`. A game-global
+            /// map would let a load/unload in B replace or free A's entry,
+            /// and a surface cycle while B is active would re-upload A's
+            /// bytes through B's renderer, clobbering an unrelated texture.
+            /// Living here, the retention travels with the renderer it
+            /// belongs to and is torn down with the world.
+            direct_textures: atlas_mixin.DirectTextureStore = .empty,
             /// Retained so `deinit` can free heap-owning components (the
             /// `ChildrenComponent` ArrayLists) before the ECS is torn down —
             /// the backend drops components by value with no destructor.
@@ -498,6 +512,9 @@ pub fn GameConfigWithYAxis(
             }
 
             pub fn deinit(self: *World) void {
+                // Retained direct uploads (#820) — the CPU copies; their
+                // GPU side goes with `self.renderer.deinit()` below.
+                AtlasMixin.freeWorldDirectTextures(self);
                 // Free every `ChildrenComponent`'s backing allocation before
                 // the ECS wipe drops the components by value (no destructor)
                 // — otherwise the child lists leak on final teardown.
@@ -998,15 +1015,6 @@ pub fn GameConfigWithYAxis(
         ui_draw_list: std.ArrayListUnmanaged(ui_draw_list_mod.UiDrawCmd) = .empty,
         ui_render_opts: ui_draw_list_mod.UiRenderOptions = .{},
         ui_fonts: ui_draw_list_mod.UiFontStore = .empty,
-
-        /// Direct uploads the engine carries across a GPU surface loss
-        /// (#820): every `loadTextureFromMemory` id → an owned copy of the
-        /// bytes it was decoded from, so `surfaceRestored` can re-upload
-        /// under the SAME id. Only populated when the renderer exposes the
-        /// gfx re-arm seam (`tracks_direct_uploads`); empty otherwise, and
-        /// `.empty` costs nothing. Entries leave on `unloadTexture` /
-        /// `deinit`. Keyed by the engine's public `u32` handle.
-        direct_textures: atlas_mixin.DirectTextureStore = .empty,
 
         // Debug-only: tombstone ring buffer (#420)
         tombstones: if (is_debug) [tombstone_size]?TombstoneEntry else void =
@@ -1638,7 +1646,6 @@ pub fn GameConfigWithYAxis(
         pub const tracks_direct_uploads = AtlasMixin.tracks_direct_uploads;
         pub const invalidateDirectTextures = AtlasMixin.invalidateDirectTextures;
         pub const reuploadDirectTextures = AtlasMixin.reuploadDirectTextures;
-        pub const deinitDirectTextures = AtlasMixin.deinitDirectTextures;
 
         // ── Standalone image asset shims (#831) ──
         //

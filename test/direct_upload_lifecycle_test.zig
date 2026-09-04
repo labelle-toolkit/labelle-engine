@@ -259,8 +259,8 @@ test "loadTextureFromMemory retains an OWNED copy of the bytes keyed by the publ
     const id = try game.loadTextureFromMemory("png", &scratch);
     scratch[0] = 0;
 
-    try testing.expectEqual(@as(u32, 1), game.direct_textures.count());
-    const dt = game.direct_textures.get(id).?;
+    try testing.expectEqual(@as(u32, 1), game.active_world.direct_textures.count());
+    const dt = game.active_world.direct_textures.get(id).?;
     try testing.expectEqualStrings("png", dt.file_type);
     try testing.expectEqualStrings(png_a, dt.bytes);
     try testing.expect(dt.bytes.ptr != &scratch);
@@ -275,15 +275,15 @@ test "unloadTexture frees the retained copy (u32 and typed handles alike)" {
 
     const a = try game.loadTextureFromMemory("png", png_a);
     const b = try game.loadTextureFromMemory("png", png_b);
-    try testing.expectEqual(@as(u32, 2), game.direct_textures.count());
+    try testing.expectEqual(@as(u32, 2), game.active_world.direct_textures.count());
 
     game.unloadTexture(a);
-    try testing.expectEqual(@as(u32, 1), game.direct_textures.count());
-    try testing.expect(game.direct_textures.get(a) == null);
+    try testing.expectEqual(@as(u32, 1), game.active_world.direct_textures.count());
+    try testing.expect(game.active_world.direct_textures.get(a) == null);
 
     const typed: core.TextureId = @enumFromInt(b);
     game.unloadTexture(typed);
-    try testing.expectEqual(@as(u32, 0), game.direct_textures.count());
+    try testing.expectEqual(@as(u32, 0), game.active_world.direct_textures.count());
     try testing.expectEqual(@as(usize, 2), game.renderer.unloaded.items.len);
 
     // Releasing an unknown id is harmless (and still reaches the renderer,
@@ -323,7 +323,7 @@ test "surfaceLost invalidates every retained id (never unloads); surfaceRestored
     // ...and it happened BEFORE the sync hook ran.
     try testing.expectEqual(@as(usize, 2), recorder.invalidated_at_lost);
     // Retained copies untouched: the ids are still live.
-    try testing.expectEqual(@as(u32, 2), game.direct_textures.count());
+    try testing.expectEqual(@as(u32, 2), game.active_world.direct_textures.count());
 
     game.surfaceRestored();
     try testing.expectEqual(@as(usize, 1), recorder.restored_count);
@@ -388,7 +388,7 @@ test "a failed re-upload is logged, the entry kept, and the restore still comple
     try testing.expectEqual(@as(usize, 0), game.renderer.reuploads.items.len);
     // Kept so `unloadTexture`/`deinit` still own the copy (no leak, no
     // dangling id).
-    try testing.expectEqual(@as(u32, 1), game.direct_textures.count());
+    try testing.expectEqual(@as(u32, 1), game.active_world.direct_textures.count());
 }
 
 test "a failed load retains nothing" {
@@ -400,7 +400,7 @@ test "a failed load retains nothing" {
 
     game.renderer.fail_load = true;
     try testing.expectError(error.DecodeFailed, game.loadTextureFromMemory("png", png_a));
-    try testing.expectEqual(@as(u32, 0), game.direct_textures.count());
+    try testing.expectEqual(@as(u32, 0), game.active_world.direct_textures.count());
 }
 
 // ── Without the seam (gfx < 1.31): v2.13.0 behaviour, byte for byte ─────
@@ -413,7 +413,7 @@ test "a renderer without the seam retains nothing and the surface events do noth
 
     const id = try game.loadTextureFromMemory("png", png_a);
     try testing.expect(id >= (1 << 31));
-    try testing.expectEqual(@as(u32, 0), game.direct_textures.count());
+    try testing.expectEqual(@as(u32, 0), game.active_world.direct_textures.count());
 
     // Both compile and run; nothing to invalidate or re-upload.
     game.surfaceLost();
@@ -423,4 +423,125 @@ test "a renderer without the seam retains nothing and the surface events do noth
 
     game.unloadTexture(id);
     try testing.expectEqual(@as(usize, 1), game.renderer.unload_count);
+}
+
+// ── Multi-world scoping (review round 1) ────────────────────────────────
+//
+// Every `World` owns its own renderer, and every renderer mints ids from
+// the same base — so world A and world B routinely hand out the SAME
+// `u32`. A game-global retention map keyed by that bare id cross-wires
+// them: a load/unload in B replaces or frees A's entry, and a surface
+// cycle while B is active re-uploads A's bytes through B's renderer,
+// clobbering an unrelated texture. The store lives on the World instead.
+//
+// The other half of the argument: one backend GPU context serves every
+// world, so its loss kills the SHELVED worlds' textures too — the surface
+// cycle must cover all of them, each against its own renderer.
+
+const world_a_png = "\x89PNG-A-world";
+const world_b_png = "\x89PNG-B-world";
+
+test "worlds retain independently: identical ids in two worlds do not clobber each other across a surface cycle" {
+    var recorder = Recorder{};
+    var game = TrackingGame.init(testing.allocator);
+    defer game.deinit();
+    game.setHooks(&recorder);
+
+    // World A becomes active (the unnamed default is destroyed) and takes
+    // an upload; then world B, whose fresh renderer mints the SAME id.
+    try game.createWorld("a");
+    try game.setActiveWorld("a");
+    const world_a = game.active_world;
+    const id_a = try game.loadTextureFromMemory("png", world_a_png);
+
+    try game.createWorld("b");
+    try game.setActiveWorld("b");
+    const world_b = game.active_world;
+    const id_b = try game.loadTextureFromMemory("qoi", world_b_png);
+
+    // The premise of the bug: same number, different registries.
+    try testing.expectEqual(id_a, id_b);
+    try testing.expect(world_a != world_b);
+
+    // Neither store leaked into the other, and B's load did not replace A's.
+    try testing.expectEqual(@as(u32, 1), world_a.direct_textures.count());
+    try testing.expectEqual(@as(u32, 1), world_b.direct_textures.count());
+    try testing.expectEqualStrings(world_a_png, world_a.direct_textures.get(id_a).?.bytes);
+    try testing.expectEqualStrings(world_b_png, world_b.direct_textures.get(id_b).?.bytes);
+
+    // Surface cycle while B is active. One GPU context serves both worlds,
+    // so BOTH must be invalidated and re-uploaded — each against its own
+    // renderer, with its own bytes.
+    game.surfaceLost();
+    try testing.expectEqual(@as(usize, 1), world_a.renderer.invalidated.items.len);
+    try testing.expectEqual(@as(usize, 1), world_b.renderer.invalidated.items.len);
+
+    game.surfaceRestored();
+    const ups_a = world_a.renderer.reuploads.items;
+    const ups_b = world_b.renderer.reuploads.items;
+    try testing.expectEqual(@as(usize, 1), ups_a.len);
+    try testing.expectEqual(@as(usize, 1), ups_b.len);
+    // Each world's renderer saw ITS world's file type and bytes — the
+    // clobber this test exists for would show up as A's png in B or a
+    // double re-upload in the active renderer.
+    try testing.expectEqualStrings("png", ups_a[0].fileType());
+    try testing.expectEqualStrings(world_a_png, ups_a[0].data());
+    try testing.expectEqualStrings("qoi", ups_b[0].fileType());
+    try testing.expectEqualStrings(world_b_png, ups_b[0].data());
+}
+
+test "unloading in the active world leaves an identically-numbered entry in a shelved world intact" {
+    var recorder = Recorder{};
+    var game = TrackingGame.init(testing.allocator);
+    defer game.deinit();
+    game.setHooks(&recorder);
+
+    try game.createWorld("a");
+    try game.setActiveWorld("a");
+    const world_a = game.active_world;
+    const id_a = try game.loadTextureFromMemory("png", world_a_png);
+
+    try game.createWorld("b");
+    try game.setActiveWorld("b");
+    const world_b = game.active_world;
+    const id_b = try game.loadTextureFromMemory("qoi", world_b_png);
+    try testing.expectEqual(id_a, id_b);
+
+    game.unloadTexture(id_b);
+
+    // B's entry is gone; A's — same number, different world — untouched.
+    try testing.expectEqual(@as(u32, 0), world_b.direct_textures.count());
+    try testing.expectEqual(@as(u32, 1), world_a.direct_textures.count());
+    try testing.expectEqualStrings(world_a_png, world_a.direct_textures.get(id_a).?.bytes);
+
+    // The release reached B's renderer only.
+    try testing.expectEqual(@as(usize, 1), world_b.renderer.unloaded.items.len);
+    try testing.expectEqual(@as(usize, 0), world_a.renderer.unloaded.items.len);
+
+    // And the surviving world still re-uploads on a cycle.
+    game.surfaceLost();
+    game.surfaceRestored();
+    try testing.expectEqual(@as(usize, 1), world_a.renderer.reuploads.items.len);
+    try testing.expectEqual(@as(usize, 0), world_b.renderer.reuploads.items.len);
+}
+
+test "a shelved world's retained copies are freed with the world, not leaked" {
+    var recorder = Recorder{};
+    var game = TrackingGame.init(testing.allocator);
+    defer game.deinit();
+    game.setHooks(&recorder);
+
+    try game.createWorld("a");
+    try game.setActiveWorld("a");
+    _ = try game.loadTextureFromMemory("png", world_a_png);
+
+    try game.createWorld("b");
+    try game.setActiveWorld("b");
+    _ = try game.loadTextureFromMemory("qoi", world_b_png);
+
+    // Destroying a shelved world frees its store...
+    try game.setActiveWorld("a");
+    game.destroyWorld("b");
+    // ...and `game.deinit` frees the active one's. testing.allocator
+    // reports either miss as a leak.
 }

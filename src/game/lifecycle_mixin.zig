@@ -105,9 +105,6 @@ pub fn Mixin(comptime Game: type) type {
             self.clearSubmittedUi();
             self.ui_draw_list.deinit(self.allocator);
             self.ui_fonts.deinit(self.allocator);
-            // Direct uploads retained for surface restore (#820): the CPU
-            // copies only — their GPU side went with the renderer above.
-            self.deinitDirectTextures();
             self.scenes.deinit();
             self.jsonc_scenes.deinit();
             // Sprite-based asset inference (#563): free the reverse index and
@@ -345,9 +342,11 @@ pub fn Mixin(comptime Game: type) type {
         ///      asset's holders stay valid.
         ///   2. Re-arm every atlas's `texture_id` so the idempotent
         ///      per-tick bridge re-wires fresh handles after restore.
-        ///   3. Invalidate every retained DIRECT upload's handle in the
-        ///      renderer (#820) — same no-destroy rule as (1); the engine
-        ///      ids stay valid and `surfaceRestored` re-arms them.
+        ///   3. Invalidate every retained DIRECT upload's handle, in
+        ///      EVERY world (#820) — one backend context serves them all,
+        ///      so its loss kills the shelved worlds' textures too. Same
+        ///      no-destroy rule as (1); the engine ids stay valid and
+        ///      `surfaceRestored` re-arms them.
         ///   4. Emit `engine__surface_lost` — SYNCHRONOUSLY — for hook
         ///      listeners, while every GPU handle is still alive.
         ///

@@ -132,7 +132,8 @@ pub const DirectTexture = struct {
     bytes: []const u8,
 };
 
-/// `Game.direct_textures` — public `u32` handle → retained upload.
+/// `World.direct_textures` — public `u32` handle → retained upload. Lives
+/// on the World, not the Game: see the field's doc comment for why.
 pub const DirectTextureStore = std.AutoHashMapUnmanaged(u32, DirectTexture);
 
 pub fn Mixin(comptime Game: type) type {
@@ -194,7 +195,10 @@ pub fn Mixin(comptime Game: type) type {
         /// renderer with the gfx re-arm seam (`Game.tracks_direct_uploads`,
         /// gfx >= 1.31) the ENGINE carries it across a GPU surface loss
         /// (Android TERM_WINDOW / INIT_WINDOW): it retains a copy of
-        /// `data` + `file_type`, drops the dead handle on `surfaceLost`
+        /// `data` + `file_type` (on the active world — the retention is
+        /// per-world because the texture registry is, though a surface
+        /// cycle covers every world's uploads), drops the dead handle on
+        /// `surfaceLost`
         /// (no destroy — the context is gone) and re-decodes + re-uploads
         /// on `surfaceRestored` under the SAME `u32`, before
         /// `engine__surface_restored` is delivered. The id you hold stays
@@ -228,7 +232,10 @@ pub fn Mixin(comptime Game: type) type {
             const tex_id = try self.renderer.loadTextureFromMemory(file_type, data);
             const id: u32 = if (@typeInfo(@TypeOf(tex_id)) == .@"enum") @intFromEnum(tex_id) else tex_id;
             if (comptime tracks) {
-                retainDirectTexture(self, id, file_type, data) catch |err| {
+                // The ACTIVE world's store: the id was just minted by the
+                // active world's renderer, which is the only registry it
+                // means anything in.
+                retainDirectTexture(self.active_world, id, file_type, data) catch |err| {
                     // Either the upload is tracked or the load fails: a
                     // texture that silently would NOT come back after a
                     // resume is the exact ambiguity this seam removes.
@@ -243,39 +250,65 @@ pub fn Mixin(comptime Game: type) type {
 
         pub const tracks_direct_uploads = tracks;
 
-        fn retainDirectTexture(self: *Game, id: u32, file_type: [:0]const u8, data: []const u8) !void {
-            const ft = try self.allocator.dupeZ(u8, file_type);
-            errdefer self.allocator.free(ft);
-            const bytes = try self.allocator.dupe(u8, data);
-            errdefer self.allocator.free(bytes);
+        fn retainDirectTexture(world: *Game.World, id: u32, file_type: [:0]const u8, data: []const u8) !void {
+            const ft = try world.allocator.dupeZ(u8, file_type);
+            errdefer world.allocator.free(ft);
+            const bytes = try world.allocator.dupe(u8, data);
+            errdefer world.allocator.free(bytes);
             // A renderer that hands out the same key twice would leak the
             // first copy — replace, freeing it, rather than trust it.
-            if (self.direct_textures.fetchRemove(id)) |old| freeDirectTexture(self, old.value);
-            try self.direct_textures.put(self.allocator, id, .{ .file_type = ft, .bytes = bytes });
+            if (world.direct_textures.fetchRemove(id)) |old| freeDirectTexture(world, old.value);
+            try world.direct_textures.put(world.allocator, id, .{ .file_type = ft, .bytes = bytes });
         }
 
-        fn freeDirectTexture(self: *Game, dt: DirectTexture) void {
-            self.allocator.free(dt.file_type);
-            self.allocator.free(dt.bytes);
+        fn freeDirectTexture(world: *Game.World, dt: DirectTexture) void {
+            world.allocator.free(dt.file_type);
+            world.allocator.free(dt.bytes);
         }
 
-        /// `surfaceLost` half: tell the renderer every retained id's
-        /// backend handle is dead. NOT `unloadTexture` — the GPU context is
-        /// gone (destroying on it is UB) and after re-init the backend
-        /// recycles slot numbers, so a late free through the stale handle
-        /// kills whichever live texture landed in that slot. The engine ids
-        /// and the retained bytes are untouched. No-op without the seam.
+        /// `surfaceLost` half: tell each world's renderer that every id it
+        /// retained has a dead backend handle. NOT `unloadTexture` — the GPU
+        /// context is gone (destroying on it is UB) and after re-init the
+        /// backend recycles slot numbers, so a late free through the stale
+        /// handle kills whichever live texture landed in that slot. The
+        /// engine ids and the retained bytes are untouched. No-op without
+        /// the seam.
+        ///
+        /// EVERY world, not just the active one: the worlds share one
+        /// backend GPU context, so its loss kills a shelved world's textures
+        /// exactly as it kills the active world's. Skipping them would leave
+        /// a world that is swapped back in after the restore drawing through
+        /// handles the backend has since recycled — the same
+        /// somebody-else's-texture bug this ticket is about, deferred to the
+        /// next `setActiveWorld`. Each world is invalidated against ITS OWN
+        /// renderer: the ids are per-registry and collide across worlds.
         pub fn invalidateDirectTextures(self: *Game) void {
             if (comptime !tracks) return;
+            forEachWorld(self, invalidateWorldDirectTextures);
+        }
+
+        fn invalidateWorldDirectTextures(world: *Game.World) void {
             const Param = @typeInfo(@TypeOf(Renderer.invalidateTexture)).@"fn".params[1].type.?;
-            var it = self.direct_textures.keyIterator();
+            var it = world.direct_textures.keyIterator();
             while (it.next()) |id| {
-                self.renderer.invalidateTexture(normalizeHandle(Param, id.*));
+                world.renderer.invalidateTexture(normalizeHandle(Param, id.*));
             }
         }
 
+        /// Run `f` over every world exactly once — the active one plus the
+        /// shelved ones. `setActiveWorld` REMOVES the incoming world from
+        /// `worlds` and shelves the outgoing one, so the active world is
+        /// never also in the map and nothing is visited twice.
+        fn forEachWorld(self: *Game, comptime f: fn (*Game.World) void) void {
+            f(self.active_world);
+            var it = self.worlds.valueIterator();
+            while (it.next()) |world| f(world.*);
+        }
+
         /// `surfaceRestored` half: re-decode + re-upload every retained
-        /// direct upload under its ORIGINAL engine id. A failed re-upload
+        /// direct upload under its ORIGINAL engine id, in every world and
+        /// against that world's own renderer (mirror of
+        /// `invalidateDirectTextures` — same reasons). A failed re-upload
         /// is logged and the entry kept (the id then draws nothing, exactly
         /// like an invalidated key, until the game releases it); a stray
         /// unload in between (`TextureNotRegistered`) is impossible here
@@ -283,12 +316,16 @@ pub fn Mixin(comptime Game: type) type {
         /// without the seam.
         pub fn reuploadDirectTextures(self: *Game) void {
             if (comptime !tracks) return;
+            forEachWorld(self, reuploadWorldDirectTextures);
+        }
+
+        fn reuploadWorldDirectTextures(world: *Game.World) void {
             const Param = @typeInfo(@TypeOf(Renderer.reuploadTextureFromMemory)).@"fn".params[1].type.?;
-            var it = self.direct_textures.iterator();
+            var it = world.direct_textures.iterator();
             var ok: usize = 0;
             while (it.next()) |entry| {
                 const dt = entry.value_ptr.*;
-                self.renderer.reuploadTextureFromMemory(normalizeHandle(Param, entry.key_ptr.*), dt.file_type, dt.bytes) catch |err| {
+                world.renderer.reuploadTextureFromMemory(normalizeHandle(Param, entry.key_ptr.*), dt.file_type, dt.bytes) catch |err| {
                     std.log.warn(
                         "surface_restored: re-upload of direct texture {d} ({s}, {d} bytes) failed: {s}",
                         .{ entry.key_ptr.*, dt.file_type, dt.bytes.len, @errorName(err) },
@@ -297,17 +334,18 @@ pub fn Mixin(comptime Game: type) type {
                 };
                 ok += 1;
             }
-            if (self.direct_textures.count() > 0) {
-                std.log.info("surface_restored: re-uploaded {d}/{d} direct textures under their original ids", .{ ok, self.direct_textures.count() });
+            if (world.direct_textures.count() > 0) {
+                std.log.info("surface_restored: re-uploaded {d}/{d} direct textures under their original ids", .{ ok, world.direct_textures.count() });
             }
         }
 
-        /// `Game.deinit` half: free the retained copies. The renderer frees
-        /// the GPU side in its own teardown.
-        pub fn deinitDirectTextures(self: *Game) void {
-            var it = self.direct_textures.valueIterator();
-            while (it.next()) |dt| freeDirectTexture(self, dt.*);
-            self.direct_textures.deinit(self.allocator);
+        /// `World.deinit` half: free the retained copies. The renderer frees
+        /// the GPU side in its own teardown. Called for the active world and
+        /// every shelved one, since each `World` frees its own.
+        pub fn freeWorldDirectTextures(world: *Game.World) void {
+            var it = world.direct_textures.valueIterator();
+            while (it.next()) |dt| freeDirectTexture(world, dt.*);
+            world.direct_textures.deinit(world.allocator);
         }
 
         pub fn registerAtlasFromMemoryImpl(self: *Game, name: []const u8, json_content: []const u8, image_data: []const u8, file_type: [:0]const u8) !void {
@@ -746,8 +784,14 @@ pub fn Mixin(comptime Game: type) type {
             if (!@hasDecl(Renderer, "unloadTexture")) return;
             // Drop the retained copy first (#820): the map is keyed by the
             // public `u32`, so normalize the caller's handle down to it.
+            // The ACTIVE world's store only — the renderer call below goes
+            // to the active world's renderer, so that is the registry this
+            // id names; a shelved world's identically-numbered entry belongs
+            // to a different texture and must not be disturbed.
             if (comptime tracks) {
-                if (self.direct_textures.fetchRemove(normalizeHandle(u32, tex_id))) |old| freeDirectTexture(self, old.value);
+                if (self.active_world.direct_textures.fetchRemove(normalizeHandle(u32, tex_id))) |old| {
+                    freeDirectTexture(self.active_world, old.value);
+                }
             }
             // Normalize to the renderer's handle type, derived from the SEAM's
             // OWN signature rather than a `Renderer.TextureId` decl — the real
