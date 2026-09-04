@@ -116,6 +116,24 @@ pub fn Mixin(comptime Game: type) type {
             if (self.drive_particles and scaled_dt != 0) {
                 @import("../particles_tick.zig").tick(self, scaled_dt);
             }
+            // Tiled per-tile animations (labelle-gfx#351) — water,
+            // shorelines, torches, waterfalls. gfx's tilemap renderer owns
+            // NO clock (backends differ; headless tests must be
+            // deterministic), so this call is the only thing that moves
+            // them. Same always-run block and same `scaled_dt` as the two
+            // ticks above, so a hard pause freezes the water and a slowed
+            // time-scale slows it, exactly as for sprite animation.
+            //
+            // Ticked here rather than in the render pass on purpose: the
+            // render pass runs once per ACTIVE CAMERA (split-screen), which
+            // would advance the animation N× per frame.
+            //
+            // Folds away completely on a renderer without gfx's tilemap
+            // seam or on a gfx predating `advanceAnimations`, and returns
+            // immediately when no entity carries a tilemap.
+            if (scaled_dt != 0) {
+                TilemapMixin.tickTilemapAnimations(self, scaled_dt);
+            }
             AtlasMixin.resolveAtlasSprites(self);
             self.renderer.sync(EcsImpl, self.ecs_backend);
 

@@ -305,6 +305,11 @@ pub fn build(b: *std.Build) void {
         // needs only the standard core/engine/scene imports — and it pins
         // that an engine on OLDER gfx keeps full tilemap support.
         "test/tilemap_collection_test.zig",
+        // Per-tile animation tick (companion to labelle-gfx#351). Same
+        // reason for a hand-rolled gfx stand-in: the pinned gfx has no
+        // `advanceAnimations`, and the pre/post pair is what pins the
+        // `@hasDecl` degrade.
+        "test/tilemap_animation_tick_test.zig",
     };
 
     for (test_files) |test_file| {
