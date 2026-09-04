@@ -64,6 +64,24 @@ const minimal_tmx =
 // never decodes them — it just mints a handle — so any non-empty blob works.
 const fake_png = "\x89PNG\r\n\x1a\n fake tileset pixels";
 
+/// #835 — the same minimal map with the tileset's `<image source>` swapped,
+/// so a test can pin the `file_type` token derived from a given filename.
+fn tmxWith(comptime image_source: []const u8) []const u8 {
+    return "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n" ++
+        "<map version=\"1.10\" orientation=\"orthogonal\" width=\"3\" height=\"2\" tilewidth=\"16\" tileheight=\"16\">\n" ++
+        " <tileset firstgid=\"1\" name=\"test_tiles\" tilewidth=\"16\" tileheight=\"16\" columns=\"4\" tilecount=\"8\">\n" ++
+        "  <image source=\"" ++ image_source ++ "\" width=\"64\" height=\"32\"/>\n" ++
+        " </tileset>\n" ++
+        " <layer name=\"ground\" width=\"3\" height=\"2\">\n" ++
+        "  <data encoding=\"csv\">\n1,2,3,\n4,5,6,\n</data>\n" ++
+        " </layer>\n" ++
+        "</map>\n";
+}
+
+const upper_ext_tmx = tmxWith("TILES.PNG");
+const jpg_ext_tmx = tmxWith("tiles.JPG");
+const no_ext_tmx = tmxWith("tiles");
+
 /// The sprite pass emits one draw with this sentinel texture id, so the
 /// test can prove tilemap tiles are drawn strictly BEFORE it (the terrain
 /// is the background layer, under the gameplay sprites).
@@ -142,6 +160,11 @@ const MockRender = struct {
     /// Logical screen height sprites (and the tilemap y-flip) flip against —
     /// mirrors `GfxRendererWith.screen_height` (set via `setScreenHeight`).
     screen_height: f32 = 600,
+    /// #835 — the `file_type` token of the last `loadTextureFromMemory`
+    /// call, COPIED: the tilemap runtime frees the token as soon as the
+    /// call returns, so borrowing the slice would dangle.
+    last_file_type_buf: [32]u8 = undefined,
+    last_file_type_len: usize = 0,
 
     pub fn init(allocator: std.mem.Allocator) Self {
         return .{ .alloc = allocator };
@@ -152,8 +175,13 @@ const MockRender = struct {
 
     // Upload path shared with sprites — mints a backend texture + handle.
     pub fn loadTextureFromMemory(self: *Self, file_type: [:0]const u8, data: []const u8) !u32 {
-        _ = file_type;
         _ = data;
+        // #835 — keep the token verbatim so a test can pin its SPELLING.
+        // Every real image backend that reads this argument (raylib) does a
+        // literal `strcmp` against `".png"`, dot included.
+        const n = @min(file_type.len, self.last_file_type_buf.len);
+        @memcpy(self.last_file_type_buf[0..n], file_type[0..n]);
+        self.last_file_type_len = n;
         const id = self.next_id;
         self.next_id += 1;
         try self.textures.put(self.alloc, id, .{ .id = id, .width = 64, .height = 32 });
@@ -170,6 +198,10 @@ const MockRender = struct {
     /// uploaded (F1). Idempotent: a stale id is a safe no-op.
     pub fn unloadTexture(self: *Self, id: u32) void {
         _ = self.textures.remove(id);
+    }
+    /// The `file_type` token of the most recent upload (#835).
+    pub fn lastFileType(self: *const Self) []const u8 {
+        return self.last_file_type_buf[0..self.last_file_type_len];
     }
 
     // ── core.RenderInterface no-ops (mirror StubRender) ──
@@ -313,6 +345,50 @@ test "addTilemap decodes the .tmx into a per-entity runtime" {
     try testing.expectEqual(@as(usize, 1), rt.map.tile_layers.len);
     try testing.expectEqual(@as(usize, 1), rt.map.tilesets.len);
     try testing.expectEqualStrings("tiles.png", rt.map.tilesets[0].image_source);
+}
+
+test "#835: the tileset file_type handed to the backend KEEPS its leading dot" {
+    const G = TilemapGame();
+    var game = G.init(testing.allocator);
+    defer game.deinit();
+    try registerFixture(&game);
+
+    const e = game.createEntity();
+    game.addTilemap(e, .{ .asset_name = "level.tmx" });
+
+    // The dot is load-bearing. labelle-raylib's `decodeImage` forwards this
+    // token to raylib's `LoadImageFromMemory`, which dispatches through
+    // `strcmp(fileType, ".png")` — WITH the dot. A dotless "png" matches no
+    // arm, returns an EMPTY image, and the runtime's `catch null` degrades
+    // that to a silently blank tileset. Nothing pinned the spelling before
+    // #835, which is how it shipped.
+    try testing.expectEqualStrings(".png", game.renderer.lastFileType());
+}
+
+test "#835: the file_type is lowercased, keeps a non-png extension, and defaults to .png" {
+    const G = TilemapGame();
+    var game = G.init(testing.allocator);
+    defer game.deinit();
+
+    // `.PNG` must normalise to `.png`: raylib compares against the exact
+    // lowercase and exact uppercase spellings only, so a mixed-case `.Png`
+    // would match nothing.
+    try game.addEmbeddedTilemapAsset("upper.tmx", upper_ext_tmx);
+    try game.addEmbeddedTilemapAsset("TILES.PNG", fake_png);
+    game.addTilemap(game.createEntity(), .{ .asset_name = "upper.tmx" });
+    try testing.expectEqualStrings(".png", game.renderer.lastFileType());
+
+    // A non-png extension is carried through verbatim (dotted, lowercased).
+    try game.addEmbeddedTilemapAsset("jpg.tmx", jpg_ext_tmx);
+    try game.addEmbeddedTilemapAsset("tiles.JPG", fake_png);
+    game.addTilemap(game.createEntity(), .{ .asset_name = "jpg.tmx" });
+    try testing.expectEqualStrings(".jpg", game.renderer.lastFileType());
+
+    // No extension at all still falls back to the dotted default.
+    try game.addEmbeddedTilemapAsset("noext.tmx", no_ext_tmx);
+    try game.addEmbeddedTilemapAsset("tiles", fake_png);
+    game.addTilemap(game.createEntity(), .{ .asset_name = "noext.tmx" });
+    try testing.expectEqualStrings(".png", game.renderer.lastFileType());
 }
 
 test "tilemap renders as a PRE-SPRITE background pass at the entity's world offset" {
