@@ -105,6 +105,9 @@ pub fn Mixin(comptime Game: type) type {
             self.clearSubmittedUi();
             self.ui_draw_list.deinit(self.allocator);
             self.ui_fonts.deinit(self.allocator);
+            // Direct uploads retained for surface restore (#820): the CPU
+            // copies only — their GPU side went with the renderer above.
+            self.deinitDirectTextures();
             self.scenes.deinit();
             self.jsonc_scenes.deinit();
             // Sprite-based asset inference (#563): free the reverse index and
@@ -342,7 +345,10 @@ pub fn Mixin(comptime Game: type) type {
         ///      asset's holders stay valid.
         ///   2. Re-arm every atlas's `texture_id` so the idempotent
         ///      per-tick bridge re-wires fresh handles after restore.
-        ///   3. Emit `engine__surface_lost` — SYNCHRONOUSLY — for hook
+        ///   3. Invalidate every retained DIRECT upload's handle in the
+        ///      renderer (#820) — same no-destroy rule as (1); the engine
+        ///      ids stay valid and `surfaceRestored` re-arms them.
+        ///   4. Emit `engine__surface_lost` — SYNCHRONOUSLY — for hook
         ///      listeners, while every GPU handle is still alive.
         ///
         /// `reenqueueGpuResident` + `surfaceRestored` do the inverse once
@@ -361,12 +367,18 @@ pub fn Mixin(comptime Game: type) type {
         ///
         /// Delivering the event here, via `emitEngineEventSync`, gives a
         /// game hook the one moment where releasing GPU-resident objects
-        /// the engine does not track is both possible and correct:
-        /// textures uploaded straight through `loadTextureFromMemory`
-        /// (the catalog re-uploads ITS assets and `reuploadUiFonts` covers
-        /// the engine's own fonts; direct uploads belong to the caller),
-        /// textures lent to a GUI bridge by backend handle, and so on.
-        /// Contract: **direct uploads die with the surface** — release them
+        /// the engine does not track is both possible and correct. What
+        /// the engine tracks: the catalog's assets (re-enqueued), its own
+        /// UI fonts (`reuploadUiFonts`) and — on a renderer with the gfx
+        /// re-arm seam, `Game.tracks_direct_uploads` — every direct
+        /// `loadTextureFromMemory` upload, re-uploaded under the same id
+        /// (`reuploadDirectTextures`). What it cannot track: a texture
+        /// lent to a GUI bridge by BACKEND handle (imgui `registerTexture`
+        /// via `nativeTextureId`) — the restore puts a new backend texture
+        /// behind the engine id, so that lend must be unregistered here
+        /// and re-registered after `engine__surface_restored`. On a
+        /// renderer WITHOUT the seam the v2.13.0 contract stands: direct
+        /// uploads die with the surface — release them
         /// (`game.unloadTexture`) in an `engine__surface_lost` hook and
         /// re-create them after `engine__surface_restored`. The handler
         /// runs on the backend's app thread, the same one the parked game
@@ -375,6 +387,8 @@ pub fn Mixin(comptime Game: type) type {
         pub fn surfaceLost(self: *Game) void {
             self.assets.invalidateGpuResources();
             self.atlas_manager.invalidateUploadedTextures();
+            // Direct uploads (#820): drop the dead handles, keep the ids.
+            self.invalidateDirectTextures();
             std.log.info("surface_lost: invalidated gpu-resident assets, refcounts preserved", .{});
             // Engine `Events` dual-emit (#578); folds away when the game
             // doesn't subscribe. Sync, not buffered — see the doc above.
@@ -391,10 +405,12 @@ pub fn Mixin(comptime Game: type) type {
         /// frames. Bounded so a wedged decode can't hang the restore.
         ///
         /// Emits `engine__surface_restored` SYNCHRONOUSLY, after the
-        /// engine's own re-upload pass, so a hook can re-create what it
-        /// released in `engine__surface_lost` before the first restored
-        /// frame draws — a buffered emit would leave that frame sampling
-        /// whatever the hook had not yet re-created (#820).
+        /// engine's own re-upload pass — catalog, UI fonts, and every
+        /// retained direct upload back under its original id — so a hook
+        /// can re-derive anything it lent by backend handle, or re-create
+        /// what it released in `engine__surface_lost`, before the first
+        /// restored frame draws — a buffered emit would leave that frame
+        /// sampling whatever the hook had not yet re-created (#820).
         ///
         /// What the event guarantees is a LIVE GPU context (bgfx has
         /// re-inited; uploads work), not catalog readiness: the pump above
@@ -412,6 +428,10 @@ pub fn Mixin(comptime Game: type) type {
             // them — re-upload from their retained RGBA here or `text_line`s
             // would sample a stale, destroyed GPU handle after resume.
             self.reuploadUiFonts();
+            // Direct uploads (#820): re-decode + re-upload under their
+            // ORIGINAL ids, so a game's held `u32` — and a hook about to
+            // re-resolve `nativeTextureId` from it — sees a live texture.
+            self.reuploadDirectTextures();
             std.log.info("surface_restored: re-enqueued + pumped to ready", .{});
             // Engine `Events` dual-emit (#578). Sync — see the doc above.
             self.emitEngineEventSync("engine__surface_restored", .{});

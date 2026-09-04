@@ -999,6 +999,15 @@ pub fn GameConfigWithYAxis(
         ui_render_opts: ui_draw_list_mod.UiRenderOptions = .{},
         ui_fonts: ui_draw_list_mod.UiFontStore = .empty,
 
+        /// Direct uploads the engine carries across a GPU surface loss
+        /// (#820): every `loadTextureFromMemory` id → an owned copy of the
+        /// bytes it was decoded from, so `surfaceRestored` can re-upload
+        /// under the SAME id. Only populated when the renderer exposes the
+        /// gfx re-arm seam (`tracks_direct_uploads`); empty otherwise, and
+        /// `.empty` costs nothing. Entries leave on `unloadTexture` /
+        /// `deinit`. Keyed by the engine's public `u32` handle.
+        direct_textures: atlas_mixin.DirectTextureStore = .empty,
+
         // Debug-only: tombstone ring buffer (#420)
         tombstones: if (is_debug) [tombstone_size]?TombstoneEntry else void =
             if (is_debug) [_]?TombstoneEntry{null} ** tombstone_size else {},
@@ -1619,6 +1628,17 @@ pub fn GameConfigWithYAxis(
         /// without the seam, so this stays callable against any gfx instead of
         /// turning a graceful degrade into a compile error.
         pub const unloadTexture = AtlasMixin.unloadTexture;
+
+        /// True when the renderer can re-arm a minted texture key across a
+        /// surface loss (gfx >= 1.31: `invalidateTexture` +
+        /// `reuploadTextureFromMemory` on `GfxRenderer`). Governs whether
+        /// `loadTextureFromMemory` retains its bytes for `surfaceRestored`
+        /// (#820). False → the v2.13.0 contract: direct uploads die with the
+        /// surface and the game owns their lifecycle.
+        pub const tracks_direct_uploads = AtlasMixin.tracks_direct_uploads;
+        pub const invalidateDirectTextures = AtlasMixin.invalidateDirectTextures;
+        pub const reuploadDirectTextures = AtlasMixin.reuploadDirectTextures;
+        pub const deinitDirectTextures = AtlasMixin.deinitDirectTextures;
 
         // ── Standalone image asset shims (#831) ──
         //
