@@ -377,6 +377,10 @@ fn parseTmx(comptime Gfx: type, allocator: std.mem.Allocator, bytes: []const u8)
     const with_collection = @hasField(Gfx.Tileset, "tile_images");
 
     var map = Gfx.TileMap{ .allocator = allocator };
+    // Covers everything ownership has moved INTO `map` (its `deinit` frees
+    // the nested `tile_images` and `data` too). `tilesets`/`tile_layers`
+    // default to `&.{}`, so this is a no-op until the first handover.
+    errdefer map.deinit();
     const map_open = std.mem.indexOf(u8, bytes, "<map ") orelse return error.InvalidTmx;
     const map_el = elementHeader(bytes, map_open);
     map.width = attrU32(map_el, "width");
@@ -385,7 +389,15 @@ fn parseTmx(comptime Gfx: type, allocator: std.mem.Allocator, bytes: []const u8)
     map.tile_height = attrU32(map_el, "tileheight");
 
     var tilesets: std.ArrayList(Gfx.Tileset) = .empty;
-    errdefer tilesets.deinit(allocator);
+    // Each appended tileset may own a `tile_images` allocation, which the
+    // list's own `deinit` does not reach. After `toOwnedSlice` the list is
+    // empty and this loop is a no-op — `map.deinit` covers them from there.
+    errdefer {
+        for (tilesets.items) |ts| {
+            if (comptime with_collection) allocator.free(ts.tile_images);
+        }
+        tilesets.deinit(allocator);
+    }
 
     var pos: usize = 0;
     while (std.mem.indexOfPos(u8, bytes, pos, "<tileset ")) |open| {
@@ -446,7 +458,11 @@ fn parseTmx(comptime Gfx: type, allocator: std.mem.Allocator, bytes: []const u8)
     map.tilesets = try tilesets.toOwnedSlice(allocator);
 
     var layers: std.ArrayList(Gfx.TileLayer) = .empty;
-    errdefer layers.deinit(allocator);
+    // Same shape as `tilesets`: every appended layer owns its `data`.
+    errdefer {
+        for (layers.items) |l| allocator.free(l.data);
+        layers.deinit(allocator);
+    }
     pos = 0;
     while (std.mem.indexOfPos(u8, bytes, pos, "<layer ")) |open| {
         const el = elementHeader(bytes, open);
@@ -455,19 +471,30 @@ fn parseTmx(comptime Gfx: type, allocator: std.mem.Allocator, bytes: []const u8)
             .width = attrU32(el, "width"),
             .height = attrU32(el, "height"),
         };
+        // Both markers must fall inside THIS layer. Searching the whole
+        // buffer would hand a data-less layer the next layer's gids and
+        // parse "successfully" — a fixture bug that would read as a code
+        // bug in whatever test used it.
+        const layer_end = std.mem.indexOfPos(u8, bytes, open, "</layer>") orelse bytes.len;
         const data_open = std.mem.indexOfPos(u8, bytes, open, "<data ") orelse return error.InvalidTmx;
+        if (data_open >= layer_end) return error.InvalidTmx;
         const data_el = elementHeader(bytes, data_open);
         const csv_start = data_open + data_el.len;
         const csv_end = std.mem.indexOfPos(u8, bytes, csv_start, "</data>") orelse return error.InvalidTmx;
+        if (csv_end >= layer_end) return error.InvalidTmx;
         var gids = try allocator.alloc(u32, layer.width * layer.height);
         errdefer allocator.free(gids);
         var n: usize = 0;
         var it = std.mem.tokenizeAny(u8, bytes[csv_start..csv_end], ",\n\r \t");
         while (it.next()) |tok| {
-            if (n >= gids.len) break;
+            // Surplus gids are rejected rather than dropped, and a short
+            // CSV is rejected below: `alloc` leaves the tail UNDEFINED, so
+            // a miscounted fixture would otherwise place garbage tiles.
+            if (n >= gids.len) return error.InvalidTmx;
             gids[n] = std.fmt.parseInt(u32, tok, 10) catch 0;
             n += 1;
         }
+        if (n != gids.len) return error.InvalidTmx;
         layer.data = gids;
         try layers.append(allocator, layer);
         pos = csv_end;
@@ -804,4 +831,82 @@ test "gating: a pre-#343 gfx seam skips a collection tileset without failing the
     try testing.expectEqual(@as(usize, 1), upload_count);
     try testing.expect(rt.tileset_ids[0] != null);
     try testing.expect(rt.tileset_ids[1] == null);
+}
+
+// ── The fixture parser's own guards (#843 review) ────────────────────────
+//
+// `parseTmx` is test scaffolding, but it is the scaffolding every case in
+// this file is read through: a fixture it mis-parses silently would read as
+// a bug in the code under test. These pin the three ways it used to accept
+// a malformed fixture. All three are unreachable from the fixtures above —
+// that is the point of writing them down.
+
+test "a CSV short of width*height is rejected, not left undefined" {
+    const Gfx = FakeGfx(true);
+    // 3x2 = 6 gids declared, 4 supplied. `alloc` leaves the tail undefined,
+    // so accepting this would place two garbage tiles.
+    const tmx =
+        \\<map width="3" height="2" tilewidth="16" tileheight="16">
+        \\ <layer name="ground" width="3" height="2">
+        \\  <data encoding="csv">
+        \\1,1,1,1
+        \\</data>
+        \\ </layer>
+        \\</map>
+    ;
+    try std.testing.expectError(error.InvalidTmx, parseTmx(Gfx, std.testing.allocator, tmx));
+}
+
+test "a CSV longer than width*height is rejected, not truncated" {
+    const Gfx = FakeGfx(true);
+    const tmx =
+        \\<map width="3" height="2" tilewidth="16" tileheight="16">
+        \\ <layer name="ground" width="3" height="2">
+        \\  <data encoding="csv">
+        \\1,1,1,1,1,1,1,1
+        \\</data>
+        \\ </layer>
+        \\</map>
+    ;
+    try std.testing.expectError(error.InvalidTmx, parseTmx(Gfx, std.testing.allocator, tmx));
+}
+
+test "a data-less layer does not steal the next layer's gids" {
+    const Gfx = FakeGfx(true);
+    // `over` carries the only <data> in the buffer. Before the layer bound,
+    // `ground` found it and both layers parsed as if they had gids.
+    const tmx =
+        \\<map width="2" height="1" tilewidth="16" tileheight="16">
+        \\ <layer name="ground" width="2" height="1">
+        \\ </layer>
+        \\ <layer name="over" width="2" height="1">
+        \\  <data encoding="csv">
+        \\7,7
+        \\</data>
+        \\ </layer>
+        \\</map>
+    ;
+    try std.testing.expectError(error.InvalidTmx, parseTmx(Gfx, std.testing.allocator, tmx));
+}
+
+test "a tileset parsed before a malformed layer does not leak" {
+    const Gfx = FakeGfx(true);
+    // The collection tileset's `tile_images` is allocated and handed to
+    // `map` before the layer loop fails. testing.allocator is the assertion:
+    // it reports any block the error path fails to release.
+    const tmx =
+        \\<map width="2" height="1" tilewidth="16" tileheight="16">
+        \\ <tileset firstgid="1" name="props" tilewidth="16" tileheight="16" columns="0" tilecount="2">
+        \\  <tile id="0">
+        \\   <image source="a.png" width="16" height="16"/>
+        \\  </tile>
+        \\  <tile id="1">
+        \\   <image source="b.png" width="16" height="16"/>
+        \\  </tile>
+        \\ </tileset>
+        \\ <layer name="ground" width="2" height="1">
+        \\ </layer>
+        \\</map>
+    ;
+    try std.testing.expectError(error.InvalidTmx, parseTmx(Gfx, std.testing.allocator, tmx));
 }
