@@ -522,3 +522,33 @@ test "an engine on older gfx keeps its tilemaps and simply does not animate" {
     game.render();
     try testing.expect(rt.tm.draws > 0);
 }
+
+test "setPaused alone keeps animating, exactly like the neighbouring ticks" {
+    var game = ModernGame.init(testing.allocator);
+    defer game.deinit();
+    const e = try spawnTilemap(&game);
+    const rt = game.tilemapRuntime(e) orelse return error.NoTilemapRuntime;
+
+    // `setPaused(true)` sets the flag and LEAVES `time_scale` at 1.0, so
+    // `scaled_dt` stays non-zero. That is deliberate and matches the two
+    // ticks this one sits beside in `loop_mixin.tick`'s always-run block:
+    // `sprite_animation_tick` gates on `drive_sprite_animations and
+    // !sprite_animations_paused and scaled_dt != 0`, and `particles_tick`
+    // on `drive_particles and scaled_dt != 0` — NEITHER consults `paused`
+    // / `isPaused()`. `isPaused()` gates the gameplay-skip section further
+    // down, not this block. A pause menu that wants everything frozen uses
+    // `Game.pause()`, which zeroes `time_scale` (covered above).
+    //
+    // This test exists so that consistency is pinned rather than
+    // rediscovered: change it only by changing all three ticks together.
+    game.setPaused(true);
+    try testing.expect(game.isPaused());
+    game.tick(0.3);
+    try testing.expectEqual(@as(usize, 1), rt.tm.ticks);
+    try testing.expectEqual(@as(u32, 5), rt.tm.drawn_gid);
+
+    // `pause()` — the flag AND `time_scale = 0` — does freeze it.
+    game.pause();
+    game.tick(0.3);
+    try testing.expectEqual(@as(usize, 1), rt.tm.ticks);
+}
