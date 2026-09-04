@@ -31,6 +31,12 @@ pub fn Mixin(comptime Game: type) type {
     const has_atlas_sprite_fields = @hasField(Sprite, "sprite_name") and
         @hasField(Sprite, "source_rect") and @hasField(Sprite, "texture");
 
+    // The field `setTextFont` writes. `Text` is `void` on a renderer that
+    // ships no text visual at all (`StubRender`, several test mocks), and
+    // `@hasField` on a non-struct is a compile error — so the `void` check
+    // must come first and short-circuit.
+    const has_text_font = Text != void and @hasField(Text, "font");
+
     // A renderer keys textures on either an enum handle (labelle-gfx's
     // `TextureId`) or a plain integer; `normalizeHandle` bridges both.
     const TextureHandle = if (has_atlas_sprite_fields) @FieldType(Sprite, "texture") else void;
@@ -211,6 +217,70 @@ pub fn Mixin(comptime Game: type) type {
 
             sprite.source_rect = atlas_mixin.sourceRectFor(atlas_mixin.SourceRectOf(Sprite), result);
             sprite.texture = atlas_mixin.normalizeHandle(TextureHandle, result.texture_id);
+            self.renderer.markVisualDirty(entity);
+        }
+
+        // ── Text font swap ────────────────────────────────────────
+
+        /// Point a `Text` entity at a declared `.font` resource BY NAME:
+        /// resolves the name through `Game.fontId` and stamps the result on
+        /// the component's `font` field, then marks the visual dirty. The
+        /// text counterpart to `setSpriteFrame` (#826), closing the same gap
+        /// for text that #826 closed for sprites.
+        ///
+        /// WHY THIS EXISTS (#842): `TextVisual.font` is a `FontId`, and until
+        /// now nothing public produced one — so `addText` from a script could
+        /// only ever pass `.invalid`, and the whole `.font` resource kind was
+        /// unreachable end to end (no project in the toolkit declares one).
+        /// `game.fontId(name)` alone fixes the resolution; this exists so the
+        /// common case is one call that cannot forget the dirty-mark, exactly
+        /// as `setSpriteFlip` / `setSpriteFrame` / `setMaterial` do.
+        ///
+        /// HOW IT DIFFERS FROM `setSpriteFrame`, deliberately. `setSpriteFrame`
+        /// has a load-bearing correctness detail — `texture_scale_*` must
+        /// multiply the source rect but not the display dims, which every
+        /// hand-rolled copy got wrong. Text has no such transform to get
+        /// wrong: `FontId` is an opaque baked handle and glyph metrics ride
+        /// INSIDE the bake, so this really is a pure lookup + assign. The one
+        /// sizing subtlety is not this function's to make: a font is baked at
+        /// one `FontBakeParams.pixel_height`, and rendering it far from that
+        /// size is the renderer's scaling problem — two sizes of one face are
+        /// two separate declared resources with two names and two `FontId`s
+        /// (see the "distinct params produce distinct entries" case in
+        /// `test/asset_streaming_shim_test.zig`). Pick the name you want; this
+        /// will not resize anything for you.
+        ///
+        /// NOT-READY / FAILURE POSTURE — silent, matching every sibling setter,
+        /// but note the asymmetry with `setSpriteFrame`:
+        ///  * Entity has no `Text` component → returns without touching
+        ///    anything.
+        ///  * `fontId(name)` is `null` (font still streaming, missing, or
+        ///    registered under another kind) → the component is left ALONE and
+        ///    the visual is NOT marked dirty. Unlike `setSpriteFrame`, nothing
+        ///    is stamped for a later pass to pick up: a `Text` component has no
+        ///    `font_name` field and there is no per-frame text resolver, so an
+        ///    unresolved call CANNOT self-heal. A caller swapping to a lazily
+        ///    declared font must either retry until it takes, declare the
+        ///    resource eager, or call `loadFontIfNeeded(name)` first — see the
+        ///    streaming contract on `atlas_mixin.fontId`. Returning `bool`
+        ///    would let a caller notice; it is void for consistency with the
+        ///    other setters, and a caller that needs to know can test
+        ///    `game.fontId(name) != null` itself.
+        ///  * No `log.warn` on an unresolved name: like `setSpriteFrame` this
+        ///    is callable per frame, so a warn would be a log flood.
+        ///
+        /// Short-circuits when the font already matches, avoiding a wasted
+        /// dirty-mark. Comptime no-op on renderers with no `Text` component at
+        /// all (`StubRender`, mocks — `Text` is `void` there) or whose `Text`
+        /// carries no `font` field, so the helper stays safe to call uniformly
+        /// exactly like `setSpriteFlip`'s `flip_x` guard.
+        pub fn setTextFont(self: *Game, entity: Entity, name: []const u8) void {
+            if (comptime !has_text_font) return;
+            self.assertEntityAlive(entity, "setTextFont");
+            const text = self.ecs_backend.getComponent(entity, Text) orelse return;
+            const id = self.fontId(name) orelse return;
+            if (std.meta.eql(text.font, id)) return;
+            text.font = id;
             self.renderer.markVisualDirty(entity);
         }
 

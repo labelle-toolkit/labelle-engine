@@ -1,7 +1,6 @@
 /// GUI mixin — GUI begin/end, view rendering, and widget dispatch.
 const std = @import("std");
 const gui_types = @import("../gui_types.zig");
-const font_types = @import("font_types");
 
 /// Returns the GUI mixin for a given Game type.
 pub fn Mixin(comptime Game: type) type {
@@ -43,22 +42,6 @@ pub fn Mixin(comptime Game: type) type {
             }
         }
 
-        /// Runtime asset lookup for a label's optional `font` field.
-        /// Returns the baked `FontId` when the asset is `.ready`,
-        /// `null` otherwise (asset still loading, missing, or
-        /// not-a-font payload). Falling back to `null` keeps the
-        /// renderer's default-font path intact during streaming —
-        /// the label simply uses the backend's built-in font for a
-        /// frame or two until the asset finishes loading.
-        fn resolveLabelFont(self: *Game, font_name: []const u8) ?font_types.FontId {
-            const entry = self.assets.entries.getPtr(font_name) orelse return null;
-            const resource = entry.resource orelse return null;
-            return switch (resource) {
-                .font => |id| id,
-                else => null,
-            };
-        }
-
         fn renderGuiElementComptime(self: *Game, comptime element: gui_types.GuiElement) void {
             if (!element.isVisible()) return;
             switch (element) {
@@ -68,12 +51,23 @@ pub fn Mixin(comptime Game: type) type {
                     // keeps the default-font path zero-overhead for
                     // labels that don't use a custom font.
                     if (comptime lbl.font) |font_name| {
-                        const font_id = resolveLabelFont(self, font_name);
+                        // `Game.fontId` (atlas_mixin) — the SAME lookup a
+                        // script reaches for `addText` / `setTextFont`.
+                        // This used to be a private `resolveLabelFont`
+                        // right here, which is precisely why the resource
+                        // kind was unusable from anywhere but a GUI label
+                        // (#842); it is now one implementation, and its
+                        // null-while-streaming contract is documented on
+                        // `atlas_mixin.fontId`. Null keeps the renderer's
+                        // default-font path intact — the label draws in
+                        // the backend's built-in font for a frame or two
+                        // until the asset finishes baking.
+                        const font_id = self.fontId(font_name);
                         // The backend's font-aware label draw is
                         // expected to accept an `?FontId` — null
                         // means "fall back to default font", same
-                        // shape as `resolveLabelFont`'s contract
-                        // during streaming. Backends that don't
+                        // shape as `fontId`'s contract during
+                        // streaming. Backends that don't
                         // implement `labelWidgetWithFont` keep
                         // working via the `@hasDecl` guard on the
                         // `Gui` wrapper.

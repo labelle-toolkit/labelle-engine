@@ -1142,6 +1142,7 @@ pub fn GameConfigWithYAxis(
         pub const setZIndex = Visuals.setZIndex;
         pub const setSpriteFlip = Visuals.setSpriteFlip;
         pub const setSpriteFrame = Visuals.setSpriteFrame;
+        pub const setTextFont = Visuals.setTextFont;
         pub const setMaterial = Visuals.setMaterial;
         pub const clearMaterial = Visuals.clearMaterial;
 
@@ -1674,6 +1675,11 @@ pub fn GameConfigWithYAxis(
         pub const registerFontFromMemory = AtlasMixin.registerFontFromMemory;
         pub const loadFontFromMemory = AtlasMixin.loadFontFromMemory;
         pub const loadFontIfNeeded = AtlasMixin.loadFontIfNeeded;
+        /// Name → `FontId` for a declared `.font` resource — the public
+        /// bridge `addText` / `setTextFont` need (#842). Returns null while
+        /// the font is not resident; see the doc comment on
+        /// `atlas_mixin.fontId` for the streaming contract.
+        pub const fontId = AtlasMixin.fontId;
 
         pub const isAtlasLoaded = AtlasMixin.isAtlasLoaded;
         pub const getTextureManager = AtlasMixin.getTextureManager;
