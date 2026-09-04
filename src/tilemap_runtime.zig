@@ -15,11 +15,11 @@
 //! `Runtime`, which `Game` heap-allocates (stable address — the renderer
 //! keeps a `*const TileMap` into `Runtime.map`). Tileset textures are
 //! uploaded through `RenderImpl.loadTextureFromMemory` (the SAME backend
-//! texture path sprites use) and are therefore owned by the renderer's
-//! shared texture registry, NOT by the tilemap renderer — the resolver
-//! seam hands them over as unowned. They are freed when the renderer is
-//! deinited (scene teardown / shutdown), so `Runtime.deinit` does not
-//! unload them (see `TileMapRenderer.TextureEntry.owned`).
+//! texture path sprites use) and handed to gfx through the resolver seam as
+//! UNOWNED, so `TileMapRenderer` never frees them (see
+//! `TileMapRenderer.TextureEntry.owned`). The uploader owns them instead:
+//! `Runtime.deinit` unloads every id in `owned_ids`, which holds each
+//! uploaded texture exactly once.
 //!
 //! Two tileset layouts are served. A **sheet** is one image sliced by a
 //! uniform grid — one texture per tileset, in `tileset_ids`. A **collection
@@ -201,13 +201,16 @@ pub fn Runtime(comptime RenderImpl: type) type {
         /// at `tile_ids[tile_offsets[i] + j]`. Flat because gfx hands the
         /// resolver `(tileset_index, image_index)` directly, so one
         /// allocation covers the whole map and lookup is two loads — no
-        /// slice-of-slices, no hash map on the draw path. Empty when gfx
-        /// predates labelle-gfx#343 or the map holds no collection tileset.
+        /// slice-of-slices, no hash map on the draw path. Empty ONLY on a gfx
+        /// predating labelle-gfx#343; otherwise its length is the map's
+        /// total per-tile image count, which is 0 for a sheet-only map.
         tile_ids: []?TextureId,
         /// Start of each tileset's run inside `tile_ids`; length
         /// `tilesets.len + 1`, so tileset `i` owns
-        /// `tile_ids[tile_offsets[i]..tile_offsets[i + 1]]`. Empty
-        /// alongside `tile_ids`.
+        /// `tile_ids[tile_offsets[i]..tile_offsets[i + 1]]`. Empty only on a
+        /// pre-#343 gfx; on any newer gfx it is allocated whether or not
+        /// the map holds a collection tileset, and a sheet-only map simply
+        /// leaves every run empty (all offsets 0).
         tile_offsets: []usize,
         /// Every texture id this runtime UPLOADED, each exactly once — the
         /// unload list. Distinct from `tileset_ids`/`tile_ids`, which are
@@ -262,8 +265,11 @@ pub fn Runtime(comptime RenderImpl: type) type {
             _ = tileset;
             _ = image;
             const ctx: *const ResolverCtx = @ptrCast(@alignCast(context.?));
-            // `tile_offsets` is empty for a map with no collection tileset
-            // (and on older gfx), so the bound check covers both.
+            // Two shapes reach here with nothing to resolve, and one check
+            // covers both: on a pre-#343 gfx `tile_offsets` is empty, so the
+            // length test rejects; on a newer gfx with a sheet-only map it is
+            // allocated but every run is empty, so `end - base` is 0 and the
+            // image test rejects.
             if (tileset_index + 1 >= ctx.tile_offsets.len) return null;
             const base = ctx.tile_offsets[tileset_index];
             const end = ctx.tile_offsets[tileset_index + 1];

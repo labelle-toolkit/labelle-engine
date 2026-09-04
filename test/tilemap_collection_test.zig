@@ -106,7 +106,7 @@ const mixed_tmx =
     \\ <tileset firstgid="1" name="terrain" tilewidth="16" tileheight="16" columns="4" tilecount="8">
     \\  <image source="tiles.png" width="64" height="32"/>
     \\ </tileset>
-    \\ <tileset firstgid="9" name="props" tilewidth="16" tileheight="16" columns="0" tilecount="2">
+    \\ <tileset firstgid="9" name="props" tilewidth="16" tileheight="16" columns="0" tilecount="3">
     \\  <tile id="0">
     \\   <image source="tree.png" width="32" height="48"/>
     \\  </tile>
