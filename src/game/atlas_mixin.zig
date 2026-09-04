@@ -11,6 +11,7 @@ const std = @import("std");
 const atlas_mod = @import("../atlas.zig");
 const core = @import("labelle-core");
 const assets_mod = @import("../assets/mod.zig");
+const font_types = @import("font_types");
 
 /// The rect type a renderer's `Sprite.source_rect` holds, whether the field
 /// is declared as `?SourceRect` (the common case) or as the rect directly.
@@ -713,6 +714,66 @@ pub fn Mixin(comptime Game: type) type {
 
         pub fn loadFontIfNeeded(self: *Game, name: []const u8) !bool {
             return loadAssetIfNeededInternal(self, name);
+        }
+
+        /// The `FontId` for a loaded `.font` resource, or `null` while that
+        /// font is not resident.
+        ///
+        /// This is the ONE public bridge from a resource NAME to the handle a
+        /// `Text` component's `font` field takes. A game declares
+        /// `.{ .name = "ui", .font = "assets/Font.ttf", .font_params = … }` in
+        /// `project.labelle`, the assembler emits
+        /// `loadFontFromMemory("ui", "ttf", @embedFile(…), &ui_params)`, and
+        /// this turns `"ui"` back into the `FontId` that
+        /// `addText(e, .{ .font = … })` / `setTextFont` want. Before #842 the
+        /// resolution existed only as `gui_mixin`'s private
+        /// `resolveLabelFont`, reachable from the GUI label path and nowhere
+        /// else, so a script could only ever pass `FontId.invalid` — i.e. the
+        /// declared font was unreachable end to end. `gui_mixin` now calls
+        /// THIS function; there is deliberately no second copy of the lookup
+        /// (a duplicated helper is how #833 shipped a fix to one copy only).
+        ///
+        /// ## Not-ready contract — READ THIS BEFORE CALLING IT PER FRAME
+        ///
+        /// Fonts stream through the same `AssetCatalog` pop-in model as
+        /// images: `null` here does NOT mean "no such font", it means "not
+        /// resident *yet*". `null` is returned when the name is unregistered,
+        /// when its decode/bake is still in flight, when the bake failed, and
+        /// when the entry holds a non-font resource (an image or a sound
+        /// registered under that name). Callers cannot tell those apart and
+        /// should not try to — the only correct response to `null` is to keep
+        /// the default font for this frame and ask again next frame.
+        ///
+        /// Two ways to not deal with that:
+        ///  * Declare the resource eager (`lazy = false`) — the assembler
+        ///    emits `loadFontFromMemory`, which blocks until the bake lands,
+        ///    so this returns a valid id from the very first frame.
+        ///  * Call `loadFontIfNeeded(name)` yourself first. It is the
+        ///    BLOCKING answer: it pumps the catalog on the calling thread
+        ///    until the entry is `.ready` (or errors), after which this
+        ///    returns non-null. Do not call it every frame — it is a
+        ///    frame-stalling primitive, meant for a load screen or a one-shot
+        ///    setup script.
+        ///
+        /// A lazily-declared font therefore reads `null` for the first few
+        /// frames and a `Text` entity renders in the backend's built-in font
+        /// until then — the same graceful degrade the GUI label path has
+        /// always had.
+        pub fn fontId(self: *Game, name: []const u8) ?font_types.FontId {
+            const entry = self.assets.entries.getPtr(name) orelse return null;
+            // A non-null `resource` IS the ready check: `loader.upload`
+            // populates it on the success path only, and `loader.free`
+            // clears it on unload. Checking `assets.isReady` separately
+            // would be the same condition spelled twice.
+            const resource = entry.resource orelse return null;
+            return switch (resource) {
+                .font => |id| id,
+                // Name collision with an image or a sound. Never coerce —
+                // `registerFontFromMemory` swallows `AssetAlreadyRegistered`,
+                // so a manifest that reuses a name lands here rather than at
+                // registration.
+                else => null,
+            };
         }
 
         pub fn isAtlasLoaded(self: *Game, name: []const u8) bool {

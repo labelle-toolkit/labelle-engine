@@ -183,6 +183,11 @@ pub fn build(b: *std.Build) void {
         // copies omitted (silently mis-sampling a downscaled atlas).
         "test/set_sprite_frame_test.zig",
         "test/set_material_test.zig",
+        // #842 — `Game.fontId` (public name → `FontId` for a declared
+        // `.font` resource) and `Game.setTextFont`. Before this the only
+        // resolution was `gui_mixin`'s private `resolveLabelFont`, so
+        // `addText` from a script could only ever pass `FontId.invalid`.
+        "test/font_id_test.zig",
         "test/video_component_test.zig",
         "test/camera_viewport_test.zig",
         "test/camera_viewport_seed_test.zig",
