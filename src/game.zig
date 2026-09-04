@@ -1283,6 +1283,7 @@ pub fn GameConfigWithYAxis(
         pub const clearGizmos = GizmoMixin.clearGizmos;
         pub const clearGizmoGroup = GizmoMixin.clearGizmoGroup;
         pub const getGizmoDraws = GizmoMixin.getGizmoDraws;
+        pub const bindGizmoText = GizmoMixin.bindGizmoText;
         pub const getGizmoText = GizmoMixin.getGizmoText;
         pub const selectEntity = GizmoMixin.selectEntity;
         pub const deselectEntity = GizmoMixin.deselectEntity;

@@ -240,6 +240,27 @@ pub fn GizmoState(comptime Entity: type) type {
             }
         }
 
+        /// Point every `.text` draw's `GizmoDraw.text` at its bytes in the
+        /// arena, immediately before the list is handed to the renderer.
+        ///
+        /// The spans are stored by draw INDEX rather than by pointer because
+        /// `text_bytes` reallocates as it grows: binding inside `appendText`
+        /// would leave every earlier draw's slice dangling the moment a later
+        /// `drawGizmoText` outgrew the buffer. By the time the frame renders,
+        /// no further appends can occur, so the arena is stable and the
+        /// slices are valid for exactly as long as core's `GizmoDraw.text`
+        /// contract requires — the duration of the `renderGizmoDraws` call.
+        ///
+        /// Any subsequent append or `clear()` invalidates them again, which
+        /// is why this runs per frame rather than once.
+        pub fn bindText(self: *Self) void {
+            for (self.text_spans.items) |span| {
+                if (span.draw_index >= self.draws.items.len) continue;
+                self.draws.items[span.draw_index].text =
+                    self.text_bytes.items[span.start..][0..span.len];
+            }
+        }
+
         pub fn getDraws(self: *const Self) []const GizmoDraw {
             return self.draws.items;
         }

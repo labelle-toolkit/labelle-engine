@@ -158,8 +158,20 @@ pub fn Mixin(comptime Game: type) type {
         /// Passes all draws — the category check happens at draw time in the
         /// gizmo_state (category-aware methods skip appending disabled draws).
         /// Category 0 (uncategorized) draws are always included.
+        /// Resolve every `.text` draw's borrowed slice against the frame
+        /// arena. `renderGizmos` calls this itself; it is public so a test
+        /// or an editor-side consumer that reads `getGizmoDraws()` directly
+        /// can get populated text without going through a render pass.
+        pub fn bindGizmoText(self: *Game) void {
+            self.gizmo_state.bindText();
+        }
+
         pub fn renderGizmos(self: *Game) void {
             if (!self.gizmos_enabled) return;
+            // Resolve text spans to live slices before the renderer sees the
+            // list — see `GizmoState.bindText` for why this cannot happen at
+            // append time.
+            self.gizmo_state.bindText();
             const draws = self.gizmo_state.getDraws();
             const Renderer = @TypeOf(self.renderer.*);
             if (@hasDecl(Renderer, "renderGizmoDraws")) {

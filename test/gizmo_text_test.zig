@@ -215,3 +215,31 @@ test "gizmo text: renderGizmos is a no-op for a renderer without drawText" {
 
     try testing.expectEqual(@as(usize, 1), game.getGizmoDraws().len);
 }
+
+test "GizmoDraw.text stays valid for every draw across an arena realloc" {
+    // Regression guard for the tempting one-liner: binding GizmoDraw.text
+    // inside appendText would leave every EARLIER draw dangling as soon as a
+    // later drawGizmoText outgrew `text_bytes`. That is why the spans are
+    // keyed by draw INDEX and resolved once, at render time. ArrayList's
+    // initial u8 capacity is a cache line, so this needs enough rounds to
+    // force at least one reallocation.
+    var game = Game.init(testing.allocator);
+    defer game.deinit();
+
+    var buf: [32]u8 = undefined;
+    const rounds = 40;
+    for (0..rounds) |i| {
+        const s = try std.fmt.bufPrint(&buf, "label-{d:0>3}", .{i});
+        game.drawGizmoTextScreen(@floatFromInt(i), 0, s, 0xFFFFFFFF);
+    }
+
+    game.bindGizmoText();
+    const draws = game.getGizmoDraws();
+    try testing.expectEqual(@as(usize, rounds), draws.len);
+
+    // Every draw — not just the last — must still name its own text.
+    for (0..rounds) |i| {
+        const want = try std.fmt.bufPrint(&buf, "label-{d:0>3}", .{i});
+        try testing.expectEqualStrings(want, draws[i].text);
+    }
+}
