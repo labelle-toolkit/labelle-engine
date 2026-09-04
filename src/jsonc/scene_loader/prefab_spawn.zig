@@ -88,7 +88,32 @@ pub fn PrefabSpawn(comptime GameType: type, comptime Components: type, comptime 
             // prefab tree, so the prefab itself outlives `pc_arena`.
             var pc_arena = std.heap.ArenaAllocator.init(game.allocator);
             defer pc_arena.deinit();
-            const prefab_components = (uf.prefabComponents(prefab_root, pc_arena.allocator(), game.log) catch null) orelse return null;
+
+            // #844: `null` from `prefabComponents` means "this root
+            // declares NO components" — a root carrying only
+            // `"children"` (or only structural keys) is well-formed
+            // per RFC #596, exactly the shape a purely-visual
+            // dressing prefab has. It is NOT a failure, and the two
+            // outcomes must stay distinguishable:
+            //
+            //   - a real ERROR (OOM while synthesizing the flat
+            //     view) aborts the spawn — silently continuing with
+            //     an empty set would drop every root component;
+            //   - `null` continues with an EMPTY set so the
+            //     `children` loop below still runs.
+            //
+            // Collapsing `null` into `return null` made a
+            // children-only prefab unspawnable at runtime while it
+            // still loaded fine from a scene (`entity_walker.zig`
+            // keeps the view optional and handles null downstream —
+            // the correct precedent). Because save/load Phase 1a
+            // respawns through this path, the whole subtree came
+            // back missing after a load
+            // (Flying-Platform/flying-platform-labelle#857).
+            const prefab_components = (uf.prefabComponents(prefab_root, pc_arena.allocator(), game.log) catch |err| {
+                game.log.err("[spawnPrefab] '{s}' component view failed: {s}", .{ name, @errorName(err) });
+                return null;
+            }) orelse Value.Object{ .entries = &.{} };
 
             const entity = game.createEntity();
             game.trackSceneEntity(entity);
