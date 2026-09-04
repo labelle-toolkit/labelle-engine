@@ -399,7 +399,7 @@ test "shim: an atlas whose decode was never queued errors instead of spinning fo
     // `AssetCatalog.enqueueDecode` TOLERATES a full request ring: it logs,
     // leaves the entry at `.registered`, and nothing re-enqueues it — not
     // `pump`, not any other layer. `acquire` then bumps the refcount and
-    // returns happily, so the old inline loop span forever on an asset
+    // returns happily, so the old inline loop spun forever on an asset
     // that would never become ready, with no error, no log and no crash.
     //
     // The post-acquire state is what makes that deterministic, so that is

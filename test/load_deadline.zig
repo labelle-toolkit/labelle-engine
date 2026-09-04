@@ -82,7 +82,14 @@ pub fn callWithDeadline(
             .nsec = @intCast(step_ns % std.time.ns_per_s),
         };
         var rem: std.c.timespec = undefined;
-        _ = std.c.nanosleep(&req, &rem);
+        // Retry the REMAINDER on EINTR. Counting a signal-interrupted sleep
+        // as a full `step_ns` would let repeated interruptions burn the
+        // deadline while barely any wall-clock time had passed — aborting a
+        // loader that was never actually wedged. A test whose whole job is to
+        // fail deterministically must not itself be flaky under signals.
+        while (std.c.nanosleep(&req, &rem) == -1 and std.posix.errno(@as(c_int, -1)) == .INTR) {
+            req = rem;
+        }
     }
 
     if (!runner.done.load(.acquire)) {
