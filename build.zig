@@ -151,6 +151,11 @@ pub fn build(b: *std.Build) void {
         // the buffered event path so flows can listen to lifecycle
         // hooks as Event-node variants.
         "test/engine_events_test.zig",
+        // #856 — fallible event enqueue (`Game.tryEmit`): the failure
+        // path driven with a FailingAllocator, the queue-intact /
+        // no-duplicate guarantee, and proof the infallible `emit` call
+        // shape is unchanged.
+        "test/events_fallible_emit_test.zig",
         // #820 — direct `loadTextureFromMemory` uploads carried across a
         // GPU surface loss under their original ids (retain / invalidate /
         // re-upload / free), gated on the gfx re-arm seam.

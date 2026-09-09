@@ -1,7 +1,8 @@
 /// Events mixin — hook + game-event dispatch: `emitHook` (typed hook
-/// payload), `emit` (buffered game event), `emitEngineEvent` (tolerant
-/// `engine__<event>` dual-emit, #578), `emitSync` (immediate), and
-/// `dispatchEvents` (end-of-frame buffer drain).
+/// payload), `emit` (buffered game event), `tryEmit` (the same enqueue,
+/// fallible — #856), `emitEngineEvent` (tolerant `engine__<event>`
+/// dual-emit, #578), `emitSync` (immediate), and `dispatchEvents`
+/// (end-of-frame buffer drain).
 ///
 /// Extracted verbatim from `game.zig`; behaviour is identical. The
 /// comptime types/flags this needs (`Payload`, `has_hooks`, `has_events`,
@@ -11,6 +12,15 @@
 /// (`emit`, `emitHook`) use lexical sibling syntax.
 const std = @import("std");
 
+/// Error set of the fallible enqueue path (`Game.tryEmit`, #856).
+///
+/// Enqueue's only failure mode is growing the frame's event buffer, so
+/// this is exactly `std.mem.Allocator.Error` (`error{OutOfMemory}`).
+/// Named rather than inferred so call sites can spell the type out
+/// (`fn onPickup(...) engine.EmitError!void`) and so a future failure
+/// mode can be added here in one place instead of at every `try`.
+pub const EmitError = std.mem.Allocator.Error;
+
 /// Returns the events-dispatch mixin for a given Game type.
 pub fn Mixin(comptime Game: type) type {
     const GameEvents = Game.GameEvents;
@@ -18,6 +28,10 @@ pub fn Mixin(comptime Game: type) type {
     const EventBuffer = Game.EventBufferExport;
     const has_events = Game.has_events_export;
     const has_hooks = Game.has_hooks_export;
+    // Aliased under a different name so the `pub const EmitError` inside
+    // the returned struct can reference the file-scope one without a
+    // self-referential dependency loop.
+    const EmitErrorAlias = EmitError;
 
     return struct {
         pub fn emitHook(self: *Game, payload: Payload) void {
@@ -28,13 +42,94 @@ pub fn Mixin(comptime Game: type) type {
             }
         }
 
-        /// Emit a game event. Buffered and delivered to scripts at end of frame.
-        pub fn emit(self: *Game, event: GameEvents) void {
+        /// Error set of `tryEmit` (#856). Re-exported on the mixin so
+        /// `Game.EmitError` resolves without importing this file.
+        pub const EmitError = EmitErrorAlias;
+
+        /// Enqueue a game event, reporting enqueue failure to the caller.
+        ///
+        /// This is the fallible sibling of `emit` (#856). Both push onto
+        /// the same frame buffer and both are delivered by the same
+        /// end-of-frame `dispatchEvents` drain — the ONLY difference is
+        /// what happens when the buffer cannot grow: `emit` logs and
+        /// returns, `tryEmit` returns `error.OutOfMemory`.
+        ///
+        /// ## Success guarantee
+        ///
+        /// A successful return means the event ENTERED THE QUEUE, and
+        /// nothing more. It does NOT mean any listener has run, that the
+        /// event was persisted, or that anyone acknowledged it. Delivery
+        /// still happens later, at the frame's `dispatchEvents` drain
+        /// (or at the next drain, for an event emitted from inside a
+        /// handler — see `dispatchEvents`).
+        ///
+        /// ## Failure guarantee
+        ///
+        /// On error the buffer is left exactly as it was: every
+        /// previously queued event is intact and in order, and the
+        /// failed event is queued neither partially nor twice. A retry
+        /// once memory is available enqueues it exactly once. Ordering
+        /// of the events that DID make it is untouched.
+        ///
+        /// The error does NOT roll back whatever model mutation the
+        /// producer made before emitting. Enqueue reporting is not a
+        /// transaction: the engine cannot un-spend the gold you just
+        /// deducted. The recovery pattern is a dirty flag the producer
+        /// reconciles on a later frame:
+        ///
+        /// ```zig
+        /// // Producer keeps a derived view (an inventory panel) in sync
+        /// // with the model by emitting on every change.
+        /// fn addItem(self: *Inventory, game: *Game, slot: u32) void {
+        ///     self.slots[slot] += 1;                 // model mutation — already done
+        ///     game.tryEmit(.{ .inventory_changed = .{ .slot = slot } }) catch {
+        ///         // The notification is lost, but the model moved. Do
+        ///         // NOT undo the mutation — record that the derived
+        ///         // view is stale and reconcile later.
+        ///         self.view_dirty = true;
+        ///     };
+        /// }
+        ///
+        /// // Cheap per-frame reconciliation: retry the notification, and
+        /// // if it still cannot be queued stay dirty and try next frame.
+        /// fn update(self: *Inventory, game: *Game) void {
+        ///     if (!self.view_dirty) return;
+        ///     game.tryEmit(.{ .inventory_resync = .{} }) catch return;
+        ///     self.view_dirty = false;
+        /// }
+        /// ```
+        ///
+        /// A producer that cannot degrade — one whose whole correctness
+        /// rests on the notification — should rebuild from the model on
+        /// the dirty flag rather than assume the event will land.
+        ///
+        /// ## Games with no declared events
+        ///
+        /// When the project declares no game events (`GameEvents ==
+        /// void`, the `GameWith(Hooks)` unit-test shape), there is no
+        /// queue to append to and no listener to lose: the whole body
+        /// folds away at comptime and the call RETURNS SUCCESS. Success
+        /// there means "nothing was dropped", not "an event is pending".
+        /// It is never an error, so a producer written against a game
+        /// with events keeps compiling and keeps passing when linked
+        /// into an event-less build.
+        pub fn tryEmit(self: *Game, event: GameEvents) EmitErrorAlias!void {
             if (has_events) {
-                self.event_buffer.append(self.allocator, event) catch |err| {
-                    self.log.err("Failed to emit game event: {s}", .{@errorName(err)});
-                };
+                try self.event_buffer.append(self.allocator, event);
             }
+        }
+
+        /// Emit a game event. Buffered and delivered to scripts at end of frame.
+        ///
+        /// Infallible: an enqueue failure is logged and swallowed, so the
+        /// producer cannot observe the lost notification. This is the
+        /// historical behaviour and stays the default — reach for
+        /// `tryEmit` when losing the event would corrupt a derived view,
+        /// a cache or a counter the producer maintains (#856).
+        pub fn emit(self: *Game, event: GameEvents) void {
+            tryEmit(self, event) catch |err| {
+                self.log.err("Failed to emit game event: {s}", .{@errorName(err)});
+            };
         }
 
         /// Engine-side tolerant emit for the `engine__<event>` variants

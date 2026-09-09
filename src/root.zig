@@ -80,6 +80,12 @@ pub const Game = game_mod.Game;
 /// logical canvas). See labelle-engine#852.
 pub const ScreenSize = game_mod.ScreenSize;
 
+/// Error set of the fallible event enqueue `Game.tryEmit` (#856) —
+/// `error{OutOfMemory}`. Exported so producers can spell the type out in
+/// their own signatures (`fn addItem(...) engine.EmitError!void`) without
+/// reaching for a concrete `Game` instantiation.
+pub const EmitError = @import("game/events_mixin.zig").EmitError;
+
 // ── Tilemap (T2 Phase 2) ──
 /// Engine built-in `Tilemap` component — references an embedded `.tmx`
 /// asset by name. Reachable on a configured game as `Game.TilemapComp`.
