@@ -108,7 +108,7 @@ inventing a second file shape.
 |-------|-----|---------|
 | Scene file top level | `include` | Array of scene-file paths. Each included scene is loaded recursively before the including scene's own entities. Include depth is bounded. |
 | File-header `meta` | `include` | Reserved for a future consumer; currently unused. It does not cause inclusion. |
-| Entity | `ref` | Structural name registered for the entity in the current scene-file reference scope. |
+| Entity | `ref` | Structural name registered in the active `RefContext`: the scene-file scope for plain entities, or a per-instance nested scope for prefab instances. An explicit call-site `ref` on a nested prefab is also exposed in its parent scope. |
 | Component field | `@name` value | Consumer-side entity reference. On an `entity_ref` component field, `@name` is resolved in the resolver's second pass to the entity ID registered by `ref`. |
 
 `ref` is an entity key, not a file key. In a flat prefab file the file object
@@ -137,22 +137,42 @@ For example, the producer and consumer sides are separate:
 ```
 
 The loader creates entities and records `ref` names during its first pass,
-then patches `@name` fields during the second pass. References from an
-included file are scoped to that file's `RefContext`; they are not visible
-to the including scene.
+then patches `@name` fields during the second pass. Plain entities use the
+enclosing scene-file `RefContext`. `loadChildEntity` and
+`spawnAndLinkNestedEntities` create a child `RefContext` for each nested
+prefab instance, chained to its parent for lookup: prefab-internal names are
+local to that instance, while lookups may still resolve names from enclosing
+scopes. An explicit scene-level `ref` on the nested instance is bubbled back
+to its parent scope; prefab-defined/internal refs are not. This prevents
+repeated instances from colliding while allowing a scene to name a particular
+instance.
 
-### Key sets are closed and disjoint
+For example, if a scene contains `{ "prefab": "crate", "ref": "crate_a" }`
+and `crate` defines an internal child `{ "ref": "handle" }`, `@handle` can
+resolve inside that `crate_a` instance, and `@crate_a` can resolve from the
+scene's other plain entities. `@handle` cannot resolve from a scene sibling,
+and a second `{ "prefab": "crate", "ref": "crate_b" }` gets its own `handle`
+scope. References from an included file are scoped to that file's
+`RefContext`; they are not visible to the including scene.
 
-The proposal works because the top-level key sets are well-defined and don't overlap:
+### Mode-specific key sets are disjoint; `ref` is shared
+
+The proposal works because the mode-specific top-level key sets are
+well-defined and don't overlap. `ref` is a shared structural entity key,
+outside those mode-specific sets:
 
 | Group       | Keys                                                  |
 |-------------|-------------------------------------------------------|
 | Scene file metadata / composition | `name`, `version` *(future)*, `include` |
-| Entity-inline | `components`, `children`, `ref`                       |
-| Entity-ref  | `prefab`, `overrides`, `ref`                           |
+| Shared entity structure | `ref`                                                   |
+| Entity-inline | `components`, `children`                              |
+| Entity-ref  | `prefab`, `overrides`                                  |
 | Legacy *(removed in v2.0)* | `entities`, `assets`                    |
 
-A file's "is this a reference or inline?" classification is the same predicate as today: does the entity object have `"prefab"`? For a flat prefab file, that entity object is the top-level object and may also carry `ref`.
+A file's "is this a reference or inline?" classification is the same
+predicate as today: does the entity object have `"prefab"`? For a flat prefab
+file, that entity object is the top-level object and may also carry the shared
+`ref` key.
 
 ### §B2 still applies
 
