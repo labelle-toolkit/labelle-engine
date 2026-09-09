@@ -159,6 +159,22 @@ pub fn Mixin(comptime Game: type) type {
             // Scene changes must process even when paused (e.g. pause menu → new scene)
             if (self.pending_scene_change) |next_scene| {
                 const atomic = self.pending_scene_atomic;
+                // Reserve BEFORE the swap buffers `engine__scene_loading` /
+                // `engine__scene_loaded` borrowing `next_scene` (#867
+                // review). `tick` cannot propagate an error, so on failure
+                // we SUPPRESS the transition entirely: nothing is emitted,
+                // `pending_scene_change` keeps ownership of the name, and
+                // the request stays queued for a later frame — the same
+                // deferral shape the asset gate already uses below. That
+                // leaves no queued payload without a live referent.
+                self.reserveRetention() catch {
+                    self.log.err(
+                        "Out of memory reserving scene-name retention; deferring the " ++
+                            "'{s}' transition to a later frame.",
+                        .{next_scene},
+                    );
+                    return;
+                };
                 var failed = false;
                 if (atomic) {
                     self.setSceneAtomic(next_scene) catch {

@@ -53,6 +53,8 @@ const lifecycle_mixin = @import("game/lifecycle_mixin.zig");
 const components_mixin = @import("game/components_mixin.zig");
 const entity_mixin = @import("game/entity_mixin.zig");
 const scene_runtime_mixin = @import("game/scene_runtime_mixin.zig");
+pub const RetainNode = @import("game/retain_node.zig").RetainNode;
+
 const input_events_mixin = @import("game/input_events_mixin.zig");
 const events_mixin = @import("game/events_mixin.zig");
 const editor_command_mixin = @import("game/editor_command_mixin.zig");
@@ -580,20 +582,41 @@ pub fn GameConfigWithYAxis(
         /// the payload pointing at freed memory for a FULL FRAME, since the
         /// generated loop drains before it ticks.
         ///
-        /// Freeing is therefore deferred to the drain that delivers the
-        /// event: `retainUntilDrained` parks the slice here, and
-        /// `dispatchEvents` swaps this list out on entry and frees it on
-        /// exit. Swapping (rather than freeing in place) is what makes a
-        /// NESTED drain correct — an inner drain delivers exactly the
-        /// events buffered since the outer one swapped, and frees exactly
-        /// the slices retained in that same window.
+        /// Freeing is deferred to the drain that delivers the event: a
+        /// caller RESERVES a node before emitting, hands the slice over
+        /// after, and `dispatchEvents` detaches the chain on entry and
+        /// frees it on exit. Detaching (rather than freeing in place) is
+        /// what makes a NESTED drain correct — an inner drain delivers
+        /// exactly the events buffered since the outer one detached, and
+        /// frees exactly the slices retained in that same window.
+        ///
+        /// ## Why a node chain rather than a list of slices
+        ///
+        /// The retention must not be able to fail AFTER the event is
+        /// queued. At that point the caller holds an allocation a queued
+        /// payload borrows, and neither disposal is acceptable: freeing is
+        /// the use-after-free this exists to prevent, and dropping it leaks
+        /// (#867 review).
+        ///
+        /// So the allocation happens at RESERVE time, while nothing is
+        /// queued yet and the caller can still abort cleanly; handing the
+        /// slice over afterwards is pure pointer surgery that cannot fail.
+        /// A growable list cannot give that guarantee — reserved capacity
+        /// does not compose across nested reservations, and a drain that
+        /// swaps the list out loses it. One node per reservation has
+        /// neither problem.
         ///
         /// This keeps the payload shape (`[]const u8`) and the buffered
         /// timing unchanged, which inlining a fixed-size name would not:
         /// state and scene names have no length bound, so an inline field
         /// would truncate them.
-        pending_payload_frees: if (has_events) std.ArrayList([]const u8) else void =
-            if (has_events) .empty else {},
+        pending_payload_frees: if (has_events) ?*RetainNode else void =
+            if (has_events) null else {},
+        /// Nodes allocated by `reserveRetention` and not yet consumed. One
+        /// per outstanding reservation, so nested reservations (the loop
+        /// reserving around a `setScene` that reserves too) compose.
+        retention_spares: if (has_events) ?*RetainNode else void =
+            if (has_events) null else {},
 
         // Scene management
         scenes: std.StringHashMap(SceneEntry),
@@ -1089,6 +1112,15 @@ pub fn GameConfigWithYAxis(
         /// after the drain that delivers the event (#862/#863). See
         /// `game/events_mixin.zig` for the contract.
         pub const retainUntilDrained = EventsMixin.retainUntilDrained;
+
+        /// Reserve one retention slot BEFORE emitting the event whose
+        /// payload will borrow the slice (#862/#863). See
+        /// `game/events_mixin.zig` for why the order matters.
+        pub const reserveRetention = EventsMixin.reserveRetention;
+
+        /// Free every retention node still held — retained and
+        /// reserved-unused alike. `deinit` only.
+        pub const releaseRetentions = EventsMixin.releaseRetentions;
 
         /// Engine-side tolerant emit for the `engine__<event>` variants
         /// declared on `engine.Events` (RFC-FLOW-VOCABULARY phase 6,

@@ -78,14 +78,11 @@ pub fn Mixin(comptime Game: type) type {
                 self.allocator.free(name);
             }
             // Payload backing stores still parked for a drain that will
-            // now never come (#862/#863). `deinit`'s final
-            // `dispatchEvents` already freed everything retained before
-            // it; this reclaims anything a handler retained DURING that
-            // last drain, which would otherwise leak.
-            if (comptime @TypeOf(self.pending_payload_frees) != void) {
-                for (self.pending_payload_frees.items) |slice| self.allocator.free(slice);
-                self.pending_payload_frees.deinit(self.allocator);
-            }
+            // now never come, plus any node reserved but never used
+            // (#862/#863). `deinit`'s final `dispatchEvents` already freed
+            // everything retained before it; this reclaims what a handler
+            // retained DURING that last drain, which would otherwise leak.
+            self.releaseRetentions();
             // Clean up inactive worlds
             var world_iter = self.worlds.iterator();
             while (world_iter.next()) |entry| {

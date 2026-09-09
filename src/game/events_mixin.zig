@@ -18,6 +18,7 @@
 /// comptime source of truth via `Game.*`. Intra-cluster calls
 /// (`emit`, `emitHook`) use lexical sibling syntax.
 const std = @import("std");
+const game_types = @import("retain_node.zig");
 
 /// Error set of the fallible enqueue path (`Game.tryEmit`, #856).
 ///
@@ -298,6 +299,29 @@ pub fn Mixin(comptime Game: type) type {
         /// `A -> B -> A` handler chain from hanging the drain, and what
         /// keeps the iterated slice stable. See
         /// `HOOK-DELIVERY-CONTRACT.md` §2 and §4.
+        /// Reserve one retention node, BEFORE emitting the event whose
+        /// payload will borrow the slice (#862/#863).
+        ///
+        /// Ordering is the whole point. If the retention could fail AFTER
+        /// the event was buffered, the caller would hold an allocation a
+        /// queued payload borrows with no safe way to dispose of it:
+        /// freeing it is a use-after-free, and dropping it leaks. An
+        /// earlier revision caught the failure and freed the slice —
+        /// logging it did not make it safe (#867 review).
+        ///
+        /// Allocating here means the only failure happens while nothing is
+        /// queued yet, so the caller can abort cleanly and leave the game
+        /// exactly as it was.
+        ///
+        /// One node per call, so nested reservations compose: the loop can
+        /// reserve around a `setScene` that reserves for itself.
+        pub fn reserveRetention(self: *Game) error{OutOfMemory}!void {
+            if (comptime !has_events) return;
+            const node = try self.allocator.create(game_types.RetainNode);
+            node.* = .{ .next = self.retention_spares };
+            self.retention_spares = node;
+        }
+
         /// Park `slice` until the drain that delivers the currently
         /// buffered events has finished, then free it on the game
         /// allocator (#862/#863).
@@ -308,12 +332,10 @@ pub fn Mixin(comptime Game: type) type {
         /// drain — a full frame, since the generated loop drains before it
         /// ticks.
         ///
-        /// Infallible by design: the caller's alternative is to free now,
-        /// which is the use-after-free this exists to prevent. If the list
-        /// cannot grow we free immediately and log, restoring the old
-        /// (buggy but not leaking) behaviour rather than leaking
-        /// unboundedly — the one case where the hazard is the lesser
-        /// outcome, and it is reported rather than silent.
+        /// MUST be preceded by a successful `reserveRetention` in the same
+        /// operation. Infallible by construction rather than by swallowing
+        /// a failure: the node already exists, so this only relinks
+        /// pointers.
         pub fn retainUntilDrained(self: *Game, slice: []const u8) void {
             if (comptime !has_events) {
                 // No buffer, so nothing can outlive a drain: the borrow
@@ -321,14 +343,43 @@ pub fn Mixin(comptime Game: type) type {
                 self.allocator.free(slice);
                 return;
             }
-            self.pending_payload_frees.append(self.allocator, slice) catch {
-                self.log.err(
-                    "Out of memory retaining an event payload's backing store; " ++
-                        "freeing it now, which may expose a stale borrow to a listener.",
-                    .{},
-                );
-                self.allocator.free(slice);
+            const node = self.retention_spares orelse {
+                // Only reachable from a caller that skipped its
+                // reservation — a programming error here, not a runtime
+                // condition. Freeing would reinstate the use-after-free
+                // and dropping would leak, so refuse loudly instead of
+                // picking one silently.
+                @panic("retainUntilDrained without a matching reserveRetention (#862/#863)");
             };
+            self.retention_spares = node.next;
+            node.* = .{ .slice = slice, .next = self.pending_payload_frees };
+            self.pending_payload_frees = node;
+        }
+
+        /// Free a detached retention chain and its nodes.
+        fn freeRetainChain(self: *Game, head: ?*game_types.RetainNode) void {
+            var it = head;
+            while (it) |node| {
+                const next = node.next;
+                self.allocator.free(node.slice);
+                self.allocator.destroy(node);
+                it = next;
+            }
+        }
+
+        /// Release every node still held — retained AND reserved-unused.
+        /// Called from `deinit`, after the final flush.
+        pub fn releaseRetentions(self: *Game) void {
+            if (comptime !has_events) return;
+            freeRetainChain(self, self.pending_payload_frees);
+            self.pending_payload_frees = null;
+            var it = self.retention_spares;
+            while (it) |node| {
+                const next = node.next;
+                self.allocator.destroy(node);
+                it = next;
+            }
+            self.retention_spares = null;
         }
 
         pub fn dispatchEvents(self: *Game) void {
@@ -336,14 +387,14 @@ pub fn Mixin(comptime Game: type) type {
             var dispatch_buf: EventBuffer = .empty;
             std.mem.swap(EventBuffer, &self.event_buffer, &dispatch_buf);
 
-            // Swap the retention list out ALONGSIDE the event buffer, so
+            // Detach the retention chain ALONGSIDE the event buffer, so
             // the two stay in step: these are exactly the slices retained
             // while those events were being buffered. Anything a handler
-            // retains during the drain lands in the fresh list and is
+            // retains during the drain lands on the fresh chain and is
             // freed after the NEXT drain — which is what a nested
             // `dispatchEvents` relies on (#862/#863).
-            var to_free: std.ArrayList([]const u8) = .empty;
-            std.mem.swap(std.ArrayList([]const u8), &self.pending_payload_frees, &to_free);
+            const to_free = self.pending_payload_frees;
+            self.pending_payload_frees = null;
 
             for (dispatch_buf.items) |event| {
                 switch (event) {
@@ -356,8 +407,7 @@ pub fn Mixin(comptime Game: type) type {
 
             // AFTER the loop: every listener that could borrow these
             // slices has now run and returned.
-            for (to_free.items) |slice| self.allocator.free(slice);
-            to_free.deinit(self.allocator);
+            freeRetainChain(self, to_free);
 
             if (self.event_buffer.items.len == 0) {
                 std.mem.swap(EventBuffer, &self.event_buffer, &dispatch_buf);

@@ -65,6 +65,17 @@ pub fn Mixin(comptime Game: type) type {
         ///   5. Free the previous owned slot (no-op if null).
         pub fn setStateOwned(self: *Game, state_name: []const u8) error{OutOfMemory}!void {
             const new_owned = try self.allocator.dupe(u8, state_name);
+            // Reserve the retention slot BEFORE `setState` buffers
+            // `engine__state_changed` (#867 review). If this could fail
+            // afterwards we would be holding an allocation a queued payload
+            // borrows, with no safe disposal: freeing is a use-after-free
+            // and not freeing leaks. Failing HERE leaves nothing queued, so
+            // the whole call aborts cleanly with the game untouched — no
+            // state change, no event, no orphaned allocation.
+            self.reserveRetention() catch |err| {
+                self.allocator.free(new_owned);
+                return err;
+            };
             const old_owned = self.owned_initial_state;
             self.owned_initial_state = new_owned;
             self.setState(new_owned);

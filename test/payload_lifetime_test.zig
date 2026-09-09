@@ -488,4 +488,130 @@ test {
     _ = OWNED_STATE_PAYLOAD;
     _ = NESTED_DRAIN;
     _ = SCENE_NAME_PAYLOADS;
+    _ = RETENTION_ALLOCATION_FAILURE;
 }
+
+// ── Allocation failure at the retention reserve (#867 review) ──────────
+
+pub const RETENTION_ALLOCATION_FAILURE = struct {
+    test "setStateOwned aborts CLEANLY when the retention node cannot be allocated (#862)" {
+        // The correction the review forced. An earlier revision retained
+        // AFTER emitting and, if the retention allocation failed, freed the
+        // slice — reinstating the exact use-after-free the mechanism
+        // exists to prevent, with a log line in front of it. Logging does
+        // not make a UAF acceptable.
+        //
+        // Reserving BEFORE the emit moves the only failure to a point
+        // where nothing is queued yet, so the whole call can abort with
+        // the game untouched. This proves that: the transition fails, no
+        // event is queued, no state changes, and nothing leaks or dangles.
+        var poison = PoisonAllocator{ .inner = testing.allocator };
+        var failing = std.testing.FailingAllocator.init(poison.allocator(), .{});
+        const allocator = failing.allocator();
+
+        var rec: Recorder = .{};
+        var hooks: AllHooks = .{ .receivers = .{&rec} };
+        var game = Game.init(allocator);
+        defer game.deinit();
+        game.setHooks(&hooks);
+
+        try game.setStateOwned("before_failure");
+        game.dispatchEvents();
+        rec = .{};
+
+        // Let exactly ONE more allocation through — `setStateOwned`'s dupe
+        // of the new name — then fail the next, which is the retention
+        // node inside `reserveRetention`.
+        failing.fail_index = failing.alloc_index + 1;
+
+        const result = game.setStateOwned("never_applied");
+        try testing.expectError(error.OutOfMemory, result);
+
+        // Stop failing so teardown and the follow-up transition can run.
+        failing.fail_index = std.math.maxInt(usize);
+
+        // The game is EXACTLY as it was: the state did not change...
+        try testing.expectEqualStrings("before_failure", game.getState());
+        // ...and nothing was queued, so the drain has nothing to deliver.
+        game.dispatchEvents();
+        try testing.expectEqual(@as(usize, 0), rec.seen);
+
+        // And the mechanism still works afterwards — the failure left no
+        // half-state behind.
+        try game.setStateOwned("after_failure");
+        game.dispatchEvents();
+        try testing.expectEqual(@as(usize, 1), rec.seen);
+        try testing.expect(!rec.saw_poison);
+        try testing.expectEqualStrings("before_failure", rec.lastOld());
+    }
+
+    test "a queued scene transition DEFERS rather than dangling when reservation fails (#863)" {
+        // `tick` cannot propagate an error, so the loop suppresses the
+        // whole transition instead: nothing is emitted, and
+        // `pending_scene_change` keeps ownership of the name so a later
+        // frame can retry. The failure must not leave a queued payload
+        // without a live referent, and must not drop the request.
+        var poison = PoisonAllocator{ .inner = testing.allocator };
+        var failing = std.testing.FailingAllocator.init(poison.allocator(), .{});
+        const allocator = failing.allocator();
+
+        var rec: SceneRecorder = .{};
+        var hooks: SceneHooks = .{ .receivers = .{&rec} };
+        var game = SceneGame.init(allocator);
+        defer game.deinit();
+        game.setHooks(&hooks);
+        game.registerSceneSimple("first_scene", emptyLoader);
+        game.registerSceneSimple("second_scene", emptyLoader);
+
+        try game.setScene("first_scene");
+        game.dispatchEvents();
+        rec = .{};
+
+        game.queueSceneChange("second_scene");
+        // Fail the very next allocation — the loop's retention reserve,
+        // which happens before the swap emits anything.
+        failing.fail_index = failing.alloc_index;
+        game.tick(0.016);
+        failing.fail_index = std.math.maxInt(usize);
+
+        // Suppressed, not half-done: no scene events were buffered...
+        game.dispatchEvents();
+        try testing.expectEqual(@as(usize, 0), rec.loading);
+        try testing.expectEqual(@as(usize, 0), rec.loaded);
+        try testing.expectEqual(@as(usize, 0), rec.unloaded);
+        try testing.expect(!rec.saw_poison);
+        // ...the scene did not change...
+        try testing.expectEqualStrings("first_scene", game.current_scene_name.?);
+        // ...and the request is still queued, so a later frame retries it
+        // rather than dropping the transition forever.
+        try testing.expect(game.pending_scene_change != null);
+
+        // The retry succeeds and its payload is live.
+        game.tick(0.016);
+        game.dispatchEvents();
+        try testing.expect(rec.loaded >= 1);
+        try testing.expect(!rec.saw_poison);
+    }
+
+    test "deinit is clean when a reservation was made but never used (#862)" {
+        // A reserved-but-unused node must not leak. `setState`
+        // short-circuits when the name is unchanged, so no event is
+        // emitted and no slice is retained — but the reservation happened.
+        var poison = PoisonAllocator{ .inner = testing.allocator };
+        const allocator = poison.allocator();
+
+        var rec: Recorder = .{};
+        var hooks: AllHooks = .{ .receivers = .{&rec} };
+        var game = Game.init(allocator);
+        game.setHooks(&hooks);
+
+        try game.setStateOwned("same_name");
+        // Same name: `setState`'s eql probe short-circuits, so this
+        // reserves and never retains.
+        try game.setStateOwned("same_name");
+        try game.setStateOwned("same_name");
+
+        // `testing.allocator` fails the test if any node leaked.
+        game.deinit();
+    }
+};

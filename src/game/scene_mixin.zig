@@ -707,6 +707,14 @@ pub fn Mixin(comptime Game: type) type {
             // Engine `Events` dual-emit (#578).
             self.emitEngineEvent("engine__scene_assets_acquire", .{ .name = name });
 
+            // Reserve the retention node BEFORE `unloadCurrentScene`
+            // buffers `engine__scene_unloaded` borrowing
+            // `current_scene_name` (#867 review). Failing here aborts with
+            // nothing queued and nothing torn down; failing after the emit
+            // would leave a queued payload whose backing store we could
+            // neither free nor keep.
+            if (self.current_scene_name != null) try self.reserveRetention();
+
             self.unloadCurrentScene();
 
             if (self.current_scene_name) |old_name| {
@@ -897,6 +905,14 @@ pub fn Mixin(comptime Game: type) type {
             self.clearActiveSceneEntities();
 
             // Unload old scene (runs script deinit, fires hooks, frees scene struct)
+            // Reserve the retention node BEFORE `unloadCurrentScene`
+            // buffers `engine__scene_unloaded` borrowing
+            // `current_scene_name` (#867 review). Failing here aborts with
+            // nothing queued and nothing torn down; failing after the emit
+            // would leave a queued payload whose backing store we could
+            // neither free nor keep.
+            if (self.current_scene_name != null) try self.reserveRetention();
+
             self.unloadCurrentScene();
 
             if (self.current_scene_name) |old_name| {
