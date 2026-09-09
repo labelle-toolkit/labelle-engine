@@ -724,7 +724,30 @@ pub fn Mixin(comptime Game: type) type {
             // gives listeners a chance to cache the manifest and
             // react before `scene_before_load` fires.
             self.emitHook(.{ .scene_assets_acquire = .{ .name = name, .assets = target_assets } });
-            // Engine `Events` dual-emit (#578).
+
+            // Discard EVERYTHING queued so far, and note the position:
+            // after the immediate lifecycle hooks above, before the
+            // announcements below (#864/#868 review).
+            //
+            // Those hooks are the pre-teardown cleanup seam, so their
+            // handlers legitimately run against the OUTGOING world — and a
+            // handler that calls `game.emit(...)` queues a payload full of
+            // entity ids that teardown is about to invalidate. An earlier
+            // revision cleared BEFORE the hooks, which let exactly those
+            // emissions survive to the drain as dangling ids. Clearing
+            // after them discards the outgoing scene's events (its own and
+            // its cleanup handlers' alike) while the announcements, queued
+            // next, still reach the drain.
+            self.clearPendingSceneEvents();
+
+            // Announcement, queued AFTER the discard so it survives.
+            // BUFFERED (#864): delivered at the next drain like every other
+            // buffered engine event.
+            //
+            // NOTIFICATION, not cleanup. By the time a buffered subscriber
+            // sees this the swap has happened — it says "scene X was
+            // acquired", not "is about to be". Work needing the OUTGOING
+            // world belongs on the `emitHook` twin, which already ran.
             self.emitEngineEvent("engine__scene_assets_acquire", .{ .name = name });
 
             self.unloadCurrentScene();
@@ -881,9 +904,15 @@ pub fn Mixin(comptime Game: type) type {
             const previous_name = if (self.current_scene_name) |n| self.allocator.dupe(u8, n) catch null else null;
             defer if (previous_name) |p| self.allocator.free(p);
 
+            // Drop the OUTGOING scene's queued events BEFORE announcing
+            // this transition (#864). The clear used to live inside
+            // `unloadCurrentScene` below — i.e. AFTER these emits — which
+            // discarded the announcements themselves, so no buffer-reading
+            // subscriber could ever see them.
+            // Immediate hook only. Both announcements are queued together
+            // further down, AFTER the discard that follows the last
+            // lifecycle hook — see the block below `scene_before_reset`.
             self.emitHook(.{ .scene_assets_acquire = .{ .name = name, .assets = target_assets } });
-            // Engine `Events` dual-emit (#578).
-            self.emitEngineEvent("engine__scene_assets_acquire", .{ .name = name });
 
             // `scene_before_reset` fires BEFORE any entity
             // destruction — plugin controllers with per-world heap
@@ -916,7 +945,29 @@ pub fn Mixin(comptime Game: type) type {
             // ordering in `save_load_mixin.zig::loadGameState`.
             if (self.current_scene_name) |outgoing| {
                 self.emitHook(.{ .scene_before_reset = .{ .name = outgoing } });
-                // Engine `Events` dual-emit (#578).
+            }
+
+            // Discard EVERYTHING queued so far — positioned after the LAST
+            // immediate lifecycle hook and before the announcements
+            // (#864/#868 review).
+            //
+            // `scene_assets_acquire` and `scene_before_reset` are the
+            // pre-teardown cleanup seam, so their handlers legitimately run
+            // against the OUTGOING world; a handler that calls
+            // `game.emit(...)` queues entity ids the reset below is about
+            // to invalidate. Clearing here discards the outgoing scene's
+            // events AND its cleanup handlers' emissions, while the
+            // announcements queued next still reach the drain.
+            self.clearPendingSceneEvents();
+
+            // The announcements, in acquire → before_reset order (what a
+            // subscriber reads as the shape of the transition). BUFFERED:
+            // delivered at the next drain, by which point the swap has
+            // happened — a NOTIFICATION that a reset occurred, not a
+            // chance to act before one. Pre-teardown work belongs on the
+            // `emitHook` twins above.
+            self.emitEngineEvent("engine__scene_assets_acquire", .{ .name = name });
+            if (self.current_scene_name) |outgoing| {
                 self.emitEngineEvent("engine__scene_before_reset", .{ .name = outgoing });
             }
 

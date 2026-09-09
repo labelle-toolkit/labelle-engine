@@ -349,9 +349,9 @@ and installed by `setHooks`. The engine never copies, owns, or frees them.
 
 ### D7 — a scene unload DISCARDS the queue
 
-`unloadCurrentScene` calls `event_buffer.clearRetainingCapacity()` as its
-**first** statement, before emitting its own `scene_unloaded`. Everything a
-script queued earlier in the frame is dropped, silently.
+A scene swap calls `clearPendingSceneEvents`, which is
+`event_buffer.clearRetainingCapacity()`. Everything queued before that
+point is dropped, silently.
 
 The rationale is sound (the outgoing scene's entities are about to be
 destroyed, so their events reference ids that will not exist) but the
@@ -359,10 +359,34 @@ behaviour is worth stating plainly:
 
 > **Any buffered event that has not been drained when a scene unloads is
 > lost. Do not use a buffered `emit` to hand state across a scene
-> transition.** Use game/plugin state, or `emitSync` if the handler must run
+> transition.** Use game/plugin state, or a hook if the handler must run
 > before the swap.
 
-`setSceneAtomic` reaches the same clear through `unloadCurrentScene`.
+**Where the clear sits, and why it matters (#864).** It used to be
+`unloadCurrentScene`'s first statement. It is now an explicit call the
+scene paths make at a specific moment:
+
+1. the immediate lifecycle hooks run — `scene_assets_acquire`, and
+   `scene_before_reset` on the atomic path. This is the pre-teardown
+   cleanup seam, so handlers here see the OUTGOING world;
+2. **`clearPendingSceneEvents()`** — discards the outgoing scene's queued
+   events *and* anything those cleanup handlers emitted, since those
+   payloads carry ids the reset is about to invalidate;
+3. the `engine__*` announcements are queued, so they survive to the drain;
+4. `unloadCurrentScene` tears down.
+
+Both orderings around step 2 have been wrong at some point: clearing
+*after* step 3 discarded the announcements themselves (the #864 bug),
+clearing *before* step 1 let the cleanup handlers' emissions survive
+teardown as dangling ids. Step 2 is the only position where both hold.
+
+`unloadCurrentScene` itself no longer clears. Events emitted by its own
+`scene_unload` hook and by a scene's `onUnload` are therefore queued after
+the discard and DO reach the drain — which is what they did before this
+change too, since the clear preceded them then as well. They are delivered
+after the teardown, so the same notification-not-cleanup rule applies.
+
+`setSceneAtomic` follows the identical sequence.
 
 ### D8 — shutdown flushes exactly once
 
@@ -444,12 +468,47 @@ If you are reading this because CI failed that way, the fix is in
 | Component `onReady` / `postLoad` | direct comptime call from the scene loader | **immediate**, per entity, as it is assembled — see §11 |
 | Whole-scene completion | `scene_load` hook (immediate) + `engine__scene_loaded` (buffered) | after the loader returns and the scene is active |
 | Asset readiness | polled, not evented. `assets.pump()` at the top of `tick`; the `setScene` manifest gate spins until `.ready` | no event is emitted per asset |
-| `engine__scene_assets_acquire`, `engine__scene_before_reset` | `emitEngineEvent` → buffered → **discarded** | ⚠️ **never delivered.** `setScene` queues the acquire event (`scene_mixin.zig:708`) and then calls `unloadCurrentScene` (`:710`), whose first statement clears the buffer; the atomic path queues `scene_before_reset` (`:876`) before the same clear at `:896`. Their `emitHook` twins DO fire — only the buffered `engine__*` variants are dropped. Tracked in #864 |
+| `engine__scene_assets_acquire`, `engine__scene_before_reset` | `emitEngineEvent` → buffered | **next drain**, like every other buffered engine event (#864) |
 
-> ⚠️ The row above is the one place this table advertises an event that does
-> not arrive. It is recorded rather than quietly omitted because a flow author
-> reading the generated event list will otherwise write a listener that can
-> never run.
+> These two used to be discarded rather than delivered.
+> `unloadCurrentScene` opened by clearing the event buffer, and both were
+> queued a few lines in front of it, so nothing subscribed could ever see
+> them — while their `emitHook` twins fired normally. That asymmetry is why
+> it stayed hidden: the feature worked from native code and silently did
+> nothing from a flow.
+>
+> The clear is now `clearPendingSceneEvents`, called by the scene paths
+> **before** they announce the transition. Discarding the outgoing scene's
+> own queued events is unchanged and still deliberate — its entities are
+> about to be destroyed, so those payloads reference ids that will be dead
+> by the drain. Only the ordering moved.
+>
+> **Buffered NOTIFICATION is not synchronous CLEANUP — and for
+> `before_reset` the difference bites.** The `emitHook` twins fire at the
+> emit site, before any teardown, and are the seam for work that needs the
+> OUTGOING world: freeing plugin state keyed on entities that are about to
+> be destroyed, snapshotting a component, releasing a handle. The buffered
+> `engine__*` variants arrive at the NEXT DRAIN, by which point the swap
+> has completed — they say a reset *happened*, not that one is *about to*.
+> A subscriber there cannot touch the outgoing ECS, and should not try.
+>
+> Concretely, verified in `test/scene_lifecycle_events_test.zig`: the
+> buffered `engine__scene_before_reset` names the scene that was torn down
+> while `current_scene_name` already reports the incoming one.
+>
+> Note this applies to FLOWS too, not only language plugins.
+> labelle-assembler lowers an `OnEvent` flow to a `FlowEventHandler` in the
+> `GameHooks` receiver tuple (`flow_scanner.zig`), so a flow consumes
+> engine events through `MergeHooks` — at the drain for a buffered event.
+> Its handler object is program-lifetime and survives the reset; the world
+> it would inspect does not.
+>
+> **These stay buffered on purpose.** Making them `emitEngineEventSync`
+> looks like the obvious fix and is not one: sync dispatches straight to
+> the hook tuple and never touches the buffer, so flow `OnEvent`s and
+> language-plugin subscriptions — which read `event_buffer` at their own
+> drain points (§9, `script_contract`) — would still receive nothing. Sync
+> would have "fixed" only the consumers that already worked.
 
 ---
 

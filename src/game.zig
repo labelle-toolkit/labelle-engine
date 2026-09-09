@@ -1599,6 +1599,11 @@ pub fn GameConfigWithYAxis(
         // Full docs in `game/scene_runtime_mixin.zig` /
         // `game/entity_mixin.zig` (scene-entity tracking).
         pub const unloadCurrentScene = SceneRuntimeMixin.unloadCurrentScene;
+
+        /// Drop events the outgoing scene queued, so they are not delivered
+        /// into the incoming one (#864). Callers clear at the point that
+        /// suits their ordering — before announcing a transition, not after.
+        pub const clearPendingSceneEvents = SceneRuntimeMixin.clearPendingSceneEvents;
         pub const trackSceneEntity = EntityMixin.trackSceneEntity;
         pub const untrackSceneEntity = EntityMixin.untrackSceneEntity;
         pub const setActiveScene = SceneRuntimeMixin.setActiveScene;

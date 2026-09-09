@@ -46,8 +46,24 @@ pub fn Mixin(comptime Game: type) type {
 
         // ── Active scene runtime ──────────────────────────────────
 
-        pub fn unloadCurrentScene(self: *Game) void {
+        /// Drop events the OUTGOING scene queued, so they cannot be
+        /// delivered into the incoming one.
+        ///
+        /// Split out of `unloadCurrentScene` (#864). It used to run as that
+        /// function's first statement, which discarded
+        /// `engine__scene_assets_acquire` / `engine__scene_before_reset` —
+        /// both emitted moments earlier to ANNOUNCE this very transition.
+        /// Callers now clear FIRST and announce after, so the announcements
+        /// survive to the drain that delivers them.
+        pub fn clearPendingSceneEvents(self: *Game) void {
             if (has_events) self.event_buffer.clearRetainingCapacity();
+        }
+
+        /// Tear down the active scene.
+        ///
+        /// Does NOT clear the event buffer — see `clearPendingSceneEvents`.
+        /// Every caller clears at the point that suits its own ordering.
+        pub fn unloadCurrentScene(self: *Game) void {
             if (self.current_scene_name) |name| {
                 self.emitHook(.{ .scene_unload = .{ .name = name } });
                 // Engine `Events` dual-emit (#578).
