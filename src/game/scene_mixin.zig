@@ -723,36 +723,21 @@ pub fn Mixin(comptime Game: type) type {
             // gate proved allReady, before any scene teardown. This
             // gives listeners a chance to cache the manifest and
             // react before `scene_before_load` fires.
-            // Clear the OUTGOING scene's queued events BEFORE announcing
-            // this transition (#864). The clear used to happen inside
-            // `unloadCurrentScene` below, i.e. AFTER these emits, which
-            // discarded them — nothing subscribed could ever see them.
-            //
-            // These stay BUFFERED rather than becoming `emitEngineEventSync`.
-            // Sync dispatches straight to the hook tuple and never reaches
-            // the buffer, so flow `OnEvent`s and language-plugin
-            // subscriptions — which read `event_buffer` at their own drain
-            // points — would still miss them. Buffered + a clear that no
-            // longer eats them reaches every subscriber.
+            // Drop the OUTGOING scene's queued events BEFORE announcing
+            // this transition (#864). The clear used to live inside
+            // `unloadCurrentScene` below — i.e. AFTER these emits — which
+            // discarded the announcements themselves, so no buffer-reading
+            // subscriber could ever see them.
             self.clearPendingSceneEvents();
             self.emitHook(.{ .scene_assets_acquire = .{ .name = name, .assets = target_assets } });
-            // Engine `Events` dual-emit (#578) — SYNCHRONOUS (#864).
+            // Engine `Events` dual-emit (#578) — BUFFERED (#864), delivered
+            // at the next drain like every other buffered engine event.
             //
-            // Buffering it here meant it was never delivered at all:
-            // `unloadCurrentScene` a few lines below opens with
-            // `event_buffer.clearRetainingCapacity()`, so the queued event
-            // was discarded before any drain could see it. A flow
-            // subscribing to `engine__scene_assets_acquire` could never
-            // fire, while the `emitHook` twin above — which dispatches
-            // immediately — worked. That asymmetry is what made it
-            // invisible: the feature worked from native code and silently
-            // did nothing from a flow.
-            //
-            // Sync is also the honest delivery for this event: it is an
-            // "about to do X" signal whose whole value is preceding the
-            // teardown, and its hook twin already fires immediately at
-            // exactly this point. Deferring it to the next drain would
-            // report the acquire AFTER the scene it precedes was gone.
+            // NOTIFICATION, not cleanup. By the time a buffered subscriber
+            // sees this, the swap has happened: it says "scene X was
+            // acquired", not "scene X is about to be". Anything that must
+            // run while the OUTGOING world still exists belongs on the
+            // `emitHook` twin above, which dispatches right here.
             self.emitEngineEvent("engine__scene_assets_acquire", .{ .name = name });
 
             self.unloadCurrentScene();
@@ -909,36 +894,21 @@ pub fn Mixin(comptime Game: type) type {
             const previous_name = if (self.current_scene_name) |n| self.allocator.dupe(u8, n) catch null else null;
             defer if (previous_name) |p| self.allocator.free(p);
 
-            // Clear the OUTGOING scene's queued events BEFORE announcing
-            // this transition (#864). The clear used to happen inside
-            // `unloadCurrentScene` below, i.e. AFTER these emits, which
-            // discarded them — nothing subscribed could ever see them.
-            //
-            // These stay BUFFERED rather than becoming `emitEngineEventSync`.
-            // Sync dispatches straight to the hook tuple and never reaches
-            // the buffer, so flow `OnEvent`s and language-plugin
-            // subscriptions — which read `event_buffer` at their own drain
-            // points — would still miss them. Buffered + a clear that no
-            // longer eats them reaches every subscriber.
+            // Drop the OUTGOING scene's queued events BEFORE announcing
+            // this transition (#864). The clear used to live inside
+            // `unloadCurrentScene` below — i.e. AFTER these emits — which
+            // discarded the announcements themselves, so no buffer-reading
+            // subscriber could ever see them.
             self.clearPendingSceneEvents();
             self.emitHook(.{ .scene_assets_acquire = .{ .name = name, .assets = target_assets } });
-            // Engine `Events` dual-emit (#578) — SYNCHRONOUS (#864).
+            // Engine `Events` dual-emit (#578) — BUFFERED (#864), delivered
+            // at the next drain like every other buffered engine event.
             //
-            // Buffering it here meant it was never delivered at all:
-            // `unloadCurrentScene` a few lines below opens with
-            // `event_buffer.clearRetainingCapacity()`, so the queued event
-            // was discarded before any drain could see it. A flow
-            // subscribing to `engine__scene_assets_acquire` could never
-            // fire, while the `emitHook` twin above — which dispatches
-            // immediately — worked. That asymmetry is what made it
-            // invisible: the feature worked from native code and silently
-            // did nothing from a flow.
-            //
-            // Sync is also the honest delivery for this event: it is an
-            // "about to do X" signal whose whole value is preceding the
-            // teardown, and its hook twin already fires immediately at
-            // exactly this point. Deferring it to the next drain would
-            // report the acquire AFTER the scene it precedes was gone.
+            // NOTIFICATION, not cleanup. By the time a buffered subscriber
+            // sees this, the swap has happened: it says "scene X was
+            // acquired", not "scene X is about to be". Anything that must
+            // run while the OUTGOING world still exists belongs on the
+            // `emitHook` twin above, which dispatches right here.
             self.emitEngineEvent("engine__scene_assets_acquire", .{ .name = name });
 
             // `scene_before_reset` fires BEFORE any entity
@@ -972,16 +942,20 @@ pub fn Mixin(comptime Game: type) type {
             // ordering in `save_load_mixin.zig::loadGameState`.
             if (self.current_scene_name) |outgoing| {
                 self.emitHook(.{ .scene_before_reset = .{ .name = outgoing } });
-                // Engine `Events` dual-emit (#578) — SYNCHRONOUS (#864),
-                // same reason as `scene_assets_acquire` above: the
-                // `unloadCurrentScene` below clears the event buffer, so
-                // the buffered half was discarded before it could be
-                // drained and no flow listener could ever run.
+                // Engine `Events` dual-emit (#578) — BUFFERED (#864).
                 //
-                // `before_reset` in particular cannot be deferred without
-                // becoming a lie — an event named for what it PRECEDES,
-                // delivered after the reset, describes a world that no
-                // longer exists.
+                // Read the NAME carefully: the `emitHook` twin above fires
+                // BEFORE the reset and is the pre-teardown cleanup seam —
+                // a handler there still sees the outgoing ECS. The buffered
+                // variant is delivered at the NEXT DRAIN, by which point
+                // the reset has already happened, so it is a notification
+                // that a reset occurred and CANNOT support cleanup that
+                // needs the outgoing world.
+                //
+                // Buffered anyway, deliberately: sync would reach only the
+                // hook tuple, which the twin above already covers, and
+                // would leave buffer-reading subscribers with nothing at
+                // all — the #864 bug over again (#868 review).
                 self.emitEngineEvent("engine__scene_before_reset", .{ .name = outgoing });
             }
 

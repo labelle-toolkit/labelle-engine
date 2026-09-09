@@ -53,6 +53,11 @@ const Listener = struct {
     /// counts (#868 review: the previous version counted only).
     acquire_at: usize = 0,
     reset_at: usize = 0,
+    /// Set by the flow-timing test so the handler can observe which scene
+    /// is active AT DELIVERY.
+    game: ?*anyopaque = null,
+    scene_at_reset_len: usize = 0,
+    scene_at_reset_buf: [64]u8 = undefined,
     last_acquire_len: usize = 0,
     last_acquire: [64]u8 = undefined,
     last_reset_len: usize = 0,
@@ -69,6 +74,13 @@ const Listener = struct {
         self.resets += 1;
         hook_seq += 1;
         self.reset_at = hook_seq;
+        if (self.game) |ptr| {
+            const g: *Game = @ptrCast(@alignCast(ptr));
+            if (g.current_scene_name) |cur| {
+                self.scene_at_reset_len = @min(cur.len, self.scene_at_reset_buf.len);
+                @memcpy(self.scene_at_reset_buf[0..self.scene_at_reset_len], cur[0..self.scene_at_reset_len]);
+            }
+        }
         self.last_reset_len = @min(payload.name.len, self.last_reset.len);
         @memcpy(self.last_reset[0..self.last_reset_len], payload.name[0..self.last_reset_len]);
     }
@@ -78,6 +90,11 @@ const Listener = struct {
     }
     fn lastReset(self: *const Listener) []const u8 {
         return self.last_reset[0..self.last_reset_len];
+    }
+
+    /// Which scene was ACTIVE when `before_reset` was delivered.
+    fn scene_at_reset(self: *const Listener) []const u8 {
+        return self.scene_at_reset_buf[0..self.scene_at_reset_len];
     }
 };
 
@@ -269,6 +286,52 @@ pub const SCENE_LIFECYCLE_EVENTS = struct {
         game.dispatchEvents();
         try testing.expectEqual(@as(usize, 1), listener.acquires);
         try testing.expectEqual(@as(usize, 1), listener.resets);
+    }
+
+    test "a FLOW-shaped receiver sees before_reset only AFTER the teardown (#864)" {
+        // What a generated flow listener actually is: labelle-assembler
+        // lowers an `OnEvent` flow to a `pub const FlowEventHandler` and
+        // appends `*FlowEventHandler` to the `GameHooks` receiver tuple
+        // (flow_scanner.zig:318-322). So a flow consumes engine events
+        // through `MergeHooks` — the same dispatch this `Listener` stands
+        // in for — NOT by reading the buffer the way a language plugin
+        // does.
+        //
+        // Which fixes the TIMING, and the timing is the point here. A
+        // BUFFERED event reaches the tuple at the drain, and the drain
+        // happens after the swap has completed. So a flow listening for
+        // `engine__scene_before_reset` is told that a reset HAPPENED; it
+        // cannot use the outgoing world, because that world is gone by
+        // then. Pre-teardown cleanup is the `emitHook` twin's job.
+        //
+        // Asserted by observing the game state AT DELIVERY, not by
+        // reasoning about it.
+        var game = Game.init(testing.allocator);
+        defer game.deinit();
+        var listener: Listener = .{};
+        var hooks: AllHooks = .{ .receivers = .{&listener} };
+        game.setHooks(&hooks);
+        game.registerSceneSimple("first_scene", emptyLoader);
+        game.registerSceneSimple("second_scene", emptyLoader);
+
+        try game.setScene("first_scene");
+        game.dispatchEvents();
+        listener = .{};
+        listener.game = &game;
+
+        try game.setSceneAtomic("second_scene");
+        // Nothing yet — buffered.
+        try testing.expectEqual(@as(usize, 0), listener.resets);
+
+        game.dispatchEvents();
+        try testing.expectEqual(@as(usize, 1), listener.resets);
+        // It names the scene that WAS torn down…
+        try testing.expectEqualStrings("first_scene", listener.lastReset());
+        // …but by the time it arrives, that scene is already gone and the
+        // incoming one is active. A handler here cannot touch the outgoing
+        // ECS, and the contract says so rather than letting someone find
+        // out the hard way.
+        try testing.expectEqualStrings("second_scene", listener.scene_at_reset());
     }
 
     test "before_reset does NOT fire on a first load, which has nothing to tear down (#864)" {

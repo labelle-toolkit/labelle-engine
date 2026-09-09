@@ -459,6 +459,26 @@ If you are reading this because CI failed that way, the fix is in
 > about to be destroyed, so those payloads reference ids that will be dead
 > by the drain. Only the ordering moved.
 >
+> **Buffered NOTIFICATION is not synchronous CLEANUP — and for
+> `before_reset` the difference bites.** The `emitHook` twins fire at the
+> emit site, before any teardown, and are the seam for work that needs the
+> OUTGOING world: freeing plugin state keyed on entities that are about to
+> be destroyed, snapshotting a component, releasing a handle. The buffered
+> `engine__*` variants arrive at the NEXT DRAIN, by which point the swap
+> has completed — they say a reset *happened*, not that one is *about to*.
+> A subscriber there cannot touch the outgoing ECS, and should not try.
+>
+> Concretely, verified in `test/scene_lifecycle_events_test.zig`: the
+> buffered `engine__scene_before_reset` names the scene that was torn down
+> while `current_scene_name` already reports the incoming one.
+>
+> Note this applies to FLOWS too, not only language plugins.
+> labelle-assembler lowers an `OnEvent` flow to a `FlowEventHandler` in the
+> `GameHooks` receiver tuple (`flow_scanner.zig`), so a flow consumes
+> engine events through `MergeHooks` — at the drain for a buffered event.
+> Its handler object is program-lifetime and survives the reset; the world
+> it would inspect does not.
+>
 > **These stay buffered on purpose.** Making them `emitEngineEventSync`
 > looks like the obvious fix and is not one: sync dispatches straight to
 > the hook tuple and never touches the buffer, so flow `OnEvent`s and
