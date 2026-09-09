@@ -34,7 +34,7 @@ The intent was correct. The implementation was over-engineered. The "name" the w
 
 ## Proposal
 
-**Drop the `root:` wrapper.** Top-level keys of the file ARE the entity. Metadata keys (`name`, `version`) and entity-shape keys (`components`, `children`, `prefab`, `overrides`) coexist at the same level.
+**Drop the `root:` wrapper.** Top-level keys of the file ARE the entity. Metadata keys (`name`, `version`) and entity-shape keys (`components`, `children`, `prefab`, `overrides`, `ref`) coexist at the same level. Scene composition via `include` remains a file-level scene key, not an entity key.
 
 ### Before / after — full coverage
 
@@ -97,18 +97,62 @@ The intent was correct. The implementation was over-engineered. The "name" the w
 }
 ```
 
+### Current loader key contract
+
+The following table records the semantics implemented by the current JSONC
+loader and resolver. It is intentionally narrower than the broader
+flattening proposal: it documents where each key is valid rather than
+inventing a second file shape.
+
+| Scope | Key | Meaning |
+|-------|-----|---------|
+| Scene file top level | `include` | Array of scene-file paths. Each included scene is loaded recursively before the including scene's own entities. Include depth is bounded. |
+| File-header `meta` | `include` | Reserved for a future consumer; currently unused. It does not cause inclusion. |
+| Entity | `ref` | Structural name registered for the entity in the current scene-file reference scope. |
+| Component field | `@name` value | Consumer-side entity reference. On an `entity_ref` component field, `@name` is resolved in the resolver's second pass to the entity ID registered by `ref`. |
+
+`ref` is an entity key, not a file key. In a flat prefab file the file object
+*is* the prefab-root entity, so its top-level `ref` names that prefab-root
+entity. The same key may appear on entries in `children` (and on entities
+nested in entity-bearing component fields). A prefab reference can inherit
+the prefab root's `ref` when the call-site entry does not provide its own.
+
+For example, the producer and consumer sides are separate:
+
+```jsonc
+// prefabs/storage.jsonc — the flat file object is the prefab-root entity
+{
+    "ref": "storage",
+    "children": [
+        { "ref": "item", "components": { "Item": {} } }
+    ]
+}
+
+// a scene entity's component field consumes the name
+{
+    "components": {
+        "WithItem": { "item_id": "@item" }
+    }
+}
+```
+
+The loader creates entities and records `ref` names during its first pass,
+then patches `@name` fields during the second pass. References from an
+included file are scoped to that file's `RefContext`; they are not visible
+to the including scene.
+
 ### Key sets are closed and disjoint
 
 The proposal works because the top-level key sets are well-defined and don't overlap:
 
 | Group       | Keys                                                  |
 |-------------|-------------------------------------------------------|
-| Metadata    | `name`, `version` *(future)*                           |
-| Entity-inline | `components`, `children`                            |
-| Entity-ref  | `prefab`, `overrides`                                  |
+| Scene file metadata / composition | `name`, `version` *(future)*, `include` |
+| Entity-inline | `components`, `children`, `ref`                       |
+| Entity-ref  | `prefab`, `overrides`, `ref`                           |
 | Legacy *(removed in v2.0)* | `entities`, `assets`                    |
 
-A file's "is this a reference or inline?" classification is the same predicate as today: does the top-level have `"prefab"`? Just looked up one level shallower.
+A file's "is this a reference or inline?" classification is the same predicate as today: does the entity object have `"prefab"`? For a flat prefab file, that entity object is the top-level object and may also carry `ref`.
 
 ### §B2 still applies
 
