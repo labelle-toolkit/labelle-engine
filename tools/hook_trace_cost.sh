@@ -192,8 +192,20 @@ time_build() { # time_build <label> <root file> <out>
   echo "   __text=$(size -m "$3" | awk '/Section __text:/{print $3}')"
 }
 
-time_build "tracing OFF (core.MergeHooks.emit)" "$WORK/scale/scaling_off_exe.zig" "$WORK/scale_off"
-time_build "tracing ON  (engine traced walk)"  "$WORK/scale/scaling_on_exe.zig"  "$WORK/scale_on"
+# Warm the GLOBAL cache first: whichever half compiles the shared std /
+# core artifacts pays for them, and that dwarfs the difference under
+# measurement. Then interleave, because the numbers still drift.
+rm -rf "$WORK/zcs"
+# shellcheck disable=SC2086
+zig build-exe -lc $DARWIN_FRAMEWORKS \
+  --cache-dir "$WORK/zcs" --global-cache-dir "$WORK/zg2" -femit-bin="$WORK/warm" \
+  --dep engine --dep labelle-core --dep scene \
+  -Mroot="$WORK/scale/scaling_on_exe.zig" "${MODS[@]}" >/dev/null
+
+for _ in 1 2; do
+  time_build "tracing OFF (core.MergeHooks.emit)" "$WORK/scale/scaling_off_exe.zig" "$WORK/scale_off"
+  time_build "tracing ON  (engine traced walk)"  "$WORK/scale/scaling_on_exe.zig"  "$WORK/scale_on"
+done
 
 echo
 echo "  (Both binaries run; the ON one prints its record count.)"

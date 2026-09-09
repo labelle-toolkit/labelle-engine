@@ -101,9 +101,41 @@ Both are pinned by `test/hook_delivery_contract_test.zig`;
 branch-quota headroom (64 variants x 16 receivers) and must never set a
 quota of its own.
 
+### Tracing what actually happened (#858)
+
+`HOOK-TRACING.md` documents opt-in runtime tracing: enqueue (and enqueue
+FAILURE), drain identity, sync vs buffered dispatch, per-receiver
+delivery, and where a consumable event stopped. Switch it on with one
+declaration on the compilation root:
+
+```zig
+pub const labelle_hook_trace = true;   // or an engine.HookTraceOptions
+```
+
+Three things to know before touching it:
+
+1. **`zig test` cannot enable it.** The compilation root under `zig test`
+   is Zig's test runner, so the ON-path tests are EXECUTABLES
+   (`test/hook_trace_root_exe.zig`, `test/hook_trace_scaling_exe.zig`),
+   same constraint #855 hit. `test/hook_trace_off_test.zig` is the off
+   proof precisely because it *cannot* opt in.
+2. **A traced build walks the receiver tuple in
+   `src/game/hook_trace_dispatch.zig` instead of calling
+   `core.MergeHooks.emit`.** That walk is a hand-written mirror of core's;
+   if core's dispatch loop changes, change it too. The parity check in
+   `hook_trace_root_exe.zig` fails the build if they diverge.
+3. **Do not mark `walkMerged`/`walkSingle` `inline`.** One instantiation
+   per variant is what keeps the comptime cost linear; inlining them
+   reproduces `evaluation exceeded 1000 backwards branches` at 64 x 16.
+
+`tools/hook_trace_cost.sh` measures both halves (off = unchanged codegen,
+on = compile time and code size at 64 x 16).
+
 ## References
 
 - PIE umbrella: labelle-gui#59
 - Architecture decision (control plane protocol): labelle-gui#60
 - This spike: labelle-engine#516
 - Typed hook context: labelle-engine#855 (`RFC-TYPED-HOOK-CONTEXT.md`)
+- Hook/event delivery contract: labelle-engine#857 (`HOOK-DELIVERY-CONTRACT.md`)
+- Opt-in hook tracing: labelle-engine#858 (`HOOK-TRACING.md`)

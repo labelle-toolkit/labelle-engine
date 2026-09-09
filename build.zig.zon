@@ -80,6 +80,11 @@
         // `src/game/events_mixin.zig` points readers at it, and a packaged
         // copy that omits it sends them to a file they do not have (#857).
         "HOOK-DELIVERY-CONTRACT.md",
+        // The tracing reference. Shipped for the same reason: both
+        // `src/hook_trace.zig` and `src/game/hook_trace_dispatch.zig`
+        // point readers at it, and a package that omits it sends them to
+        // a file they do not have (#858).
+        "HOOK-TRACING.md",
         "build.zig",
         "build.zig.zon",
         "src",
