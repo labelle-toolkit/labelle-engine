@@ -394,6 +394,12 @@ pub fn build(b: *std.Build) void {
         // ENABLED. The traced enqueue path appended to a `void` buffer, so
         // this combination did not COMPILE — building it is the assertion.
         .{ .name = "hook_trace_eventless_exe", .root = "test/hook_trace_eventless_exe.zig" },
+        // #727/#858 review: `ring_capacity = 0` is a DOCUMENTED sink-only
+        // configuration, and `Tracer.at` divides by `capacity`. Modulo by
+        // a comptime zero is a compile error, so instantiating either
+        // renderer in such a build could fail to compile — building this
+        // is the assertion.
+        .{ .name = "hook_trace_zero_ring_exe", .root = "test/hook_trace_zero_ring_exe.zig" },
         .{ .name = "hook_trace_scaling_exe", .root = "test/hook_trace_scaling_exe.zig" },
     };
     for (hook_trace_exes) |spec| {
