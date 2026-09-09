@@ -180,10 +180,13 @@ MODS=(
 )
 
 time_build() { # time_build <label> <root file> <out>
-  echo "-- $1 --"
+  echo "-- $1 (ReleaseFast) --"
   rm -rf "$WORK/zcs"
   # shellcheck disable=SC2086
-  /usr/bin/time -p zig build-exe -lc $DARWIN_FRAMEWORKS \
+  # ReleaseFast, matching the size probe in step 1. Without an explicit
+  # -O this built in DEBUG, so the reported compile-time and __text deltas
+  # described a mode nobody ships (#858 review).
+  /usr/bin/time -p zig build-exe -O ReleaseFast -lc $DARWIN_FRAMEWORKS \
     --cache-dir "$WORK/zcs" --global-cache-dir "$WORK/zg2" \
     -femit-bin="$3" \
     --dep engine --dep labelle-core --dep scene \

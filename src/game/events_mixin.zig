@@ -68,7 +68,7 @@ pub fn Mixin(comptime Game: type) type {
         /// delivery (`.drain`) from immediate delivery (`.emit_sync`,
         /// `.emit_hook`) — the acceptance criterion #858 leads with.
         inline fn deliver(self: *Game, payload: Payload, comptime source: hook_trace.Source) void {
-            if (has_hooks) {
+            if (comptime has_hooks) {
                 if (self.hooks) |h| {
                     if (comptime tracing) {
                         TraceDispatch.dispatch(Game, self, h, payload, source);
@@ -83,6 +83,14 @@ pub fn Mixin(comptime Game: type) type {
                     // the one place the difference is visible.
                     traceEmptyDispatch(self, payload, source);
                 }
+            } else if (comptime tracing) {
+                // A game that declares EVENTS but no hooks at all
+                // (`has_hooks == false`) used to fall off the end of this
+                // `if` and record nothing — so a zero-listener dispatch was
+                // invisible, which is the same silence the branch above
+                // exists to remove. Same empty pair, same reason (#858
+                // review).
+                traceEmptyDispatch(self, payload, source);
             }
         }
 
@@ -104,6 +112,25 @@ pub fn Mixin(comptime Game: type) type {
             };
             var begin = rec;
             begin.phase = .dispatch_begin;
+            // Capture scalars here too. Omitting them made the unwired case
+            // the ONE dispatch a reader could not inspect the payload of —
+            // and "nobody was wired" is exactly when you want to see what
+            // was being sent (#858 review). Same double gate as every other
+            // capture site: a comptime budget AND the runtime flag, so the
+            // switch is not even instantiated by default.
+            if (comptime hook_trace.options.payload_capacity > 0) {
+                if (t.capture_payloads) {
+                    switch (payload) {
+                        inline else => |data| {
+                            begin.payload_len = hook_trace.renderScalars(
+                                @TypeOf(data),
+                                data,
+                                &begin.payload_buf,
+                            );
+                        },
+                    }
+                }
+            }
             t.push(begin);
             var end = rec;
             end.phase = .dispatch_end;

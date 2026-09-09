@@ -240,11 +240,17 @@ macOS arm64:
 
 | | compile (real) | `__text` |
 |---|---|---|
-| tracing OFF (`core.MergeHooks.emit`) | 1.61 – 1.68 s | 1 371 224 |
-| tracing ON (engine traced walk) | 1.77 – 1.79 s | 1 548 332 |
+| tracing OFF (`core.MergeHooks.emit`) | 6.21 – 6.30 s | 253 464 |
+| tracing ON (engine traced walk) | 6.82 – 6.87 s | 292 836 |
 
-≈ **+0.13 s (+8 %) compile time** and **+177 108 bytes (+12.9 %) of
+≈ **+0.6 s (+10.6 %) compile time** and **+39 372 bytes (+15.5 %) of
 machine code** at that scale — paid only by a build that opted in.
+
+> These are **ReleaseFast**, matching the step-1 size probe. An earlier
+> revision of `tools/hook_trace_cost.sh` omitted `-O` here, so this A/B
+> built in Debug and the table reported 1.61 → 1.79 s and +12.9 % `__text`
+> — a mode nobody ships, and not comparable with the rest of the document
+> (#858 review). Both halves are now built the same way.
 
 ### The branch quota — measured, and a footgun
 
