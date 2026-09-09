@@ -444,12 +444,18 @@ If you are reading this because CI failed that way, the fix is in
 | Component `onReady` / `postLoad` | direct comptime call from the scene loader | **immediate**, per entity, as it is assembled — see §11 |
 | Whole-scene completion | `scene_load` hook (immediate) + `engine__scene_loaded` (buffered) | after the loader returns and the scene is active |
 | Asset readiness | polled, not evented. `assets.pump()` at the top of `tick`; the `setScene` manifest gate spins until `.ready` | no event is emitted per asset |
-| `engine__scene_assets_acquire`, `engine__scene_before_reset` | `emitEngineEvent` → buffered → **discarded** | ⚠️ **never delivered.** `setScene` queues the acquire event (`scene_mixin.zig:708`) and then calls `unloadCurrentScene` (`:710`), whose first statement clears the buffer; the atomic path queues `scene_before_reset` (`:876`) before the same clear at `:896`. Their `emitHook` twins DO fire — only the buffered `engine__*` variants are dropped. Tracked in #864 |
+| `engine__scene_assets_acquire`, `engine__scene_before_reset` | `emitEngineEventSync` | **immediate**, at the emit site — matching their `emitHook` twins (#864) |
 
-> ⚠️ The row above is the one place this table advertises an event that does
-> not arrive. It is recorded rather than quietly omitted because a flow author
-> reading the generated event list will otherwise write a listener that can
-> never run.
+> These two were buffered until #864, and buffering meant they were never
+> delivered at all: `unloadCurrentScene` opens by clearing the event buffer,
+> and both were queued a few lines in front of it. Only the `engine__*` halves
+> were lost — the `emitHook` twins always fired — so the feature worked from
+> native code and silently did nothing from a flow.
+>
+> Sync is also the honest delivery for both. They are "about to do X" signals
+> whose value is *preceding* the teardown, and `before_reset` in particular
+> cannot be deferred without becoming a lie: delivered after the reset, it
+> would describe a world that no longer exists.
 
 ---
 

@@ -78,6 +78,10 @@ pub fn build(b: *std.Build) void {
         // delivers them. Uses a POISONING allocator: under a plain one
         // these tests pass with the bug present.
         "test/payload_lifetime_test.zig",
+        // #864 — the two scene lifecycle events that were queued and then
+        // discarded by `unloadCurrentScene`'s buffer clear. Listens on the
+        // `engine__*` variants through the REAL setScene paths.
+        "test/scene_lifecycle_events_test.zig",
         "test/easing_test.zig",
         "test/scene_test.zig",
         "test/gestures_test.zig",
