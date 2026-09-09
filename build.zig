@@ -408,6 +408,11 @@ pub fn build(b: *std.Build) void {
         // renderer in such a build could fail to compile — building this
         // is the assertion.
         .{ .name = "hook_trace_zero_ring_exe", .root = "test/hook_trace_zero_ring_exe.zig" },
+        // #865 review: the SINGLE-receiver dispatch path never recorded
+        // `Phase.consumed`, so a handled consumable event was
+        // indistinguishable from an ignored one. Both controls — returned
+        // true, returned false — in one harness.
+        .{ .name = "hook_trace_single_receiver_exe", .root = "test/hook_trace_single_receiver_exe.zig" },
         .{ .name = "hook_trace_scaling_exe", .root = "test/hook_trace_scaling_exe.zig" },
     };
     for (hook_trace_exes) |spec| {
