@@ -108,7 +108,7 @@ inventing a second file shape.
 |-------|-----|---------|
 | Scene file top level | `include` | Array of scene-file paths. Each included scene is loaded recursively before the including scene's own entities. Include depth is bounded. |
 | File-header `meta` | `include` | Reserved for a future consumer; currently unused. It does not cause inclusion. |
-| Entity | `ref` | Structural name registered in the active `RefContext`: the scene-file scope for plain entities, or a per-instance nested scope for prefab instances. An explicit call-site `ref` on a nested prefab is also exposed in its parent scope. |
+| Entity | `ref` | Structural name registered in the active `RefContext`. Scope depends on the traversal path, as described below; an explicit call-site `ref` on a nested instance is also exposed in its parent scope. |
 | Component field | `@name` value | Consumer-side entity reference. On an `entity_ref` component field, `@name` is resolved in the resolver's second pass to the entity ID registered by `ref`. |
 
 `ref` is an entity key, not a file key. In a flat prefab file the file object
@@ -117,43 +117,46 @@ entity. The same key may appear on entries in `children` (and on entities
 nested in entity-bearing component fields). A prefab reference can inherit
 the prefab root's `ref` when the call-site entry does not provide its own.
 
-For example, the producer and consumer sides are separate:
+For example, this prefab declares and consumes a name within the same scope:
 
 ```jsonc
 // prefabs/storage.jsonc — the flat file object is the prefab-root entity
 {
     "ref": "storage",
+    "components": { "WithItem": { "item_id": "@item" } },
     "children": [
         { "ref": "item", "components": { "Item": {} } }
     ]
 }
-
-// a scene entity's component field consumes the name
-{
-    "components": {
-        "WithItem": { "item_id": "@item" }
-    }
-}
 ```
 
-The loader creates entities and records `ref` names during its first pass,
-then patches `@name` fields during the second pass. Plain entities use the
-enclosing scene-file `RefContext`. `loadChildEntity` and
-`spawnAndLinkNestedEntities` create a child `RefContext` for each nested
-prefab instance, chained to its parent for lookup: prefab-internal names are
-local to that instance, while lookups may still resolve names from enclosing
-scopes. An explicit scene-level `ref` on the nested instance is bubbled back
-to its parent scope; prefab-defined/internal refs are not. This prevents
-repeated instances from colliding while allowing a scene to name a particular
-instance.
+Reference scope depends on the traversal path, not just whether an entity
+uses `prefab`:
 
-For example, if a scene contains `{ "prefab": "crate", "ref": "crate_a" }`
-and `crate` defines an internal child `{ "ref": "handle" }`, `@handle` can
-resolve inside that `crate_a` instance, and `@crate_a` can resolve from the
-scene's other plain entities. `@handle` cannot resolve from a scene sibling,
-and a second `{ "prefab": "crate", "ref": "crate_b" }` gets its own `handle`
-scope. References from an included file are scoped to that file's
-`RefContext`; they are not visible to the including scene.
+- `processEntities` loads direct scene entries into the scene-file
+  `RefContext`, including prefab references. Their root and inline descendant
+  names share that scope; repeated names can collide.
+- `loadChildEntity` creates a child context for a prefab nested under another
+  entity. Inline children instead reuse the parent's context.
+- `spawnAndLinkNestedEntities` creates a child context for an entity nested
+  in an entity-bearing component field, including inline entities.
+
+Child contexts chain to their parent for lookup, but their internal names
+remain local. An explicit call-site `ref` on the nested instance is also
+registered in the parent context. Thus two crate prefab instances nested
+under another entity can each have an internal `handle` name without
+colliding. This isolation does not apply if both crates are direct entries
+in the scene's top-level `children` array.
+
+Resolution has two passes per context: collect names and deferred fields,
+then patch those fields. A nested context is patched as soon as that instance
+finishes loading, before later top-level scene siblings have loaded. Its
+lookups into enclosing scopes can therefore only find names already
+registered there; a reference to a later sibling remains unresolved (the
+loader logs it and leaves the field at zero). The scene context's own second
+pass runs after all its direct entries load. References from an included
+file belong to that file's separate context and are not visible to the
+including scene.
 
 ### Mode-specific key sets are disjoint; `ref` is shared
 
