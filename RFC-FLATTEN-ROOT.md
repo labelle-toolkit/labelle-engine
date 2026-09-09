@@ -34,7 +34,7 @@ The intent was correct. The implementation was over-engineered. The "name" the w
 
 ## Proposal
 
-**Drop the `root:` wrapper.** Top-level keys of the file ARE the entity. Metadata keys (`name`, `version`) and entity-shape keys (`components`, `children`, `prefab`, `overrides`, `ref`) coexist at the same level. Scene composition via `include` remains a file-level scene key, not an entity key.
+**Drop the `root:` wrapper.** Top-level keys of the file ARE the entity. Metadata keys (`name`, `version`) and entity-shape keys (`components`, `children`, `prefab`, `overrides`) coexist at the same level. A flat prefab root can also carry the entity key `ref`; the scene-file object itself is not instantiated, so a top-level scene `ref` is not registered. Scene composition via `include` remains a file-level scene key, not an entity key.
 
 ### Before / after — full coverage
 
@@ -102,10 +102,12 @@ The intent was correct. The implementation was over-engineered. The "name" the w
 The following table records the semantics implemented by the current JSONC
 scene loader and resolver. The `ref` / `@name` resolution described here
 applies to scene loading, including prefabs instantiated along that path.
-Runtime `spawnFromPrefab` uses a separate path without a `RefContext`; it
-does not perform this name resolution, and an `@name` value in a component
-can fail deserialization there. Do not use the example below as a runtime
-spawn contract. It is intentionally narrower than the broader
+Runtime `spawnFromPrefab` applies prefab-root components and loads ordinary
+children without a `RefContext`, so an `@name` value on those paths can fail
+deserialization. Component-nested entities are an exception: their loader
+creates a local context even without a parent context and resolves names
+inside that subtree. The root-component example below requires scene
+loading and is not a runtime spawn contract. It is intentionally narrower than the broader
 flattening proposal: it documents where each key is valid rather than
 inventing a second file shape.
 
