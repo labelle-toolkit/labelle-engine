@@ -100,7 +100,12 @@ The intent was correct. The implementation was over-engineered. The "name" the w
 ### Current loader key contract
 
 The following table records the semantics implemented by the current JSONC
-loader and resolver. It is intentionally narrower than the broader
+scene loader and resolver. The `ref` / `@name` resolution described here
+applies to scene loading, including prefabs instantiated along that path.
+Runtime `spawnFromPrefab` uses a separate path without a `RefContext`; it
+does not perform this name resolution, and an `@name` value in a component
+can fail deserialization there. Do not use the example below as a runtime
+spawn contract. It is intentionally narrower than the broader
 flattening proposal: it documents where each key is valid rather than
 inventing a second file shape.
 
@@ -117,7 +122,8 @@ entity. The same key may appear on entries in `children` (and on entities
 nested in entity-bearing component fields). A prefab reference can inherit
 the prefab root's `ref` when the call-site entry does not provide its own.
 
-For example, this prefab declares and consumes a name within the same scope:
+For example, during scene loading this prefab declares and consumes a name
+within the same scope:
 
 ```jsonc
 // prefabs/storage.jsonc — the flat file object is the prefab-root entity
