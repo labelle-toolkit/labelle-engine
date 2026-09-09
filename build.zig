@@ -69,6 +69,11 @@ pub fn build(b: *std.Build) void {
     // Test files in test/ directory
     const test_files = [_][]const u8{
         "test/root_test.zig",
+        // #855 — typed hook context: `engine.HookContext` injection by
+        // field type, `ctx.game()` / `ctx.gameAs(G)`, the bound-Game
+        // identity check, and a regression proving the legacy
+        // `game_ptr: *anyopaque` receiver form still works unchanged.
+        "test/typed_hook_context_test.zig",
         "test/easing_test.zig",
         "test/scene_test.zig",
         "test/gestures_test.zig",
@@ -321,7 +326,41 @@ pub fn build(b: *std.Build) void {
         // `advanceAnimations`, and the pre/post pair is what pins the
         // `@hasDecl` degrade.
         "test/tilemap_animation_tick_test.zig",
+        // #857 — the hook/event DELIVERY CONTRACT as an executable spec:
+        // pre/post-drain state, FIFO + receiver-tuple order, next-drain
+        // delivery of handler-emitted events, emitSync queue-jumping,
+        // consumable break, borrowed-payload lifetime, scene-reset drop,
+        // shutdown flush, and the generated loop's drain-before-tick
+        // shape. Prose in `HOOK-DELIVERY-CONTRACT.md`.
+        "test/hook_delivery_contract_test.zig",
+        // #857 — the representative dispatcher size (64 event variants x
+        // 16 receiver types). Compiles ONLY because `core.MergeHooks.emit`
+        // raises the comptime branch quota; this file deliberately sets no
+        // quota of its own, so dropping core's would break the build here.
+        "test/hook_dispatch_scaling_test.zig",
     };
+
+    // #855 — the typed hook context's no-argument `ctx.game()` form
+    // resolves `@import("root").Game`, and under `zig test` the root is
+    // Zig's test runner, not the test file. So the shipping authoring
+    // form can only be compiled and run from a real EXECUTABLE whose root
+    // declares `pub const Game`, the way an assembler-generated
+    // `main.zig` does. This headless harness is that root; it asserts and
+    // exits non-zero on failure, so `zig build test` gates on it.
+    const typed_hook_ctx_exe = b.addExecutable(.{
+        .name = "typed_hook_context_root_exe",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("test/typed_hook_context_root_exe.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "labelle-core", .module = core_module },
+                .{ .name = "engine", .module = engine_module },
+                .{ .name = "scene", .module = scene_module },
+            },
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(typed_hook_ctx_exe).step);
 
     for (test_files) |test_file| {
         const t = b.addTest(.{

@@ -57,14 +57,53 @@ The generated main calls those at init, in the frame loop, and on shutdown. Wiri
 
 `test/preview_mode_test.zig` exercises the full `connect → hello → heartbeats → bye → EOF` cycle against a real loopback `std.net.Server` in-process. End-to-end with an actual subprocess will land editor-side in labelle-gui Phase 1.
 
+## Hook authoring — typed game access (#855)
+
+A hook receiver reaches the assembled game through a declared field, not a cast:
+
+```zig
+pub const AnimationHooks = struct {
+    ctx: engine.HookContext = .{},           // injected by Game.setHooks
+
+    pub fn worker_eat_start(self: *AnimationHooks, payload: anytype) void {
+        const game = self.ctx.game();        // typed as @import("root").Game
+        ...
+    }
+};
+```
+
+Injection is **by field type**, so the field can carry any name. `ctx.gameAs(G)` names the game type explicitly (needed in unit tests, where `zig test`'s compilation root is the test runner, not the test file).
+
+The legacy form — `game_ptr: *anyopaque` plus a hand-written `getGame` — is still injected and still works; the two mix freely in one `MergeHooks` tuple.
+
+**Do not try to declare `game: *Game` on a receiver.** It is a hard `dependency loop` error: `labelle-core`'s dispatcher calls `@typeInfo` on the receiver type, which forces its fields to resolve, which needs the Game, which needs the dispatcher. A receiver may name its Game type only from a **function body** or a **private declaration**. `RFC-TYPED-HOOK-CONTEXT.md` has the four probes and the full option analysis.
+
 ## Conventions
 
 1. **Module + test file pair**: `src/foo.zig` + `test/foo_test.zig`, wired in `build.zig`'s `test_files` array. Do NOT leave `test {}` blocks inside `src/*.zig` (build.zig doesn't reach them through the cross-module import — see the comment above `assets_tests` in `build.zig`).
 2. **Re-export through `root.zig`**: every new public type/fn surfaces as `engine.Foo`. Group with a `// ── Section ──` heading.
 3. **`std.json.Stringify.valueAlloc`** for any JSON emission — escape correctness matters once the wire is read by another process.
 
+## Hook / event delivery
+
+`HOOK-DELIVERY-CONTRACT.md` (repo root) is the authoritative reference for
+when a hook or event handler actually runs. Read it before touching
+`src/game/events_mixin.zig`, `src/game/loop_mixin.zig`, or
+`labelle-core`'s `src/dispatcher.zig`. Two things surprise everybody:
+
+- The generated main loop calls `g.dispatchEvents()` **before** `g.tick(dt)`,
+  so anything the engine buffers inside `tick` is delivered one frame later.
+- `emit` copies the payload struct but **borrows** any slice inside it; the
+  referent must outlive the drain.
+
+Both are pinned by `test/hook_delivery_contract_test.zig`;
+`test/hook_dispatch_scaling_test.zig` pins the dispatcher's comptime
+branch-quota headroom (64 variants x 16 receivers) and must never set a
+quota of its own.
+
 ## References
 
 - PIE umbrella: labelle-gui#59
 - Architecture decision (control plane protocol): labelle-gui#60
 - This spike: labelle-engine#516
+- Typed hook context: labelle-engine#855 (`RFC-TYPED-HOOK-CONTEXT.md`)

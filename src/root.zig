@@ -717,6 +717,22 @@ pub const PauseChangedInfo = hooks_types_mod.PauseChangedInfo;
 pub const EntityInfo = hooks_types_mod.EntityInfo;
 pub const ComponentPayload = hooks_types_mod.ComponentPayload;
 
+// ── Typed hook context (#855) ──
+/// Declare `ctx: engine.HookContext = .{}` on a hook receiver and the
+/// engine binds it in `setHooks`; handlers then reach the assembled game
+/// with `self.ctx.game()` instead of a hand-written `@ptrCast` of an
+/// injected `*anyopaque`. Purely additive — the legacy
+/// `game_ptr: *anyopaque` field keeps working. See
+/// `RFC-TYPED-HOOK-CONTEXT.md`.
+pub const HookContext = hooks_types_mod.HookContext;
+/// The assembled `Game` type of the current compilation
+/// (`@import("root").Game`), as a compile error rather than a mystery
+/// when the root exports none. What `HookContext.game()` resolves to.
+pub const RootGame = hooks_types_mod.RootGame;
+/// Per-type identity token used by `HookContext`'s bound-game check.
+pub const TypeId = hooks_types_mod.TypeId;
+pub const typeId = hooks_types_mod.typeId;
+
 // ── Hook Dispatcher ──
 pub const MergeHooks = core.MergeHooks;
 pub const MergeHookPayloads = core.MergeHookPayloads;

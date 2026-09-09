@@ -9,6 +9,7 @@
 /// these flags.
 const std = @import("std");
 const core = @import("labelle-core");
+const hooks_types = @import("../hooks_types.zig");
 
 /// Returns the lifecycle/runtime-control mixin for a given Game type.
 pub fn Mixin(comptime Game: type) type {
@@ -163,6 +164,7 @@ pub fn Mixin(comptime Game: type) type {
                         if (@hasField(HookType, "game_ptr")) {
                             hook_ptr.game_ptr = @ptrCast(self);
                         }
+                        bindHookContexts(HookType, hook_ptr, self);
                     }
                 } else {
                     self.hooks = .{ .receiver = receiver };
@@ -171,6 +173,7 @@ pub fn Mixin(comptime Game: type) type {
                     if (@hasField(HookType, "game_ptr")) {
                         receiver.game_ptr = @ptrCast(self);
                     }
+                    bindHookContexts(HookType, receiver, self);
                 }
                 self.emitHook(.{ .game_init = .{ .allocator = self.allocator } });
                 // Engine `Events` dual-emit (#578). `engine.game_init`
@@ -178,6 +181,31 @@ pub fn Mixin(comptime Game: type) type {
                 // doesn't carry `Allocator`. Listeners that need an
                 // allocator should reach `game.allocator` directly.
                 self.emitEngineEvent("engine__game_init", .{});
+            }
+        }
+
+        /// Fill every `HookContext` field of one hook receiver with a
+        /// checked binding to this game (#855).
+        ///
+        /// Injection is **by field type, not by field name** — any field
+        /// declared `engine.HookContext` is bound, whatever it is called.
+        /// A receiver with none is left untouched, which is what keeps the
+        /// legacy `game_ptr: *anyopaque` form (injected just above) and
+        /// context-free receivers working unchanged.
+        ///
+        /// Comptime cost is one `std.meta.fields` walk per receiver at
+        /// `setHooks` — the receiver type was already fully resolved by
+        /// the `@hasField(HookType, "game_ptr")` probe on the line before,
+        /// so this adds fields-per-receiver comptime branches and nothing
+        /// per handler or per event. It does not touch `MergeHooks.emit`'s
+        /// receivers x variants product, which is where the eval-branch
+        /// budget actually goes.
+        fn bindHookContexts(comptime HookType: type, hook_ptr: anytype, self: *Game) void {
+            if (comptime @typeInfo(HookType) != .@"struct") return;
+            inline for (std.meta.fields(HookType)) |f| {
+                if (comptime f.type == hooks_types.HookContext) {
+                    @field(hook_ptr, f.name) = hooks_types.HookContext.bind(Game, self);
+                }
             }
         }
 

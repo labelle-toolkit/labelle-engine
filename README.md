@@ -68,6 +68,12 @@ labelle init my-game --backend=raylib --ecs=zig_ecs
 cd my-game && labelle run
 ```
 
+## Reference documents
+
+| Document | Covers |
+|----------|--------|
+| [HOOK-DELIVERY-CONTRACT.md](HOOK-DELIVERY-CONTRACT.md) | When hooks and events are delivered: drain points, ordering, handler-emitted timing, payload lifetime/ownership, scene-reset and shutdown behaviour, and the lifecycle caveats. |
+
 ## Integration
 
 labelle-engine works with other labelle-toolkit libraries:
