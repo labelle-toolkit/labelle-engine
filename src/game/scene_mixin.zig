@@ -630,6 +630,26 @@ pub fn Mixin(comptime Game: type) type {
         }
 
         pub fn setScene(self: *Game, name: []const u8) !void {
+            // Reserve the retention node FIRST — before the asset gate
+            // acquires anything, before any mutation, and long before
+            // `unloadCurrentScene` buffers `engine__scene_unloaded`
+            // borrowing `current_scene_name` (#867 review).
+            //
+            // Ordering matters twice over. Reserving after the gate meant a
+            // failure here returned an error with the TARGET'S ASSETS
+            // ALREADY ACQUIRED and `pending_scene_assets` set, while the
+            // caller treated the transition as consumed — leaking those
+            // references with no path back to release them. And reserving
+            // after the emit would leave a queued payload whose backing
+            // store we could neither free nor keep.
+            //
+            // Taking it here means an OOM returns with nothing acquired,
+            // nothing queued and nothing torn down.
+            var retention = try self.reserveRetention();
+            // Released on every path that does not retain: a deferred
+            // gate, an asset error, or simply no outgoing scene name.
+            defer retention.release();
+
             // Phase 2 of the Asset Streaming RFC (#437) — gate the
             // swap on the new scene's `assets:` manifest. Acquires
             // (idempotently across frames) any not-yet-loaded assets,
@@ -710,7 +730,11 @@ pub fn Mixin(comptime Game: type) type {
             self.unloadCurrentScene();
 
             if (self.current_scene_name) |old_name| {
-                self.allocator.free(old_name);
+                // NOT freed here (#863). `unloadCurrentScene` just BUFFERED
+                // `engine__scene_unloaded` with `name` borrowing this very
+                // slice; a buffered event is delivered on the next drain,
+                // so freeing now hands the listener freed bytes.
+                retention.retain(old_name);
                 self.current_scene_name = null;
             }
 
@@ -796,6 +820,26 @@ pub fn Mixin(comptime Game: type) type {
         /// Clears the scene entity list first so Scene.deinit skips entity destruction,
         /// then resets the ECS atomically, then loads the new scene.
         pub fn setSceneAtomic(self: *Game, name: []const u8) !void {
+            // Reserve the retention node FIRST — before the asset gate
+            // acquires anything, before any mutation, and long before
+            // `unloadCurrentScene` buffers `engine__scene_unloaded`
+            // borrowing `current_scene_name` (#867 review).
+            //
+            // Ordering matters twice over. Reserving after the gate meant a
+            // failure here returned an error with the TARGET'S ASSETS
+            // ALREADY ACQUIRED and `pending_scene_assets` set, while the
+            // caller treated the transition as consumed — leaking those
+            // references with no path back to release them. And reserving
+            // after the emit would leave a queued payload whose backing
+            // store we could neither free nor keep.
+            //
+            // Taking it here means an OOM returns with nothing acquired,
+            // nothing queued and nothing torn down.
+            var retention = try self.reserveRetention();
+            // Released on every path that does not retain: a deferred
+            // gate, an asset error, or simply no outgoing scene name.
+            defer retention.release();
+
             if (!self.scenes.contains(name)) return error.SceneNotFound;
 
             // Sprite-based asset inference (#563) — mirror of `setScene`.
@@ -896,7 +940,11 @@ pub fn Mixin(comptime Game: type) type {
             self.unloadCurrentScene();
 
             if (self.current_scene_name) |old_name| {
-                self.allocator.free(old_name);
+                // NOT freed here (#863). `unloadCurrentScene` just BUFFERED
+                // `engine__scene_unloaded` with `name` borrowing this very
+                // slice; a buffered event is delivered on the next drain,
+                // so freeing now hands the listener freed bytes.
+                retention.retain(old_name);
                 self.current_scene_name = null;
             }
 

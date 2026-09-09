@@ -261,28 +261,64 @@ That is the recommended shape for any payload whose string has no natural
 owner. `Events.video_finished` uses `[]const u8` and relies on a referent that
 outlives the drain.
 
-> 🐛 **The scene-name payloads VIOLATE this rule on the queued-transition
-> path.** `tick` hands the OWNED `pending_scene_change` slice to `setScene`,
-> which buffers `engine__scene_loading` / `engine__scene_loaded` carrying that
-> slice — and then `loop_mixin.zig:196-198` frees it in the same commit block.
-> Since all of that happens *after* the frame's drain, both payloads dangle
-> until the next iteration. `engine__scene_unloaded` has the same shape:
-> `unloadCurrentScene` queues the owned current name and `setScene` frees it
-> immediately afterwards. Do not read this section as saying scene events are
-> safe — they are the same bug as `state_changed` below, on a different
-> string. Tracked in #863.
+### When the engine itself has no owner for a string
 
-> 🐛 **`Events.state_changed` currently VIOLATES this rule on one path.**
-> `setStateOwned` (`src/game/state_mixin.zig`) dupes the new name, calls
-> `setState` — which queues `state_changed` carrying `old_state` pointing at
-> the *previous* owned allocation — and then frees that allocation before
-> returning. The buffered event's `old_state` dangles until the drain, so the
-> runtime/editor-owned state path can expose freed bytes to a flow listener.
->
-> This is documented here rather than fixed: this PR pins the contract down and
-> changes no behaviour. The fix (retain the old slot until the drain, or copy
-> the name into the payload) is a behaviour change and belongs in its own
-> change. Tracked in #862.
+Two engine paths emit a buffered event carrying a name they are about to
+free: `setStateOwned` (the previous state name, #862) and the scene
+lifecycle (`pending_scene_change` on the queued path and
+`current_scene_name` on unload, #863). Both used to free in the same call
+that buffered the event, so the payload borrowed freed memory for a full
+frame — the drain leads the iteration (§2), so the listener ran an entire
+frame after the free.
+
+Neither inlines the name. State and scene names have **no length bound**,
+so a fixed-size field would silently truncate them, which trades a
+lifetime bug for a correctness bug.
+
+Instead the free is deferred, in three steps:
+
+```zig
+// 1. RESERVE — before emitting anything, and before any other mutation.
+var retention = try self.reserveRetention();
+// 2. RELEASE — returns the node on every path that does not retain.
+defer retention.release();
+
+// … emit the event that borrows `slice` …
+
+// 3. RETAIN — infallible; the node already exists.
+retention.retain(slice);
+```
+
+**The order is the design, not a detail.** Once the event is queued the
+caller holds an allocation a queued payload borrows, and neither disposal
+is acceptable: freeing it is the use-after-free this exists to prevent,
+and dropping it leaks. So the only fallible step happens while nothing is
+queued yet — and, on the scene paths, before the asset gate acquires
+anything, so a failure cannot strand acquired references either. A caller
+that cannot propagate the error (`tick`) skips just that transition and
+finishes the frame.
+
+`Retention` is an owned handle rather than a slot in a shared list because
+a reservation is not always used: the loop's scene transition reserves
+every frame but defers while the asset gate is still loading. A handle has
+a scope, so `defer release()` returns the unused node immediately.
+
+### Retained slices are freed by the OUTERMOST drain
+
+Not by the drain that retired them. A payload can alias a slice a *later*
+window retires: `state_changed.new_state` points at the current owned
+name, and a handler calling `setStateOwned` parks exactly that name for
+the next drain. If that handler then drains, a per-window scheme would
+free the slice while the outer drain is still delivering the payload that
+borrows it.
+
+So freeing is tied to drain **depth**: while any `dispatchEvents` is in
+flight nothing is released, and the outermost one frees everything the
+nested drains retired.
+
+Use this mechanism for any engine-owned allocation a buffered payload
+borrows. Prefer a program- or game-lifetime referent when one exists;
+reach for this when the string genuinely has no owner.
 
 **Value-copying an event is not deep-copying its data.** That sentence is the
 whole of §5.
