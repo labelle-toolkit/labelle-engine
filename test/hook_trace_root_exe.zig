@@ -327,7 +327,14 @@ fn check11NestedDrainNumbering(h: *Harness) !void {
     nested_drain_game = &h.game;
     defer nested_drain_game = null;
 
+    // TWO events in the outer drain: the first one's handler drains
+    // (nesting), the second is delivered AFTERWARDS. The second is the one
+    // that matters — an earlier fix corrected `drain_end` but left the
+    // dispatch entry point snapshotting the monotonic counter, so
+    // everything delivered after the nested drain still carried the inner
+    // id and no test noticed.
     h.game.emit(.{ .t__chain_src = .{ .depth = 0 } });
+    h.game.emit(.{ .t__alpha = .{ .seq = 7 } });
     h.game.dispatchEvents();
 
     var outer_begin: ?u64 = null;
@@ -352,6 +359,19 @@ fn check11NestedDrainNumbering(h: *Harness) !void {
     expect(outer_end != null, "the outer drain ended");
     expect(inner_begin.? != outer_begin.?, "the inner drain got its OWN id");
     expectEqU64(outer_begin.?, outer_end.?, "drain_end reports the OUTER id, not the nested one");
+
+    // The event delivered AFTER the nested drain must still carry the OUTER
+    // id. This is the half that `drain_end` alone did not cover.
+    var alpha_drain: ?u64 = null;
+    for (0..t.count()) |i| {
+        const r = t.at(i);
+        if (r.phase == .deliver and std.mem.eql(u8, r.event, "t__alpha")) {
+            alpha_drain = r.drain;
+            break;
+        }
+    }
+    expect(alpha_drain != null, "the post-nesting event was delivered");
+    expectEqU64(outer_begin.?, alpha_drain.?, "a delivery AFTER the nested drain keeps the OUTER id");
 }
 
 /// #858 review: a record rejected for sink reentrancy must leave NO trace —

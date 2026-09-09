@@ -110,7 +110,19 @@ pub fn Mixin(comptime Game: type) type {
                 .frame = self.frame_number,
                 .drain = t.current_drain,
             };
-            var begin = rec;
+            // Per-variant consumable, exactly as both walks stamp it. The
+            // empty pair left it false, so an unwired CONSUMABLE event read
+            // as a notification — the same field the walks were corrected
+            // for (#858 review).
+            var rec_c = rec;
+            switch (payload) {
+                inline else => |_, tag| {
+                    rec_c.consumable = comptime hook_trace.isConsumable(
+                        @FieldType(Payload, @tagName(tag)),
+                    );
+                },
+            }
+            var begin = rec_c;
             begin.phase = .dispatch_begin;
             // Capture scalars here too. Omitting them made the unwired case
             // the ONE dispatch a reader could not inspect the payload of —
@@ -132,7 +144,7 @@ pub fn Mixin(comptime Game: type) type {
                 }
             }
             t.push(begin);
-            var end = rec;
+            var end = rec_c;
             end.phase = .dispatch_end;
             t.push(end);
         }
@@ -445,7 +457,12 @@ pub fn Mixin(comptime Game: type) type {
             // the game has no hooks to dispatch to — same comptime
             // shortcut `emitHook` relies on. Folds the entire call
             // away in zero-hook builds.
-            if (!has_events or !has_hooks) return;
+            if (!has_events) return;
+            // `!has_hooks` used to return here, short-circuiting BEFORE
+            // `deliver` — so the zero-listener record `deliver` now emits was
+            // unreachable from the sync path. A traced build must still see
+            // that the emit happened and reached nobody (#858 review).
+            if (comptime !has_hooks and !tracing) return;
             switch (event) {
                 inline else => |data, tag| {
                     deliver(self, @unionInit(Payload, @tagName(tag), data), .emit_sync);

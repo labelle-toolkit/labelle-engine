@@ -63,7 +63,11 @@ pub fn dispatch(
 
     const t: *trace.Tracer = &self.hook_tracer;
     const frame = self.frame_number;
-    const drain = t.drain_seq;
+    // The RUNNING drain, not the monotonic allocator. Snapshotting
+    // `drain_seq` here meant the fix in `events_mixin` only reached
+    // `drain_end`: every outer event dispatched AFTER a nested drain still
+    // read the bumped counter and reported the inner id (#858 review).
+    const drain = t.current_drain;
 
     switch (payload) {
         inline else => |data, tag| {
