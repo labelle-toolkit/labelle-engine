@@ -365,19 +365,11 @@ pub const receiver_ids_decl = "hook_receiver_ids";
 /// publishes none — a hand-written game, a unit-test root, or output from
 /// an assembler predating #727. Absence is normal and falls back to the
 /// derivation below; it is never an error.
-///
-/// Read from the compilation root for the same reason `labelle_hook_trace`
-/// is: the assembler owns `main.zig`, and the root is the one place the
-/// engine can see generated facts without the engine depending on the
-/// assembler.
 pub const receiver_id_table: ?[]const []const u8 = blk: {
     const root = @import("root");
     if (!@hasDecl(root, receiver_ids_decl)) break :blk null;
     const v = @field(root, receiver_ids_decl);
     const info = @typeInfo(@TypeOf(v));
-    // Accept the generated `[N][]const u8` array and a `[]const []const u8`
-    // slice. Anything else is a root that means something different by the
-    // name, and silently trusting it would put a wrong id on every record.
     if (info == .array) {
         if (info.array.child != []const u8) @compileError(
             "`pub const " ++ receiver_ids_decl ++ "` must be a list of `[]const u8`, got " ++
@@ -409,22 +401,22 @@ pub fn tableId(comptime index: usize) ?[]const u8 {
 /// A table shifted against the tuple silently labels every record with the
 /// wrong receiver — the precise failure the table exists to prevent — so a
 /// disagreement is a build error, not a fallback. A root with NO table is
-/// normal (hand-written game, test root, pre-#727 output) and skips this.
+/// normal and skips this.
 ///
-/// Shared by both dispatch walks. It lived inline in `walkMerged` only,
-/// so the single-receiver path accepted a two-entry table and labelled
-/// slot 0 from a stale table (#866 review). One helper, called from both,
-/// is what stops the two paths drifting apart again.
+/// Shared by both dispatch walks. It lived inline in `walkMerged` only, so
+/// the single-receiver path accepted a two-entry table and labelled slot 0
+/// from a stale table (#866 review). One helper, called from both, is what
+/// stops the two paths drifting apart again.
 pub fn assertTableAligned(comptime receiver_count: usize) void {
     comptime {
         // `if (…) |tbl|` rather than `orelse return`: a `return` inside a
         // comptime block returns from the FUNCTION, which Zig rejects here.
         if (receiver_id_table) |tbl| {
             if (tbl.len != receiver_count) @compileError(std.fmt.comptimePrint(
-            "`" ++ receiver_ids_decl ++ "` has {d} entries but the hook tuple has " ++
-                "{d} receiver(s). The table is index-aligned with the tuple by contract " ++
-                "(labelle-assembler#727), so this build would label trace records with " ++
-                "the wrong receiver. Regenerate: the table and the tuple come from one plan.",
+                "`" ++ receiver_ids_decl ++ "` has {d} entries but the hook tuple has " ++
+                    "{d} receiver(s). The table is index-aligned with the tuple by contract " ++
+                    "(labelle-assembler#727), so this build would label trace records with " ++
+                    "the wrong receiver. Regenerate: the table and the tuple come from one plan.",
                 .{ tbl.len, receiver_count },
             ));
         }
@@ -436,25 +428,19 @@ pub fn assertTableAligned(comptime receiver_count: usize) void {
 ///
 /// Same shape as `ReceiverId`, but it can consult the generated table,
 /// which `ReceiverId` cannot because identity-by-position needs the
-/// position. Precedence, strongest first:
-///
-///   1. the generated table — index-aligned with this very tuple, and the
-///      string the route inspector prints;
-///   2. a `labelle_receiver_id` decl on the receiver;
-///   3. the `@typeName` derivation.
+/// position. Precedence, strongest first: the table, a
+/// `labelle_receiver_id` decl, then the `@typeName` derivation.
 ///
 /// The table wins over a declared id ON PURPOSE. Both come from
 /// labelle-assembler#723's `Receiver.id` and normally agree, but only the
-/// table is aligned with the dispatch order a reader is trying to follow,
-/// so where they could ever disagree the table is the one that keeps a
-/// trace frame and an inspector row talking about the same receiver.
+/// table is aligned with the dispatch order a reader is trying to follow.
 pub fn ReceiverIdAt(comptime Base: type, comptime index: usize) type {
     return struct {
         pub const type_name: []const u8 = @typeName(Base);
-        // Spelled as comptime blocks rather than a chained `orelse`:
-        // when the first optional is comptime-known present Zig narrows
-        // it to a non-optional, and a chained `orelse` then fails to
-        // compile on exactly the builds that HAVE a table.
+        // Spelled as comptime blocks rather than a chained `orelse`: when
+        // the first optional is comptime-known present Zig narrows it to a
+        // non-optional, and a chained `orelse` then fails to compile on
+        // exactly the builds that HAVE a table.
         pub const kind: IdKind = blk: {
             if (tableId(index) != null) break :blk .table;
             if (declared(Base) != null) break :blk .declared;

@@ -202,9 +202,7 @@ fn walkSingle(
 ) u32 {
     const Base = core.UnwrapReceiver(Game.HooksParam);
     // Single-receiver dispatch is a ONE-entry tuple, so a table with any
-    // other length is misaligned here just as it is in `walkMerged`. This
-    // check was missing, so a single-receiver game with a two-entry table
-    // built happily and labelled slot 0 from a stale table (#866 review).
+    // other length is misaligned here just as it is in `walkMerged`.
     //
     // Deliberately BEFORE the `@hasDecl` early return: the table's
     // alignment with the tuple does not depend on whether this particular
@@ -232,6 +230,35 @@ fn walkSingle(
         // later listener never ran (#858 review).
         .consumable = variant_consumable,
     });
-    _ = @field(Base, name)(h.receiver, data);
+    // Mirror `walkMerged`'s consumable handling. This path discarded the
+    // return unconditionally, so a single-receiver game NEVER produced a
+    // `.consumed` record — a consumable event that WAS handled looked
+    // identical in the trace to one that was ignored, on the very field a
+    // reader uses to explain why propagation stopped (#865 review).
+    //
+    // No `break` here, unlike the merged walk: there is no loop to leave,
+    // and nothing after this receiver to suppress. Behaviour is therefore
+    // unchanged either way — this only RECORDS what the handler returned,
+    // which is what keeps the untraced path and the handler's return-type
+    // contract exactly as they were.
+    if (variant_consumable) {
+        const handled = @field(Base, name)(h.receiver, data);
+        if (handled) {
+            t.push(.{
+                .phase = .consumed,
+                .source = source,
+                .event = name,
+                .frame = frame,
+                .drain = drain,
+                .receiver = Id.id,
+                .receiver_type = Id.type_name,
+                .receiver_id_kind = Id.kind,
+                .index = 0,
+                .consumable = true,
+            });
+        }
+    } else {
+        _ = @field(Base, name)(h.receiver, data);
+    }
     return 1;
 }

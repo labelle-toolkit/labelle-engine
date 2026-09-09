@@ -630,6 +630,26 @@ pub fn Mixin(comptime Game: type) type {
         }
 
         pub fn setScene(self: *Game, name: []const u8) !void {
+            // Reserve the retention node FIRST — before the asset gate
+            // acquires anything, before any mutation, and long before
+            // `unloadCurrentScene` buffers `engine__scene_unloaded`
+            // borrowing `current_scene_name` (#867 review).
+            //
+            // Ordering matters twice over. Reserving after the gate meant a
+            // failure here returned an error with the TARGET'S ASSETS
+            // ALREADY ACQUIRED and `pending_scene_assets` set, while the
+            // caller treated the transition as consumed — leaking those
+            // references with no path back to release them. And reserving
+            // after the emit would leave a queued payload whose backing
+            // store we could neither free nor keep.
+            //
+            // Taking it here means an OOM returns with nothing acquired,
+            // nothing queued and nothing torn down.
+            var retention = try self.reserveRetention();
+            // Released on every path that does not retain: a deferred
+            // gate, an asset error, or simply no outgoing scene name.
+            defer retention.release();
+
             // Phase 2 of the Asset Streaming RFC (#437) — gate the
             // swap on the new scene's `assets:` manifest. Acquires
             // (idempotently across frames) any not-yet-loaded assets,
@@ -704,13 +724,40 @@ pub fn Mixin(comptime Game: type) type {
             // gives listeners a chance to cache the manifest and
             // react before `scene_before_load` fires.
             self.emitHook(.{ .scene_assets_acquire = .{ .name = name, .assets = target_assets } });
-            // Engine `Events` dual-emit (#578).
+
+            // Discard EVERYTHING queued so far, and note the position:
+            // after the immediate lifecycle hooks above, before the
+            // announcements below (#864/#868 review).
+            //
+            // Those hooks are the pre-teardown cleanup seam, so their
+            // handlers legitimately run against the OUTGOING world — and a
+            // handler that calls `game.emit(...)` queues a payload full of
+            // entity ids that teardown is about to invalidate. An earlier
+            // revision cleared BEFORE the hooks, which let exactly those
+            // emissions survive to the drain as dangling ids. Clearing
+            // after them discards the outgoing scene's events (its own and
+            // its cleanup handlers' alike) while the announcements, queued
+            // next, still reach the drain.
+            self.clearPendingSceneEvents();
+
+            // Announcement, queued AFTER the discard so it survives.
+            // BUFFERED (#864): delivered at the next drain like every other
+            // buffered engine event.
+            //
+            // NOTIFICATION, not cleanup. By the time a buffered subscriber
+            // sees this the swap has happened — it says "scene X was
+            // acquired", not "is about to be". Work needing the OUTGOING
+            // world belongs on the `emitHook` twin, which already ran.
             self.emitEngineEvent("engine__scene_assets_acquire", .{ .name = name });
 
             self.unloadCurrentScene();
 
             if (self.current_scene_name) |old_name| {
-                self.allocator.free(old_name);
+                // NOT freed here (#863). `unloadCurrentScene` just BUFFERED
+                // `engine__scene_unloaded` with `name` borrowing this very
+                // slice; a buffered event is delivered on the next drain,
+                // so freeing now hands the listener freed bytes.
+                retention.retain(old_name);
                 self.current_scene_name = null;
             }
 
@@ -796,6 +843,26 @@ pub fn Mixin(comptime Game: type) type {
         /// Clears the scene entity list first so Scene.deinit skips entity destruction,
         /// then resets the ECS atomically, then loads the new scene.
         pub fn setSceneAtomic(self: *Game, name: []const u8) !void {
+            // Reserve the retention node FIRST — before the asset gate
+            // acquires anything, before any mutation, and long before
+            // `unloadCurrentScene` buffers `engine__scene_unloaded`
+            // borrowing `current_scene_name` (#867 review).
+            //
+            // Ordering matters twice over. Reserving after the gate meant a
+            // failure here returned an error with the TARGET'S ASSETS
+            // ALREADY ACQUIRED and `pending_scene_assets` set, while the
+            // caller treated the transition as consumed — leaking those
+            // references with no path back to release them. And reserving
+            // after the emit would leave a queued payload whose backing
+            // store we could neither free nor keep.
+            //
+            // Taking it here means an OOM returns with nothing acquired,
+            // nothing queued and nothing torn down.
+            var retention = try self.reserveRetention();
+            // Released on every path that does not retain: a deferred
+            // gate, an asset error, or simply no outgoing scene name.
+            defer retention.release();
+
             if (!self.scenes.contains(name)) return error.SceneNotFound;
 
             // Sprite-based asset inference (#563) — mirror of `setScene`.
@@ -837,9 +904,15 @@ pub fn Mixin(comptime Game: type) type {
             const previous_name = if (self.current_scene_name) |n| self.allocator.dupe(u8, n) catch null else null;
             defer if (previous_name) |p| self.allocator.free(p);
 
+            // Drop the OUTGOING scene's queued events BEFORE announcing
+            // this transition (#864). The clear used to live inside
+            // `unloadCurrentScene` below — i.e. AFTER these emits — which
+            // discarded the announcements themselves, so no buffer-reading
+            // subscriber could ever see them.
+            // Immediate hook only. Both announcements are queued together
+            // further down, AFTER the discard that follows the last
+            // lifecycle hook — see the block below `scene_before_reset`.
             self.emitHook(.{ .scene_assets_acquire = .{ .name = name, .assets = target_assets } });
-            // Engine `Events` dual-emit (#578).
-            self.emitEngineEvent("engine__scene_assets_acquire", .{ .name = name });
 
             // `scene_before_reset` fires BEFORE any entity
             // destruction — plugin controllers with per-world heap
@@ -872,7 +945,29 @@ pub fn Mixin(comptime Game: type) type {
             // ordering in `save_load_mixin.zig::loadGameState`.
             if (self.current_scene_name) |outgoing| {
                 self.emitHook(.{ .scene_before_reset = .{ .name = outgoing } });
-                // Engine `Events` dual-emit (#578).
+            }
+
+            // Discard EVERYTHING queued so far — positioned after the LAST
+            // immediate lifecycle hook and before the announcements
+            // (#864/#868 review).
+            //
+            // `scene_assets_acquire` and `scene_before_reset` are the
+            // pre-teardown cleanup seam, so their handlers legitimately run
+            // against the OUTGOING world; a handler that calls
+            // `game.emit(...)` queues entity ids the reset below is about
+            // to invalidate. Clearing here discards the outgoing scene's
+            // events AND its cleanup handlers' emissions, while the
+            // announcements queued next still reach the drain.
+            self.clearPendingSceneEvents();
+
+            // The announcements, in acquire → before_reset order (what a
+            // subscriber reads as the shape of the transition). BUFFERED:
+            // delivered at the next drain, by which point the swap has
+            // happened — a NOTIFICATION that a reset occurred, not a
+            // chance to act before one. Pre-teardown work belongs on the
+            // `emitHook` twins above.
+            self.emitEngineEvent("engine__scene_assets_acquire", .{ .name = name });
+            if (self.current_scene_name) |outgoing| {
                 self.emitEngineEvent("engine__scene_before_reset", .{ .name = outgoing });
             }
 
@@ -896,7 +991,11 @@ pub fn Mixin(comptime Game: type) type {
             self.unloadCurrentScene();
 
             if (self.current_scene_name) |old_name| {
-                self.allocator.free(old_name);
+                // NOT freed here (#863). `unloadCurrentScene` just BUFFERED
+                // `engine__scene_unloaded` with `name` borrowing this very
+                // slice; a buffered event is delivered on the next drain,
+                // so freeing now hands the listener freed bytes.
+                retention.retain(old_name);
                 self.current_scene_name = null;
             }
 

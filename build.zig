@@ -74,6 +74,14 @@ pub fn build(b: *std.Build) void {
         // identity check, and a regression proving the legacy
         // `game_ptr: *anyopaque` receiver form still works unchanged.
         "test/typed_hook_context_test.zig",
+        // #862/#863 — buffered payloads must outlive the drain that
+        // delivers them. Uses a POISONING allocator: under a plain one
+        // these tests pass with the bug present.
+        "test/payload_lifetime_test.zig",
+        // #864 — the two scene lifecycle events that were queued and then
+        // discarded by `unloadCurrentScene`'s buffer clear. Listens on the
+        // `engine__*` variants through the REAL setScene paths.
+        "test/scene_lifecycle_events_test.zig",
         "test/easing_test.zig",
         "test/scene_test.zig",
         "test/gestures_test.zig",
@@ -409,6 +417,13 @@ pub fn build(b: *std.Build) void {
         // did not validate the table length, so a stale table silently
         // mislabelled slot 0. Valid one-receiver/one-entry shape.
         .{ .name = "hook_trace_single_receiver_table_exe", .root = "test/hook_trace_single_receiver_table_exe.zig" },
+        // #865 review: the SINGLE-receiver dispatch path never recorded
+        // `Phase.consumed`, so a handled consumable event was
+        // indistinguishable from an ignored one. Both controls — returned
+        // true, returned false — in one harness. Distinct from the two
+        // above: they cover the table's IDENTITY, this one the consumable
+        // RETURN, and all three exercise `walkSingle`.
+        .{ .name = "hook_trace_single_receiver_exe", .root = "test/hook_trace_single_receiver_exe.zig" },
         .{ .name = "hook_trace_scaling_exe", .root = "test/hook_trace_scaling_exe.zig" },
     };
     for (hook_trace_exes) |spec| {

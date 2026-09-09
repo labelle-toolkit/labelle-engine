@@ -458,7 +458,7 @@ test "D6: the safe pattern — storage that outlives the drain" {
 
 // ══ D7 — scene reset DISCARDS the queue ═══════════════════════════════
 
-test "D7: unloadCurrentScene discards every queued event" {
+test "D7: a scene swap discards the outgoing scene's queued events" {
     var h: Harness = undefined;
     h.wire();
     defer h.unwire();
@@ -467,15 +467,38 @@ test "D7: unloadCurrentScene discards every queued event" {
     h.game.emit(.{ .t__beta = .{ .seq = 2 } });
     try testing.expectEqual(@as(usize, 2), h.game.event_buffer.items.len);
 
-    // `unloadCurrentScene` clears the buffer BEFORE emitting its own
-    // `scene_unloaded`. Anything a script queued earlier in the frame is
-    // dropped, silently and by design (the outgoing scene's entities are
-    // about to be destroyed, so its events reference dead ids).
+    // The DISCARD is unchanged and still by design: the outgoing scene's
+    // entities are about to be destroyed, so its queued events reference
+    // ids that will be dead by the drain.
+    //
+    // What changed in #864 is WHO does it. The clear used to be
+    // `unloadCurrentScene`'s first statement, which also discarded the
+    // `engine__scene_assets_acquire` / `engine__scene_before_reset` emitted
+    // moments earlier to ANNOUNCE the transition — so no subscriber could
+    // ever see them. It is now `clearPendingSceneEvents`, which the scene
+    // paths call BEFORE announcing, so the announcements survive to the
+    // drain while the outgoing scene's own events still do not.
+    h.game.clearPendingSceneEvents();
     h.game.unloadCurrentScene();
     try testing.expectEqual(@as(usize, 0), h.game.event_buffer.items.len);
 
     h.game.dispatchEvents();
     try testing.expectEqual(@as(usize, 0), h.trace.len);
+}
+
+test "D7b: unloadCurrentScene alone no longer clears the queue (#864)" {
+    // The other half of the split, pinned explicitly so the two cannot
+    // drift back together. Teardown does not silently eat the buffer;
+    // discarding is now an explicit decision at the call site.
+    var h: Harness = undefined;
+    h.wire();
+    defer h.unwire();
+
+    h.game.emit(.{ .t__alpha = .{ .seq = 1 } });
+    try testing.expectEqual(@as(usize, 1), h.game.event_buffer.items.len);
+
+    h.game.unloadCurrentScene();
+    try testing.expect(h.game.event_buffer.items.len >= 1);
 }
 
 // ══ D8 — shutdown flushes exactly once ════════════════════════════════

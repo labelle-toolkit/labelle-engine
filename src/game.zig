@@ -54,6 +54,8 @@ const lifecycle_mixin = @import("game/lifecycle_mixin.zig");
 const components_mixin = @import("game/components_mixin.zig");
 const entity_mixin = @import("game/entity_mixin.zig");
 const scene_runtime_mixin = @import("game/scene_runtime_mixin.zig");
+pub const RetainNode = @import("game/retain_node.zig").RetainNode;
+
 const input_events_mixin = @import("game/input_events_mixin.zig");
 const events_mixin = @import("game/events_mixin.zig");
 const editor_command_mixin = @import("game/editor_command_mixin.zig");
@@ -581,6 +583,66 @@ pub fn GameConfigWithYAxis(
         /// &.{"combat__*"};`
         hook_tracer: HookTracer = hook_trace_mod.tracer_init,
         event_buffer: EventBuffer = if (has_events) .empty else {},
+        /// Allocations a BUFFERED event payload still borrows from
+        /// (#862/#863).
+        ///
+        /// `HOOK-DELIVERY-CONTRACT.md` §5: an event struct is copied by
+        /// value and any slice inside it is BORROWED, so the referent must
+        /// outlive the drain. Two engine paths broke that by freeing the
+        /// referent in the same call that buffered the event —
+        /// `setStateOwned` freeing the previous state name, and the loop's
+        /// scene-transition commit freeing `pending_scene_change` — leaving
+        /// the payload pointing at freed memory for a FULL FRAME, since the
+        /// generated loop drains before it ticks.
+        ///
+        /// Freeing is deferred to the drain that delivers the event: a
+        /// caller RESERVES a node before emitting, hands the slice over
+        /// after, and `dispatchEvents` detaches the chain on entry and
+        /// frees it on exit. Detaching (rather than freeing in place) is
+        /// what makes a NESTED drain correct — an inner drain delivers
+        /// exactly the events buffered since the outer one detached, and
+        /// frees exactly the slices retained in that same window.
+        ///
+        /// ## Why a node chain rather than a list of slices
+        ///
+        /// The retention must not be able to fail AFTER the event is
+        /// queued. At that point the caller holds an allocation a queued
+        /// payload borrows, and neither disposal is acceptable: freeing is
+        /// the use-after-free this exists to prevent, and dropping it leaks
+        /// (#867 review).
+        ///
+        /// So the allocation happens at RESERVE time, while nothing is
+        /// queued yet and the caller can still abort cleanly; handing the
+        /// slice over afterwards is pure pointer surgery that cannot fail.
+        /// A growable list cannot give that guarantee — reserved capacity
+        /// does not compose across nested reservations, and a drain that
+        /// swaps the list out loses it. One node per reservation has
+        /// neither problem.
+        ///
+        /// This keeps the payload shape (`[]const u8`) and the buffered
+        /// timing unchanged, which inlining a fixed-size name would not:
+        /// state and scene names have no length bound, so an inline field
+        /// would truncate them.
+        pending_payload_frees: if (has_events) ?*RetainNode else void =
+            if (has_events) null else {},
+        /// Chains retired by drains that are still nested inside another
+        /// drain. Freed only when the OUTERMOST `dispatchEvents` returns.
+        ///
+        /// Per-drain windows are not enough on their own (#867 review). A
+        /// payload can alias a slice that a LATER window retires: the
+        /// outer `state_changed`'s `new_state` points at the current owned
+        /// name, and a handler that calls `setStateOwned` parks that very
+        /// name for the next drain. If that handler then drains, the inner
+        /// drain would free it while the outer drain is still delivering
+        /// the payload that borrows it.
+        ///
+        /// So freeing is tied to drain DEPTH, not to a single window:
+        /// while any drain is in flight nothing is released, and the
+        /// outermost one frees everything the nested drains retired.
+        drain_deferred_frees: if (has_events) ?*RetainNode else void =
+            if (has_events) null else {},
+        /// Nesting depth of `dispatchEvents`.
+        drain_depth: if (has_events) u16 else void = if (has_events) 0 else {},
 
         // Scene management
         scenes: std.StringHashMap(SceneEntry),
@@ -1072,6 +1134,22 @@ pub fn GameConfigWithYAxis(
         /// Error set of `tryEmit` — `error{OutOfMemory}`.
         pub const EmitError = EventsMixin.EmitError;
 
+        /// Park an allocation a BUFFERED event payload borrows, freeing it
+        /// after the drain that delivers the event (#862/#863). See
+        /// `game/events_mixin.zig` for the contract.
+        /// An owned reservation of one deferred free (#862/#863).
+        pub const Retention = EventsMixin.Retention;
+
+        /// Take a retention reservation BEFORE emitting the event whose
+        /// payload will borrow the slice (#862/#863). Pair with
+        /// `defer r.release()`. See `game/events_mixin.zig` for why the
+        /// order matters.
+        pub const reserveRetention = EventsMixin.reserveRetention;
+
+        /// Free every retention node still held — retained and
+        /// reserved-unused alike. `deinit` only.
+        pub const releaseRetentions = EventsMixin.releaseRetentions;
+
         /// Engine-side tolerant emit for the `engine__<event>` variants
         /// declared on `engine.Events` (RFC-FLOW-VOCABULARY phase 6,
         /// #578). The assembler folds the engine's `Events` block into
@@ -1534,6 +1612,11 @@ pub fn GameConfigWithYAxis(
         // Full docs in `game/scene_runtime_mixin.zig` /
         // `game/entity_mixin.zig` (scene-entity tracking).
         pub const unloadCurrentScene = SceneRuntimeMixin.unloadCurrentScene;
+
+        /// Drop events the outgoing scene queued, so they are not delivered
+        /// into the incoming one (#864). Callers clear at the point that
+        /// suits their ordering — before announcing a transition, not after.
+        pub const clearPendingSceneEvents = SceneRuntimeMixin.clearPendingSceneEvents;
         pub const trackSceneEntity = EntityMixin.trackSceneEntity;
         pub const untrackSceneEntity = EntityMixin.untrackSceneEntity;
         pub const setActiveScene = SceneRuntimeMixin.setActiveScene;
