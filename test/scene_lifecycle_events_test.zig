@@ -46,6 +46,31 @@ const LifecycleEvents = union(enum) {
 
 var hook_seq: usize = 0;
 
+/// Stands in for a plugin controller that does pre-teardown cleanup on the
+/// immediate `scene_assets_acquire` / `scene_before_reset` hooks and emits
+/// a game event while doing it — carrying entity ids from the OUTGOING
+/// world, which the reset is about to invalidate.
+const CleanupEmitter = struct {
+    game: ?*anyopaque = null,
+    emitted: usize = 0,
+
+    pub fn scene_assets_acquire(self: *CleanupEmitter, _: anytype) void {
+        self.emit();
+    }
+    pub fn scene_before_reset(self: *CleanupEmitter, _: anytype) void {
+        self.emit();
+    }
+
+    fn emit(self: *CleanupEmitter) void {
+        const ptr = self.game orelse return;
+        const g: *Game = @ptrCast(@alignCast(ptr));
+        self.emitted += 1;
+        // A payload naming the outgoing world. If this survives teardown a
+        // subscriber reads ids that no longer exist.
+        g.emit(.{ .engine__scene_assets_acquire = .{ .name = "from_outgoing_cleanup_hook" } });
+    }
+};
+
 const Listener = struct {
     acquires: usize = 0,
     resets: usize = 0,
@@ -107,7 +132,10 @@ const AllHookPayloads = engine.MergeHookPayloads(.{
     engine.HookPayload(Entity),
     LifecycleEvents,
 });
-const AllHooks = engine.MergeHooks(AllHookPayloads, .{*Listener});
+/// Both receivers share ONE tuple because `Game` is parameterised on its
+/// hooks type — a second tuple would be a second `Game`. Tests that do not
+/// exercise the cleanup path leave its `game` null, so it emits nothing.
+const AllHooks = engine.MergeHooks(AllHookPayloads, .{ *Listener, *CleanupEmitter });
 
 const Game = game_mod.GameConfig(
     core.StubRender(Entity),
@@ -167,7 +195,8 @@ pub const SCENE_LIFECYCLE_EVENTS = struct {
         var game = Game.init(allocator);
         defer game.deinit();
         var listener: Listener = .{};
-        var hooks: AllHooks = .{ .receivers = .{&listener} };
+        var cleanup_off: CleanupEmitter = .{};
+        var hooks: AllHooks = .{ .receivers = .{ &listener, &cleanup_off } };
         game.setHooks(&hooks);
         game.registerSceneSimple("first_scene", emptyLoader);
         game.registerSceneSimple("second_scene", emptyLoader);
@@ -217,7 +246,8 @@ pub const SCENE_LIFECYCLE_EVENTS = struct {
         var game = Game.init(allocator);
         defer game.deinit();
         var listener: Listener = .{};
-        var hooks: AllHooks = .{ .receivers = .{&listener} };
+        var cleanup_off: CleanupEmitter = .{};
+        var hooks: AllHooks = .{ .receivers = .{ &listener, &cleanup_off } };
         game.setHooks(&hooks);
         game.registerSceneSimple("first_scene", emptyLoader);
         game.registerSceneSimple("second_scene", emptyLoader);
@@ -262,7 +292,8 @@ pub const SCENE_LIFECYCLE_EVENTS = struct {
         var game = Game.init(testing.allocator);
         defer game.deinit();
         var listener: Listener = .{};
-        var hooks: AllHooks = .{ .receivers = .{&listener} };
+        var cleanup_off: CleanupEmitter = .{};
+        var hooks: AllHooks = .{ .receivers = .{ &listener, &cleanup_off } };
         game.setHooks(&hooks);
         game.registerSceneSimple("first_scene", emptyLoader);
         game.registerSceneSimple("second_scene", emptyLoader);
@@ -288,6 +319,63 @@ pub const SCENE_LIFECYCLE_EVENTS = struct {
         try testing.expectEqual(@as(usize, 1), listener.resets);
     }
 
+    test "events emitted BY the cleanup hooks are discarded; announcements survive once (#868)" {
+        // The regression for a hazard I introduced. Moving the clear ahead
+        // of the immediate lifecycle hooks let THEIR emissions survive the
+        // teardown — payloads full of entity ids the reset invalidates,
+        // delivered a frame later as if they were live. The clear now sits
+        // after the last lifecycle hook and before the announcements, so
+        // both properties hold at once.
+        const allocator = testing.allocator;
+        var game = Game.init(allocator);
+        defer game.deinit();
+        var cleanup: CleanupEmitter = .{ .game = &game };
+        var quiet: Listener = .{};
+        var hooks: AllHooks = .{ .receivers = .{ &quiet, &cleanup } };
+        game.setHooks(&hooks);
+        game.registerSceneSimple("first_scene", emptyLoader);
+        game.registerSceneSimple("second_scene", emptyLoader);
+
+        contract.bind(&game);
+        defer contract.unbind();
+        subscribe("engine__scene_assets_acquire");
+        subscribe("engine__scene_before_reset");
+        contract.drainEvents(&game);
+
+        try game.setScene("first_scene");
+        contract.drainEvents(&game);
+        var warm: std.ArrayList([]const u8) = .empty;
+        defer {
+            for (warm.items) |l| allocator.free(l);
+            warm.deinit(allocator);
+        }
+        try pollAll(allocator, &warm);
+
+        try game.setSceneAtomic("second_scene");
+        // The cleanup hooks really did run and really did emit — otherwise
+        // this test would prove nothing about discarding their output.
+        try testing.expect(cleanup.emitted > 0);
+
+        contract.drainEvents(&game);
+        var lines: std.ArrayList([]const u8) = .empty;
+        defer {
+            for (lines.items) |l| allocator.free(l);
+            lines.deinit(allocator);
+        }
+        try pollAll(allocator, &lines);
+
+        // The hooks' own emission is GONE…
+        for (lines.items) |line| {
+            try testing.expect(std.mem.indexOf(u8, line, "from_outgoing_cleanup_hook") == null);
+        }
+        // …while both announcements arrive, EXACTLY ONCE each.
+        try testing.expectEqual(@as(usize, 1), countName(lines.items, "engine__scene_assets_acquire"));
+        try testing.expectEqual(@as(usize, 1), countName(lines.items, "engine__scene_before_reset"));
+        // …in the order that describes the transition.
+        try testing.expect(indexOfName(lines.items, "engine__scene_assets_acquire").? <
+            indexOfName(lines.items, "engine__scene_before_reset").?);
+    }
+
     test "a FLOW-shaped receiver sees before_reset only AFTER the teardown (#864)" {
         // What a generated flow listener actually is: labelle-assembler
         // lowers an `OnEvent` flow to a `pub const FlowEventHandler` and
@@ -309,7 +397,8 @@ pub const SCENE_LIFECYCLE_EVENTS = struct {
         var game = Game.init(testing.allocator);
         defer game.deinit();
         var listener: Listener = .{};
-        var hooks: AllHooks = .{ .receivers = .{&listener} };
+        var cleanup_off: CleanupEmitter = .{};
+        var hooks: AllHooks = .{ .receivers = .{ &listener, &cleanup_off } };
         game.setHooks(&hooks);
         game.registerSceneSimple("first_scene", emptyLoader);
         game.registerSceneSimple("second_scene", emptyLoader);
@@ -338,7 +427,8 @@ pub const SCENE_LIFECYCLE_EVENTS = struct {
         var game = Game.init(testing.allocator);
         defer game.deinit();
         var listener: Listener = .{};
-        var hooks: AllHooks = .{ .receivers = .{&listener} };
+        var cleanup_off: CleanupEmitter = .{};
+        var hooks: AllHooks = .{ .receivers = .{ &listener, &cleanup_off } };
         game.setHooks(&hooks);
         game.registerSceneSimple("only_scene", emptyLoader);
 

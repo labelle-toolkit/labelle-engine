@@ -81,7 +81,17 @@
 //! flowing through the buffered path this frame is visible — engine
 //! `engine__*` dual-emits, game scripts' `game.emit`, and the script's
 //! own `labelle_event_emit` alike. `emitSync` bypasses the buffer and is
-//! therefore NOT tappable, mirroring how it also skips flow `OnEvent`s.
+//! therefore NOT tappable from here.
+//!
+//! It does NOT skip flow `OnEvent`s, despite what this comment used to
+//! say: labelle-assembler lowers an `OnEvent` flow to a
+//! `pub const FlowEventHandler` appended to the `GameHooks` receiver
+//! tuple (`flow_scanner.zig`), so a flow is dispatched through
+//! `MergeHooks` and a synchronous emit reaches it like any other
+//! receiver. The BUFFER TAP above is what sync misses — which is exactly
+//! why a lifecycle event meant for scripts cannot be made sync
+//! (labelle-engine#864). Wording only: no behaviour change, and no
+//! change to `emitSync`'s contract.
 //!
 //! Subscriptions activate at DRAIN boundaries: `labelle_event_subscribe`
 //! parks the name in a PENDING set, and `drainEvents` filters the
