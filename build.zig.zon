@@ -76,6 +76,10 @@
         },
     },
     .paths = .{
+        // The authoritative hook/event delivery contract. Shipped because
+        // `src/game/events_mixin.zig` points readers at it, and a packaged
+        // copy that omits it sends them to a file they do not have (#857).
+        "HOOK-DELIVERY-CONTRACT.md",
         "build.zig",
         "build.zig.zon",
         "src",

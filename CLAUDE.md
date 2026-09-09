@@ -84,6 +84,23 @@ The legacy form — `game_ptr: *anyopaque` plus a hand-written `getGame` — is 
 2. **Re-export through `root.zig`**: every new public type/fn surfaces as `engine.Foo`. Group with a `// ── Section ──` heading.
 3. **`std.json.Stringify.valueAlloc`** for any JSON emission — escape correctness matters once the wire is read by another process.
 
+## Hook / event delivery
+
+`HOOK-DELIVERY-CONTRACT.md` (repo root) is the authoritative reference for
+when a hook or event handler actually runs. Read it before touching
+`src/game/events_mixin.zig`, `src/game/loop_mixin.zig`, or
+`labelle-core`'s `src/dispatcher.zig`. Two things surprise everybody:
+
+- The generated main loop calls `g.dispatchEvents()` **before** `g.tick(dt)`,
+  so anything the engine buffers inside `tick` is delivered one frame later.
+- `emit` copies the payload struct but **borrows** any slice inside it; the
+  referent must outlive the drain.
+
+Both are pinned by `test/hook_delivery_contract_test.zig`;
+`test/hook_dispatch_scaling_test.zig` pins the dispatcher's comptime
+branch-quota headroom (64 variants x 16 receivers) and must never set a
+quota of its own.
+
 ## References
 
 - PIE umbrella: labelle-gui#59

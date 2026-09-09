@@ -43,11 +43,17 @@
 //!
 //! ```zig
 //! script_contract.bind(&g);            // once, after Game init
-//! // per frame:
+//! // per frame, in this order:
+//! g.dispatchEvents();                  // drain FIRST — see below
 //! g.tick(dt);                          // plugin tick runs the scripts
-//! script_contract.drainEvents(&g);     // AFTER tick, BEFORE dispatchEvents
-//! g.dispatchEvents();
+//! script_contract.drainEvents(&g);     // AFTER tick
 //! ```
+//!
+//! The drain leads the frame; it does not trail it. An event a script emits
+//! during `g.tick` is therefore delivered on the NEXT iteration, not this one.
+//! An earlier version of this comment showed `g.tick` first and implied
+//! same-frame delivery — it was wrong. Confirmed against every shipped backend
+//! template and a real generated `main.zig`. See HOOK-DELIVERY-CONTRACT.md §2.
 //!
 //! The tick → drainEvents → dispatchEvents ordering is load-bearing:
 //! `drainEvents` walks the frame's buffered events (`game.event_buffer`)

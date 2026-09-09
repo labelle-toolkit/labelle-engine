@@ -1,7 +1,14 @@
 /// Events mixin — hook + game-event dispatch: `emitHook` (typed hook
 /// payload), `emit` (buffered game event), `emitEngineEvent` (tolerant
 /// `engine__<event>` dual-emit, #578), `emitSync` (immediate), and
-/// `dispatchEvents` (end-of-frame buffer drain).
+/// `dispatchEvents` (the once-per-frame buffer drain).
+///
+/// The authoritative delivery contract — drain points, ordering,
+/// handler-emitted timing, payload lifetime, scene-reset and shutdown
+/// behaviour — is `HOOK-DELIVERY-CONTRACT.md` at the repo root (#857),
+/// pinned by `test/hook_delivery_contract_test.zig`. Read it before
+/// changing anything in this file: several of the guarantees below are
+/// load-bearing for flows, scripts and plugins.
 ///
 /// Extracted verbatim from `game.zig`; behaviour is identical. The
 /// comptime types/flags this needs (`Payload`, `has_hooks`, `has_events`,
@@ -28,7 +35,9 @@ pub fn Mixin(comptime Game: type) type {
             }
         }
 
-        /// Emit a game event. Buffered and delivered to scripts at end of frame.
+        /// Emit a game event. Buffered; delivered at the next
+        /// `dispatchEvents`. Enqueue failure is logged and the event is
+        /// LOST — the caller gets no signal (see #856).
         pub fn emit(self: *Game, event: GameEvents) void {
             if (has_events) {
                 self.event_buffer.append(self.allocator, event) catch |err| {
@@ -182,7 +191,20 @@ pub fn Mixin(comptime Game: type) type {
             }
         }
 
-        /// Deliver buffered game events to hooks. Called at end of frame.
+        /// Deliver buffered game events to hooks.
+        ///
+        /// Called once per frame by the generated main loop — BEFORE
+        /// `g.tick(dt)`, not after it (every backend template emits the
+        /// assembler's `tick_code`, whose tail is this call, immediately
+        /// ahead of the engine tick). Also called once by `Game.deinit`
+        /// as the final flush.
+        ///
+        /// The buffer is SWAPPED OUT before iterating, so an event a
+        /// handler emits lands in the fresh buffer and is delivered by
+        /// the NEXT drain — never by this one. That is what keeps an
+        /// `A -> B -> A` handler chain from hanging the drain, and what
+        /// keeps the iterated slice stable. See
+        /// `HOOK-DELIVERY-CONTRACT.md` §2 and §4.
         pub fn dispatchEvents(self: *Game) void {
             if (!has_events) return;
             var dispatch_buf: EventBuffer = .empty;

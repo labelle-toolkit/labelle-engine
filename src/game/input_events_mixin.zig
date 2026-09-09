@@ -97,8 +97,11 @@ pub fn Mixin(comptime Game: type) type {
         /// through `Game.Input` (the backend-agnostic wrapper) — never a
         /// backend's native API — which is what keeps this portable
         /// across raylib / sokol / SDL. Called from `tick` while input
-        /// state is still current; buffered events drain via
-        /// `dispatchEvents` the same frame.
+        /// state is still current. The events it buffers drain on the
+        /// NEXT loop iteration, not this one: the generated loop runs
+        /// `g.dispatchEvents()` BEFORE `g.tick(dt)`, and this scan runs
+        /// inside `tick`. One frame of latency, by construction — see
+        /// HOOK-DELIVERY-CONTRACT.md §2.
         pub fn scanInputEvents(self: *Game) void {
             // Each category's emit calls are gated at comptime (so an
             // unused one folds away), but the per-element scans are plain
