@@ -1,305 +1,329 @@
 # RFC: Declarative, event-driven sprite animation
 
-## Summary
+## Status and scope
 
-Five incremental changes that let sprite animations be authored as **prefab
-data** instead of per-game driver scripts, and unify how they pause:
+**Design revision, not an implemented API or an approved implementation plan.**
+The September 9 investigation checked current engine, assembler, core and
+Flying Platform code, all 17 PR review threads, and 36 focused tests. See the
+[investigation and review dispositions](docs/investigations/rfc-793/investigation.md)
+and [reproducible probes](docs/investigations/rfc-793/README.md).
 
-1. **Drive animations by default** — retire the one-line opt-in every game
-   copies (`00_sprite_animation_driver.zig`).
-2. **Frame-range shorthand** — declare `sewer_machine_0001..0010` without
-   listing all ten filenames.
-3. **Event-triggered playback** — `"play once on event X"`, `"loop on event
-   Y"`, `"stop on event Z"`, declared on the animation.
-4. **Named + crossing-accurate frame markers** — `"emit footstep at frame
-   3"`, firing a *named* game event (not a generic frame-index event) and
-   never dropped by a `dt` spike.
-5. **Unify pause on the time scale** — Unity-style: pause zeroes the scaled
-   game clock and everything scaled freezes for free; a per-animation
-   `scaled | unscaled` update mode keeps menu/UI animations running. Removes
-   the separate `sprite_animations_paused` flag and per-script pause checks.
+Five workstreams make animation authoring simpler:
 
-Together they make animations **fully symmetric event participants** —
-triggered *by* events and emitting *named* events at specific frames — so the
-common cases need no `*_animation.zig` script at all.
+1. Drive SpriteAnimation by default, with one owner of advancement.
+2. Expand frame ranges from authored patterns.
+3. Start, stop and control playback from scoped events.
+4. Emit named, crossing-accurate frame cues with an explicit delivery policy.
+5. Define scaled/unscaled animation clocks and migrate pause behavior.
 
-## Motivation
+The frame shorthand is closest to implementation. The event bridge, playback
+state, dispatch schedule, targeting and pause migration require the decisions
+listed below before their implementation PRs start. Publishing this RFC does
+not close [#794](https://github.com/labelle-toolkit/labelle-engine/issues/794).
 
-Today, "make this sprite animate in response to the game" means writing a
-per-feature Zig script. flying-platform alone carries ~10 of them:
-`33_wc_animation.zig`, `worker_animation.zig`, `08_sleep_animation.zig`,
-`bandit_animation.zig`, `ship_animation.zig`, `17_status_overlay.zig`,
-`34_bowel_overlay.zig`, the kitchen smoke/sink overlay component + script,
-`condenser_gate.zig`, … A large fraction of these are literally *"when
-state/event X happens, play clip A once or on loop; when Y, stop."*
+## Motivation and current baseline
 
-That's boilerplate the engine can absorb. The animation machinery is already
-engine-side; what's missing is a **declarative binding** between the game's
-event bus and animation playback — in both directions.
+Simple animated props should be authorable as prefab data. Continuous character
+state, room ownership and gameplay decisions remain the game's responsibility.
+The target is less repeated playback code, not a second game state machine.
 
-This also directly serves the toolkit's "Packs" / LLM-authoring goal: adding
-an animated prop should be one prefab entry, not a component **plus** a script.
+Baseline: engine `46677c9` (v2.18.0), assembler `cabe371`, core `5425b7c`;
+full revisions and source links are in the investigation. The original RFC
+branch predates this foundation; it has now been brought up to current main.
 
-## Background: what already exists
+- `SpriteAnimation` already has frames, fps, boundary mode, per-clip speed and
+  numeric `event_frames`. The component is transient; prefab loading recreates
+  it and resets playback state. The current frame-count limit is 255.
+- The engine's `game/loop_mixin.zig` already advances it when
+  `drive_sprite_animations` is enabled. The flag still defaults to false.
+- The driver already emits buffered frame, completion and loop events. Legacy
+  frame cues fire when a tick lands on a marked frame; they can miss crossings.
+- `AnimationDef` already has named marker metadata, crossing traversal and
+  `TransitionRule` tables. Those facilities are reusable, but their output is
+  not a generic runtime-string-to-GameEvents emitter.
+- `game.emit` accepts a typed union value. `emitEngineEvent` requires a
+  comptime tag and a compatible payload. `emitSync` bypasses the buffer.
+- Animation scratch buffers retain at most 32 events. AnimationDef traversal
+  is also bounded to 512 crossed beats. Existing overflow can be discarded;
+  copying that code does not guarantee every cue is delivered.
+- Explicit pause and zero time scale are currently different paths. Animation
+  runs before the engine's pause return, gated by subsystem pause and nonzero
+  scaled dt. `setPaused(true)` can freeze the clock while sprites still advance.
 
-Grounding the proposal in the current code (`labelle-engine/src`):
+The three old review comments claiming the driver, frame events and transition
+tables do not exist describe the old branch, not this baseline. The remaining
+design concerns must not be dismissed on that basis.
 
-- **`SpriteAnimation`** (`sprite_animation.zig:51`) — a `.transient` component
-  with `frames: []const []const u8`, `fps`, `mode: .loop | .once | .ping_pong`,
-  `speed`, and `event_frames: []const u16`. It auto-plays on spawn.
-- **The engine already advances it.** `game/loop_mixin.zig:86` ticks every
-  `SpriteAnimation` on the time-scaled `dt`, gated on
-  `drive_sprite_animations and !sprite_animations_paused and scaled_dt != 0`.
-- **The flag defaults off.** `game.zig:723` (`drive_sprite_animations: bool =
-  false`) — *"Off by default so existing projects that still drive animation
-  from a script don't double-advance."* Hence every game copies a one-line
-  `setDriveSpriteAnimations(true)` at boot.
-- **Animations already EMIT events** (`animation_events.zig`): `engine__anim_
-  complete` (once clips), `engine__anim_frame` (from `event_frames`, "landed
-  on" semantics — v1 can miss a frame on a `dt` spike), `engine__anim_loop`.
-  Delivered through the buffered event bus (`game.emit`).
-- **`AnimationDef`** (`animation_def.zig`) — a richer clip/variant system with
-  `TransitionRule { from: ?u8, to: u8, via: u8 }` and **crossing-accurate**
-  markers via beat iteration.
-- **Components already SUBSCRIBE to events** — the events-as-spine pattern the
-  packs use (custom `events/*.zig` folding into `GameEvents`).
+## 1. Default animation driving
 
-So animations already *produce* events and the bus already *routes* them; what
-does not exist is animations *consuming* events declaratively, or emitting
-*named* ones.
+The proposed default is engine-owned advancement. Keep an explicit opt-out for
+games that intentionally drive animation themselves. Do not add a second tick
+or infer the owner solely from a guessed legacy script filename.
 
-## Proposal
+Choose the release mechanism before implementation: an explicit project
+configuration/default for new projects, or a documented engine default change
+with consumer migration. The assembler, generated loops and engine flag must
+agree. The no-animation path should remain inexpensive; this RFC makes no
+unmeasured zero-cost claim.
 
-### 1. Drive sprite animations by default
+Acceptance: exactly one advance per frame, manual-driver opt-out, the migrated
+Flying Platform setup, and a project without SpriteAnimation. Default-on is a
+separate rollout gate from frame-pattern support.
 
-The advance is already in the engine; the only game-side artifact is flipping
-the opt-in. Make it unnecessary:
+## 2. Frame-range shorthand
 
-- **Default `drive_sprite_animations = true`.** The tick only iterates
-  `SpriteAnimation` components — zero cost for games with none.
-- The one thing this can break is a game *still* running the deprecated
-  legacy `sprite_animation_tick` script (double-advance). Those get an
-  explicit **opt-out** (`setDriveSpriteAnimations(false)`), and are expected to
-  migrate. Consider a comptime alternative: the assembler enables the flag when
-  the `SpriteAnimation` component is present in the registry and no legacy tick
-  script is discovered — "if you use the component, it's driven."
-- **Result:** `00_sprite_animation_driver.zig` disappears from every game.
-
-Because it changes a default, land it behind the next engine **major**, or gate
-on a project-config `animation.autodrive` that defaults on for new scaffolds.
-
-### 2. Frame-range shorthand
-
-Authoring an N-frame clip should not mean typing N filenames. Extend the
-`SpriteAnimation` prefab deserializer to accept a pattern as an alternative to
-`frames`:
+Illustrative authoring syntax, subject to the validation contract below:
 
 ```jsonc
 "SpriteAnimation": {
-  "frames_pattern": "sewer/sewer_machine/sewer_machine_%04d",
+  "frames_pattern": "sewer/sewer_machine/sewer_machine_%04d.png",
   "from": 1, "to": 10,
   "fps": 8, "mode": "loop"
 }
 ```
 
-- Expands to `..._0001.png … _0010.png` at load, interning the same strings
-  `frames` would have.
-- `frames` (explicit list) stays valid and takes precedence; `frames_pattern`
-  is sugar. `%0Nd` width comes from the pattern; `.png` is appended if absent.
-- Pure load-time expansion — no runtime cost, no change to the component's
-  runtime shape.
+Normalize the pattern into the same frame-key slice used by explicit `frames`
+before constructing the component. The generic deserializer currently walks
+real struct fields and requires `frames`; optional unknown fields can be
+ignored. Merely adding JSON keys does not implement this feature.
 
-### 3. Event-triggered playback
+Frame keys are exact atlas identifiers. No implicit `.png` suffix: extensionless
+grid keys such as `tiles/0` are also valid. Authors include any desired extension
+in the pattern. Preserve explicit `frames` support.
 
-Let an animation declare which events start/stop it and how. New optional
-`triggers` on the animation component (or a sibling `AnimationTriggers`
-component if we want to keep `SpriteAnimation` save-shape frozen):
+The implementation specification must settle:
+
+- Inclusive bounds; supported integer placeholder and zero-padding grammar;
+  width limits; malformed, reversed and empty ranges.
+- Checked arithmetic before allocating, and the current 255-frame ceiling.
+- Explicit-list/pattern conflict handling. The old proposal silently preferred
+  `frames`; the recommended rule is a diagnostic when both are authored.
+- Syntax diagnostics versus resource readiness. Validate keys when the atlas
+  becomes available; an asynchronously loading atlas is not a malformed key.
+- Ownership: the expanded slice belongs to the per-world arena; strings use
+  the existing intern mechanism. No borrows from temporary parsed JSON and no
+  permanent slice allocation on every prefab respawn.
+
+Acceptance: equivalence with an explicit list; first/last frames; range and
+allocation boundaries; extensionless keys; missing-frame diagnostics; repeated
+spawn/reset lifetime; representative root and pack prefabs.
+
+## 3. Scoped event-triggered playback
+
+The proposed surface remains declarative. These event names are illustrative
+domain events, not existing Flying Platform events:
 
 ```jsonc
 "SpriteAnimation": {
-  "frames_pattern": "sewer/sewer_machine/sewer_machine_%04d", "from": 1, "to": 10, "fps": 8,
-  "start": "dormant",              // don't auto-play on spawn
+  "frames_pattern": "machine_%04d.png", "from": 1, "to": 10,
+  "fps": 8, "start": "dormant",
   "triggers": [
-    { "on": "sewer__machine_on",  "play": "loop" },
-    { "on": "sewer__machine_off", "action": "stop" },
-    { "on": "sewer__pulse",       "play": "once" }
+    { "on": "factory.machine_on", "play": "loop" },
+    { "on": "factory.machine_off", "action": "stop" }
   ]
 }
 ```
 
-Vocabulary:
+### Event identity and typed payloads
 
-- `play`: `once` | `loop` | `ping_pong` — (re)start the clip in that mode.
-- `action`: `stop` | `pause` | `resume` | `restart`.
-- `start`: `playing` (today's behavior, default) | `dormant` (wait for a
-  trigger) — so triggered props don't run until their event arrives.
+Validate `on` against discovered event metadata. Dotted provider/event names
+are the recommended author spelling; current assembler retention also accepts
+qualified `provider__event` spelling in JSONC. Specify alias and pack-namespace
+resolution once and reuse it for validation, code generation and inspection.
+Unknown names must produce actionable diagnostics.
 
-This is resolved by the same driver that already advances animations; it reads
-the frame's event buffer and applies matching triggers before advancing.
+The existing consumption filter scans JSON/JSONC for both spellings. Reuse it;
+test events referenced only by root/pack prefabs, staged dependency prefabs,
+and any runtime-loaded authoring path. A newly introduced generic marker
+channel must be retained when only a marker label appears in authored data.
 
-#### Entity targeting (the crux)
+### Targeting and lifetime
 
-Events are global; a `machine_on` must start *the machine in the room that
-turned on*, not every sewer. This is the real design decision, not the syntax.
-Two rules, pick one (or support both):
+Self/owner-scoped matching is the recommended default; broadcast requires an
+explicit `scope: "any"`. This is not yet a complete target contract:
 
-- **Self-scoped (default):** an animation reacts only to events emitted *about
-  its own entity* (or an ancestor — the room). The event carries an entity id;
-  the trigger matches when that id is the animation's entity or a parent. This
-  mirrors exactly what the imperative scripts do today (walk `parent → child by
-  sprite_name`).
-- **Broadcast (opt-in):** `{ "on": "...", "scope": "any" }` reacts to the event
-  regardless of target — for genuinely global cues (a day/night tint pulse).
+- Specify target extraction from typed payload metadata. An arbitrary `entity`
+  field can mean an actor/source, and many events have no entity field.
+- For an untargeted event, require explicit broadcast or a declared adapter;
+  never silently interpret it as “all instances” under self scope.
+- Define whether self means exact entity, ancestors, or a declared owner
+  binding; define deterministic matching and invalid/cyclic ancestry handling.
+- Validate entity lifetime at delivery and command application. Reset/destroy
+  must invalidate queued targets; bare recycled IDs must not target a new entity.
+- For spatially associated props, domain code supplies the target binding.
+  Kitchen overlays currently use room cells; not all relationships are parents.
 
-Recommendation: **self-scoped by default**, `scope: "any"` to opt out. Getting
-this right is what makes the feature replace scripts instead of adding footguns.
+Choose the component boundary before implementation: fields on SpriteAnimation
+or a sibling binding component. A first version restricted to SpriteAnimation
+is recommended. AnimationDef reuse needs an explicit def/clip binding; existing
+transition tables alone do not identify which game component to control.
 
-### 4. Named + crossing-accurate frame markers
+### Playback state and repeated requests
 
-`event_frames` already fires at frames, but fires one *generic*
-`engine__anim_frame` carrying the index — so every consumer filters `if (frame
-== 3)`. Let the marker name the event it emits:
+Define playing, paused, stopped/dormant and completed states, with this action
+table completed as part of the implementation specification:
 
-```jsonc
-"markers": [
-  { "frame": 3, "emit": "footstep" },
-  { "frame": 7, "emit": "sewer__splash" }
-]
+| Request | Contract to specify |
+| --- | --- |
+| `play: once/loop/ping_pong` | Which state resets; mode changes; repeated requests. Recommended: repeated running loop is a no-op, once restarts. |
+| `stop` | Hold current image or restore an idle/initial frame; timer/direction/repetition reset. Current consumers sometimes explicitly restore idle. |
+| `pause` / `resume` | Preserve playback position; define resume from stopped/completed; interaction with global and subsystem pause. |
+| `restart` | Reset frame, timer, direction, repetition and marker cursor; update the visible sprite even without a later frame crossing. |
+| `start: dormant` | Initial visible frame and behavior before the first request; reconciliation after loading. |
+
+Reject conflicting `play` and `action` fields in one entry. Specify ordering
+for multiple matching entries and multiple events in one drain. Address speed
+zero, mode changes, completion, and frame-zero entry cues explicitly.
+
+### Dispatch schedule and reentrancy
+
+Do not have the normal animation tick merely scan “this frame's event buffer.”
+The audited bgfx desktop order is:
+
+```text
+root/plugin updates -> scripting event tap -> buffered dispatch
+    -> engine tick (SpriteAnimation and engine events) -> rendering
 ```
 
-- Emits the *named* event through `game.emit`, carrying the animation's entity
-  as target (so consumers can scope it, same as §3).
-- **Crossing-accurate by default.** `SpriteAnimation.event_frames` is v1
-  "landed-on" (a lag spike past frame 3 misses it, per its own doc comment);
-  `AnimationDef` already does crossing-accurate via beat iteration. The named-
-  marker path should use crossing detection so a footstep/hit never silently
-  drops. Keep the legacy `event_frames` field working (landed-on) for compat.
+Root/plugin events are already drained when SpriteAnimation advances;
+engine-tick events can reach the next drain. Synchronous events never enter
+that buffer. Other generated loops need a checked, equivalent contract.
 
-### 5. Unify pause on the time scale (scaled / unscaled update mode)
+Recommended integration: a dispatch listener queues animation commands, and a
+defined animation boundary applies them. Settle that boundary and whether a
+play request displays frame zero immediately or on the next update. Preserve
+once-per-drain delivery and the next-drain behavior of handler-emitted events.
 
-Pause is the piece that makes §1 fully clean — and it's currently fragmented.
-Today the engine has **three** overlapping pause concepts, and the game adds a
-fourth:
+Specify ordering relative to native/flow listeners and consumable events. A
+buffer tap observes even events later consumed; a normal listener may not.
+The RFC must choose rather than accidentally inherit one behavior. Coordinate
+with [delivery contracts #857](https://github.com/labelle-toolkit/labelle-engine/issues/857)
+and [handler ordering](https://github.com/labelle-toolkit/labelle-assembler/issues/723).
 
-- `time_scale` → `scaled_dt = dt * time_scale` (`game/loop_mixin.zig:26`).
-- a separate `paused` flag (#465): `isPaused() = paused OR time_scale==0`
-  (`loop_mixin.zig:197`), halts the tick independently.
-- `sprite_animations_paused` — a flag *just* for `SpriteAnimation`
-  (`loop_mixin.zig:86` gates on `!sprite_animations_paused and scaled_dt != 0`).
-- flying-platform's own `GamePaused` singleton, which every custom animation
-  script (`worker_animation`, `ship_animation`, …) checks via
-  `pause_state.isPaused`.
+Never execute arbitrary gameplay callbacks while an animation ECS view/pointer
+is live. Marker-trigger cycles must not recursively drain or advance forever
+in one frame. Bound pending commands and define visible overflow reporting.
 
-The kicker: a `time_scale == 0` pause **already** zeroes `scaled_dt`, which
-**already** freezes `SpriteAnimation` — so `sprite_animations_paused` is largely
-redundant, and the per-script `GamePaused` checks re-implement "am I paused"
-everywhere. Every animated thing has to know about pause independently.
+### Load and state reconciliation
 
-**How Unity 3D does it** (the target model): one global knob, `Time.timeScale`.
-Pause = `timeScale = 0`; everything reading **scaled** time freezes for free —
-movement (`Time.deltaTime`), the Animator (Update Mode `Normal`), physics,
-particles. Things that must keep moving during pause opt into **unscaled** time:
-`Time.unscaledDeltaTime`, or Animator Update Mode `Unscaled Time` (menus, UI).
-One time scale + a per-system scaled/unscaled choice — no per-system pause flag.
+SpriteAnimation is transient. An already-active machine restored from a save
+may never emit a new “on” edge. Choose a post-restoration reconciliation step
+or a domain synchronization event with explicit target binding. Entity-ready
+callbacks are not a whole-scene completion guarantee.
 
-**Proposal — collapse labelle onto the time scale, exactly like Unity:**
+Acceptance: two independently targeted props; explicit broadcast; missing or
+invalid targets; sync/buffered events; repeated/conflicting commands; deletion
+and world reset; restart visibility; an active prop restored without a new edge.
 
-1. **Pause = zero the scaled game clock.** `isPaused` ⇒ `scaled_dt == 0` as the
-   single source of truth. flying-platform's `GamePaused` *sets* that (or the
-   engine `paused` flag zeroes the effective game dt), instead of being a
-   parallel mechanism.
-2. **Systems advance on scaled `dt`.** Expose `game.dt()` (scaled) vs
-   `game.realDt()` (unscaled). Anything using scaled dt — `SpriteAnimation`
-   *and* the custom worker/ship animators — freezes on pause with **zero
-   pause-aware code**, deleting the per-script `pause_state.isPaused` early-outs.
-3. **Per-animation update mode** = Unity's Animator UpdateMode:
-   `SpriteAnimation.update: scaled | unscaled` (default `scaled`). Menu spinners
-   / pause-screen effects set `unscaled` and keep running while the game freezes.
+## 4. Named markers and bounded delivery
 
-**Removes:** the `sprite_animations_paused` flag, the `setSpriteAnimationsPaused`
-wiring in `97_pause_menu.zig`, and the copy-pasted `isPaused` checks in every
-animation script. Pause becomes "set timeScale 0"; `scaled` things freeze,
-`unscaled` things don't. This generalizes beyond animation to *all* time-based
-systems, and it's what lets §1's "drive by default" ship without a leftover
-pause flag.
+Named markers should identify a cue and the animation that crossed it. The
+original arbitrary `emit: "footstep"` promise requires a typed-event bridge:
 
-**Compat:** `unscaled` defaults to off (today's behavior — everything is
-effectively scaled). Keep `setSpriteAnimationsPaused` as a deprecated shim that
-maps to a pause of the animation subsystem's scaled clock, so callers don't
-break during migration.
+1. **Recommended first contract:** a typed engine marker notification carrying
+   entity, marker name, frame and repetition. Consumers filter the cue name.
+2. **Alternative:** a generated mapping to existing GameEvents variants, with
+   required payload validation or an explicit payload adapter. A marker entity
+   alone cannot populate arbitrary event fields.
 
-## The combined model
+Choose one before coding. A generic named cue is not an implementation of
+arbitrary custom event emission. It is consistent with the named metadata
+AnimationDef already produces and can form a shared marker contract.
 
-Put §3 and §4 together and animations become event-symmetric, entirely in data:
+### Crossing semantics to pin down
 
-```
-game event ──trigger (§3)──▶  [ animation clip ]  ──marker (§4)──▶ named game event
-                                    ▲     │
-                          AnimationDef transitions (existing)
-```
+Use chronological crossings, not just the final landed frame. Add examples
+and tests for each of these cases before fixing the traversal algorithm:
 
-- **In:** "play once / loop / stop on event X" (declarative — new)
-- **Out:** "emit `footstep` at frame N" (marker — exists, upgraded to named +
-  crossing-accurate)
-- **Sequencing:** `AnimationDef` `TransitionRule` for state cases (existing)
+| Case | Required decision/test |
+| --- | --- |
+| Frame 0 on start/restart | Does it emit on command application or first positive advance? Exactly once for the chosen boundary. |
+| Several crossed markers | Oldest first; stable author order for cues sharing a frame. |
+| Loop wrap | End/start ordering; repeated hits across multiple loops; repetition attribution. |
+| Once clip | Clamp at final frame; final cue/completion order; no repeated completion on later ticks. |
+| Ping-pong | Forward/backward order and endpoint visitation; avoid double-counting an endpoint on reversal. |
+| Very large dt | Bounded work, accurate final playback state, observable excess delivery. |
 
-Add §1 (default-on) and §2 (shorthand) and authoring an animated prop goes from
-"a component **plus** a script" to a single prefab entry.
+Crossing accuracy does not promise unlimited delivery. Existing PendingBuf
+retains 32 events and AnimationDef traverses at most 512 beats; game enqueue can
+also fail allocation. Do not silently reuse those limits while claiming cues
+never drop, or replace them with an unbounded catch-up loop.
 
-## What this does NOT replace
+The preferred requirement is exact delivery within a documented budget with
+explicit overflow/failure reporting. Specify whether excess cosmetic cues may
+be aggregated or discarded, and how an authoritative consumer reconciles.
+Coordinate enqueue reporting with [#856](https://github.com/labelle-toolkit/labelle-engine/issues/856).
+Tests must distinguish correct traversal from successful downstream enqueue.
 
-Be honest about the ceiling. Event-triggers + markers cover *"play/stop a clip
-on an event, and emit cues."* They do **not** replace true state machines that
-choose direction/target frame from current runtime state — e.g.
-`33_wc_animation.zig` plays the door **forward or reverse depending on the
-current frame** and flips a screen colour. Those belong in `AnimationDef`
-transitions (`from → to via`); the trigger just *requests* a target clip and the
-transition table decides the path. The RFC composes with that system, it does
-not duplicate it. Worker locomotion, death, and status overlays that derive the
-clip from continuous component state also stay script/`AnimationDef`-driven.
+Keep legacy numeric `event_frames` on its separate landed-on timing path.
+It is **not a semantic alias** for crossing-accurate named markers. Changing
+legacy timing would require its own explicit migration decision.
 
-Rough estimate on flying-platform: of the ~10 `*_animation.zig` scripts, the
-machine/smoke/overlay/gate family (~half) collapses to prefab data; the
-worker/wc/state-machine family stays but shrinks (markers replace their manual
-frame bookkeeping).
+## 5. Pause and scaled/unscaled clocks
 
-## Compatibility & migration
+Do not collapse pause by assigning zero to time scale without specifying the
+engine, generated-loop and consumer consequences. The audited behavior is:
 
-- **§2 / §3 / §4** are strictly additive (new optional fields / a new sibling
-  component). Existing prefabs are untouched.
-- **§1** changes a default → next major, or a `animation.autodrive` project
-  flag defaulting on for new scaffolds, off for pre-existing ones until they
-  drop their legacy tick script.
-- Keep `event_frames` (landed-on) as a deprecated alias of the new named-marker
-  path so #625 consumers don't break.
+- `setPaused(true)` changes the pause flag and emits pause notifications, but
+  does not zero `dt * time_scale` in the existing always-run animation pass.
+- `setTimeScale(0)` freezes scaled animation but does not emit pause_changed.
+- `pause()` followed by `resume_()` replaces a prior scale such as 0.5 with 1.0.
+- Root/plugin script ticks are gated on positive scaled dt. Flying Platform's
+  Escape-to-resume handler is a normal script tick and would stop running if
+  that consumer migrated by simply zeroing time scale.
 
-## Open questions
+Recommended clock model: retain configured time scale, derive effective scaled
+dt from explicit pause, and expose real/unscaled dt separately. Preserve a
+slow-motion setting across pause/resume. Specify whether pause notifications
+describe explicit pause transitions, the effective frozen state, or both.
 
-1. **Component boundary:** extend `SpriteAnimation` (it's `.transient`, so no
-   save-shape cost) vs. a separate `AnimationTriggers` / `AnimationMarkers`
-   sibling? Separate keeps each concern small and lets `AnimationDef` reuse the
-   trigger/marker parsers.
-2. **Targeting default:** self-scoped vs. broadcast — confirm self-scoped is the
-   right default and specify how the "about my entity/ancestor" match reads the
-   event payload.
-3. **Trigger → AnimationDef bridge:** for `AnimationDef` entities, does a
-   trigger name a *clip* (letting transitions handle the `via`), or a raw
-   frame range? Naming a clip is the composable answer.
-4. **Marker payload:** do named markers carry extra data (a `value` field) or
-   just the entity + event name? Start with entity + name; add payload if a
-   consumer needs it.
-5. **Dedup / re-trigger semantics:** if `machine_on` fires while already
-   looping, is it a no-op or a restart? Propose no-op for `loop`, restart for
-   `once`.
+SpriteAnimation proposes `update: scaled | unscaled`, default scaled. Its
+driver already runs before the engine pause return; it needs per-animation
+clock selection and gates that allow unscaled instances to progress. An outer
+`scaled_dt != 0` gate cannot exclude that work. Move menu/input processing that
+must unpause into an always-running path in every affected generated loop.
 
-## Rollout
+The animation-only pause API is independent behavior. If retained as a shim,
+specify whether it suppresses both update modes or only scaled instances, and
+which state implements that suppression. Do not claim subsystem pause state
+has disappeared while requiring it through an undocumented compatibility clock.
 
-Independent, shippable in order:
+Acceptance: explicit pause and zero scale; scaled freezing/unscaled progress;
+slow-motion restoration; notifications; independent animation suppression;
+keyboard and menu unpause; native and callback generated loops. This is a
+separate cross-repository migration, not a prerequisite to frame shorthand.
 
-1. §2 frame-range shorthand — smallest, immediate authoring win, zero risk.
-2. §4 named + crossing-accurate markers — additive; upgrades #625.
-3. §3 event-triggered playback + targeting — the main feature.
-4. §5 pause unification (scaled/unscaled update mode) — the cross-cutting
-   cleanup; deprecate `sprite_animations_paused` and the per-script checks.
-5. §1 default-on driver — the breaking-default cleanup; batch with §5 into a
-   major (both remove leftover flags/boilerplate).
+## Consumer pilot and limits
+
+The one-line engine-driver opt-in in Flying Platform is real. The broader
+script-removal estimate has not been demonstrated:
+
+- Kitchen and condenser scripts derive activity from current model state.
+- Kitchen overlays use spatial room-cell matching, not ancestor matching.
+- Disabled-room decoration suppression also uses spatial association.
+- Some WC storage-slot entities have no parent link to their room.
+- The old `sewer__machine_on/off/pulse` examples are hypothetical events.
+
+Require one real pilot: domain event production, explicit target binding,
+stop/idle behavior and load reconciliation, with two independent instances.
+Do not claim that roughly half the scripts disappear until this is measured.
+Continuous locomotion, stateful door direction and ownership resolution remain
+game logic or AnimationDef consumers.
+
+## Readiness and rollout
+
+The investigation's 36 passing tests establish the baseline and its limitations,
+not acceptance of any proposed feature. The PR remains a design discussion.
+
+- [ ] Finalize shorthand grammar, bounds, ownership and diagnostics.
+- [ ] Choose generic marker notification versus typed custom-event mapping.
+- [ ] Specify crossing order and bounded delivery/failure behavior.
+- [ ] Choose trigger component/state layout, target contract and dispatch phase.
+- [ ] Define reconciliation and demonstrate a real consumer pilot.
+- [ ] Specify effective clocks, pause notifications and unscaled input migration.
+- [ ] Choose the default-driving rollout and verify single ownership.
+
+Recommended implementation order: shorthand; marker contract; triggers with a
+consumer pilot; pause migration; default driving. Each has its own acceptance
+gate. The marker and trigger work shares the hooks delivery/ordering contracts;
+the whole hooks enhancement roadmap is not a prerequisite to start shorthand.
