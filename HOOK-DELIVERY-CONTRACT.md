@@ -273,23 +273,52 @@ frame after the free.
 
 Neither inlines the name. State and scene names have **no length bound**,
 so a fixed-size field would silently truncate them, which trades a
-lifetime bug for a correctness bug. Instead the free is deferred to the
-drain that delivers the event:
+lifetime bug for a correctness bug.
+
+Instead the free is deferred, in three steps:
 
 ```zig
-// Buffered an event borrowing `slice`, and would otherwise free it now.
-self.retainUntilDrained(slice);
+// 1. RESERVE — before emitting anything, and before any other mutation.
+var retention = try self.reserveRetention();
+// 2. RELEASE — returns the node on every path that does not retain.
+defer retention.release();
+
+// … emit the event that borrows `slice` …
+
+// 3. RETAIN — infallible; the node already exists.
+retention.retain(slice);
 ```
 
-`dispatchEvents` swaps the retention list out on entry and frees it on
-exit, in step with the event buffer itself. Swapping rather than freeing
-in place is what makes a NESTED drain correct: an inner `dispatchEvents`
-reclaims exactly the slices retained since the outer one swapped, so it
-cannot free a payload the handler that triggered it is still holding.
+**The order is the design, not a detail.** Once the event is queued the
+caller holds an allocation a queued payload borrows, and neither disposal
+is acceptable: freeing it is the use-after-free this exists to prevent,
+and dropping it leaks. So the only fallible step happens while nothing is
+queued yet — and, on the scene paths, before the asset gate acquires
+anything, so a failure cannot strand acquired references either. A caller
+that cannot propagate the error (`tick`) skips just that transition and
+finishes the frame.
 
-Use `retainUntilDrained` for any engine-owned allocation a buffered
-payload borrows. Prefer a program- or game-lifetime referent when one
-exists; reach for this when the string genuinely has no owner.
+`Retention` is an owned handle rather than a slot in a shared list because
+a reservation is not always used: the loop's scene transition reserves
+every frame but defers while the asset gate is still loading. A handle has
+a scope, so `defer release()` returns the unused node immediately.
+
+### Retained slices are freed by the OUTERMOST drain
+
+Not by the drain that retired them. A payload can alias a slice a *later*
+window retires: `state_changed.new_state` points at the current owned
+name, and a handler calling `setStateOwned` parks exactly that name for
+the next drain. If that handler then drains, a per-window scheme would
+free the slice while the outer drain is still delivering the payload that
+borrows it.
+
+So freeing is tied to drain **depth**: while any `dispatchEvents` is in
+flight nothing is released, and the outermost one frees everything the
+nested drains retired.
+
+Use this mechanism for any engine-owned allocation a buffered payload
+borrows. Prefer a program- or game-lifetime referent when one exists;
+reach for this when the string genuinely has no owner.
 
 **Value-copying an event is not deep-copying its data.** That sentence is the
 whole of §5.

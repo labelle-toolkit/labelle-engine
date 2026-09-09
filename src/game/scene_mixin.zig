@@ -630,6 +630,26 @@ pub fn Mixin(comptime Game: type) type {
         }
 
         pub fn setScene(self: *Game, name: []const u8) !void {
+            // Reserve the retention node FIRST — before the asset gate
+            // acquires anything, before any mutation, and long before
+            // `unloadCurrentScene` buffers `engine__scene_unloaded`
+            // borrowing `current_scene_name` (#867 review).
+            //
+            // Ordering matters twice over. Reserving after the gate meant a
+            // failure here returned an error with the TARGET'S ASSETS
+            // ALREADY ACQUIRED and `pending_scene_assets` set, while the
+            // caller treated the transition as consumed — leaking those
+            // references with no path back to release them. And reserving
+            // after the emit would leave a queued payload whose backing
+            // store we could neither free nor keep.
+            //
+            // Taking it here means an OOM returns with nothing acquired,
+            // nothing queued and nothing torn down.
+            var retention = try self.reserveRetention();
+            // Released on every path that does not retain: a deferred
+            // gate, an asset error, or simply no outgoing scene name.
+            defer retention.release();
+
             // Phase 2 of the Asset Streaming RFC (#437) — gate the
             // swap on the new scene's `assets:` manifest. Acquires
             // (idempotently across frames) any not-yet-loaded assets,
@@ -706,16 +726,6 @@ pub fn Mixin(comptime Game: type) type {
             self.emitHook(.{ .scene_assets_acquire = .{ .name = name, .assets = target_assets } });
             // Engine `Events` dual-emit (#578).
             self.emitEngineEvent("engine__scene_assets_acquire", .{ .name = name });
-
-            // Reserve BEFORE `unloadCurrentScene` buffers
-            // `engine__scene_unloaded` borrowing `current_scene_name`
-            // (#867 review). Failing here aborts with nothing queued and
-            // nothing torn down; failing after the emit would leave a
-            // queued payload whose backing store we could neither free nor
-            // keep.
-            var retention = try self.reserveRetention();
-            // Released when there is no outgoing name (first scene load).
-            defer retention.release();
 
             self.unloadCurrentScene();
 
@@ -810,6 +820,26 @@ pub fn Mixin(comptime Game: type) type {
         /// Clears the scene entity list first so Scene.deinit skips entity destruction,
         /// then resets the ECS atomically, then loads the new scene.
         pub fn setSceneAtomic(self: *Game, name: []const u8) !void {
+            // Reserve the retention node FIRST — before the asset gate
+            // acquires anything, before any mutation, and long before
+            // `unloadCurrentScene` buffers `engine__scene_unloaded`
+            // borrowing `current_scene_name` (#867 review).
+            //
+            // Ordering matters twice over. Reserving after the gate meant a
+            // failure here returned an error with the TARGET'S ASSETS
+            // ALREADY ACQUIRED and `pending_scene_assets` set, while the
+            // caller treated the transition as consumed — leaking those
+            // references with no path back to release them. And reserving
+            // after the emit would leave a queued payload whose backing
+            // store we could neither free nor keep.
+            //
+            // Taking it here means an OOM returns with nothing acquired,
+            // nothing queued and nothing torn down.
+            var retention = try self.reserveRetention();
+            // Released on every path that does not retain: a deferred
+            // gate, an asset error, or simply no outgoing scene name.
+            defer retention.release();
+
             if (!self.scenes.contains(name)) return error.SceneNotFound;
 
             // Sprite-based asset inference (#563) — mirror of `setScene`.
@@ -884,20 +914,6 @@ pub fn Mixin(comptime Game: type) type {
             // `unloadCurrentScene` iteration below so listeners
             // see the full pre-teardown world. Mirrors the
             // ordering in `save_load_mixin.zig::loadGameState`.
-            // Reserve BEFORE anything destructive (#867 review). The
-            // reservation is the last fallible step on this path, and
-            // everything below it mutates: `scene_before_reset` fires,
-            // both entity-tracking lists are cleared, the ECS is reset.
-            // Taking the node here means an OOM returns with the outgoing
-            // scene's tracking and world still intact; reserving further
-            // down — as an earlier revision did — returned an error AFTER
-            // the world had already been torn down, while claiming the
-            // state was untouched.
-            var retention = try self.reserveRetention();
-            // Released if there turns out to be no outgoing name to retain
-            // (a first `setSceneAtomic` on a fresh Game).
-            defer retention.release();
-
             if (self.current_scene_name) |outgoing| {
                 self.emitHook(.{ .scene_before_reset = .{ .name = outgoing } });
                 // Engine `Events` dual-emit (#578).

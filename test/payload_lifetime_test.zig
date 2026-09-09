@@ -609,7 +609,7 @@ pub const RETENTION_ALLOCATION_FAILURE = struct {
         // Gap the review found in the first correction. The loop reserves
         // a node BEFORE `setScene`, but an asset-gated transition DEFERS —
         // `setScene` returns without committing while the manifest is
-        // still loading, so `retainUntilDrained` never runs and the block
+        // still loading, so the retain step never runs and the block
         // executes again next frame. With a shared spare list that left
         // one node behind per retry, growing until `deinit`.
         //
@@ -675,6 +675,103 @@ pub const RETENTION_ALLOCATION_FAILURE = struct {
         // Left pending on purpose: `pending_scene_change` owns its dup and
         // `deinit` frees it. Nulling the field here would drop that
         // allocation on the floor — which `testing.allocator` duly caught.
+    }
+
+    test "an OOM during a scene transition does not freeze the FRAME (#867)" {
+        // The loop suppresses a transition it cannot reserve for. An
+        // earlier revision did that with `return`, which exited `tick`
+        // entirely — so a game under sustained memory pressure stopped
+        // ticking altogether: scripts, timers and rendering all frozen by
+        // a failed SCENE CHANGE. Deferring the transition has to mean
+        // deferring the transition, not skipping the rest of the frame.
+        var poison = PoisonAllocator{ .inner = testing.allocator };
+        var failing = std.testing.FailingAllocator.init(poison.allocator(), .{});
+        const allocator = failing.allocator();
+
+        var rec: SceneRecorder = .{};
+        var hooks: SceneHooks = .{ .receivers = .{&rec} };
+        var game = SceneGame.init(allocator);
+        defer game.deinit();
+        game.setHooks(&hooks);
+        game.registerSceneSimple("first_scene", emptyLoader);
+        game.registerSceneSimple("second_scene", emptyLoader);
+
+        try game.setScene("first_scene");
+        game.dispatchEvents();
+        rec = .{};
+
+        const frames_before = game.frame_number;
+        game.queueSceneChange("second_scene");
+
+        // Fail the reservation on several consecutive frames.
+        var i: usize = 0;
+        while (i < 3) : (i += 1) {
+            failing.fail_index = failing.alloc_index;
+            game.tick(0.016);
+            failing.fail_index = std.math.maxInt(usize);
+        }
+
+        // THE ASSERTION: the frames still advanced. Pre-fix this stayed
+        // put, because `tick` returned before its own frame bookkeeping.
+        try testing.expect(game.frame_number > frames_before);
+        // And the transition really was the thing that failed.
+        try testing.expect(game.pending_scene_change != null);
+        try testing.expectEqualStrings("first_scene", game.current_scene_name.?);
+    }
+
+    test "a failed reservation acquires NO scene assets (#867)" {
+        // `setScene` reserves before the asset gate. Reserving after it
+        // meant an OOM returned an error with the target's assets already
+        // acquired and `pending_scene_assets` set, while the caller
+        // treated the transition as consumed — leaking those references
+        // with no path back to release them.
+        var poison = PoisonAllocator{ .inner = testing.allocator };
+        var failing = std.testing.FailingAllocator.init(poison.allocator(), .{});
+        const allocator = failing.allocator();
+
+        var rec: SceneRecorder = .{};
+        var hooks: SceneHooks = .{ .receivers = .{&rec} };
+        var game = SceneGame.init(allocator);
+        defer game.deinit();
+        game.setHooks(&hooks);
+        game.registerSceneSimple("first_scene", emptyLoader);
+        game.registerSceneSimple("asset_scene", emptyLoader);
+        try game.setSceneAssets("asset_scene", &.{"tracked_asset"});
+
+        try game.setScene("first_scene");
+        game.dispatchEvents();
+        rec = .{};
+
+        try game.assets.entries.put("tracked_asset", .{
+            .state = .ready,
+            .refcount = 0,
+            .loader = &engine.assets_mod.image_loader.vtable,
+            .loader_kind = .image,
+            .raw_bytes = &.{},
+            .file_type = "png",
+            .params = null,
+            .decoded = null,
+            .resource = null,
+            .last_error = null,
+        });
+        const refcount_before = game.assets.entries.get("tracked_asset").?.refcount;
+
+        // Fail the very first allocation `setScene` makes — the retention
+        // node, which is now taken before the gate runs.
+        failing.fail_index = failing.alloc_index;
+        const result = game.setScene("asset_scene");
+        failing.fail_index = std.math.maxInt(usize);
+        try testing.expectError(error.OutOfMemory, result);
+
+        // Nothing was acquired on the way out...
+        try testing.expectEqual(
+            refcount_before,
+            game.assets.entries.get("tracked_asset").?.refcount,
+        );
+        // ...no half-finished gate was left behind...
+        try testing.expectEqual(@as(?[]const u8, null), game.pending_scene_assets);
+        // ...and the scene did not change.
+        try testing.expectEqualStrings("first_scene", game.current_scene_name.?);
     }
 
     test "deinit is clean when a reservation was made but never used (#862)" {
