@@ -142,17 +142,21 @@ uses `prefab`:
 - `processEntities` loads direct scene entries into the scene-file
   `RefContext`, including prefab references. Their root and inline descendant
   names share that scope; repeated names can collide.
-- `loadChildEntity` creates a child context for a prefab nested under another
-  entity. Inline children instead reuse the parent's context.
+- Children routed through `loadChildEntity` receive a child context when
+  they reference a prefab; inline children reuse the parent context.
 - `spawnAndLinkNestedEntities` creates a child context for an entity nested
-  in an entity-bearing component field, including inline entities.
+  in an entity-bearing component field, including inline entities. Its own
+  immediate `children` (prefab-defined or call-site) are loaded directly
+  with that context, even when those children reference prefabs. They do
+  not pass through `loadChildEntity` at this boundary.
 
 Child contexts chain to their parent for lookup, but their internal names
 remain local. An explicit call-site `ref` on the nested instance is also
-registered in the parent context. Thus two crate prefab instances nested
-under another entity can each have an internal `handle` name without
-colliding. This isolation does not apply if both crates are direct entries
-in the scene's top-level `children` array.
+registered in the parent context. Isolation applies only where the traversal
+actually creates a child context. In particular, direct scene entries share
+the scene context, and the immediate children of a component-nested entity
+share that entity's context; repeated internal names can collide in both
+cases.
 
 Resolution has two passes per context: collect names and deferred fields,
 then patch those fields. A nested context is patched as soon as that instance
@@ -168,11 +172,14 @@ including scene.
 
 The proposal works because the mode-specific top-level key sets are
 well-defined and don't overlap. `ref` is a shared structural entity key,
-outside those mode-specific sets:
+outside those mode-specific sets. File `name` is also available to prefabs:
+registration uses an explicit name when present, otherwise the source name
+or filename. `include` is the scene-specific composition directive:
 
 | Group       | Keys                                                  |
 |-------------|-------------------------------------------------------|
-| Scene file metadata / composition | `name`, `version` *(future)*, `include` |
+| Shared file metadata | `name`, `version` *(future)* |
+| Scene file composition | `include` |
 | Shared entity structure | `ref`                                                   |
 | Entity-inline | `components`, `children`                              |
 | Entity-ref  | `prefab`, `overrides`                                  |
