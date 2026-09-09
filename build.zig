@@ -408,10 +408,21 @@ pub fn build(b: *std.Build) void {
         // renderer in such a build could fail to compile — building this
         // is the assertion.
         .{ .name = "hook_trace_zero_ring_exe", .root = "test/hook_trace_zero_ring_exe.zig" },
+        // labelle-assembler#727: a root that DECLARES `hook_receiver_ids`.
+        // Proves the tracer reads the generated table instead of deriving
+        // — the table ids there are unlike both the derived and the
+        // declared ones, so a fallback fails every check.
+        .{ .name = "hook_trace_receiver_table_exe", .root = "test/hook_trace_receiver_table_exe.zig" },
+        // #866 review: the SINGLE-receiver dispatch path (`walkSingle`)
+        // did not validate the table length, so a stale table silently
+        // mislabelled slot 0. Valid one-receiver/one-entry shape.
+        .{ .name = "hook_trace_single_receiver_table_exe", .root = "test/hook_trace_single_receiver_table_exe.zig" },
         // #865 review: the SINGLE-receiver dispatch path never recorded
         // `Phase.consumed`, so a handled consumable event was
         // indistinguishable from an ignored one. Both controls — returned
-        // true, returned false — in one harness.
+        // true, returned false — in one harness. Distinct from the two
+        // above: they cover the table's IDENTITY, this one the consumable
+        // RETURN, and all three exercise `walkSingle`.
         .{ .name = "hook_trace_single_receiver_exe", .root = "test/hook_trace_single_receiver_exe.zig" },
         .{ .name = "hook_trace_scaling_exe", .root = "test/hook_trace_scaling_exe.zig" },
     };

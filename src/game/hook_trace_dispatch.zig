@@ -132,12 +132,19 @@ fn walkMerged(
 ) u32 {
     const merged = h.*;
     const Receivers = @TypeOf(merged.receivers);
+    // The generated table claims to be index-aligned with THIS tuple; if
+    // it is not, every id below is attached to the wrong receiver (#727).
+    trace.assertTableAligned(std.meta.fields(Receivers).len);
     var ran: u32 = 0;
     inline for (0..std.meta.fields(Receivers).len) |i| {
         const recv = merged.receivers[i];
         const Base = core.UnwrapReceiver(@TypeOf(recv));
         if (comptime @hasDecl(Base, name)) {
-            const Id = trace.ReceiverId(Base);
+            // Identity BY POSITION when the generated table is present:
+            // slot `i` here is slot `i` there, so a tracer frame and a
+            // route-inspector row name the receiver identically by
+            // construction rather than by two derivations agreeing (#727).
+            const Id = trace.ReceiverIdAt(Base, i);
             // Recorded BEFORE the call, so anything the handler itself
             // emits shows up after this record — which is what makes a
             // handler-emitted event legible in the trace.
@@ -194,8 +201,18 @@ fn walkSingle(
     drain: u64,
 ) u32 {
     const Base = core.UnwrapReceiver(Game.HooksParam);
+    // Single-receiver dispatch is a ONE-entry tuple, so a table with any
+    // other length is misaligned here just as it is in `walkMerged`.
+    //
+    // Deliberately BEFORE the `@hasDecl` early return: the table's
+    // alignment with the tuple does not depend on whether this particular
+    // receiver handles this particular event, and a check that only ran
+    // for handled events would pass or fail by coincidence.
+    trace.assertTableAligned(1);
     if (comptime !@hasDecl(Base, name)) return 0;
-    const Id = trace.ReceiverId(Base);
+    // Slot 0 by definition, so it reads the table's first entry when there
+    // is one (#727).
+    const Id = trace.ReceiverIdAt(Base, 0);
     t.push(.{
         .phase = .deliver,
         .source = source,
