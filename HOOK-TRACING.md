@@ -95,11 +95,7 @@ pub const Record = struct {
     event: []const u8,        // variant name (@tagName)
     receiver: []const u8,     // assembler#723 id, "" when not receiver-scoped
     receiver_type: []const u8,// the raw Zig @typeName
-<<<<<<< HEAD
     receiver_id_kind: IdKind, // .table | .declared | .derived
-=======
-    receiver_id_kind: IdKind, // .declared | .derived
->>>>>>> origin/main
     index: u16,               // position in the dispatch tuple
     count: u32,               // phase-dependent, see below
     consumable: bool,
@@ -296,7 +292,6 @@ relative to the generated target root, minus `.zig`:
 | pack hook | `packs/citizens/hooks/needs_hooks` |
 | flow handler | `scripts/flows/hit_counter` |
 
-<<<<<<< HEAD
 The engine sees a **type**, not a path. It resolves the id in three ways,
 and every record says which one applied (`receiver_id_kind`). Strongest
 first: `.table`, then `.declared`, then `.derived`.
@@ -329,10 +324,6 @@ an assembler predating #727 — and falls back to the two kinds below.
 > **Consumers:** `.table` is a value in the JSONL `receiver_id_kind` field
 > alongside `.declared` and `.derived`. A reader that enumerates the set
 > must accept it.
-=======
-The engine sees a **type**, not a path. It resolves the id in two ways,
-and every record says which one applied (`receiver_id_kind`).
->>>>>>> origin/main
 
 ### `.declared` — exact
 
@@ -378,7 +369,6 @@ Where the derivation is wrong:
 Every record therefore also carries the raw `receiver_type`, so a trace
 is never ambiguous even when the id is derived.
 
-<<<<<<< HEAD
 ### The assembler side — done (labelle-assembler#727)
 
 `codegen/blocks/hooks.zig` computes the exact id (`Receiver.id`, #723) for
@@ -400,30 +390,6 @@ falls back to the derivation only where neither exists.
 
 Turning tracing on in a generated project is `.hooks.trace` in
 `project.labelle` (absent = off).
-=======
-### What an assembler change would buy
-
-> **Open item for labelle-assembler.** `codegen/blocks/hooks.zig` already
-> computes the exact id (`Receiver.id`, #723) for every receiver in
-> `buildReceiverPlan`. Emitting one line per receiver —
->
-> ```zig
-> pub const labelle_receiver_id = "packs/citizens/hooks/needs_hooks";
-> ```
->
-> — into each generated hook file (or a generated wrapper) would move
-> every trace record from `.derived` to `.declared`, at which point
-> runtime trace ids and #724's static inspector ids are the *same string
-> by construction* rather than by a derivation that happens to agree.
-> The engine side is already done: the decl name is
-> `engine.hook_receiver_id_decl`, and a receiver that carries it wins
-> over the derivation with no other change.
->
-> Until that lands, the epic's "runtime tracing and static inspection use
-> the same stable event/handler identity" holds **by derivation, not by
-> construction**, for assembler-generated hooks — and holds exactly for
-> any receiver that declares the decl by hand.
->>>>>>> origin/main
 
 Event identity has no such gap: an event's trace name is `@tagName` of
 the merged payload variant, which is the same final event name the
