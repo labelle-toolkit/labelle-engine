@@ -278,12 +278,21 @@ pub fn Mixin(comptime Game: type) type {
             // `InputInterface` and buffer matching engine events. Placed
             // here, at the tail of the active-frame body, so the events
             // land in `event_buffer` alongside this frame's lifecycle
-            // events and drain together on the next `dispatchEvents`
-            // (called by the generated main loop right after `tick`) —
-            // i.e. they dispatch the SAME frame. Input state is current
-            // during `tick` (scripts already read it here). Each scan
-            // loop is comptime-gated, so an event-less game runs none of
-            // this.
+            // events and drain together on the next `dispatchEvents`.
+            // Input state is current during `tick` (scripts already read
+            // it here). Each scan loop is comptime-gated, so an
+            // event-less game runs none of this.
+            //
+            // TIMING (#857): "the next `dispatchEvents`" is the NEXT loop
+            // iteration's, not this one's. Every shipped backend template
+            // emits the drain immediately BEFORE `g.tick(dt)`, so
+            // everything `tick` buffers — these input events, the
+            // `engine__tick`/`engine__post_tick` pair above, animation
+            // events — is delivered one iteration later. An earlier
+            // version of this comment claimed the drain ran right after
+            // `tick` and that these dispatched in the SAME frame; that
+            // was never true of the generated loop. See
+            // `HOOK-DELIVERY-CONTRACT.md` §2.
             InputEventsMixin.scanInputEvents(self);
 
             self.frame_number += 1;
