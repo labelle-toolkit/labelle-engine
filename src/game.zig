@@ -612,11 +612,24 @@ pub fn GameConfigWithYAxis(
         /// would truncate them.
         pending_payload_frees: if (has_events) ?*RetainNode else void =
             if (has_events) null else {},
-        /// Nodes allocated by `reserveRetention` and not yet consumed. One
-        /// per outstanding reservation, so nested reservations (the loop
-        /// reserving around a `setScene` that reserves too) compose.
-        retention_spares: if (has_events) ?*RetainNode else void =
+        /// Chains retired by drains that are still nested inside another
+        /// drain. Freed only when the OUTERMOST `dispatchEvents` returns.
+        ///
+        /// Per-drain windows are not enough on their own (#867 review). A
+        /// payload can alias a slice that a LATER window retires: the
+        /// outer `state_changed`'s `new_state` points at the current owned
+        /// name, and a handler that calls `setStateOwned` parks that very
+        /// name for the next drain. If that handler then drains, the inner
+        /// drain would free it while the outer drain is still delivering
+        /// the payload that borrows it.
+        ///
+        /// So freeing is tied to drain DEPTH, not to a single window:
+        /// while any drain is in flight nothing is released, and the
+        /// outermost one frees everything the nested drains retired.
+        drain_deferred_frees: if (has_events) ?*RetainNode else void =
             if (has_events) null else {},
+        /// Nesting depth of `dispatchEvents`.
+        drain_depth: if (has_events) u16 else void = if (has_events) 0 else {},
 
         // Scene management
         scenes: std.StringHashMap(SceneEntry),
@@ -1111,11 +1124,13 @@ pub fn GameConfigWithYAxis(
         /// Park an allocation a BUFFERED event payload borrows, freeing it
         /// after the drain that delivers the event (#862/#863). See
         /// `game/events_mixin.zig` for the contract.
-        pub const retainUntilDrained = EventsMixin.retainUntilDrained;
+        /// An owned reservation of one deferred free (#862/#863).
+        pub const Retention = EventsMixin.Retention;
 
-        /// Reserve one retention slot BEFORE emitting the event whose
-        /// payload will borrow the slice (#862/#863). See
-        /// `game/events_mixin.zig` for why the order matters.
+        /// Take a retention reservation BEFORE emitting the event whose
+        /// payload will borrow the slice (#862/#863). Pair with
+        /// `defer r.release()`. See `game/events_mixin.zig` for why the
+        /// order matters.
         pub const reserveRetention = EventsMixin.reserveRetention;
 
         /// Free every retention node still held — retained and

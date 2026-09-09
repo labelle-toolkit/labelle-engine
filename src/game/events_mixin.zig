@@ -299,61 +299,93 @@ pub fn Mixin(comptime Game: type) type {
         /// `A -> B -> A` handler chain from hanging the drain, and what
         /// keeps the iterated slice stable. See
         /// `HOOK-DELIVERY-CONTRACT.md` §2 and §4.
-        /// Reserve one retention node, BEFORE emitting the event whose
+        /// An owned, single-use reservation of one retention node.
+        ///
+        /// The node is allocated when the reservation is TAKEN, before the
+        /// event is emitted, so the only fallible step happens while
+        /// nothing is queued and the caller can still abort cleanly. Once
+        /// taken, handing the slice over cannot fail.
+        ///
+        /// A handle rather than a shared spare list because a reservation
+        /// is not always used: the loop's scene transition reserves every
+        /// frame but DEFERS while the asset gate is still loading, and a
+        /// shared list grew by one node per deferred frame until `deinit`
+        /// (#867 review). A handle has an owner and a scope, so
+        /// `defer r.release()` returns the unused node immediately, which
+        /// is bounded by construction and correct under nesting — each
+        /// handle owns its own node and touches no shared capacity.
+        pub const Retention = struct {
+            game: *Game,
+            /// Null once `retain` consumed it, or after `release`.
+            node: ?*game_types.RetainNode = null,
+
+            /// Park `slice` until the drain that delivers the currently
+            /// buffered events has finished, then free it on the game
+            /// allocator (#862/#863).
+            ///
+            /// For a caller that has just BUFFERED an event borrowing
+            /// `slice` and would otherwise free it straight away. Freeing
+            /// immediately leaves the payload pointing at freed memory
+            /// until the next drain — a full frame, since the generated
+            /// loop drains before it ticks.
+            ///
+            /// Infallible: the node already exists, so this only relinks
+            /// pointers.
+            pub fn retain(self: *Retention, slice: []const u8) void {
+                if (comptime !has_events) {
+                    // No buffer, so nothing can outlive a drain: the
+                    // borrow hazard does not exist.
+                    self.game.allocator.free(slice);
+                    return;
+                }
+                const node = self.node orelse
+                    @panic("Retention.retain called twice, or after release (#862/#863)");
+                self.node = null;
+                node.* = .{ .slice = slice, .next = self.game.pending_payload_frees };
+                self.game.pending_payload_frees = node;
+            }
+
+            /// Return an unused node. Idempotent, and a no-op once
+            /// `retain` has consumed the reservation — so the intended
+            /// shape is `defer r.release();` right after reserving,
+            /// whatever path the caller then takes.
+            pub fn release(self: *Retention) void {
+                if (comptime !has_events) return;
+                if (self.node) |n| {
+                    self.game.allocator.destroy(n);
+                    self.node = null;
+                }
+            }
+        };
+
+        /// Take a retention reservation, BEFORE emitting the event whose
         /// payload will borrow the slice (#862/#863).
         ///
         /// Ordering is the whole point. If the retention could fail AFTER
         /// the event was buffered, the caller would hold an allocation a
         /// queued payload borrows with no safe way to dispose of it:
         /// freeing it is a use-after-free, and dropping it leaks. An
-        /// earlier revision caught the failure and freed the slice —
+        /// earlier revision caught that failure and freed the slice —
         /// logging it did not make it safe (#867 review).
         ///
-        /// Allocating here means the only failure happens while nothing is
-        /// queued yet, so the caller can abort cleanly and leave the game
-        /// exactly as it was.
-        ///
-        /// One node per call, so nested reservations compose: the loop can
-        /// reserve around a `setScene` that reserves for itself.
-        pub fn reserveRetention(self: *Game) error{OutOfMemory}!void {
-            if (comptime !has_events) return;
+        /// Pair with `defer r.release()`.
+        pub fn reserveRetention(self: *Game) error{OutOfMemory}!Retention {
+            if (comptime !has_events) return .{ .game = self };
             const node = try self.allocator.create(game_types.RetainNode);
-            node.* = .{ .next = self.retention_spares };
-            self.retention_spares = node;
+            node.* = .{};
+            return .{ .game = self, .node = node };
         }
 
-        /// Park `slice` until the drain that delivers the currently
-        /// buffered events has finished, then free it on the game
-        /// allocator (#862/#863).
-        ///
-        /// For a caller that has just BUFFERED an event borrowing `slice`
-        /// and would otherwise free it straight away. Freeing immediately
-        /// leaves the payload pointing at freed memory until the next
-        /// drain — a full frame, since the generated loop drains before it
-        /// ticks.
-        ///
-        /// MUST be preceded by a successful `reserveRetention` in the same
-        /// operation. Infallible by construction rather than by swallowing
-        /// a failure: the node already exists, so this only relinks
-        /// pointers.
-        pub fn retainUntilDrained(self: *Game, slice: []const u8) void {
-            if (comptime !has_events) {
-                // No buffer, so nothing can outlive a drain: the borrow
-                // hazard does not exist and the slice is freed at once.
-                self.allocator.free(slice);
-                return;
+        /// Move a retired chain onto `drain_deferred_frees`, to be freed
+        /// when the outermost drain returns.
+        fn spliceRetained(self: *Game, head: ?*game_types.RetainNode) void {
+            var it = head;
+            while (it) |node| {
+                const next = node.next;
+                node.next = self.drain_deferred_frees;
+                self.drain_deferred_frees = node;
+                it = next;
             }
-            const node = self.retention_spares orelse {
-                // Only reachable from a caller that skipped its
-                // reservation — a programming error here, not a runtime
-                // condition. Freeing would reinstate the use-after-free
-                // and dropping would leak, so refuse loudly instead of
-                // picking one silently.
-                @panic("retainUntilDrained without a matching reserveRetention (#862/#863)");
-            };
-            self.retention_spares = node.next;
-            node.* = .{ .slice = slice, .next = self.pending_payload_frees };
-            self.pending_payload_frees = node;
         }
 
         /// Free a detached retention chain and its nodes.
@@ -367,19 +399,14 @@ pub fn Mixin(comptime Game: type) type {
             }
         }
 
-        /// Release every node still held — retained AND reserved-unused.
-        /// Called from `deinit`, after the final flush.
+        /// Free every slice still retained for a drain that will never
+        /// come. `deinit` only.
         pub fn releaseRetentions(self: *Game) void {
             if (comptime !has_events) return;
             freeRetainChain(self, self.pending_payload_frees);
             self.pending_payload_frees = null;
-            var it = self.retention_spares;
-            while (it) |node| {
-                const next = node.next;
-                self.allocator.destroy(node);
-                it = next;
-            }
-            self.retention_spares = null;
+            freeRetainChain(self, self.drain_deferred_frees);
+            self.drain_deferred_frees = null;
         }
 
         pub fn dispatchEvents(self: *Game) void {
@@ -395,6 +422,7 @@ pub fn Mixin(comptime Game: type) type {
             // `dispatchEvents` relies on (#862/#863).
             const to_free = self.pending_payload_frees;
             self.pending_payload_frees = null;
+            self.drain_depth += 1;
 
             for (dispatch_buf.items) |event| {
                 switch (event) {
@@ -405,9 +433,21 @@ pub fn Mixin(comptime Game: type) type {
             }
             dispatch_buf.clearRetainingCapacity();
 
-            // AFTER the loop: every listener that could borrow these
-            // slices has now run and returned.
-            freeRetainChain(self, to_free);
+            // Retire this window, but do NOT free while any drain is
+            // still in flight. An outer payload can alias a slice a
+            // nested window retired — `state_changed.new_state` points at
+            // the current owned name, and a handler calling
+            // `setStateOwned` parks exactly that name — so freeing at the
+            // inner drain's exit pulls it out from under the outer
+            // handler still reading it (#867 review).
+            spliceRetained(self, to_free);
+            self.drain_depth -= 1;
+            if (self.drain_depth == 0) {
+                // Outermost drain: every handler at every level has
+                // returned, so nothing can still be borrowing these.
+                freeRetainChain(self, self.drain_deferred_frees);
+                self.drain_deferred_frees = null;
+            }
 
             if (self.event_buffer.items.len == 0) {
                 std.mem.swap(EventBuffer, &self.event_buffer, &dispatch_buf);

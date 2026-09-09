@@ -167,7 +167,7 @@ pub fn Mixin(comptime Game: type) type {
                 // the request stays queued for a later frame — the same
                 // deferral shape the asset gate already uses below. That
                 // leaves no queued payload without a live referent.
-                self.reserveRetention() catch {
+                var retention = self.reserveRetention() catch {
                     self.log.err(
                         "Out of memory reserving scene-name retention; deferring the " ++
                             "'{s}' transition to a later frame.",
@@ -175,6 +175,12 @@ pub fn Mixin(comptime Game: type) type {
                     );
                     return;
                 };
+                // The asset gate DEFERS: `setScene` can return without
+                // committing while the target's manifest is still loading,
+                // and this block runs again next frame. Releasing the
+                // unused node on every such path is what keeps the retry
+                // loop from accumulating one node per frame (#867 review).
+                defer retention.release();
                 var failed = false;
                 if (atomic) {
                     self.setSceneAtomic(next_scene) catch {
@@ -216,7 +222,7 @@ pub fn Mixin(comptime Game: type) type {
                     // buffered event is delivered on the NEXT drain — the
                     // generated loop drains before it ticks, so this ran a
                     // full frame ahead of the listener that reads it.
-                    self.retainUntilDrained(next_scene);
+                    retention.retain(next_scene);
                     self.pending_scene_change = null;
                     self.pending_scene_atomic = false;
                 }

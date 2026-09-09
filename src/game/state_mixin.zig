@@ -72,10 +72,13 @@ pub fn Mixin(comptime Game: type) type {
             // and not freeing leaks. Failing HERE leaves nothing queued, so
             // the whole call aborts cleanly with the game untouched — no
             // state change, no event, no orphaned allocation.
-            self.reserveRetention() catch |err| {
+            var retention = self.reserveRetention() catch |err| {
                 self.allocator.free(new_owned);
                 return err;
             };
+            // Released if `setState` short-circuits on an unchanged name,
+            // in which case no event is queued and nothing needs retaining.
+            defer retention.release();
             const old_owned = self.owned_initial_state;
             self.owned_initial_state = new_owned;
             self.setState(new_owned);
@@ -97,7 +100,7 @@ pub fn Mixin(comptime Game: type) type {
             //
             // The `emitHook` twins above are unaffected: they dispatch
             // immediately and have already returned by this line.
-            if (old_owned) |s| self.retainUntilDrained(s);
+            if (old_owned) |s| retention.retain(s);
         }
 
         /// Queue a state change for next tick. The transition happens at

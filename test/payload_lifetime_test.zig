@@ -246,24 +246,36 @@ const NestedDrainer = struct {
 
     pub fn engine__state_changed(self: *NestedDrainer, payload: anytype) void {
         self.seen += 1;
-        for (payload.old_state) |c| {
-            if (c == 0xDE) self.saw_poison = true;
-        }
+        // BOTH fields, not just `old_state`. An earlier version of this
+        // test read only `old_state` and therefore missed a live P1:
+        // `new_state` points at the CURRENT owned name, which is exactly
+        // the slice a nested `setStateOwned` parks for the next drain, so
+        // the inner drain freed it while this handler was still holding it
+        // (#867 review). A payload has two slices; a lifetime test that
+        // checks one of them proves half the contract.
+        self.check(payload.old_state);
+        self.check(payload.new_state);
         if (!self.nested_done and self.armed) {
             self.nested_done = true;
             {
                 const g = self.ctx.gameAs(NestedGame);
                 // A handler that transitions AND drains, inside a running
-                // drain. The inner drain must free only what was retained
-                // in its own window — freeing the outer window's slices
-                // would poison the payload this very handler is holding.
+                // drain. Nothing may be freed while ANY drain is in
+                // flight: this handler resumes below and re-reads a
+                // payload whose `new_state` the inner transition parked.
                 g.setStateOwned("from_inside_handler") catch {};
                 g.dispatchEvents();
-                // Still readable after the nested drain returned.
-                for (payload.old_state) |c| {
-                    if (c == 0xDE) self.saw_poison = true;
-                }
+                // Still readable after the nested drain returned — both
+                // of them.
+                self.check(payload.old_state);
+                self.check(payload.new_state);
             }
+        }
+    }
+
+    fn check(self: *NestedDrainer, name: []const u8) void {
+        for (name) |c| {
+            if (c == 0xDE) self.saw_poison = true;
         }
     }
 };
@@ -591,6 +603,78 @@ pub const RETENTION_ALLOCATION_FAILURE = struct {
         game.dispatchEvents();
         try testing.expect(rec.loaded >= 1);
         try testing.expect(!rec.saw_poison);
+    }
+
+    test "an asset-gated transition retried many times allocates a BOUNDED amount (#867)" {
+        // Gap the review found in the first correction. The loop reserves
+        // a node BEFORE `setScene`, but an asset-gated transition DEFERS —
+        // `setScene` returns without committing while the manifest is
+        // still loading, so `retainUntilDrained` never runs and the block
+        // executes again next frame. With a shared spare list that left
+        // one node behind per retry, growing until `deinit`.
+        //
+        // An owned handle plus `defer release()` returns the unused node
+        // on the deferral path, which is what this measures: outstanding
+        // allocations must not grow with the number of retries.
+        //
+        // The gate is pinned open by putting a catalog entry in `.queued`
+        // — the state a real in-flight decode sits in — and never pumping
+        // it. That is exactly what `gateOnManifest` reads to return
+        // `.not_ready`, so the deferral is the production one, reached
+        // deterministically instead of by racing a worker thread.
+        var poison = PoisonAllocator{ .inner = testing.allocator };
+        var failing = std.testing.FailingAllocator.init(poison.allocator(), .{});
+        const allocator = failing.allocator();
+
+        var rec: SceneRecorder = .{};
+        var hooks: SceneHooks = .{ .receivers = .{&rec} };
+        var game = SceneGame.init(allocator);
+        defer game.deinit();
+        game.setHooks(&hooks);
+        game.registerSceneSimple("first_scene", emptyLoader);
+        game.registerSceneSimple("gated_scene", emptyLoader);
+        try game.setSceneAssets("gated_scene", &.{"forever_queued"});
+
+        try game.setScene("first_scene");
+        game.dispatchEvents();
+        rec = .{};
+
+        // An asset that never finishes decoding.
+        try game.assets.entries.put("forever_queued", .{
+            .state = .queued,
+            .refcount = 1,
+            .loader = &engine.assets_mod.image_loader.vtable,
+            .loader_kind = .image,
+            .raw_bytes = &.{},
+            .file_type = "png",
+            .params = null,
+            .decoded = null,
+            .resource = null,
+            .last_error = null,
+        });
+
+        game.queueSceneChange("gated_scene");
+
+        // Warm up: the first few retries may allocate one-off bookkeeping
+        // (the pending-assets marker), so measure the STEADY state.
+        var i: usize = 0;
+        while (i < 5) : (i += 1) game.tick(0.016);
+        const outstanding_after_5 = failing.allocations - failing.deallocations;
+
+        while (i < 60) : (i += 1) game.tick(0.016);
+        const outstanding_after_60 = failing.allocations - failing.deallocations;
+
+        // The transition really is still deferring — otherwise the retries
+        // never happened and this measures nothing.
+        try testing.expect(game.pending_scene_change != null);
+        try testing.expectEqual(@as(usize, 0), rec.loaded);
+
+        // 55 further retries must not leave 55 further allocations behind.
+        try testing.expectEqual(outstanding_after_5, outstanding_after_60);
+
+        // Left pending on purpose: `pending_scene_change` owns its dup and
+        // `deinit` frees it. Nulling the field here would drop that
+        // allocation on the floor — which `testing.allocator` duly caught.
     }
 
     test "deinit is clean when a reservation was made but never used (#862)" {

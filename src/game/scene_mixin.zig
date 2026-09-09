@@ -707,13 +707,15 @@ pub fn Mixin(comptime Game: type) type {
             // Engine `Events` dual-emit (#578).
             self.emitEngineEvent("engine__scene_assets_acquire", .{ .name = name });
 
-            // Reserve the retention node BEFORE `unloadCurrentScene`
-            // buffers `engine__scene_unloaded` borrowing
-            // `current_scene_name` (#867 review). Failing here aborts with
-            // nothing queued and nothing torn down; failing after the emit
-            // would leave a queued payload whose backing store we could
-            // neither free nor keep.
-            if (self.current_scene_name != null) try self.reserveRetention();
+            // Reserve BEFORE `unloadCurrentScene` buffers
+            // `engine__scene_unloaded` borrowing `current_scene_name`
+            // (#867 review). Failing here aborts with nothing queued and
+            // nothing torn down; failing after the emit would leave a
+            // queued payload whose backing store we could neither free nor
+            // keep.
+            var retention = try self.reserveRetention();
+            // Released when there is no outgoing name (first scene load).
+            defer retention.release();
 
             self.unloadCurrentScene();
 
@@ -722,7 +724,7 @@ pub fn Mixin(comptime Game: type) type {
                 // `engine__scene_unloaded` with `name` borrowing this very
                 // slice; a buffered event is delivered on the next drain,
                 // so freeing now hands the listener freed bytes.
-                self.retainUntilDrained(old_name);
+                retention.retain(old_name);
                 self.current_scene_name = null;
             }
 
@@ -882,6 +884,20 @@ pub fn Mixin(comptime Game: type) type {
             // `unloadCurrentScene` iteration below so listeners
             // see the full pre-teardown world. Mirrors the
             // ordering in `save_load_mixin.zig::loadGameState`.
+            // Reserve BEFORE anything destructive (#867 review). The
+            // reservation is the last fallible step on this path, and
+            // everything below it mutates: `scene_before_reset` fires,
+            // both entity-tracking lists are cleared, the ECS is reset.
+            // Taking the node here means an OOM returns with the outgoing
+            // scene's tracking and world still intact; reserving further
+            // down — as an earlier revision did — returned an error AFTER
+            // the world had already been torn down, while claiming the
+            // state was untouched.
+            var retention = try self.reserveRetention();
+            // Released if there turns out to be no outgoing name to retain
+            // (a first `setSceneAtomic` on a fresh Game).
+            defer retention.release();
+
             if (self.current_scene_name) |outgoing| {
                 self.emitHook(.{ .scene_before_reset = .{ .name = outgoing } });
                 // Engine `Events` dual-emit (#578).
@@ -905,14 +921,6 @@ pub fn Mixin(comptime Game: type) type {
             self.clearActiveSceneEntities();
 
             // Unload old scene (runs script deinit, fires hooks, frees scene struct)
-            // Reserve the retention node BEFORE `unloadCurrentScene`
-            // buffers `engine__scene_unloaded` borrowing
-            // `current_scene_name` (#867 review). Failing here aborts with
-            // nothing queued and nothing torn down; failing after the emit
-            // would leave a queued payload whose backing store we could
-            // neither free nor keep.
-            if (self.current_scene_name != null) try self.reserveRetention();
-
             self.unloadCurrentScene();
 
             if (self.current_scene_name) |old_name| {
@@ -920,7 +928,7 @@ pub fn Mixin(comptime Game: type) type {
                 // `engine__scene_unloaded` with `name` borrowing this very
                 // slice; a buffered event is delivered on the next drain,
                 // so freeing now hands the listener freed bytes.
-                self.retainUntilDrained(old_name);
+                retention.retain(old_name);
                 self.current_scene_name = null;
             }
 
