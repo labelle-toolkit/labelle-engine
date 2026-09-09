@@ -316,6 +316,18 @@ pub fn build(b: *std.Build) void {
         // `advanceAnimations`, and the pre/post pair is what pins the
         // `@hasDecl` degrade.
         "test/tilemap_animation_tick_test.zig",
+        // #857 — the hook/event DELIVERY CONTRACT as an executable spec:
+        // pre/post-drain state, FIFO + receiver-tuple order, next-drain
+        // delivery of handler-emitted events, emitSync queue-jumping,
+        // consumable break, borrowed-payload lifetime, scene-reset drop,
+        // shutdown flush, and the generated loop's drain-before-tick
+        // shape. Prose in `HOOK-DELIVERY-CONTRACT.md`.
+        "test/hook_delivery_contract_test.zig",
+        // #857 — the representative dispatcher size (64 event variants x
+        // 16 receiver types). Compiles ONLY because `core.MergeHooks.emit`
+        // raises the comptime branch quota; this file deliberately sets no
+        // quota of its own, so dropping core's would break the build here.
+        "test/hook_dispatch_scaling_test.zig",
     };
 
     for (test_files) |test_file| {
