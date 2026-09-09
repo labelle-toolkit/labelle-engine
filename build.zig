@@ -405,6 +405,10 @@ pub fn build(b: *std.Build) void {
         // — the table ids there are unlike both the derived and the
         // declared ones, so a fallback fails every check.
         .{ .name = "hook_trace_receiver_table_exe", .root = "test/hook_trace_receiver_table_exe.zig" },
+        // #866 review: the SINGLE-receiver dispatch path (`walkSingle`)
+        // did not validate the table length, so a stale table silently
+        // mislabelled slot 0. Valid one-receiver/one-entry shape.
+        .{ .name = "hook_trace_single_receiver_table_exe", .root = "test/hook_trace_single_receiver_table_exe.zig" },
         .{ .name = "hook_trace_scaling_exe", .root = "test/hook_trace_scaling_exe.zig" },
     };
     for (hook_trace_exes) |spec| {

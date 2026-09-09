@@ -132,22 +132,9 @@ fn walkMerged(
 ) u32 {
     const merged = h.*;
     const Receivers = @TypeOf(merged.receivers);
-    // The generated table (labelle-assembler#727) claims to be
-    // index-aligned with THIS tuple. If it is not, every id below is
-    // silently attached to the wrong receiver — the exact failure the
-    // table exists to prevent — so a length disagreement is a build
-    // error, not a fallback. A root with no table is normal and skips this.
-    comptime {
-        if (trace.receiver_id_table) |tbl| {
-            if (tbl.len != std.meta.fields(Receivers).len) @compileError(std.fmt.comptimePrint(
-                "`" ++ trace.receiver_ids_decl ++ "` has {d} entries but the hook tuple has " ++
-                    "{d} receivers. The table is index-aligned with the tuple by contract " ++
-                    "(labelle-assembler#727), so this build would label trace records with the " ++
-                    "wrong receiver. Regenerate: the table and the tuple come from one plan.",
-                .{ tbl.len, std.meta.fields(Receivers).len },
-            ));
-        }
-    }
+    // The generated table claims to be index-aligned with THIS tuple; if
+    // it is not, every id below is attached to the wrong receiver (#727).
+    trace.assertTableAligned(std.meta.fields(Receivers).len);
     var ran: u32 = 0;
     inline for (0..std.meta.fields(Receivers).len) |i| {
         const recv = merged.receivers[i];
@@ -214,9 +201,19 @@ fn walkSingle(
     drain: u64,
 ) u32 {
     const Base = core.UnwrapReceiver(Game.HooksParam);
+    // Single-receiver dispatch is a ONE-entry tuple, so a table with any
+    // other length is misaligned here just as it is in `walkMerged`. This
+    // check was missing, so a single-receiver game with a two-entry table
+    // built happily and labelled slot 0 from a stale table (#866 review).
+    //
+    // Deliberately BEFORE the `@hasDecl` early return: the table's
+    // alignment with the tuple does not depend on whether this particular
+    // receiver handles this particular event, and a check that only ran
+    // for handled events would pass or fail by coincidence.
+    trace.assertTableAligned(1);
     if (comptime !@hasDecl(Base, name)) return 0;
-    // Single-receiver dispatch is tuple slot 0 by definition, so it reads
-    // the table's first entry when there is one (#727).
+    // Slot 0 by definition, so it reads the table's first entry when there
+    // is one (#727).
     const Id = trace.ReceiverIdAt(Base, 0);
     t.push(.{
         .phase = .deliver,

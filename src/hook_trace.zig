@@ -403,6 +403,34 @@ pub fn tableId(comptime index: usize) ?[]const u8 {
     return t[index];
 }
 
+/// Compile-fail unless the generated table is aligned with a dispatch
+/// tuple of `receiver_count` receivers (labelle-assembler#727).
+///
+/// A table shifted against the tuple silently labels every record with the
+/// wrong receiver — the precise failure the table exists to prevent — so a
+/// disagreement is a build error, not a fallback. A root with NO table is
+/// normal (hand-written game, test root, pre-#727 output) and skips this.
+///
+/// Shared by both dispatch walks. It lived inline in `walkMerged` only,
+/// so the single-receiver path accepted a two-entry table and labelled
+/// slot 0 from a stale table (#866 review). One helper, called from both,
+/// is what stops the two paths drifting apart again.
+pub fn assertTableAligned(comptime receiver_count: usize) void {
+    comptime {
+        // `if (…) |tbl|` rather than `orelse return`: a `return` inside a
+        // comptime block returns from the FUNCTION, which Zig rejects here.
+        if (receiver_id_table) |tbl| {
+            if (tbl.len != receiver_count) @compileError(std.fmt.comptimePrint(
+            "`" ++ receiver_ids_decl ++ "` has {d} entries but the hook tuple has " ++
+                "{d} receiver(s). The table is index-aligned with the tuple by contract " ++
+                "(labelle-assembler#727), so this build would label trace records with " ++
+                "the wrong receiver. Regenerate: the table and the tuple come from one plan.",
+                .{ tbl.len, receiver_count },
+            ));
+        }
+    }
+}
+
 /// Comptime receiver identity for the receiver at tuple slot `index`
 /// (labelle-assembler#727).
 ///
