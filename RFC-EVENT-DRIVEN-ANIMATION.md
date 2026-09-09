@@ -16,9 +16,10 @@ Five workstreams make animation authoring simpler:
 4. Emit named, crossing-accurate frame cues with an explicit delivery policy.
 5. Define scaled/unscaled animation clocks and migrate pause behavior.
 
-The frame shorthand is closest to implementation. Targeting and dispatch policy
-are agreed in section 3; the typed event bridge, remaining playback semantics,
-generated-loop integration and pause migration still need specification.
+The frame shorthand is closest to implementation. Targeting, dispatch, typed
+marker output and basic pause/resume/stop behavior are agreed below. The typed
+target adapters, remaining playback semantics, generated-loop integration,
+marker timing/delivery and global pause migration still need specification.
 Publishing this RFC does
 not close [#794](https://github.com/labelle-toolkit/labelle-engine/issues/794).
 
@@ -187,10 +188,18 @@ table completed as part of the implementation specification:
 | Request | Contract to specify |
 | --- | --- |
 | `play: once/loop/ping_pong` | Agreed: playing an already-playing identical loop is a no-op. Once retrigger, ping-pong retrigger and mode-change behavior still need specification. |
-| `stop` | Agreed: repeated stop is a no-op. Hold current image versus restore idle, and timer/direction/repetition effects, remain to be specified. |
-| `pause` / `resume` | Agreed: repeated pause is a no-op and pause preserves playback position. Define resume from stopped/completed and interaction with global/subsystem pause. |
+| `stop` | Agreed: reset playback to frame 0 and remain stopped. Reset the residual timer, direction, repetition and marker cursor; repeated stop is a no-op. An explicitly authored idle image may override the displayed image. Visibility is unchanged. |
+| `pause` / `resume` | Agreed: pause preserves frame and residual timer; resume continues paused playback from that position. Repeated pause is a no-op. Define resume from stopped/completed and interaction with global/subsystem pause separately. |
 | `restart` | Reset frame, timer, direction, repetition and marker cursor; update the visible sprite even without a later frame crossing. |
 | `start: dormant` | Initial visible frame and behavior before the first request; reconciliation after loading. |
+
+For example, a fan paused on frame 3 stays there and resumes from the same
+position. Stopping resets it to frame 0 and leaves it stopped. A distinct
+powered-off image is an explicit authored override, never inferred by the
+engine; its configuration syntax remains to be specified. Stopping kitchen
+smoke does not automatically hide its entity: visibility is separate state.
+Resetting the displayed frame must work without a subsequent advancing tick.
+Whether a stop/reset emits a frame-zero cue remains a marker-timing decision.
 
 Reject conflicting `play` and `action` fields in one entry. Commands are applied
 in dispatch order; matching entries within one event use authored trigger order.
@@ -266,18 +275,28 @@ entities are not scanned by direct targeting.
 
 ## 4. Named markers and bounded delivery
 
-Named markers should identify a cue and the animation that crossed it. The
-original arbitrary `emit: "footstep"` promise requires a typed-event bridge:
+**Agreed v1 contract:** one typed animation-marker notification, carrying a
+validated entity handle, marker identity/name, frame, repetition, and clip
+identity where applicable. The concrete type/tag spelling and identity
+representation remain implementation-specification details.
 
-1. **Recommended first contract:** a typed engine marker notification carrying
-   entity, marker name, frame and repetition. Consumers filter the cue name.
-2. **Alternative:** a generated mapping to existing GameEvents variants, with
-   required payload validation or an explicit payload adapter. A marker entity
-   alone cannot populate arbitrary event fields.
+Gameplay handlers interpret the cue and construct any domain events. For
+example, an attack's `contact` cue lets gameplay inspect the current target,
+weapon and attack validity before emitting a damage-related event; a `footstep`
+cue can simply request a sound. The animation does not invent gameplay payloads.
 
-Choose one before coding. A generic named cue is not an implementation of
-arbitrary custom event emission. It is consistent with the named metadata
-AnimationDef already produces and can form a shared marker contract.
+Direct mappings from prefab marker declarations to arbitrary existing custom
+GameEvents are outside v1. This is consistent with the named metadata already
+produced by AnimationDef and can form a shared marker contract. Validate authored
+marker identities and route subscriptions by identity; do not require every
+listener to inspect every cue. The identity resolution and retention mechanism
+must be specified alongside the event metadata integration.
+
+Acceptance: the full typed payload reaches the intended subscribers, including
+the entity/clip distinction for shared marker names; invalid or stale handles
+cannot act on replacement entities; a gameplay adapter and a cosmetic handler
+demonstrate the two uses. This contract does not itself guarantee delivery under
+overflow or enqueue failure; those policies remain below.
 
 ### Crossing semantics to pin down
 
@@ -365,13 +384,16 @@ The investigation's 36 passing tests establish the baseline and its limitations,
 not acceptance of any proposed feature. The PR remains a design discussion.
 
 - [ ] Finalize shorthand grammar, bounds, ownership and diagnostics.
-- [ ] Choose generic marker notification versus typed custom-event mapping.
+- [x] Choose typed marker notifications for v1; gameplay interprets cues and
+  constructs domain events. Direct custom-event mapping is outside v1.
+- [x] Agree pause/resume position preservation, stop resetting to frame 0,
+  explicit idle-image overrides and visibility remaining independent.
 - [ ] Specify crossing order and bounded delivery/failure behavior.
 - [x] Agree entity/group/broadcast targeting, recipient lifetime, ordered command
   batches, consumption handling and explicit restart synchronization.
 - [ ] Specify typed target adapters, trigger component/state layout, remaining
   action semantics and generated-loop/handler integration; implement and test
-  the agreed policy. The checked item above is a design decision, not delivery.
+  the agreed policy. Checked items above are design decisions, not delivery.
 - [ ] Define reconciliation and demonstrate a real consumer pilot.
 - [ ] Specify effective clocks, pause notifications and unscaled input migration.
 - [ ] Choose the default-driving rollout and verify single ownership.
