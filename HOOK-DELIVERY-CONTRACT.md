@@ -262,7 +262,7 @@ registry/scene entry outliving the drain.
 > This is documented here rather than fixed: this PR pins the contract down and
 > changes no behaviour. The fix (retain the old slot until the drain, or copy
 > the name into the payload) is a behaviour change and belongs in its own
-> change. Tracked separately.
+> change. Tracked in #862.
 
 **Value-copying an event is not deep-copying its data.** That sentence is the
 whole of §5.
