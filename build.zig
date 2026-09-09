@@ -390,6 +390,10 @@ pub fn build(b: *std.Build) void {
     // on them.
     const hook_trace_exes = [_]struct { name: []const u8, root: []const u8 }{
         .{ .name = "hook_trace_root_exe", .root = "test/hook_trace_root_exe.zig" },
+        // #858 review: an eventless game (GameEvents == void) with tracing
+        // ENABLED. The traced enqueue path appended to a `void` buffer, so
+        // this combination did not COMPILE — building it is the assertion.
+        .{ .name = "hook_trace_eventless_exe", .root = "test/hook_trace_eventless_exe.zig" },
         .{ .name = "hook_trace_scaling_exe", .root = "test/hook_trace_scaling_exe.zig" },
     };
     for (hook_trace_exes) |spec| {

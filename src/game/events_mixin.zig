@@ -199,6 +199,20 @@ pub fn Mixin(comptime Game: type) type {
             event: GameEvents,
             comptime source: hook_trace.Source,
         ) EmitErrorAlias!void {
+            // The guard lives HERE, not at the call sites. `tryEmit`
+            // checked `has_events` before delegating; `emit`'s traced
+            // branch did not, so a game with no declared events
+            // (`GameEvents == void`, so `event_buffer` is `void` too)
+            // failed to COMPILE the moment tracing was enabled —
+            // "no field or member function append in void" (#858 review).
+            //
+            // Putting it inside the shared helper makes that class of
+            // mistake unrepresentable: every traced enqueue path is
+            // covered, including any added later. Returning success
+            // matches `tryEmit`'s documented eventless contract — there
+            // was no queue to append to and no listener to lose, so
+            // "nothing was dropped", not "an event is pending".
+            if (comptime !has_events) return;
             self.event_buffer.append(self.allocator, event) catch |err| {
                 // A DROPPED notification is the single most valuable
                 // thing a trace can show — `emit` swallows it, and
