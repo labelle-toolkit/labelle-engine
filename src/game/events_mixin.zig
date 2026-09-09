@@ -11,6 +11,11 @@
 /// changing anything in this file: several of the guarantees below are
 /// load-bearing for flows, scripts and plugins.
 ///
+/// Opt-in TRACING of the same paths (#858) is documented in
+/// `HOOK-TRACING.md`; its call sites here are all behind
+/// `if (comptime tracing)` and compile out entirely unless the
+/// compilation root declares `labelle_hook_trace`.
+///
 /// Extracted verbatim from `game.zig`; behaviour is identical. The
 /// comptime types/flags this needs (`Payload`, `has_hooks`, `has_events`,
 /// `EventBuffer`) are defined in `GameConfig`'s function body and surfaced
@@ -18,6 +23,8 @@
 /// comptime source of truth via `Game.*`. Intra-cluster calls
 /// (`emit`, `emitHook`) use lexical sibling syntax.
 const std = @import("std");
+const hook_trace = @import("../hook_trace.zig");
+const hook_trace_dispatch = @import("hook_trace_dispatch.zig");
 
 /// Error set of the fallible enqueue path (`Game.tryEmit`, #856).
 ///
@@ -39,14 +46,68 @@ pub fn Mixin(comptime Game: type) type {
     // the returned struct can reference the file-scope one without a
     // self-referential dependency loop.
     const EmitErrorAlias = EmitError;
+    // Opt-in tracing (#858). `false` unless the compilation root declares
+    // `pub const labelle_hook_trace`, and every trace call site below is
+    // behind `if (comptime tracing)`, so an untraced build lowers to
+    // exactly the code it lowered to before #858 — no branch, no format
+    // call, no string.
+    const tracing = hook_trace.enabled;
+    const TraceDispatch = if (tracing) hook_trace_dispatch else void;
 
     return struct {
-        pub fn emitHook(self: *Game, payload: Payload) void {
+        /// Fan a fully-built `Payload` out to the installed receiver.
+        ///
+        /// The ONE place hook delivery happens. Untraced, it is
+        /// `h.emit(payload)` — `core.MergeHooks.emit` or
+        /// `core.HookDispatcher.emit`, unchanged. Traced, the engine
+        /// walks the receiver tuple itself so it can record which
+        /// handler ran and where a consumable event stopped
+        /// (`game/hook_trace_dispatch.zig`).
+        ///
+        /// `source` is comptime so the trace can distinguish queued
+        /// delivery (`.drain`) from immediate delivery (`.emit_sync`,
+        /// `.emit_hook`) — the acceptance criterion #858 leads with.
+        inline fn deliver(self: *Game, payload: Payload, comptime source: hook_trace.Source) void {
             if (has_hooks) {
                 if (self.hooks) |h| {
-                    h.emit(payload);
+                    if (comptime tracing) {
+                        TraceDispatch.dispatch(Game, self, h, payload, source);
+                    } else {
+                        h.emit(payload);
+                    }
+                } else if (comptime tracing) {
+                    // No receiver installed yet (pre-`setHooks`). Record
+                    // the empty fan-out rather than staying silent: "my
+                    // handler never ran" and "hooks were not wired yet"
+                    // look identical from the game's side, and this is
+                    // the one place the difference is visible.
+                    traceEmptyDispatch(self, payload, source);
                 }
             }
+        }
+
+        pub fn emitHook(self: *Game, payload: Payload) void {
+            deliver(self, payload, .emit_hook);
+        }
+
+        /// Trace-only: an emission that reached no dispatcher at all —
+        /// the empty `dispatch_begin`/`dispatch_end` pair that tells a
+        /// reader "nobody was wired", not "nobody handled it". Never
+        /// reached in an untraced build.
+        fn traceEmptyDispatch(self: *Game, payload: Payload, comptime source: hook_trace.Source) void {
+            const t = &self.hook_tracer;
+            const rec: hook_trace.Record = .{
+                .source = source,
+                .event = @tagName(std.meta.activeTag(payload)),
+                .frame = self.frame_number,
+                .drain = t.drain_seq,
+            };
+            var begin = rec;
+            begin.phase = .dispatch_begin;
+            t.push(begin);
+            var end = rec;
+            end.phase = .dispatch_end;
+            t.push(end);
         }
 
         /// Error set of `tryEmit` (#856). Re-exported on the mixin so
@@ -122,8 +183,69 @@ pub fn Mixin(comptime Game: type) type {
         /// into an event-less build.
         pub fn tryEmit(self: *Game, event: GameEvents) EmitErrorAlias!void {
             if (has_events) {
+                if (comptime tracing) return enqueueTraced(self, event, .try_emit);
                 try self.event_buffer.append(self.allocator, event);
             }
+        }
+
+        /// The traced enqueue, shared by `emit` and `tryEmit` so the two
+        /// can no more drift under tracing than they do without it
+        /// (#856). Never reached in an untraced build.
+        ///
+        /// `source` is comptime only so the record can name the API the
+        /// producer actually called; the two enqueue identically.
+        fn enqueueTraced(
+            self: *Game,
+            event: GameEvents,
+            comptime source: hook_trace.Source,
+        ) EmitErrorAlias!void {
+            self.event_buffer.append(self.allocator, event) catch |err| {
+                // A DROPPED notification is the single most valuable
+                // thing a trace can show — `emit` swallows it, and
+                // `tryEmit`'s caller may too. Record it before it is
+                // handed back. Recording cannot allocate, so this path
+                // is safe under the very OOM that caused it.
+                traceEnqueue(self, event, source, .enqueue_failed, @errorName(err));
+                return err;
+            };
+            traceEnqueue(self, event, source, .enqueue, "");
+        }
+
+        fn traceEnqueue(
+            self: *Game,
+            event: GameEvents,
+            comptime source: hook_trace.Source,
+            comptime phase: hook_trace.Phase,
+            err_name: []const u8,
+        ) void {
+            const t = &self.hook_tracer;
+            var rec: hook_trace.Record = .{
+                .phase = phase,
+                .source = source,
+                .event = @tagName(std.meta.activeTag(event)),
+                .frame = self.frame_number,
+                .drain = t.drain_seq,
+                .err = err_name,
+                .count = @intCast(self.event_buffer.items.len),
+            };
+            // Payload capture needs BOTH a comptime budget and the
+            // runtime opt-in; with the default `payload_capacity = 0`
+            // this `inline else` switch is never even instantiated, so
+            // enqueue tracing costs one `@tagName` and a struct store.
+            if (comptime hook_trace.options.payload_capacity > 0) {
+                if (t.capture_payloads) {
+                    switch (event) {
+                        inline else => |data| {
+                            rec.payload_len = hook_trace.renderScalars(
+                                @TypeOf(data),
+                                data,
+                                &rec.payload_buf,
+                            );
+                        },
+                    }
+                }
+            }
+            t.push(rec);
         }
 
         /// Emit a game event. Buffered and delivered to scripts at end of frame.
@@ -134,6 +256,12 @@ pub fn Mixin(comptime Game: type) type {
         /// `tryEmit` when losing the event would corrupt a derived view,
         /// a cache or a counter the producer maintains (#856).
         pub fn emit(self: *Game, event: GameEvents) void {
+            if (comptime tracing) {
+                enqueueTraced(self, event, .emit) catch |err| {
+                    self.log.err("Failed to emit game event: {s}", .{@errorName(err)});
+                };
+                return;
+            }
             tryEmit(self, event) catch |err| {
                 self.log.err("Failed to emit game event: {s}", .{@errorName(err)});
             };
@@ -279,7 +407,7 @@ pub fn Mixin(comptime Game: type) type {
             if (!has_events or !has_hooks) return;
             switch (event) {
                 inline else => |data, tag| {
-                    emitHook(self, @unionInit(Payload, @tagName(tag), data));
+                    deliver(self, @unionInit(Payload, @tagName(tag), data), .emit_sync);
                 },
             }
         }
@@ -303,12 +431,35 @@ pub fn Mixin(comptime Game: type) type {
             var dispatch_buf: EventBuffer = .empty;
             std.mem.swap(EventBuffer, &self.event_buffer, &dispatch_buf);
 
+            if (comptime tracing) {
+                const t = &self.hook_tracer;
+                t.drain_seq += 1;
+                t.push(.{
+                    .phase = .drain_begin,
+                    .source = .drain,
+                    .frame = self.frame_number,
+                    .drain = t.drain_seq,
+                    .count = @intCast(dispatch_buf.items.len),
+                });
+            }
+
             for (dispatch_buf.items) |event| {
                 switch (event) {
                     inline else => |data, tag| {
-                        emitHook(self, @unionInit(Payload, @tagName(tag), data));
+                        deliver(self, @unionInit(Payload, @tagName(tag), data), .drain);
                     },
                 }
+            }
+
+            if (comptime tracing) {
+                const t = &self.hook_tracer;
+                t.push(.{
+                    .phase = .drain_end,
+                    .source = .drain,
+                    .frame = self.frame_number,
+                    .drain = t.drain_seq,
+                    .count = @intCast(dispatch_buf.items.len),
+                });
             }
             dispatch_buf.clearRetainingCapacity();
 

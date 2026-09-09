@@ -338,6 +338,14 @@ pub fn build(b: *std.Build) void {
         // raises the comptime branch quota; this file deliberately sets no
         // quota of its own, so dropping core's would break the build here.
         "test/hook_dispatch_scaling_test.zig",
+        // #858 — the OFF half of opt-in hook tracing. `zig test` makes
+        // the test RUNNER the compilation root, so this binary cannot
+        // declare `labelle_hook_trace` and is structurally an untraced
+        // build: it asserts the tracer folds to `void`, that `Game`'s
+        // layout is unchanged, and that emit/drain behaviour matches the
+        // traced harness's sequence exactly. Plus the tracing types that
+        // compile either way (identity, filters, renderers, the ring).
+        "test/hook_trace_off_test.zig",
     };
 
     // #855 — the typed hook context's no-argument `ctx.game()` form
@@ -361,6 +369,45 @@ pub fn build(b: *std.Build) void {
         }),
     });
     test_step.dependOn(&b.addRunArtifact(typed_hook_ctx_exe).step);
+
+    // #858 — opt-in hook tracing. Tracing is switched on by a decl on the
+    // COMPILATION ROOT, and under `zig test` the root is Zig's test
+    // runner, so — exactly as #855 found — the ON path can only be
+    // compiled and run from a real executable whose root carries the
+    // declaration. Two of them:
+    //
+    //   * `hook_trace_root_exe` — the behaviour harness (enqueue, failed
+    //     enqueue, drain identity, sync vs buffered, listener execution,
+    //     consumable stop, filtering, the ring bound, sinks, text/JSONL
+    //     rendering, and PARITY with `core.MergeHooks.emit`'s own walk).
+    //   * `hook_trace_scaling_exe` — the comptime budget at the #854
+    //     validation size (64 variants x 16 receivers) with tracing ON.
+    //     The traced walk pays the same `variants x receivers` product
+    //     `MergeHooks.emit` does, so this is the file that fails first if
+    //     `hook_trace_dispatch.dispatch`'s quota is ever removed.
+    //
+    // Both assert and exit non-zero on failure, so `zig build test` gates
+    // on them.
+    const hook_trace_exes = [_]struct { name: []const u8, root: []const u8 }{
+        .{ .name = "hook_trace_root_exe", .root = "test/hook_trace_root_exe.zig" },
+        .{ .name = "hook_trace_scaling_exe", .root = "test/hook_trace_scaling_exe.zig" },
+    };
+    for (hook_trace_exes) |spec| {
+        const exe = b.addExecutable(.{
+            .name = spec.name,
+            .root_module = b.createModule(.{
+                .root_source_file = b.path(spec.root),
+                .target = target,
+                .optimize = optimize,
+                .imports = &.{
+                    .{ .name = "labelle-core", .module = core_module },
+                    .{ .name = "engine", .module = engine_module },
+                    .{ .name = "scene", .module = scene_module },
+                },
+            }),
+        });
+        test_step.dependOn(&b.addRunArtifact(exe).step);
+    }
 
     for (test_files) |test_file| {
         const t = b.addTest(.{
