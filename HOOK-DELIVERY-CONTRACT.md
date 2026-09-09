@@ -548,6 +548,11 @@ hook-order contract for every scene. Refs #802, #801, #561.
 * **Flow-handler priority ordering** is assembler-side and is specified in
   labelle-assembler#723, not here.
 * **`emit`'s enqueue failure contract** landed with #856: `tryEmit` is the fallible sibling, documented in the failure-mode table above and in `rfc/EVENTS-FALLIBLE-ENQUEUE.md`.
-* **Observability** — there is no way to enumerate listeners or trace a
-  dispatch today; see labelle-assembler#724 (static route inspector) and
-  labelle-engine#858 (runtime tracing).
+* **Observability** — runtime dispatch tracing landed with #858:
+  `HOOK-TRACING.md` documents the opt-in (`pub const labelle_hook_trace`
+  on the compilation root), the record format and the measured cost. It
+  makes every guarantee in this document observable at runtime — the
+  drain point (§2), FIFO + receiver order (§3), next-drain delivery of a
+  handler-emitted event (§4), the consumable break (§3 D5) and the silent
+  enqueue failure (§8). STATIC listener enumeration is still open:
+  labelle-assembler#724.

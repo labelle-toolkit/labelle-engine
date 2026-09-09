@@ -5,6 +5,7 @@ const Position = core.Position;
 const MockEcsBackend = core.MockEcsBackend;
 const HookDispatcher = core.HookDispatcher;
 const hooks_types = @import("hooks_types.zig");
+const hook_trace_mod = @import("hook_trace.zig");
 const ComponentPayload = hooks_types.ComponentPayload;
 const VisualType = core.VisualType;
 const ParentComponent = core.ParentComponent;
@@ -229,6 +230,12 @@ pub fn GameConfigWithYAxis(
         pub const EventBufferExport = EventBuffer;
         pub const has_events_export = has_events;
         pub const has_hooks_export = has_hooks;
+        /// Opt-in hook tracing (#858). `false` unless the compilation
+        /// root declares `pub const labelle_hook_trace`; see
+        /// `src/hook_trace.zig` and `HOOK-TRACING.md`.
+        pub const hook_trace_enabled = hook_trace_mod.enabled;
+        /// `hook_trace.Tracer` in a traced build, `void` otherwise.
+        pub const HookTracer = hook_trace_mod.TracerField;
         // For the lifecycle mixin's `setHooks` (mirrors the function-body
         // consts of the same role; see PayloadExport rationale).
         pub const HooksParam = Hooks;
@@ -569,6 +576,12 @@ pub fn GameConfigWithYAxis(
         /// design can be settled alongside scene-manifest auto-acquire.
         assets: assets_mod.AssetCatalog,
         hooks: HooksField = if (has_hooks) null else {},
+        /// Hook/event trace ring (#858). `void` — and therefore
+        /// zero-sized — in any build that did not opt in, so an
+        /// untraced `Game` is exactly the size it was before #858.
+        /// Configure it directly: `game.hook_tracer.events.include =
+        /// &.{"combat__*"};`
+        hook_tracer: HookTracer = hook_trace_mod.tracer_init,
         event_buffer: EventBuffer = if (has_events) .empty else {},
         /// Allocations a BUFFERED event payload still borrows from
         /// (#862/#863).

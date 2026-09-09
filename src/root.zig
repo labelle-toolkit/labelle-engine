@@ -86,6 +86,35 @@ pub const ScreenSize = game_mod.ScreenSize;
 /// reaching for a concrete `Game` instantiation.
 pub const EmitError = @import("game/events_mixin.zig").EmitError;
 
+// ── Hook / event tracing (#858) ──
+//
+// Opt in from the compilation root (the assembler-generated `main.zig`,
+// or a hand-written executable root):
+//
+//     pub const labelle_hook_trace = true;
+//     // or
+//     pub const labelle_hook_trace: engine.HookTraceOptions =
+//         .{ .ring_capacity = 512, .payload_capacity = 48 };
+//
+// With no such declaration `engine.hookTraceEnabled` is `false`,
+// `Game.hook_tracer` is `void`, and every trace call site folds away at
+// comptime. See `HOOK-TRACING.md`.
+pub const hook_trace = @import("hook_trace.zig");
+pub const HookTraceOptions = hook_trace.Options;
+pub const HookTracer = hook_trace.Tracer;
+pub const HookTraceRecord = hook_trace.Record;
+pub const HookTracePhase = hook_trace.Phase;
+pub const HookTraceSource = hook_trace.Source;
+pub const HookTraceFilter = hook_trace.Filter;
+pub const HookTraceOverflow = hook_trace.Overflow;
+pub const HookTraceIdKind = hook_trace.IdKind;
+/// True when this compilation opted into hook tracing.
+pub const hookTraceEnabled = hook_trace.enabled;
+/// The `pub const` a hook receiver can carry to pin its trace identity
+/// to labelle-assembler#723's `Receiver.id` exactly
+/// (`pub const labelle_receiver_id = "hooks/animation_hooks";`).
+pub const hook_receiver_id_decl = hook_trace.receiver_id_decl;
+
 // ── Tilemap (T2 Phase 2) ──
 /// Engine built-in `Tilemap` component — references an embedded `.tmx`
 /// asset by name. Reachable on a configured game as `Game.TilemapComp`.
