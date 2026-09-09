@@ -444,18 +444,27 @@ If you are reading this because CI failed that way, the fix is in
 | Component `onReady` / `postLoad` | direct comptime call from the scene loader | **immediate**, per entity, as it is assembled — see §11 |
 | Whole-scene completion | `scene_load` hook (immediate) + `engine__scene_loaded` (buffered) | after the loader returns and the scene is active |
 | Asset readiness | polled, not evented. `assets.pump()` at the top of `tick`; the `setScene` manifest gate spins until `.ready` | no event is emitted per asset |
-| `engine__scene_assets_acquire`, `engine__scene_before_reset` | `emitEngineEventSync` | **immediate**, at the emit site — matching their `emitHook` twins (#864) |
+| `engine__scene_assets_acquire`, `engine__scene_before_reset` | `emitEngineEvent` → buffered | **next drain**, like every other buffered engine event (#864) |
 
-> These two were buffered until #864, and buffering meant they were never
-> delivered at all: `unloadCurrentScene` opens by clearing the event buffer,
-> and both were queued a few lines in front of it. Only the `engine__*` halves
-> were lost — the `emitHook` twins always fired — so the feature worked from
-> native code and silently did nothing from a flow.
+> These two used to be discarded rather than delivered.
+> `unloadCurrentScene` opened by clearing the event buffer, and both were
+> queued a few lines in front of it, so nothing subscribed could ever see
+> them — while their `emitHook` twins fired normally. That asymmetry is why
+> it stayed hidden: the feature worked from native code and silently did
+> nothing from a flow.
 >
-> Sync is also the honest delivery for both. They are "about to do X" signals
-> whose value is *preceding* the teardown, and `before_reset` in particular
-> cannot be deferred without becoming a lie: delivered after the reset, it
-> would describe a world that no longer exists.
+> The clear is now `clearPendingSceneEvents`, called by the scene paths
+> **before** they announce the transition. Discarding the outgoing scene's
+> own queued events is unchanged and still deliberate — its entities are
+> about to be destroyed, so those payloads reference ids that will be dead
+> by the drain. Only the ordering moved.
+>
+> **These stay buffered on purpose.** Making them `emitEngineEventSync`
+> looks like the obvious fix and is not one: sync dispatches straight to
+> the hook tuple and never touches the buffer, so flow `OnEvent`s and
+> language-plugin subscriptions — which read `event_buffer` at their own
+> drain points (§9, `script_contract`) — would still receive nothing. Sync
+> would have "fixed" only the consumers that already worked.
 
 ---
 

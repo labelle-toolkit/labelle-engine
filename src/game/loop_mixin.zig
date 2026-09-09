@@ -241,6 +241,9 @@ pub fn Mixin(comptime Game: type) type {
                 self.hot_reload_dirty = false;
                 if (self.current_scene_name) |name| {
                     if (self.scenes.get(name)) |entry| {
+                        // Same ordering as before #864 — nothing is
+                        // announced ahead of the teardown on this path.
+                        self.clearPendingSceneEvents();
                         self.unloadCurrentScene();
                         self.emitHook(.{ .scene_before_load = .{ .name = name, .allocator = self.allocator } });
                         // Engine `Events` dual-emit (#578).

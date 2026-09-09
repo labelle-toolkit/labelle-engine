@@ -723,6 +723,18 @@ pub fn Mixin(comptime Game: type) type {
             // gate proved allReady, before any scene teardown. This
             // gives listeners a chance to cache the manifest and
             // react before `scene_before_load` fires.
+            // Clear the OUTGOING scene's queued events BEFORE announcing
+            // this transition (#864). The clear used to happen inside
+            // `unloadCurrentScene` below, i.e. AFTER these emits, which
+            // discarded them — nothing subscribed could ever see them.
+            //
+            // These stay BUFFERED rather than becoming `emitEngineEventSync`.
+            // Sync dispatches straight to the hook tuple and never reaches
+            // the buffer, so flow `OnEvent`s and language-plugin
+            // subscriptions — which read `event_buffer` at their own drain
+            // points — would still miss them. Buffered + a clear that no
+            // longer eats them reaches every subscriber.
+            self.clearPendingSceneEvents();
             self.emitHook(.{ .scene_assets_acquire = .{ .name = name, .assets = target_assets } });
             // Engine `Events` dual-emit (#578) — SYNCHRONOUS (#864).
             //
@@ -741,7 +753,7 @@ pub fn Mixin(comptime Game: type) type {
             // teardown, and its hook twin already fires immediately at
             // exactly this point. Deferring it to the next drain would
             // report the acquire AFTER the scene it precedes was gone.
-            self.emitEngineEventSync("engine__scene_assets_acquire", .{ .name = name });
+            self.emitEngineEvent("engine__scene_assets_acquire", .{ .name = name });
 
             self.unloadCurrentScene();
 
@@ -897,6 +909,18 @@ pub fn Mixin(comptime Game: type) type {
             const previous_name = if (self.current_scene_name) |n| self.allocator.dupe(u8, n) catch null else null;
             defer if (previous_name) |p| self.allocator.free(p);
 
+            // Clear the OUTGOING scene's queued events BEFORE announcing
+            // this transition (#864). The clear used to happen inside
+            // `unloadCurrentScene` below, i.e. AFTER these emits, which
+            // discarded them — nothing subscribed could ever see them.
+            //
+            // These stay BUFFERED rather than becoming `emitEngineEventSync`.
+            // Sync dispatches straight to the hook tuple and never reaches
+            // the buffer, so flow `OnEvent`s and language-plugin
+            // subscriptions — which read `event_buffer` at their own drain
+            // points — would still miss them. Buffered + a clear that no
+            // longer eats them reaches every subscriber.
+            self.clearPendingSceneEvents();
             self.emitHook(.{ .scene_assets_acquire = .{ .name = name, .assets = target_assets } });
             // Engine `Events` dual-emit (#578) — SYNCHRONOUS (#864).
             //
@@ -915,7 +939,7 @@ pub fn Mixin(comptime Game: type) type {
             // teardown, and its hook twin already fires immediately at
             // exactly this point. Deferring it to the next drain would
             // report the acquire AFTER the scene it precedes was gone.
-            self.emitEngineEventSync("engine__scene_assets_acquire", .{ .name = name });
+            self.emitEngineEvent("engine__scene_assets_acquire", .{ .name = name });
 
             // `scene_before_reset` fires BEFORE any entity
             // destruction — plugin controllers with per-world heap
@@ -958,7 +982,7 @@ pub fn Mixin(comptime Game: type) type {
                 // becoming a lie — an event named for what it PRECEDES,
                 // delivered after the reset, describes a world that no
                 // longer exists.
-                self.emitEngineEventSync("engine__scene_before_reset", .{ .name = outgoing });
+                self.emitEngineEvent("engine__scene_before_reset", .{ .name = outgoing });
             }
 
             // Clear both entity-tracking lists BEFORE
