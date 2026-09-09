@@ -16,9 +16,10 @@ Five workstreams make animation authoring simpler:
 4. Emit named, crossing-accurate frame cues with an explicit delivery policy.
 5. Define scaled/unscaled animation clocks and migrate pause behavior.
 
-The frame shorthand is closest to implementation. The event bridge, playback
-state, dispatch schedule, targeting and pause migration require the decisions
-listed below before their implementation PRs start. Publishing this RFC does
+The frame shorthand is closest to implementation. Targeting and dispatch policy
+are agreed in section 3; the typed event bridge, remaining playback semantics,
+generated-loop integration and pause migration still need specification.
+Publishing this RFC does
 not close [#794](https://github.com/labelle-toolkit/labelle-engine/issues/794).
 
 ## Motivation and current baseline
@@ -139,19 +140,39 @@ channel must be retained when only a marker label appears in authored data.
 
 ### Targeting and lifetime
 
-Self/owner-scoped matching is the recommended default; broadcast requires an
-explicit `scope: "any"`. This is not yet a complete target contract:
+**Agreed policy:** exact-entity targeting by default, explicit groups, and
+opt-in broadcast. There is no implicit ancestor walk. These are semantic target
+forms; the concrete authored syntax and typed payload adapter remain to be chosen.
 
-- Specify target extraction from typed payload metadata. An arbitrary `entity`
-  field can mean an actor/source, and many events have no entity field.
-- For an untargeted event, require explicit broadcast or a declared adapter;
-  never silently interpret it as “all instances” under self scope.
-- Define whether self means exact entity, ancestors, or a declared owner
-  binding; define deterministic matching and invalid/cyclic ancestry handling.
-- Validate entity lifetime at delivery and command application. Reset/destroy
-  must invalidate queued targets; bare recycled IDs must not target a new entity.
-- For spatially associated props, domain code supplies the target binding.
-  Kitchen overlays currently use room cells; not all relationships are parents.
+| Target | Recipients | Lookup strategy |
+| --- | --- | --- |
+| Entity (default) | One explicitly identified entity subscribed to the event | Direct entity lookup and binding match. |
+| Group/owner | Matching subscribers in an explicitly owned group | A maintained membership list. |
+| Broadcast (opt-in) | All subscribers matching the event and trigger filters | That event's subscriber list. |
+
+The game owns group membership: rooms, machines and squads can define groups
+without imposing an ECS parent hierarchy. Maintain membership on spawn, removal,
+ownership changes and destruction. Reparenting changes a group only when the
+game's ownership rule says it should. Kitchen overlays can use room-cell binding.
+
+Resolve the recipient set once when the event is dispatched. Later group joins
+do not receive the old event; leaving the group afterward does not retract a
+command already addressed to a still-live entity. Use generation-checked group
+and entity handles, including world identity/reset invalidation. Revalidate
+entity handles at command application and skip destroyed recipients; a recycled
+ID must never redirect a queued command. Group destruction retires membership
+and its handle for future dispatch, without destroying members implicitly.
+
+Define target extraction through typed metadata or a declared adapter; do not
+guess from an arbitrary field named `entity`, which might identify an actor.
+An event with no target needs explicit broadcast or an adapter. It must not
+silently become broadcast under the default entity scope.
+
+Animation advancement remains a separate ECS pass. Targeting must not scan all
+animated entities for each individually targeted event. A broadcast to 500
+recipients legitimately visits 500 recipients; 500 direct commands should not
+require 500 full-world scans. Maintain subscriber indexes on binding lifecycle
+changes, and benchmark targeting separately from ordinary frame advancement.
 
 Choose the component boundary before implementation: fields on SpriteAnimation
 or a sibling binding component. A first version restricted to SpriteAnimation
@@ -165,15 +186,27 @@ table completed as part of the implementation specification:
 
 | Request | Contract to specify |
 | --- | --- |
-| `play: once/loop/ping_pong` | Which state resets; mode changes; repeated requests. Recommended: repeated running loop is a no-op, once restarts. |
-| `stop` | Hold current image or restore an idle/initial frame; timer/direction/repetition reset. Current consumers sometimes explicitly restore idle. |
-| `pause` / `resume` | Preserve playback position; define resume from stopped/completed; interaction with global and subsystem pause. |
+| `play: once/loop/ping_pong` | Agreed: playing an already-playing identical loop is a no-op. Once retrigger, ping-pong retrigger and mode-change behavior still need specification. |
+| `stop` | Agreed: repeated stop is a no-op. Hold current image versus restore idle, and timer/direction/repetition effects, remain to be specified. |
+| `pause` / `resume` | Agreed: repeated pause is a no-op and pause preserves playback position. Define resume from stopped/completed and interaction with global/subsystem pause. |
 | `restart` | Reset frame, timer, direction, repetition and marker cursor; update the visible sprite even without a later frame crossing. |
 | `start: dormant` | Initial visible frame and behavior before the first request; reconciliation after loading. |
 
-Reject conflicting `play` and `action` fields in one entry. Specify ordering
-for multiple matching entries and multiple events in one drain. Address speed
-zero, mode changes, completion, and frame-zero entry cues explicitly.
+Reject conflicting `play` and `action` fields in one entry. Commands are applied
+in dispatch order; matching entries within one event use authored trigger order.
+Apply commands sequentially, so later commands determine the resulting state:
+`play -> stop` ends stopped. Do not coalesce commands merely by keeping the last
+one: `restart -> pause` must retain the reset before becoming paused.
+
+Apply the complete boundary batch before advancing frames or emitting markers
+caused by those commands. Intermediate commands must not emit transient cues
+before a later conflicting command is applied. The final-state frame-zero cue
+rule remains part of the marker specification. Address speed zero, mode changes
+and completion explicitly.
+
+Use explicit `restart` to synchronize recipients. Broadcast `play` alone does
+not synchronize existing loops because the identical-loop request is a no-op.
+A restart batch resets its recipients together at the animation boundary.
 
 ### Dispatch schedule and reentrancy
 
@@ -189,14 +222,24 @@ Root/plugin events are already drained when SpriteAnimation advances;
 engine-tick events can reach the next drain. Synchronous events never enter
 that buffer. Other generated loops need a checked, equivalent contract.
 
-Recommended integration: a dispatch listener queues animation commands, and a
-defined animation boundary applies them. Settle that boundary and whether a
-play request displays frame zero immediately or on the next update. Preserve
-once-per-drain delivery and the next-drain behavior of handler-emitted events.
+**Agreed policy:** dispatch resolves recipients and queues playback commands.
+At one boundary per animation update, apply the queued batch in order, then
+advance animations in one ECS pass and render. Freeze the batch at that boundary;
+commands arriving after it wait for the next animation update. Buffered and
+synchronous dispatch both enqueue commands rather than mutating live animation
+components immediately. Exact generated-loop placement and first-frame display
+timing must be specified consistently for native and callback backends.
+Preserve once-per-drain delivery and the next-drain behavior of handler-emitted
+events; command ordering is actual dispatch order, not enqueue timestamp order
+across synchronous and buffered delivery.
 
-Specify ordering relative to native/flow listeners and consumable events. A
-buffer tap observes even events later consumed; a normal listener may not.
-The RFC must choose rather than accidentally inherit one behavior. Coordinate
+**Consumption is respected:** events consumed by input/modal handlers must not
+also enqueue animation reactions. Animation routing must run after the relevant
+consumption decisions, and must not use an unconditional buffer tap that bypasses
+them. The exact integration with native/flow handler ordering remains to be
+specified. Prefer non-consumable domain notifications such as “machine activated”
+after gameplay accepts an action; then every matching animation subscriber can
+react without competing with input handling. Coordinate
 with [delivery contracts #857](https://github.com/labelle-toolkit/labelle-engine/issues/857)
 and [handler ordering](https://github.com/labelle-toolkit/labelle-assembler/issues/723).
 
@@ -211,9 +254,15 @@ may never emit a new “on” edge. Choose a post-restoration reconciliation ste
 or a domain synchronization event with explicit target binding. Entity-ready
 callbacks are not a whole-scene completion guarantee.
 
-Acceptance: two independently targeted props; explicit broadcast; missing or
-invalid targets; sync/buffered events; repeated/conflicting commands; deletion
-and world reset; restart visibility; an active prop restored without a new edge.
+Acceptance: two independently targeted props; group membership changes before
+and after dispatch; group destruction and handle reuse; explicit broadcast;
+missing/invalid targets; sync/buffered ordering; authored trigger order;
+play/stop and restart/pause conflicts; consumed input versus domain notifications;
+entity deletion and world reset; restart visibility and synchronized broadcasts;
+an active prop restored without a new edge. Benchmark 1, 100 and 1,000 entities
+with one broadcast, group dispatch, and many individually targeted events.
+Report targeting cost separately from frame advancement, and verify unrelated
+entities are not scanned by direct targeting.
 
 ## 4. Named markers and bounded delivery
 
@@ -318,7 +367,11 @@ not acceptance of any proposed feature. The PR remains a design discussion.
 - [ ] Finalize shorthand grammar, bounds, ownership and diagnostics.
 - [ ] Choose generic marker notification versus typed custom-event mapping.
 - [ ] Specify crossing order and bounded delivery/failure behavior.
-- [ ] Choose trigger component/state layout, target contract and dispatch phase.
+- [x] Agree entity/group/broadcast targeting, recipient lifetime, ordered command
+  batches, consumption handling and explicit restart synchronization.
+- [ ] Specify typed target adapters, trigger component/state layout, remaining
+  action semantics and generated-loop/handler integration; implement and test
+  the agreed policy. The checked item above is a design decision, not delivery.
 - [ ] Define reconciliation and demonstrate a real consumer pilot.
 - [ ] Specify effective clocks, pause notifications and unscaled input migration.
 - [ ] Choose the default-driving rollout and verify single ownership.
