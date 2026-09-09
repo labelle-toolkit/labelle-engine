@@ -157,8 +157,38 @@ pub fn Mixin(comptime Game: type) type {
             }
 
             // Scene changes must process even when paused (e.g. pause menu → new scene)
-            if (self.pending_scene_change) |next_scene| {
+            if (self.pending_scene_change) |next_scene| scene_change: {
                 const atomic = self.pending_scene_atomic;
+                // Reserve BEFORE the swap buffers `engine__scene_loading` /
+                // `engine__scene_loaded` borrowing `next_scene` (#867
+                // review). `tick` cannot propagate an error, so on failure
+                // we SUPPRESS the transition: nothing is emitted,
+                // `pending_scene_change` keeps ownership of the name, and
+                // the request stays queued for a later frame — the same
+                // deferral shape the asset gate already uses below. That
+                // leaves no queued payload without a live referent.
+                //
+                // `break`, not `return`. An earlier revision returned from
+                // `tick` entirely, so a game under sustained memory
+                // pressure stopped ticking — scripts, timers and rendering
+                // all frozen by a failed SCENE CHANGE. Skipping the
+                // transition and finishing the frame keeps the game
+                // running and lets the retry happen next frame, which is
+                // the whole point of deferring (#867 review).
+                var retention = self.reserveRetention() catch {
+                    self.log.err(
+                        "Out of memory reserving scene-name retention; deferring the " ++
+                            "'{s}' transition to a later frame.",
+                        .{next_scene},
+                    );
+                    break :scene_change;
+                };
+                // The asset gate DEFERS: `setScene` can return without
+                // committing while the target's manifest is still loading,
+                // and this block runs again next frame. Releasing the
+                // unused node on every such path is what keeps the retry
+                // loop from accumulating one node per frame (#867 review).
+                defer retention.release();
                 var failed = false;
                 if (atomic) {
                     self.setSceneAtomic(next_scene) catch {
@@ -194,7 +224,13 @@ pub fn Mixin(comptime Game: type) type {
                     false;
                 const committed = !has_assets or self.pending_scene_assets == null;
                 if (failed or committed) {
-                    self.allocator.free(next_scene);
+                    // NOT freed here (#863). `setScene` above BUFFERED
+                    // `engine__scene_loading` / `engine__scene_loaded`
+                    // carrying this very slice as a borrowed name, and a
+                    // buffered event is delivered on the NEXT drain — the
+                    // generated loop drains before it ticks, so this ran a
+                    // full frame ahead of the listener that reads it.
+                    retention.retain(next_scene);
                     self.pending_scene_change = null;
                     self.pending_scene_atomic = false;
                 }
@@ -205,6 +241,9 @@ pub fn Mixin(comptime Game: type) type {
                 self.hot_reload_dirty = false;
                 if (self.current_scene_name) |name| {
                     if (self.scenes.get(name)) |entry| {
+                        // Same ordering as before #864 — nothing is
+                        // announced ahead of the teardown on this path.
+                        self.clearPendingSceneEvents();
                         self.unloadCurrentScene();
                         self.emitHook(.{ .scene_before_load = .{ .name = name, .allocator = self.allocator } });
                         // Engine `Events` dual-emit (#578).

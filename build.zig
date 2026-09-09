@@ -74,6 +74,14 @@ pub fn build(b: *std.Build) void {
         // identity check, and a regression proving the legacy
         // `game_ptr: *anyopaque` receiver form still works unchanged.
         "test/typed_hook_context_test.zig",
+        // #862/#863 — buffered payloads must outlive the drain that
+        // delivers them. Uses a POISONING allocator: under a plain one
+        // these tests pass with the bug present.
+        "test/payload_lifetime_test.zig",
+        // #864 — the two scene lifecycle events that were queued and then
+        // discarded by `unloadCurrentScene`'s buffer clear. Listens on the
+        // `engine__*` variants through the REAL setScene paths.
+        "test/scene_lifecycle_events_test.zig",
         "test/easing_test.zig",
         "test/scene_test.zig",
         "test/gestures_test.zig",
