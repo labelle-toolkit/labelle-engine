@@ -13,6 +13,7 @@ Part of the [labelle-toolkit](https://github.com/labelle-toolkit) ecosystem.
 - **Scene Loader** — automatic entity spawning with component assignment, nested entities, and parent-child hierarchies
 - **GUI Views** — declarative UI definitions bound to scenes
 - **Hook System** — type-safe, zero-overhead lifecycle hooks
+- **Game Events** — buffered `emit` plus fallible `tryEmit` for producers that must observe a dropped notification ([guide](rfc/EVENTS-FALLIBLE-ENQUEUE.md))
 - **Input & Gestures** — abstracted input handling with gesture recognition
 - **Audio** — audio playback types and management
 - **Query System** — ECS queries with filtering and iteration

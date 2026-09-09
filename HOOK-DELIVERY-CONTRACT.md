@@ -363,7 +363,7 @@ inside the final drain is delivered".
 
 | Situation | Today's behaviour |
 |-----------|-------------------|
-| Allocation failure in `emit` | Caught, logged at `err`, **event silently lost**. `emit` returns `void` — the producer cannot know. This is exactly what [#856](https://github.com/labelle-toolkit/labelle-engine/issues/856) exists to fix; its enqueue-success/failure contract belongs in this document once it lands. |
+| Allocation failure in `emit` | Caught, logged at `err`, **event silently lost** — `emit` returns `void`, so the producer cannot know. Use **`tryEmit`** (#856) when that matters: same enqueue, same drain, but it returns `EmitError!void`. On failure the buffer is unchanged — earlier events intact and ordered, the failed event neither partial nor duplicated — so a retry lands exactly once. It does NOT roll back the producer's own mutation; the documented recovery is a dirty flag reconciled on a later frame. See `rfc/EVENTS-FALLIBLE-ENQUEUE.md`. |
 | `emitEngineEvent` for a variant the project's `GameEvents` lacks | Comptime no-op. Not an error, not a warning. |
 | Handler declared for an event that does not exist | **Compile error** from `MergeHooks`' validation block ("Handler 'x' … doesn't match any event in …"). |
 | `HookDispatcher` (single receiver) with `exhaustive = true` | Compile error when a variant has no handler. Off by default. |
@@ -452,7 +452,7 @@ hook-order contract for every scene. Refs #802, #801, #561.
   in labelle-assembler or a game repo.
 * **Flow-handler priority ordering** is assembler-side and is specified in
   labelle-assembler#723, not here.
-* **`emit`'s enqueue failure contract** is deliberately absent pending #856.
+* **`emit`'s enqueue failure contract** landed with #856: `tryEmit` is the fallible sibling, documented in the failure-mode table above and in `rfc/EVENTS-FALLIBLE-ENQUEUE.md`.
 * **Observability** — there is no way to enumerate listeners or trace a
   dispatch today; see labelle-assembler#724 (static route inspector) and
   labelle-engine#858 (runtime tracing).

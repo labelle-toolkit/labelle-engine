@@ -1041,8 +1041,23 @@ pub fn GameConfigWithYAxis(
 
         pub const emitHook = EventsMixin.emitHook;
 
-        /// Emit a game event. Buffered and delivered to scripts at end of frame.
+        /// Emit a game event. Buffered and delivered to scripts at end of
+        /// frame. Infallible — an enqueue failure is logged and swallowed;
+        /// use `tryEmit` when the producer must observe the loss.
         pub const emit = EventsMixin.emit;
+
+        /// Fallible sibling of `emit` (#856): same buffer, same drain, but
+        /// an enqueue failure is returned rather than logged and dropped.
+        /// A successful return means the event ENTERED THE QUEUE — not
+        /// that a listener ran. On failure the buffer is unchanged (no
+        /// partial, no duplicate) and the producer's earlier model
+        /// mutation is NOT rolled back; keep a dirty flag and reconcile.
+        /// Games with no declared events return success (nothing to lose).
+        /// Full contract in `game/events_mixin.zig`.
+        pub const tryEmit = EventsMixin.tryEmit;
+
+        /// Error set of `tryEmit` — `error{OutOfMemory}`.
+        pub const EmitError = EventsMixin.EmitError;
 
         /// Engine-side tolerant emit for the `engine__<event>` variants
         /// declared on `engine.Events` (RFC-FLOW-VOCABULARY phase 6,
