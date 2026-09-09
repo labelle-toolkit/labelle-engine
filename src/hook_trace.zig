@@ -505,8 +505,23 @@ pub const Tracer = struct {
     dropped_reentrant: u64 = 0,
     /// Next `Record.seq`.
     seq: u64 = 0,
-    /// Number of completed drains. Also stamped onto every record.
+    /// Monotonic drain counter — only ever incremented, never restored.
+    /// Allocates the id; it does NOT say which drain is running.
     drain_seq: u64 = 0,
+    /// The drain currently being processed, which is what records are
+    /// stamped with. Saved and restored around a drain, so a NESTED
+    /// `dispatchEvents` (a handler that drains) does not steal the outer
+    /// drain's number: previously the outer `drain_end` — and every outer
+    /// deliver/enqueue after the nested call — reported the INNER id
+    /// (#858 review).
+    current_drain: u64 = 0,
+    /// Nesting depth of `dispatchEvents`. Only needed to answer "is a drain
+    /// still running?" when one ends: at depth 0 `current_drain` returns to
+    /// tracking `drain_seq`, so an enqueue made OUTSIDE any drain is stamped
+    /// with the number of drains completed — the pre-existing meaning, which
+    /// `hook_trace_root_exe` pins ("the enqueue predates the drain it landed
+    /// in").
+    drain_depth: u16 = 0,
     in_sink: bool = false,
 
     /// Record `rec`, filling in `seq`. Filtered-out records are not
@@ -515,6 +530,17 @@ pub const Tracer = struct {
         if (!self.active) return;
         if (!self.events.admits(rec_in.event)) return;
         if (rec_in.receiver.len != 0 and !self.receivers.admits(rec_in.receiver)) return;
+
+        // Reentrancy is decided BEFORE any mutation. Recording first and
+        // rejecting after burned a `seq` and wrote the ring for a record
+        // the tracer then counted as dropped — the trace showed a gap in
+        // sequence numbers AND a retained record for the same event, so
+        // `dropped_reentrant` could not be reconciled against `seq`
+        // (#858 review). A rejected record must leave no trace at all.
+        if (self.sink != null and self.in_sink) {
+            self.dropped_reentrant += 1;
+            return;
+        }
 
         var rec = rec_in;
         rec.seq = self.seq;
@@ -535,10 +561,7 @@ pub const Tracer = struct {
         }
 
         if (self.sink) |s| {
-            if (self.in_sink) {
-                self.dropped_reentrant += 1;
-                return;
-            }
+            // The reentrancy guard ran above, before any state changed.
             self.in_sink = true;
             defer self.in_sink = false;
             s.onRecord(s.ctx, &rec);
@@ -548,6 +571,14 @@ pub const Tracer = struct {
     /// Retained record `i`, oldest first.
     pub fn at(self: *const Tracer, i: usize) *const Record {
         std.debug.assert(i < self.len);
+        // `capacity == 0` is a DOCUMENTED configuration (sink-only: records
+        // are filtered and handed to the sink, nothing retained). `% 0` is
+        // illegal, so the modulo cannot be reached in that build — `len` is
+        // always 0 there, making this unreachable rather than merely
+        // unlikely. Spelled out so a renderer written against `capacity`
+        // instead of `count()` fails loudly at the assert above rather than
+        // dividing by zero (#858 review).
+        if (comptime capacity == 0) unreachable;
         return &self.ring[(self.head + i) % capacity];
     }
 

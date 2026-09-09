@@ -20,7 +20,8 @@
 //!     receiver-tuple order the traced walk mirrors.
 //!
 //! The BINARY-level measurement (an untraced build of this branch
-//! producing byte-identical code to pre-#858) is `zig build hook-trace-cost`;
+//! producing byte-identical code to pre-#858) is `bash tools/hook_trace_cost.sh` (the script IS the entrypoint —
+//! there is no such build step);
 //! see `HOOK-TRACING.md` §5.
 
 const std = @import("std");

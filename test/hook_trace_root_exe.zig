@@ -68,6 +68,9 @@ const TraceEvents = union(enum) {
 };
 
 var chain_game: ?*Game = null;
+/// #858 review: when set, `t__chain_src`'s handler ALSO drains, producing a
+/// nested `dispatchEvents` inside a running drain.
+var nested_drain_game: ?*Game = null;
 
 // ── Receivers ──────────────────────────────────────────────────────────
 
@@ -86,6 +89,9 @@ const AnimationHooks = struct {
     pub fn t__chain_src(self: *AnimationHooks, info: anytype) void {
         self.order.push("anim:chain_src");
         if (chain_game) |g| g.emit(.{ .t__chain_dst = .{ .depth = info.depth + 1 } });
+        // #858 review: drain from INSIDE a drain, so the nested-numbering
+        // regression has something to observe.
+        if (nested_drain_game) |g| g.dispatchEvents();
     }
     pub fn t__chain_dst(self: *AnimationHooks, _: anytype) void {
         self.order.push("anim:chain_dst");
@@ -286,6 +292,8 @@ pub fn main() !u8 {
     try check08NoListener(&h);
     try check09Identity(&h);
     try check10Filtering(&h);
+    try check11NestedDrainNumbering(&h);
+    try check12ReentrantSinkLeavesNoTrace(&h);
     try check12Sink(&h);
     try check13Rendering(&h);
     try check14Parity(&h);
@@ -304,6 +312,83 @@ pub fn main() !u8 {
 }
 
 // ── 1. Enqueue, both APIs ──────────────────────────────────────────────
+
+/// #858 review: a NESTED `dispatchEvents` must not renumber the outer drain.
+///
+/// `drain_end` (and every outer deliver/enqueue after the nested call) read
+/// the monotonic `drain_seq`, so a handler that drained made the OUTER drain
+/// report the INNER id — the one field that says which drain a record belongs
+/// to, silently wrong exactly when the trace is hardest to read.
+fn check11NestedDrainNumbering(h: *Harness) !void {
+    const t = h.fresh();
+
+    // `t__chain_src`'s handler emits; here we make it DRAIN as well, so the
+    // inner drain runs inside the outer one.
+    nested_drain_game = &h.game;
+    defer nested_drain_game = null;
+
+    h.game.emit(.{ .t__chain_src = .{ .depth = 0 } });
+    h.game.dispatchEvents();
+
+    var outer_begin: ?u64 = null;
+    var outer_end: ?u64 = null;
+    var inner_begin: ?u64 = null;
+    var depth: u32 = 0;
+    for (0..t.count()) |i| {
+        const r = t.at(i);
+        switch (r.phase) {
+            .drain_begin => {
+                depth += 1;
+                if (depth == 1) outer_begin = r.drain else if (depth == 2) inner_begin = r.drain;
+            },
+            .drain_end => {
+                if (depth == 1) outer_end = r.drain;
+                depth -= 1;
+            },
+            else => {},
+        }
+    }
+    expect(outer_begin != null and inner_begin != null, "the nested drain actually ran");
+    expect(outer_end != null, "the outer drain ended");
+    expect(inner_begin.? != outer_begin.?, "the inner drain got its OWN id");
+    expectEqU64(outer_begin.?, outer_end.?, "drain_end reports the OUTER id, not the nested one");
+}
+
+/// #858 review: a record rejected for sink reentrancy must leave NO trace —
+/// it previously consumed a `seq` and was written to the ring first, so the
+/// trace showed a sequence gap AND a retained record for something counted as
+/// dropped, which cannot be reconciled.
+fn check12ReentrantSinkLeavesNoTrace(h: *Harness) !void {
+    const t = h.fresh();
+    const Sink = struct {
+        var tracer: *engine.HookTracer = undefined;
+        fn onRecord(_: ?*anyopaque, _: *const engine.HookTraceRecord) void {
+            // Re-enter: this push must be rejected outright.
+            tracer.push(.{ .phase = .deliver, .source = .drain, .event = "reentrant" });
+        }
+    };
+    Sink.tracer = t;
+    var ctx: u8 = 0;
+    t.sink = .{ .ctx = @ptrCast(&ctx), .onRecord = Sink.onRecord };
+    defer t.sink = null;
+
+    const seq_before = t.seq;
+    const count_before = t.count();
+    h.game.emit(.{ .t__alpha = .{ .seq = 1 } });
+
+    expectEqU64(1, t.dropped_reentrant, "the reentrant record is counted");
+    expectEqU64(seq_before + 1, t.seq, "…and consumed NO sequence number");
+    expect(t.count() == count_before + 1, "…and was not retained in the ring");
+    for (0..t.count()) |i| {
+        expect(!std.mem.eql(u8, t.at(i).event, "reentrant"), "the rejected record is absent");
+    }
+
+    // Leave no buffered event behind: a later check asserts on EVERY
+    // rendered payload, and a stray `t__alpha` would fail it with the wrong
+    // seq. Sink is cleared first so the drain does not re-enter it.
+    t.sink = null;
+    h.game.dispatchEvents();
+}
 
 fn check01Enqueue(h: *Harness) !void {
     var t = h.fresh();

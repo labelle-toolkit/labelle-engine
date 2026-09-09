@@ -100,7 +100,7 @@ pub fn Mixin(comptime Game: type) type {
                 .source = source,
                 .event = @tagName(std.meta.activeTag(payload)),
                 .frame = self.frame_number,
-                .drain = t.drain_seq,
+                .drain = t.current_drain,
             };
             var begin = rec;
             begin.phase = .dispatch_begin;
@@ -238,7 +238,7 @@ pub fn Mixin(comptime Game: type) type {
                 .source = source,
                 .event = @tagName(std.meta.activeTag(event)),
                 .frame = self.frame_number,
-                .drain = t.drain_seq,
+                .drain = t.current_drain,
                 .err = err_name,
                 .count = @intCast(self.event_buffer.items.len),
             };
@@ -443,16 +443,24 @@ pub fn Mixin(comptime Game: type) type {
         pub fn dispatchEvents(self: *Game) void {
             if (!has_events) return;
             var dispatch_buf: EventBuffer = .empty;
+            var outer_drain: u64 = 0;
             std.mem.swap(EventBuffer, &self.event_buffer, &dispatch_buf);
 
             if (comptime tracing) {
                 const t = &self.hook_tracer;
                 t.drain_seq += 1;
+                // Stamp records with the drain that is RUNNING, saved and
+                // restored around nesting, not with the monotonic counter —
+                // a handler that drains would otherwise renumber everything
+                // the outer drain does after it (#858 review).
+                outer_drain = t.current_drain;
+                t.drain_depth += 1;
+                t.current_drain = t.drain_seq;
                 t.push(.{
                     .phase = .drain_begin,
                     .source = .drain,
                     .frame = self.frame_number,
-                    .drain = t.drain_seq,
+                    .drain = t.current_drain,
                     .count = @intCast(dispatch_buf.items.len),
                 });
             }
@@ -471,9 +479,15 @@ pub fn Mixin(comptime Game: type) type {
                     .phase = .drain_end,
                     .source = .drain,
                     .frame = self.frame_number,
-                    .drain = t.drain_seq,
+                    .drain = t.current_drain,
                     .count = @intCast(dispatch_buf.items.len),
                 });
+                // Back to the enclosing drain if this one was nested;
+                // otherwise `current_drain` resumes tracking the monotonic
+                // counter so a later top-level enqueue reads as "after N
+                // drains" rather than "inside drain N".
+                t.drain_depth -= 1;
+                t.current_drain = if (t.drain_depth > 0) outer_drain else t.drain_seq;
             }
             dispatch_buf.clearRetainingCapacity();
 

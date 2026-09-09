@@ -94,7 +94,7 @@ pub fn dispatch(
             if (comptime Game.HooksIsMergedExport) {
                 ran = walkMerged(t, h, name, data, variant_consumable, source, frame, drain);
             } else {
-                ran = walkSingle(Game, t, h, name, data, source, frame, drain);
+                ran = walkSingle(Game, t, h, name, data, variant_consumable, source, frame, drain);
             }
 
             t.push(.{
@@ -184,6 +184,7 @@ fn walkSingle(
     h: anytype,
     comptime name: []const u8,
     data: anytype,
+    comptime variant_consumable: bool,
     comptime source: trace.Source,
     frame: u64,
     drain: u64,
@@ -201,6 +202,12 @@ fn walkSingle(
         .receiver_type = Id.type_name,
         .receiver_id_kind = Id.kind,
         .index = 0,
+        // The merged walk stamps this on its deliver records and both
+        // walks stamp it on the dispatch bounds; omitting it here made a
+        // single-receiver deliver read as non-consumable for an event that
+        // IS consumable — the one field a reader uses to explain why a
+        // later listener never ran (#858 review).
+        .consumable = variant_consumable,
     });
     _ = @field(Base, name)(h.receiver, data);
     return 1;
