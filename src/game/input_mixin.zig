@@ -4,6 +4,8 @@ const Position = core.Position;
 const input_types = @import("../input_types.zig");
 const KeyboardKey = input_types.KeyboardKey;
 const MouseButton = input_types.MouseButton;
+const GamepadButton = input_types.GamepadButton;
+const GamepadAxis = input_types.GamepadAxis;
 
 /// Returns the input forwarding mixin for a given Game type.
 pub fn Mixin(comptime Game: type) type {
@@ -56,6 +58,33 @@ pub fn Mixin(comptime Game: type) type {
         /// Returns false if the backend doesn't report mouse-button edges.
         pub fn isMouseButtonReleased(_: *Game, button: MouseButton) bool {
             return Input.isMouseButtonReleased(@intCast(@intFromEnum(button)));
+        }
+
+        // ── Gamepad ──────────────────────────────────────────────
+
+        /// True when gamepad `id` is connected and usable this frame.
+        /// Returns false if the backend doesn't report gamepad state.
+        pub fn isGamepadAvailable(_: *Game, id: u32) bool {
+            return Input.isGamepadAvailable(id);
+        }
+
+        /// True while `button` on gamepad `id` is held down this frame.
+        /// Returns false if the backend doesn't report gamepad state.
+        pub fn isGamepadButtonDown(_: *Game, id: u32, button: GamepadButton) bool {
+            return Input.isGamepadButtonDown(id, @intCast(@intFromEnum(button)));
+        }
+
+        /// True on the frame `button` on gamepad `id` transitions from up to down.
+        /// Returns false if the backend doesn't report gamepad button edges.
+        pub fn isGamepadButtonPressed(_: *Game, id: u32, button: GamepadButton) bool {
+            return Input.isGamepadButtonPressed(id, @intCast(@intFromEnum(button)));
+        }
+
+        /// Current value of `axis` on gamepad `id`. Sticks report -1..1,
+        /// triggers report -1 (released) to 1 (fully pressed) on raylib.
+        /// Returns 0 if the backend doesn't report gamepad axes.
+        pub fn getGamepadAxisValue(_: *Game, id: u32, axis: GamepadAxis) f32 {
+            return Input.getGamepadAxisValue(id, @intCast(@intFromEnum(axis)));
         }
 
         // ── Touch ────────────────────────────────────────────────

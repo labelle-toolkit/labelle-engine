@@ -1,6 +1,20 @@
 /// Visuals mixin — sprite, shape, text, icon, and gizmo management + z-index.
+const std = @import("std");
 const core = @import("labelle-core");
 const Position = core.Position;
+
+/// `sourceRectFor` / `SourceRectOf` / `normalizeHandle` — the atlas→geometry
+/// mapping shared with `resolveAtlasSprites`. `setSpriteFrame` MUST go through
+/// the same function the per-frame resolver uses, or the two paths would drift
+/// (that drift is exactly what issue #826 documents in the wild).
+const atlas_mixin = @import("atlas_mixin.zig");
+
+/// Curated per-entity material effect + uniforms (labelle-gfx#305). Sourced
+/// from `labelle-core` so the engine, the renderer plugin's `Sprite.material`
+/// field, and game code all name ONE nominal type (gfx re-exports the same
+/// `backend_contract.Material`). Re-exported at the module root as
+/// `engine.Material`. See `setMaterial` / `clearMaterial` below.
+const Material = core.backend_contract.Material;
 
 /// Returns the visual management mixin for a given Game type.
 pub fn Mixin(comptime Game: type) type {
@@ -11,24 +25,51 @@ pub fn Mixin(comptime Game: type) type {
     const Icon = Game.IconComp;
     const Gizmo = core.GizmoComponent(Entity);
 
+    // The three fields `setSpriteFrame` writes. Same predicate
+    // `atlas_mixin.resolveAtlasSprites` gates on — a renderer is free to
+    // ship a `Sprite` without any of them (`StubRender`, test mocks).
+    const has_atlas_sprite_fields = @hasField(Sprite, "sprite_name") and
+        @hasField(Sprite, "source_rect") and @hasField(Sprite, "texture");
+
+    // The field `setTextFont` writes. `Text` is `void` on a renderer that
+    // ships no text visual at all (`StubRender`, several test mocks), and
+    // `@hasField` on a non-struct is a compile error — so the `void` check
+    // must come first and short-circuit.
+    const has_text_font = Text != void and @hasField(Text, "font");
+
+    // A renderer keys textures on either an enum handle (labelle-gfx's
+    // `TextureId`) or a plain integer; `normalizeHandle` bridges both.
+    const TextureHandle = if (has_atlas_sprite_fields) @FieldType(Sprite, "texture") else void;
+
+    // The type that renderer's `Text.font` field holds. The engine's `FontId`
+    // is a generational `{ index, generation }` struct; labelle-gfx's is an
+    // `enum(u32)` (and labelle-gfx#349 is what puts it on `TextComponent`), so
+    // the two are NOT assignable. `normalizeFontHandle` bridges them the same
+    // way `normalizeHandle` bridges texture handles — see engine#848.
+    const FontHandle = if (has_text_font) @FieldType(Text, "font") else void;
+
     return struct {
         pub fn addSprite(self: *Game, entity: Entity, sprite: Sprite) void {
             self.ecs_backend.addComponent(entity, sprite);
+            self.bumpRoster(); // membership changed (#653)
             self.renderer.trackEntity(entity, .sprite);
         }
 
         pub fn addShape(self: *Game, entity: Entity, shape: Shape) void {
             self.ecs_backend.addComponent(entity, shape);
+            self.bumpRoster(); // membership changed (#653)
             self.renderer.trackEntity(entity, .shape);
         }
 
         pub fn addText(self: *Game, entity: Entity, text: Text) void {
             self.ecs_backend.addComponent(entity, text);
+            self.bumpRoster(); // membership changed (#653)
             self.renderer.trackEntity(entity, .text);
         }
 
         pub fn addIcon(self: *Game, entity: Entity, icon: Icon) void {
             self.ecs_backend.addComponent(entity, icon);
+            self.bumpRoster(); // membership changed (#653)
             self.renderer.trackEntity(entity, .sprite);
         }
 
@@ -44,6 +85,7 @@ pub fn Mixin(comptime Game: type) type {
                 .offset_x = offset_x,
                 .offset_y = offset_y,
             });
+            self.bumpRoster(); // Gizmo membership changed (#653)
             self.setPosition(gizmo_entity, .{
                 .x = parent_pos.x + offset_x,
                 .y = parent_pos.y + offset_y,
@@ -56,16 +98,19 @@ pub fn Mixin(comptime Game: type) type {
         pub fn removeSprite(self: *Game, entity: Entity) void {
             self.renderer.untrackEntity(entity);
             self.ecs_backend.removeComponent(entity, Sprite);
+            self.bumpRoster(); // membership changed (#653)
         }
 
         pub fn removeShape(self: *Game, entity: Entity) void {
             self.renderer.untrackEntity(entity);
             self.ecs_backend.removeComponent(entity, Shape);
+            self.bumpRoster(); // membership changed (#653)
         }
 
         pub fn removeText(self: *Game, entity: Entity) void {
             self.renderer.untrackEntity(entity);
             self.ecs_backend.removeComponent(entity, Text);
+            self.bumpRoster(); // membership changed (#653)
         }
 
         pub fn setZIndex(self: *Game, entity: Entity, z_index: i16) void {
@@ -112,6 +157,191 @@ pub fn Mixin(comptime Game: type) type {
             if (sprite.flip_x == flip_x) return;
             sprite.flip_x = flip_x;
             self.renderer.markVisualDirty(entity);
+        }
+
+        // ── Atlas frame swap ──────────────────────────────────────
+
+        /// Point a sprite entity at a different atlas frame by name: stamps
+        /// `sprite_name`, re-resolves `source_rect` + `texture` through the
+        /// per-entity sprite cache, and marks the visual dirty. One call for
+        /// the whole "advance an animation frame" operation.
+        ///
+        /// WHY THIS EXISTS (#826): assigning `sprite.sprite_name = "other.png"`
+        /// alone renders the OLD frame — the renderer draws from `source_rect`
+        /// + `texture`, and nothing re-resolves those until the next
+        /// `resolveAtlasSprites` pass. So every animation script grew its own
+        /// `resolveSprite` helper reaching into the atlas manager by hand. Five
+        /// copies of those twelve lines exist across two games and a demo.
+        ///
+        /// WHY `texture_scale_*` IS THE LOAD-BEARING PART: `FindSpriteResult`
+        /// carries `texture_scale_x` / `texture_scale_y`, which are `1.0` for a
+        /// 1:1 atlas and `< 1` when the shipped PNG was downscaled without
+        /// re-running TexturePacker (a workflow the engine supports — see the
+        /// `FindSpriteResult` doc comment in `src/atlas.zig`). The source rect's
+        /// x/y/w/h are TEXTURE-pixel coordinates and must be multiplied by that
+        /// scale, while the DISPLAY dimensions are design-space and must stay
+        /// un-scaled. Every one of the five hand-rolled copies reads
+        /// `found.sprite.x/y/getWidth()/getHeight()` raw, so all five silently
+        /// mis-sample a downscaled atlas — sampling from beyond the texture's
+        /// real extent and drawing the wrong pixels, with nothing logged. This
+        /// helper delegates to `sourceRectFor`, the same pure mapping
+        /// `resolveAtlasSprites` uses, so the scale (and trim geometry, and
+        /// rotation) can only ever be applied one way.
+        ///
+        /// Resolves via `findSpriteCached` rather than `findSprite`: this is the
+        /// per-frame animation path, so the entity-keyed cache turns a repeated
+        /// hash walk over every loaded atlas into a version+hash compare.
+        ///
+        /// FAILURE POSTURE — silent, matching `setSpriteFlip` / `setMaterial`
+        /// (and `resolveAtlasSprites`, which skips unresolved names without a
+        /// word). No `log.warn`: this is called every frame by animation
+        /// scripts, so a warn on an unresolved name would be an unbounded log
+        /// flood rather than a diagnostic.
+        ///  * Entity has no `Sprite` component → returns without touching
+        ///    anything. Callers needing an assertion should `getComponent` first.
+        ///  * Name doesn't resolve → `sprite_name` IS still stamped, but
+        ///    `source_rect` / `texture` are left alone and the visual is NOT
+        ///    marked dirty. Stamping the name is deliberate: it mirrors the
+        ///    hand-rolled helpers, and it lets the per-frame `resolveAtlasSprites`
+        ///    pass pick the frame up on its own once the atlas finishes loading
+        ///    (a deferred-load swap self-heals instead of sticking forever). The
+        ///    alternative — a total no-op that leaves the old name in place —
+        ///    would be more literally "no-op safe" but would strand any caller
+        ///    that swaps a frame before its atlas is resident.
+        ///
+        /// Comptime no-op on renderers whose `Sprite` lacks the atlas trio
+        /// (`sprite_name` / `source_rect` / `texture`) — `StubRender` and mock
+        /// renderers in downstream tests — so the helper stays safe to call
+        /// uniformly, exactly like `setSpriteFlip`'s `flip_x` guard.
+        pub fn setSpriteFrame(self: *Game, entity: Entity, name: []const u8) void {
+            if (comptime !has_atlas_sprite_fields) return;
+            self.assertEntityAlive(entity, "setSpriteFrame");
+            const sprite = self.ecs_backend.getComponent(entity, Sprite) orelse return;
+
+            sprite.sprite_name = name;
+
+            const result = self.findSpriteCached(@intCast(entity), name) orelse return;
+
+            sprite.source_rect = atlas_mixin.sourceRectFor(atlas_mixin.SourceRectOf(Sprite), result);
+            sprite.texture = atlas_mixin.normalizeHandle(TextureHandle, result.texture_id);
+            self.renderer.markVisualDirty(entity);
+        }
+
+        // ── Text font swap ────────────────────────────────────────
+
+        /// Point a `Text` entity at a declared `.font` resource BY NAME:
+        /// resolves the name through `Game.fontId` and stamps the result on
+        /// the component's `font` field, then marks the visual dirty. The
+        /// text counterpart to `setSpriteFrame` (#826), closing the same gap
+        /// for text that #826 closed for sprites.
+        ///
+        /// WHY THIS EXISTS (#842): `TextVisual.font` is a `FontId`, and until
+        /// now nothing public produced one — so `addText` from a script could
+        /// only ever pass `.invalid`, and the whole `.font` resource kind was
+        /// unreachable end to end (no project in the toolkit declares one).
+        /// `game.fontId(name)` alone fixes the resolution; this exists so the
+        /// common case is one call that cannot forget the dirty-mark, exactly
+        /// as `setSpriteFlip` / `setSpriteFrame` / `setMaterial` do.
+        ///
+        /// HOW IT DIFFERS FROM `setSpriteFrame`, deliberately. `setSpriteFrame`
+        /// has a load-bearing correctness detail — `texture_scale_*` must
+        /// multiply the source rect but not the display dims, which every
+        /// hand-rolled copy got wrong. Text has no such transform to get
+        /// wrong: `FontId` is an opaque baked handle and glyph metrics ride
+        /// INSIDE the bake, so this really is a pure lookup + assign. The one
+        /// sizing subtlety is not this function's to make: a font is baked at
+        /// one `FontBakeParams.pixel_height`, and rendering it far from that
+        /// size is the renderer's scaling problem — two sizes of one face are
+        /// two separate declared resources with two names and two `FontId`s
+        /// (see the "distinct params produce distinct entries" case in
+        /// `test/asset_streaming_shim_test.zig`). Pick the name you want; this
+        /// will not resize anything for you.
+        ///
+        /// NOT-READY / FAILURE POSTURE — silent, matching every sibling setter,
+        /// but note the asymmetry with `setSpriteFrame`:
+        ///  * Entity has no `Text` component → returns without touching
+        ///    anything.
+        ///  * `fontId(name)` is `null` (font still streaming, missing, or
+        ///    registered under another kind) → the component is left ALONE and
+        ///    the visual is NOT marked dirty. Unlike `setSpriteFrame`, nothing
+        ///    is stamped for a later pass to pick up: a `Text` component has no
+        ///    `font_name` field and there is no per-frame text resolver, so an
+        ///    unresolved call CANNOT self-heal. A caller swapping to a lazily
+        ///    declared font must either retry until it takes, declare the
+        ///    resource eager, or call `loadFontIfNeeded(name)` first — see the
+        ///    streaming contract on `atlas_mixin.fontId`. Returning `bool`
+        ///    would let a caller notice; it is void for consistency with the
+        ///    other setters, and a caller that needs to know can test
+        ///    `game.fontId(name) != null` itself.
+        ///  * No `log.warn` on an unresolved name: like `setSpriteFrame` this
+        ///    is callable per frame, so a warn would be a log flood.
+        ///
+        /// Short-circuits when the font already matches, avoiding a wasted
+        /// dirty-mark. Comptime no-op on renderers with no `Text` component at
+        /// all (`StubRender`, mocks — `Text` is `void` there) or whose `Text`
+        /// carries no `font` field, so the helper stays safe to call uniformly
+        /// exactly like `setSpriteFlip`'s `flip_x` guard.
+        pub fn setTextFont(self: *Game, entity: Entity, name: []const u8) void {
+            if (comptime !has_text_font) return;
+            self.assertEntityAlive(entity, "setTextFont");
+            const text = self.ecs_backend.getComponent(entity, Text) orelse return;
+            const id = self.fontId(name) orelse return;
+            // Compare and store in the RENDERER's handle type, never the
+            // engine's: `text.font` is whatever the renderer declared.
+            const handle = atlas_mixin.normalizeFontHandle(FontHandle, id);
+            if (std.meta.eql(text.font, handle)) return;
+            text.font = handle;
+            self.renderer.markVisualDirty(entity);
+        }
+
+        /// Apply a curated per-entity material effect (flash / palette_swap /
+        /// dissolve / outline — labelle-gfx#305) to a sprite entity, then mark
+        /// its visuals dirty so the renderer picks up the change on the next
+        /// sync.
+        ///
+        /// The runtime mirror of the declarative `.Sprite = .{ .material = … }`
+        /// scene/prefab authoring path: material rides INLINE on the sprite
+        /// component (exactly like `tint` / `flip_x`), so there is no separate
+        /// `Material` component to register — this setter and the scene loader's
+        /// generic field coercion feed the very same `Sprite.material` field.
+        ///
+        /// Bundles the `sprite.material = m` + `renderer.markVisualDirty(entity)`
+        /// pair (forgetting the dirty-mark leaves the visual stale — the same
+        /// silent bug `setSpriteFlip` was created to prevent). Short-circuits
+        /// when the material already matches, avoiding a wasted dirty-mark and
+        /// the batch-breaking material re-submit it would provoke.
+        ///
+        /// GRACEFUL DEGRADE — two layers, no crash on either:
+        ///  1. Comptime: a no-op on renderers whose `Sprite` carries no
+        ///     `material` field (`StubRender`, mock renderers, and gfx builds
+        ///     predating the material seam). The `@hasField` guard short-circuits
+        ///     before any field access, so the setter is safe to call uniformly.
+        ///  2. Runtime: on a backend that lacks the specific effect's shader,
+        ///     the renderer's `materialSupported` gate draws the plain sprite
+        ///     (`labelle-gfx#305`). Setting an unsupported material never
+        ///     crashes — it simply has no visible effect on that backend.
+        ///
+        /// Returns silently if the entity has no `Sprite` component — callers
+        /// that need to assert presence should `getComponent` themselves first
+        /// (matches `setSpriteFlip` / `setZIndex`).
+        pub fn setMaterial(self: *Game, entity: Entity, material: Material) void {
+            if (comptime !@hasField(Sprite, "material")) return;
+            self.assertEntityAlive(entity, "setMaterial");
+            const sprite = self.ecs_backend.getComponent(entity, Sprite) orelse return;
+            if (std.meta.eql(sprite.material, material)) return;
+            sprite.material = material;
+            self.renderer.markVisualDirty(entity);
+        }
+
+        /// Remove any material effect from a sprite entity, restoring the plain
+        /// (fast-path, fully batchable) sprite draw. Equivalent to
+        /// `setMaterial(entity, .{})` — `Material.effect == .none` is the
+        /// no-material default that never touches the renderer's material path.
+        ///
+        /// Same graceful-degrade + missing-`Sprite` + short-circuit semantics as
+        /// `setMaterial`.
+        pub fn clearMaterial(self: *Game, entity: Entity) void {
+            self.setMaterial(entity, .{});
         }
     };
 }

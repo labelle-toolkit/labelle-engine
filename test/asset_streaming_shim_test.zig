@@ -60,7 +60,12 @@ fn MockRenderer(comptime Entity: type) type {
             layer: enum { default } = .default,
         };
 
-        pub const TextureId = enum(u32) { invalid = 0, _ };
+        // NO `pub const TextureId` here, deliberately. The real `GfxRenderer`
+        // wrapper (labelle-gfx/src/renderer.zig) declares none — its texture
+        // methods are spelled in terms of core's `TextureId` — and every mock
+        // that invented one let engine code compile here and fail in a real
+        // game (#816, and the v2.12.0 release it broke). This mock stays
+        // shaped like the real thing even where that is less convenient.
         pub const TextureInfo = struct { width: f32, height: f32 };
 
         pub fn init(_: std.mem.Allocator) Self {
@@ -82,20 +87,48 @@ fn MockRenderer(comptime Entity: type) type {
             return false;
         }
 
-        // Present only so the atlas shim's `has_load_from_memory`
-        // gate flips to `true`. The shim no longer invokes it — the
-        // catalog owns the upload — but removing it would disable the
-        // shim entirely on this Game type.
-        pub fn loadTextureFromMemory(_: *Self, _: [:0]const u8, _: []const u8) !TextureId {
-            return .invalid;
+        // Flips the atlas shim's `has_load_from_memory` gate to `true`.
+        // The atlas shim no longer invokes it (the catalog owns the
+        // upload), but `Game.loadTextureFromMemory` — the standalone
+        // in-memory texture uploader (render-mesh seam, gfx#290) — does
+        // forward straight to it, so return a recognisable non-invalid
+        // id the round-trip test can assert against.
+        pub const mock_tex_id: u32 = 77;
+        pub fn loadTextureFromMemory(_: *Self, _: [:0]const u8, _: []const u8) !core.TextureId {
+            return @enumFromInt(mock_tex_id);
         }
 
         // Not used on the catalog path (the catalog-managed upload
         // bypasses the renderer's texture side-table), but the shim
         // compiles the `queryTextureDims` call against it. Returning
         // `null` matches the adapter-uploaded-texture reality.
-        pub fn getTextureInfo(_: *const Self, _: TextureId) ?TextureInfo {
+        pub fn getTextureInfo(_: *const Self, _: core.TextureId) ?TextureInfo {
             return null;
+        }
+
+        // #328 phase 4: the seam `game.nativeTextureId` forwards to. Present
+        // here so the gate flips true and the engine's accessor is compiled
+        // and exercised, not merely declared.
+        pub const mock_backend_id: u32 = 4242;
+        // Takes core's `TextureId`, like the real `GfxRenderer` seam — and
+        // note the wrapper deliberately exposes NO `TextureId` decl of its
+        // own, because the real one does not either. An earlier version of
+        // this mock declared one, which let the engine's normalization
+        // compile here and fail in an actual game.
+        pub fn nativeTextureId(_: *const Self, _: core.TextureId) ?core.BackendTextureId {
+            return @enumFromInt(mock_backend_id);
+        }
+
+        // #817: the seam `game.unloadTexture` forwards to. Same shape as the
+        // real `GfxRenderer.unloadTexture` — `*Self`, core's `TextureId`,
+        // returns void. The counters are INSTANCE state (not container-level
+        // `var`s) so a test asserts what this Game's renderer was actually
+        // told, with no leakage between tests.
+        unload_calls: u32 = 0,
+        last_unloaded: ?core.TextureId = null,
+        pub fn unloadTexture(self: *Self, id: core.TextureId) void {
+            self.unload_calls += 1;
+            self.last_unloaded = id;
         }
     };
 }
@@ -114,6 +147,7 @@ const TestGame = engine.GameConfig(
     MockEcs,
     engine.input_mod.StubInput,
     engine.audio_mod.StubAudio,
+    engine.StubVideo,
     engine.gui_mod.StubGui,
     void, // hooks
     core.StubLogSink,
@@ -180,7 +214,20 @@ const tiny_atlas_json: []const u8 =
     \\  "meta": { "size": { "w": 1, "h": 1 } } }
 ;
 const fake_png: []const u8 = "fake-png-bytes";
-const file_type: [:0]const u8 = "png";
+
+// IMAGE `file_type` carries the LEADING DOT. This constant used to read
+// `"png"`, which is harmless here (the mock renderer / mock ImageBackend
+// ignore the argument) but WRONG against a real backend and — as #832's
+// review showed — it reads as a repo-wide convention it is not.
+//
+// The producer is labelle-assembler (#676, merged): both its atlas arm and
+// its `.image` arm emit `".png"`. The consumer that reads it is raylib's
+// `LoadImageFromMemory`, which `strcmp`s against `".png"` and returns an
+// empty image for `"png"`. Audio and font `file_type` are the opposite —
+// `"wav"` / `"ogg"` / `"ttf"`, no dot (see `audio_file_type` /
+// `font_file_type` below), because their decoders dispatch on exactly
+// those tokens.
+const file_type: [:0]const u8 = ".png";
 
 // ── Tests ──
 
@@ -261,14 +308,30 @@ test "shim: isAtlasLoaded is false for unregistered and pending, true after load
     try testing.expect(game.isAtlasLoaded("pending"));
 }
 
+// ── Hard-deadline harness ──
+//
+// Shared with `image_load_shim_test.zig` (#832/#833). The atlas test below
+// used to `join()` its worker unconditionally, which meant a real
+// regression HUNG CI instead of failing at its deadline — a test that
+// cannot fail. `load_deadline.zig` prints the wedged call and aborts.
+
+const deadline = @import("load_deadline.zig");
+
+fn loadAtlasWithDeadline(game: *TestGame, name: []const u8) deadline.Outcome {
+    return deadline.callWithDeadline(TestGame, "loadAtlasIfNeeded", game, name);
+}
+
+const expectDeadlineError = deadline.expectError;
+
 test "shim: deadlock regression — decode error surfaces within 200ms, no hang" {
     // The core sync-shim invariant: without the `pump()` call inside
     // the busy-wait, `isReady` never flips and the loop spins forever.
     // A forced decode error proves the loop terminates on the error
     // path; combined with `shim: loadAtlasIfNeeded twice is idempotent`
     // above (which proves the loop terminates on the happy path), we
-    // cover both exits. The 200ms timeout bounds runaway-spin failures
-    // so a regression fails CI instead of stalling it.
+    // cover both exits. The deadline is ENFORCED — `loadAtlasWithDeadline`
+    // aborts rather than joining a wedged worker — so a regression fails
+    // CI at 200ms with a named message instead of stalling it.
 
     Mock.reset();
     Mock.decode_fails = true;
@@ -280,45 +343,98 @@ test "shim: deadlock regression — decode error surfaces within 200ms, no hang"
 
     try game.registerAtlasFromMemory("dead", tiny_atlas_json, fake_png, file_type);
 
-    // Run the shim on a background thread so the main thread can
-    // impose a deadline. A deadlock manifests as the worker never
-    // finishing — the 200ms wait below expires while
-    // `loadAtlasIfNeeded` is still spinning.
-    const Runner = struct {
-        result: ?anyerror = null,
-        done: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
-
-        fn run(self: *@This(), g: *TestGame) void {
-            if (g.loadAtlasIfNeeded("dead")) |_| {
-                self.result = null;
-            } else |err| {
-                self.result = err;
-            }
-            self.done.store(true, .release);
-        }
-    };
-    var runner = Runner{};
-    const handle = try std.Thread.spawn(.{}, Runner.run, .{ &runner, &game });
-
-    const deadline_ns: u64 = 200 * std.time.ns_per_ms;
-    var waited_ns: u64 = 0;
-    const step_ns: u64 = 1 * std.time.ns_per_ms;
-    while (waited_ns < deadline_ns) : (waited_ns += step_ns) {
-        if (runner.done.load(.acquire)) break;
-        { var _req: std.c.timespec = .{ .sec = (step_ns / std.time.ns_per_s), .nsec = (step_ns % std.time.ns_per_s) }; var _rem: std.c.timespec = undefined; _ = std.c.nanosleep(&_req, &_rem); }
-    }
-    const terminated = runner.done.load(.acquire);
-    handle.join();
-    try testing.expect(terminated);
     // The error surfaced through the catalog's `lastError` path —
     // not a successful load, not a hang.
-    try testing.expectEqual(
-        @as(?anyerror, error.MockDecodeFailure),
-        runner.result,
-    );
+    try expectDeadlineError(loadAtlasWithDeadline(&game, "dead"), error.MockDecodeFailure);
     // Atlas still reports unloaded — the failure did NOT accidentally
     // flip the TextureManager's pending→loaded transition.
     try testing.expect(!game.isAtlasLoaded("dead"));
+}
+
+test "shim: a blocking atlas load while the GPU surface is lost fails fast, not deadlocks" {
+    // #833 hang #2, inherited from #832's fix the moment `loadAtlasIfNeeded`
+    // started going through `loadAssetIfNeededInternal`.
+    //
+    // `surfaceLost` clears the catalog's `gpu_alive` gate and then emits
+    // `engine__surface_lost` SYNCHRONOUSLY (#820/#823), so a hook that
+    // (re-)loads an atlas runs with image uploads already PARKED on the
+    // result ring. The old inline loop entered the busy-wait there and
+    // could never leave it: `pump` refuses to upload into a dead context,
+    // so the entry reaches neither `.ready` nor `.failed`. That wedges
+    // `surfaceLost` itself — and `surfaceRestored`, the only thing that
+    // reopens the gate, can then never run.
+    //
+    // Without the fix this test does not "fail slowly", it hangs; the
+    // harness is what turns that into a fast, named CI failure.
+    Mock.reset();
+    engine.ImageLoader.setBackend(Mock.backend);
+    defer engine.ImageLoader.clearBackend();
+
+    var game = TestGame.init(testing.allocator);
+    defer game.deinit();
+
+    try game.registerAtlasFromMemory("hud_atlas", tiny_atlas_json, fake_png, file_type);
+
+    game.surfaceLost();
+    try testing.expect(!game.assets.gpu_alive);
+
+    try expectDeadlineError(loadAtlasWithDeadline(&game, "hud_atlas"), error.GpuSurfaceUnavailable);
+    // Nothing was uploaded into the dead context, and the guard fires
+    // BEFORE `acquire`, so no phantom refcount is left pinning the entry.
+    try testing.expectEqual(@as(u32, 0), Mock.upload_calls);
+    try testing.expectEqual(@as(u32, 0), game.assets.entries.get("hud_atlas").?.refcount);
+    try testing.expect(!game.isAtlasLoaded("hud_atlas"));
+
+    // INIT_WINDOW reopens the gate; the very same call now works.
+    game.surfaceRestored();
+    try testing.expect(game.assets.gpu_alive);
+    try testing.expect(try game.loadAtlasIfNeeded("hud_atlas"));
+    try testing.expect(game.isAtlasLoaded("hud_atlas"));
+}
+
+test "shim: an atlas whose decode was never queued errors instead of spinning forever" {
+    // #833 hang #1, the issue's original subject, inherited from #832's
+    // fix by the same collapse.
+    //
+    // `AssetCatalog.enqueueDecode` TOLERATES a full request ring: it logs,
+    // leaves the entry at `.registered`, and nothing re-enqueues it — not
+    // `pump`, not any other layer. `acquire` then bumps the refcount and
+    // returns happily, so the old inline loop spun forever on an asset
+    // that would never become ready, with no error, no log and no crash.
+    //
+    // The post-acquire state is what makes that deterministic, so that is
+    // what this test constructs: an entry sitting at `.registered` with a
+    // nonzero refcount and nothing in flight — byte for byte what a
+    // ring-full `enqueueDecode` leaves behind. Reproducing it by actually
+    // filling the ring would mean registering 64+ assets per worker ring
+    // and stalling three worker threads mid-decode to keep them full: not
+    // deterministic, and not cheaper than saying the invariant outright.
+    // (`acquire` only enqueues on the 0 → 1 refcount transition, which is
+    // exactly why a bumped-but-unqueued entry can never recover.)
+    Mock.reset();
+    engine.ImageLoader.setBackend(Mock.backend);
+    defer engine.ImageLoader.clearBackend();
+
+    var game = TestGame.init(testing.allocator);
+    defer game.deinit();
+
+    try game.registerAtlasFromMemory("unqueued", tiny_atlas_json, fake_png, file_type);
+
+    // Reaching into `.entries` is intentional — there is no higher-level
+    // API that can put an entry in the post-ring-full state.
+    const entry = game.assets.entries.getPtr("unqueued").?;
+    try testing.expectEqual(engine.AssetState.registered, entry.state);
+    entry.refcount = 1;
+
+    try expectDeadlineError(loadAtlasWithDeadline(&game, "unqueued"), error.AssetDecodeNotQueued);
+    // Our reference was returned; the simulated holder still owns theirs,
+    // and no decode was ever attempted.
+    try testing.expectEqual(@as(u32, 1), game.assets.entries.get("unqueued").?.refcount);
+    try testing.expectEqual(@as(u32, 0), Mock.decode_calls);
+    try testing.expect(!game.isAtlasLoaded("unqueued"));
+
+    // Hand back the simulated holder's reference so teardown is clean.
+    game.assets.release("unqueued");
 }
 
 test "shim: acquire refcount is released when decode fails" {
@@ -369,6 +485,31 @@ test "shim: double register through the shim is tolerated" {
 
     _ = try game.loadAtlasIfNeeded("shared");
     try testing.expect(game.isAtlasLoaded("shared"));
+}
+
+// ── Standalone in-memory texture upload (render-mesh seam, gfx#290) ──
+//
+// `Game.loadTextureFromMemory(file_type, data) → u32` is the plugin
+// entry point (labelle-spine uploads an atlas PNG and hands the numeric
+// id to `game.drawMesh`). Unlike the atlas shim it does NOT go through
+// the catalog — it forwards straight to `renderer.loadTextureFromMemory`
+// and normalises the returned `TextureId` enum to a plain `u32`.
+
+test "texture: loadTextureFromMemory forwards to renderer and returns u32 id" {
+    var game = TestGame.init(testing.allocator);
+    defer game.deinit();
+
+    const png_bytes: []const u8 = "fake-atlas-png";
+    const id: u32 = try game.loadTextureFromMemory(file_type, png_bytes);
+
+    // The mock renderer hands back `TextureId(77)`; the wrapper must
+    // normalise the enum to the raw u32 `drawMesh` expects.
+    try testing.expectEqual(
+        MockRenderer(MockEcs.Entity).mock_tex_id,
+        id,
+    );
+    // Sanity: the returned handle is a valid (non-`invalid`) id.
+    try testing.expect(id != 0);
 }
 
 // ── Audio shim (Phase 4, #447) ──
@@ -607,4 +748,183 @@ test "font shim: distinct registrations with different params produce distinct e
     try testing.expect(game.assets.isReady("font_large"));
     try testing.expectEqual(@as(u32, 2), MockFont.decode_calls);
     try testing.expectEqual(@as(u32, 2), MockFont.upload_calls);
+}
+
+// ── #328 phase 4: game.nativeTextureId ────────────────────────────────
+//
+// The seam exists so a game script stops doing
+// `game.renderer.getTextureInfo(...).backend_texture.id` — reaching around
+// the engine boundary, legal only because Zig has no per-field privacy. A
+// downstream UI kit did exactly that once gfx began minting its own keys
+// (labelle-gfx#326).
+//
+// Driven through a real `Game`, NOT a bare mock: an accessor tested only
+// against its own test double proves nothing about what the engine compiles.
+
+test "game.nativeTextureId forwards to the renderer's seam" {
+    var game = TestGame.init(testing.allocator);
+    defer game.deinit();
+
+    // A BARE u32 — the engine's public texture handle, what
+    // `game.loadTextureFromMemory` and `AssetTexture` actually hand a caller.
+    // Passing the renderer's own `TextureId` here would test a path no
+    // engine-facing caller takes (both review bots caught that on #814).
+    const Renderer = MockRenderer(MockEcs.Entity);
+    const engine_handle: u32 = 1 << 31;
+    const backend_id = game.nativeTextureId(engine_handle).?;
+
+    try testing.expectEqual(@as(u32, Renderer.mock_backend_id), backend_id.toInt());
+
+    // Engine handle and backend id are different numbers AND different types.
+    try testing.expect(backend_id.toInt() != engine_handle);
+    try testing.expect(@TypeOf(backend_id) != @TypeOf(engine_handle));
+
+    // And an already-typed handle still works, so both spellings are accepted.
+    // Typed as core's `TextureId` — what the real gfx seam takes.
+    const typed: core.TextureId = @enumFromInt(1 << 31);
+    try testing.expectEqual(backend_id.toInt(), game.nativeTextureId(typed).?.toInt());
+}
+
+// ── #817: game.unloadTexture ──────────────────────────────────────────
+//
+// The release half of the texture seam. A game could acquire a texture
+// through `game.loadTextureFromMemory` but could only release it via
+// `game.renderer.unloadTexture(@enumFromInt(handle))` — reaching past the
+// engine boundary, legal only because Zig has no per-field privacy.
+//
+// Same testing rules as the phase-4 seam above, for the same reason: driven
+// through a real `Game` against a mock shaped like the real `GfxRenderer`
+// (no `TextureId` decl of its own, methods take core's), and the mock
+// RECORDS the call so these assert forwarding rather than compilation.
+
+test "game.unloadTexture forwards a bare u32 handle to the renderer" {
+    var game = TestGame.init(testing.allocator);
+    defer game.deinit();
+
+    try testing.expectEqual(@as(u32, 0), game.renderer.unload_calls);
+
+    // A BARE u32 — the engine's public texture handle, exactly what
+    // `game.loadTextureFromMemory` hands a caller. This is the spelling that
+    // matters and the one a convenient mock most easily gets wrong (#816).
+    const engine_handle: u32 = 1 << 31;
+    game.unloadTexture(engine_handle);
+
+    try testing.expectEqual(@as(u32, 1), game.renderer.unload_calls);
+    // Forwarded, not merely counted: the renderer saw THIS handle, widened
+    // into core's `TextureId` rather than reinterpreted or truncated.
+    try testing.expectEqual(engine_handle, @intFromEnum(game.renderer.last_unloaded.?));
+}
+
+test "game.unloadTexture accepts an already-typed handle too" {
+    var game = TestGame.init(testing.allocator);
+    defer game.deinit();
+
+    const typed: core.TextureId = @enumFromInt(4242);
+    game.unloadTexture(typed);
+
+    try testing.expectEqual(@as(u32, 1), game.renderer.unload_calls);
+    try testing.expectEqual(typed, game.renderer.last_unloaded.?);
+}
+
+test "game.unloadTexture round-trips the handle loadTextureFromMemory returned" {
+    // The acquire/release pair the seam exists for, end to end through the
+    // public API only — `game.renderer` appears nowhere but the assertions.
+    var game = TestGame.init(testing.allocator);
+    defer game.deinit();
+
+    const handle = try game.loadTextureFromMemory("png", fake_png);
+    try testing.expectEqual(@as(u32, MockRenderer(MockEcs.Entity).mock_tex_id), handle);
+    try testing.expectEqual(@TypeOf(handle), u32);
+
+    game.unloadTexture(handle);
+
+    try testing.expectEqual(@as(u32, 1), game.renderer.unload_calls);
+    try testing.expectEqual(handle, @intFromEnum(game.renderer.last_unloaded.?));
+}
+
+test "game.unloadTexture is a silent no-op on a renderer without the seam" {
+    // The graceful degrade: `Game` surfaces `unloadTexture` unconditionally,
+    // and the mixin's `@hasDecl` gate — not a `@compileError` — decides. A
+    // renderer that predates the seam must still compile and simply do
+    // nothing, which is why the re-export in `game.zig` is unguarded.
+    const NoUnload = struct {
+        const Self = @This();
+        pub const Sprite = MockRenderer(MockEcs.Entity).Sprite;
+        pub const Shape = MockRenderer(MockEcs.Entity).Shape;
+        pub fn init(_: std.mem.Allocator) Self {
+            return .{};
+        }
+        pub fn deinit(_: *Self) void {}
+        pub fn trackEntity(_: *Self, _: MockEcs.Entity, _: core.VisualType) void {}
+        pub fn untrackEntity(_: *Self, _: MockEcs.Entity) void {}
+        pub fn markPositionDirty(_: *Self, _: MockEcs.Entity) void {}
+        pub fn markPositionDirtyWithChildren(_: *Self, comptime _: type, _: anytype, _: MockEcs.Entity) void {}
+        pub fn updateHierarchyFlag(_: *Self, _: MockEcs.Entity, _: bool) void {}
+        pub fn markVisualDirty(_: *Self, _: MockEcs.Entity) void {}
+        pub fn sync(_: *Self, comptime _: type, _: anytype) void {}
+        pub fn render(_: *Self) void {}
+        pub fn setScreenHeight(_: *Self, _: f32) void {}
+        pub fn clear(_: *Self) void {}
+        pub fn renderGizmoDraws(_: *Self, _: []const core.GizmoDraw) void {}
+        pub fn hasEntity(_: *const Self, _: MockEcs.Entity) bool {
+            return false;
+        }
+    };
+    const NoUnloadGame = engine.GameConfig(
+        NoUnload,
+        MockEcs,
+        engine.input_mod.StubInput,
+        engine.audio_mod.StubAudio,
+        engine.StubVideo,
+        engine.gui_mod.StubGui,
+        void,
+        core.StubLogSink,
+        EmptyComponents,
+        &.{},
+        void,
+    );
+
+    var game = NoUnloadGame.init(testing.allocator);
+    defer game.deinit();
+
+    // Compiles and returns; no `@compileError`, no crash.
+    game.unloadTexture(@as(u32, 7));
+}
+
+// ── normalizeHandle (#818 review) ─────────────────────────────────────
+//
+// A renderer seam may take an ENUM handle (labelle-gfx's `TextureId`) or a
+// plain INTEGER — the tilemap renderers in `test/tilemap_test.zig` declare
+// `unloadTexture(id: u32)`. A caller may hold either the engine's public
+// `u32` or an already-typed handle. All four combinations must work.
+//
+// The first version assumed the target was always an enum and called
+// `@enumFromInt` unconditionally, which does not compile against an
+// integer-handle renderer.
+
+test "normalizeHandle: int caller -> enum target" {
+    const E = enum(u32) { invalid = 0, _ };
+    const out = engine.normalizeTextureHandle(E, @as(u32, 4242));
+    try testing.expectEqual(@as(u32, 4242), @intFromEnum(out));
+    try testing.expectEqual(E, @TypeOf(out));
+}
+
+test "normalizeHandle: enum caller -> enum target passes through" {
+    const E = enum(u32) { invalid = 0, _ };
+    const in: E = @enumFromInt(1 << 31);
+    const out = engine.normalizeTextureHandle(E, in);
+    try testing.expectEqual(@as(u32, 1 << 31), @intFromEnum(out));
+}
+
+test "normalizeHandle: int caller -> INT target (the case that would not compile)" {
+    const out = engine.normalizeTextureHandle(u32, @as(u32, 4242));
+    try testing.expectEqual(@as(u32, 4242), out);
+    try testing.expectEqual(u32, @TypeOf(out));
+}
+
+test "normalizeHandle: enum caller -> INT target" {
+    const E = enum(u32) { invalid = 0, _ };
+    const in: E = @enumFromInt(77);
+    const out = engine.normalizeTextureHandle(u32, in);
+    try testing.expectEqual(@as(u32, 77), out);
 }

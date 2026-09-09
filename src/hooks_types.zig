@@ -16,6 +16,7 @@ pub fn HookPayload(comptime Entity: type) type {
         game_deinit: void,
         frame_start: FrameInfo,
         frame_end: FrameInfo,
+        fixed_update: FixedUpdateInfo,
 
         // Scene lifecycle
         scene_before_reset: SceneInfo,
@@ -44,6 +45,19 @@ pub const GameInitInfo = struct {
 
 pub const FrameInfo = struct {
     frame_number: u64 = 0,
+    dt: f32 = 0,
+};
+
+/// Payload for `fixed_update` — emitted once per fixed-timestep step the
+/// accumulator runs inside a single `tick` (#751). Unlike `frame_start` /
+/// `frame_end` (which fire once per rendered frame on the variable dt),
+/// `fixed_update` fires 0..N times per frame at a stable `dt` so
+/// determinism-sensitive logic (physics, lockstep sim) advances on a fixed
+/// clock decoupled from render rate. `step_index` is the monotonic global
+/// fixed-step counter (never reset across frames) — handy for lockstep /
+/// state-hash assertions. `dt` is the fixed step (`Game.fixed_dt`).
+pub const FixedUpdateInfo = struct {
+    step_index: u64 = 0,
     dt: f32 = 0,
 };
 

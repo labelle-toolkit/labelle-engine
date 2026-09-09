@@ -22,7 +22,9 @@ jobs:
       - name: Checkout sibling dependencies
         shell: bash
         run: |
-          git clone --depth 1 --branch main https://github.com/labelle-toolkit/labelle-core.git ../labelle-core
+          BR="${{ github.head_ref || github.ref_name }}"
+          git clone --depth 1 --branch "$BR" https://github.com/labelle-toolkit/labelle-core.git ../labelle-core \
+            || git clone --depth 1 --branch main https://github.com/labelle-toolkit/labelle-core.git ../labelle-core
 
       - name: Install Zig
         uses: mlugg/setup-zig@v2

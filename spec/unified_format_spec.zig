@@ -9,8 +9,8 @@
 //!  - prefab references nested inside entity-bearing component
 //!    fields (the `Room.movement_nodes` pattern) under the unified
 //!    format,
-//!  - a reference entry carrying both `overrides` and a legacy
-//!    `components` key.
+//!  - a reference entry carrying the removed legacy `components`
+//!    key is rejected (engine v2.0, #592).
 
 const std = @import("std");
 const zspec = @import("zspec");
@@ -181,38 +181,39 @@ pub const UnifiedFormatSpec = struct {
             try expect.toBeNull(findMarker(&game, 500));
         }
 
-        test "legacy components on a nested reference still resolves" {
-            try Bridge.loadSceneFromSource(&game,
+        test "legacy components on a nested reference is a load-time error" {
+            // A nested prefab reference patches via `overrides` (or
+            // flat PascalCase keys); the pre-#560 `components`
+            // wrapper on a reference is rejected in v2.0 (#592).
+            try std.testing.expectError(error.InvalidFormat, Bridge.loadSceneFromSource(&game,
                 \\{ "root": { "children": [
                 \\  { "components": { "Container": { "slots": [
                 \\    { "prefab": "nested_item", "components": { "Marker": { "id": 8 } } }
                 \\  ] } } }
                 \\] } }
-            , PREFAB_DIR);
-
-            try expect.notToBeNull(findMarker(&game, 8));
+            , PREFAB_DIR));
         }
     };
 
-    // ── reference entry: overrides vs. legacy components ────────
+    // ── reference entry: legacy components rejected (#592) ──────
 
-    pub const @"a reference carrying both overrides and components" = struct {
+    pub const @"a reference carrying a legacy components key" = struct {
         test "tests:before" {
             const src = Corpus.create(.{});
             try Bridge.addEmbeddedPrefab(&game, "base", src.base, PREFAB_DIR);
         }
 
-        test "overrides wins over a legacy components key on the same entry" {
-            try Bridge.loadSceneFromSource(&game,
+        test "a components key on a prefab reference is a load-time error" {
+            // Even alongside a valid `overrides`, a `components`
+            // wrapper on a reference is the removed legacy alias and
+            // is rejected outright (#592).
+            try std.testing.expectError(error.InvalidFormat, Bridge.loadSceneFromSource(&game,
                 \\{ "root": { "children": [
                 \\  { "prefab": "base",
                 \\    "overrides":  { "Marker": { "id": 9  } },
                 \\    "components": { "Marker": { "id": 99 } } }
                 \\] } }
-            , PREFAB_DIR);
-
-            try expect.notToBeNull(findMarker(&game, 9));
-            try expect.toBeNull(findMarker(&game, 99));
+            , PREFAB_DIR));
         }
     };
 };

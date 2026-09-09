@@ -16,9 +16,11 @@ pub const script_runner_mod = @import("script_runner.zig");
 pub const gestures_mod = @import("gestures.zig");
 pub const sparse_set_mod = @import("sparse_set.zig");
 pub const query_mod = @import("query.zig");
+pub const command_buffer_mod = @import("command_buffer.zig");
 pub const hooks_types_mod = @import("hooks_types.zig");
-pub const animation_mod = @import("animation.zig");
+pub const anim_timing_mod = @import("anim_timing.zig");
 pub const animation_def_mod = @import("animation_def.zig");
+pub const animation_def_runtime_mod = @import("animation_def_runtime.zig");
 pub const animation_state_mod = @import("animation_state.zig");
 pub const sprite_animation_mod = @import("sprite_animation.zig");
 pub const sprite_animation_tick_mod = @import("sprite_animation_tick.zig");
@@ -46,12 +48,109 @@ pub const runtime_env = @import("runtime_env.zig");
 pub const requestedScene = runtime_env.requestedScene;
 
 // ── Game ──
+/// Comptime helper that converts a texture handle to whatever type a
+/// renderer seam takes (enum or integer). Exported so `test/` can exercise
+/// it directly — inline tests in `src/*.zig` are NOT collected by this
+/// suite, so a test beside the implementation would never run.
+pub const normalizeTextureHandle = @import("game/atlas_mixin.zig").normalizeHandle;
+
+/// The font twin of `normalizeTextureHandle` (engine#848): converts the
+/// engine's generational `FontId` to whatever type a renderer's `Text.font`
+/// field holds — labelle-gfx's `enum(u32)`, a plain integer, or the engine's
+/// own struct. `packFontId` / `unpackFontId` are the `u32` transport encoding
+/// it uses (index low, generation high), exported so the assembler adapter,
+/// a backend, and `test/` can all agree on one layout.
+pub const normalizeFontHandle = @import("game/atlas_mixin.zig").normalizeFontHandle;
+pub const packFontId = @import("game/atlas_mixin.zig").packFontId;
+pub const unpackFontId = @import("game/atlas_mixin.zig").unpackFontId;
+
 pub const GameConfig = game_mod.GameConfig;
+/// Y-axis-aware game configuration — `GameConfig` plus an explicit trailing
+/// `core.YAxis` slot. The assembler adopts this once it parses `.y_axis`
+/// from `project.labelle` (labelle-engine#639 / #370). See `game.zig`.
+pub const GameConfigWithYAxis = game_mod.GameConfigWithYAxis;
 pub const GameLog = game_log_mod.GameLog;
 pub const StubLogSink = core.StubLogSink;
 pub const StderrLogSink = core.StderrLogSink;
 pub const GameWith = game_mod.GameWith;
 pub const Game = game_mod.Game;
+
+/// Screen dimensions in one explicit coordinate space — the return type of
+/// `Game.framebufferSize` (physical pixels) and `Game.designSize` (the
+/// logical canvas). See labelle-engine#852.
+pub const ScreenSize = game_mod.ScreenSize;
+
+// ── Tilemap (T2 Phase 2) ──
+/// Engine built-in `Tilemap` component — references an embedded `.tmx`
+/// asset by name. Reachable on a configured game as `Game.TilemapComp`.
+/// See `src/tilemap.zig` / `src/tilemap_runtime.zig`.
+pub const Tilemap = @import("tilemap.zig").Tilemap;
+/// An explicit `.tmx`-layer → engine-layer binding for the T3 Z-interleave
+/// (`Tilemap.layer_bindings`). See `src/tilemap.zig`.
+pub const TilemapLayerBinding = @import("tilemap.zig").LayerBinding;
+/// Grid size (in tiles) of one `.tmx` tile layer — returned by
+/// `Game.tilemapLayerSize`, the bound a procedural generator sizes its
+/// `Game.setTiles` slice against (#825). See `src/tilemap.zig`.
+pub const TilemapLayerSize = @import("tilemap.zig").TileLayerSize;
+/// True when a renderer plugin exposes a CONCRETELY reflectable gfx tilemap
+/// seam. Gates `Game.tilemap_supported` / `Game.TilemapRuntimeType`; exposed
+/// so consumers (and tests) can probe a renderer without configuring a whole
+/// `Game`. See `src/tilemap_runtime.zig`.
+pub const tilemapSupported = @import("tilemap_runtime.zig").supported;
+
+// ── Camera (camera-prefabs MVP, #714) ──
+/// Engine built-in `Camera` component — the authored / seed camera state
+/// (`zoom` + optional inert `viewport`; the camera's world center is the
+/// entity's `Position`). Reachable on a configured game as `Game.CameraComp`.
+/// See `src/camera.zig` / `RFC-CAMERA-PREFABS.md`.
+pub const Camera = @import("camera.zig").Camera;
+/// Engine-local screen-space viewport rect carried by `Camera.viewport`
+/// (renderer-agnostic; inert in the single-camera MVP). See `src/camera.zig`.
+pub const CameraViewport = @import("camera.zig").Viewport;
+/// The `Camera` component module — exposes `makeTag` / `tag_capacity` for the
+/// inline camera-tag buffer (camera-bound layers, #723/#724).
+pub const camera_mod = @import("camera.zig");
+
+// ── Image (standalone-PNG component, #568) ──
+/// Engine built-in `Image` component — displays a standalone PNG loaded
+/// through `AssetCatalog` (no atlas, no sub-rect), the entity-side
+/// counterpart to `Sprite`. Reachable on a configured game as
+/// `Game.ImageComp`. NOTE: distinct from `gui_types.Image` in the imgui
+/// layer — different module, different render path. See
+/// `src/image_component.zig` / RFC-UNIFY-SCENES-AND-PREFABS.md.
+pub const Image = @import("image_component.zig").Image;
+/// Engine-local pivot enum carried by `Image.pivot` (a renderer-agnostic
+/// mirror of gfx's `Pivot`). See `src/image_component.zig`.
+pub const ImagePivot = @import("image_component.zig").Pivot;
+
+// ── Asset inference (sprite-based reverse index + AssetManifest, #563) ──
+/// Sprite/image → resource-bundle reverse index + entity-tree walker that
+/// infers which atlas/image resources a scene needs (making the explicit
+/// `meta.assets` list derivable) plus the `AssetManifest` escape-hatch
+/// component. RFC-UNIFY-SCENES-AND-PREFABS §"Assets — inference". Engine half
+/// of #563; see `src/asset_manifest.zig`.
+pub const asset_manifest_mod = @import("asset_manifest.zig");
+pub const ResourceRef = asset_manifest_mod.ResourceRef;
+pub const AssetManifest = asset_manifest_mod.AssetManifest;
+pub const ReverseIndex = asset_manifest_mod.ReverseIndex;
+pub const InferredManifest = asset_manifest_mod.InferredManifest;
+pub const inferAssets = asset_manifest_mod.inferAssets;
+pub const inferAssetsJsonc = asset_manifest_mod.inferAssetsJsonc;
+pub const inferAssetsFromSource = asset_manifest_mod.inferAssetsFromSource;
+// #754 — transitive prefab-reference walking for asset inference.
+pub const PrefabResolver = asset_manifest_mod.PrefabResolver;
+pub const inferAssetsJsoncWithPrefabs = asset_manifest_mod.inferAssetsJsoncWithPrefabs;
+pub const inferAssetsFromSourceWithPrefabs = asset_manifest_mod.inferAssetsFromSourceWithPrefabs;
+
+// ── Camera viewport layout (camera-bound layers Phase 3, #761) ──
+// Renderer-agnostic split-screen composition math: `splitScreen(w, h, n,
+// layout, out)` tiles a screen into N viewport rects (horizontal /
+// vertical / grid) for multi-camera split-screen / minimap / PiP. The
+// engine computes the layout; the gfx per-layer viewport binding consumes
+// it (that wiring + real cross-backend `setViewport` remain gfx-side work).
+pub const camera_viewport_mod = @import("camera_viewport.zig");
+pub const SplitLayout = camera_viewport_mod.SplitLayout;
+pub const splitScreen = camera_viewport_mod.splitScreen;
 
 // ── Input ──
 pub const InputInterface = input_mod.InputInterface;
@@ -77,6 +176,8 @@ pub const Rotation = input_mod.Rotation;
 // ── Audio ──
 pub const AudioInterface = audio_mod.AudioInterface;
 pub const StubAudio = audio_mod.StubAudio;
+pub const VideoInterface = core.VideoInterface;
+pub const StubVideo = core.StubVideo;
 pub const SoundId = audio_mod.SoundId;
 pub const MusicId = audio_mod.MusicId;
 pub const AudioError = audio_mod.AudioError;
@@ -104,6 +205,24 @@ pub const FontBakeParams = assets_mod.font_loader.FontBakeParams;
 pub const CodepointRange = assets_mod.font_loader.CodepointRange;
 pub const DecodedFont = assets_mod.font_loader.DecodedFont;
 
+// ── In-game UI kit DrawList renderer (issue #771) ──
+// The engine side of the labelle-gui `ui_kit` DrawList seam: converts the
+// kit's `DrawCmd`s into engine commands and issues screen-space draw calls,
+// plus the baked-font store the renderer's text pass and the kit's
+// `FontResolver` share. See `src/ui_draw_list.zig` and
+// `src/game/ui_kit_mixin.zig`.
+const ui_draw_list_mod = @import("ui_draw_list.zig");
+pub const UiDrawCmd = ui_draw_list_mod.UiDrawCmd;
+pub const UiRect = ui_draw_list_mod.UiRect;
+pub const UiRgba8 = ui_draw_list_mod.UiRgba8;
+pub const UiUvRect = ui_draw_list_mod.UiUvRect;
+pub const UiRenderOptions = ui_draw_list_mod.UiRenderOptions;
+pub const UiFontStore = ui_draw_list_mod.UiFontStore;
+pub const BakedUiFont = ui_draw_list_mod.BakedUiFont;
+pub const ResolvedUiFrame = ui_draw_list_mod.ResolvedUiFrame;
+pub const convertUiDrawCommand = ui_draw_list_mod.convertCommand;
+pub const renderUiCommands = ui_draw_list_mod.renderCommands;
+
 // ── GUI ──
 pub const GuiInterface = gui_mod.GuiInterface;
 pub const StubGui = gui_mod.StubGui;
@@ -126,10 +245,43 @@ pub const ValueState = gui_runtime_state_mod.ValueState;
 pub const FormBinder = form_binder_mod.FormBinder;
 pub const GuiEvent = form_binder_mod.GuiEvent;
 
+// ── Material seam (per-entity curated shader effects, labelle-gfx#305) ──
+//
+// The game-facing authoring types for the material seam. `Material` rides
+// INLINE on the renderer plugin's `Sprite` component (like `tint` / `flip_x`),
+// so there is no separate ECS component — games author it declaratively as
+// `.Sprite = .{ .material = .{ .effect = .flash, .uniforms = .{ … } } }` in a
+// scene/prefab `.zon`, or at runtime via `game.setMaterial(entity, .{ … })` /
+// `game.clearMaterial(entity)` (see `src/game/visuals.zig`). Sourced from
+// `labelle-core` so the engine, gfx's `Sprite.material`, and game code all name
+// the one nominal `backend_contract.Material` type. A backend lacking a given
+// effect's shader draws the plain sprite (graceful degrade, never a crash).
+pub const Material = core.backend_contract.Material;
+pub const MaterialEffect = core.backend_contract.MaterialEffect;
+pub const MaterialUniforms = core.backend_contract.MaterialUniforms;
+
 // ── Core Utilities ──
 pub const SparseSet = sparse_set_mod.SparseSet;
 pub const separateComponents = query_mod.separateComponents;
 pub const CallbackType = query_mod.CallbackType;
+
+// ── Command Buffer (labelle-engine#615) ──
+//
+// First-class deferred-mutation staging + conflict detection,
+// parameterized over a game-supplied `Command` type — the same
+// comptime-trait pattern `labelle-core`'s `Ecs(Backend)` uses. Scripts
+// push commands during a frame instead of mutating the world directly;
+// at a safe end-of-frame sync point the runtime detects conflicts (two
+// commands mutating the same entity in one frame) and applies/clears.
+// Graduates flying-platform's vendored `command_buffer` plugin into the
+// engine, generalized game-agnostic. See `src/command_buffer.zig`.
+pub const CommandBuffer = command_buffer_mod.CommandBuffer;
+/// Comptime helper: the entity-key type a `Command` mutates (`[N]?Key` → `Key`).
+pub const CommandKey = command_buffer_mod.CommandKey;
+/// Comptime helper: the write-key arity of a `Command` (`[N]?Key` → `N`).
+pub const commandKeyCount = command_buffer_mod.commandKeyCount;
+/// Comptime contract check a game `Command` type must pass.
+pub const validateCommandContract = command_buffer_mod.validateCommandContract;
 
 // ── Engine Lifecycle Events (RFC-FLOW-VOCABULARY phase 6, #578) ──
 //
@@ -187,6 +339,19 @@ pub const Events = struct {
         dt: f32 = 0,
     };
 
+    /// Fired once per fixed-timestep step the accumulator runs inside a
+    /// single `tick` (#751) — 0..N times per frame at the stable
+    /// `Game.fixed_dt`, decoupled from render rate. Mirrors
+    /// `HookPayload.fixed_update`. Opt-in: a game enables the phase via
+    /// `Game.setFixedTimestepEnabled(true)`; with it off (no `fixed/`
+    /// systems) this never fires and behaviour is byte-identical. Wire a
+    /// flow / hook to `engine__fixed_tick` for physics / lockstep sim.
+    /// `step_index` is the monotonic global fixed-step counter.
+    pub const fixed_tick = struct {
+        step_index: u64 = 0,
+        dt: f32 = 0,
+    };
+
     /// Fired when the ECS façade creates an entity. Mirrors
     /// `HookPayload.entity_created`. Entity IDs above the u32 range
     /// are clipped — the engine's on-disk catalog convention assumes
@@ -200,6 +365,16 @@ pub const Events = struct {
     /// `HookPayload.entity_destroyed`.
     pub const entity_destroyed = struct {
         entity: u32,
+    };
+
+    /// Fired once when a play-once `VideoComponent` (loop = false) reaches the
+    /// end of its clip — emitted by the engine's video system (FP#549), not the
+    /// in-process hook path. Wire a flow/script to `engine__video_finished` to
+    /// transition the scene when an intro ends. `entity` is the video entity;
+    /// `path` is its (borrowed, scene-lifetime) resource name.
+    pub const video_finished = struct {
+        entity: u32,
+        path: []const u8,
     };
 
     /// Fired just before a scene's loader runs (assets are already
@@ -262,6 +437,39 @@ pub const Events = struct {
         paused: bool,
     };
 
+    // ── SpriteAnimation playback events (#625) ────────────────────────
+    //
+    // Emitted by the engine's `sprite_animation_tick` driver (NOT the
+    // in-process `HookPayload` path — these have no HookPayload mirror,
+    // like the input events above). A project opts in purely by declaring
+    // the variant on its `GameEvents`; when absent, the driver's whole
+    // events path folds away and the tick uses the plain `advance`. Wire
+    // a flow / hook to `engine__anim_frame` for footstep / hit cues,
+    // `engine__anim_complete` for one-shot `.once` clips, and
+    // `engine__anim_loop` for loop-wrap / ping-pong-reversal cadence.
+
+    /// Fired the tick a `SpriteAnimation` LANDS on a frame listed in its
+    /// `event_frames` (footstep / hit / spawn cue). `frame` is the 0-based
+    /// index it landed on.
+    pub const anim_frame = struct {
+        entity: u32,
+        frame: u8 = 0,
+    };
+
+    /// Fired exactly once when a `.once` `SpriteAnimation` reaches its
+    /// final frame. `.loop` / `.ping_pong` clips never emit this.
+    pub const anim_complete = struct {
+        entity: u32,
+    };
+
+    /// Fired on every `.loop` wrap and every `.ping_pong` endpoint
+    /// reversal. `repetition` is the saturating loop/reversal count at
+    /// the moment it fired.
+    pub const anim_loop = struct {
+        entity: u32,
+        repetition: u16 = 0,
+    };
+
     // ── Input events (labelle-gui#208, Option B) ─────────────────
     // Engine-hosted input events scanned in `Game.tick` through the
     // unified `InputInterface`. Flows handle them via
@@ -298,16 +506,197 @@ pub const Events = struct {
         y: f32,
     };
 
-    /// Fired the frame a gamepad slot became available (transitioned
-    /// from unavailable to available). `id` is the gamepad slot index.
+    /// Fired the frame a gamepad connect event was drained from the
+    /// backend / per-OS source (core#18 contract). Payload mirrors the
+    /// fields of `core.GamepadEvent`:
+    ///
+    /// - `id` — the device slot/index. Kept (and listed first) for
+    ///   backward-compat: flows / hooks that only read `.id` still
+    ///   compile against the enriched payload.
+    /// - `name` / `name_len` — inline, NUL-terminated device name buffer.
+    ///   Stored INLINE (not as a `[]const u8`) on purpose: engine events
+    ///   are COPIED into `event_buffer` and dispatched on a later frame,
+    ///   so a borrowed slice into the transient drain buffer would dangle.
+    ///   Read it via `nameSlice()`.
+    /// - `guid` — stable per-device reconnection key when the backend
+    ///   exposes one (else `null`).
+    /// - `source_class` — real gamepad vs. TV/d-pad remote vs. unknown.
+    /// - `type_hint` — best-guess vendor family for glyph/prompt choice.
     pub const gamepad_connected = struct {
+        id: u32,
+        name: [core.gamepad.NAME_CAPACITY:0]u8 = [_:0]u8{0} ** core.gamepad.NAME_CAPACITY,
+        name_len: u8 = 0,
+        guid: ?[16]u8 = null,
+        source_class: core.GamepadSourceClass = .unknown,
+        type_hint: core.GamepadTypeHint = .unknown,
+
+        /// Borrow the device name as a slice (valid for the lifetime of
+        /// the payload value).
+        pub fn nameSlice(self: *const gamepad_connected) []const u8 {
+            // Defensively cap to the buffer length: `name_len` is a backend-
+            // reported value, and a misbehaving backend reporting a length
+            // greater than NAME_CAPACITY would otherwise slice out of bounds.
+            const len = @min(self.name_len, core.gamepad.NAME_CAPACITY);
+            return self.name[0..len];
+        }
+    };
+
+    /// Fired the frame a gamepad disconnect event was drained (core#18).
+    /// Only `id` (the device slot) is carried — a disconnect needs no name
+    /// or capability metadata. Kept identical to the legacy payload.
+    pub const gamepad_disconnected = struct {
         id: u32,
     };
 
-    /// Fired the frame a gamepad slot became unavailable (transitioned
-    /// from available to unavailable). `id` is the gamepad slot index.
-    pub const gamepad_disconnected = struct {
-        id: u32,
+    // ── ControllerManager player↔controller events (#611) ─────────────
+    //
+    // Higher-altitude than the raw `gamepad_*` events above. The engine's
+    // `ControllerManager` (src/controller_manager.zig) consumes the drained
+    // gamepad events and emits these — the game listens to *players*, not
+    // hardware slots. `controller_available`/`controller_removed` surface
+    // the unassigned pool (the cue to decide); the `player_*` trio fires
+    // only *after* the game assigns. All four are flow-listenable via
+    // `OnEvent { name: "engine.<event>" }`. See the issue for the
+    // mechanism-not-policy rationale.
+
+    /// Fired when a connected-but-unbound controller enters the unassigned
+    /// pool — the game's cue to decide whether/how it becomes a player.
+    /// Carries the same identity fields as `gamepad_connected` (read the
+    /// name via `nameSlice()`).
+    pub const controller_available = struct {
+        controller_id: u32,
+        name: [core.gamepad.NAME_CAPACITY:0]u8 = [_:0]u8{0} ** core.gamepad.NAME_CAPACITY,
+        name_len: u8 = 0,
+        guid: ?[16]u8 = null,
+        source_class: core.GamepadSourceClass = .unknown,
+        type_hint: core.GamepadTypeHint = .unknown,
+
+        pub fn nameSlice(self: *const controller_available) []const u8 {
+            return self.name[0..self.name_len];
+        }
+    };
+
+    /// Fired when an unassigned controller leaves the pool (unplugged while
+    /// it was never bound to a player).
+    pub const controller_removed = struct {
+        controller_id: u32,
+    };
+
+    /// Fired when the game assigns a controller to a player (via the
+    /// `ControllerManager` assignment API or an opt-in policy helper).
+    /// Emitted only *after* the game decides — never auto-imposed.
+    pub const player_joined = struct {
+        player: u32,
+        controller_id: u32,
+    };
+
+    /// Fired when a player's assigned controller has been absent longer
+    /// than the configurable debounce window — a real loss, not a blip. A
+    /// transient drop that reconnects inside the window NEVER fires this.
+    /// Gate `Controller.advance` / raise a "reconnect Player N" prompt here.
+    pub const player_controller_lost = struct {
+        player: u32,
+    };
+
+    /// Fired when a previously-lost (or debouncing) player gets their
+    /// controller back — a same-`guid` replug, or the raylib resume
+    /// heuristic. `controller_id` is the (possibly new) backing controller.
+    pub const player_controller_restored = struct {
+        player: u32,
+        controller_id: u32,
+    };
+
+    // ── GPU surface lifecycle (Android context loss, epic #386 Phase 4) ──
+    //
+    // On Android, TERM_WINDOW destroys every GPU texture (game state and
+    // the CPU allocator survive); INIT_WINDOW recreates the surface. The
+    // backend calls `Game.surfaceLost` / `Game.surfaceRestored`, which
+    // invalidate + re-upload the GPU-resident asset catalog and emit
+    // these events so flows/scripts can pause/resume rendering-dependent
+    // work across the gap. Both carry no payload — the transition itself
+    // is the signal. Zero-cost when no listener subscribes (same gate
+    // `emitEngineEvent` uses for every other engine event).
+    //
+    // Unlike the other lifecycle events, BOTH are delivered SYNCHRONOUSLY
+    // to hooks (`emitEngineEventSync`, #820): the game loop is parked from
+    // loss until after restore, so a buffered emit would only drain once
+    // the new surface was already up — too late to release anything.
+    //
+    // What the engine carries across the gap by itself: the catalog's
+    // assets, its own UI fonts, and — when the renderer has gfx's re-arm
+    // seam (`Game.tracks_direct_uploads`, gfx >= 1.31) — every DIRECT
+    // `game.loadTextureFromMemory` upload, re-uploaded under the SAME
+    // `u32` before `surface_restored` is delivered. A game holding such an
+    // id has nothing to do on either event.
+    //
+    // What it cannot carry: anything derived from a texture by BACKEND
+    // handle and lent elsewhere — a `game.nativeTextureId` → bgfx handle
+    // registered with the imgui bridge, say. The re-upload puts a new
+    // backend texture behind the engine id, so the lend goes stale:
+    // unregister it in `engine__surface_lost` (the bridge clears borrowed
+    // slots itself on device loss; a stale registration may later name its
+    // recycled font slot) and re-resolve + re-register after
+    // `engine__surface_restored`. Do NOT `game.unloadTexture` the engine id
+    // on loss — that forfeits the tracking.
+    //
+    // Without the seam (`tracks_direct_uploads == false`) the v2.13.0
+    // contract stands: direct uploads DIE with the surface. Release them
+    // in an `engine__surface_lost` hook (handles are still alive there —
+    // `game.unloadTexture` is safe) and re-create them after
+    // `engine__surface_restored`. Never release through a handle after
+    // restore: the backend recycles handle slots, so a stale handle now
+    // names one of the catalog's freshly re-uploaded textures.
+
+    /// Fired when the GPU surface is lost and the catalog has dropped its
+    /// stale texture handles (refcounts preserved), BEFORE the backend
+    /// tears the context down — every handle is still alive. Delivered
+    /// synchronously. No new GPU work should run until `surface_restored`.
+    pub const surface_lost = struct {};
+
+    /// Fired after the GPU surface is restored and the engine has run its
+    /// own re-upload pass: the catalog's GPU-resident assets are
+    /// re-enqueued and pumped towards `.ready` (BOUNDED, so a wedged decode
+    /// cannot hang the restore — a slow tail finishes over the next ticks),
+    /// the engine's UI fonts are re-uploaded, and every tracked direct
+    /// upload is back under its original id. Delivered synchronously,
+    /// before the first restored frame draws. The guarantee a hook gets is
+    /// a LIVE GPU context to re-create its own objects against — not that
+    /// every catalog asset is already resident.
+    pub const surface_restored = struct {};
+
+    // ── Studio plugin panels: play-time action channel (Asset Plugins ──
+    //    Phase 3, RFC-ASSET-PLUGINS rev 4, #729 / assembler #577) ────────
+    //
+    // Fired by the `editor_plugin_command` bridge export (editor-contract
+    // **v1.7**) when the studio dispatches a panel action whose
+    // `"target"` is `"preview"`. A plugin declares its editor handler by
+    // subscribing to this event — comptime hook registration, the same
+    // channel input plugins use for `engine__key_pressed` (#606). Like the
+    // input/anim events, it has NO `HookPayload` mirror: the bridge emits
+    // it directly (synchronously — see `game/editor_command_mixin.zig`),
+    // not the in-process lifecycle path. Zero-cost when no plugin
+    // subscribes: the variant never lands on the merged `GameEvents`, the
+    // bridge folds to a -1, and an older/handler-less build degrades
+    // gracefully.
+
+    /// Fired for one studio play-time plugin command. `plugin` is the panel
+    /// id (the dispatch payload's `plugin_panel`), `command` the action's
+    /// `command`, and `params` the field values as a JSON object. All three
+    /// are borrowed from the studio's wasm buffers for the SYNCHRONOUS
+    /// dispatch only — a handler that retains them must copy.
+    ///
+    /// A handler may RESPOND to the command it is handling (#758) by calling
+    /// `engine.plugin_command.respond(bytes)` (or `.respondFmt`) inside the
+    /// dispatch — the response travels back to the caller (studio bridge
+    /// v1.8 / script contract v1.2). One response per command,
+    /// first-writer-wins; see `game/editor_command_mixin.zig`. The field
+    /// set here is deliberately unchanged: the respond seam is a module
+    /// function, not a payload member, so already-generated projects (whose
+    /// assembler folded this struct before #758) can respond too.
+    pub const editor_plugin_command = struct {
+        plugin: []const u8,
+        command: []const u8,
+        params: []const u8,
     };
 };
 
@@ -326,12 +715,32 @@ pub const ComponentPayload = hooks_types_mod.ComponentPayload;
 pub const MergeHooks = core.MergeHooks;
 pub const MergeHookPayloads = core.MergeHookPayloads;
 
+// ── Profiler ──
+/// Per-script / per-plugin frame profiler (lives in the scene module so
+/// both the ScriptRunner and the SystemRegistry can reach it). Enable at
+/// runtime with `LABELLE_PROFILE=1`; ranks tick costs to the log.
+pub const profiler = scene_mod.profiler;
+
+/// FPS / frame-time tracker for the debug inspector (#380). Fed one `dt`
+/// per `Game.tick`; read via `game.fps()` / `game.frameStats()`. Ungated —
+/// always available. The per-script/per-plugin overlay rows come from
+/// `game.scriptProfileRows()` / `game.pluginProfileRows()` + the
+/// `profiler.collect*Rows` helpers.
+pub const FrameProfiler = @import("frame_profiler.zig").FrameProfiler;
+
 // ── Scene System ──
 pub const Scene = scene_mod.Scene;
 pub const PrefabRegistry = scene_mod.PrefabRegistry;
 pub const ComponentRegistry = scene_mod.ComponentRegistry;
 pub const ComponentRegistryMulti = scene_mod.ComponentRegistryMulti;
 pub const ComponentRegistryWithPlugins = scene_mod.ComponentRegistryWithPlugins;
+// Two-tier component visibility + per-pack registry partition (Packs · #652)
+pub const Visibility = scene_mod.Visibility;
+pub const getVisibility = scene_mod.getVisibility;
+pub const isGlobalComponent = scene_mod.isGlobal;
+pub const ComponentView = scene_mod.ComponentView;
+pub const PackView = scene_mod.PackView;
+pub const globalComponentNames = scene_mod.globalNames;
 pub const ScriptRegistry = scene_mod.ScriptRegistry;
 pub const ScriptFns = scene_mod.ScriptFns;
 pub const GizmoRegistry = scene_mod.GizmoRegistry;
@@ -342,19 +751,93 @@ pub const SystemRegistry = scene_mod.SystemRegistry;
 pub const ReferenceContext = scene_mod.ReferenceContext;
 
 // ── Animation ──
-pub const Animation = animation_mod.Animation;
-pub const AnimConfig = animation_mod.AnimConfig;
-pub const DefaultAnimationType = animation_mod.DefaultAnimationType;
+// Shared timing vocabulary (#667): two orthogonal axes. `AdvanceMode` =
+// timer driver (time/distance/static); `BoundaryMode` = boundary behavior
+// (loop/once/ping_pong). The legacy `Animation(AnimType)` flipbook was
+// retired here — use `SpriteAnimation` (props) or `AnimationDef` +
+// `AnimationState` (characters).
+pub const AdvanceMode = anim_timing_mod.AdvanceMode;
+pub const BoundaryMode = anim_timing_mod.BoundaryMode;
 pub const AnimationDef = animation_def_mod.AnimationDef;
 pub const AnimationState = animation_state_mod.AnimationState;
-pub const AnimMode = animation_def_mod.Mode;
+pub const advanceAny = animation_state_mod.advanceAny;
+// #686: duck-typed transition/queue — game wrappers with typed Clip
+// enums drop in without copying engine logic.
+pub const transitionAny = animation_state_mod.transitionAny;
+pub const requestTransitionAny = animation_state_mod.requestTransitionAny;
+pub const applyPendingAny = animation_state_mod.applyPendingAny;
+pub const AnimMode = animation_def_mod.Mode; // deprecated alias of AdvanceMode
 pub const AnimClipMeta = animation_def_mod.ClipMeta;
+// #671 transition semantics: explicit switch modes + data-driven via clips.
+pub const AnimSwitchMode = animation_state_mod.SwitchMode;
+pub const AnimTransitionRule = animation_def_mod.TransitionRule;
+pub const RuntimeAnimationDef = animation_def_runtime_mod.RuntimeAnimationDef;
+pub const AnimDefSource = animation_def_runtime_mod.AnimDefSource;
+pub const refreshState = animation_def_runtime_mod.refreshState;
+pub const ReloadWatcher = animation_def_runtime_mod.ReloadWatcher;
+// Named runtime-def store behind `Game.loadAnimationDefSource` /
+// `editor_api.editor_load_animation_def` (studio Play-mode hot reload).
+pub const RuntimeAnimDefs = animation_def_runtime_mod.RuntimeAnimDefs;
+pub const AnimFrameEntry = animation_def_mod.FrameEntry;
+// Per-frame animation events (#670): marker/clip-end/loop-end payloads +
+// the entity-less `PendingBuf` the pure advance methods append to.
+pub const animation_events_mod = @import("animation_events.zig");
+pub const AnimMarkerHit = animation_events_mod.AnimMarkerHit;
+pub const AnimClipEnd = animation_events_mod.AnimClipEnd;
+pub const AnimLoopEnd = animation_events_mod.AnimLoopEnd;
+pub const PendingAnimEvent = animation_events_mod.PendingAnimEvent;
+pub const AnimPendingBuf = animation_events_mod.PendingBuf;
+pub const AnimEventKind = animation_events_mod.PendingKind;
+pub const anim_pending_cap = animation_events_mod.max_pending;
 pub const SpriteAnimation = sprite_animation_mod.SpriteAnimation;
-pub const SpriteAnimationMode = sprite_animation_mod.AnimationMode;
+pub const SpriteAnimationMode = sprite_animation_mod.AnimationMode; // deprecated alias of BoundaryMode
 pub const spriteAnimationTick = sprite_animation_tick_mod.tick;
 pub const SpriteByField = sprite_by_field_mod.SpriteByField;
 pub const SpriteByFieldSource = sprite_by_field_mod.SpriteByFieldSource;
 pub const spriteByFieldTick = sprite_by_field_tick_mod.tick;
+
+// ── Easing ──
+// Pure (curve × placement) interpolation catalog — `engine.easing.ease`,
+// `.interpolate`, `.expApproach`, plus the `Curve`/`Placement` enums.
+// Zero deps; the future tween system + scripts consume it (#668).
+pub const easing = @import("easing.zig");
+
+// ── Tween ──
+// Central fire-and-forget motion records stepped once per frame (#669).
+// `TweenSystem.create()` returns a chainable builder; `tweenTick` advances
+// them. Pass `TweenAlwaysAlive{}` as the liveness backend when no tween is
+// entity-bound.
+pub const tween_mod = @import("tween.zig");
+pub const tween_tick_mod = @import("tween_tick.zig");
+pub const Tween = tween_mod.Tween;
+pub const TweenStep = tween_mod.Step;
+pub const TweenHandle = tween_mod.TweenHandle;
+pub const TweenSystem = tween_mod.TweenSystem;
+pub const TweenBuilder = tween_mod.TweenBuilder;
+pub const tweenTick = tween_tick_mod.tick;
+pub const TweenAlwaysAlive = tween_tick_mod.AlwaysAlive;
+
+// ── Particles ──
+// CPU-simulated 2D particle core (#750, `labelle-particles` v1): a pooled,
+// seeded, deterministic emitter sim decoupled from Game/ECS/renderer.
+// `ParticleSystem.init(alloc, config)` then `step(dt)` each frame and
+// iterate `live()` / `renderData(i)` to draw through the sprite batcher.
+// Transient by design — never serialized. `presets` ships smoke/sparks/rain.
+pub const particles_mod = @import("particles.zig");
+pub const ParticleSystem = particles_mod.ParticleSystem;
+pub const EmitterConfig = particles_mod.EmitterConfig;
+pub const Particle = particles_mod.Particle;
+pub const ParticleRamp = particles_mod.Ramp;
+pub const ParticleColor = particles_mod.Color;
+pub const ParticleRenderData = particles_mod.RenderData;
+pub const particle_presets = particles_mod.presets;
+// The `Emitter` ECS component (#750) + its per-frame tick/render glue. The
+// scene loader recognizes `Emitter` and auto-enables the phase; a game can
+// also drive it manually via `game.setDriveParticles(true)`.
+pub const emitter_mod = @import("emitter.zig");
+pub const Emitter = emitter_mod.Emitter;
+pub const EmitterPreset = emitter_mod.EmitterPreset;
+pub const particles_tick = @import("particles_tick.zig");
 
 // ── Atlas ──
 pub const SpriteData = atlas_mod.SpriteData;
@@ -363,6 +846,15 @@ pub const ComptimeAtlas = atlas_mod.ComptimeAtlas;
 pub const RuntimeAtlas = atlas_mod.RuntimeAtlas;
 pub const TextureManager = atlas_mod.TextureManager;
 pub const SpriteCache = atlas_mod.SpriteCache;
+/// The atlas-lookup → renderer `source_rect` mapping, including the trim
+/// geometry. Exposed so it can be tested directly: it is a pure function,
+/// and the alternative — driving it through a Game — needs a renderer whose
+/// Sprite carries `source_rect`, which the test stubs do not have.
+pub const sourceRectFor = @import("game/atlas_mixin.zig").sourceRectFor;
+/// Resolves a renderer `Sprite`'s `source_rect` field to its rect type,
+/// tolerating both the optional and non-optional spellings. Exposed for the
+/// test that pins that tolerance.
+pub const SourceRectOf = @import("game/atlas_mixin.zig").SourceRectOf;
 
 // ── Assets (Asset Streaming RFC — #437) ──
 // `AssetCatalog` is reachable from games both as this module-level
@@ -408,6 +900,39 @@ pub const preview_binary_magic = preview_mode_mod.binary_magic;
 // `endFrameStreamIOSurface` triple.
 pub const preview_iosurface_mod = preview_mode_mod.preview_iosurface;
 
+// ── Editor API (labelle-studio Play mode, Phase 3) ──
+// Wasm editor control surface: plain `export fn editor_*` symbols the
+// studio drives through emcc `-sEXPORTED_FUNCTIONS`, plus the three
+// touchpoints the assembler-generated main splices in under its
+// preview flag (`bind` / `shouldTick` / `frame`). Deliberately a lazy
+// `pub const` and NOT referenced anywhere else in the engine: a build
+// that never references `engine.editor_api` never analyzes the file,
+// so non-preview builds emit no `editor_*` symbols.
+pub const editor_api = @import("editor_api.zig");
+
+// ── Script Runtime Contract v1 (language plugins, #737) ──
+// The flat `export fn labelle_*` C-ABI surface every scripting language
+// binds (RFC-LANGUAGE-PLUGINS; header in `contract/labelle_script.h`),
+// plus the two touchpoints the assembler-generated main splices in when
+// a language plugin is attached (`bind` / `drainEvents`). Deliberately a
+// lazy `pub const` and NOT referenced anywhere else in the engine: a
+// build that never references `engine.script_contract` never analyzes
+// the file, so script-less builds emit no `labelle_*` symbols — the
+// same zero-cost gate as `editor_api` above.
+pub const script_contract = @import("script_contract.zig");
+
+// ── Plugin-command response channel (#758) ──
+// The handler-side seam of the plugin-command channel: a subscriber to
+// `engine__editor_plugin_command` calls `engine.plugin_command.respond`
+// (or `.respondFmt`) inside the synchronous dispatch to send a response
+// back to whoever issued the command — the studio's
+// `editor_plugin_command_out` (bridge v1.8) or a script's
+// `labelle_plugin_call`/`labelle_plugin_response_fetch` (contract v1.2).
+// Also home to the channel's shared constants (`max_response_len`) and
+// the dispatch `Result` type. The dispatch itself is the Game mixin
+// (`game.editorPluginCommandOut`); this namespace is what HANDLERS import.
+pub const plugin_command = @import("game/editor_command_mixin.zig");
+
 // ── Out-of-band screenshot request (labelle-cli#227) ──
 // Read by the assembler-generated `main.zig`'s frame loop after the
 // game enters its main loop — when `LABELLE_SCREENSHOT_PATH` is set
@@ -440,6 +965,14 @@ pub const jsonc_deserializer = @import("jsonc/deserializer.zig");
 // downstream tooling (asset inference, editors) use one walker.
 pub const tree_walker = @import("jsonc/tree_walker.zig");
 
+// ── Unified-format accessors (RFC #560/#594/#596) ──
+// Key classification (`isPascalCase`, `isComponentKeyShape`,
+// `isTargetKey`) and the warn-once diagnostics dedup probe
+// (`alreadyWarnedKey`) — re-exported for tests and tooling that
+// need to agree with the loader's shape rules (#803).
+pub const unified_format = @import("jsonc/unified_format.zig");
+pub const isComponentKeyShape = unified_format.isComponentKeyShape;
+
 // ── Scene Value & JSONC Parser ──
 pub const SceneValue = jsonc_mod.Value;
 pub const JsoncParser = jsonc_mod.JsoncParser;
@@ -448,6 +981,34 @@ pub const HotReloader = jsonc_mod.HotReloader;
 
 // ── Scheduler (flow Delay timers, #25 Stage 2) ──
 pub const Scheduler = @import("scheduler.zig").Scheduler;
+
+// ── ControllerManager (player↔controller mapping, #611) ──
+// Game-facing layer over the raw gamepad events: unassigned pool +
+// assignment API + player-level events, with engine-owned debounced-lost
+// and identity-based resume. Mechanism, not policy — the two common
+// policies ship as opt-in helpers. See src/controller_manager.zig.
+pub const controller_manager_mod = @import("controller_manager.zig");
+pub const ControllerManager = controller_manager_mod.ControllerManager;
+pub const DefaultControllerManager = controller_manager_mod.DefaultControllerManager;
+pub const ControllerManagerConfig = controller_manager_mod.Config;
+pub const ControllerInfo = controller_manager_mod.ControllerInfo;
+pub const ControllerManagerEvent = controller_manager_mod.ManagerEvent;
+pub const NO_PLAYER = controller_manager_mod.NO_PLAYER;
+pub const NO_CONTROLLER = controller_manager_mod.NO_CONTROLLER;
+
+// ── Behavior Tree (game-agnostic AI facility, #616) ──
+// Flat-array (serializable) behavior-tree interpreter promoted from
+// flying-platform-labelle. `engine.BehaviorTree(.{...})` builds a facility
+// with custom capacities; the module also exposes default-capacity `Tree` /
+// `TreeBuilder` aliases (`engine.behavior_tree.Tree`).
+pub const behavior_tree = @import("behavior_tree.zig");
+pub const BehaviorTree = behavior_tree.BehaviorTree;
+pub const BehaviorTreeOptions = behavior_tree.Options;
+pub const BehaviorTreeStatus = behavior_tree.Status;
+pub const BehaviorTreeNode = behavior_tree.Node;
+pub const BehaviorTreeNodeKind = behavior_tree.NodeKind;
+pub const BehaviorTreeActionFn = behavior_tree.ActionFn;
+pub const BehaviorTreeConditionFn = behavior_tree.ConditionFn;
 
 // ── Core Re-exports ──
 pub const Position = core.Position;
@@ -461,6 +1022,22 @@ pub const ParentComponent = core.ParentComponent;
 pub const ChildrenComponent = core.ChildrenComponent;
 pub const GizmoInterface = core.GizmoInterface;
 pub const StubGizmos = core.StubGizmos;
+
+// ── Gizmo text payloads (#827) ──
+// `GizmoDraw` (labelle-core) carries no text field, so a `.text` gizmo's
+// characters live in the game's per-frame arena and are joined to their draw by
+// index. Games read them back with `Game.getGizmoText(i)`; this record is the
+// join itself, surfaced for tooling that walks the raw draw list.
+pub const GizmoTextSpan = @import("game/gizmo_draws.zig").GizmoTextSpan;
 pub const PhysicsInterface = core.PhysicsInterface;
 pub const StubPhysics = core.StubPhysics;
 
+// ── Post-fx stack (labelle-gfx#305) ──
+// Full-screen post-processing value types, re-exported from labelle-core (the
+// canonical home of the backend contract). gfx re-exports the SAME core types,
+// so surfacing them here keeps the core diamond unified — the engine takes no
+// gfx module dependency. The runtime mutators live on `Game`
+// (`setPostFx`/`pushPostPass`/`clearPostFx`, see game/post_fx_mixin.zig).
+pub const PostPass = core.backend_contract.PostPass;
+pub const PostPassKind = core.backend_contract.PostPassKind;
+pub const PostPassUniforms = core.backend_contract.PostPassUniforms;

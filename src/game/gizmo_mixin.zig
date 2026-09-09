@@ -34,6 +34,31 @@ pub fn Mixin(comptime Game: type) type {
             self.gizmo_state.drawArrow(self.allocator, x1, y1, x2, y2, color);
         }
 
+        /// Draw a debug string at world (x, y) — an entity id, a solver's step
+        /// count, an FPS readout. Routes to `GizmoDraw.Kind.text`, which
+        /// labelle-core already defines.
+        ///
+        /// **String lifetime**: `text` is COPIED into a per-frame byte arena
+        /// owned by the game's gizmo state, so the caller's buffer may be
+        /// reused or freed the instant this returns (a `bufPrint` stack buffer
+        /// is fine). The copy — like the draw itself — lives until the next
+        /// `clearGizmos()`, and `getGizmoText()` slices point into that arena,
+        /// so they are invalidated by `clearGizmos()` or by a later
+        /// `drawGizmoText*` call that grows the arena. Handing such a slice
+        /// straight back to a `drawGizmoText*` call is still safe: the copy is
+        /// taken from the arena the growth leaves behind, not from the slice.
+        ///
+        /// **Reaching the string**: `GizmoDraw` (labelle-core) has no text
+        /// payload field, so the string is NOT on the draw. Resolve it by index
+        /// over `getGizmoDraws()` with `getGizmoText(i)`. A backend reached
+        /// through `renderGizmoDraws` therefore sees a positioned, coloured
+        /// `.text` draw with no characters and skips it — the same no-op it
+        /// already performs today. Painting it needs a `text: []const u8` field
+        /// on core's `GizmoDraw`; see #827.
+        pub fn drawGizmoText(self: *Game, x: f32, y: f32, text: []const u8, color: u32) void {
+            self.gizmo_state.drawText(self.allocator, x, y, text, color);
+        }
+
         // Category-aware world-space gizmos
 
         pub fn drawGizmoLineCategory(self: *Game, category: u8, x1: f32, y1: f32, x2: f32, y2: f32, color: u32) void {
@@ -50,6 +75,12 @@ pub fn Mixin(comptime Game: type) type {
 
         pub fn drawGizmoArrowCategory(self: *Game, category: u8, x1: f32, y1: f32, x2: f32, y2: f32, color: u32) void {
             self.gizmo_state.drawArrowWithCategory(self.allocator, category, x1, y1, x2, y2, color);
+        }
+
+        /// Category-gated `drawGizmoText`. Same string lifetime; nothing is
+        /// appended (and nothing is copied) when `category` is disabled.
+        pub fn drawGizmoTextCategory(self: *Game, category: u8, x: f32, y: f32, text: []const u8, color: u32) void {
+            self.gizmo_state.drawTextWithCategory(self.allocator, category, x, y, text, color);
         }
 
         // Screen-space gizmos
@@ -70,6 +101,12 @@ pub fn Mixin(comptime Game: type) type {
             self.gizmo_state.drawArrowScreen(self.allocator, x1, y1, x2, y2, color);
         }
 
+        /// Screen-space `drawGizmoText` — the HUD variant, and the one a debug
+        /// readout usually wants. Same string lifetime.
+        pub fn drawGizmoTextScreen(self: *Game, x: f32, y: f32, text: []const u8, color: u32) void {
+            self.gizmo_state.drawTextScreen(self.allocator, x, y, text, color);
+        }
+
         pub fn clearGizmos(self: *Game) void {
             self.gizmo_state.clear();
         }
@@ -80,6 +117,13 @@ pub fn Mixin(comptime Game: type) type {
 
         pub fn getGizmoDraws(self: *const Game) []const GizmoDraw {
             return self.gizmo_state.getDraws();
+        }
+
+        /// The string of the `.text` draw at `draw_index` in `getGizmoDraws()`,
+        /// or `null` for any other kind. Valid until the next `clearGizmos()`
+        /// or `drawGizmoText*` call — see `drawGizmoText`.
+        pub fn getGizmoText(self: *const Game, draw_index: usize) ?[]const u8 {
+            return self.gizmo_state.getText(draw_index);
         }
 
         // Gizmo categories
@@ -114,8 +158,20 @@ pub fn Mixin(comptime Game: type) type {
         /// Passes all draws — the category check happens at draw time in the
         /// gizmo_state (category-aware methods skip appending disabled draws).
         /// Category 0 (uncategorized) draws are always included.
+        /// Resolve every `.text` draw's borrowed slice against the frame
+        /// arena. `renderGizmos` calls this itself; it is public so a test
+        /// or an editor-side consumer that reads `getGizmoDraws()` directly
+        /// can get populated text without going through a render pass.
+        pub fn bindGizmoText(self: *Game) void {
+            self.gizmo_state.bindText();
+        }
+
         pub fn renderGizmos(self: *Game) void {
             if (!self.gizmos_enabled) return;
+            // Resolve text spans to live slices before the renderer sees the
+            // list — see `GizmoState.bindText` for why this cannot happen at
+            // append time.
+            self.gizmo_state.bindText();
             const draws = self.gizmo_state.getDraws();
             const Renderer = @TypeOf(self.renderer.*);
             if (@hasDecl(Renderer, "renderGizmoDraws")) {

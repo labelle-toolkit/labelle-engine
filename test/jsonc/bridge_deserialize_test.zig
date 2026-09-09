@@ -39,6 +39,7 @@ const TestGame = engine.game_mod.GameConfig(
     MockEcs,
     engine.input_mod.StubInput,
     engine.audio_mod.StubAudio,
+    engine.StubVideo,
     engine.gui_mod.StubGui,
     void,
     core.StubLogSink,
@@ -64,7 +65,7 @@ fn oneEntity(game: *TestGame) TestGame.EntityType {
 
 test "deserialize optional: JSONC null → field is null (success path)" {
     var game = try boot(
-        \\{ "entities": [
+        \\{ "children": [
         \\  { "components": { "Decoration": { "label": null, "priority": 7 } } }
         \\] }
     );
@@ -77,7 +78,7 @@ test "deserialize optional: JSONC null → field is null (success path)" {
 
 test "deserialize optional: JSONC string → field is that string (success path)" {
     var game = try boot(
-        \\{ "entities": [
+        \\{ "children": [
         \\  { "components": { "Decoration": { "label": "banner", "priority": 3 } } }
         \\] }
     );
@@ -105,7 +106,7 @@ test "deserialize optional: malformed non-null value fails (does NOT silently be
     // pin is specifically that `label` is null because the field
     // failed, not because "null" was accepted as a non-null integer.
     var game = try boot(
-        \\{ "entities": [
+        \\{ "children": [
         \\  { "components": { "Decoration": { "label": 42, "priority": 5 } } }
         \\] }
     );

@@ -1,0 +1,296 @@
+//! Tests for two-tier component visibility + per-pack registry partition.
+//! Packs isolation model · labelle-engine #652 (umbrella #651).
+
+const std = @import("std");
+const testing = std.testing;
+const engine = @import("engine");
+
+const ComponentRegistry = engine.ComponentRegistry;
+const Visibility = engine.Visibility;
+const getVisibility = engine.getVisibility;
+const PackView = engine.PackView;
+const ComponentView = engine.ComponentView;
+
+// ─── Sample components across two notional packs + a global facet ───────────
+
+/// Global contract facet — every pack may name it.
+const Locked = struct {
+    pub const visibility = .global;
+    by: u64 = 0,
+};
+
+/// Global facet declared with an explicit type annotation.
+const Position = struct {
+    pub const visibility: Visibility = .global;
+    x: f32 = 0,
+    y: f32 = 0,
+};
+
+/// Private to the "citizens" pack (default visibility = .pack).
+const Worker = struct {
+    hunger: f32 = 0,
+};
+
+/// Private to the "citizens" pack.
+const Home = struct {
+    capacity: u8 = 0,
+};
+
+/// Private to the "ships" pack — foreign to citizens.
+const Ship = struct {
+    pub const visibility = .pack;
+    fuel: f32 = 0,
+};
+
+const FullRegistry = ComponentRegistry(.{
+    .Locked = Locked,
+    .Position = Position,
+    .Worker = Worker,
+    .Home = Home,
+    .Ship = Ship,
+});
+
+// Each pack's resolvable registry = all globals ++ its own private components.
+const CitizensView = PackView(FullRegistry, &.{ "Worker", "Home" });
+const ShipsView = PackView(FullRegistry, &.{"Ship"});
+
+// ─── Part 1: per-component visibility ───────────────────────────────────────
+
+test "getVisibility: default is .pack (private)" {
+    try testing.expectEqual(Visibility.pack, getVisibility(Worker));
+    try testing.expectEqual(Visibility.pack, getVisibility(Home));
+}
+
+test "getVisibility: .global declared via enum literal" {
+    try testing.expectEqual(Visibility.global, getVisibility(Locked));
+}
+
+test "getVisibility: .global declared with explicit type" {
+    try testing.expectEqual(Visibility.global, getVisibility(Position));
+}
+
+test "getVisibility: explicit .pack matches the default" {
+    try testing.expectEqual(Visibility.pack, getVisibility(Ship));
+}
+
+test "isGlobal helper" {
+    try testing.expect(engine.isGlobalComponent(Locked));
+    try testing.expect(!engine.isGlobalComponent(Worker));
+}
+
+test "globalNames lists only the global components" {
+    const globals = engine.globalComponentNames(FullRegistry);
+    try testing.expectEqual(@as(usize, 2), globals.len);
+    // Order follows FullRegistry.names() — Locked then Position.
+    try testing.expectEqualStrings("Locked", globals[0]);
+    try testing.expectEqualStrings("Position", globals[1]);
+}
+
+// ─── Part 2: per-pack partition view ────────────────────────────────────────
+
+test "PackView resolves the pack's own private components" {
+    try testing.expect(CitizensView.has("Worker"));
+    try testing.expect(CitizensView.has("Home"));
+    try testing.expect(Worker == CitizensView.getType("Worker"));
+    try testing.expect(Home == CitizensView.getType("Home"));
+}
+
+test "PackView resolves all .global components" {
+    try testing.expect(CitizensView.has("Locked"));
+    try testing.expect(CitizensView.has("Position"));
+    try testing.expect(Locked == CitizensView.getType("Locked"));
+    // Globals are visible to every pack, including the ships pack.
+    try testing.expect(ShipsView.has("Locked"));
+    try testing.expect(Position == ShipsView.getType("Position"));
+}
+
+test "PackView: foreign-private names miss (escape hole closed)" {
+    // citizens cannot see the ships pack's private component...
+    try testing.expect(!CitizensView.has("Ship"));
+    try testing.expect(!CitizensView.isAllowed("Ship"));
+    // ...and vice-versa.
+    try testing.expect(!ShipsView.has("Worker"));
+    try testing.expect(!ShipsView.has("Home"));
+    try testing.expect(!ShipsView.isAllowed("Worker"));
+
+    // The full/global registry is UNCHANGED — it still resolves every name
+    // (this is what the serializer + ECS use).
+    try testing.expect(FullRegistry.has("Ship"));
+    try testing.expect(FullRegistry.has("Worker"));
+}
+
+test "ComponentView.names returns the visible, defined names" {
+    const names = CitizensView.names();
+    // 2 globals (Locked, Position) + 2 own (Worker, Home).
+    try testing.expectEqual(@as(usize, 4), names.len);
+
+    var saw_worker = false;
+    var saw_ship = false;
+    for (names) |n| {
+        if (std.mem.eql(u8, n, "Worker")) saw_worker = true;
+        if (std.mem.eql(u8, n, "Ship")) saw_ship = true;
+    }
+    try testing.expect(saw_worker);
+    try testing.expect(!saw_ship);
+}
+
+// ─── entityHasNamed dispatches through the view ─────────────────────────────
+
+const StubEcs = struct {
+    /// Pretend every queried entity has every type it is asked about.
+    pub fn hasComponent(self: @This(), entity: u32, comptime T: type) bool {
+        _ = self;
+        _ = entity;
+        _ = T;
+        return true;
+    }
+};
+
+test "entityHasNamed resolves an allowed name through the view" {
+    const ecs = StubEcs{};
+    try testing.expect(CitizensView.entityHasNamed(ecs, @as(u32, 1), "Worker"));
+    try testing.expect(CitizensView.entityHasNamed(ecs, @as(u32, 1), "Locked"));
+}
+
+// ─── Documented compile-error case (the escape closure) ─────────────────────
+//
+// Resolving a foreign-private name through a partitioned view is a COMPILE
+// ERROR — the demonstration cannot live in a passing test, so it is captured
+// here as a commented case. Uncommenting any line below makes `zig build test`
+// fail at comptime with:
+//   "Component 'Ship' is not visible to this pack (foreign-private or unknown)."
+//
+//   _ = CitizensView.getType("Ship");
+//   _ = CitizensView.entityHasNamed(StubEcs{}, @as(u32, 1), "Ship");
+//
+// The runtime-friendly negative path is exercised above via `has()` /
+// `isAllowed()` returning false.
+
+test "view over the full registry with an empty allow-list resolves nothing" {
+    const Empty = ComponentView(FullRegistry, &.{});
+    try testing.expect(!Empty.has("Worker"));
+    try testing.expect(!Empty.has("Locked"));
+    try testing.expectEqual(@as(usize, 0), Empty.names().len);
+}
+
+// ─── ComponentRegistryMulti.names() (#657 follow-up) ────────────────────────
+//
+// The multi-source registry composes several maps (one per pack, typically),
+// with field names namespaced as `<pack>__<Pascal>`. `names()` returns the
+// deduplicated union of every map's field names, in map order (first
+// occurrence wins — matching `getType`'s resolution), matching the flat name
+// list a single-source `ComponentRegistry.names()` provides. That flat list is
+// what makes `PackView` / `globalNames` usable over the multi registry.
+
+const ComponentRegistryMulti = engine.ComponentRegistryMulti;
+
+/// Two notional packs contributing namespaced maps, plus shared global facets
+/// (`Locked` in map 0, `Position` in map 1).
+const MultiRegistry = ComponentRegistryMulti(.{
+    .{ .Locked = Locked, .citizens__Worker = Worker, .citizens__Home = Home },
+    .{ .ships__Ship = Ship, .Position = Position },
+});
+
+test "ComponentRegistryMulti.names lists every composed map's names in order" {
+    const names = MultiRegistry.names();
+    try testing.expectEqual(@as(usize, 5), names.len);
+    // Map order, then field order within each map.
+    try testing.expectEqualStrings("Locked", names[0]);
+    try testing.expectEqualStrings("citizens__Worker", names[1]);
+    try testing.expectEqualStrings("citizens__Home", names[2]);
+    try testing.expectEqualStrings("ships__Ship", names[3]);
+    try testing.expectEqualStrings("Position", names[4]);
+}
+
+test "ComponentRegistryMulti.names deduplicates, first map wins" {
+    const DupRegistry = ComponentRegistryMulti(.{
+        .{ .Position = Position, .Worker = Worker },
+        .{ .Worker = Ship, .Home = Home }, // Worker duplicated → first map wins
+    });
+    const names = DupRegistry.names();
+    try testing.expectEqual(@as(usize, 3), names.len);
+    try testing.expectEqualStrings("Position", names[0]);
+    try testing.expectEqualStrings("Worker", names[1]);
+    try testing.expectEqualStrings("Home", names[2]);
+    // The deduped name resolves to the FIRST map's type, matching getType order.
+    try testing.expect(Worker == DupRegistry.getType("Worker"));
+}
+
+test "globalNames works over a ComponentRegistryMulti" {
+    const globals = engine.globalComponentNames(MultiRegistry);
+    // Only Locked (map 0) and Position (map 1) are `.global`.
+    try testing.expectEqual(@as(usize, 2), globals.len);
+    try testing.expectEqualStrings("Locked", globals[0]);
+    try testing.expectEqualStrings("Position", globals[1]);
+}
+
+test "PackView composes over a ComponentRegistryMulti" {
+    const CitizensMulti = PackView(MultiRegistry, &.{ "citizens__Worker", "citizens__Home" });
+    // Own private components + all globals resolve...
+    try testing.expect(CitizensMulti.has("citizens__Worker"));
+    try testing.expect(CitizensMulti.has("citizens__Home"));
+    try testing.expect(CitizensMulti.has("Locked"));
+    try testing.expect(CitizensMulti.has("Position"));
+    // ...the foreign pack's private component does not.
+    try testing.expect(!CitizensMulti.has("ships__Ship"));
+    try testing.expect(!CitizensMulti.isAllowed("ships__Ship"));
+}
+
+// ─── Comptime branch-quota headroom at large registries (#795) ──────────────
+//
+// Registry resolution (`names()`, `globalNames`, `PackView`, `ComponentView`)
+// runs nested comptime `inline for` walks whose branch count scales with
+// (component count × map count). A large pack-composed game overran Zig's
+// default 1000 backwards-branch budget deep in engine code — with the engine
+// shipped as a pinned source tarball there was no game-side fix (#795, real
+// hit in flying-platform-labelle). The fix raises the comptime quota at those
+// entry points.
+//
+// This test instantiates a registry far past the count that previously tripped
+// the ceiling (pre-fix it broke around ~240 components at `names()`; here we
+// build 800). If the quota bumps are ever removed this file fails to COMPILE
+// with "evaluation exceeded 1000 backwards branches" — i.e. the proof is that
+// the module builds at all, plus the runtime assertions below.
+
+const BigN = 400; // components per map → 400 globals + 400 privates = 800 total
+
+/// Synthesize a component map VALUE with `n` comptime `type` fields named
+/// `<prefix>{start..}`, each defaulting to `T`. Mirrors the `@Struct`-based
+/// wide-type construction used in `script_contract_test.zig`; the registry
+/// only cares about field name→type, so reusing one type per field is fine.
+fn manyMap(comptime prefix: []const u8, comptime start: usize, comptime n: usize, comptime T: type) type {
+    @setEvalBranchQuota(1_000_000);
+    var field_names: [n][:0]const u8 = undefined;
+    var attrs: [n]std.builtin.Type.StructField.Attributes = undefined;
+    for (&field_names, &attrs, 0..) |*nm, *a, i| {
+        nm.* = std.fmt.comptimePrint("{s}{d}", .{ prefix, start + i });
+        a.* = .{ .@"comptime" = true, .default_value_ptr = @as(*const type, &T) };
+    }
+    const cn = field_names;
+    const ca = attrs;
+    return @Struct(.auto, null, &cn, &@splat(type), &ca);
+}
+
+// Map 0: BigN `.global` components (Locked). Map 1: BigN private ones (Worker).
+const BigGlobals = manyMap("g", 0, BigN, Locked){};
+const BigPrivates = manyMap("p", 0, BigN, Worker){};
+const BigRegistry = ComponentRegistryMulti(.{ BigGlobals, BigPrivates });
+
+test "large registry: names() stays under the raised quota" {
+    // Pre-fix this call alone overran the 1000-branch budget at ~240 names.
+    try testing.expectEqual(@as(usize, 2 * BigN), BigRegistry.names().len);
+}
+
+test "large registry: globalNames stays under the raised quota" {
+    // Only the `g*` (Locked) map is `.global`.
+    try testing.expectEqual(@as(usize, BigN), engine.globalComponentNames(BigRegistry).len);
+}
+
+test "large registry: PackView + ComponentView.names stay under the raised quota" {
+    const BigView = PackView(BigRegistry, &.{ "p0", "p1", "p199" });
+    // All globals (BigN) + the 3 own privates resolve.
+    try testing.expectEqual(@as(usize, BigN + 3), BigView.names().len);
+    try testing.expect(BigView.has("g0")); // a global facet
+    try testing.expect(BigView.has("p0")); // own private
+    try testing.expect(!BigView.has("p50")); // foreign private (not listed)
+}

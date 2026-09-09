@@ -104,6 +104,115 @@ pub const PrefabCache = struct {
         self.prefabs.put(duped_key, val) catch return null;
         return val;
     }
+
+    /// Replace — or insert — the registry entry for a prefab from an
+    /// in-memory JSONC source: the labelle-studio Play-mode hot-reload
+    /// path (`editor_api.editor_reload_prefab`, studio issue #24).
+    ///
+    /// Transactional: the source is parsed and shape-checked BEFORE the
+    /// registry is touched, so a malformed/half-saved file returns an
+    /// error and every future spawn keeps using the previous definition.
+    /// Rejected (validated at push time so the editor gets an error
+    /// instead of silent future spawn failures):
+    ///   * unparseable JSONC,
+    ///   * a non-object top level (a prefab must be a single entity
+    ///     object — array "bundles" are a scene-file shape),
+    ///   * an RFC #560 §B2 violation (`prefab` reference + `children`).
+    /// Deeper semantic problems (unknown components, cycles introduced
+    /// through OTHER prefabs) surface at spawn time through the loader's
+    /// existing gates, which log and return a null spawn without
+    /// corrupting the world.
+    ///
+    /// Keying matches `addEmbeddedPrefab` / `scanDir`: the entry lands
+    /// under the source's *effective name* (its `"name"` field when
+    /// present, else `name`). Corollary: pushing a source whose `"name"`
+    /// diverges from the old one REGISTERS the new name and leaves the
+    /// previous entry (old name → old data) in place until restart —
+    /// a rename, not an in-place edit.
+    ///
+    /// Ownership/graveyard: `source` is duped into `self.persistent`
+    /// (the caller may free its buffer immediately), and a REPLACED
+    /// `Value` tree is never freed — it stays allocated for the game's
+    /// lifetime. That is load-bearing, not sloppiness: components on
+    /// already-spawned entities hold `[]const u8` slices into the old
+    /// tree (see the module header), and the editor can push while the
+    /// sim is paused, when no tick will ever re-read them — the same
+    /// retire-don't-free reasoning as `RuntimeAnimDefs`, obtained here
+    /// for free because the cache's persistent allocator never frees.
+    /// On the error paths the partial parse leaks into `persistent` the
+    /// same harmless way `scanDir`'s error path documents.
+    ///
+    /// Desktop caveat: an entry pushed for a file living in a directory
+    /// `scanDir` has NOT yet walked will make that later first-time scan
+    /// fail with `error.DuplicatePrefabName` (the scan treats the pushed
+    /// key as a collision). Unreachable from the studio — its wasm games
+    /// never run the filesystem scan and always boot a scene (scan done)
+    /// before any push.
+    ///
+    /// Returns what the live-refresh pass (#691) needs to diff
+    /// generations: the key the source landed under, and the RETIRED
+    /// value on a replace (`null` on an insert — nothing can be live).
+    /// `retired` stays valid forever (retire-don't-free, above);
+    /// `key` aliases either the new tree's `"name"` string or the
+    /// caller's `name` buffer, so it is only guaranteed for the
+    /// duration of the caller's frame — consume it immediately.
+    pub fn replaceFromSource(
+        self: *PrefabCache,
+        log: anytype,
+        name: []const u8,
+        source: []const u8,
+    ) error{ OutOfMemory, InvalidFormat }!ReplaceResult {
+        const src = try self.persistent.dupe(u8, source);
+        var parser = JsoncParser.init(self.persistent, src);
+        const val = parser.parse() catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => {
+                log.err("[prefab-reload] '{s}': source does not parse ({s}) — keeping the previous definition", .{ name, @errorName(err) });
+                return error.InvalidFormat;
+            },
+        };
+        const obj = val.asObject() orelse {
+            log.err("[prefab-reload] '{s}': top level must be an object (a prefab is a single entity) — keeping the previous definition", .{name});
+            return error.InvalidFormat;
+        };
+        // RFC #560 §B2 at push time — mirrors the gate every use site
+        // re-checks (`spawnPrefabImpl`), but failing HERE keeps the old
+        // definition live instead of installing one that can never spawn.
+        uf.rejectB2Violation(uf.rootObject(obj), log, "hot-reloaded prefab root") catch {
+            return error.InvalidFormat;
+        };
+
+        const key = uf.effectiveName(obj, name);
+        if (self.prefabs.getPtr(key)) |existing| {
+            // Replace in place — the map keeps its own key allocation;
+            // the old Value tree is retired (never freed, see above).
+            const retired = existing.*;
+            existing.* = val;
+            return .{ .key = key, .retired = retired };
+        } else {
+            // Insert. `key` may alias the caller's `name` buffer (freed
+            // right after the call), so the map needs its own copy.
+            const duped_key = try self.persistent.dupe(u8, key);
+            try self.prefabs.put(duped_key, val);
+            return .{ .key = key, .retired = null };
+        }
+    }
+
+    pub const ReplaceResult = struct {
+        /// Effective name the source was installed under.
+        key: []const u8,
+        /// The generation this push replaced (never freed), or null
+        /// when the push inserted a brand-new entry.
+        retired: ?Value,
+    };
+
+    /// Registry-map lookup ONLY — no disk fallback, no insertion, no
+    /// collision side effects. The live-refresh pass (#691) resolves
+    /// `PrefabInstance.path` through this so matching instances can
+    /// never trigger `get`'s desktop disk re-read of an aliased name.
+    pub fn getInstalled(self: *PrefabCache, name: []const u8) ?Value {
+        return self.prefabs.get(name);
+    }
 };
 
 /// Allocate a persistent `PrefabCache` and store it on the game's

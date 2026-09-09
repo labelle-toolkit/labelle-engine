@@ -74,6 +74,7 @@ const TestGame = engine.game_mod.GameConfig(
     MockEcs,
     engine.input_mod.StubInput,
     engine.audio_mod.StubAudio,
+    engine.StubVideo,
     engine.gui_mod.StubGui,
     void,
     core.StubLogSink,
@@ -157,7 +158,7 @@ fn boot(tmp_dir: *std.testing.TmpDir) !Fixture {
     errdefer game.deinit();
 
     try Bridge.loadSceneFromSource(&game,
-        \\{ "entities": [] }
+        \\{ "children": [] }
     , prefab_dir);
 
     return .{ .game = game, .prefab_dir = prefab_dir };

@@ -37,6 +37,46 @@ test "deserialize: integer to u8 (out of range returns null)" {
     try testing.expect(deserializer.deserialize(u8, v, testing.allocator) == null);
 }
 
+test "deserialize: integer array to []const u16 (event_frames authorable)" {
+    // Regression for #718 codex P2 #1: `SpriteAnimation.event_frames` must
+    // be authorable as a NUMBER array in JSONC. `[]const u8` is string-
+    // special-cased (interned), so the field is `[]const u16`, which lands
+    // in the generic slice→int branch below.
+    var items = [_]SceneValue{ .{ .integer = 2 }, .{ .integer = 5 } };
+    const v = SceneValue{ .array = .{ .items = &items } };
+    const out = deserializer.deserialize([]const u16, v, testing.allocator).?;
+    defer testing.allocator.free(out);
+    try testing.expectEqual(@as(usize, 2), out.len);
+    try testing.expectEqual(@as(u16, 2), out[0]);
+    try testing.expectEqual(@as(u16, 5), out[1]);
+}
+
+test "deserialize: SpriteAnimation with event_frames [2, 5] round-trips" {
+    // End-to-end proof that a scene/prefab can author `event_frames`. Only
+    // the no-default fields (`frames`, `fps`) plus `event_frames` are set;
+    // everything else falls back to struct defaults.
+    const SpriteAnimation = engine.SpriteAnimation;
+    var frame_names = [_]SceneValue{ .{ .string = "a.png" }, .{ .string = "b.png" } };
+    var cue_frames = [_]SceneValue{ .{ .integer = 2 }, .{ .integer = 5 } };
+    var entries = [_]SceneValue.Object.Entry{
+        .{ .key = "frames", .value = .{ .array = .{ .items = &frame_names } } },
+        .{ .key = "fps", .value = .{ .integer = 6 } },
+        .{ .key = "event_frames", .value = .{ .array = .{ .items = &cue_frames } } },
+    };
+    const obj = SceneValue{ .object = .{ .entries = &entries } };
+
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const anim = deserializer.deserialize(SpriteAnimation, obj, arena.allocator()).?;
+
+    try testing.expectEqual(@as(f32, 6), anim.fps);
+    try testing.expectEqual(@as(usize, 2), anim.event_frames.len);
+    try testing.expectEqual(@as(u16, 2), anim.event_frames[0]);
+    try testing.expectEqual(@as(u16, 5), anim.event_frames[1]);
+    // Untouched fields keep their defaults.
+    try testing.expectEqual(@as(f32, 1.0), anim.speed);
+}
+
 test "deserialize: bool" {
     const t = SceneValue{ .boolean = true };
     const f = SceneValue{ .boolean = false };

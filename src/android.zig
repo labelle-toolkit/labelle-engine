@@ -18,9 +18,12 @@
 //! The game is a pure `NativeActivity` (`android:hasCode="false"`), so
 //! there is no Java code to call into directly — every framework call
 //! has to go through JNI from C/Zig. We obtain the `ANativeActivity*`
-//! from sokol_app's `sapp_android_get_native_activity()` (bound here as
-//! an `extern "c"` symbol), which exposes a `JavaVM*`, a main-thread
-//! `JNIEnv*`, and the activity `jobject`.
+//! from labelle-core's backend-agnostic Android seam
+//! (`core.android_backend`, labelle-core#310): the active backend
+//! registers an `AndroidBackendContext` whose `get_native_activity`
+//! returns the activity, which exposes a `JavaVM*`, a main-thread
+//! `JNIEnv*`, and the activity `jobject`. The engine therefore links no
+//! backend-specific (`sapp_*`/sokol) symbol of its own.
 //!
 //! We use **two paths**, picked at runtime by API level:
 //!
@@ -102,6 +105,12 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
+
+/// labelle-core, consumed for its backend-agnostic Android JNI seam
+/// (`core.android_backend`, labelle-core#310). We read the active
+/// backend's registered `AndroidBackendContext` to obtain the
+/// `ANativeActivity*` instead of linking a backend-specific symbol.
+const core = @import("labelle-core");
 
 /// True when compiling for an Android target (covers arm64/x86_64 via
 /// `.android` and arm/x86 via `.androideabi`). All the JNI machinery
@@ -338,14 +347,14 @@ fn logWarn(comptime msg: [:0]const u8) void {
     if (comptime is_android) _ = __android_log_write(ANDROID_LOG_WARN, "labelle", msg);
 }
 
-// ── sokol_app native-activity accessor ────────────────────────────
+// ── native-activity accessor ──────────────────────────────────────
 //
-// sokol_app's Android backend exposes the `ANativeActivity*` via this
-// C entry point (`SOKOL_API_IMPL`, i.e. an exported symbol). We bind
-// it as an `extern "c"` function so the engine never has to
-// `@import("sokol")` — the symbol resolves at link time against the
-// `sokol_clib` static library every sokol-Android build links anyway.
-extern "c" fn sapp_android_get_native_activity() ?*anyopaque;
+// The `ANativeActivity*` is obtained through labelle-core's
+// backend-agnostic seam (`core.android_backend`, labelle-core#310):
+// the active backend adapter registers an `AndroidBackendContext` at
+// startup, and we read its `get_native_activity` pointer. This keeps
+// the engine free of any backend-specific (`sapp_*`/sokol) symbol — if
+// no backend registered a context, immersive mode is a graceful no-op.
 
 // ── Module state ──────────────────────────────────────────────────
 //
@@ -443,13 +452,30 @@ fn contentRectHook(activity: *ANativeActivity, rect: ?*const anyopaque) callconv
     applyImmersive(activity);
 }
 
-/// Perform the JNI calls that hide the system bars. MUST be called on
-/// the Android UI thread (the `onWindowFocusChanged` callback is).
+/// Perform the JNI calls that hide the system bars, using the
+/// `ANativeActivity`'s own `env`. MUST be called on the Android UI/main
+/// thread — the only thread where `activity.env` is the valid `JNIEnv*`
+/// AND where `WindowInsetsController.hide()` is legal. Both immersive
+/// entry points satisfy that:
+///   * sokol's `onWindowFocusChanged` / `onContentRectChanged` hooks (the
+///     framework invokes them on the UI thread), and
+///   * `applyImmersiveUiThread`, which the bgfx shell calls from its
+///     chained `onWindowFocusChanged` (also a UI-thread framework callback).
 fn applyImmersive(activity: *ANativeActivity) void {
     const env_ptr = activity.env orelse {
         logWarn("immersive: ANativeActivity.env is null, skipping");
         return;
     };
+    applyImmersiveWithEnv(env_ptr, activity.clazz);
+}
+
+/// Perform the JNI calls that hide the system bars with an **explicit**
+/// `JNIEnv*` and the activity `jobject`. Split out from `applyImmersive`
+/// to keep the env/object plumbing in one place; both callers pass the
+/// UI-thread `activity.env`. `env_ptr` MUST be valid for the calling
+/// (UI) thread; `activity_obj` is the activity instance
+/// (`ANativeActivity.clazz`).
+fn applyImmersiveWithEnv(env_ptr: *JNIEnv, activity_obj: jobject) void {
     // `env_ptr` is the `JNIEnv*` (a `*JNIEnv`). JNI functions take that
     // pointer as their first argument. `env_ptr.*` is the `JNIEnv`
     // (the table pointer); dereferencing again yields the interface
@@ -493,7 +519,7 @@ fn applyImmersive(activity: *ANativeActivity) void {
     //  12. GetMethodID(.., "setSystemBarsBehavior", "(I)V");
     //      CallVoidMethodA(.., BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE)
 
-    const activity_class = jni.GetObjectClass(env, activity.clazz) orelse {
+    const activity_class = jni.GetObjectClass(env, activity_obj) orelse {
         _ = clearException(env);
         logWarn("immersive: GetObjectClass(activity) failed");
         return;
@@ -505,7 +531,7 @@ fn applyImmersive(activity: *ANativeActivity) void {
         logWarn("immersive: getWindow methodID lookup failed");
         return;
     };
-    const window = jni.CallObjectMethodA(env, activity.clazz, get_window, null) orelse {
+    const window = jni.CallObjectMethodA(env, activity_obj, get_window, null) orelse {
         _ = clearException(env);
         logWarn("immersive: getWindow() returned null");
         return;
@@ -664,9 +690,11 @@ fn clearException(env: *JNIEnv) bool {
 /// Enable Android immersive mode for the running game: hide the status
 /// bar and the navigation bar in immersive-sticky mode.
 ///
-/// Obtains the `ANativeActivity*` itself from sokol_app via
-/// `sapp_android_get_native_activity()`, so the caller (the assembler-
-/// generated `main.zig`) only needs a single argument-free call.
+/// Obtains the `ANativeActivity*` itself from labelle-core's
+/// backend-agnostic Android seam (`core.android_backend.get()`), so the
+/// caller (the assembler-generated `main.zig`) only needs a single
+/// argument-free call. If no backend has registered an
+/// `AndroidBackendContext`, this is a graceful no-op.
 ///
 /// **Call site:** the assembler emits this in the generated
 /// `main.zig`'s `sokol_main()`. sokol's `ANativeActivity_onCreate`
@@ -689,8 +717,15 @@ fn clearException(env: *JNIEnv) bool {
 pub fn enableImmersiveMode() void {
     if (comptime !is_android) return;
 
-    const na: *ANativeActivity = @ptrCast(@alignCast(sapp_android_get_native_activity() orelse {
-        logWarn("immersive: sapp_android_get_native_activity() returned null");
+    // Reach the running `ANativeActivity*` through core's backend seam.
+    // No context registered → no backend ships Android JNI glue → there
+    // is nothing to enable, so immersive mode is a graceful no-op.
+    const ctx = core.android_backend.get() orelse {
+        logWarn("immersive: no AndroidBackendContext registered");
+        return;
+    };
+    const na: *ANativeActivity = @ptrCast(@alignCast(ctx.get_native_activity() orelse {
+        logWarn("immersive: get_native_activity() returned null");
         return;
     }));
 
@@ -708,4 +743,54 @@ pub fn enableImmersiveMode() void {
     na.callbacks.onContentRectChanged = &contentRectHook;
 
     logInfo("immersive: content-rect hook installed");
+}
+
+/// Hide the system bars from a **UI-thread** caller — the immersive entry
+/// point for backends whose app shell owns the `ANativeActivityCallbacks`
+/// (the bgfx backend, built on `native_app_glue`).
+///
+/// **Why a UI-thread entry, and why the hook-based `enableImmersiveMode()`
+/// can't be used here.** native_app_glue OWNS `onContentRectChanged` (it
+/// posts `APP_CMD_CONTENT_RECT_CHANGED`), so the engine's launch hook in
+/// `enableImmersiveMode()` installs too late / clobbers the glue and never
+/// fires. And the bars cannot be hidden from the glue's app thread (where
+/// the game's frame loop runs): `WindowInsetsController.hide()` MUST run on
+/// the Android UI/main thread — Android throws `CalledFromWrongThread`-style
+/// exceptions otherwise, even from a thread freshly attached to the JVM
+/// (verified on-device: a frame-loop call attached the thread fine but the
+/// `hide()` JNI call still threw).
+///
+/// So the bgfx shell instead chains `onWindowFocusChanged` — a framework
+/// callback the OS invokes ON THE UI THREAD, at launch (first focus gain)
+/// and on every focus regain — and calls THIS function from there (via the
+/// shell's `setImmersiveCallback`). Running on the UI thread, the activity's
+/// own `ANativeActivity.env` is the correct `JNIEnv*`, so `applyImmersive`
+/// works exactly as it does on the sokol callback path.
+///
+/// `callconv(.c)` so the shell can store it as a bare C function pointer
+/// without importing the engine (the shell must not depend on the engine;
+/// the generated `main.zig`, which owns both, wires them together).
+///
+/// Idempotent — safe to call on every focus gain. The activity is resolved
+/// through the same backend-agnostic seam (`core.android_backend.get()`) as
+/// `enableImmersiveMode`, so the engine still links no backend symbol. A
+/// graceful no-op on non-Android targets, when no `AndroidBackendContext`
+/// is registered, or before the activity exists.
+pub fn applyImmersiveUiThread() callconv(.c) void {
+    if (comptime !is_android) return;
+
+    // Same backend-agnostic activity lookup as `enableImmersiveMode`.
+    const ctx = core.android_backend.get() orelse {
+        logWarn("immersive: no AndroidBackendContext registered");
+        return;
+    };
+    const na: *ANativeActivity = @ptrCast(@alignCast(ctx.get_native_activity() orelse {
+        logWarn("immersive: get_native_activity() returned null");
+        return;
+    }));
+
+    // Called on the UI thread (from the shell's chained
+    // `onWindowFocusChanged`), so `na.env` is the correct `JNIEnv*` and the
+    // decor-view / WindowInsetsController JNI calls are thread-legal.
+    applyImmersive(na);
 }

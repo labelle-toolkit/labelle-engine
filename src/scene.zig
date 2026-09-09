@@ -8,6 +8,7 @@ pub const prefab = scene.prefab;
 pub const component = scene.component;
 pub const script = scene.script;
 pub const gizmo = scene.gizmo;
+pub const profiler = scene.profiler;
 
 // ── Types ──
 pub const RefInfo = scene.RefInfo;
@@ -38,6 +39,13 @@ pub const PrefabRegistry = scene.PrefabRegistry;
 pub const ComponentRegistry = scene.ComponentRegistry;
 pub const ComponentRegistryMulti = scene.ComponentRegistryMulti;
 pub const ComponentRegistryWithPlugins = scene.ComponentRegistryWithPlugins;
+// Two-tier visibility + per-pack partition (Packs · #652)
+pub const Visibility = scene.Visibility;
+pub const getVisibility = scene.getVisibility;
+pub const isGlobal = scene.isGlobal;
+pub const ComponentView = scene.ComponentView;
+pub const PackView = scene.PackView;
+pub const globalNames = scene.globalNames;
 
 // ── System ──
 pub const SystemRegistry = scene.SystemRegistry;

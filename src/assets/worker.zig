@@ -153,6 +153,21 @@ pub fn SpscRing(comptime T: type, comptime capacity: u32) type {
             return item;
         }
 
+        /// Consumer-side peek. Returns a copy of the next item without
+        /// advancing `tail` (the slot stays on the ring). Safe from the
+        /// single consumer thread only — it reads the producer's `head`
+        /// with `acquire` exactly like `tryDequeue`, but never publishes
+        /// a `tail` advance, so the producer cannot reclaim the slot.
+        /// Used by `AssetCatalog.pump` to classify a result during GPU
+        /// context loss without consuming a GPU-bound upload that must
+        /// wait for the surface to come back (epic #386 Phase 4).
+        pub fn peek(self: *const Self) ?T {
+            const tail = self.tail.load(.monotonic);
+            const head = self.head.load(.acquire);
+            if (head == tail) return null;
+            return self.buffer[tail & mask];
+        }
+
         /// Non-atomic snapshot — only safe from the consumer side or
         /// while both threads are quiesced. Used by `deinit` drain.
         pub fn isEmpty(self: *const Self) bool {

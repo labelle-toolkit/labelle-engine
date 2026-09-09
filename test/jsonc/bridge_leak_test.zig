@@ -48,7 +48,7 @@ test "loadScene: simple scene with components does not leak" {
         .sub_path = "scene.jsonc",
         .data =
         \\{
-        \\  "entities": [
+        \\  "children": [
         \\    { "components": { "Position": { "x": 10, "y": 20 }, "Health": { "current": 50, "max": 100 } } },
         \\    { "components": { "Position": { "x": 30, "y": 40 }, "Inventory": { "slots": 5 } } }
         \\  ]
@@ -78,7 +78,7 @@ test "loadSceneFromSource: simple scene with components does not leak" {
 
     const source =
         \\{
-        \\  "entities": [
+        \\  "children": [
         \\    { "components": { "Position": { "x": 10, "y": 20 }, "Health": { "current": 50, "max": 100 } } },
         \\    { "components": { "Position": { "x": 30, "y": 40 }, "Inventory": { "slots": 5 } } }
         \\  ]
@@ -112,9 +112,9 @@ test "loadScene: scene with prefabs does not leak" {
         .sub_path = "scene.jsonc",
         .data =
         \\{
-        \\  "entities": [
-        \\    { "prefab": "enemy", "components": { "Position": { "x": 100, "y": 200 } } },
-        \\    { "prefab": "enemy", "components": { "Position": { "x": 300, "y": 400 } } },
+        \\  "children": [
+        \\    { "prefab": "enemy", "overrides": { "Position": { "x": 100, "y": 200 } } },
+        \\    { "prefab": "enemy", "overrides": { "Position": { "x": 300, "y": 400 } } },
         \\    { "prefab": "enemy" }
         \\  ]
         \\}
@@ -143,7 +143,7 @@ test "loadScene: nested entity arrays (spawnAndLinkNestedEntities) do not leak" 
         .sub_path = "scene.jsonc",
         .data =
         \\{
-        \\  "entities": [
+        \\  "children": [
         \\    {
         \\      "components": {
         \\        "Position": { "x": 0, "y": 0 },
@@ -181,7 +181,7 @@ test "loadScene: children entities do not leak" {
         .sub_path = "scene.jsonc",
         .data =
         \\{
-        \\  "entities": [
+        \\  "children": [
         \\    {
         \\      "components": { "Position": { "x": 0, "y": 0 } },
         \\      "children": [

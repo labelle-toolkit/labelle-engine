@@ -27,12 +27,16 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+    // font_types now aliases the canonical Glyph/CodepointEntry/KernPair from
+    // labelle-core (labelle-assembler#647) instead of redefining them, so it
+    // needs core in its own module graph (it used to be a dependency-free leaf).
+    font_types_module.addImport("labelle-core", core_module);
 
     const engine_module = b.addModule("engine", .{
         .root_source_file = b.path("src/root.zig"),
         .target = target,
         .optimize = optimize,
-        // src/preview_mode.zig needs libc for its raw `close`/`write`/`fcntl`
+        // src/preview/socket.zig needs libc for its raw `close`/`write`/`fcntl`
         // bindings — 0.16 dropped `std.posix.fcntl`/`std.posix.close` and
         // routed file IO through `std.Io.File` (which would force an
         // `io: std.Io` thread-through), so going straight to libc is the
@@ -65,37 +69,92 @@ pub fn build(b: *std.Build) void {
     // Test files in test/ directory
     const test_files = [_][]const u8{
         "test/root_test.zig",
+        "test/easing_test.zig",
         "test/scene_test.zig",
         "test/gestures_test.zig",
         "test/sparse_set_test.zig",
         "test/query_test.zig",
+        // #615 — first-class CommandBuffer(Command): enqueue (growable
+        // engine-owned storage), conflict detection (write-key overlap +
+        // release-before-acquire handoff exemption), deferred apply.
+        "test/command_buffer_test.zig",
         "test/gui_view_test.zig",
-        "test/animation_atlas_test.zig",
+        "test/anim_timing_test.zig",
         "test/gui_runtime_state_test.zig",
         "test/form_binder_test.zig",
         "test/script_runner_test.zig",
         "test/game_log_test.zig",
+        "test/fullscreen_api_test.zig",
+        "test/vsync_api_test.zig",
+        "test/engine_sprite_anim_test.zig",
+        // The atlas -> source_rect mapping, trim geometry included: the
+        // seam where a parsed-but-unread `spriteSourceSize` silently
+        // became a per-frame positional error.
+        "test/atlas_source_rect_test.zig",
         "test/save_policy_test.zig",
         "test/save_load_mixin_test.zig",
         "test/jsonc/bridge_leak_test.zig",
         "test/jsonc/nested_lifecycle_test.zig",
+        "test/jsonc/target_overrides_test.zig",
+        "test/jsonc/unknown_component_warn_test.zig",
+        // C2 — a project-registered component named `Tilemap` must win over
+        // the engine built-in in the scene loader (no silent shadowing).
+        "test/jsonc/tilemap_precedence_test.zig",
+        // #568 — standalone `Image` component: scene-loader parse, loader
+        // resolution through AssetCatalog, and registered-vs-built-in
+        // precedence.
+        "test/jsonc/image_component_test.zig",
         "test/scene_ref_test.zig",
         "test/asset_catalog_test.zig",
         "test/audio_loader_test.zig",
         "test/font_types_test.zig",
         "test/font_loader_test.zig",
         "test/asset_streaming_shim_test.zig",
+        // #821 — atlas→texture binding integrity across scene swaps and GPU
+        // surface loss: every atlas must rebind to ITS OWN freshly uploaded
+        // texture, never a recycled slot (models the assembler adapter).
+        "test/atlas_surface_crosswire_test.zig",
+        // #831 — standalone `.image` load shims: `loadImageFromMemory`
+        // blocks so an eager image is drawable on the FIRST frame, which
+        // `assets.acquire` alone does not guarantee.
+        "test/image_load_shim_test.zig",
+        // #563 — sprite-based asset inference: reverse index (sprite/image →
+        // resource bundle) + entity-tree walker that derives the `meta.assets`
+        // set, plus the `AssetManifest` escape hatch. Engine half of the RFC
+        // unification; assembler-side codegen (making `meta.assets` optional)
+        // is the follow-up.
+        "test/asset_manifest_test.zig",
+        "test/asset_inference_wire_test.zig",
         "test/animation_def_test.zig",
+        "test/animation_state_transitions_test.zig",
+        "test/animation_def_runtime_test.zig",
+        "test/animation_events_test.zig",
+        "test/tween_test.zig",
+        "test/behavior_tree_test.zig",
+        "test/particles_test.zig",
+        "test/emitter_component_test.zig",
+        "test/particles_tick_test.zig",
+        "test/jsonc/emitter_component_test.zig",
         "test/sprite_animation_test.zig",
         "test/sprite_animation_tick_test.zig",
+        "test/sprite_animation_events_test.zig",
         "test/sprite_by_field_test.zig",
         "test/sprite_by_field_tick_test.zig",
         "test/scene_assets_hooks_test.zig",
         "test/pause_hook_test.zig",
+        // RFC-I18N §4 — frame-boundary hook: the generated main wires the
+        // i18n module's `resetFrameArena` into the top of `tick` (every
+        // frame, paused included) via `setFrameBoundaryFn`.
+        "test/frame_boundary_test.zig",
+        "test/fixed_timestep_test.zig",
         // #578 — `pub const Events` on the engine, dual-emit through
         // the buffered event path so flows can listen to lifecycle
         // hooks as Event-node variants.
         "test/engine_events_test.zig",
+        // #820 — direct `loadTextureFromMemory` uploads carried across a
+        // GPU surface loss under their original ids (retain / invalidate /
+        // re-upload / free), gated on the gfx re-arm seam.
+        "test/direct_upload_lifecycle_test.zig",
         // labelle-gui#208 — engine-hosted input events scanned in
         // `Game.tick` through the unified `InputInterface`, dual-emitted
         // on the buffered event path so flows can listen via `OnEvent`.
@@ -103,16 +162,35 @@ pub fn build(b: *std.Build) void {
         // Accessor methods on the game handle wrapping the unified
         // `InputInterface` for key-release / mouse-button polling (#208).
         "test/input_mixin_test.zig",
+        // #611 — ControllerManager player↔controller mapping: unassigned
+        // pool, assignment API, debounced-lost, guid/heuristic resume,
+        // opt-in policy helpers, and the auto-pause integration.
+        "test/controller_manager_test.zig",
         "test/spawn_from_prefab_test.zig",
         "test/jsonc/bridge_prefab_tags_test.zig",
         "test/save_load_two_phase_test.zig",
+        "test/post_load_render_gate_test.zig",
         "test/example_prefab_animation_walkthrough_test.zig",
         "test/jsonc/bridge_deserialize_test.zig",
         "test/jsonc/deserializer_test.zig",
         "test/jsonc/unified_format_test.zig",
         "test/jsonc_bridge_gizmo_visibility_test.zig",
         "test/collect_entities_test.zig",
+        "test/entities_with_roster_test.zig",
         "test/set_sprite_flip_test.zig",
+        // #826 — `setSpriteFrame`: the atlas frame swap that five games
+        // hand-rolled, including the `texture_scale_*` application all five
+        // copies omitted (silently mis-sampling a downscaled atlas).
+        "test/set_sprite_frame_test.zig",
+        "test/set_material_test.zig",
+        // #842 — `Game.fontId` (public name → `FontId` for a declared
+        // `.font` resource) and `Game.setTextFont`. Before this the only
+        // resolution was `gui_mixin`'s private `resolveLabelFont`, so
+        // `addText` from a script could only ever pass `FontId.invalid`.
+        "test/font_id_test.zig",
+        "test/video_component_test.zig",
+        "test/camera_viewport_test.zig",
+        "test/camera_viewport_seed_test.zig",
         // PIE viewport handshake (#543) — kept separate from
         // preview_mode_test.zig so the new coverage isn't gated on
         // that file's pre-existing 21-test subscription bug.
@@ -143,6 +221,101 @@ pub fn build(b: *std.Build) void {
         // Runtime Scheduler for flow `Delay` nodes (#48 / #25 Stage 2).
         // Pause-aware timer wheel reusing the gameplay clock.
         "test/scheduler_test.zig",
+        // Two-tier component visibility + per-pack registry partition (#652).
+        "test/component_visibility_test.zig",
+        // #630 — scene-teardown: O(N) `unloadCurrentScene` drain (guarded
+        // untrack) + `resetEcsBackend` clears `scene_entities`.
+        "test/scene_teardown_test.zig",
+        // #639 — project Y-axis convention: `Game.y_axis` constant +
+        // `yAxis()` accessor + additive `screenToLogical` picking path
+        // (RFC §3, Q1→(b), Q3). Raw `screenToDesign` stays unchanged.
+        "test/y_axis_test.zig",
+        // #852 — screen coordinate spaces: `getMouseDesign` /
+        // `getMouseLogical` (input mapped out of the backend's own space),
+        // `designToScreen` / `logicalToScreen` (the inverse), and the
+        // `framebufferSize` / `designSize` accessors. Covers a 2x
+        // framebuffer, a 1x one, and a renderer with none of the decls.
+        "test/screen_space_test.zig",
+        // labelle-gfx#290 Stage 4 — render-phase custom-mesh seam:
+        // `game.drawMesh(...)` forwarding + `SystemRegistry.renderMeshes`
+        // plugin render callback (the seam `labelle-spine` submits skinned
+        // meshes through).
+        "test/render_mesh_test.zig",
+        // In-game UI-kit DrawList renderer loop + font pipeline (#771):
+        // the engine consumer of labelle-gui `ui_kit`'s backend-agnostic
+        // DrawList — UV→pixel src mapping, glyph-run text pass, focus ring,
+        // command conversion, and the full `bakeUiFont` + submit/render
+        // integration through a recording renderer + mock font backend.
+        "test/ui_draw_list_test.zig",
+        // labelle-studio Play mode (Phase 3) — wasm editor control
+        // surface: bind/dispatch vtable, pause/step tick gating, scene
+        // digest JSON (+ truncation validity), camera override state
+        // machine, pre-bind no-op safety.
+        "test/editor_api_test.zig",
+        // Runtime scene-source override map (editor_load_scene): set →
+        // load consults override (loadSceneFromSource by loading scene
+        // name, loadSceneFile includes by path stem); replace frees the
+        // previous source.
+        "test/scene_source_override_test.zig",
+        // editor_api v1.1 — `Game.setStateOwned`: game-owned copy of
+        // runtime-sourced state names (loader meta.initial_state +
+        // editor_set_state share the PR #599 UAF-safe ordering).
+        "test/set_state_owned_test.zig",
+        // editor_reload_prefab v1.4 (#691) — bounded live-instance
+        // refresh: declared-transient diff on roots + local_path-matched
+        // children, runtime-attached survival, entity-ref preservation,
+        // reference-mode override re-merge, length-gated structural edits.
+        "test/prefab_refresh_test.zig",
+        // #701 — destroyEntity/destroyEntityOnly unlink the destroyed
+        // entity from its parent's `Children` list (stale-id/alias hole).
+        // The cascade iterates a snapshot so the per-child unlink can't
+        // invalidate the walk.
+        "test/destroy_unlink_test.zig",
+        // #697 — silent-failure hardening on the loading→gameplay
+        // transition: the hot-reload loader swallow (`catch {}`) now
+        // surfaces a loader failure through `game.log.err` instead of
+        // vanishing. Drives a hot reload with a fail-on-demand loader and
+        // asserts the error reaches a capturing log sink.
+        "test/loading_transition_hardening_test.zig",
+        // #380 — debug inspector: FPS/frame-time tracker (FrameProfiler)
+        // + live per-script/per-plugin profiler-overlay data collection.
+        // The per-script profiler timings themselves shipped in v1.6.0;
+        // these cover the FPS counter and the overlay-facing surface.
+        "test/frame_profiler_test.zig",
+        "test/inspector_overlay_test.zig",
+        // #737 — Script Runtime Contract v1: the `labelle_*` C-ABI
+        // surface language plugins bind (RFC-LANGUAGE-PLUGINS). Covers
+        // pre-bind no-op safety, the bind/vtable dispatch for every op,
+        // component serde round-trips over the registry, name-dispatched
+        // queries, event emit-by-name, and the subscribe/drain/poll FIFO
+        // (incl. the two-arena payload lifetime).
+        "test/script_contract_test.zig",
+        // labelle-gfx#305 Phase 2 Slice C — post-fx type re-exports
+        // (engine.PostPass/PostPassKind/PostPassUniforms are the SAME
+        // labelle-core types gfx re-exports, unified diamond) + the
+        // `Game.setPostFx/pushPostPass/clearPostFx` passthrough seam.
+        "test/post_fx_passthrough_test.zig",
+        // #827 — `drawGizmoText` + `…Screen`/`…Category` on the Game gizmo
+        // mixin. `GizmoDraw` (labelle-core) has no text payload, so the
+        // string is copied into a per-frame arena on the gizmo state and
+        // joined to its draw by index (`getGizmoText`); these cover the
+        // copy-not-borrow lifetime, the category gate, and the arena reset
+        // at `clearGizmos`.
+        "test/gizmo_text_test.zig",
+        // #841 (companion to labelle-gfx#343) — collection-of-images
+        // tilesets: one texture per per-tile `<image>` instead of one per
+        // tileset, deduped by `source`, unloaded once each. Drives a
+        // renderer seam shaped like gfx's in BOTH the post-#343 and
+        // pre-#343 shapes rather than the pinned gfx `tilemap` package
+        // (which predates the `tile_images`/`resolveTileFn` fields), so it
+        // needs only the standard core/engine/scene imports — and it pins
+        // that an engine on OLDER gfx keeps full tilemap support.
+        "test/tilemap_collection_test.zig",
+        // Per-tile animation tick (companion to labelle-gfx#351). Same
+        // reason for a hand-rolled gfx stand-in: the pinned gfx has no
+        // `advanceAnimations`, and the pre/post pair is what pins the
+        // `@hasDecl` degrade.
+        "test/tilemap_animation_tick_test.zig",
     };
 
     for (test_files) |test_file| {
@@ -160,6 +333,59 @@ pub fn build(b: *std.Build) void {
         });
         test_step.dependOn(&b.addRunArtifact(t).step);
     }
+
+    // `zig build bench` — the id-column (#783) host+binding
+    // micro-benchmark, forced ReleaseFast regardless of the top-level
+    // optimize so the measurement is meaningful. The MEASURED code lives
+    // in the engine module (`script_contract`), so the whole engine
+    // module graph must be ReleaseFast too — the default `core_module`/
+    // `engine_module` inherit the top-level `optimize` (Debug by
+    // default), which would silently measure Debug (#788 review). So
+    // re-derive the graph at ReleaseFast for the bench alone.
+    const bench_opt: std.builtin.OptimizeMode = .ReleaseFast;
+    const core_rf = b.dependency("labelle_core", .{ .target = target, .optimize = bench_opt }).module("labelle-core");
+    const scene_rf = b.dependency("scene", .{ .target = target, .optimize = bench_opt }).module("scene");
+    const jsonc_rf = b.dependency("jsonc", .{ .target = target, .optimize = bench_opt }).module("jsonc");
+    const audio_types_rf = b.createModule(.{
+        .root_source_file = b.path("src/audio_types.zig"),
+        .target = target,
+        .optimize = bench_opt,
+    });
+    const font_types_rf = b.createModule(.{
+        .root_source_file = b.path("src/font_types.zig"),
+        .target = target,
+        .optimize = bench_opt,
+    });
+    font_types_rf.addImport("labelle-core", core_rf);
+    const engine_rf = b.createModule(.{
+        .root_source_file = b.path("src/root.zig"),
+        .target = target,
+        .optimize = bench_opt,
+        .link_libc = true,
+    });
+    engine_rf.addImport("labelle-core", core_rf);
+    engine_rf.addImport("scene", scene_rf);
+    engine_rf.addImport("jsonc", jsonc_rf);
+    engine_rf.addImport("audio_types", audio_types_rf);
+    engine_rf.addImport("font_types", font_types_rf);
+    if (target.result.os.tag == .macos) {
+        engine_rf.linkFramework("IOSurface", .{});
+        engine_rf.linkFramework("CoreFoundation", .{});
+    }
+    const bench_step = b.step("bench", "Run the script-contract id-column benchmark (ReleaseFast)");
+    const bench_exe = b.addExecutable(.{
+        .name = "script_contract_bench",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("test/script_contract_bench.zig"),
+            .target = target,
+            .optimize = bench_opt,
+            .imports = &.{
+                .{ .name = "labelle-core", .module = core_rf },
+                .{ .name = "engine", .module = engine_rf },
+            },
+        }),
+    });
+    bench_step.dependOn(&b.addRunArtifact(bench_exe).step);
 
     // PIE viewport macOS IOSurface frame stream (#547). The test
     // binary itself is cross-platform — on non-macOS hosts every
@@ -236,6 +462,113 @@ pub fn build(b: *std.Build) void {
     assets_single_threaded_module.addImport("font_types", font_types_module);
     const assets_single_threaded = b.addTest(.{ .root_module = assets_single_threaded_module });
     test_step.dependOn(&assets_single_threaded.step);
+
+    // T2 tilemap test — proves the engine `Tilemap` component + `.tmx`
+    // decode + post-sprite render pass against the ACTUALLY-shipped gfx
+    // 1.21.0 API. The engine module takes no gfx dependency; this test
+    // reaches gfx's std-only `tilemap` sub-package (the `TileMap` decoder
+    // + `TileMapRendererWith`) through the lazy `labelle_gfx` pin and
+    // drives it over `core.mock_backend.MockBackend`. `lazyDependency`
+    // returns null on the first uncached run and Zig re-invokes after
+    // fetching, so downstream engine-module consumers never pull gfx.
+    if (b.lazyDependency("labelle_gfx", .{ .target = target, .optimize = optimize })) |gfx_dep| {
+        // gfx pins its `tilemap` sub-package in-tree (`.path = "tilemap"`);
+        // reach that module through gfx's own builder. The sub-package is
+        // std-only (no labelle-core), so there is no core-diamond to unify.
+        const tilemap_module = gfx_dep.builder.dependency("tilemap", .{
+            .target = target,
+            .optimize = optimize,
+        }).module("tilemap");
+        const tilemap_test = b.addTest(.{
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("test/tilemap_test.zig"),
+                .target = target,
+                .optimize = optimize,
+                .imports = &.{
+                    .{ .name = "labelle-core", .module = core_module },
+                    .{ .name = "engine", .module = engine_module },
+                    .{ .name = "scene", .module = scene_module },
+                    .{ .name = "tilemap", .module = tilemap_module },
+                },
+            }),
+        });
+        test_step.dependOn(&b.addRunArtifact(tilemap_test).step);
+
+        // T3 tilemap Z-interleave test — drives the `renderWithLayerHook`
+        // (gfx v1.22.0) interleave path with a hook-capable, multi-camera
+        // mock. Same gfx `tilemap` sub-package + MockBackend seam as the T2
+        // test above.
+        const tilemap_interleave_test = b.addTest(.{
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("test/tilemap_interleave_test.zig"),
+                .target = target,
+                .optimize = optimize,
+                .imports = &.{
+                    .{ .name = "labelle-core", .module = core_module },
+                    .{ .name = "engine", .module = engine_module },
+                    .{ .name = "scene", .module = scene_module },
+                    .{ .name = "tilemap", .module = tilemap_module },
+                },
+            }),
+        });
+        test_step.dependOn(&b.addRunArtifact(tilemap_interleave_test).step);
+
+        // T3 per-camera correctness (cull #711 P1 / background #709 / reap
+        // #712). Shares mocks with the interleave test via
+        // `tilemap_interleave_support.zig` (path-imported).
+        const tilemap_percamera_test = b.addTest(.{
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("test/tilemap_percamera_test.zig"),
+                .target = target,
+                .optimize = optimize,
+                .imports = &.{
+                    .{ .name = "labelle-core", .module = core_module },
+                    .{ .name = "engine", .module = engine_module },
+                    .{ .name = "scene", .module = scene_module },
+                    .{ .name = "tilemap", .module = tilemap_module },
+                },
+            }),
+        });
+        test_step.dependOn(&b.addRunArtifact(tilemap_percamera_test).step);
+
+        // Runtime tile mutation (#825) — `setTile` / `setTiles` /
+        // `tilemapLayerSize` write into the DECODED map, which gfx's
+        // immediate-mode pass re-reads each frame. Shares the mocks with the
+        // interleave suite via `tilemap_interleave_support.zig`.
+        const tilemap_mutation_test = b.addTest(.{
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("test/tilemap_mutation_test.zig"),
+                .target = target,
+                .optimize = optimize,
+                .imports = &.{
+                    .{ .name = "labelle-core", .module = core_module },
+                    .{ .name = "engine", .module = engine_module },
+                    .{ .name = "scene", .module = scene_module },
+                    .{ .name = "tilemap", .module = tilemap_module },
+                },
+            }),
+        });
+        test_step.dependOn(&b.addRunArtifact(tilemap_mutation_test).step);
+
+        // External `.tsx` resolution (#834) — the runtime now hands gfx a
+        // resolver backed by the same embedded registry that serves tileset
+        // images, so a `<tileset source="…tsx"/>` decodes in an embedded
+        // build instead of failing into a warning.
+        const tilemap_external_tsx_test = b.addTest(.{
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("test/tilemap_external_tsx_test.zig"),
+                .target = target,
+                .optimize = optimize,
+                .imports = &.{
+                    .{ .name = "labelle-core", .module = core_module },
+                    .{ .name = "engine", .module = engine_module },
+                    .{ .name = "scene", .module = scene_module },
+                    .{ .name = "tilemap", .module = tilemap_module },
+                },
+            }),
+        });
+        test_step.dependOn(&b.addRunArtifact(tilemap_external_tsx_test).step);
+    }
 
     // zspec BDD specs — mirrors the `spec` step in labelle-pathfinding.
     // Uses zspec's own test runner; the spec files declare

@@ -1,6 +1,31 @@
 /// Scene mixin — scene registration, loading, transitions, and lifecycle.
 const std = @import("std");
 const builtin = @import("builtin");
+const asset_manifest_mod = @import("../asset_manifest.zig");
+const prefab_cache_mod = @import("../jsonc/prefab_cache.zig");
+const PrefabCache = prefab_cache_mod.PrefabCache;
+
+/// Build a `PrefabResolver` over the game's live `PrefabCache` so sprite-based
+/// asset inference (#563) can follow `{ "prefab": "<name>" }` references
+/// transitively into the referenced prefab's tree (#754). Returns `null` when
+/// no cache is attached yet (a first `setScene` before any prefab is
+/// registered) — inference then behaves as pre-#754 (prefab refs contribute
+/// only their name string).
+///
+/// Uses `getInstalled` (registry-only, no disk fallback, no insertion side
+/// effects) so inference stays a pure read: the assembler emits every project
+/// prefab via `addEmbeddedPrefab` at init — before the first `setScene` — so
+/// the cache is populated by the time inference runs on all assembler builds.
+fn prefabResolver(game: anytype) ?asset_manifest_mod.PrefabResolver {
+    const ptr = game.prefab_cache_ptr orelse return null;
+    const Resolve = struct {
+        fn resolve(ctx: *anyopaque, name: []const u8) ?@import("jsonc").Value {
+            const cache: *PrefabCache = @ptrCast(@alignCast(ctx));
+            return cache.getInstalled(name);
+        }
+    };
+    return .{ .ctx = ptr, .resolveFn = Resolve.resolve };
+}
 
 /// Collect every asset name currently registered in the catalog into a
 /// fresh allocator-owned slice. The returned slice borrows the name
@@ -22,6 +47,112 @@ fn collectAllRegisteredAssetNames(allocator: std.mem.Allocator, catalog: anytype
         try list.append(allocator, key.*);
     }
     return list.toOwnedSlice(allocator);
+}
+
+/// Lazily build the sprite-based asset-inference reverse index (#563) from
+/// every atlas currently registered in `atlas_manager`, caching it on
+/// `game.reverse_index`. Returns a pointer to the built index, or `null` if
+/// the build could not complete (OOM) — in which case the caller skips
+/// inference and falls back to its existing behavior.
+///
+/// The index maps every atlas *sprite path* to its providing atlas *bundle
+/// name* (the same name used as the `AssetCatalog` resource key, so an
+/// inferred entry can be `acquire`d directly). Cross-atlas duplicate sprite
+/// names are first-wins and never fatal (`addAtlasLenient`) — the renderer's
+/// `findSprite` already resolves such collisions that way, so inference must
+/// not be the thing that turns a shipping game into a crash. Built once and
+/// reused; steady-state cost is zero for games that declare every manifest.
+///
+/// Standalone images (`Image` component, #568) are a documented gap here:
+/// they are not currently enumerable from a single runtime registry the way
+/// atlas sprites are. A scene relying on a standalone image with no explicit
+/// manifest should carry an `AssetManifest` until that registry lands. Sprite
+/// refs — the #563 acceptance case — are fully covered.
+fn ensureReverseIndex(game: anytype) ?*asset_manifest_mod.ReverseIndex {
+    if (game.reverse_index) |*ri| return ri;
+
+    var index = asset_manifest_mod.ReverseIndex.init(game.allocator);
+
+    var scratch: std.ArrayListUnmanaged([]const u8) = .empty;
+    defer scratch.deinit(game.allocator);
+
+    var it = game.atlas_manager.atlases.iterator();
+    while (it.next()) |entry| {
+        scratch.clearRetainingCapacity();
+        var sit = entry.value_ptr.sprites.keyIterator();
+        while (sit.next()) |k| {
+            scratch.append(game.allocator, k.*) catch {
+                index.deinit();
+                return null;
+            };
+        }
+        _ = index.addAtlasLenient(entry.key_ptr.*, scratch.items) catch {
+            index.deinit();
+            return null;
+        };
+    }
+
+    game.reverse_index = index;
+    return &(game.reverse_index.?);
+}
+
+/// Resolve the asset manifest a scene should load through the gate.
+///
+/// This is the single point where sprite-based asset inference (#563) hooks
+/// into the existing acquire/gate/release machinery, and it is deliberately
+/// conservative:
+///
+///   - Scene has an explicit / already-cached manifest (`assets.len > 0`):
+///     returned untouched. Every existing scene loads byte-for-byte
+///     identically — inference never runs for it.
+///   - Scene has no manifest but no `source` either: returns empty, so the
+///     caller's existing Debug eager-load-everything fallback still applies.
+///   - Scene has no manifest but DOES carry its JSONC `source`: walk it
+///     against the runtime reverse index, and if that yields a non-empty set,
+///     cache it onto `SceneEntry.assets`. From then on the scene is
+///     indistinguishable from one with an explicit manifest — the gate
+///     acquires the inferred set and the scene-swap path releases it
+///     symmetrically. Inference runs once (result cached), and any failure
+///     (malformed source / OOM) is best-effort: it logs and returns empty
+///     rather than failing the load.
+fn resolveSceneAssets(game: anytype, name: []const u8) []const []const u8 {
+    const entry = game.scenes.getPtr(name) orelse return &.{};
+    // Explicit or already-inferred manifest — never re-derive.
+    if (entry.assets.len > 0) return entry.assets;
+    const source = entry.source orelse return &.{};
+
+    const index = ensureReverseIndex(game) orelse return &.{};
+    if (index.count() == 0) return &.{};
+
+    // Follow prefab references transitively (#754): a pure prefab-composition
+    // scene (zero inline `Sprite`) derives the union of its prefabs' atlas
+    // bundles instead of an empty manifest. Resolver is best-effort — `null`
+    // (no cache yet) falls back to inline-only inference.
+    var manifest = asset_manifest_mod.inferAssetsFromSourceWithPrefabs(game.allocator, index, source, prefabResolver(game)) catch |err| {
+        game.log.warn(
+            "[Scene] '{s}': asset inference skipped ({s}) — falling back to declared/eager behavior",
+            .{ name, @errorName(err) },
+        );
+        return &.{};
+    };
+    if (manifest.slice().len == 0) {
+        manifest.deinit();
+        return &.{};
+    }
+
+    // Park the manifest so its heap-owned name copies outlive this call, then
+    // cache the (heap-stable) slice onto the SceneEntry. The slice pointer is
+    // owned by `manifest.names` — appending the struct to `inferred_manifests`
+    // copies the struct by value but leaves that buffer in place, so the
+    // cached slice stays valid even if the outer list later reallocs.
+    const slice = manifest.slice();
+    game.inferred_manifests.append(game.allocator, manifest) catch {
+        manifest.deinit();
+        return &.{};
+    };
+    entry.assets = slice;
+    std.log.info("[Scene] '{s}' has no manifest, inferred {d} asset(s) from sprite refs", .{ name, slice.len });
+    return slice;
 }
 
 /// Possible outcomes of the asset-manifest gate fired at the start
@@ -62,7 +193,7 @@ fn acquireBatch(game: anytype, target_name: []const u8, target_assets: []const [
             // Roll back any prior acquires in this batch.
             for (target_assets) |rb| {
                 if (game.assets.entries.getPtr(rb)) |e| {
-                    if (e.refcount > 0) game.assets.release(rb);
+                    if (e.refcount > 0) releaseAssetImpl(game, rb);
                 }
             }
             return err;
@@ -138,11 +269,38 @@ fn gateOrDefer(
     }
 }
 
+/// Release one catalog reference and, if that was the last one, blank
+/// the atlas binding that pointed at the texture just freed.
+///
+/// engine#821/#822: at refcount 0 the catalog destroys the image's
+/// texture and its slot is up for grabs by the next upload of ANY
+/// asset — the atlas's latched `texture_id` must not survive it, or it
+/// resolves to whichever atlas recycles the slot. Re-arming here (the
+/// mirror of the surface-loss path) blanks the atlas the same frame,
+/// and the per-tick bridge rebinds a fresh handle when the asset's own
+/// upload lands. Assets still referenced elsewhere (a manifest shared
+/// with the incoming scene, a load pin) keep their live binding.
+///
+/// EVERY path that can take an image to refcount 0 must go through
+/// here — the scene-swap release, the load-pin release
+/// (`releaseLoadAcquired`), and the gate rollbacks — which is why it is
+/// a `Game` method rather than a scene-swap local. The bridge's
+/// identity-keyed rebind (`TextureManager.markPendingLoaded`) is the
+/// safety net for any release this does not reach; this is what keeps
+/// the blank-out immediate rather than one tick late.
+fn releaseAssetImpl(game: anytype, asset_name: []const u8) void {
+    game.assets.release(asset_name);
+    const entry = game.assets.entries.getPtr(asset_name) orelse return;
+    if (entry.refcount == 0) {
+        game.atlas_manager.invalidateAtlasBinding(asset_name);
+    }
+}
+
 /// Release every asset in `assets`. Called from the success path
 /// of both `setScene` variants with the outgoing scene's manifest
 /// slice (looked up once by the caller — no second `scenes.get`).
 fn releasePreviousAssets(game: anytype, assets: []const []const u8) void {
-    for (assets) |asset_name| game.assets.release(asset_name);
+    for (assets) |asset_name| releaseAssetImpl(game, asset_name);
 }
 
 /// Consults `game.asset_failure_policy` when the manifest gate
@@ -174,7 +332,7 @@ fn handleAssetFailure(game: anytype, caller_tag: []const u8, target_name: []cons
 fn rollbackPendingAssets(game: anytype) void {
     const target_name = game.pending_scene_assets orelse return;
     if (game.scenes.get(target_name)) |entry| {
-        for (entry.assets) |asset_name| game.assets.release(asset_name);
+        for (entry.assets) |asset_name| releaseAssetImpl(game, asset_name);
     }
     game.allocator.free(target_name);
     game.pending_scene_assets = null;
@@ -206,7 +364,18 @@ fn bridgeImageAssetsToAtlasManager(game: anytype, assets: []const []const u8) vo
         // Both are normal: the first means we already bridged on
         // an earlier setScene; the second means the asset name
         // doesn't correspond to a registered atlas (e.g. audio).
-        game.atlas_manager.markPendingLoaded(asset_name, handle, null) catch {};
+        // Those two are the only errors `markPendingLoaded` can
+        // return today, so swallow exactly those — but surface
+        // anything else instead of a blanket `catch {}` so a future
+        // genuine bind failure can't vanish silently (#697).
+        game.atlas_manager.markPendingLoaded(asset_name, handle, null) catch |err| {
+            if (err != error.AtlasNotPending and err != error.AtlasNotFound) {
+                game.log.err(
+                    "bridgeImageAssetsToAtlasManager: unexpected atlas bind failure for '{s}': {s}",
+                    .{ asset_name, @errorName(err) },
+                );
+            }
+        };
     }
 }
 
@@ -231,18 +400,70 @@ fn bridgeImageAssetsToAtlasManager(game: anytype, assets: []const []const u8) vo
 /// one HashMap iteration per frame; the catalog typically holds
 /// <20 entries.
 fn bridgeAllReadyImageAssets_impl(game: anytype) void {
+    // While a post-load gate is armed but not yet bridged (#638), DON'T
+    // bind any atlas in its manifest here. The gate (`updatePostLoadRenderGate`)
+    // binds that whole manifest atomically, all-at-once, the moment every
+    // atlas is `.ready` — mirroring the scene-change gate. Letting this
+    // per-tick walk bind a gated atlas the instant ITS upload lands would
+    // reintroduce the incremental, half-bound-manifest window the gate
+    // exists to eliminate (atlas X bound while atlas Y is still in flight).
+    // Atlases outside the gated manifest (and all atlases once the gate
+    // has bridged / cleared) bind here as before — the eager-fallback and
+    // late-upload paths (#508) are untouched.
+    const gated: []const []const u8 =
+        if (game.post_load_render_gate != null and !game.post_load_render_gate_bridged)
+            game.post_load_render_gate.?
+        else
+            &.{};
+
     var iter = game.assets.entries.iterator();
     while (iter.next()) |kv| {
         const entry = kv.value_ptr;
         if (entry.loader_kind != .image) continue;
-        if (entry.state != .ready) continue;
+        if (entry.state != .ready) {
+            // The catalog holds no texture for this asset right now
+            // (freed at refcount 0, dropped by a surface loss, mid
+            // re-decode, failed). Whatever handle the atlas still
+            // carries is dead and its slot may already belong to another
+            // atlas — blank it (engine#821). No-op when already pending,
+            // so the steady state costs nothing; this only catches a
+            // release path that did not go through `releaseAsset`.
+            game.atlas_manager.invalidateAtlasBinding(kv.key_ptr.*);
+            continue;
+        }
+        if (isInManifest(gated, kv.key_ptr.*)) continue;
         const resource = entry.resource orelse continue;
         const handle = switch (resource) {
             .image => |t| t,
             else => continue,
         };
-        game.atlas_manager.markPendingLoaded(kv.key_ptr.*, handle, null) catch {};
+        // Idempotent per-tick walk: AtlasNotPending (already bound to
+        // this very handle) and AtlasNotFound are expected and swallowed.
+        // A bound atlas whose catalog handle CHANGED (texture freed and
+        // re-uploaded into another slot) is rebound here — that is the
+        // identity-keyed half of the #821 fix, see `markPendingLoaded`.
+        // Anything else is a genuine bind failure — surface it rather
+        // than letting a blanket `catch {}` hide it (#697). The guard
+        // keeps the normal per-frame path silent (no log spam), since
+        // those two are the only errors `markPendingLoaded` returns today.
+        game.atlas_manager.markPendingLoaded(kv.key_ptr.*, handle, null) catch |err| {
+            if (err != error.AtlasNotPending and err != error.AtlasNotFound) {
+                game.log.err(
+                    "bridgeAllReadyImageAssets: unexpected atlas bind failure for '{s}': {s}",
+                    .{ kv.key_ptr.*, @errorName(err) },
+                );
+            }
+        };
     }
+}
+
+/// `true` if `name` is one of the entries in `manifest`. Linear scan —
+/// manifests are single-digit-length atlas-name lists.
+fn isInManifest(manifest: []const []const u8, name: []const u8) bool {
+    for (manifest) |m| {
+        if (std.mem.eql(u8, m, name)) return true;
+    }
+    return false;
 }
 
 /// Returns the scene management mixin for a given Game type.
@@ -262,7 +483,16 @@ pub fn Mixin(comptime Game: type) type {
             self.scenes.put(name, .{
                 .loader_fn = wrapper,
                 .hooks = hooks_val,
-            }) catch {};
+            }) catch |err| {
+                // A dropped registration silently vanishes here and only
+                // resurfaces much later as an opaque `error.SceneNotFound`
+                // from `setScene('{name}')` with no clue why. Surface the
+                // real cause (OOM) at the point of failure (#697).
+                self.log.err(
+                    "registerScene('{s}') failed: {s} — scene will be missing at setScene time",
+                    .{ name, @errorName(err) },
+                );
+            };
         }
 
         pub fn registerSceneSimple(
@@ -279,6 +509,31 @@ pub fn Mixin(comptime Game: type) type {
         /// `resolveAtlasSprites` runs. See the free fn for details.
         pub fn bridgeAllReadyImageAssets(self: *Game) void {
             bridgeAllReadyImageAssets_impl(self);
+        }
+
+        /// Bridge a specific atlas manifest into `atlas_manager` in one
+        /// pass — the exact `bridgeImageAssetsToAtlasManager` call the
+        /// scene-change path uses after `gateOnManifest` proves every
+        /// atlas `.ready`. Exposed so the save/load path
+        /// (`updatePostLoadRenderGate`) can bind the loaded scene's
+        /// manifest atomically, all-at-once, the same way a scene swap
+        /// does — instead of relying on the per-tick incremental
+        /// `bridgeAllReadyImageAssets` walk. See the load-binding race
+        /// fix (engine#638): incremental binding is the asymmetry that
+        /// let a menu→Load occasionally bind an atlas under the wrong
+        /// freshly-uploaded handle; the scene-change path never does
+        /// because it binds the whole manifest in a single deterministic
+        /// pass after all uploads land.
+        pub fn bridgeManifest(self: *Game, assets: []const []const u8) void {
+            bridgeImageAssetsToAtlasManager(self, assets);
+        }
+
+        /// Drop one catalog reference; at refcount 0 also blank the atlas
+        /// binding whose texture just died (engine#821). The ONE way to
+        /// release an image asset from `Game` code — see `releaseAssetImpl`
+        /// for why every release site must use it.
+        pub fn releaseAsset(self: *Game, name: []const u8) void {
+            releaseAssetImpl(self, name);
         }
 
         /// Register a scene together with its declared asset manifest.
@@ -325,6 +580,31 @@ pub fn Mixin(comptime Game: type) type {
             entry.assets = assets;
         }
 
+        /// Attach the raw JSONC `source` of a previously-registered scene,
+        /// enabling sprite-based asset inference (#563) when the scene has no
+        /// explicit manifest. Mirrors `setSceneAssets` — the assembler emits
+        /// one call per comptime scene (gated on `@hasDecl` for forward-compat
+        /// with older engines) after the `registerScene*` loop, passing the
+        /// scene's `@embedFile`'d `.jsonc` source. Returns
+        /// `error.SceneNotFound` if `name` was never registered.
+        ///
+        /// Setting a source has NO effect on a scene that already declares an
+        /// explicit `assets` manifest — inference is skipped for those, so
+        /// their loading stays byte-for-byte identical. It only matters for
+        /// manifest-less scenes, where `setScene`/`setSceneAtomic` walk the
+        /// source to derive the manifest on first load.
+        ///
+        /// Lifetime: `source` is stored by reference and must outlive the
+        /// `Game`. The assembler emits a program-lifetime `@embedFile` slice.
+        pub fn setSceneSource(
+            self: *Game,
+            name: []const u8,
+            source: []const u8,
+        ) error{SceneNotFound}!void {
+            const entry = self.scenes.getPtr(name) orelse return error.SceneNotFound;
+            entry.source = source;
+        }
+
         /// Attach a declared `initial_state` to a previously-registered scene.
         /// `setScene` will call `setState(state)` after the scene loads.
         ///
@@ -358,10 +638,16 @@ pub fn Mixin(comptime Game: type) type {
             // the gate entirely. Scenes registered via the legacy
             // `registerSceneSimple` (no manifest) have `assets ==
             // &.{}` and behave identically to before this change.
-            const declared_assets: []const []const u8 = if (self.scenes.get(name)) |e|
-                e.assets
-            else
-                &.{};
+            // Sprite-based asset inference (#563): when the scene declares no
+            // explicit manifest but carries its JSONC `source`, derive the
+            // manifest from the entity tree's Sprite refs and cache it onto
+            // `SceneEntry.assets`. From that point the scene flows through the
+            // identical acquire/gate/release path as an explicitly-declared
+            // one; scenes WITH a manifest are returned untouched, so their
+            // loading is byte-for-byte unchanged. Returns empty when there is
+            // no source (or inference found nothing), preserving the Debug
+            // eager-load fallback below.
+            const declared_assets: []const []const u8 = resolveSceneAssets(self, name);
 
             // Dev-mode eager-load fallback (issue #502) — if the scene
             // declared no assets and we're a Debug build, load every
@@ -433,8 +719,15 @@ pub fn Mixin(comptime Game: type) type {
             self.emitEngineEvent("engine__scene_loading", .{ .name = name });
 
             if (self.scenes.get(name)) |entry| {
-                // Comptime-registered scene
-                try entry.loader_fn(self);
+                // Comptime-registered scene. `loading_scene_name` is set
+                // for the duration of the loader so the JSONC bridge can
+                // resolve scene-source overrides by scene name (Play
+                // mode / editor_api).
+                {
+                    self.loading_scene_name = name;
+                    defer self.loading_scene_name = null;
+                    try entry.loader_fn(self);
+                }
                 self.current_scene_name = self.allocator.dupe(u8, name) catch null;
                 self.emitHook(.{ .scene_load = .{ .name = name } });
                 // Engine `Events` dual-emit (#578).
@@ -442,6 +735,13 @@ pub fn Mixin(comptime Game: type) type {
                 if (entry.hooks.onLoad) |onLoad| {
                     onLoad(self);
                 }
+                // Seed the gfx camera from the authored `Camera` component
+                // (camera-prefabs #714) — the authored starting point before
+                // scripts take the wheel. Runs AFTER `onLoad` (finding #3) so a
+                // scene that finalizes the camera's Position/zoom in its hook is
+                // reflected on the first rendered frame. Comptime-folds away on
+                // camera-less renderers.
+                self.seedCameraFromComponent();
             } else if (self.jsonc_scenes.get(name)) |_| {
                 // Runtime JSONC scene — loaded at runtime by the game loop
                 // The actual loading is deferred: the generated code or game code
@@ -496,22 +796,29 @@ pub fn Mixin(comptime Game: type) type {
         /// Clears the scene entity list first so Scene.deinit skips entity destruction,
         /// then resets the ECS atomically, then loads the new scene.
         pub fn setSceneAtomic(self: *Game, name: []const u8) !void {
-            const entry = self.scenes.get(name) orelse return error.SceneNotFound;
+            if (!self.scenes.contains(name)) return error.SceneNotFound;
+
+            // Sprite-based asset inference (#563) — mirror of `setScene`.
+            // Derives + caches the manifest for a source-bearing, manifest-less
+            // scene before the entry is (re-)read below, so `declared_assets`
+            // reflects the inferred set. See `resolveSceneAssets` / `setScene`.
+            const declared_assets: []const []const u8 = resolveSceneAssets(self, name);
+            const entry = self.scenes.get(name).?;
 
             // Dev-mode eager-load fallback (issue #502) — same logic as
             // setScene, kept in sync. See setScene for the full rationale.
             var eager_buf: ?[][]const u8 = null;
             defer if (eager_buf) |b| self.allocator.free(b);
-            const target_assets: []const []const u8 = if (entry.assets.len == 0 and comptime builtin.mode == .Debug) blk: {
-                const all = collectAllRegisteredAssetNames(self.allocator, &self.assets) catch break :blk entry.assets;
+            const target_assets: []const []const u8 = if (declared_assets.len == 0 and comptime builtin.mode == .Debug) blk: {
+                const all = collectAllRegisteredAssetNames(self.allocator, &self.assets) catch break :blk declared_assets;
                 if (all.len == 0) {
                     self.allocator.free(all);
-                    break :blk entry.assets;
+                    break :blk declared_assets;
                 }
                 std.log.info("[Scene] '{s}' has no manifest, eager-loaded {d} resources (Debug build)", .{ name, all.len });
                 eager_buf = all;
                 break :blk @as([]const []const u8, all);
-            } else entry.assets;
+            } else declared_assets;
 
             // Manifest gate — see `setScene` for the full
             // explanation. Both entry points participate in the
@@ -600,7 +907,13 @@ pub fn Mixin(comptime Game: type) type {
             self.emitHook(.{ .scene_before_load = .{ .name = name, .allocator = self.allocator } });
             // Engine `Events` dual-emit (#578).
             self.emitEngineEvent("engine__scene_loading", .{ .name = name });
-            try entry.loader_fn(self);
+            // Scene-source override resolution — same rationale as the
+            // `setScene` loader block above.
+            {
+                self.loading_scene_name = name;
+                defer self.loading_scene_name = null;
+                try entry.loader_fn(self);
+            }
             self.current_scene_name = self.allocator.dupe(u8, name) catch null;
             self.emitHook(.{ .scene_load = .{ .name = name } });
             // Engine `Events` dual-emit (#578).
@@ -609,6 +922,11 @@ pub fn Mixin(comptime Game: type) type {
             if (entry.hooks.onLoad) |onLoad| {
                 onLoad(self);
             }
+            // Seed the gfx camera from the authored `Camera` component AFTER
+            // `onLoad` (finding #3), so a scene finalizing the camera in its
+            // hook is reflected on the first rendered frame (camera-prefabs
+            // #714). Comptime-folds away on camera-less renderers.
+            self.seedCameraFromComponent();
 
             if (previous_name) |p| {
                 const prev_assets: []const []const u8 = if (self.scenes.get(p)) |e| e.assets else &.{};

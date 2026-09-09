@@ -8,6 +8,15 @@
 //! with the two-pass `@ref` resolution flow when a `RefContext` is
 //! active.
 //!
+//! The per-built-in branches are factored into `applySprite` /
+//! `applyShape` / `applyTilemap` / `applyCamera` / `applyImage` so the
+//! Script Runtime Contract (`src/script_contract.zig`, #737) can route
+//! `labelle_component_set` through the IDENTICAL machinery — scripts
+//! get write-parity with scenes by construction. The fns report
+//! whether the deserialize applied; `applyComponent` ignores the
+//! answer (scene loading stays fire-and-forget), the contract maps
+//! `false` to its rc `-1`.
+//!
 //! Allocation lifetime — `deserialize`-side allocations (slices for
 //! `frames` / `entries` / etc.) land in
 //! `active_world.nested_entity_arena` so they share the lifetime of
@@ -24,6 +33,7 @@ const Position = core.Position;
 const deserializer = @import("deserializer.zig");
 const ref_resolver_mod = @import("ref_resolver.zig");
 const uf = @import("unified_format.zig");
+const ImageComp = @import("../image_component.zig").Image;
 
 pub fn ComponentApply(comptime GameType: type, comptime Components: type) type {
     const Entity = GameType.EntityType;
@@ -98,18 +108,75 @@ pub fn ComponentApply(comptime GameType: type, comptime Components: type) type {
 
             // Sprite — uses addSprite for renderer registration.
             if (std.mem.eql(u8, name, "Sprite")) {
-                if (deserializer.deserialize(Sprite, value, comp_alloc)) |sprite| {
-                    game.addSprite(entity, sprite);
-                }
+                _ = applySprite(game, entity, value);
                 return;
             }
 
             // Shape — uses addShape for renderer registration.
             if (std.mem.eql(u8, name, "Shape")) {
-                if (deserializer.deserialize(Shape, value, comp_alloc)) |shape| {
-                    game.addShape(entity, shape);
-                }
+                _ = applyShape(game, entity, value);
                 return;
+            }
+
+            // Tilemap (T2 Phase 2) — built-in, uses addTilemap so the
+            // `.tmx` asset decodes + binds a draw-pass renderer at load.
+            //
+            // A project-registered component named `Tilemap` WINS: the
+            // built-in branch is compiled out when the registry defines the
+            // name, so the generic `Components.names()` dispatch below routes
+            // it to the registered type. Without this guard the built-in
+            // would silently shadow the registered component (and because
+            // `TilemapComp.asset_name` defaults to `""`, even custom JSON
+            // lacking `asset_name` would deserialize as an empty engine
+            // tilemap) — silent scene-data loss (C2).
+            if (comptime !Components.has("Tilemap")) {
+                if (std.mem.eql(u8, name, "Tilemap")) {
+                    _ = applyTilemap(game, entity, value);
+                    return;
+                }
+            }
+
+            // Camera (camera-prefabs MVP, #714) — built-in, attaches as a
+            // plain POD component (no runtime/side-table, unlike Tilemap). The
+            // engine seeds the live gfx camera from it after instantiation
+            // (`seedCameraFromComponent`). Guarded `!Components.has("Camera")`
+            // exactly like Tilemap so a project-registered `Camera` still wins
+            // (the built-in branch compiles out, routing `"Camera"` to the
+            // registered type via the generic dispatch below).
+            if (comptime !Components.has("Camera")) {
+                if (std.mem.eql(u8, name, "Camera")) {
+                    _ = applyCamera(game, entity, value);
+                    return;
+                }
+            }
+
+            // Image (standalone-PNG component, #568) — built-in, deserializes
+            // to a plain engine-local POD stored via `addComponent` (like the
+            // `Camera` branch above; unlike `Tilemap` there is no side-table /
+            // asset decode at apply time — the referenced PNG is acquired
+            // through `AssetCatalog` on the scene's asset path). Guarded
+            // `!Components.has("Image")` exactly like `Tilemap` / `Camera` so a
+            // project-registered `Image` still wins (the built-in branch
+            // compiles out, routing `"Image"` to the registered type via the
+            // generic dispatch below).
+            if (comptime !Components.has("Image")) {
+                if (std.mem.eql(u8, name, "Image")) {
+                    _ = applyImage(game, entity, value);
+                    return;
+                }
+            }
+
+            // Emitter (particles, #750) — built-in, deserializes to a plain
+            // engine-local POD (`preset` enum + nested `config`) stored via
+            // `addComponent`; the per-frame `particles_tick` lazily spins up
+            // the pooled `ParticleSystem` in the Game side-table. Guarded
+            // `!Components.has("Emitter")` exactly like the other built-ins so
+            // a project-registered `Emitter` still wins.
+            if (comptime !Components.has("Emitter")) {
+                if (std.mem.eql(u8, name, "Emitter")) {
+                    _ = applyEmitter(game, entity, value);
+                    return;
+                }
             }
 
             // All other components — comptime dispatch via
@@ -137,18 +204,103 @@ pub fn ComponentApply(comptime GameType: type, comptime Components: type) type {
                 }
             }
 
-            // RFC #596 Axis 4: unknown PascalCase keys on an entity
-            // are treated as components, but we warn-once so typos
-            // (`Posiiton`) surface visibly. Lowercase names that
-            // reach here (e.g. legacy embedded structural keys that
-            // bypassed the structural / component split) are
+            // RFC #596 Axis 4: unknown component-shaped keys on an
+            // entity are treated as no-ops, but we warn-once so typos
+            // surface visibly — PascalCase (`Posiiton`) AND
+            // pack-namespaced (`industry__Storag`, #803: every pack
+            // component starts lowercase, so PascalCase alone missed
+            // the entire namespaced registry). Other lowercase names
+            // that reach here (e.g. legacy embedded structural keys
+            // that bypassed the structural / component split) stay
             // silently ignored — they're not authoring mistakes the
             // RFC catches. Position / Sprite / Shape are handled
             // above and returned before reaching this gate, so the
             // built-in components don't false-warn.
-            if (uf.isPascalCase(name)) {
+            if (uf.isComponentKeyShape(name)) {
                 uf.warnUnknownComponent(game.log, name);
             }
+        }
+
+        // ── Per-built-in apply fns (shared with the script contract) ──
+        //
+        // Each targets the ENGINE built-in type unconditionally; the
+        // registry-precedence gates (`!Components.has("Tilemap")` etc.)
+        // stay at the call sites — `applyComponent` above and the
+        // contract's `builtin_comps` dispatch — so a project-registered
+        // component of the same name never reaches these. The `bool`
+        // return reports whether the deserialize applied: scenes ignore
+        // it, `labelle_component_set` maps `false` to `-1` (the entity
+        // is untouched on failure — the deserialize is all-or-nothing).
+
+        /// `Sprite` → `addSprite`, so renderer entity-tracking fires.
+        pub fn applySprite(game: *GameType, entity: Entity, value: Value) bool {
+            const comp_alloc = game.active_world.nested_entity_arena.allocator();
+            const sprite = deserializer.deserialize(Sprite, value, comp_alloc) orelse return false;
+            game.addSprite(entity, sprite);
+            return true;
+        }
+
+        /// `Shape` → `addShape`, so renderer entity-tracking fires.
+        pub fn applyShape(game: *GameType, entity: Entity, value: Value) bool {
+            const comp_alloc = game.active_world.nested_entity_arena.allocator();
+            const shape = deserializer.deserialize(Shape, value, comp_alloc) orelse return false;
+            game.addShape(entity, shape);
+            return true;
+        }
+
+        /// `Tilemap` → `addTilemap`, so the `.tmx` asset decodes + binds
+        /// a draw-pass renderer (a no-op attach on renderers without the
+        /// tilemap seam — the component still lands).
+        pub fn applyTilemap(game: *GameType, entity: Entity, value: Value) bool {
+            const comp_alloc = game.active_world.nested_entity_arena.allocator();
+            const tilemap = deserializer.deserialize(GameType.TilemapComp, value, comp_alloc) orelse return false;
+            game.addTilemap(entity, tilemap);
+            return true;
+        }
+
+        /// `Camera` → `addComponent` of the engine built-in POD. `tag` is
+        /// an INLINE bounded buffer (`[16:0]u8`), which the generic struct
+        /// deserializer doesn't map from a JSON string — it would silently
+        /// keep the `"main"` default. Apply the authored tag here so the
+        /// primary authoring channel (`{"Camera":{"tag":"sky_parallax"}}`)
+        /// seeds the bounded field. Absent → default `"main"`.
+        pub fn applyCamera(game: *GameType, entity: Entity, value: Value) bool {
+            const comp_alloc = game.active_world.nested_entity_arena.allocator();
+            var cam = deserializer.deserialize(GameType.CameraComp, value, comp_alloc) orelse return false;
+            if (value.asObject()) |o| {
+                if (o.get("tag")) |t| {
+                    if (t.asString()) |s| cam.setTagSlice(s);
+                }
+            }
+            game.addComponent(entity, cam);
+            return true;
+        }
+
+        /// `Image` → `addComponent` of the engine-local POD (#568).
+        /// `name` / `layer` are `[]const u8` and `pivot` is an enum — the
+        /// generic struct deserializer maps all of them from JSONC
+        /// (strings land in the nested-entity arena, matching
+        /// `Sprite.sprite_name`'s lifetime), so no `Camera`-style
+        /// inline-tag special-casing is needed here.
+        pub fn applyImage(game: *GameType, entity: Entity, value: Value) bool {
+            const comp_alloc = game.active_world.nested_entity_arena.allocator();
+            const image = deserializer.deserialize(ImageComp, value, comp_alloc) orelse return false;
+            game.addComponent(entity, image);
+            return true;
+        }
+
+        /// `Emitter` → `addComponent` of the engine-local POD (#750). The
+        /// generic struct deserializer maps the `preset` enum + the nested
+        /// `config` struct straight from JSONC. Loading an emitter flips
+        /// `drive_particles` on so the tick/draw run without the game having
+        /// to call `setDriveParticles` itself — scene-authored emitters just
+        /// work, while a project with no emitter stays byte-identical.
+        pub fn applyEmitter(game: *GameType, entity: Entity, value: Value) bool {
+            const comp_alloc = game.active_world.nested_entity_arena.allocator();
+            const emitter = deserializer.deserialize(GameType.EmitterComp, value, comp_alloc) orelse return false;
+            game.addComponent(entity, emitter);
+            game.drive_particles = true;
+            return true;
         }
 
         /// Strip fields that contain entity-like arrays from a
