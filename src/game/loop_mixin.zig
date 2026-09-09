@@ -194,7 +194,13 @@ pub fn Mixin(comptime Game: type) type {
                     false;
                 const committed = !has_assets or self.pending_scene_assets == null;
                 if (failed or committed) {
-                    self.allocator.free(next_scene);
+                    // NOT freed here (#863). `setScene` above BUFFERED
+                    // `engine__scene_loading` / `engine__scene_loaded`
+                    // carrying this very slice as a borrowed name, and a
+                    // buffered event is delivered on the NEXT drain — the
+                    // generated loop drains before it ticks, so this ran a
+                    // full frame ahead of the listener that reads it.
+                    self.retainUntilDrained(next_scene);
                     self.pending_scene_change = null;
                     self.pending_scene_atomic = false;
                 }

@@ -710,7 +710,11 @@ pub fn Mixin(comptime Game: type) type {
             self.unloadCurrentScene();
 
             if (self.current_scene_name) |old_name| {
-                self.allocator.free(old_name);
+                // NOT freed here (#863). `unloadCurrentScene` just BUFFERED
+                // `engine__scene_unloaded` with `name` borrowing this very
+                // slice; a buffered event is delivered on the next drain,
+                // so freeing now hands the listener freed bytes.
+                self.retainUntilDrained(old_name);
                 self.current_scene_name = null;
             }
 
@@ -896,7 +900,11 @@ pub fn Mixin(comptime Game: type) type {
             self.unloadCurrentScene();
 
             if (self.current_scene_name) |old_name| {
-                self.allocator.free(old_name);
+                // NOT freed here (#863). `unloadCurrentScene` just BUFFERED
+                // `engine__scene_unloaded` with `name` borrowing this very
+                // slice; a buffered event is delivered on the next drain,
+                // so freeing now hands the listener freed bytes.
+                self.retainUntilDrained(old_name);
                 self.current_scene_name = null;
             }
 

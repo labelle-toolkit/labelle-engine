@@ -77,7 +77,16 @@ pub fn Mixin(comptime Game: type) type {
                     self.game_state = new_owned;
                 }
             }
-            if (old_owned) |s| self.allocator.free(s);
+            // NOT freed here (#862). `setState` above BUFFERED
+            // `engine__state_changed` with `old_state` borrowing this very
+            // slot, and a buffered event is delivered on the NEXT drain —
+            // the generated loop drains before it ticks, so freeing now
+            // leaves a listener reading freed bytes for a full frame.
+            // Hand it to the drain that delivers the event instead.
+            //
+            // The `emitHook` twins above are unaffected: they dispatch
+            // immediately and have already returned by this line.
+            if (old_owned) |s| self.retainUntilDrained(s);
         }
 
         /// Queue a state change for next tick. The transition happens at

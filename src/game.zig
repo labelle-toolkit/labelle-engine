@@ -568,6 +568,32 @@ pub fn GameConfigWithYAxis(
         assets: assets_mod.AssetCatalog,
         hooks: HooksField = if (has_hooks) null else {},
         event_buffer: EventBuffer = if (has_events) .empty else {},
+        /// Allocations a BUFFERED event payload still borrows from
+        /// (#862/#863).
+        ///
+        /// `HOOK-DELIVERY-CONTRACT.md` §5: an event struct is copied by
+        /// value and any slice inside it is BORROWED, so the referent must
+        /// outlive the drain. Two engine paths broke that by freeing the
+        /// referent in the same call that buffered the event —
+        /// `setStateOwned` freeing the previous state name, and the loop's
+        /// scene-transition commit freeing `pending_scene_change` — leaving
+        /// the payload pointing at freed memory for a FULL FRAME, since the
+        /// generated loop drains before it ticks.
+        ///
+        /// Freeing is therefore deferred to the drain that delivers the
+        /// event: `retainUntilDrained` parks the slice here, and
+        /// `dispatchEvents` swaps this list out on entry and frees it on
+        /// exit. Swapping (rather than freeing in place) is what makes a
+        /// NESTED drain correct — an inner drain delivers exactly the
+        /// events buffered since the outer one swapped, and frees exactly
+        /// the slices retained in that same window.
+        ///
+        /// This keeps the payload shape (`[]const u8`) and the buffered
+        /// timing unchanged, which inlining a fixed-size name would not:
+        /// state and scene names have no length bound, so an inline field
+        /// would truncate them.
+        pending_payload_frees: if (has_events) std.ArrayList([]const u8) else void =
+            if (has_events) .empty else {},
 
         // Scene management
         scenes: std.StringHashMap(SceneEntry),
@@ -1058,6 +1084,11 @@ pub fn GameConfigWithYAxis(
 
         /// Error set of `tryEmit` — `error{OutOfMemory}`.
         pub const EmitError = EventsMixin.EmitError;
+
+        /// Park an allocation a BUFFERED event payload borrows, freeing it
+        /// after the drain that delivers the event (#862/#863). See
+        /// `game/events_mixin.zig` for the contract.
+        pub const retainUntilDrained = EventsMixin.retainUntilDrained;
 
         /// Engine-side tolerant emit for the `engine__<event>` variants
         /// declared on `engine.Events` (RFC-FLOW-VOCABULARY phase 6,

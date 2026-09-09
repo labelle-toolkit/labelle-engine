@@ -261,28 +261,35 @@ That is the recommended shape for any payload whose string has no natural
 owner. `Events.video_finished` uses `[]const u8` and relies on a referent that
 outlives the drain.
 
-> 🐛 **The scene-name payloads VIOLATE this rule on the queued-transition
-> path.** `tick` hands the OWNED `pending_scene_change` slice to `setScene`,
-> which buffers `engine__scene_loading` / `engine__scene_loaded` carrying that
-> slice — and then `loop_mixin.zig:196-198` frees it in the same commit block.
-> Since all of that happens *after* the frame's drain, both payloads dangle
-> until the next iteration. `engine__scene_unloaded` has the same shape:
-> `unloadCurrentScene` queues the owned current name and `setScene` frees it
-> immediately afterwards. Do not read this section as saying scene events are
-> safe — they are the same bug as `state_changed` below, on a different
-> string. Tracked in #863.
+### When the engine itself has no owner for a string
 
-> 🐛 **`Events.state_changed` currently VIOLATES this rule on one path.**
-> `setStateOwned` (`src/game/state_mixin.zig`) dupes the new name, calls
-> `setState` — which queues `state_changed` carrying `old_state` pointing at
-> the *previous* owned allocation — and then frees that allocation before
-> returning. The buffered event's `old_state` dangles until the drain, so the
-> runtime/editor-owned state path can expose freed bytes to a flow listener.
->
-> This is documented here rather than fixed: this PR pins the contract down and
-> changes no behaviour. The fix (retain the old slot until the drain, or copy
-> the name into the payload) is a behaviour change and belongs in its own
-> change. Tracked in #862.
+Two engine paths emit a buffered event carrying a name they are about to
+free: `setStateOwned` (the previous state name, #862) and the scene
+lifecycle (`pending_scene_change` on the queued path and
+`current_scene_name` on unload, #863). Both used to free in the same call
+that buffered the event, so the payload borrowed freed memory for a full
+frame — the drain leads the iteration (§2), so the listener ran an entire
+frame after the free.
+
+Neither inlines the name. State and scene names have **no length bound**,
+so a fixed-size field would silently truncate them, which trades a
+lifetime bug for a correctness bug. Instead the free is deferred to the
+drain that delivers the event:
+
+```zig
+// Buffered an event borrowing `slice`, and would otherwise free it now.
+self.retainUntilDrained(slice);
+```
+
+`dispatchEvents` swaps the retention list out on entry and frees it on
+exit, in step with the event buffer itself. Swapping rather than freeing
+in place is what makes a NESTED drain correct: an inner `dispatchEvents`
+reclaims exactly the slices retained since the outer one swapped, so it
+cannot free a payload the handler that triggered it is still holding.
+
+Use `retainUntilDrained` for any engine-owned allocation a buffered
+payload borrows. Prefer a program- or game-lifetime referent when one
+exists; reach for this when the string genuinely has no owner.
 
 **Value-copying an event is not deep-copying its data.** That sentence is the
 whole of §5.
