@@ -25,7 +25,14 @@ pinned by executable tests:
 
 ## 1. The emit paths
 
-Four ways to get a handler called. They differ in **when**, not in **who**.
+Four ways to get a handler called. They differ in **when** — and one of them
+also differs in **who**.
+
+> ⚠️ `emitSync` is not merely a faster `emit`. The buffered path copies the
+> event into the script-contract inbox on its way through; `emitSync` bypasses
+> that tap entirely. Switching an emit to `emitSync` for latency therefore
+> **silently stops delivering it to language-script subscribers**. Choose
+> `emitSync` for ordering, never as an optimisation.
 
 | Call | Timing | Reaches | Notes |
 |------|--------|---------|-------|
@@ -47,7 +54,14 @@ away at comptime.
 
 ## 2. Drain points — where `dispatchEvents` actually runs
 
-**There is exactly one drain per frame, and it runs BEFORE `g.tick(dt)`.**
+**Exactly one drain per generated-loop iteration that runs the SIM half, and
+it runs BEFORE `g.tick(dt)`.**
+
+The qualifier is load-bearing: under editor preview (`labelle-studio` Play
+mode) a paused iteration fails `shouldTick()` and skips the whole SIM half —
+`g.dispatchEvents()` included — so **zero** drains happen while paused and the
+buffer grows unbounded (§11). "Once per frame" is true of a running sim, not of
+every iteration of the loop.
 
 Every shipped backend template (raylib/sokol/bgfx desktop, mobile, wasm, and
 the null headless runner) emits the assembler's `tick_code` — which *ends*
@@ -81,7 +95,7 @@ while (running) {
   behaves the way authors expect.
 * **Anything the ENGINE emits inside `g.tick` waits for the NEXT
   iteration's drain.** That covers `engine__tick`, `engine__post_tick`,
-  `engine__fixed_tick`'s buffered twin, the input-event scan
+  the input-event scan
   (`engine__key_pressed`, `engine__mouse_button_pressed`, …), sprite-animation
   events, and any `entity_created` / `scene_loaded` raised by work `tick`
   drives. **One frame of latency, by construction.**
@@ -235,8 +249,20 @@ drain, and (critically) an arena reset between the emit and the drain.
 `[NAME_CAPACITY:0]u8` buffer plus a length, with a `nameSlice()` accessor,
 precisely because the borrowed-slice form would dangle across the drain.
 That is the recommended shape for any payload whose string has no natural
-owner. `Events.state_changed` / `scene_loaded` / `video_finished` do use
-`[]const u8`, and rely on the registry/scene entry outliving the drain.
+owner. `Events.scene_loaded` / `video_finished` do use `[]const u8`, and rely on the
+registry/scene entry outliving the drain.
+
+> 🐛 **`Events.state_changed` currently VIOLATES this rule on one path.**
+> `setStateOwned` (`src/game/state_mixin.zig`) dupes the new name, calls
+> `setState` — which queues `state_changed` carrying `old_state` pointing at
+> the *previous* owned allocation — and then frees that allocation before
+> returning. The buffered event's `old_state` dangles until the drain, so the
+> runtime/editor-owned state path can expose freed bytes to a flow listener.
+>
+> This is documented here rather than fixed: this PR pins the contract down and
+> changes no behaviour. The fix (retain the old slot until the drain, or copy
+> the name into the payload) is a behaviour change and belongs in its own
+> change. Tracked separately.
 
 **Value-copying an event is not deep-copying its data.** That sentence is the
 whole of §5.
@@ -255,7 +281,11 @@ and installed by `setHooks`. The engine never copies, owns, or frees them.
   temporary.
 * `setHooks` is also what fires `game_init` / `engine__game_init`
   (`engine__game_init` is buffered, so it needs a drain to land).
-* Events emitted before `setHooks` are buffered but dispatched to nobody.
+* Events emitted before `setHooks` are **buffered, not discarded.** `setHooks`
+  neither drains nor clears the buffer, so the next `dispatchEvents` delivers
+  them to the newly installed receiver. They are lost only if a drain happens
+  while no receiver is installed — which is a narrower condition than "emitted
+  early", and the one to actually guard against.
 
 ---
 
@@ -289,8 +319,17 @@ behaviour is worth stating plainly:
 4. `event_buffer.deinit(allocator)` — the buffer is gone.
 5. …the rest of teardown (active scene `deinit_fn`, ECS, assets, …).
 
-So: **a pending event is flushed at shutdown, but an event emitted *by* a
-shutdown handler is dropped** — there is no next drain.
+So: **a pending event is flushed at shutdown, and whether a shutdown handler's
+own emit survives depends on where that handler runs.**
+
+* The native `game_deinit` hook runs at **step 1**, before the final drain, so
+  an `emit` from it is included in step 3 and *is* delivered.
+* A handler running *during* the final drain — an `engine__game_deinit` event
+  handler, say — appends to the fresh buffer the snapshot swap left behind, and
+  **that** is what gets dropped: there is no second drain.
+
+The rule is not "shutdown handlers can't emit"; it is "nothing emitted from
+inside the final drain is delivered".
 
 > ⚠️ **Hazard.** Step 4 precedes step 5. No engine code path emits after
 > step 4, but a scene's `deinit_fn` that reaches back into the game and

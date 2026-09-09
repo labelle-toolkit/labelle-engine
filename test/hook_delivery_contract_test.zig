@@ -74,6 +74,11 @@ const DeliveryEvents = union(enum) {
     t__borrowed: struct { name: []const u8 = "" },
     /// Consumable.
     t__claim: ClaimPayload,
+    /// Nested `emitSync` source / sink — pins that a sync emit raised from
+    /// INSIDE a running handler dispatches inline, before the outer
+    /// receiver chain resumes.
+    t__nest_src: struct { seq: u32 = 0 },
+    t__nest_dst: struct { seq: u32 = 0 },
 };
 
 // The receivers reach the game to emit chained events. A file-scope
@@ -114,6 +119,16 @@ const R1 = struct {
         self.trace.push("r1:claim");
         return false; // declines — the next receiver gets a look
     }
+    /// Raises a SYNC event from inside a running handler. If `emitSync`
+    /// ever deferred or queued while a dispatch is in flight, the trace
+    /// order below changes and this test fails.
+    pub fn t__nest_src(self: *R1, _: anytype) void {
+        self.trace.push("r1:nest_src");
+        if (chain_game) |g| g.emitSync(.{ .t__nest_dst = .{ .seq = 1 } });
+    }
+    pub fn t__nest_dst(self: *R1, _: anytype) void {
+        self.trace.push("r1:nest_dst");
+    }
 };
 
 /// Receiver #2 — claims the consumable event.
@@ -122,6 +137,12 @@ const R2 = struct {
 
     pub fn t__alpha(self: *R2, _: anytype) void {
         self.trace.push("r2:alpha");
+    }
+    pub fn t__nest_src(self: *R2, _: anytype) void {
+        self.trace.push("r2:nest_src");
+    }
+    pub fn t__nest_dst(self: *R2, _: anytype) void {
+        self.trace.push("r2:nest_dst");
     }
     pub fn t__claim(self: *R2, _: anytype) bool {
         self.trace.push("r2:claim");
@@ -136,6 +157,12 @@ const R3 = struct {
 
     pub fn t__alpha(self: *R3, _: anytype) void {
         self.trace.push("r3:alpha");
+    }
+    pub fn t__nest_src(self: *R3, _: anytype) void {
+        self.trace.push("r3:nest_src");
+    }
+    pub fn t__nest_dst(self: *R3, _: anytype) void {
+        self.trace.push("r3:nest_dst");
     }
     pub fn t__claim(self: *R3, _: anytype) bool {
         self.trace.push("r3:claim");
@@ -313,16 +340,42 @@ test "D4: emitSync runs immediately, ahead of events queued before it" {
     try expectTrace(&h.trace, &.{ "r1:beta", "r1:alpha", "r2:alpha", "r3:alpha" });
 }
 
-test "D4: emitSync from inside a handler nests — it does not queue" {
+test "D4: emitSync fans out synchronously from the call site" {
     var h: Harness = undefined;
     h.wire();
     defer h.unwire();
 
-    // Sanity: the sync path uses the SAME `MergeHooks.emit` fan-out, so
-    // receiver order and the consumable rule hold identically.
+    // The sync path uses the SAME `MergeHooks.emit` fan-out, so receiver
+    // order and the consumable rule hold identically.
     h.game.emitSync(.{ .t__alpha = .{ .seq = 7 } });
     try expectTrace(&h.trace, &.{ "r1:alpha", "r2:alpha", "r3:alpha" });
     try testing.expectEqual(@as(u32, 7), h.r1.last_alpha_seq);
+    try testing.expectEqual(@as(usize, 0), h.game.event_buffer.items.len);
+}
+
+test "D4b: emitSync raised INSIDE a handler nests before the outer chain resumes" {
+    var h: Harness = undefined;
+    h.wire();
+    defer h.unwire();
+
+    // D4 above only proves fan-out from the test body. This drives the
+    // case the guarantee is actually about: R1's handler calls `emitSync`
+    // WHILE the outer dispatch is still walking receivers.
+    h.game.emit(.{ .t__nest_src = .{ .seq = 1 } });
+    h.game.dispatchEvents();
+
+    // The nested event runs to completion across ALL receivers before the
+    // outer `nest_src` chain continues to R2 and R3. A regression that
+    // queued the nested emit instead would trace
+    //   r1:nest_src, r2:nest_src, r3:nest_src, (…next drain…) r*:nest_dst
+    // and fail here.
+    try expectTrace(&h.trace, &.{
+        "r1:nest_src",
+        "r1:nest_dst", "r2:nest_dst", "r3:nest_dst",
+        "r2:nest_src", "r3:nest_src",
+    });
+
+    // Nothing was left queued: the nested emit never touched the buffer.
     try testing.expectEqual(@as(usize, 0), h.game.event_buffer.items.len);
 }
 
