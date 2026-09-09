@@ -157,8 +157,17 @@ marker the return value is discarded and every receiver runs
 synchronously runs before every event `emit` queued earlier in the same
 frame. Mixing the two on one event kind produces out-of-order handler calls.
 Use `emitSync` only for leaf operations that genuinely cannot tolerate the
-buffered window — the surface-loss events (#820) and the fixed-timestep
-phase (#751) are the two in-tree justifications.
+buffered window. There are **three** in-tree justifications, and the list is
+meant to be exhaustive:
+
+* the surface-loss events (#820) — the GPU context dies the moment the backend
+  call returns, so a buffered delivery would arrive after every handle is dead;
+* the fixed-timestep phase (#751) — flow-driven fixed systems must stay in
+  phase with the `fixed_update` hook;
+* `engine__editor_plugin_command` (`src/game/editor_command_mixin.zig`) — the
+  handler borrows host-owned command buffers and must produce a response
+  *before* the bridge call returns. Buffering it would both invalidate the
+  payload's lifetime and break the synchronous response contract.
 
 ### Cross-frame
 
@@ -249,8 +258,19 @@ drain, and (critically) an arena reset between the emit and the drain.
 `[NAME_CAPACITY:0]u8` buffer plus a length, with a `nameSlice()` accessor,
 precisely because the borrowed-slice form would dangle across the drain.
 That is the recommended shape for any payload whose string has no natural
-owner. `Events.scene_loaded` / `video_finished` do use `[]const u8`, and rely on the
-registry/scene entry outliving the drain.
+owner. `Events.video_finished` uses `[]const u8` and relies on a referent that
+outlives the drain.
+
+> 🐛 **The scene-name payloads VIOLATE this rule on the queued-transition
+> path.** `tick` hands the OWNED `pending_scene_change` slice to `setScene`,
+> which buffers `engine__scene_loading` / `engine__scene_loaded` carrying that
+> slice — and then `loop_mixin.zig:196-198` frees it in the same commit block.
+> Since all of that happens *after* the frame's drain, both payloads dangle
+> until the next iteration. `engine__scene_unloaded` has the same shape:
+> `unloadCurrentScene` queues the owned current name and `setScene` frees it
+> immediately afterwards. Do not read this section as saying scene events are
+> safe — they are the same bug as `state_changed` below, on a different
+> string. Tracked in #863.
 
 > 🐛 **`Events.state_changed` currently VIOLATES this rule on one path.**
 > `setStateOwned` (`src/game/state_mixin.zig`) dupes the new name, calls
@@ -388,6 +408,12 @@ If you are reading this because CI failed that way, the fix is in
 | Component `onReady` / `postLoad` | direct comptime call from the scene loader | **immediate**, per entity, as it is assembled — see §11 |
 | Whole-scene completion | `scene_load` hook (immediate) + `engine__scene_loaded` (buffered) | after the loader returns and the scene is active |
 | Asset readiness | polled, not evented. `assets.pump()` at the top of `tick`; the `setScene` manifest gate spins until `.ready` | no event is emitted per asset |
+| `engine__scene_assets_acquire`, `engine__scene_before_reset` | `emitEngineEvent` → buffered → **discarded** | ⚠️ **never delivered.** `setScene` queues the acquire event (`scene_mixin.zig:708`) and then calls `unloadCurrentScene` (`:710`), whose first statement clears the buffer; the atomic path queues `scene_before_reset` (`:876`) before the same clear at `:896`. Their `emitHook` twins DO fire — only the buffered `engine__*` variants are dropped. Tracked in #864 |
+
+> ⚠️ The row above is the one place this table advertises an event that does
+> not arrive. It is recorded rather than quietly omitted because a flow author
+> reading the generated event list will otherwise write a listener that can
+> never run.
 
 ---
 
