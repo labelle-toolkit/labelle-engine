@@ -163,6 +163,11 @@ pub const Source = enum {
 
 /// How the receiver id in a record was obtained.
 pub const IdKind = enum {
+    /// Read from the generated `hook_receiver_ids` table
+    /// (labelle-assembler#727), index-aligned with the dispatch tuple.
+    /// The STRONGEST kind: it is the very string the route inspector
+    /// prints, not a second derivation that happens to agree.
+    table,
     /// The receiver declared `pub const labelle_receiver_id = "…"`, so
     /// the id is EXACTLY labelle-assembler#723's `Receiver.id`.
     declared,
@@ -351,6 +356,89 @@ pub const Overflow = enum {
 /// (which only rejects two-parameter `pub fn`s whose name is not an event),
 /// so declaring it is always safe.
 pub const receiver_id_decl = "labelle_receiver_id";
+
+/// The decl the generated root publishes receiver ids under
+/// (labelle-assembler#727).
+pub const receiver_ids_decl = "hook_receiver_ids";
+
+/// The generated receiver-id table, or `null` when the compilation root
+/// publishes none — a hand-written game, a unit-test root, or output from
+/// an assembler predating #727. Absence is normal and falls back to the
+/// derivation below; it is never an error.
+///
+/// Read from the compilation root for the same reason `labelle_hook_trace`
+/// is: the assembler owns `main.zig`, and the root is the one place the
+/// engine can see generated facts without the engine depending on the
+/// assembler.
+pub const receiver_id_table: ?[]const []const u8 = blk: {
+    const root = @import("root");
+    if (!@hasDecl(root, receiver_ids_decl)) break :blk null;
+    const v = @field(root, receiver_ids_decl);
+    const info = @typeInfo(@TypeOf(v));
+    // Accept the generated `[N][]const u8` array and a `[]const []const u8`
+    // slice. Anything else is a root that means something different by the
+    // name, and silently trusting it would put a wrong id on every record.
+    if (info == .array) {
+        if (info.array.child != []const u8) @compileError(
+            "`pub const " ++ receiver_ids_decl ++ "` must be a list of `[]const u8`, got " ++
+                @typeName(@TypeOf(v)) ++ ".",
+        );
+        const arr = v;
+        break :blk &arr;
+    }
+    if (info == .pointer and info.pointer.size == .slice and info.pointer.child == []const u8) {
+        break :blk v;
+    }
+    @compileError(
+        "`pub const " ++ receiver_ids_decl ++ "` must be a list of `[]const u8`, got " ++
+            @typeName(@TypeOf(v)) ++ ".",
+    );
+};
+
+/// The table's id for tuple slot `index`, or null when there is no table
+/// or the slot is past its end.
+pub fn tableId(comptime index: usize) ?[]const u8 {
+    const t = receiver_id_table orelse return null;
+    if (index >= t.len) return null;
+    return t[index];
+}
+
+/// Comptime receiver identity for the receiver at tuple slot `index`
+/// (labelle-assembler#727).
+///
+/// Same shape as `ReceiverId`, but it can consult the generated table,
+/// which `ReceiverId` cannot because identity-by-position needs the
+/// position. Precedence, strongest first:
+///
+///   1. the generated table — index-aligned with this very tuple, and the
+///      string the route inspector prints;
+///   2. a `labelle_receiver_id` decl on the receiver;
+///   3. the `@typeName` derivation.
+///
+/// The table wins over a declared id ON PURPOSE. Both come from
+/// labelle-assembler#723's `Receiver.id` and normally agree, but only the
+/// table is aligned with the dispatch order a reader is trying to follow,
+/// so where they could ever disagree the table is the one that keeps a
+/// trace frame and an inspector row talking about the same receiver.
+pub fn ReceiverIdAt(comptime Base: type, comptime index: usize) type {
+    return struct {
+        pub const type_name: []const u8 = @typeName(Base);
+        // Spelled as comptime blocks rather than a chained `orelse`:
+        // when the first optional is comptime-known present Zig narrows
+        // it to a non-optional, and a chained `orelse` then fails to
+        // compile on exactly the builds that HAVE a table.
+        pub const kind: IdKind = blk: {
+            if (tableId(index) != null) break :blk .table;
+            if (declared(Base) != null) break :blk .declared;
+            break :blk .derived;
+        };
+        pub const id: []const u8 = blk: {
+            if (tableId(index)) |t| break :blk t;
+            if (declared(Base)) |d| break :blk d;
+            break :blk deriveFromTypeName(@typeName(Base));
+        };
+    };
+}
 
 /// Comptime receiver identity, memoized per receiver type — Zig caches
 /// generic struct instantiations, so the `@typeName` walk below runs

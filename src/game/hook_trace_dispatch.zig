@@ -132,12 +132,32 @@ fn walkMerged(
 ) u32 {
     const merged = h.*;
     const Receivers = @TypeOf(merged.receivers);
+    // The generated table (labelle-assembler#727) claims to be
+    // index-aligned with THIS tuple. If it is not, every id below is
+    // silently attached to the wrong receiver — the exact failure the
+    // table exists to prevent — so a length disagreement is a build
+    // error, not a fallback. A root with no table is normal and skips this.
+    comptime {
+        if (trace.receiver_id_table) |tbl| {
+            if (tbl.len != std.meta.fields(Receivers).len) @compileError(std.fmt.comptimePrint(
+                "`" ++ trace.receiver_ids_decl ++ "` has {d} entries but the hook tuple has " ++
+                    "{d} receivers. The table is index-aligned with the tuple by contract " ++
+                    "(labelle-assembler#727), so this build would label trace records with the " ++
+                    "wrong receiver. Regenerate: the table and the tuple come from one plan.",
+                .{ tbl.len, std.meta.fields(Receivers).len },
+            ));
+        }
+    }
     var ran: u32 = 0;
     inline for (0..std.meta.fields(Receivers).len) |i| {
         const recv = merged.receivers[i];
         const Base = core.UnwrapReceiver(@TypeOf(recv));
         if (comptime @hasDecl(Base, name)) {
-            const Id = trace.ReceiverId(Base);
+            // Identity BY POSITION when the generated table is present:
+            // slot `i` here is slot `i` there, so a tracer frame and a
+            // route-inspector row name the receiver identically by
+            // construction rather than by two derivations agreeing (#727).
+            const Id = trace.ReceiverIdAt(Base, i);
             // Recorded BEFORE the call, so anything the handler itself
             // emits shows up after this record — which is what makes a
             // handler-emitted event legible in the trace.
@@ -195,7 +215,9 @@ fn walkSingle(
 ) u32 {
     const Base = core.UnwrapReceiver(Game.HooksParam);
     if (comptime !@hasDecl(Base, name)) return 0;
-    const Id = trace.ReceiverId(Base);
+    // Single-receiver dispatch is tuple slot 0 by definition, so it reads
+    // the table's first entry when there is one (#727).
+    const Id = trace.ReceiverIdAt(Base, 0);
     t.push(.{
         .phase = .deliver,
         .source = source,
