@@ -92,7 +92,8 @@ pub fn tick(game: anytype, dt: f32) void {
             break :blk c;
         } else anim.advance(eff_dt);
 
-        if (!changed) continue;
+        if (!changed and !anim.definition_dirty) continue;
+        anim.definition_dirty = false;
 
         const new_name = anim.currentSprite() orelse continue;
         const sprite = game.ecs_backend.getComponent(entity, Sprite) orelse continue;

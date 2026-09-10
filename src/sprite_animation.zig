@@ -63,7 +63,14 @@ pub const SpriteAnimation = struct {
     // shapes than which frame a pipe animation happened to be on.
     pub const save = save_policy.Saveable(.transient, @This(), .{});
 
-    frames: []const []const u8,
+    /// Either inline frames or a library definition + clip, never both.
+    frames: []const []const u8 = &.{},
+    definition: []const u8 = "",
+    clip: []const u8 = "",
+    /// Bound prefab clips synchronize frame zero even on a sub-frame tick.
+    definition_dirty: bool = false,
+    /// Set after validating the selected clip against resident scene atlases.
+    definition_validated: bool = false,
     fps: f32,
     mode: AnimationMode = .loop,
 

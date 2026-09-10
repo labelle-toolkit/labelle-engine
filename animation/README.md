@@ -73,3 +73,42 @@ feeds a shared loaded definition into two real `engine.SpriteAnimation` values
 and checks independent advancement and loop wrap. This compatibility check is
 also part of the full engine test step. It is not an assembled-game or renderer
 acceptance test; no new prefab authoring syntax is wired into the assembler yet.
+
+
+## Engine and prefab integration
+
+Place shared definitions in the game's `animations/` directory. An assembler
+with JSONC animation discovery embeds them and calls
+`game.loadAnimationJsoncSource("animations/props/propeller.jsonc", source)`
+before loading scenes. `.zon` files continue to use `AnimationDef` unchanged.
+
+A registered engine `SpriteAnimation` component can select a definition:
+
+```jsonc
+"SpriteAnimation": {
+    "definition": "animations/props/propeller.jsonc",
+    "clip": "spin",
+    "fps": 10,
+    "mode": "loop"
+}
+```
+
+`fps`, `mode`, and `speed` remain per-instance settings. The engine binds the
+selected clip's shared frame slice while each entity owns its timer, frame,
+direction, and pause state. Existing inline `frames` declarations remain valid;
+combining them with `definition` is rejected. Definition/clip errors are logged
+and the malformed component is not attached, following the scene bridge's
+component-application contract.
+
+Use a scene asset manifest containing the selected clip's atlases. The atlas
+resolver checks the selected clip after that manifest is ready, logging the
+definition, clip, frame index, and exact missing key once and stopping an invalid
+clip. Hosts loading assets imperatively can call `validateSpriteAnimation` once
+the required atlases are resident. Registration and binding do not assume that
+textures are ready.
+
+The session-owned `Library` copies sources and names and keeps borrows stable
+until game deinit. Scene reset/load creates fresh playback state from the prefab
+and reuses those definitions. Registering a name twice fails without changing
+the existing definition; live definition replacement is not implemented here.
+Pack-local discovery and marker/transition schemas remain separate work.

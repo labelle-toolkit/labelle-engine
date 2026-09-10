@@ -710,6 +710,7 @@ pub fn GameConfigWithYAxis(
         /// and `RuntimeAnimDefs` for the retire-don't-free ownership
         /// story. Empty (and cost-free) outside editor-preview hosts.
         runtime_anim_defs: animation_def_runtime.RuntimeAnimDefs,
+        animation_library: @import("animation").Library,
         /// Name of the scene whose registered `loader_fn` is currently
         /// executing. Set by `setScene` / `setSceneAtomic` / the
         /// hot-reload path around the loader call ONLY — a borrow of the
@@ -1536,6 +1537,9 @@ pub fn GameConfigWithYAxis(
         /// `editor_api.editor_load_animation_def`) — see
         /// `game/animation_runtime_mixin.zig` for the `anim_def_name`
         /// refresh convention and the fallback contract.
+        pub const loadAnimationJsoncSource = AnimationRuntimeMixin.loadAnimationJsoncSource;
+        pub const bindSpriteAnimation = AnimationRuntimeMixin.bindSpriteAnimation;
+        pub const validateSpriteAnimation = AnimationRuntimeMixin.validateSpriteAnimation;
         pub const loadAnimationDefSource = AnimationRuntimeMixin.loadAnimationDefSource;
         pub const runtimeAnimDef = AnimationRuntimeMixin.runtimeAnimDef;
         pub const refreshAnimationStates = AnimationRuntimeMixin.refreshAnimationStates;

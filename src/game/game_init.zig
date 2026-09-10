@@ -93,6 +93,7 @@ pub fn Mixin(comptime Game: type, comptime VideoImpl: type, comptime AudioImpl: 
                 .particle_systems = std.AutoHashMap(Entity, *@import("../particles.zig").ParticleSystem).init(allocator),
                 .scene_source_overrides = std.StringHashMap([]const u8).init(allocator),
                 .runtime_anim_defs = animation_def_runtime.RuntimeAnimDefs.init(allocator),
+                .animation_library = @import("animation").Library.init(allocator),
                 .gizmo_state = gizmo_draws_mod.GizmoState(Entity).init(allocator),
                 // `game_ctx` is a placeholder here (the not-yet-stable world
                 // pointer); `bindScheduler` fixes it once `self` is stable.

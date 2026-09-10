@@ -964,6 +964,29 @@ pub fn Mixin(comptime Game: type) type {
         /// Only marks entities dirty on cache misses (sprite name or atlas version changed).
         pub fn resolveAtlasSprites(self: *Game) void {
             if (!has_atlas_sprite_fields) return;
+            // Validate only selected clips in the active scene, once its
+            // manifest is ready. Other scenes can use different atlases.
+            const manifest: []const []const u8 = blk: {
+                const name = self.current_scene_name orelse break :blk &.{};
+                const entry = self.scenes.get(name) orelse break :blk &.{};
+                break :blk entry.assets;
+            };
+            if (self.assets.allReady(manifest)) {
+                const Animation = @import("../sprite_animation.zig").SpriteAnimation;
+                if (comptime Game.ComponentRegistry.has("SpriteAnimation") and Game.ComponentRegistry.getType("SpriteAnimation") == Animation) {
+                    var animations = self.ecs_backend.view(.{Animation}, .{});
+                    defer animations.deinit();
+                    while (animations.next()) |entity| {
+                        const anim = self.ecs_backend.getComponent(entity, Animation).?;
+                        if (anim.definition.len == 0 or anim.definition_validated) continue;
+                        self.validateSpriteAnimation(anim) catch {
+                            // Report once and stop advancing invalid clips.
+                            anim.speed = 0;
+                        };
+                        anim.definition_validated = true;
+                    }
+                }
+            }
             if (self.atlas_manager.atlasCount() == 0) return;
 
             var v = self.ecs_backend.view(.{Sprite}, .{});

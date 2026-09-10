@@ -69,6 +69,7 @@ pub fn build(b: *std.Build) void {
     // The definition package remains independent. Verify its frame slices
     // against the existing engine player before migrating playback ownership.
     const animation_module = b.dependency("animation", .{ .target = target, .optimize = optimize }).module("animation");
+    engine_module.addImport("animation", animation_module);
     const animation_tests = b.addTest(.{ .root_module = b.createModule(.{
         .root_source_file = b.path("test/animation_package_test.zig"),
         .target = target,
@@ -76,6 +77,7 @@ pub fn build(b: *std.Build) void {
         .imports = &.{
             .{ .name = "engine", .module = engine_module },
             .{ .name = "animation", .module = animation_module },
+            .{ .name = "labelle-core", .module = core_module },
         },
     }) });
     const run_animation_tests = b.addRunArtifact(animation_tests);
