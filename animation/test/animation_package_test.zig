@@ -450,3 +450,48 @@ test "named lifecycle events saturate wide entity IDs" {
         try std.testing.expectEqual(std.math.maxInt(u32), game.id);
     }
 }
+
+fn SelectiveGame(comptime markers: bool) type {
+    return struct {
+        const Payload = union(enum) {
+            engine__anim_marker: engine.Events.anim_marker,
+            engine__anim_complete: engine.Events.anim_complete,
+            engine__anim_loop: engine.Events.anim_loop,
+        };
+        const Log = struct {
+            pub fn warn(_: @This(), comptime _: []const u8, _: anytype) void {}
+        };
+        log: Log = .{},
+        count: usize = 0,
+        pub fn nextAnimationIdentity(_: *@This()) u64 {
+            return 1;
+        }
+        pub fn engineEventWanted(comptime name: []const u8) bool {
+            return std.mem.eql(u8, name, "engine__anim_marker") == markers;
+        }
+        pub fn tryEmit(self: *@This(), _: Payload) !void {
+            self.count += 1;
+        }
+    };
+}
+
+test "unrequested named markers cannot exhaust lifecycle delivery budget" {
+    var game: SelectiveGame(false) = .{};
+    const markers = [_]animation.Marker{.{ .name = "ignored", .frame = 0 }} ** 80;
+    var anim = engine.SpriteAnimation{ .frames = &.{ "a", "b" }, .markers = &markers, .fps = 1, .mode = .once };
+    _ = engine.advanceNamedAnimation(&game, 1, &anim, 1);
+    try std.testing.expectEqual(@as(u8, 1), anim.frame);
+    try std.testing.expectEqual(@as(usize, 1), game.count);
+    try std.testing.expectEqual(@as(u64, 1), anim.marker_cursor.sequence);
+    try std.testing.expect(!anim.marker_stalled);
+}
+
+test "unrequested loops cannot exhaust marker-only delivery budget" {
+    var game: SelectiveGame(true) = .{};
+    var anim = engine.SpriteAnimation{ .frames = &.{"a"}, .fps = 1, .mode = .loop };
+    _ = engine.advanceNamedAnimation(&game, 1, &anim, 100);
+    try std.testing.expectEqual(@as(u16, 100), anim.repetition);
+    try std.testing.expectEqual(@as(usize, 0), game.count);
+    try std.testing.expect(!anim.marker_cursor.pending());
+    try std.testing.expect(!anim.marker_stalled);
+}

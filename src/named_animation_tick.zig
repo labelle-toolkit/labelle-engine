@@ -15,7 +15,11 @@ pub fn advance(game: anytype, entity: anytype, anim: *SpriteAnimation, dt: f32) 
     var sink = Sink(G){ .game = game, .entity = @intCast(entity), .anim = anim };
     const clip = animation.Clip{ .name = anim.clip, .frames = anim.frames, .markers = anim.markers };
     const mode: animation.BoundaryMode = @enumFromInt(@intFromEnum(anim.mode));
-    var budget: animation.MarkerCursor.Budget = .{};
+    var budget: animation.MarkerCursor.Budget = .{
+        .markers = G.engineEventWanted("engine__anim_marker"),
+        .loops = G.engineEventWanted("engine__anim_loop"),
+        .complete = G.engineEventWanted("engine__anim_complete"),
+    };
     // Pause freezes traversal, including deferred beats. A cue for a frame
     // already entered may still finish its queue handoff while paused.
     const running = dt > 0 and std.math.isFinite(dt) and anim.fps > 0 and std.math.isFinite(anim.fps);

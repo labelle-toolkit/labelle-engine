@@ -34,7 +34,14 @@ pub const MarkerCursor = struct {
     complete_pending: bool = false,
     completed: bool = false,
 
-    pub const Budget = struct { frames: usize = 256, events: usize = 64 };
+    pub const Budget = struct {
+        frames: usize = 256,
+        events: usize = 64,
+        /// Only requested occurrences consume handoffs or sequence identities.
+        markers: bool = true,
+        loops: bool = true,
+        complete: bool = true,
+    };
     pub const Result = struct { frames: usize, events: usize, pending: bool };
 
     pub fn pending(self: *const MarkerCursor) bool {
@@ -61,15 +68,17 @@ pub const MarkerCursor = struct {
         var result = Result{ .frames = 0, .events = 0, .pending = true };
         while (true) {
             if (self.loop_pending) {
-                if (result.events == budget.events) return result;
-                try self.send(sink, .loop, 0);
+                if (budget.loops) {
+                    if (result.events == budget.events) return result;
+                    try self.send(sink, .loop, 0);
+                    result.events += 1;
+                }
                 self.loop_pending = false;
-                result.events += 1;
             }
             if (self.entering) {
                 while (self.marker_index < clip.markers.len) {
                     const index = self.marker_index;
-                    if (clip.markers[index].frame == self.frame) {
+                    if (budget.markers and clip.markers[index].frame == self.frame) {
                         if (result.events == budget.events) return result;
                         try self.send(sink, .marker, @intCast(index));
                         result.events += 1;
@@ -82,20 +91,29 @@ pub const MarkerCursor = struct {
                     self.complete_pending = true;
             }
             if (self.complete_pending) {
-                if (result.events == budget.events) return result;
-                try self.send(sink, .complete, 0);
+                if (budget.complete) {
+                    if (result.events == budget.events) return result;
+                    try self.send(sink, .complete, 0);
+                    result.events += 1;
+                }
                 self.complete_pending = false;
                 self.completed = true;
                 self.steps = 0;
                 self.remainder_seconds = 0;
-                result.events += 1;
             }
             if (self.steps == 0 or self.completed) {
                 result.pending = false;
                 return result;
             }
-            if (result.frames == budget.frames) return result;
             const last: u8 = @intCast(clip.frames.len - 1);
+            // One-frame ping-pong has no crossings or reversals. Initial
+            // markers still drain above, but elapsed beats cannot loop it.
+            if (mode == .ping_pong and last == 0) {
+                self.steps = 0;
+                result.pending = false;
+                return result;
+            }
+            if (result.frames == budget.frames) return result;
             // Check overflow before committing the crossing, not afterwards.
             const boundary = if (self.forward) self.frame == last else self.frame == 0;
             if (mode != .once and boundary and self.repetition == std.math.maxInt(u64))
@@ -113,9 +131,6 @@ pub const MarkerCursor = struct {
                     .loop => self.frame = if (self.forward) 0 else last,
                     .ping_pong => {
                         self.forward = !self.forward;
-                        // A single-frame ping-pong does not re-enter its only
-                        // frame merely because its direction changes.
-                        if (last == 0) continue;
                         self.frame = if (self.forward) 1 else last - 1;
                     },
                     .once => unreachable,

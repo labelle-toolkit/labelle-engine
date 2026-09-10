@@ -55,7 +55,12 @@ there is no cross-entity timestamp sort or backend-independent total order.
 ## Budgets and backpressure
 
 Each entity gets at most 256 entered frames and 64 event handoffs per update,
-shared between its old backlog and new elapsed time. The allocation-free cursor
+shared between its old backlog and new elapsed time. Unrequested occurrence
+kinds consume neither event handoffs nor sequence identities; the frame budget
+still bounds traversal. Standalone callers can select occurrence kinds through
+`MarkerCursor.Budget` (all kinds are enabled by default). One-frame ping-pong
+clips drain their initial markers, then stay stationary without reversals or
+loop events, matching ordinary playback. The allocation-free cursor
 retains remaining beats and its position among markers on the current frame.
 It advances the occurrence sequence only after a successful `tryEmit`. Failed
 enqueues therefore retry without duplicating a successful handoff. Loop and

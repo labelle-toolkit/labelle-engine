@@ -174,3 +174,24 @@ test "fps changes preserve elapsed seconds" {
     try t.expectEqual(@as(u8, 1), cursor.frame);
     try t.expectApproxEqAbs(@as(f64, 0.001), cursor.remainder_seconds, 0.000001);
 }
+
+test "one-frame ping-pong drains initial markers then remains stationary" {
+    const single = a.Clip{ .name = "still", .frames = &.{"a"}, .markers = &.{.{ .name = "start", .frame = 0 }} };
+    var cursor: a.MarkerCursor = .{};
+    var sink = Sink{ .fail_at = 0 };
+    defer sink.deinit();
+    try cursor.offer(1000.25, 1);
+    try t.expectError(error.OutOfMemory, cursor.pump(&single, .ping_pong, .{}, &sink));
+    try t.expectError(error.Busy, cursor.offer(1, 1));
+    sink.fail_at = null;
+    const result = try cursor.pump(&single, .ping_pong, .{ .frames = 0, .events = 1 }, &sink);
+    try t.expect(!result.pending);
+    try t.expectEqual(@as(usize, 1), sink.items.items.len);
+    try t.expectEqual(@as(u64, 0), cursor.repetition);
+    try t.expect(cursor.forward);
+    try t.expectEqual(@as(u8, 0), cursor.frame);
+    try t.expectApproxEqAbs(@as(f64, 0.25), cursor.remainder_seconds, 0.000001);
+    try cursor.offer(500, 1);
+    try t.expect(!(try cursor.pump(&single, .ping_pong, .{ .events = 0 }, &sink)).pending);
+    try t.expectEqual(@as(usize, 1), sink.items.items.len);
+}
