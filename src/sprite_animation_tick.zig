@@ -81,9 +81,9 @@ pub fn tick(game: anytype, dt: f32) void {
 
         // Per-clip playback speed on top of the (already time-scaled) dt.
         // `effectiveSpeed()`: 0 / negative → paused, never reverse.
-        const eff_dt = dt * anim.effectiveSpeed();
+        const eff_dt = if (dt == 0) 0 else dt * anim.effectiveSpeed();
 
-        const changed = if (comptime events_wanted) blk: {
+        const changed = if (eff_dt == 0) false else if (comptime events_wanted) blk: {
             var buf: anim_events.PendingBuf = .{};
             const c = anim.advanceEventsMasked(eff_dt, &buf, mask);
             // Most ticks queue nothing (sub-frame or an event-less frame);

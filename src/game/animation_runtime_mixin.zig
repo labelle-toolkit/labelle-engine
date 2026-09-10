@@ -79,9 +79,52 @@ pub fn Mixin(comptime Game: type) type {
         /// atlas resolver does this after the current scene's manifest gate.
         pub fn validateSpriteAnimation(self: *Game, anim: *const @import("../sprite_animation.zig").SpriteAnimation) !void {
             for (anim.frames, 0..) |key, index| {
-                if (self.findSprite(key) == null) {
+                if (!hasResidentFrame(self, key)) {
                     self.log.err("animation '{s}', clip '{s}', frame {d}: atlas key '{s}' not found", .{ anim.definition, anim.clip, index, key });
                     return error.MissingAnimationFrame;
+                }
+            }
+        }
+
+        fn sceneManifest(self: *Game) ?[]const []const u8 {
+            const name = self.current_scene_name orelse return null;
+            const entry = self.scenes.get(name) orelse return null;
+            return if (entry.assets.len == 0) null else entry.assets;
+        }
+
+        fn hasResidentFrame(self: *Game, key: []const u8) bool {
+            if (sceneManifest(self)) |manifest| {
+                for (manifest) |name| {
+                    const atlas = self.atlas_manager.getAtlas(name) orelse continue;
+                    if (atlas.isLoaded() and atlas.has(key)) return true;
+                }
+            } else {
+                // Imperative loading: the caller chooses when to validate,
+                // but pending metadata never counts as a resident frame.
+                var it = self.atlas_manager.atlases.valueIterator();
+                while (it.next()) |atlas| {
+                    if (atlas.isLoaded() and atlas.has(key)) return true;
+                }
+            }
+            return false;
+        }
+
+        /// Validate only when a real scene manifest has become resident.
+        /// Without one, the imperative caller owns the readiness boundary.
+        pub fn validateSceneSpriteAnimations(self: *Game) void {
+            const manifest = sceneManifest(self) orelse return;
+            if (!self.assets.allReady(manifest)) return;
+            const Animation = @import("../sprite_animation.zig").SpriteAnimation;
+            if (comptime Game.ComponentRegistry.has("SpriteAnimation") and Game.ComponentRegistry.getType("SpriteAnimation") == Animation) {
+                var view = self.ecs_backend.view(.{Animation}, .{});
+                defer view.deinit();
+                while (view.next()) |entity| {
+                    const anim = self.ecs_backend.getComponent(entity, Animation).?;
+                    if (anim.definition.len == 0 or anim.definition_validated) continue;
+                    self.validateSpriteAnimation(anim) catch {
+                        anim.speed = 0;
+                    };
+                    anim.definition_validated = true;
                 }
             }
         }

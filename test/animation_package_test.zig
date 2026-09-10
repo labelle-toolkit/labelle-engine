@@ -99,3 +99,71 @@ test "missing resident atlas frames are reported by explicit validation" {
     try game.bindSpriteAnimation(&anim);
     try std.testing.expectError(error.MissingAnimationFrame, game.validateSpriteAnimation(&anim));
 }
+
+fn noSceneLoad(_: *Game) !void {}
+const atlas_source =
+    \\{"frames":{"a":{"frame":{"x":0,"y":0,"w":1,"h":1}},"b":{"frame":{"x":1,"y":0,"w":1,"h":1}},"c":{"frame":{"x":2,"y":0,"w":1,"h":1}}},"meta":{"size":{"w":3,"h":1}}}
+;
+
+test "no scene or empty manifest leaves asynchronous animations unvalidated and playing" {
+    var game = Game.init(std.testing.allocator);
+    defer game.deinit();
+    try game.loadAnimationJsoncSource("prop", source);
+    var anim = engine.SpriteAnimation{ .definition = "prop", .clip = "idle", .fps = 4 };
+    try game.bindSpriteAnimation(&anim);
+    const entity = game.createEntity();
+    game.addComponent(entity, anim);
+    game.validateSceneSpriteAnimations();
+    const stored = game.ecs_backend.getComponent(entity, engine.SpriteAnimation).?;
+    try std.testing.expect(!stored.definition_validated);
+    try std.testing.expectEqual(@as(f32, 1), stored.speed);
+    try game.scenes.put("main", .{ .loader_fn = noSceneLoad, .hooks = .{} });
+    game.current_scene_name = try game.allocator.dupe(u8, "main");
+    game.validateSceneSpriteAnimations();
+    try std.testing.expect(!stored.definition_validated);
+    try std.testing.expectEqual(@as(f32, 1), stored.speed);
+    // Finishing an imperative load later makes explicit validation succeed.
+    try game.atlas_manager.loadAtlasFromJsonContent("props", atlas_source, 7, null);
+    try game.validateSpriteAnimation(stored);
+}
+
+test "pending metadata and atlases outside the active manifest do not validate" {
+    var game = Game.init(std.testing.allocator);
+    defer game.deinit();
+    try game.loadAnimationJsoncSource("prop", source);
+    var anim = engine.SpriteAnimation{ .definition = "prop", .clip = "idle", .fps = 4 };
+    try game.bindSpriteAnimation(&anim);
+    try game.atlas_manager.registerPendingAtlas("props", atlas_source, "png", ".png");
+    try std.testing.expect(game.findSprite("a") != null); // metadata exists
+    try std.testing.expectError(error.MissingAnimationFrame, game.validateSpriteAnimation(&anim));
+    try game.atlas_manager.markPendingLoaded("props", 7, null);
+    try game.validateSpriteAnimation(&anim);
+    try game.scenes.put("main", .{ .loader_fn = noSceneLoad, .hooks = .{}, .assets = &.{"other"} });
+    game.current_scene_name = try game.allocator.dupe(u8, "main");
+    try std.testing.expectError(error.MissingAnimationFrame, game.validateSpriteAnimation(&anim));
+    game.scenes.getPtr("main").?.assets = &.{"props"};
+    try game.validateSpriteAnimation(&anim);
+}
+
+test "Game.tick synchronizes newly bound frame zero under both pause controls" {
+    for ([_]bool{ false, true }) |time_scale_pause| {
+        var game = Game.init(std.testing.allocator);
+        defer game.deinit();
+        try game.loadAnimationJsoncSource("prop", source);
+        var anim = engine.SpriteAnimation{ .definition = "prop", .clip = "idle", .fps = 4 };
+        try game.bindSpriteAnimation(&anim);
+        // Even a pending accumulated interval must not be consumed on pause.
+        anim.timer = 0.5;
+        const entity = game.createEntity();
+        game.addComponent(entity, anim);
+        game.addComponent(entity, Game.SpriteComp{ .sprite_name = "placeholder" });
+        game.setDriveSpriteAnimations(true);
+        if (time_scale_pause) game.setTimeScale(0) else game.setSpriteAnimationsPaused(true);
+        game.tick(0.25);
+        const stored = game.ecs_backend.getComponent(entity, engine.SpriteAnimation).?;
+        try std.testing.expectEqualStrings("a", game.ecs_backend.getComponent(entity, Game.SpriteComp).?.sprite_name);
+        try std.testing.expectEqual(@as(u8, 0), stored.frame);
+        try std.testing.expectEqual(@as(f32, 0.5), stored.timer);
+        try std.testing.expect(!stored.definition_dirty);
+    }
+}

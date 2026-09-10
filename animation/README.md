@@ -104,8 +104,10 @@ Use a scene asset manifest containing the selected clip's atlases. The atlas
 resolver checks the selected clip after that manifest is ready, logging the
 definition, clip, frame index, and exact missing key once and stopping an invalid
 clip. Hosts loading assets imperatively can call `validateSpriteAnimation` once
-the required atlases are resident. Registration and binding do not assume that
-textures are ready.
+the required atlases are resident. Without a nonempty current-scene manifest,
+automatic validation waits for that explicit call. Pending atlas metadata never
+counts as resident, and a current manifest restricts validation to its atlases.
+Registration and binding do not assume that textures are ready.
 
 The session-owned `Library` copies sources and names and keeps borrows stable
 until game deinit. Scene reset/load creates fresh playback state from the prefab

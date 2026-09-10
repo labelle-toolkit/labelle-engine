@@ -102,12 +102,10 @@ pub fn Mixin(comptime Game: type) type {
             // per-frame game script. Lives in the always-run block (not the
             // gameplay-skip section) so it advances on `scaled_dt`, which a
             // `time_scale==0` hard pause already zeroes.
-            // `scaled_dt != 0` skips the ECS walk entirely when time is
-            // frozen (a `time_scale==0` hard pause, which still runs this
-            // always-run block) — no frame can advance on a zero dt anyway.
-            // Slow-mo keeps a tiny non-zero dt, so it still animates.
-            if (self.drive_sprite_animations and !self.sprite_animations_paused and scaled_dt != 0) {
-                @import("../sprite_animation_tick.zig").tick(self, scaled_dt);
+            // A zero-delta pass still synchronizes newly bound frame zero.
+            // Playback clocks and events remain frozen while paused.
+            if (self.drive_sprite_animations) {
+                @import("../sprite_animation_tick.zig").tick(self, if (self.sprite_animations_paused) 0 else scaled_dt);
             }
             // Particle sims (#750). Step each emitter's pooled ParticleSystem
             // on the time-scaled dt; `scaled_dt != 0` freezes them under a

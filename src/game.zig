@@ -1540,6 +1540,7 @@ pub fn GameConfigWithYAxis(
         pub const loadAnimationJsoncSource = AnimationRuntimeMixin.loadAnimationJsoncSource;
         pub const bindSpriteAnimation = AnimationRuntimeMixin.bindSpriteAnimation;
         pub const validateSpriteAnimation = AnimationRuntimeMixin.validateSpriteAnimation;
+        pub const validateSceneSpriteAnimations = AnimationRuntimeMixin.validateSceneSpriteAnimations;
         pub const loadAnimationDefSource = AnimationRuntimeMixin.loadAnimationDefSource;
         pub const runtimeAnimDef = AnimationRuntimeMixin.runtimeAnimDef;
         pub const refreshAnimationStates = AnimationRuntimeMixin.refreshAnimationStates;

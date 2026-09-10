@@ -509,6 +509,8 @@ pub fn build(b: *std.Build) void {
     engine_rf.addImport("labelle-core", core_rf);
     engine_rf.addImport("scene", scene_rf);
     engine_rf.addImport("jsonc", jsonc_rf);
+    const animation_rf = b.dependency("animation", .{ .target = target, .optimize = bench_opt }).module("animation");
+    engine_rf.addImport("animation", animation_rf);
     engine_rf.addImport("audio_types", audio_types_rf);
     engine_rf.addImport("font_types", font_types_rf);
     if (target.result.os.tag == .macos) {
