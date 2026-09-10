@@ -8,15 +8,15 @@ cd animation
 zig build test --summary all
 ```
 
-This stage owns shared JSONC frame definitions. It does **not** add a second
-playback system: existing AnimationDef, SpriteAnimation and engine exports are
-unchanged. Moving those implementations behind this package, assembler
-discovery/bindings, prefab references, playback, trigger commands, reliable
-markers, persistence and pause migration remain subsequent stages.
+This package owns shared JSONC frame definitions and a session-owned library.
+The engine binds them to its existing SpriteAnimation player; the existing
+AnimationDef / `.zon` path remains supported. Consolidating playback here,
+trigger commands, reliable markers, persistence and pause migration remain
+subsequent stages.
 
 ## Initial schema
 
-Games will store reusable assets under `animations/*.jsonc`. This loader accepts:
+Games store reusable assets under `animations/*.jsonc`. This loader accepts:
 
 ```jsonc
 {
@@ -42,7 +42,7 @@ Games will store reusable assets under `animations/*.jsonc`. This loader accepts
 - These are exact atlas keys, not filesystem paths. Parse errors and missing
   resource keys are separate. Rich source-location diagnostics are future work.
 - Fields for speed, markers and triggers are intentionally not accepted yet.
-  This API does not imply that the assembler recognizes new prefab syntax.
+  Prefab references require the assembler integration described below.
 
 ## Ownership and resource readiness
 
