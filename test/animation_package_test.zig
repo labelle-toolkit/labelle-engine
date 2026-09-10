@@ -174,11 +174,19 @@ const MarkerEvents = union(enum) {
     engine__anim_loop: engine.Events.anim_loop,
 };
 const MarkerReceiver = struct {
+    ctx: engine.HookContext = .{},
+    replace_on_first: bool = false,
     hits: [1024]engine.Events.anim_marker = undefined,
     count: usize = 0,
     pub fn engine__anim_marker(self: *@This(), event: engine.Events.anim_marker) void {
         self.hits[self.count] = event;
         self.count += 1;
+        if (self.replace_on_first) {
+            self.replace_on_first = false;
+            const game = self.ctx.gameAs(MarkerGame);
+            game.resetEcsBackend();
+            _ = markerEntity(game) catch @panic("test replacement failed");
+        }
     }
 };
 const MarkerPayload = core.MergeHookPayloads(.{ engine.HookPayload(u32), MarkerEvents });
@@ -318,4 +326,19 @@ test "pause freezes deferred beats and resumes at current speed" {
     anim.speed = 0.5;
     engine.spriteAnimationTick(&game, 1);
     try std.testing.expect(anim.marker_cursor.steps < steps);
+}
+
+test "a hook can reset the world and later queued markers cannot hit its replacement" {
+    var game = MarkerGame.init(std.testing.allocator);
+    defer game.deinit();
+    var receiver = MarkerReceiver{ .replace_on_first = true };
+    var hooks = MarkerHooks{ .receivers = .{&receiver} };
+    game.setHooks(&hooks);
+    try game.loadAnimationJsoncSource("prop", marked_source);
+    _ = try markerEntity(&game);
+    engine.spriteAnimationTick(&game, 0.5);
+    game.dispatchEvents();
+    try std.testing.expectEqual(@as(usize, 1), receiver.count);
+    try std.testing.expectEqualStrings("start", receiver.hits[0].marker);
+    try std.testing.expect(!game.isAnimationMarkerTargetAlive(receiver.hits[0]));
 }
