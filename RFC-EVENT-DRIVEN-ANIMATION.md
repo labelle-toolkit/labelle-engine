@@ -2,7 +2,7 @@
 
 ## Status and scope
 
-**Design revision, not an implemented API or an approved implementation plan.**
+**Agreed behavioral design; implementation and acceptance remain outstanding.**
 The September 9 investigation checked current engine, assembler, core and
 Flying Platform code, all 17 PR review threads, and 36 focused tests. See the
 [investigation and review dispositions](docs/investigations/rfc-793/investigation.md)
@@ -16,11 +16,11 @@ Five workstreams make animation authoring simpler:
 4. Emit named, crossing-accurate frame cues with an explicit delivery policy.
 5. Define scaled/unscaled animation clocks and migrate pause behavior.
 
-The frame shorthand is closest to implementation. Targeting, dispatch, typed
-marker output and basic pause/resume/stop behavior are agreed below. The typed
-target adapters, remaining playback semantics, generated-loop integration,
-marker timing/delivery and global pause migration still need specification.
-Publishing this RFC does
+The September 10 design discussion agreed the package boundary, JSONC authoring,
+targeting, dispatch, retriggering, marker crossings and pending delivery,
+save/load continuity, clocks and default-driving migration recorded below.
+Concrete API/schema layouts, numerical limits and backend integration still need
+implementation specifications and validation. Publishing this RFC does
 not close [#794](https://github.com/labelle-toolkit/labelle-engine/issues/794).
 
 ## Motivation and current baseline
@@ -62,11 +62,12 @@ The proposed default is engine-owned advancement. Keep an explicit opt-out for
 games that intentionally drive animation themselves. Do not add a second tick
 or infer the owner solely from a guessed legacy script filename.
 
-Choose the release mechanism before implementation: an explicit project
-configuration/default for new projects, or a documented engine default change
-with consumer migration. The assembler, generated loops and engine flag must
-agree. The no-animation path should remain inexpensive; this RFC makes no
-unmeasured zero-cost claim.
+Agreed rollout: introduce compatibility diagnostics for existing manual drivers,
+then change the engine default in a major release with consumer migration.
+Advance each automatically driven instance exactly once per update; explicit
+manual ownership excludes it from automatic advancement. The assembler,
+generated loops and engine configuration must agree. The no-animation path
+should remain inexpensive; this RFC makes no unmeasured zero-cost claim.
 
 Acceptance: exactly one advance per frame, manual-driver opt-out, the migrated
 Flying Platform setup, and a project without SpriteAnimation. Default-on is a
@@ -74,11 +75,59 @@ separate rollout gate from frame-pattern support.
 
 ## 2. Frame-range shorthand
 
+### Package and authored-definition boundary
+
+Animation is a top-level package **inside the labelle-engine repository**,
+alongside the existing `scene/` and `jsonc/` packages, not merely a
+`src/animation/` directory:
+
+```text
+labelle-engine/
+  animation/
+    build.zig
+    build.zig.zon
+    src/
+    test/
+  scene/
+  jsonc/
+  src/                  # engine integration
+```
+
+The package owns definitions, JSONC parsing/validation, playback, trigger and
+marker mechanics, and definition reload/reconciliation mechanics. Engine-specific
+ECS, event-dispatch, persistence and game-loop adapters stay in engine `src/`.
+The package must not import the engine that imports it: use explicit interfaces
+for entity validation, event delivery and resource resolution. Depend on the
+existing JSONC package where appropriate. Consolidate the existing AnimationDef
+foundation rather than create a competing animation system; preserve public
+engine exports during migration. Its own build/tests must run independently.
+
+Games author shared definitions in `animations/*.jsonc`. Definitions contain
+clips, frame ranges, markers, default speed and clip transitions. Prefabs refer
+to a definition, choose initial playback settings, and declare event/target
+bindings where those depend on the prefab. Each entity owns separate playback
+state. For example (illustrative schema, not a shipped API):
+
+```jsonc
+"SpriteAnimation": {
+  "definition": "animations/wc_door.jsonc",
+  "clip": "closed"
+}
+```
+
+The assembler discovers/packages these assets and validates typed event
+bindings; the engine loads and validates definitions at runtime. Shared
+definition lifetimes must cover playback and pending marker references across
+hot reload. Specify migration from existing definitions and inline authoring;
+do not silently change existing file interpretation.
+
+### Expansion contract
+
 Illustrative authoring syntax, subject to the validation contract below:
 
 ```jsonc
 "SpriteAnimation": {
-  "frames_pattern": "sewer/sewer_machine/sewer_machine_%04d.png",
+  "frames_pattern": "sewer/sewer_machine/sewer_machine_{frame:04}.png",
   "from": 1, "to": 10,
   "fps": 8, "mode": "loop"
 }
@@ -93,18 +142,20 @@ Frame keys are exact atlas identifiers. No implicit `.png` suffix: extensionless
 grid keys such as `tiles/0` are also valid. Authors include any desired extension
 in the pattern. Preserve explicit `frames` support.
 
-The implementation specification must settle:
+Agreed expansion behavior and remaining implementation limits:
 
-- Inclusive bounds; supported integer placeholder and zero-padding grammar;
-  width limits; malformed, reversed and empty ranges.
+- Expand at definition load. `from`/`to` are inclusive; `{frame:04}` denotes
+  decimal frame numbering padded with zeroes to width four. Reject malformed
+  patterns and reversed ranges; reverse playback uses direction, not reversed
+  authoring bounds. Finalize the accepted placeholder/width limits explicitly.
 - Checked arithmetic before allocating, and the current 255-frame ceiling.
 - Explicit-list/pattern conflict handling. The old proposal silently preferred
   `frames`; the recommended rule is a diagnostic when both are authored.
 - Syntax diagnostics versus resource readiness. Validate keys when the atlas
   becomes available; an asynchronously loading atlas is not a malformed key.
-- Ownership: the expanded slice belongs to the per-world arena; strings use
-  the existing intern mechanism. No borrows from temporary parsed JSON and no
-  permanent slice allocation on every prefab respawn.
+- Ownership: expanded slices belong to the shared definition's lifetime, with
+  no borrows from temporary parsed JSON and no expansion allocation on every
+  prefab respawn. Reuse existing interning with compatible resource lifetimes.
 
 Acceptance: equivalence with an explicit list; first/last frames; range and
 allocation boundaries; extensionless keys; missing-frame diagnostics; repeated
@@ -117,7 +168,7 @@ domain events, not existing Flying Platform events:
 
 ```jsonc
 "SpriteAnimation": {
-  "frames_pattern": "machine_%04d.png", "from": 1, "to": 10,
+  "frames_pattern": "machine_{frame:04}.png", "from": 1, "to": 10,
   "fps": 8, "start": "dormant",
   "triggers": [
     { "on": "factory.machine_on", "play": "loop" },
@@ -143,7 +194,10 @@ channel must be retained when only a marker label appears in authored data.
 
 **Agreed policy:** exact-entity targeting by default, explicit groups, and
 opt-in broadcast. There is no implicit ancestor walk. These are semantic target
-forms; the concrete authored syntax and typed payload adapter remain to be chosen.
+forms; concrete authored syntax remains to be chosen. Each trigger explicitly
+maps its typed payload to the target, for example `worker_id`; the assembler
+validates/generates that adapter. Never infer a target field or silently fall
+back to broadcast. Validate lifetime at dispatch and again at application.
 
 | Target | Recipients | Lookup strategy |
 | --- | --- | --- |
@@ -187,10 +241,10 @@ table completed as part of the implementation specification:
 
 | Request | Contract to specify |
 | --- | --- |
-| `play: once/loop/ping_pong` | Agreed: playing an already-playing identical loop is a no-op. Once retrigger, ping-pong retrigger and mode-change behavior still need specification. |
+| `play: once/loop/ping_pong` | Playing the same active clip with unchanged playback mode is a no-op, for every mode. Playing a different clip starts at frame zero with a new playback identity. Playing a completed/stopped clip starts it again with a new identity. Explicit mode changes and `play` on paused playback still require specification; `resume` is the continuation action. |
 | `stop` | Agreed: reset playback to frame 0 and remain stopped. Reset the residual timer, direction, repetition and marker cursor; repeated stop is a no-op. An explicitly authored idle image may override the displayed image. Visibility is unchanged. |
 | `pause` / `resume` | Agreed: pause preserves frame and residual timer; resume continues paused playback from that position. Repeated pause is a no-op. Define resume from stopped/completed and interaction with global/subsystem pause separately. |
-| `restart` | Reset frame, timer, direction, repetition and marker cursor; update the visible sprite even without a later frame crossing. |
+| `restart` | Reset frame, timer, direction, repetition and marker cursor; create a new playback identity; update the visible sprite even without a later frame crossing. |
 | `start: dormant` | Initial visible frame and behavior before the first request; reconciliation after loading. |
 
 For example, a fan paused on frame 3 stays there and resumes from the same
@@ -199,7 +253,8 @@ powered-off image is an explicit authored override, never inferred by the
 engine; its configuration syntax remains to be specified. Stopping kitchen
 smoke does not automatically hide its entity: visibility is separate state.
 Resetting the displayed frame must work without a subsequent advancing tick.
-Whether a stop/reset emits a frame-zero cue remains a marker-timing decision.
+Start/restart emits frame-zero markers once; resume/restore does not replay them.
+Stop is a reset-to-stopped action, not a new playback start.
 
 Reject conflicting `play` and `action` fields in one entry. Commands are applied
 in dispatch order; matching entries within one event use authored trigger order.
@@ -210,7 +265,7 @@ one: `restart -> pause` must retain the reset before becoming paused.
 Apply the complete boundary batch before advancing frames or emitting markers
 caused by those commands. Intermediate commands must not emit transient cues
 before a later conflicting command is applied. The final-state frame-zero cue
-rule remains part of the marker specification. Address speed zero, mode changes
+rule follows the crossing contract below. Address speed zero, mode changes
 and completion explicitly.
 
 Use explicit `restart` to synchronize recipients. Broadcast `play` alone does
@@ -258,10 +313,22 @@ in one frame. Bound pending commands and define visible overflow reporting.
 
 ### Load and state reconciliation
 
-SpriteAnimation is transient. An already-active machine restored from a save
-may never emit a new “on” edge. Choose a post-restoration reconciliation step
-or a domain synchronization event with explicit target binding. Entity-ready
-callbacks are not a whole-scene completion guarantee.
+The current SpriteAnimation is transient; the agreed design adds persistence
+where continuity matters. Save clip, playback position and residual time,
+direction, repetition, paused/stopped/completed status, playback identity and
+marker progress. Preserve pending crossed markers for saved entities and remap
+their generation-checked entity references on restore. Do not re-emit markers
+already delivered. Restore is not a new start or a replay of historical events.
+
+Provide a post-restoration game hook to reconcile playback with authoritative
+state (for example, cancel an attack that is no longer active). Restore references
+and reconcile before pending cues can cause gameplay effects. Entity-ready
+callbacks are not a whole-scene completion guarantee. Playback and pending
+delivery state must be snapshotted consistently; specify the save boundary and
+handoff to the normal event queue so a save cannot lose or duplicate a cue
+between successful enqueue and hook delivery. This is not a promise of
+transactional exactly-once external side effects. Version/reload identity and
+the persisted representation remain implementation work.
 
 Acceptance: two independently targeted props; group membership changes before
 and after dispatch; group destruction and handle reuse; explicit broadcast;
@@ -277,7 +344,8 @@ entities are not scanned by direct targeting.
 
 **Agreed v1 contract:** one typed animation-marker notification, carrying a
 validated entity handle, marker identity/name, frame, repetition, and clip
-identity where applicable. The concrete type/tag spelling and identity
+identity where applicable, playback identity and a unique occurrence identity
+within that playback. The concrete type/tag spelling and identity
 representation remain implementation-specification details.
 
 Gameplay handlers interpret the cue and construct any domain events. For
@@ -295,33 +363,52 @@ must be specified alongside the event metadata integration.
 Acceptance: the full typed payload reaches the intended subscribers, including
 the entity/clip distinction for shared marker names; invalid or stale handles
 cannot act on replacement entities; a gameplay adapter and a cosmetic handler
-demonstrate the two uses. This contract does not itself guarantee delivery under
-overflow or enqueue failure; those policies remain below.
+demonstrate the two uses. Hooks may perform gameplay actions as well as cosmetic
+effects, but must validate the entity and action at delivery. Playback identity
+allows rejection of an old attack's cue after interruption. Delivery/backpressure
+requirements are below; successful enqueue alone is not successful delivery.
 
-### Crossing semantics to pin down
+### Agreed crossing semantics
 
 Use chronological crossings, not just the final landed frame. Add examples
 and tests for each of these cases before fixing the traversal algorithm:
 
 | Case | Required decision/test |
 | --- | --- |
-| Frame 0 on start/restart | Does it emit on command application or first positive advance? Exactly once for the chosen boundary. |
+| Frame 0 on start/restart | Emit once at the animation command boundary for playback that starts/restarts after applying the batch. Resume and restoration do not replay it. Intermediate commands superseded in the batch do not emit transient cues. |
 | Several crossed markers | Oldest first; stable author order for cues sharing a frame. |
-| Loop wrap | End/start ordering; repeated hits across multiple loops; repetition attribution. |
+| Loop wrap | Visit the end then the entered start in traversal order, including every crossed loop; record repetition and unique occurrence identity. |
 | Once clip | Clamp at final frame; final cue/completion order; no repeated completion on later ticks. |
-| Ping-pong | Forward/backward order and endpoint visitation; avoid double-counting an endpoint on reversal. |
-| Very large dt | Bounded work, accurate final playback state, observable excess delivery. |
+| Reverse / ping-pong | Emit on every frame entered in traversal order. A turning endpoint is visited once, not again just because direction reverses. |
+| Very large dt | Preserve all crossings; process and deliver them in order across updates within a per-update budget. Specify cursor/backpressure mechanics before implementation. |
 
 Crossing accuracy does not promise unlimited delivery. Existing PendingBuf
 retains 32 events and AnimationDef traverses at most 512 beats; game enqueue can
 also fail allocation. Do not silently reuse those limits while claiming cues
 never drop, or replace them with an unbounded catch-up loop.
 
-The preferred requirement is exact delivery within a documented budget with
-explicit overflow/failure reporting. Specify whether excess cosmetic cues may
-be aggregated or discarded, and how an authoritative consumer reconciles.
-Coordinate enqueue reporting with [#856](https://github.com/labelle-toolkit/labelle-engine/issues/856).
-Tests must distinguish correct traversal from successful downstream enqueue.
+Agreed policy: retain pending crossings and deliver in order across updates when
+the per-update budget is exhausted. Do not silently drop, aggregate or overwrite
+pending cues, including on enqueue failure. Retry a failed enqueue without
+duplicating an occurrence already successfully handed off. Preserve ordering
+across old backlog and newly crossed markers. Coordinate fallible enqueue with
+[#856](https://github.com/labelle-toolkit/labelle-engine/issues/856).
+
+This requires a bounded-work/backpressure design, not an unbounded queue or
+catch-up loop. Specify numerical limits, resumable traversal cursors and what
+advancement does when pending storage cannot grow. Never commit advancement
+past a crossing that cannot be retained or reconstructed. Allocation failure
+must leave retryable state; report stalls/overload visibly. No implementation
+may claim unlimited progress, bounded memory and lossless delivery simultaneously
+without a backpressure mechanism. Tests must separate crossing discovery,
+successful enqueue, dispatch and save/load handoff.
+
+Interruption does not erase already-crossed markers: keep them with their
+original playback identity. Restart/clip replacement creates a new identity;
+hooks decide whether the earlier action still applies. Discard a marker if its
+target no longer exists, including world/generation invalidation, rather than
+retargeting a recycled entity. Define deterministic tie order for markers on
+different entities separately from each playback's traversal order.
 
 Keep legacy numeric `event_frames` on its separate landed-on timing path.
 It is **not a semantic alias** for crossing-accurate named markers. Changing
@@ -340,10 +427,22 @@ engine, generated-loop and consumer consequences. The audited behavior is:
   Escape-to-resume handler is a normal script tick and would stop running if
   that consumer migrated by simply zeroing time scale.
 
-Recommended clock model: retain configured time scale, derive effective scaled
-dt from explicit pause, and expose real/unscaled dt separately. Preserve a
-slow-motion setting across pause/resume. Specify whether pause notifications
-describe explicit pause transitions, the effective frozen state, or both.
+Agreed clock model: retain the requested game speed separately from explicit
+pause and from each animation's speed multiplier:
+
+```text
+scaled animation dt = real dt * (game_paused ? 0 : current_game_speed) * animation_speed
+unscaled animation dt = real dt * animation_speed
+```
+
+Local animation pause suppresses its advancement independently of game pause.
+Resume uses the current settings, never restores a stale pre-pause game speed.
+For example, animation speed 0.5 multiplied by current game speed 2 gives 1x;
+if the game itself changed from 0.5 to 2 while paused, it resumes at 2, not 0.5.
+Without an explicit speed change, pause/resume naturally preserves slow motion.
+Emit `pause_changed` only on explicit game pause-state transitions. Setting game
+speed to zero freezes scaled time without changing that state or emitting a
+pause transition. Unscaled animation and UI input continue during game pause.
 
 SpriteAnimation proposes `update: scaled | unscaled`, default scaled. Its
 driver already runs before the engine pause return; it needs per-animation
@@ -381,22 +480,38 @@ game logic or AnimationDef consumers.
 ## Readiness and rollout
 
 The investigation's 36 passing tests establish the baseline and its limitations,
-not acceptance of any proposed feature. The PR remains a design discussion.
+not acceptance of any proposed feature. The following checked items record
+behavioral decisions agreed in discussion, not implemented delivery.
 
-- [ ] Finalize shorthand grammar, bounds, ownership and diagnostics.
+- [x] Agree top-level `animation/` package alongside `scene/` and `jsonc/`, shared
+  game `animations/*.jsonc` definitions and per-entity playback state.
+- [x] Agree inclusive frame ranges, explicit zero-padding, load-time expansion,
+  reversed/malformed rejection and atlas-ready missing-key diagnostics.
 - [x] Choose typed marker notifications for v1; gameplay interprets cues and
   constructs domain events. Direct custom-event mapping is outside v1.
 - [x] Agree pause/resume position preservation, stop resetting to frame 0,
   explicit idle-image overrides and visibility remaining independent.
-- [ ] Specify crossing order and bounded delivery/failure behavior.
+- [x] Agree traversal-order markers, frame-zero start/restart semantics, occurrence
+  identity, retained pending crossings and retry without silent loss/duplication.
+- [x] Agree retrigger no-op, explicit restart/new playback identity and retention
+  of interrupted playback's pending markers; discard invalid entity targets.
 - [x] Agree entity/group/broadcast targeting, recipient lifetime, ordered command
   batches, consumption handling and explicit restart synchronization.
-- [ ] Specify typed target adapters, trigger component/state layout, remaining
-  action semantics and generated-loop/handler integration; implement and test
-  the agreed policy. Checked items above are design decisions, not delivery.
-- [ ] Define reconciliation and demonstrate a real consumer pilot.
-- [ ] Specify effective clocks, pause notifications and unscaled input migration.
-- [ ] Choose the default-driving rollout and verify single ownership.
+- [x] Agree explicit typed payload-to-target mapping without field guessing or
+  broadcast fallback, with lifetime checks at dispatch and application.
+- [x] Agree saved playback/marker progress, pending cue preservation with entity
+  remapping, no historical marker replay, and post-restore game reconciliation.
+- [x] Agree independent pause and speed settings, scaled/unscaled clocks, current
+  speed on resume, explicit-only pause notifications and always-running UI input.
+- [x] Choose compatibility diagnostics followed by major-release default driving,
+  with explicit manual opt-out and exactly one owner of advancement.
+- [ ] Specify concrete JSONC schema, grammar limits, package dependency wiring,
+  typed adapter APIs, binding/state layout and remaining mode-change semantics.
+- [ ] Specify bounded storage/traversal backpressure and atomic save/queue handoff,
+  cross-entity tie ordering, and hot-reload identity/lifetime details.
+- [ ] Implement/test native and callback loop integration, consumption ordering,
+  unscaled input migration and compatibility shims; verify single advancement.
+- [ ] Demonstrate a real consumer pilot, including persistence and failure paths.
 
 Recommended implementation order: shorthand; marker contract; triggers with a
 consumer pilot; pause migration; default driving. Each has its own acceptance
