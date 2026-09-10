@@ -1,6 +1,6 @@
 const std = @import("std");
 const testing = std.testing;
-const engine = @import("engine");
+const engine = @import("animation");
 
 const AnimationDef = engine.AnimationDef;
 const AnimationState = engine.AnimationState;

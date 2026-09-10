@@ -19,10 +19,10 @@ zig build test    # all engine tests
 |------|------|
 | `src/root.zig` | Public module surface. Add new re-exports here so downstream code can reach them via `engine.Foo`. |
 | `src/game.zig` | `GameConfig` / `Game` — comptime-parameterised game container (renderer, ECS, input, audio, gui, hooks). |
-| `src/sprite_animation.zig` + `sprite_animation_tick.zig` | Reference for the "one type + one tick fn, paired" pattern used elsewhere. |
+| `animation/src/sprite_animation.zig` + `src/sprite_animation_tick.zig` | Reference for the "one type + one tick fn, paired" pattern used elsewhere. |
 | `src/jsonc_scene_bridge.zig` | Scene loading from `.jsonc`. |
 | `src/preview_mode.zig` | Play-in-Editor control channel (see below). |
-| `test/*.zig` | Each test file is its own binary, wired explicitly in `build.zig`. Tests use `std.testing` directly — zspec is available toolkit-wide but not required here. |
+| `test/*.zig` + `animation/test/*.zig` | Each test file is its own binary, wired explicitly in `build.zig`. Tests use `std.testing` directly — zspec is available toolkit-wide but not required here. |
 
 ## Preview Mode (issue #516, PIE umbrella #59)
 

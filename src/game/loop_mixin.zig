@@ -103,7 +103,8 @@ pub fn Mixin(comptime Game: type) type {
             // gameplay-skip section) so it advances on `scaled_dt`, which a
             // `time_scale==0` hard pause already zeroes.
             // A zero-delta pass still synchronizes newly bound frame zero.
-            // Playback clocks and events remain frozen while paused.
+            // Playback clocks freeze while paused. Named start cues and queue
+            // retries for an already-entered frame may still be handed off.
             if (self.drive_sprite_animations) {
                 @import("../sprite_animation_tick.zig").tick(self, if (self.sprite_animations_paused) 0 else scaled_dt);
             }

@@ -25,12 +25,4 @@ pub const AdvanceMode = enum {
 
 /// What happens at a clip's BOUNDARY — past the last frame. Orthogonal to
 /// `AdvanceMode`. (Formerly `sprite_animation.AnimationMode`.)
-pub const BoundaryMode = enum {
-    /// Wrap back to frame 0 and keep cycling.
-    loop,
-    /// Stop on the last frame and hold there.
-    once,
-    /// Play forward to the last frame, then reverse to 0, flipping at
-    /// each endpoint.
-    ping_pong,
-};
+pub const BoundaryMode = @import("marker_cursor.zig").BoundaryMode;

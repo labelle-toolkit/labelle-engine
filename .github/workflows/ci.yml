@@ -46,8 +46,8 @@ jobs:
         working-directory: animation
         run: zig build test --summary all
 
-      - name: Test definition playback compatibility
-        run: zig build test-animation --summary all
+      - name: Test animation playback and engine adapters
+        run: zig build test-animation-legacy -j2 --summary all
 
       # Full test suite on Linux (and macOS once that lands as a
       # separate matrix entry — out of scope here).

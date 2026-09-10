@@ -68,7 +68,7 @@ const misc_mixin = @import("game/misc_mixin.zig");
 pub const ScreenSize = misc_mixin.ScreenSize;
 
 const animation_runtime_mixin = @import("game/animation_runtime_mixin.zig");
-const animation_def_runtime = @import("animation_def_runtime.zig");
+const animation_def_runtime = @import("animation").animation_def_runtime_mod;
 const prefab_runtime_mixin = @import("game/prefab_runtime_mixin.zig");
 const roster_mod = @import("game/roster.zig");
 const game_init_mod = @import("game/game_init.zig");
@@ -711,6 +711,9 @@ pub fn GameConfigWithYAxis(
         /// story. Empty (and cost-free) outside editor-preview hosts.
         runtime_anim_defs: animation_def_runtime.RuntimeAnimDefs,
         animation_library: @import("animation").Library,
+        /// Never reset with ECS/world state: recycled entity ids receive new
+        /// marker targets and new playback occurrences throughout this Game.
+        animation_identity: u64 = 0,
         /// Name of the scene whose registered `loader_fn` is currently
         /// executing. Set by `setScene` / `setSceneAtomic` / the
         /// hot-reload path around the loader call ONLY — a borrow of the
@@ -1539,6 +1542,9 @@ pub fn GameConfigWithYAxis(
         /// refresh convention and the fallback contract.
         pub const loadAnimationJsoncSource = AnimationRuntimeMixin.loadAnimationJsoncSource;
         pub const bindSpriteAnimation = AnimationRuntimeMixin.bindSpriteAnimation;
+        pub const selectSpriteAnimation = AnimationRuntimeMixin.selectSpriteAnimation;
+        pub const nextAnimationIdentity = AnimationRuntimeMixin.nextAnimationIdentity;
+        pub const isAnimationMarkerTargetAlive = AnimationRuntimeMixin.isAnimationMarkerTargetAlive;
         pub const validateSpriteAnimation = AnimationRuntimeMixin.validateSpriteAnimation;
         pub const validateSceneSpriteAnimations = AnimationRuntimeMixin.validateSceneSpriteAnimations;
         pub const loadAnimationDefSource = AnimationRuntimeMixin.loadAnimationDefSource;

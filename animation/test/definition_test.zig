@@ -51,7 +51,7 @@ test "malformed authoring fails explicitly" {
         .{ error.EmptyFrames, "{\"frames\":[]}" },
         .{ error.EmptyFrameKey, "{\"frames\":[\"\"]}" },
         .{ error.ConflictingFrames, "{\"frames\":[\"a\"],\"from\":0}" },
-        .{ error.UnknownField, "{\"frames\":[\"a\"],\"markers\":[]}" },
+        .{ error.UnknownField, "{\"frames\":[\"a\"],\"triggers\":[]}" },
     };
     inline for (clips) |case| {
         const text = "{\"version\":1,\"clips\":{\"x\":" ++ case[1] ++ "}}";

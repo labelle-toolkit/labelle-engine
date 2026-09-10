@@ -1,6 +1,6 @@
-# Animation package — definition foundation
+# Animation package — definitions and named markers
 
-First implementation stage of engine #794 / RFC #793. A top-level package next
+Implementation stages for engine #794 / RFC #793. A top-level package next
 to `scene/` and `jsonc/`, independently built and tested with Zig 0.16:
 
 ```sh
@@ -8,11 +8,19 @@ cd animation
 zig build test --summary all
 ```
 
-This package owns shared JSONC frame definitions and a session-owned library.
-The engine binds them to its existing SpriteAnimation player; the existing
-AnimationDef / `.zon` path remains supported. Consolidating playback here,
-trigger commands, reliable markers, persistence and pause migration remain
-subsequent stages.
+This package owns JSONC definitions and named markers, the legacy ZON
+AnimationDef and RuntimeAnimationDef paths, AnimationState, SpriteAnimation,
+SpriteByField, timing vocabulary, and event buffers. It depends on JSONC and
+labelle-core's save metadata, but not the engine, renderer, or a concrete ECS.
+
+All animation tests live in `animation/test/`, including engine adapter tests.
+From the engine root, run `zig build test-animation-legacy --summary all` to
+include those adapters; the ordinary `zig build test` still runs them.
+The package's own `zig build test` runs its independent authoring/playback tests.
+
+The engine preserves its public animation exports. ECS ticks, prefab binding,
+and hook delivery stay in engine `src/` because they integrate game services.
+Trigger commands, persistence and clock migration remain subsequent stages.
 
 ## Initial schema
 
@@ -41,8 +49,9 @@ Games store reusable assets under `animations/*.jsonc`. This loader accepts:
   unsupported versions and trailing data fail explicitly.
 - These are exact atlas keys, not filesystem paths. Parse errors and missing
   resource keys are separate. Rich source-location diagnostics are future work.
-- Fields for speed, markers and triggers are intentionally not accepted yet.
-  Prefab references require the assembler integration described below.
+- Clips optionally declare named `markers`; see [MARKERS.md](MARKERS.md).
+  Clip-level speed and triggers are not accepted yet. Prefab references require
+  the assembler integration described below.
 
 ## Ownership and resource readiness
 
@@ -114,3 +123,5 @@ until game deinit. Scene reset/load creates fresh playback state from the prefab
 and reuses those definitions. Registering a name twice fails without changing
 the existing definition; live definition replacement is not implemented here.
 Pack-local discovery and marker/transition schemas remain separate work.
+
+Named marker authoring, traversal budgets and delivery limits: [MARKERS.md](MARKERS.md).

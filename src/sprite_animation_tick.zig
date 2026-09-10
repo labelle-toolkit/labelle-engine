@@ -28,8 +28,8 @@
 //! the full motivation and the staging rationale for splitting these
 //! across two files (and two PRs).
 
-const SpriteAnimation = @import("sprite_animation.zig").SpriteAnimation;
-const anim_events = @import("animation_events.zig");
+const SpriteAnimation = @import("animation").sprite_animation_mod.SpriteAnimation;
+const anim_events = @import("animation").animation_events_mod;
 
 /// Advance all `SpriteAnimation` components by `dt` and update their
 /// sibling Sprite on frame flips.
@@ -72,6 +72,7 @@ pub fn tick(game: anytype, dt: f32) void {
         .loop_end = Game.engineEventWanted("engine__anim_loop"),
     };
     const events_wanted = comptime mask.frame or mask.clip_end or mask.loop_end;
+    const named_events_wanted = comptime Game.engineEventWanted("engine__anim_marker") or mask.clip_end or mask.loop_end;
 
     var view = game.ecs_backend.view(.{ SpriteAnimation, Sprite }, .{});
     defer view.deinit();
@@ -83,7 +84,8 @@ pub fn tick(game: anytype, dt: f32) void {
         // `effectiveSpeed()`: 0 / negative → paused, never reverse.
         const eff_dt = if (dt == 0) 0 else dt * anim.effectiveSpeed();
 
-        const changed = if (eff_dt == 0) false else if (comptime events_wanted) blk: {
+        const old_frame = anim.frame;
+        const changed = if (named_events_wanted and anim.markers.len != 0) @import("named_animation_tick.zig").advance(game, entity, anim, eff_dt) else if (eff_dt == 0) false else if (comptime events_wanted) blk: {
             var buf: anim_events.PendingBuf = .{};
             const c = anim.advanceEventsMasked(eff_dt, &buf, mask);
             // Most ticks queue nothing (sub-frame or an event-less frame);
@@ -91,6 +93,19 @@ pub fn tick(game: anytype, dt: f32) void {
             if (buf.len > 0) forwardEvents(game, entity, &buf);
             break :blk c;
         } else anim.advance(eff_dt);
+
+        // Numeric cues retain their landed-on semantics, even on a clip
+        // that also declares crossing-accurate named markers.
+        if (comptime mask.frame) {
+            if (named_events_wanted and anim.markers.len != 0 and anim.frame != old_frame) {
+                for (anim.event_frames) |marked| {
+                    if (marked == anim.frame) {
+                        game.emitEngineEvent("engine__anim_frame", .{ .entity = @as(u32, @intCast(entity)), .frame = anim.frame });
+                        break;
+                    }
+                }
+            }
+        }
 
         if (!changed and !anim.definition_dirty) continue;
         anim.definition_dirty = false;

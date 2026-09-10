@@ -198,8 +198,17 @@ pub fn ComponentApply(comptime GameType: type, comptime Components: type) type {
                 if (std.mem.eql(u8, name, comp_name)) {
                     const T = Components.getType(comp_name);
                     if (deserializer.deserialize(T, filtered, comp_alloc)) |component| {
-                        if (comptime T == @import("../sprite_animation.zig").SpriteAnimation) {
+                        if (comptime T == @import("animation").sprite_animation_mod.SpriteAnimation) {
                             var bound = component;
+                            // Check the installed player before replacing a fresh
+                            // deserialized value (including live prefab refresh).
+                            if (game.ecs_backend.getComponent(entity, T)) |old| {
+                                if ((GameType.engineEventWanted("engine__anim_marker") or GameType.engineEventWanted("engine__anim_complete") or GameType.engineEventWanted("engine__anim_loop")) and old.markers.len != 0 and old.marker_cursor.pending()) {
+                                    game.log.warn("animation refresh deferred: PendingAnimationMarkers; retry after playback drains", .{});
+                                    return;
+                                }
+                                bound.marker_target_id = old.marker_target_id;
+                            }
                             game.bindSpriteAnimation(&bound) catch |err| {
                                 game.log.err("animation '{s}', clip '{s}': {s}", .{ bound.definition, bound.clip, @errorName(err) });
                                 return;

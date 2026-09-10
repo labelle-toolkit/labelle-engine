@@ -24,7 +24,7 @@
 //! added later once `spawnFromPrefab` exists (Slice 2 / issue #479).
 
 const std = @import("std");
-const sbf_mod = @import("sprite_by_field.zig");
+const sbf_mod = @import("animation").sprite_by_field_mod;
 const SpriteByField = sbf_mod.SpriteByField;
 
 pub fn tick(game: anytype, dt: f32) void {

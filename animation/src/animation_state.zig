@@ -8,7 +8,6 @@
 /// Games add this component to entities that need sprite animation.
 /// Transitions are driven by calling `transition()` (from hooks or scripts).
 /// Frame advancement and sprite resolution are handled by the engine.
-
 const animation_def = @import("animation_def.zig");
 pub const Mode = animation_def.Mode;
 pub const ClipMeta = animation_def.ClipMeta;
@@ -132,7 +131,6 @@ pub fn advanceAny(state: anytype, dt: f32) void {
         state.frame = @min(@as(u8, @intFromFloat(cycle)), state.frame_count - 1);
     }
 }
-
 
 /// Duck-typed hard-cut transition (#686): sets the core clip fields on
 /// any state-shaped struct — the wrapper's `clip` may be a typed enum
