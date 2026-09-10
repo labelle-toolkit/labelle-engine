@@ -72,8 +72,8 @@ pub const SpriteAnimation = struct {
     /// Set after validating the selected clip against resident scene atlases.
     definition_validated: bool = false,
     /// Shared named cues; runtime cursors are independent for each entity.
-    markers: []const @import("animation").Marker = &.{},
-    marker_cursor: @import("animation").MarkerCursor = .{},
+    markers: []const @import("marker.zig").Marker = &.{},
+    marker_cursor: @import("marker_cursor.zig").MarkerCursor = .{},
     marker_target_id: u64 = 0,
     marker_playback_id: u64 = 0,
     marker_stalled: bool = false,

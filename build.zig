@@ -71,7 +71,7 @@ pub fn build(b: *std.Build) void {
     const animation_module = b.dependency("animation", .{ .target = target, .optimize = optimize }).module("animation");
     engine_module.addImport("animation", animation_module);
     const animation_tests = b.addTest(.{ .root_module = b.createModule(.{
-        .root_source_file = b.path("test/animation_package_test.zig"),
+        .root_source_file = b.path("animation/test/animation_package_test.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{
@@ -110,14 +110,14 @@ pub fn build(b: *std.Build) void {
         // release-before-acquire handoff exemption), deferred apply.
         "test/command_buffer_test.zig",
         "test/gui_view_test.zig",
-        "test/anim_timing_test.zig",
+        "animation/test/anim_timing_test.zig",
         "test/gui_runtime_state_test.zig",
         "test/form_binder_test.zig",
         "test/script_runner_test.zig",
         "test/game_log_test.zig",
         "test/fullscreen_api_test.zig",
         "test/vsync_api_test.zig",
-        "test/engine_sprite_anim_test.zig",
+        "animation/test/engine_sprite_anim_test.zig",
         // The atlas -> source_rect mapping, trim geometry included: the
         // seam where a parsed-but-unread `spriteSourceSize` silently
         // became a per-frame positional error.
@@ -156,21 +156,21 @@ pub fn build(b: *std.Build) void {
         // is the follow-up.
         "test/asset_manifest_test.zig",
         "test/asset_inference_wire_test.zig",
-        "test/animation_def_test.zig",
-        "test/animation_state_transitions_test.zig",
-        "test/animation_def_runtime_test.zig",
-        "test/animation_events_test.zig",
+        "animation/test/animation_def_test.zig",
+        "animation/test/animation_state_transitions_test.zig",
+        "animation/test/animation_def_runtime_test.zig",
+        "animation/test/animation_events_test.zig",
         "test/tween_test.zig",
         "test/behavior_tree_test.zig",
         "test/particles_test.zig",
         "test/emitter_component_test.zig",
         "test/particles_tick_test.zig",
         "test/jsonc/emitter_component_test.zig",
-        "test/sprite_animation_test.zig",
-        "test/sprite_animation_tick_test.zig",
-        "test/sprite_animation_events_test.zig",
-        "test/sprite_by_field_test.zig",
-        "test/sprite_by_field_tick_test.zig",
+        "animation/test/sprite_animation_test.zig",
+        "animation/test/sprite_animation_tick_test.zig",
+        "animation/test/sprite_animation_events_test.zig",
+        "animation/test/sprite_by_field_test.zig",
+        "animation/test/sprite_by_field_tick_test.zig",
         "test/scene_assets_hooks_test.zig",
         "test/pause_hook_test.zig",
         // RFC-I18N §4 — frame-boundary hook: the generated main wires the
@@ -206,7 +206,7 @@ pub fn build(b: *std.Build) void {
         "test/jsonc/bridge_prefab_tags_test.zig",
         "test/save_load_two_phase_test.zig",
         "test/post_load_render_gate_test.zig",
-        "test/example_prefab_animation_walkthrough_test.zig",
+        "animation/test/example_prefab_animation_walkthrough_test.zig",
         "test/jsonc/bridge_deserialize_test.zig",
         "test/jsonc/deserializer_test.zig",
         "test/jsonc/unified_format_test.zig",
@@ -455,12 +455,15 @@ pub fn build(b: *std.Build) void {
                     .{ .name = "labelle-core", .module = core_module },
                     .{ .name = "engine", .module = engine_module },
                     .{ .name = "scene", .module = scene_module },
+                    .{ .name = "animation", .module = animation_module },
                 },
             }),
         });
         test_step.dependOn(&b.addRunArtifact(exe).step);
     }
 
+    const legacy_animation_step = b.step("test-animation-legacy", "Run all animation package and engine adapter tests");
+    legacy_animation_step.dependOn(&run_animation_tests.step);
     for (test_files) |test_file| {
         const t = b.addTest(.{
             .root_module = b.createModule(.{
@@ -471,10 +474,13 @@ pub fn build(b: *std.Build) void {
                     .{ .name = "labelle-core", .module = core_module },
                     .{ .name = "engine", .module = engine_module },
                     .{ .name = "scene", .module = scene_module },
+                    .{ .name = "animation", .module = animation_module },
                 },
             }),
         });
-        test_step.dependOn(&b.addRunArtifact(t).step);
+        const run = b.addRunArtifact(t);
+        test_step.dependOn(&run.step);
+        if (std.mem.startsWith(u8, test_file, "animation/test/")) legacy_animation_step.dependOn(&run.step);
     }
 
     // `zig build bench` — the id-column (#783) host+binding

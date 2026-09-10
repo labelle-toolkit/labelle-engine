@@ -12,7 +12,7 @@ const std = @import("std");
 const core = @import("labelle-core");
 const atlas_mod = @import("../atlas.zig");
 const assets_mod = @import("../assets/mod.zig");
-const animation_def_runtime = @import("../animation_def_runtime.zig");
+const animation_def_runtime = @import("animation").animation_def_runtime_mod;
 const gizmo_draws_mod = @import("gizmo_draws.zig");
 const roster_mod = @import("roster.zig");
 

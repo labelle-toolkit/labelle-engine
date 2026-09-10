@@ -3,6 +3,9 @@
     .name = .animation,
     .version = "0.2.0",
     .minimum_zig_version = "0.16.0",
-    .dependencies = .{ .jsonc = .{ .path = "../jsonc" } },
+    .dependencies = .{
+        .jsonc = .{ .path = "../jsonc" },
+        .labelle_core = .{ .path = "../../labelle-core" },
+    },
     .paths = .{ "build.zig", "build.zig.zon", "src", "test", "README.md", "MARKERS.md" },
 }

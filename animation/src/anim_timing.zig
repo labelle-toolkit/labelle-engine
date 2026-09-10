@@ -25,4 +25,4 @@ pub const AdvanceMode = enum {
 
 /// What happens at a clip's BOUNDARY — past the last frame. Orthogonal to
 /// `AdvanceMode`. (Formerly `sprite_animation.AnimationMode`.)
-pub const BoundaryMode = @import("animation").BoundaryMode;
+pub const BoundaryMode = @import("marker_cursor.zig").BoundaryMode;

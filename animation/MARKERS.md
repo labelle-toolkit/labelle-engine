@@ -39,6 +39,10 @@ owned strings. `game.selectSpriteAnimation(anim, definition, clip)` validates a
 replacement atomically. It returns `PendingAnimationMarkers` if the old cursor
 has not drained; retry after advancement resumes. Directly overwriting runtime
 cursor fields is not a supported playback-control API.
+Live prefab replacement performs the same pending-cursor check on the installed
+component. A blocked refresh logs a warning and leaves the old player intact;
+retry the prefab refresh after playback drains. A successful replacement retains
+the target token for already queued cues.
 
 Occurrences are visited chronologically per player, including every crossed
 loop. A new start visits frame zero once; zero-delta updates do not replay it.
@@ -55,7 +59,11 @@ shared between its old backlog and new elapsed time. The allocation-free cursor
 retains remaining beats and its position among markers on the current frame.
 It advances the occurrence sequence only after a successful `tryEmit`. Failed
 enqueues therefore retry without duplicating a successful handoff. Loop and
-completion handoffs use the same retry path on marked clips.
+completion handoffs use the same retry path on marked clips. If the game requests
+neither named markers nor lifecycle events, marker metadata does not enable this
+bounded path; ordinary eventless playback keeps its existing catch-up behavior.
+The fractional remainder is stored in seconds, preserving elapsed time when FPS
+changes. Accepted whole beats retain their original meaning while draining.
 
 When old work cannot drain, the animation clock stalls: **new wall time is not
 accepted**. This is explicit backpressure, not an unlimited real-time catch-up

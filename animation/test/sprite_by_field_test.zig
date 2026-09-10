@@ -4,7 +4,7 @@
 
 const std = @import("std");
 const testing = std.testing;
-const engine = @import("engine");
+const engine = @import("animation");
 const core = @import("labelle-core");
 
 const SpriteByField = engine.SpriteByField;

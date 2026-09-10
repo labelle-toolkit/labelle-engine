@@ -25,7 +25,8 @@ pub const MarkerCursor = struct {
     forward: bool = true,
     repetition: u64 = 0,
     sequence: u64 = 0,
-    fraction: f64 = 0,
+    remainder_seconds: f64 = 0,
+    pump_started: bool = false,
     steps: u64 = 0,
     marker_index: usize = 0,
     entering: bool = true,
@@ -45,17 +46,18 @@ pub const MarkerCursor = struct {
             return error.InvalidTime;
         // The initial frame-zero visit can be drained together with first dt.
         if (self.steps != 0 or self.loop_pending or self.complete_pending or
-            (self.entering and self.sequence != 0)) return error.Busy;
+            (self.entering and self.pump_started)) return error.Busy;
         if (self.completed) return;
-        const beats = seconds * fps + self.fraction;
+        const beats = (seconds + self.remainder_seconds) * fps;
         if (!std.math.isFinite(beats) or beats >= 4294967296.0) return error.TimeOverflow;
         self.steps = @intFromFloat(@floor(beats));
-        self.fraction = beats - @floor(beats);
+        self.remainder_seconds = (beats - @floor(beats)) / fps;
     }
 
     pub fn pump(self: *MarkerCursor, clip: *const Clip, mode: BoundaryMode, budget: Budget, sink: anytype) !Result {
         if (clip.frames.len == 0 or clip.frames.len > 255 or self.frame >= clip.frames.len)
             return error.InvalidFrame;
+        self.pump_started = true;
         var result = Result{ .frames = 0, .events = 0, .pending = true };
         while (true) {
             if (self.loop_pending) {
@@ -85,7 +87,7 @@ pub const MarkerCursor = struct {
                 self.complete_pending = false;
                 self.completed = true;
                 self.steps = 0;
-                self.fraction = 0;
+                self.remainder_seconds = 0;
                 result.events += 1;
             }
             if (self.steps == 0 or self.completed) {

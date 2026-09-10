@@ -27,7 +27,6 @@
 /// marker→beat, sprite names) is keyed `[clip][variant]`. A (clip, variant)
 /// pair with no override shares the base clip's entry list, so defs without
 /// overrides generate exactly the tables they always did.
-
 const std = @import("std");
 const anim_timing = @import("anim_timing.zig");
 const anim_events = @import("animation_events.zig");

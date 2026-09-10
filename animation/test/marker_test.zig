@@ -117,7 +117,7 @@ test "invalid and excessive time does not mutate the cursor" {
     try t.expectError(error.InvalidTime, cursor.offer(-1, 1));
     try t.expectError(error.TimeOverflow, cursor.offer(4294967296, 1));
     try t.expectEqual(@as(u64, 0), cursor.steps);
-    try t.expectEqual(@as(f64, 0), cursor.fraction);
+    try t.expectEqual(@as(f64, 0), cursor.remainder_seconds);
 }
 
 fn markerAllocationProbe(allocator: std.mem.Allocator) !void {
@@ -141,4 +141,36 @@ test "zero frame budget can deliver entered cues but never advances queued beats
     try t.expectEqual(@as(usize, 1), sink.items.items.len);
     _ = try cursor.pump(&clip, .loop, .{}, &sink);
     try t.expectEqual(@as(u8, 1), cursor.frame);
+}
+
+test "initial failed or budget-blocked entry rejects time until drained" {
+    inline for (.{ true, false }) |fail| {
+        var cursor: a.MarkerCursor = .{};
+        var sink = Sink{ .fail_at = if (fail) 0 else null };
+        defer sink.deinit();
+        if (fail) {
+            try t.expectError(error.OutOfMemory, cursor.pump(&clip, .loop, .{}, &sink));
+        } else {
+            try t.expect((try cursor.pump(&clip, .loop, .{ .events = 0 }, &sink)).pending);
+        }
+        try t.expectError(error.Busy, cursor.offer(0.25, 4));
+        try t.expectEqual(@as(u64, 0), cursor.steps);
+        sink.fail_at = null;
+        _ = try cursor.pump(&clip, .loop, .{}, &sink);
+        try cursor.offer(0.25, 4);
+        _ = try cursor.pump(&clip, .loop, .{}, &sink);
+        try t.expectEqual(@as(u8, 1), cursor.frame);
+    }
+}
+
+test "fps changes preserve elapsed seconds" {
+    var cursor: a.MarkerCursor = .{};
+    var sink: Sink = .{};
+    defer sink.deinit();
+    try cursor.offer(0.125, 4);
+    _ = try cursor.pump(&clip, .loop, .{}, &sink);
+    try cursor.offer(0.001, 8);
+    _ = try cursor.pump(&clip, .loop, .{}, &sink);
+    try t.expectEqual(@as(u8, 1), cursor.frame);
+    try t.expectApproxEqAbs(@as(f64, 0.001), cursor.remainder_seconds, 0.000001);
 }

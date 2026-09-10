@@ -18,13 +18,13 @@ pub const sparse_set_mod = @import("sparse_set.zig");
 pub const query_mod = @import("query.zig");
 pub const command_buffer_mod = @import("command_buffer.zig");
 pub const hooks_types_mod = @import("hooks_types.zig");
-pub const anim_timing_mod = @import("anim_timing.zig");
-pub const animation_def_mod = @import("animation_def.zig");
-pub const animation_def_runtime_mod = @import("animation_def_runtime.zig");
-pub const animation_state_mod = @import("animation_state.zig");
-pub const sprite_animation_mod = @import("sprite_animation.zig");
+pub const anim_timing_mod = @import("animation").anim_timing_mod;
+pub const animation_def_mod = @import("animation").animation_def_mod;
+pub const animation_def_runtime_mod = @import("animation").animation_def_runtime_mod;
+pub const animation_state_mod = @import("animation").animation_state_mod;
+pub const sprite_animation_mod = @import("animation").sprite_animation_mod;
 pub const sprite_animation_tick_mod = @import("sprite_animation_tick.zig");
-pub const sprite_by_field_mod = @import("sprite_by_field.zig");
+pub const sprite_by_field_mod = @import("animation").sprite_by_field_mod;
 pub const sprite_by_field_tick_mod = @import("sprite_by_field_tick.zig");
 pub const atlas_mod = @import("atlas.zig");
 pub const assets_mod = @import("assets/mod.zig");
@@ -849,7 +849,7 @@ pub const RuntimeAnimDefs = animation_def_runtime_mod.RuntimeAnimDefs;
 pub const AnimFrameEntry = animation_def_mod.FrameEntry;
 // Per-frame animation events (#670): marker/clip-end/loop-end payloads +
 // the entity-less `PendingBuf` the pure advance methods append to.
-pub const animation_events_mod = @import("animation_events.zig");
+pub const animation_events_mod = @import("animation").animation_events_mod;
 pub const AnimMarkerHit = animation_events_mod.AnimMarkerHit;
 pub const AnimClipEnd = animation_events_mod.AnimClipEnd;
 pub const AnimLoopEnd = animation_events_mod.AnimLoopEnd;
@@ -861,6 +861,8 @@ pub const animation = @import("animation");
 pub const SpriteAnimation = sprite_animation_mod.SpriteAnimation;
 pub const SpriteAnimationMode = sprite_animation_mod.AnimationMode; // deprecated alias of BoundaryMode
 pub const spriteAnimationTick = sprite_animation_tick_mod.tick;
+/// Advance one marked player with bounded event delivery; dt is already scaled.
+pub const advanceNamedAnimation = @import("named_animation_tick.zig").advance;
 pub const SpriteByField = sprite_by_field_mod.SpriteByField;
 pub const SpriteByFieldSource = sprite_by_field_mod.SpriteByFieldSource;
 pub const spriteByFieldTick = sprite_by_field_tick_mod.tick;

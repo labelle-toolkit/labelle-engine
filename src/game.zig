@@ -68,7 +68,7 @@ const misc_mixin = @import("game/misc_mixin.zig");
 pub const ScreenSize = misc_mixin.ScreenSize;
 
 const animation_runtime_mixin = @import("game/animation_runtime_mixin.zig");
-const animation_def_runtime = @import("animation_def_runtime.zig");
+const animation_def_runtime = @import("animation").animation_def_runtime_mod;
 const prefab_runtime_mixin = @import("game/prefab_runtime_mixin.zig");
 const roster_mod = @import("game/roster.zig");
 const game_init_mod = @import("game/game_init.zig");

@@ -1,6 +1,6 @@
 const std = @import("std");
 const animation = @import("animation");
-const SpriteAnimation = @import("sprite_animation.zig").SpriteAnimation;
+const SpriteAnimation = @import("animation").sprite_animation_mod.SpriteAnimation;
 
 /// Named clips stall their animation clock under backpressure. Accepted beats
 /// stay in the cursor; new wall time is not accumulated while a batch is still
@@ -18,7 +18,8 @@ pub fn advance(game: anytype, entity: anytype, anim: *SpriteAnimation, dt: f32) 
     var budget: animation.MarkerCursor.Budget = .{};
     // Pause freezes traversal, including deferred beats. A cue for a frame
     // already entered may still finish its queue handoff while paused.
-    if (dt <= 0 or !std.math.isFinite(dt) or anim.fps <= 0 or !std.math.isFinite(anim.fps)) budget.frames = 0;
+    const running = dt > 0 and std.math.isFinite(dt) and anim.fps > 0 and std.math.isFinite(anim.fps);
+    if (!running) budget.frames = 0;
     // First finish any older batch, including initial frame zero. Do not
     // replenish budgets between the old and new portions of this update.
     const previous = anim.marker_cursor.pump(&clip, mode, budget, &sink) catch |err| {
@@ -31,7 +32,7 @@ pub fn advance(game: anytype, entity: anytype, anim: *SpriteAnimation, dt: f32) 
     }
     budget.frames -= previous.frames;
     budget.events -= previous.events;
-    if (dt > 0 and std.math.isFinite(dt) and anim.fps > 0 and std.math.isFinite(anim.fps)) {
+    if (running) {
         anim.marker_cursor.offer(dt, anim.fps) catch |err| {
             stalled(game, anim, err);
             return syncState(anim, old_frame);
@@ -54,7 +55,7 @@ fn syncState(anim: *SpriteAnimation, old: u8) bool {
     anim.forward = anim.marker_cursor.forward;
     anim.repetition = @intCast(@min(anim.marker_cursor.repetition, std.math.maxInt(u16)));
     anim.finished_emitted = anim.marker_cursor.completed;
-    anim.timer = if (anim.fps > 0 and anim.marker_cursor.steps == 0) @floatCast(anim.marker_cursor.fraction / anim.fps) else 0;
+    anim.timer = @floatCast(anim.marker_cursor.remainder_seconds);
     return anim.frame != old;
 }
 
@@ -85,10 +86,10 @@ fn Sink(comptime G: type) type {
                     } });
                 },
                 .complete => if (comptime G.engineEventWanted("engine__anim_complete")) {
-                    try self.game.tryEmit(.{ .engine__anim_complete = .{ .entity = @intCast(self.entity) } });
+                    try self.game.tryEmit(.{ .engine__anim_complete = .{ .entity = std.math.cast(u32, self.entity) orelse std.math.maxInt(u32) } });
                 },
                 .loop => if (comptime G.engineEventWanted("engine__anim_loop")) {
-                    try self.game.tryEmit(.{ .engine__anim_loop = .{ .entity = @intCast(self.entity), .repetition = @intCast(@min(event.repetition, std.math.maxInt(u16))) } });
+                    try self.game.tryEmit(.{ .engine__anim_loop = .{ .entity = std.math.cast(u32, self.entity) orelse std.math.maxInt(u32), .repetition = @intCast(@min(event.repetition, std.math.maxInt(u16))) } });
                 },
             }
         }

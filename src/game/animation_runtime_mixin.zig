@@ -40,7 +40,7 @@
 /// `AnimDefSource` seam. Games that don't are still refreshed in place,
 /// but revert to comptime numbers on their next clip switch.
 const std = @import("std");
-const animation_def_runtime = @import("../animation_def_runtime.zig");
+const animation_def_runtime = @import("animation").animation_def_runtime_mod;
 
 /// Returns the animation-runtime mixin for a given Game type.
 pub fn Mixin(comptime Game: type) type {
@@ -57,7 +57,7 @@ pub fn Mixin(comptime Game: type) type {
             if (comptime !Game.ComponentRegistry.has("SpriteAnimation")) return false;
             const entity = std.math.cast(Game.EntityType, event.entity) orelse return false;
             if (!self.ecs_backend.entityExists(entity)) return false;
-            const anim = self.ecs_backend.getComponent(entity, @import("../sprite_animation.zig").SpriteAnimation) orelse return false;
+            const anim = self.ecs_backend.getComponent(entity, @import("animation").sprite_animation_mod.SpriteAnimation) orelse return false;
             return event.target_id != 0 and anim.marker_target_id == event.target_id;
         }
         /// Register a shared JSONC definition before loading scenes/prefabs.
@@ -71,11 +71,11 @@ pub fn Mixin(comptime Game: type) type {
 
         /// Bind a freshly deserialized component. Inline definitions retain
         /// their existing behavior. This does not require resident atlases.
-        pub fn bindSpriteAnimation(self: *Game, anim: *@import("../sprite_animation.zig").SpriteAnimation) !void {
+        pub fn bindSpriteAnimation(self: *Game, anim: *@import("animation").sprite_animation_mod.SpriteAnimation) !void {
             // Replacing an unfinished cursor would erase a crossing whose
             // enqueue failed. Drain it first; the supported select API below
             // checks before changing the old clip or its borrowed frame table.
-            if (anim.markers.len != 0 and anim.marker_cursor.pending()) return error.PendingAnimationMarkers;
+            if ((Game.engineEventWanted("engine__anim_marker") or Game.engineEventWanted("engine__anim_complete") or Game.engineEventWanted("engine__anim_loop")) and anim.markers.len != 0 and anim.marker_cursor.pending()) return error.PendingAnimationMarkers;
             if (anim.definition.len == 0) {
                 if (anim.markers.len != 0) return error.MarkerDefinitionRequired;
                 if (anim.clip.len != 0) return error.AnimationDefinitionRequired;
@@ -105,7 +105,7 @@ pub fn Mixin(comptime Game: type) type {
 
         /// Select/restart a shared clip atomically. A retained crossing applies
         /// backpressure to replacement too; on error the old player is intact.
-        pub fn selectSpriteAnimation(self: *Game, anim: *@import("../sprite_animation.zig").SpriteAnimation, definition: []const u8, clip: []const u8) !void {
+        pub fn selectSpriteAnimation(self: *Game, anim: *@import("animation").sprite_animation_mod.SpriteAnimation, definition: []const u8, clip: []const u8) !void {
             var next = anim.*;
             next.definition = definition;
             next.clip = clip;
@@ -116,7 +116,7 @@ pub fn Mixin(comptime Game: type) type {
 
         /// Call only after the clip's atlases are resident. The automatic
         /// atlas resolver does this after the current scene's manifest gate.
-        pub fn validateSpriteAnimation(self: *Game, anim: *const @import("../sprite_animation.zig").SpriteAnimation) !void {
+        pub fn validateSpriteAnimation(self: *Game, anim: *const @import("animation").sprite_animation_mod.SpriteAnimation) !void {
             for (anim.frames, 0..) |key, index| {
                 if (!hasResidentFrame(self, key)) {
                     self.log.err("animation '{s}', clip '{s}', frame {d}: atlas key '{s}' not found", .{ anim.definition, anim.clip, index, key });
@@ -153,7 +153,7 @@ pub fn Mixin(comptime Game: type) type {
         pub fn validateSceneSpriteAnimations(self: *Game) void {
             const manifest = sceneManifest(self) orelse return;
             if (!self.assets.allReady(manifest)) return;
-            const Animation = @import("../sprite_animation.zig").SpriteAnimation;
+            const Animation = @import("animation").sprite_animation_mod.SpriteAnimation;
             if (comptime Game.ComponentRegistry.has("SpriteAnimation") and Game.ComponentRegistry.getType("SpriteAnimation") == Animation) {
                 var view = self.ecs_backend.view(.{Animation}, .{});
                 defer view.deinit();

@@ -8,12 +8,19 @@ cd animation
 zig build test --summary all
 ```
 
-This package owns shared JSONC frame/marker definitions, a resumable marker
-cursor, and a session-owned library.
-The engine binds them to its existing SpriteAnimation player; the existing
-AnimationDef / `.zon` path remains supported. The engine adapter delivers named markers through its fallible event queue.
-Consolidating the remaining AnimationDef playback, trigger commands, persistence
-and clock migration remain subsequent stages.
+This package owns JSONC definitions and named markers, the legacy ZON
+AnimationDef and RuntimeAnimationDef paths, AnimationState, SpriteAnimation,
+SpriteByField, timing vocabulary, and event buffers. It depends on JSONC and
+labelle-core's save metadata, but not the engine, renderer, or a concrete ECS.
+
+All animation tests live in `animation/test/`, including engine adapter tests.
+From the engine root, run `zig build test-animation-legacy --summary all` to
+include those adapters; the ordinary `zig build test` still runs them.
+The package's own `zig build test` runs its independent authoring/playback tests.
+
+The engine preserves its public animation exports. ECS ticks, prefab binding,
+and hook delivery stay in engine `src/` because they integrate game services.
+Trigger commands, persistence and clock migration remain subsequent stages.
 
 ## Initial schema
 

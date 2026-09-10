@@ -1,6 +1,6 @@
 /// RuntimeAnimationDef — heap-allocated mirror of `AnimationDef` (#672).
 ///
-/// The comptime `AnimationDef` (src/animation_def.zig) bakes every clip
+/// The comptime `AnimationDef` (animation/src/animation_def.zig) bakes every clip
 /// enum, `ClipMeta`, and sprite-name string into the binary — changing a
 /// frame count or speed needs a full recompile. This module parses the
 /// same `.zon` schema at RUNTIME into heap tables so a preview/editor
@@ -26,7 +26,6 @@
 /// owns the `std.Io` instance and the ECS iteration (see `ReloadWatcher`
 /// doc for the host loop shape). This keeps the engine module free of the
 /// 0.16 `std.Io` plumbing and its tests free of the filesystem.
-
 const std = @import("std");
 const animation_def = @import("animation_def.zig");
 

@@ -317,6 +317,7 @@ test "pause freezes deferred beats and resumes at current speed" {
     engine.spriteAnimationTick(&game, 100);
     const anim = game.ecs_backend.getComponent(e, engine.SpriteAnimation).?;
     try std.testing.expect(anim.marker_cursor.steps > 0);
+    try std.testing.expect(anim.marker_stalled);
     const frame = anim.frame;
     const steps = anim.marker_cursor.steps;
     anim.speed = 0;
@@ -341,4 +342,111 @@ test "a hook can reset the world and later queued markers cannot hit its replace
     try std.testing.expectEqual(@as(usize, 1), receiver.count);
     try std.testing.expectEqualStrings("start", receiver.hits[0].marker);
     try std.testing.expect(!game.isAnimationMarkerTargetAlive(receiver.hits[0]));
+}
+
+test "unused marker metadata retains eventless large delta playback and selection" {
+    var game = Game.init(std.testing.allocator);
+    defer game.deinit();
+    try game.loadAnimationJsoncSource("prop", marked_source);
+    const e = game.createEntity();
+    var anim = engine.SpriteAnimation{ .definition = "prop", .clip = "walk", .fps = 4 };
+    try game.bindSpriteAnimation(&anim);
+    var plain = engine.SpriteAnimation{ .frames = anim.frames, .fps = 4 };
+    game.addComponent(e, anim);
+    game.addComponent(e, Game.SpriteComp{ .sprite_name = "old" });
+    _ = plain.advance(100);
+    engine.spriteAnimationTick(&game, 100);
+    const actual = game.ecs_backend.getComponent(e, engine.SpriteAnimation).?;
+    try std.testing.expectEqual(plain.frame, actual.frame);
+    try std.testing.expectEqual(@as(u64, 0), actual.marker_cursor.steps);
+    try game.selectSpriteAnimation(actual, "prop", "walk");
+}
+
+test "marked player retains elapsed seconds across fps changes and pause" {
+    var game = MarkerGame.init(std.testing.allocator);
+    defer game.deinit();
+    try game.loadAnimationJsoncSource("prop", marked_source);
+    const e = try markerEntity(&game);
+    engine.spriteAnimationTick(&game, 0.125);
+    const anim = game.ecs_backend.getComponent(e, engine.SpriteAnimation).?;
+    anim.fps = 0;
+    engine.spriteAnimationTick(&game, 1);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.125), anim.timer, 0.000001);
+    anim.fps = 8;
+    engine.spriteAnimationTick(&game, 0.001);
+    try std.testing.expectEqual(@as(u8, 1), anim.frame);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.001), anim.timer, 0.000001);
+}
+
+test "prefab refresh preserves pending crossings and queued target identity" {
+    var game = MarkerGame.init(std.testing.allocator);
+    defer game.deinit();
+    var receiver: MarkerReceiver = .{};
+    var hooks = MarkerHooks{ .receivers = .{&receiver} };
+    game.setHooks(&hooks);
+    try game.loadAnimationJsoncSource("prop", marked_source);
+    const B = engine.JsoncSceneBridge(MarkerGame, Components);
+    const prefab =
+        \\{"components":{"Sprite":{"sprite_name":"a"},"SpriteAnimation":{"definition":"prop","clip":"walk","fps":4}}}
+    ;
+    try B.addEmbeddedPrefab(&game, "propeller", prefab, "prefabs");
+    try B.loadSceneFromSource(&game, "{\"children\":[]}", "prefabs");
+    const e = game.spawnPrefab("propeller", .{ .x = 0, .y = 0 }).?;
+    engine.spriteAnimationTick(&game, 100);
+    const before = game.ecs_backend.getComponent(e, engine.SpriteAnimation).?.*;
+    try std.testing.expect(before.marker_cursor.steps > 0);
+    try game.reloadPrefabSource("propeller", prefab);
+    const after = game.ecs_backend.getComponent(e, engine.SpriteAnimation).?;
+    try std.testing.expectEqual(before.marker_cursor.steps, after.marker_cursor.steps);
+    try std.testing.expectEqual(before.marker_playback_id, after.marker_playback_id);
+    while (after.marker_cursor.pending()) {
+        game.dispatchEvents();
+        engine.spriteAnimationTick(&game, 0.00001);
+    }
+    // Retrying a now-unblocked refresh preserves already queued targets.
+    const queued_playback = after.marker_playback_id;
+    try game.reloadPrefabSource("propeller", prefab);
+    try std.testing.expectEqual(before.marker_target_id, after.marker_target_id);
+    try std.testing.expect(queued_playback != after.marker_playback_id);
+    game.dispatchEvents();
+    try std.testing.expectEqual(@as(usize, 268), receiver.count);
+}
+
+test "named lifecycle events saturate wide entity IDs" {
+    const WideGame = struct {
+        const Payload = union(enum) {
+            engine__anim_complete: engine.Events.anim_complete,
+            engine__anim_loop: engine.Events.anim_loop,
+        };
+        const Log = struct {
+            pub fn warn(_: @This(), comptime _: []const u8, _: anytype) void {}
+        };
+        log: Log = .{},
+        count: usize = 0,
+        id: u32 = 0,
+        pub fn nextAnimationIdentity(_: *@This()) u64 {
+            return 1;
+        }
+        pub fn engineEventWanted(comptime name: []const u8) bool {
+            return !std.mem.eql(u8, name, "engine__anim_marker");
+        }
+        pub fn tryEmit(self: *@This(), event: Payload) !void {
+            self.id = switch (event) {
+                inline else => |value| value.entity,
+            };
+            self.count += 1;
+        }
+    };
+    inline for (.{ animation.BoundaryMode.once, animation.BoundaryMode.loop }) |mode| {
+        var game: WideGame = .{};
+        var anim = engine.SpriteAnimation{
+            .frames = &.{ "a", "b" },
+            .fps = 4,
+            .mode = mode,
+            .markers = &.{.{ .name = "start", .frame = 0 }},
+        };
+        _ = engine.advanceNamedAnimation(&game, std.math.maxInt(u64), &anim, 0.5);
+        try std.testing.expectEqual(@as(usize, 1), game.count);
+        try std.testing.expectEqual(std.math.maxInt(u32), game.id);
+    }
 }
