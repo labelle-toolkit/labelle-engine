@@ -45,6 +45,21 @@ const animation_def_runtime = @import("../animation_def_runtime.zig");
 /// Returns the animation-runtime mixin for a given Game type.
 pub fn Mixin(comptime Game: type) type {
     return struct {
+        pub fn nextAnimationIdentity(self: *Game) u64 {
+            self.animation_identity = std.math.add(u64, self.animation_identity, 1) catch
+                @panic("animation identity exhausted");
+            return self.animation_identity;
+        }
+
+        /// Recheck at delivery and in gameplay handlers before touching the
+        /// target. A rebind preserves target identity but changes playback id.
+        pub fn isAnimationMarkerTargetAlive(self: *Game, event: anytype) bool {
+            if (comptime !Game.ComponentRegistry.has("SpriteAnimation")) return false;
+            const entity = std.math.cast(Game.EntityType, event.entity) orelse return false;
+            if (!self.ecs_backend.entityExists(entity)) return false;
+            const anim = self.ecs_backend.getComponent(entity, @import("../sprite_animation.zig").SpriteAnimation) orelse return false;
+            return event.target_id != 0 and anim.marker_target_id == event.target_id;
+        }
         /// Register a shared JSONC definition before loading scenes/prefabs.
         /// The game owns both strings and frame tables until deinit.
         pub fn loadAnimationJsoncSource(self: *Game, name: []const u8, source: []const u8) !void {
@@ -57,7 +72,12 @@ pub fn Mixin(comptime Game: type) type {
         /// Bind a freshly deserialized component. Inline definitions retain
         /// their existing behavior. This does not require resident atlases.
         pub fn bindSpriteAnimation(self: *Game, anim: *@import("../sprite_animation.zig").SpriteAnimation) !void {
+            // Replacing an unfinished cursor would erase a crossing whose
+            // enqueue failed. Drain it first; the supported select API below
+            // checks before changing the old clip or its borrowed frame table.
+            if (anim.markers.len != 0 and anim.marker_cursor.pending()) return error.PendingAnimationMarkers;
             if (anim.definition.len == 0) {
+                if (anim.markers.len != 0) return error.MarkerDefinitionRequired;
                 if (anim.clip.len != 0) return error.AnimationDefinitionRequired;
                 if (anim.frames.len == 0 or anim.frames.len > 255) return error.InvalidAnimationFrames;
                 return;
@@ -65,7 +85,15 @@ pub fn Mixin(comptime Game: type) type {
             if (anim.frames.len != 0) return error.AmbiguousAnimationFrames;
             const def = self.animation_library.get(anim.definition) orelse return error.UnknownAnimationDefinition;
             const clip = def.find(anim.clip) orelse return error.UnknownAnimationClip;
+            // Queued marker strings must survive prefab arenas and rebinds.
+            anim.definition = self.animation_library.definitions.getEntry(anim.definition).?.key_ptr.*;
+            anim.clip = clip.name;
             anim.frames = clip.frames;
+            anim.markers = clip.markers;
+            anim.marker_cursor = .{};
+            if (anim.marker_target_id == 0) anim.marker_target_id = self.nextAnimationIdentity();
+            anim.marker_playback_id = self.nextAnimationIdentity();
+            anim.marker_stalled = false;
             anim.frame = 0;
             anim.timer = 0;
             anim.forward = true;
@@ -73,6 +101,17 @@ pub fn Mixin(comptime Game: type) type {
             anim.repetition = 0;
             anim.definition_dirty = true;
             anim.definition_validated = false;
+        }
+
+        /// Select/restart a shared clip atomically. A retained crossing applies
+        /// backpressure to replacement too; on error the old player is intact.
+        pub fn selectSpriteAnimation(self: *Game, anim: *@import("../sprite_animation.zig").SpriteAnimation, definition: []const u8, clip: []const u8) !void {
+            var next = anim.*;
+            next.definition = definition;
+            next.clip = clip;
+            next.frames = &.{};
+            try self.bindSpriteAnimation(&next);
+            anim.* = next;
         }
 
         /// Call only after the clip's atlases are resident. The automatic

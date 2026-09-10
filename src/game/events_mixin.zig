@@ -69,6 +69,11 @@ pub fn Mixin(comptime Game: type) type {
         /// delivery (`.drain`) from immediate delivery (`.emit_sync`,
         /// `.emit_hook`) — the acceptance criterion #858 leads with.
         inline fn deliver(self: *Game, payload: Payload, comptime source: hook_trace.Source) void {
+            // Marker payloads can outlive the entity between tick and drain.
+            // A generation token also protects id reuse and world switches.
+            if (comptime @hasField(Payload, "engine__anim_marker")) {
+                if (payload == .engine__anim_marker and !self.isAnimationMarkerTargetAlive(payload.engine__anim_marker)) return;
+            }
             if (comptime has_hooks) {
                 if (self.hooks) |h| {
                     if (comptime tracing) {

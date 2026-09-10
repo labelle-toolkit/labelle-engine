@@ -167,3 +167,155 @@ test "Game.tick synchronizes newly bound frame zero under both pause controls" {
         try std.testing.expect(!stored.definition_dirty);
     }
 }
+
+const MarkerEvents = union(enum) {
+    engine__anim_marker: engine.Events.anim_marker,
+    engine__anim_complete: engine.Events.anim_complete,
+    engine__anim_loop: engine.Events.anim_loop,
+};
+const MarkerReceiver = struct {
+    hits: [1024]engine.Events.anim_marker = undefined,
+    count: usize = 0,
+    pub fn engine__anim_marker(self: *@This(), event: engine.Events.anim_marker) void {
+        self.hits[self.count] = event;
+        self.count += 1;
+    }
+};
+const MarkerPayload = core.MergeHookPayloads(.{ engine.HookPayload(u32), MarkerEvents });
+const MarkerHooks = core.MergeHooks(MarkerPayload, .{*MarkerReceiver});
+const MarkerGame = engine.GameConfig(core.StubRender(Ecs.Entity), Ecs, engine.StubInput, engine.StubAudio, engine.StubVideo, engine.StubGui, *MarkerHooks, core.StubLogSink, Components, &.{}, MarkerEvents);
+const marked_source = "{\"version\":1,\"clips\":{\"walk\":{\"frames\":[\"a\",\"b\",\"c\"],\"markers\":[{\"name\":\"start\",\"frame\":0},{\"name\":\"footstep\",\"frame\":1}]}}}";
+
+fn markerEntity(game: *MarkerGame) !u32 {
+    const e = game.createEntity();
+    var anim = engine.SpriteAnimation{ .definition = "prop", .clip = "walk", .fps = 4 };
+    try game.bindSpriteAnimation(&anim);
+    game.addComponent(e, anim);
+    game.addComponent(e, MarkerGame.SpriteComp{ .sprite_name = "old" });
+    return e;
+}
+
+test "named markers deliver typed payloads at drain with independent playback identities" {
+    var game = MarkerGame.init(std.testing.allocator);
+    defer game.deinit();
+    var receiver: MarkerReceiver = .{};
+    var hooks = MarkerHooks{ .receivers = .{&receiver} };
+    game.setHooks(&hooks);
+    try game.loadAnimationJsoncSource("prop", marked_source);
+    const a = try markerEntity(&game);
+    const b = try markerEntity(&game);
+    game.ecs_backend.getComponent(b, engine.SpriteAnimation).?.speed = 0;
+    engine.spriteAnimationTick(&game, 0.5);
+    try std.testing.expectEqual(@as(usize, 0), receiver.count);
+    game.dispatchEvents();
+    try std.testing.expectEqual(@as(usize, 3), receiver.count);
+    var a_hits: usize = 0;
+    for (receiver.hits[0..receiver.count]) |hit| {
+        try std.testing.expect(game.isAnimationMarkerTargetAlive(hit));
+        try std.testing.expectEqualStrings("prop", hit.definition);
+        try std.testing.expectEqualStrings("walk", hit.clip);
+        if (hit.entity == a) a_hits += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 2), a_hits);
+    const first = game.ecs_backend.getComponent(a, engine.SpriteAnimation).?;
+    const second = game.ecs_backend.getComponent(b, engine.SpriteAnimation).?;
+    try std.testing.expect(first.marker_playback_id != second.marker_playback_id);
+    try std.testing.expect(first.marker_target_id != second.marker_target_id);
+    try std.testing.expectEqual(@as(u8, 0), second.frame);
+}
+
+test "queued markers cannot target replacement entities after ECS reset" {
+    var game = MarkerGame.init(std.testing.allocator);
+    defer game.deinit();
+    var receiver: MarkerReceiver = .{};
+    var hooks = MarkerHooks{ .receivers = .{&receiver} };
+    game.setHooks(&hooks);
+    try game.loadAnimationJsoncSource("prop", marked_source);
+    _ = try markerEntity(&game);
+    engine.spriteAnimationTick(&game, 0.25);
+    const old = game.event_buffer.items[0].engine__anim_marker;
+    game.resetEcsBackend();
+    _ = try markerEntity(&game);
+    try std.testing.expect(!game.isAnimationMarkerTargetAlive(old));
+    game.dispatchEvents();
+    try std.testing.expectEqual(@as(usize, 0), receiver.count);
+}
+
+test "rebind keeps crossed markers original playback identity and owned names" {
+    var game = MarkerGame.init(std.testing.allocator);
+    defer game.deinit();
+    var receiver: MarkerReceiver = .{};
+    var hooks = MarkerHooks{ .receivers = .{&receiver} };
+    game.setHooks(&hooks);
+    try game.loadAnimationJsoncSource("prop", marked_source);
+    const e = try markerEntity(&game);
+    engine.spriteAnimationTick(&game, 0.25);
+    const anim = game.ecs_backend.getComponent(e, engine.SpriteAnimation).?;
+    const old_playback = anim.marker_playback_id;
+    try game.selectSpriteAnimation(anim, "prop", "walk");
+    try std.testing.expect(anim.marker_playback_id != old_playback);
+    game.dispatchEvents();
+    try std.testing.expectEqual(@as(usize, 2), receiver.count);
+    for (receiver.hits[0..receiver.count]) |hit| {
+        try std.testing.expectEqual(old_playback, hit.playback_id);
+        try std.testing.expect(game.isAnimationMarkerTargetAlive(hit));
+    }
+}
+
+test "failed real event enqueue retains marker until a later tick and drain" {
+    var game = MarkerGame.init(std.testing.allocator);
+    defer game.deinit();
+    var receiver: MarkerReceiver = .{};
+    var hooks = MarkerHooks{ .receivers = .{&receiver} };
+    game.setHooks(&hooks);
+    try game.loadAnimationJsoncSource("prop", marked_source);
+    const e = try markerEntity(&game);
+    var failing = std.testing.FailingAllocator.init(std.testing.allocator, .{ .fail_index = 0 });
+    game.allocator = failing.allocator();
+    engine.spriteAnimationTick(&game, 0.25);
+    game.allocator = std.testing.allocator;
+    const anim = game.ecs_backend.getComponent(e, engine.SpriteAnimation).?;
+    try std.testing.expect(anim.marker_stalled);
+    try std.testing.expectEqual(@as(usize, 0), game.event_buffer.items.len);
+    engine.spriteAnimationTick(&game, 0);
+    game.dispatchEvents();
+    try std.testing.expectEqual(@as(usize, 1), receiver.count);
+    try std.testing.expectEqual(@as(u64, 0), receiver.hits[0].sequence);
+    try std.testing.expectEqualStrings("start", receiver.hits[0].marker);
+}
+
+test "clip replacement refuses undelivered crossings without mutating playback" {
+    var game = MarkerGame.init(std.testing.allocator);
+    defer game.deinit();
+    try game.loadAnimationJsoncSource("prop", marked_source);
+    const e = try markerEntity(&game);
+    const anim = game.ecs_backend.getComponent(e, engine.SpriteAnimation).?;
+    const previous_id = anim.marker_playback_id;
+    try std.testing.expectError(error.PendingAnimationMarkers, game.selectSpriteAnimation(anim, "missing", "walk"));
+    try std.testing.expectEqual(previous_id, anim.marker_playback_id);
+    try std.testing.expectEqualStrings("prop", anim.definition);
+    engine.spriteAnimationTick(&game, 0);
+    try std.testing.expectError(error.UnknownAnimationDefinition, game.selectSpriteAnimation(anim, "missing", "walk"));
+    try std.testing.expectEqual(previous_id, anim.marker_playback_id);
+    try game.selectSpriteAnimation(anim, "prop", "walk");
+    try std.testing.expect(anim.marker_playback_id != previous_id);
+}
+
+test "pause freezes deferred beats and resumes at current speed" {
+    var game = MarkerGame.init(std.testing.allocator);
+    defer game.deinit();
+    try game.loadAnimationJsoncSource("prop", marked_source);
+    const e = try markerEntity(&game);
+    engine.spriteAnimationTick(&game, 100);
+    const anim = game.ecs_backend.getComponent(e, engine.SpriteAnimation).?;
+    try std.testing.expect(anim.marker_cursor.steps > 0);
+    const frame = anim.frame;
+    const steps = anim.marker_cursor.steps;
+    anim.speed = 0;
+    engine.spriteAnimationTick(&game, 1);
+    try std.testing.expectEqual(frame, anim.frame);
+    try std.testing.expectEqual(steps, anim.marker_cursor.steps);
+    anim.speed = 0.5;
+    engine.spriteAnimationTick(&game, 1);
+    try std.testing.expect(anim.marker_cursor.steps < steps);
+}

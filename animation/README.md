@@ -114,3 +114,5 @@ until game deinit. Scene reset/load creates fresh playback state from the prefab
 and reuses those definitions. Registering a name twice fails without changing
 the existing definition; live definition replacement is not implemented here.
 Pack-local discovery and marker/transition schemas remain separate work.
+
+Named marker authoring, traversal budgets and delivery limits: [MARKERS.md](MARKERS.md).

@@ -491,6 +491,23 @@ pub const Events = struct {
         frame: u8 = 0,
     };
 
+    /// Crossing-accurate named cue. Strings belong to the shared animation
+    /// library. target_id guards entity reuse; playback_id lets a gameplay
+    /// hook reject cues from an interrupted action. sequence is unique within
+    /// that playback. Recheck isAnimationMarkerTargetAlive before acting.
+    pub const anim_marker = struct {
+        entity: u64,
+        target_id: u64,
+        playback_id: u64,
+        sequence: u64,
+        definition: []const u8,
+        clip: []const u8,
+        marker: []const u8,
+        marker_index: u16,
+        frame: u8,
+        repetition: u64,
+    };
+
     /// Fired exactly once when a `.once` `SpriteAnimation` reaches its
     /// final frame. `.loop` / `.ping_pong` clips never emit this.
     pub const anim_complete = struct {

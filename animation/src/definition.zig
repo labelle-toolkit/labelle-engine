@@ -1,15 +1,16 @@
 const std = @import("std");
 const jsonc = @import("jsonc");
 const FrameRange = @import("frame_range.zig").FrameRange;
+const Marker = @import("marker.zig").Marker;
 
 pub const Clip = struct {
     name: []const u8,
     frames: []const []const u8,
+    markers: []const Marker = &.{},
 };
 
 /// Shared immutable authoring data. Playback state belongs to the entity.
-/// This first schema intentionally accepts only version and clip frame keys.
-/// Reject unsupported fields rather than pretending triggers/markers are live.
+/// Unsupported authoring fields fail rather than being silently ignored.
 pub const Definition = struct {
     arena: std.heap.ArenaAllocator,
     clips: []const Clip,
@@ -33,7 +34,7 @@ pub const Definition = struct {
             if (entry.key.len == 0) return error.EmptyClipName;
             for (clips[0..i]) |prior| if (std.mem.eql(u8, prior.name, entry.key)) return error.DuplicateClip;
             const data = try object(entry.value);
-            try fields(data, &.{ "frames", "frames_pattern", "from", "to" });
+            try fields(data, &.{ "frames", "frames_pattern", "from", "to", "markers" });
             var frames: []const []const u8 = undefined;
             if (data.get("frames")) |explicit| {
                 if (data.get("frames_pattern") != null or data.get("from") != null or data.get("to") != null)
@@ -61,7 +62,8 @@ pub const Definition = struct {
                     .to = try bound(data, "to"),
                 }).expand(a);
             }
-            clips[i] = .{ .name = entry.key, .frames = frames };
+            const markers = if (data.get("markers")) |v| try parseMarkers(a, v, frames.len) else &.{};
+            clips[i] = .{ .name = entry.key, .frames = frames, .markers = markers };
         }
         return .{ .arena = arena, .clips = clips };
     }
@@ -90,6 +92,28 @@ pub const Definition = struct {
         return null;
     }
 };
+
+fn parseMarkers(a: std.mem.Allocator, value: jsonc.Value, frame_count: usize) ![]const Marker {
+    const list = switch (value) {
+        .array => |v| v.items,
+        else => return error.ExpectedArray,
+    };
+    if (list.len > 256) return error.TooManyMarkers;
+    const markers = try a.alloc(Marker, list.len);
+    for (list, 0..) |item, i| {
+        const data = try object(item);
+        try fields(data, &.{ "name", "frame" });
+        const name = data.getString("name") orelse return error.InvalidMarkerName;
+        if (name.len == 0) return error.InvalidMarkerName;
+        const frame = data.getInteger("frame") orelse return error.InvalidMarkerFrame;
+        if (frame < 0 or frame >= frame_count) return error.InvalidMarkerFrame;
+        // A name identifies one authored marker within a clip. Names may
+        // be reused in other clips; occurrence identity includes the clip.
+        for (markers[0..i]) |prior| if (std.mem.eql(u8, name, prior.name)) return error.DuplicateMarker;
+        markers[i] = .{ .name = name, .frame = @intCast(frame) };
+    }
+    return markers;
+}
 
 fn object(value: jsonc.Value) !jsonc.Value.Object {
     return switch (value) {
