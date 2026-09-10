@@ -1,0 +1,8 @@
+.{
+    .fingerprint = 0x8d5284dc744277a8,
+    .name = .animation,
+    .version = "0.1.0",
+    .minimum_zig_version = "0.16.0",
+    .dependencies = .{ .jsonc = .{ .path = "../jsonc" } },
+    .paths = .{ "build.zig", "build.zig.zon", "src", "test", "README.md" },
+}

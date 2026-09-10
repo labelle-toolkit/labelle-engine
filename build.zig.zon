@@ -27,6 +27,7 @@
         .jsonc = .{
             .path = "jsonc",
         },
+        .animation = .{ .path = "animation" },
         .audio_backend = .{
             .path = "audio_backend",
         },
@@ -90,6 +91,7 @@
         "src",
         "scene",
         "jsonc",
+        "animation",
         "codegen",
         "audio_backend",
         "spec",

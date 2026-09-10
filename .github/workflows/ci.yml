@@ -42,6 +42,13 @@ jobs:
       - name: Build library
         run: zig build
 
+      - name: Test standalone animation package
+        working-directory: animation
+        run: zig build test --summary all
+
+      - name: Test definition playback compatibility
+        run: zig build test-animation --summary all
+
       # Full test suite on Linux (and macOS once that lands as a
       # separate matrix entry — out of scope here).
       - name: Run tests (Linux)

@@ -66,6 +66,22 @@ pub fn build(b: *std.Build) void {
 
     const test_step = b.step("test", "Run engine tests");
 
+    // The definition package remains independent. Verify its frame slices
+    // against the existing engine player before migrating playback ownership.
+    const animation_module = b.dependency("animation", .{ .target = target, .optimize = optimize }).module("animation");
+    const animation_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("test/animation_package_test.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "engine", .module = engine_module },
+            .{ .name = "animation", .module = animation_module },
+        },
+    }) });
+    const run_animation_tests = b.addRunArtifact(animation_tests);
+    test_step.dependOn(&run_animation_tests.step);
+    b.step("test-animation", "Test definition-to-engine playback compatibility").dependOn(&run_animation_tests.step);
+
     // Test files in test/ directory
     const test_files = [_][]const u8{
         "test/root_test.zig",
