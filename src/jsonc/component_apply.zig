@@ -198,7 +198,16 @@ pub fn ComponentApply(comptime GameType: type, comptime Components: type) type {
                 if (std.mem.eql(u8, name, comp_name)) {
                     const T = Components.getType(comp_name);
                     if (deserializer.deserialize(T, filtered, comp_alloc)) |component| {
-                        game.addComponent(entity, component);
+                        if (comptime T == @import("../sprite_animation.zig").SpriteAnimation) {
+                            var bound = component;
+                            game.bindSpriteAnimation(&bound) catch |err| {
+                                game.log.err("animation '{s}', clip '{s}': {s}", .{ bound.definition, bound.clip, @errorName(err) });
+                                return;
+                            };
+                            game.addComponent(entity, bound);
+                        } else {
+                            game.addComponent(entity, component);
+                        }
                     }
                     return;
                 }

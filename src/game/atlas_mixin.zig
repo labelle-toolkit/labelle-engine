@@ -964,6 +964,7 @@ pub fn Mixin(comptime Game: type) type {
         /// Only marks entities dirty on cache misses (sprite name or atlas version changed).
         pub fn resolveAtlasSprites(self: *Game) void {
             if (!has_atlas_sprite_fields) return;
+            self.validateSceneSpriteAnimations();
             if (self.atlas_manager.atlasCount() == 0) return;
 
             var v = self.ecs_backend.view(.{Sprite}, .{});

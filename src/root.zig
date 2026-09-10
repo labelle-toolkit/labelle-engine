@@ -840,6 +840,7 @@ pub const PendingAnimEvent = animation_events_mod.PendingAnimEvent;
 pub const AnimPendingBuf = animation_events_mod.PendingBuf;
 pub const AnimEventKind = animation_events_mod.PendingKind;
 pub const anim_pending_cap = animation_events_mod.max_pending;
+pub const animation = @import("animation");
 pub const SpriteAnimation = sprite_animation_mod.SpriteAnimation;
 pub const SpriteAnimationMode = sprite_animation_mod.AnimationMode; // deprecated alias of BoundaryMode
 pub const spriteAnimationTick = sprite_animation_tick_mod.tick;

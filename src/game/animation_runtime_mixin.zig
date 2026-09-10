@@ -45,6 +45,90 @@ const animation_def_runtime = @import("../animation_def_runtime.zig");
 /// Returns the animation-runtime mixin for a given Game type.
 pub fn Mixin(comptime Game: type) type {
     return struct {
+        /// Register a shared JSONC definition before loading scenes/prefabs.
+        /// The game owns both strings and frame tables until deinit.
+        pub fn loadAnimationJsoncSource(self: *Game, name: []const u8, source: []const u8) !void {
+            self.animation_library.load(name, source) catch |err| {
+                self.log.err("animation '{s}': {s}", .{ name, @errorName(err) });
+                return err;
+            };
+        }
+
+        /// Bind a freshly deserialized component. Inline definitions retain
+        /// their existing behavior. This does not require resident atlases.
+        pub fn bindSpriteAnimation(self: *Game, anim: *@import("../sprite_animation.zig").SpriteAnimation) !void {
+            if (anim.definition.len == 0) {
+                if (anim.clip.len != 0) return error.AnimationDefinitionRequired;
+                if (anim.frames.len == 0 or anim.frames.len > 255) return error.InvalidAnimationFrames;
+                return;
+            }
+            if (anim.frames.len != 0) return error.AmbiguousAnimationFrames;
+            const def = self.animation_library.get(anim.definition) orelse return error.UnknownAnimationDefinition;
+            const clip = def.find(anim.clip) orelse return error.UnknownAnimationClip;
+            anim.frames = clip.frames;
+            anim.frame = 0;
+            anim.timer = 0;
+            anim.forward = true;
+            anim.finished_emitted = false;
+            anim.repetition = 0;
+            anim.definition_dirty = true;
+            anim.definition_validated = false;
+        }
+
+        /// Call only after the clip's atlases are resident. The automatic
+        /// atlas resolver does this after the current scene's manifest gate.
+        pub fn validateSpriteAnimation(self: *Game, anim: *const @import("../sprite_animation.zig").SpriteAnimation) !void {
+            for (anim.frames, 0..) |key, index| {
+                if (!hasResidentFrame(self, key)) {
+                    self.log.err("animation '{s}', clip '{s}', frame {d}: atlas key '{s}' not found", .{ anim.definition, anim.clip, index, key });
+                    return error.MissingAnimationFrame;
+                }
+            }
+        }
+
+        fn sceneManifest(self: *Game) ?[]const []const u8 {
+            const name = self.current_scene_name orelse return null;
+            const entry = self.scenes.get(name) orelse return null;
+            return if (entry.assets.len == 0) null else entry.assets;
+        }
+
+        fn hasResidentFrame(self: *Game, key: []const u8) bool {
+            if (sceneManifest(self)) |manifest| {
+                for (manifest) |name| {
+                    const atlas = self.atlas_manager.getAtlas(name) orelse continue;
+                    if (atlas.isLoaded() and atlas.has(key)) return true;
+                }
+            } else {
+                // Imperative loading: the caller chooses when to validate,
+                // but pending metadata never counts as a resident frame.
+                var it = self.atlas_manager.atlases.valueIterator();
+                while (it.next()) |atlas| {
+                    if (atlas.isLoaded() and atlas.has(key)) return true;
+                }
+            }
+            return false;
+        }
+
+        /// Validate only when a real scene manifest has become resident.
+        /// Without one, the imperative caller owns the readiness boundary.
+        pub fn validateSceneSpriteAnimations(self: *Game) void {
+            const manifest = sceneManifest(self) orelse return;
+            if (!self.assets.allReady(manifest)) return;
+            const Animation = @import("../sprite_animation.zig").SpriteAnimation;
+            if (comptime Game.ComponentRegistry.has("SpriteAnimation") and Game.ComponentRegistry.getType("SpriteAnimation") == Animation) {
+                var view = self.ecs_backend.view(.{Animation}, .{});
+                defer view.deinit();
+                while (view.next()) |entity| {
+                    const anim = self.ecs_backend.getComponent(entity, Animation).?;
+                    if (anim.definition.len == 0 or anim.definition_validated) continue;
+                    self.validateSpriteAnimation(anim) catch {
+                        anim.speed = 0;
+                    };
+                    anim.definition_validated = true;
+                }
+            }
+        }
+
         /// Parse a `.zon` animation-def source and install it as the
         /// runtime override for `name` (the def's stem, `"worker"` for
         /// `animations/worker.zon`), then refresh every live component
