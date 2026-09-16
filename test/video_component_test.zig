@@ -29,6 +29,9 @@ const FakeVideo = struct {
     var fullscreen_n: usize = 0;
     var playing: bool = true; // toggled to simulate end-of-stream
     var replay_n: usize = 0;
+    /// The next N `openVideo` calls return 0 (failure), as a backend whose
+    /// decoder isn't ready — or can never open the clip — does.
+    var fail_opens: u32 = 0;
 
     fn reset() void {
         next_id = 1;
@@ -37,10 +40,15 @@ const FakeVideo = struct {
         fullscreen_n = 0;
         playing = true;
         replay_n = 0;
+        fail_opens = 0;
     }
 
     pub fn openVideo(_: []const u8) u32 {
         open_count += 1;
+        if (fail_opens > 0) {
+            fail_opens -= 1;
+            return 0;
+        }
         const id = next_id;
         next_id += 1;
         return id;
@@ -210,4 +218,53 @@ test "removeVideo: detaches the component" {
     game.renderVideos(0.016);
     // No new draw — the component is gone.
     try testing.expectEqual(@as(usize, 1), FakeVideo.draw_n);
+}
+
+test "renderVideos: a video that never opens gives up, finishes, and stops asking" {
+    FakeVideo.reset();
+    FakeVideo.fail_opens = std.math.maxInt(u32); // the backend can never open it
+    var game = TestGame.init(testing.allocator);
+    defer game.deinit();
+
+    const e = game.createEntity();
+    game.setPosition(e, .{ .x = 0, .y = 0 });
+    var v = core.VideoComponent.init("broken.mp4", 100, 100);
+    v.loop = false;
+    game.addVideo(e, v);
+
+    // Up to the limit the system keeps trying — a backend may just be warming up.
+    for (0..core.VIDEO_MAX_OPEN_ATTEMPTS - 1) |_| game.renderVideos(0.016);
+    const vc = game.getComponent(e, core.VideoComponent).?;
+    try testing.expect(!vc.finished);
+    try testing.expectEqual(@as(u32, core.VIDEO_MAX_OPEN_ATTEMPTS - 1), FakeVideo.open_count);
+
+    // The attempt that reaches the limit gives up: the clip is finished, so
+    // whatever waits on it (an intro handing off to the menu) is released.
+    game.renderVideos(0.016);
+    try testing.expect(vc.finished);
+    try testing.expectEqual(@as(u32, core.VIDEO_MAX_OPEN_ATTEMPTS), FakeVideo.open_count);
+
+    // And it never asks again — this is what stops a decoder being re-created
+    // every frame for the rest of the process (#874).
+    for (0..10) |_| game.renderVideos(0.016);
+    try testing.expectEqual(@as(u32, core.VIDEO_MAX_OPEN_ATTEMPTS), FakeVideo.open_count);
+    try testing.expectEqual(@as(usize, 0), FakeVideo.draw_n); // nothing was ever drawn
+}
+
+test "renderVideos: a transient open failure still plays" {
+    FakeVideo.reset();
+    FakeVideo.fail_opens = 3; // not ready for the first three frames
+    var game = TestGame.init(testing.allocator);
+    defer game.deinit();
+
+    const e = game.createEntity();
+    game.setPosition(e, .{ .x = 0, .y = 0 });
+    game.addVideo(e, core.VideoComponent.init("slow.mp4", 100, 100));
+
+    for (0..4) |_| game.renderVideos(0.016);
+
+    const vc = game.getComponent(e, core.VideoComponent).?;
+    try testing.expect(vc.handle != 0); // opened on the fourth try
+    try testing.expect(!vc.finished); // a retry that succeeded is not a failure
+    try testing.expectEqual(@as(usize, 1), FakeVideo.draw_n); // and it plays
 }
