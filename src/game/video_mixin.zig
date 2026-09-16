@@ -8,6 +8,7 @@
 ///     position — so a project authors *multiple videos in multiple places*
 ///     declaratively, like sprites.
 
+const std = @import("std");
 const core = @import("labelle-core");
 const VideoComponent = core.VideoComponent;
 
@@ -82,8 +83,41 @@ pub fn Mixin(comptime Game: type) type {
             while (v.next()) |entity| {
                 const vc = self.ecs_backend.getComponent(entity, VideoComponent) orelse continue;
                 if (vc.handle == 0) {
+                    // A video that could never be opened is already finished —
+                    // don't keep asking the backend (see the give-up below).
+                    if (vc.finished) continue;
                     vc.handle = Video.open(vc.path);
-                    if (vc.handle == 0) continue; // open failed; retry next frame
+                    if (vc.handle == 0) {
+                        // Opening legitimately fails for a frame or two while a
+                        // backend warms up (on Android the asset manager isn't
+                        // reachable until the activity is up), so retry — but
+                        // never forever. A device whose decoder cannot open the
+                        // clip at all would otherwise re-create a decoder every
+                        // frame while the component never finishes: a play-once
+                        // intro hangs the boot on a blank screen and nothing in
+                        // the log says why (a MediaTek tablet did exactly this —
+                        // 359 decoder creations in 21 s at 40 % CPU, #874).
+                        //
+                        // Giving up FINISHES the video: whatever waits on the
+                        // end of the clip has to be released whether it played
+                        // or never started, so the same `engine__video_finished`
+                        // fires and a play-once flow advances as it always does.
+                        // Looping videos finish here too — this is the one way a
+                        // loop ends, and it is the only honest signal left.
+                        vc.open_attempts +|= 1;
+                        if (vc.open_attempts >= core.VIDEO_MAX_OPEN_ATTEMPTS and !vc.finished) {
+                            std.log.warn(
+                                "video: giving up on '{s}' after {d} failed opens — finishing it",
+                                .{ vc.path, vc.open_attempts },
+                            );
+                            vc.finished = true;
+                            self.emitEngineEvent("engine__video_finished", .{
+                                .entity = entity,
+                                .path = vc.path,
+                            });
+                        }
+                        continue;
+                    }
                 }
                 Video.update(vc.handle, dt);
 
