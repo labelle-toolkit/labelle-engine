@@ -1389,6 +1389,161 @@ test "root API: PixelWater and its settings type are reachable through the engin
     try testing.expect(engine.validatePixelWaterSettings(s) == null);
 }
 
+// ── Live prefab refresh (#691) reaches the built-in ─────────────────────
+//
+// `PixelWater` is a JSONC BUILT-IN: `component_apply.zig` routes it before
+// its registry loop, so it is deliberately absent from `Components.names()`.
+// The prefab-refresh dispatcher iterates exactly that registry, which used to
+// mean a pushed prefab's reservoir edit silently did NOTHING until a full
+// respawn — component and gfx instance both left on the retired values. Codex
+// P2 on #880.
+//
+// These assert the MECHANISM on BOTH sides: the live component AND the
+// renderer state the instance actually holds. A test that only checked the
+// component would pass on a fix that never reached gfx; one that only checked
+// "no crash" would pass on the bug itself.
+
+const Bridge = engine.JsoncSceneBridge(TestGame, EmptyComponents);
+
+const reservoir_prefab_v1 =
+    \\{ "components": {
+    \\    "Sprite": { "sprite_name": "reservoir" },
+    \\    "PixelWater": {
+    \\      "mask": "reservoir_mask",
+    \\      "reflection": "reflection",
+    \\      "logical_size": [96, 18],
+    \\      "grid_pixels": 1,
+    \\      "water_level": 0.35,
+    \\      "distortion_pixels": 1
+    \\    }
+    \\} }
+;
+
+/// Boot a bridge-backed game with the reservoir prefab installed, the two
+/// textures already resident, and one live instance spawned.
+fn bootRefresh(game: *TestGame) !MockEcs.Entity {
+    try loadMask(game, "reservoir_mask");
+    try loadMask(game, "reflection");
+    try Bridge.addEmbeddedPrefab(game, "reservoir", reservoir_prefab_v1, "prefabs");
+    try Bridge.loadSceneFromSource(game,
+        \\{ "children": [] }
+    , "prefabs");
+    const e = game.spawnPrefab("reservoir", .{ .x = 0, .y = 0 }).?;
+    // The push is only meaningful against a reservoir that is already fully
+    // resolved on both sides.
+    try testing.expect(game.waterInstance(e) != null);
+    return e;
+}
+
+test "prefab refresh: a non-structural reservoir edit reaches the live component AND the gfx instance" {
+    installImageBackend();
+    defer engine.ImageLoader.clearBackend();
+
+    var game = TestGame.init(testing.allocator);
+    defer game.deinit();
+
+    const e = try bootRefresh(&game);
+    const id = game.waterInstance(e).?;
+    try testing.expectApproxEqAbs(@as(f32, 0.35), game.renderer.waterState(id).?.level, 1e-6);
+
+    const settings_before = game.renderer.set_settings_calls;
+    const level_before = game.renderer.set_level_calls;
+    const releases_before = game.renderer.release_calls;
+
+    try game.reloadPrefabSource("reservoir",
+        \\{ "components": {
+        \\    "Sprite": { "sprite_name": "reservoir" },
+        \\    "PixelWater": {
+        \\      "mask": "reservoir_mask",
+        \\      "reflection": "reflection",
+        \\      "logical_size": [96, 18],
+        \\      "grid_pixels": 1,
+        \\      "water_level": 0.8,
+        \\      "distortion_pixels": 2
+        \\    }
+        \\} }
+    );
+
+    // The component took the new values…
+    const comp = game.pixelWater(e).?;
+    try testing.expectApproxEqAbs(@as(f32, 0.8), comp.water_level, 1e-6);
+    try testing.expectApproxEqAbs(@as(f32, 2), comp.distortion_pixels, 1e-6);
+
+    // …and so did the gfx instance. This is the half the bug dropped.
+    try testing.expectEqual(id.index, game.waterInstance(e).?.index);
+    const st = game.renderer.waterState(id).?;
+    try testing.expectApproxEqAbs(@as(f32, 0.8), st.level, 1e-6);
+    try testing.expectApproxEqAbs(@as(f32, 2), st.config.distortion_pixels, 1e-6);
+
+    // WHICH PATH RAN: the validated non-structural writes, not a
+    // drop-and-recreate (which would reach the same values by accident).
+    try testing.expect(game.renderer.set_settings_calls > settings_before);
+    try testing.expect(game.renderer.set_level_calls > level_before);
+    try testing.expectEqual(releases_before, game.renderer.release_calls);
+}
+
+test "prefab refresh: a structural reservoir edit recreates the instance from the new component" {
+    installImageBackend();
+    defer engine.ImageLoader.clearBackend();
+
+    var game = TestGame.init(testing.allocator);
+    defer game.deinit();
+
+    const e = try bootRefresh(&game);
+    const old_id = game.waterInstance(e).?;
+    const releases_before = game.renderer.release_calls;
+
+    try game.reloadPrefabSource("reservoir",
+        \\{ "components": {
+        \\    "Sprite": { "sprite_name": "reservoir" },
+        \\    "PixelWater": {
+        \\      "mask": "reservoir_mask",
+        \\      "reflection": "reflection",
+        \\      "logical_size": [64, 18],
+        \\      "grid_pixels": 1,
+        \\      "water_level": 0.35,
+        \\      "distortion_pixels": 1
+        \\    }
+        \\} }
+    );
+
+    // Structural fields are the instance's identity: the old one is gone…
+    try testing.expectEqual(releases_before + 1, game.renderer.release_calls);
+    // …and the tick rebuilds it from the new component.
+    engine.pixel_water_tick.tick(&game, 0);
+    const new_id = game.waterInstance(e).?;
+    try testing.expect(game.renderer.waterState(old_id) == null);
+    try testing.expectEqual(@as(u32, 64), game.renderer.waterState(new_id).?.config.logical_width);
+    try testing.expectEqual(@as(usize, 1), game.renderer.waterInstanceCount());
+}
+
+test "prefab refresh: dropping the reservoir from the prefab removes the component, the instance and the asset refs" {
+    installImageBackend();
+    defer engine.ImageLoader.clearBackend();
+
+    var game = TestGame.init(testing.allocator);
+    defer game.deinit();
+
+    const e = try bootRefresh(&game);
+    const id = game.waterInstance(e).?;
+    // The reservoir is pinning both textures on top of the loader's own ref.
+    try testing.expectEqual(@as(u32, 2), refcount(&game, "reservoir_mask"));
+    try testing.expectEqual(@as(u32, 2), refcount(&game, "reflection"));
+
+    try game.reloadPrefabSource("reservoir",
+        \\{ "components": { "Sprite": { "sprite_name": "reservoir" } } }
+    );
+
+    try testing.expect(game.pixelWater(e) == null);
+    try testing.expect(game.waterInstance(e) == null);
+    try testing.expect(game.renderer.waterState(id) == null);
+    try testing.expectEqual(@as(usize, 0), game.renderer.waterInstanceCount());
+    // Released SYNCHRONOUSLY — not left for a tick that a reservoir-less
+    // world has no reason to run.
+    try testing.expectEqual(@as(u32, 1), refcount(&game, "reservoir_mask"));
+    try testing.expectEqual(@as(u32, 1), refcount(&game, "reflection"));
+}
+
 // ── Graceful degrade on a renderer without the water seam ───────────────
 
 const NoWaterGame = engine.GameConfig(

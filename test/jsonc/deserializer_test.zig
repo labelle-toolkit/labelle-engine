@@ -37,6 +37,69 @@ test "deserialize: integer to u8 (out of range returns null)" {
     try testing.expect(deserializer.deserialize(u8, v, testing.allocator) == null);
 }
 
+// ── Float → integer: the values that must NOT trap ──────────────────
+//
+// `valueToInt`'s float branch used to run `@intFromFloat` into `i64`
+// BEFORE its checked cast, so a syntactically valid but wild number
+// (`1e100`, `NaN`, `-Infinity`) was illegal behaviour: a trap in safety
+// builds, which TERMINATES scene loading instead of the component's own
+// apply reporting a malformed payload. Reported by codex on #880 against
+// `PixelWater.logical_size: [1e100, 18]`, but the branch is shared by
+// every integer field of every component, so it is fixed generally here.
+//
+// Two halves to each of these: the wild value must come back `null` (the
+// deserializer's existing "does not fit" answer — NOT a crash), and a
+// neighbouring value that legitimately converts must still convert, so a
+// blanket over-rejection fails just as loudly.
+
+test "deserialize: out-of-range float to integer returns null instead of trapping" {
+    // 1e100 overflows i64 by ~80 orders of magnitude.
+    try testing.expect(deserializer.deserialize(u32, SceneValue{ .float = 1e100 }, testing.allocator) == null);
+    try testing.expect(deserializer.deserialize(i64, SceneValue{ .float = -1e100 }, testing.allocator) == null);
+    // …and an ordinary authored float still truncates through.
+    try testing.expectEqual(@as(u32, 96), deserializer.deserialize(u32, SceneValue{ .float = 96.0 }, testing.allocator).?);
+}
+
+test "deserialize: non-finite float to integer returns null instead of trapping" {
+    const nan = std.math.nan(f64);
+    try testing.expect(deserializer.deserialize(u32, SceneValue{ .float = nan }, testing.allocator) == null);
+    try testing.expect(deserializer.deserialize(i32, SceneValue{ .float = std.math.inf(f64) }, testing.allocator) == null);
+    try testing.expect(deserializer.deserialize(i32, SceneValue{ .float = -std.math.inf(f64) }, testing.allocator) == null);
+    try testing.expectEqual(@as(i32, -7), deserializer.deserialize(i32, SceneValue{ .float = -7.0 }, testing.allocator).?);
+}
+
+test "deserialize: float to integer keeps truncation, negatives and the i64 boundary" {
+    // The guard must not change any conversion that already worked.
+    // Truncation is toward zero, as `@intFromFloat` always was.
+    try testing.expectEqual(@as(i32, 2), deserializer.deserialize(i32, SceneValue{ .float = 2.9 }, testing.allocator).?);
+    try testing.expectEqual(@as(i32, -2), deserializer.deserialize(i32, SceneValue{ .float = -2.9 }, testing.allocator).?);
+    try testing.expectEqual(@as(u32, 0), deserializer.deserialize(u32, SceneValue{ .float = -0.5 }, testing.allocator).?);
+    // -2^63 is exactly representable in f64 AND is a legal `i64` — the
+    // lower bound is inclusive, so this one must survive.
+    try testing.expectEqual(
+        @as(i64, std.math.minInt(i64)),
+        deserializer.deserialize(i64, SceneValue{ .float = -9223372036854775808.0 }, testing.allocator).?,
+    );
+    // 2^63 is one PAST `maxInt(i64)` (and is what `maxInt(i64)` rounds to
+    // in f64) — the upper bound is exclusive, so this one is rejected.
+    try testing.expect(deserializer.deserialize(i64, SceneValue{ .float = 9223372036854775808.0 }, testing.allocator) == null);
+    // A narrower destination still range-checks after truncation.
+    try testing.expect(deserializer.deserialize(u8, SceneValue{ .float = 300.0 }, testing.allocator) == null);
+}
+
+test "deserialize: an out-of-range float inside logical_size fails the component, not the process" {
+    // The reported shape, end to end: `[2]u32` recurses per element, so the
+    // wild element must fail the ARRAY, which (no default on a rejected
+    // field) leaves `applyPixelWater` reporting a malformed payload.
+    var wild = [_]SceneValue{ .{ .float = 1e100 }, .{ .integer = 18 } };
+    try testing.expect(deserializer.deserialize([2]u32, SceneValue{ .array = .{ .items = &wild } }, testing.allocator) == null);
+
+    var ok = [_]SceneValue{ .{ .float = 96.0 }, .{ .integer = 18 } };
+    const size = deserializer.deserialize([2]u32, SceneValue{ .array = .{ .items = &ok } }, testing.allocator).?;
+    try testing.expectEqual(@as(u32, 96), size[0]);
+    try testing.expectEqual(@as(u32, 18), size[1]);
+}
+
 test "deserialize: integer array to []const u16 (event_frames authorable)" {
     // Regression for #718 codex P2 #1: `SpriteAnimation.event_frames` must
     // be authorable as a NUMBER array in JSONC. `[]const u8` is string-

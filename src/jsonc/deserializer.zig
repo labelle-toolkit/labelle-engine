@@ -219,8 +219,32 @@ fn valueToFloat(comptime T: type, value: Value) ?T {
 fn valueToInt(comptime T: type, value: Value) ?T {
     return switch (value) {
         .integer => |i| std.math.cast(T, i),
+        // A JSON number that parsed as a FLOAT but feeds an integer field
+        // (`"grid_pixels": 2.0`, `"logical_size": [96.0, 18.0]`). Truncate
+        // toward zero, then range-check as any other integer would be.
+        //
+        // The guards are not cosmetic: `@intFromFloat` is ILLEGAL BEHAVIOUR
+        // — a safety-build trap, and worse without safety — when the source
+        // is NaN/±Inf or lands outside the destination's range. A scene
+        // authoring `[1e100, 18]` would therefore TERMINATE the loader
+        // instead of the component's own apply reporting a malformed
+        // payload. Rejecting here returns `null`, which is the deserializer's
+        // existing "this value does not fit" answer (same as the
+        // out-of-range integer path above), so the field falls back to its
+        // default or fails the struct — never traps.
+        //
+        // Bound check, on the TRUNCATED value so `-0.5` and `2.9` keep
+        // converting as before: `minInt(i64)` (-2^63) is exactly
+        // representable in f64 and is a legal target, hence `<`; `2^63` is
+        // one past `maxInt(i64)` and is what `maxInt(i64)` rounds to in f64,
+        // hence `>=`.
         .float => |f| blk: {
-            const rounded: i64 = @intFromFloat(f);
+            if (!std.math.isFinite(f)) break :blk null;
+            const truncated = @trunc(f);
+            const min_i64: f64 = -9223372036854775808.0; // -2^63, exact
+            const limit_i64: f64 = 9223372036854775808.0; //  2^63, exact
+            if (truncated < min_i64 or truncated >= limit_i64) break :blk null;
+            const rounded: i64 = @intFromFloat(truncated);
             break :blk std.math.cast(T, rounded);
         },
         else => null,
