@@ -13,7 +13,7 @@ Deliver the actual condenser as a vertical slice, using a built-in material and 
 Repositories: labelle-core, labelle-gfx, labelle-bgfx, labelle-engine; inspect generated backend adapters in the CLI and other backend implementations.
 
 - Record the current material draw signatures, Material layout, serializer behavior, capability enum switches, shader build targets, texture sampling and resource ownership.
-- Define PixelWaterDraw and the minimal optional typed draw API. Choose the retained water-instance reference representation and generation checks. Keep ordinary sprite payloads small.
+- Define PixelWaterDraw, the runtime settings synchronization operation and the minimal optional typed draw API. Choose the retained water-instance reference representation and generation checks. Keep ordinary sprite payloads small.
 - Add pixel_water as the capability identity. Enumerate every exhaustive switch affected, including Sokol/null/mock and generated wrappers; unsupported implementations must still compile.
 - If any ABI layout changes, enumerate size/offset assertions and adapter/version/pin changes before implementation. Do not silently expand an extern struct across differently pinned packages.
 - Capture the existing material/post-fx golden baselines. Existing BGFX targets include `zig build material-golden` and `zig build post-fx-golden`; run on supported hardware with the repository's pinned toolchain.
@@ -50,7 +50,7 @@ Exit: mock-backed water draws contain the expected data and ordinary sprites ret
 
 Likely files: `src/gfx/texture.zig`, `src/gfx/programs.zig`, `src/shaders/`, shader packaging/build inputs, capability exports and material golden harness.
 
-- Add and compile the water shader using existing BGFX tooling. Verify Metal first; list other compiled/verified targets explicitly.
+- Add and compile the water shader using existing BGFX tooling. Compile and package all four variants (_mtl, _spv, _essl, _glsl), including generated/embedded shader registrations. Check renderer dispatch for Metal, Vulkan, OpenGLES and desktop GL. Metal is the first development checkpoint; require real condenser runtime smoke/capture checks on macOS Metal, WebGL2 and Android OpenGLES before delivery. Record SPIR-V/Vulkan and desktop GL runtime verification separately from successful compilation; missing ESSL support is a delivery blocker, not an acceptable fallback.
 - Implement fixed mask/reflection samplers with clamped nearest sampling and documented uniform layout.
 - Add mask/level clipping, dark water body, limited highlights, periodic surface motion and supplied reflection sampling.
 - Quantize logical sampling/displacement. Test zero amplitude and a one-native-pixel displacement.
@@ -58,22 +58,22 @@ Likely files: `src/gfx/texture.zig`, `src/gfx/programs.zig`, `src/shaders/`, sha
 - Preserve blending, sprite source rectangles, transform and layer order. Never read and write the same render target; v1 does not need a scene-capture pass.
 - Create/destroy the effect's programs and uniforms independently. Check handles and degrade only this effect on failure.
 
-Visual tests: level 0/0.35/1; waves off/on; ripple start/mid/expired; edge impacts; masked-out pixels; two materials; native/2x/4x nearest scaling; foreground occlusion. Existing material goldens must pass. Add a dedicated fixed-time water capture rather than silently re-blessing regressions.
+Visual tests: level 0/0.35/1; waves off/on; ripple start/mid/expired; edge impacts; masked-out pixels; two materials; continuous filling with repeated impacts; abrupt nonzero level changes; empty/refill; native/2x/4x nearest scaling; foreground occlusion. Existing material goldens must pass. Add a dedicated fixed-time water capture rather than silently re-blessing regressions.
 
 Exit: the GPU effect works in a small fixture, with resource cleanup and supported-target reporting checked.
 
 ## 5. Engine authoring and runtime controls
 
-Likely files: `src/game/visuals.zig` or a focused water helper/mixin, a typed PixelWater component, existing JSON/ZON component coercion and asset lifecycle integration. Extend `test/set_material_test.zig` or add focused water tests.
+Likely files: `src/game/visuals.zig` or a focused water helper/mixin, a typed PixelWater component and public settings type re-exported through `src/root.zig`, existing JSON/ZON component coercion and asset lifecycle integration. Extend `test/set_material_test.zig` or add focused water tests.
 
-- Register typed PixelWater settings through the existing component/prefab authoring path. Do not create a parallel JSON parser.
+- Register typed PixelWater settings through the existing component/prefab authoring path. Add the public PixelWater/settings exports to `src/root.zig` and a consumer test that imports them through the engine root. Do not create a parallel JSON parser.
 - Resolve mask/reflection assets and create the retained instance when the entity is ready; release it on destruction/reload.
-- Implement proposed setWaterLevel/addWaterRipple helpers and deterministic simulation-time updates.
+- Implement proposed setWaterSettings/setWaterLevel/addWaterRipple helpers and deterministic simulation-time updates. setWaterSettings must validate and atomically synchronize wave, distortion, reflection, color and ripple-appearance values into both the component and retained instance. Equal settings are a no-op; changed settings bump the retained revision without recreating the instance or shader. Loader/editor updates use the same synchronization path; direct field writes do not promise synchronization. Structural texture/grid changes use explicit validated reconfiguration.
 - Apply configuration validation from the RFC, with entity/field-specific diagnostics.
-- Bound impacts to eight; expire old entries and replace the oldest deterministically at capacity. Clear ripples when the level changes. Handle empty reservoirs and invalid/outside impacts.
+- Bound impacts to eight; expire old entries and replace the oldest deterministically at capacity. Preserve ripple X/age/strength across nonzero level changes and anchor them to the current surface on every draw; clear only when emptied. Reject non-finite or out-of-logical-X-bounds impacts. In v1 CPU acceptance does not test mask coverage: GPU masking clips output, and masked-out impacts may consume a slot. Keep CPU image-buffer ownership unchanged; configure the example emitters over valid mask coverage.
 - Add droplet crossing logic in the example/game behavior; emit one ripple per hit and retire/reset the droplet. Keep mist animation independent.
 
-Tests: JSON/ZON equivalent settings; missing textures; non-finite/range errors; pause/time-scale behavior; exact capacity/expiry; no duplicate impact; entity cleanup/reload; dirty-state propagation; unsupported renderer fallback.
+Tests: JSON/ZON equivalent settings; missing textures; non-finite/range errors; pause/time-scale behavior; exact capacity/expiry; no duplicate impact; entity cleanup/reload; dirty-state propagation for each runtime settings group with stationary transforms; equal-settings no-op; invalid-settings rollback; root API import; rising-level ripple continuity; empty/refill; in-bounds masked-out impacts clipped on GPU; unsupported renderer fallback.
 
 Exit: game code can change level and trigger impacts without BGFX-specific calls.
 
@@ -81,10 +81,10 @@ Exit: game code can change level and trigger impacts without BGFX-specific calls
 
 - Assemble the prepared machine in a runnable Labelle example with the real reservoir bounds and emitter positions.
 - Start with amplitude/distortion ≤1 logical pixel and subdued reflection opacity. Match the dark palette before adding detail.
-- Expose a small example control panel or key bindings for pause, single impact, water level and waves on/off. This is a review aid, not a required engine editor feature.
+- Expose a small example control panel or key bindings for pause, single impact, water level, continuous filling, and waves on/off through the public settings helper. This is a review aid, not a required engine editor feature.
 - Verify drops meet the current surface and cause ripples at the matching local X coordinate; mist remains above the reservoir.
 - Capture a native image, integer-upscaled image and short real-time clip. Compare against the attached condenser reference, checking unchanged frame/foreground and coherent water motion.
-- Check a sustained run for shader/program churn, leaked resources, repeated diagnostics and unbounded impact growth. Record frame/draw cost on the test machine; do not promise an unmeasured budget.
+- Exercise the real condenser on macOS Metal, WebGL2 and Android OpenGLES; attach captures and confirm the water shader is active rather than the fallback. Check a sustained run for shader/program churn, leaked resources, repeated diagnostics and unbounded impact growth. Record frame/draw cost on the test machine; do not promise an unmeasured budget.
 
 Exit: #100's condenser-specific acceptance criteria are met. A generic shader demo alone is insufficient.
 
@@ -100,5 +100,5 @@ Exit: #100's condenser-specific acceptance criteria are met. A generic shader de
 - Contract mismatch: stop pin updates until layout/adapter checks agree.
 - Incorrect native grid or mask: resolve the asset coordinates before tuning shader noise.
 - Frame/background distortion: verify mask and layer ordering before reducing effect opacity to hide it.
-- Unsupported renderer: use the explicit fallback; never advertise unverified support.
+- Unsupported renderer: use the explicit fallback; never advertise unverified support. WebGL2/Android OpenGLES are required delivery targets, so a static fallback there does not satisfy completion.
 - Scope growth into custom shader loading, live scene reflections or fluid physics: file follow-ups and keep this delivery bounded.

@@ -4,7 +4,7 @@ Status: proposed; documentation and implementation plan only.
 
 Implementation objective: [labelle-bgfx#100](https://github.com/labelle-toolkit/labelle-bgfx/issues/100).
 Broader custom-material design: [labelle-engine#878](https://github.com/labelle-toolkit/labelle-engine/issues/878) (backlog; not a dependency).
-Detailed delivery plan: [PLAN-PIXEL-WATER.md](PLAN-PIXEL-WATER.md).
+Detailed delivery plan: [RFC-PIXEL-WATER-PLAN.md](RFC-PIXEL-WATER-PLAN.md).
 
 ## Problem and outcome
 
@@ -77,13 +77,20 @@ Configuration holds authored defaults. Per-instance state holds the current fill
 
 ```zig
 // Illustrative signatures; adapt to the engine's entity/resource conventions.
+g.setWaterSettings(reservoir, settings); // validated waves, distortion, reflection and colors
 g.setWaterLevel(reservoir, 0.45);
 g.addWaterRipple(reservoir, local_x, strength);
 ```
 
 The engine update step advances time from simulation delta, so pause and time scale apply. Do not derive deterministic tests from a wall clock. Drop behavior determines when its trajectory crosses the current surface and emits one impact; the shader does not detect collisions.
 
-Reject impacts outside the local reservoir/mask or on an empty reservoir. Expire ripples after their configured duration. When all eight slots are occupied, replace the oldest active impact deterministically. Store x, start time and strength; the surface defines y. Each reservoir owns its own state, with no cross-instance ripple leakage. Level changes clear active ripples in v1 to avoid leaving disturbances floating on an old surface.
+For v1, reject impacts with non-finite values, X outside [0, logical_width), or an empty reservoir. CPU validation is limited to logical bounds: it does not query mask coverage. The GPU mask clips ripple output, so an in-bounds impact inside a masked-out region may consume a ripple slot without producing visible output. The image loader releases decoded CPU pixels after upload; no CPU collision-mask retention or GPU readback is introduced. Author condenser emitters over valid surface coverage. A future irregular-reservoir collision feature would require an explicit CPU coverage asset and lifetime contract. Expire ripples after their configured duration. When all eight slots are occupied, replace the oldest active impact deterministically. Store x, start time and strength; the surface defines y. Each reservoir owns its own state, with no cross-instance ripple leakage. Nonzero level changes preserve each active ripple's X, age and strength; the shader evaluates it relative to the current surface_y on every draw. This keeps disturbances attached to the rising surface while the condenser fills. Setting the level to zero clears active ripples; refilling starts without old impacts. Test continuous filling during repeated impacts, abrupt nonzero level changes, emptying and refilling.
+
+Expose PixelWater and its public settings type through src/root.zig, following the existing built-in component exports.
+
+setWaterSettings validates a complete backend-independent settings value and atomically updates the component and gfx-owned retained instance. It covers wave amplitude/period, distortion, reflection opacity, color ramps and ripple appearance. Unchanged values are a no-op; changed values bump the retained revision and become visible on the next submission even when the transform/material identity is unchanged. Invalid values leave the previous settings intact. Changes preserve simulation time and active impacts; ripple appearance settings take effect on their next evaluation. Changing wave period may shift phase in v1. Texture references, logical dimensions and grid size are structural configuration: change them through explicit reconfiguration/recreation with resource validation, not this scalar settings setter.
+
+Direct field mutation is not an automatic synchronization mechanism. Runtime callers must use the setter; loader/editor/hot-reload paths must invoke the same validated synchronization operation after a successful component update. Changing settings must not create a new GPU program or silently recreate the water instance.
 
 A water API update must invalidate the relevant retained data. Animated time/ripples must be uploaded even if the entity transform and material identity are unchanged.
 
@@ -99,7 +106,7 @@ This is a single built-in effect-specific path, not the game-authored shader API
 
 ## BGFX implementation
 
-Add the pixel-water fragment shader to the existing shader build/package pipeline. Use the established sprite vertex convention and premultiplication/blend conventions. Resolve fixed sampler slots for mask/reflection and upload typed uniforms; document every slot and color-space expectation.
+Add the pixel-water fragment shader to the existing shader build/package pipeline with all four packaged variants: Metal (_mtl), SPIR-V (_spv), ESSL 3.00 (_essl), and desktop GLSL (_glsl). Match the existing renderer selection, including OpenGLES for WebGL2 and Android. All four must compile and be packaged; Metal macOS, WebGL2 and Android OpenGLES are required runtime delivery checks. SPIR-V/Vulkan and desktop GLSL runtime results must be reported explicitly, separately from compile-only coverage. Use the established sprite vertex convention and premultiplication/blend conventions. Resolve fixed sampler slots for mask/reflection and upload typed uniforms; document every slot and color-space expectation.
 
 Compute a restrained periodic surface wave, add bounded fading ripple disturbances, quantize offsets, sample the supplied reflection, and mix the water's dark/body and limited highlight colors. Clip all output to both mask and fill level. A highlight is not physically simulated light; reflection opacity/highlight intensity may be driven by game lamp state.
 
@@ -109,7 +116,7 @@ Initialize programs independently from existing effects; failure must not disabl
 
 ## Capabilities and fallback
 
-BGFX is the first supported backend; Metal on macOS is the first validation target. Shader compilation targets and renderer support must be explicitly advertised based on real program readiness. Other backends remain compilable and report pixel_water unsupported until implemented.
+BGFX is the first supported backend. Metal on macOS can be the first development checkpoint, but delivery also requires working WebGL2 and Android OpenGLES rendering, not their silent static fallback. Shader compilation targets and renderer support must be explicitly advertised based on real program readiness. Other backends remain compilable and report pixel_water unsupported until implemented.
 
 On unsupported capability or missing GPU resources, draw an authored static reservoir fallback with ordinary sprite rendering and report a diagnostic once per relevant failure. The fallback is deliberately approximate; do not claim its level/ripples are simulated. Invalid authored assets should fail validation with useful diagnostics instead of disappearing silently.
 
