@@ -51,6 +51,19 @@ pub fn Mixin(comptime Game: type) type {
             // Remove target first — guarantees a free slot for shelving the current world
             const kv = self.worlds.fetchRemove(name) orelse return error.WorldNotFound;
 
+            // Water instance ids belong to the world's OWN renderer, and the
+            // table's keys to its own ECS (#100). Carrying them across the
+            // swap would hand the incoming renderer ids it never issued: an
+            // entity-id collision makes an old-world entry look like the new
+            // entity's instance, and a non-collision has the reaper release
+            // a stale id against the wrong renderer. Release them here,
+            // while `self.renderer` still points at the world that issued
+            // them; the water tick recreates them from the components when
+            // that world becomes active again. The ASSET references are
+            // deliberately kept — the shelved world's components still own
+            // them, and nothing would re-acquire on the way back.
+            self.clearPixelWaterInstances();
+
             // Shelve or destroy current active world
             if (self.active_world_name) |current_name| {
                 // Named world — shelve into map (can't fail: we just freed a slot)
@@ -123,8 +136,12 @@ pub fn Mixin(comptime Game: type) type {
             // ECS wipe invalidates every emitter entity id in the side-table.
             self.clearParticleSystems();
             // Water instances are keyed by entity; the ECS reset makes every
-            // key dangling, so release them before the wipe (#100).
+            // key dangling, so release them before the wipe (#100). The
+            // catalog references go with them: unlike a world swap, the
+            // components themselves are about to be destroyed, so nothing
+            // is left to own them (and the incoming scene re-acquires).
             self.clearPixelWaterInstances();
+            self.releaseAllWaterAssets();
             // Free every `ChildrenComponent`'s backing allocation before the
             // ECS is torn down: the backend drops components by value with no
             // destructor, so their heap-backed child lists would otherwise

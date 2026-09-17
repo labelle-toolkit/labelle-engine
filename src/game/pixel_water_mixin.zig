@@ -55,6 +55,25 @@ pub fn WaterInstanceIdOf(comptime Renderer: type) type {
     return if (rendererSupportsWater(Renderer)) Renderer.WaterInstanceId else struct {};
 }
 
+/// The catalog references ONE reservoir holds, and the one bit of resolution
+/// state that cannot be read back off the renderer.
+///
+/// Why the names are OWNED copies rather than the component's own slices: the
+/// release is owed exactly when the component is gone (entity destroyed,
+/// component removed, ECS wiped), and scene-authored names live in the
+/// world's nested-entity arena — which the very same teardown frees. A
+/// borrowed slice would be dangling at the only moment it is needed.
+pub const WaterAssets = struct {
+    /// Duped with `game.allocator`; empty when no reference is held.
+    mask: []const u8 = "",
+    reflection: []const u8 = "",
+    /// Set when the instance was created while an authored reflection was
+    /// still streaming, so the tick knows to reconfigure once it lands.
+    /// Without it, whichever of the two textures finished first would decide
+    /// whether the authored reflection ever appears.
+    reflection_pending: bool = false,
+};
+
 pub fn Mixin(comptime Game: type) type {
     const Entity = Game.EntityType;
     const Renderer = Game.RendererType;
@@ -134,23 +153,98 @@ pub fn Mixin(comptime Game: type) type {
                     setWaterLevel(self, entity, candidate.water_level) catch return false;
                 }
                 self.drive_pixel_water = true;
-                acquireWaterAssets(self, candidate);
+                syncWaterAssets(self, entity, candidate);
                 return true;
             }
 
             // COMMIT: fresh component.
             self.addComponent(entity, candidate);
             self.drive_pixel_water = true;
-            acquireWaterAssets(self, candidate);
+            syncWaterAssets(self, entity, candidate);
             // Opportunistic: if the textures are already resident the
             // instance exists on this very call rather than one tick later.
             _ = resolvePixelWaterInstance(self, entity);
             return true;
         }
 
-        fn acquireWaterAssets(self: *Game, comp: PixelWater) void {
-            if (comp.mask.len != 0) _ = self.assets.acquire(comp.mask) catch {};
-            if (comp.reflection.len != 0) _ = self.assets.acquire(comp.reflection) catch {};
+        // ── Asset references ────────────────────────────────────────────
+        //
+        // A reservoir pins its mask / reflection in the catalog for as long
+        // as the component lives, so a streaming mask actually streams and
+        // an unrelated `release` cannot evict a texture a live instance is
+        // sampling. Every one of those `acquire`s is balanced: the names are
+        // recorded per entity (`Game.water_assets`) and released when the
+        // component goes away — destroy, `removeComponent` (via the reaper),
+        // ECS reset, and `deinit`. An unbalanced `acquire` would pin the
+        // texture for the rest of the process and inflate further on every
+        // hot reload.
+
+        /// Take the references `comp` needs and drop any this entity held
+        /// for other names. A re-author with UNCHANGED names is a no-op —
+        /// it must not bump the refcount, or repeated prefab refreshes would
+        /// ratchet it up one per pass.
+        fn syncWaterAssets(self: *Game, entity: Entity, comp: PixelWater) void {
+            if (self.water_assets.getPtr(entity)) |held| {
+                if (std.mem.eql(u8, held.mask, comp.mask) and
+                    std.mem.eql(u8, held.reflection, comp.reflection)) return;
+                releaseWaterAssets(self, entity);
+            }
+
+            var rec: WaterAssets = .{};
+            rec.mask = acquireOne(self, comp.mask);
+            rec.reflection = acquireOne(self, comp.reflection);
+            self.water_assets.put(entity, rec) catch {
+                freeAssetRecord(self, rec);
+            };
+        }
+
+        /// Acquire `name` and return an OWNED copy of it, or `""` when there
+        /// is nothing to hold (empty name, unregistered asset, OOM). The
+        /// returned slice is the receipt: a non-empty one means a reference
+        /// IS held and must be released.
+        fn acquireOne(self: *Game, name: []const u8) []const u8 {
+            if (name.len == 0) return "";
+            _ = self.assets.acquire(name) catch return "";
+            return self.allocator.dupe(u8, name) catch {
+                self.assets.release(name);
+                return "";
+            };
+        }
+
+        fn freeAssetRecord(self: *Game, rec: WaterAssets) void {
+            if (rec.mask.len != 0) {
+                self.assets.release(rec.mask);
+                self.allocator.free(rec.mask);
+            }
+            if (rec.reflection.len != 0) {
+                self.assets.release(rec.reflection);
+                self.allocator.free(rec.reflection);
+            }
+        }
+
+        /// Drop every catalog reference `entity` holds. Safe to call on an
+        /// entity that never had any.
+        pub fn releaseWaterAssets(self: *Game, entity: Entity) void {
+            const kv = self.water_assets.fetchRemove(entity) orelse return;
+            freeAssetRecord(self, kv.value);
+        }
+
+        /// Drop every reservoir's catalog references (retaining capacity).
+        /// The ECS-reset / `deinit` counterpart of `releaseWaterAssets` —
+        /// NOT called on a world swap, where the shelved world's components
+        /// live on and still own their references.
+        pub fn releaseAllWaterAssets(self: *Game) void {
+            var it = self.water_assets.valueIterator();
+            while (it.next()) |rec| freeAssetRecord(self, rec.*);
+            self.water_assets.clearRetainingCapacity();
+        }
+
+        /// Release BOTH halves for `entity` — the gfx instance and the
+        /// catalog references. The whole-component teardown the destroy
+        /// paths and the reaper use.
+        pub fn releasePixelWater(self: *Game, entity: Entity) void {
+            releasePixelWaterInstance(self, entity);
+            releaseWaterAssets(self, entity);
         }
 
         /// The live component, or `null`.
@@ -230,7 +324,22 @@ pub fn Mixin(comptime Game: type) type {
         /// — that is how a streaming mask "pops in" without a retry timer.
         pub fn resolvePixelWaterInstance(self: *Game, entity: Entity) bool {
             if (comptime !supported) return false;
-            if (self.water_instances.get(entity) != null) return true;
+            if (self.water_instances.get(entity)) |existing_id| {
+                // NOT a bare `return true`. Two things can still be owed on
+                // an entity that already has an instance:
+                //   * the SPRITE may have arrived after the water did
+                //     (authored component order, or a sprite removed and
+                //     re-added), and the binding is what makes the effect
+                //     draw at all;
+                //   * an authored REFLECTION may have finished streaming
+                //     after the mask did, and nothing else would ever apply
+                //     it.
+                // Both helpers are idempotent and cost a hash lookup, which
+                // is what makes calling them per frame acceptable.
+                applyPendingReflection(self, entity, existing_id);
+                bindSpriteToInstance(self, entity, existing_id);
+                return true;
+            }
 
             const comp = self.ecs_backend.getComponent(entity, PixelWater) orelse return false;
             const cfg = buildWaterConfig(self, comp.*) orelse return false;
@@ -246,12 +355,50 @@ pub fn Mixin(comptime Game: type) type {
                 return false;
             };
 
-            // Seed the authored level through the same validated setter a
-            // runtime caller uses.
-            self.renderer.setWaterLevel(id, comp.water_level) catch {};
+            // Seed the authored level. A failure here is NOT ignorable: it
+            // would leave a live instance at the default level while the
+            // component reads the authored one — the exact component /
+            // instance divergence the rest of this file exists to prevent —
+            // and report success. Hand the instance back instead; the tick
+            // retries from a clean slate next frame.
+            self.renderer.setWaterLevel(id, comp.water_level) catch |err| {
+                self.log.err("PixelWater on entity {any}: initial level sync failed: {s}", .{
+                    entity, @errorName(err),
+                });
+                _ = self.water_instances.remove(entity);
+                _ = self.renderer.releaseWaterInstance(id);
+                return false;
+            };
+
+            // Remember a reflection that was still streaming when the
+            // (required) mask became resident, so `applyPendingReflection`
+            // can finish the job. Whichever texture lands first must not
+            // decide whether the authored reflection ever appears.
+            if (self.water_assets.getPtr(entity)) |held| {
+                held.reflection_pending = comp.reflection.len != 0 and
+                    catalogTexture(self, comp.reflection) == null;
+            }
 
             bindSpriteToInstance(self, entity, id);
             return true;
+        }
+
+        /// Push the full config again once a late-arriving reflection is
+        /// resident. No-op unless one was actually pending.
+        fn applyPendingReflection(self: *Game, entity: Entity, id: WaterInstanceId) void {
+            if (comptime !supported) return;
+            const held = self.water_assets.getPtr(entity) orelse return;
+            if (!held.reflection_pending) return;
+            const comp = self.ecs_backend.getComponent(entity, PixelWater) orelse return;
+            if (catalogTexture(self, comp.reflection) == null) return;
+            const cfg = buildWaterConfig(self, comp.*) orelse return;
+            self.renderer.setWaterSettings(id, cfg) catch |err| {
+                self.log.err("PixelWater on entity {any}: reflection bind failed: {s}", .{
+                    entity, @errorName(err),
+                });
+                return;
+            };
+            held.reflection_pending = false;
         }
 
         /// Point the sprite's draw at the instance: `Sprite.water` carries the
@@ -262,8 +409,14 @@ pub fn Mixin(comptime Game: type) type {
             const sprite = self.ecs_backend.getComponent(entity, Sprite) orelse return;
             var changed = false;
             if (comptime @hasField(Sprite, "water")) {
-                sprite.water = id;
-                changed = true;
+                // Equality-guarded: this now runs on EVERY tick of an
+                // already-bound reservoir (see `resolvePixelWaterInstance`),
+                // and an unconditional write would mark the visual dirty
+                // every frame — a redundant sync that breaks the draw batch.
+                if (!std.meta.eql(sprite.water, id)) {
+                    sprite.water = id;
+                    changed = true;
+                }
             }
             if (comptime has_pixel_water_effect) {
                 if (sprite.material.effect != pixel_water_effect) {
@@ -434,8 +587,17 @@ pub fn Mixin(comptime Game: type) type {
         /// to be wiped, so every entity key becomes a dangling handle.
         pub fn clearPixelWaterInstances(self: *Game) void {
             if (comptime !supported) return;
-            var it = self.water_instances.valueIterator();
-            while (it.next()) |id| _ = self.renderer.releaseWaterInstance(id.*);
+            // Through `releasePixelWaterInstance` rather than a raw release
+            // loop: a world SWAP also lands here, and there the entities
+            // survive — so their sprites must lose the now-dead id too, or
+            // a shelved reservoir keeps a stale `Sprite.water` until
+            // something happens to rebind it. `fetchRemove` invalidates the
+            // iterator, hence the take-the-first-key loop.
+            while (true) {
+                var it = self.water_instances.iterator();
+                const entry = it.next() orelse break;
+                releasePixelWaterInstance(self, entry.key_ptr.*);
+            }
             self.water_instances.clearRetainingCapacity();
         }
 
@@ -452,8 +614,23 @@ pub fn Mixin(comptime Game: type) type {
                 while (it.next()) |entry| {
                     const entity = entry.key_ptr.*;
                     if (!self.ecs_backend.hasComponent(entity, PixelWater)) {
-                        releasePixelWaterInstance(self, entity);
+                        releasePixelWater(self, entity);
                         continue :outer; // iterator invalidated — restart
+                    }
+                }
+                break;
+            }
+            // The asset table is the SUPERSET: a reservoir whose mask never
+            // became resident holds catalog references without ever having
+            // had an instance, so sweeping only the instance table above
+            // would strand exactly those.
+            outer_assets: while (true) {
+                var it = self.water_assets.iterator();
+                while (it.next()) |entry| {
+                    const entity = entry.key_ptr.*;
+                    if (!self.ecs_backend.hasComponent(entity, PixelWater)) {
+                        releaseWaterAssets(self, entity);
+                        continue :outer_assets;
                     }
                 }
                 break;
@@ -465,6 +642,16 @@ pub fn Mixin(comptime Game: type) type {
         pub fn deinitPixelWaterInstances(self: *Game) void {
             if (comptime supported) clearPixelWaterInstances(self);
             self.water_instances.deinit();
+            // Free the OWNED name copies, but do NOT `assets.release` them:
+            // `Game.deinit` tears the catalog down before it reaches this
+            // point, so a release here would read a freed hash map. The
+            // refcounts die with the catalog; the dupes are ours to free.
+            var it = self.water_assets.valueIterator();
+            while (it.next()) |rec| {
+                if (rec.mask.len != 0) self.allocator.free(rec.mask);
+                if (rec.reflection.len != 0) self.allocator.free(rec.reflection);
+            }
+            self.water_assets.deinit();
         }
     };
 }

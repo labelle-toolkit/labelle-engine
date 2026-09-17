@@ -716,6 +716,15 @@ pub fn GameConfigWithYAxis(
         /// so the id is tracked here too (mirrors `particle_systems`).
         /// Emptied by `clearPixelWaterInstances` on an ECS reset.
         water_instances: std.AutoHashMap(Entity, pixel_water_mixin.WaterInstanceIdOf(RenderImpl)),
+        /// Entity → the catalog references that reservoir holds (COND-07),
+        /// plus its late-reflection resolution state. Separate from
+        /// `water_instances` because the two have different lifetimes: the
+        /// references are taken when the component is AUTHORED, the instance
+        /// only once the mask is resident — and a reservoir whose mask never
+        /// arrives still owes the catalog a `release`. Unlike the instance
+        /// table this is NOT emptied on a world swap: the shelved world's
+        /// components live on and still own their references.
+        water_assets: std.AutoHashMap(Entity, pixel_water_mixin.WaterAssets),
         /// Runtime scene-source overrides (labelle-studio Play mode /
         /// `editor_api`). Keyed by scene NAME (e.g. `"main"`); the JSONC
         /// loader consults this map BEFORE the embedded/compiled source
@@ -1331,6 +1340,9 @@ pub fn GameConfigWithYAxis(
         pub const addWaterRipple = PixelWaterMixin.addWaterRipple;
         pub const setDrivePixelWater = PixelWaterMixin.setDrivePixelWater;
         pub const releasePixelWaterInstance = PixelWaterMixin.releasePixelWaterInstance;
+        pub const releasePixelWater = PixelWaterMixin.releasePixelWater;
+        pub const releaseWaterAssets = PixelWaterMixin.releaseWaterAssets;
+        pub const releaseAllWaterAssets = PixelWaterMixin.releaseAllWaterAssets;
         pub const clearPixelWaterInstances = PixelWaterMixin.clearPixelWaterInstances;
         pub const reapGhostPixelWater = PixelWaterMixin.reapGhostPixelWater;
         pub const deinitPixelWaterInstances = PixelWaterMixin.deinitPixelWaterInstances;

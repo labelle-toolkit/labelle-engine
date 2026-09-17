@@ -137,6 +137,10 @@ fn WaterRenderer(comptime Entity: type) type {
         reject_settings: bool = false,
         /// Simulates the instance store being out of room.
         fail_create: bool = false,
+        /// Simulates gfx refusing a level write — the failure mode that
+        /// used to leave a live instance at the default level while the
+        /// component read the authored one.
+        fail_level: bool = false,
 
         pub fn init(_: std.mem.Allocator) Self {
             return .{};
@@ -214,6 +218,7 @@ fn WaterRenderer(comptime Entity: type) type {
         pub fn setWaterLevel(self: *Self, id: MockWaterId, level: f32) !void {
             self.set_level_calls += 1;
             const s = self.slot(id) orelse return error.StaleInstance;
+            if (self.fail_level) return error.OutOfMemory;
             if (!std.math.isFinite(level)) return error.NonFiniteValue;
             s.level = std.math.clamp(level, 0, 1);
             if (s.level == 0) s.ripple_count = 0;
@@ -308,6 +313,13 @@ fn installImageBackend() void {
 
 fn loadMask(game: *TestGame, name: []const u8) !void {
     try game.loadImageFromMemory(name, png_type, fake_png);
+}
+
+/// The catalog refcount held on `name`. The reservoir's asset references are
+/// invisible in behaviour until something evicts a texture, so every
+/// acquire/release assertion below reads this directly.
+fn refcount(game: *TestGame, name: []const u8) u32 {
+    return game.assets.entries.getPtr(name).?.refcount;
 }
 
 /// The canonical authored reservoir — the RFC's example block, with the
@@ -601,6 +613,241 @@ test "reload: a STRUCTURAL re-author recreates the instance" {
         @as(u32, 64),
         game.renderer.waterState(game.waterInstance(e).?).?.config.logical_width,
     );
+}
+
+test "lifetime: the destroy releases the instance SYNCHRONOUSLY, before any tick" {
+    // The reaper is the fallback for a bare `removeComponent`, not the
+    // primary path: an ECS backend that recycles entity ids can hand a
+    // reservoir created later in the SAME frame the dead entity's key, and
+    // `resolvePixelWaterInstance` would then accept the stale instance
+    // instead of building the new one. So the destroy itself must release.
+    installImageBackend();
+    defer engine.ImageLoader.clearBackend();
+
+    var game = TestGame.init(testing.allocator);
+    defer game.deinit();
+
+    const e = try spawnReservoir(&game);
+    game.destroyEntity(e);
+
+    // No tick in between — that is the whole assertion.
+    try testing.expectEqual(@as(usize, 1), game.renderer.release_calls);
+    try testing.expectEqual(@as(usize, 0), game.renderer.waterInstanceCount());
+    try testing.expect(game.waterInstance(e) == null);
+}
+
+test "instance: a failed initial level sync releases the instance instead of reporting success" {
+    installImageBackend();
+    defer engine.ImageLoader.clearBackend();
+
+    var game = TestGame.init(testing.allocator);
+    defer game.deinit();
+
+    try loadMask(&game, "reservoir_mask");
+    try loadMask(&game, "reflection");
+    game.renderer.fail_level = true;
+
+    const e = game.createEntity();
+    game.addSprite(e, .{ .sprite_name = "reservoir" });
+    try testing.expect(game.addPixelWater(e, authored()));
+
+    // MECHANISM: the instance WAS created and then handed back — not merely
+    // never created. A swallowed level error would leave it live at the
+    // default level while the component reads the authored 0.35.
+    try testing.expectEqual(@as(usize, 1), game.renderer.create_calls);
+    try testing.expectEqual(@as(usize, 1), game.renderer.release_calls);
+    try testing.expectEqual(@as(usize, 0), game.renderer.waterInstanceCount());
+    try testing.expect(game.waterInstance(e) == null);
+    // And nothing half-bound is left on the sprite.
+    try testing.expect(game.getComponent(e, TestGame.SpriteComp).?.water.isNone());
+}
+
+test "binding: a sprite added AFTER the water still gets bound" {
+    // Authored component order is not guaranteed: `PixelWater` before
+    // `Sprite`, with the mask already resident, creates the instance while
+    // there is no sprite to bind. The per-frame resolve must finish the job
+    // when the sprite shows up, or the effect never draws.
+    installImageBackend();
+    defer engine.ImageLoader.clearBackend();
+
+    var game = TestGame.init(testing.allocator);
+    defer game.deinit();
+
+    try loadMask(&game, "reservoir_mask");
+    try loadMask(&game, "reflection");
+
+    const e = game.createEntity();
+    try testing.expect(game.addPixelWater(e, authored()));
+    const id = game.waterInstance(e).?;
+
+    game.addSprite(e, .{ .sprite_name = "reservoir" });
+    try testing.expect(game.getComponent(e, TestGame.SpriteComp).?.water.isNone());
+
+    game.tick(0);
+    const sprite = game.getComponent(e, TestGame.SpriteComp).?;
+    try testing.expect(!sprite.water.isNone());
+    try testing.expectEqual(id.index, sprite.water.index);
+
+    // MECHANISM: the rebind is equality-guarded, so a steady-state frame
+    // does NOT re-dirty the visual. Without the guard this would climb by
+    // one every tick and break the backend's draw batching.
+    const dirty_after_bind = game.renderer.visual_dirty_count;
+    game.tick(0);
+    game.tick(0);
+    try testing.expectEqual(dirty_after_bind, game.renderer.visual_dirty_count);
+}
+
+test "reflection: one that finishes streaming after the mask is still applied" {
+    // Mask and reflection are acquired together but land independently. If
+    // only the creation moment could apply the reflection, the completion
+    // ORDER of two uploads would decide whether the authored reflection ever
+    // appears — a nondeterministic visual.
+    installImageBackend();
+    defer engine.ImageLoader.clearBackend();
+
+    var game = TestGame.init(testing.allocator);
+    defer game.deinit();
+
+    try loadMask(&game, "reservoir_mask");
+    // Registered but NOT resident: the streaming reflection.
+    try game.registerImageFromMemory("reflection", png_type, fake_png);
+
+    const e = game.createEntity();
+    game.addSprite(e, .{ .sprite_name = "reservoir" });
+    try testing.expect(game.addPixelWater(e, authored()));
+
+    const id = game.waterInstance(e).?;
+    try testing.expectEqual(@as(u32, 0), game.renderer.waterState(id).?.config.reflection);
+
+    const settings_before = game.renderer.set_settings_calls;
+    _ = try game.loadImageIfNeeded("reflection");
+    game.tick(0);
+
+    try testing.expect(game.renderer.waterState(id).?.config.reflection != 0);
+    // MECHANISM: exactly ONE reconfigure ran…
+    try testing.expectEqual(settings_before + 1, game.renderer.set_settings_calls);
+    // …and the pending flag was cleared, so later frames do not re-push it.
+    game.tick(0);
+    game.tick(0);
+    try testing.expectEqual(settings_before + 1, game.renderer.set_settings_calls);
+}
+
+// ── Asset references ────────────────────────────────────────────────────
+
+test "assets: a reservoir pins its mask and reflection, and the destroy releases both" {
+    installImageBackend();
+    defer engine.ImageLoader.clearBackend();
+
+    var game = TestGame.init(testing.allocator);
+    defer game.deinit();
+
+    const e = try spawnReservoir(&game);
+    // The eager load holds one reference; the reservoir adds the second.
+    try testing.expectEqual(@as(u32, 2), refcount(&game, "reservoir_mask"));
+    try testing.expectEqual(@as(u32, 2), refcount(&game, "reflection"));
+
+    game.destroyEntity(e);
+    try testing.expectEqual(@as(u32, 1), refcount(&game, "reservoir_mask"));
+    try testing.expectEqual(@as(u32, 1), refcount(&game, "reflection"));
+}
+
+test "assets: re-authoring the same names does not ratchet the refcount" {
+    // Hot reload and live prefab refresh re-run `addPixelWater` on a live
+    // component. An unconditional acquire would add one reference per pass
+    // and pin the texture for the rest of the process.
+    installImageBackend();
+    defer engine.ImageLoader.clearBackend();
+
+    var game = TestGame.init(testing.allocator);
+    defer game.deinit();
+
+    const e = try spawnReservoir(&game);
+    const before = refcount(&game, "reservoir_mask");
+
+    var again = authored();
+    again.distortion_pixels = 0.5; // a non-structural re-author
+    try testing.expect(game.addPixelWater(e, again));
+    try testing.expect(game.addPixelWater(e, again));
+    try testing.expectEqual(before, refcount(&game, "reservoir_mask"));
+
+    // A STRUCTURAL re-author onto a different mask moves the reference:
+    // the old name drops back, the new one is pinned.
+    try loadMask(&game, "other_mask");
+    var swapped = authored();
+    swapped.mask = "other_mask";
+    try testing.expect(game.addPixelWater(e, swapped));
+    try testing.expectEqual(before - 1, refcount(&game, "reservoir_mask"));
+    try testing.expectEqual(@as(u32, 2), refcount(&game, "other_mask"));
+}
+
+test "assets: a reservoir whose mask never arrives still releases on removal" {
+    // The asset table is the superset of the instance table — this entity
+    // never had an instance for the reaper to find, but it does hold
+    // catalog references.
+    installImageBackend();
+    defer engine.ImageLoader.clearBackend();
+
+    var game = TestGame.init(testing.allocator);
+    defer game.deinit();
+
+    try game.registerImageFromMemory("reservoir_mask", png_type, fake_png);
+    const e = game.createEntity();
+    try testing.expect(game.addPixelWater(e, .{
+        .mask = "reservoir_mask",
+        .logical_size = .{ 96, 18 },
+    }));
+    try testing.expect(game.waterInstance(e) == null);
+    try testing.expectEqual(@as(u32, 1), refcount(&game, "reservoir_mask"));
+
+    game.removeComponent(e, PixelWater);
+    engine.pixel_water_tick.tick(&game, 0);
+    try testing.expectEqual(@as(u32, 0), refcount(&game, "reservoir_mask"));
+}
+
+test "assets: an ECS reset releases every reservoir's references" {
+    installImageBackend();
+    defer engine.ImageLoader.clearBackend();
+
+    var game = TestGame.init(testing.allocator);
+    defer game.deinit();
+
+    _ = try spawnReservoir(&game);
+    try testing.expectEqual(@as(u32, 2), refcount(&game, "reservoir_mask"));
+
+    game.resetEcsBackend();
+    try testing.expectEqual(@as(u32, 1), refcount(&game, "reservoir_mask"));
+    try testing.expectEqual(@as(usize, 0), game.renderer.waterInstanceCount());
+}
+
+// ── Worlds ──────────────────────────────────────────────────────────────
+
+test "world: a swap releases the instances and the return rebuilds them" {
+    // A water-instance id belongs to the renderer that ISSUED it, and every
+    // world owns its own renderer. Carrying the table across a swap hands
+    // the incoming renderer ids it never issued.
+    installImageBackend();
+    defer engine.ImageLoader.clearBackend();
+
+    var game = TestGame.init(testing.allocator);
+    defer game.deinit();
+
+    try game.createWorld("a");
+    try game.setActiveWorld("a");
+    const e = try spawnReservoir(&game);
+    try testing.expect(game.waterInstance(e) != null);
+
+    try game.createWorld("b");
+    try game.setActiveWorld("b");
+    // Released against the renderer that issued it, not carried over.
+    try testing.expect(game.waterInstance(e) == null);
+
+    try game.setActiveWorld("a");
+    // The asset references were NOT dropped on the way out (the shelved
+    // world's components still own them), so nothing has to re-acquire.
+    try testing.expectEqual(@as(u32, 2), refcount(&game, "reservoir_mask"));
+    game.tick(0);
+    try testing.expect(game.waterInstance(e) != null);
+    try testing.expectEqual(@as(usize, 1), game.renderer.waterInstanceCount());
 }
 
 // ── Validation ──────────────────────────────────────────────────────────
@@ -995,12 +1242,22 @@ test "time: two reservoirs keep independent clocks" {
     game.addSprite(b, .{ .sprite_name = "reservoir_b" });
     try testing.expect(game.addPixelWater(b, authored()));
 
+    const id_a = game.waterInstance(a).?;
+    const id_b = game.waterInstance(b).?;
+
+    // Seed A's clock apart from B's BEFORE any tick. Equal starting times
+    // would leave this test unable to tell two independent clocks from one
+    // shared clock — and an implementation that advanced only B would pass
+    // an assertion on B alone.
+    try game.renderer.setWaterTime(id_a, 1.0);
     game.tick(0.25);
+    try testing.expectApproxEqAbs(@as(f32, 1.25), game.renderer.waterState(id_a).?.time, 1e-6);
+    try testing.expectApproxEqAbs(@as(f32, 0.25), game.renderer.waterState(id_b).?.time, 1e-6);
+
     // Then freeze A's entity out of the world and keep ticking.
     game.destroyEntity(a);
     game.tick(0.25);
 
-    const id_b = game.waterInstance(b).?;
     try testing.expectApproxEqAbs(@as(f32, 0.5), game.renderer.waterState(id_b).?.time, 1e-6);
     try testing.expectEqual(@as(usize, 1), game.renderer.waterInstanceCount());
 }
