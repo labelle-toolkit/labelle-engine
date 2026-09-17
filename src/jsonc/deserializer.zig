@@ -141,6 +141,21 @@ pub fn deserialize(comptime T: type, value: Value, allocator: std.mem.Allocator)
         return internString(s);
     }
 
+    // Fixed-size arrays (`[2]u32` — `PixelWater.logical_size`, and any
+    // future `[N]T` authored as a JSON array). Length must match exactly:
+    // a short or long literal is an authoring mistake, and silently padding
+    // with zeros would turn `"logical_size": [96]` into a zero-height
+    // reservoir that fails validation somewhere far away from the typo.
+    if (info == .array) {
+        const arr = value.asArray() orelse return null;
+        if (arr.items.len != info.array.len) return null;
+        var out: T = undefined;
+        for (arr.items, 0..) |item, i| {
+            out[i] = deserialize(info.array.child, item, allocator) orelse return null;
+        }
+        return out;
+    }
+
     // Slices of other types (`[]const Struct`, `[]const []const u8`,
     // etc.). The `[]const u8` case is handled specifically above so
     // string deduplication still runs via the intern pool; this

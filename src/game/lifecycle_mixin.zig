@@ -102,6 +102,7 @@ pub fn Mixin(comptime Game: type) type {
 
             // Particle sims (#750) — free the per-emitter pools + the table.
             self.deinitParticleSystems();
+            self.deinitPixelWaterInstances();
 
             // Clean up active world
             self.active_world.deinit();

@@ -87,6 +87,11 @@ pub fn build(b: *std.Build) void {
     // Test files in test/ directory
     const test_files = [_][]const u8{
         "test/root_test.zig",
+        // COND-07 / labelle-bgfx#100 — the `PixelWater` authoring component,
+        // its game-facing helpers, the bounded-strength rule at BOTH
+        // boundaries, and the stage-before-commit ordering. Mock-backed and
+        // deterministic (simulation time only, never a wall clock).
+        "test/pixel_water_test.zig",
         // #855 — typed hook context: `engine.HookContext` injection by
         // field type, `ctx.game()` / `ctx.gameAs(G)`, the bound-Game
         // identity check, and a regression proving the legacy

@@ -80,6 +80,8 @@ const image_component_mod = @import("image_component.zig");
 const camera_mixin = @import("game/camera_mixin.zig");
 const emitter_mod = @import("emitter.zig");
 const emitter_mixin = @import("game/emitter_mixin.zig");
+const pixel_water_mod = @import("pixel_water.zig");
+const pixel_water_mixin = @import("game/pixel_water_mixin.zig");
 const particles_mod = @import("particles.zig");
 const frame_profiler_mod = @import("frame_profiler.zig");
 
@@ -241,6 +243,11 @@ pub fn GameConfigWithYAxis(
         pub const HooksParam = Hooks;
         pub const HooksIsMergedExport = HooksIsMerged;
         pub const EcsBackend = EcsImpl;
+        /// The renderer plugin type itself. Mixins that must reflect on the
+        /// renderer's optional seams (`game/pixel_water_mixin.zig` reads its
+        /// `WaterConfig` / `WaterInstanceId`) need the TYPE, and `renderer` is
+        /// a `*RenderImpl` field rather than a decl.
+        pub const RendererType = RenderImpl;
         pub const SpriteComp = Sprite;
         /// Engine built-in `Image` component — standalone-PNG entity backed by
         /// `AssetCatalog` (#568). Distinct from `SpriteComp` (atlas sprites)
@@ -351,6 +358,18 @@ pub fn GameConfigWithYAxis(
         pub const emitter_is_builtin =
             !(@hasDecl(ComponentsType, "has") and ComponentsType.has("Emitter"));
 
+        // ── Pixel water (COND-07, labelle-bgfx#100) ──────────────────
+        /// Engine built-in `PixelWater` component (authors a reservoir for
+        /// the built-in `pixel_water` material; see `src/pixel_water.zig`).
+        /// Handled by dedicated built-in channels (scene loader, side-table
+        /// runtime) — NOT a `ComponentRegistry` component, unless a project
+        /// registers its own `PixelWater`, which takes precedence.
+        pub const PixelWaterComp = pixel_water_mod.PixelWater;
+        /// True when the project did NOT register its own `PixelWater`.
+        /// Mirrors `emitter_is_builtin`.
+        pub const pixel_water_is_builtin =
+            !(@hasDecl(ComponentsType, "has") and ComponentsType.has("PixelWater"));
+
         pub const Input = @import("input.zig").InputInterface(InputImpl);
 
         /// True when the active input backend itself declares
@@ -429,6 +448,7 @@ pub fn GameConfigWithYAxis(
         const TilemapMixin = tilemap_mixin.Mixin(Self);
         const CameraMixin = camera_mixin.Mixin(Self);
         const EmitterMixin = emitter_mixin.Mixin(Self);
+        const PixelWaterMixin = pixel_water_mixin.Mixin(Self);
         // VideoImpl/AudioImpl are `GameConfig` fn params (not `Self`
         // decls), so the construction mixin takes them explicitly.
         const InitMixin = game_init_mod.Mixin(Self, VideoImpl, AudioImpl);
@@ -690,6 +710,12 @@ pub fn GameConfigWithYAxis(
         /// this is always present. `resetEcsBackend` clears it via
         /// `clearParticleSystems` (entity ids die with the ECS reset).
         particle_systems: std.AutoHashMap(Entity, *particles_mod.ParticleSystem),
+        /// Entity → gfx water-instance id (COND-07). The LIFETIME record for
+        /// reservoirs: `Sprite.water` is the draw binding, but a destroyed
+        /// entity's sprite is exactly what is gone when the release is owed,
+        /// so the id is tracked here too (mirrors `particle_systems`).
+        /// Emptied by `clearPixelWaterInstances` on an ECS reset.
+        water_instances: std.AutoHashMap(Entity, pixel_water_mixin.WaterInstanceIdOf(RenderImpl)),
         /// Runtime scene-source overrides (labelle-studio Play mode /
         /// `editor_api`). Keyed by scene NAME (e.g. `"main"`); the JSONC
         /// loader consults this map BEFORE the embedded/compiled source
@@ -943,6 +969,12 @@ pub fn GameConfigWithYAxis(
         /// `setDriveParticles`. Gated on `scaled_dt != 0` in the tick, so a
         /// hard pause (`time_scale == 0`) freezes particles.
         drive_particles: bool = false,
+        /// Opt into the engine-driven pixel-water phase (COND-07). Off by
+        /// default so a game with no reservoir is byte-identical; the scene
+        /// loader flips it on when it loads a `PixelWater`. Gated on
+        /// `scaled_dt != 0`-aware handling in the tick, so a hard pause
+        /// freezes the water clock and slow-mo slows it.
+        drive_pixel_water: bool = false,
         frame_number: u64 = 0,
         /// Current game state (e.g. "menu", "playing", "paused").
         /// Set via setState() or queueStateChange(). Default is "running".
@@ -1287,6 +1319,21 @@ pub fn GameConfigWithYAxis(
         pub const clearParticleSystems = EmitterMixin.clearParticleSystems;
         pub const reapGhostEmitters = EmitterMixin.reapGhostEmitters;
         pub const deinitParticleSystems = EmitterMixin.deinitParticleSystems;
+
+        // ── Pixel water (COND-07) — `game/pixel_water_mixin.zig` ──────
+        pub const addPixelWater = PixelWaterMixin.addPixelWater;
+        pub const pixelWater = PixelWaterMixin.pixelWater;
+        pub const waterInstance = PixelWaterMixin.waterInstance;
+        pub const resolvePixelWaterInstance = PixelWaterMixin.resolvePixelWaterInstance;
+        pub const setWaterSettings = PixelWaterMixin.setWaterSettings;
+        pub const setWaterLevel = PixelWaterMixin.setWaterLevel;
+        pub const setWaterWavesEnabled = PixelWaterMixin.setWaterWavesEnabled;
+        pub const addWaterRipple = PixelWaterMixin.addWaterRipple;
+        pub const setDrivePixelWater = PixelWaterMixin.setDrivePixelWater;
+        pub const releasePixelWaterInstance = PixelWaterMixin.releasePixelWaterInstance;
+        pub const clearPixelWaterInstances = PixelWaterMixin.clearPixelWaterInstances;
+        pub const reapGhostPixelWater = PixelWaterMixin.reapGhostPixelWater;
+        pub const deinitPixelWaterInstances = PixelWaterMixin.deinitPixelWaterInstances;
 
         // ── Roster cache (#653, #657) — `game/roster.zig` ─────────
         // Borrowed-slice lifetime contract + design rationale live in

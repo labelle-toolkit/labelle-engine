@@ -115,6 +115,17 @@ pub fn Mixin(comptime Game: type) type {
             if (self.drive_particles and scaled_dt != 0) {
                 @import("../particles_tick.zig").tick(self, scaled_dt);
             }
+            // Pixel water (COND-07, labelle-bgfx#100). Same always-run block
+            // and the same TIME-SCALED dt as the two ticks above, so a hard
+            // pause (`time_scale == 0`) freezes the reservoir's clock and
+            // slow-mo slows it — the shader's time comes from the simulation
+            // step, never a wall clock. Unlike the particle tick this is NOT
+            // gated on `scaled_dt != 0`: a paused frame must still be able to
+            // bind a mask that finished uploading, and the advance itself is a
+            // no-op on a zero delta.
+            if (self.drive_pixel_water) {
+                @import("../pixel_water_tick.zig").tick(self, scaled_dt);
+            }
             // Tiled per-tile animations (labelle-gfx#351) — water,
             // shorelines, torches, waterfalls. gfx's tilemap renderer owns
             // NO clock (backends differ; headless tests must be

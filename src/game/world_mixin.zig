@@ -122,6 +122,9 @@ pub fn Mixin(comptime Game: type) type {
             // Free per-entity particle sims for the same reason (#750): the
             // ECS wipe invalidates every emitter entity id in the side-table.
             self.clearParticleSystems();
+            // Water instances are keyed by entity; the ECS reset makes every
+            // key dangling, so release them before the wipe (#100).
+            self.clearPixelWaterInstances();
             // Free every `ChildrenComponent`'s backing allocation before the
             // ECS is torn down: the backend drops components by value with no
             // destructor, so their heap-backed child lists would otherwise
