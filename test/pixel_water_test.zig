@@ -850,6 +850,72 @@ test "world: a swap releases the instances and the return rebuilds them" {
     try testing.expectEqual(@as(usize, 1), game.renderer.waterInstanceCount());
 }
 
+test "world: a shelved world's asset references survive a tick in another world" {
+    // The asset table deliberately SURVIVES a world swap (the shelved
+    // world's components still own their references). That is only sound
+    // if the reaper can tell the two worlds apart: keyed on `Entity`
+    // alone, every shelved record looks like an orphan against the
+    // newly-active ECS and gets released out from under a live component.
+    installImageBackend();
+    defer engine.ImageLoader.clearBackend();
+
+    var game = TestGame.init(testing.allocator);
+    defer game.deinit();
+
+    try game.createWorld("a");
+    try game.setActiveWorld("a");
+    const e = try spawnReservoir(&game);
+    try testing.expectEqual(@as(u32, 2), refcount(&game, "reservoir_mask"));
+
+    try game.createWorld("b");
+    try game.setActiveWorld("b");
+    // A single frame in the OTHER world must not touch world a's books.
+    game.tick(0);
+    try testing.expectEqual(@as(u32, 2), refcount(&game, "reservoir_mask"));
+    try testing.expectEqual(@as(u32, 2), refcount(&game, "reflection"));
+
+    // And the reservoir still works on the way back — the references it
+    // kept are the ones its instance is rebuilt from.
+    try game.setActiveWorld("a");
+    game.tick(0);
+    try testing.expect(game.waterInstance(e) != null);
+    try testing.expectEqual(@as(u32, 2), refcount(&game, "reservoir_mask"));
+}
+
+test "world: colliding entity ids get their own asset records" {
+    // Two independent world ECS instances hand out the same ids from the
+    // same base, so world b's first entity IS world a's first entity as
+    // far as an `Entity`-keyed table is concerned.
+    installImageBackend();
+    defer engine.ImageLoader.clearBackend();
+
+    var game = TestGame.init(testing.allocator);
+    defer game.deinit();
+
+    try game.createWorld("a");
+    try game.setActiveWorld("a");
+    const e_a = try spawnReservoir(&game);
+
+    try game.createWorld("b");
+    try game.setActiveWorld("b");
+    const e_b = game.createEntity();
+    // The premise: without it this test proves nothing.
+    try testing.expectEqual(e_a, e_b);
+    game.addSprite(e_b, .{ .sprite_name = "reservoir" });
+    try testing.expect(game.addPixelWater(e_b, authored()));
+
+    // Two reservoirs in two worlds → two references on top of the eager
+    // load. A shared record would have mistaken b's reservoir for a's and
+    // never acquired at all.
+    try testing.expectEqual(@as(u32, 3), refcount(&game, "reservoir_mask"));
+    try testing.expectEqual(@as(u32, 3), refcount(&game, "reflection"));
+
+    // Destroying b's reservoir drops only b's reference.
+    game.destroyEntity(e_b);
+    try testing.expectEqual(@as(u32, 2), refcount(&game, "reservoir_mask"));
+    try testing.expectEqual(@as(u32, 2), refcount(&game, "reflection"));
+}
+
 // ── Validation ──────────────────────────────────────────────────────────
 
 test "validation: a missing mask is rejected and names the field" {

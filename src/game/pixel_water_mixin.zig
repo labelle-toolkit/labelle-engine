@@ -168,6 +168,18 @@ pub fn Mixin(comptime Game: type) type {
         }
 
         // ── Asset references ────────────────────────────────────────────
+
+        /// The ACTIVE world's asset records. Lives on `Game.World`, not on
+        /// `Game`: the keys are that world's entity ids and the table
+        /// survives a world swap, so a game-global one would confuse two
+        /// worlds' reservoirs whenever their ids collide and would have the
+        /// reaper release a shelved world's references (see the field's own
+        /// comment in `game.zig`). Every caller below is by definition
+        /// operating on the active world.
+        fn waterAssetTable(self: *Game) *std.AutoHashMap(Entity, WaterAssets) {
+            return &self.active_world.water_assets;
+        }
+
         //
         // A reservoir pins its mask / reflection in the catalog for as long
         // as the component lives, so a streaming mask actually streams and
@@ -184,7 +196,7 @@ pub fn Mixin(comptime Game: type) type {
         /// it must not bump the refcount, or repeated prefab refreshes would
         /// ratchet it up one per pass.
         fn syncWaterAssets(self: *Game, entity: Entity, comp: PixelWater) void {
-            if (self.water_assets.getPtr(entity)) |held| {
+            if (waterAssetTable(self).getPtr(entity)) |held| {
                 if (std.mem.eql(u8, held.mask, comp.mask) and
                     std.mem.eql(u8, held.reflection, comp.reflection)) return;
                 releaseWaterAssets(self, entity);
@@ -193,7 +205,7 @@ pub fn Mixin(comptime Game: type) type {
             var rec: WaterAssets = .{};
             rec.mask = acquireOne(self, comp.mask);
             rec.reflection = acquireOne(self, comp.reflection);
-            self.water_assets.put(entity, rec) catch {
+            waterAssetTable(self).put(entity, rec) catch {
                 freeAssetRecord(self, rec);
             };
         }
@@ -225,7 +237,7 @@ pub fn Mixin(comptime Game: type) type {
         /// Drop every catalog reference `entity` holds. Safe to call on an
         /// entity that never had any.
         pub fn releaseWaterAssets(self: *Game, entity: Entity) void {
-            const kv = self.water_assets.fetchRemove(entity) orelse return;
+            const kv = waterAssetTable(self).fetchRemove(entity) orelse return;
             freeAssetRecord(self, kv.value);
         }
 
@@ -234,9 +246,9 @@ pub fn Mixin(comptime Game: type) type {
         /// NOT called on a world swap, where the shelved world's components
         /// live on and still own their references.
         pub fn releaseAllWaterAssets(self: *Game) void {
-            var it = self.water_assets.valueIterator();
+            var it = waterAssetTable(self).valueIterator();
             while (it.next()) |rec| freeAssetRecord(self, rec.*);
-            self.water_assets.clearRetainingCapacity();
+            waterAssetTable(self).clearRetainingCapacity();
         }
 
         /// Release BOTH halves for `entity` — the gfx instance and the
@@ -374,7 +386,7 @@ pub fn Mixin(comptime Game: type) type {
             // (required) mask became resident, so `applyPendingReflection`
             // can finish the job. Whichever texture lands first must not
             // decide whether the authored reflection ever appears.
-            if (self.water_assets.getPtr(entity)) |held| {
+            if (waterAssetTable(self).getPtr(entity)) |held| {
                 held.reflection_pending = comp.reflection.len != 0 and
                     catalogTexture(self, comp.reflection) == null;
             }
@@ -387,7 +399,7 @@ pub fn Mixin(comptime Game: type) type {
         /// resident. No-op unless one was actually pending.
         fn applyPendingReflection(self: *Game, entity: Entity, id: WaterInstanceId) void {
             if (comptime !supported) return;
-            const held = self.water_assets.getPtr(entity) orelse return;
+            const held = waterAssetTable(self).getPtr(entity) orelse return;
             if (!held.reflection_pending) return;
             const comp = self.ecs_backend.getComponent(entity, PixelWater) orelse return;
             if (catalogTexture(self, comp.reflection) == null) return;
@@ -625,7 +637,7 @@ pub fn Mixin(comptime Game: type) type {
             // had an instance, so sweeping only the instance table above
             // would strand exactly those.
             outer_assets: while (true) {
-                var it = self.water_assets.iterator();
+                var it = waterAssetTable(self).iterator();
                 while (it.next()) |entry| {
                     const entity = entry.key_ptr.*;
                     if (!self.ecs_backend.hasComponent(entity, PixelWater)) {
@@ -637,21 +649,27 @@ pub fn Mixin(comptime Game: type) type {
             }
         }
 
-        /// Release every instance and the table itself. Called from
+        /// Release every instance and the instance table itself. Called from
         /// `Game.deinit`.
+        ///
+        /// The ASSET records are not touched here: they live on each `World`
+        /// now, and every world's teardown (`World.deinit`) frees its own
+        /// name copies. That is also why no `assets.release` happens on the
+        /// `Game.deinit` path at all — the catalog is already gone by then.
         pub fn deinitPixelWaterInstances(self: *Game) void {
             if (comptime supported) clearPixelWaterInstances(self);
             self.water_instances.deinit();
-            // Free the OWNED name copies, but do NOT `assets.release` them:
-            // `Game.deinit` tears the catalog down before it reaches this
-            // point, so a release here would read a freed hash map. The
-            // refcounts die with the catalog; the dupes are ours to free.
-            var it = self.water_assets.valueIterator();
-            while (it.next()) |rec| {
-                if (rec.mask.len != 0) self.allocator.free(rec.mask);
-                if (rec.reflection.len != 0) self.allocator.free(rec.reflection);
-            }
-            self.water_assets.deinit();
+        }
+
+        /// Drop the catalog references held by a world that is about to be
+        /// DESTROYED (`destroyWorld`, or the unnamed active world discarded
+        /// by `setActiveWorld`). Runs while the catalog is still alive,
+        /// which is exactly what `World.deinit` cannot assume; it leaves the
+        /// table empty so that teardown has nothing left to free.
+        pub fn releaseWorldWaterAssets(self: *Game, world: *Game.World) void {
+            var it = world.water_assets.valueIterator();
+            while (it.next()) |rec| freeAssetRecord(self, rec.*);
+            world.water_assets.clearRetainingCapacity();
         }
     };
 }

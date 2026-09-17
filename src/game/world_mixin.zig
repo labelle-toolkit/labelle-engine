@@ -38,6 +38,11 @@ pub fn Mixin(comptime Game: type) type {
         /// Destroy a named inactive world. Frees all its entities and visuals.
         pub fn destroyWorld(self: *Game, name: []const u8) void {
             if (self.worlds.fetchRemove(name)) |kv| {
+                // Its reservoirs die with it, so their catalog references are
+                // owed back — and this is the last moment the catalog is
+                // guaranteed alive (`World.deinit` cannot assume that; see
+                // the `water_assets` field comment).
+                self.releaseWorldWaterAssets(kv.value);
                 kv.value.deinit();
                 self.allocator.destroy(kv.value);
                 self.allocator.free(kv.key);
@@ -61,7 +66,10 @@ pub fn Mixin(comptime Game: type) type {
             // them; the water tick recreates them from the components when
             // that world becomes active again. The ASSET references are
             // deliberately kept — the shelved world's components still own
-            // them, and nothing would re-acquire on the way back.
+            // them, and nothing would re-acquire on the way back. They are
+            // safe to keep because they live on the `World` itself, so they
+            // travel with the ECS whose ids key them and stay out of the
+            // incoming world's reaper.
             self.clearPixelWaterInstances();
 
             // Shelve or destroy current active world
@@ -69,7 +77,10 @@ pub fn Mixin(comptime Game: type) type {
                 // Named world — shelve into map (can't fail: we just freed a slot)
                 self.worlds.put(current_name, self.active_world) catch @panic("OOM shelving world");
             } else {
-                // Unnamed default world — destroy it
+                // Unnamed default world — destroy it. Unlike the shelved
+                // case its components do NOT live on, so the references they
+                // hold are released here, while the catalog is still alive.
+                self.releaseWorldWaterAssets(self.active_world);
                 self.active_world.deinit();
                 self.allocator.destroy(self.active_world);
             }
