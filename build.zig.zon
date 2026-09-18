@@ -76,8 +76,8 @@
         // enforced at the consuming game's build; this pin only feeds the
         // tilemap sub-package test.
         .labelle_gfx = .{
-            .url = "https://github.com/labelle-toolkit/labelle-gfx/archive/refs/tags/v1.36.0.tar.gz",
-            .hash = "labelle_gfx-1.36.0-nMpCPGPLDwCNBg59oCHDWvtTKeOgZiIQfU4wc1FCWVau",
+            .url = "https://github.com/labelle-toolkit/labelle-gfx/archive/refs/tags/v2.0.0.tar.gz",
+            .hash = "labelle_gfx-2.0.0-nMpCPELoDgBTsyFFwWitkzyGOIYWAv0eTfPhqq-87FJB",
             .lazy = true,
         },
     },
