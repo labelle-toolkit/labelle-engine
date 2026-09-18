@@ -21,6 +21,7 @@ const MockRenderer = struct {
     visual_dirty_count: usize = 0,
     creates: u64 = 0,
     destroys: usize = 0,
+    invalidates: usize = 0,
     writes: usize = 0,
     texture_writes: usize = 0,
     fail_create: bool = false,
@@ -59,6 +60,9 @@ const MockRenderer = struct {
     }
     pub fn destroyShaderMaterial(self: *Self, _: sm.Id) void {
         self.destroys += 1;
+    }
+    pub fn invalidateShaderMaterials(self: *Self) void {
+        self.invalidates += 1;
     }
     pub fn setShaderParameter(self: *Self, _: sm.Id, _: []const u8, _: []const f32) !void {
         if (self.stale) return error.InvalidHandle;
@@ -138,8 +142,10 @@ test "shader ownership stays with named worlds and context loss clears every wor
     try testing.expectEqual(a, b_entity);
     try testing.expectEqual(@as(usize, 0), world_a.renderer.destroys);
     game.surfaceLost();
-    try testing.expectEqual(@as(usize, 1), world_a.renderer.destroys);
-    try testing.expectEqual(@as(usize, 1), game.renderer.destroys);
+    try testing.expectEqual(@as(usize, 0), world_a.renderer.destroys);
+    try testing.expectEqual(@as(usize, 0), game.renderer.destroys);
+    try testing.expectEqual(@as(usize, 1), world_a.renderer.invalidates);
+    try testing.expectEqual(@as(usize, 1), game.renderer.invalidates);
     try testing.expect(game.shaderMaterial(b_entity) == null);
     try testing.expectError(error.GpuSurfaceUnavailable, game.createShaderMaterial(b_entity, descriptor));
     try game.setActiveWorld("a");
@@ -267,7 +273,7 @@ test "catalog texture replacement balances success failure and superseded pendin
     game.clearShaderMaterial(e);
     try testing.expectEqual(@as(u32, 1), refs(&game, "ready"));
 }
-test "pending acquisitions are released on scene reset and failed material creation" {
+test "pending acquisitions survive failed material creation and are released on scene reset" {
     ImageBackend.install();
     var game = Game.init(testing.allocator);
     defer game.deinit();
@@ -280,8 +286,17 @@ test "pending acquisitions are released on scene reset and failed material creat
     try pumpReady(&game, "cold");
     game.renderer.fail_create = true;
     try testing.expectError(error.InvalidShader, game.createShaderMaterial(e, d));
-    try testing.expectEqual(@as(u32, 0), refs(&game, "cold"));
+    // The attempt's own committed pin was released; the retained pending
+    // request (the asset is already streamed) is NOT — a retry must not
+    // re-stream it.
+    try testing.expectEqual(@as(u32, 1), refs(&game, "cold"));
+    try testing.expectEqual(@as(usize, 1), game.active_world.shader_pending.count());
     game.renderer.fail_create = false;
+    try game.createShaderMaterial(e, d);
+    try testing.expectEqual(@as(u32, 1), refs(&game, "cold"));
+    try testing.expectEqual(@as(usize, 0), game.active_world.shader_pending.count());
+    game.clearShaderMaterial(e);
+    try testing.expectEqual(@as(u32, 0), refs(&game, "cold"));
     try game.registerImageFromMemory("reset", ".png", "fake");
     try testing.expectError(error.TextureNotReady, game.createShaderMaterial(e, textured("reset", &binding)));
     game.resetEcsBackend();
@@ -391,4 +406,94 @@ test "shader setters report surface loss rather than a handle error" {
     try testing.expectError(error.InvalidHandle, game.setShaderParameter(e, "u_time", &.{0}));
     try game.createShaderMaterial(e, descriptor);
     try game.setShaderParameter(e, "u_time", &.{1});
+}
+
+// Stage-before-commit for the PENDING side (codex on #882): re-authoring on
+// an entity that holds a cold pending request must not release that request
+// — or the committed material — unless the replacement fully commits.
+// Refcounts are asserted directly, and the ids compared, so a fix that
+// merely re-requested the asset (refcount dips to 0 then back) would fail.
+test "failed re-authoring keeps the previous material and every pending pin" {
+    ImageBackend.install();
+    var game = Game.init(testing.allocator);
+    defer game.deinit();
+    try game.loadImageFromMemory("ready", ".png", "fake");
+    try game.registerImageFromMemory("cold", ".png", "fake");
+    const e = game.createEntity();
+    game.addSprite(e, .{});
+    var binding: [1]engine.ShaderTextureBinding = undefined;
+    try game.createShaderMaterial(e, textured("ready", &binding));
+    const live = game.shaderMaterial(e).?;
+    try testing.expectError(error.TextureNotReady, game.setShaderTexture(e, "s_mask", "cold"));
+    try testing.expectEqual(@as(u32, 1), refs(&game, "cold"));
+    // Resolution failure on a descriptor that does not mention the pending binding.
+    var other: [1]engine.ShaderTextureBinding = .{.{ .name = "s_other", .texture = .{ .catalog = "missing" } }};
+    var d = descriptor;
+    d.textures = &other;
+    try testing.expectError(error.AssetNotRegistered, game.createShaderMaterial(e, d));
+    try testing.expectEqual(@as(u32, 1), refs(&game, "cold"));
+    try testing.expectEqual(@as(u32, 2), refs(&game, "ready"));
+    try testing.expectEqual(live, game.shaderMaterial(e).?);
+    try testing.expectEqual(live, game.ecs_backend.getComponent(e, MockRenderer.Sprite).?.material.shader);
+    try testing.expectEqual(@as(usize, 0), game.renderer.destroys);
+    // Backend creation failure after every texture resolved.
+    game.renderer.fail_create = true;
+    try testing.expectError(error.InvalidShader, game.createShaderMaterial(e, textured("ready", &binding)));
+    game.renderer.fail_create = false;
+    try testing.expectEqual(@as(u32, 1), refs(&game, "cold"));
+    try testing.expectEqual(@as(u32, 2), refs(&game, "ready"));
+    try testing.expectEqual(live, game.shaderMaterial(e).?);
+    try testing.expectEqual(@as(usize, 0), game.renderer.destroys);
+    // A failed texture update on the SAME binding keeps the pending request too.
+    try testing.expectError(error.AssetNotRegistered, game.setShaderTexture(e, "s_mask", "missing"));
+    try testing.expectEqual(@as(u32, 1), refs(&game, "cold"));
+    // The retained request is still the live one: once ready it commits
+    // without re-streaming, and the sweep leaves exactly the committed pin.
+    try pumpReady(&game, "cold");
+    try game.setShaderTexture(e, "s_mask", "cold");
+    try testing.expectEqual(@as(u32, 1), refs(&game, "cold"));
+    try testing.expectEqual(@as(u32, 1), refs(&game, "ready"));
+    try testing.expectEqual(@as(usize, 0), game.active_world.shader_pending.count());
+    // "ready" (loadImageFromMemory) + "cold" exactly once: the retained
+    // request kept it streamed across every failure, so nothing re-uploaded.
+    try testing.expectEqual(@as(usize, 2), ImageBackend.uploads);
+    game.clearShaderMaterial(e);
+    try testing.expectEqual(@as(u32, 0), refs(&game, "cold"));
+}
+
+// labelle-gfx#361 hand-off: on surface loss the engine must FORGET materials
+// through `invalidateShaderMaterials` — never destroy through the lost
+// context — and its pin releases must not reach the image backend either
+// (the catalog is invalidated first). After restore the setters report the
+// stale id and a recreate goes live.
+test "surface loss forgets materials without a backend destroy and recreation goes live after restore" {
+    ImageBackend.install();
+    var game = Game.init(testing.allocator);
+    defer game.deinit();
+    try game.loadImageFromMemory("mask", ".png", "fake");
+    const e = game.createEntity();
+    game.addSprite(e, .{});
+    var binding: [1]engine.ShaderTextureBinding = undefined;
+    try game.createShaderMaterial(e, textured("mask", &binding));
+    const textureless = game.createEntity();
+    game.addSprite(textureless, .{});
+    try game.createShaderMaterial(textureless, descriptor);
+    try testing.expectEqual(@as(u32, 2), refs(&game, "mask"));
+    game.surfaceLost();
+    try testing.expectEqual(@as(usize, 0), game.renderer.destroys);
+    try testing.expectEqual(@as(usize, 1), game.renderer.invalidates);
+    try testing.expectEqual(@as(usize, 0), ImageBackend.unloads);
+    try testing.expectEqual(@as(u32, 1), refs(&game, "mask"));
+    try testing.expect(game.shaderMaterial(e) == null);
+    try testing.expect(game.shaderMaterial(textureless) == null);
+    try testing.expectEqual(sm.Id.none, game.ecs_backend.getComponent(e, MockRenderer.Sprite).?.material.shader);
+    try testing.expectEqual(sm.Id.none, game.ecs_backend.getComponent(textureless, MockRenderer.Sprite).?.material.shader);
+    game.surfaceRestored();
+    try testing.expectError(error.InvalidHandle, game.setShaderParameter(e, "u_time", &.{0}));
+    try pumpReady(&game, "mask");
+    try game.createShaderMaterial(e, textured("mask", &binding));
+    try testing.expectEqual(@as(u64, 3), game.renderer.creates);
+    try testing.expect(game.shaderMaterial(e) != null);
+    try game.setShaderParameter(e, "u_time", &.{1});
+    try testing.expectEqual(@as(usize, 0), game.renderer.destroys);
 }

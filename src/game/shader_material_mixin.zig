@@ -28,7 +28,10 @@ pub fn Mixin(comptime Game: type) type {
             self.allocator.free(item.name);
         }
 
-        fn cancelPendingBinding(self: *Game, entity: Entity, name: []const u8, keep_key: ?[]const u8) void {
+        /// Drops the entity's request for `name` (unless it is exactly
+        /// `keep_key`) WITHOUT touching the map itself, so a caller holding
+        /// a `getOrPut` pointer into it stays valid.
+        fn removePendingBinding(self: *Game, entity: Entity, name: []const u8, keep_key: ?[]const u8) void {
             const pending = self.active_world.shader_pending.getPtr(entity) orelse return;
             for (pending.items, 0..) |held, i| {
                 if (!std.mem.eql(u8, held.name, name)) continue;
@@ -38,25 +41,61 @@ pub fn Mixin(comptime Game: type) type {
             }
         }
 
+        fn cancelPendingBinding(self: *Game, entity: Entity, name: []const u8, keep_key: ?[]const u8) void {
+            removePendingBinding(self, entity, name, keep_key);
+            pruneEmptyPending(self, entity);
+        }
+
+        /// An entity with no live request owns no map entry: `count()` is
+        /// what `World.deinit` asserts on and what "nothing pending" means.
+        fn pruneEmptyPending(self: *Game, entity: Entity) void {
+            const pending = self.active_world.shader_pending.getPtr(entity) orelse return;
+            if (pending.items.len != 0) return;
+            var list = self.active_world.shader_pending.fetchRemove(entity).?.value;
+            list.deinit(self.allocator);
+        }
+
+        /// Stage-before-commit for PENDING pins: the replacement request is
+        /// fully secured (copies made, reference acquired, decode confirmed
+        /// queued) before the same-name request it supersedes is released,
+        /// so a failure here drops nothing the entity already held.
         fn requestPending(self: *Game, entity: Entity, name: []const u8, key: []const u8) !void {
-            cancelPendingBinding(self, entity, name, key);
-            const gop = try self.active_world.shader_pending.getOrPut(self.allocator, entity);
-            if (!gop.found_existing) gop.value_ptr.* = .empty;
-            for (gop.value_ptr.items) |held| if (std.mem.eql(u8, held.name, name)) return;
+            if (self.active_world.shader_pending.getPtr(entity)) |pending| {
+                for (pending.items) |held| if (std.mem.eql(u8, held.name, name) and std.mem.eql(u8, held.key, key)) return;
+            }
             const copy = try self.allocator.dupe(u8, key);
             errdefer self.allocator.free(copy);
             const binding = try self.allocator.dupe(u8, name);
             errdefer self.allocator.free(binding);
+            const gop = try self.active_world.shader_pending.getOrPut(self.allocator, entity);
+            if (!gop.found_existing) gop.value_ptr.* = .empty;
+            errdefer pruneEmptyPending(self, entity);
             try gop.value_ptr.ensureUnusedCapacity(self.allocator, 1);
             _ = try self.assets.acquire(key);
             errdefer self.assets.release(key);
             if (self.assets.entries.getPtr(key).?.state == .registered) return error.AssetDecodeNotQueued;
+            // Secured: NOW retire the superseded same-name request (a
+            // different key by construction — the exact pair returned above).
+            // Non-pruning on purpose: `gop.value_ptr` must stay valid.
+            removePendingBinding(self, entity, name, null);
             gop.value_ptr.appendAssumeCapacity(.{ .name = binding, .key = copy });
         }
 
-        fn releaseRecord(self: *Game, world: *Game.World, record: sm.Record) void {
+        /// How a runtime material is retired — the split labelle-gfx encodes
+        /// as `TextureInfo.gpu_resident` and `invalidateShaderMaterials`.
+        pub const Retire = enum {
+            /// The context is alive: free the backend resource.
+            destroy,
+            /// The context is GONE (surface loss): forget the id, never call
+            /// the backend destructor — destroying on a stale context is UB,
+            /// and after re-init the dead handle would free whatever the
+            /// backend recycled into that slot.
+            invalidate,
+        };
+
+        fn releaseRecord(self: *Game, world: *Game.World, record: sm.Record, retire: Retire) void {
             if (comptime supported) {
-                if (record.id != .none) world.renderer.destroyShaderMaterial(record.id);
+                if (retire == .destroy and record.id != .none) world.renderer.destroyShaderMaterial(record.id);
             }
             for (record.textures[0..record.len]) |binding| {
                 if (binding.catalog) |key| {
@@ -67,43 +106,25 @@ pub fn Mixin(comptime Game: type) type {
             }
         }
 
-        /// Requires a live sprite. Failure preserves the previous material and pins.
+        /// Requires a live sprite. Failure preserves the previous material and
+        /// pins: NOTHING the entity already holds — the committed record or
+        /// any pending request, mentioned by the new descriptor or not — is
+        /// released until the replacement has been validated, resolved and
+        /// created. On commit every pending request is swept (the committed
+        /// pins own the textures from then on); `TextureNotReady` keeps the
+        /// request it just made so the retry finds the asset still streaming.
         pub fn createShaderMaterial(self: *Game, entity: Entity, desc: sm.Descriptor) anyerror!void {
             if (comptime !supported) return error.Unsupported;
             if (!self.assets.gpu_alive) return error.GpuSurfaceUnavailable;
             if (!self.renderer.shaderMaterialSupported()) return error.Unsupported;
             if (!self.ecs_backend.entityExists(entity)) return error.InvalidEntity;
             const sprite = self.ecs_backend.getComponent(entity, Game.SpriteComp) orelse return error.MissingSprite;
-            errdefer |err| if (err != error.TextureNotReady) clearPending(self, self.active_world, entity);
             if (desc.textures.len > sm.contract.MAX_TEXTURES) return error.CapacityExceeded;
             var validation_bindings: [sm.contract.MAX_TEXTURES]sm.contract.TextureBinding = undefined;
             for (desc.textures, 0..) |binding, i| validation_bindings[i] = .{ .name = binding.name, .sampler = binding.sampler };
             try sm.contract.validateDescriptor(.{ .version = desc.version, .label = desc.label, .shaders = desc.shaders, .parameters = desc.parameters, .textures = validation_bindings[0..desc.textures.len], .blend = desc.blend });
-            // Drop pins no longer mentioned by a re-authored descriptor.
-            if (self.active_world.shader_pending.getPtr(entity)) |pending| {
-                var i: usize = 0;
-                while (i < pending.items.len) {
-                    const key = pending.items[i];
-                    var keep = false;
-                    for (desc.textures) |binding| switch (binding.texture) {
-                        .catalog => |name| {
-                            if (std.mem.eql(u8, key.key, name) and std.mem.eql(u8, key.name, binding.name)) {
-                                keep = true;
-                                break;
-                            }
-                        },
-                        .id => {},
-                    };
-                    if (keep) {
-                        i += 1;
-                    } else {
-                        freePending(self, key);
-                        _ = pending.swapRemove(i);
-                    }
-                }
-            }
             var record: sm.Record = .{ .id = .none };
-            errdefer releaseRecord(self, self.active_world, record);
+            errdefer releaseRecord(self, self.active_world, record, .destroy);
             const RD = Renderer.ShaderMaterialDescriptor;
             const RB = std.meta.Child(@FieldType(RD, "textures"));
             var bindings: [sm.contract.MAX_TEXTURES]RB = undefined;
@@ -123,7 +144,7 @@ pub fn Mixin(comptime Game: type) type {
                 .textures = bindings[0..desc.textures.len],
                 .blend = desc.blend,
             });
-            if (self.active_world.shader_materials.fetchRemove(entity)) |old| releaseRecord(self, self.active_world, old.value);
+            if (self.active_world.shader_materials.fetchRemove(entity)) |old| releaseRecord(self, self.active_world, old.value, .destroy);
             self.active_world.shader_materials.putAssumeCapacity(entity, record);
             // Only the shader slot is ours. `Material.shader` takes precedence
             // over a curated `effect` while it is live, but the curated effect
@@ -190,11 +211,11 @@ pub fn Mixin(comptime Game: type) type {
                 }
             }
             const held = binding orelse return error.UnknownTexture;
-            cancelPendingBinding(self, entity, name, switch (texture) {
-                .catalog => |key| key,
-                .id => null,
-            });
-            errdefer |err| if (err != error.TextureNotReady) cancelPendingBinding(self, entity, name, null);
+            // The request this binding may already hold is left alone until the
+            // replacement commits: `requestPending` supersedes it only once its
+            // own request is secured, and the cancel below runs after the
+            // backend accepted the texture. A hard failure therefore drops
+            // nothing.
             var pin: ?[]const u8 = null;
             const id = try resolveTexture(self, entity, name, texture, &pin);
             errdefer if (pin) |key| {
@@ -216,7 +237,7 @@ pub fn Mixin(comptime Game: type) type {
         pub fn clearShaderMaterial(self: *Game, entity: Entity) void {
             clearPending(self, self.active_world, entity);
             const old = self.active_world.shader_materials.fetchRemove(entity) orelse return;
-            releaseRecord(self, self.active_world, old.value);
+            releaseRecord(self, self.active_world, old.value, .destroy);
             if (comptime supported) if (self.ecs_backend.entityExists(entity)) if (self.ecs_backend.getComponent(entity, Game.SpriteComp)) |sprite| {
                 if (sprite.material.shader == old.value.id) {
                     sprite.material.shader = .none;
@@ -227,26 +248,59 @@ pub fn Mixin(comptime Game: type) type {
 
         /// World-local ownership prevents entity-id collisions across scene worlds.
         pub fn clearWorldShaderMaterials(self: *Game, world: *Game.World) void {
+            _ = retireWorldShaderMaterials(self, world, .destroy);
+        }
+
+        /// Returns how many committed materials were retired.
+        fn retireWorldShaderMaterials(self: *Game, world: *Game.World, retire: Retire) usize {
             while (world.shader_pending.count() != 0) {
                 var pending = world.shader_pending.keyIterator();
                 clearPending(self, world, pending.next().?.*);
             }
+            const retired = world.shader_materials.count();
             var it = world.shader_materials.iterator();
             while (it.next()) |entry| {
-                releaseRecord(self, world, entry.value_ptr.*);
+                releaseRecord(self, world, entry.value_ptr.*, retire);
                 if (comptime supported) if (world.ecs_backend.entityExists(entry.key_ptr.*)) if (world.ecs_backend.getComponent(entry.key_ptr.*, Game.SpriteComp)) |sprite| {
                     sprite.material.shader = .none;
                     world.renderer.markVisualDirty(entry.key_ptr.*);
                 };
             }
             world.shader_materials.clearRetainingCapacity();
-            if (comptime @hasDecl(Renderer, "clearShaderMaterials")) world.renderer.clearShaderMaterials();
+            switch (retire) {
+                .destroy => if (comptime @hasDecl(Renderer, "clearShaderMaterials")) world.renderer.clearShaderMaterials(),
+                // The whole-context counterpart of `clearShaderMaterials`
+                // (labelle-gfx#361): a material with NO texture bindings is
+                // invisible to gfx's per-texture invalidation, so this is the
+                // only way it is retired on surface loss. A renderer that
+                // predates the seam only offers the destroying clear, which
+                // gfx documents as "call before context teardown" — the best
+                // that renderer can do, and no worse than before.
+                .invalidate => if (comptime @hasDecl(Renderer, "invalidateShaderMaterials"))
+                    world.renderer.invalidateShaderMaterials()
+                else if (comptime @hasDecl(Renderer, "clearShaderMaterials"))
+                    world.renderer.clearShaderMaterials(),
+            }
+            return retired;
         }
 
         pub fn clearAllShaderMaterials(self: *Game) void {
             clearWorldShaderMaterials(self, self.active_world);
             var it = self.worlds.valueIterator();
             while (it.next()) |world| clearWorldShaderMaterials(self, world.*);
+        }
+
+        /// Surface loss: forget every world's runtime materials WITHOUT a
+        /// backend destroy, release their catalog pins, and put every bound
+        /// sprite back on the plain draw path. The engine retains no
+        /// descriptor (they are borrowed for the create call), so it cannot
+        /// recreate; the game does, from its own definitions, after
+        /// `surfaceRestored`. Returns the count for the caller's diagnostic.
+        pub fn invalidateAllShaderMaterials(self: *Game) usize {
+            var n = retireWorldShaderMaterials(self, self.active_world, .invalidate);
+            var it = self.worlds.valueIterator();
+            while (it.next()) |world| n += retireWorldShaderMaterials(self, world.*, .invalidate);
+            return n;
         }
 
         pub fn reapShaderMaterials(self: *Game) void {

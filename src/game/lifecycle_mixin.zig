@@ -420,8 +420,19 @@ pub fn Mixin(comptime Game: type) type {
         /// loop lives on, so the usual `emitSync` re-entrancy caveats
         /// apply (no nested emits into the same drain).
         pub fn surfaceLost(self: *Game) void {
-            self.clearAllShaderMaterials();
+            // Catalog first: it flips `gpu_alive` and drops every `.ready`
+            // image to `.registered` without freeing, so the material pin
+            // releases below can never reach `loader.free` on the dead
+            // context (a refcount hitting zero on a still-`.ready` entry
+            // would). Then FORGET the materials (labelle-gfx#361
+            // `invalidateShaderMaterials`) — never destroy through a
+            // context that is gone.
             self.assets.invalidateGpuResources();
+            const invalidated = self.invalidateAllShaderMaterials();
+            if (invalidated != 0) self.log.warn(
+                "surface_lost: {d} shader material(s) invalidated across worlds; their ids now resolve to nothing and bound sprites draw plain — recreate from game-owned definitions after surface_restored",
+                .{invalidated},
+            );
             self.atlas_manager.invalidateUploadedTextures();
             // Direct uploads (#820): drop the dead handles, keep the ids.
             self.invalidateDirectTextures();

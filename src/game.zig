@@ -1278,6 +1278,7 @@ pub fn GameConfigWithYAxis(
         pub const clearShaderMaterial = ShaderMaterialMixin.clearShaderMaterial;
         pub const clearWorldShaderMaterials = ShaderMaterialMixin.clearWorldShaderMaterials;
         pub const clearAllShaderMaterials = ShaderMaterialMixin.clearAllShaderMaterials;
+        pub const invalidateAllShaderMaterials = ShaderMaterialMixin.invalidateAllShaderMaterials;
         pub const reapShaderMaterials = ShaderMaterialMixin.reapShaderMaterials;
         pub const setMaterial = Visuals.setMaterial;
         pub const clearMaterial = Visuals.clearMaterial;
