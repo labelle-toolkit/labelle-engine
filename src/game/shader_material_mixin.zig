@@ -125,7 +125,13 @@ pub fn Mixin(comptime Game: type) type {
             });
             if (self.active_world.shader_materials.fetchRemove(entity)) |old| releaseRecord(self, self.active_world, old.value);
             self.active_world.shader_materials.putAssumeCapacity(entity, record);
-            sprite.material = .{ .shader = record.id };
+            // Only the shader slot is ours. `Material.shader` takes precedence
+            // over a curated `effect` while it is live, but the curated effect
+            // must SURVIVE the shader's lifetime: overwriting the whole
+            // `Material` here silently drops an authored flash/outline/dissolve
+            // and `clearShaderMaterial` (which only resets `.shader`) can never
+            // give it back.
+            sprite.material.shader = record.id;
             self.renderer.markVisualDirty(entity);
             clearPending(self, self.active_world, entity);
         }
@@ -158,6 +164,11 @@ pub fn Mixin(comptime Game: type) type {
 
         pub fn setShaderParameter(self: *Game, entity: Entity, name: []const u8, values: []const f32) anyerror!void {
             if (comptime !supported) return error.Unsupported;
+            // Contract: calls made while the GPU is unavailable report the
+            // surface loss, not a handle error — `surfaceLost` has already
+            // cleared every runtime id, so `InvalidHandle` here would read as
+            // "this entity never had a material".
+            if (!self.assets.gpu_alive) return error.GpuSurfaceUnavailable;
             const id = shaderMaterial(self, entity) orelse return error.InvalidHandle;
             self.renderer.setShaderParameter(id, name, values) catch |err| {
                 if (err == error.InvalidHandle) clearShaderMaterial(self, entity);
@@ -168,6 +179,7 @@ pub fn Mixin(comptime Game: type) type {
         /// Accepts a catalog key, TextureId, or explicit ShaderTexture union.
         pub fn setShaderTexture(self: *Game, entity: Entity, name: []const u8, source: anytype) anyerror!void {
             if (comptime !supported) return error.Unsupported;
+            if (!self.assets.gpu_alive) return error.GpuSurfaceUnavailable;
             const record = self.active_world.shader_materials.getPtr(entity) orelse return error.InvalidHandle;
             const texture: sm.Texture = if (@TypeOf(source) == sm.Texture) source else if (@TypeOf(source) == core.TextureId) .{ .id = source } else .{ .catalog = source };
             var binding: ?*sm.HeldTexture = null;

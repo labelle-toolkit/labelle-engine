@@ -353,3 +353,42 @@ test "zon writer rejects typed authored shader handles" {
     _ = Writer.addComponents(e, &game, .{ .Sprite = @as(MockRenderer.Sprite, .{ .material = .{ .shader = @enumFromInt(123) } }) }, null);
     try testing.expectEqual(sm.Id.none, game.ecs_backend.getComponent(e, MockRenderer.Sprite).?.material.shader);
 }
+
+// A game-owned shader takes PRECEDENCE over a curated effect; it does not
+// replace it. Creating and then clearing a shader material must leave the
+// authored `effect`/`uniforms` exactly as the game set them — asserted on the
+// component itself, so a fix that merely re-derived the same `.none` would not
+// pass.
+test "shader creation preserves the curated material effect it takes precedence over" {
+    var game = Game.init(testing.allocator);
+    defer game.deinit();
+    const e = game.createEntity();
+    game.addSprite(e, .{});
+    game.setMaterial(e, .{ .effect = .flash, .uniforms = .{ .scalar0 = 0.5, .r = 1 } });
+    try game.createShaderMaterial(e, descriptor);
+    const sprite = game.ecs_backend.getComponent(e, MockRenderer.Sprite).?;
+    try testing.expect(sprite.material.shader != .none);
+    try testing.expectEqual(core.MaterialEffect.flash, sprite.material.effect);
+    try testing.expectEqual(@as(f32, 0.5), sprite.material.uniforms.scalar0);
+    try testing.expectEqual(@as(f32, 1), sprite.material.uniforms.r);
+    game.clearShaderMaterial(e);
+    try testing.expectEqual(sm.Id.none, sprite.material.shader);
+    try testing.expectEqual(core.MaterialEffect.flash, sprite.material.effect);
+    try testing.expectEqual(@as(f32, 0.5), sprite.material.uniforms.scalar0);
+}
+
+// Contract: "Calls while the GPU is unavailable return GpuSurfaceUnavailable."
+// Asserted on a LIVE entity whose material existed before the loss, so the
+// error cannot be the incidental `InvalidHandle` an unknown entity would give.
+test "shader setters report surface loss rather than a handle error" {
+    var game = Game.init(testing.allocator);
+    defer game.deinit();
+    const e = try spawn(&game);
+    game.surfaceLost();
+    try testing.expectError(error.GpuSurfaceUnavailable, game.setShaderParameter(e, "u_time", &.{0}));
+    try testing.expectError(error.GpuSurfaceUnavailable, game.setShaderTexture(e, "s_mask", "mask"));
+    game.surfaceRestored();
+    try testing.expectError(error.InvalidHandle, game.setShaderParameter(e, "u_time", &.{0}));
+    try game.createShaderMaterial(e, descriptor);
+    try game.setShaderParameter(e, "u_time", &.{1});
+}
