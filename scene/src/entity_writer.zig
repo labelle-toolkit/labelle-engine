@@ -34,19 +34,6 @@ pub fn EntityWriter(
     const EcsImpl = GameType.EcsBackend;
     const Sprite = GameType.SpriteComp;
 
-    // `PixelWater` (COND-07, labelle-bgfx#100) is an engine BUILT-IN, not a
-    // `ComponentRegistry` entry, so — like `Sprite` / `Shape` — the comptime
-    // `.zon` writer needs its own branch or a `.zon`-authored reservoir would
-    // be silently dropped. It routes through `game.addPixelWater` rather than
-    // `addComponent` for the same reason the JSONC branch does: that helper is
-    // the validated, stage-before-commit path, so BOTH authoring formats land
-    // on one synchronization operation instead of two that can drift.
-    //
-    // A project-registered `PixelWater` still wins (the branch compiles out,
-    // routing the name to the registry dispatch below), and the whole thing
-    // folds away on a duck-typed GameType without the helper.
-    const has_builtin_pixel_water = @hasDecl(GameType, "addPixelWater") and
-        @hasDecl(GameType, "PixelWaterComp") and !Components.has("PixelWater");
     const Shape = GameType.ShapeComp;
     const RefCtx = ReferenceContext(Entity);
 
@@ -54,6 +41,14 @@ pub fn EntityWriter(
         // =====================================================================
         // Component addition with entity reference support
         // =====================================================================
+
+        fn addAuthoredSprite(game: *GameType, entity: Entity, sprite: Sprite) void {
+            var authored = sprite;
+            if (comptime @hasField(Sprite, "material")) {
+                if (comptime @FieldType(Sprite, "material") == labelle_core.Material) authored.material.shader = .none;
+            }
+            game.addSprite(entity, authored);
+        }
 
         /// Add components from a comptime component tuple to an entity.
         /// Handles Sprite/Shape visuals, custom components from the ComponentRegistry,
@@ -67,15 +62,11 @@ pub fn EntityWriter(
                 const value = @field(comps, field.name);
 
                 if (comptime std.mem.eql(u8, field.name, "Sprite")) {
-                    game.addSprite(entity, coerce(Sprite, value));
+                    addAuthoredSprite(game, entity, coerce(Sprite, value));
                     vtype = .sprite;
                 } else if (comptime std.mem.eql(u8, field.name, "Shape")) {
                     game.addShape(entity, coerce(Shape, value));
                     vtype = .shape;
-                } else if (comptime has_builtin_pixel_water and
-                    std.mem.eql(u8, field.name, "PixelWater"))
-                {
-                    _ = game.addPixelWater(entity, coerce(GameType.PixelWaterComp, value));
                 } else if (comptime Components.has(field.name)) {
                     const T = Components.getType(field.name);
                     addCustomComponent(T, field.name, entity, game, value, ref_ctx);
@@ -106,21 +97,12 @@ pub fn EntityWriter(
 
                 if (comptime std.mem.eql(u8, field.name, "Sprite")) {
                     const val = comptime if (has_override) merge(Sprite, prefab_val, scene_comps.Sprite) else coerce(Sprite, prefab_val);
-                    game.addSprite(entity, val);
+                    addAuthoredSprite(game, entity, val);
                     vtype = .sprite;
                 } else if (comptime std.mem.eql(u8, field.name, "Shape")) {
                     const val = comptime if (has_override) merge(Shape, prefab_val, scene_comps.Shape) else coerce(Shape, prefab_val);
                     game.addShape(entity, val);
                     vtype = .shape;
-                } else if (comptime has_builtin_pixel_water and
-                    std.mem.eql(u8, field.name, "PixelWater"))
-                {
-                    const PW = GameType.PixelWaterComp;
-                    const val = comptime if (has_override)
-                        merge(PW, prefab_val, @field(scene_comps, field.name))
-                    else
-                        coerce(PW, prefab_val);
-                    _ = game.addPixelWater(entity, val);
                 } else if (comptime Components.has(field.name)) {
                     const T = Components.getType(field.name);
                     if (has_override) {
@@ -140,15 +122,11 @@ pub fn EntityWriter(
                 const value = @field(scene_comps, field.name);
 
                 if (comptime std.mem.eql(u8, field.name, "Sprite")) {
-                    game.addSprite(entity, coerce(Sprite, value));
+                    addAuthoredSprite(game, entity, coerce(Sprite, value));
                     vtype = .sprite;
                 } else if (comptime std.mem.eql(u8, field.name, "Shape")) {
                     game.addShape(entity, coerce(Shape, value));
                     vtype = .shape;
-                } else if (comptime has_builtin_pixel_water and
-                    std.mem.eql(u8, field.name, "PixelWater"))
-                {
-                    _ = game.addPixelWater(entity, coerce(GameType.PixelWaterComp, value));
                 } else if (comptime Components.has(field.name)) {
                     const T = Components.getType(field.name);
                     addCustomComponent(T, field.name, entity, game, value, ref_ctx);
@@ -368,6 +346,7 @@ pub fn EntityWriter(
         /// Deep-coerce a .zon anonymous value into target type T.
         /// Handles structs (field-by-field), tagged unions (by active field), and enums.
         pub fn coerce(comptime T: type, comptime zon_val: anytype) T {
+            if (T == labelle_core.shader_material.Id) return .none;
             const Src = @TypeOf(zon_val);
             const src_info = @typeInfo(Src);
             const dst_info = @typeInfo(T);

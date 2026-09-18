@@ -96,6 +96,7 @@ pub fn Mixin(comptime Game: type) type {
         }
 
         pub fn removeSprite(self: *Game, entity: Entity) void {
+            self.clearShaderMaterial(entity);
             self.renderer.untrackEntity(entity);
             self.ecs_backend.removeComponent(entity, Sprite);
             self.bumpRoster(); // membership changed (#653)
@@ -329,6 +330,7 @@ pub fn Mixin(comptime Game: type) type {
             self.assertEntityAlive(entity, "setMaterial");
             const sprite = self.ecs_backend.getComponent(entity, Sprite) orelse return;
             if (std.meta.eql(sprite.material, material)) return;
+            if (sprite.material.shader != material.shader) self.clearShaderMaterial(entity);
             sprite.material = material;
             self.renderer.markVisualDirty(entity);
         }

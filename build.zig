@@ -87,11 +87,7 @@ pub fn build(b: *std.Build) void {
     // Test files in test/ directory
     const test_files = [_][]const u8{
         "test/root_test.zig",
-        // COND-07 / labelle-bgfx#100 — the `PixelWater` authoring component,
-        // its game-facing helpers, the bounded-strength rule at BOTH
-        // boundaries, and the stage-before-commit ordering. Mock-backed and
-        // deterministic (simulation time only, never a wall clock).
-        "test/pixel_water_test.zig",
+        "test/shader_material_test.zig",
         // #855 — typed hook context: `engine.HookContext` injection by
         // field type, `ctx.game()` / `ctx.gameAs(G)`, the bound-Game
         // identity check, and a regression proving the legacy
@@ -469,6 +465,7 @@ pub fn build(b: *std.Build) void {
 
     const legacy_animation_step = b.step("test-animation-legacy", "Run all animation package and engine adapter tests");
     legacy_animation_step.dependOn(&run_animation_tests.step);
+    const shader_regressions = b.step("test-shader-regressions", "Execute shader, scene, prefab, and material regressions");
     for (test_files) |test_file| {
         const t = b.addTest(.{
             .root_module = b.createModule(.{
@@ -485,6 +482,10 @@ pub fn build(b: *std.Build) void {
         });
         const run = b.addRunArtifact(t);
         test_step.dependOn(&run.step);
+        for ([_][]const u8{ "test/shader_material_test.zig", "test/scene_test.zig", "test/scene_lifecycle_events_test.zig", "test/scene_teardown_test.zig", "test/prefab_refresh_test.zig", "test/jsonc/deserializer_test.zig", "test/set_material_test.zig" }) |related| {
+            if (std.mem.eql(u8, test_file, related)) shader_regressions.dependOn(&run.step);
+        }
+        if (std.mem.eql(u8, test_file, "test/shader_material_test.zig")) b.step("test-shader-material", "Execute shader ownership and lifecycle tests").dependOn(&run.step);
         if (std.mem.startsWith(u8, test_file, "animation/test/")) legacy_animation_step.dependOn(&run.step);
     }
 

@@ -80,8 +80,6 @@ const image_component_mod = @import("image_component.zig");
 const camera_mixin = @import("game/camera_mixin.zig");
 const emitter_mod = @import("emitter.zig");
 const emitter_mixin = @import("game/emitter_mixin.zig");
-const pixel_water_mod = @import("pixel_water.zig");
-const pixel_water_mixin = @import("game/pixel_water_mixin.zig");
 const particles_mod = @import("particles.zig");
 const frame_profiler_mod = @import("frame_profiler.zig");
 
@@ -244,8 +242,7 @@ pub fn GameConfigWithYAxis(
         pub const HooksIsMergedExport = HooksIsMerged;
         pub const EcsBackend = EcsImpl;
         /// The renderer plugin type itself. Mixins that must reflect on the
-        /// renderer's optional seams (`game/pixel_water_mixin.zig` reads its
-        /// `WaterConfig` / `WaterInstanceId`) need the TYPE, and `renderer` is
+        /// renderer's optional seams need the TYPE, and `renderer` is
         /// a `*RenderImpl` field rather than a decl.
         pub const RendererType = RenderImpl;
         pub const SpriteComp = Sprite;
@@ -358,18 +355,6 @@ pub fn GameConfigWithYAxis(
         pub const emitter_is_builtin =
             !(@hasDecl(ComponentsType, "has") and ComponentsType.has("Emitter"));
 
-        // ── Pixel water (COND-07, labelle-bgfx#100) ──────────────────
-        /// Engine built-in `PixelWater` component (authors a reservoir for
-        /// the built-in `pixel_water` material; see `src/pixel_water.zig`).
-        /// Handled by dedicated built-in channels (scene loader, side-table
-        /// runtime) — NOT a `ComponentRegistry` component, unless a project
-        /// registers its own `PixelWater`, which takes precedence.
-        pub const PixelWaterComp = pixel_water_mod.PixelWater;
-        /// True when the project did NOT register its own `PixelWater`.
-        /// Mirrors `emitter_is_builtin`.
-        pub const pixel_water_is_builtin =
-            !(@hasDecl(ComponentsType, "has") and ComponentsType.has("PixelWater"));
-
         pub const Input = @import("input.zig").InputInterface(InputImpl);
 
         /// True when the active input backend itself declares
@@ -448,7 +433,7 @@ pub fn GameConfigWithYAxis(
         const TilemapMixin = tilemap_mixin.Mixin(Self);
         const CameraMixin = camera_mixin.Mixin(Self);
         const EmitterMixin = emitter_mixin.Mixin(Self);
-        const PixelWaterMixin = pixel_water_mixin.Mixin(Self);
+        const ShaderMaterialMixin = @import("game/shader_material_mixin.zig").Mixin(Self);
         // VideoImpl/AudioImpl are `GameConfig` fn params (not `Self`
         // decls), so the construction mixin takes them explicitly.
         const InitMixin = game_init_mod.Mixin(Self, VideoImpl, AudioImpl);
@@ -530,28 +515,8 @@ pub fn GameConfigWithYAxis(
             /// Living here, the retention travels with the renderer it
             /// belongs to and is torn down with the world.
             direct_textures: atlas_mixin.DirectTextureStore = .empty,
-            /// Entity → the catalog references that world's reservoirs hold
-            /// (COND-07), plus each one's late-reflection resolution state.
-            /// Separate from `water_instances` because the two have different
-            /// lifetimes: the references are taken when the component is
-            /// AUTHORED, the instance only once the mask is resident — and a
-            /// reservoir whose mask never arrives still owes the catalog a
-            /// `release`.
-            ///
-            /// PER-WORLD, for the same reason as `direct_textures` above and
-            /// unlike `water_instances`. The instance table is EMPTIED on a
-            /// world swap, so an `Entity` key can never outlive the ECS that
-            /// minted it; the asset table deliberately SURVIVES one (the
-            /// shelved world's components live on and still own their
-            /// references). Keyed game-globally on `Entity` alone that is
-            /// unsound twice over: independent world ECS instances hand out
-            /// the same ids, so world B's reservoir would be mistaken for
-            /// world A's and never acquire at all — and `reapGhostPixelWater`
-            /// checks every record against the ACTIVE ECS, so a shelved
-            /// world's records look like orphans and are released out from
-            /// under live components on the next tick. Living here, the
-            /// records travel with the ECS whose ids key them.
-            water_assets: std.AutoHashMap(Entity, pixel_water_mixin.WaterAssets),
+            shader_pending: std.AutoHashMapUnmanaged(Entity, std.ArrayList(@import("shader_material.zig").Pending)) = .{},
+            shader_materials: std.AutoHashMapUnmanaged(Entity, @import("shader_material.zig").Record) = .{},
             /// Retained so `deinit` can free heap-owning components (the
             /// `ChildrenComponent` ArrayLists) before the ECS is torn down —
             /// the backend drops components by value with no destructor.
@@ -563,32 +528,18 @@ pub fn GameConfigWithYAxis(
                     .renderer = RenderImpl.init(allocator),
                     .sprite_cache = atlas_mod.SpriteCache.init(allocator),
                     .nested_entity_arena = std.heap.ArenaAllocator.init(allocator),
-                    .water_assets = std.AutoHashMap(Entity, pixel_water_mixin.WaterAssets).init(allocator),
                     .allocator = allocator,
                 };
             }
 
             pub fn deinit(self: *World) void {
+                std.debug.assert(self.shader_pending.count() == 0);
+                self.shader_pending.deinit(self.allocator);
+                std.debug.assert(self.shader_materials.count() == 0);
+                self.shader_materials.deinit(self.allocator);
                 // Retained direct uploads (#820) — the CPU copies; their
                 // GPU side goes with `self.renderer.deinit()` below.
                 AtlasMixin.freeWorldDirectTextures(self);
-                // Water asset records (COND-07). The OWNED name copies are
-                // freed here; the catalog `release` is NOT owed from this
-                // path. `Game.deinit` tears the catalog down before it
-                // reaches any world teardown, so a release here would read a
-                // freed hash map (this ordering already cost one panic). The
-                // mid-game teardowns — `destroyWorld` and the unnamed-world
-                // destroy in `setActiveWorld` — run
-                // `releaseWorldWaterAssets` first, while the catalog is
-                // still alive, and leave this loop nothing to do.
-                {
-                    var wa_it = self.water_assets.valueIterator();
-                    while (wa_it.next()) |rec| {
-                        if (rec.mask.len != 0) self.allocator.free(rec.mask);
-                        if (rec.reflection.len != 0) self.allocator.free(rec.reflection);
-                    }
-                    self.water_assets.deinit();
-                }
                 // Free every `ChildrenComponent`'s backing allocation before
                 // the ECS wipe drops the components by value (no destructor)
                 // — otherwise the child lists leak on final teardown.
@@ -750,12 +701,6 @@ pub fn GameConfigWithYAxis(
         /// this is always present. `resetEcsBackend` clears it via
         /// `clearParticleSystems` (entity ids die with the ECS reset).
         particle_systems: std.AutoHashMap(Entity, *particles_mod.ParticleSystem),
-        /// Entity → gfx water-instance id (COND-07). The LIFETIME record for
-        /// reservoirs: `Sprite.water` is the draw binding, but a destroyed
-        /// entity's sprite is exactly what is gone when the release is owed,
-        /// so the id is tracked here too (mirrors `particle_systems`).
-        /// Emptied by `clearPixelWaterInstances` on an ECS reset.
-        water_instances: std.AutoHashMap(Entity, pixel_water_mixin.WaterInstanceIdOf(RenderImpl)),
         /// Runtime scene-source overrides (labelle-studio Play mode /
         /// `editor_api`). Keyed by scene NAME (e.g. `"main"`); the JSONC
         /// loader consults this map BEFORE the embedded/compiled source
@@ -1009,12 +954,6 @@ pub fn GameConfigWithYAxis(
         /// `setDriveParticles`. Gated on `scaled_dt != 0` in the tick, so a
         /// hard pause (`time_scale == 0`) freezes particles.
         drive_particles: bool = false,
-        /// Opt into the engine-driven pixel-water phase (COND-07). Off by
-        /// default so a game with no reservoir is byte-identical; the scene
-        /// loader flips it on when it loads a `PixelWater`. Gated on
-        /// `scaled_dt != 0`-aware handling in the tick, so a hard pause
-        /// freezes the water clock and slow-mo slows it.
-        drive_pixel_water: bool = false,
         frame_number: u64 = 0,
         /// Current game state (e.g. "menu", "playing", "paused").
         /// Set via setState() or queueStateChange(). Default is "running".
@@ -1332,6 +1271,15 @@ pub fn GameConfigWithYAxis(
         pub const setSpriteFlip = Visuals.setSpriteFlip;
         pub const setSpriteFrame = Visuals.setSpriteFrame;
         pub const setTextFont = Visuals.setTextFont;
+        pub const createShaderMaterial = ShaderMaterialMixin.createShaderMaterial;
+        pub const shaderMaterial = ShaderMaterialMixin.shaderMaterial;
+        pub const setShaderParameter = ShaderMaterialMixin.setShaderParameter;
+        pub const setShaderTexture = ShaderMaterialMixin.setShaderTexture;
+        pub const clearShaderMaterial = ShaderMaterialMixin.clearShaderMaterial;
+        pub const clearWorldShaderMaterials = ShaderMaterialMixin.clearWorldShaderMaterials;
+        pub const clearAllShaderMaterials = ShaderMaterialMixin.clearAllShaderMaterials;
+        pub const invalidateAllShaderMaterials = ShaderMaterialMixin.invalidateAllShaderMaterials;
+        pub const reapShaderMaterials = ShaderMaterialMixin.reapShaderMaterials;
         pub const setMaterial = Visuals.setMaterial;
         pub const clearMaterial = Visuals.clearMaterial;
 
@@ -1359,25 +1307,6 @@ pub fn GameConfigWithYAxis(
         pub const clearParticleSystems = EmitterMixin.clearParticleSystems;
         pub const reapGhostEmitters = EmitterMixin.reapGhostEmitters;
         pub const deinitParticleSystems = EmitterMixin.deinitParticleSystems;
-
-        // ── Pixel water (COND-07) — `game/pixel_water_mixin.zig` ──────
-        pub const addPixelWater = PixelWaterMixin.addPixelWater;
-        pub const pixelWater = PixelWaterMixin.pixelWater;
-        pub const waterInstance = PixelWaterMixin.waterInstance;
-        pub const resolvePixelWaterInstance = PixelWaterMixin.resolvePixelWaterInstance;
-        pub const setWaterSettings = PixelWaterMixin.setWaterSettings;
-        pub const setWaterLevel = PixelWaterMixin.setWaterLevel;
-        pub const setWaterWavesEnabled = PixelWaterMixin.setWaterWavesEnabled;
-        pub const addWaterRipple = PixelWaterMixin.addWaterRipple;
-        pub const setDrivePixelWater = PixelWaterMixin.setDrivePixelWater;
-        pub const releasePixelWaterInstance = PixelWaterMixin.releasePixelWaterInstance;
-        pub const releasePixelWater = PixelWaterMixin.releasePixelWater;
-        pub const releaseWaterAssets = PixelWaterMixin.releaseWaterAssets;
-        pub const releaseAllWaterAssets = PixelWaterMixin.releaseAllWaterAssets;
-        pub const releaseWorldWaterAssets = PixelWaterMixin.releaseWorldWaterAssets;
-        pub const clearPixelWaterInstances = PixelWaterMixin.clearPixelWaterInstances;
-        pub const reapGhostPixelWater = PixelWaterMixin.reapGhostPixelWater;
-        pub const deinitPixelWaterInstances = PixelWaterMixin.deinitPixelWaterInstances;
 
         // ── Roster cache (#653, #657) — `game/roster.zig` ─────────
         // Borrowed-slice lifetime contract + design rationale live in

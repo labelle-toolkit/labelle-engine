@@ -91,7 +91,6 @@ pub fn Mixin(comptime Game: type, comptime VideoImpl: type, comptime AudioImpl: 
                     std.AutoHashMap(Entity, *Game.TilemapRuntimeType).init(allocator)
                 else {},
                 .particle_systems = std.AutoHashMap(Entity, *@import("../particles.zig").ParticleSystem).init(allocator),
-                .water_instances = std.AutoHashMap(Entity, @import("pixel_water_mixin.zig").WaterInstanceIdOf(Game.RendererType)).init(allocator),
                 .scene_source_overrides = std.StringHashMap([]const u8).init(allocator),
                 .runtime_anim_defs = animation_def_runtime.RuntimeAnimDefs.init(allocator),
                 .animation_library = @import("animation").Library.init(allocator),
