@@ -88,6 +88,10 @@ pub fn build(b: *std.Build) void {
     const test_files = [_][]const u8{
         "test/root_test.zig",
         "test/shader_material_test.zig",
+        // #881 — the comptime `.zon` entity writer must never silently
+        // drop an engine BUILT-IN (`Camera`/`Image`/`Emitter` were), and a
+        // NEW built-in that forgets a writer branch must fail to COMPILE.
+        "test/zon_builtin_components_test.zig",
         // #883 — a shader material destroyed mid-update must never be
         // submitted for the frame the renderer had already cached it in.
         // Mock renderer with a CACHED DRAW LIST counts material vs

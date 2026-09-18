@@ -337,3 +337,150 @@ test "insert (no previous generation) and invalid pushes touch nothing" {
     try testing.expectError(error.InvalidFormat, game.reloadPrefabSource("condenser", "{ \"components\": "));
     try testing.expectEqual(@as(f32, 6.0), game.ecs_backend.getComponent(e, Overlay).?.fps);
 }
+
+// ── Built-in components (#881) ──────────────────────────────────────
+//
+// The refresh dispatched over `Components.names()` only, so the engine's
+// BUILT-INS — which are deliberately absent from every project registry —
+// were invisible to it. `Emitter` is the one `.transient` built-in, so
+// editing an emitter in a pushed prefab silently did nothing until a full
+// respawn. (`Image`/`Camera`/`Tilemap` carry no `save` decl, so they are
+// `.saveable` and stay outside the refresh contract by design.)
+
+test "built-in: a transient Emitter declared by the prefab re-applies in place" {
+    var game = engine.Game.init(testing.allocator);
+    defer game.deinit();
+    try boot(&game, &.{.{ .name = "smoker", .src =
+        \\{ "components": {
+        \\    "Emitter": { "preset": "smoke" },
+        \\    "Keep": { "hp": 3 }
+        \\} }
+    }});
+
+    const e = game.spawnPrefab("smoker", .{ .x = 0, .y = 0 }).?;
+    try testing.expectEqual(engine.EmitterPreset.smoke, game.ecs_backend.getComponent(e, engine.Emitter).?.preset);
+    game.ecs_backend.getComponent(e, Keep).?.hp = 99;
+
+    try game.reloadPrefabSource("smoker",
+        \\{ "components": {
+        \\    "Emitter": { "preset": "rain" },
+        \\    "Keep": { "hp": 3 }
+        \\} }
+    );
+
+    // The built-in must have been RE-APPLIED on the live entity — not
+    // merely left in place (which is what the entity-exists check would
+    // have accepted).
+    const em = game.ecs_backend.getComponent(e, engine.Emitter) orelse
+        return error.EmitterComponentDropped;
+    try testing.expectEqual(engine.EmitterPreset.rain, em.preset);
+    // The saveable neighbour is still untouched by the refresh.
+    try testing.expectEqual(@as(i32, 99), game.ecs_backend.getComponent(e, Keep).?.hp);
+}
+
+test "built-in: an Emitter dropped by the new source is removed from live instances" {
+    var game = engine.Game.init(testing.allocator);
+    defer game.deinit();
+    try boot(&game, &.{.{ .name = "sparker", .src =
+        \\{ "components": {
+        \\    "Emitter": { "preset": "sparks" },
+        \\    "Keep": { "hp": 1 }
+        \\} }
+    }});
+
+    const e = game.spawnPrefab("sparker", .{ .x = 0, .y = 0 }).?;
+    try testing.expect(game.ecs_backend.getComponent(e, engine.Emitter) != null);
+
+    try game.reloadPrefabSource("sparker",
+        \\{ "components": {
+        \\    "Keep": { "hp": 1 }
+        \\} }
+    );
+
+    try testing.expect(game.ecs_backend.getComponent(e, engine.Emitter) == null);
+}
+
+// The two tests above assert the COMPONENT changed. That is only half of
+// a refresh for `Emitter`, whose real state lives in the
+// `particle_systems` side table: `particles_tick.tick` snapshots
+// `resolvedConfig()` when it first creates the entity's `ParticleSystem`
+// and never reads the component again. An emitter that has already ticked
+// therefore kept running the OLD config, and the refresh was a silent
+// no-op — which a component-level assertion cannot see. These two go at
+// the particles.
+
+test "built-in: refreshing an Emitter takes effect in the PARTICLES, not just the component" {
+    var game = engine.Game.init(testing.allocator);
+    defer game.deinit();
+    try boot(&game, &.{.{ .name = "smoker", .src =
+        \\{ "components": {
+        \\    "Emitter": { "config": { "rate": 10, "lifetime": 100, "max_particles": 512 } }
+        \\} }
+    }});
+
+    const e = game.spawnPrefab("smoker", .{ .x = 0, .y = 0 }).?;
+    game.setDriveParticles(true);
+    // Tick first, so the sim EXISTS: its snapshot of the old config is
+    // exactly what the refresh has to invalidate. (Refreshing an emitter
+    // that never ticked was never broken — the lazy create picks up the
+    // new config by itself.)
+    game.tick(1.0);
+    const before = game.particleSystem(e) orelse return error.NoParticleSystem;
+    try testing.expectEqual(@as(f32, 10), before.config.rate);
+    const emitted_at_old_rate = before.liveCount();
+    try testing.expect(emitted_at_old_rate > 0);
+
+    try game.reloadPrefabSource("smoker",
+        \\{ "components": {
+        \\    "Emitter": { "config": { "rate": 200, "lifetime": 100, "max_particles": 512 } }
+        \\} }
+    );
+    game.tick(1.0);
+
+    const after = game.particleSystem(e) orelse return error.NoParticleSystem;
+    // The sim itself moved to the new config...
+    try testing.expectEqual(@as(f32, 200), after.config.rate);
+    // ...and so did the particles it actually emitted. Against the bug the
+    // second second emits at the OLD rate, so the count lands at
+    // `2 * emitted_at_old_rate` — the assertion that a component-only
+    // check would have let through.
+    try testing.expect(after.liveCount() > 2 * emitted_at_old_rate);
+    try testing.expectEqual(@as(usize, 200), after.liveCount());
+}
+
+test "built-in: an Emitter dropped by a refresh releases its particle system even while hard-paused" {
+    var game = engine.Game.init(testing.allocator);
+    defer game.deinit();
+    try boot(&game, &.{.{ .name = "sparker", .src =
+        \\{ "components": {
+        \\    "Emitter": { "preset": "sparks" },
+        \\    "Keep": { "hp": 1 }
+        \\} }
+    }});
+
+    const e = game.spawnPrefab("sparker", .{ .x = 0, .y = 0 }).?;
+    game.setDriveParticles(true);
+    game.tick(0.1);
+    try testing.expect(game.particleSystem(e) != null);
+
+    // Hard pause: `particles_tick.tick` is gated on `scaled_dt != 0`, so
+    // `reapGhostEmitters` — the ONLY other thing that frees an orphaned
+    // pool — stops running.
+    game.setTimeScale(0);
+
+    try game.reloadPrefabSource("sparker",
+        \\{ "components": {
+        \\    "Keep": { "hp": 1 }
+        \\} }
+    );
+
+    try testing.expect(game.ecs_backend.getComponent(e, engine.Emitter) == null);
+    // Released at REMOVAL time, not deferred to a reaper that will not run:
+    // asserted before any tick, so nothing else can have done it.
+    try testing.expect(game.particleSystem(e) == null);
+    try testing.expectEqual(@as(usize, 0), game.particle_systems.count());
+
+    // And ticking under the pause does not resurrect or re-orphan it.
+    game.tick(0.1);
+    try testing.expectEqual(@as(usize, 0), game.particle_systems.count());
+}

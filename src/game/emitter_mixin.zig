@@ -47,6 +47,37 @@ pub fn Mixin(comptime Game: type) type {
             return sys;
         }
 
+        /// Re-sync the cached `ParticleSystem` with the entity's CURRENT
+        /// `Emitter` component (#881).
+        ///
+        /// `particles_tick.tick` snapshots `resolvedConfig()` ONCE — when it
+        /// first sees the emitter — and never reads the component again. A
+        /// live prefab refresh that swaps only the ECS component therefore
+        /// leaves the old sim running with the old config, and the refresh
+        /// reads as a silent no-op. Dropping the cached system here makes
+        /// the next tick rebuild it from the new config; that recreate is
+        /// exactly what `acquireParticleSystem` already documents for a
+        /// config change.
+        ///
+        /// A no-op when the resolved config is unchanged, so re-pushing a
+        /// prefab whose emitter was not edited does not restart particles
+        /// that are mid-flight.
+        ///
+        /// When the component is GONE (removed by the refresh) the system is
+        /// released outright: the only other reaper is `reapGhostEmitters`,
+        /// which runs from `particles_tick.tick` — and that does not run
+        /// while the game is hard-paused, so the pool would linger as a ghost
+        /// (still drawn) until the pause lifted.
+        pub fn refreshParticleSystem(self: *Game, entity: Entity) void {
+            const sys = self.particle_systems.get(entity) orelse return;
+            const emitter = self.ecs_backend.getComponent(entity, Game.EmitterComp) orelse {
+                releaseParticleSystem(self, entity);
+                return;
+            };
+            if (std.meta.eql(sys.config, emitter.resolvedConfig())) return;
+            releaseParticleSystem(self, entity);
+        }
+
         /// Free the `ParticleSystem` for `entity` if present. No-op otherwise.
         pub fn releaseParticleSystem(self: *Game, entity: Entity) void {
             if (self.particle_systems.fetchRemove(entity)) |kv| {

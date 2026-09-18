@@ -14,6 +14,12 @@ pub const profiler = scene.profiler;
 /// generated scene does, without standing up a whole scene.
 pub const entity_writer = scene.entity_writer;
 pub const EntityWriter = scene.EntityWriter;
+/// Engine BUILT-IN scene components (#881) — the one source of truth every
+/// registry-driven dispatch chain derives its built-in set from.
+pub const builtins = scene.builtins;
+pub const Builtin = scene.Builtin;
+pub const isBuiltinComponent = scene.isBuiltinComponent;
+pub const builtin_component_names = scene.builtin_component_names;
 
 // ── Types ──
 pub const RefInfo = scene.RefInfo;

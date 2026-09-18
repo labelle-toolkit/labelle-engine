@@ -1353,6 +1353,7 @@ pub fn GameConfigWithYAxis(
         pub const particleSystem = EmitterMixin.particleSystem;
         pub const acquireParticleSystem = EmitterMixin.acquireParticleSystem;
         pub const releaseParticleSystem = EmitterMixin.releaseParticleSystem;
+        pub const refreshParticleSystem = EmitterMixin.refreshParticleSystem;
         pub const clearParticleSystems = EmitterMixin.clearParticleSystems;
         pub const reapGhostEmitters = EmitterMixin.reapGhostEmitters;
         pub const deinitParticleSystems = EmitterMixin.deinitParticleSystems;

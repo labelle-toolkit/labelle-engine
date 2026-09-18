@@ -9,6 +9,9 @@
 pub const types = @import("types.zig");
 pub const core = @import("core.zig");
 pub const entity_writer = @import("entity_writer.zig");
+/// Built-in scene components — one source of truth for every
+/// registry-driven dispatch chain (#881).
+pub const builtins = @import("builtins.zig");
 pub const prefab = @import("prefab.zig");
 pub const component = @import("component.zig");
 pub const script = @import("script.zig");
@@ -61,6 +64,11 @@ pub const NoGizmos = gizmo.NoGizmos;
 // ── Entity Writer ──
 pub const EntityWriter = entity_writer.EntityWriter;
 
+// ── Built-ins (#881) ──
+pub const Builtin = builtins.Builtin;
+pub const isBuiltinComponent = builtins.has;
+pub const builtinComponent = builtins.lookup;
+pub const builtin_component_names = builtins.names;
+
 // ── System ──
 pub const SystemRegistry = system.SystemRegistry;
-
