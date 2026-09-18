@@ -93,10 +93,28 @@ pub fn Mixin(comptime Game: type) type {
             invalidate,
         };
 
+        /// Retires the record: the backend material AND the catalog pins
+        /// that feed its texture bindings.
+        ///
+        /// The pins travel WITH the queued material (raised on #885): a
+        /// deferred material still names its textures, so releasing the
+        /// pins here would let the catalog free the last reference to a
+        /// ready texture while the material that samples it is still
+        /// queued — and the flush would then destroy a material whose
+        /// texture is already gone. They are released in
+        /// `freeRecordPins`, at the moment the material is actually
+        /// destroyed (or dropped).
         fn releaseRecord(self: *Game, world: *Game.World, record: sm.Record, retire: Retire) void {
             if (comptime supported) {
-                if (retire == .destroy) retireId(self, world, record.id);
+                if (retire == .destroy and retireRecord(self, world, record)) return;
             }
+            freeRecordPins(self, record);
+        }
+
+        /// Release everything a record owns on the ENGINE side: one catalog
+        /// reference per pinned binding plus the owned key/name copies.
+        /// Never touches the backend.
+        fn freeRecordPins(self: *Game, record: sm.Record) void {
             for (record.textures[0..record.len]) |binding| {
                 if (binding.catalog) |key| {
                     self.assets.release(key);
@@ -130,15 +148,22 @@ pub fn Mixin(comptime Game: type) type {
         // flushes what is left while the renderer is alive, so deferral
         // never turns into a leak.
 
-        /// Queue `id` for destruction after the next `renderer.sync`.
-        fn retireId(self: *Game, world: *Game.World, id: sm.contract.Id) void {
-            if (comptime !supported) return;
-            if (id == .none) return;
-            world.shader_retire.append(self.allocator, id) catch {
-                // Out of memory for a one-pointer append: destroy now.
-                // A one-frame fallback flash beats leaking the material.
-                world.renderer.destroyShaderMaterial(id);
+        /// Queue `record` — its backend id and the catalog pins its
+        /// textures hold — for destruction after the next
+        /// `renderer.sync`. Returns true when ownership of the pins moved
+        /// to the queue, so the caller must NOT release them.
+        fn retireRecord(self: *Game, world: *Game.World, record: sm.Record) bool {
+            if (comptime !supported) return false;
+            // Nothing to destroy: the pins are the caller's to release now.
+            if (record.id == .none) return false;
+            world.shader_retire.append(self.allocator, record) catch {
+                // Out of memory for the append: destroy now. A one-frame
+                // fallback flash beats leaking the material, and the pins
+                // are safe to release once the material is gone.
+                world.renderer.destroyShaderMaterial(record.id);
+                return false;
             };
+            return true;
         }
 
         /// Destroy everything retired since the last flush. Called from
@@ -147,15 +172,26 @@ pub fn Mixin(comptime Game: type) type {
         /// ids.
         pub fn flushRetiredShaderMaterials(self: *Game) void {
             if (comptime !supported) return;
-            flushWorldRetired(self.active_world);
-            var it = self.worlds.valueIterator();
-            while (it.next()) |world| flushWorldRetired(world.*);
+            // ACTIVE WORLD ONLY (raised on #885). `tick` synchronizes
+            // `self.renderer` — the active world's — and nothing else. A
+            // shelved world still holds the cached draw list its last sync
+            // built, so flushing it here would destroy ids that list can
+            // still name: exactly the defect #883 fixed, reintroduced for
+            // inactive worlds. A shelved world's queue waits until the
+            // world is made active again (its next sync then clears the
+            // way), and is released wholesale by
+            // `clearWorldShaderMaterials` / `invalidateAllShaderMaterials`
+            // if the world is torn down or its context dies first.
+            flushWorldRetired(self, self.active_world);
         }
 
-        fn flushWorldRetired(world: *Game.World) void {
+        fn flushWorldRetired(self: *Game, world: *Game.World) void {
             if (comptime !supported) return;
-            for (world.shader_retire.items) |id| {
-                if (id != .none) world.renderer.destroyShaderMaterial(id);
+            for (world.shader_retire.items) |record| {
+                if (record.id != .none) world.renderer.destroyShaderMaterial(record.id);
+                // Only NOW — the material that sampled these textures is
+                // gone, so the last catalog reference may safely drop.
+                freeRecordPins(self, record);
             }
             world.shader_retire.clearRetainingCapacity();
         }
@@ -165,7 +201,12 @@ pub fn Mixin(comptime Game: type) type {
         /// that have already dropped every backend material. Destroying a
         /// queued id afterwards would be a double free (or a free on a
         /// dead context).
-        fn dropWorldRetired(world: *Game.World) void {
+        fn dropWorldRetired(self: *Game, world: *Game.World) void {
+            // The BACKEND destroy is what gets dropped — the engine-side
+            // pins still have to be released, or the catalog keeps a
+            // reference (and the owned copies leak) for a material that no
+            // longer exists.
+            for (world.shader_retire.items) |record| freeRecordPins(self, record);
             world.shader_retire.clearRetainingCapacity();
         }
 
@@ -334,9 +375,19 @@ pub fn Mixin(comptime Game: type) type {
                 .destroy => if (comptime @hasDecl(Renderer, "clearShaderMaterials")) {
                     // Whole-context clear: every backend material is gone,
                     // including the ids this pass just retired (#883).
-                    // Forget them rather than double-destroying.
+                    // Forget them rather than double-destroying — but still
+                    // release their catalog pins.
                     world.renderer.clearShaderMaterials();
-                    dropWorldRetired(world);
+                    dropWorldRetired(self, world);
+                } else {
+                    // No whole-context clear on this renderer: destroy the
+                    // queue one id at a time. Doing it HERE (rather than
+                    // leaving it for the next `tick`) is what lets
+                    // `World.deinit` assume an empty queue — and, more
+                    // importantly, it releases the catalog pins while
+                    // `Game.deinit` still has the catalog alive, since
+                    // `clearAllShaderMaterials` runs before `assets.deinit`.
+                    flushWorldRetired(self, world);
                 },
                 // The whole-context counterpart of `clearShaderMaterials`
                 // (labelle-gfx#361): a material with NO texture bindings is
@@ -353,8 +404,11 @@ pub fn Mixin(comptime Game: type) type {
                     }
                     // The context is gone (or every material was just
                     // dropped): a queued destroy would run the backend
-                    // destructor on a stale handle. Forget instead.
-                    dropWorldRetired(world);
+                    // destructor on a stale handle. Forget instead — the
+                    // catalog pins are still released (the asset catalog
+                    // is an ENGINE-side refcount; it outlives the GPU
+                    // context).
+                    dropWorldRetired(self, world);
                 },
             }
             return retired;

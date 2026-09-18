@@ -337,3 +337,77 @@ test "every retired material is destroyed exactly once" {
     try testing.expectEqual(@as(usize, 3), total_creates);
     try testing.expectEqual(@as(usize, 3), total_destroys);
 }
+
+// ── The flush must follow the SYNC, not the world map (#885) ────────────
+//
+// `tick` synchronizes `self.renderer` — the ACTIVE world's — and nothing
+// else. Flushing every world's queue from there destroys ids that a
+// shelved world's cached draw list still names: the #883 defect all over
+// again, for inactive worlds. A shelved queue waits for its own sync.
+
+test "a shelved world's retire queue is untouched by the active world's flush" {
+    var game = Game.init(testing.allocator);
+    defer game.deinit();
+    try game.createWorld("a");
+    try game.setActiveWorld("a");
+    const e = try boot(&game);
+
+    // World A: one frame, so its renderer caches a draw list naming
+    // material #1; then supersede it, which retires #1.
+    frame(&game);
+    try game.createShaderMaterial(e, descriptor);
+    const a = game.active_world;
+    try testing.expectEqual(@as(usize, 1), a.shader_retire.items.len);
+    const retired = a.shader_retire.items[0].id;
+    try testing.expect(a.renderer.alive[@intFromEnum(retired)]);
+    // A's cached list — built by the sync above — still names it.
+    try testing.expectEqual(retired, a.renderer.cached[0]);
+
+    // Shelve A; B becomes active.
+    try game.createWorld("b");
+    try game.setActiveWorld("b");
+    const syncs_before = a.renderer.syncs;
+
+    // Frames on B. B's sync says NOTHING about A's cached draw list.
+    frame(&game);
+    frame(&game);
+    try testing.expectEqual(syncs_before, a.renderer.syncs);
+    try testing.expectEqual(@as(usize, 1), a.shader_retire.items.len);
+    try testing.expectEqual(@as(usize, 0), a.renderer.destroys);
+    // The mechanism, not just the count: the id A would still submit is
+    // alive, so a render of A's stale list draws through the material
+    // path.
+    try testing.expect(a.renderer.alive[@intFromEnum(retired)]);
+    a.renderer.render();
+    try testing.expectEqual(@as(usize, 0), a.renderer.dead_submits);
+
+    // Back to A: its OWN sync rebuilds the list, and the flush right
+    // after it is the first moment the id is safe to free.
+    try game.setActiveWorld("a");
+    frame(&game);
+    try testing.expectEqual(@as(usize, 0), a.shader_retire.items.len);
+    try testing.expectEqual(@as(usize, 1), a.renderer.destroys);
+    try testing.expectEqual(@as(usize, 0), a.renderer.dead_submits);
+}
+
+test "tearing a shelved world down releases its queue instead of leaking it" {
+    {
+        var game = Game.init(testing.allocator);
+        defer game.deinit();
+        try game.createWorld("a");
+        try game.setActiveWorld("a");
+        const e = try boot(&game);
+        try game.createShaderMaterial(e, descriptor);
+        try testing.expectEqual(@as(usize, 1), game.active_world.shader_retire.items.len);
+
+        try game.createWorld("b");
+        try game.setActiveWorld("b");
+        // A is shelved WITH a queued material. Destroying it must not
+        // leak the backend resource just because the flush skips
+        // inactive worlds now.
+        game.destroyWorld("a");
+        try testing.expectEqual(@as(usize, 2), total_creates);
+        try testing.expectEqual(@as(usize, 2), total_destroys);
+    }
+    try testing.expectEqual(total_creates, total_destroys);
+}

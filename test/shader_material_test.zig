@@ -28,6 +28,13 @@ const MockRenderer = struct {
     fail_update: bool = false,
     stale: bool = false,
     last_texture: core.TextureId = .invalid,
+    /// #885 mechanism probe: how many catalog textures the image backend
+    /// had ALREADY unloaded when the first deferred destroy ran. A
+    /// material's bound textures must outlive the material, so this has to
+    /// be 0 — releasing the pins at retire time instead of at flush time
+    /// makes it 1, which on a real backend is a sample from freed GPU
+    /// memory.
+    unloads_at_destroy: ?usize = null,
     pub fn init(_: std.mem.Allocator) Self {
         return .{};
     }
@@ -60,6 +67,7 @@ const MockRenderer = struct {
     }
     pub fn destroyShaderMaterial(self: *Self, _: sm.Id) void {
         self.destroys += 1;
+        if (self.unloads_at_destroy == null) self.unloads_at_destroy = ImageBackend.unloads;
     }
     pub fn invalidateShaderMaterials(self: *Self) void {
         self.invalidates += 1;
@@ -250,6 +258,10 @@ test "cold catalog request holds one pending pin, retries, and restores last-own
     try testing.expect(game.renderer.last_texture != before);
     try testing.expectEqual(@as(u32, 1), refs(&game, "mask"));
     game.destroyEntityOnly(e);
+    // #885: the catalog pins travel with the RETIRED material — releasing
+    // them at retire time would free the texture under a material the
+    // renderer has not destroyed yet. They drop at the flush.
+    game.flushRetiredShaderMaterials();
     try testing.expectEqual(@as(u32, 0), refs(&game, "mask"));
     try testing.expectEqual(@as(usize, 2), ImageBackend.uploads);
 }
@@ -280,6 +292,10 @@ test "catalog texture replacement balances success failure and superseded pendin
     game.renderer.fail_update = false;
     try game.setShaderTexture(e, "s_mask", @as(engine.ShaderTexture, .{ .catalog = "ready" }));
     game.clearShaderMaterial(e);
+    // #885: the catalog pins travel with the RETIRED material — releasing
+    // them at retire time would free the texture under a material the
+    // renderer has not destroyed yet. They drop at the flush.
+    game.flushRetiredShaderMaterials();
     try testing.expectEqual(@as(u32, 1), refs(&game, "ready"));
 }
 test "pending acquisitions survive failed material creation and are released on scene reset" {
@@ -305,6 +321,10 @@ test "pending acquisitions survive failed material creation and are released on 
     try testing.expectEqual(@as(u32, 1), refs(&game, "cold"));
     try testing.expectEqual(@as(usize, 0), game.active_world.shader_pending.count());
     game.clearShaderMaterial(e);
+    // #885: the catalog pins travel with the RETIRED material — releasing
+    // them at retire time would free the texture under a material the
+    // renderer has not destroyed yet. They drop at the flush.
+    game.flushRetiredShaderMaterials();
     try testing.expectEqual(@as(u32, 0), refs(&game, "cold"));
     try game.registerImageFromMemory("reset", ".png", "fake");
     try testing.expectError(error.TextureNotReady, game.createShaderMaterial(e, textured("reset", &binding)));
@@ -367,6 +387,10 @@ test "superseding one pending sampler preserves another sampler request" {
     try game.setShaderTexture(e, "s_b", "cold_b");
     try testing.expectEqual(@as(u32, 1), refs(&game, "cold_b"));
     game.clearMaterial(e);
+    // #885: the catalog pins travel with the RETIRED material — releasing
+    // them at retire time would free the texture under a material the
+    // renderer has not destroyed yet. They drop at the flush.
+    game.flushRetiredShaderMaterials();
     try testing.expectEqual(@as(u32, 0), refs(&game, "cold_b"));
     try testing.expect(game.shaderMaterial(e) == null);
 }
@@ -469,6 +493,10 @@ test "failed re-authoring keeps the previous material and every pending pin" {
     // request kept it streamed across every failure, so nothing re-uploaded.
     try testing.expectEqual(@as(usize, 2), ImageBackend.uploads);
     game.clearShaderMaterial(e);
+    // #885: the catalog pins travel with the RETIRED material — releasing
+    // them at retire time would free the texture under a material the
+    // renderer has not destroyed yet. They drop at the flush.
+    game.flushRetiredShaderMaterials();
     try testing.expectEqual(@as(u32, 0), refs(&game, "cold"));
 }
 
@@ -507,4 +535,105 @@ test "surface loss forgets materials without a backend destroy and recreation go
     try testing.expect(game.shaderMaterial(e) != null);
     try game.setShaderParameter(e, "u_time", &.{1});
     try testing.expectEqual(@as(usize, 0), game.renderer.destroys);
+}
+
+// #885 — the deferral introduced by #883 must defer the CATALOG PINS too.
+// `releaseRecord` queues the backend material for a later destroy; if it
+// releases the record's texture pins on the spot, the last reference to a
+// ready texture can drop while the still-queued material references it,
+// and the flush then destroys a material whose texture is already gone.
+//
+// This asserts the MECHANISM: the probe inside `destroyShaderMaterial`
+// records the unload tally at the moment of destruction, so the test fails
+// on the ORDERING, not merely on a final count that a wrong order also
+// reaches.
+test "a retired material's catalog textures stay resident until the flush destroys it" {
+    ImageBackend.install();
+    var game = Game.init(testing.allocator);
+    defer game.deinit();
+    try game.loadImageFromMemory("pinned", ".png", "fake");
+    const e = game.createEntity();
+    game.addSprite(e, .{});
+    var binding: [1]engine.ShaderTextureBinding = undefined;
+    try game.createShaderMaterial(e, textured("pinned", &binding));
+    // The load's own reference plus the material's pin.
+    try testing.expectEqual(@as(u32, 2), refs(&game, "pinned"));
+    // Hand the load's reference back: the MATERIAL is now the last owner,
+    // so its release is the one that frees the texture. Without that this
+    // test could not tell a premature release from a harmless one.
+    game.assets.release("pinned");
+    try testing.expectEqual(@as(u32, 1), refs(&game, "pinned"));
+    try testing.expectEqual(@as(usize, 0), ImageBackend.unloads);
+
+    // Retire it. The backend material is only QUEUED — and so is its pin.
+    game.clearShaderMaterial(e);
+    try testing.expectEqual(@as(usize, 0), game.renderer.destroys);
+    try testing.expectEqual(@as(u32, 1), refs(&game, "pinned"));
+    try testing.expectEqual(@as(usize, 0), ImageBackend.unloads);
+
+    game.flushRetiredShaderMaterials();
+    // The destroy ran, and the texture was STILL RESIDENT when it did.
+    try testing.expectEqual(@as(usize, 1), game.renderer.destroys);
+    try testing.expectEqual(@as(?usize, 0), game.renderer.unloads_at_destroy);
+    // Only now does the last reference drop — each exactly once.
+    try testing.expectEqual(@as(u32, 0), refs(&game, "pinned"));
+    try testing.expectEqual(@as(usize, 1), ImageBackend.unloads);
+}
+
+// The whole-context retirements must DROP the queue rather than
+// double-destroy — but dropping the backend destroy must not also drop the
+// pin release, or the catalog keeps a reference for a material that no
+// longer exists.
+test "surface loss releases the pins of already-retired materials without a backend destroy" {
+    ImageBackend.install();
+    var game = Game.init(testing.allocator);
+    defer game.deinit();
+    try game.loadImageFromMemory("pinned", ".png", "fake");
+    const e = game.createEntity();
+    game.addSprite(e, .{});
+    var binding: [1]engine.ShaderTextureBinding = undefined;
+    try game.createShaderMaterial(e, textured("pinned", &binding));
+    game.assets.release("pinned");
+    game.clearShaderMaterial(e);
+    try testing.expectEqual(@as(u32, 1), refs(&game, "pinned"));
+
+    // Context gone: the queued id must never reach the backend...
+    _ = game.invalidateAllShaderMaterials();
+    try testing.expectEqual(@as(usize, 0), game.renderer.destroys);
+    // ...but its engine-side reference is released all the same.
+    try testing.expectEqual(@as(u32, 0), refs(&game, "pinned"));
+    // A later flush has nothing left to do.
+    game.flushRetiredShaderMaterials();
+    try testing.expectEqual(@as(usize, 0), game.renderer.destroys);
+}
+
+// The teardown ordering this fix has to respect: `Game.deinit` tears the
+// ASSET CATALOG down right after `clearAllShaderMaterials`, so a material
+// still sitting on the retire queue must have its pins released inside
+// that call — while the catalog is still alive. Leaving them for
+// `World.deinit` (which runs later, and cannot reach the catalog from a
+// `World`) strands the reference.
+test "the whole-context clear releases the pins of a still-queued material" {
+    ImageBackend.install();
+    var game = Game.init(testing.allocator);
+    defer game.deinit();
+    try game.loadImageFromMemory("pinned", ".png", "fake");
+    const e = game.createEntity();
+    game.addSprite(e, .{});
+    var binding: [1]engine.ShaderTextureBinding = undefined;
+    try game.createShaderMaterial(e, textured("pinned", &binding));
+    game.assets.release("pinned");
+    // Retire it and never flush.
+    game.clearShaderMaterial(e);
+    try testing.expectEqual(@as(u32, 1), refs(&game, "pinned"));
+    try testing.expectEqual(@as(usize, 0), ImageBackend.unloads);
+
+    // Exactly what `Game.deinit` runs before `assets.deinit()`.
+    game.clearAllShaderMaterials();
+    // Nothing is left queued, the backend material is gone, and the
+    // texture was freed HERE — while the catalog still existed.
+    try testing.expectEqual(@as(usize, 0), game.active_world.shader_retire.items.len);
+    try testing.expectEqual(@as(usize, 1), game.renderer.destroys);
+    try testing.expectEqual(@as(u32, 0), refs(&game, "pinned"));
+    try testing.expectEqual(@as(usize, 1), ImageBackend.unloads);
 }

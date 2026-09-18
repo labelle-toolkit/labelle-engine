@@ -529,7 +529,15 @@ pub fn GameConfigWithYAxis(
             /// `flushRetiredShaderMaterials` (right after the next sync,
             /// and on world teardown) destroys it, so the extra lifetime
             /// is bounded to exactly one frame and nothing leaks.
-            shader_retire: std.ArrayListUnmanaged(@import("shader_material.zig").contract.Id) = .empty,
+            ///
+            /// Holds the WHOLE record, not just the id (raised on #885):
+            /// a queued material still samples its bound textures, so its
+            /// catalog pins must stay held until it is actually
+            /// destroyed. Releasing them at retire time could free the
+            /// last reference to a ready texture out from under a
+            /// material the renderer has not finished with — a GPU-side
+            /// use-after-free introduced by the deferral itself.
+            shader_retire: std.ArrayListUnmanaged(@import("shader_material.zig").Record) = .empty,
             /// Retained so `deinit` can free heap-owning components (the
             /// `ChildrenComponent` ArrayLists) before the ECS is torn down —
             /// the backend drops components by value with no destructor.
@@ -550,9 +558,24 @@ pub fn GameConfigWithYAxis(
                 // renderer is still alive — this is the last flush, so a
                 // material retired after the final sync is destroyed here
                 // rather than leaked.
-                if (comptime @hasDecl(RenderImpl, "destroyShaderMaterial")) {
-                    for (self.shader_retire.items) |id| {
-                        if (id != .none) self.renderer.destroyShaderMaterial(id);
+                // Normally EMPTY by now: every `World.deinit` call site
+                // runs `clearWorldShaderMaterials` first, which flushes or
+                // drops the queue while the ASSET CATALOG is still alive
+                // (`Game.deinit` tears the catalog down right after
+                // `clearAllShaderMaterials`, and this world's teardown
+                // comes later still). This loop is the backstop for a
+                // world torn down by some other route: it frees the
+                // backend material and the record's owned copies, but
+                // cannot touch catalog refcounts from here — the catalog
+                // is not reachable from a `World`, and by this point it
+                // may already be gone.
+                for (self.shader_retire.items) |record| {
+                    if (comptime @hasDecl(RenderImpl, "destroyShaderMaterial")) {
+                        if (record.id != .none) self.renderer.destroyShaderMaterial(record.id);
+                    }
+                    for (record.textures[0..record.len]) |binding| {
+                        if (binding.catalog) |key| self.allocator.free(key);
+                        self.allocator.free(binding.name);
                     }
                 }
                 self.shader_retire.deinit(self.allocator);
