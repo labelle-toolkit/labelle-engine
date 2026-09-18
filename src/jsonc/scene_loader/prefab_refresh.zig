@@ -404,7 +404,28 @@ pub fn PrefabRefresh(comptime GameType: type, comptime Components: type) type {
             const prev: ?T = if (game.ecs_backend.getComponent(entity, T)) |p| p.* else null;
             ApplyHelpers.applyComponent(game, entity, name, value, Position{});
             if (prev) |old_comp| preserveEntityRefs(T, game, entity, old_comp);
+            syncSideTable(T, game, entity);
             OnReadyHelpers.fireOnReadyByName(game, entity, name);
+        }
+
+        /// Replacing the ECS component is only HALF of a refresh for a
+        /// component whose real state lives in a side table (#881).
+        ///
+        /// `particles_tick.tick` snapshots `Emitter.resolvedConfig()` when it
+        /// first creates the entity's `ParticleSystem` and never reads the
+        /// component again, so an emitter that has already ticked keeps
+        /// running the OLD config — the refresh silently does nothing, which
+        /// is precisely the bug this branch set out to fix. A
+        /// component-level assertion cannot see that; the particles can.
+        ///
+        /// Also covers REMOVAL: `refreshParticleSystem` releases the system
+        /// outright when the component is gone. Ghost emitters are otherwise
+        /// only reaped from `particles_tick.tick`, which does not run while
+        /// the game is hard-paused, so a prefab push that drops an `Emitter`
+        /// mid-pause would leave the pool alive (and drawing) until the pause
+        /// lifted.
+        fn syncSideTable(comptime T: type, game: *GameType, entity: Entity) void {
+            if (comptime T == GameType.EmitterComp) game.refreshParticleSystem(entity);
         }
 
         /// The built-in half of the transient refresh. Only SHADOWABLE
@@ -456,6 +477,7 @@ pub fn PrefabRefresh(comptime GameType: type, comptime Components: type) type {
         fn removeTransientType(comptime T: type, game: *GameType, entity: Entity) void {
             if (game.ecs_backend.getComponent(entity, T) != null) {
                 game.removeComponent(entity, T);
+                syncSideTable(T, game, entity);
             }
         }
 
