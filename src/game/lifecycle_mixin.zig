@@ -63,6 +63,7 @@ pub fn Mixin(comptime Game: type) type {
             // through this whole call.
             if (has_events) self.event_buffer.deinit(self.allocator);
             self.teardownActiveScene();
+            self.clearAllShaderMaterials();
             self.scene_entities.deinit(self.allocator);
             self.assets.deinit();
             if (self.current_scene_name) |name| {
@@ -102,7 +103,6 @@ pub fn Mixin(comptime Game: type) type {
 
             // Particle sims (#750) — free the per-emitter pools + the table.
             self.deinitParticleSystems();
-            self.deinitPixelWaterInstances();
 
             // Clean up active world
             self.active_world.deinit();
@@ -420,6 +420,7 @@ pub fn Mixin(comptime Game: type) type {
         /// loop lives on, so the usual `emitSync` re-entrancy caveats
         /// apply (no nested emits into the same drain).
         pub fn surfaceLost(self: *Game) void {
+            self.clearAllShaderMaterials();
             self.assets.invalidateGpuResources();
             self.atlas_manager.invalidateUploadedTextures();
             // Direct uploads (#820): drop the dead handles, keep the ids.

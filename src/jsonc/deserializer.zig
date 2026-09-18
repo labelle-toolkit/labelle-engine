@@ -84,6 +84,8 @@ fn internString(s: []const u8) ?[]const u8 {
 /// (typically `deserializeStruct`) treats `null` as "use default if
 /// available, else propagate failure to the parent struct."
 pub fn deserialize(comptime T: type, value: Value, allocator: std.mem.Allocator) ?T {
+    // A prefab cannot resurrect a backend generation-bearing runtime handle.
+    if (T == @import("labelle-core").shader_material.Id) return .none;
     const info = @typeInfo(T);
 
     // Optionals — JSONC `null` → component field stays `null`,
@@ -141,11 +143,7 @@ pub fn deserialize(comptime T: type, value: Value, allocator: std.mem.Allocator)
         return internString(s);
     }
 
-    // Fixed-size arrays (`[2]u32` — `PixelWater.logical_size`, and any
-    // future `[N]T` authored as a JSON array). Length must match exactly:
-    // a short or long literal is an authoring mistake, and silently padding
-    // with zeros would turn `"logical_size": [96]` into a zero-height
-    // reservoir that fails validation somewhere far away from the typo.
+    // Authored fixed-size arrays require an exact length.
     if (info == .array) {
         const arr = value.asArray() orelse return null;
         if (arr.items.len != info.array.len) return null;

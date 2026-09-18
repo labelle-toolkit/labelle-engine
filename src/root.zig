@@ -910,39 +910,12 @@ pub const Emitter = emitter_mod.Emitter;
 pub const EmitterPreset = emitter_mod.EmitterPreset;
 pub const particles_tick = @import("particles_tick.zig");
 
-// ── Pixel water (COND-07, labelle-bgfx#100, RFC-PIXEL-WATER) ──
-//
-// The built-in reservoir effect's AUTHORING surface. `PixelWater` is an
-// engine built-in component (like `Emitter` / `Image` / `Camera`) — the scene
-// loader recognizes it and auto-enables the water phase; it is NOT a
-// `ComponentRegistry` entry.
-//
-// A game reaches the runtime through `game.setWaterSettings` /
-// `game.setWaterLevel` / `game.addWaterRipple`, all of which delegate the
-// animated state (time, level, the eight live impacts, expiry and the
-// deterministic oldest-replacement at capacity) to labelle-gfx's gfx-owned
-// water-instance store. The engine's own contributions are asset resolution +
-// instance lifetime, validation with entity/field-named diagnostics, and the
-// stage-before-commit synchronization rule.
-//
-// `PixelWaterSettings` is the public value `setWaterSettings` takes; colours
-// stay AUTHORED sRGB hex on both the component and the settings so the
-// sRGB→linear conversion happens exactly once, at the gfx seam (no
-// double-gamma).
-pub const pixel_water_mod = @import("pixel_water.zig");
-pub const PixelWater = pixel_water_mod.PixelWater;
-pub const PixelWaterSettings = pixel_water_mod.PixelWaterSettings;
-pub const PixelWaterColor = pixel_water_mod.PixelWaterColor;
-pub const PixelWaterField = pixel_water_mod.PixelWaterField;
-pub const PixelWaterReason = pixel_water_mod.PixelWaterReason;
-pub const PixelWaterIssue = pixel_water_mod.PixelWaterIssue;
-pub const PixelWaterError = pixel_water_mod.PixelWaterError;
-pub const parseHexColor = pixel_water_mod.parseHexColor;
-pub const srgbToLinear = pixel_water_mod.srgbToLinear;
-pub const validatePixelWaterComponent = pixel_water_mod.validateComponent;
-pub const validatePixelWaterSettings = pixel_water_mod.validateSettings;
-pub const validatePixelWaterRippleStrength = pixel_water_mod.validateRippleStrength;
-pub const pixel_water_tick = @import("pixel_water_tick.zig");
+// ── Game-owned shader materials ──
+pub const shader_material = @import("shader_material.zig");
+pub const ShaderMaterialDescriptor = shader_material.Descriptor;
+pub const ShaderTextureBinding = shader_material.TextureBinding;
+pub const ShaderTexture = shader_material.Texture;
+pub const ShaderMaterialId = shader_material.contract.Id;
 
 // ── Atlas ──
 pub const SpriteData = atlas_mod.SpriteData;

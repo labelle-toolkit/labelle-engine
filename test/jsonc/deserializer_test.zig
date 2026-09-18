@@ -44,7 +44,7 @@ test "deserialize: integer to u8 (out of range returns null)" {
 // (`1e100`, `NaN`, `-Infinity`) was illegal behaviour: a trap in safety
 // builds, which TERMINATES scene loading instead of the component's own
 // apply reporting a malformed payload. Reported by codex on #880 against
-// `PixelWater.logical_size: [1e100, 18]`, but the branch is shared by
+// `logical_size: [1e100, 18]`, but the branch is shared by
 // every integer field of every component, so it is fixed generally here.
 //
 // Two halves to each of these: the wild value must come back `null` (the
@@ -90,7 +90,7 @@ test "deserialize: float to integer keeps truncation, negatives and the i64 boun
 test "deserialize: an out-of-range float inside logical_size fails the component, not the process" {
     // The reported shape, end to end: `[2]u32` recurses per element, so the
     // wild element must fail the ARRAY, which (no default on a rejected
-    // field) leaves `applyPixelWater` reporting a malformed payload.
+    // field) leaves component application reporting a malformed payload.
     var wild = [_]SceneValue{ .{ .float = 1e100 }, .{ .integer = 18 } };
     try testing.expect(deserializer.deserialize([2]u32, SceneValue{ .array = .{ .items = &wild } }, testing.allocator) == null);
 
