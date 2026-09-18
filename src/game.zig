@@ -517,6 +517,19 @@ pub fn GameConfigWithYAxis(
             direct_textures: atlas_mixin.DirectTextureStore = .empty,
             shader_pending: std.AutoHashMapUnmanaged(Entity, std.ArrayList(@import("shader_material.zig").Pending)) = .{},
             shader_materials: std.AutoHashMapUnmanaged(Entity, @import("shader_material.zig").Record) = .{},
+            /// Backend materials whose destroy is DEFERRED until after the
+            /// next `renderer.sync` (#883).
+            ///
+            /// `tick` syncs the renderer BEFORE the scene update runs, so a
+            /// material replaced or cleared during that update was already
+            /// cached for the imminent `render()`. Destroying it there and
+            /// then made that frame submit a dead id — one frame through
+            /// the plain-sprite fallback. Retiring it here keeps every
+            /// submitted id live for the frame it was cached in;
+            /// `flushRetiredShaderMaterials` (right after the next sync,
+            /// and on world teardown) destroys it, so the extra lifetime
+            /// is bounded to exactly one frame and nothing leaks.
+            shader_retire: std.ArrayListUnmanaged(@import("shader_material.zig").contract.Id) = .empty,
             /// Retained so `deinit` can free heap-owning components (the
             /// `ChildrenComponent` ArrayLists) before the ECS is torn down —
             /// the backend drops components by value with no destructor.
@@ -533,6 +546,16 @@ pub fn GameConfigWithYAxis(
             }
 
             pub fn deinit(self: *World) void {
+                // Deferred backend destroys (#883) must run while the
+                // renderer is still alive — this is the last flush, so a
+                // material retired after the final sync is destroyed here
+                // rather than leaked.
+                if (comptime @hasDecl(RenderImpl, "destroyShaderMaterial")) {
+                    for (self.shader_retire.items) |id| {
+                        if (id != .none) self.renderer.destroyShaderMaterial(id);
+                    }
+                }
+                self.shader_retire.deinit(self.allocator);
                 std.debug.assert(self.shader_pending.count() == 0);
                 self.shader_pending.deinit(self.allocator);
                 std.debug.assert(self.shader_materials.count() == 0);
@@ -1280,6 +1303,9 @@ pub fn GameConfigWithYAxis(
         pub const clearAllShaderMaterials = ShaderMaterialMixin.clearAllShaderMaterials;
         pub const invalidateAllShaderMaterials = ShaderMaterialMixin.invalidateAllShaderMaterials;
         pub const reapShaderMaterials = ShaderMaterialMixin.reapShaderMaterials;
+        /// Destroy the materials retired since the last renderer sync
+        /// (#883). `tick` calls this right after `renderer.sync`.
+        pub const flushRetiredShaderMaterials = ShaderMaterialMixin.flushRetiredShaderMaterials;
         pub const setMaterial = Visuals.setMaterial;
         pub const clearMaterial = Visuals.clearMaterial;
 

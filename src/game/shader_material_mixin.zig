@@ -95,7 +95,7 @@ pub fn Mixin(comptime Game: type) type {
 
         fn releaseRecord(self: *Game, world: *Game.World, record: sm.Record, retire: Retire) void {
             if (comptime supported) {
-                if (retire == .destroy and record.id != .none) world.renderer.destroyShaderMaterial(record.id);
+                if (retire == .destroy) retireId(self, world, record.id);
             }
             for (record.textures[0..record.len]) |binding| {
                 if (binding.catalog) |key| {
@@ -104,6 +104,69 @@ pub fn Mixin(comptime Game: type) type {
                 }
                 self.allocator.free(binding.name);
             }
+        }
+
+        // ── Deferred destruction (#883) ──────────────────────────────
+        //
+        // `tick` runs `renderer.sync` BEFORE `active_scene_update_fn`, so a
+        // material replaced or cleared during that update has ALREADY been
+        // cached for the `render()` that follows. Destroying the backend
+        // material there and then made that render submit a dead id — one
+        // frame drawn through the plain-sprite fallback, the kind of
+        // visual glitch that reads as "the shader stuttered" and never
+        // reproduces on demand (a fixed-time golden never catches it
+        // either: goldens sample after a sync).
+        //
+        // The retire list is the conventional answer for a renderer with a
+        // cached draw list, and it was chosen over "resync the entity
+        // inline on change" for two reasons: it puts no sync work on the
+        // update path (and needs no care with the world/renderer split),
+        // and it covers the curated `setMaterial` path — which clears the
+        // shader slot through `clearShaderMaterial` — for free.
+        //
+        // Lifetime is bounded to exactly ONE frame: `tick` flushes the
+        // list immediately after the next `renderer.sync`, at which point
+        // no cached draw can still reference the id. A world teardown
+        // flushes what is left while the renderer is alive, so deferral
+        // never turns into a leak.
+
+        /// Queue `id` for destruction after the next `renderer.sync`.
+        fn retireId(self: *Game, world: *Game.World, id: sm.contract.Id) void {
+            if (comptime !supported) return;
+            if (id == .none) return;
+            world.shader_retire.append(self.allocator, id) catch {
+                // Out of memory for a one-pointer append: destroy now.
+                // A one-frame fallback flash beats leaking the material.
+                world.renderer.destroyShaderMaterial(id);
+            };
+        }
+
+        /// Destroy everything retired since the last flush. Called from
+        /// `tick` right after `renderer.sync` — the point at which the
+        /// renderer's cached draw list can no longer name any of these
+        /// ids.
+        pub fn flushRetiredShaderMaterials(self: *Game) void {
+            if (comptime !supported) return;
+            flushWorldRetired(self.active_world);
+            var it = self.worlds.valueIterator();
+            while (it.next()) |world| flushWorldRetired(world.*);
+        }
+
+        fn flushWorldRetired(world: *Game.World) void {
+            if (comptime !supported) return;
+            for (world.shader_retire.items) |id| {
+                if (id != .none) world.renderer.destroyShaderMaterial(id);
+            }
+            world.shader_retire.clearRetainingCapacity();
+        }
+
+        /// Forget the queue WITHOUT destroying — for the whole-context
+        /// retirements (`clearShaderMaterials` / `invalidateShaderMaterials`)
+        /// that have already dropped every backend material. Destroying a
+        /// queued id afterwards would be a double free (or a free on a
+        /// dead context).
+        fn dropWorldRetired(world: *Game.World) void {
+            world.shader_retire.clearRetainingCapacity();
         }
 
         /// Requires a live sprite. Failure preserves the previous material and
@@ -268,7 +331,13 @@ pub fn Mixin(comptime Game: type) type {
             }
             world.shader_materials.clearRetainingCapacity();
             switch (retire) {
-                .destroy => if (comptime @hasDecl(Renderer, "clearShaderMaterials")) world.renderer.clearShaderMaterials(),
+                .destroy => if (comptime @hasDecl(Renderer, "clearShaderMaterials")) {
+                    // Whole-context clear: every backend material is gone,
+                    // including the ids this pass just retired (#883).
+                    // Forget them rather than double-destroying.
+                    world.renderer.clearShaderMaterials();
+                    dropWorldRetired(world);
+                },
                 // The whole-context counterpart of `clearShaderMaterials`
                 // (labelle-gfx#361): a material with NO texture bindings is
                 // invisible to gfx's per-texture invalidation, so this is the
@@ -276,10 +345,17 @@ pub fn Mixin(comptime Game: type) type {
                 // predates the seam only offers the destroying clear, which
                 // gfx documents as "call before context teardown" — the best
                 // that renderer can do, and no worse than before.
-                .invalidate => if (comptime @hasDecl(Renderer, "invalidateShaderMaterials"))
-                    world.renderer.invalidateShaderMaterials()
-                else if (comptime @hasDecl(Renderer, "clearShaderMaterials"))
-                    world.renderer.clearShaderMaterials(),
+                .invalidate => {
+                    if (comptime @hasDecl(Renderer, "invalidateShaderMaterials")) {
+                        world.renderer.invalidateShaderMaterials();
+                    } else if (comptime @hasDecl(Renderer, "clearShaderMaterials")) {
+                        world.renderer.clearShaderMaterials();
+                    }
+                    // The context is gone (or every material was just
+                    // dropped): a queued destroy would run the backend
+                    // destructor on a stale handle. Forget instead.
+                    dropWorldRetired(world);
+                },
             }
             return retired;
         }

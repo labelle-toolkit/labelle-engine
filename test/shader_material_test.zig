@@ -109,11 +109,19 @@ test "shader facade executes create update replace clear and entity destruction"
     try testing.expectEqual(@as(usize, 0), game.renderer.destroys);
     game.renderer.fail_create = false;
     try game.createShaderMaterial(e, descriptor);
+    // #883: the superseded material is RETIRED, not destroyed on the
+    // spot — the renderer's cached draw list may still name it for the
+    // frame it was synced in. `flushRetiredShaderMaterials` (which `tick`
+    // runs right after `renderer.sync`) is what frees it.
+    try testing.expectEqual(@as(usize, 0), game.renderer.destroys);
+    game.flushRetiredShaderMaterials();
     try testing.expectEqual(@as(usize, 1), game.renderer.destroys);
     game.destroyEntity(e);
+    game.flushRetiredShaderMaterials();
     try testing.expectEqual(@as(usize, 2), game.renderer.destroys);
     try testing.expect(game.shaderMaterial(e) == null);
     game.clearShaderMaterial(e);
+    game.flushRetiredShaderMaterials();
     try testing.expectEqual(@as(usize, 2), game.renderer.destroys);
 }
 test "shader scene reset destroys instances and reused entity ids start empty" {
@@ -122,6 +130,7 @@ test "shader scene reset destroys instances and reused entity ids start empty" {
     _ = try spawn(&game);
     _ = try spawn(&game);
     game.resetEcsBackend();
+    game.flushRetiredShaderMaterials();
     try testing.expectEqual(@as(usize, 2), game.renderer.destroys);
     const e = game.createEntity();
     try testing.expect(game.shaderMaterial(e) == null);
@@ -313,6 +322,7 @@ test "direct ECS destruction and sprite removal reap committed and pending owner
     const next = try spawn(&game);
     game.ecs_backend.removeComponent(next, MockRenderer.Sprite);
     game.reapShaderMaterials();
+    game.flushRetiredShaderMaterials();
     try testing.expectEqual(@as(usize, 2), game.renderer.destroys);
 }
 test "actual atomic scene swap clears shader ownership before new scene loader" {
@@ -327,6 +337,7 @@ test "actual atomic scene swap clears shader ownership before new scene loader" 
     };
     game.registerSceneSimple("next", Loader.load);
     try game.setSceneAtomic("next");
+    game.flushRetiredShaderMaterials();
     try testing.expectEqual(@as(usize, 1), game.renderer.destroys);
     try testing.expectEqual(@as(u64, 2), game.renderer.creates);
     try testing.expect(game.shaderMaterial(e).? != @as(sm.Id, @enumFromInt(1)));
