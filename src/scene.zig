@@ -9,6 +9,11 @@ pub const component = scene.component;
 pub const script = scene.script;
 pub const gizmo = scene.gizmo;
 pub const profiler = scene.profiler;
+/// The comptime `.zon` component writer / coercer. Exported so the engine's
+/// authoring-parity tests can coerce a `.zon` component value the same way a
+/// generated scene does, without standing up a whole scene.
+pub const entity_writer = scene.entity_writer;
+pub const EntityWriter = scene.EntityWriter;
 
 // ── Types ──
 pub const RefInfo = scene.RefInfo;
@@ -54,4 +59,3 @@ pub const SystemRegistry = scene.SystemRegistry;
 pub const GizmoComponent = scene.GizmoComponent;
 pub const GizmoRegistry = scene.GizmoRegistry;
 pub const NoGizmos = scene.NoGizmos;
-

@@ -33,6 +33,20 @@ pub fn EntityWriter(
     const Entity = GameType.EntityType;
     const EcsImpl = GameType.EcsBackend;
     const Sprite = GameType.SpriteComp;
+
+    // `PixelWater` (COND-07, labelle-bgfx#100) is an engine BUILT-IN, not a
+    // `ComponentRegistry` entry, so — like `Sprite` / `Shape` — the comptime
+    // `.zon` writer needs its own branch or a `.zon`-authored reservoir would
+    // be silently dropped. It routes through `game.addPixelWater` rather than
+    // `addComponent` for the same reason the JSONC branch does: that helper is
+    // the validated, stage-before-commit path, so BOTH authoring formats land
+    // on one synchronization operation instead of two that can drift.
+    //
+    // A project-registered `PixelWater` still wins (the branch compiles out,
+    // routing the name to the registry dispatch below), and the whole thing
+    // folds away on a duck-typed GameType without the helper.
+    const has_builtin_pixel_water = @hasDecl(GameType, "addPixelWater") and
+        @hasDecl(GameType, "PixelWaterComp") and !Components.has("PixelWater");
     const Shape = GameType.ShapeComp;
     const RefCtx = ReferenceContext(Entity);
 
@@ -58,6 +72,10 @@ pub fn EntityWriter(
                 } else if (comptime std.mem.eql(u8, field.name, "Shape")) {
                     game.addShape(entity, coerce(Shape, value));
                     vtype = .shape;
+                } else if (comptime has_builtin_pixel_water and
+                    std.mem.eql(u8, field.name, "PixelWater"))
+                {
+                    _ = game.addPixelWater(entity, coerce(GameType.PixelWaterComp, value));
                 } else if (comptime Components.has(field.name)) {
                     const T = Components.getType(field.name);
                     addCustomComponent(T, field.name, entity, game, value, ref_ctx);
@@ -94,6 +112,15 @@ pub fn EntityWriter(
                     const val = comptime if (has_override) merge(Shape, prefab_val, scene_comps.Shape) else coerce(Shape, prefab_val);
                     game.addShape(entity, val);
                     vtype = .shape;
+                } else if (comptime has_builtin_pixel_water and
+                    std.mem.eql(u8, field.name, "PixelWater"))
+                {
+                    const PW = GameType.PixelWaterComp;
+                    const val = comptime if (has_override)
+                        merge(PW, prefab_val, @field(scene_comps, field.name))
+                    else
+                        coerce(PW, prefab_val);
+                    _ = game.addPixelWater(entity, val);
                 } else if (comptime Components.has(field.name)) {
                     const T = Components.getType(field.name);
                     if (has_override) {
@@ -118,6 +145,10 @@ pub fn EntityWriter(
                 } else if (comptime std.mem.eql(u8, field.name, "Shape")) {
                     game.addShape(entity, coerce(Shape, value));
                     vtype = .shape;
+                } else if (comptime has_builtin_pixel_water and
+                    std.mem.eql(u8, field.name, "PixelWater"))
+                {
+                    _ = game.addPixelWater(entity, coerce(GameType.PixelWaterComp, value));
                 } else if (comptime Components.has(field.name)) {
                     const T = Components.getType(field.name);
                     addCustomComponent(T, field.name, entity, game, value, ref_ctx);

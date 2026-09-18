@@ -38,6 +38,11 @@ pub fn Mixin(comptime Game: type) type {
         /// Destroy a named inactive world. Frees all its entities and visuals.
         pub fn destroyWorld(self: *Game, name: []const u8) void {
             if (self.worlds.fetchRemove(name)) |kv| {
+                // Its reservoirs die with it, so their catalog references are
+                // owed back — and this is the last moment the catalog is
+                // guaranteed alive (`World.deinit` cannot assume that; see
+                // the `water_assets` field comment).
+                self.releaseWorldWaterAssets(kv.value);
                 kv.value.deinit();
                 self.allocator.destroy(kv.value);
                 self.allocator.free(kv.key);
@@ -51,12 +56,31 @@ pub fn Mixin(comptime Game: type) type {
             // Remove target first — guarantees a free slot for shelving the current world
             const kv = self.worlds.fetchRemove(name) orelse return error.WorldNotFound;
 
+            // Water instance ids belong to the world's OWN renderer, and the
+            // table's keys to its own ECS (#100). Carrying them across the
+            // swap would hand the incoming renderer ids it never issued: an
+            // entity-id collision makes an old-world entry look like the new
+            // entity's instance, and a non-collision has the reaper release
+            // a stale id against the wrong renderer. Release them here,
+            // while `self.renderer` still points at the world that issued
+            // them; the water tick recreates them from the components when
+            // that world becomes active again. The ASSET references are
+            // deliberately kept — the shelved world's components still own
+            // them, and nothing would re-acquire on the way back. They are
+            // safe to keep because they live on the `World` itself, so they
+            // travel with the ECS whose ids key them and stay out of the
+            // incoming world's reaper.
+            self.clearPixelWaterInstances();
+
             // Shelve or destroy current active world
             if (self.active_world_name) |current_name| {
                 // Named world — shelve into map (can't fail: we just freed a slot)
                 self.worlds.put(current_name, self.active_world) catch @panic("OOM shelving world");
             } else {
-                // Unnamed default world — destroy it
+                // Unnamed default world — destroy it. Unlike the shelved
+                // case its components do NOT live on, so the references they
+                // hold are released here, while the catalog is still alive.
+                self.releaseWorldWaterAssets(self.active_world);
                 self.active_world.deinit();
                 self.allocator.destroy(self.active_world);
             }
@@ -122,6 +146,13 @@ pub fn Mixin(comptime Game: type) type {
             // Free per-entity particle sims for the same reason (#750): the
             // ECS wipe invalidates every emitter entity id in the side-table.
             self.clearParticleSystems();
+            // Water instances are keyed by entity; the ECS reset makes every
+            // key dangling, so release them before the wipe (#100). The
+            // catalog references go with them: unlike a world swap, the
+            // components themselves are about to be destroyed, so nothing
+            // is left to own them (and the incoming scene re-acquires).
+            self.clearPixelWaterInstances();
+            self.releaseAllWaterAssets();
             // Free every `ChildrenComponent`'s backing allocation before the
             // ECS is torn down: the backend drops components by value with no
             // destructor, so their heap-backed child lists would otherwise

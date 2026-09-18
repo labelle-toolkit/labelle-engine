@@ -372,6 +372,27 @@ pub fn PrefabRefresh(comptime GameType: type, comptime Components: type) type {
         /// `onReady`/`postLoad` fire exactly like a Phase 1 respawn
         /// would.
         fn applyTransient(game: *GameType, entity: Entity, name: []const u8, value: Value) void {
+            if (comptime water_is_builtin) {
+                if (std.mem.eql(u8, name, "PixelWater")) {
+                    // Straight through the SAME `applyPixelWater` the scene
+                    // load and the script contract use, so a pushed prefab
+                    // re-authors the live component and the gfx instance
+                    // through `addPixelWater`'s stage-before-commit path
+                    // (structural edit → instance dropped and recreated from
+                    // the new component; otherwise the validated
+                    // settings/level writes). A rejected candidate leaves
+                    // BOTH sides on the previous configuration, exactly as on
+                    // every other authoring boundary.
+                    //
+                    // No `preserveEntityRefs` / `fireOnReadyByName` here:
+                    // `PixelWater` declares no entity-ref fields, and both
+                    // helpers are registry-name-driven — a built-in is
+                    // invisible to them by construction.
+                    _ = ApplyHelpers.applyPixelWater(game, entity, value);
+                    return;
+                }
+            }
+
             const comp_names = comptime Components.names();
             inline for (comp_names) |comp_name| {
                 if (std.mem.eql(u8, name, comp_name)) {
@@ -388,6 +409,22 @@ pub fn PrefabRefresh(comptime GameType: type, comptime Components: type) type {
         }
 
         fn removeTransient(game: *GameType, entity: Entity, name: []const u8) void {
+            if (comptime water_is_builtin) {
+                if (std.mem.eql(u8, name, "PixelWater")) {
+                    if (game.ecs_backend.getComponent(entity, GameType.PixelWaterComp) != null) {
+                        game.removeComponent(entity, GameType.PixelWaterComp);
+                        // Drop the gfx instance and the catalog references
+                        // NOW instead of leaving them to the water tick's
+                        // reaper: the reaper only runs while some reservoir
+                        // still drives the tick, so dropping the LAST
+                        // reservoir in a prefab would otherwise keep its
+                        // instance drawing and its mask pinned indefinitely.
+                        game.releasePixelWater(entity);
+                    }
+                    return;
+                }
+            }
+
             const comp_names = comptime Components.names();
             inline for (comp_names) |comp_name| {
                 if (std.mem.eql(u8, name, comp_name)) {
@@ -401,6 +438,22 @@ pub fn PrefabRefresh(comptime GameType: type, comptime Components: type) type {
                 }
             }
         }
+
+        /// `PixelWater` is a JSONC BUILT-IN: `component_apply.zig` routes it
+        /// through `applyPixelWater` before its registry loop, and it is
+        /// deliberately absent from `Components.names()`. The two dispatch
+        /// helpers below iterate exactly that registry, so without this gate
+        /// a pushed prefab's reservoir edit would silently do nothing until a
+        /// full respawn. The precedence test is the SAME one the apply path
+        /// uses — a project-registered `PixelWater` compiles this branch out
+        /// and takes the generic registry route instead.
+        ///
+        /// The `isTransient` half keeps the refresh's scope contract honest
+        /// by construction: if the component's save policy ever stops being
+        /// `.transient`, the refresh stops touching it, like every registry
+        /// component.
+        const water_is_builtin = !Components.has("PixelWater") and
+            isTransient(GameType.PixelWaterComp);
 
         fn isTransient(comptime T: type) bool {
             if (@typeInfo(T) != .@"struct") return false;

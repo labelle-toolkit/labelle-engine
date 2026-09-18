@@ -292,6 +292,13 @@ pub fn Mixin(comptime Game: type) type {
             self.detachFromParent(entity);
             untrackSceneEntity(self, entity);
             self.active_world.sprite_cache.invalidate(@intCast(entity));
+            // Water instance + catalog references, released SYNCHRONOUSLY
+            // (#100) rather than left to the tick's reaper: on a backend
+            // that recycles entity ids, a reservoir created later in the
+            // same frame can land on this very key and inherit the dead
+            // entity's instance. Before `untrackEntity`, because the release
+            // unbinds the sprite and marks the visual dirty.
+            self.releasePixelWater(entity);
             self.renderer.untrackEntity(entity);
             self.releaseTilemap(entity);
             // Free this entity's own `Children` backing allocation just before
@@ -343,6 +350,13 @@ pub fn Mixin(comptime Game: type) type {
             if (self.ecs_backend.getComponent(entity, Children)) |cc| cc.deinit(self.allocator);
             untrackSceneEntity(self, entity);
             self.active_world.sprite_cache.invalidate(@intCast(entity));
+            // Water instance + catalog references, released SYNCHRONOUSLY
+            // (#100) rather than left to the tick's reaper: on a backend
+            // that recycles entity ids, a reservoir created later in the
+            // same frame can land on this very key and inherit the dead
+            // entity's instance. Before `untrackEntity`, because the release
+            // unbinds the sprite and marks the visual dirty.
+            self.releasePixelWater(entity);
             self.renderer.untrackEntity(entity);
             self.releaseTilemap(entity);
             self.ecs_backend.destroyEntity(entity);

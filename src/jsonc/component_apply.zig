@@ -34,6 +34,7 @@ const deserializer = @import("deserializer.zig");
 const ref_resolver_mod = @import("ref_resolver.zig");
 const uf = @import("unified_format.zig");
 const ImageComp = @import("../image_component.zig").Image;
+const PixelWaterComp = @import("../pixel_water.zig").PixelWater;
 
 pub fn ComponentApply(comptime GameType: type, comptime Components: type) type {
     const Entity = GameType.EntityType;
@@ -179,6 +180,23 @@ pub fn ComponentApply(comptime GameType: type, comptime Components: type) type {
                 }
             }
 
+            // PixelWater (COND-07, labelle-bgfx#100) — built-in. Unlike the
+            // other built-ins the apply does NOT go straight to
+            // `addComponent`: it routes through `game.addPixelWater`, which
+            // VALIDATES AND STAGES the candidate before committing either the
+            // component or the gfx-owned water instance. Committing the
+            // component here and synchronizing afterwards would leave a torn
+            // state on rejection — the component holding the new value while
+            // the instance still holds the old one, with nothing left to
+            // detect the divergence. Guarded `!Components.has("PixelWater")`
+            // exactly like the other built-ins.
+            if (comptime !Components.has("PixelWater")) {
+                if (std.mem.eql(u8, name, "PixelWater")) {
+                    _ = applyPixelWater(game, entity, value);
+                    return;
+                }
+            }
+
             // All other components — comptime dispatch via
             // Components registry.
             const filtered = stripEntityArrayFields(value, game.allocator);
@@ -319,6 +337,25 @@ pub fn ComponentApply(comptime GameType: type, comptime Components: type) type {
             game.addComponent(entity, emitter);
             game.drive_particles = true;
             return true;
+        }
+
+        /// `PixelWater` → `game.addPixelWater` (COND-07). The generic struct
+        /// deserializer maps every authored field — including the
+        /// `[2]u32` `logical_size` (see the array branch in
+        /// `deserializer.zig`) and the sRGB hex colour strings, which stay
+        /// STRINGS on the component so the sRGB→linear conversion happens
+        /// exactly once, at the gfx seam.
+        ///
+        /// Returns `false` when the payload is malformed OR when validation
+        /// rejected it; in both cases the entity is untouched and a
+        /// field-named diagnostic has been logged.
+        pub fn applyPixelWater(game: *GameType, entity: Entity, value: Value) bool {
+            const comp_alloc = game.active_world.nested_entity_arena.allocator();
+            const water = deserializer.deserialize(PixelWaterComp, value, comp_alloc) orelse {
+                game.log.err("PixelWater on entity {any}: malformed component payload", .{entity});
+                return false;
+            };
+            return game.addPixelWater(entity, water);
         }
 
         /// Strip fields that contain entity-like arrays from a
