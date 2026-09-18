@@ -2,15 +2,15 @@
 
 Environment: Windows, Zig 0.16.0. Commands: `zig build test -j4 --summary all`, plus direct `zig test` invocations for the baseline preview binaries.
 
-Baseline snapshots: engine `6b5a448` and core `b734e0c`, extracted without edits. The current engine uses the completed generic-shader core. Both broad comparison runs were stopped at the user's request; they are **not completed suite runs**.
+Baseline snapshots: engine `6b5a448` and core `b734e0c`, extracted without edits. The current engine uses the completed generic-shader core. Both broad comparison runs were stopped after collecting the relevant failure evidence; they are **not completed suite runs**.
 
 The earlier completed current full run reported 237/258 build steps succeeded, 1246/1293 tests passed, 47 runtime failures, and 12 failed steps. Its raw log was removed during cleanup. The retained partial rerun and baseline logs below provide narrower, explicit evidence; no claim is made that every broad-suite issue has been baseline-reproduced.
 
-Passing targeted evidence: engine `test-shader-regressions` 78/78 (including 13 shader tests); gfx `test` 181/181. User independently reports final integration 18 tests, 12 shader compilations, and 10 runtime scenarios passing.
+Passing targeted evidence: engine `test-shader-regressions` 78/78 (including 13 shader tests); gfx `test` 181/181. Independent integration validation passes 20 example tests, 16 shader compilations, and 16 runtime scenarios, including the subsequently added game-owned mist effect.
 
 ## Runtime failures: baseline reproduced
 
-All 47 preview-family runtime failures have now been reproduced on the original baseline. Each fails during loopback harness initialization with `GetSockNameFailed`, before the behavior under test. Baseline preview-mode: 10 pass / 29 fail; frame-stream: 0 pass / 10 fail; handshake: 0 pass / 7 fail; flows API: 6 pass / 1 fail. The last three direct baseline test commands finished before the stop request was processed; no test processes remain.
+All 47 preview-family runtime failures have now been reproduced on the original baseline. Each fails during loopback harness initialization with `GetSockNameFailed`, before the behavior under test. Baseline preview-mode: 10 pass / 29 fail; frame-stream: 0 pass / 10 fail; handshake: 0 pass / 7 fail; flows API: 6 pass / 1 fail. The direct baseline commands for the last three groups completed before the broader comparison was stopped.
 
 ### test/preview_mode_test.zig (29 failures)
 
