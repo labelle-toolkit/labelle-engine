@@ -7,6 +7,7 @@ const std = @import("std");
 const labelle_core = @import("labelle-core");
 
 const types = @import("types.zig");
+const builtins = @import("builtins.zig");
 const script_mod = @import("script.zig");
 const component_mod = @import("component.zig");
 
@@ -33,8 +34,6 @@ pub fn EntityWriter(
     const Entity = GameType.EntityType;
     const EcsImpl = GameType.EcsBackend;
     const Sprite = GameType.SpriteComp;
-
-    const Shape = GameType.ShapeComp;
     const RefCtx = ReferenceContext(Entity);
 
     return struct {
@@ -50,6 +49,146 @@ pub fn EntityWriter(
             game.addSprite(entity, authored);
         }
 
+        // =====================================================================
+        // Built-in dispatch (#881)
+        // =====================================================================
+        //
+        // BUILT-INS are engine-owned components that a project never
+        // registers, so `Components.has(name)` is false for them and the
+        // registry loop below walks straight past. Before #881 this writer
+        // hand-rolled a chain of `Sprite`/`Shape` comparisons and everything
+        // else fell off the end with NO error: a `.zon`-authored `Camera`,
+        // `Image` or `Emitter` produced an entity with no such component and
+        // not one diagnostic anywhere.
+        //
+        // The set now comes from `scene.builtins.Builtin` — one source of
+        // truth shared with the other dispatch sites — and `handlerFor`'s
+        // EXHAUSTIVE switch is what forces this writer to keep up: add a tag
+        // to that enum without a prong here and the completeness gate below
+        // fails to COMPILE, naming the built-in. Silent-drop is no longer
+        // expressible.
+
+        /// How a built-in reaches the ECS. `plain` is a bare
+        /// `addComponent`; the others route through the Game API that
+        /// also performs the built-in's side-effects (renderer tracking,
+        /// tilemap decode, particle driving).
+        const Via = enum { sprite, shape, tilemap, camera, image, emitter };
+
+        const Handler = struct {
+            via: Via,
+            /// The entity's `VisualType` once this component lands
+            /// (`.none` leaves whatever a sibling component set).
+            visual: VisualType,
+        };
+
+        /// The writer branch for each built-in. EXHAUSTIVE on purpose —
+        /// a new `builtins.Builtin` tag with no prong here is a compile
+        /// error ("unhandled enumeration value"), which is exactly the
+        /// #881 guarantee: a built-in can never be silently dropped from
+        /// a `.zon` scene again.
+        fn handlerFor(comptime b: builtins.Builtin) Handler {
+            return switch (b) {
+                .Sprite => .{ .via = .sprite, .visual = .sprite },
+                .Shape => .{ .via = .shape, .visual = .shape },
+                .Tilemap => .{ .via = .tilemap, .visual = .none },
+                .Camera => .{ .via = .camera, .visual = .none },
+                .Image => .{ .via = .image, .visual = .none },
+                .Emitter => .{ .via = .emitter, .visual = .none },
+            };
+        }
+
+        /// Completeness gate (#881). Forces `handlerFor` for EVERY
+        /// built-in the moment this writer is instantiated — a missing
+        /// prong breaks the build even if no scene authors that
+        /// component yet.
+        pub const builtin_dispatch_complete = blk: {
+            for (std.enums.values(builtins.Builtin)) |b| _ = handlerFor(b);
+            break :blk true;
+        };
+
+        comptime {
+            std.debug.assert(builtin_dispatch_complete);
+        }
+
+        /// The built-in `name` dispatches to, or `null` when the name is
+        /// not a built-in — or is a SHADOWABLE built-in the project
+        /// registered itself (`Tilemap`/`Camera`/`Image`/`Emitter`),
+        /// which mirrors the `!Components.has(…)` gates in
+        /// `jsonc/component_apply.zig`. `Sprite`/`Shape` are
+        /// unconditional and shadow the registry, as they always have.
+        fn builtinFor(comptime name: []const u8) ?builtins.Builtin {
+            const b = comptime builtins.lookup(name) orelse return null;
+            if (comptime b.shadowable() and Components.has(name)) return null;
+            return b;
+        }
+
+        /// Add one built-in, coercing the authored `.zon` value to the
+        /// engine type the Game exposes as `<name>Comp`. `overlay` is a
+        /// scene-level override tuple laid over `value` (pass `.{}` when
+        /// there is none — an empty overlay is the identity merge), so a
+        /// prefab + scene pair reaches the built-in's add path ONCE, on
+        /// the merged value.
+        fn addBuiltin(
+            comptime b: builtins.Builtin,
+            game: *GameType,
+            entity: Entity,
+            comptime value: anytype,
+            comptime overlay: anytype,
+        ) VisualType {
+            const T = comptime b.Type(GameType);
+            const handler = comptime handlerFor(b);
+            switch (comptime handler.via) {
+                .sprite => addAuthoredSprite(game, entity, merge(T, value, overlay)),
+                .shape => game.addShape(entity, merge(T, value, overlay)),
+                .tilemap => game.addTilemap(entity, merge(T, value, overlay)),
+                .camera => {
+                    // `tag` is an inline `[16:0]u8`; a `.zon` string can
+                    // only reach it through `setTagSlice` (the same reason
+                    // `applyCamera` special-cases it on the JSONC side).
+                    var cam = coerceMergedSkipping(T, value, overlay, "tag");
+                    if (comptime @hasField(@TypeOf(overlay), "tag")) {
+                        cam.setTagSlice(@field(overlay, "tag"));
+                    } else if (comptime @hasField(@TypeOf(value), "tag")) {
+                        cam.setTagSlice(@field(value, "tag"));
+                    }
+                    game.addComponent(entity, cam);
+                },
+                .image => game.addComponent(entity, merge(T, value, overlay)),
+                .emitter => {
+                    game.addComponent(entity, merge(T, value, overlay));
+                    // Parity with `applyEmitter`: authoring an emitter
+                    // turns the particle tick/draw on by itself.
+                    game.drive_particles = true;
+                },
+            }
+            return comptime handler.visual;
+        }
+
+        /// Field-by-field coerce of `overlay` over `value` into `T`,
+        /// leaving the field named `skip` at its default — for inline
+        /// bounded buffers (`Camera.tag`) that no generic coercion can
+        /// fill from a `.zon` string.
+        fn coerceMergedSkipping(
+            comptime T: type,
+            comptime value: anytype,
+            comptime overlay: anytype,
+            comptime skip: []const u8,
+        ) T {
+            var result: T = undefined;
+            inline for (@typeInfo(T).@"struct".fields) |f| {
+                if (comptime std.mem.eql(u8, f.name, skip)) {
+                    setFieldDefault(f, &result);
+                } else if (comptime @hasField(@TypeOf(overlay), f.name)) {
+                    @field(result, f.name) = coerce(f.type, @field(overlay, f.name));
+                } else if (comptime @hasField(@TypeOf(value), f.name)) {
+                    @field(result, f.name) = coerce(f.type, @field(value, f.name));
+                } else {
+                    setFieldDefault(f, &result);
+                }
+            }
+            return result;
+        }
+
         /// Add components from a comptime component tuple to an entity.
         /// Handles Sprite/Shape visuals, custom components from the ComponentRegistry,
         /// and entity references (deferred to Phase 2 via ref_ctx).
@@ -61,12 +200,9 @@ pub fn EntityWriter(
 
                 const value = @field(comps, field.name);
 
-                if (comptime std.mem.eql(u8, field.name, "Sprite")) {
-                    addAuthoredSprite(game, entity, coerce(Sprite, value));
-                    vtype = .sprite;
-                } else if (comptime std.mem.eql(u8, field.name, "Shape")) {
-                    game.addShape(entity, coerce(Shape, value));
-                    vtype = .shape;
+                if (comptime builtinFor(field.name)) |b| {
+                    const v = addBuiltin(b, game, entity, value, .{});
+                    if (v != .none) vtype = v;
                 } else if (comptime Components.has(field.name)) {
                     const T = Components.getType(field.name);
                     addCustomComponent(T, field.name, entity, game, value, ref_ctx);
@@ -95,14 +231,15 @@ pub fn EntityWriter(
                 const prefab_val = @field(prefab_comps, field.name);
                 const has_override = comptime @hasField(@TypeOf(scene_comps), field.name);
 
-                if (comptime std.mem.eql(u8, field.name, "Sprite")) {
-                    const val = comptime if (has_override) merge(Sprite, prefab_val, scene_comps.Sprite) else coerce(Sprite, prefab_val);
-                    addAuthoredSprite(game, entity, val);
-                    vtype = .sprite;
-                } else if (comptime std.mem.eql(u8, field.name, "Shape")) {
-                    const val = comptime if (has_override) merge(Shape, prefab_val, scene_comps.Shape) else coerce(Shape, prefab_val);
-                    game.addShape(entity, val);
-                    vtype = .shape;
+                if (comptime builtinFor(field.name)) |b| {
+                    // Merged authoring stays a `.zon`-level overlay so the
+                    // built-in's add path (and its side-effects) runs once,
+                    // on the merged value.
+                    const v = if (comptime has_override)
+                        addBuiltin(b, game, entity, prefab_val, @field(scene_comps, field.name))
+                    else
+                        addBuiltin(b, game, entity, prefab_val, .{});
+                    if (v != .none) vtype = v;
                 } else if (comptime Components.has(field.name)) {
                     const T = Components.getType(field.name);
                     if (has_override) {
@@ -121,12 +258,9 @@ pub fn EntityWriter(
 
                 const value = @field(scene_comps, field.name);
 
-                if (comptime std.mem.eql(u8, field.name, "Sprite")) {
-                    addAuthoredSprite(game, entity, coerce(Sprite, value));
-                    vtype = .sprite;
-                } else if (comptime std.mem.eql(u8, field.name, "Shape")) {
-                    game.addShape(entity, coerce(Shape, value));
-                    vtype = .shape;
+                if (comptime builtinFor(field.name)) |b| {
+                    const v = addBuiltin(b, game, entity, value, .{});
+                    if (v != .none) vtype = v;
                 } else if (comptime Components.has(field.name)) {
                     const T = Components.getType(field.name);
                     addCustomComponent(T, field.name, entity, game, value, ref_ctx);

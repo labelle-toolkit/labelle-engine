@@ -88,6 +88,10 @@ pub fn build(b: *std.Build) void {
     const test_files = [_][]const u8{
         "test/root_test.zig",
         "test/shader_material_test.zig",
+        // #881 — the comptime `.zon` entity writer must never silently
+        // drop an engine BUILT-IN (`Camera`/`Image`/`Emitter` were), and a
+        // NEW built-in that forgets a writer branch must fail to COMPILE.
+        "test/zon_builtin_components_test.zig",
         // #855 — typed hook context: `engine.HookContext` injection by
         // field type, `ctx.game()` / `ctx.gameAs(G)`, the bound-Game
         // identity check, and a regression proving the legacy

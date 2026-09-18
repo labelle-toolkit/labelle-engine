@@ -72,6 +72,7 @@ const prefab_cache_mod = @import("../prefab_cache.zig");
 const PrefabCache = prefab_cache_mod.PrefabCache;
 const uf = @import("../unified_format.zig");
 const component_apply_mod = @import("../component_apply.zig");
+const builtins = @import("scene").builtins;
 const on_ready_mod = @import("../on_ready.zig");
 
 /// Follow at most this many `{ "prefab": … }` alias hops when
@@ -321,14 +322,22 @@ pub fn PrefabRefresh(comptime GameType: type, comptime Components: type) type {
 
         // ── Per-entity diff + re-apply ─────────────────────────────
 
-        /// `Position`/`Sprite`/`Shape` are name-special-cased in
-        /// `applyComponent` BEFORE its registry loop — they must never
+        /// `Position` and the UNSHADOWABLE built-ins (`Sprite`/`Shape`)
+        /// are name-special-cased in `applyComponent` BEFORE its
+        /// registry loop — structural/renderer-owned, they must never
         /// enter the transient path even if a host registers a
-        /// same-named registry type.
+        /// same-named registry type. Derived from
+        /// `scene.builtins.Builtin` (#881) rather than a literal list,
+        /// so a future unshadowable built-in is reserved here for free.
         fn isReservedName(name: []const u8) bool {
-            return std.mem.eql(u8, name, "Position") or
-                std.mem.eql(u8, name, "Sprite") or
-                std.mem.eql(u8, name, "Shape");
+            if (std.mem.eql(u8, name, "Position")) return true;
+            inline for (comptime builtins.names) |bname| {
+                const b = comptime builtins.lookup(bname).?;
+                if (comptime !b.shadowable()) {
+                    if (std.mem.eql(u8, name, bname)) return true;
+                }
+            }
+            return false;
         }
 
         fn containsKey(set: []const Declared, key: []const u8) bool {
@@ -377,12 +386,43 @@ pub fn PrefabRefresh(comptime GameType: type, comptime Components: type) type {
                 if (std.mem.eql(u8, name, comp_name)) {
                     const T = Components.getType(comp_name);
                     if (comptime isTransient(T)) {
-                        const prev: ?T = if (game.ecs_backend.getComponent(entity, T)) |p| p.* else null;
-                        ApplyHelpers.applyComponent(game, entity, name, value, Position{});
-                        if (prev) |old_comp| preserveEntityRefs(T, game, entity, old_comp);
-                        OnReadyHelpers.fireOnReadyByName(game, entity, name);
+                        applyTransientType(T, game, entity, name, value);
                     }
                     return;
+                }
+            }
+            // Built-ins are NOT in the registry, so the loop above is
+            // blind to them (#881): `Emitter` — the one `.transient`
+            // built-in — used to fall off the end here, and editing an
+            // emitter in a pushed prefab silently did nothing until a
+            // full respawn. Derived from `scene.builtins.Builtin`, so a
+            // future transient built-in refreshes without a new branch.
+            applyTransientBuiltin(game, entity, name, value);
+        }
+
+        fn applyTransientType(comptime T: type, game: *GameType, entity: Entity, name: []const u8, value: Value) void {
+            const prev: ?T = if (game.ecs_backend.getComponent(entity, T)) |p| p.* else null;
+            ApplyHelpers.applyComponent(game, entity, name, value, Position{});
+            if (prev) |old_comp| preserveEntityRefs(T, game, entity, old_comp);
+            OnReadyHelpers.fireOnReadyByName(game, entity, name);
+        }
+
+        /// The built-in half of the transient refresh. Only SHADOWABLE
+        /// built-ins the project did not register itself reach the
+        /// built-in channel — the same `!Components.has(…)` precedence
+        /// `component_apply.zig` applies (a registered same-name
+        /// component was already handled by the registry loop above).
+        fn applyTransientBuiltin(game: *GameType, entity: Entity, name: []const u8, value: Value) void {
+            inline for (comptime builtins.names) |bname| {
+                const b = comptime builtins.lookup(bname).?;
+                if (comptime b.shadowable() and !Components.has(bname)) {
+                    const T = comptime b.Type(GameType);
+                    if (comptime isTransient(T)) {
+                        if (std.mem.eql(u8, name, bname)) {
+                            applyTransientType(T, game, entity, name, value);
+                            return;
+                        }
+                    }
                 }
             }
         }
@@ -392,13 +432,30 @@ pub fn PrefabRefresh(comptime GameType: type, comptime Components: type) type {
             inline for (comp_names) |comp_name| {
                 if (std.mem.eql(u8, name, comp_name)) {
                     const T = Components.getType(comp_name);
-                    if (comptime isTransient(T)) {
-                        if (game.ecs_backend.getComponent(entity, T) != null) {
-                            game.removeComponent(entity, T);
-                        }
-                    }
+                    if (comptime isTransient(T)) removeTransientType(T, game, entity);
                     return;
                 }
+            }
+            // Same #881 blind spot as `applyTransient`: a transient
+            // built-in dropped from the new prefab source must come off
+            // the live instance too, or the refresh is one-way.
+            inline for (comptime builtins.names) |bname| {
+                const b = comptime builtins.lookup(bname).?;
+                if (comptime b.shadowable() and !Components.has(bname)) {
+                    const T = comptime b.Type(GameType);
+                    if (comptime isTransient(T)) {
+                        if (std.mem.eql(u8, name, bname)) {
+                            removeTransientType(T, game, entity);
+                            return;
+                        }
+                    }
+                }
+            }
+        }
+
+        fn removeTransientType(comptime T: type, game: *GameType, entity: Entity) void {
+            if (game.ecs_backend.getComponent(entity, T) != null) {
+                game.removeComponent(entity, T);
             }
         }
 

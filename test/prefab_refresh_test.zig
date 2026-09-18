@@ -337,3 +337,65 @@ test "insert (no previous generation) and invalid pushes touch nothing" {
     try testing.expectError(error.InvalidFormat, game.reloadPrefabSource("condenser", "{ \"components\": "));
     try testing.expectEqual(@as(f32, 6.0), game.ecs_backend.getComponent(e, Overlay).?.fps);
 }
+
+// ── Built-in components (#881) ──────────────────────────────────────
+//
+// The refresh dispatched over `Components.names()` only, so the engine's
+// BUILT-INS — which are deliberately absent from every project registry —
+// were invisible to it. `Emitter` is the one `.transient` built-in, so
+// editing an emitter in a pushed prefab silently did nothing until a full
+// respawn. (`Image`/`Camera`/`Tilemap` carry no `save` decl, so they are
+// `.saveable` and stay outside the refresh contract by design.)
+
+test "built-in: a transient Emitter declared by the prefab re-applies in place" {
+    var game = engine.Game.init(testing.allocator);
+    defer game.deinit();
+    try boot(&game, &.{.{ .name = "smoker", .src =
+        \\{ "components": {
+        \\    "Emitter": { "preset": "smoke" },
+        \\    "Keep": { "hp": 3 }
+        \\} }
+    }});
+
+    const e = game.spawnPrefab("smoker", .{ .x = 0, .y = 0 }).?;
+    try testing.expectEqual(engine.EmitterPreset.smoke, game.ecs_backend.getComponent(e, engine.Emitter).?.preset);
+    game.ecs_backend.getComponent(e, Keep).?.hp = 99;
+
+    try game.reloadPrefabSource("smoker",
+        \\{ "components": {
+        \\    "Emitter": { "preset": "rain" },
+        \\    "Keep": { "hp": 3 }
+        \\} }
+    );
+
+    // The built-in must have been RE-APPLIED on the live entity — not
+    // merely left in place (which is what the entity-exists check would
+    // have accepted).
+    const em = game.ecs_backend.getComponent(e, engine.Emitter) orelse
+        return error.EmitterComponentDropped;
+    try testing.expectEqual(engine.EmitterPreset.rain, em.preset);
+    // The saveable neighbour is still untouched by the refresh.
+    try testing.expectEqual(@as(i32, 99), game.ecs_backend.getComponent(e, Keep).?.hp);
+}
+
+test "built-in: an Emitter dropped by the new source is removed from live instances" {
+    var game = engine.Game.init(testing.allocator);
+    defer game.deinit();
+    try boot(&game, &.{.{ .name = "sparker", .src =
+        \\{ "components": {
+        \\    "Emitter": { "preset": "sparks" },
+        \\    "Keep": { "hp": 1 }
+        \\} }
+    }});
+
+    const e = game.spawnPrefab("sparker", .{ .x = 0, .y = 0 }).?;
+    try testing.expect(game.ecs_backend.getComponent(e, engine.Emitter) != null);
+
+    try game.reloadPrefabSource("sparker",
+        \\{ "components": {
+        \\    "Keep": { "hp": 1 }
+        \\} }
+    );
+
+    try testing.expect(game.ecs_backend.getComponent(e, engine.Emitter) == null);
+}
