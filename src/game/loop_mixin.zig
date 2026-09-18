@@ -136,6 +136,13 @@ pub fn Mixin(comptime Game: type) type {
             }
             AtlasMixin.resolveAtlasSprites(self);
             self.renderer.sync(EcsImpl, self.ecs_backend);
+            // Deferred shader-material destroys (#883). The sync above has
+            // just rebuilt the renderer's cached draw state from the ECS,
+            // so no cached draw can still name a material retired during
+            // the PREVIOUS frame's update — this is the first moment those
+            // backend resources are safe to free, and freeing them here is
+            // what bounds the deferral to a single frame.
+            self.flushRetiredShaderMaterials();
 
             // Gamepad hotplug + ControllerManager drain (core#18 / #611).
             // Runs in the ALWAYS-RUN section, BEFORE the pause gate below,

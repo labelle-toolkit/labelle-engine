@@ -92,6 +92,11 @@ pub fn build(b: *std.Build) void {
         // drop an engine BUILT-IN (`Camera`/`Image`/`Emitter` were), and a
         // NEW built-in that forgets a writer branch must fail to COMPILE.
         "test/zon_builtin_components_test.zig",
+        // #883 — a shader material destroyed mid-update must never be
+        // submitted for the frame the renderer had already cached it in.
+        // Mock renderer with a CACHED DRAW LIST counts material vs
+        // fallback draws and dead-id submits.
+        "test/shader_material_retire_test.zig",
         // #855 — typed hook context: `engine.HookContext` injection by
         // field type, `ctx.game()` / `ctx.gameAs(G)`, the bound-Game
         // identity check, and a regression proving the legacy
