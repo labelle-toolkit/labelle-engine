@@ -382,3 +382,25 @@ test "deserialize: EnumSet all-valid bools (mixed true/false) produces expected 
     try testing.expect(!got.contains(.vegetable));
     try testing.expect(got.contains(.meat));
 }
+
+test "deserialize: sentinel strings preserve text and terminator" {
+    for ([_][]const u8{ "", "Condenser" }) |text| {
+        const result = deserializer.deserialize([:0]const u8, .{ .string = text }, testing.allocator).?;
+        defer testing.allocator.free(result);
+        try testing.expectEqualStrings(text, result);
+        try testing.expectEqual(@as(u8, 0), result[result.len]);
+    }
+    try testing.expect(deserializer.deserialize([:0]const u8, .{ .integer = 1 }, testing.allocator) == null);
+    const optional = deserializer.deserialize(?[:0]const u8, .{ .string = "Lamp" }, testing.allocator).?.?;
+    defer testing.allocator.free(optional);
+    try testing.expectEqualStrings("Lamp", optional);
+    try testing.expectEqual(@as(u8, 0), optional[optional.len]);
+}
+
+test "deserialize: sentinel numeric slices preserve terminator" {
+    var items = [_]SceneValue{ .{ .integer = 12 }, .{ .integer = 34 } };
+    const result = deserializer.deserialize([:99]const u32, .{ .array = .{ .items = &items } }, testing.allocator).?;
+    defer testing.allocator.free(result);
+    try testing.expectEqualSlices(u32, &.{ 12, 34 }, result);
+    try testing.expectEqual(@as(u32, 99), result[result.len]);
+}

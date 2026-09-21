@@ -143,6 +143,17 @@ pub fn deserialize(comptime T: type, value: Value, allocator: std.mem.Allocator)
         return internString(s);
     }
 
+    // Text components use sentinel-terminated strings. Keep their storage
+    // in the caller's scene arena, including the trailing sentinel byte.
+    if (info == .pointer and info.pointer.size == .slice and
+        info.pointer.child == u8 and info.pointer.sentinel() != null)
+    {
+        const s = value.asString() orelse return null;
+        const buf = allocator.allocSentinel(u8, s.len, info.pointer.sentinel().?) catch return null;
+        @memcpy(buf, s);
+        return buf;
+    }
+
     // Authored fixed-size arrays require an exact length.
     if (info == .array) {
         const arr = value.asArray() orelse return null;
@@ -172,7 +183,10 @@ pub fn deserialize(comptime T: type, value: Value, allocator: std.mem.Allocator)
         const arr = value.asArray() orelse return null;
         const Element = info.pointer.child;
 
-        const buf = allocator.alloc(Element, arr.items.len) catch return null;
+        const buf = if (comptime info.pointer.sentinel()) |sentinel|
+            allocator.allocSentinel(Element, arr.items.len, sentinel) catch return null
+        else
+            allocator.alloc(Element, arr.items.len) catch return null;
         for (arr.items, 0..) |item, i| {
             buf[i] = deserialize(Element, item, allocator) orelse return null;
         }
