@@ -295,6 +295,13 @@ pub fn Mixin(comptime Game: type) type {
         /// intent, and adopting the old window state here would drop it.
         /// Adopting never queues a request — it records what the window
         /// already is, so there is nothing to apply.
+        ///
+        /// Backend contract: `actual` is read right after the drain, so a
+        /// backend whose switch is ASYNCHRONOUS (the browser's Fullscreen
+        /// API) must report the in-flight target from `isFullscreen()`
+        /// until the transition settles. Reporting the old state instead
+        /// would flip the desired flag, and a bound checkbox, back for
+        /// those frames. labelle-bgfx's web backend does this.
         pub fn syncFullscreen(self: *Game, actual: bool) void {
             if (self.fullscreen_dirty) return;
             self.fullscreen = actual;
