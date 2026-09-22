@@ -970,6 +970,12 @@ pub fn GameConfigWithYAxis(
         /// `takeFullscreenRequest()` drain so the backend toggle fires
         /// exactly once per change instead of every frame.
         fullscreen_dirty: bool = false,
+        /// Whether the platform can switch fullscreen at all, reported by
+        /// the backend through the frame loop (`setFullscreenAvailable`).
+        /// Defaults to true, so desktop and backends that never report it
+        /// keep today's behaviour. A browser that refuses the Fullscreen
+        /// API (iPhone Safari) reports false (labelle-bgfx#99).
+        fullscreen_available: bool = true,
         /// Desired vsync state, owned by the engine (same cooperative split
         /// as `fullscreen`). Scripts flip it via `setVsync`/`toggleVsync`;
         /// the generated frame loop drains `takeVsyncRequest()` and applies
@@ -1740,6 +1746,9 @@ pub fn GameConfigWithYAxis(
         pub const toggleFullscreen = LifecycleMixin.toggleFullscreen;
         pub const isFullscreen = LifecycleMixin.isFullscreen;
         pub const takeFullscreenRequest = LifecycleMixin.takeFullscreenRequest;
+        pub const syncFullscreen = LifecycleMixin.syncFullscreen;
+        pub const setFullscreenAvailable = LifecycleMixin.setFullscreenAvailable;
+        pub const isFullscreenAvailable = LifecycleMixin.isFullscreenAvailable;
         pub const setVsync = LifecycleMixin.setVsync;
         pub const toggleVsync = LifecycleMixin.toggleVsync;
         pub const isVsync = LifecycleMixin.isVsync;
