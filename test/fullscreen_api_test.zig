@@ -107,3 +107,26 @@ test "fullscreen: a pending request wins over the stale window state" {
     try testing.expect(game.isFullscreen());
     try testing.expectEqual(@as(?bool, true), game.takeFullscreenRequest());
 }
+
+// ── Availability: the platform's answer to "can fullscreen switch at
+// all?", so a settings UI can grey the option out (labelle-bgfx#99). ──
+
+test "fullscreen: available by default, so unreported backends keep the option" {
+    var game = Game.init(testing.allocator);
+    defer game.deinit();
+
+    try testing.expect(game.isFullscreenAvailable());
+}
+
+test "fullscreen: the backend's report is what the UI reads" {
+    var game = Game.init(testing.allocator);
+    defer game.deinit();
+
+    game.setFullscreenAvailable(false); // e.g. iPhone Safari
+    try testing.expect(!game.isFullscreenAvailable());
+    // Availability is a capability, not a request: nothing is queued.
+    try testing.expectEqual(@as(?bool, null), game.takeFullscreenRequest());
+
+    game.setFullscreenAvailable(true);
+    try testing.expect(game.isFullscreenAvailable());
+}

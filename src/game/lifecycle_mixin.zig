@@ -300,6 +300,23 @@ pub fn Mixin(comptime Game: type) type {
             self.fullscreen = actual;
         }
 
+        /// Frame-loop report (generated main only): whether the platform
+        /// can switch fullscreen at all — the backend's
+        /// `window.fullscreenAvailable()`. A settings UI reads it through
+        /// `isFullscreenAvailable()` to grey its fullscreen option out
+        /// where it could only ever fail, e.g. a browser without the
+        /// Fullscreen API (labelle-bgfx#99).
+        pub fn setFullscreenAvailable(self: *Game, available: bool) void {
+            self.fullscreen_available = available;
+        }
+
+        /// Can the fullscreen switch do anything on this platform? True
+        /// unless the backend reported otherwise, so a backend that never
+        /// reports it keeps the option enabled.
+        pub fn isFullscreenAvailable(self: *const Game) bool {
+            return self.fullscreen_available;
+        }
+
         // ── Vsync ──
         //
         // Mirrors the Fullscreen split: the engine owns the *desired* vsync
