@@ -87,6 +87,7 @@ const RecordingGfxEngine = struct {
     push_calls: usize = 0,
     last_pushed: ?PostPass = null,
     clear_calls: usize = 0,
+    invalidate_calls: usize = 0,
 
     pub fn setPostFx(self: *@This(), passes: []const PostPass) void {
         self.set_calls += 1;
@@ -101,6 +102,9 @@ const RecordingGfxEngine = struct {
     }
     pub fn clearPostFx(self: *@This()) void {
         self.clear_calls += 1;
+    }
+    pub fn invalidatePostFxTargets(self: *@This()) void {
+        self.invalidate_calls += 1;
     }
 };
 
@@ -209,6 +213,25 @@ test "Game.setPostFx/pushPostPass/clearPostFx forward to renderer.inner" {
     try testing.expectEqual(@as(usize, 1), game.renderer.inner.push_calls);
 }
 
+test "Game.surfaceLost forgets EVERY world's post-fx targets exactly once (labelle-gfx#364)" {
+    // After an Android surface cycle the driver's cached render-target ids are
+    // dead. `surfaceLost` must tell each world's retained engine to forget
+    // them; a world that is merely shelved still owns a driver that would
+    // resume with stale ids on `setActiveWorld`.
+    const RGame = RecordingGame();
+    var game = RGame.init(testing.allocator);
+    defer game.deinit();
+    try game.createWorld("shelved");
+
+    try testing.expectEqual(@as(usize, 0), game.renderer.inner.invalidate_calls);
+    game.surfaceLost();
+    try testing.expectEqual(@as(usize, 1), game.renderer.inner.invalidate_calls);
+    try testing.expectEqual(@as(usize, 1), game.getWorld("shelved").?.renderer.inner.invalidate_calls);
+    // Forgetting targets must not touch the stack itself.
+    try testing.expectEqual(@as(usize, 0), game.renderer.inner.clear_calls);
+    try testing.expectEqual(@as(usize, 0), game.renderer.inner.set_calls);
+}
+
 test "post-fx methods are safe no-ops on a renderer without GfxEngineType (back-compat)" {
     // The default engine.Game uses StubRender, which has no `GfxEngineType` —
     // the mixin's comptime guard fails, so all three calls compile to nothing
@@ -222,5 +245,6 @@ test "post-fx methods are safe no-ops on a renderer without GfxEngineType (back-
     });
     game.pushPostPass(.{ .kind = .vignette, .uniforms = .{ .scalar0 = 0.5 } });
     game.clearPostFx();
+    game.invalidateAllPostFxTargets();
     // Reaching here without a crash is the assertion: guarded no-op.
 }

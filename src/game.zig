@@ -1581,6 +1581,7 @@ pub fn GameConfigWithYAxis(
         pub const setPostFx = PostFxMixin.setPostFx;
         pub const pushPostPass = PostFxMixin.pushPostPass;
         pub const clearPostFx = PostFxMixin.clearPostFx;
+        pub const invalidateAllPostFxTargets = PostFxMixin.invalidateAllPostFxTargets;
 
         // ── Scene Management (mixin) ─────────────────────────────
         pub const registerScene = SceneMixin.registerScene;

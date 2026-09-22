@@ -19,6 +19,14 @@ fn rendererHasPostFx(comptime Renderer: type) bool {
         @hasDecl(Renderer.GfxEngineType, "setPostFx");
 }
 
+/// True when the retained engine can forget its post-fx render targets on
+/// surface loss (labelle-gfx#364). Older gfx lacks it; those builds keep the
+/// pre-#364 behaviour (post-fx lost after a surface cycle).
+fn rendererHasPostFxInvalidation(comptime Renderer: type) bool {
+    return @hasDecl(Renderer, "GfxEngineType") and
+        @hasDecl(Renderer.GfxEngineType, "invalidatePostFxTargets");
+}
+
 pub fn Mixin(comptime Game: type) type {
     return struct {
         /// Replace the whole post-fx stack (e.g. the `project.labelle`
@@ -39,6 +47,20 @@ pub fn Mixin(comptime Game: type) type {
         pub fn clearPostFx(self: *Game) void {
             const Renderer = @TypeOf(self.renderer.*);
             if (comptime rendererHasPostFx(Renderer)) self.renderer.inner.clearPostFx();
+        }
+
+        /// Surface loss (labelle-gfx#364): every world's post-fx ping-pong
+        /// targets died with the GPU context. Forget them, WITHOUT a backend
+        /// destroy, so the next post-fx frame re-creates them against the
+        /// restored context. The stacks themselves are kept. Without this the
+        /// driver keeps the stale ids (the canvas size never changes across a
+        /// surface cycle) and post-fx silently stops after resume.
+        pub fn invalidateAllPostFxTargets(self: *Game) void {
+            const Renderer = @TypeOf(self.renderer.*);
+            if (comptime !rendererHasPostFxInvalidation(Renderer)) return;
+            self.active_world.renderer.inner.invalidatePostFxTargets();
+            var it = self.worlds.valueIterator();
+            while (it.next()) |world| world.*.renderer.inner.invalidatePostFxTargets();
         }
     };
 }
