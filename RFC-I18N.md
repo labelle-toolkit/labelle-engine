@@ -34,7 +34,6 @@ labelle's assembler already generates code at build time. That means the entire 
 - **RTL / bidi layout and complex-script shaping.** Arabic and Indic text need shaping, which is a renderer concern — see RFC-FONT-LOADER §Non-goals, which defers shaping for the same reason. i18n produces *strings*; glyph coverage and layout are the font/renderer layer's problem. A game can ship a `he` locale today and get wrong-direction text; that is a font-stack gap, not an i18n gap.
 - **Locale-aware number, date, and currency formatting.** Separate concern with a much larger surface (CLDR data tables). A game that needs it can format before interpolating.
 - **Translator tooling.** No `.po`/`.xliff` import-export, no web editor, no machine-translation hook. Locale files are hand-edited JSONC.
-- **OS locale auto-detection.** Platform-specific (`CFLocale`, `GetUserDefaultLocaleName`, `LANG`) and best added once one game actually wants it. Startup locale comes from config or env — see §8.
 - **Per-entity or data-driven translation.** Item and workstation display names living in prefab `.jsonc` files are a plausible follow-up, but phase 1 covers UI strings written in scripts only.
 
 ## Design
@@ -329,9 +328,8 @@ Games with no `locales/` directory declare nothing and pay nothing — the whole
 
 1. `LABELLE_LOCALE` env var — a *dev and CI* override, matching the existing `LABELLE_*` run knobs (`LABELLE_SCENE`, `LABELLE_HEADLESS`). It makes screenshotting every locale a loop over one variable. An unknown tag here is a warning and is ignored, not a crash — it must not be able to break a player's run if it leaks into a shipped environment.
 2. A persisted player choice, once `setLocale` is wired to settings (out of scope for phase 1).
-3. `i18n.default`.
-
-OS detection is deliberately absent (see Non-goals). If it lands later it slots in above `.default` and below the player's own choice.
+3. The device language (flying-platform#917). The generated setup passes the backend's `window.systemLocale()` (an optional decl behind `@hasDecl`: labelle-bgfx reads `AConfiguration` on Android, `navigator.language` on the web, CoreFoundation on macOS, `GetUserDefaultLocaleName` on Windows and `LC_ALL`/`LC_MESSAGES`/`LANG` on Linux) to the module's `applySystemLocale`. It matches the exact tag first, then the bare language (`en-US` → `en`), then the first shipped tag of the same language (`pt-AO` → a `pt-*` locale), after normalizing POSIX spellings (`pt_BR.UTF-8`). A language the build doesn't ship falls through to the default. `LABELLE_LOCALE` goes through the same matching.
+4. `i18n.default`.
 
 ## Phasing
 
