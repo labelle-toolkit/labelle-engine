@@ -433,6 +433,9 @@ pub fn Mixin(comptime Game: type) type {
                 "surface_lost: {d} shader material(s) invalidated across worlds; their ids now resolve to nothing and bound sprites draw plain — recreate from game-owned definitions after surface_restored",
                 .{invalidated},
             );
+            // Post-fx ping-pong targets (labelle-gfx#364): forget, don't
+            // destroy, so they are re-created on the first restored frame.
+            self.invalidateAllPostFxTargets();
             self.atlas_manager.invalidateUploadedTextures();
             // Direct uploads (#820): drop the dead handles, keep the ids.
             self.invalidateDirectTextures();
