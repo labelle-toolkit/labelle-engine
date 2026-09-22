@@ -1740,6 +1740,7 @@ pub fn GameConfigWithYAxis(
         pub const toggleFullscreen = LifecycleMixin.toggleFullscreen;
         pub const isFullscreen = LifecycleMixin.isFullscreen;
         pub const takeFullscreenRequest = LifecycleMixin.takeFullscreenRequest;
+        pub const syncFullscreen = LifecycleMixin.syncFullscreen;
         pub const setVsync = LifecycleMixin.setVsync;
         pub const toggleVsync = LifecycleMixin.toggleVsync;
         pub const isVsync = LifecycleMixin.isVsync;

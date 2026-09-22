@@ -279,6 +279,27 @@ pub fn Mixin(comptime Game: type) type {
             return self.fullscreen;
         }
 
+        /// Frame-loop read-back (generated main only): adopt the window's
+        /// ACTUAL fullscreen state as the desired one. Call it after the
+        /// `takeFullscreenRequest` drain, with the backend's
+        /// `window.isFullscreen()`.
+        ///
+        /// Without it the desired flag only ever moves through
+        /// `setFullscreen`, so a platform-side exit leaves it stale: on the
+        /// web, Esc or the browser's own UI leaves fullscreen behind the
+        /// game's back, the settings checkbox bound to `isFullscreen()`
+        /// keeps reading "on", and the player's next click turns it "off"
+        /// without changing anything on screen (labelle-bgfx#99).
+        ///
+        /// A request still waiting to be drained wins: it is the newer
+        /// intent, and adopting the old window state here would drop it.
+        /// Adopting never queues a request — it records what the window
+        /// already is, so there is nothing to apply.
+        pub fn syncFullscreen(self: *Game, actual: bool) void {
+            if (self.fullscreen_dirty) return;
+            self.fullscreen = actual;
+        }
+
         // ── Vsync ──
         //
         // Mirrors the Fullscreen split: the engine owns the *desired* vsync
