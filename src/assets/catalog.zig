@@ -42,4 +42,5 @@ test {
     _ = @import("catalog/tests_pump.zig");
     _ = @import("catalog/tests_release.zig");
     _ = @import("catalog/tests_surface_loss.zig");
+    _ = @import("catalog/tests_main_thread.zig");
 }

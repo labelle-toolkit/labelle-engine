@@ -49,6 +49,15 @@ pub const WorkResult = worker_mod.WorkResult;
 /// will drain the remainder. Matches the RFC §2 sketch.
 pub const UPLOAD_BUDGET_PER_FRAME: u8 = 4;
 
+/// Decodes `pump()` runs per call when decoding on the main thread
+/// (`main_thread_decode`, the single-threaded/WASM path, #877). One per
+/// frame keeps a frame between every asset, so a loading screen keeps
+/// animating: a scene with N atlases loads over N frames instead of one
+/// frozen frame. A single large asset still costs its whole decode in
+/// one frame, since one decode can't be split; the point is frames
+/// BETWEEN assets.
+pub const MAIN_THREAD_DECODES_PER_PUMP: u8 = 1;
+
 /// Number of decode worker threads. Each owns its own SPSC request +
 /// result ring pair — keeps the existing single-producer / single-
 /// consumer ring invariants untouched. 3 is a sensible default on a
@@ -83,6 +92,27 @@ pub const AssetCatalog = struct {
     /// frames pass without new work, the next `pump` still starts
     /// where the last one left off.
     pump_cursor: u8,
+    /// Decode on the main thread from `pump()`, under
+    /// `MAIN_THREAD_DECODES_PER_PUMP`, instead of on worker threads.
+    /// Defaults to `builtin.single_threaded` (WASM), where no thread can
+    /// be spawned. Before #877 that path decoded synchronously inside
+    /// `acquire`, so a scene swap froze the page until every asset was
+    /// decoded. A field rather than a bare comptime check so native tests
+    /// can drive the single-threaded pipeline. Setting it FALSE on a
+    /// single-threaded target has no effect: no thread could run there,
+    /// so `decodesOnMainThread` forces the main-thread path.
+    main_thread_decode: bool,
+    /// Set when `enqueueDecode` found its request ring full and left an
+    /// acquired entry at `.registered`. The next `pump` re-enqueues every
+    /// such entry. Without this nothing ever retried: the entry kept its
+    /// refcount, so `acquire` could not enqueue it again either, and a
+    /// scene gated on it waited forever (#891 review). More reachable on
+    /// the main-thread path, where nothing drains the rings between
+    /// `acquire` calls.
+    enqueue_deferred: bool,
+    /// Rotation cursor for the main-thread decode scan, so one ring's
+    /// backlog can't starve the others (mirrors `pump_cursor`).
+    decode_cursor: u8,
     /// `true` while the GPU surface is alive. Cleared by
     /// `invalidateGpuResources` (Android TERM_WINDOW) and restored by
     /// `reenqueueGpuResident` (INIT_WINDOW). While `false`, `pump`'s
@@ -116,6 +146,9 @@ pub const AssetCatalog = struct {
             .workers_started = false,
             .dispatch_counter = 0,
             .pump_cursor = 0,
+            .main_thread_decode = builtin.single_threaded,
+            .enqueue_deferred = false,
+            .decode_cursor = 0,
             .gpu_alive = true,
         };
     }
@@ -135,6 +168,13 @@ pub const AssetCatalog = struct {
                 &self.requests[i],
                 &self.results[i],
             );
+        }
+
+        // Main-thread decode (#877): the workers exist only as request
+        // drains that `pump()` steps; no thread is spawned.
+        if (self.decodesOnMainThread()) {
+            self.workers_started = true;
+            return;
         }
 
         // Spawn threads one by one. If any spawn fails, stop the ones
@@ -265,7 +305,7 @@ pub const AssetCatalog = struct {
     /// `.registered` entry, a `WorkRequest` is enqueued on the
     /// main→worker ring and the state moves to `.queued`. If the
     /// ring is full we log and leave the state at `.registered` —
-    /// `pump()` (#442) will retry on its next tick. The pointer is
+    /// `pump()` re-enqueues it on its next tick (`enqueue_deferred`). The pointer is
     /// still returned either way; callers can keep polling `isReady`.
     pub fn acquire(self: *AssetCatalog, name: []const u8) !*AssetEntry {
         // Resolve the stable hashmap-owned key up front: `name` itself may
@@ -317,21 +357,20 @@ pub const AssetCatalog = struct {
         const idx = self.dispatch_counter % NUM_WORKERS;
         self.dispatch_counter +%= 1;
         if (self.requests[idx].tryEnqueue(request)) |_| {
+            // On the main-thread path (`main_thread_decode`, WASM) the
+            // request STAYS queued: `pump()` decodes it under a per-frame
+            // budget. Decoding it here, as the #461 path did, made every
+            // acquire pay its full decode and froze a scene swap into one
+            // long frame (#877).
             entry.state = .queued;
-
-            // `single_threaded` (WASM) has no worker thread
-            // running — `start()` is a no-op there (issue #461).
-            // Drain the request we just enqueued on the main
-            // thread so the result lands in the result ring
-            // before the next `pump()`.
-            if (builtin.single_threaded) {
-                self.workers[idx].runOnce();
-            }
         } else |err| switch (err) {
-            error.QueueFull => std.log.debug(
-                "assets: request ring {d} full, deferring decode of '{s}'",
-                .{ idx, key },
-            ),
+            error.QueueFull => {
+                self.enqueue_deferred = true;
+                std.log.debug(
+                    "assets: request ring {d} full, deferring decode of '{s}'",
+                    .{ idx, key },
+                );
+            },
         }
     }
 
@@ -445,6 +484,56 @@ pub const AssetCatalog = struct {
         entry.last_error = null;
     }
 
+    /// Whether decodes run on the main thread from `pump`. Always on
+    /// single-threaded targets, whatever `main_thread_decode` says: no
+    /// worker thread can exist there, so the threaded path would leave
+    /// every acquired asset queued forever (#891 review).
+    fn decodesOnMainThread(self: *const AssetCatalog) bool {
+        return builtin.single_threaded or self.main_thread_decode;
+    }
+
+    /// Re-enqueues acquired entries (`refcount > 0`) that a full request
+    /// ring left at `.registered`. Stops at the first ring that is still
+    /// full (`enqueueDecode` re-arms `enqueue_deferred` for the next
+    /// pump). Skipped while the GPU is lost: then `.registered` + live
+    /// refcount is the context-loss state, which `reenqueueGpuResident`
+    /// owns.
+    fn retryDeferredEnqueues(self: *AssetCatalog) void {
+        if (!self.gpu_alive) return;
+        self.enqueue_deferred = false;
+        var it = self.entries.iterator();
+        while (it.next()) |kv| {
+            const entry = kv.value_ptr;
+            if (entry.refcount == 0 or entry.state != .registered) continue;
+            self.enqueueDecode(kv.key_ptr.*, entry) catch |err| {
+                std.log.warn("assets: re-enqueue of '{s}' failed: {s}", .{ kv.key_ptr.*, @errorName(err) });
+                self.enqueue_deferred = true;
+                return;
+            };
+            if (entry.state == .registered) return; // ring still full; flag re-armed
+        }
+    }
+
+    /// Decodes up to `MAIN_THREAD_DECODES_PER_PUMP` queued requests on
+    /// the calling (main) thread, round-robin across the request rings
+    /// from `decode_cursor`. Only used when `decodesOnMainThread()`
+    /// (#877); results land on the result rings for `pump` to upload.
+    fn decodeOnMainThread(self: *AssetCatalog) void {
+        if (!self.workers_started) return; // nothing was ever acquired
+        var done: u8 = 0;
+        var tried: u8 = 0;
+        while (done < MAIN_THREAD_DECODES_PER_PUMP and tried < NUM_WORKERS) {
+            const idx: u8 = @intCast((@as(usize, self.decode_cursor) + tried) % NUM_WORKERS);
+            if (self.workers[idx].runOne()) {
+                done += 1;
+                self.decode_cursor = @intCast((@as(usize, idx) + 1) % NUM_WORKERS);
+                tried = 0;
+            } else {
+                tried += 1;
+            }
+        }
+    }
+
     /// Drains worker results and finalises uploads on the main thread.
     /// Caps itself at `UPLOAD_BUDGET_PER_FRAME` so a burst of ready
     /// decodes cannot stall a frame; the next `pump()` picks up where
@@ -478,6 +567,13 @@ pub const AssetCatalog = struct {
     ///    pixels (confirmed: `loaders/image.zig` `upload` returns
     ///    before reaching its `allocator.free` on the error path).
     pub fn pump(self: *AssetCatalog) void {
+        // Main-thread decode (#877): decode a bounded number of queued
+        // requests first, so this same pump can upload what it just
+        // decoded. The scan below then drains results exactly as it does
+        // for the worker threads.
+        if (self.enqueue_deferred) self.retryDeferredEnqueues();
+        if (self.decodesOnMainThread()) self.decodeOnMainThread();
+
         // Counter bounds ACTUAL GPU uploads, not dequeued results. Cheap
         // paths (zombie drops, decode errors, removed-entry cleanup) are
         // nearly free and should be cleared in a single pump tick so a
