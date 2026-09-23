@@ -106,3 +106,50 @@ test "main-thread decode is the single-threaded default, and only there" {
     try testing.expectEqual(@import("builtin").single_threaded, catalog.main_thread_decode);
     try testing.expectEqual(@as(u8, 1), engine.MAIN_THREAD_DECODES_PER_PUMP);
 }
+
+test "a full request ring defers, and pump re-enqueues it (#891 review)" {
+    PumpMock.reset();
+    image_loader.setBackend(PumpMock.backend_value);
+    defer image_loader.clearBackend();
+
+    var catalog = mainThreadCatalog();
+    defer catalog.deinit();
+
+    // One more asset than the request rings hold, all acquired in one
+    // frame before any pump: the main-thread path drains nothing between
+    // acquires, so the last one finds its ring full.
+    const capacity = @as(usize, engine.NUM_WORKERS) * @import("../worker.zig").ring_capacity;
+    const count = capacity + 1;
+    const names = comptime blk: {
+        @setEvalBranchQuota(200_000); // 193 comptimePrint calls
+        var list: [count][]const u8 = undefined;
+        for (&list, 0..) |*n, i| n.* = std.fmt.comptimePrint("atlas_{d}", .{i});
+        break :blk list;
+    };
+    for (names) |n| try catalog.register(n, .image, dummy_file_type, dummy_bytes);
+    for (names) |n| _ = try catalog.acquire(n);
+
+    // The overflow entry was acquired (refcount 1) but never queued.
+    var stranded: usize = 0;
+    for (names) |n| {
+        const e = catalog.entries.getPtr(n).?;
+        if (e.state == .registered) {
+            try std.testing.expectEqual(@as(u32, 1), e.refcount);
+            stranded += 1;
+        }
+    }
+    try testing.expectEqual(@as(usize, 1), stranded);
+    try testing.expect(catalog.enqueue_deferred);
+
+    // Pumping must bring EVERY asset to ready. Before the fix the
+    // stranded one stayed `.registered` forever and this never finished.
+    var pumps: usize = 0;
+    while (!catalog.allReady(&names)) : (pumps += 1) {
+        try testing.expect(pumps < count * 2);
+        catalog.pump();
+    }
+    try testing.expect(!catalog.enqueue_deferred);
+    try testing.expectEqual(@as(u32, @intCast(count)), PumpMock.decode_calls);
+
+    for (names) |n| catalog.release(n);
+}
