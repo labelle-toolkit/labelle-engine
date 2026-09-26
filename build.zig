@@ -66,6 +66,22 @@ pub fn build(b: *std.Build) void {
 
     const test_step = b.step("test", "Run engine tests");
 
+    const storage_module = b.createModule(.{
+        .root_source_file = b.path("src/storage.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "labelle-core", .module = core_module }},
+    });
+    const storage_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("test/storage_test.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "storage", .module = storage_module }},
+    }) });
+    const storage_run = b.addRunArtifact(storage_tests);
+    test_step.dependOn(&storage_run.step);
+    b.step("test-storage", "Test persistent blob storage").dependOn(&storage_run.step);
+
     // The definition package remains independent. Verify its frame slices
     // against the existing engine player before migrating playback ownership.
     const animation_module = b.dependency("animation", .{ .target = target, .optimize = optimize }).module("animation");
@@ -133,6 +149,7 @@ pub fn build(b: *std.Build) void {
         // became a per-frame positional error.
         "test/atlas_source_rect_test.zig",
         "test/save_policy_test.zig",
+        "test/storage_serialization_test.zig",
         "test/save_load_mixin_test.zig",
         "test/jsonc/bridge_leak_test.zig",
         "test/jsonc/nested_lifecycle_test.zig",
@@ -474,6 +491,8 @@ pub fn build(b: *std.Build) void {
 
     const legacy_animation_step = b.step("test-animation-legacy", "Run all animation package and engine adapter tests");
     legacy_animation_step.dependOn(&run_animation_tests.step);
+    const save_regressions = b.step("test-save-storage", "Test storage and engine save/load integration");
+    save_regressions.dependOn(&storage_run.step);
     const shader_regressions = b.step("test-shader-regressions", "Execute shader, scene, prefab, and material regressions");
     for (test_files) |test_file| {
         const t = b.addTest(.{
@@ -491,6 +510,7 @@ pub fn build(b: *std.Build) void {
         });
         const run = b.addRunArtifact(t);
         test_step.dependOn(&run.step);
+        if (std.mem.startsWith(u8, test_file, "test/save_") or std.mem.eql(u8, test_file, "test/storage_serialization_test.zig")) save_regressions.dependOn(&run.step);
         for ([_][]const u8{ "test/shader_material_test.zig", "test/scene_test.zig", "test/scene_lifecycle_events_test.zig", "test/scene_teardown_test.zig", "test/prefab_refresh_test.zig", "test/jsonc/deserializer_test.zig", "test/set_material_test.zig" }) |related| {
             if (std.mem.eql(u8, test_file, related)) shader_regressions.dependOn(&run.step);
         }

@@ -118,13 +118,18 @@ pub fn Mixin(comptime Game: type) type {
         // ─── Load ───────────────────────────────────────────────────
 
         pub fn loadGameState(self: *Game, filename: []const u8) !void {
+            const json = try std.Io.Dir.cwd().readFileAlloc(io_helper.io(), filename, self.allocator, .limited(MAX_SAVE_SIZE));
+            defer self.allocator.free(json);
+            try deserializeGameState(self, json);
+        }
+
+        /// Accept bytes from any storage provider. Parsing and version checks
+        /// still happen here before the live ECS is reset.
+        pub fn deserializeGameState(self: *Game, json: []const u8) !void {
             @setEvalBranchQuota(10000);
+            if (json.len > MAX_SAVE_SIZE) return error.StreamTooLong;
             const allocator = self.allocator;
             const names = comptime Reg.names();
-
-            const _io = io_helper.io();
-            const json = try std.Io.Dir.cwd().readFileAlloc(_io, filename, allocator, .limited(MAX_SAVE_SIZE));
-            defer allocator.free(json);
 
             const parsed = try std.json.parseFromSlice(std.json.Value, allocator, json, .{});
             defer parsed.deinit();

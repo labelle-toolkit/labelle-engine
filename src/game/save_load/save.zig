@@ -50,6 +50,13 @@ pub fn Mixin(comptime Game: type) type {
         // ─── Save ───────────────────────────────────────────────────
 
         pub fn saveGameState(self: *Game, filename: []const u8) !void {
+            const bytes = try serializeGameState(self);
+            defer self.allocator.free(bytes);
+            try std.Io.Dir.cwd().writeFile(io_helper.io(), .{ .sub_path = filename, .data = bytes });
+        }
+
+        /// Engine-owned JSON, allocated with self.allocator. Caller frees it.
+        pub fn serializeGameState(self: *Game) ![]u8 {
             @setEvalBranchQuota(10000);
             const allocator = self.allocator;
             const names = comptime Reg.names();
@@ -384,11 +391,7 @@ pub fn Mixin(comptime Game: type) type {
 
             try writer.writeAll("\n  ]\n}\n");
 
-            const _io = io_helper.io();
-            // `buffered()` reads the not-yet-drained bytes without
-            // transferring ownership — `defer alloc_writer.deinit()`
-            // above is responsible for freeing the buffer.
-            try std.Io.Dir.cwd().writeFile(_io, .{ .sub_path = filename, .data = alloc_writer.writer.buffered() });
+            return alloc_writer.toOwnedSlice();
         }
     };
 }

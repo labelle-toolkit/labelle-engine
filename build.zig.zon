@@ -104,5 +104,9 @@
         // ships with the package — native-compiled language plugins bind
         // against it (#737).
         "contract",
+        // The persistent-blob storage ABI (request kinds, status codes, list
+        // payload) that platform bindings implement. `src/storage/web.zig`
+        // points implementers at it, so the package must carry it.
+        "docs/persistent-blobs.md",
     },
 }

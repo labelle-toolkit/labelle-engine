@@ -2,6 +2,9 @@ const std = @import("std");
 
 pub const core = @import("labelle-core");
 
+// ── Persistent blobs ──
+pub const storage = @import("storage.zig");
+
 // Engine modules
 pub const game_mod = @import("game.zig");
 pub const game_log_mod = @import("game_log.zig");
