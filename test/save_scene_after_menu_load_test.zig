@@ -17,9 +17,26 @@ const engine = @import("engine");
 const Position = core.Position;
 const Saveable = core.Saveable;
 
+/// What `worldSceneName()` reported from inside the most recent
+/// `Colonist.postLoad` (engine#896 round 1: provenance must be installed
+/// BEFORE post-load callbacks run).
+var post_load_scene_buf: [64]u8 = undefined;
+var post_load_scene: ?[]const u8 = null;
+
 const Colonist = struct {
     pub const save = Saveable(.saveable, @This(), .{});
     hunger: u32 = 0,
+
+    pub fn postLoad(self: *@This(), game: anytype, entity: anytype) void {
+        _ = self;
+        _ = entity;
+        const name = game.worldSceneName() orelse {
+            post_load_scene = null;
+            return;
+        };
+        @memcpy(post_load_scene_buf[0..name.len], name);
+        post_load_scene = post_load_scene_buf[0..name.len];
+    }
 };
 
 const TestComponents = engine.scene_mod.ComponentRegistry(.{
@@ -168,7 +185,7 @@ test "a real scene swap after a load drops the loaded scene (#896)" {
     // Back to the menu (e.g. "Quit to menu"): the loaded world is gone, so
     // a save now describes the menu, not the stale colony.
     try game.setScene("menu");
-    try testing.expect(game.loaded_save_scene_name == null);
+    try testing.expect(game.active_world.loaded_save_scene_name == null);
     const bytes = try game.serializeGameState();
     defer testing.allocator.free(bytes);
     try expectSavedScene(bytes, "menu");
@@ -194,6 +211,199 @@ test "loading a legacy save without a scene falls back to the active scene (#896
     try testing.expect(legacy.len < save1.len);
     try testing.expect((try savedScene(legacy)) == null);
     try game.deserializeGameState(legacy);
-    try testing.expect(game.loaded_save_scene_name == null);
+    try testing.expect(game.active_world.loaded_save_scene_name == null);
     try testing.expectEqualStrings("menu", game.worldSceneName().?);
+}
+
+// ── Round-1 review fixes: provenance is per-World and cleared by the
+//    primitives that rebuild the world (engine#898 review) ──────────────
+
+test "switching active worlds switches scene provenance (#896)" {
+    const save1 = try makeColonySave();
+    defer testing.allocator.free(save1);
+
+    var game = TestGame.init(testing.allocator);
+    defer game.deinit();
+    registerScenes(&game);
+    try game.setScene("menu");
+
+    // Load into a NAMED world so it survives being shelved.
+    try game.createWorld("a");
+    try game.setActiveWorld("a");
+    try game.deserializeGameState(save1);
+    try testing.expectEqualStrings("colony", game.worldSceneName().?);
+
+    // A fresh world holds none of the loaded entities: it must not
+    // inherit the colony provenance.
+    try game.createWorld("b");
+    try game.setActiveWorld("b");
+    try testing.expect(game.active_world.loaded_save_scene_name == null);
+    try testing.expectEqualStrings("menu", game.worldSceneName().?);
+    {
+        const bytes = try game.serializeGameState();
+        defer testing.allocator.free(bytes);
+        try expectSavedScene(bytes, "menu");
+    }
+
+    // Switching back restores the provenance WITH its entities.
+    try game.setActiveWorld("a");
+    try testing.expectEqual(@as(usize, 1), colonistCount(&game));
+    try testing.expectEqualStrings("colony", game.worldSceneName().?);
+    const bytes = try game.serializeGameState();
+    defer testing.allocator.free(bytes);
+    try expectSavedScene(bytes, "colony");
+}
+
+test "hot reload rebuilding the scene drops the loaded provenance (#896)" {
+    const save1 = try makeColonySave();
+    defer testing.allocator.free(save1);
+
+    var game = TestGame.init(testing.allocator);
+    defer game.deinit();
+    registerScenes(&game);
+    try game.setScene("menu");
+    try game.deserializeGameState(save1);
+    try testing.expectEqualStrings("colony", game.worldSceneName().?);
+
+    // Hot reload: `unloadCurrentScene()` + the menu loader rerun. The
+    // restored colony world is gone, so a save now describes the menu.
+    game.hot_reload_dirty = true;
+    game.tick(0.016);
+    try testing.expect(!game.hot_reload_dirty);
+    try testing.expect(game.active_world.loaded_save_scene_name == null);
+    try testing.expectEqualStrings("menu", game.worldSceneName().?);
+    const bytes = try game.serializeGameState();
+    defer testing.allocator.free(bytes);
+    try expectSavedScene(bytes, "menu");
+}
+
+/// Passes everything through to `child` except an allocation of exactly
+/// `fail_len` bytes while armed — used to fail precisely the saved-scene
+/// name copy (the name below has a length nothing else on the
+/// pre-reset load path requests).
+const FailOnLen = struct {
+    child: std.mem.Allocator,
+    fail_len: ?usize = null,
+    failed: bool = false,
+
+    fn allocator(self: *FailOnLen) std.mem.Allocator {
+        return .{ .ptr = self, .vtable = &.{
+            .alloc = alloc,
+            .resize = resize,
+            .remap = remap,
+            .free = free,
+        } };
+    }
+    fn alloc(ctx: *anyopaque, len: usize, a: std.mem.Alignment, ra: usize) ?[*]u8 {
+        const self: *FailOnLen = @ptrCast(@alignCast(ctx));
+        if (self.fail_len) |n| if (n == len) {
+            self.failed = true;
+            return null;
+        };
+        return self.child.rawAlloc(len, a, ra);
+    }
+    fn resize(ctx: *anyopaque, m: []u8, a: std.mem.Alignment, n: usize, ra: usize) bool {
+        const self: *FailOnLen = @ptrCast(@alignCast(ctx));
+        return self.child.rawResize(m, a, n, ra);
+    }
+    fn remap(ctx: *anyopaque, m: []u8, a: std.mem.Alignment, n: usize, ra: usize) ?[*]u8 {
+        const self: *FailOnLen = @ptrCast(@alignCast(ctx));
+        return self.child.rawRemap(m, a, n, ra);
+    }
+    fn free(ctx: *anyopaque, m: []u8, a: std.mem.Alignment, ra: usize) void {
+        const self: *FailOnLen = @ptrCast(@alignCast(ctx));
+        self.child.rawFree(m, a, ra);
+    }
+};
+
+const distinct_scene = "outpost_scene_with_a_deliberately_odd_name_length_x";
+
+test "OOM copying the saved scene errors and leaves the old world intact (#896)" {
+    // Session 1: a save whose scene has a distinctive name length.
+    const save1 = blk: {
+        var game = TestGame.init(testing.allocator);
+        defer game.deinit();
+        game.registerSceneSimple(distinct_scene, colonyLoader);
+        try game.setScene(distinct_scene);
+        break :blk try game.serializeGameState();
+    };
+    defer testing.allocator.free(save1);
+    try expectSavedScene(save1, distinct_scene);
+
+    var fal: FailOnLen = .{ .child = testing.allocator };
+    var game = TestGame.init(fal.allocator());
+    defer game.deinit();
+    registerScenes(&game);
+    game.registerSceneSimple(distinct_scene, colonyLoader);
+    try game.setScene("menu");
+
+    // The live world: one marker entity the save does not contain.
+    const marker = game.createEntity();
+    game.active_world.ecs_backend.addComponent(marker, Colonist{ .hunger = 99 });
+
+    fal.fail_len = distinct_scene.len;
+    try testing.expectError(error.OutOfMemory, game.deserializeGameState(save1));
+    fal.fail_len = null;
+    // The name copy is what failed (not some later allocation) ...
+    try testing.expect(fal.failed);
+    // ... and it failed BEFORE the reset: the old world is untouched.
+    try testing.expectEqual(@as(u32, 99), game.active_world.ecs_backend.getComponent(marker, Colonist).?.hunger);
+    try testing.expectEqual(@as(usize, 0), colonistCount(&game));
+    try testing.expectEqualStrings("menu", game.worldSceneName().?);
+
+    // Without the fault the same save loads and adopts the scene.
+    try game.deserializeGameState(save1);
+    try testing.expectEqual(@as(usize, 1), colonistCount(&game));
+    try testing.expectEqualStrings(distinct_scene, game.worldSceneName().?);
+}
+
+test "postLoad callbacks observe the loaded scene (#896)" {
+    const save1 = try makeColonySave();
+    defer testing.allocator.free(save1);
+
+    var game = TestGame.init(testing.allocator);
+    defer game.deinit();
+    registerScenes(&game);
+    try game.setScene("menu");
+
+    post_load_scene = null;
+    try game.deserializeGameState(save1);
+    const seen = post_load_scene orelse return error.TestPostLoadNotRun;
+    try testing.expectEqualStrings("colony", seen);
+}
+
+test "an unregistered saved scene resaves as the fallback scene (#896)" {
+    // Session 1: the scene was called `colony_v1` when saved.
+    const save1 = blk: {
+        var game = TestGame.init(testing.allocator);
+        defer game.deinit();
+        game.registerSceneSimple("colony_v1", colonyLoader);
+        try game.setScene("colony_v1");
+        break :blk try game.serializeGameState();
+    };
+    defer testing.allocator.free(save1);
+    try expectSavedScene(save1, "colony_v1");
+
+    // Session 2: renamed to `colony`; load the old save while in it. The
+    // render gate falls back to the active scene, so provenance must too.
+    const save2 = blk: {
+        var game = TestGame.init(testing.allocator);
+        defer game.deinit();
+        registerScenes(&game);
+        try game.setScene("colony");
+        try game.deserializeGameState(save1);
+        try testing.expect(game.active_world.loaded_save_scene_name == null);
+        try testing.expectEqualStrings("colony", game.worldSceneName().?);
+        break :blk try game.serializeGameState();
+    };
+    defer testing.allocator.free(save2);
+    // Resolves, unlike `colony_v1`: a later menu→Load gates on colony.
+    try expectSavedScene(save2, "colony");
+
+    var game = TestGame.init(testing.allocator);
+    defer game.deinit();
+    registerScenes(&game);
+    try game.setScene("menu");
+    try game.deserializeGameState(save2);
+    try testing.expectEqualStrings("colony", game.worldSceneName().?);
 }

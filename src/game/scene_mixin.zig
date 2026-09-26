@@ -760,10 +760,6 @@ pub fn Mixin(comptime Game: type) type {
                 retention.retain(old_name);
                 self.current_scene_name = null;
             }
-            // The swap replaces whatever world a prior load restored, so
-            // the next save must record the new scene, not the loaded
-            // save's (engine#896).
-            self.clearLoadedSaveSceneName();
 
             self.emitHook(.{ .scene_before_load = .{ .name = name, .allocator = self.allocator } });
             // Engine `Events` dual-emit (#578).
@@ -1002,10 +998,6 @@ pub fn Mixin(comptime Game: type) type {
                 retention.retain(old_name);
                 self.current_scene_name = null;
             }
-            // The swap replaces whatever world a prior load restored, so
-            // the next save must record the new scene, not the loaded
-            // save's (engine#896).
-            self.clearLoadedSaveSceneName();
 
             // Atomic reset — destroys all entities and visuals without iteration
             self.resetEcsBackend();
@@ -1083,21 +1075,24 @@ pub fn Mixin(comptime Game: type) type {
         }
 
         /// The scene the live world belongs to (engine#896): the scene
-        /// recorded in the save the last `deserializeGameState` restored,
-        /// else the active scene. Differs from `getCurrentSceneName` only
-        /// after a cross-scene load (menu→Load), where the active scene is
-        /// still "menu" but the ECS holds the save's gameplay world. This
-        /// is what `serializeGameState` records as the save's `"scene"`.
+        /// recorded in the save the last `deserializeGameState` restored
+        /// into the ACTIVE world, else the active scene. Differs from
+        /// `getCurrentSceneName` only after a cross-scene load (menu→Load),
+        /// where the active scene is still "menu" but the ECS holds the
+        /// save's gameplay world. This is what `serializeGameState`
+        /// records as the save's `"scene"`. Provenance lives on the
+        /// `World`, so `setActiveWorld` switches it with the entities.
         pub fn worldSceneName(self: *const Game) ?[]const u8 {
-            return self.loaded_save_scene_name orelse self.current_scene_name;
+            return self.active_world.loaded_save_scene_name orelse self.current_scene_name;
         }
 
-        /// Drop the loaded-save scene override (engine#896). Called on
-        /// every real scene swap — the swap replaces the restored world,
-        /// so the active scene is once again the world's own.
+        /// Drop the active world's loaded-save scene provenance
+        /// (engine#896). Called by the primitives that rebuild the active
+        /// world's contents (`resetEcsBackend`, `unloadCurrentScene`), so
+        /// every scene swap, hot reload and load starts from "the world
+        /// is the active scene's own".
         pub fn clearLoadedSaveSceneName(self: *Game) void {
-            if (self.loaded_save_scene_name) |n| self.allocator.free(n);
-            self.loaded_save_scene_name = null;
+            self.active_world.setLoadedSaveSceneName(null);
         }
 
         /// Returns the name of the scene currently being loaded — i.e. the

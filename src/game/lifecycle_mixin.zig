@@ -69,7 +69,6 @@ pub fn Mixin(comptime Game: type) type {
             if (self.current_scene_name) |name| {
                 self.allocator.free(name);
             }
-            self.clearLoadedSaveSceneName();
             if (self.pending_scene_change) |name| {
                 self.allocator.free(name);
             }
