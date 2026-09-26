@@ -2,6 +2,27 @@ const std = @import("std");
 const s = @import("storage");
 const a = std.testing.allocator;
 
+test "default native store preserves explicit save directory and injected store" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var buffer: [4096]u8 = undefined;
+    const length = try tmp.dir.realPath(std.testing.io, &buffer);
+    const Default = s.Default(struct {});
+    var selected = try Default.init(a, .{ .app_id = "test-game", .native_directory = buffer[0..length] });
+    defer selected.deinit();
+    _ = try finish(selected.store(), .{ .write = .{ .name = "old-slot.json", .bytes = "world" } });
+    var reopened = try Default.init(a, .{ .app_id = "test-game", .native_directory = buffer[0..length] });
+    defer reopened.deinit();
+    const read = try finish(reopened.store(), .{ .read = .{ .name = "old-slot.json", .max_bytes = 10 } });
+    defer read.deinit(a);
+    try std.testing.expectEqualStrings("world", read.read);
+    var injected = try Default.init(a, .{ .app_id = "test-game", .native_directory = "ignored", .store = selected.store() });
+    defer injected.deinit();
+    try std.testing.expect(injected.directory == null);
+    _ = try finish(injected.store(), .{ .delete = "old-slot.json" });
+    try std.testing.expectError(error.NotFound, finish(reopened.store(), .{ .read = .{ .name = "old-slot.json", .max_bytes = 10 } }));
+}
+
 fn failSync(_: ?*anyopaque, _: std.Io.File) std.Io.File.SyncError!void {
     return error.NoSpaceLeft;
 }

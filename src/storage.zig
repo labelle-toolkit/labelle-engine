@@ -5,6 +5,7 @@ const std = @import("std");
 pub const Files = @import("storage/files.zig").Files;
 pub const dataRoot = @import("storage/data_root.zig");
 pub const Web = @import("storage/web.zig").Web;
+pub const Default = @import("storage/default.zig").Default;
 
 pub const Error = error{
     InvalidName,
