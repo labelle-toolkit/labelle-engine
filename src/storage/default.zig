@@ -36,12 +36,15 @@ pub fn Default(comptime Backend: type) type {
             }
             const io = io_helper.io();
             if (options.native_directory) |path| {
-                if (std.fs.path.isAbsolute(path)) {
+                // Same stable-path rule as Files.init: on Windows `\saves`
+                // is rooted on the CURRENT drive, so it is resolved here.
+                const platform: storage.dataRoot.Platform = if (builtin.os.tag == .windows) .windows else .linux;
+                if (storage.dataRoot.isAbsolute(platform, path)) {
                     self.directory = try allocator.dupe(u8, path);
                 } else {
                     var cwd: [std.fs.max_path_bytes]u8 = undefined;
                     const length = std.Io.Dir.cwd().realPath(io, &cwd) catch return error.Unavailable;
-                    self.directory = try std.fs.path.resolve(allocator, &.{ cwd[0..length], path });
+                    self.directory = try storage.dataRoot.resolveDirectory(allocator, platform, cwd[0..length], path);
                 }
             } else {
                 const android = builtin.abi == .android or builtin.abi == .androideabi;

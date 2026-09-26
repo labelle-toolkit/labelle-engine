@@ -158,7 +158,7 @@ test "linux XDG_DATA_HOME: empty and relative are ignored, absolute wins, unset 
     try std.testing.expectError(error.Unavailable, s.dataRoot.resolve(a, .{ .platform = .linux, .app_id = "fp", .xdg_data_home = "" }));
 }
 
-test "crash-left staging files are purged on the next write; foreign entries are kept" {
+test "only aged crash-left staging files are purged; live and foreign entries are kept" {
     const io = std.testing.io;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -167,6 +167,10 @@ test "crash-left staging files are purged on the next write; foreign entries are
     // Simulate an interrupted write: a full blob staged but never renamed.
     try tmp.dir.createDirPath(io, ".pending");
     try tmp.dir.writeFile(io, .{ .sub_path = ".pending/0123456789abcdef", .data = "crash-left blob" });
+    const aged = std.Io.Timestamp.now(io, .real).subDuration(.fromSeconds(60 * 60));
+    try tmp.dir.setTimestamps(io, ".pending/0123456789abcdef", .{ .access_timestamp = .{ .new = aged }, .modify_timestamp = .{ .new = aged } });
+    // Another writer's in-flight staging file: fresh, so it must survive.
+    try tmp.dir.writeFile(io, .{ .sub_path = ".pending/1111111111111111", .data = "in-flight blob" });
     // Not ours: wrong name pattern, a directory, and (where supported) a
     // symlink whose target must survive.
     try tmp.dir.writeFile(io, .{ .sub_path = ".pending/notes.txt", .data = "keep" });
@@ -179,6 +183,7 @@ test "crash-left staging files are purged on the next write; foreign entries are
 
     try std.testing.expectError(error.FileNotFound, tmp.dir.statFile(io, ".pending/0123456789abcdef", .{}));
     _ = try tmp.dir.statFile(io, ".pending/notes.txt", .{});
+    _ = try tmp.dir.statFile(io, ".pending/1111111111111111", .{});
     var kept_dir = try tmp.dir.openDir(io, ".pending/fedcba9876543210", .{});
     kept_dir.close(io);
     if (linked) _ = try tmp.dir.statFile(io, ".pending/aaaaaaaaaaaaaaaa", .{ .follow_symlinks = false });
@@ -186,7 +191,8 @@ test "crash-left staging files are purged on the next write; foreign entries are
     defer target.deinit(a);
     try std.testing.expectEqualStrings("keep", target.read);
 
-    // The live write landed, and no staging file of its own is left behind.
+    // The live write landed, and no staging file of its own is left behind
+    // (the other writer's fresh file is the only staging-named file).
     const read = try finish(files.store(), .{ .read = .{ .name = "slot.json", .max_bytes = 16 } });
     defer read.deinit(a);
     try std.testing.expectEqualStrings("live", read.read);
@@ -194,11 +200,79 @@ test "crash-left staging files are purged on the next write; foreign entries are
     defer staging.close(io);
     var iterator = staging.iterate();
     while (try iterator.next(io)) |entry| {
-        if (entry.kind == .file) try std.testing.expect(!s.Files.isStagingName(entry.name));
+        if (entry.kind == .file and !std.mem.eql(u8, entry.name, "1111111111111111"))
+            try std.testing.expect(!s.Files.isStagingName(entry.name));
     }
     const list = try finish(files.store(), .list);
     defer list.deinit(a);
     try std.testing.expectEqual(@as(usize, 2), list.list.len); // slot.json + target.json
+}
+
+test "staging staleness uses a safety age" {
+    const now: std.Io.Timestamp = .fromNanoseconds(100 * std.time.ns_per_hour);
+    try std.testing.expect(!s.Files.isStaleStaging(now, now));
+    try std.testing.expect(!s.Files.isStaleStaging(now.subDuration(.fromSeconds(9 * 60)), now));
+    try std.testing.expect(s.Files.isStaleStaging(now.subDuration(.fromSeconds(11 * 60)), now));
+    // A file stamped in the future (clock skew) is never stale.
+    try std.testing.expect(!s.Files.isStaleStaging(now.addDuration(.fromSeconds(60 * 60)), now));
+}
+
+test "list stats unknown directory-entry kinds; only regular files are candidates" {
+    try std.testing.expect(s.Files.isEntryCandidate(.file));
+    try std.testing.expect(s.Files.isEntryCandidate(.unknown));
+    for ([_]std.Io.File.Kind{ .directory, .sym_link, .named_pipe, .block_device, .character_device, .unix_domain_socket }) |kind| {
+        try std.testing.expect(!s.Files.isEntryCandidate(kind));
+    }
+}
+
+test "reads refuse a symlinked key; regular keys still read" {
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var buffer: [4096]u8 = undefined;
+    const length = try tmp.dir.realPath(io, &buffer);
+    try tmp.dir.createDirPath(io, "saves");
+    try tmp.dir.writeFile(io, .{ .sub_path = "outside.txt", .data = "secret" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "saves/slot.json", .data = "save" });
+    const directory = try std.fmt.allocPrint(a, "{s}/saves", .{buffer[0..length]});
+    defer a.free(directory);
+    var files = try s.Files.init(io, directory);
+    const read = try finish(files.store(), .{ .read = .{ .name = "slot.json", .max_bytes = 16 } });
+    defer read.deinit(a);
+    try std.testing.expectEqualStrings("save", read.read);
+    // Symlink creation may be unprivileged-forbidden (Windows); skip then.
+    tmp.dir.symLink(io, "../outside.txt", "saves/linked.json", .{}) catch return error.SkipZigTest;
+    try std.testing.expectError(error.AccessDenied, finish(files.store(), .{ .read = .{ .name = "linked.json", .max_bytes = 16 } }));
+    // A directory under a valid key is refused too, not read.
+    try tmp.dir.createDirPath(io, "saves/dir.json");
+    try std.testing.expectError(error.AccessDenied, finish(files.store(), .{ .read = .{ .name = "dir.json", .max_bytes = 16 } }));
+    // Neither the link nor the directory is listed.
+    const list = try finish(files.store(), .list);
+    defer list.deinit(a);
+    try std.testing.expectEqual(@as(usize, 1), list.list.len);
+}
+
+test "native directory resolves once with the Files.init stable-path rule" {
+    const cases = .{
+        // Windows current-drive-rooted and relative paths use cwd's drive.
+        .{ s.dataRoot.Platform.windows, "C:\\game", "\\saves", "C:\\saves" },
+        .{ s.dataRoot.Platform.windows, "D:\\game", "/saves", "D:\\saves" },
+        .{ s.dataRoot.Platform.windows, "C:\\game", "saves", "C:\\game\\saves" },
+        .{ s.dataRoot.Platform.windows, "C:\\game", "C:saves", "C:\\game\\saves" },
+        .{ s.dataRoot.Platform.windows, "C:\\game", "E:\\keep", "E:\\keep" },
+        .{ s.dataRoot.Platform.windows, "C:\\game", "//server/share/saves", "//server/share/saves" },
+        .{ s.dataRoot.Platform.linux, "/home/u/game", "saves", "/home/u/game/saves" },
+        .{ s.dataRoot.Platform.linux, "/home/u/game", "/saves", "/saves" },
+    };
+    inline for (cases) |case| {
+        const result = try s.dataRoot.resolveDirectory(a, case[0], case[1], case[2]);
+        defer a.free(result);
+        try std.testing.expectEqualStrings(case[3], result);
+        try std.testing.expect(s.dataRoot.isAbsolute(case[0], result));
+    }
+    // A drive-relative path on ANOTHER drive cannot be resolved stably.
+    try std.testing.expectError(error.Unavailable, s.dataRoot.resolveDirectory(a, .windows, "C:\\game", "D:saves"));
+    try std.testing.expectError(error.Unavailable, s.dataRoot.resolveDirectory(a, .windows, "\\game", "saves"));
 }
 
 const Bridge = struct {

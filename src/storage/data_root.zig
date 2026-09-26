@@ -32,6 +32,25 @@ pub fn isAbsolute(platform: Platform, path: []const u8) bool {
     return std.fs.path.isAbsolutePosix(path);
 }
 
+/// Resolve a configured native directory ONCE against `cwd` (the process's
+/// absolute working directory). Stable paths are kept as given. Relative
+/// paths, and on Windows current-drive-rooted (`\saves`, `/saves`) and
+/// drive-relative (`C:saves`) paths, are resolved against `cwd` and must
+/// then satisfy the same stable-path rule `Files.init` enforces. Owned result.
+pub fn resolveDirectory(allocator: std.mem.Allocator, platform: Platform, cwd: []const u8, path: []const u8) storage.Error![]u8 {
+    if (isAbsolute(platform, path)) return allocator.dupe(u8, path);
+    if (!isAbsolute(platform, cwd)) return error.Unavailable;
+    const resolved = if (platform == .windows)
+        try std.fs.path.resolveWindows(allocator, &.{ cwd, path })
+    else
+        try std.fs.path.resolvePosix(allocator, &.{ cwd, path });
+    if (!isAbsolute(platform, resolved)) {
+        allocator.free(resolved);
+        return error.Unavailable;
+    }
+    return resolved;
+}
+
 /// Owned result. Never falls back to cwd; unresolved Android startup can be
 /// retried once its runtime service provides internalDataPath.
 pub fn resolve(allocator: std.mem.Allocator, inputs: Inputs) storage.Error![]u8 {
