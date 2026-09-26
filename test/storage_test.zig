@@ -142,6 +142,65 @@ test "stable roots use override, OS user data and Android internal path, never c
     try std.testing.expectError(error.Unavailable, s.dataRoot.resolve(a, .{ .platform = .linux, .app_id = "fp", .override = "relative", .home = "/home/u" }));
 }
 
+test "linux XDG_DATA_HOME: empty and relative are ignored, absolute wins, unset uses HOME" {
+    const cases = .{
+        .{ @as(?[]const u8, null), "/home/u/.local/share/fp" },
+        .{ @as(?[]const u8, ""), "/home/u/.local/share/fp" },
+        .{ @as(?[]const u8, "relative/data"), "/home/u/.local/share/fp" },
+        .{ @as(?[]const u8, "/xdg/data"), "/xdg/data/fp" },
+    };
+    inline for (cases) |case| {
+        const result = try s.dataRoot.resolve(a, .{ .platform = .linux, .app_id = "fp", .xdg_data_home = case[0], .home = "/home/u" });
+        defer a.free(result);
+        try std.testing.expectEqualStrings(case[1], result);
+    }
+    // An ignored XDG value with no HOME to fall back on is still unavailable.
+    try std.testing.expectError(error.Unavailable, s.dataRoot.resolve(a, .{ .platform = .linux, .app_id = "fp", .xdg_data_home = "" }));
+}
+
+test "crash-left staging files are purged on the next write; foreign entries are kept" {
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var buffer: [4096]u8 = undefined;
+    const length = try tmp.dir.realPath(io, &buffer);
+    // Simulate an interrupted write: a full blob staged but never renamed.
+    try tmp.dir.createDirPath(io, ".pending");
+    try tmp.dir.writeFile(io, .{ .sub_path = ".pending/0123456789abcdef", .data = "crash-left blob" });
+    // Not ours: wrong name pattern, a directory, and (where supported) a
+    // symlink whose target must survive.
+    try tmp.dir.writeFile(io, .{ .sub_path = ".pending/notes.txt", .data = "keep" });
+    try tmp.dir.createDirPath(io, ".pending/fedcba9876543210");
+    try tmp.dir.writeFile(io, .{ .sub_path = "target.json", .data = "keep" });
+    const linked = if (tmp.dir.symLink(io, "../target.json", ".pending/aaaaaaaaaaaaaaaa", .{})) true else |_| false;
+
+    var files = try s.Files.init(io, buffer[0..length]);
+    _ = try finish(files.store(), .{ .write = .{ .name = "slot.json", .bytes = "live" } });
+
+    try std.testing.expectError(error.FileNotFound, tmp.dir.statFile(io, ".pending/0123456789abcdef", .{}));
+    _ = try tmp.dir.statFile(io, ".pending/notes.txt", .{});
+    var kept_dir = try tmp.dir.openDir(io, ".pending/fedcba9876543210", .{});
+    kept_dir.close(io);
+    if (linked) _ = try tmp.dir.statFile(io, ".pending/aaaaaaaaaaaaaaaa", .{ .follow_symlinks = false });
+    const target = try finish(files.store(), .{ .read = .{ .name = "target.json", .max_bytes = 16 } });
+    defer target.deinit(a);
+    try std.testing.expectEqualStrings("keep", target.read);
+
+    // The live write landed, and no staging file of its own is left behind.
+    const read = try finish(files.store(), .{ .read = .{ .name = "slot.json", .max_bytes = 16 } });
+    defer read.deinit(a);
+    try std.testing.expectEqualStrings("live", read.read);
+    var staging = try tmp.dir.openDir(io, ".pending", .{ .iterate = true });
+    defer staging.close(io);
+    var iterator = staging.iterate();
+    while (try iterator.next(io)) |entry| {
+        if (entry.kind == .file) try std.testing.expect(!s.Files.isStagingName(entry.name));
+    }
+    const list = try finish(files.store(), .list);
+    defer list.deinit(a);
+    try std.testing.expectEqual(@as(usize, 2), list.list.len); // slot.json + target.json
+}
+
 const Bridge = struct {
     var status_code: i32 = 0;
     var released: usize = 0;
