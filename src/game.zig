@@ -1657,6 +1657,8 @@ pub fn GameConfigWithYAxis(
         pub const requestReload = MiscMixin.requestReload;
 
         // ── Save/Load (mixin) ───────────────────────────────────────
+        pub const serializeGameState = SaveLoadMixin.serializeGameState;
+        pub const deserializeGameState = SaveLoadMixin.deserializeGameState;
         pub const saveGameState = SaveLoadMixin.saveGameState;
         pub const loadGameState = SaveLoadMixin.loadGameState;
         pub const armPostLoadRenderGate = SaveLoadMixin.armPostLoadRenderGate;
