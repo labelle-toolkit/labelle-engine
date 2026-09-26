@@ -113,6 +113,12 @@ test "keys cannot escape namespace or select Windows special files" {
     }
     try s.validateName("Colony 2.meta");
     try s.validateName("colônia.json");
+    try s.validateName("café.json");
+    // C1 controls (UTF-8 C2 80..C2 9F) are rejected like C0 controls.
+    for ([_][]const u8{ "a\u{85}b.json", "x\u{9F}", "\u{80}", "\x7f" }) |name| {
+        try std.testing.expectError(error.InvalidName, s.validateName(name));
+    }
+    try s.validateName("\u{A0}x.json"); // first code point past C1 is fine
     for ([_][]const u8{ "CON .json", "CONIN$", "conout$.meta", "COM¹.json" }) |name| {
         try std.testing.expectError(error.InvalidName, s.validateName(name));
     }
@@ -349,4 +355,95 @@ test "web result allocation failures release handles and partially built lists" 
     Bridge.status_code = 1;
     Bridge.payload = "[{\"name\":\"a.json\",\"size\":1,\"modified_ms\":1},{\"name\":\"b.json\",\"size\":2,\"modified_ms\":2}]";
     try std.testing.checkAllAllocationFailures(a, allocationExercise, .{});
+}
+
+/// Real wall clock shifted by `offset_ns`, so a test can "advance time"
+/// for a store while file mtimes stay real.
+const FakeClock = struct {
+    var offset_ns: i96 = 0;
+    fn now(userdata: ?*anyopaque, clock: std.Io.Clock) std.Io.Timestamp {
+        return std.testing.io.vtable.now(userdata, clock).addDuration(.fromNanoseconds(offset_ns));
+    }
+};
+
+test "a young staging file kept by one purge is purged by a later write once stale" {
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var buffer: [4096]u8 = undefined;
+    const length = try tmp.dir.realPath(io, &buffer);
+    try tmp.dir.createDirPath(io, ".pending");
+    try tmp.dir.writeFile(io, .{ .sub_path = ".pending/0123456789abcdef", .data = "crash-left blob" });
+    const five_minutes_ago = std.Io.Timestamp.now(io, .real).subDuration(.fromSeconds(5 * 60));
+    try tmp.dir.setTimestamps(io, ".pending/0123456789abcdef", .{ .access_timestamp = .{ .new = five_minutes_ago }, .modify_timestamp = .{ .new = five_minutes_ago } });
+
+    var vtable = io.vtable.*;
+    vtable.now = FakeClock.now;
+    var clocked = io;
+    clocked.vtable = &vtable;
+    FakeClock.offset_ns = 0;
+    var files = try s.Files.init(clocked, buffer[0..length]);
+
+    // First write: the orphan is only 5 minutes old, so it is kept and a
+    // re-check is scheduled for when it turns stale.
+    _ = try finish(files.store(), .{ .write = .{ .name = "slot.json", .bytes = "one" } });
+    _ = try tmp.dir.statFile(io, ".pending/0123456789abcdef", .{});
+    const due = files.staging_purge_due orelse return error.TestExpectedRecheck;
+    try std.testing.expect(due.nanoseconds > std.Io.Timestamp.now(io, .real).nanoseconds);
+
+    // Before the due time a write does not purge (it is still young).
+    FakeClock.offset_ns = 60 * std.time.ns_per_s;
+    _ = try finish(files.store(), .{ .write = .{ .name = "slot.json", .bytes = "two" } });
+    _ = try tmp.dir.statFile(io, ".pending/0123456789abcdef", .{});
+
+    // Six more minutes pass (11 minutes old): the next write removes it and,
+    // with nothing young left, stops re-checking.
+    FakeClock.offset_ns = 6 * std.time.ns_per_min;
+    _ = try finish(files.store(), .{ .write = .{ .name = "slot.json", .bytes = "three" } });
+    try std.testing.expectError(error.FileNotFound, tmp.dir.statFile(io, ".pending/0123456789abcdef", .{}));
+    try std.testing.expectEqual(@as(?std.Io.Timestamp, null), files.staging_purge_due);
+}
+
+extern "c" fn mkfifo(path: [*:0]const u8, mode: std.c.mode_t) c_int;
+
+fn makeFifo(path: [:0]const u8) !void {
+    switch (@import("builtin").os.tag) {
+        .linux => if (std.os.linux.errno(std.os.linux.mknodat(std.os.linux.AT.FDCWD, path, std.os.linux.S.IFIFO | 0o600, 0)) != .SUCCESS) return error.SkipZigTest,
+        .macos, .ios, .freebsd, .netbsd, .openbsd, .dragonfly => if (mkfifo(path, 0o600) != 0) return error.SkipZigTest,
+        else => return error.SkipZigTest,
+    }
+}
+
+const Watchdog = struct {
+    var done: std.atomic.Value(bool) = .init(false);
+    fn run() void {
+        var waited: usize = 0;
+        while (!done.load(.acquire)) : (waited += 1) {
+            if (waited >= 100) @panic("storage read of a FIFO key blocked (watchdog timeout)");
+            std.testing.io.sleep(.fromMilliseconds(50), .awake) catch {};
+        }
+    }
+};
+
+test "reads refuse a FIFO key without blocking" {
+    if (@import("builtin").os.tag == .windows) return error.SkipZigTest;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var buffer: [4096]u8 = undefined;
+    const length = try tmp.dir.realPath(io, &buffer);
+    const fifo_path = try std.fmt.allocPrintSentinel(a, "{s}/pipe.json", .{buffer[0..length]}, 0);
+    defer a.free(fifo_path);
+    try makeFifo(fifo_path);
+
+    var files = try s.Files.init(io, buffer[0..length]);
+    Watchdog.done.store(false, .release);
+    const watchdog = try std.Thread.spawn(.{}, Watchdog.run, .{});
+    defer watchdog.join();
+    defer Watchdog.done.store(true, .release);
+    try std.testing.expectError(error.AccessDenied, finish(files.store(), .{ .read = .{ .name = "pipe.json", .max_bytes = 16 } }));
+    // A FIFO is never listed as a blob.
+    const list = try finish(files.store(), .list);
+    defer list.deinit(a);
+    try std.testing.expectEqual(@as(usize, 0), list.list.len);
 }

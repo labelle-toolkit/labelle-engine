@@ -106,12 +106,15 @@ pub const Store = struct {
     }
 };
 
-/// Portable single-component UTF-8 key; no paths, Windows device names or
-/// alternate data streams. Sidecars such as colony.meta are ordinary keys.
+/// Portable single-component UTF-8 key; no paths, control characters (C0,
+/// DEL, C1), Windows device names or alternate data streams. Sidecars such as colony.meta are ordinary keys.
 pub fn validateName(name: []const u8) Error!void {
     if (name.len == 0 or name.len > 128 or !std.unicode.utf8ValidateSlice(name)) return error.InvalidName;
     if (name[0] == '.' or name[name.len - 1] == '.' or name[name.len - 1] == ' ') return error.InvalidName;
     for (name) |c| if (c < 32 or c == 127 or std.mem.indexOfScalar(u8, "/\\:*?\"<>|", c) != null) return error.InvalidName;
+    // C1 controls (U+0080..U+009F) are invisible or terminal-affecting too.
+    var code_points = std.unicode.Utf8View.initUnchecked(name).iterator();
+    while (code_points.nextCodepoint()) |cp| if (cp >= 0x80 and cp <= 0x9F) return error.InvalidName;
     const stem = std.mem.trimEnd(u8, name[0 .. std.mem.indexOfScalar(u8, name, '.') orelse name.len], " ");
     for ([_][]const u8{ "CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$", "COM¹", "COM²", "COM³", "LPT¹", "LPT²", "LPT³" }) |device| {
         if (std.ascii.eqlIgnoreCase(stem, device)) return error.InvalidName;
