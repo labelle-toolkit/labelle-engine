@@ -1074,6 +1074,27 @@ pub fn Mixin(comptime Game: type) type {
             return self.current_scene_name;
         }
 
+        /// The scene the live world belongs to (engine#896): the scene
+        /// recorded in the save the last `deserializeGameState` restored
+        /// into the ACTIVE world, else the active scene. Differs from
+        /// `getCurrentSceneName` only after a cross-scene load (menu→Load),
+        /// where the active scene is still "menu" but the ECS holds the
+        /// save's gameplay world. This is what `serializeGameState`
+        /// records as the save's `"scene"`. Provenance lives on the
+        /// `World`, so `setActiveWorld` switches it with the entities.
+        pub fn worldSceneName(self: *const Game) ?[]const u8 {
+            return self.active_world.loaded_save_scene_name orelse self.current_scene_name;
+        }
+
+        /// Drop the active world's loaded-save scene provenance
+        /// (engine#896). Called by the primitives that rebuild the active
+        /// world's contents (`resetEcsBackend`, `unloadCurrentScene`), so
+        /// every scene swap, hot reload and load starts from "the world
+        /// is the active scene's own".
+        pub fn clearLoadedSaveSceneName(self: *Game) void {
+            self.active_world.setLoadedSaveSceneName(null);
+        }
+
         /// Returns the name of the scene currently being loaded — i.e. the
         /// `setScene`/`setSceneAtomic` target whose asset-manifest gate
         /// is still deferring (atlases decoding, etc.). Returns `null`

@@ -175,6 +175,32 @@ pub fn Mixin(comptime Game: type) type {
                 else => null,
             } else null;
 
+            // engine#896: the scene the restored world will belong to, so
+            // the NEXT save records it. A load never swaps scenes, so after
+            // a menu→Load `current_scene_name` is still "menu"; without this
+            // a save made from the loaded world would record "menu" and
+            // loading THAT save would gate on the menu manifest (gameplay
+            // atlases never bound — an invisible world).
+            //
+            // Normalised to the scene the render gate will actually use:
+            // only a REGISTERED saved scene becomes provenance. A legacy
+            // save (no `"scene"`) or an unresolved name (e.g. a renamed
+            // scene) yields `null`, i.e. the world is attributed to the
+            // active scene — exactly the fallback `armPostLoadRenderGate`
+            // takes — so a resave records a name that resolves.
+            //
+            // Copied with `try` BEFORE the live world is reset: `saved_scene`
+            // borrows the parsed JSON, and an OOM here must leave the
+            // existing world intact and surface as an error, not silently
+            // drop the provenance. Handed to the world before Step 6 so
+            // `postLoad` callbacks already observe it; until then this
+            // `errdefer` owns it.
+            var provenance: ?[]const u8 = if (saved_scene) |sn|
+                (if (self.scenes.contains(sn)) try allocator.dupe(u8, sn) else null)
+            else
+                null;
+            errdefer if (provenance) |p| allocator.free(p);
+
             // Step 1: Clear scene tracking and destroy all entities atomically.
             //
             // Both scene-entity lists have to be cleared here:
@@ -619,6 +645,15 @@ pub fn Mixin(comptime Game: type) type {
             }
 
             // Step 6: Post-load cleanup
+
+            // Install the restored world's provenance (engine#896) before
+            // any post-load callback runs, so a callback that consults
+            // `worldSceneName()` or checkpoints via `serializeGameState()`
+            // sees the loaded scene, not the active one. `resetEcsBackend`
+            // (Step 1) already cleared the previous value; the world owns
+            // the name from here on.
+            self.active_world.setLoadedSaveSceneName(provenance);
+            provenance = null;
 
             // 6a: Component-level postLoad hooks
             inline for (names) |name| {

@@ -538,6 +538,23 @@ pub fn GameConfigWithYAxis(
             /// material the renderer has not finished with — a GPU-side
             /// use-after-free introduced by the deferral itself.
             shader_retire: std.ArrayListUnmanaged(@import("shader_material.zig").Record) = .empty,
+            /// Scene provenance of THIS world's contents (engine#896): the
+            /// scene recorded in the save `deserializeGameState` restored
+            /// into it. A load never swaps scenes, so after a menu→Load
+            /// `current_scene_name` is still "menu" while the ECS holds the
+            /// saved gameplay world; `serializeGameState` records this name
+            /// (via `worldSceneName`, falling back to `current_scene_name`)
+            /// so the next save round-trips to the gameplay scene.
+            ///
+            /// PER-WORLD, not per-Game, so `setActiveWorld` switches it
+            /// with the entities it describes. Cleared by every primitive
+            /// that rebuilds the active world's contents
+            /// (`resetEcsBackend`, `unloadCurrentScene` — which covers
+            /// `setScene`, `setSceneAtomic`, hot reload and the load path
+            /// itself). Only ever a REGISTERED scene name (the load
+            /// normalises an unresolved one to `null`). Owned by
+            /// `allocator`; `null` = the world is the active scene's own.
+            loaded_save_scene_name: ?[]const u8 = null,
             /// Retained so `deinit` can free heap-owning components (the
             /// `ChildrenComponent` ArrayLists) before the ECS is torn down —
             /// the backend drops components by value with no destructor.
@@ -551,6 +568,14 @@ pub fn GameConfigWithYAxis(
                     .nested_entity_arena = std.heap.ArenaAllocator.init(allocator),
                     .allocator = allocator,
                 };
+            }
+
+            /// Replace this world's scene provenance (engine#896), taking
+            /// ownership of `name` (allocated with `self.allocator`, or
+            /// `null` to clear). Frees the previous value.
+            pub fn setLoadedSaveSceneName(self: *World, name: ?[]const u8) void {
+                if (self.loaded_save_scene_name) |old| self.allocator.free(old);
+                self.loaded_save_scene_name = name;
             }
 
             pub fn deinit(self: *World) void {
@@ -578,6 +603,7 @@ pub fn GameConfigWithYAxis(
                         self.allocator.free(binding.name);
                     }
                 }
+                self.setLoadedSaveSceneName(null);
                 self.shader_retire.deinit(self.allocator);
                 std.debug.assert(self.shader_pending.count() == 0);
                 self.shader_pending.deinit(self.allocator);
@@ -1642,6 +1668,8 @@ pub fn GameConfigWithYAxis(
         pub const queueSceneChange = SceneMixin.queueSceneChange;
         pub const queueSceneChangeAtomic = SceneMixin.queueSceneChangeAtomic;
         pub const getCurrentSceneName = SceneMixin.getCurrentSceneName;
+        pub const worldSceneName = SceneMixin.worldSceneName;
+        pub const clearLoadedSaveSceneName = SceneMixin.clearLoadedSaveSceneName;
         pub const pendingSceneName = SceneMixin.pendingSceneName;
         pub const bridgeAllReadyImageAssets = SceneMixin.bridgeAllReadyImageAssets;
         pub const bridgeManifest = SceneMixin.bridgeManifest;
