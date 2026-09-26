@@ -66,15 +66,17 @@ pub fn build(b: *std.Build) void {
 
     const test_step = b.step("test", "Run engine tests");
 
+    const storage_module = b.createModule(.{
+        .root_source_file = b.path("src/storage.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "labelle-core", .module = core_module }},
+    });
     const storage_tests = b.addTest(.{ .root_module = b.createModule(.{
         .root_source_file = b.path("test/storage_test.zig"),
         .target = target,
         .optimize = optimize,
-        .imports = &.{.{ .name = "storage", .module = b.createModule(.{
-            .root_source_file = b.path("src/storage.zig"),
-            .target = target,
-            .optimize = optimize,
-        }) }},
+        .imports = &.{.{ .name = "storage", .module = storage_module }},
     }) });
     const storage_run = b.addRunArtifact(storage_tests);
     test_step.dependOn(&storage_run.step);

@@ -119,12 +119,13 @@ idempotent delete, size errors, a failed flush preserving old content,
 temporary-file isolation, stable roots, async completion, malformed results,
 and allocation-failure cleanup.
 
-Compile the actual cross-repo bindings (object-only; no emcc link):
+Compile the actual cross-repo bindings (object-only; no emcc link). Replace
+`<labelle-web-checkout>` with the path to your labelle-web checkout:
 
 ```powershell
 zig build-obj -target wasm32-emscripten -lc --dep storage --dep storage-bindings `
   '-Mroot=test/storage_web_compile.zig' '-Mstorage=src/storage.zig' `
-  '-Mstorage-bindings=C:/prj/save-chain-20260926-web/src/web_storage.zig' `
+  '-Mstorage-bindings=<labelle-web-checkout>/src/web_storage.zig' `
   '-femit-bin=.zig-cache/storage-web-abi.o'
 ```
 
