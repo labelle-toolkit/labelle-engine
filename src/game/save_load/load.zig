@@ -699,6 +699,21 @@ pub fn Mixin(comptime Game: type) type {
             // the manual `assets.acquire(...)` loop games shipped (FP#542).
             self.armPostLoadRenderGate(saved_scene);
 
+            // engine#896: remember which scene the restored world belongs
+            // to so the NEXT save records it. A load never swaps scenes, so
+            // after a menu→Load `current_scene_name` is still "menu";
+            // without this a save made from the loaded world would record
+            // "menu" and loading THAT save would gate on the menu manifest
+            // (gameplay atlases never bound — an invisible world). A save
+            // with no `"scene"` (legacy) clears the override: the world is
+            // attributed to the active scene, as before. Duped because
+            // `saved_scene` borrows the parsed JSON freed on return. On OOM
+            // the override is dropped (falls back to the active scene).
+            self.clearLoadedSaveSceneName();
+            if (saved_scene) |sn| {
+                self.loaded_save_scene_name = allocator.dupe(u8, sn) catch null;
+            }
+
             // Re-seed the gfx cameras from the just-restored `Camera`
             // components (camera-bound layers, #723/#724). Without this a save
             // that authored a tagged secondary camera comes back with its

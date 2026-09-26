@@ -900,6 +900,20 @@ pub fn GameConfigWithYAxis(
         /// has pinned a manifest. Released in full on `deinit`.
         post_load_acquired_assets: ?[]const []const u8 = null,
 
+        /// The scene the currently-loaded world belongs to, as recorded in
+        /// the save `deserializeGameState` last restored (engine#896).
+        /// A load never swaps scenes, so after a menu→Load
+        /// `current_scene_name` is still "menu" while the ECS holds the
+        /// saved (gameplay) world. `serializeGameState` records THIS name
+        /// (falling back to `current_scene_name`) so a save made after a
+        /// menu→Load round-trips to the gameplay scene instead of "menu"
+        /// — otherwise loading that newer save arms the post-load gate on
+        /// the menu manifest and the world draws with no atlases bound.
+        /// Owned (allocator-duped). Cleared whenever a real scene swap
+        /// replaces the world, and by a load of a save that records no
+        /// scene. `null` = the world is the active scene's own.
+        loaded_save_scene_name: ?[]const u8 = null,
+
         /// Whether the post-load gate's manifest has been bridged into
         /// `atlas_manager` yet (engine#638). The load path binds the whole
         /// manifest in ONE deterministic pass — the moment every atlas is
@@ -1642,6 +1656,8 @@ pub fn GameConfigWithYAxis(
         pub const queueSceneChange = SceneMixin.queueSceneChange;
         pub const queueSceneChangeAtomic = SceneMixin.queueSceneChangeAtomic;
         pub const getCurrentSceneName = SceneMixin.getCurrentSceneName;
+        pub const worldSceneName = SceneMixin.worldSceneName;
+        pub const clearLoadedSaveSceneName = SceneMixin.clearLoadedSaveSceneName;
         pub const pendingSceneName = SceneMixin.pendingSceneName;
         pub const bridgeAllReadyImageAssets = SceneMixin.bridgeAllReadyImageAssets;
         pub const bridgeManifest = SceneMixin.bridgeManifest;

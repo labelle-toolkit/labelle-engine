@@ -183,7 +183,13 @@ pub fn Mixin(comptime Game: type) type {
             // in its Load handler (FP#542). Optional + back-compat: older
             // saves simply omit the key and `loadGameState` falls back to
             // the current scene's manifest (the pre-#638 behaviour).
-            if (self.current_scene_name) |scene_name| {
+            //
+            // engine#896: record the scene the WORLD belongs to, not merely
+            // the active scene. After a menu→Load the active scene is still
+            // "menu" but the ECS holds the save's gameplay world, so prefer
+            // the scene the last load restored (`loaded_save_scene_name`,
+            // cleared on any real scene swap).
+            if (self.worldSceneName()) |scene_name| {
                 try writer.writeAll("  \"scene\": ");
                 try writeJsonString(writer, scene_name);
                 try writer.writeAll(",\n");

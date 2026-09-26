@@ -151,6 +151,7 @@ pub fn build(b: *std.Build) void {
         "test/save_policy_test.zig",
         "test/storage_serialization_test.zig",
         "test/save_load_mixin_test.zig",
+        "test/save_scene_after_menu_load_test.zig",
         "test/jsonc/bridge_leak_test.zig",
         "test/jsonc/nested_lifecycle_test.zig",
         "test/jsonc/target_overrides_test.zig",
