@@ -42,8 +42,12 @@ pub fn Default(comptime Backend: type) type {
                 if (storage.dataRoot.isAbsolute(platform, path)) {
                     self.directory = try allocator.dupe(u8, path);
                 } else {
+                    // `std.process.currentPath`, NOT `Dir.cwd().realPath`:
+                    // on Zig 0.16 the cwd handle is AT_FDCWD (not a real fd)
+                    // and realPath on it fails with FileNotFound (#895). The
+                    // target need not exist; Files creates it on first write.
                     var cwd: [std.fs.max_path_bytes]u8 = undefined;
-                    const length = std.Io.Dir.cwd().realPath(io, &cwd) catch return error.Unavailable;
+                    const length = std.process.currentPath(io, &cwd) catch return error.Unavailable;
                     self.directory = try storage.dataRoot.resolveDirectory(allocator, platform, cwd[0..length], path);
                 }
             } else {

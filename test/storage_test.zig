@@ -269,6 +269,11 @@ test "native directory resolves once with the Files.init stable-path rule" {
         .{ s.dataRoot.Platform.windows, "C:\\game", "//server/share/saves", "//server/share/saves" },
         .{ s.dataRoot.Platform.linux, "/home/u/game", "saves", "/home/u/game/saves" },
         .{ s.dataRoot.Platform.linux, "/home/u/game", "/saves", "/saves" },
+        // Nested relative paths and `..` normalise to a stable absolute path.
+        .{ s.dataRoot.Platform.windows, "C:\\game", "data\\saves", "C:\\game\\data\\saves" },
+        .{ s.dataRoot.Platform.windows, "C:\\game\\bin", "..\\saves", "C:\\game\\saves" },
+        .{ s.dataRoot.Platform.linux, "/home/u/game", "data/saves", "/home/u/game/data/saves" },
+        .{ s.dataRoot.Platform.linux, "/home/u/game/bin", "../saves", "/home/u/game/saves" },
     };
     inline for (cases) |case| {
         const result = try s.dataRoot.resolveDirectory(a, case[0], case[1], case[2]);
@@ -279,6 +284,40 @@ test "native directory resolves once with the Files.init stable-path rule" {
     // A drive-relative path on ANOTHER drive cannot be resolved stably.
     try std.testing.expectError(error.Unavailable, s.dataRoot.resolveDirectory(a, .windows, "C:\\game", "D:saves"));
     try std.testing.expectError(error.Unavailable, s.dataRoot.resolveDirectory(a, .windows, "\\game", "saves"));
+}
+
+test "relative native_directory resolves against the process cwd through the real init path (#895)" {
+    // No injected cwd: this drives Default.init's own cwd lookup, which used
+    // `Dir.cwd().realPath` and failed with Unavailable on Zig 0.16.
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var buffer: [4096]u8 = undefined;
+    const length = try tmp.dir.realPath(std.testing.io, &buffer);
+    const root = buffer[0..length];
+    try tmp.dir.createDirPath(std.testing.io, "existing");
+    const Default = s.Default(struct {});
+    // std.testing.tmpDir lives at `.zig-cache/tmp/<sub_path>` under the cwd.
+    const cases = .{
+        .{ "existing", "existing" }, // relative, already exists
+        .{ "fresh", "fresh" }, // relative, created on first write
+        .{ "nested/deeper/saves", "nested" ++ std.fs.path.sep_str ++ "deeper" ++ std.fs.path.sep_str ++ "saves" },
+    };
+    inline for (cases) |case| {
+        const relative = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/{s}", .{ tmp.sub_path, case[0] });
+        defer a.free(relative);
+        var selected = try Default.init(a, .{ .app_id = "test-game", .native_directory = relative });
+        defer selected.deinit();
+        const expected = try std.fs.path.join(a, &.{ root, case[1] });
+        defer a.free(expected);
+        try std.testing.expectEqualStrings(expected, selected.directory.?);
+        _ = try finish(selected.store(), .{ .write = .{ .name = "slot.json", .bytes = "saved" } });
+        // The blob landed under the tmp dir, read back without the store.
+        const on_disk_path = try std.fs.path.join(a, &.{ case[1], "slot.json" });
+        defer a.free(on_disk_path);
+        var on_disk: [16]u8 = undefined;
+        const bytes = try tmp.dir.readFile(std.testing.io, on_disk_path, &on_disk);
+        try std.testing.expectEqualStrings("saved", bytes);
+    }
 }
 
 const Bridge = struct {
