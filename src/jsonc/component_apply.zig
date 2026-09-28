@@ -34,6 +34,7 @@ const deserializer = @import("deserializer.zig");
 const ref_resolver_mod = @import("ref_resolver.zig");
 const uf = @import("unified_format.zig");
 const ImageComp = @import("../image_component.zig").Image;
+const builtins = @import("scene").builtins;
 
 pub fn ComponentApply(comptime GameType: type, comptime Components: type) type {
     const Entity = GameType.EntityType;
@@ -247,8 +248,11 @@ pub fn ComponentApply(comptime GameType: type, comptime Components: type) type {
         /// entities have no component to patch their ids into and could
         /// only ever be ghosts (#808).
         pub fn isKnownComponent(name: []const u8) bool {
-            const builtins = [_][]const u8{ "Position", "Sprite", "Shape", "Tilemap", "Camera", "Image", "Emitter" };
-            for (builtins) |b| {
+            // `Position` is applied via `setPosition`, not a built-in
+            // component; the rest come from the ONE built-in list (#881)
+            // so a new built-in can't be applied yet classified unknown.
+            if (std.mem.eql(u8, name, "Position")) return true;
+            for (builtins.names) |b| {
                 if (std.mem.eql(u8, name, b)) return true;
             }
             inline for (comptime Components.names()) |n| {
