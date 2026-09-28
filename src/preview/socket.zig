@@ -66,7 +66,7 @@ const socket_io = if (builtin.os.tag == .windows) struct {
     // never gets set, and the next `read` blocks. Use the stdlib's
     // correctly-declared `std.c.fcntl` instead (see `lib/std/c.zig`).
     pub const c_fcntl = std.c.fcntl;
-    extern "c" fn __error() *c_int; // macOS errno location
+    extern "c" fn __error() *c_int; // Darwin (macOS/iOS/tvOS/...) errno location
     extern "c" fn __errno_location() *c_int; // glibc errno location
     extern "c" fn __errno() *c_int; // Bionic errno location (Android)
 
@@ -76,13 +76,13 @@ const socket_io = if (builtin.os.tag == .windows) struct {
         // dropped by Zig's linker on each target.
         const is_android = builtin.target.abi == .android or builtin.target.abi == .androideabi;
         if (comptime is_android) return __errno().*;
-        return if (builtin.os.tag == .macos) __error().* else __errno_location().*;
+        return if (comptime builtin.os.tag.isDarwin()) __error().* else __errno_location().*;
     }
 
     pub const F_GETFL: c_int = 3;
     pub const F_SETFL: c_int = 4;
-    pub const O_NONBLOCK: c_int = if (builtin.os.tag == .macos) 4 else 2048;
-    pub const EAGAIN: c_int = if (builtin.os.tag == .macos) 35 else 11;
+    pub const O_NONBLOCK: c_int = if (builtin.os.tag.isDarwin()) 4 else 2048;
+    pub const EAGAIN: c_int = if (builtin.os.tag.isDarwin()) 35 else 11;
 
     pub fn raw_close(fd: c_int) c_int {
         return close(fd);
@@ -189,4 +189,31 @@ pub fn wouldBlock() bool {
 extern "kernel32" fn GetCurrentProcessId() callconv(.winapi) u32;
 pub fn getCurrentProcessId() u32 {
     return GetCurrentProcessId();
+}
+
+// #899: pin the hand-rolled POSIX constants to the stdlib's per-target
+// values. The shims used to key on `os.tag == .macos`, so iOS/tvOS fell
+// into the Linux branch (glibc `__errno_location`, O_NONBLOCK=2048,
+// EAGAIN=11). With these asserts a target that picks the wrong branch
+// fails to compile instead of misbehaving at runtime.
+comptime {
+    if (builtin.os.tag.isDarwin() or builtin.os.tag == .linux) {
+        std.debug.assert(socket_io.EAGAIN == @intFromEnum(std.c.E.AGAIN));
+        std.debug.assert(socket_io.F_GETFL == std.c.F.GETFL);
+        std.debug.assert(socket_io.F_SETFL == std.c.F.SETFL);
+        std.debug.assert(socket_io.O_NONBLOCK == @as(u32, @bitCast(std.c.O{ .NONBLOCK = true })));
+    }
+}
+
+// Forces analysis of every POSIX/Windows shim body for the target being
+// compiled. `zig build check-ios` compiles this file for
+// `aarch64-ios-simulator` (#899) so a non-Darwin branch leaking onto
+// Apple mobile targets is caught in CI.
+test "preview socket shims analyze for the target (#899)" {
+    _ = &socketWrite;
+    _ = &socketRead;
+    _ = &socketClose;
+    _ = &setNonBlocking;
+    _ = &restoreBlocking;
+    _ = &wouldBlock;
 }
