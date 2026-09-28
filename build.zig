@@ -66,6 +66,10 @@ pub fn build(b: *std.Build) void {
 
     const test_step = b.step("test", "Run engine tests");
 
+    // labelle-engine#902: src/ must not name platforms, stores, packages or
+    // backends. Same guard as the CLI core's (RFC #406).
+    addAgnosticGuard(b, test_step, optimize);
+
     const storage_module = b.createModule(.{
         .root_source_file = b.path("src/storage.zig"),
         .target = target,
@@ -816,6 +820,25 @@ pub fn build(b: *std.Build) void {
 /// references every preview socket shim and `screenshot_request.nowNs`,
 /// built for `query`. Callers depend on its step, which compiles it
 /// without linking.
+/// Run the platform-agnosticism guard (labelle-engine#902) as part of
+/// `zig build test`, and on its own as `zig build test-guard`. It runs on the
+/// host with the repository root as its working directory, because it walks
+/// `src/` at test time; `src/agnostic_guard_test.zig` fails rather than
+/// passing vacuously if that walk misses the engine's root file.
+fn addAgnosticGuard(b: *std.Build, test_step: *std.Build.Step, optimize: std.builtin.OptimizeMode) void {
+    const guard_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/agnostic_guard_test.zig"),
+            .target = b.graph.host,
+            .optimize = optimize,
+        }),
+    });
+    const guard_run = b.addRunArtifact(guard_tests);
+    guard_run.setCwd(b.path("."));
+    test_step.dependOn(&guard_run.step);
+    b.step("test-guard", "Check src/ for platform, store, package and backend names (labelle-engine#902)").dependOn(&guard_run.step);
+}
+
 fn addSocketTargetCheck(
     b: *std.Build,
     query: std.Target.Query,
