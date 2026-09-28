@@ -381,6 +381,10 @@ pub fn build(b: *std.Build) void {
         // queries, event emit-by-name, and the subscribe/drain/poll FIFO
         // (incl. the two-arena payload lifetime).
         "test/script_contract_test.zig",
+        // #886 — the contract's built-in set is derived from
+        // `scene.builtins.Builtin`: every tag is script-addressable
+        // (drift guard), Emitter's channel, and the shadowing rule.
+        "test/script_contract_builtins_test.zig",
         // labelle-gfx#305 Phase 2 Slice C — post-fx type re-exports
         // (engine.PostPass/PostPassKind/PostPassUniforms are the SAME
         // labelle-core types gfx re-exports, unified diamond) + the

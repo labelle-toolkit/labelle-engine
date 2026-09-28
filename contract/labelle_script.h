@@ -23,8 +23,8 @@
  *   - Structured payloads are UTF-8 JSON (encoding v1).
  *   - Components are addressed BY NAME over the game's own component
  *     registry plus the engine built-ins JSONC scenes author: "Position"
- *     ({"x":…,"y":…}) and the five scene built-ins "Sprite", "Shape",
- *     "Tilemap", "Camera", "Image" — routed through the scene loader's
+ *     ({"x":…,"y":…}) and the scene built-ins "Sprite", "Shape",
+ *     "Tilemap", "Camera", "Image", "Emitter" — routed through the scene loader's
  *     own apply machinery (see the support table before
  *     labelle_component_set).
  *   - Events are addressed by the game's `GameEvents` union tag name
@@ -137,8 +137,8 @@ uint64_t labelle_prefab_spawn(const char *name, size_t name_len,
 /* Built-in component support (write-parity with JSONC scenes — `set`
  * dispatches through the very apply branches the scene loader uses,
  * with its precedence: a project-registered component named Tilemap /
- * Camera / Image WINS and routes through the registry instead; Sprite /
- * Shape are always the built-ins, in scenes too). All five also
+ * Camera / Image / Emitter WINS and routes through the registry instead;
+ * Sprite / Shape are always the built-ins, in scenes too). All of them also
  * resolve in labelle_query.
  *
  *   name      set  get  has  remove   notes
@@ -157,6 +157,11 @@ uint64_t labelle_prefab_spawn(const char *name, size_t name_len,
  *                                     authored seed (the live camera
  *                                     keeps its last seeded state)
  *   Image     yes  yes  yes  yes      plain data component
+ *   Emitter   yes  yes  yes  yes      set turns on engine-driven
+ *                                     particles (as a scene load does)
+ *                                     and resyncs a live particle
+ *                                     system to the new config; remove
+ *                                     releases it
  *
  * yes* — get omits fields that are renderer HANDLES rather than
  * authored data (e.g. gfx Sprite's `texture`); they re-derive from the
