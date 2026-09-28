@@ -1379,6 +1379,10 @@ pub fn GameConfigWithYAxis(
         pub const addEmbeddedTilemapAsset = TilemapMixin.addEmbeddedTilemapAsset;
         pub const clearTilemaps = TilemapMixin.clearTilemaps;
         pub const deinitTilemaps = TilemapMixin.deinitTilemaps;
+        // GPU surface lifecycle for tileset textures (#847), driven from
+        // `surfaceLost` / `surfaceRestored`.
+        pub const invalidateTilemapTextures = TilemapMixin.invalidateTilemapTextures;
+        pub const reloadTilemapTextures = TilemapMixin.reloadTilemapTextures;
 
         // ── Particles / Emitter side-table (#750) — `game/emitter_mixin.zig`
         pub const setDriveParticles = EmitterMixin.setDriveParticles;

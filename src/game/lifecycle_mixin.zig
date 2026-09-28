@@ -484,6 +484,9 @@ pub fn Mixin(comptime Game: type) type {
             self.atlas_manager.invalidateUploadedTextures();
             // Direct uploads (#820): drop the dead handles, keep the ids.
             self.invalidateDirectTextures();
+            // Tileset textures (#847): uploaded by the tilemap runtime, not
+            // through `loadTextureFromMemoryU32`, so (3) misses them.
+            self.invalidateTilemapTextures();
             std.log.info("surface_lost: invalidated gpu-resident assets, refcounts preserved", .{});
             // Engine `Events` dual-emit (#578); folds away when the game
             // doesn't subscribe. Sync, not buffered — see the doc above.
@@ -527,6 +530,9 @@ pub fn Mixin(comptime Game: type) type {
             // ORIGINAL ids, so a game's held `u32` — and a hook about to
             // re-resolve `nativeTextureId` from it — sees a live texture.
             self.reuploadDirectTextures();
+            // Tileset textures (#847): same ids, re-decoded from the
+            // embedded registry, and each map's gfx renderer rebound.
+            _ = self.reloadTilemapTextures();
             std.log.info("surface_restored: re-enqueued + pumped to ready", .{});
             // Engine `Events` dual-emit (#578). Sync — see the doc above.
             self.emitEngineEventSync("engine__surface_restored", .{});

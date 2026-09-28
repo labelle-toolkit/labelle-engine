@@ -649,6 +649,38 @@ pub fn Mixin(comptime Game: type) type {
             self.tilemaps.clearRetainingCapacity();
         }
 
+        // ── GPU surface lifecycle (#847) ─────────────────────────────
+        //
+        // Tileset textures (sheet AND per-tile) are uploaded by the runtime
+        // straight through the renderer, so the direct-upload re-arm (#820)
+        // does not cover them. These two carry them across instead; see
+        // the `tilemap_runtime.zig` module header for the mechanism. Both
+        // fold away without the tilemap seam, and are no-ops per runtime
+        // without gfx's re-arm seam (`Runtime.surface_reload_supported`).
+
+        /// `surfaceLost` half: invalidate (never destroy) every live
+        /// tilemap's textures and suppress its draw until restore.
+        pub fn invalidateTilemapTextures(self: *Game) void {
+            if (comptime !supported) return;
+            var it = self.tilemaps.valueIterator();
+            while (it.next()) |rt| rt.*.surfaceLost();
+        }
+
+        /// `surfaceRestored` half: re-upload every live tilemap's textures
+        /// under their original ids from the embedded asset registry and
+        /// rebind its gfx renderer. Returns the number re-uploaded.
+        pub fn reloadTilemapTextures(self: *Game) usize {
+            if (comptime !supported) return 0;
+            const provider = tilemap_runtime.ImageProvider{
+                .context = self,
+                .getFn = provideImage,
+            };
+            var ok: usize = 0;
+            var it = self.tilemaps.valueIterator();
+            while (it.next()) |rt| ok += rt.*.surfaceRestored(provider);
+            return ok;
+        }
+
         /// Free every tilemap runtime + the side table. Called from the
         /// lifecycle mixin's `deinit`.
         pub fn deinitTilemaps(self: *Game) void {

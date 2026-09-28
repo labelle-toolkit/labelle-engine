@@ -430,3 +430,55 @@ test "mutation API is an inert no-op on a renderer without the tilemap seam" {
     game.setTiles(e, "ground", &[_]u32{ 1, 2, 3 });
     try testing.expect(game.tilemapLayerSize(e, "ground") == null);
 }
+
+// ── Surface loss / restore through the REAL gfx tilemap renderer (#847) ──
+
+fn drawsOf(calls: anytype, backend_id: u32) usize {
+    var n: usize = 0;
+    for (calls) |c| n += @intFromBool(c.texture_id == backend_id);
+    return n;
+}
+
+test "a surface cycle re-binds gfx's tilemap renderer to the re-uploaded sheet and keeps edits" {
+    const G = InterleaveGame();
+    try testing.expect(G.TilemapRuntimeType.surface_reload_supported);
+    var game = G.init(testing.allocator);
+    defer game.deinit();
+    try groundGame(&game);
+
+    const e = game.createEntity();
+    game.setPosition(e, .{ .x = 0, .y = 0 });
+    game.addTilemap(e, .{ .asset_name = "level.tmx" });
+    game.setTile(e, "ground", 0, 0, 0); // 5 of 6 cells left
+
+    const rt = game.tilemapRuntime(e).?;
+    const id = rt.tileset_ids[0].?;
+    const old_backend = rt.tm.textures.get(0).?.texture.id;
+    try testing.expectEqual(s.tileset_handle, old_backend);
+
+    game.surfaceLost();
+    try testing.expect(game.renderer.getTextureInfo(id) == null); // invalidated
+    {
+        // Nothing is drawn while `tm` holds the dead handle.
+        MockBackend.initMock(testing.allocator);
+        defer MockBackend.deinitMock();
+        game.render();
+        try testing.expectEqual(@as(usize, 0), drawsOf(MockBackend.getDrawCalls(), old_backend));
+    }
+
+    game.surfaceRestored();
+
+    // Same engine id, a NEW backend handle behind it — and gfx's renderer
+    // (which caches the backend texture, not the id) now holds that one.
+    try testing.expectEqual(id, rt.tileset_ids[0].?);
+    const new_backend = game.renderer.getTextureInfo(id).?.backend_texture.id;
+    try testing.expect(new_backend != old_backend);
+    try testing.expectEqual(new_backend, rt.tm.textures.get(0).?.texture.id);
+
+    // The next frame samples the fresh texture only, with the edit intact.
+    MockBackend.initMock(testing.allocator);
+    defer MockBackend.deinitMock();
+    game.render();
+    try testing.expectEqual(@as(usize, 5), drawsOf(MockBackend.getDrawCalls(), new_backend));
+    try testing.expectEqual(@as(usize, 0), drawsOf(MockBackend.getDrawCalls(), old_backend));
+}

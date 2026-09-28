@@ -28,28 +28,39 @@
 //! gated at comptime on gfx carrying labelle-gfx#343; see
 //! `collection_supported` in `Runtime`.
 //!
-//! ## Known gap: tilemap textures do NOT survive surface loss (#847)
+//! ## Surface loss / restore (#847)
 //!
 //! Both passes upload through `RenderImpl.loadTextureFromMemory` — the
-//! RENDERER's entry point, not `Game.loadTextureFromMemoryU32`. Only the
-//! latter retains the file type + bytes in `World.direct_textures`
-//! (`atlas_mixin.retainDirectTexture`), and `surfaceLost` /
-//! `surfaceRestored` re-arm exactly that store (#820). So after an Android
-//! TERM_WINDOW/INIT_WINDOW cycle a tilemap's ids resolve to nothing and its
-//! layers draw blank until the runtime is rebuilt (`acquireTilemap`).
+//! RENDERER's entry point, not `Game.loadTextureFromMemoryU32` — so the
+//! bytes are NOT retained in `World.direct_textures`, and the engine's
+//! direct-upload re-arm (#820) never sees them. The runtime carries its own
+//! textures across an Android TERM_WINDOW / INIT_WINDOW cycle instead, on
+//! the same gfx re-arm seam (`invalidateTexture` +
+//! `reuploadTextureFromMemory`, gated by `surface_reload_supported`):
 //!
-//! This is NOT specific to the per-tile textures of a collection tileset:
-//! the sheet upload in pass 1 predates #841 and has always taken the same
-//! direct path, so every tilemap texture is affected identically. Fixing it
-//! is a lifecycle change, not an upload change — `Runtime.deinit` calls
-//! `renderer.unloadTexture` on ids whose backend handles are already dead
-//! by the time `surfaceLost` runs, which is the exact recycled-slot free
-//! #820 exists to prevent — so it belongs to #847, which covers sheet and
-//! per-tile textures together, rather than to either pass here.
+//!   * `surfaceLost` INVALIDATES every id in `owned_ids` — drops the dead
+//!     backend handle WITHOUT destroying it (the context is gone, and after
+//!     re-init the backend recycles slots, so a late free would destroy
+//!     somebody else's live texture — the #820 bug). The ids stay
+//!     registered, so a `deinit` in the meantime is still a clean unload.
+//!   * `surfaceRestored` re-decodes each id's image from the SAME embedded
+//!     provider that fed `initInPlace` (program-lifetime `@embedFile`
+//!     bytes, so nothing is duplicated) and re-uploads it under its
+//!     ORIGINAL id, then REBINDS the gfx `TileMapRenderer`: gfx resolves
+//!     textures eagerly and caches the BACKEND texture value, not the id,
+//!     so the old renderer would keep sampling dead handles. The decoded
+//!     map — including every runtime `setTile` / `setLayerTiles` edit — and
+//!     the per-tile animation clock are kept.
+//!
+//! Between the two (and if the rebind fails) `surface_lost` suppresses the
+//! draw pass, so a stale backend handle is never sampled. On a renderer
+//! without the seam both calls are no-ops and the pre-#847 behaviour
+//! stands: tilemap textures die with the surface.
 
 const std = @import("std");
 
 const TileLayerSize = @import("tilemap.zig").TileLayerSize;
+const normalizeHandle = @import("game/atlas_mixin.zig").normalizeHandle;
 
 /// True when `RenderImpl` exposes the gfx 1.21.0 tilemap seam: the
 /// per-backend `TileMapRenderer` type plus the shared texture path the
@@ -239,6 +250,15 @@ pub fn Runtime(comptime RenderImpl: type) type {
         /// which also makes `deinit` O(n) instead of the O(n²) dedup scan
         /// it replaces.
         owned_ids: []TextureId,
+        /// The image `source` each `owned_ids[k]` was decoded from, index
+        /// for index — what `surfaceRestored` re-fetches from the provider
+        /// to re-upload under the same id (#847). Borrowed from `map`,
+        /// which owns the strings and lives exactly as long as this runtime.
+        owned_sources: []const []const u8,
+        /// Set by `surfaceLost`, cleared once `surfaceRestored` has
+        /// re-uploaded the textures AND rebound `tm`. While set, the draw
+        /// pass is skipped: `tm` still holds the dead backend handles.
+        surface_lost: bool = false,
         /// Resolver context, stored inline so its address is heap-stable
         /// (matches the `Game`-heap-allocated `Runtime`). gfx resolves
         /// textures eagerly inside `initWithOptions` today — but keeping
@@ -355,6 +375,11 @@ pub fn Runtime(comptime RenderImpl: type) type {
             var owned: std.ArrayList(TextureId) = .empty;
             errdefer owned.deinit(allocator);
             try owned.ensureTotalCapacity(allocator, map.tilesets.len + tile_total);
+            // Parallel to `owned` (see `owned_sources`), same capacity, so
+            // the paired appends below cannot fail either.
+            var sources: std.ArrayList([]const u8) = .empty;
+            errdefer sources.deinit(allocator);
+            try sources.ensureTotalCapacity(allocator, map.tilesets.len + tile_total);
             // Every texture uploaded so far is released if a LATER step
             // fails; without this the map's textures would outlive the
             // half-built runtime that owns them.
@@ -379,7 +404,10 @@ pub fn Runtime(comptime RenderImpl: type) type {
                     );
                     break :blk null;
                 };
-                if (ids[i]) |id| owned.appendAssumeCapacity(id);
+                if (ids[i]) |id| {
+                    owned.appendAssumeCapacity(id);
+                    sources.appendAssumeCapacity(tileset.image_source);
+                }
             }
 
             // ── Pass 2: one texture per per-tile image (#841) ───────────
@@ -429,6 +457,7 @@ pub fn Runtime(comptime RenderImpl: type) type {
                         };
                         tile_ids[cursor] = id;
                         owned.appendAssumeCapacity(id);
+                        sources.appendAssumeCapacity(image.source);
                         // Keyed by the `source` slice, which the decoded
                         // `TileMap` owns and outlives this init.
                         by_source.putAssumeCapacity(image.source, id);
@@ -446,6 +475,8 @@ pub fn Runtime(comptime RenderImpl: type) type {
                 for (owned_ids) |id| renderer.unloadTexture(id);
                 allocator.free(owned_ids);
             }
+            const owned_sources = try sources.toOwnedSlice(allocator);
+            errdefer allocator.free(owned_sources);
 
             self.* = .{
                 .allocator = allocator,
@@ -456,6 +487,7 @@ pub fn Runtime(comptime RenderImpl: type) type {
                 .tile_ids = tile_ids,
                 .tile_offsets = tile_offsets,
                 .owned_ids = owned_ids,
+                .owned_sources = owned_sources,
                 .resolver_ctx = undefined,
             };
 
@@ -467,16 +499,87 @@ pub fn Runtime(comptime RenderImpl: type) type {
                 .tile_ids = self.tile_ids,
                 .tile_offsets = self.tile_offsets,
             };
+            self.tm = try self.bindRenderer();
+        }
+
+        /// Build a gfx `TileMapRenderer` over `self.map`, resolving every
+        /// texture through `resolver_ctx` NOW (gfx resolves eagerly). Used
+        /// by `initInPlace` and again by `surfaceRestored`, which needs the
+        /// fresh backend handles re-resolved.
+        fn bindRenderer(self: *Self) !TmRenderer {
             var resolver = Resolver{ .context = &self.resolver_ctx, .resolveFn = resolveTexture };
             // Additive: `resolveTileFn` does not exist on gfx before #343,
             // and a resolver that leaves it null behaves exactly as today.
             if (comptime collection_supported) resolver.resolveTileFn = resolveTileTexture;
-            self.tm = try TmRenderer.initWithOptions(allocator, &self.map, .{
+            return TmRenderer.initWithOptions(self.allocator, &self.map, .{
                 .resolver = resolver,
                 // Embedded env: never touch the filesystem for unresolved
                 // tilesets — the resolver is the only texture source.
                 .load_unresolved_from_filesystem = false,
             });
+        }
+
+        // ── Surface loss / restore (#847) — see the module header ──
+
+        /// Whether the renderer carries gfx's re-arm seam for minted keys
+        /// (labelle-gfx#345) — the same both-or-neither gate as
+        /// `Game.tracks_direct_uploads`. Without it the two calls below are
+        /// no-ops.
+        pub const surface_reload_supported = @hasDecl(RenderImpl, "invalidateTexture") and
+            @hasDecl(RenderImpl, "reuploadTextureFromMemory");
+
+        /// Surface-loss half: drop the dead backend handle behind every
+        /// texture this runtime uploaded, WITHOUT destroying it, and stop
+        /// drawing until `surfaceRestored`. Idempotent.
+        pub fn surfaceLost(self: *Self) void {
+            if (comptime !surface_reload_supported) return;
+            const Param = @typeInfo(@TypeOf(RenderImpl.invalidateTexture)).@"fn".params[1].type.?;
+            for (self.owned_ids) |id| self.renderer.invalidateTexture(normalizeHandle(Param, id));
+            self.surface_lost = true;
+        }
+
+        /// Surface-restore half: re-decode + re-upload every owned texture
+        /// under its ORIGINAL id from `images` (the provider `initInPlace`
+        /// was given), then rebind `tm` so it resolves the new backend
+        /// handles. Returns how many textures came back. A texture whose
+        /// bytes are gone or whose re-upload fails stays invalidated — it
+        /// draws nothing, exactly like a tileset that failed its first
+        /// decode. If the rebind itself fails the map stays suppressed
+        /// (`surface_lost`) rather than sampling dead handles. No-op unless
+        /// `surfaceLost` ran first.
+        pub fn surfaceRestored(self: *Self, images: ImageProvider) usize {
+            if (comptime !surface_reload_supported) return 0;
+            if (!self.surface_lost) return 0;
+            const Param = @typeInfo(@TypeOf(RenderImpl.reuploadTextureFromMemory)).@"fn".params[1].type.?;
+            var ok: usize = 0;
+            for (self.owned_ids, self.owned_sources) |id, source| {
+                const bytes = images.get(source) orelse {
+                    std.log.warn("tilemap: surface restore: image '{s}' is no longer registered — it will draw nothing", .{source});
+                    continue;
+                };
+                const ft = fileTypeZ(self.allocator, source) catch continue;
+                defer self.allocator.free(ft);
+                self.renderer.reuploadTextureFromMemory(normalizeHandle(Param, id), ft, bytes) catch |err| {
+                    std.log.warn("tilemap: surface restore: re-upload of '{s}' failed: {s} — it will draw nothing", .{ source, @errorName(err) });
+                    continue;
+                };
+                ok += 1;
+            }
+            var fresh = self.bindRenderer() catch |err| {
+                std.log.warn("tilemap: surface restore: rebinding the tilemap renderer failed: {s} — this map stays hidden", .{@errorName(err)});
+                return ok;
+            };
+            // Keep the per-tile animation clock (labelle-gfx#351): the
+            // animator depends only on the map's tilesets, not on textures,
+            // so the old one carries over and the fresh one is dropped.
+            if (comptime @hasField(TmRenderer, "animator")) {
+                std.mem.swap(@TypeOf(fresh.animator), &fresh.animator, &self.tm.animator);
+            }
+            // gfx got every texture as UNOWNED, so this frees no GPU object.
+            self.tm.deinit();
+            self.tm = fresh;
+            self.surface_lost = false;
+            return ok;
         }
 
         pub fn deinit(self: *Self) void {
@@ -510,6 +613,7 @@ pub fn Runtime(comptime RenderImpl: type) type {
             self.allocator.free(self.tile_ids);
             self.allocator.free(self.tile_offsets);
             self.allocator.free(self.owned_ids);
+            self.allocator.free(self.owned_sources);
         }
 
         /// The map's height in pixels (`tile_height * rows`). Used by the
@@ -534,6 +638,7 @@ pub fn Runtime(comptime RenderImpl: type) type {
             view_width: ?f32,
             view_height: ?f32,
         ) void {
+            if (self.surface_lost) return; // `tm` holds dead handles (#847)
             self.tm.drawAllLayers(camera_x, camera_y, .{
                 .offset_x = offset_x,
                 .offset_y = offset_y,
@@ -672,6 +777,7 @@ pub fn Runtime(comptime RenderImpl: type) type {
             view_width: ?f32,
             view_height: ?f32,
         ) void {
+            if (self.surface_lost) return; // `tm` holds dead handles (#847)
             self.tm.drawLayerDirect(&self.map.tile_layers[i], camera_x, camera_y, .{
                 .offset_x = offset_x,
                 .offset_y = offset_y,
