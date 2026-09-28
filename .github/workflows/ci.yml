@@ -132,5 +132,5 @@ jobs:
           set -euo pipefail
           SDK="$(xcrun --sdk iphonesimulator --show-sdk-path)"
           echo "iphonesimulator SDK: $SDK"
-          zig build check-ios --sysroot "$SDK" --summary all
+          zig build check-ios -Dios-sdk="$SDK" --summary all
           file zig-out/check-ios/preview_socket_ios_check

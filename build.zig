@@ -87,23 +87,32 @@ pub fn build(b: *std.Build) void {
     // so this analyzes + codegens without linking (no iOS SDK needed); the
     // comptime asserts in `src/preview/socket.zig` pin the fcntl/errno
     // constants against `std.c` for the target. With
-    // `--sysroot "$(xcrun --sdk iphonesimulator --show-sdk-path)"` the test
+    // `-Dios-sdk="$(xcrun --sdk iphonesimulator --show-sdk-path)"` the test
     // binary is also linked against the simulator libSystem, which catches
     // a wrong errno accessor (e.g. glibc `__errno_location`) as an
     // undefined symbol. CI runs both flavours.
-    const check_ios_step = b.step("check-ios", "Compile the preview socket shims for aarch64-ios-simulator (links too when --sysroot is given)");
+    const ios_sdk = b.option([]const u8, "ios-sdk", "iPhoneSimulator SDK path; makes `check-ios` link against it");
+    const check_ios_step = b.step("check-ios", "Compile the preview socket shims for aarch64-ios-simulator (links too with -Dios-sdk)");
     const ios_sim_target = b.resolveTargetQuery(.{ .cpu_arch = .aarch64, .os_tag = .ios, .abi = .simulator });
     const ios_socket_check = b.addTest(.{
         .name = "preview_socket_ios_check",
         .root_module = b.createModule(.{
-            .root_source_file = b.path("src/preview/socket.zig"),
+            .root_source_file = b.path("test/preview_socket_ios_check.zig"),
             .target = ios_sim_target,
             .optimize = optimize,
             .link_libc = true,
+            .imports = &.{.{ .name = "preview_socket", .module = b.createModule(.{
+                .root_source_file = b.path("src/preview/socket.zig"),
+                .target = ios_sim_target,
+                .optimize = optimize,
+                .link_libc = true,
+            }) }},
         }),
     });
-    if (b.sysroot != null) {
-        // Requesting the binary makes the step link it.
+    if (ios_sdk) |sdk| {
+        // Same search paths labelle-sokol's iOS hook uses. Requesting the
+        // binary (install) is what makes the step link it.
+        ios_socket_check.root_module.addLibraryPath(.{ .cwd_relative = b.pathJoin(&.{ sdk, "usr/lib" }) });
         check_ios_step.dependOn(&b.addInstallArtifact(ios_socket_check, .{
             .dest_dir = .{ .override = .{ .custom = "check-ios" } },
         }).step);

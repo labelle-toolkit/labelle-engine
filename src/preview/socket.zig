@@ -204,16 +204,3 @@ comptime {
         std.debug.assert(socket_io.O_NONBLOCK == @as(u32, @bitCast(std.c.O{ .NONBLOCK = true })));
     }
 }
-
-// Forces analysis of every POSIX/Windows shim body for the target being
-// compiled. `zig build check-ios` compiles this file for
-// `aarch64-ios-simulator` (#899) so a non-Darwin branch leaking onto
-// Apple mobile targets is caught in CI.
-test "preview socket shims analyze for the target (#899)" {
-    _ = &socketWrite;
-    _ = &socketRead;
-    _ = &socketClose;
-    _ = &setNonBlocking;
-    _ = &restoreBlocking;
-    _ = &wouldBlock;
-}
