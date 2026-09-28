@@ -53,10 +53,13 @@ pub fn nowNs() u64 {
     // symbol is only referenced on this comptime branch, so non-libc
     // targets never force an unresolved libc dependency.
     if (comptime builtin.link_libc) {
-        const clk: c_int = switch (builtin.os.tag) {
-            .macos, .ios, .watchos, .tvos => 6, // _CLOCK_MONOTONIC
-            else => 1, // CLOCK_MONOTONIC (linux et al.)
-        };
+        // CLOCK_MONOTONIC from `std.c`, which resolves it per target
+        // (6 on Darwin, 1 on Linux/Android); 1 where `std.c` has none.
+        const clk: c_int = if (@typeInfo(std.c.clockid_t) == .@"enum" and
+            @hasField(std.c.clockid_t, "MONOTONIC"))
+            @intCast(@intFromEnum(std.c.clockid_t.MONOTONIC))
+        else
+            1;
         var ts: Timespec = .{ .sec = 0, .nsec = 0 };
         _ = clock_gettime(clk, &ts);
         return @as(u64, @intCast(ts.sec)) * std.time.ns_per_s + @as(u64, @intCast(ts.nsec));

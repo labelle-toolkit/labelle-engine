@@ -67,11 +67,10 @@ const socket_io = if (builtin.os.tag == .windows) struct {
     // correctly-declared `std.c.fcntl` instead (see `lib/std/c.zig`).
     pub const c_fcntl = std.c.fcntl;
     // errno and the fcntl/flag/errno constants come from `std.c`, which
-    // resolves them per target: Darwin (macOS/iOS/tvOS/...) `__error`,
-    // Bionic `__errno`, glibc/musl `__errno_location`, and the per-arch
-    // Linux ABI values (O_NONBLOCK is 2048 on asm-generic and PowerPC,
-    // 128 on MIPS, 0x4000 on SPARC). Hand-written per-OS tables got iOS
-    // wrong (#899).
+    // resolves them per target: Darwin `__error`, Bionic `__errno`,
+    // glibc/musl `__errno_location`, and the per-arch Linux ABI values
+    // (O_NONBLOCK is 2048 on asm-generic and PowerPC, 128 on MIPS,
+    // 0x4000 on SPARC). Hand-written per-OS tables drifted (#899).
     pub fn errno() c_int {
         return std.c._errno().*;
     }
