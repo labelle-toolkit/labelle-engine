@@ -59,7 +59,10 @@ pub fn Default(comptime Backend: type) type {
                     .windows => .windows,
                     .macos => .macos,
                     .linux => .linux,
-                    else => return error.Unavailable,
+                    // Any other OS has no user-data default here, but a
+                    // supplied `platform_root` still works; it is checked
+                    // with POSIX path rules.
+                    else => if (options.platform_root != null) .linux else return error.Unavailable,
                 };
                 const root = try storage.dataRoot.resolve(allocator, .{
                     .platform = platform,

@@ -47,6 +47,11 @@ WORK="$(mktemp -d)"
 # that has nothing to do with the change under test.
 ENG="$WORK/eng"
 trap 'rm -rf "$WORK"' EXIT
+# The engine reads target capabilities from a `target_features` module that
+# its build.zig normally generates (#902). These direct compiles target the
+# host, which has POSIX shm (the one field today). An older tree that never
+# imports it just ignores the extra module.
+printf 'pub const has_posix_shm = true;\n' > "$WORK/target_features.zig"
 
 DARWIN_FRAMEWORKS=""
 if [ "$(uname -s)" = "Darwin" ]; then
@@ -64,7 +69,7 @@ build_probe() { # build_probe <out> [extra zig flags...]
     -femit-bin="$out" \
     --dep engine --dep labelle-core --dep scene \
     -Mroot="$ENG/test/hook_trace_cost_probe.zig" \
-    --dep labelle-core --dep scene --dep jsonc --dep audio_types --dep font_types \
+    --dep labelle-core --dep scene --dep jsonc --dep audio_types --dep font_types --dep target_features \
     -Mengine="$ENG/src/root.zig" \
     -Mlabelle-core="$CORE/src/root.zig" \
     --dep labelle-core \
@@ -73,6 +78,7 @@ build_probe() { # build_probe <out> [extra zig flags...]
     -Maudio_types="$ENG/src/audio_types.zig" \
     --dep labelle-core \
     -Mfont_types="$ENG/src/font_types.zig" \
+    -Mtarget_features="$WORK/target_features.zig" \
     >/dev/null
 }
 
@@ -168,7 +174,7 @@ grep -v '^pub const labelle_hook_trace' "$REPO/test/hook_trace_scaling_exe.zig" 
 cp "$REPO/test/hook_trace_scaling_exe.zig" "$WORK/scale/scaling_on_exe.zig"
 
 MODS=(
-  --dep labelle-core --dep scene --dep jsonc --dep audio_types --dep font_types
+  --dep labelle-core --dep scene --dep jsonc --dep audio_types --dep font_types --dep target_features
   -Mengine="$REPO/src/root.zig"
   -Mlabelle-core="$CORE/src/root.zig"
   --dep labelle-core
@@ -177,6 +183,7 @@ MODS=(
   -Maudio_types="$REPO/src/audio_types.zig"
   --dep labelle-core
   -Mfont_types="$REPO/src/font_types.zig"
+  -Mtarget_features="$WORK/target_features.zig"
 )
 
 time_build() { # time_build <label> <root file> <out>
