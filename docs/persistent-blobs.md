@@ -34,7 +34,12 @@ idempotent. Reads enforce an inclusive size cap, including zero-byte blobs.
 `storage.Default(Backend).init(allocator, options)` selects native files or
 `Backend.PersistentStorage` on emscripten. `options.app_id` is a stable namespace;
 `options.native_directory` preserves an existing game save location. Relative
-legacy paths resolve once at initialization. An explicitly injected
+legacy paths resolve once at initialization. `options.platform_root` is an
+app-private root the platform package supplies (on Android, the activity's
+internal data directory, which the caller reads through labelle-android); saves
+then go to `<platform_root>/saves`. The engine no longer reads it itself
+(#902), so a mobile caller that leaves it `null` falls through to the OS
+defaults below, which on Android usually means `Unavailable`. An explicitly injected
 `options.store` takes precedence and does not consult native paths. Keep the
 selected instance at a stable address after obtaining its Store, and deinit it
 after all operations. The caller supplies exactly one Store. The engine has
@@ -72,14 +77,16 @@ not fsynced. File operations currently run synchronously.
 `storage.dataRoot.resolve(allocator, Inputs)` is a pure, owned-string resolver:
 
 1. Absolute `LABELLE_DATA_DIR` override, when supplied.
-2. Android: supplied app-private internal data directory, or `Unavailable`.
+2. Absolute `platform_root`, when the caller supplies one (a mobile app's
+   internal storage). A relative one is `Unavailable`.
 3. Windows: `LOCALAPPDATA/<app_id>`.
 4. macOS: `HOME/Library/Application Support/<app_id>`.
 5. Linux: `XDG_DATA_HOME/<app_id>` or `HOME/.local/share/<app_id>`.
 
 An invalid configured path is an error, never a fallback to cwd. Windows paths
-rooted on an unspecified current drive are rejected. `Default` reads environment values and the Android native activity
-internal data path; the caller supplies its stable application ID. No
+rooted on an unspecified current drive are rejected. `Default` reads environment
+values; the caller supplies its stable application ID and, on a mobile target,
+the `platform_root`. No
 service/target files are modified, and existing FP directories are not moved.
 
 ## Web binding contract
@@ -141,5 +148,5 @@ The selected backend provides only bindings; persistence policy and engine
 serialization remain independent of graphics. Exactly-one-package-claim
 validation remains a runtime-service resolver gate, outside this change.
 Explicit Store injection works today; this does not claim that the future
-provider-resolution architecture is complete. Android default path selection
-is implemented but an emulator/device persistence run has not been performed.
+provider-resolution architecture is complete. The `platform_root` path is
+host-tested; an emulator/device persistence run has not been performed.
