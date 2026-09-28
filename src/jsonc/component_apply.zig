@@ -34,6 +34,7 @@ const deserializer = @import("deserializer.zig");
 const ref_resolver_mod = @import("ref_resolver.zig");
 const uf = @import("unified_format.zig");
 const ImageComp = @import("../image_component.zig").Image;
+const builtins = @import("scene").builtins;
 
 pub fn ComponentApply(comptime GameType: type, comptime Components: type) type {
     const Entity = GameType.EntityType;
@@ -237,6 +238,27 @@ pub fn ComponentApply(comptime GameType: type, comptime Components: type) type {
             if (uf.isComponentKeyShape(name)) {
                 uf.warnUnknownComponent(game.log, name);
             }
+        }
+
+        /// True iff `applyComponent` would attach something for `name`:
+        /// an engine built-in it special-cases, or a name in the
+        /// `Components` registry. Everything else no-ops there (RFC #596
+        /// Axis 4), so the scene loader uses this to skip spawning the
+        /// entity-bearing arrays of an unknown component — its nested
+        /// entities have no component to patch their ids into and could
+        /// only ever be ghosts (#808).
+        pub fn isKnownComponent(name: []const u8) bool {
+            // `Position` is applied via `setPosition`, not a built-in
+            // component; the rest come from the ONE built-in list (#881)
+            // so a new built-in can't be applied yet classified unknown.
+            if (std.mem.eql(u8, name, "Position")) return true;
+            for (builtins.names) |b| {
+                if (std.mem.eql(u8, name, b)) return true;
+            }
+            inline for (comptime Components.names()) |n| {
+                if (std.mem.eql(u8, name, n)) return true;
+            }
+            return false;
         }
 
         // ── Per-built-in apply fns (shared with the script contract) ──

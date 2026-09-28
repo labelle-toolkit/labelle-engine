@@ -204,6 +204,16 @@ pub fn warnUnknownComponent(log: anytype, name: []const u8) void {
     warnOnceKey(log, key, "[unified-format] unknown component '{s}' on entity — treated as no-op (RFC #596). If this is a typo, fix it; if it's a forward-compat reference to a not-yet-loaded plugin, ignore this warning.", .{name});
 }
 
+/// Warn once that an unknown component carried entity-like array items
+/// that the loader did NOT spawn (#808). Unlike `warnUnknownComponent`
+/// this fires for any key shape: dropping authored entities is never
+/// silent, even under a data-shaped lowercase key.
+pub fn warnUnknownComponentNested(log: anytype, name: []const u8) void {
+    var buf: [256]u8 = undefined;
+    const key = std.fmt.bufPrint(&buf, "unknown-component-nested:{s}", .{name}) catch return;
+    warnOnceKey(log, key, "[unified-format] unknown component '{s}' carries nested entities — they were NOT spawned (the component is a no-op, so they would be unreachable ghosts; #808). Fix the component name or register it.", .{name});
+}
+
 /// Unwrap the explicit `"root"` block. The unified format ships two
 /// shapes during the v1.x deprecation window (RFC #594):
 ///
