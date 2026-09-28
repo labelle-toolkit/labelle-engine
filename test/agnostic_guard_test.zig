@@ -69,8 +69,6 @@ const allowed_words = [_][]const u8{ "macos", "windows", "linux", "darwin", "win
 /// shrinks: an entry whose file is clean (or gone) fails the guard as stale,
 /// so moving platform code out has to delete its line here.
 const allowed_files = [_][]const u8{
-    // This file: it spells the forbidden table out.
-    "agnostic_guard_test.zig",
     "android.zig",
     "assets/catalog/engine.zig",
     "assets/catalog/tests_main_thread.zig",
