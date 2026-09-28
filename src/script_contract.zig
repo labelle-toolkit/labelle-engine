@@ -150,16 +150,18 @@
 //! ## Component name space (registry + scene built-ins)
 //!
 //! Component names resolve over the game's own `ComponentRegistry` PLUS
-//! everything JSONC scenes can author: `Position`, and the five
-//! `jsonc/component_apply.zig` special-cases — `Sprite`, `Shape`,
-//! `Tilemap`, `Camera`, `Image`. The built-ins are not merely
+//! everything JSONC scenes can author: `Position`, and every scene
+//! built-in in `scene.builtins.Builtin` (the one source of truth, #886)
+//! — `Sprite`, `Shape`, `Tilemap`, `Camera`, `Image`, `Emitter`. The
+//! built-ins are not merely
 //! name-aliased: `set` routes through the scene loader's OWN apply fns
 //! (`applySprite` → `addSprite` renderer tracking, `applyCamera`'s
-//! inline-tag mapping, `applyTilemap`'s asset decode), and `remove`
-//! through the engine's typed teardown channels (`removeSprite` /
-//! `removeShape` / `removeTilemap`), so a script write is
+//! inline-tag mapping, `applyTilemap`'s asset decode, `applyEmitter`'s
+//! `drive_particles` opt-in), and `remove` through the engine's typed
+//! teardown channels (`removeSprite` / `removeShape` / `removeTilemap`,
+//! and the particle side-table release for `Emitter`), so a script write is
 //! indistinguishable from a scene author. The loader's registry-
-//! precedence gates carry over too — `Tilemap`/`Camera`/`Image` defer
+//! precedence gates carry over too — `Tilemap`/`Camera`/`Image`/`Emitter` defer
 //! to a project-registered component of the same name, `Sprite`/`Shape`
 //! stay built-in — and `contract/labelle_script.h` tabulates the
 //! per-name `get` caveats (renderer-handle fields are omitted; `Camera`
@@ -235,6 +237,10 @@ const std = @import("std");
 const core = @import("labelle-core");
 const jsonc = @import("jsonc");
 const component_apply = @import("jsonc/component_apply.zig");
+/// Engine built-in scene components — the one source of truth (#881).
+/// `builtin_comps` below is DERIVED from it (#886), never hand-listed.
+const builtins = @import("scene").builtins;
+const Builtin = builtins.Builtin;
 /// The plugin-command channel's shared pieces (#758): `max_response_len`
 /// sizes the response store below, and the mixin `Result` is what
 /// `editorPluginCommandOut` hands back through the vtable impl.
@@ -609,8 +615,9 @@ pub export fn labelle_prefab_spawn(
 /// Set component `name` on entity `id` from a JSON object — the general
 /// serde seam over the game's OWN `ComponentRegistry`, plus everything
 /// scenes can author: the built-in `Position` (routed through
-/// `setPosition` so render dirty-tracking fires) and the five scene
-/// built-ins `Sprite`/`Shape`/`Tilemap`/`Camera`/`Image`, dispatched
+/// `setPosition` so render dirty-tracking fires) and the scene
+/// built-ins (`scene.builtins.Builtin`: `Sprite`/`Shape`/`Tilemap`/
+/// `Camera`/`Image`/`Emitter`), dispatched
 /// through the scene loader's own apply fns with its registry-
 /// precedence gates (module doc, "Component name space"). Unlike
 /// `editor_set_component` — deliberately allowlisted to the vetted
@@ -885,7 +892,7 @@ pub export fn labelle_component_remove(id: u64, name_ptr: [*]const u8, name_len:
 /// bound. An unknown component name yields the valid empty result `[]`
 /// (required = 2). Names resolve over the same space as the component
 /// ops — the registry, `Position`, and the scene built-ins (`Sprite`/
-/// `Shape`/`Tilemap`/`Camera`/`Image`, with the same registry-precedence
+/// `Shape`/`Tilemap`/`Camera`/`Image`/`Emitter`, with the same registry-precedence
 /// gates).
 ///
 /// Writing fills `out` up to `out_cap`, ending at the last whole id, so
@@ -1340,24 +1347,29 @@ fn Holder(comptime GP: type) type {
             return @hasDecl(Components, "has") and Components.has(comp_name);
         }
 
-        const BuiltinComp = struct { name: []const u8, T: type };
-        /// The five scene BUILT-INS (`jsonc/component_apply.zig`'s
-        /// dedicated branches), with the scene loader's exact
-        /// precedence: `Sprite`/`Shape` are unconditional (they shadow
-        /// a same-named registry entry in the scene path too);
-        /// `Tilemap`/`Camera`/`Image` are compiled out when the project
-        /// registered its own component of that name — the mirror of
-        /// the loader's `!Components.has(…)` gates (and game.zig's
-        /// `camera_is_builtin`), so the registry loop below owns the
-        /// name exactly when the scene's generic dispatch would.
+        const BuiltinComp = struct { b: Builtin, name: []const u8, T: type };
+        /// The scene BUILT-INS, derived from `scene.builtins.Builtin`
+        /// (#886) — never a hand-maintained list: a literal list here
+        /// once forgot `Emitter`, so `labelle_component_set("Emitter", …)`
+        /// fell through to the registry loop and returned -1 while every
+        /// other authoring channel accepted it. Precedence is the
+        /// enum's `shadowable` rule, i.e. the scene loader's: `Sprite` /
+        /// `Shape` are unconditional (they shadow a same-named registry
+        /// entry in the scene path too); the shadowable ones are
+        /// compiled out when the project registered its own component
+        /// of that name — the mirror of the loader's
+        /// `!Components.has(…)` gates (and game.zig's
+        /// `camera_is_builtin` / `emitter_is_builtin`), so the registry
+        /// loop owns the name exactly when the scene's generic dispatch
+        /// would. Per-built-in behaviour (apply fn, typed teardown, get
+        /// serialization) lives in EXHAUSTIVE switches over `Builtin`
+        /// below, so a new tag fails to compile until it is handled.
         const builtin_comps: []const BuiltinComp = blk: {
-            var list: []const BuiltinComp = &.{
-                .{ .name = "Sprite", .T = G.SpriteComp },
-                .{ .name = "Shape", .T = G.ShapeComp },
-            };
-            if (!registryHas("Tilemap")) list = list ++ &[_]BuiltinComp{.{ .name = "Tilemap", .T = G.TilemapComp }};
-            if (!registryHas("Camera")) list = list ++ &[_]BuiltinComp{.{ .name = "Camera", .T = G.CameraComp }};
-            if (!registryHas("Image")) list = list ++ &[_]BuiltinComp{.{ .name = "Image", .T = G.ImageComp }};
+            var list: []const BuiltinComp = &.{};
+            for (std.enums.values(Builtin)) |b| {
+                if (b.shadowable() and registryHas(@tagName(b))) continue;
+                list = list ++ &[_]BuiltinComp{.{ .b = b, .name = @tagName(b), .T = b.Type(G) }};
+            }
             break :blk list;
         };
 
@@ -1498,7 +1510,7 @@ fn Holder(comptime GP: type) type {
             // from a scene author's.
             inline for (builtin_comps) |spec| {
                 if (std.mem.eql(u8, name, spec.name)) {
-                    return setBuiltinComponent(spec.name, ent, json);
+                    return setBuiltinComponent(spec.b, ent, json);
                 }
             }
             const comp_names = comptime Components.names();
@@ -1537,7 +1549,7 @@ fn Holder(comptime GP: type) type {
         /// other slices land in `componentAlloc()`), so nothing escapes
         /// it. -1 on parse/deserialize failure leaves the entity
         /// untouched: the apply is all-or-nothing.
-        fn setBuiltinComponent(comptime comp_name: []const u8, ent: Entity, json: []const u8) i32 {
+        fn setBuiltinComponent(comptime b: Builtin, ent: Entity, json: []const u8) i32 {
             var arena = std.heap.ArenaAllocator.init(game.allocator);
             defer arena.deinit();
             var parser = jsonc.JsoncParser.init(arena.allocator(), json);
@@ -1550,17 +1562,47 @@ fn Holder(comptime GP: type) type {
             // end-of-document check refuses the same shapes on the
             // registry path by itself.
             if (parser.pos != json.len) return -1;
-            const applied = if (comptime std.mem.eql(u8, comp_name, "Sprite"))
-                Apply.applySprite(game, ent, value)
-            else if (comptime std.mem.eql(u8, comp_name, "Shape"))
-                Apply.applyShape(game, ent, value)
-            else if (comptime std.mem.eql(u8, comp_name, "Tilemap"))
-                Apply.applyTilemap(game, ent, value)
-            else if (comptime std.mem.eql(u8, comp_name, "Camera"))
-                Apply.applyCamera(game, ent, value)
-            else
-                Apply.applyImage(game, ent, value);
+            // EXHAUSTIVE over `Builtin` (#886): a new built-in with no
+            // apply branch here is a compile error, not a silent -1.
+            const applied = switch (b) {
+                .Sprite => Apply.applySprite(game, ent, value),
+                .Shape => Apply.applyShape(game, ent, value),
+                .Tilemap => Apply.applyTilemap(game, ent, value),
+                .Camera => Apply.applyCamera(game, ent, value),
+                .Image => Apply.applyImage(game, ent, value),
+                .Emitter => emitter: {
+                    // The scene's own apply (which also turns on
+                    // `drive_particles`), then resync the side table: a
+                    // live `ParticleSystem` snapshots its config once,
+                    // so replacing the component alone would keep the
+                    // OLD emitter running (prefab_refresh's
+                    // `syncSideTable`, same reason).
+                    const ok = Apply.applyEmitter(game, ent, value);
+                    if (ok) game.refreshParticleSystem(ent);
+                    break :emitter ok;
+                },
+            };
             return if (applied) 0 else -1;
+        }
+
+        /// JSON view of a built-in, shared by `component_get` and the
+        /// batch write-back so both serialize identically. EXHAUSTIVE
+        /// over `Builtin` (#886).
+        fn builtinJsonInto(comptime b: Builtin, comp: anytype, out: []u8) usize {
+            return switch (b) {
+                // `tag` is an inline `[16:0]u8`; serialize the STRING
+                // view so the output round-trips through the apply
+                // branch's `setTagSlice` (the generic path would emit a
+                // NUL-padded byte array).
+                .Camera => stringifyInto(.{
+                    .zoom = comp.zoom,
+                    .viewport = comp.viewport,
+                    .tag = comp.tagSlice(),
+                }, out),
+                // Omit renderer-handle fields (gfx `Sprite.texture`) —
+                // GET mirrors what a scene could have authored.
+                .Sprite, .Shape, .Tilemap, .Image, .Emitter => stringifyFilteredInto(comp, out),
+            };
         }
 
         fn componentGetImpl(id: u64, name: []const u8, out: []u8) usize {
@@ -1577,20 +1619,7 @@ fn Holder(comptime GP: type) type {
             inline for (builtin_comps) |spec| {
                 if (std.mem.eql(u8, name, spec.name)) {
                     const comp = game.getComponent(ent, spec.T) orelse return 0;
-                    if (comptime std.mem.eql(u8, spec.name, "Camera")) {
-                        // `tag` is an inline `[16:0]u8`; serialize the
-                        // STRING view so the output round-trips through
-                        // the apply branch's `setTagSlice` (the generic
-                        // path would emit a NUL-padded byte array).
-                        return stringifyInto(.{
-                            .zoom = comp.zoom,
-                            .viewport = comp.viewport,
-                            .tag = comp.tagSlice(),
-                        }, out);
-                    }
-                    // Omit renderer-handle fields (gfx `Sprite.texture`)
-                    // — GET mirrors what a scene could have authored.
-                    return stringifyFilteredInto(comp.*, out);
+                    return builtinJsonInto(spec.b, comp.*, out);
                 }
             }
             const comp_names = comptime Components.names();
@@ -1739,17 +1768,21 @@ fn Holder(comptime GP: type) type {
             inline for (builtin_comps) |spec| {
                 if (std.mem.eql(u8, name, spec.name)) {
                     if (!game.hasComponent(ent, spec.T)) return 0;
-                    if (comptime std.mem.eql(u8, spec.name, "Sprite")) {
-                        game.removeSprite(ent);
-                    } else if (comptime std.mem.eql(u8, spec.name, "Shape")) {
-                        game.removeShape(ent);
-                    } else if (comptime std.mem.eql(u8, spec.name, "Tilemap")) {
-                        game.removeTilemap(ent);
-                    } else {
-                        // Camera / Image are plain data components; the
-                        // generic remove (with its onRemove gate) is the
-                        // whole teardown.
-                        game.removeComponent(ent, spec.T);
+                    // EXHAUSTIVE over `Builtin` (#886).
+                    switch (spec.b) {
+                        .Sprite => game.removeSprite(ent),
+                        .Shape => game.removeShape(ent),
+                        .Tilemap => game.removeTilemap(ent),
+                        // Plain data components; the generic remove
+                        // (with its onRemove gate) is the whole teardown.
+                        .Camera, .Image => game.removeComponent(ent, spec.T),
+                        // Release the live `ParticleSystem` too — ghost
+                        // pools are otherwise only reaped by the tick,
+                        // which doesn't run while hard-paused.
+                        .Emitter => {
+                            game.removeComponent(ent, spec.T);
+                            game.refreshParticleSystem(ent);
+                        },
                     }
                     return 0;
                 }
@@ -2326,16 +2359,9 @@ fn Holder(comptime GP: type) type {
                     // renderer handles omitted), then route it through the
                     // scene apply machinery — the per-entity set's path.
                     var jbuf: [4096]u8 = undefined;
-                    const n = if (comptime std.mem.eql(u8, spec.name, "Camera"))
-                        stringifyInto(.{
-                            .zoom = comp.zoom,
-                            .viewport = comp.viewport,
-                            .tag = comp.tagSlice(),
-                        }, &jbuf)
-                    else
-                        stringifyFilteredInto(comp, &jbuf);
+                    const n = builtinJsonInto(spec.b, comp, &jbuf);
                     if (n == 0 or n > jbuf.len) return false;
-                    return setBuiltinComponent(spec.name, ent, jbuf[0..n]) == 0;
+                    return setBuiltinComponent(spec.b, ent, jbuf[0..n]) == 0;
                 }
             }
             const comp_names = comptime Components.names();
