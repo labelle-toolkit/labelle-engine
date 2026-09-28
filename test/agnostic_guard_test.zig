@@ -208,12 +208,16 @@ fn stripPrefix(run: []const u8) ?[]const u8 {
 /// whole. A run that opens with one lowercase letter and then two or more
 /// uppercase ones is a lowercase-leading acronym (`iOS`, `iOSConfig`): no
 /// boundary after its first letter, so it splits as `iOS|Config`, not
-/// `i|OS|Config`. Only the first piece of a run can open with a lowercase
-/// letter (every later piece starts at an uppercase one), so `start` is the
-/// run's start whenever that rule can fire.
+/// `i|OS|Config`. The same acronym embedded after a lowercase prefix
+/// (`getiOSConfig`, `isiOSApp`) opens its own piece: a boundary falls before
+/// an `i` that follows a lowercase letter and precedes two uppercase ones,
+/// so the run splits as `get|iOS|Config`. That `i` is the only lowercase
+/// letter that starts a piece; every other piece starts at an uppercase one.
 fn splitsBefore(text: []const u8, start: usize, i: usize) bool {
     const prev = text[i - 1];
     const cur = text[i];
+    if (cur == 'i' and std.ascii.isLower(prev) and i + 2 < text.len and
+        std.ascii.isUpper(text[i + 1]) and std.ascii.isUpper(text[i + 2])) return true;
     if (!std.ascii.isUpper(cur)) return false;
     if (std.ascii.isLower(prev)) {
         const leading_acronym = i == start + 1 and i + 1 < text.len and std.ascii.isUpper(text[i + 1]);
@@ -386,6 +390,10 @@ test "the tokenizer keeps lowercase-leading acronyms whole" {
     try expectWords("iOSConfig", &.{"ios"});
     try expectWords("iosConfig", &.{"ios"});
     try expectWords("const iOSConfig = struct {};", &.{"ios"});
+    // Embedded after a lowercase prefix: `get|iOS|Config`, `is|iOS|App`.
+    try expectWords("getiOSConfig isiOSApp hasiOS", &.{ "ios", "ios", "ios" });
+    // An `i` ending an ordinary word before an acronym stays clean.
+    try expectWords("apiURL multiIO", &.{});
     // A one-letter lowercase prefix before a single capital is ordinary camelCase.
     try expectWords("getSDLPath aSdl", &.{ "sdl", "sdl" });
     // Neither an all-lowercase run nor a capitalised `Io` is the platform.
