@@ -6,7 +6,6 @@
 /// and `unloadCurrentScene` reach `emitHook` / `emitEngineEvent` /
 /// `teardownActiveScene` / `destroyEntityOnly` through the `Game`
 /// re-exports.
-
 /// Returns the scene-runtime mixin for a given Game type.
 pub fn Mixin(comptime Game: type) type {
     const Entity = Game.EntityType;
@@ -100,6 +99,11 @@ pub fn Mixin(comptime Game: type) type {
             // Scene deinit destroys non-persistent entities (which untracks them
             // from the renderer). Persistent entities remain in ECS + renderer.
             self.teardownActiveScene();
+
+            // The world's contents no longer come from a loaded save —
+            // whatever rebuilds it next (scene swap, hot-reload rerun)
+            // belongs to the active scene (engine#896).
+            self.clearLoadedSaveSceneName();
         }
 
         /// Store a type-erased active scene. Called by sceneLoaderFn to hand

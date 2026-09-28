@@ -169,6 +169,10 @@ pub fn Mixin(comptime Game: type) type {
             // active scene's own list. (#630)
             self.scene_entities.clearRetainingCapacity();
             self.clearActiveSceneEntities();
+
+            // The rebuilt world has no loaded-save provenance (engine#896);
+            // the load path re-installs it after this reset.
+            self.clearLoadedSaveSceneName();
         }
 
         pub fn teardownActiveScene(self: *Game) void {

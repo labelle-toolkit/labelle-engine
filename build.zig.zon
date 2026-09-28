@@ -1,7 +1,7 @@
 .{
     .fingerprint = 0xe8a81a8dc7f48c87,
     .name = .engine,
-    .version = "3.2.0",
+    .version = "3.4.2",
     .minimum_zig_version = "0.16.0",
     .dependencies = .{
         // Requires labelle-core >= v1.27.0 — core's `ChildrenComponent` is now
@@ -104,5 +104,9 @@
         // ships with the package — native-compiled language plugins bind
         // against it (#737).
         "contract",
+        // The persistent-blob storage ABI (request kinds, status codes, list
+        // payload) that platform bindings implement. `src/storage/web.zig`
+        // points implementers at it, so the package must carry it.
+        "docs/persistent-blobs.md",
     },
 }

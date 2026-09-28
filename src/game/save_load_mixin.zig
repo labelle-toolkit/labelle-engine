@@ -28,6 +28,8 @@ pub fn Mixin(comptime Game: type) type {
     const RenderGateMixin = render_gate.Mixin(Game);
 
     return struct {
+        pub const serializeGameState = SaveMixin.serializeGameState;
+        pub const deserializeGameState = LoadMixin.deserializeGameState;
         pub const saveGameState = SaveMixin.saveGameState;
         pub const loadGameState = LoadMixin.loadGameState;
         pub const armPostLoadRenderGate = RenderGateMixin.armPostLoadRenderGate;

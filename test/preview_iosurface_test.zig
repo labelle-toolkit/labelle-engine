@@ -44,7 +44,7 @@ fn nowMs() i64 {
     // CLOCK_MONOTONIC == 6 on macOS, 1 on Linux. Both branches valid
     // because the routine is only used inside macOS-gated tests; the
     // Linux value is here purely so the file compiles cross-platform.
-    const CLOCK_MONOTONIC: c_int = if (builtin.os.tag == .macos) 6 else 1;
+    const CLOCK_MONOTONIC: c_int = if (builtin.os.tag.isDarwin()) 6 else 1;
     var ts: Timespec = undefined;
     _ = clock_gettime(CLOCK_MONOTONIC, &ts);
     return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);

@@ -1,21 +1,21 @@
-/// Out-of-band screenshot capture request, surfaced to the generated
-/// `main.zig` so it can call the active backend's `takeScreenshot`
-/// path once the right frame arrives.
-///
-/// The CLI (`labelle run --screenshot=<path> [--after=<dur>]`) sets the
-/// `LABELLE_SCREENSHOT_PATH` (+ optional `LABELLE_SCREENSHOT_AFTER_SEC`)
-/// env vars on the spawned game process; this module reads them at
-/// startup. No flag → `parse()` returns `null` and the codegen-emitted
-/// runtime branch optimizes away.
-///
-/// Why an env var, not a CLI argv pass-through: the assembler-generated
-/// `main.zig` already owns argv parsing for `--preview-mode <host:port>`
-/// and ad-hoc game args. A new argv flag would mean either threading
-/// the parse through every generator template (raylib desktop/wasm,
-/// sokol desktop/mobile, Android, iOS) or stealing a bare positional
-/// token that the user might also want to forward to their game.
-/// `getenv` lives outside the argv parser entirely; the template hole
-/// is one runtime branch.
+//! Out-of-band screenshot capture request, surfaced to the generated
+//! `main.zig` so it can call the active backend's `takeScreenshot`
+//! path once the right frame arrives.
+//!
+//! The CLI (`labelle run --screenshot=<path> [--after=<dur>]`) sets the
+//! `LABELLE_SCREENSHOT_PATH` (+ optional `LABELLE_SCREENSHOT_AFTER_SEC`)
+//! env vars on the spawned game process; this module reads them at
+//! startup. No flag → `parse()` returns `null` and the codegen-emitted
+//! runtime branch optimizes away.
+//!
+//! Why an env var, not a CLI argv pass-through: the assembler-generated
+//! `main.zig` already owns argv parsing for `--preview-mode <host:port>`
+//! and ad-hoc game args. A new argv flag would mean either threading
+//! the parse through every generator template (raylib desktop/wasm,
+//! sokol desktop/mobile, Android) or stealing a bare positional
+//! token that the user might also want to forward to their game.
+//! `getenv` lives outside the argv parser entirely; the template hole
+//! is one runtime branch.
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -36,17 +36,35 @@ extern "c" fn getenv(name: [*:0]const u8) ?[*:0]const u8;
 /// replacement (matches what `preview_mode_test`/`preview_iosurface_test`
 /// already use elsewhere in the engine).
 const Timespec = extern struct { sec: i64, nsec: i64 };
-const CLOCK_MONOTONIC: c_int = 6; // macOS value; Linux is 1 — picked
-// up below at runtime via `posix.CLOCK.MONOTONIC` when available.
 extern "c" fn clock_gettime(clk: c_int, tp: *Timespec) c_int;
 
-pub fn nowNs() i128 {
-    const clk_id: c_int = switch (builtin.os.tag) {
-        .macos, .ios, .watchos, .tvos => 6, // _CLOCK_MONOTONIC
-        .linux => 1, // CLOCK_MONOTONIC
-        .windows => 1, // unused — Windows path below
-        else => 1,
+/// CLOCK_MONOTONIC for the compilation target, taken from `std.c` (which
+/// resolves it per OS: 6 on Darwin, 1 on Linux/Android/emscripten) rather
+/// than a hand-written per-OS table. Targets where `std.c` has no clock id
+/// (Windows) keep the previous fallback of 1.
+pub const CLOCK_MONOTONIC: c_int = if (@typeInfo(std.c.clockid_t) == .@"enum" and
+    @hasField(std.c.clockid_t, "MONOTONIC"))
+    @intCast(@intFromEnum(std.c.clockid_t.MONOTONIC))
+else
+    1;
+
+// The std.c value must match the values the old hand-written table used
+// on the supported desktop/mobile targets. `zig build check-socket-targets`
+// analyzes this file for macOS, Windows, Android and several Linux ABIs.
+comptime {
+    const expected: ?c_int = switch (builtin.os.tag) {
+        .macos => 6, // Darwin _CLOCK_MONOTONIC
+        .linux => 1, // Linux (glibc, musl, Bionic) CLOCK_MONOTONIC
+        .windows => 1,
+        else => null,
     };
+    if (expected) |e| {
+        if (CLOCK_MONOTONIC != e) @compileError("screenshot_request: unexpected CLOCK_MONOTONIC for this target");
+    }
+}
+
+pub fn nowNs() i128 {
+    const clk_id: c_int = CLOCK_MONOTONIC;
     // Zero-initialize so a `clock_gettime` failure can't yield garbage
     // ns (uninitialized stack would let the assembler frame loop's
     // `after_sec` check fire at random times — never, or immediately).

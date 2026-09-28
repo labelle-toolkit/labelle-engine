@@ -291,6 +291,25 @@ pub const AssetWorker = struct {
         }
     }
 
+    /// Decode AT MOST ONE pending request on the calling thread and
+    /// publish its result. Returns whether it decoded anything. This is
+    /// the budgeted main-thread path (#877): `AssetCatalog.pump` calls it
+    /// a bounded number of times per frame, so a scene swap to several
+    /// assets spreads its decodes across frames instead of freezing on
+    /// all of them at once, which is what `runOnce` inside `acquire` did.
+    ///
+    /// Same result-ring check as `runOnce`: a full ring leaves the
+    /// request queued rather than dequeueing work it cannot publish.
+    ///
+    /// SAFETY: same as `runOnce`: never while the background thread runs.
+    pub fn runOne(self: *AssetWorker) bool {
+        std.debug.assert(self.thread == null);
+        if (self.results.isFull()) return false;
+        const request = self.requests.tryDequeue() orelse return false;
+        decodeAndPublish(self, request, .sync);
+        return true;
+    }
+
     /// Decode one request, push the result onto the result ring.
     /// Extracted from the old `runLoop` body so `runOnce` (the
     /// single-threaded drain) and the worker thread share the exact

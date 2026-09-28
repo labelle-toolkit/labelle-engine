@@ -66,6 +66,47 @@ pub fn build(b: *std.Build) void {
 
     const test_step = b.step("test", "Run engine tests");
 
+    // labelle-engine#902: src/ must not name platforms, stores, packages or
+    // backends. Same guard as the CLI core's (RFC #406).
+    addAgnosticGuard(b, test_step, optimize);
+
+    const storage_module = b.createModule(.{
+        .root_source_file = b.path("src/storage.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "labelle-core", .module = core_module }},
+    });
+    const storage_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("test/storage_test.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "storage", .module = storage_module }},
+    }) });
+    const storage_run = b.addRunArtifact(storage_tests);
+    test_step.dependOn(&storage_run.step);
+    b.step("test-storage", "Test persistent blob storage").dependOn(&storage_run.step);
+
+    // #899: the preview socket shims take errno and the fcntl/errno
+    // constants from `std.c`, which resolves them per target, and
+    // `screenshot_request.nowNs` takes CLOCK_MONOTONIC the same way. This
+    // step compiles both (no link) for targets the host never builds for,
+    // so a per-OS/per-arch mistake fails in CI instead of on a device:
+    // Linux ABIs whose flag values differ from asm-generic (MIPS
+    // O_NONBLOCK=128, SPARC 0x4000), PowerPC, Android, macOS and Windows.
+    const check_socket_targets_step = b.step("check-socket-targets", "Compile the preview socket shims and the monotonic clock for macOS, Windows, Android and several Linux ABIs (no link)");
+    const socket_check_queries = [_]std.Target.Query{
+        .{ .cpu_arch = .aarch64, .os_tag = .macos },
+        .{ .cpu_arch = .x86_64, .os_tag = .windows, .abi = .gnu },
+        .{ .cpu_arch = .aarch64, .os_tag = .linux, .abi = .android },
+        .{ .cpu_arch = .x86_64, .os_tag = .linux, .abi = .gnu },
+        .{ .cpu_arch = .powerpc64le, .os_tag = .linux, .abi = .gnu },
+        .{ .cpu_arch = .mips, .os_tag = .linux, .abi = .gnueabihf },
+        .{ .cpu_arch = .sparc64, .os_tag = .linux, .abi = .gnu },
+    };
+    for (socket_check_queries) |query| {
+        check_socket_targets_step.dependOn(&addSocketTargetCheck(b, query, optimize).step);
+    }
+
     // The definition package remains independent. Verify its frame slices
     // against the existing engine player before migrating playback ownership.
     const animation_module = b.dependency("animation", .{ .target = target, .optimize = optimize }).module("animation");
@@ -133,7 +174,9 @@ pub fn build(b: *std.Build) void {
         // became a per-frame positional error.
         "test/atlas_source_rect_test.zig",
         "test/save_policy_test.zig",
+        "test/storage_serialization_test.zig",
         "test/save_load_mixin_test.zig",
+        "test/save_scene_after_menu_load_test.zig",
         "test/jsonc/bridge_leak_test.zig",
         "test/jsonc/nested_lifecycle_test.zig",
         "test/jsonc/target_overrides_test.zig",
@@ -474,6 +517,8 @@ pub fn build(b: *std.Build) void {
 
     const legacy_animation_step = b.step("test-animation-legacy", "Run all animation package and engine adapter tests");
     legacy_animation_step.dependOn(&run_animation_tests.step);
+    const save_regressions = b.step("test-save-storage", "Test storage and engine save/load integration");
+    save_regressions.dependOn(&storage_run.step);
     const shader_regressions = b.step("test-shader-regressions", "Execute shader, scene, prefab, and material regressions");
     for (test_files) |test_file| {
         const t = b.addTest(.{
@@ -491,6 +536,7 @@ pub fn build(b: *std.Build) void {
         });
         const run = b.addRunArtifact(t);
         test_step.dependOn(&run.step);
+        if (std.mem.startsWith(u8, test_file, "test/save_") or std.mem.eql(u8, test_file, "test/storage_serialization_test.zig")) save_regressions.dependOn(&run.step);
         for ([_][]const u8{ "test/shader_material_test.zig", "test/scene_test.zig", "test/scene_lifecycle_events_test.zig", "test/scene_teardown_test.zig", "test/prefab_refresh_test.zig", "test/jsonc/deserializer_test.zig", "test/set_material_test.zig" }) |related| {
             if (std.mem.eql(u8, test_file, related)) shader_regressions.dependOn(&run.step);
         }
@@ -768,4 +814,62 @@ pub fn build(b: *std.Build) void {
         spec_step.dependOn(&run_spec_tests.step);
         test_step.dependOn(&run_spec_tests.step);
     }
+}
+
+/// Run the platform-agnosticism guard (labelle-engine#902) as part of
+/// `zig build test`, and on its own as `zig build test-guard`. It runs on the
+/// host with the repository root as its working directory, because it walks
+/// `src/` at test time; `test/agnostic_guard_test.zig` fails rather than
+/// passing vacuously if that walk misses the engine's root file.
+fn addAgnosticGuard(b: *std.Build, test_step: *std.Build.Step, optimize: std.builtin.OptimizeMode) void {
+    const guard_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("test/agnostic_guard_test.zig"),
+            .target = b.graph.host,
+            .optimize = optimize,
+        }),
+    });
+    const guard_run = b.addRunArtifact(guard_tests);
+    guard_run.setCwd(b.path("."));
+    // The walk reads src/ at run time, which the test binary's cache inputs
+    // do not cover: without this, a cached result (local, or a restored CI
+    // cache) would skip the walk and let a new forbidden name through.
+    guard_run.has_side_effects = true;
+    test_step.dependOn(&guard_run.step);
+    b.step("test-guard", "Check src/ for platform, store, package and backend names (labelle-engine#902)").dependOn(&guard_run.step);
+}
+
+/// #899: an executable rooted at `test/cross_target_check.zig` that
+/// references every preview socket shim and `screenshot_request.nowNs`,
+/// built for `query`. Callers depend on its step, which compiles it
+/// without linking.
+fn addSocketTargetCheck(
+    b: *std.Build,
+    query: std.Target.Query,
+    optimize: std.builtin.OptimizeMode,
+) *std.Build.Step.Compile {
+    const check_target = b.resolveTargetQuery(query);
+    return b.addExecutable(.{
+        .name = "cross_target_check",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("test/cross_target_check.zig"),
+            .target = check_target,
+            .optimize = optimize,
+            .link_libc = true,
+            .imports = &.{
+                .{ .name = "preview_socket", .module = b.createModule(.{
+                    .root_source_file = b.path("src/preview/socket.zig"),
+                    .target = check_target,
+                    .optimize = optimize,
+                    .link_libc = true,
+                }) },
+                .{ .name = "screenshot_request", .module = b.createModule(.{
+                    .root_source_file = b.path("src/screenshot_request.zig"),
+                    .target = check_target,
+                    .optimize = optimize,
+                    .link_libc = true,
+                }) },
+            },
+        }),
+    });
 }
