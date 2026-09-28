@@ -94,7 +94,7 @@ pub fn build(b: *std.Build) void {
     const ios_sdk = b.option([]const u8, "ios-sdk", "iPhoneSimulator SDK path; makes `check-ios` link against it");
     const check_ios_step = b.step("check-ios", "Compile the preview socket shims for aarch64-ios-simulator (links too with -Dios-sdk)");
     const ios_sim_target = b.resolveTargetQuery(.{ .cpu_arch = .aarch64, .os_tag = .ios, .abi = .simulator });
-    const ios_socket_check = b.addTest(.{
+    const ios_socket_check = b.addExecutable(.{
         .name = "preview_socket_ios_check",
         .root_module = b.createModule(.{
             .root_source_file = b.path("test/preview_socket_ios_check.zig"),
