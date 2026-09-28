@@ -239,6 +239,24 @@ pub fn ComponentApply(comptime GameType: type, comptime Components: type) type {
             }
         }
 
+        /// True iff `applyComponent` would attach something for `name`:
+        /// an engine built-in it special-cases, or a name in the
+        /// `Components` registry. Everything else no-ops there (RFC #596
+        /// Axis 4), so the scene loader uses this to skip spawning the
+        /// entity-bearing arrays of an unknown component — its nested
+        /// entities have no component to patch their ids into and could
+        /// only ever be ghosts (#808).
+        pub fn isKnownComponent(name: []const u8) bool {
+            const builtins = [_][]const u8{ "Position", "Sprite", "Shape", "Tilemap", "Camera", "Image", "Emitter" };
+            for (builtins) |b| {
+                if (std.mem.eql(u8, name, b)) return true;
+            }
+            inline for (comptime Components.names()) |n| {
+                if (std.mem.eql(u8, name, n)) return true;
+            }
+            return false;
+        }
+
         // ── Per-built-in apply fns (shared with the script contract) ──
         //
         // Each targets the ENGINE built-in type unconditionally; the

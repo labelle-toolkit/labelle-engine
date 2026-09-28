@@ -45,6 +45,23 @@ pub fn NestedSpawn(comptime GameType: type, comptime Components: type, comptime 
     const OnReadyHelpers = on_ready_mod.OnReady(GameType, Components);
 
     return struct {
+        /// True iff any array field of `obj` holds an entity-like item.
+        /// Every such item is §B2-validated first (`error.InvalidFormat`
+        /// on `{prefab + children}`), matching the spawn path below.
+        fn carriesEntityLike(game: *GameType, obj: Value.Object) Self.LoadEntityError!bool {
+            var found = false;
+            for (obj.entries) |entry| {
+                const arr = entry.value.asArray() orelse continue;
+                for (arr.items) |item| {
+                    if (!ApplyHelpers.isEntityLike(item)) continue;
+                    found = true;
+                    const item_obj = item.asObject() orelse continue;
+                    try uf.rejectB2Violation(item_obj, game.log, "component-nested entity");
+                }
+            }
+            return found;
+        }
+
         /// Spawn entity-like objects nested inside a component's
         /// fields, collect their entity IDs, and patch them back
         /// into the component's `[]const u64` fields.
@@ -65,6 +82,19 @@ pub fn NestedSpawn(comptime GameType: type, comptime Components: type, comptime 
             targets: ?*to.TargetCtx,
         ) Self.LoadEntityError!void {
             const obj = comp_value.asObject() orelse return;
+
+            // #808: an unknown component no-ops in `applyComponent`, so
+            // entities nested in its arrays would have no field to patch
+            // their ids into — ghosts, tracked as scene entities under a
+            // component that was never added. Skip the whole value BEFORE
+            // spawning anything, and say so when it actually dropped
+            // entity-like items. The RFC #560 §B2 format gate still runs
+            // on the skipped items: a malformed entry is a hard error
+            // whatever component carries it.
+            if (!ApplyHelpers.isKnownComponent(comp_name)) {
+                if (try carriesEntityLike(game, obj)) uf.warnUnknownComponentNested(game.log, comp_name);
+                return;
+            }
 
             // Arena for deep-merged override component values
             // (RFC #562) — mirrors the block in `loadEntityInternal`.
