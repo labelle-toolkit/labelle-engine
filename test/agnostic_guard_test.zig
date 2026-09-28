@@ -209,15 +209,16 @@ fn stripPrefix(run: []const u8) ?[]const u8 {
 /// uppercase ones is a lowercase-leading acronym (`iOS`, `iOSConfig`): no
 /// boundary after its first letter, so it splits as `iOS|Config`, not
 /// `i|OS|Config`. The same acronym embedded after a lowercase prefix
-/// (`getiOSConfig`, `isiOSApp`) opens its own piece: a boundary falls before
-/// an `i` that follows a lowercase letter and precedes two uppercase ones,
-/// so the run splits as `get|iOS|Config`. That `i` is the only lowercase
+/// (`getiOSConfig`, `getiOsConfig`) opens its own piece: a boundary falls
+/// before an `i` that follows a lowercase letter and precedes an uppercase
+/// one, so the run splits as `get|iOS|Config` (or `get|i|Os|Config`, which
+/// the tokenizer's joins read back as `iOs`). That `i` is the only lowercase
 /// letter that starts a piece; every other piece starts at an uppercase one.
 fn splitsBefore(text: []const u8, start: usize, i: usize) bool {
     const prev = text[i - 1];
     const cur = text[i];
-    if (cur == 'i' and std.ascii.isLower(prev) and i + 2 < text.len and
-        std.ascii.isUpper(text[i + 1]) and std.ascii.isUpper(text[i + 2])) return true;
+    if (cur == 'i' and std.ascii.isLower(prev) and i + 1 < text.len and
+        std.ascii.isUpper(text[i + 1])) return true;
     if (!std.ascii.isUpper(cur)) return false;
     if (std.ascii.isLower(prev)) {
         const leading_acronym = i == start + 1 and i + 1 < text.len and std.ascii.isUpper(text[i + 1]);
@@ -392,6 +393,7 @@ test "the tokenizer keeps lowercase-leading acronyms whole" {
     try expectWords("const iOSConfig = struct {};", &.{"ios"});
     // Embedded after a lowercase prefix: `get|iOS|Config`, `is|iOS|App`.
     try expectWords("getiOSConfig isiOSApp hasiOS", &.{ "ios", "ios", "ios" });
+    try expectWords("getiOsConfig hasiOs", &.{ "ios", "ios" });
     // An `i` ending an ordinary word before an acronym stays clean.
     try expectWords("apiURL multiIO", &.{});
     // A one-letter lowercase prefix before a single capital is ordinary camelCase.
