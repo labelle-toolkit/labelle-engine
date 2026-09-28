@@ -1,9 +1,8 @@
-//! #899: root of `zig build check-ios`. Built for `aarch64-ios-simulator`
-//! and never run. `main` takes the address of every POSIX shim, which makes
-//! Zig analyze their bodies and the comptime constant asserts in
-//! `src/preview/socket.zig` for an Apple mobile target. A non-Darwin branch
-//! leaking onto iOS then fails the build. With `-Dios-sdk` the executable is
-//! also linked, which catches a wrong errno symbol.
+//! #899: root of `zig build check-ios` and `zig build check-socket-targets`.
+//! Built for targets the host does not run and never executed. `main` takes
+//! the address of every POSIX shim, which makes Zig analyze their bodies for
+//! that target. With `check-ios -Dios-sdk=…` the executable is also linked
+//! against the iOS simulator SDK, which catches a wrong errno symbol.
 //!
 //! This is an executable, not a `test` binary, with stack tracing, the
 //! segfault handler and the full panic handler switched off. The test runner

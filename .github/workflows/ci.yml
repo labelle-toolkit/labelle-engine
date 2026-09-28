@@ -6,6 +6,9 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+
 jobs:
   build-and-test:
     strategy:
@@ -21,8 +24,9 @@ jobs:
 
       - name: Checkout sibling dependencies
         shell: bash
+        env:
+          BR: ${{ github.head_ref || github.ref_name }}
         run: |
-          BR="${{ github.head_ref || github.ref_name }}"
           git clone --depth 1 --branch "$BR" https://github.com/labelle-toolkit/labelle-core.git ../labelle-core \
             || git clone --depth 1 --branch main https://github.com/labelle-toolkit/labelle-core.git ../labelle-core
 
@@ -49,11 +53,14 @@ jobs:
       - name: Test animation playback and engine adapters
         run: zig build test-animation-legacy -j2 --summary all
 
-      # #899: the preview socket shims must take the Darwin branch on
-      # Apple mobile targets. Compile-only, so no iOS SDK is needed.
-      - name: Compile preview socket shims for iOS simulator (no link)
+      # #899: the preview socket shims must resolve errno and the fcntl
+      # constants for each target (iOS, Android, MIPS/SPARC Linux, ...).
+      # Compile-only, so no SDK is needed.
+      - name: Compile preview socket shims for other targets (no link)
         if: matrix.os == 'ubuntu-latest'
-        run: zig build check-ios --summary all
+        run: |
+          zig build check-ios --summary all
+          zig build check-socket-targets --summary all
 
       # Full test suite on Linux (and macOS once that lands as a
       # separate matrix entry — out of scope here).
@@ -116,8 +123,9 @@ jobs:
 
       - name: Checkout sibling dependencies
         shell: bash
+        env:
+          BR: ${{ github.head_ref || github.ref_name }}
         run: |
-          BR="${{ github.head_ref || github.ref_name }}"
           git clone --depth 1 --branch "$BR" https://github.com/labelle-toolkit/labelle-core.git ../labelle-core \
             || git clone --depth 1 --branch main https://github.com/labelle-toolkit/labelle-core.git ../labelle-core
 

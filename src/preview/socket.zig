@@ -66,23 +66,20 @@ const socket_io = if (builtin.os.tag == .windows) struct {
     // never gets set, and the next `read` blocks. Use the stdlib's
     // correctly-declared `std.c.fcntl` instead (see `lib/std/c.zig`).
     pub const c_fcntl = std.c.fcntl;
-    extern "c" fn __error() *c_int; // Darwin (macOS/iOS/tvOS/...) errno location
-    extern "c" fn __errno_location() *c_int; // glibc errno location
-    extern "c" fn __errno() *c_int; // Bionic errno location (Android)
-
+    // errno and the fcntl/flag/errno constants come from `std.c`, which
+    // resolves them per target: Darwin (macOS/iOS/tvOS/...) `__error`,
+    // Bionic `__errno`, glibc/musl `__errno_location`, and the per-arch
+    // Linux ABI values (O_NONBLOCK is 2048 on asm-generic and PowerPC,
+    // 128 on MIPS, 0x4000 on SPARC). Hand-written per-OS tables got iOS
+    // wrong (#899).
     pub fn errno() c_int {
-        // Bionic (Android) ships `__errno`, not `__errno_location`.
-        // Compile-time pick by ABI so the dead branch's extern ref is
-        // dropped by Zig's linker on each target.
-        const is_android = builtin.target.abi == .android or builtin.target.abi == .androideabi;
-        if (comptime is_android) return __errno().*;
-        return if (comptime builtin.os.tag.isDarwin()) __error().* else __errno_location().*;
+        return std.c._errno().*;
     }
 
-    pub const F_GETFL: c_int = 3;
-    pub const F_SETFL: c_int = 4;
-    pub const O_NONBLOCK: c_int = if (builtin.os.tag.isDarwin()) 4 else 2048;
-    pub const EAGAIN: c_int = if (builtin.os.tag.isDarwin()) 35 else 11;
+    pub const F_GETFL: c_int = std.c.F.GETFL;
+    pub const F_SETFL: c_int = std.c.F.SETFL;
+    pub const O_NONBLOCK: c_int = @bitCast(@as(u32, @bitCast(std.c.O{ .NONBLOCK = true })));
+    pub const EAGAIN: c_int = @intFromEnum(std.c.E.AGAIN);
 
     pub fn raw_close(fd: c_int) c_int {
         return close(fd);
@@ -189,18 +186,4 @@ pub fn wouldBlock() bool {
 extern "kernel32" fn GetCurrentProcessId() callconv(.winapi) u32;
 pub fn getCurrentProcessId() u32 {
     return GetCurrentProcessId();
-}
-
-// #899: pin the hand-rolled POSIX constants to the stdlib's per-target
-// values. The shims used to key on `os.tag == .macos`, so iOS/tvOS fell
-// into the Linux branch (glibc `__errno_location`, O_NONBLOCK=2048,
-// EAGAIN=11). With these asserts a target that picks the wrong branch
-// fails to compile instead of misbehaving at runtime.
-comptime {
-    if (builtin.os.tag.isDarwin() or builtin.os.tag == .linux) {
-        std.debug.assert(socket_io.EAGAIN == @intFromEnum(std.c.E.AGAIN));
-        std.debug.assert(socket_io.F_GETFL == std.c.F.GETFL);
-        std.debug.assert(socket_io.F_SETFL == std.c.F.SETFL);
-        std.debug.assert(socket_io.O_NONBLOCK == @as(u32, @bitCast(std.c.O{ .NONBLOCK = true })));
-    }
 }
