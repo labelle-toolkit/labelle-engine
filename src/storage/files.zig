@@ -1,4 +1,4 @@
-//! Desktop/Android file storage. The supplied absolute directory is a
+//! Native file storage. The supplied absolute directory is a
 //! namespace (normally <dataRoot>/saves). It is created only for writes.
 const std = @import("std");
 const storage = @import("../storage.zig");

@@ -1,13 +1,16 @@
-//! Stable root selection. Environment/Android context are supplied by the
-//! host's runtime service, keeping this module independent of that wiring.
+//! Stable root selection. The environment and any platform-supplied root are
+//! passed in by the caller, keeping this module independent of that wiring.
 const std = @import("std");
 const storage = @import("../storage.zig");
-pub const Platform = enum { windows, macos, linux, android };
+pub const Platform = enum { windows, macos, linux };
 pub const Inputs = struct {
     platform: Platform,
     app_id: []const u8,
     override: ?[]const u8 = null, // LABELLE_DATA_DIR
-    android_internal: ?[]const u8 = null,
+    /// An app-private root the platform package supplies (a mobile app's
+    /// internal storage, say). Used as given when set; it wins over the OS
+    /// user-data defaults, and only `override` wins over it.
+    platform_root: ?[]const u8 = null,
     local_app_data: ?[]const u8 = null, // LOCALAPPDATA
     xdg_data_home: ?[]const u8 = null, // XDG_DATA_HOME
     home: ?[]const u8 = null, // HOME
@@ -51,17 +54,16 @@ pub fn resolveDirectory(allocator: std.mem.Allocator, platform: Platform, cwd: [
     return resolved;
 }
 
-/// Owned result. Never falls back to cwd; unresolved Android startup can be
-/// retried once its runtime service provides internalDataPath.
+/// Owned result. Never falls back to cwd; a caller whose platform root is not
+/// ready yet can retry once the platform package provides it.
 pub fn resolve(allocator: std.mem.Allocator, inputs: Inputs) storage.Error![]u8 {
     try storage.validateName(inputs.app_id);
     if (inputs.override) |path| {
         if (!isAbsolute(inputs.platform, path)) return error.Unavailable;
         return allocator.dupe(u8, path);
     }
-    if (inputs.platform == .android) {
-        const path = inputs.android_internal orelse return error.Unavailable;
-        if (!isAbsolute(.android, path)) return error.Unavailable;
+    if (inputs.platform_root) |path| {
+        if (!isAbsolute(inputs.platform, path)) return error.Unavailable;
         return allocator.dupe(u8, path);
     }
     // XDG Base Directory spec: an empty XDG_DATA_HOME is unset, and a
@@ -74,7 +76,6 @@ pub fn resolve(allocator: std.mem.Allocator, inputs: Inputs) storage.Error![]u8 
         .windows => inputs.local_app_data,
         .macos => inputs.home,
         .linux => xdg_data_home orelse inputs.home,
-        .android => unreachable,
     } orelse return error.Unavailable;
     if (!isAbsolute(inputs.platform, base)) return error.Unavailable;
     const middle = switch (inputs.platform) {

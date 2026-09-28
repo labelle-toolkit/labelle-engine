@@ -130,13 +130,14 @@ test "keys cannot escape namespace or select Windows special files" {
     try std.testing.expect(!s.dataRoot.isAbsolute(.linux, "/data\x00suffix"));
 }
 
-test "stable roots use override, OS user data and Android internal path, never cwd" {
+test "stable roots use override, a platform root and OS user data, never cwd" {
     const cases = .{
         .{ s.dataRoot.Inputs{ .platform = .windows, .app_id = "fp", .local_app_data = "C:/Users/u/AppData/Local" }, "C:/Users/u/AppData/Local/fp" },
         .{ s.dataRoot.Inputs{ .platform = .macos, .app_id = "fp", .home = "/Users/u" }, "/Users/u/Library/Application Support/fp" },
         .{ s.dataRoot.Inputs{ .platform = .linux, .app_id = "fp", .home = "/home/u" }, "/home/u/.local/share/fp" },
         .{ s.dataRoot.Inputs{ .platform = .linux, .app_id = "fp", .xdg_data_home = "/data", .home = "/home/u" }, "/data/fp" },
-        .{ s.dataRoot.Inputs{ .platform = .android, .app_id = "fp", .android_internal = "/data/user/0/fp/files" }, "/data/user/0/fp/files" },
+        .{ s.dataRoot.Inputs{ .platform = .linux, .app_id = "fp", .platform_root = "/data/user/0/fp/files", .home = "/home/u" }, "/data/user/0/fp/files" },
+        .{ s.dataRoot.Inputs{ .platform = .linux, .app_id = "fp", .override = "/chosen", .platform_root = "/data/user/0/fp/files" }, "/chosen" },
         .{ s.dataRoot.Inputs{ .platform = .linux, .app_id = "fp", .override = "/chosen" }, "/chosen" },
     };
     inline for (cases) |case| {
@@ -144,7 +145,8 @@ test "stable roots use override, OS user data and Android internal path, never c
         defer a.free(result);
         try std.testing.expectEqualStrings(case[1], result);
     }
-    try std.testing.expectError(error.Unavailable, s.dataRoot.resolve(a, .{ .platform = .android, .app_id = "fp" }));
+    try std.testing.expectError(error.Unavailable, s.dataRoot.resolve(a, .{ .platform = .linux, .app_id = "fp" }));
+    try std.testing.expectError(error.Unavailable, s.dataRoot.resolve(a, .{ .platform = .linux, .app_id = "fp", .platform_root = "relative", .home = "/home/u" }));
     try std.testing.expectError(error.Unavailable, s.dataRoot.resolve(a, .{ .platform = .linux, .app_id = "fp", .override = "relative", .home = "/home/u" }));
 }
 

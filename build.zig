@@ -45,6 +45,7 @@ pub fn build(b: *std.Build) void {
         .link_libc = true,
     });
     engine_module.addImport("labelle-core", core_module);
+    engine_module.addImport("target_features", targetFeatures(b, target));
     engine_module.addImport("scene", scene_module);
     engine_module.addImport("jsonc", jsonc_module);
     engine_module.addImport("audio_types", audio_types_module);
@@ -574,6 +575,7 @@ pub fn build(b: *std.Build) void {
         .link_libc = true,
     });
     engine_rf.addImport("labelle-core", core_rf);
+    engine_rf.addImport("target_features", targetFeatures(b, target));
     engine_rf.addImport("scene", scene_rf);
     engine_rf.addImport("jsonc", jsonc_rf);
     const animation_rf = b.dependency("animation", .{ .target = target, .optimize = bench_opt }).module("animation");
@@ -814,6 +816,18 @@ pub fn build(b: *std.Build) void {
         spec_step.dependOn(&run_spec_tests.step);
         test_step.dependOn(&run_spec_tests.step);
     }
+}
+
+/// What the target's libc and OS provide, as a `target_features` module the
+/// engine reads instead of naming platforms in `src/` (labelle-engine#902).
+/// The build knows the target; the source only asks about a capability.
+///   - `has_posix_shm`: libc ships `shm_open`/`shm_unlink`. Bionic (Android)
+///     does not; `libgame.so` would fail to `dlopen` with `cannot locate
+///     symbol "shm_unlink"` if the preview's shm code linked them.
+fn targetFeatures(b: *std.Build, target: std.Build.ResolvedTarget) *std.Build.Module {
+    const options = b.addOptions();
+    options.addOption(bool, "has_posix_shm", !target.result.abi.isAndroid());
+    return options.createModule();
 }
 
 /// Run the platform-agnosticism guard (labelle-engine#902) as part of

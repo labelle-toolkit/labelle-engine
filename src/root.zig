@@ -36,12 +36,6 @@ pub const preview_capture_mod = @import("preview_capture.zig");
 pub const screenshot_request_mod = @import("screenshot_request.zig");
 pub const jsonc_mod = @import("jsonc");
 
-// ── Android runtime helpers ──
-// Immersive-mode (hide system bars) lives here; see src/android.zig
-// for the JNI / UI-thread rationale. Reached from the assembler-
-// generated Android `main.zig` as `engine.android.enableImmersiveMode`.
-pub const android = @import("android.zig");
-
 // ── Runtime-env hooks (cli#229) ──
 // `engine.requestedScene()` reads the `LABELLE_SCENE` env var the cli
 // sets when invoked with `labelle run --scene=<name>`. Loading
