@@ -66,7 +66,7 @@ const nanosleep = posix_externs.nanosleep;
 const clock_gettime = posix_externs.clock_gettime;
 
 fn nowMs() i64 {
-    const CLOCK_MONOTONIC: c_int = if (@import("builtin").os.tag == .macos) 6 else 1;
+    const CLOCK_MONOTONIC: c_int = if (@import("builtin").os.tag.isDarwin()) 6 else 1;
     var ts: Timespec = undefined;
     _ = clock_gettime(CLOCK_MONOTONIC, &ts);
     return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);

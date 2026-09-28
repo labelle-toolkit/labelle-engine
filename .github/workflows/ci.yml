@@ -6,6 +6,9 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+
 jobs:
   build-and-test:
     strategy:
@@ -21,8 +24,9 @@ jobs:
 
       - name: Checkout sibling dependencies
         shell: bash
+        env:
+          BR: ${{ github.head_ref || github.ref_name }}
         run: |
-          BR="${{ github.head_ref || github.ref_name }}"
           git clone --depth 1 --branch "$BR" https://github.com/labelle-toolkit/labelle-core.git ../labelle-core \
             || git clone --depth 1 --branch main https://github.com/labelle-toolkit/labelle-core.git ../labelle-core
 
@@ -48,6 +52,15 @@ jobs:
 
       - name: Test animation playback and engine adapters
         run: zig build test-animation-legacy -j2 --summary all
+
+      # #899: the preview socket shims must resolve errno and the fcntl
+      # constants for each target (iOS, Android, MIPS/SPARC Linux, ...).
+      # Compile-only, so no SDK is needed.
+      - name: Compile preview socket shims for other targets (no link)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          zig build check-ios --summary all
+          zig build check-socket-targets --summary all
 
       # Full test suite on Linux (and macOS once that lands as a
       # separate matrix entry — out of scope here).
@@ -96,3 +109,36 @@ jobs:
           echo '```' >> $GITHUB_STEP_SUMMARY
           cat build_output.txt >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
+
+  # #899: link the preview socket shims against the real iOS simulator
+  # libSystem so a non-Darwin errno accessor (glibc `__errno_location`)
+  # fails as an undefined symbol. Needs Xcode's iphonesimulator SDK.
+  ios-simulator-link-check:
+    runs-on: macos-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Checkout sibling dependencies
+        shell: bash
+        env:
+          BR: ${{ github.head_ref || github.ref_name }}
+        run: |
+          git clone --depth 1 --branch "$BR" https://github.com/labelle-toolkit/labelle-core.git ../labelle-core \
+            || git clone --depth 1 --branch main https://github.com/labelle-toolkit/labelle-core.git ../labelle-core
+
+      - name: Install Zig
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+
+      - name: Link preview socket shims for iOS simulator
+        shell: bash
+        run: |
+          set -euo pipefail
+          SDK="$(xcrun --sdk iphonesimulator --show-sdk-path)"
+          echo "iphonesimulator SDK: $SDK"
+          zig build check-ios -Dios-sdk="$SDK" --summary all
+          file zig-out/check-ios/preview_socket_ios_check

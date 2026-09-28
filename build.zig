@@ -82,6 +82,48 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&storage_run.step);
     b.step("test-storage", "Test persistent blob storage").dependOn(&storage_run.step);
 
+    // #899: the preview socket shims take errno and the fcntl/errno
+    // constants from `std.c`, which resolves them per target. These steps
+    // compile the shims for targets the host never builds for, so a
+    // per-OS/per-arch mistake fails in CI instead of on a device.
+    //
+    // `check-ios` builds for aarch64-ios-simulator. By default nothing
+    // requests the emitted binary, so it analyzes + codegens without
+    // linking (no iOS SDK needed). With
+    // `-Dios-sdk="$(xcrun --sdk iphonesimulator --show-sdk-path)"` it also
+    // links against the simulator libSystem, which catches a wrong errno
+    // symbol (e.g. glibc `__errno_location`) as an undefined symbol.
+    //
+    // `check-socket-targets` compiles (no link) for Linux ABIs whose flag
+    // values differ from asm-generic (MIPS O_NONBLOCK=128, SPARC 0x4000),
+    // PowerPC, Android, macOS and the iOS simulator.
+    const ios_sdk = b.option([]const u8, "ios-sdk", "iPhoneSimulator SDK path; makes `check-ios` link against it");
+    const check_ios_step = b.step("check-ios", "Compile the preview socket shims for aarch64-ios-simulator (links too with -Dios-sdk)");
+    const ios_socket_check = addSocketTargetCheck(b, .{ .cpu_arch = .aarch64, .os_tag = .ios, .abi = .simulator }, optimize);
+    if (ios_sdk) |sdk| {
+        // Same search paths labelle-sokol's iOS hook uses. Requesting the
+        // binary (install) is what makes the step link it.
+        ios_socket_check.root_module.addLibraryPath(.{ .cwd_relative = b.pathJoin(&.{ sdk, "usr/lib" }) });
+        check_ios_step.dependOn(&b.addInstallArtifact(ios_socket_check, .{
+            .dest_dir = .{ .override = .{ .custom = "check-ios" } },
+        }).step);
+    } else {
+        check_ios_step.dependOn(&ios_socket_check.step);
+    }
+    const check_socket_targets_step = b.step("check-socket-targets", "Compile the preview socket shims for iOS, macOS, Android and several Linux ABIs (no link)");
+    const socket_check_queries = [_]std.Target.Query{
+        .{ .cpu_arch = .aarch64, .os_tag = .ios, .abi = .simulator },
+        .{ .cpu_arch = .aarch64, .os_tag = .macos },
+        .{ .cpu_arch = .aarch64, .os_tag = .linux, .abi = .android },
+        .{ .cpu_arch = .x86_64, .os_tag = .linux, .abi = .gnu },
+        .{ .cpu_arch = .powerpc64le, .os_tag = .linux, .abi = .gnu },
+        .{ .cpu_arch = .mips, .os_tag = .linux, .abi = .gnueabihf },
+        .{ .cpu_arch = .sparc64, .os_tag = .linux, .abi = .gnu },
+    };
+    for (socket_check_queries) |query| {
+        check_socket_targets_step.dependOn(&addSocketTargetCheck(b, query, optimize).step);
+    }
+
     // The definition package remains independent. Verify its frame slices
     // against the existing engine player before migrating playback ownership.
     const animation_module = b.dependency("animation", .{ .target = target, .optimize = optimize }).module("animation");
@@ -789,4 +831,30 @@ pub fn build(b: *std.Build) void {
         spec_step.dependOn(&run_spec_tests.step);
         test_step.dependOn(&run_spec_tests.step);
     }
+}
+
+/// #899: an executable rooted at `test/preview_socket_ios_check.zig` that
+/// references every preview socket shim, built for `query`. Callers decide
+/// whether to link it (install) or only compile it (depend on its step).
+fn addSocketTargetCheck(
+    b: *std.Build,
+    query: std.Target.Query,
+    optimize: std.builtin.OptimizeMode,
+) *std.Build.Step.Compile {
+    const check_target = b.resolveTargetQuery(query);
+    return b.addExecutable(.{
+        .name = "preview_socket_ios_check",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("test/preview_socket_ios_check.zig"),
+            .target = check_target,
+            .optimize = optimize,
+            .link_libc = true,
+            .imports = &.{.{ .name = "preview_socket", .module = b.createModule(.{
+                .root_source_file = b.path("src/preview/socket.zig"),
+                .target = check_target,
+                .optimize = optimize,
+                .link_libc = true,
+            }) }},
+        }),
+    });
 }
