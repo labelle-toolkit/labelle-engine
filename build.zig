@@ -400,6 +400,11 @@ pub fn build(b: *std.Build) void {
         // needs only the standard core/engine/scene imports — and it pins
         // that an engine on OLDER gfx keeps full tilemap support.
         "test/tilemap_collection_test.zig",
+        // #847 — tileset textures (sheet AND per-tile) across a GPU surface
+        // loss/restore: invalidated (never freed) on loss, re-uploaded under
+        // their original ids on restore, gfx's tilemap renderer re-bound.
+        // Same hand-rolled gfx stand-in (`tilemap_fake_gfx.zig`).
+        "test/tilemap_surface_test.zig",
         // Per-tile animation tick (companion to labelle-gfx#351). Same
         // reason for a hand-rolled gfx stand-in: the pinned gfx has no
         // `advanceAnimations`, and the pre/post pair is what pins the

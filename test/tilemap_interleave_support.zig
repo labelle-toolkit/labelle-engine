@@ -195,12 +195,19 @@ pub const HookRender = struct {
     /// Count of `unloadTexture` calls that landed WHILE `in_render` — must be
     /// 0 once reaping is hoisted to a pre-render step.
     unloads_during_render: usize = 0,
+    /// Ids whose backend handle `invalidateTexture` declared dead (#847).
+    dead: std.AutoHashMapUnmanaged(u32, void) = .empty,
+    /// Backend handles minted by `reuploadTextureFromMemory` — far above
+    /// the first-upload range so a draw sampling a re-uploaded texture is
+    /// told apart from one sampling the dead handle (#847).
+    next_backend_id: u32 = 1000,
 
     pub fn init(allocator: std.mem.Allocator) Self {
         return .{ .alloc = allocator };
     }
     pub fn deinit(self: *Self) void {
         self.textures.deinit(self.alloc);
+        self.dead.deinit(self.alloc);
     }
 
     pub fn loadTextureFromMemory(self: *Self, file_type: [:0]const u8, data: []const u8) !u32 {
@@ -212,12 +219,30 @@ pub const HookRender = struct {
         return id;
     }
     pub fn getTextureInfo(self: *const Self, id: u32) ?@TypeOf(self.inner).TextureInfo {
+        if (self.dead.contains(id)) return null;
         const tex = self.textures.get(id) orelse return null;
         return .{ .backend_texture = tex };
     }
     pub fn unloadTexture(self: *Self, id: u32) void {
         if (self.in_render) self.unloads_during_render += 1;
         _ = self.textures.remove(id);
+        _ = self.dead.remove(id);
+    }
+
+    // ── gfx minted-key re-arm seam (labelle-gfx#345; #847) ──
+    // Same contract as gfx's `RetainedEngine`: invalidate keeps the key
+    // registered but resolving to nothing; reupload re-arms the SAME key
+    // with a NEW backend handle.
+    pub fn invalidateTexture(self: *Self, id: u32) void {
+        if (self.textures.contains(id)) self.dead.put(self.alloc, id, {}) catch @panic("OOM");
+    }
+    pub fn reuploadTextureFromMemory(self: *Self, id: u32, file_type: [:0]const u8, data: []const u8) !void {
+        _ = file_type;
+        _ = data;
+        const tex = self.textures.getPtr(id) orelse return error.TextureNotRegistered;
+        tex.id = self.next_backend_id;
+        self.next_backend_id += 1;
+        _ = self.dead.remove(id);
     }
 
     // ── core.RenderInterface no-ops ──
