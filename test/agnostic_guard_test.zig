@@ -205,10 +205,11 @@ fn stripPrefix(run: []const u8) ?[]const u8 {
 /// letter or digit followed by an uppercase one (`getSDL`, `Sdl2Provision`),
 /// or the last letter of an uppercase run when a lowercase letter follows
 /// it (`SDL|Path`). Digits never start a piece, so `sdl2` and `win32` stay
-/// whole. A run that opens with one lowercase letter and then two or more
-/// uppercase ones is a lowercase-leading acronym (`iOS`, `iOSConfig`): no
-/// boundary after its first letter, so it splits as `iOS|Config`, not
-/// `i|OS|Config`. The same acronym embedded after a lowercase prefix
+/// whole. A piece that opens with `iOS` is the lowercase-leading acronym
+/// (`iOS`, `iOSConfig`): no boundary after its `i`, so it splits as
+/// `iOS|Config`, not `i|OS|Config`. Only that literal: any other one-letter
+/// lowercase prefix before capitals is ordinary camelCase (`x|SDL|Config`,
+/// `p|WGPU|Device`), so the acronym keeps its own piece (#905). The same acronym embedded after a lowercase prefix
 /// (`getiOSConfig`, `getiOsConfig`) opens its own piece: a boundary falls
 /// before an `i` that follows a lowercase letter and starts `iOS` or `iOs`,
 /// so the run splits as `get|iOS|Config` (or `get|i|Os|Config`, which the
@@ -224,7 +225,8 @@ fn splitsBefore(text: []const u8, start: usize, i: usize) bool {
         text[i + 1] == 'O' and (text[i + 2] == 'S' or text[i + 2] == 's')) return true;
     if (!std.ascii.isUpper(cur)) return false;
     if (std.ascii.isLower(prev)) {
-        const leading_acronym = i == start + 1 and i + 1 < text.len and std.ascii.isUpper(text[i + 1]);
+        const leading_acronym = i == start + 1 and prev == 'i' and cur == 'O' and
+            i + 1 < text.len and text[i + 1] == 'S';
         return !leading_acronym;
     }
     if (std.ascii.isDigit(prev)) return true;
@@ -400,6 +402,8 @@ test "the tokenizer keeps lowercase-leading acronyms whole" {
     // Only `iOS`/`iOs` split off an `i`: other acronyms after a word ending
     // in `i` keep their own piece.
     try expectWords("apiSDLConfig taxiWASM", &.{ "sdl", "wasm" });
+    // A one-letter prefix other than `iOS`'s `i` is ordinary camelCase (#905).
+    try expectWords("xSDLConfig pWGPUDevice iSDLPath", &.{ "sdl", "wgpu", "sdl" });
     // An `i` ending an ordinary word before an acronym stays clean.
     try expectWords("apiURL multiIO", &.{});
     // A one-letter lowercase prefix before a single capital is ordinary camelCase.
