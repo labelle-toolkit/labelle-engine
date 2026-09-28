@@ -831,6 +831,10 @@ fn addAgnosticGuard(b: *std.Build, test_step: *std.Build.Step, optimize: std.bui
     });
     const guard_run = b.addRunArtifact(guard_tests);
     guard_run.setCwd(b.path("."));
+    // The walk reads src/ at run time, which the test binary's cache inputs
+    // do not cover: without this, a cached result (local, or a restored CI
+    // cache) would skip the walk and let a new forbidden name through.
+    guard_run.has_side_effects = true;
     test_step.dependOn(&guard_run.step);
     b.step("test-guard", "Check src/ for platform, store, package and backend names (labelle-engine#902)").dependOn(&guard_run.step);
 }
