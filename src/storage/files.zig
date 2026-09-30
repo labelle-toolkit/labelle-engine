@@ -149,9 +149,14 @@ pub const Files = struct {
 fn openKey(io: std.Io, dir: std.Io.Dir, name: []const u8) !std.Io.File {
     const os = @import("builtin").os.tag;
     if (os == .windows or os == .wasi) {
-        const file = try dir.openFile(io, name, .{ .follow_symlinks = false, .allow_directory = false });
+        var file = try dir.openFile(io, name, .{ .follow_symlinks = false, .allow_directory = false });
         errdefer file.close(io);
         if ((try file.stat(io)).kind != .file) return error.AccessDenied;
+        // Zig 0.16's Windows no-follow open uses an asynchronous NT handle,
+        // but returns nonblocking=false. A pending read then hits unreachable
+        // instead of waiting for completion (Flying Platform #972). Match the
+        // handle mode so File.Reader takes Threaded's APC/wait read path.
+        if (os == .windows) file.flags.nonblocking = true;
         return file;
     }
     const posix = std.posix;

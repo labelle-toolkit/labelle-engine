@@ -74,6 +74,33 @@ fn finish(store: s.Store, request: s.Request) !s.Result {
     return (try operation.poll()) orelse error.UnexpectedPending;
 }
 
+// Dir.setTimestamps is not implemented on Windows in Zig 0.16. Updating
+// the open file works on every host and still exercises real file mtimes.
+fn setModified(dir: std.Io.Dir, path: []const u8, timestamp: std.Io.Timestamp) !void {
+    const file = try dir.openFile(std.testing.io, path, .{ .mode = .read_write });
+    defer file.close(std.testing.io);
+    try file.setTimestamps(std.testing.io, .{ .modify_timestamp = .{ .new = timestamp } });
+}
+
+test "file reads preserve large payloads across reopen and enforce the exact size limit" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var buffer: [4096]u8 = undefined;
+    const length = try tmp.dir.realPath(std.testing.io, &buffer);
+    var files = try s.Files.init(std.testing.io, buffer[0..length]);
+    const payload = try a.alloc(u8, 128 * 1024 + 17);
+    defer a.free(payload);
+    for (payload, 0..) |*byte, i| byte.* = @truncate(i);
+    _ = try finish(files.store(), .{ .write = .{ .name = "world.json", .bytes = payload } });
+    for (0..3) |_| {
+        var reopened = try s.Files.init(std.testing.io, buffer[0..length]);
+        const read = try finish(reopened.store(), .{ .read = .{ .name = "world.json", .max_bytes = payload.len } });
+        defer read.deinit(a);
+        try std.testing.expectEqualSlices(u8, payload, read.read);
+        try std.testing.expectError(error.TooLarge, finish(reopened.store(), .{ .read = .{ .name = "world.json", .max_bytes = payload.len - 1 } }));
+    }
+}
+
 test "file blobs survive reopen, overwrite, list metadata and independent sidecars" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -174,7 +201,7 @@ test "only aged crash-left staging files are purged; live and foreign entries ar
     try tmp.dir.createDirPath(io, ".pending");
     try tmp.dir.writeFile(io, .{ .sub_path = ".pending/0123456789abcdef", .data = "crash-left blob" });
     const aged = std.Io.Timestamp.now(io, .real).subDuration(.fromSeconds(60 * 60));
-    try tmp.dir.setTimestamps(io, ".pending/0123456789abcdef", .{ .access_timestamp = .{ .new = aged }, .modify_timestamp = .{ .new = aged } });
+    try setModified(tmp.dir, ".pending/0123456789abcdef", aged);
     // Another writer's in-flight staging file: fresh, so it must survive.
     try tmp.dir.writeFile(io, .{ .sub_path = ".pending/1111111111111111", .data = "in-flight blob" });
     // Not ours: wrong name pattern, a directory, and (where supported) a
@@ -182,7 +209,12 @@ test "only aged crash-left staging files are purged; live and foreign entries ar
     try tmp.dir.writeFile(io, .{ .sub_path = ".pending/notes.txt", .data = "keep" });
     try tmp.dir.createDirPath(io, ".pending/fedcba9876543210");
     try tmp.dir.writeFile(io, .{ .sub_path = "target.json", .data = "keep" });
-    const linked = if (tmp.dir.symLink(io, "../target.json", ".pending/aaaaaaaaaaaaaaaa", .{})) true else |_| false;
+    const linked = if (tmp.dir.symLink(io, "../target.json", ".pending/aaaaaaaaaaaaaaaa", .{})) true else |_| failed: {
+        // Windows can leave the newly created placeholder when setting
+        // the reparse point fails (for example without symlink privilege).
+        tmp.dir.deleteFile(io, ".pending/aaaaaaaaaaaaaaaa") catch {};
+        break :failed false;
+    };
 
     var files = try s.Files.init(io, buffer[0..length]);
     _ = try finish(files.store(), .{ .write = .{ .name = "slot.json", .bytes = "live" } });
@@ -206,6 +238,9 @@ test "only aged crash-left staging files are purged; live and foreign entries ar
     defer staging.close(io);
     var iterator = staging.iterate();
     while (try iterator.next(io)) |entry| {
+        // Windows reports a file symlink as .file. This fixture's known
+        // symlink is foreign, already checked above, not a staged blob.
+        if (linked and std.mem.eql(u8, entry.name, "aaaaaaaaaaaaaaaa")) continue;
         if (entry.kind == .file and !std.mem.eql(u8, entry.name, "1111111111111111"))
             try std.testing.expect(!s.Files.isStagingName(entry.name));
     }
@@ -414,7 +449,7 @@ test "a young staging file kept by one purge is purged by a later write once sta
     try tmp.dir.createDirPath(io, ".pending");
     try tmp.dir.writeFile(io, .{ .sub_path = ".pending/0123456789abcdef", .data = "crash-left blob" });
     const five_minutes_ago = std.Io.Timestamp.now(io, .real).subDuration(.fromSeconds(5 * 60));
-    try tmp.dir.setTimestamps(io, ".pending/0123456789abcdef", .{ .access_timestamp = .{ .new = five_minutes_ago }, .modify_timestamp = .{ .new = five_minutes_ago } });
+    try setModified(tmp.dir, ".pending/0123456789abcdef", five_minutes_ago);
 
     var vtable = io.vtable.*;
     vtable.now = FakeClock.now;
