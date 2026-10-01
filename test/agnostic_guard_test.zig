@@ -69,7 +69,6 @@ const allowed_words = [_][]const u8{ "macos", "windows", "linux", "darwin", "win
 /// shrinks: an entry whose file is clean (or gone) fails the guard as stale,
 /// so moving platform code out has to delete its line here.
 const allowed_files = [_][]const u8{
-    "android.zig",
     "assets/catalog/engine.zig",
     "assets/catalog/tests_main_thread.zig",
     "assets/catalog/tests_surface_loss.zig",
@@ -104,13 +103,10 @@ const allowed_files = [_][]const u8{
     "preview/connection.zig",
     "preview/protocol.zig",
     "preview_capture.zig",
-    "preview_shm.zig",
     "root.zig",
     "screenshot_request.zig",
     "storage.zig",
-    "storage/data_root.zig",
     "storage/default.zig",
-    "storage/files.zig",
     "storage/web.zig",
     "tilemap_runtime.zig",
     "ui_draw_list.zig",
@@ -505,7 +501,7 @@ test "the allowlist matches Windows-style walker paths, one file per entry" {
     try std.testing.expect(allowedIndex("storage/default.zig") != null);
     try std.testing.expect(allowedIndex("storage\\default.zig") != null);
     try std.testing.expect(allowedIndex("jsonc\\scene_loader\\nested_spawn.zig") != null);
-    try std.testing.expect(allowedIndex("android.zig") != null);
+    try std.testing.expect(allowedIndex("storage/web.zig") != null);
     // A new file under a legacy directory is NOT exempt.
     try std.testing.expect(allowedIndex("storage/not_yet_written.zig") == null);
     try std.testing.expect(allowedIndex("storage/") == null);
@@ -584,13 +580,11 @@ test "a platform in the path is a finding, and keeps an allowlist entry dirty" {
     // An allowlisted file whose path names a platform stays dirty with
     // clean contents: the entry is only stale once the file is moved or
     // renamed.
-    try scan.file("android.zig", "const x = 1;\n");
-    try scan.file("storage\\web.zig", "");
+    try scan.file("storage\\web.zig", "const x = 1;\n");
     try std.testing.expectEqual(@as(usize, 7), scan.offenders.items.len);
     var stale: std.ArrayList([]const u8) = .empty;
     defer stale.deinit(gpa);
     try scan.stale(&stale);
-    try std.testing.expect(!containsString(stale.items, "android.zig"));
     try std.testing.expect(!containsString(stale.items, "storage/web.zig"));
     try std.testing.expect(containsString(stale.items, "atlas.zig"));
 }

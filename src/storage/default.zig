@@ -22,6 +22,10 @@ pub fn Default(comptime Backend: type) type {
             /// seam. Relative values resolve ONCE to an absolute directory.
             native_directory: ?[]const u8 = null,
             store: ?storage.Store = null,
+            /// The app-private root the platform package supplies (a mobile
+            /// app's internal storage). Saves go to `<platform_root>/saves`;
+            /// without it the OS user-data default is used.
+            platform_root: ?[]const u8 = null,
         };
 
         pub fn init(allocator: std.mem.Allocator, options: Options) storage.Error!Self {
@@ -51,12 +55,14 @@ pub fn Default(comptime Backend: type) type {
                     self.directory = try storage.dataRoot.resolveDirectory(allocator, platform, cwd[0..length], path);
                 }
             } else {
-                const android = builtin.abi == .android or builtin.abi == .androideabi;
-                const platform: storage.dataRoot.Platform = if (android) .android else switch (builtin.os.tag) {
+                const platform: storage.dataRoot.Platform = switch (builtin.os.tag) {
                     .windows => .windows,
                     .macos => .macos,
                     .linux => .linux,
-                    else => return error.Unavailable,
+                    // Any other OS has no user-data default here, but an
+                    // explicit root still works: `LABELLE_DATA_DIR` or a
+                    // supplied `platform_root`, checked with POSIX path rules.
+                    else => if (options.platform_root != null or env("LABELLE_DATA_DIR") != null) .linux else return error.Unavailable,
                 };
                 const root = try storage.dataRoot.resolve(allocator, .{
                     .platform = platform,
@@ -65,7 +71,7 @@ pub fn Default(comptime Backend: type) type {
                     .home = env("HOME"),
                     .local_app_data = env("LOCALAPPDATA"),
                     .xdg_data_home = env("XDG_DATA_HOME"),
-                    .android_internal = if (android) androidPath() else null,
+                    .platform_root = options.platform_root,
                 });
                 defer allocator.free(root);
                 self.directory = try std.fs.path.join(allocator, &.{ root, "saves" });
@@ -94,19 +100,4 @@ pub fn Default(comptime Backend: type) type {
 fn env(comptime name: [:0]const u8) ?[]const u8 {
     if (comptime !builtin.link_libc) return null;
     return if (std.c.getenv(name)) |value| std.mem.span(value) else null;
-}
-
-fn androidPath() ?[]const u8 {
-    const core = @import("labelle-core");
-    const context = core.android_backend.get() orelse return null;
-    const raw = context.get_native_activity() orelse return null;
-    const Prefix = extern struct {
-        callbacks: ?*anyopaque,
-        vm: ?*anyopaque,
-        env: ?*anyopaque,
-        clazz: ?*anyopaque,
-        internal_data_path: ?[*:0]const u8,
-    };
-    const activity: *const Prefix = @ptrCast(@alignCast(raw));
-    return if (activity.internal_data_path) |path| std.mem.span(path) else null;
 }
