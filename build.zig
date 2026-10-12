@@ -168,6 +168,7 @@ pub fn build(b: *std.Build) void {
         "test/script_runner_test.zig",
         "test/game_log_test.zig",
         "test/fullscreen_api_test.zig",
+        "test/cursor_api_test.zig",
         "test/vsync_api_test.zig",
         "animation/test/engine_sprite_anim_test.zig",
         // The atlas -> source_rect mapping, trim geometry included: the

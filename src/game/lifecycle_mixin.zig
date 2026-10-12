@@ -23,6 +23,7 @@ pub fn Mixin(comptime Game: type) type {
         // ── Teardown / hook wiring ────────────────────────────────
 
         pub fn deinit(self: *Game) void {
+            _ = self.cursor_controls.set_visible(true);
             // Release any atlas manifest a `loadGameState` pinned but the
             // game never released via a subsequent load (engine#638), so a
             // game torn down after a load doesn't leak catalog refcounts.
@@ -236,6 +237,32 @@ pub fn Mixin(comptime Game: type) type {
 
         pub fn isRunning(self: *const Game) bool {
             return self.running;
+        }
+
+        /// Host startup seam: bind optional window operations after the
+        /// window exists and before scripts run. Older backends are supported.
+        /// Rebinding restores the previous pointer before replacing callbacks.
+        pub fn bindCursorWindow(self: *Game, comptime Window: type) void {
+            _ = self.cursor_controls.set_visible(true);
+            self.cursor_controls = core.CursorControls.fromWindow(Window);
+        }
+
+        /// Hide/restore the system pointer for a game-drawn cursor. Returns
+        /// false if unavailable: do not draw a replacement on failure. This is
+        /// synchronous and must run on the window/draw thread. It never locks
+        /// or remaps input. Restore before removing the overlay; deinit also
+        /// restores. An unbound or older backend safely returns false.
+        pub fn setCursorVisible(self: *Game, visible: bool) bool {
+            return self.cursor_controls.set_visible(visible);
+        }
+
+        /// A mouse/pen is over the focused game surface. False when unsupported
+        /// or outside it. Query every draw frame, then hide only if drawing the
+        /// overlay. Position artwork and its scaled hotspot in the same space
+        /// as the GUI mouse position (or getMouseDesign for design-space art),
+        /// outside the world camera.
+        pub fn isCursorOverWindow(self: *const Game) bool {
+            return self.cursor_controls.is_over_window();
         }
 
         // ── Fullscreen ──

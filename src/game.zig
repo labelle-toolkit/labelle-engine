@@ -1002,6 +1002,8 @@ pub fn GameConfigWithYAxis(
         /// keep today's behaviour. A browser that refuses the Fullscreen
         /// API (iPhone Safari) reports false (labelle-bgfx#99).
         fullscreen_available: bool = true,
+        /// Optional host-window controls; bound by generated startup code.
+        cursor_controls: core.CursorControls = .{},
         /// Desired vsync state, owned by the engine (same cooperative split
         /// as `fullscreen`). Scripts flip it via `setVsync`/`toggleVsync`;
         /// the generated frame loop drains `takeVsyncRequest()` and applies
@@ -1776,6 +1778,9 @@ pub fn GameConfigWithYAxis(
         pub const setFrameBoundaryFn = LifecycleMixin.setFrameBoundaryFn;
         pub const quit = LifecycleMixin.quit;
         pub const isRunning = LifecycleMixin.isRunning;
+        pub const bindCursorWindow = LifecycleMixin.bindCursorWindow;
+        pub const setCursorVisible = LifecycleMixin.setCursorVisible;
+        pub const isCursorOverWindow = LifecycleMixin.isCursorOverWindow;
         pub const setFullscreen = LifecycleMixin.setFullscreen;
         pub const toggleFullscreen = LifecycleMixin.toggleFullscreen;
         pub const isFullscreen = LifecycleMixin.isFullscreen;
