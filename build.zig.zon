@@ -1,7 +1,7 @@
 .{
     .fingerprint = 0xe8a81a8dc7f48c87,
     .name = .engine,
-    .version = "4.0.0",
+    .version = "4.1.0",
     .minimum_zig_version = "0.16.0",
     .dependencies = .{
         // Requires labelle-core >= v1.27.0 — core's `ChildrenComponent` is now
@@ -23,6 +23,7 @@
         // `VideoComponent.open_attempts` and `VIDEO_MAX_OPEN_ATTEMPTS`, which
         // landed in core v1.31.0 (labelle-core#77). That is the effective floor
         // from engine 2.21.0.
+        // Engine 4.1.0 requires core >= 2.2.0 for shared CursorControls.
         .labelle_core = .{
             .path = "../labelle-core",
         },
