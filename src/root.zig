@@ -1116,3 +1116,6 @@ pub const StubPhysics = core.StubPhysics;
 pub const PostPass = core.backend_contract.PostPass;
 pub const PostPassKind = core.backend_contract.PostPassKind;
 pub const PostPassUniforms = core.backend_contract.PostPassUniforms;
+
+/// Optional host-window cursor controls, shared with backend implementors.
+pub const CursorControls = core.CursorControls;

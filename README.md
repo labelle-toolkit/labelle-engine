@@ -87,3 +87,35 @@ labelle-engine works with other labelle-toolkit libraries:
 ## License
 
 See [LICENSE](LICENSE) for details.
+
+## Custom mouse pointers
+
+Game scripts use `game.setCursorVisible(visible) bool` and
+`game.isCursorOverWindow() bool`. They never import a platform window backend.
+The visibility call is synchronous: a false result means the pointer could not
+be hidden, so do not draw a replacement. The query is false outside the focused
+game surface or on an unsupported/touch-only backend.
+
+For a script's draw callback:
+
+```zig
+pub fn drawGui(game: anytype) void {
+    const show = game.isCursorOverWindow();
+    if (!game.setCursorVisible(!show) or !show) return;
+    // Draw your cursor artwork on the GUI foreground layer, with its scaled
+    // hotspot at the GUI mouse position. Keep ImGui MouseDrawCursor disabled.
+}
+```
+
+The overlay and its mouse coordinates must use the same space. For design-space
+rendering use `game.getMouseDesign()`; for an ImGui foreground overlay use ImGui's
+mouse position. Do not apply the world camera to the pointer. Restore with
+`game.setCursorVisible(true)` before disabling the overlay. Game teardown and
+rebinding also restore the previous pointer.
+
+The host binds once, after creating the window and before script setup:
+`game.bindCursorWindow(window)`. The companion assembler change generates this
+call for both loop and callback platforms, guarded for older engines. Handwritten
+hosts must bind explicitly. Without binding, both methods return false safely.
+The core dependency must include `CursorControls`; older window backends need no
+changes. labelle-bgfx's companion implementation supports desktop and web.
