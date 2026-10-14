@@ -1,0 +1,12 @@
+Build Summary: 11/11 steps succeeded; 36/36 tests passed
+test success
++- run test 6 pass (6 total) 568ms MaxRSS:7M
+|  +- compile test Debug native success 2s MaxRSS:322M
++- run test 4 pass (4 total) 833ms MaxRSS:7M
+|  +- compile test Debug native success 2s MaxRSS:318M
++- run test 13 pass (13 total) 300ms MaxRSS:7M
+|  +- compile test Debug native success 1s MaxRSS:273M
++- run test 5 pass (5 total) 478ms MaxRSS:7M
+|  +- compile test Debug native success 1s MaxRSS:300M
++- run test 8 pass (8 total) 1s MaxRSS:7M
+   +- compile test Debug native success 2s MaxRSS:327M
