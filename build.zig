@@ -128,6 +128,7 @@ pub fn build(b: *std.Build) void {
 
     // Test files in test/ directory
     const test_files = [_][]const u8{
+        "test/position_revisions_test.zig",
         "test/root_test.zig",
         "test/shader_material_test.zig",
         // #881 — the comptime `.zon` entity writer must never silently
@@ -548,6 +549,7 @@ pub fn build(b: *std.Build) void {
             }),
         });
         const run = b.addRunArtifact(t);
+        if (std.mem.eql(u8, test_file, "test/position_revisions_test.zig")) b.step("test-position-revisions", "Test position revision lifecycle").dependOn(&run.step);
         test_step.dependOn(&run.step);
         if (std.mem.startsWith(u8, test_file, "test/save_") or std.mem.eql(u8, test_file, "test/storage_serialization_test.zig")) save_regressions.dependOn(&run.step);
         for ([_][]const u8{ "test/shader_material_test.zig", "test/scene_test.zig", "test/scene_lifecycle_events_test.zig", "test/scene_teardown_test.zig", "test/prefab_refresh_test.zig", "test/jsonc/deserializer_test.zig", "test/set_material_test.zig" }) |related| {

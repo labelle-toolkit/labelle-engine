@@ -1119,3 +1119,6 @@ pub const PostPassUniforms = core.backend_contract.PostPassUniforms;
 
 /// Optional host-window cursor controls, shared with backend implementors.
 pub const CursorControls = core.CursorControls;
+
+// ── Position freshness ──
+pub const PositionRevisions = @import("position_revisions.zig").PositionRevisions;

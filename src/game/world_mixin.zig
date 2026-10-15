@@ -142,6 +142,7 @@ pub fn Mixin(comptime Game: type) type {
             _ = self.active_world.nested_entity_arena.reset(.retain_capacity);
 
             // Reinitialize ECS + sprite cache (but NOT renderer — textures preserved)
+            self.active_world.position_revisions.reset();
             self.active_world.ecs_backend = EcsImpl.init(self.allocator);
             self.active_world.sprite_cache = atlas_mod.SpriteCache.init(self.allocator);
             self.gizmo_state = gizmo_draws_mod.GizmoState(Entity).init(self.allocator);
