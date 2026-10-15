@@ -186,3 +186,56 @@ fn checkSlotAllocation(allocator: std.mem.Allocator) !void {
 test "every registration allocation failure rolls back the indexed entry" {
     try testing.checkAllAllocationFailures(testing.allocator, checkSlotAllocation, .{});
 }
+
+test "pending notifications coalesce and stale acknowledgements cannot erase new movement" {
+    var r = engine.PositionRevisions{};
+    defer r.deinit(testing.allocator);
+    try r.watchChanges(testing.allocator, 1);
+    try r.watchChanges(testing.allocator, 2);
+    const before = r.get(1).?;
+    r.invalidate(1);
+    r.invalidate(1);
+    r.acknowledge(1, before);
+    var it = r.pendingIterator();
+    try testing.expectEqual(@as(?u64, 2), it.next());
+    r.acknowledge(2, r.get(2).?);
+    try testing.expectEqual(@as(?u64, 1), it.next());
+    r.acknowledge(1, r.get(1).?);
+    try testing.expectEqual(null, it.next());
+    try testing.expectEqual(null, r.pending_head);
+    r.invalidateAll();
+    r.unwatchChanges(1);
+    r.forget(2);
+    try testing.expectEqual(null, r.pending_head);
+    try r.watchChanges(testing.allocator, 3); // recycled slot has no stale links
+    it = r.pendingIterator();
+    try testing.expectEqual(@as(?u64, 3), it.next());
+    try testing.expectEqual(null, it.next());
+    r.reset();
+    try testing.expectEqual(null, r.pending_head);
+}
+
+test "membership watches ignore value updates and notify additions removals and raw companion" {
+    var game = Game.init(testing.allocator);
+    defer game.deinit();
+    const Domain = struct { value: u32 = 0 };
+    const r = &game.active_world.position_revisions;
+    try r.watchMembership(testing.allocator, Domain);
+    const e = game.createEntity();
+    var before = r.membership_revision;
+    game.addComponent(e, Domain{});
+    try testing.expect(r.membership_revision != before);
+    before = r.membership_revision;
+    game.addComponent(e, Domain{ .value = 1 });
+    game.setComponent(e, Domain{ .value = 2 });
+    game.setField(Domain, .value, e, 3);
+    try testing.expectEqual(before, r.membership_revision);
+    game.removeComponent(e, Domain);
+    try testing.expect(r.membership_revision != before);
+    before = r.membership_revision;
+    game.removeComponent(e, Domain);
+    try testing.expectEqual(before, r.membership_revision);
+    game.active_world.ecs_backend.addComponent(e, Domain{});
+    game.invalidateComponentMembership(Domain);
+    try testing.expect(r.membership_revision != before);
+}

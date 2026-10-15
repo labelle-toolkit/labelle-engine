@@ -1410,6 +1410,7 @@ pub fn GameConfigWithYAxis(
         pub const watchPositionDependency = ComponentsMixin.watchPositionDependency;
         pub const watchComponentDependency = ComponentsMixin.watchComponentDependency;
         pub const dependencyRevision = ComponentsMixin.dependencyRevision;
+        pub const invalidateComponentMembership = ComponentsMixin.invalidateComponentMembership;
         pub const invalidateComponentDependency = ComponentsMixin.invalidateComponentDependency;
         pub const trackPositionRevision = ComponentsMixin.trackPositionRevision;
         pub const positionRevisionSlot = ComponentsMixin.positionRevisionSlot;

@@ -75,3 +75,25 @@ count. Tracking allocation failure rolls back registration.
 
 Validation includes slot recycling/reset and every registration allocation
 failure. Full engine validation: 1,514 tests passed.
+
+## Pending work and membership discovery
+
+The world tracker supports one opt-in pending-work consumer. `watchChanges`
+registers and queues an entity; position/ancestor invalidation coalesces subsequent
+notifications in links stored in its revision slot. Enqueuing needs no allocation.
+`pendingIterator` visits only pending entities. The consumer acknowledges a
+specific current revision after publication; stale acknowledgements do nothing.
+Cancellation leaves work pending. Destruction unlinks the slot before recycling;
+reset clears the queue. Graph consumers can call `markAllPending` on graph changes.
+
+`watchMembership(T)` and `membership_revision` provide a separate discovery
+signal. Shared add/set/remove and authored custom-component writes notify actual
+membership changes; field updates do not. A raw ECS add/remove must call
+`game.invalidateComponentMembership(T)`. This does not invalidate graph watches
+or position freshness by itself. A consumer must filter entities that have left
+its domain and unwatch them; position tracking is not a domain registry.
+
+These APIs run on the simulation thread. The pending iterator permits removing
+its current entry, but not registering entities, changing positions, or destroying
+other entries during iteration. It is not an independent subscription stream for
+multiple consumers. Queries must never register or consume pending work.

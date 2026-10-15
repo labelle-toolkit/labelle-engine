@@ -3,10 +3,13 @@ const std = @import("std");
 /// Opt-in, world-owned freshness tokens. Reads never allocate or repair.
 /// Tokens are never reused after untracking/reset; overflow fails closed.
 pub const PositionRevisions = struct {
-    const Slot = struct { entity: u64, revision: u64, next_free: ?u32 = null };
+    const Slot = struct { entity: u64, revision: u64, next_free: ?u32 = null, watched: bool = false, pending: bool = false, prev: ?u32 = null, next_pending: ?u32 = null };
     entries: std.AutoHashMapUnmanaged(u64, u32) = .empty,
     slots: std.ArrayListUnmanaged(Slot) = .empty,
     free_slot: ?u32 = null,
+    pending_head: ?u32 = null,
+    membership_types: std.AutoHashMapUnmanaged(u64, void) = .empty,
+    membership_revision: u64 = 0,
     serial: u64 = 0,
     watched_entities: std.AutoHashMapUnmanaged(u64, void) = .empty,
     watched_components: std.AutoHashMapUnmanaged(u64, void) = .empty,
@@ -14,6 +17,7 @@ pub const PositionRevisions = struct {
     hierarchy_untrusted: bool = false,
 
     pub fn deinit(self: *PositionRevisions, allocator: std.mem.Allocator) void {
+        self.membership_types.deinit(allocator);
         self.entries.deinit(allocator);
         self.slots.deinit(allocator);
         self.watched_entities.deinit(allocator);
@@ -42,6 +46,88 @@ pub const PositionRevisions = struct {
             self.slots.items[index] = .{ .entity = entity, .revision = self.next() };
         }
         return self.slots.items[entry.value_ptr.*].revision;
+    }
+
+    /// One opt-in consumer per world. Queue links live in already allocated
+    /// revision slots: movement cannot lose notifications through allocation failure.
+    pub fn watchChanges(self: *PositionRevisions, allocator: std.mem.Allocator, entity: u64) !void {
+        _ = try self.track(allocator, entity);
+        const index = self.slot(entity).?;
+        if (!self.slots.items[index].watched) {
+            self.slots.items[index].watched = true;
+            self.enqueue(index);
+        }
+    }
+
+    fn enqueue(self: *PositionRevisions, index: u32) void {
+        const value = &self.slots.items[index];
+        if (!value.watched or value.pending) return;
+        value.pending = true;
+        value.prev = null;
+        value.next_pending = self.pending_head;
+        if (self.pending_head) |head| self.slots.items[head].prev = index;
+        self.pending_head = index;
+    }
+
+    fn unlink(self: *PositionRevisions, index: u32) void {
+        const value = &self.slots.items[index];
+        if (!value.pending) return;
+        if (value.prev) |prev| self.slots.items[prev].next_pending = value.next_pending else self.pending_head = value.next_pending;
+        if (value.next_pending) |next_index| self.slots.items[next_index].prev = value.prev;
+        value.pending = false;
+        value.prev = null;
+        value.next_pending = null;
+    }
+
+    pub fn markPending(self: *PositionRevisions, entity: u64) void {
+        if (self.slot(entity)) |index| self.enqueue(index);
+    }
+
+    pub fn markAllPending(self: *PositionRevisions) void {
+        for (self.slots.items, 0..) |value, i| {
+            if (value.revision != 0) self.enqueue(@intCast(i));
+        }
+    }
+
+    pub fn acknowledge(self: *PositionRevisions, entity: u64, revision: u64) void {
+        const index = self.slot(entity) orelse return;
+        if (self.slots.items[index].revision == revision) self.unlink(index);
+    }
+
+    pub fn unwatchChanges(self: *PositionRevisions, entity: u64) void {
+        const index = self.slot(entity) orelse return;
+        self.unlink(index);
+        self.slots.items[index].watched = false;
+    }
+
+    pub const PendingIterator = struct {
+        owner: *PositionRevisions,
+        next_index: ?u32,
+        pub fn next(self: *PendingIterator) ?u64 {
+            const index = self.next_index orelse return null;
+            const value = self.owner.slots.items[index];
+            self.next_index = value.next_pending;
+            return value.entity;
+        }
+    };
+
+    /// The current element may be acknowledged/unwatched during iteration.
+    /// Do not register, destroy other entities, or mutate positions until done.
+    pub fn pendingIterator(self: *PositionRevisions) PendingIterator {
+        return .{ .owner = self, .next_index = self.pending_head };
+    }
+
+    pub fn watchMembership(self: *PositionRevisions, allocator: std.mem.Allocator, comptime T: type) !void {
+        const entry = try self.membership_types.getOrPut(allocator, comptime std.hash.Wyhash.hash(0, @typeName(T)));
+        if (!entry.found_existing) self.membership_revision = self.next();
+    }
+
+    pub fn watchesMembership(self: *const PositionRevisions, comptime T: type) bool {
+        return self.membership_types.contains(comptime std.hash.Wyhash.hash(0, @typeName(T)));
+    }
+
+    pub fn invalidateMembership(self: *PositionRevisions, comptime T: type) void {
+        if (self.watchesMembership(T)) self.membership_revision = self.next();
     }
 
     /// Registration-time handle. No pointers escape growable storage.
@@ -81,7 +167,10 @@ pub const PositionRevisions = struct {
 
     pub fn invalidate(self: *PositionRevisions, entity: u64) void {
         if (self.watched_entities.contains(entity)) self.dependency_revision = self.next();
-        if (self.entries.get(entity)) |index| self.slots.items[index].revision = self.next();
+        if (self.entries.get(entity)) |index| {
+            self.slots.items[index].revision = self.next();
+            self.enqueue(index);
+        }
     }
 
     /// Raw Children replacement may break the reverse index. Fail closed on
@@ -95,14 +184,18 @@ pub const PositionRevisions = struct {
         if (self.entries.count() == 0) return;
         const revision = self.next();
         if (self.watched_entities.count() != 0) self.dependency_revision = revision;
-        for (self.slots.items) |*value| {
-            if (value.revision != 0) value.revision = revision;
+        for (self.slots.items, 0..) |*value, i| {
+            if (value.revision != 0) {
+                value.revision = revision;
+                self.enqueue(@intCast(i));
+            }
         }
     }
 
     pub fn forget(self: *PositionRevisions, entity: u64) void {
         if (self.watched_entities.remove(entity)) self.dependency_revision = self.next();
         if (self.entries.fetchRemove(entity)) |entry| {
+            self.unlink(entry.value);
             self.slots.items[entry.value] = .{ .entity = entity, .revision = 0, .next_free = self.free_slot };
             self.free_slot = entry.value;
         }
@@ -112,6 +205,9 @@ pub const PositionRevisions = struct {
         self.entries.clearRetainingCapacity();
         self.slots.clearRetainingCapacity();
         self.free_slot = null;
+        self.pending_head = null;
+        self.membership_types.clearRetainingCapacity();
+        self.membership_revision = self.next();
         self.watched_entities.clearRetainingCapacity();
         self.watched_components.clearRetainingCapacity();
         self.dependency_revision = self.next();

@@ -245,6 +245,9 @@ pub fn EntityWriter(
                     if (has_override) {
                         const val = comptime merge(T, prefab_val, @field(scene_comps, field.name));
                         if (comptime @hasDecl(GameType, "invalidateComponentDependency")) game.invalidateComponentDependency(T);
+                        if (comptime @hasDecl(GameType, "invalidateComponentMembership")) {
+                            if (!game.ecs_backend.hasComponent(entity, T)) game.invalidateComponentMembership(T);
+                        }
                         game.ecs_backend.addComponent(entity, val);
                     } else {
                         addCustomComponent(T, field.name, entity, game, prefab_val, ref_ctx);
@@ -308,6 +311,9 @@ pub fn EntityWriter(
             // field-level references and can be coerced directly.
             if (!has_refs and !has_nested) {
                 if (comptime @hasDecl(GameType, "invalidateComponentDependency")) game.invalidateComponentDependency(T);
+                if (comptime @hasDecl(GameType, "invalidateComponentMembership")) {
+                    if (!game.ecs_backend.hasComponent(entity, T)) game.invalidateComponentMembership(T);
+                }
                 game.ecs_backend.addComponent(entity, coerce(T, comp_data));
                 return;
             }
@@ -363,6 +369,9 @@ pub fn EntityWriter(
             }
 
             if (comptime @hasDecl(GameType, "invalidateComponentDependency")) game.invalidateComponentDependency(T);
+            if (comptime @hasDecl(GameType, "invalidateComponentMembership")) {
+                if (!game.ecs_backend.hasComponent(entity, T)) game.invalidateComponentMembership(T);
+            }
             game.ecs_backend.addComponent(entity, comp);
         }
 

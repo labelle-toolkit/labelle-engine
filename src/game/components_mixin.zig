@@ -46,6 +46,12 @@ pub fn Mixin(comptime Game: type) type {
             self.active_world.position_revisions.invalidateComponent(T);
         }
 
+        /// Notify after unavoidable raw component membership changes. Field
+        /// updates do not require this; shared add/remove APIs notify automatically.
+        pub fn invalidateComponentMembership(self: *Game, comptime T: type) void {
+            self.active_world.position_revisions.invalidateMembership(T);
+        }
+
         /// Token is scoped to the active world. Pair it with world/entity
         /// identity; never compare tokens across different worlds.
         pub fn positionRevision(self: *Game, entity: Entity) ?u64 {
@@ -259,6 +265,7 @@ pub fn Mixin(comptime Game: type) type {
 
         pub fn addComponent(self: *Game, entity: Entity, component: anytype) void {
             invalidateComponentDependency(self, @TypeOf(component));
+            if (self.active_world.position_revisions.watchesMembership(@TypeOf(component)) and !self.ecs_backend.hasComponent(entity, @TypeOf(component))) invalidateComponentMembership(self, @TypeOf(component));
             // `Children` owns a heap list; overwriting it by value would leak
             // the old allocation. The engine manages it via setParent/destroy,
             // but this is a public path — free any existing one first.
@@ -287,6 +294,7 @@ pub fn Mixin(comptime Game: type) type {
             invalidateComponentDependency(self, @TypeOf(component));
             const T = @TypeOf(component);
             const is_update = self.ecs_backend.hasComponent(entity, T);
+            if (!is_update) invalidateComponentMembership(self, T);
             // Overwriting a `Children` by value would leak its old heap list
             // (see `addComponent`) — free it first on a genuine replace.
             if (T == Children and is_update) {
@@ -367,6 +375,7 @@ pub fn Mixin(comptime Game: type) type {
         }
 
         pub fn removeComponent(self: *Game, entity: Entity, comptime T: type) void {
+            if (self.active_world.position_revisions.watchesMembership(T) and self.ecs_backend.hasComponent(entity, T)) invalidateComponentMembership(self, T);
             invalidateComponentDependency(self, T);
             if (@typeInfo(T) == .@"struct" and @hasDecl(T, "onRemove")) {
                 T.onRemove(ComponentPayload{ .entity_id = @intCast(entity), .game_ptr = @ptrCast(self) });
