@@ -53,6 +53,15 @@ pub fn Mixin(comptime Game: type) type {
             return self.active_world.position_revisions.get(@intCast(entity));
         }
 
+        /// Slot discovery is preparation work; indexed reads never allocate.
+        pub fn positionRevisionSlot(self: *Game, entity: Entity) ?u32 {
+            return self.active_world.position_revisions.slot(@intCast(entity));
+        }
+
+        pub fn positionRevisionAt(self: *Game, entity: Entity, slot: u32) ?u64 {
+            return self.active_world.position_revisions.getAt(@intCast(entity), slot);
+        }
+
         /// Call after unavoidable direct ECS position writes. Shared setters
         /// call this automatically. Includes all descendants, even when the
         /// changed ancestor itself is not a matching participant.

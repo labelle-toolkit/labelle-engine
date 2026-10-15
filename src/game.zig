@@ -1412,6 +1412,8 @@ pub fn GameConfigWithYAxis(
         pub const dependencyRevision = ComponentsMixin.dependencyRevision;
         pub const invalidateComponentDependency = ComponentsMixin.invalidateComponentDependency;
         pub const trackPositionRevision = ComponentsMixin.trackPositionRevision;
+        pub const positionRevisionSlot = ComponentsMixin.positionRevisionSlot;
+        pub const positionRevisionAt = ComponentsMixin.positionRevisionAt;
         pub const positionRevision = ComponentsMixin.positionRevision;
         pub const invalidatePosition = ComponentsMixin.invalidatePosition;
         pub const getPosition = ComponentsMixin.getPosition;

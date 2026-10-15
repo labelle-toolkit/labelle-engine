@@ -58,3 +58,20 @@ Direct ECS or component-pointer writes still require explicit
 `invalidateComponentDependency(T)` (and `invalidatePosition(entity)` for spatial
 changes). This is not automatic backend instrumentation. Queries only compare
 tokens; they never register dependencies or allocate.
+
+## Indexed freshness reads
+
+After tracking, preparation can save `positionRevisionSlot(entity)` alongside
+world identity, full entity handle and revision. Matching calls
+`positionRevisionAt(entity, slot)` and compares the returned revision with the
+saved revision. This uses an array lookup rather than an entity hash lookup;
+it does not allocate, inspect ECS components or traverse ancestry.
+
+Slots are recycled on destruction, so the slot alone is not an identity or
+freshness token. Reads reject a mismatched entity or empty slot. Re-registering
+the same entity, including after reset, receives a new monotonic revision.
+Storage follows peak concurrent tracked entities rather than lifetime spawn
+count. Tracking allocation failure rolls back registration.
+
+Validation includes slot recycling/reset and every registration allocation
+failure. Full engine validation: 1,514 tests passed.
