@@ -1122,3 +1122,5 @@ pub const CursorControls = core.CursorControls;
 
 // ── Position freshness ──
 pub const PositionRevisions = @import("position_revisions.zig").PositionRevisions;
+
+pub const SnapshotExecutor = @import("snapshot_executor.zig").SnapshotExecutor;

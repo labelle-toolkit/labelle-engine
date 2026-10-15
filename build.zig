@@ -1,6 +1,21 @@
 const std = @import("std");
 
 pub fn build(b: *std.Build) void {
+    const worker_check = b.step("snapshot-worker-check", "Compile snapshot executor for threaded and serial WASM");
+    inline for (.{ false, true }) |single| {
+        const wasm = b.resolveTargetQuery(.{ .cpu_arch = .wasm32, .os_tag = .emscripten, .cpu_features_add = std.Target.wasm.featureSet(&.{ .atomics, .bulk_memory }) });
+        const executor = b.createModule(.{ .root_source_file = b.path("src/snapshot_executor.zig"), .target = wasm, .optimize = .ReleaseSmall, .single_threaded = single, .link_libc = true });
+        const object = b.addObject(.{ .name = if (single) "snapshot-worker-serial" else "snapshot-worker-threaded", .root_module = b.createModule(.{
+            .root_source_file = b.path("test/snapshot_executor_compile.zig"),
+            .target = wasm,
+            .optimize = .ReleaseSmall,
+            .single_threaded = single,
+            .link_libc = true,
+            .imports = &.{.{ .name = "worker", .module = executor }},
+        }) });
+        worker_check.dependOn(&object.step);
+    }
+
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
