@@ -1,0 +1,119 @@
+const std = @import("std");
+const testing = std.testing;
+const engine = @import("engine");
+const core = @import("labelle-core");
+const Game = engine.game_mod.Game;
+
+fn tracked(game: *Game, entity: Game.EntityType) !u64 {
+    return (try game.trackPositionRevision(entity)).?;
+}
+
+test "position setters invalidate tracked descendants but not unrelated entities" {
+    var game = Game.init(testing.allocator);
+    defer game.deinit();
+    const root = game.createEntity();
+    const child = game.createEntity();
+    const leaf = game.createEntity();
+    const other = game.createEntity();
+    game.setParent(child, root, .{});
+    game.setParent(leaf, child, .{});
+    var revision = try tracked(&game, leaf);
+    const other_revision = try tracked(&game, other);
+    try testing.expectEqual(null, game.positionRevision(root));
+    game.setPosition(root, .{ .x = 1 });
+    try testing.expect(game.positionRevision(leaf).? > revision);
+    revision = game.positionRevision(leaf).?;
+    game.setComponent(root, core.Position{ .x = 2 });
+    try testing.expect(game.positionRevision(leaf).? > revision);
+    revision = game.positionRevision(leaf).?;
+    game.setField(core.Position, .x, root, 3);
+    try testing.expect(game.positionRevision(leaf).? > revision);
+    revision = game.positionRevision(leaf).?;
+    game.removeComponent(root, core.Position);
+    try testing.expect(game.positionRevision(leaf).? > revision);
+    try testing.expectEqual(other_revision, game.positionRevision(other));
+}
+
+test "generic Parent writes maintain ancestry and invalidate before the next read" {
+    var game = Game.init(testing.allocator);
+    defer game.deinit();
+    const a = game.createEntity();
+    const b = game.createEntity();
+    const child = game.createEntity();
+    const leaf = game.createEntity();
+    game.setParent(leaf, child, .{});
+    var revision = try tracked(&game, leaf);
+    game.addComponent(child, Game.ParentComp{ .entity = a });
+    try testing.expect(game.positionRevision(leaf).? > revision);
+    revision = game.positionRevision(leaf).?;
+    game.setField(Game.ParentComp, .entity, child, b);
+    try testing.expectEqual(@as(usize, 0), game.getChildren(a).len);
+    try testing.expectEqual(child, game.getChildren(b)[0]);
+    try testing.expect(game.positionRevision(leaf).? > revision);
+    revision = game.positionRevision(leaf).?;
+    game.setPosition(b, .{ .x = 1 });
+    try testing.expect(game.positionRevision(leaf).? > revision);
+    revision = game.positionRevision(leaf).?;
+    game.removeComponent(child, Game.ParentComp);
+    try testing.expect(game.positionRevision(leaf).? > revision);
+    try testing.expectEqual(@as(usize, 0), game.getChildren(b).len);
+}
+
+test "destruction and ECS reset cannot reuse a previously observed token" {
+    var game = Game.init(testing.allocator);
+    defer game.deinit();
+    const parent = game.createEntity();
+    const child = game.createEntity();
+    game.setParent(child, parent, .{});
+    const before = try tracked(&game, child);
+    _ = try tracked(&game, parent);
+    game.destroyEntityOnly(parent);
+    try testing.expectEqual(null, game.positionRevision(parent));
+    try testing.expect(game.positionRevision(child).? > before);
+    const old = game.positionRevision(child).?;
+    game.resetEcsBackend();
+    const replacement = game.createEntity();
+    try testing.expectEqual(null, game.positionRevision(replacement));
+    try testing.expect((try tracked(&game, replacement)) > old);
+}
+
+test "raw Children mutation fails closed for subsequent ancestor changes" {
+    var game = Game.init(testing.allocator);
+    defer game.deinit();
+    const parent = game.createEntity();
+    const child = game.createEntity();
+    game.setParent(child, parent, .{});
+    _ = try tracked(&game, child);
+    game.removeComponent(parent, Game.ChildrenComp);
+    const before = game.positionRevision(child).?;
+    game.setPosition(parent, .{ .x = 1 });
+    try testing.expect(game.positionRevision(child).? > before);
+}
+
+test "tracking failure leaves no fake ready revision; reads do not allocate" {
+    var revisions = engine.PositionRevisions{};
+    var bytes: [0]u8 = .{};
+    var allocator = std.heap.FixedBufferAllocator.init(&bytes);
+    defer revisions.deinit(allocator.allocator());
+    try testing.expectError(error.OutOfMemory, revisions.track(allocator.allocator(), 1));
+    try testing.expectEqual(null, revisions.get(1));
+    revisions.invalidate(1);
+    try testing.expectEqual(null, revisions.get(1));
+}
+
+test "revision storage follows world switches without leaking identities" {
+    var game = Game.init(testing.allocator);
+    defer game.deinit();
+    try game.createWorld("a");
+    try game.createWorld("b");
+    try game.setActiveWorld("a");
+    const a = game.createEntity();
+    const before = try tracked(&game, a);
+    try game.setActiveWorld("b");
+    const b = game.createEntity();
+    try testing.expectEqual(null, game.positionRevision(b));
+    _ = try tracked(&game, b);
+    game.setPosition(b, .{ .x = 9 });
+    try game.setActiveWorld("a");
+    try testing.expectEqual(before, game.positionRevision(a));
+}

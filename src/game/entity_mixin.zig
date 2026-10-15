@@ -302,7 +302,9 @@ pub fn Mixin(comptime Game: type) type {
             // destructor). Kept here — after the preview telemetry above — so
             // a preview `getChildren` never reads a freed list. Re-fetch: the
             // cascade may have relocated the Children pool under an old pointer.
+            self.invalidatePosition(entity);
             if (self.ecs_backend.getComponent(entity, Children)) |cc| cc.deinit(self.allocator);
+            self.active_world.position_revisions.forget(@intCast(entity));
             self.ecs_backend.destroyEntity(entity);
             self.bumpRoster();
             recordTombstone(self, entity);
@@ -343,6 +345,7 @@ pub fn Mixin(comptime Game: type) type {
             // the `Children` component itself dies with the entity, so its
             // ArrayList must be freed or it leaks (the ECS runs no
             // destructor).
+            self.invalidatePosition(entity);
             if (self.ecs_backend.getComponent(entity, Children)) |cc| cc.deinit(self.allocator);
             untrackSceneEntity(self, entity);
             self.active_world.sprite_cache.invalidate(@intCast(entity));
@@ -351,6 +354,7 @@ pub fn Mixin(comptime Game: type) type {
             self.clearShaderMaterial(entity);
             self.renderer.untrackEntity(entity);
             self.releaseTilemap(entity);
+            self.active_world.position_revisions.forget(@intCast(entity));
             self.ecs_backend.destroyEntity(entity);
             self.bumpRoster();
             recordTombstone(self, entity);
