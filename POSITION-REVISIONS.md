@@ -40,3 +40,21 @@ Validation: six lifecycle tests exercise descendant invalidation, generic Parent
 mutation, destruction/reset, raw Children fallback, allocation failure and world
 isolation. The full engine test suite and Flying Platform's 20 test targets are
 also run for this change. No WASM performance result is claimed.
+
+## Aggregate dependency watch
+
+`watchPositionDependency(entity)` enrolls a live entity's position in a single
+world-owned dependency group. Ancestor movement, reparenting, destruction and
+raw-hierarchy invalidation advance `dependencyRevision()`. Ordinary tracked
+workers moving do not advance it unless explicitly enrolled in this group.
+
+`watchComponentDependency(T)` enrolls a component type: shared add/set/remove/
+setField and the authored scene writer advance the same group when that type
+changes. This catches new graph nodes as well as link/stair edits. Registration
+can fail with OOM; consumers must not publish a cache if registration failed.
+The token is conservative and scoped to the world, not a component value hash.
+
+Direct ECS or component-pointer writes still require explicit
+`invalidateComponentDependency(T)` (and `invalidatePosition(entity)` for spatial
+changes). This is not automatic backend instrumentation. Queries only compare
+tokens; they never register dependencies or allocate.

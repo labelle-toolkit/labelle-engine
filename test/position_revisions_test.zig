@@ -117,3 +117,33 @@ test "revision storage follows world switches without leaking identities" {
     try game.setActiveWorld("a");
     try testing.expectEqual(before, game.positionRevision(a));
 }
+
+test "dependency group changes for watched ancestry and components, not ordinary movement" {
+    var game = Game.init(testing.allocator);
+    defer game.deinit();
+    const Input = struct { value: u32 = 0 };
+    const parent = game.createEntity();
+    const node = game.createEntity();
+    const worker = game.createEntity();
+    game.setParent(node, parent, .{});
+    try game.watchPositionDependency(node);
+    try game.watchComponentDependency(Input);
+    _ = try tracked(&game, worker);
+    var revision = game.dependencyRevision();
+    game.setPosition(worker, .{ .x = 1 });
+    try testing.expectEqual(revision, game.dependencyRevision());
+    game.setPosition(parent, .{ .x = 1 });
+    try testing.expect(game.dependencyRevision() != revision);
+    revision = game.dependencyRevision();
+    game.addComponent(worker, Input{});
+    try testing.expect(game.dependencyRevision() != revision);
+    revision = game.dependencyRevision();
+    game.setField(Input, .value, worker, 3);
+    try testing.expect(game.dependencyRevision() != revision);
+    revision = game.dependencyRevision();
+    game.removeComponent(worker, Input);
+    try testing.expect(game.dependencyRevision() != revision);
+    revision = game.dependencyRevision();
+    game.destroyEntity(node);
+    try testing.expect(game.dependencyRevision() != revision);
+}

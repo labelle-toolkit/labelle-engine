@@ -1407,6 +1407,10 @@ pub fn GameConfigWithYAxis(
         // ── Position & Hierarchy ──────────────────────────────────
 
         pub const setPosition = ComponentsMixin.setPosition;
+        pub const watchPositionDependency = ComponentsMixin.watchPositionDependency;
+        pub const watchComponentDependency = ComponentsMixin.watchComponentDependency;
+        pub const dependencyRevision = ComponentsMixin.dependencyRevision;
+        pub const invalidateComponentDependency = ComponentsMixin.invalidateComponentDependency;
         pub const trackPositionRevision = ComponentsMixin.trackPositionRevision;
         pub const positionRevision = ComponentsMixin.positionRevision;
         pub const invalidatePosition = ComponentsMixin.invalidatePosition;

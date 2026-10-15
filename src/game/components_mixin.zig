@@ -28,6 +28,24 @@ pub fn Mixin(comptime Game: type) type {
             return try self.active_world.position_revisions.track(self.allocator, @intCast(entity));
         }
 
+        pub fn watchPositionDependency(self: *Game, entity: Entity) !void {
+            if (!self.ecs_backend.entityExists(entity)) return error.EntityNotAlive;
+            try self.active_world.position_revisions.watchPosition(self.allocator, @intCast(entity));
+        }
+
+        pub fn watchComponentDependency(self: *Game, comptime T: type) !void {
+            try self.active_world.position_revisions.watchComponent(self.allocator, T);
+        }
+
+        pub fn dependencyRevision(self: *Game) u64 {
+            return self.active_world.position_revisions.dependency_revision;
+        }
+
+        /// Explicit companion for unavoidable direct backend/component-pointer writes.
+        pub fn invalidateComponentDependency(self: *Game, comptime T: type) void {
+            self.active_world.position_revisions.invalidateComponent(T);
+        }
+
         /// Token is scoped to the active world. Pair it with world/entity
         /// identity; never compare tokens across different worlds.
         pub fn positionRevision(self: *Game, entity: Entity) ?u64 {
@@ -231,6 +249,7 @@ pub fn Mixin(comptime Game: type) type {
         // ── Generic Component Access ──────────────────────────────
 
         pub fn addComponent(self: *Game, entity: Entity, component: anytype) void {
+            invalidateComponentDependency(self, @TypeOf(component));
             // `Children` owns a heap list; overwriting it by value would leak
             // the old allocation. The engine manages it via setParent/destroy,
             // but this is a public path — free any existing one first.
@@ -256,6 +275,7 @@ pub fn Mixin(comptime Game: type) type {
         }
 
         pub fn setComponent(self: *Game, entity: Entity, component: anytype) void {
+            invalidateComponentDependency(self, @TypeOf(component));
             const T = @TypeOf(component);
             const is_update = self.ecs_backend.hasComponent(entity, T);
             // Overwriting a `Children` by value would leak its old heap list
@@ -316,6 +336,7 @@ pub fn Mixin(comptime Game: type) type {
             value: @FieldType(T, @tagName(field)),
         ) void {
             const comp_ptr = self.ecs_backend.getComponent(entity, T) orelse return;
+            invalidateComponentDependency(self, T);
             if (T == Parent) {
                 var updated = comp_ptr.*;
                 @field(updated, @tagName(field)) = value;
@@ -337,6 +358,7 @@ pub fn Mixin(comptime Game: type) type {
         }
 
         pub fn removeComponent(self: *Game, entity: Entity, comptime T: type) void {
+            invalidateComponentDependency(self, T);
             if (@typeInfo(T) == .@"struct" and @hasDecl(T, "onRemove")) {
                 T.onRemove(ComponentPayload{ .entity_id = @intCast(entity), .game_ptr = @ptrCast(self) });
             }
