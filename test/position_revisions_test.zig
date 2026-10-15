@@ -239,3 +239,23 @@ test "membership watches ignore value updates and notify additions removals and 
     game.invalidateComponentMembership(Domain);
     try testing.expect(r.membership_revision != before);
 }
+
+test "snapshot executor joins delayed work and reuses its worker across batches" {
+    var executor = engine.SnapshotExecutor{};
+    defer executor.deinit();
+    const Job = struct {
+        values: [16]u32 = @splat(0),
+        fn run(raw: *anyopaque, start: usize, end: usize) void {
+            const self: *@This() = @ptrCast(@alignCast(raw));
+            // Make the worker lane later than the main lane.
+            if (start == 0) for (0..100) |_| {
+                std.Thread.yield() catch {};
+            };
+            for (start..end) |i| self.values[i] += 1;
+        }
+    };
+    var job = Job{};
+    for (0..8) |_| _ = executor.run(&job, job.values.len, Job.run);
+    for (job.values) |value| try testing.expectEqual(@as(u32, 8), value);
+    try testing.expectEqual(@as(u32, 0), executor.state.load(.acquire));
+}
