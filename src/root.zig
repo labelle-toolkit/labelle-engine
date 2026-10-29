@@ -4,6 +4,7 @@ pub const core = @import("labelle-core");
 
 // ── Persistent blobs ──
 pub const storage = @import("storage.zig");
+pub const settings = @import("settings.zig");
 
 // Engine modules
 pub const game_mod = @import("game.zig");

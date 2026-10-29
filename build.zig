@@ -87,6 +87,16 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&storage_run.step);
     b.step("test-storage", "Test persistent blob storage").dependOn(&storage_run.step);
 
+    const settings_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("src/settings.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "labelle-core", .module = core_module }},
+    }) });
+    const settings_run = b.addRunArtifact(settings_tests);
+    test_step.dependOn(&settings_run.step);
+    b.step("test-settings", "Test asynchronous typed settings").dependOn(&settings_run.step);
+
     // #899: the preview socket shims take errno and the fcntl/errno
     // constants from `std.c`, which resolves them per target, and
     // `screenshot_request.nowNs` takes CLOCK_MONOTONIC the same way. This

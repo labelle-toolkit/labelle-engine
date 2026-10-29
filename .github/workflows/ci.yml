@@ -46,6 +46,16 @@ jobs:
       - name: Build library
         run: zig build
 
+      - name: Test persistent settings
+        run: zig build test-settings -j2 --summary all
+
+      - name: Compile settings for browser and mobile
+        shell: bash
+        run: |
+          for target in wasm32-emscripten aarch64-linux-android; do
+            zig build-obj -target "$target" --dep settings -Mroot=test/settings_compile.zig -target "$target" -Msettings=src/settings.zig -fno-emit-bin
+          done
+
       - name: Test standalone animation package
         working-directory: animation
         run: zig build test --summary all
