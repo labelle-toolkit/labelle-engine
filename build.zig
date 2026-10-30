@@ -208,6 +208,10 @@ pub fn build(b: *std.Build) void {
         // keep the save format byte-identical; pins a golden save and
         // loads it back as an "existing" save.
         "test/save_serializer_golden_test.zig",
+        // #922 — the save loader split into bounded functions must load
+        // existing saves into the same world (pinned re-serialization),
+        // keep postLoad/marker/create semantics and leak nothing.
+        "test/save_load_compat_test.zig",
         "test/save_scene_after_menu_load_test.zig",
         "test/jsonc/bridge_leak_test.zig",
         "test/jsonc/nested_lifecycle_test.zig",
