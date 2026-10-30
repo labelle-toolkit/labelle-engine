@@ -5,6 +5,7 @@
 | base-threaded-edit2 | 0 | 423.46 | 220.8 | 10.3 | 180.1 | 10.42 |
 | base-threaded-noop | 0 | 1.03 |  |  |  | 0.11 |
 | proto-single-cold | 0 | 424.02 | 222.7 | 10.32 | 168.6 | 10.44 |
+| proto-single-edit1 | 0 | 385.65 | 212.5 | 9.85 | 165.4 | 9.96 |
 | proto-threaded-cold | 0 | 408.2 | 213.5 | 10.38 | 171.2 | 10.51 |
 | proto-threaded-edit1 | 0 | 410.41 | 218.3 | 10.32 | 187.0 | 10.43 |
 | proto-threaded-edit2 | 0 | 424.74 | 242.2 | 10.32 | 177.4 | 10.43 |
