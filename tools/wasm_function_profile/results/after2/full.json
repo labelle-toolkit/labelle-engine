@@ -1,0 +1,96 @@
+{
+  "run": "full",
+  "cwd": "<fp-clone>/.labelle/bgfx_wasm",
+  "command": [
+    "C:/Users/User/.zvm/0.16.0/zig.exe",
+    "build",
+    "-Doptimize=ReleaseSafe",
+    "-j2",
+    "--summary",
+    "all"
+  ],
+  "exit": 0,
+  "build_ok": true,
+  "wall_seconds": 144.46,
+  "tree_peak_private_bytes": 768798720,
+  "top_processes": [
+    {
+      "name": "wasm-opt.exe",
+      "argv": "C:/Users/User/.labelle/providers/github.com/labelle-toolkit/labelle-web/emsdk/v1/x86_64-windows/4.0.9-3bcf1dcd01f0/upstream\\bin\\wasm-opt --strip-target-features --post-emscripten -O3 --low-memory-unused --zero-filled-memory --pass-arg=directize-initial-contents-immutable C:\\Users\\User\\.labelle\\zig-local-cache\\o\\36f1edef23cd22beb64f7ae4613929c4\\game.wasm -o C:\\Users\\User\\.labelle\\zig-local-cache\\o\\",
+      "peak_private_bytes": 628482048,
+      "peak_working_set_bytes": 614821888
+    },
+    {
+      "name": "node.exe",
+      "argv": "C:/Users/User/.labelle/providers/github.com/labelle-toolkit/labelle-web/emsdk/v1/x86_64-windows/4.0.9-3bcf1dcd01f0/node/20.18.0_64bit/bin/node.exe C:\\Users\\User\\.labelle\\providers\\github.com\\labelle-toolkit\\labelle-web\\emsdk\\v1\\x86_64-windows\\4.0.9-3bcf1dcd01f0\\upstream\\emscripten\\tools\\acorn-optimizer.mjs C:\\Users\\User\\AppData\\Local\\Temp\\emscripten_temp_77qakoqh\\game.jso1.js JSDCE --minify-whites",
+      "peak_private_bytes": 119328768,
+      "peak_working_set_bytes": 94355456
+    },
+    {
+      "name": "zig.exe",
+      "argv": "C:/Users/User/.zvm/0.16.0/zig.exe build -Doptimize=ReleaseSafe -j2 --summary all",
+      "peak_private_bytes": 67657728,
+      "peak_working_set_bytes": 18747392
+    },
+    {
+      "name": "node.exe",
+      "argv": "C:/Users/User/.labelle/providers/github.com/labelle-toolkit/labelle-web/emsdk/v1/x86_64-windows/4.0.9-3bcf1dcd01f0/node/20.18.0_64bit/bin/node.exe C:\\Users\\User\\.labelle\\providers\\github.com\\labelle-toolkit\\labelle-web\\emsdk\\v1\\x86_64-windows\\4.0.9-3bcf1dcd01f0\\upstream\\emscripten\\tools\\acorn-optimizer.mjs C:\\Users\\User\\AppData\\Local\\Temp\\emscripten_temp_77qakoqh\\game.js growableHeap -o C:\\Users\\U",
+      "peak_private_bytes": 56737792,
+      "peak_working_set_bytes": 39325696
+    },
+    {
+      "name": "build.exe",
+      "argv": "C:\\Users\\User\\.labelle\\zig-local-cache\\o\\f493836e9aa1a7d50ee7a66a6206ef00\\build.exe C:\\Users\\User\\.zvm\\0.16.0\\zig.exe C:\\Users\\User\\.zvm\\0.16.0\\lib D:\\prj\\labelle-toolkit\\epic-528\\fp-922\\.labelle\\bgfx_wasm C:\\Users\\User\\.labelle\\zig-local-cache C:\\Users\\User\\.labelle\\zig-global-cache --seed 0xc9b30e0 -Z118ad8dde19e696e -Doptimize=ReleaseSafe -j2 --summary all",
+      "peak_private_bytes": 48115712,
+      "peak_working_set_bytes": 22544384
+    }
+  ],
+  "long_processes": [
+    {
+      "name": "zig.exe",
+      "argv": "C:/Users/User/.zvm/0.16.0/zig.exe build -Doptimize=ReleaseSafe -j2 --summary all",
+      "peak_private_bytes": 67657728,
+      "peak_working_set_bytes": 18747392,
+      "start_s": 0.0,
+      "end_s": 144.0,
+      "seconds": 143.9
+    },
+    {
+      "name": "build.exe",
+      "argv": "C:\\Users\\User\\.labelle\\zig-local-cache\\o\\f493836e9aa1a7d50ee7a66a6206ef00\\build.exe C:\\Users\\User\\.zvm\\0.16.0\\zig.exe C:\\Users\\User\\.zvm\\0.16.0\\lib D:\\prj\\labelle-toolkit\\epic-528\\fp-922\\.labelle\\bgfx_wasm C:\\Users\\User\\.labelle\\zig-local-cache C:\\Users\\User\\.labelle\\zig-global-cache --seed 0xc9b30e0 -Z118ad8dde19e696e -Doptimize=ReleaseSafe -j2 --summary all",
+      "peak_private_bytes": 48115712,
+      "peak_working_set_bytes": 22544384,
+      "start_s": 0.5,
+      "end_s": 144.0,
+      "seconds": 143.4
+    },
+    {
+      "name": "cmd.exe",
+      "argv": "cmd.exe /d /e:ON /v:OFF /c C:\\Users\\User\\.labelle\\providers\\github.com\\labelle-toolkit\\labelle-web\\emsdk\\v1\\x86_64-windows\\4.0.9-3bcf1dcd01f0\\upstream\\emscripten\\emcc.bat -sASSERTIONS=1 -O3 -sMIN_WEBGL_VERSION=2 -sMAX_WEBGL_VERSION=2 -sGL_ENABLE_GET_PROC_ADDRESS=1 -sALLOW_MEMORY_GROWTH=1 -sSTACK_SIZE=524288 -pthread -sPTHREAD_POOL_SIZE=4 -sINITIAL_MEMORY=67108864 C:\\Users\\User\\.labelle\\zig-local-c",
+      "peak_private_bytes": 7335936,
+      "peak_working_set_bytes": 8556544,
+      "start_s": 1.5,
+      "end_s": 144.0,
+      "seconds": 142.4
+    },
+    {
+      "name": "python.exe",
+      "argv": "C:/Users/User/.labelle/providers/github.com/labelle-toolkit/labelle-web/emsdk/v1/x86_64-windows/4.0.9-3bcf1dcd01f0/python/3.9.2-nuget_64bit/python.exe -E C:\\Users\\User\\.labelle\\providers\\github.com\\labelle-toolkit\\labelle-web\\emsdk\\v1\\x86_64-windows\\4.0.9-3bcf1dcd01f0\\upstream\\emscripten\\emcc.py -sASSERTIONS=1 -O3 -sMIN_WEBGL_VERSION=2 -sMAX_WEBGL_VERSION=2 -sGL_ENABLE_GET_PROC_ADDRESS=1 -sALLOW_M",
+      "peak_private_bytes": 21008384,
+      "peak_working_set_bytes": 36577280,
+      "start_s": 1.5,
+      "end_s": 144.0,
+      "seconds": 142.4
+    },
+    {
+      "name": "wasm-opt.exe",
+      "argv": "C:/Users/User/.labelle/providers/github.com/labelle-toolkit/labelle-web/emsdk/v1/x86_64-windows/4.0.9-3bcf1dcd01f0/upstream\\bin\\wasm-opt --strip-target-features --post-emscripten -O3 --low-memory-unused --zero-filled-memory --pass-arg=directize-initial-contents-immutable C:\\Users\\User\\.labelle\\zig-local-cache\\o\\36f1edef23cd22beb64f7ae4613929c4\\game.wasm -o C:\\Users\\User\\.labelle\\zig-local-cache\\o\\",
+      "peak_private_bytes": 628482048,
+      "peak_working_set_bytes": 614821888,
+      "start_s": 2.1,
+      "end_s": 142.4,
+      "seconds": 140.4
+    }
+  ],
+  "finished_utc": "2026-10-30T18:43:27.449917+00:00"
+}
