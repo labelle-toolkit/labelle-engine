@@ -61,6 +61,7 @@ const std = @import("std");
 
 const TileLayerSize = @import("tilemap.zig").TileLayerSize;
 const normalizeHandle = @import("game/atlas_mixin.zig").normalizeHandle;
+const rt_boundary = @import("boundary/tmx_adapter.zig");
 
 /// True when `RenderImpl` exposes the gfx 1.21.0 tilemap seam: the
 /// per-backend `TileMapRenderer` type plus the shared texture path the
@@ -343,7 +344,9 @@ pub fn Runtime(comptime RenderImpl: type) type {
             // options-taking entry point, and an engine built against it must
             // still compile (external tilesets then keep failing with
             // `error.ExternalTilesetUnsupported`, exactly as before).
-            var map = if (comptime @hasDecl(TileMap, "loadFromMemoryWithOptions")) blk: {
+            var map = if (comptime rt_boundary.enabled)
+                try rt_boundary.loadTileMap(TileMap, tmx_bytes, images)
+            else if (comptime @hasDecl(TileMap, "loadFromMemoryWithOptions")) blk: {
                 const LoadOptions = @typeInfo(@TypeOf(TileMap.loadFromMemoryWithOptions)).@"fn".params[3].type.?;
                 const TsxResolver = @typeInfo(@FieldType(LoadOptions, "tsx_resolver")).optional.child;
                 break :blk try TileMap.loadFromMemoryWithOptions(allocator, tmx_bytes, "", LoadOptions{
