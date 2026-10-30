@@ -1,0 +1,39 @@
+functions 4424 total code 5368582
+   58476  game.save_load.save.Mixin(game.GameConfigWithYAxis(...)
+   53719  sort.block.block__anon_291496
+   48888  jsonc.component_apply.ComponentApply(game.GameConfigWithYAxis(...)
+   46494  main.gameFrame
+   41813  sort.block.block__anon_424660
+   40240  game.loop_mixin.Mixin(game.GameConfigWithYAxis(...)
+   40046  main.main
+   37754  tile_map.TileMap.parseXml
+   37681  serde.writeComponent__anon_201810
+   37659  work_cycle_machine.make(game.GameConfigWithYAxis(...)
+   37312  sort.block.block__anon_401217
+   32999  sort.block.block__anon_316752
+   32722  serde.writeComponent__anon_199002
+   31086  dispatcher.MergeHooks(dispatcher.MergeHookPayloads(.{ hooks_types.HookPayload(u32), dispatcher.MergeHookPayloads(.{ main.GameEventsRaw, main.PluginEvents }) }),
+   26122  root.Systems.drawGui__anon_157247
+   24933  jsonc.ref_resolver.RefResolver(game.GameConfigWithYAxis(...)
+   24513  tilemap_runtime.Runtime(renderer.GfxRendererWith(gfx,main.GameLayers,u32,.up)).initInPlace
+   24126  scheduling.scheduleIdleWorkers__anon_370148
+   24117  sort.block.block__anon_372278
+   22928  sibling_fields.SiblingFieldsCheck(components.worker.Worker,"job_state"[0..9],.{ .idle = .{ ... }, .working = .{ ... }, .delivering = .{ ... }, .wandering = .{ .
+   22816  scripts.playing.12_fight_resolver.resolveFights__anon_364143
+   22306  tile_map.TileMap.parseTilesetElement
+   22003  binding.run__anon_382101
+   21988  sort.block.block__anon_159456
+   20784  sprite_by_field_tick.tick__anon_406380
+   20336  scripts.playing.14_guard_system.tick__anon_362587
+   19877  jsonc.ref_resolver.RefResolver(game.GameConfigWithYAxis(...)
+   19868  nav.controller.Controller.prepareEndpointDomains__anon_403869
+   19456  scripts.playing.17_turbine_bombs.tick__anon_398997
+   18928  jsonc.on_ready.OnReady(game.GameConfigWithYAxis(...)
+clusters:
+     40046 B in    1 fns (largest   40046)  startup main.main
+         0 B in    0 fns (largest       0)  inspector drawEntityDetail
+         0 B in    0 fns (largest       0)  inspector drawEntityBrowser
+    256060 B in  364 fns (largest   26122)  inspector other root.draw*
+    142697 B in   82 fns (largest   14322)  load.Mixin.* (all)
+    407337 B in  141 fns (largest   58476)  save.Mixin.* (all)
+     89975 B in    5 fns (largest   46494)  main.* (generated, all)
