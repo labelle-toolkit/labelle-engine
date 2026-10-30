@@ -115,6 +115,313 @@ pub fn Mixin(comptime Game: type) type {
             }
         }
 
+        // ─── Bounded restore helpers (#922) ─────────────────────────
+        //
+        // `deserializeGameState` walks the ComponentRegistry several
+        // times. Written as `inline for` bodies, every registered
+        // component's JSON read + entity-ref remap, ref-array restore,
+        // postLoad sweep and post-load marker sweep was expanded into ONE
+        // function (~133 KB of code in one Flying Platform target), and LLVM's
+        // super-linear passes over it cost compile time and memory. Each
+        // helper below is instantiated once per component type (or once,
+        // for the built-ins) and kept `noinline`, so the loader stays a
+        // short sequence of calls and every piece is optimised as its own
+        // bounded function — the same treatment #921 gave the serializer.
+        // The helpers run the same statements in the same order as the
+        // inline bodies did: errors still propagate through `try`, the
+        // per-component temporary lists are still freed by `defer`, and
+        // the "skip on malformed input" contract is unchanged.
+        // `test/save_load_compat_test.zig` pins it. Do not make them
+        // `inline`: that rebuilds the giant function.
+
+        /// The save policies the loader restores (mirror of the
+        /// serializer's `isPersisted`).
+        fn isPersisted(comptime T: type) bool {
+            const policy = core.getSavePolicy(T) orelse return false;
+            return policy == .saveable or policy == .marker;
+        }
+
+        /// Phase 2: restore one registry component of `entity` from its
+        /// saved `components` object, remapping entity refs. A missing
+        /// entry or one that fails to parse is skipped, as before.
+        noinline fn restoreRegisteredComponent(
+            comptime T: type,
+            self: *Game,
+            entity: Entity,
+            components: std.json.ObjectMap,
+            id_map: *const std.AutoHashMap(u64, u64),
+        ) void {
+            const comp_name = comptime serde.componentName(T);
+            if (components.get(comp_name)) |comp_val| {
+                if (serde.readComponent(T, comp_val, serde.autoSkipField)) |restored| {
+                    var comp = restored;
+                    serde.remapEntityRefs(T, &comp, id_map);
+                    self.active_world.ecs_backend.addComponent(entity, comp);
+                } else |_| {}
+            }
+        }
+
+        /// Step 4: restore `T`'s ref-array fields on `entity` (if it has
+        /// a `T`), allocating the slices from the world arena.
+        noinline fn restoreComponentRefArrays(
+            comptime T: type,
+            self: *Game,
+            entity: Entity,
+            ref_obj: std.json.ObjectMap,
+            id_map: *const std.AutoHashMap(u64, u64),
+            arena: std.mem.Allocator,
+        ) !void {
+            if (self.active_world.ecs_backend.getComponent(entity, T)) |comp| {
+                try serde.readRefArrays(T, comp, ref_obj, id_map, arena);
+            }
+        }
+
+        /// Step 6a: run `T.postLoad` on every entity carrying `T`.
+        noinline fn runComponentPostLoad(comptime T: type, self: *Game) !void {
+            const allocator = self.allocator;
+            var entities = try Common.collectEntities(T, &self.active_world.ecs_backend, allocator);
+            defer entities.deinit(allocator);
+            for (entities.items) |ent| {
+                if (self.active_world.ecs_backend.getComponent(ent, T)) |comp| {
+                    comp.postLoad(self, ent);
+                }
+            }
+        }
+
+        /// Step 6b: add `T`'s declared post-load marker components to
+        /// every entity carrying `T` that lacks them.
+        noinline fn addPostLoadMarkers(comptime T: type, self: *Game) !void {
+            const allocator = self.allocator;
+            const markers = comptime core.getPostLoadMarkers(T);
+            var entities = try Common.collectEntities(T, &self.active_world.ecs_backend, allocator);
+            defer entities.deinit(allocator);
+            for (entities.items) |ent| {
+                inline for (markers) |Marker| {
+                    if (!self.active_world.ecs_backend.hasComponent(ent, Marker)) {
+                        self.active_world.ecs_backend.addComponent(ent, Marker{});
+                    }
+                }
+            }
+        }
+
+        /// Step 6c: create the singleton entity a `post_load_create`
+        /// component asks for.
+        noinline fn createPostLoadEntity(comptime T: type, self: *Game) void {
+            const ent = self.createEntity();
+            self.active_world.ecs_backend.addComponent(ent, T{});
+            self.addEntityToActiveScene(ent);
+        }
+
+        /// Restore Parent (built-in) — counterpart to the Parent save
+        /// block. Uses `setParent` so the engine's Children back-link is
+        /// rebuilt alongside.
+        ///
+        /// Mirrors the save-side `has_parent_in_registry` guard and
+        /// Position's load-side guard: if a game ever registers
+        /// `Game.ParentComp`, the registry-driven restore already handles
+        /// Parent via `addComponent`, so this built-in block would
+        /// double-restore and trigger `setParent` with stale state
+        /// (review #470).
+        ///
+        /// Skip the restore unless we can both parse a valid saved entity
+        /// ID and map it to a post-load entity — passing a stale or raw ID
+        /// to `setParent` would trip `assertEntityAlive` in debug or
+        /// corrupt hierarchy state in release builds.
+        noinline fn restoreBuiltinParent(
+            self: *Game,
+            entity: Entity,
+            components: std.json.ObjectMap,
+            id_map: *const std.AutoHashMap(u64, u64),
+        ) void {
+            if (comptime Common.isRegistered(Game.ParentComp)) return;
+            const parent_val = components.get("Parent") orelse return;
+            // A malformed save carrying `"Parent": 123` or
+            // `"Parent": null` would otherwise trip the `.object`
+            // tag-cast safety check and panic in debug before the
+            // field-level guards below had a chance to skip the restore.
+            const parent_obj = switch (parent_val) {
+                .object => |o| o,
+                else => return,
+            };
+            const ent_val = parent_obj.get("entity") orelse return;
+            const saved_parent_id: u64 = switch (ent_val) {
+                .integer => |i| if (i >= 0) @intCast(i) else return,
+                else => return,
+            };
+            const current_parent_id = id_map.get(saved_parent_id) orelse return;
+            const parent_entity: Entity = @intCast(current_parent_id);
+            const inherit_rotation = parentFlag(parent_obj, "inherit_rotation");
+            const inherit_scale = parentFlag(parent_obj, "inherit_scale");
+            self.setParent(entity, parent_entity, .{
+                .inherit_rotation = inherit_rotation,
+                .inherit_scale = inherit_scale,
+            });
+        }
+
+        /// Restore PrefabInstance (built-in) — counterpart to the save
+        /// block. String fields are duped into the world's nested-entity
+        /// arena so they outlive the parsed JSON deinit.
+        noinline fn restoreBuiltinPrefabInstance(
+            self: *Game,
+            entity: Entity,
+            components: std.json.ObjectMap,
+        ) !void {
+            const PrefabInstance_load = Game.PrefabInstanceComp;
+            if (comptime Common.isRegistered(PrefabInstance_load)) return;
+            const pi_val = components.get("PrefabInstance") orelse return;
+            const pi_obj = switch (pi_val) {
+                .object => |o| o,
+                else => return,
+            };
+            const path_str = switch (pi_obj.get("path") orelse return) {
+                .string => |s| s,
+                else => return,
+            };
+            const overrides_str = switch (pi_obj.get("overrides") orelse return) {
+                .string => |s| s,
+                else => return,
+            };
+            const pi_arena = self.active_world.nested_entity_arena.allocator();
+            const path_dup = try pi_arena.dupe(u8, path_str);
+            const overrides_dup = try pi_arena.dupe(u8, overrides_str);
+            self.active_world.ecs_backend.addComponent(entity, PrefabInstance_load{
+                .path = path_dup,
+                .overrides = overrides_dup,
+            });
+        }
+
+        /// Restore PrefabChild (built-in) — counterpart to the save
+        /// block. `root` is an entity ref, remapped through `id_map`;
+        /// `local_path` is duped into the world arena to outlive the
+        /// parsed JSON.
+        noinline fn restoreBuiltinPrefabChild(
+            self: *Game,
+            entity: Entity,
+            components: std.json.ObjectMap,
+            id_map: *const std.AutoHashMap(u64, u64),
+        ) !void {
+            const PrefabChild_load = Game.PrefabChildComp;
+            if (comptime Common.isRegistered(PrefabChild_load)) return;
+            const pc_val = components.get("PrefabChild") orelse return;
+            const pc_obj = switch (pc_val) {
+                .object => |o| o,
+                else => return,
+            };
+            const root_val = pc_obj.get("root") orelse return;
+            const saved_root_id: u64 = switch (root_val) {
+                .integer => |i| if (i >= 0) @intCast(i) else return,
+                else => return,
+            };
+            const current_root_id = id_map.get(saved_root_id) orelse return;
+            const root_entity: Entity = @intCast(current_root_id);
+            const local_path_str = switch (pc_obj.get("local_path") orelse return) {
+                .string => |s| s,
+                else => return,
+            };
+            const pc_arena = self.active_world.nested_entity_arena.allocator();
+            const local_path_dup = try pc_arena.dupe(u8, local_path_str);
+            self.active_world.ecs_backend.addComponent(entity, PrefabChild_load{
+                .root = root_entity,
+                .local_path = local_path_dup,
+            });
+        }
+
+        /// Restore Tilemap (built-in, T2 Phase 2) — counterpart to the
+        /// save block. `addTilemap` re-attaches the component AND rebuilds
+        /// the decoded-map runtime from the (still-embedded) `.tmx` asset;
+        /// runtime state itself is never saved. `asset_name` is duped into
+        /// the world arena to outlive the parsed JSON deinit.
+        noinline fn restoreBuiltinTilemap(
+            self: *Game,
+            entity: Entity,
+            components: std.json.ObjectMap,
+        ) !void {
+            if (comptime Common.isRegistered(Game.TilemapComp)) return;
+            const tm_val = components.get("Tilemap") orelse return;
+            const tm_obj = switch (tm_val) {
+                .object => |o| o,
+                else => return,
+            };
+            const name_str = switch (tm_obj.get("asset_name") orelse return) {
+                .string => |s| s,
+                else => return,
+            };
+            const tm_arena = self.active_world.nested_entity_arena.allocator();
+            const name_dup = try tm_arena.dupe(u8, name_str);
+
+            // Restore explicit `layer_bindings` (T3), if the save carried
+            // them. Absent → `null` (implicit-by-name), matching a T2 save.
+            // Strings + the slice are duped into the world arena to
+            // outlive the parsed JSON.
+            const LayerBinding = @import("../../tilemap.zig").LayerBinding;
+            var bindings: ?[]const LayerBinding = null;
+            if (tm_obj.get("layer_bindings")) |lb_val| {
+                if (lb_val == .array) {
+                    const arr = lb_val.array;
+                    const buf = try tm_arena.alloc(LayerBinding, arr.items.len);
+                    var n: usize = 0;
+                    for (arr.items) |item| {
+                        const obj = switch (item) {
+                            .object => |o| o,
+                            else => continue,
+                        };
+                        const tmx = switch (obj.get("tmx_layer") orelse continue) {
+                            .string => |s| s,
+                            else => continue,
+                        };
+                        const eng = switch (obj.get("engine_layer") orelse continue) {
+                            .string => |s| s,
+                            else => continue,
+                        };
+                        buf[n] = .{
+                            .tmx_layer = try tm_arena.dupe(u8, tmx),
+                            .engine_layer = try tm_arena.dupe(u8, eng),
+                        };
+                        n += 1;
+                    }
+                    bindings = buf[0..n];
+                }
+            }
+            self.addTilemap(entity, .{ .asset_name = name_dup, .layer_bindings = bindings });
+        }
+
+        /// Restore Camera (built-in, camera-prefabs #714) — counterpart to
+        /// the save block. Plain POD (no strings / no runtime), so a
+        /// straight `addComponent` re-attaches it; the seed re-applies to
+        /// the live camera on the next scene bind / paused frame. Gated on
+        /// `camera_is_builtin` like the save side.
+        noinline fn restoreBuiltinCamera(
+            self: *Game,
+            entity: Entity,
+            components: std.json.ObjectMap,
+        ) void {
+            if (comptime !Game.camera_is_builtin) return;
+            const cam_val = components.get("Camera") orelse return;
+            const cam_obj = switch (cam_val) {
+                .object => |o| o,
+                else => return,
+            };
+            var cam: Game.CameraComp = .{};
+            // Preserve the 1.0 default if a (malformed) save omits zoom —
+            // `getNumberField` would otherwise yield 0.
+            if (cam_obj.get("zoom") != null) cam.zoom = getNumberField(cam_obj, "zoom");
+            // Camera tag (camera-bound layers, #723/#724). Absent in
+            // pre-#724 saves → the `"main"` default is kept.
+            if (getStringField(cam_obj, "tag")) |t| cam.setTagSlice(t);
+            if (cam_obj.get("viewport")) |vp_val| {
+                if (vp_val == .object) {
+                    const vp = vp_val.object;
+                    cam.viewport = .{
+                        .x = @intFromFloat(getNumberField(vp, "x")),
+                        .y = @intFromFloat(getNumberField(vp, "y")),
+                        .width = @intFromFloat(getNumberField(vp, "width")),
+                        .height = @intFromFloat(getNumberField(vp, "height")),
+                    };
+                }
+            }
+            self.addComponent(entity, cam);
+        }
+
         // ─── Load ───────────────────────────────────────────────────
 
         pub fn loadGameState(self: *Game, filename: []const u8) !void {
@@ -384,213 +691,19 @@ pub fn Mixin(comptime Game: type) type {
 
                 inline for (names) |name| {
                     const T = Reg.getType(name);
-                    if (comptime core.getSavePolicy(T)) |policy| {
-                        if (policy == .saveable or policy == .marker) {
-                            const comp_name = comptime serde.componentName(T);
-                            if (components.get(comp_name)) |comp_val| {
-                                if (serde.readComponent(T, comp_val, serde.autoSkipField)) |restored| {
-                                    var comp = restored;
-                                    serde.remapEntityRefs(T, &comp, &id_map);
-                                    self.active_world.ecs_backend.addComponent(entity, comp);
-                                } else |_| {}
-                            }
-                        }
+                    if (comptime isPersisted(T)) {
+                        restoreRegisteredComponent(T, self, entity, components, &id_map);
                     }
                 }
 
-                // Restore Parent (built-in) — counterpart to the Parent
-                // save block above. Uses `setParent` so the engine's
-                // Children back-link is rebuilt alongside.
-                //
-                // Mirrors the save-side `has_parent_in_registry` guard
-                // and Position's load-side guard: if a game ever
-                // registers `Game.ParentComp`, the registry-driven
-                // restore already handles Parent via `addComponent`, so
-                // this built-in block would double-restore and trigger
-                // `setParent` with stale state (review #470).
-                //
-                // Skip the restore unless we can both parse a valid
-                // saved entity ID and map it to a post-load entity —
-                // passing a stale or raw ID to `setParent` would trip
-                // `assertEntityAlive` in debug or corrupt hierarchy
-                // state in release builds.
-                const Parent_load = Game.ParentComp;
-                if (comptime !Common.isRegistered(Parent_load)) {
-                    if (components.get("Parent")) |parent_val| blk: {
-                        // A malformed save carrying `"Parent": 123` or
-                        // `"Parent": null` would otherwise trip the
-                        // `.object` tag-cast safety check and panic in
-                        // debug before the field-level guards below
-                        // had a chance to skip the restore.
-                        const parent_obj = switch (parent_val) {
-                            .object => |o| o,
-                            else => break :blk,
-                        };
-                        const ent_val = parent_obj.get("entity") orelse break :blk;
-                        const saved_parent_id: u64 = switch (ent_val) {
-                            .integer => |i| if (i >= 0) @intCast(i) else break :blk,
-                            else => break :blk,
-                        };
-                        const current_parent_id = id_map.get(saved_parent_id) orelse break :blk;
-                        const parent_entity: Entity = @intCast(current_parent_id);
-                        const inherit_rotation = parentFlag(parent_obj, "inherit_rotation");
-                        const inherit_scale = parentFlag(parent_obj, "inherit_scale");
-                        self.setParent(entity, parent_entity, .{
-                            .inherit_rotation = inherit_rotation,
-                            .inherit_scale = inherit_scale,
-                        });
-                    }
-                }
-
-                // Restore PrefabInstance (built-in) — counterpart to
-                // the save block above. String fields are duped into
-                // the world's nested-entity arena so they outlive the
-                // parsed JSON deinit.
-                const PrefabInstance_load = Game.PrefabInstanceComp;
-                if (comptime !Common.isRegistered(PrefabInstance_load)) {
-                    if (components.get("PrefabInstance")) |pi_val| blk: {
-                        const pi_obj = switch (pi_val) {
-                            .object => |o| o,
-                            else => break :blk,
-                        };
-                        const path_str = switch (pi_obj.get("path") orelse break :blk) {
-                            .string => |s| s,
-                            else => break :blk,
-                        };
-                        const overrides_str = switch (pi_obj.get("overrides") orelse break :blk) {
-                            .string => |s| s,
-                            else => break :blk,
-                        };
-                        const pi_arena = self.active_world.nested_entity_arena.allocator();
-                        const path_dup = try pi_arena.dupe(u8, path_str);
-                        const overrides_dup = try pi_arena.dupe(u8, overrides_str);
-                        self.active_world.ecs_backend.addComponent(entity, PrefabInstance_load{
-                            .path = path_dup,
-                            .overrides = overrides_dup,
-                        });
-                    }
-                }
-
-                // Restore PrefabChild (built-in) — counterpart to the
-                // save block above. `root` is an entity ref, remapped
-                // through `id_map`; `local_path` is duped into the
-                // world arena to outlive the parsed JSON.
-                const PrefabChild_load = Game.PrefabChildComp;
-                if (comptime !Common.isRegistered(PrefabChild_load)) {
-                    if (components.get("PrefabChild")) |pc_val| blk: {
-                        const pc_obj = switch (pc_val) {
-                            .object => |o| o,
-                            else => break :blk,
-                        };
-                        const root_val = pc_obj.get("root") orelse break :blk;
-                        const saved_root_id: u64 = switch (root_val) {
-                            .integer => |i| if (i >= 0) @intCast(i) else break :blk,
-                            else => break :blk,
-                        };
-                        const current_root_id = id_map.get(saved_root_id) orelse break :blk;
-                        const root_entity: Entity = @intCast(current_root_id);
-                        const local_path_str = switch (pc_obj.get("local_path") orelse break :blk) {
-                            .string => |s| s,
-                            else => break :blk,
-                        };
-                        const pc_arena = self.active_world.nested_entity_arena.allocator();
-                        const local_path_dup = try pc_arena.dupe(u8, local_path_str);
-                        self.active_world.ecs_backend.addComponent(entity, PrefabChild_load{
-                            .root = root_entity,
-                            .local_path = local_path_dup,
-                        });
-                    }
-                }
-
-                // Restore Tilemap (built-in, T2 Phase 2) — counterpart to
-                // the save block. `addTilemap` re-attaches the component AND
-                // rebuilds the decoded-map runtime from the (still-embedded)
-                // `.tmx` asset; runtime state itself is never saved.
-                // `asset_name` is duped into the world arena to outlive the
-                // parsed JSON deinit.
-                const TilemapT_load = Game.TilemapComp;
-                if (comptime !Common.isRegistered(TilemapT_load)) {
-                    if (components.get("Tilemap")) |tm_val| blk: {
-                        const tm_obj = switch (tm_val) {
-                            .object => |o| o,
-                            else => break :blk,
-                        };
-                        const name_str = switch (tm_obj.get("asset_name") orelse break :blk) {
-                            .string => |s| s,
-                            else => break :blk,
-                        };
-                        const tm_arena = self.active_world.nested_entity_arena.allocator();
-                        const name_dup = try tm_arena.dupe(u8, name_str);
-
-                        // Restore explicit `layer_bindings` (T3), if the save
-                        // carried them. Absent → `null` (implicit-by-name),
-                        // matching a T2 save. Strings + the slice are duped
-                        // into the world arena to outlive the parsed JSON.
-                        const LayerBinding = @import("../../tilemap.zig").LayerBinding;
-                        var bindings: ?[]const LayerBinding = null;
-                        if (tm_obj.get("layer_bindings")) |lb_val| {
-                            if (lb_val == .array) {
-                                const arr = lb_val.array;
-                                const buf = try tm_arena.alloc(LayerBinding, arr.items.len);
-                                var n: usize = 0;
-                                for (arr.items) |item| {
-                                    const obj = switch (item) {
-                                        .object => |o| o,
-                                        else => continue,
-                                    };
-                                    const tmx = switch (obj.get("tmx_layer") orelse continue) {
-                                        .string => |s| s,
-                                        else => continue,
-                                    };
-                                    const eng = switch (obj.get("engine_layer") orelse continue) {
-                                        .string => |s| s,
-                                        else => continue,
-                                    };
-                                    buf[n] = .{
-                                        .tmx_layer = try tm_arena.dupe(u8, tmx),
-                                        .engine_layer = try tm_arena.dupe(u8, eng),
-                                    };
-                                    n += 1;
-                                }
-                                bindings = buf[0..n];
-                            }
-                        }
-                        self.addTilemap(entity, .{ .asset_name = name_dup, .layer_bindings = bindings });
-                    }
-                }
-
-                // Restore Camera (built-in, camera-prefabs #714) — counterpart
-                // to the save block. Plain POD (no strings / no runtime), so a
-                // straight `addComponent` re-attaches it; the seed re-applies to
-                // the live camera on the next scene bind / paused frame. Gated
-                // on `camera_is_builtin` like the save side.
-                if (comptime Game.camera_is_builtin) {
-                    if (components.get("Camera")) |cam_val| blk: {
-                        const cam_obj = switch (cam_val) {
-                            .object => |o| o,
-                            else => break :blk,
-                        };
-                        var cam: Game.CameraComp = .{};
-                        // Preserve the 1.0 default if a (malformed) save omits
-                        // zoom — `getNumberField` would otherwise yield 0.
-                        if (cam_obj.get("zoom") != null) cam.zoom = getNumberField(cam_obj, "zoom");
-                        // Camera tag (camera-bound layers, #723/#724). Absent in
-                        // pre-#724 saves → the `"main"` default is kept.
-                        if (getStringField(cam_obj, "tag")) |t| cam.setTagSlice(t);
-                        if (cam_obj.get("viewport")) |vp_val| {
-                            if (vp_val == .object) {
-                                const vp = vp_val.object;
-                                cam.viewport = .{
-                                    .x = @intFromFloat(getNumberField(vp, "x")),
-                                    .y = @intFromFloat(getNumberField(vp, "y")),
-                                    .width = @intFromFloat(getNumberField(vp, "width")),
-                                    .height = @intFromFloat(getNumberField(vp, "height")),
-                                };
-                            }
-                        }
-                        self.addComponent(entity, cam);
-                    }
-                }
+                // Built-in components (Parent, PrefabInstance, PrefabChild,
+                // Tilemap, Camera) — each restored by its own bounded
+                // helper below, in the same order as before (#922).
+                restoreBuiltinParent(self, entity, components, &id_map);
+                try restoreBuiltinPrefabInstance(self, entity, components);
+                try restoreBuiltinPrefabChild(self, entity, components, &id_map);
+                try restoreBuiltinTilemap(self, entity, components);
+                restoreBuiltinCamera(self, entity, components);
             }
 
             // Step 4: Restore ref arrays ([]const u64 slices)
@@ -610,9 +723,7 @@ pub fn Mixin(comptime Game: type) type {
                     inline for (names) |name| {
                         const T = Reg.getType(name);
                         if (comptime serde.hasRefArrayFields(T)) {
-                            if (self.active_world.ecs_backend.getComponent(entity, T)) |comp| {
-                                try serde.readRefArrays(T, comp, ref_obj, &id_map, arena);
-                            }
+                            try restoreComponentRefArrays(T, self, entity, ref_obj, &id_map, arena);
                         }
                     }
                 }
@@ -659,30 +770,15 @@ pub fn Mixin(comptime Game: type) type {
             inline for (names) |name| {
                 const T = Reg.getType(name);
                 if (comptime core.hasPostLoad(T)) {
-                    var entities = try Common.collectEntities(T, &self.active_world.ecs_backend, allocator);
-                    defer entities.deinit(allocator);
-                    for (entities.items) |ent| {
-                        if (self.active_world.ecs_backend.getComponent(ent, T)) |comp| {
-                            comp.postLoad(self, ent);
-                        }
-                    }
+                    try runComponentPostLoad(T, self);
                 }
             }
 
             // 6b: post_load_add markers
             inline for (names) |name| {
                 const T = Reg.getType(name);
-                const markers = comptime core.getPostLoadMarkers(T);
-                if (markers.len > 0) {
-                    var entities = try Common.collectEntities(T, &self.active_world.ecs_backend, allocator);
-                    defer entities.deinit(allocator);
-                    for (entities.items) |ent| {
-                        inline for (markers) |Marker| {
-                            if (!self.active_world.ecs_backend.hasComponent(ent, Marker)) {
-                                self.active_world.ecs_backend.addComponent(ent, Marker{});
-                            }
-                        }
-                    }
+                if (comptime core.getPostLoadMarkers(T).len > 0) {
+                    try addPostLoadMarkers(T, self);
                 }
             }
 
@@ -690,9 +786,7 @@ pub fn Mixin(comptime Game: type) type {
             inline for (names) |name| {
                 const T = Reg.getType(name);
                 if (comptime core.getPostLoadCreate(T)) {
-                    const ent = self.createEntity();
-                    self.active_world.ecs_backend.addComponent(ent, T{});
-                    self.addEntityToActiveScene(ent);
+                    createPostLoadEntity(T, self);
                 }
             }
 
