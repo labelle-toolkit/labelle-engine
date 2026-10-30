@@ -480,8 +480,27 @@ pub fn Mixin(comptime Game: type) type {
                     return loader_fn(game);
                 }
             }.load;
+            putSceneEntry(self, name, wrapper, hooks_val);
+        }
+
+        /// The runtime half of `registerScene` (#922). `registerScene` is
+        /// instantiated once per scene (its name and loader are comptime),
+        /// and the generated `main` calls it once per scene, so every
+        /// instantiation has a single caller and LLVM inlined each one —
+        /// hash-map insert, growth path and error log included. With ~140
+        /// scenes that made Flying Platform's startup `main` ~280 KB of
+        /// code larger. Keeping the insert in one shared, `noinline`
+        /// function leaves each instantiation a single call. Behaviour,
+        /// ordering and the error log are unchanged. Do not make it
+        /// `inline`.
+        noinline fn putSceneEntry(
+            self: *Game,
+            name: []const u8,
+            loader_fn: *const fn (*Game) anyerror!void,
+            hooks_val: Game.SceneHooks,
+        ) void {
             self.scenes.put(name, .{
-                .loader_fn = wrapper,
+                .loader_fn = loader_fn,
                 .hooks = hooks_val,
             }) catch |err| {
                 // A dropped registration silently vanishes here and only
@@ -493,6 +512,14 @@ pub fn Mixin(comptime Game: type) type {
                     .{ name, @errorName(err) },
                 );
             };
+        }
+
+        /// Registered scene lookup shared by the per-scene setters below
+        /// (#922): the generated `main` calls each setter once per scene,
+        /// and an inlined hash lookup at every call site added ~25 KB to
+        /// Flying Platform's startup `main`.
+        noinline fn sceneEntryPtr(self: *Game, name: []const u8) ?*Game.SceneEntry {
+            return self.scenes.getPtr(name);
         }
 
         pub fn registerSceneSimple(
@@ -576,7 +603,7 @@ pub fn Mixin(comptime Game: type) type {
             name: []const u8,
             assets: []const []const u8,
         ) error{SceneNotFound}!void {
-            const entry = self.scenes.getPtr(name) orelse return error.SceneNotFound;
+            const entry = sceneEntryPtr(self, name) orelse return error.SceneNotFound;
             entry.assets = assets;
         }
 
@@ -601,7 +628,7 @@ pub fn Mixin(comptime Game: type) type {
             name: []const u8,
             source: []const u8,
         ) error{SceneNotFound}!void {
-            const entry = self.scenes.getPtr(name) orelse return error.SceneNotFound;
+            const entry = sceneEntryPtr(self, name) orelse return error.SceneNotFound;
             entry.source = source;
         }
 
@@ -625,7 +652,7 @@ pub fn Mixin(comptime Game: type) type {
             name: []const u8,
             state: []const u8,
         ) error{SceneNotFound}!void {
-            const entry = self.scenes.getPtr(name) orelse return error.SceneNotFound;
+            const entry = sceneEntryPtr(self, name) orelse return error.SceneNotFound;
             entry.initial_state = state;
         }
 
