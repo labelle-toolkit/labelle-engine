@@ -164,6 +164,10 @@ pub fn build(b: *std.Build) void {
         "test/scene_lifecycle_events_test.zig",
         "test/easing_test.zig",
         "test/scene_test.zig",
+        // #922 — startup scene registration through the shared noinline
+        // helpers: each scene keeps its own loader, setters hit the right
+        // entry, unknown names still fail.
+        "test/scene_registration_test.zig",
         "test/gestures_test.zig",
         "test/sparse_set_test.zig",
         "test/query_test.zig",
