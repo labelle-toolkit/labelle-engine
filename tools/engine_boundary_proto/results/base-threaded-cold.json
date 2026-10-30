@@ -1,0 +1,48 @@
+{
+  "run": "base-threaded-cold",
+  "cwd": "D:/prj/labelle-toolkit/epic-528/fp-engine-boundary/.labelle/bgfx_wasm",
+  "command": [
+    "C:/Users/User/.zvm/0.16.0/zig.exe",
+    "build",
+    "-Doptimize=ReleaseSafe",
+    "-j2",
+    "--summary",
+    "all"
+  ],
+  "exit": 0,
+  "wall_seconds": 506.3,
+  "tree_peak_private_bytes": 10704576512,
+  "top_processes": [
+    {
+      "name": "zig.exe",
+      "argv": "C:\\Users\\User\\.zvm\\0.16.0\\zig.exe build-lib -fno-single-threaded -OReleaseSafe -target wasm32-emscripten -mcpu baseline+atomics+bulk_memory -I C:\\Users\\User\\.labelle\\zig-local-cache\\o\\2fb5824d4233e9fe32370ab196a5b16d -I C:\\Users\\User\\.labelle\\zig-local-cache\\o\\2fb5824d4233e9fe32370ab196a5b16d --dep ",
+      "peak_private_bytes": 10588106752,
+      "peak_working_set_bytes": 8936488960
+    },
+    {
+      "name": "zig.exe",
+      "argv": "C:\\Users\\User\\.zvm\\0.16.0\\zig.exe build-lib -fno-single-threaded -OReleaseSafe -target wasm32-emscripten -mcpu baseline+atomics+bulk_memory -I C:\\Users\\User\\.labelle\\zig-local-cache\\o\\2fb5824d4233e9fe32370ab196a5b16d --dep zbgfx --dep cimgui -Mroot=D:\\prj\\labelle-toolkit\\epic-528\\fp-engine-boundary\\",
+      "peak_private_bytes": 1513639936,
+      "peak_working_set_bytes": 116871168
+    },
+    {
+      "name": "zig.exe",
+      "argv": "C:\\Users\\User\\.zvm\\0.16.0\\zig.exe build-lib @C:\\Users\\User\\.labelle\\zig-local-cache\\args\\6e044696df0f33e29dbe1530a8e1dd3c85350ee6964176282eff343828f7b43b",
+      "peak_private_bytes": 1471086592,
+      "peak_working_set_bytes": 71127040
+    },
+    {
+      "name": "zig.exe",
+      "argv": "C:\\Users\\User\\.zvm\\0.16.0\\zig.exe build-lib -fllvm -flld -cflags -D__STDC_LIMIT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_CONSTANT_MACROS -DENABLE_OPT=1 -DENABLE_HLSL=1 -fno-sanitize=undefined -- D:\\prj\\labelle-toolkit\\epic-528\\fp-engine-boundary\\.labelle\\bgfx_wasm\\zig-pkg\\zbgfx-0.12.3-Sm4IxJtWDQcMwkbs",
+      "peak_private_bytes": 1459220480,
+      "peak_working_set_bytes": 47747072
+    },
+    {
+      "name": "zig.exe",
+      "argv": "C:\\Users\\User\\.zvm\\0.16.0\\zig.exe build-exe -fllvm -flld C:\\Users\\User\\.labelle\\zig-local-cache\\o\\ca62d8e9609f048363c92499370327dc\\bx.lib -cflags -fno-sanitize=undefined -fno-strict-aliasing -fno-exceptions -fno-rtti -ffast-math -Wno-microsoft-enum-value -Wno-microsoft-const-init -Wno-deprecated-dec",
+      "peak_private_bytes": 1269981184,
+      "peak_working_set_bytes": 35074048
+    }
+  ],
+  "finished_utc": "2026-10-30T16:03:00.224624+00:00"
+}

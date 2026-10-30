@@ -42,10 +42,11 @@ while p.poll() is None:
                     argv = c.cmdline()
                 except Exception:
                     argv = []
-                old = [c.name(), ' '.join(argv)[:300], 0, 0]
+                old = [c.name(), ' '.join(argv)[:300], 0, 0, time.time() - t0, 0]
                 peaks[c.pid] = old
             old[2] = max(old[2], priv)
             old[3] = max(old[3], getattr(m, 'peak_wset', m.rss))
+            old[5] = time.time() - t0
         except (psutil.NoSuchProcess, psutil.AccessDenied):
             pass
     tree_peak = max(tree_peak, total)
@@ -53,9 +54,13 @@ while p.poll() is None:
 th.join()
 elapsed = time.time() - t0
 top = sorted(peaks.values(), key=lambda r: -r[2])[:5]
+procs_out = [{'name': r[0], 'argv': r[1], 'peak_private_bytes': r[2], 'start_s': round(r[4], 1), 'end_s': round(r[5], 1),
+              'seconds': round(r[5] - r[4], 1)} for r in sorted(peaks.values(), key=lambda r: r[4])
+             if r[5] - r[4] > 2 or r[2] > 2**28]
 summary = {'run': name, 'cwd': cwd, 'command': cmd, 'exit': p.returncode, 'wall_seconds': round(elapsed, 2),
            'tree_peak_private_bytes': tree_peak,
-           'top_processes': [{'name': n, 'argv': a, 'peak_private_bytes': pp, 'peak_working_set_bytes': pw} for n, a, pp, pw in top],
+           'top_processes': [{'name': r[0], 'argv': r[1], 'peak_private_bytes': r[2], 'peak_working_set_bytes': r[3]} for r in top],
+           'long_processes': procs_out,
            'finished_utc': datetime.datetime.now(datetime.timezone.utc).isoformat()}
 (out / (name + '.json')).write_text(json.dumps(summary, indent=2), encoding='utf-8')
 print(json.dumps({k: summary[k] for k in ('run', 'exit', 'wall_seconds', 'tree_peak_private_bytes')}))

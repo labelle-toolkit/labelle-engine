@@ -1,0 +1,31 @@
+{
+  "run": "base-threaded-noop",
+  "cwd": "D:/prj/labelle-toolkit/epic-528/fp-engine-boundary/.labelle/bgfx_wasm",
+  "command": [
+    "C:/Users/User/.zvm/0.16.0/zig.exe",
+    "build",
+    "-Doptimize=ReleaseSafe",
+    "-j2",
+    "--summary",
+    "all"
+  ],
+  "exit": 0,
+  "wall_seconds": 1.03,
+  "tree_peak_private_bytes": 116256768,
+  "top_processes": [
+    {
+      "name": "zig.exe",
+      "argv": "C:/Users/User/.zvm/0.16.0/zig.exe build -Doptimize=ReleaseSafe -j2 --summary all",
+      "peak_private_bytes": 67682304,
+      "peak_working_set_bytes": 18751488
+    },
+    {
+      "name": "build.exe",
+      "argv": "C:\\Users\\User\\.labelle\\zig-local-cache\\o\\efbbcee49c9bb3af802892e75e24228b\\build.exe C:\\Users\\User\\.zvm\\0.16.0\\zig.exe C:\\Users\\User\\.zvm\\0.16.0\\lib D:\\prj\\labelle-toolkit\\epic-528\\fp-engine-boundary\\.labelle\\bgfx_wasm C:\\Users\\User\\.labelle\\zig-local-cache C:\\Users\\User\\.labelle\\zig-global-cache --s",
+      "peak_private_bytes": 48574464,
+      "peak_working_set_bytes": 22708224
+    }
+  ],
+  "long_processes": [],
+  "finished_utc": "2026-10-30T16:09:29.604954+00:00"
+}

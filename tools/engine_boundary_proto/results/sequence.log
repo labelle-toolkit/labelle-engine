@@ -1,0 +1,76 @@
+=== base-cold 12:54:33
+waiting for lock 12:54:33
+lock acquired 12:54:33
+{"run": "base-threaded-cold", "exit": 0, "wall_seconds": 506.3, "tree_peak_private_bytes": 10704576512}
+   zig.exe 9.86 GiB C:\Users\User\.zvm\0.16.0\zig.exe build-lib -fno-single-threaded -OReleaseSafe -target wasm32-emscripten -mcpu baseline+
+   zig.exe 1.41 GiB C:\Users\User\.zvm\0.16.0\zig.exe build-lib -fno-single-threaded -OReleaseSafe -target wasm32-emscripten -mcpu baseline+
+   zig.exe 1.37 GiB C:\Users\User\.zvm\0.16.0\zig.exe build-lib @C:\Users\User\.labelle\zig-local-cache\args\6e044696df0f33e29dbe1530a8e1dd3
+lock released 13:03:00
+=== base-edit1 13:03:00
+comptime { _ = 1793376180; } // labelle-engine#923 game-only edit probe
+waiting for lock 13:03:00
+lock acquired 13:03:00
+{"run": "base-threaded-edit1", "exit": 0, "wall_seconds": 387.88, "tree_peak_private_bytes": 11176468480}
+   zig.exe 10.3 GiB C:\Users\User\.zvm\0.16.0\zig.exe build-lib -fno-single-threaded -OReleaseSafe -target wasm32-emscripten -mcpu baseline+
+   wasm-opt.exe 0.59 GiB C:/Users/User/.labelle/providers/github.com/labelle-toolkit/labelle-web/emsdk/v1/x86_64-windows/4.0.9-3bcf1dcd01f0/upstr
+   node.exe 0.11 GiB C:/Users/User/.labelle/providers/github.com/labelle-toolkit/labelle-web/emsdk/v1/x86_64-windows/4.0.9-3bcf1dcd01f0/node/
+lock released 13:09:28
+=== base-noop 13:09:28
+waiting for lock 13:09:28
+lock acquired 13:09:28
+{"run": "base-threaded-noop", "exit": 0, "wall_seconds": 1.03, "tree_peak_private_bytes": 116256768}
+   zig.exe 0.06 GiB C:/Users/User/.zvm/0.16.0/zig.exe build -Doptimize=ReleaseSafe -j2 --summary all
+   build.exe 0.05 GiB C:\Users\User\.labelle\zig-local-cache\o\efbbcee49c9bb3af802892e75e24228b\build.exe C:\Users\User\.zvm\0.16.0\zig.exe C:
+lock released 13:09:29
+=== apply 13:09:29
+applied
+=== proto-cold 13:09:29
+waiting for lock 13:09:29
+lock acquired 13:09:29
+{"run": "proto-threaded-cold", "exit": 0, "wall_seconds": 408.2, "tree_peak_private_bytes": 11281301504}
+   zig.exe 10.38 GiB C:\Users\User\.zvm\0.16.0\zig.exe build-lib -fno-single-threaded -OReleaseSafe -target wasm32-emscripten -mcpu baseline+
+   zig.exe 1.48 GiB C:/Users/User/.zvm/0.16.0/zig.exe build -Doptimize=ReleaseSafe -j2 --summary all
+   zig.exe 1.43 GiB C:\Users\User\.zvm\0.16.0\zig.exe build-lib -fno-single-threaded -OReleaseSafe -target wasm32-emscripten -mcpu baseline+
+lock released 13:16:18
+=== proto-edit1 13:16:18
+comptime { _ = 1793376978; } // labelle-engine#923 game-only edit probe
+waiting for lock 13:16:18
+lock acquired 13:16:18
+{"run": "proto-threaded-edit1", "exit": 0, "wall_seconds": 410.41, "tree_peak_private_bytes": 11196829696}
+   zig.exe 10.32 GiB C:\Users\User\.zvm\0.16.0\zig.exe build-lib -fno-single-threaded -OReleaseSafe -target wasm32-emscripten -mcpu baseline+
+   wasm-opt.exe 0.59 GiB C:/Users/User/.labelle/providers/github.com/labelle-toolkit/labelle-web/emsdk/v1/x86_64-windows/4.0.9-3bcf1dcd01f0/upstr
+   node.exe 0.11 GiB C:/Users/User/.labelle/providers/github.com/labelle-toolkit/labelle-web/emsdk/v1/x86_64-windows/4.0.9-3bcf1dcd01f0/node/
+lock released 13:23:08
+=== proto-edit2 13:23:08
+comptime { _ = 1793377388; } // labelle-engine#923 game-only edit probe
+waiting for lock 13:23:08
+lock acquired 13:23:08
+{"run": "proto-threaded-edit2", "exit": 0, "wall_seconds": 424.74, "tree_peak_private_bytes": 11197808640}
+   zig.exe 10.32 GiB C:\Users\User\.zvm\0.16.0\zig.exe build-lib -fno-single-threaded -OReleaseSafe -target wasm32-emscripten -mcpu baseline+
+   wasm-opt.exe 0.59 GiB C:/Users/User/.labelle/providers/github.com/labelle-toolkit/labelle-web/emsdk/v1/x86_64-windows/4.0.9-3bcf1dcd01f0/upstr
+   zig.exe 0.06 GiB C:/Users/User/.zvm/0.16.0/zig.exe build -Doptimize=ReleaseSafe -j2 --summary all
+lock released 13:30:13
+=== base-edit2-revert 13:30:13
+reverted
+comptime { _ = 1793377814; } // labelle-engine#923 game-only edit probe
+waiting for lock 13:30:14
+lock acquired 13:30:14
+{"run": "base-threaded-edit2", "exit": 0, "wall_seconds": 423.46, "tree_peak_private_bytes": 11189522432}
+   zig.exe 10.3 GiB C:\Users\User\.zvm\0.16.0\zig.exe build-lib -fno-single-threaded -OReleaseSafe -target wasm32-emscripten -mcpu baseline+
+   zig.exe 1.55 GiB C:/Users/User/.zvm/0.16.0/zig.exe build -Doptimize=ReleaseSafe -j2 --summary all
+   wasm-opt.exe 0.59 GiB C:/Users/User/.labelle/providers/github.com/labelle-toolkit/labelle-web/emsdk/v1/x86_64-windows/4.0.9-3bcf1dcd01f0/upstr
+lock released 13:37:17
+=== proto-st 13:37:17
+applied
+waiting for lock 13:37:17
+lock acquired 13:37:17
+{"run": "proto-single-cold", "exit": 0, "wall_seconds": 424.02, "tree_peak_private_bytes": 11211386880}
+   zig.exe 10.32 GiB C:\Users\User\.zvm\0.16.0\zig.exe build-lib -OReleaseSafe -target wasm32-emscripten -mcpu baseline -I C:\Users\User\.lab
+   zig.exe 1.49 GiB C:/Users/User/.zvm/0.16.0/zig.exe build -Doptimize=ReleaseSafe -j2 --summary all -Dwasm_threads=false
+   zig.exe 1.45 GiB C:\Users\User\.zvm\0.16.0\zig.exe build-lib -OReleaseSafe -target wasm32-emscripten -mcpu baseline --dep tilemap -Mroot=
+lock released 13:44:22
+=== proto-st-edit 13:44:22
+comptime { _ = 1793378662; } // labelle-engine#923 game-only edit probe
+waiting for lock 13:44:22
+lock acquired 13:44:22
+lock released 13:45:34
