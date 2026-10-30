@@ -55,6 +55,95 @@ pub fn Mixin(comptime Game: type) type {
             try std.Io.Dir.cwd().writeFile(io_helper.io(), .{ .sub_path = filename, .data = bytes });
         }
 
+        // ─── Bounded per-component helpers (#921) ───────────────────
+        //
+        // `serializeGameState` walks the whole ComponentRegistry three
+        // times. Written as `inline for` bodies, every registered
+        // component's entity collection, serde write and ref-array write
+        // was expanded into ONE function: ~523 KB of code in one Flying
+        // Platform target, where LLVM's super-linear passes over it (CFG
+        // restructuring, register stackification) dominated ReleaseSafe
+        // compile time and memory. Each helper below is instantiated once
+        // per component type and kept `noinline`, so the serializer stays
+        // a short sequence of calls and every component's code is
+        // optimised as its own bounded function. The helpers run the same
+        // statements in the same order as the inline bodies did, so the
+        // output, error propagation and cleanup are unchanged —
+        // `test/save_serializer_golden_test.zig` pins the bytes. Do not
+        // make them `inline`: that rebuilds the giant function.
+
+        /// The save policies the serializer persists.
+        fn isPersisted(comptime T: type) bool {
+            const policy = core.getSavePolicy(T) orelse return false;
+            return policy == .saveable or policy == .marker;
+        }
+
+        /// Append `id` to the save order unless it was already collected.
+        fn rememberEntity(
+            allocator: std.mem.Allocator,
+            entity_set: *std.AutoHashMap(u64, void),
+            entity_list: *std.ArrayList(u64),
+            id: u64,
+        ) !void {
+            if (entity_set.contains(id)) return;
+            try entity_set.put(id, {});
+            try entity_list.append(allocator, id);
+        }
+
+        /// Collect every entity carrying `T` into the save order.
+        noinline fn collectComponentEntities(
+            comptime T: type,
+            self: *Game,
+            entity_set: *std.AutoHashMap(u64, void),
+            entity_list: *std.ArrayList(u64),
+        ) !void {
+            const allocator = self.allocator;
+            var entities = try Common.collectEntities(T, &self.active_world.ecs_backend, allocator);
+            defer entities.deinit(allocator);
+            for (entities.items) |entity| {
+                try rememberEntity(allocator, entity_set, entity_list, Common.entityToU64(entity));
+            }
+        }
+
+        /// Write `entity`'s `T` (if present) as one `"Name": {...}` entry
+        /// of the entity's `components` object.
+        noinline fn writeRegisteredComponent(
+            comptime T: type,
+            self: *Game,
+            entity: Entity,
+            writer: *std.Io.Writer,
+            first_comp: *bool,
+        ) !void {
+            if (self.active_world.ecs_backend.getComponent(entity, T)) |comp| {
+                if (!first_comp.*) try writer.writeAll(",");
+                try writer.writeAll("\n        \"");
+                try writer.writeAll(comptime serde.componentName(T));
+                try writer.writeAll("\": ");
+                try serde.writeComponent(T, comp, writer, serde.autoSkipField);
+                first_comp.* = false;
+            }
+        }
+
+        /// Write `entity`'s `T` ref-array fields (if present) into the
+        /// entity's shared `ref_arrays` object, opening it on first use.
+        noinline fn writeComponentRefArrays(
+            comptime T: type,
+            self: *Game,
+            entity: Entity,
+            writer: *std.Io.Writer,
+            has_ref_arrays: *bool,
+        ) !void {
+            if (self.active_world.ecs_backend.getComponent(entity, T)) |comp| {
+                if (!has_ref_arrays.*) {
+                    try writer.writeAll(",\n      \"ref_arrays\": {");
+                    has_ref_arrays.* = true;
+                } else {
+                    try writer.writeAll(",");
+                }
+                try serde.writeRefArrayFields(T, comp, writer);
+            }
+        }
+
         /// Engine-owned JSON, allocated with self.allocator. Caller frees it.
         pub fn serializeGameState(self: *Game) ![]u8 {
             @setEvalBranchQuota(10000);
@@ -69,18 +158,8 @@ pub fn Mixin(comptime Game: type) type {
 
             inline for (names) |name| {
                 const T = Reg.getType(name);
-                if (comptime core.getSavePolicy(T)) |policy| {
-                    if (policy == .saveable or policy == .marker) {
-                        var entities = try Common.collectEntities(T, &self.active_world.ecs_backend, allocator);
-                        defer entities.deinit(allocator);
-                        for (entities.items) |entity| {
-                            const id = Common.entityToU64(entity);
-                            if (!entity_set.contains(id)) {
-                                try entity_set.put(id, {});
-                                try entity_list.append(allocator, id);
-                            }
-                        }
-                    }
+                if (comptime isPersisted(T)) {
+                    try collectComponentEntities(T, self, &entity_set, &entity_list);
                 }
             }
 
@@ -123,11 +202,7 @@ pub fn Mixin(comptime Game: type) type {
                 var view = self.active_world.ecs_backend.view(.{Tag}, .{});
                 defer view.deinit();
                 while (view.next()) |entity| {
-                    const id = Common.entityToU64(entity);
-                    if (!entity_set.contains(id)) {
-                        try entity_set.put(id, {});
-                        try entity_list.append(allocator, id);
-                    }
+                    try rememberEntity(allocator, &entity_set, &entity_list, Common.entityToU64(entity));
                 }
             }
 
@@ -141,11 +216,7 @@ pub fn Mixin(comptime Game: type) type {
                 var tm_view = self.active_world.ecs_backend.view(.{Game.TilemapComp}, .{});
                 defer tm_view.deinit();
                 while (tm_view.next()) |entity| {
-                    const id = Common.entityToU64(entity);
-                    if (!entity_set.contains(id)) {
-                        try entity_set.put(id, {});
-                        try entity_list.append(allocator, id);
-                    }
+                    try rememberEntity(allocator, &entity_set, &entity_list, Common.entityToU64(entity));
                 }
             }
 
@@ -158,11 +229,7 @@ pub fn Mixin(comptime Game: type) type {
                 var cam_view = self.active_world.ecs_backend.view(.{Game.CameraComp}, .{});
                 defer cam_view.deinit();
                 while (cam_view.next()) |entity| {
-                    const id = Common.entityToU64(entity);
-                    if (!entity_set.contains(id)) {
-                        try entity_set.put(id, {});
-                        try entity_list.append(allocator, id);
-                    }
+                    try rememberEntity(allocator, &entity_set, &entity_list, Common.entityToU64(entity));
                 }
             }
 
@@ -355,17 +422,8 @@ pub fn Mixin(comptime Game: type) type {
 
                 inline for (names) |name| {
                     const T = Reg.getType(name);
-                    if (comptime core.getSavePolicy(T)) |policy| {
-                        if (policy == .saveable or policy == .marker) {
-                            if (self.active_world.ecs_backend.getComponent(entity, T)) |comp| {
-                                if (!first_comp) try writer.writeAll(",");
-                                try writer.writeAll("\n        \"");
-                                try writer.writeAll(comptime serde.componentName(T));
-                                try writer.writeAll("\": ");
-                                try serde.writeComponent(T, comp, writer, serde.autoSkipField);
-                                first_comp = false;
-                            }
-                        }
+                    if (comptime isPersisted(T)) {
+                        try writeRegisteredComponent(T, self, entity, writer, &first_comp);
                     }
                 }
                 try writer.writeAll("\n      }");
@@ -374,18 +432,8 @@ pub fn Mixin(comptime Game: type) type {
                 var has_ref_arrays = false;
                 inline for (names) |name| {
                     const T = Reg.getType(name);
-                    if (comptime core.getSavePolicy(T)) |policy| {
-                        if ((policy == .saveable or policy == .marker) and comptime serde.hasRefArrayFields(T)) {
-                            if (self.active_world.ecs_backend.getComponent(entity, T)) |comp| {
-                                if (!has_ref_arrays) {
-                                    try writer.writeAll(",\n      \"ref_arrays\": {");
-                                    has_ref_arrays = true;
-                                } else {
-                                    try writer.writeAll(",");
-                                }
-                                try serde.writeRefArrayFields(T, comp, writer);
-                            }
-                        }
+                    if (comptime (isPersisted(T) and serde.hasRefArrayFields(T))) {
+                        try writeComponentRefArrays(T, self, entity, writer, &has_ref_arrays);
                     }
                 }
                 if (has_ref_arrays) {
