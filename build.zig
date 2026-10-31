@@ -188,6 +188,10 @@ pub fn build(b: *std.Build) void {
         "test/save_policy_test.zig",
         "test/storage_serialization_test.zig",
         "test/save_load_mixin_test.zig",
+        // #921 — the save serializer split into bounded functions must
+        // keep the save format byte-identical; pins a golden save and
+        // loads it back as an "existing" save.
+        "test/save_serializer_golden_test.zig",
         "test/save_scene_after_menu_load_test.zig",
         "test/jsonc/bridge_leak_test.zig",
         "test/jsonc/nested_lifecycle_test.zig",
