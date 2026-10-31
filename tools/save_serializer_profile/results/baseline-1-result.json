@@ -1,0 +1,34 @@
+{
+  "run": "baseline-1",
+  "exit": 0,
+  "command": [
+    "C:/Users/User/.zvm/0.16.0/zig.exe",
+    "build",
+    "profile-game",
+    "-Doptimize=ReleaseSafe",
+    "-j2",
+    "--summary",
+    "all"
+  ],
+  "build_wall_seconds": 233.7,
+  "game_compile_wall_seconds": 226.6,
+  "game_compile_cpu_seconds": 216.0,
+  "game_compile_peak_private_bytes": 10992017408,
+  "game_compile_peak_private_gib": 10.24,
+  "game_compile_peak_working_set_gib": 8.33,
+  "save_mixin_functions": [
+    {
+      "name": "serializeGameState",
+      "bytes": 523186
+    },
+    {
+      "name": "writeJsonString__anon_196047",
+      "bytes": 2843
+    },
+    {
+      "name": "saveGameState",
+      "bytes": 177
+    }
+  ],
+  "libgame_bytes": 91719638
+}

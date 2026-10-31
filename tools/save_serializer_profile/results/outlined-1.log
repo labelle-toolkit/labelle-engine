@@ -1,0 +1,151 @@
+Build Summary: 63/63 steps succeeded
+profile-game success
++- install game success
+   +- compile lib game ReleaseSafe wasm32-emscripten success 2m MaxRSS:3G
+      +- WriteFile cached
+      +- compile lib bgfx_imgui_bridge ReleaseSafe wasm32-emscripten cached 110ms MaxRSS:19M
+      |  +- WriteFile cached
+      |  +- compile lib cimgui_clib ReleaseSafe wasm32-emscripten cached 397ms MaxRSS:19M
+      |  +- compile lib cimgui_clib ReleaseSafe wasm32-emscripten (reused)
+      |  +- translate-c cached 90ms MaxRSS:19M
+      |  +- WriteFile (reused)
+      |  +- compile lib cimgui_clib ReleaseSafe wasm32-emscripten (reused)
+      |  +- compile lib cimgui_clib ReleaseSafe wasm32-emscripten (reused)
+      +- WriteFile cached
+      +- compile lib bgfx ReleaseSafe wasm32-emscripten cached 356ms MaxRSS:19M
+      |  +- WriteFile cached
+      |  +- compile lib bx ReleaseSafe wasm32-emscripten cached 85ms MaxRSS:19M
+      |  +- WriteFile cached
+      |  +- compile lib bimg ReleaseSafe wasm32-emscripten cached 90ms MaxRSS:19M
+      |  +- compile lib bx ReleaseSafe wasm32-emscripten (reused)
+      |  +- compile lib bimg ReleaseSafe wasm32-emscripten (reused)
+      +- compile lib bgfx_imgui_bridge ReleaseSafe wasm32-emscripten (+7 more reused dependencies)
+      +- compile lib bgfx ReleaseSafe wasm32-emscripten (+6 more reused dependencies)
+      +- WriteFile bomb_flare.mtl.bin cached
+      |  +- shader bomb_flare (mtl) (bomb_flare.mtl.bin) cached
+      |  |  +- compile exe shaderc ReleaseFast native cached 396ms MaxRSS:19M
+      |  |  |  +- WriteFile cached
+      |  |  |  +- compile lib bx Debug native-native cached 508ms MaxRSS:19M
+      |  |  |  +- WriteFile cached
+      |  |  |  +- compile lib glslang ReleaseFast native cached 2s MaxRSS:19M
+      |  |  |  +- WriteFile cached
+      |  |  |  +- compile lib spirv-opt ReleaseFast native cached 2s MaxRSS:19M
+      |  |  |  +- WriteFile cached
+      |  |  |  +- compile lib spirv-cross ReleaseFast native cached 2s MaxRSS:19M
+      |  |  |  +- compile lib bx Debug native-native (reused)
+      |  |  |  +- compile lib glslang ReleaseFast native (reused)
+      |  |  |  +- compile lib spirv-opt ReleaseFast native (reused)
+      |  |  |  +- compile lib spirv-cross ReleaseFast native (reused)
+      |  |  +- WriteFile sprite-varying.def.sc cached
+      |  +- shader bomb_flare (essl) (bomb_flare.essl.bin) cached
+      |  |  +- compile exe shaderc ReleaseFast native (+12 more reused dependencies)
+      |  |  +- WriteFile sprite-varying.def.sc (reused)
+      |  +- shader bomb_flare (glsl) (bomb_flare.glsl.bin) cached
+      |  |  +- compile exe shaderc ReleaseFast native (+12 more reused dependencies)
+      |  |  +- WriteFile sprite-varying.def.sc (reused)
+      |  +- shader bomb_flare (spv) (bomb_flare.spv.bin) cached
+      |  |  +- compile exe shaderc ReleaseFast native (+12 more reused dependencies)
+      |  |  +- WriteFile sprite-varying.def.sc (reused)
+      |  +- shader bomb_impact (mtl) (bomb_impact.mtl.bin) cached
+      |  |  +- compile exe shaderc ReleaseFast native (+12 more reused dependencies)
+      |  |  +- WriteFile sprite-varying.def.sc (reused)
+      |  +- shader bomb_impact (essl) (bomb_impact.essl.bin) cached
+      |  |  +- compile exe shaderc ReleaseFast native (+12 more reused dependencies)
+      |  |  +- WriteFile sprite-varying.def.sc (reused)
+      |  +- shader bomb_impact (glsl) (bomb_impact.glsl.bin) cached
+      |  |  +- compile exe shaderc ReleaseFast native (+12 more reused dependencies)
+      |  |  +- WriteFile sprite-varying.def.sc (reused)
+      |  +- shader bomb_impact (spv) (bomb_impact.spv.bin) cached
+      |  |  +- compile exe shaderc ReleaseFast native (+12 more reused dependencies)
+      |  |  +- WriteFile sprite-varying.def.sc (reused)
+      |  +- shader command_console (mtl) (command_console.mtl.bin) cached
+      |  |  +- compile exe shaderc ReleaseFast native (+12 more reused dependencies)
+      |  |  +- WriteFile sprite-varying.def.sc (reused)
+      |  +- shader command_console (essl) (command_console.essl.bin) cached
+      |  |  +- compile exe shaderc ReleaseFast native (+12 more reused dependencies)
+      |  |  +- WriteFile sprite-varying.def.sc (reused)
+      |  +- shader command_console (glsl) (command_console.glsl.bin) cached
+      |  |  +- compile exe shaderc ReleaseFast native (+12 more reused dependencies)
+      |  |  +- WriteFile sprite-varying.def.sc (reused)
+      |  +- shader command_console (spv) (command_console.spv.bin) cached
+      |  |  +- compile exe shaderc ReleaseFast native (+12 more reused dependencies)
+      |  |  +- WriteFile sprite-varying.def.sc (reused)
+      |  +- shader fridge_body (mtl) (fridge_body.mtl.bin) cached
+      |  |  +- compile exe shaderc ReleaseFast native (+12 more reused dependencies)
+      |  |  +- WriteFile sprite-varying.def.sc (reused)
+      |  +- shader fridge_body (essl) (fridge_body.essl.bin) cached
+      |  |  +- compile exe shaderc ReleaseFast native (+12 more reused dependencies)
+      |  |  +- WriteFile sprite-varying.def.sc (reused)
+      |  +- shader fridge_body (glsl) (fridge_body.glsl.bin) cached
+      |  |  +- compile exe shaderc ReleaseFast native (+12 more reused dependencies)
+      |  |  +- WriteFile sprite-varying.def.sc (reused)
+      |  +- shader fridge_body (spv) (fridge_body.spv.bin) cached
+      |  |  +- compile exe shaderc ReleaseFast native (+12 more reused dependencies)
+      |  |  +- WriteFile sprite-varying.def.sc (reused)
+      |  +- shader fridge_glass (mtl) (fridge_glass.mtl.bin) cached
+      |  |  +- compile exe shaderc ReleaseFast native (+12 more reused dependencies)
+      |  |  +- WriteFile sprite-varying.def.sc (reused)
+      |  +- shader fridge_glass (essl) (fridge_glass.essl.bin) cached
+      |  |  +- compile exe shaderc ReleaseFast native (+12 more reused dependencies)
+      |  |  +- WriteFile sprite-varying.def.sc (reused)
+      |  +- shader fridge_glass (glsl) (fridge_glass.glsl.bin) cached
+      |  |  +- compile exe shaderc ReleaseFast native (+12 more reused dependencies)
+      |  |  +- WriteFile sprite-varying.def.sc (reused)
+      |  +- shader fridge_glass (spv) (fridge_glass.spv.bin) cached
+      |  |  +- compile exe shaderc ReleaseFast native (+12 more reused dependencies)
+      |  |  +- WriteFile sprite-varying.def.sc (reused)
+      |  +- shader room_lamp (mtl) (room_lamp.mtl.bin) cached
+      |  |  +- compile exe shaderc ReleaseFast native (+12 more reused dependencies)
+      |  |  +- WriteFile sprite-varying.def.sc (reused)
+      |  +- shader room_lamp (essl) (room_lamp.essl.bin) cached
+      |  |  +- compile exe shaderc ReleaseFast native (+12 more reused dependencies)
+      |  |  +- WriteFile sprite-varying.def.sc (reused)
+      |  +- shader room_lamp (glsl) (room_lamp.glsl.bin) cached
+      |  |  +- compile exe shaderc ReleaseFast native (+12 more reused dependencies)
+      |  |  +- WriteFile sprite-varying.def.sc (reused)
+      |  +- shader room_lamp (spv) (room_lamp.spv.bin) cached
+      |  |  +- compile exe shaderc ReleaseFast native (+12 more reused dependencies)
+      |  |  +- WriteFile sprite-varying.def.sc (reused)
+      |  +- shader room_light (mtl) (room_light.mtl.bin) cached
+      |  |  +- compile exe shaderc ReleaseFast native (+12 more reused dependencies)
+      |  |  +- WriteFile sprite-varying.def.sc (reused)
+      |  +- shader room_light (essl) (room_light.essl.bin) cached
+      |  |  +- compile exe shaderc ReleaseFast native (+12 more reused dependencies)
+      |  |  +- WriteFile sprite-varying.def.sc (reused)
+      |  +- shader room_light (glsl) (room_light.glsl.bin) cached
+      |  |  +- compile exe shaderc ReleaseFast native (+12 more reused dependencies)
+      |  |  +- WriteFile sprite-varying.def.sc (reused)
+      |  +- shader room_light (spv) (room_light.spv.bin) cached
+      |  |  +- compile exe shaderc ReleaseFast native (+12 more reused dependencies)
+      |  |  +- WriteFile sprite-varying.def.sc (reused)
+      |  +- shader turbine_fire (mtl) (turbine_fire.mtl.bin) cached
+      |  |  +- compile exe shaderc ReleaseFast native (+12 more reused dependencies)
+      |  |  +- WriteFile sprite-varying.def.sc (reused)
+      |  +- shader turbine_fire (essl) (turbine_fire.essl.bin) cached
+      |  |  +- compile exe shaderc ReleaseFast native (+12 more reused dependencies)
+      |  |  +- WriteFile sprite-varying.def.sc (reused)
+      |  +- shader turbine_fire (glsl) (turbine_fire.glsl.bin) cached
+      |  |  +- compile exe shaderc ReleaseFast native (+12 more reused dependencies)
+      |  |  +- WriteFile sprite-varying.def.sc (reused)
+      |  +- shader turbine_fire (spv) (turbine_fire.spv.bin) cached
+      |  |  +- compile exe shaderc ReleaseFast native (+12 more reused dependencies)
+      |  |  +- WriteFile sprite-varying.def.sc (reused)
+      |  +- shader turbine_glow (mtl) (turbine_glow.mtl.bin) cached
+      |  |  +- compile exe shaderc ReleaseFast native (+12 more reused dependencies)
+      |  |  +- WriteFile sprite-varying.def.sc (reused)
+      |  +- shader turbine_glow (essl) (turbine_glow.essl.bin) cached
+      |  |  +- compile exe shaderc ReleaseFast native (+12 more reused dependencies)
+      |  |  +- WriteFile sprite-varying.def.sc (reused)
+      |  +- shader turbine_glow (glsl) (turbine_glow.glsl.bin) cached
+      |  |  +- compile exe shaderc ReleaseFast native (+12 more reused dependencies)
+      |  |  +- WriteFile sprite-varying.def.sc (reused)
+      |  +- shader turbine_glow (spv) (turbine_glow.spv.bin) cached
+      |     +- compile exe shaderc ReleaseFast native (+12 more reused dependencies)
+      |     +- WriteFile sprite-varying.def.sc (reused)
+      +- options cached
+      +- options cached
+      +- translate-c (reused)
+      +- WriteFile (reused)
+      +- compile lib cimgui_clib ReleaseSafe wasm32-emscripten (reused)
+      +- compile lib cimgui_clib ReleaseSafe wasm32-emscripten (reused)
+
