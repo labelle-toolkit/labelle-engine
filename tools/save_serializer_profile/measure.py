@@ -23,8 +23,12 @@ It temporarily
      of the game module; zig's cache is content-addressed),
   2. adds a `profile-game` step to the generated `build.zig` that installs
      only the `game` library (skips the emcc link),
-then restores both files, even on failure. Nothing is written to the game's
-source tree — `.labelle/` is generated output.
+then restores both files, even on failure. Originals are also kept on disk as
+`<file>.ab-backup` until restored, so a hard-killed run is repaired by
+`measure.py --abort PID --build-dir ...` (what run_ab.sh does when
+interrupted: kills the PID's process tree, then restores) or by the next run.
+Nothing is written to the game's source tree — `.labelle/` is generated
+output.
 
 The game build's environment (LABELLE_ZIG, EMSDK, zig cache dirs) is taken
 from the caller's environment; `--zig` selects the compiler.
@@ -38,7 +42,7 @@ import json
 import os
 from pathlib import Path
 import re
-import shutil
+import signal
 import subprocess
 import sys
 import threading
@@ -55,24 +59,40 @@ ANCHOR = '    // post_wire (design'
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument('name')
+    ap.add_argument('name', nargs='?')
     ap.add_argument('--build-dir', required=True, type=Path)
-    ap.add_argument('--save-zig', required=True, type=Path)
-    ap.add_argument('--llvm-nm', required=True, type=Path)
-    ap.add_argument('--out', required=True, type=Path)
+    ap.add_argument('--save-zig', type=Path)
+    ap.add_argument('--llvm-nm', type=Path)
+    ap.add_argument('--out', type=Path)
     ap.add_argument('--zig', default=os.environ.get('LABELLE_ZIG', 'zig'))
     ap.add_argument('--jobs', default='2')
+    ap.add_argument('--abort', type=int, metavar='PID',
+                    help='kill the measure.py process tree PID and restore the game files it changed')
     args = ap.parse_args()
 
+    edited = edited_files(args.build_dir)
+    if args.abort is not None:
+        kill_tree(args.abort)
+        restore(edited)
+        return
+    if not (args.name and args.save_zig and args.llvm_nm and args.out):
+        ap.error('NAME, --save-zig, --llvm-nm and --out are required')
+
+    # A TERM (POSIX) still runs the `finally` below. A hard kill (what a
+    # Windows TerminateProcess amounts to) cannot: the on-disk backups let
+    # `--abort` or the next run restore the files instead.
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(128 + signal.SIGTERM))
+
     args.out.mkdir(parents=True, exist_ok=True)
-    build_zig = args.build_dir / 'build.zig'
-    target_save = args.build_dir.parent / 'deps' / 'labelle-engine' / 'src' / 'game' / 'save_load' / 'save.zig'
+    restore(edited)  # left behind by an earlier, hard-killed run
+    build_zig, target_save = edited
     lib = args.build_dir / 'zig-out' / 'lib' / 'libgame.a'
 
-    build_backup = build_zig.read_bytes()
-    save_backup = target_save.read_bytes()
+    original_build = build_zig.read_bytes()
+    for path in edited:
+        backup_path(path).write_bytes(path.read_bytes())
     try:
-        text = build_backup.decode()
+        text = original_build.decode()
         assert ANCHOR in text, 'generated build.zig changed shape; update ANCHOR'
         build_zig.write_bytes(text.replace(ANCHOR, PROFILE_STEP + ANCHOR, 1).encode())
         bust = f'\n// #921 profile run {args.name} {time.time_ns()}\n'.encode()
@@ -84,14 +104,50 @@ def main():
             result['save_mixin_functions'] = function_sizes(args.llvm_nm, lib)
             result['libgame_bytes'] = lib.stat().st_size
     finally:
-        build_zig.write_bytes(build_backup)
-        target_save.write_bytes(save_backup)
+        restore(edited)
 
     (args.out / f'{args.name}-result.json').write_text(json.dumps(result, indent=2))
     print(json.dumps({k: v for k, v in result.items() if k != 'save_mixin_functions'}, indent=2))
     for f in result.get('save_mixin_functions', [])[:8]:
         print(f'{f["bytes"]:>8}  {f["name"]}')
     sys.exit(result['exit'])
+
+
+def edited_files(build_dir):
+    """The two generated files a run modifies: build.zig and the vendored save.zig."""
+    save = build_dir.parent / 'deps' / 'labelle-engine' / 'src' / 'game' / 'save_load' / 'save.zig'
+    return build_dir / 'build.zig', save
+
+
+def backup_path(path):
+    return path.with_name(path.name + '.ab-backup')
+
+
+def restore(paths):
+    for path in paths:
+        backup = backup_path(path)
+        if backup.exists():
+            path.write_bytes(backup.read_bytes())
+            backup.unlink()
+
+
+def kill_tree(pid):
+    """Kill `pid` and every descendant (the zig compiler processes), leaves first."""
+    try:
+        root = psutil.Process(pid)
+        tree = root.children(recursive=True) + [root]
+    except psutil.NoSuchProcess:
+        return
+    for p in reversed(tree[:-1]):
+        try:
+            p.kill()
+        except psutil.NoSuchProcess:
+            pass
+    try:
+        root.kill()
+    except psutil.NoSuchProcess:
+        pass
+    psutil.wait_procs(tree, timeout=30)
 
 
 def run_build(args):
@@ -109,6 +165,18 @@ def run_build(args):
 
     reader = threading.Thread(target=pump)
     reader.start()
+    try:
+        sample(args, process, root, procs)
+    finally:
+        # Interrupted: take the whole compiler tree down with us.
+        if process.poll() is None:
+            kill_tree(process.pid)
+            process.wait()
+    reader.join()
+    return summarize(args, command, started, process, procs)
+
+
+def sample(args, process, root, procs):
     with (args.out / f'{args.name}.jsonl').open('w', encoding='utf-8') as samples:
         while process.poll() is None:
             now = time.time()
@@ -133,8 +201,9 @@ def run_build(args):
                                       'processes': rows}) + '\n')
             samples.flush()
             time.sleep(1)
-    reader.join()
 
+
+def summarize(args, command, started, process, procs):
     game = [p for p in procs.values() if '--name' in p['argv'] and p['argv'][p['argv'].index('--name') + 1] == 'game']
     result = {'run': args.name, 'exit': process.returncode, 'command': command,
               'build_wall_seconds': round(time.time() - started, 1)}
