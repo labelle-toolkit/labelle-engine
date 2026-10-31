@@ -1,0 +1,586 @@
+{
+  "run": "outlined-2",
+  "exit": 0,
+  "command": [
+    "C:/Users/User/.zvm/0.16.0/zig.exe",
+    "build",
+    "profile-game",
+    "-Doptimize=ReleaseSafe",
+    "-j2",
+    "--summary",
+    "all"
+  ],
+  "build_wall_seconds": 152.9,
+  "game_compile_wall_seconds": 144.8,
+  "game_compile_cpu_seconds": 131.7,
+  "game_compile_peak_private_bytes": 5945073664,
+  "game_compile_peak_private_gib": 5.54,
+  "game_compile_peak_working_set_gib": 3.7,
+  "save_mixin_functions": [
+    {
+      "name": "serializeGameState",
+      "bytes": 58476
+    },
+    {
+      "name": "writeRegisteredComponent__anon_200912",
+      "bytes": 13241
+    },
+    {
+      "name": "writeRegisteredComponent__anon_202717",
+      "bytes": 12944
+    },
+    {
+      "name": "writeRegisteredComponent__anon_201413",
+      "bytes": 12417
+    },
+    {
+      "name": "writeRegisteredComponent__anon_198471",
+      "bytes": 12311
+    },
+    {
+      "name": "writeRegisteredComponent__anon_204012",
+      "bytes": 11746
+    },
+    {
+      "name": "writeRegisteredComponent__anon_199519",
+      "bytes": 11551
+    },
+    {
+      "name": "writeRegisteredComponent__anon_202615",
+      "bytes": 10772
+    },
+    {
+      "name": "writeRegisteredComponent__anon_198854",
+      "bytes": 10146
+    },
+    {
+      "name": "writeRegisteredComponent__anon_199827",
+      "bytes": 8289
+    },
+    {
+      "name": "writeRegisteredComponent__anon_203692",
+      "bytes": 7375
+    },
+    {
+      "name": "writeRegisteredComponent__anon_201309",
+      "bytes": 7195
+    },
+    {
+      "name": "writeRegisteredComponent__anon_200253",
+      "bytes": 6554
+    },
+    {
+      "name": "writeRegisteredComponent__anon_202377",
+      "bytes": 6456
+    },
+    {
+      "name": "writeRegisteredComponent__anon_201591",
+      "bytes": 6362
+    },
+    {
+      "name": "writeRegisteredComponent__anon_203451",
+      "bytes": 6189
+    },
+    {
+      "name": "writeRegisteredComponent__anon_201719",
+      "bytes": 6070
+    },
+    {
+      "name": "writeRegisteredComponent__anon_200342",
+      "bytes": 5841
+    },
+    {
+      "name": "writeRegisteredComponent__anon_202224",
+      "bytes": 5716
+    },
+    {
+      "name": "writeRegisteredComponent__anon_201129",
+      "bytes": 4864
+    },
+    {
+      "name": "writeRegisteredComponent__anon_203097",
+      "bytes": 4858
+    },
+    {
+      "name": "writeRegisteredComponent__anon_200853",
+      "bytes": 4844
+    },
+    {
+      "name": "writeRegisteredComponent__anon_204245",
+      "bytes": 4797
+    },
+    {
+      "name": "writeRegisteredComponent__anon_204571",
+      "bytes": 4597
+    },
+    {
+      "name": "writeComponentRefArrays__anon_204891",
+      "bytes": 4403
+    },
+    {
+      "name": "writeRegisteredComponent__anon_202534",
+      "bytes": 4234
+    },
+    {
+      "name": "writeRegisteredComponent__anon_201034",
+      "bytes": 4211
+    },
+    {
+      "name": "writeRegisteredComponent__anon_200793",
+      "bytes": 3994
+    },
+    {
+      "name": "writeRegisteredComponent__anon_204185",
+      "bytes": 3986
+    },
+    {
+      "name": "writeRegisteredComponent__anon_199728",
+      "bytes": 3980
+    },
+    {
+      "name": "writeRegisteredComponent__anon_199430",
+      "bytes": 3833
+    },
+    {
+      "name": "writeRegisteredComponent__anon_200477",
+      "bytes": 3596
+    },
+    {
+      "name": "writeRegisteredComponent__anon_201673",
+      "bytes": 3365
+    },
+    {
+      "name": "writeRegisteredComponent__anon_202889",
+      "bytes": 3142
+    },
+    {
+      "name": "writeRegisteredComponent__anon_201256",
+      "bytes": 3134
+    },
+    {
+      "name": "writeRegisteredComponent__anon_204510",
+      "bytes": 3134
+    },
+    {
+      "name": "writeRegisteredComponent__anon_202127",
+      "bytes": 3132
+    },
+    {
+      "name": "writeRegisteredComponent__anon_203397",
+      "bytes": 3132
+    },
+    {
+      "name": "writeRegisteredComponent__anon_202311",
+      "bytes": 3128
+    },
+    {
+      "name": "writeRegisteredComponent__anon_203644",
+      "bytes": 3084
+    },
+    {
+      "name": "writeJsonString__anon_196556",
+      "bytes": 2843
+    },
+    {
+      "name": "writeRegisteredComponent__anon_203037",
+      "bytes": 2515
+    },
+    {
+      "name": "writeRegisteredComponent__anon_202180",
+      "bytes": 2504
+    },
+    {
+      "name": "writeRegisteredComponent__anon_199677",
+      "bytes": 2277
+    },
+    {
+      "name": "writeRegisteredComponent__anon_200427",
+      "bytes": 2277
+    },
+    {
+      "name": "writeRegisteredComponent__anon_201084",
+      "bytes": 2277
+    },
+    {
+      "name": "writeRegisteredComponent__anon_202085",
+      "bytes": 2277
+    },
+    {
+      "name": "writeRegisteredComponent__anon_202842",
+      "bytes": 2277
+    },
+    {
+      "name": "writeRegisteredComponent__anon_202945",
+      "bytes": 2277
+    },
+    {
+      "name": "writeRegisteredComponent__anon_204465",
+      "bytes": 2277
+    },
+    {
+      "name": "writeRegisteredComponent__anon_199938",
+      "bytes": 2276
+    },
+    {
+      "name": "writeRegisteredComponent__anon_204654",
+      "bytes": 2276
+    },
+    {
+      "name": "writeRegisteredComponent__anon_199782",
+      "bytes": 2270
+    },
+    {
+      "name": "writeRegisteredComponent__anon_200201",
+      "bytes": 2270
+    },
+    {
+      "name": "writeRegisteredComponent__anon_201212",
+      "bytes": 2270
+    },
+    {
+      "name": "writeRegisteredComponent__anon_201547",
+      "bytes": 2270
+    },
+    {
+      "name": "writeRegisteredComponent__anon_202286",
+      "bytes": 2270
+    },
+    {
+      "name": "writeRegisteredComponent__anon_202567",
+      "bytes": 2270
+    },
+    {
+      "name": "writeRegisteredComponent__anon_202992",
+      "bytes": 2270
+    },
+    {
+      "name": "writeRegisteredComponent__anon_203516",
+      "bytes": 2270
+    },
+    {
+      "name": "writeRegisteredComponent__anon_203542",
+      "bytes": 2270
+    },
+    {
+      "name": "writeRegisteredComponent__anon_203576",
+      "bytes": 2270
+    },
+    {
+      "name": "writeRegisteredComponent__anon_203610",
+      "bytes": 2270
+    },
+    {
+      "name": "writeRegisteredComponent__anon_203969",
+      "bytes": 2270
+    },
+    {
+      "name": "writeRegisteredComponent__anon_204159",
+      "bytes": 2270
+    },
+    {
+      "name": "writeComponentRefArrays__anon_204999",
+      "bytes": 1864
+    },
+    {
+      "name": "writeComponentRefArrays__anon_204936",
+      "bytes": 1861
+    },
+    {
+      "name": "writeRegisteredComponent__anon_204386",
+      "bytes": 1586
+    },
+    {
+      "name": "writeRegisteredComponent__anon_201782",
+      "bytes": 1254
+    },
+    {
+      "name": "writeRegisteredComponent__anon_198966",
+      "bytes": 1253
+    },
+    {
+      "name": "writeRegisteredComponent__anon_200539",
+      "bytes": 1253
+    },
+    {
+      "name": "writeRegisteredComponent__anon_203156",
+      "bytes": 1253
+    },
+    {
+      "name": "collectComponentEntities__anon_189421",
+      "bytes": 575
+    },
+    {
+      "name": "collectComponentEntities__anon_189592",
+      "bytes": 575
+    },
+    {
+      "name": "collectComponentEntities__anon_189654",
+      "bytes": 575
+    },
+    {
+      "name": "collectComponentEntities__anon_189714",
+      "bytes": 575
+    },
+    {
+      "name": "collectComponentEntities__anon_189760",
+      "bytes": 575
+    },
+    {
+      "name": "collectComponentEntities__anon_189830",
+      "bytes": 575
+    },
+    {
+      "name": "collectComponentEntities__anon_189876",
+      "bytes": 575
+    },
+    {
+      "name": "collectComponentEntities__anon_189930",
+      "bytes": 575
+    },
+    {
+      "name": "collectComponentEntities__anon_189983",
+      "bytes": 575
+    },
+    {
+      "name": "collectComponentEntities__anon_190861",
+      "bytes": 575
+    },
+    {
+      "name": "collectComponentEntities__anon_190923",
+      "bytes": 575
+    },
+    {
+      "name": "collectComponentEntities__anon_191012",
+      "bytes": 575
+    },
+    {
+      "name": "collectComponentEntities__anon_191064",
+      "bytes": 575
+    },
+    {
+      "name": "collectComponentEntities__anon_191110",
+      "bytes": 575
+    },
+    {
+      "name": "collectComponentEntities__anon_191163",
+      "bytes": 575
+    },
+    {
+      "name": "collectComponentEntities__anon_191209",
+      "bytes": 575
+    },
+    {
+      "name": "collectComponentEntities__anon_191276",
+      "bytes": 575
+    },
+    {
+      "name": "collectComponentEntities__anon_191365",
+      "bytes": 575
+    },
+    {
+      "name": "collectComponentEntities__anon_191413",
+      "bytes": 575
+    },
+    {
+      "name": "collectComponentEntities__anon_191544",
+      "bytes": 575
+    },
+    {
+      "name": "collectComponentEntities__anon_191589",
+      "bytes": 575
+    },
+    {
+      "name": "collectComponentEntities__anon_191667",
+      "bytes": 575
+    },
+    {
+      "name": "collectComponentEntities__anon_191768",
+      "bytes": 575
+    },
+    {
+      "name": "collectComponentEntities__anon_191814",
+      "bytes": 575
+    },
+    {
+      "name": "collectComponentEntities__anon_192013",
+      "bytes": 575
+    },
+    {
+      "name": "collectComponentEntities__anon_192107",
+      "bytes": 575
+    },
+    {
+      "name": "collectComponentEntities__anon_192185",
+      "bytes": 575
+    },
+    {
+      "name": "collectComponentEntities__anon_192245",
+      "bytes": 575
+    },
+    {
+      "name": "collectComponentEntities__anon_192292",
+      "bytes": 575
+    },
+    {
+      "name": "collectComponentEntities__anon_193309",
+      "bytes": 575
+    },
+    {
+      "name": "collectComponentEntities__anon_193415",
+      "bytes": 575
+    },
+    {
+      "name": "collectComponentEntities__anon_193468",
+      "bytes": 575
+    },
+    {
+      "name": "collectComponentEntities__anon_193518",
+      "bytes": 575
+    },
+    {
+      "name": "collectComponentEntities__anon_193573",
+      "bytes": 575
+    },
+    {
+      "name": "collectComponentEntities__anon_193591",
+      "bytes": 575
+    },
+    {
+      "name": "collectComponentEntities__anon_193637",
+      "bytes": 575
+    },
+    {
+      "name": "collectComponentEntities__anon_193755",
+      "bytes": 575
+    },
+    {
+      "name": "collectComponentEntities__anon_193850",
+      "bytes": 575
+    },
+    {
+      "name": "collectComponentEntities__anon_193975",
+      "bytes": 575
+    },
+    {
+      "name": "collectComponentEntities__anon_194022",
+      "bytes": 575
+    },
+    {
+      "name": "collectComponentEntities__anon_194065",
+      "bytes": 575
+    },
+    {
+      "name": "collectComponentEntities__anon_194111",
+      "bytes": 575
+    },
+    {
+      "name": "collectComponentEntities__anon_194157",
+      "bytes": 575
+    },
+    {
+      "name": "collectComponentEntities__anon_194245",
+      "bytes": 575
+    },
+    {
+      "name": "collectComponentEntities__anon_194425",
+      "bytes": 575
+    },
+    {
+      "name": "collectComponentEntities__anon_194647",
+      "bytes": 575
+    },
+    {
+      "name": "collectComponentEntities__anon_194706",
+      "bytes": 575
+    },
+    {
+      "name": "collectComponentEntities__anon_194801",
+      "bytes": 575
+    },
+    {
+      "name": "collectComponentEntities__anon_194870",
+      "bytes": 575
+    },
+    {
+      "name": "collectComponentEntities__anon_194913",
+      "bytes": 575
+    },
+    {
+      "name": "collectComponentEntities__anon_194964",
+      "bytes": 575
+    },
+    {
+      "name": "collectComponentEntities__anon_195007",
+      "bytes": 575
+    },
+    {
+      "name": "collectComponentEntities__anon_195053",
+      "bytes": 575
+    },
+    {
+      "name": "collectComponentEntities__anon_195117",
+      "bytes": 575
+    },
+    {
+      "name": "collectComponentEntities__anon_195203",
+      "bytes": 575
+    },
+    {
+      "name": "collectComponentEntities__anon_195253",
+      "bytes": 575
+    },
+    {
+      "name": "collectComponentEntities__anon_195310",
+      "bytes": 575
+    },
+    {
+      "name": "collectComponentEntities__anon_195368",
+      "bytes": 575
+    },
+    {
+      "name": "collectComponentEntities__anon_195802",
+      "bytes": 575
+    },
+    {
+      "name": "collectComponentEntities__anon_195846",
+      "bytes": 575
+    },
+    {
+      "name": "collectComponentEntities__anon_195890",
+      "bytes": 575
+    },
+    {
+      "name": "collectComponentEntities__anon_195937",
+      "bytes": 575
+    },
+    {
+      "name": "collectComponentEntities__anon_195981",
+      "bytes": 575
+    },
+    {
+      "name": "rememberEntity",
+      "bytes": 537
+    },
+    {
+      "name": "collectComponentEntities__anon_191966",
+      "bytes": 278
+    },
+    {
+      "name": "collectComponentEntities__anon_193255",
+      "bytes": 278
+    },
+    {
+      "name": "collectComponentEntities__anon_194409",
+      "bytes": 278
+    },
+    {
+      "name": "collectComponentEntities__anon_195638",
+      "bytes": 278
+    },
+    {
+      "name": "saveGameState",
+      "bytes": 177
+    }
+  ],
+  "libgame_bytes": 97000342
+}
