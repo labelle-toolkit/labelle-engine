@@ -1,6 +1,21 @@
 const std = @import("std");
 
 pub fn build(b: *std.Build) void {
+    const worker_check = b.step("snapshot-worker-check", "Compile snapshot executor for threaded and serial WASM");
+    inline for (.{ false, true }) |single| {
+        const wasm = b.resolveTargetQuery(.{ .cpu_arch = .wasm32, .os_tag = .emscripten, .cpu_features_add = std.Target.wasm.featureSet(&.{ .atomics, .bulk_memory }) });
+        const executor = b.createModule(.{ .root_source_file = b.path("src/snapshot_executor.zig"), .target = wasm, .optimize = .ReleaseSmall, .single_threaded = single, .link_libc = true });
+        const object = b.addObject(.{ .name = if (single) "snapshot-worker-serial" else "snapshot-worker-threaded", .root_module = b.createModule(.{
+            .root_source_file = b.path("test/snapshot_executor_compile.zig"),
+            .target = wasm,
+            .optimize = .ReleaseSmall,
+            .single_threaded = single,
+            .link_libc = true,
+            .imports = &.{.{ .name = "worker", .module = executor }},
+        }) });
+        worker_check.dependOn(&object.step);
+    }
+
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
@@ -87,6 +102,16 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&storage_run.step);
     b.step("test-storage", "Test persistent blob storage").dependOn(&storage_run.step);
 
+    const settings_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("src/settings.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "labelle-core", .module = core_module }},
+    }) });
+    const settings_run = b.addRunArtifact(settings_tests);
+    test_step.dependOn(&settings_run.step);
+    b.step("test-settings", "Test asynchronous typed settings").dependOn(&settings_run.step);
+
     // #899: the preview socket shims take errno and the fcntl/errno
     // constants from `std.c`, which resolves them per target, and
     // `screenshot_request.nowNs` takes CLOCK_MONOTONIC the same way. This
@@ -155,6 +180,10 @@ pub fn build(b: *std.Build) void {
         "test/scene_lifecycle_events_test.zig",
         "test/easing_test.zig",
         "test/scene_test.zig",
+        // #922 — startup scene registration through the shared noinline
+        // helpers: each scene keeps its own loader, setters hit the right
+        // entry, unknown names still fail.
+        "test/scene_registration_test.zig",
         "test/gestures_test.zig",
         "test/sparse_set_test.zig",
         "test/query_test.zig",
@@ -179,6 +208,14 @@ pub fn build(b: *std.Build) void {
         "test/save_policy_test.zig",
         "test/storage_serialization_test.zig",
         "test/save_load_mixin_test.zig",
+        // #921 — the save serializer split into bounded functions must
+        // keep the save format byte-identical; pins a golden save and
+        // loads it back as an "existing" save.
+        "test/save_serializer_golden_test.zig",
+        // #922 — the save loader split into bounded functions must load
+        // existing saves into the same world (pinned re-serialization),
+        // keep postLoad/marker/create semantics and leak nothing.
+        "test/save_load_compat_test.zig",
         "test/save_scene_after_menu_load_test.zig",
         "test/jsonc/bridge_leak_test.zig",
         "test/jsonc/nested_lifecycle_test.zig",

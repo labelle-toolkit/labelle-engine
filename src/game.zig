@@ -498,6 +498,7 @@ pub fn GameConfigWithYAxis(
         /// Inactive worlds live in the `worlds` map as heap pointers.
         pub const World = struct {
             position_revisions: @import("position_revisions.zig").PositionRevisions = .{},
+            snapshot_executor: @import("snapshot_executor.zig").SnapshotExecutor = .{},
             ecs_backend: EcsImpl,
             renderer: RenderImpl,
             sprite_cache: atlas_mod.SpriteCache,
@@ -580,6 +581,7 @@ pub fn GameConfigWithYAxis(
             }
 
             pub fn deinit(self: *World) void {
+                self.snapshot_executor.deinit();
                 self.position_revisions.deinit(self.allocator);
                 // Deferred backend destroys (#883) must run while the
                 // renderer is still alive — this is the last flush, so a
@@ -1407,7 +1409,14 @@ pub fn GameConfigWithYAxis(
         // ── Position & Hierarchy ──────────────────────────────────
 
         pub const setPosition = ComponentsMixin.setPosition;
+        pub const watchPositionDependency = ComponentsMixin.watchPositionDependency;
+        pub const watchComponentDependency = ComponentsMixin.watchComponentDependency;
+        pub const dependencyRevision = ComponentsMixin.dependencyRevision;
+        pub const invalidateComponentMembership = ComponentsMixin.invalidateComponentMembership;
+        pub const invalidateComponentDependency = ComponentsMixin.invalidateComponentDependency;
         pub const trackPositionRevision = ComponentsMixin.trackPositionRevision;
+        pub const positionRevisionSlot = ComponentsMixin.positionRevisionSlot;
+        pub const positionRevisionAt = ComponentsMixin.positionRevisionAt;
         pub const positionRevision = ComponentsMixin.positionRevision;
         pub const invalidatePosition = ComponentsMixin.invalidatePosition;
         pub const getPosition = ComponentsMixin.getPosition;

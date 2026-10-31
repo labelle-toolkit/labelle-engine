@@ -4,6 +4,7 @@ pub const core = @import("labelle-core");
 
 // ── Persistent blobs ──
 pub const storage = @import("storage.zig");
+pub const settings = @import("settings.zig");
 
 // Engine modules
 pub const game_mod = @import("game.zig");
@@ -1122,3 +1123,5 @@ pub const CursorControls = core.CursorControls;
 
 // ── Position freshness ──
 pub const PositionRevisions = @import("position_revisions.zig").PositionRevisions;
+
+pub const SnapshotExecutor = @import("snapshot_executor.zig").SnapshotExecutor;

@@ -40,3 +40,60 @@ Validation: six lifecycle tests exercise descendant invalidation, generic Parent
 mutation, destruction/reset, raw Children fallback, allocation failure and world
 isolation. The full engine test suite and Flying Platform's 20 test targets are
 also run for this change. No WASM performance result is claimed.
+
+## Aggregate dependency watch
+
+`watchPositionDependency(entity)` enrolls a live entity's position in a single
+world-owned dependency group. Ancestor movement, reparenting, destruction and
+raw-hierarchy invalidation advance `dependencyRevision()`. Ordinary tracked
+workers moving do not advance it unless explicitly enrolled in this group.
+
+`watchComponentDependency(T)` enrolls a component type: shared add/set/remove/
+setField and the authored scene writer advance the same group when that type
+changes. This catches new graph nodes as well as link/stair edits. Registration
+can fail with OOM; consumers must not publish a cache if registration failed.
+The token is conservative and scoped to the world, not a component value hash.
+
+Direct ECS or component-pointer writes still require explicit
+`invalidateComponentDependency(T)` (and `invalidatePosition(entity)` for spatial
+changes). This is not automatic backend instrumentation. Queries only compare
+tokens; they never register dependencies or allocate.
+
+## Indexed freshness reads
+
+After tracking, preparation can save `positionRevisionSlot(entity)` alongside
+world identity, full entity handle and revision. Matching calls
+`positionRevisionAt(entity, slot)` and compares the returned revision with the
+saved revision. This uses an array lookup rather than an entity hash lookup;
+it does not allocate, inspect ECS components or traverse ancestry.
+
+Slots are recycled on destruction, so the slot alone is not an identity or
+freshness token. Reads reject a mismatched entity or empty slot. Re-registering
+the same entity, including after reset, receives a new monotonic revision.
+Storage follows peak concurrent tracked entities rather than lifetime spawn
+count. Tracking allocation failure rolls back registration.
+
+Validation includes slot recycling/reset and every registration allocation
+failure. Full engine validation: 1,514 tests passed.
+
+## Pending work and membership discovery
+
+The world tracker supports one opt-in pending-work consumer. `watchChanges`
+registers and queues an entity; position/ancestor invalidation coalesces subsequent
+notifications in links stored in its revision slot. Enqueuing needs no allocation.
+`pendingIterator` visits only pending entities. The consumer acknowledges a
+specific current revision after publication; stale acknowledgements do nothing.
+Cancellation leaves work pending. Destruction unlinks the slot before recycling;
+reset clears the queue. Graph consumers can call `markAllPending` on graph changes.
+
+`watchMembership(T)` and `membership_revision` provide a separate discovery
+signal. Shared add/set/remove and authored custom-component writes notify actual
+membership changes; field updates do not. A raw ECS add/remove must call
+`game.invalidateComponentMembership(T)`. This does not invalidate graph watches
+or position freshness by itself. A consumer must filter entities that have left
+its domain and unwatch them; position tracking is not a domain registry.
+
+These APIs run on the simulation thread. The pending iterator permits removing
+its current entry, but not registering entities, changing positions, or destroying
+other entries during iteration. It is not an independent subscription stream for
+multiple consumers. Queries must never register or consume pending work.
