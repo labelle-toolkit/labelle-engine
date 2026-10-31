@@ -1,0 +1,307 @@
+===-------------------------------------------------------------------------===
+                      Instruction Selection and Scheduling
+===-------------------------------------------------------------------------===
+  Total Execution Time: 5.0781 seconds (5.0094 wall clock)
+
+   ---User Time---   --System Time--   --User+System--   ---Wall Time---  --- Name ---
+   0.8281 ( 18.1%)   0.1562 ( 31.2%)   0.9844 ( 19.4%)   1.0971 ( 21.9%)  DAG Combining 1
+   0.7031 ( 15.4%)   0.0312 (  6.2%)   0.7344 ( 14.5%)   0.7114 ( 14.2%)  Instruction Scheduling
+   0.5000 ( 10.9%)   0.0938 ( 18.8%)   0.5938 ( 11.7%)   0.5664 ( 11.3%)  DAG Combining 2
+   0.5625 ( 12.3%)   0.0312 (  6.2%)   0.5938 ( 11.7%)   0.5531 ( 11.0%)  Instruction Selection
+   0.5938 ( 13.0%)   0.1250 ( 25.0%)   0.7188 ( 14.2%)   0.5477 ( 10.9%)  Instruction Creation
+   0.3438 (  7.5%)   0.0312 (  6.2%)   0.3750 (  7.4%)   0.5112 ( 10.2%)  Type Legalization
+   0.4844 ( 10.6%)   0.0000 (  0.0%)   0.4844 (  9.5%)   0.4914 (  9.8%)  DAG Combining after legalize types
+   0.4219 (  9.2%)   0.0156 (  3.1%)   0.4375 (  8.6%)   0.3541 (  7.1%)  DAG Legalization
+   0.0781 (  1.7%)   0.0156 (  3.1%)   0.0938 (  1.8%)   0.1063 (  2.1%)  Instruction Scheduling Cleanup
+   0.0625 (  1.4%)   0.0000 (  0.0%)   0.0625 (  1.2%)   0.0706 (  1.4%)  Vector Legalization
+   4.5781 (100.0%)   0.5000 (100.0%)   5.0781 (100.0%)   5.0094 (100.0%)  Total
+
+===-------------------------------------------------------------------------===
+                        Analysis execution timing report
+===-------------------------------------------------------------------------===
+  Total Execution Time: 5.4062 seconds (5.3630 wall clock)
+
+   ---User Time---   --System Time--   --User+System--   ---Wall Time---  --- Name ---
+   1.7188 ( 33.1%)   0.0469 ( 21.4%)   1.7656 ( 32.7%)   1.6136 ( 30.1%)  MemorySSAAnalysis
+   0.6719 ( 13.0%)   0.0000 (  0.0%)   0.6719 ( 12.4%)   0.6961 ( 13.0%)  BranchProbabilityAnalysis
+   0.6562 ( 12.7%)   0.0156 (  7.1%)   0.6719 ( 12.4%)   0.6617 ( 12.3%)  LoopAnalysis
+   0.4688 (  9.0%)   0.0625 ( 28.6%)   0.5312 (  9.8%)   0.5610 ( 10.5%)  DominatorTreeAnalysis
+   0.4375 (  8.4%)   0.0312 ( 14.3%)   0.4688 (  8.7%)   0.4427 (  8.3%)  BlockFrequencyAnalysis
+   0.2656 (  5.1%)   0.0156 (  7.1%)   0.2812 (  5.2%)   0.3391 (  6.3%)  PostDominatorTreeAnalysis
+   0.2500 (  4.8%)   0.0156 (  7.1%)   0.2656 (  4.9%)   0.2642 (  4.9%)  AAManager
+   0.1250 (  2.4%)   0.0000 (  0.0%)   0.1250 (  2.3%)   0.1503 (  2.8%)  CallGraphAnalysis
+   0.0469 (  0.9%)   0.0156 (  7.1%)   0.0625 (  1.2%)   0.1235 (  2.3%)  ScalarEvolutionAnalysis
+   0.1406 (  2.7%)   0.0000 (  0.0%)   0.1406 (  2.6%)   0.0845 (  1.6%)  BasicAA
+   0.0469 (  0.9%)   0.0000 (  0.0%)   0.0469 (  0.9%)   0.0438 (  0.8%)  LastRunTrackingAnalysis
+   0.0156 (  0.3%)   0.0000 (  0.0%)   0.0156 (  0.3%)   0.0424 (  0.8%)  EphemeralValuesAnalysis
+   0.0156 (  0.3%)   0.0000 (  0.0%)   0.0156 (  0.3%)   0.0407 (  0.8%)  TargetIRAnalysis
+   0.0469 (  0.9%)   0.0000 (  0.0%)   0.0469 (  0.9%)   0.0373 (  0.7%)  GlobalsAA
+   0.0469 (  0.9%)   0.0000 (  0.0%)   0.0469 (  0.9%)   0.0253 (  0.5%)  AssumptionAnalysis
+   0.0312 (  0.6%)   0.0000 (  0.0%)   0.0312 (  0.6%)   0.0247 (  0.5%)  FunctionAnalysisManagerCGSCCProxy
+   0.0156 (  0.3%)   0.0000 (  0.0%)   0.0156 (  0.3%)   0.0232 (  0.4%)  MemoryDependenceAnalysis
+   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0226 (  0.4%)  LazyValueAnalysis
+   0.0156 (  0.3%)   0.0000 (  0.0%)   0.0156 (  0.3%)   0.0196 (  0.4%)  TargetLibraryAnalysis
+   0.0156 (  0.3%)   0.0000 (  0.0%)   0.0156 (  0.3%)   0.0193 (  0.4%)  DemandedBitsAnalysis
+   0.0156 (  0.3%)   0.0000 (  0.0%)   0.0156 (  0.3%)   0.0190 (  0.4%)  OuterAnalysisManagerProxy<FunctionAnalysisManager, Loop, LoopStandardAnalysisResults &>
+   0.0000 (  0.0%)   0.0156 (  7.1%)   0.0156 (  0.3%)   0.0158 (  0.3%)  OuterAnalysisManagerProxy<ModuleAnalysisManager, Function>
+   0.0156 (  0.3%)   0.0000 (  0.0%)   0.0156 (  0.3%)   0.0155 (  0.3%)  InnerAnalysisManagerProxy<LoopAnalysisManager, Function>
+   0.0469 (  0.9%)   0.0000 (  0.0%)   0.0469 (  0.9%)   0.0149 (  0.3%)  OptimizationRemarkEmitterAnalysis
+   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0132 (  0.2%)  TypeBasedAA
+   0.0156 (  0.3%)   0.0000 (  0.0%)   0.0156 (  0.3%)   0.0132 (  0.2%)  ScopedNoAliasAA
+   0.0312 (  0.6%)   0.0000 (  0.0%)   0.0312 (  0.6%)   0.0127 (  0.2%)  OuterAnalysisManagerProxy<ModuleAnalysisManager, LazyCallGraph::SCC, LazyCallGraph &>
+   0.0156 (  0.3%)   0.0000 (  0.0%)   0.0156 (  0.3%)   0.0110 (  0.2%)  LazyCallGraphAnalysis
+   0.0156 (  0.3%)   0.0000 (  0.0%)   0.0156 (  0.3%)   0.0093 (  0.2%)  ShouldNotRunFunctionPassesAnalysis
+   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0027 (  0.1%)  LoopAccessAnalysis
+   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0000 (  0.0%)  ShouldRunExtraSimpleLoopUnswitch
+   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0000 (  0.0%)  InnerAnalysisManagerProxy<CGSCCAnalysisManager, Module>
+   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0000 (  0.0%)  ProfileSummaryAnalysis
+   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0000 (  0.0%)  InlineAdvisorAnalysis
+   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0000 (  0.0%)  InnerAnalysisManagerProxy<FunctionAnalysisManager, Module>
+   5.1875 (100.0%)   0.2188 (100.0%)   5.4062 (100.0%)   5.3630 (100.0%)  Total
+
+===-------------------------------------------------------------------------===
+                          Pass execution timing report
+===-------------------------------------------------------------------------===
+  Total Execution Time: 87.6719 seconds (88.8762 wall clock)
+
+   ---User Time---   --System Time--   --User+System--   ---Wall Time---  --- Name ---
+  12.2031 ( 14.6%)   0.4688 ( 10.8%)  12.6719 ( 14.5%)  13.1452 ( 14.8%)  InstCombinePass
+  10.5469 ( 12.7%)   0.4844 ( 11.1%)  11.0312 ( 12.6%)  11.6049 ( 13.1%)  InlinerPass
+   6.6875 (  8.0%)   0.6094 ( 14.0%)   7.2969 (  8.3%)   7.4055 (  8.3%)  WebAssembly Instruction Selection
+   5.0469 (  6.1%)   0.2031 (  4.7%)   5.2500 (  6.0%)   4.6008 (  5.2%)  GVNPass
+   3.3906 (  4.1%)   0.1719 (  3.9%)   3.5625 (  4.1%)   3.7193 (  4.2%)  SimplifyCFGPass
+   3.4531 (  4.1%)   0.0625 (  1.4%)   3.5156 (  4.0%)   3.5413 (  4.0%)  JumpThreadingPass
+   2.3750 (  2.9%)   0.0938 (  2.2%)   2.4688 (  2.8%)   2.3774 (  2.7%)  LICMPass
+   2.2031 (  2.6%)   0.0312 (  0.7%)   2.2344 (  2.5%)   2.3654 (  2.7%)  EarlyCSEPass
+   2.0312 (  2.4%)   0.1094 (  2.5%)   2.1406 (  2.4%)   2.2168 (  2.5%)  WebAssembly Register Stackify
+   1.8906 (  2.3%)   0.2031 (  4.7%)   2.0938 (  2.4%)   2.0807 (  2.3%)  SROAPass
+   1.7969 (  2.2%)   0.1094 (  2.5%)   1.9062 (  2.2%)   1.9919 (  2.2%)  DSEPass
+   1.6406 (  2.0%)   0.0469 (  1.1%)   1.6875 (  1.9%)   1.8420 (  2.1%)  WebAssembly Assembly Printer
+   1.5000 (  1.8%)   0.1094 (  2.5%)   1.6094 (  1.8%)   1.6910 (  1.9%)  WebAssembly Fix Irreducible Control Flow
+   1.6094 (  1.9%)   0.0625 (  1.4%)   1.6719 (  1.9%)   1.6753 (  1.9%)  CorrelatedValuePropagationPass
+   1.5469 (  1.9%)   0.0312 (  0.7%)   1.5781 (  1.8%)   1.4641 (  1.6%)  Live DEBUG_VALUE analysis
+   1.3438 (  1.6%)   0.0469 (  1.1%)   1.3906 (  1.6%)   1.4018 (  1.6%)  IndVarSimplifyPass
+   1.2656 (  1.5%)   0.0469 (  1.1%)   1.3125 (  1.5%)   1.2558 (  1.4%)  MemCpyOptPass
+   1.1094 (  1.3%)   0.0625 (  1.4%)   1.1719 (  1.3%)   1.1307 (  1.3%)  Loop Strength Reduction
+   1.0781 (  1.3%)   0.0625 (  1.4%)   1.1406 (  1.3%)   1.0211 (  1.1%)  ConstraintEliminationPass
+   0.9531 (  1.1%)   0.0625 (  1.4%)   1.0156 (  1.2%)   1.0137 (  1.1%)  ArgumentPromotionPass
+   0.9062 (  1.1%)   0.0625 (  1.4%)   0.9688 (  1.1%)   0.9419 (  1.1%)  PostOrderFunctionAttrsPass
+   0.9219 (  1.1%)   0.0156 (  0.4%)   0.9375 (  1.1%)   0.9350 (  1.1%)  ADCEPass
+   0.7969 (  1.0%)   0.0469 (  1.1%)   0.8438 (  1.0%)   0.8924 (  1.0%)  SCCPPass
+   0.8438 (  1.0%)   0.0312 (  0.7%)   0.8750 (  1.0%)   0.8868 (  1.0%)  LCSSAPass
+   0.7188 (  0.9%)   0.0312 (  0.7%)   0.7500 (  0.9%)   0.7872 (  0.9%)  CodeGen Prepare
+   0.6250 (  0.8%)   0.0156 (  0.4%)   0.6406 (  0.7%)   0.7767 (  0.9%)  LoopFullUnrollPass
+   0.7031 (  0.8%)   0.0469 (  1.1%)   0.7500 (  0.9%)   0.7743 (  0.9%)  LoopIdiomRecognizePass
+   0.6875 (  0.8%)   0.0469 (  1.1%)   0.7344 (  0.8%)   0.7355 (  0.8%)  IPSCCPPass
+   0.6094 (  0.7%)   0.0625 (  1.4%)   0.6719 (  0.8%)   0.6987 (  0.8%)  LoopSimplifyPass
+   0.5781 (  0.7%)   0.0625 (  1.4%)   0.6406 (  0.7%)   0.6907 (  0.8%)  Live Interval Analysis
+   0.6094 (  0.7%)   0.0625 (  1.4%)   0.6719 (  0.8%)   0.6549 (  0.7%)  Live Interval Analysis #2
+   0.5469 (  0.7%)   0.0000 (  0.0%)   0.5469 (  0.6%)   0.6298 (  0.7%)  LoopUnrollPass
+   0.5469 (  0.7%)   0.0156 (  0.4%)   0.5625 (  0.6%)   0.5636 (  0.6%)  GlobalOptPass
+   0.5625 (  0.7%)   0.0000 (  0.0%)   0.5625 (  0.6%)   0.5527 (  0.6%)  LoopDeletionPass
+   0.5000 (  0.6%)   0.0469 (  1.1%)   0.5469 (  0.6%)   0.5311 (  0.6%)  BDCEPass
+   0.4375 (  0.5%)   0.0312 (  0.7%)   0.4688 (  0.5%)   0.4632 (  0.5%)  ReassociatePass
+   0.5781 (  0.7%)   0.0156 (  0.4%)   0.5938 (  0.7%)   0.4047 (  0.5%)  SLPVectorizerPass
+   0.3438 (  0.4%)   0.0312 (  0.7%)   0.3750 (  0.4%)   0.3910 (  0.4%)  Control Flow Optimizer
+   0.3125 (  0.4%)   0.0000 (  0.0%)   0.3125 (  0.4%)   0.3104 (  0.3%)  CalledValuePropagationPass
+   0.2656 (  0.3%)   0.0000 (  0.0%)   0.2656 (  0.3%)   0.3102 (  0.3%)  Machine code sinking
+   0.2656 (  0.3%)   0.0000 (  0.0%)   0.2656 (  0.3%)   0.3055 (  0.3%)  LoopRotatePass
+   0.2656 (  0.3%)   0.0156 (  0.4%)   0.2812 (  0.3%)   0.2867 (  0.3%)  AddDiscriminatorsPass
+   0.3906 (  0.5%)   0.0312 (  0.7%)   0.4219 (  0.5%)   0.2850 (  0.3%)  LoopInstSimplifyPass
+   0.2344 (  0.3%)   0.0000 (  0.0%)   0.2344 (  0.3%)   0.2834 (  0.3%)  TailCallElimPass
+   0.2500 (  0.3%)   0.0312 (  0.7%)   0.2812 (  0.3%)   0.2636 (  0.3%)  Register Coalescer
+   0.2188 (  0.3%)   0.0156 (  0.4%)   0.2344 (  0.3%)   0.2615 (  0.3%)  Live Variable Analysis
+   0.2656 (  0.3%)   0.0312 (  0.7%)   0.2969 (  0.3%)   0.2587 (  0.3%)  Machine Common Subexpression Elimination
+   0.2656 (  0.3%)   0.0000 (  0.0%)   0.2656 (  0.3%)   0.2453 (  0.3%)  SimpleLoopUnswitchPass
+   0.2344 (  0.3%)   0.0156 (  0.4%)   0.2500 (  0.3%)   0.2227 (  0.3%)  Merge disjoint stack slots
+   0.2500 (  0.3%)   0.0469 (  1.1%)   0.2969 (  0.3%)   0.2122 (  0.2%)  WebAssembly Register Coloring
+   0.1719 (  0.2%)   0.0000 (  0.0%)   0.1719 (  0.2%)   0.2005 (  0.2%)  LoopSimplifyCFGPass
+   0.1875 (  0.2%)   0.0000 (  0.0%)   0.1875 (  0.2%)   0.1914 (  0.2%)  MergeFunctionsPass
+   0.1094 (  0.1%)   0.0000 (  0.0%)   0.1094 (  0.1%)   0.1769 (  0.2%)  Canonicalize Freeze Instructions in Loops
+   0.1875 (  0.2%)   0.0000 (  0.0%)   0.1875 (  0.2%)   0.1644 (  0.2%)  WebAssembly Explicit Locals
+   0.2031 (  0.2%)   0.0156 (  0.4%)   0.2188 (  0.2%)   0.1606 (  0.2%)  AggressiveInstCombinePass
+   0.1250 (  0.2%)   0.0000 (  0.0%)   0.1250 (  0.1%)   0.1392 (  0.2%)  InstSimplifyPass
+   0.0938 (  0.1%)   0.0000 (  0.0%)   0.0938 (  0.1%)   0.1348 (  0.2%)  Branch Probability Analysis #2
+   0.0781 (  0.1%)   0.0312 (  0.7%)   0.1094 (  0.1%)   0.1274 (  0.1%)  Eliminate PHI nodes for register allocation
+   0.0781 (  0.1%)   0.0000 (  0.0%)   0.0781 (  0.1%)   0.1210 (  0.1%)  Early Machine Loop Invariant Code Motion
+   0.1250 (  0.2%)   0.0156 (  0.4%)   0.1406 (  0.2%)   0.1205 (  0.1%)  Remove Redundant DEBUG_VALUE analysis
+   0.1250 (  0.2%)   0.0000 (  0.0%)   0.1250 (  0.1%)   0.1158 (  0.1%)  Branch Probability Analysis
+   0.0938 (  0.1%)   0.0156 (  0.4%)   0.1094 (  0.1%)   0.1141 (  0.1%)  Free MachineFunction
+   0.0781 (  0.1%)   0.0000 (  0.0%)   0.0781 (  0.1%)   0.1134 (  0.1%)  VectorCombinePass
+   0.0938 (  0.1%)   0.0000 (  0.0%)   0.0938 (  0.1%)   0.1065 (  0.1%)  Induction Variable Users
+   0.1250 (  0.2%)   0.0000 (  0.0%)   0.1250 (  0.1%)   0.1062 (  0.1%)  WebAssembly CFG Stackify
+   0.0938 (  0.1%)   0.0000 (  0.0%)   0.0938 (  0.1%)   0.1054 (  0.1%)  RecomputeGlobalsAAPass
+   0.0938 (  0.1%)   0.0000 (  0.0%)   0.0938 (  0.1%)   0.0984 (  0.1%)  RequireAnalysisPass<llvm::GlobalsAA, llvm::Module, llvm::AnalysisManager<Module>>
+   0.0781 (  0.1%)   0.0000 (  0.0%)   0.0781 (  0.1%)   0.0954 (  0.1%)  InferAlignmentPass
+   0.1094 (  0.1%)   0.0000 (  0.0%)   0.1094 (  0.1%)   0.0941 (  0.1%)  Float2IntPass
+   0.1250 (  0.2%)   0.0000 (  0.0%)   0.1250 (  0.1%)   0.0912 (  0.1%)  Remove dead machine instructions
+   0.0781 (  0.1%)   0.0000 (  0.0%)   0.0781 (  0.1%)   0.0875 (  0.1%)  GlobalDCEPass
+   0.0938 (  0.1%)   0.0000 (  0.0%)   0.0938 (  0.1%)   0.0812 (  0.1%)  ReversePostOrderFunctionAttrsPass
+   0.0781 (  0.1%)   0.0000 (  0.0%)   0.0781 (  0.1%)   0.0789 (  0.1%)  DeadArgumentEliminationPass
+   0.0781 (  0.1%)   0.0000 (  0.0%)   0.0781 (  0.1%)   0.0789 (  0.1%)  WebAssembly MC Lower Pre Pass
+   0.0312 (  0.0%)   0.0312 (  0.7%)   0.0625 (  0.1%)   0.0772 (  0.1%)  Peephole Optimizations
+   0.0469 (  0.1%)   0.0000 (  0.0%)   0.0469 (  0.1%)   0.0768 (  0.1%)  Block Frequency Analysis
+   0.0469 (  0.1%)   0.0000 (  0.0%)   0.0469 (  0.1%)   0.0708 (  0.1%)  Expand Atomic instructions
+   0.0625 (  0.1%)   0.0000 (  0.0%)   0.0625 (  0.1%)   0.0620 (  0.1%)  Machine Dominance Frontier Construction
+   0.0312 (  0.0%)   0.0000 (  0.0%)   0.0312 (  0.0%)   0.0588 (  0.1%)  Machine Block Frequency Analysis
+   0.0625 (  0.1%)   0.0000 (  0.0%)   0.0625 (  0.1%)   0.0571 (  0.1%)  CGProfilePass
+   0.0625 (  0.1%)   0.0156 (  0.4%)   0.0781 (  0.1%)   0.0569 (  0.1%)  Machine Block Frequency Analysis #3
+   0.0312 (  0.0%)   0.0000 (  0.0%)   0.0312 (  0.0%)   0.0526 (  0.1%)  WebAssembly Debug Fixup
+   0.0312 (  0.0%)   0.0312 (  0.7%)   0.0625 (  0.1%)   0.0510 (  0.1%)  Remove dead machine instructions #2
+   0.0625 (  0.1%)   0.0156 (  0.4%)   0.0781 (  0.1%)   0.0494 (  0.1%)  Prologue/Epilogue Insertion & Frame Finalization
+   0.0156 (  0.0%)   0.0000 (  0.0%)   0.0156 (  0.0%)   0.0480 (  0.1%)  WebAssembly Optimize Returned
+   0.0312 (  0.0%)   0.0156 (  0.4%)   0.0469 (  0.1%)   0.0475 (  0.1%)  Machine Block Frequency Analysis #4
+   0.0312 (  0.0%)   0.0000 (  0.0%)   0.0312 (  0.0%)   0.0464 (  0.1%)  Constant Hoisting
+   0.0312 (  0.0%)   0.0000 (  0.0%)   0.0312 (  0.0%)   0.0458 (  0.1%)  Slot index numbering
+   0.0469 (  0.1%)   0.0000 (  0.0%)   0.0469 (  0.1%)   0.0442 (  0.0%)  Dominator Tree Construction
+   0.0469 (  0.1%)   0.0000 (  0.0%)   0.0469 (  0.1%)   0.0438 (  0.0%)  Machine Block Frequency Analysis #2
+   0.0469 (  0.1%)   0.0000 (  0.0%)   0.0469 (  0.1%)   0.0433 (  0.0%)  WebAssembly CFG Sort
+   0.0469 (  0.1%)   0.0000 (  0.0%)   0.0469 (  0.1%)   0.0430 (  0.0%)  Two-Address instruction pass
+   0.0312 (  0.0%)   0.0156 (  0.4%)   0.0469 (  0.1%)   0.0418 (  0.0%)  Natural Loop Information #5
+   0.0469 (  0.1%)   0.0000 (  0.0%)   0.0469 (  0.1%)   0.0417 (  0.0%)  Expand large div/rem
+   0.0781 (  0.1%)   0.0000 (  0.0%)   0.0781 (  0.1%)   0.0415 (  0.0%)  MachinePostDominator Tree Construction
+   0.0625 (  0.1%)   0.0000 (  0.0%)   0.0625 (  0.1%)   0.0410 (  0.0%)  Post-Dominator Tree Construction #2
+   0.0469 (  0.1%)   0.0000 (  0.0%)   0.0469 (  0.1%)   0.0410 (  0.0%)  Natural Loop Information
+   0.0312 (  0.0%)   0.0000 (  0.0%)   0.0312 (  0.0%)   0.0402 (  0.0%)  Slot index numbering #2
+   0.0312 (  0.0%)   0.0000 (  0.0%)   0.0312 (  0.0%)   0.0397 (  0.0%)  Slot index numbering #3
+   0.0312 (  0.0%)   0.0156 (  0.4%)   0.0469 (  0.1%)   0.0387 (  0.0%)  Post-Dominator Tree Construction
+   0.0469 (  0.1%)   0.0000 (  0.0%)   0.0469 (  0.1%)   0.0384 (  0.0%)  Machine Natural Loop Construction
+   0.0625 (  0.1%)   0.0000 (  0.0%)   0.0625 (  0.1%)   0.0377 (  0.0%)  Natural Loop Information #2
+   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0370 (  0.0%)  Machine Natural Loop Construction #2
+   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0369 (  0.0%)  LowerExpectIntrinsicPass
+   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0369 (  0.0%)  Machine Cycle Info Analysis
+   0.0469 (  0.1%)   0.0000 (  0.0%)   0.0469 (  0.1%)   0.0363 (  0.0%)  Finalize ISel and expand pseudo-instructions
+   0.0156 (  0.0%)   0.0156 (  0.4%)   0.0312 (  0.0%)   0.0362 (  0.0%)  LibCallsShrinkWrapPass
+   0.0312 (  0.0%)   0.0156 (  0.4%)   0.0469 (  0.1%)   0.0353 (  0.0%)  CoroAnnotationElidePass
+   0.0156 (  0.0%)   0.0000 (  0.0%)   0.0156 (  0.0%)   0.0345 (  0.0%)  Canonicalize natural loops
+   0.0312 (  0.0%)   0.0000 (  0.0%)   0.0312 (  0.0%)   0.0336 (  0.0%)  RequireAnalysisPass<llvm::ShouldNotRunFunctionPassesAnalysis, llvm::Function, llvm::AnalysisManager<Function>>
+   0.0312 (  0.0%)   0.0000 (  0.0%)   0.0312 (  0.0%)   0.0335 (  0.0%)  Insert stack protectors
+   0.0156 (  0.0%)   0.0000 (  0.0%)   0.0156 (  0.0%)   0.0313 (  0.0%)  WebAssembly Optimize Live Intervals
+   0.0156 (  0.0%)   0.0000 (  0.0%)   0.0156 (  0.0%)   0.0310 (  0.0%)  WebAssembly Fix br_table Defaults
+   0.0469 (  0.1%)   0.0156 (  0.4%)   0.0625 (  0.1%)   0.0299 (  0.0%)  Dominator Tree Construction #3
+   0.0312 (  0.0%)   0.0000 (  0.0%)   0.0312 (  0.0%)   0.0295 (  0.0%)  Natural Loop Information #4
+   0.0156 (  0.0%)   0.0156 (  0.4%)   0.0312 (  0.0%)   0.0293 (  0.0%)  AlwaysInlinerPass
+   0.0156 (  0.0%)   0.0000 (  0.0%)   0.0156 (  0.0%)   0.0285 (  0.0%)  MachineDominator Tree Construction
+   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0285 (  0.0%)  LoopVectorizePass
+   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0275 (  0.0%)  LowerConstantIntrinsicsPass
+   0.0156 (  0.0%)   0.0000 (  0.0%)   0.0156 (  0.0%)   0.0270 (  0.0%)  WebAssembly Lower br_unless
+   0.0312 (  0.0%)   0.0312 (  0.7%)   0.0625 (  0.1%)   0.0265 (  0.0%)  MachineDominator Tree Construction #3
+   0.0469 (  0.1%)   0.0000 (  0.0%)   0.0469 (  0.1%)   0.0265 (  0.0%)  Natural Loop Information #3
+   0.0156 (  0.0%)   0.0000 (  0.0%)   0.0156 (  0.0%)   0.0258 (  0.0%)  LoopDistributePass
+   0.0156 (  0.0%)   0.0156 (  0.4%)   0.0312 (  0.0%)   0.0250 (  0.0%)  Scalar Evolution Analysis
+   0.0156 (  0.0%)   0.0000 (  0.0%)   0.0156 (  0.0%)   0.0249 (  0.0%)  MachineDominator Tree Construction #4
+   0.0312 (  0.0%)   0.0000 (  0.0%)   0.0312 (  0.0%)   0.0248 (  0.0%)  MergedLoadStoreMotionPass
+   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0235 (  0.0%)  InjectTLIMappings
+   0.0156 (  0.0%)   0.0000 (  0.0%)   0.0156 (  0.0%)   0.0233 (  0.0%)  PromotePass
+   0.0000 (  0.0%)   0.0156 (  0.4%)   0.0156 (  0.0%)   0.0227 (  0.0%)  Remove unreachable machine basic blocks
+   0.0000 (  0.0%)   0.0312 (  0.7%)   0.0312 (  0.0%)   0.0225 (  0.0%)  Early Tail Duplication
+   0.0312 (  0.0%)   0.0156 (  0.4%)   0.0469 (  0.1%)   0.0222 (  0.0%)  MachineDominator Tree Construction #2
+   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0214 (  0.0%)  Init Undef Pass
+   0.0156 (  0.0%)   0.0156 (  0.4%)   0.0312 (  0.0%)   0.0209 (  0.0%)  CallSiteSplittingPass
+   0.0000 (  0.0%)   0.0156 (  0.4%)   0.0156 (  0.0%)   0.0205 (  0.0%)  WebAssembly Set p2align Operands
+   0.0156 (  0.0%)   0.0000 (  0.0%)   0.0156 (  0.0%)   0.0202 (  0.0%)  InvalidateAnalysisPass<llvm::AAManager>
+   0.0156 (  0.0%)   0.0000 (  0.0%)   0.0156 (  0.0%)   0.0199 (  0.0%)  Dominator Tree Construction #2
+   0.0469 (  0.1%)   0.0000 (  0.0%)   0.0469 (  0.1%)   0.0195 (  0.0%)  Expand memcmp() to load/stores
+   0.0156 (  0.0%)   0.0000 (  0.0%)   0.0156 (  0.0%)   0.0184 (  0.0%)  LoopLoadEliminationPass
+   0.0469 (  0.1%)   0.0000 (  0.0%)   0.0469 (  0.1%)   0.0173 (  0.0%)  CoroSplitPass
+   0.0156 (  0.0%)   0.0000 (  0.0%)   0.0156 (  0.0%)   0.0167 (  0.0%)  WebAssembly Fix Function Bitcasts
+   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0165 (  0.0%)  Tail Duplication
+   0.0156 (  0.0%)   0.0000 (  0.0%)   0.0156 (  0.0%)   0.0158 (  0.0%)  CoroElidePass
+   0.0156 (  0.0%)   0.0000 (  0.0%)   0.0156 (  0.0%)   0.0155 (  0.0%)  Remove unreachable blocks from the CFG #2
+   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0150 (  0.0%)  WebAssembly late peephole optimizer
+   0.0156 (  0.0%)   0.0000 (  0.0%)   0.0156 (  0.0%)   0.0147 (  0.0%)  Remove unreachable blocks from the CFG
+   0.0156 (  0.0%)   0.0000 (  0.0%)   0.0156 (  0.0%)   0.0144 (  0.0%)  Remove unreachable blocks from the CFG #3
+   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0142 (  0.0%)  MoveAutoInitPass
+   0.0156 (  0.0%)   0.0000 (  0.0%)   0.0156 (  0.0%)   0.0139 (  0.0%)  ConstantMergePass
+   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0136 (  0.0%)  SpeculativeExecutionPass
+   0.0156 (  0.0%)   0.0000 (  0.0%)   0.0156 (  0.0%)   0.0131 (  0.0%)  Replace intrinsics with calls to vector library
+   0.0156 (  0.0%)   0.0156 (  0.4%)   0.0312 (  0.0%)   0.0130 (  0.0%)  WebAssembly Memory Intrinsic Results
+   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0128 (  0.0%)  OpenMPOptCGSCCPass
+   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0126 (  0.0%)  Post-RA pseudo instruction expansion pass
+   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0119 (  0.0%)  WebAssembly Register Numbering
+   0.0156 (  0.0%)   0.0000 (  0.0%)   0.0156 (  0.0%)   0.0117 (  0.0%)  Partially inline calls to library functions
+   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0108 (  0.0%)  Scalarize Masked Memory Intrinsics
+   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0107 (  0.0%)  WebAssembly Clean Code After Trap
+   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0107 (  0.0%)  WebAssembly Lower RefTypes Int-Ptr Conversions
+   0.0156 (  0.0%)   0.0000 (  0.0%)   0.0156 (  0.0%)   0.0106 (  0.0%)  Pre-ISel Intrinsic Lowering
+   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0098 (  0.0%)  Process Implicit Definitions
+   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0097 (  0.0%)  EntryExitInstrumenterPass
+   0.0156 (  0.0%)   0.0000 (  0.0%)   0.0156 (  0.0%)   0.0095 (  0.0%)  DivRemPairsPass
+   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0090 (  0.0%)  Expand reduction intrinsics
+   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0088 (  0.0%)  WebAssembly Replace Physical Registers
+   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0084 (  0.0%)  WebAssembly Nullify DBG_VALUE_LISTs
+   0.0156 (  0.0%)   0.0000 (  0.0%)   0.0156 (  0.0%)   0.0077 (  0.0%)  InvalidateAnalysisPass<llvm::ShouldNotRunFunctionPassesAnalysis>
+   0.0156 (  0.0%)   0.0000 (  0.0%)   0.0156 (  0.0%)   0.0070 (  0.0%)  ObjC ARC contraction
+   0.0156 (  0.0%)   0.0000 (  0.0%)   0.0156 (  0.0%)   0.0067 (  0.0%)  Unnamed pass: implement Pass::getPassName()
+   0.0000 (  0.0%)   0.0156 (  0.4%)   0.0156 (  0.0%)   0.0063 (  0.0%)  Optimize machine instruction PHIs
+   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0062 (  0.0%)  Basic Alias Analysis (stateless AA impl)
+   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0061 (  0.0%)  ControlHeightReductionPass
+   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0058 (  0.0%)  Function Alias Analysis Results #2
+   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0053 (  0.0%)  WarnMissedTransformationsPass
+   0.0156 (  0.0%)   0.0000 (  0.0%)   0.0156 (  0.0%)   0.0053 (  0.0%)  Expand indirectbr instructions
+   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0047 (  0.0%)  Function Alias Analysis Results
+   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0043 (  0.0%)  Merge contiguous icmps into a memcmp
+   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0043 (  0.0%)  WebAssembly Argument Move
+   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0039 (  0.0%)  AnnotationRemarksPass
+   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0036 (  0.0%)  AlignmentFromAssumptionsPass
+   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0035 (  0.0%)  Function Alias Analysis Results #3
+   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0035 (  0.0%)  Basic Alias Analysis (stateless AA impl) #3
+   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0034 (  0.0%)  Insert XRay ops
+   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0030 (  0.0%)  Lazy Branch Probability Analysis #3
+   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0029 (  0.0%)  Lower invoke and unwind, for unwindless code generators
+   0.0156 (  0.0%)   0.0000 (  0.0%)   0.0156 (  0.0%)   0.0028 (  0.0%)  Lower invoke and unwind, for unwindless code generators #2
+   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0027 (  0.0%)  Expand fp
+   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0026 (  0.0%)  Prepare callbr
+   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0025 (  0.0%)  Lazy Branch Probability Analysis
+   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0024 (  0.0%)  Machine Sanitizer Binary Metadata
+   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0023 (  0.0%)  Basic Alias Analysis (stateless AA impl) #2
+   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0023 (  0.0%)  WebAssembly Reference Types Memory to Local
+   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0023 (  0.0%)  Assignment Tracking Analysis
+   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0022 (  0.0%)  Local Stack Slot Allocation
+   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0022 (  0.0%)  Machine Optimization Remark Emitter
+   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0022 (  0.0%)  Lazy Branch Probability Analysis #2
+   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0022 (  0.0%)  Basic Alias Analysis (stateless AA impl) #4
+   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0021 (  0.0%)  Machine Optimization Remark Emitter #2
+   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0021 (  0.0%)  WebAssembly Exception Information
+   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0021 (  0.0%)  Stack Frame Layout Analysis
+   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0021 (  0.0%)  Machine Instruction Scheduler
+   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0020 (  0.0%)  Insert fentry calls
+   0.0000 (  0.0%)   0.0156 (  0.4%)   0.0156 (  0.0%)   0.0020 (  0.0%)  Lazy Block Frequency Analysis #3
+   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0020 (  0.0%)  Lazy Machine Block Frequency Analysis
+   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0020 (  0.0%)  Optimization Remark Emitter
+   0.0156 (  0.0%)   0.0000 (  0.0%)   0.0156 (  0.0%)   0.0020 (  0.0%)  Rename Disconnected Subregister Components
+   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0020 (  0.0%)  Fixup Statepoint Caller Saved
+   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0019 (  0.0%)  Shadow Stack GC Lowering
+   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0019 (  0.0%)  Detect Dead Lanes
+   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0019 (  0.0%)  Instrument function entry/exit with calls to e.g. mcount() (post inlining)
+   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0019 (  0.0%)  LoopSinkPass
+   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0018 (  0.0%)  Lazy Machine Block Frequency Analysis #3
+   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0017 (  0.0%)  Lazy Machine Block Frequency Analysis #4
+   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0017 (  0.0%)  Safe Stack instrumentation pass
+   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0017 (  0.0%)  Lazy Machine Block Frequency Analysis #2
+   0.0156 (  0.0%)   0.0000 (  0.0%)   0.0156 (  0.0%)   0.0017 (  0.0%)  Lazy Block Frequency Analysis
+   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0016 (  0.0%)  Lazy Block Frequency Analysis #2
+   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0016 (  0.0%)  Lower Garbage Collection Instructions
+   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0010 (  0.0%)  InferFunctionAttrsPass
+   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0005 (  0.0%)  Assumption Cache Tracker
+   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0003 (  0.0%)  Add prototypes to prototypes-less functions
+   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0001 (  0.0%)  EliminateAvailableExternallyPass
+   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0000 (  0.0%)  OpenMPOptPass
+   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0000 (  0.0%)  RelLookupTableConverterPass
+   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0000 (  0.0%)  CoroCleanupPass
+   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0000 (  0.0%)  Annotation2MetadataPass
+   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0000 (  0.0%)  RequireAnalysisPass<llvm::ProfileSummaryAnalysis, llvm::Module, llvm::AnalysisManager<Module>>
+   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0000 (  0.0%)  CoroEarlyPass
+   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0000 (  0.0%)  Lower @llvm.global_dtors via `__cxa_atexit`
+   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0000 (  0.0%)  Profile summary info
+   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0000 (  0.0%)  Target Library Information
+   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0000 (  0.0%)  Target Transform Information
+   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0000 (  0.0%)  Type-Based Alias Analysis
+   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0000 (  0.0%)  Target Pass Configuration
+   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0000 (  0.0%)  Scoped NoAlias Alias Analysis
+   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0000 (  0.0%)  ForceFunctionAttrsPass
+   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0000 (  0.0%)  Machine Module Information
+   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0000 (  0.0%)  Create Garbage Collector Module Metadata
+   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0000 (  0.0%)   0.0000 (  0.0%)  Machine Branch Probability Analysis
+  83.3125 (100.0%)   4.3594 (100.0%)  87.6719 (100.0%)  88.8762 (100.0%)  Total
+

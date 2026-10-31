@@ -1,0 +1,164 @@
+{
+  "archive": "<fp-clone>/.labelle/bgfx_wasm/zig-out/profile/libgame.a",
+  "functions": 4424,
+  "total_code_bytes": 5368582,
+  "top": [
+    {
+      "bytes": 58476,
+      "name": "game.save_load.save.Mixin(game.GameConfigWithYAxis(...)"
+    },
+    {
+      "bytes": 53719,
+      "name": "sort.block.block__anon_291496"
+    },
+    {
+      "bytes": 48888,
+      "name": "jsonc.component_apply.ComponentApply(game.GameConfigWithYAxis(...)"
+    },
+    {
+      "bytes": 46494,
+      "name": "main.gameFrame"
+    },
+    {
+      "bytes": 41813,
+      "name": "sort.block.block__anon_424660"
+    },
+    {
+      "bytes": 40240,
+      "name": "game.loop_mixin.Mixin(game.GameConfigWithYAxis(...)"
+    },
+    {
+      "bytes": 40046,
+      "name": "main.main"
+    },
+    {
+      "bytes": 37754,
+      "name": "tile_map.TileMap.parseXml"
+    },
+    {
+      "bytes": 37681,
+      "name": "serde.writeComponent__anon_201810"
+    },
+    {
+      "bytes": 37659,
+      "name": "work_cycle_machine.make(game.GameConfigWithYAxis(...)"
+    },
+    {
+      "bytes": 37312,
+      "name": "sort.block.block__anon_401217"
+    },
+    {
+      "bytes": 32999,
+      "name": "sort.block.block__anon_316752"
+    },
+    {
+      "bytes": 32722,
+      "name": "serde.writeComponent__anon_199002"
+    },
+    {
+      "bytes": 31086,
+      "name": "dispatcher.MergeHooks(dispatcher.MergeHookPayloads(.{ hooks_types.HookPayload(u32), dispatcher.MergeHookPayloads(.{ main.GameEventsRaw, main.PluginEvents }) }),"
+    },
+    {
+      "bytes": 26122,
+      "name": "root.Systems.drawGui__anon_157247"
+    },
+    {
+      "bytes": 24933,
+      "name": "jsonc.ref_resolver.RefResolver(game.GameConfigWithYAxis(...)"
+    },
+    {
+      "bytes": 24513,
+      "name": "tilemap_runtime.Runtime(renderer.GfxRendererWith(gfx,main.GameLayers,u32,.up)).initInPlace"
+    },
+    {
+      "bytes": 24126,
+      "name": "scheduling.scheduleIdleWorkers__anon_370148"
+    },
+    {
+      "bytes": 24117,
+      "name": "sort.block.block__anon_372278"
+    },
+    {
+      "bytes": 22928,
+      "name": "sibling_fields.SiblingFieldsCheck(components.worker.Worker,\"job_state\"[0..9],.{ .idle = .{ ... }, .working = .{ ... }, .delivering = .{ ... }, .wandering = .{ ."
+    },
+    {
+      "bytes": 22816,
+      "name": "scripts.playing.12_fight_resolver.resolveFights__anon_364143"
+    },
+    {
+      "bytes": 22306,
+      "name": "tile_map.TileMap.parseTilesetElement"
+    },
+    {
+      "bytes": 22003,
+      "name": "binding.run__anon_382101"
+    },
+    {
+      "bytes": 21988,
+      "name": "sort.block.block__anon_159456"
+    },
+    {
+      "bytes": 20784,
+      "name": "sprite_by_field_tick.tick__anon_406380"
+    },
+    {
+      "bytes": 20336,
+      "name": "scripts.playing.14_guard_system.tick__anon_362587"
+    },
+    {
+      "bytes": 19877,
+      "name": "jsonc.ref_resolver.RefResolver(game.GameConfigWithYAxis(...)"
+    },
+    {
+      "bytes": 19868,
+      "name": "nav.controller.Controller.prepareEndpointDomains__anon_403869"
+    },
+    {
+      "bytes": 19456,
+      "name": "scripts.playing.17_turbine_bombs.tick__anon_398997"
+    },
+    {
+      "bytes": 18928,
+      "name": "jsonc.on_ready.OnReady(game.GameConfigWithYAxis(...)"
+    }
+  ],
+  "clusters": {
+    "startup main.main": {
+      "bytes": 40046,
+      "functions": 1,
+      "largest": 40046
+    },
+    "inspector drawEntityDetail": {
+      "bytes": 0,
+      "functions": 0,
+      "largest": 0
+    },
+    "inspector drawEntityBrowser": {
+      "bytes": 0,
+      "functions": 0,
+      "largest": 0
+    },
+    "inspector other root.draw*": {
+      "bytes": 256060,
+      "functions": 364,
+      "largest": 26122
+    },
+    "load.Mixin.* (all)": {
+      "bytes": 142697,
+      "functions": 82,
+      "largest": 14322
+    },
+    "save.Mixin.* (all)": {
+      "bytes": 407337,
+      "functions": 141,
+      "largest": 58476
+    },
+    "main.* (generated, all)": {
+      "bytes": 89975,
+      "functions": 5,
+      "largest": 46494
+    }
+  }
+}

@@ -1,0 +1,67 @@
+{
+  "run": "game-clean",
+  "cwd": "<fp-clone>/.labelle/bgfx_wasm",
+  "command": [
+    "C:/Users/User/.zvm/0.16.0/zig.exe",
+    "build",
+    "profile-game",
+    "-Doptimize=ReleaseSafe",
+    "-j2",
+    "--summary",
+    "all"
+  ],
+  "exit": 0,
+  "build_ok": true,
+  "wall_seconds": 99.61,
+  "tree_peak_private_bytes": 5419847680,
+  "top_processes": [
+    {
+      "name": "zig.exe",
+      "argv": "C:\\Users\\User\\.zvm\\0.16.0\\zig.exe build-lib -fno-single-threaded -OReleaseSafe -target wasm32-emscripten -mcpu baseline+atomics+bulk_memory -I C:\\Users\\User\\.labelle\\zig-local-cache\\o\\2fb5824d4233e9fe32370ab196a5b16d -I C:\\Users\\User\\.labelle\\zig-local-cache\\o\\2fb5824d4233e9fe32370ab196a5b16d --dep labelle-core --dep labelle-gfx --dep labelle-engine --dep backend_gfx --dep backend_input --dep back",
+      "peak_private_bytes": 5304717312,
+      "peak_working_set_bytes": 3173625856
+    },
+    {
+      "name": "zig.exe",
+      "argv": "C:/Users/User/.zvm/0.16.0/zig.exe build profile-game -Doptimize=ReleaseSafe -j2 --summary all",
+      "peak_private_bytes": 67678208,
+      "peak_working_set_bytes": 18808832
+    },
+    {
+      "name": "build.exe",
+      "argv": "C:\\Users\\User\\.labelle\\zig-local-cache\\o\\f493836e9aa1a7d50ee7a66a6206ef00\\build.exe C:\\Users\\User\\.zvm\\0.16.0\\zig.exe C:\\Users\\User\\.zvm\\0.16.0\\lib D:\\prj\\labelle-toolkit\\epic-528\\fp-922\\.labelle\\bgfx_wasm C:\\Users\\User\\.labelle\\zig-local-cache C:\\Users\\User\\.labelle\\zig-global-cache --seed 0xbb30a296 -Z0ba108bcd4656eb1 profile-game -Doptimize=ReleaseSafe -j2 --summary all",
+      "peak_private_bytes": 47677440,
+      "peak_working_set_bytes": 22470656
+    }
+  ],
+  "long_processes": [
+    {
+      "name": "zig.exe",
+      "argv": "C:/Users/User/.zvm/0.16.0/zig.exe build profile-game -Doptimize=ReleaseSafe -j2 --summary all",
+      "peak_private_bytes": 67678208,
+      "peak_working_set_bytes": 18808832,
+      "start_s": 0.0,
+      "end_s": 99.1,
+      "seconds": 99.1
+    },
+    {
+      "name": "build.exe",
+      "argv": "C:\\Users\\User\\.labelle\\zig-local-cache\\o\\f493836e9aa1a7d50ee7a66a6206ef00\\build.exe C:\\Users\\User\\.zvm\\0.16.0\\zig.exe C:\\Users\\User\\.zvm\\0.16.0\\lib D:\\prj\\labelle-toolkit\\epic-528\\fp-922\\.labelle\\bgfx_wasm C:\\Users\\User\\.labelle\\zig-local-cache C:\\Users\\User\\.labelle\\zig-global-cache --seed 0xbb30a296 -Z0ba108bcd4656eb1 profile-game -Doptimize=ReleaseSafe -j2 --summary all",
+      "peak_private_bytes": 47677440,
+      "peak_working_set_bytes": 22470656,
+      "start_s": 0.5,
+      "end_s": 99.1,
+      "seconds": 98.6
+    },
+    {
+      "name": "zig.exe",
+      "argv": "C:\\Users\\User\\.zvm\\0.16.0\\zig.exe build-lib -fno-single-threaded -OReleaseSafe -target wasm32-emscripten -mcpu baseline+atomics+bulk_memory -I C:\\Users\\User\\.labelle\\zig-local-cache\\o\\2fb5824d4233e9fe32370ab196a5b16d -I C:\\Users\\User\\.labelle\\zig-local-cache\\o\\2fb5824d4233e9fe32370ab196a5b16d --dep labelle-core --dep labelle-gfx --dep labelle-engine --dep backend_gfx --dep backend_input --dep back",
+      "peak_private_bytes": 5304717312,
+      "peak_working_set_bytes": 3173625856,
+      "start_s": 1.6,
+      "end_s": 99.1,
+      "seconds": 97.5
+    }
+  ],
+  "finished_utc": "2026-10-30T18:41:02.869522+00:00"
+}

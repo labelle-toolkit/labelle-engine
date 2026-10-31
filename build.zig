@@ -180,6 +180,10 @@ pub fn build(b: *std.Build) void {
         "test/scene_lifecycle_events_test.zig",
         "test/easing_test.zig",
         "test/scene_test.zig",
+        // #922 — startup scene registration through the shared noinline
+        // helpers: each scene keeps its own loader, setters hit the right
+        // entry, unknown names still fail.
+        "test/scene_registration_test.zig",
         "test/gestures_test.zig",
         "test/sparse_set_test.zig",
         "test/query_test.zig",
@@ -208,6 +212,10 @@ pub fn build(b: *std.Build) void {
         // keep the save format byte-identical; pins a golden save and
         // loads it back as an "existing" save.
         "test/save_serializer_golden_test.zig",
+        // #922 — the save loader split into bounded functions must load
+        // existing saves into the same world (pinned re-serialization),
+        // keep postLoad/marker/create semantics and leak nothing.
+        "test/save_load_compat_test.zig",
         "test/save_scene_after_menu_load_test.zig",
         "test/jsonc/bridge_leak_test.zig",
         "test/jsonc/nested_lifecycle_test.zig",
