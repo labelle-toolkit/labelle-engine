@@ -1,0 +1,13 @@
+main.main: 335366 B; inlined at depth 1: 320203 B in 427 call sites
+  281072 B  136x  lines   3556..3691  game.scene_mixin.Mixin(...).registerSceneSimple
+   13093 B  136x  lines   3828..3963  game.scene_mixin.Mixin(...).setSceneSource
+   12578 B  136x  lines         3965  game.scene_mixin.Mixin(...).setSceneAssets
+    6990 B    1x  lines         3285  window.initWindow
+    1915 B    1x  lines         3295  game.game_init.Mixin(...).init
+    1321 B    1x  lines         3972  script_runner.ScriptRunner(...).setup
+    1126 B    6x  lines   3422..3427  main.pickCompressedTexture
+     953 B    1x  lines         3974  main.PluginControllers.setup
+     470 B    1x  lines         3297  game.lifecycle_mixin.Mixin(...).setHooks
+     368 B    1x  lines         3420  script_runner.ScriptRunner(...).init
+     148 B    1x  lines         3293  window.fixedDt
+      55 B    1x  lines         3329  game.lifecycle_mixin.Mixin(...).bindCursorWindow
