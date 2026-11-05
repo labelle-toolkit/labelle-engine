@@ -222,17 +222,48 @@ accepts `forward`, `finished_emitted`, `repetition`, `definition_dirty`,
 (`animation/src/sprite_animation.zig:350-352`, consumed at
 `src/sprite_animation_tick.zig:110-114`) and can index out of bounds; a large
 authored `timer` reaches the unchecked `@intFromFloat` into `u32` in `advance`
-(`animation/src/sprite_animation.zig:214`). Runtime-only state must be rejected
+(`animation/src/sprite_animation.zig:213`). Runtime-only state must be rejected
 or reset on bind before prefab authoring is considered closed.
 
-`markers` are also not a supported inline prefab field. With `definition` set
-they are overwritten from the clip, but when marker/lifecycle events are wanted
-a nonempty authored `markers` list fails the pending-cursor check because the
-freshly defaulted `MarkerCursor` already has `entering = true`
-(`src/game/animation_runtime_mixin.zig:78`,
-`animation/src/marker_cursor.zig:32,47-48`); without those events the authored
-list is silently ignored. Inline `markers` must be rejected explicitly, not
+Malformed values on known fields fail open as well, and in two different
+ways. `deserializeStruct` treats a field whose value does not deserialize
+exactly like an absent field: if the field has a default, the default is used
+silently (`src/jsonc/deserializer.zig:273-277`), so `"mode": "lop"` plays as
+`loop`, `"speed": "2"` plays at 1.0 and `"frames": "a.png"` becomes an empty
+list (which then fails later as `InvalidAnimationFrames`). `fps` is the one
+field without a default (`animation/src/sprite_animation.zig:80`), so a
+missing or non-numeric `fps` makes the whole struct deserialize to `null`
+(`deserializer.zig:278-285`), and the registry-component branch of
+`applyComponent` has no failure path for that case: the component is simply
+not attached and nothing is logged (`src/jsonc/component_apply.zig:201-222`;
+the file header documents that scene loading "stays fire-and-forget"). A
+prefab whose `SpriteAnimation` never appears therefore produces no
+diagnostic at all. The fail-closed requirement below covers these malformed
+and missing-required-field cases, not only unknown keys.
+
+`markers` are also not a supported inline prefab field. Because
+`bindSpriteAnimation` checks the pending cursor (`src/game/animation_runtime_mixin.zig:78`)
+before `MarkerDefinitionRequired` (`:80`), a nonempty authored `markers` list in
+a game that declares marker or lifecycle events fails with
+`PendingAnimationMarkers` (the freshly defaulted `MarkerCursor` already has
+`entering = true`, `animation/src/marker_cursor.zig:32,47-48`) whether or not
+`definition` is set; without those events, `markers` without `definition`
+returns `MarkerDefinitionRequired` and `markers` with `definition` is silently
+overwritten from the clip. Inline `markers` must be rejected explicitly, not
 interpreted.
+
+Script component writes have a related gap: `labelle_component_set`
+(`src/script_contract.zig:1517-1541`, `componentSetImpl`) routes engine
+built-ins through `component_apply.zig`'s helpers, but dispatches registered
+components (including `SpriteAnimation`) through
+`std.json.parseFromSliceLeaky(..., .{ .ignore_unknown_fields = true, .allocate = .alloc_always })`
+and `game.setComponent(ent, comp)` directly. Setting `SpriteAnimation` from a
+script therefore bypasses `bindSpriteAnimation`, the `PendingAnimationMarkers`
+check and `marker_target_id` preservation (`src/jsonc/component_apply.zig:202-217`),
+leaves `definition`/`clip` unbound, and allocates any supplied
+`definition`/`clip`/`markers` slices in `nested_entity_arena`
+(`componentAlloc()`, `src/script_contract.zig:2546-2548`, reset on
+`resetEcsBackend`) instead of borrowing session-owned `Library` strings.
 
 Frame keys are exact atlas identifiers. No implicit `.png` suffix: extensionless
 grid keys such as `tiles/0` are also valid. Authors include any desired extension
@@ -265,8 +296,22 @@ Shipped expansion behavior (`animation/src/frame_range.zig`,
   `AtlasMixin.resolveAtlasSprites` (`src/game/atlas_mixin.zig`), which runs in
   `Game.tick` *after* `sprite_animation_tick.tick` (`src/game/loop_mixin.zig`)
   and is skipped on non-atlas renderers (`!has_atlas_sprite_fields`), so an
-  invalid clip still executes one animation tick (updating `Sprite.sprite_name`
-  and queuing any frame-0/first-tick markers) before `speed` is zeroed.
+  invalid clip can execute multiple animation ticks while the manifest is not
+  ready, plus the tick on the first ready update, before `speed` is zeroed
+  (`src/game/animation_runtime_mixin.zig:153-168`). With no manifest or on a
+  non-atlas renderer, automatic validation never stops it. The same routine
+  sets `definition_validated = true` even when validation fails
+  (`src/game/animation_runtime_mixin.zig:162-166`), so the automatic path never
+  retries a stopped clip if a missing asset later becomes resident; recovery
+  requires a rebind (which clears the flag) or a host-driven
+  `validateSpriteAnimation` call plus an explicit `speed` restore. Setting
+  speed to zero also does not retract already queued cues or suppress remaining
+  handoffs for an entered frame (`src/named_animation_tick.zig:23-35`).
+  **OPEN OBJECTION:** pre-tick validation alone does not define behavior before
+  readiness or after validation fails. Specify whether unvalidated playback and
+  its cues are allowed, how invalid-clip pending/queued cues are handled, and
+  whether a failed clip is ever revalidated when the missing asset later
+  becomes resident.
 - Expanded slices belong to the definition's arena, owned by the session
   `Library`; prefab respawn rebinds borrowed slices without re-expanding.
 
@@ -308,8 +353,11 @@ must include that case.
 Playback control today is imperative:
 `game.selectSpriteAnimation(anim, definition, clip)` rebinds a clip atomically
 and returns `PendingAnimationMarkers` while `anim.markers.len != 0` and
-`anim.marker_cursor.pending()` is true (`src/game/animation_runtime_mixin.zig`,
-`bindSpriteAnimation`). Two cursor details constrain the trigger batch design:
+`anim.marker_cursor.pending()` is true, provided the game declares
+`engine__anim_marker` or one of the lifecycle events; a game that declares
+none of them never sees this error and the cursor is simply replaced
+(`src/game/animation_runtime_mixin.zig:78`, `bindSpriteAnimation`). Two cursor
+details constrain the trigger batch design:
 
 1. `MarkerCursor` initializes with `entering: bool = true` and
    `pump_started: bool = false` (`animation/src/marker_cursor.zig`). Unlike
@@ -326,6 +374,14 @@ and returns `PendingAnimationMarkers` while `anim.markers.len != 0` and
    `MarkerCursor`, `bindSpriteAnimation` refuses and leaves the old player
    intact, so the batch contract must choose whether a queued `play`/`restart`
    stalls/retries or drains-then-rebinds. That decision is still open.
+
+Live prefab refresh currently refuses a blocked replacement rather than queuing
+it: `src/jsonc/component_apply.zig:206-215` logs and returns, and
+`src/jsonc/scene_loader/prefab_refresh.zig:403-408` continues to the ready callback without
+a success result. The caller must retry the refresh after playback drains
+(`animation/MARKERS.md`, "Delivery"). **OPEN OBJECTION:** specify retry ownership
+and success notification for blocked refreshes; do not promise eventual
+application merely from the current "deferred" diagnostic.
 
 ### Event identity and typed payloads
 
@@ -409,8 +465,8 @@ smoke does not automatically hide its entity: visibility is separate state.
 Resetting the displayed frame must work without a subsequent advancing tick.
 Start/restart emits frame-zero markers once; resume/restore does not replay them.
 Stop is a reset-to-stopped action, not a new playback start. Note that today a
-zero-delta tick (`dt == 0` or `speed <= 0`) sets `budget.frames = 0` in
-`src/named_animation_tick.zig` and still calls `MarkerCursor.pump`, which drains
+zero-delta tick (`dt == 0`, `speed <= 0`, or `fps <= 0`) sets `budget.frames = 0`
+in `src/named_animation_tick.zig` and still calls `MarkerCursor.pump`, which drains
 `self.entering` (and `complete_pending` on a 1-frame `.once` clip) before
 checking `budget.frames` (`animation/src/marker_cursor.zig`); an entity spawned
 with `speed = 0` therefore still emits its frame-0 markers on the first tick
@@ -659,8 +715,14 @@ engine, generated-loop and consumer consequences. The audited behavior is:
 
 - `setPaused(true)` changes the pause flag and emits `pause_changed` plus
   `engine__pause_changed`, but does not zero `time_scale`, so the always-run
-  animation pass still receives `scaled_dt` (nonzero whenever `time_scale` is
-  nonzero).
+  animation pass still receives `scaled_dt = dt * time_scale`, unless the
+  independent `sprite_animations_paused` flag forces zero. It also does not stop
+  root/plugin script ticks or event drains: the shipped generated loop gates
+  only `runner.tick`/`PluginSystems.tick` on `scaled_dt > 0` and calls
+  `script_contract.drainEvents`/`dispatchEvents` outside that gate without
+  consulting `isPaused()` (`HOOK-DELIVERY-CONTRACT.md` §2). The pause migration
+  must not assume the `paused` flag currently means "gameplay and scripts
+  stopped".
 - `setTimeScale(0)` freezes scaled animation and the gameplay clock but does
   not emit `pause_changed`. `isPaused()` is true under either path.
 - `pause()` sets `time_scale = 0` and `setPaused(true)`; `resume_()` sets
@@ -750,7 +812,9 @@ the item says so; everything else is agreement, not delivery.
   explicit idle-image overrides and visibility remaining independent.
 - [x] Agree traversal-order markers, frame-zero start/restart semantics, occurrence
   identity, retained pending crossings and retry without silent loss/duplication.
-  Shipped in #872 (`MarkerCursor`, 256-frame/64-handoff budget, clock stall).
+  Traversal and queue handoff shipped in #872 (`MarkerCursor`,
+  256-frame/64-handoff budget, clock stall); command-boundary frame-zero semantics
+  and restore suppression remain outstanding as specified in section 4.
 - [x] Agree retrigger no-op, explicit restart/new playback identity and retention
   of interrupted playback's pending markers; discard invalid entity targets.
 - [x] Agree entity/group/broadcast targeting, recipient lifetime, ordered command
@@ -776,16 +840,24 @@ the item says so; everything else is agreement, not delivery.
   `frame`, `timer`, `forward`, `finished_emitted`, `repetition`,
   `definition_dirty`, `definition_validated`, `marker_stalled`, `marker_cursor`,
   `marker_target_id`, `marker_playback_id` and inline `markers` from JSONC; the
-  inline bind path does not reset the runtime fields). Required before `triggers`,
-  `start` or `update` ship, so pre-rollout authoring cannot load silently or
-  corrupt playback.
+  inline bind path does not reset the runtime fields). The same item must cover
+  malformed values on known fields (today they silently fall back to the field
+  default), a missing or non-numeric `fps` (today the component is silently
+  not attached, with no log), and `labelle_component_set` parity for
+  `SpriteAnimation` (`src/script_contract.zig:1517-1541` currently bypasses
+  `bindSpriteAnimation`, pending-cursor checks and `marker_target_id`
+  preservation). Required before `triggers`, `start` or `update`
+  ship, so pre-rollout authoring cannot load silently or corrupt playback.
 - [ ] Specify atomic save/queue handoff, persisted playback/cursor state, the
   persisted representation for `SpriteAnimation`'s non-serializable borrowed
   slices and their load-time rebind, and `PrefabRefresh` behavior once
   `SpriteAnimation` is no longer `.transient`;
   cross-entity tie ordering; marker subscriber indexes; `script_contract`
   target-liveness filtering and marked-clip lifecycle payload parity;
-  pre-tick atlas validation ordering; and hot-reload identity/lifetime details.
+  pre-tick atlas validation ordering, pre-readiness playback, invalid-clip cue
+  policy and failed-clip revalidation after a late asset; blocked prefab-refresh
+  retry ownership and success notification; and hot-reload identity/lifetime
+  details.
   (Per-entity traversal backpressure is done.)
 - [ ] Implement/test native and callback loop integration for the trigger
   command boundary, consumption ordering, unscaled input migration and
