@@ -479,9 +479,9 @@ table completed as part of the implementation specification:
 
 | Request | Contract to specify |
 | --- | --- |
-| `play: once/loop/ping_pong` | Playing the same active clip with unchanged playback mode is a no-op, for every mode. Playing a different clip starts at frame zero with a new playback identity. Playing a completed/stopped clip starts it again with a new identity. Explicit mode changes and `play` on paused playback still require specification; `resume` is the continuation action. |
-| `stop` | Agreed: reset playback to frame 0 and remain stopped. Reset the residual timer, direction, repetition and marker cursor; repeated stop is a no-op. An explicitly authored idle image may override the displayed image. Visibility is unchanged. |
-| `pause` / `resume` | Agreed: pause preserves frame and residual timer; resume continues paused playback from that position. Repeated pause is a no-op. Define resume from stopped/completed and interaction with global/subsystem pause separately. |
+| `play: once/loop/ping_pong` | Playing the same active clip with unchanged playback mode is a no-op, for every mode. Playing a different clip starts at frame zero with a new playback identity. Playing a completed/stopped clip starts it again with a new identity. Owner-approved: `play` on paused playback of the same clip resumes from the preserved position. An explicit playback-mode change preserves the current position and applies going forward. |
+| `stop` | Agreed: reset playback to frame 0 and remain stopped. Reset the residual timer, direction, repetition and marker cursor; invalidate the stopped playback identity so its queued cues cannot affect a later playback. Repeated stop is a no-op. An explicitly authored idle image may override the displayed image. Visibility is unchanged. |
+| `pause` / `resume` | Agreed: pause preserves frame and residual timer; resume continues paused playback from that position. Repeated pause is a no-op. Owner-approved: `resume` on stopped or completed playback is a no-op; an explicit `play` starts it again with a new identity. Local resume remains subject to the applicable game clock and editor-pause gates. |
 | `restart` | Reset frame, timer, direction, repetition and marker cursor; create a new playback identity; update the visible sprite even without a later frame crossing. |
 | `start: dormant` | Initial visible frame and behavior before the first request; reconciliation after loading. |
 
@@ -805,8 +805,7 @@ from `game.paused`, so under every pause option even unscaled clips freeze in
 Play mode. Moving unscaled advancement outside the `shouldTick` gate to keep
 the "unscaled keeps running" promise makes the event buffer grow without bound
 there (351 undrained events after 401 iterations in the November 7 POC). The
-migration must either exclude the preview loop explicitly or also move its
-drains.
+owner-approved migration explicitly freezes all preview animations during editor pause, including unscaled clips. Keep their advancement inside the editor simulation gate; do not move it outside merely to preserve runtime unscaled behavior. Runtime game pause retains the scaled/unscaled distinction.
 
 Acceptance: explicit pause and zero scale; scaled freezing/unscaled progress;
 slow-motion restoration; notifications; independent animation suppression;
@@ -852,14 +851,27 @@ choices. Options are lettered as in the review comment; the POC evidence and
 limitations below remain unchanged.
 
 This approval does not approve implementation or certify the POC results as
-independently reproduced. The subsequent review's three additional questions
-remain open: stop/playback identity, remaining playback-action behavior, and
-studio-preview pause scope. Review corrections also remain required, including
+independently reproduced. The subsequent review's three additional questions were also approved by the owner on November 7, as recorded below. Review corrections remain required, including
 reconciling the accepted pause recommendation with independent local animation
-pause and making the decision register complete. Do not silently infer answers
-to those questions or drop an agreed requirement when incorporating the approved
-recommendations. The pipeline-generated proposal's inaccurate claim to be the
+pause and making the decision register complete. Incorporate the recorded answers without dropping an agreed requirement when applying the approved recommendations. The pipeline-generated proposal's inaccurate claim to be the
 committed PR document must also be corrected; it is not an owner decision.
+
+### Additional owner-approved decisions (November 7, 2026)
+
+After the 17 POC recommendations, the owner approved the following recommendations
+with "Go with your recommendations":
+
+| Decision | Approved behavior |
+| --- | --- |
+| `stop-playback-identity` | Stop invalidates the playback identity; queued cues from the stopped playback cannot affect a later playback. |
+| `remaining-playback-actions` | `play` resumes paused playback of the same clip. `resume` is a no-op for stopped/completed playback; explicit `play` starts those again. Mode changes preserve the current position and apply going forward. |
+| `studio-preview-pause-scope` | Editor pause freezes all preview animations, including unscaled ones. Runtime game pause retains the scaled/unscaled distinction. |
+
+These are accepted behavioral decisions, not evidence that implementation or tests
+have been completed. The local-pause contract must still preserve independent
+animation pause while incorporating the approved global clock behavior. Technical
+review corrections and revalidation remain outstanding; implementation approval
+has not been granted.
 
 ### Summary
 
@@ -931,8 +943,7 @@ POC: a minimal per-target command queue applied at the tick boundary
   persist. (c) must pump the restart's entry before `stop` resets it, which
   is the transient cue section 3 forbids.
 
-Open detail the POC assumed: whether `stop` keeps or replaces the playback
-identity.
+Owner decision (November 7): `stop` invalidates the stopped playback identity; stale queued cues from it must not affect a later playback. This resolves the identity choice that the POC assumed.
 
 ### Validation, identity and the script path (1, 2, 8)
 
