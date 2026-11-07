@@ -1411,12 +1411,46 @@ decisions. The owner decides each.
      `stop` (or by any rebind), revising the interruption rule for those
      cases;
    - (c) drop only after `stop`, keep them after `restart` or a clip change.
+
+   **Author recommendation (not decided): (c).**
+   - Stop is a cancellation. Leaving enforcement to every hook means a
+     gameplay handler, such as an attack's `contact`, could still act after
+     the attack was stopped.
+   - Restart and clip changes stay under the agreed interruption rule, which a
+     shipped test pins (`rebind keeps crossed markers original playback
+     identity`).
+   - This matches stop's approved cursor reset, which already discards
+     crossings that have not been handed off. Dropping the queued ones as well
+     makes stop consistent.
+   - Mechanism sketch: playback ids increase monotonically, so each attachment
+     stores the highest playback id cancelled by `stop`. Delivery drops a cue
+     whose `playback_id` is at or below that value. It is one `u64` and one
+     comparison, and it applies unchanged to the script filter (decision 8) and
+     the lifecycle guard (decision 9).
+   - Stated consequence: decision 4's drain-then-apply covers queued `play`
+     and `restart`. `stop` does not drain first; it cancels at the boundary.
 2. **A component whose removal is parked.** Under decision 7 a removed
    `SpriteAnimation` stays attached until its cursor drains, possibly for
    several updates. Should it keep rendering its current frame, and should
    trigger commands addressed to it in that window apply or be discarded?
    Its cursor refuses new time while pending, so it does not advance.
 
+   **Author recommendation (not decided):** treat the removal as logically
+   immediate and physically deferred.
+   - While parked, the component stays frozen on its current frame. That is
+     the same image the entity shows after the removal applies, because
+     removing `SpriteAnimation` leaves the `Sprite` on its last frame.
+   - Discard trigger commands addressed to it, with a debug-level diagnostic,
+     instead of queuing them. Applying them would either act on nothing or
+     revive an animation the author just removed.
+   - A new set of `SpriteAnimation` during the window replaces the parked
+     removal (decision 7's "latest push per entity wins").
+   - Specification details that follow and are not owner choices:
+     `hasComponent` stays true until the removal applies, and
+     `engine__anim_refresh_applied` also fires for removals so a host can tell
+     when the component is gone.
+
+## Readiness and rollout
 
 The investigation's 36 passing tests establish the baseline and its limitations,
 not acceptance of any proposed feature. The checked items below record
