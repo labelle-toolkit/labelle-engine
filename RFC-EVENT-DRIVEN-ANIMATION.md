@@ -36,7 +36,7 @@ persistence still need implementation specifications and validation.
 Publishing this RFC does not close
 [#794](https://github.com/labelle-toolkit/labelle-engine/issues/794).
 
-The November 7 POC round (see "Open owner decisions: POC evidence" before
+The November 7 POC round (see "Owner-approved recommendations: POC evidence" before
 the readiness list) prototyped every option the round-1 multi-model review
 left open, against `main` `be0991e`. Its recommendations are evidence for the
 owner, **not decisions**; nothing in that section is agreed until the owner
@@ -833,7 +833,7 @@ Do not claim that roughly half the scripts disappear until this is measured.
 Continuous locomotion, stateful door direction and ownership resolution remain
 game logic or AnimationDef consumers.
 
-## Open owner decisions: POC evidence
+## Owner-approved recommendations: POC evidence
 
 The round-1 multi-model review
 ([#794 comment](https://github.com/labelle-toolkit/labelle-engine/issues/794#issuecomment-6713132800))
@@ -844,12 +844,26 @@ The POC branches are local (`poc/794-command-boundary`, `-trigger-shape`,
 `-readiness-refresh`, `-validation-identity`, `-delivery-scale`,
 `-clock-ownership`) and are evidence only; none is a proposed implementation.
 
-**Every "Recommended" entry below is a recommendation, not a decision.** The
-owner still has to choose. Options are lettered as in the review comment.
+**Owner approval recorded on November 7, 2026:** the owner explicitly approved
+all 17 recommendations in the summary below ("The recommendation are approved
+by me"), referring to the POC recommendations in PR head `2513e3f593015526cc832d247fdbf6f8bdc2f0f6`.
+The summary entries are now accepted design directions, not unanswered owner
+choices. Options are lettered as in the review comment; the POC evidence and
+limitations below remain unchanged.
+
+This approval does not approve implementation or certify the POC results as
+independently reproduced. The subsequent review's three additional questions
+remain open: stop/playback identity, remaining playback-action behavior, and
+studio-preview pause scope. Review corrections also remain required, including
+reconciling the accepted pause recommendation with independent local animation
+pause and making the decision register complete. Do not silently infer answers
+to those questions or drop an agreed requirement when incorporating the approved
+recommendations. The pipeline-generated proposal's inaccurate claim to be the
+committed PR document must also be corrected; it is not an owner decision.
 
 ### Summary
 
-| # | Decision | Recommended | Deciding evidence |
+| # | Decision | Approved recommendation | Deciding evidence |
 | --- | --- | --- | --- |
 | 1 | `prefab-validation-boundary` | (c) assembler diagnostics + engine fail-closed backstop | Assembler-only misses runtime JSONC, studio hot-push, `labelle_component_set` and Zig-built components |
 | 2 | `identity-fields-authoring` | (b) reset at authored-data entry points, plus (1) rejecting authored values | Forged `marker_target_id` lets a stale cue reach a hook today |
