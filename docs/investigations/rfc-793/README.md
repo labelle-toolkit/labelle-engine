@@ -18,3 +18,10 @@ python3 docs/investigations/rfc-793/reproduce.py \
 The [recorded run](probes.log) passed 36/36 tests on native macOS. The
 reproduction fixes the source revisions and toolchain; it does not establish
 the behavior of unreleased RFC features or reproduce a full game/UI run.
+
+## RFC #794 POC revalidation (November 8)
+
+[`poc-794/`](poc-794/README.md) records what was available for re-checking the
+November 7 POC claims at engine `be0991e`: why the six `poc/794-*` branches
+cannot be re-run, plus the refresh/removal accounting probe, its build patch,
+the exact commands and the full output.
