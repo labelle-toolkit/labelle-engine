@@ -42,3 +42,16 @@ Review findings caused by the rewrite:
 
 All other findings in that review apply to the committed file. The November 8
 second-pass corrections address them.
+
+## Independent single-agent review of `395e90a`
+
+This was not a pipeline job and not one of the four reviewers. A fresh agent
+reviewed the committed file at `395e90a3cd8dece5c07a71ea2f2017701784aa93`
+(read with `git show`) against `be0991e`, without the author's reasoning. Its
+verdict was changes requested. Blocking: decision 16 had no normative text.
+Suggestions covered the stopped playback id, `play` composition,
+frame-zero deferring states, script set against parked removal, the saveable
+sibling's authorable identity fields, the decision 13 citation basis, and
+`start` placement. It verified 36 citations. The next commit applies its
+findings, except nit N2, which was incorrect: the author option list does
+label 13(c) as revising the independent pause.

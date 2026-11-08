@@ -379,10 +379,12 @@ representative root and pack prefabs in an assembled game.
 The proposed surface remains declarative. Under approved decision 14 the
 trigger bindings live on a sibling `AnimationTriggers` component, and
 `SpriteAnimation` gains no trigger fields. Under decision 17 the event names
-use the canonical GameEvents tag. The example is illustrative: the event names
-are hypothetical domain events, not existing Flying Platform events, and the
-exact field names and the placement of `start` belong to the schema
-specification (readiness list):
+use the canonical GameEvents tag. `start` and its reconciliation predicate
+(decision 16) also live on `AnimationTriggers`. Dormancy exists only to wait
+for a trigger, and `SpriteAnimation` gains no trigger-driven fields. The
+example is illustrative: the event names are hypothetical domain events, not
+existing Flying Platform events, and the exact field names and syntax belong to
+the schema specification (readiness list):
 
 ```jsonc
 "SpriteAnimation": {
@@ -392,7 +394,7 @@ specification (readiness list):
 "AnimationTriggers": {
   "start": "dormant",
   "triggers": [
-    { "on": "factory__machine_on", "play": "loop" },
+    { "on": "factory__machine_on", "play": "loop", "start_when": "Machine.powered" },
     { "on": "factory__machine_off", "action": "stop" }
   ]
 }
@@ -458,6 +460,23 @@ prefab-refresh removal and script `componentRemoveImpl`. The POC did not
 prototype the script removal path, so covering it is a requirement, not
 demonstrated behavior.
 
+Two consequences of decision 7 (proposed):
+
+- **Script `labelle_component_set` of `SpriteAnimation`** is a push like a
+  prefab refresh. Decisions 1, 2 and 8 route it through validation and binding.
+  While the cursor is pending it is parked under the same rule (latest push per
+  entity wins) and reports acceptance; the completion event reports
+  application. The retry code mentioned under decision 8 in the POC section was
+  a POC note, not part of any approval.
+- **Ordering at the boundary, per target:** (1) drain the pending cursor within
+  the shared budget (decision 4); (2) once drained, apply the parked push;
+  (3) apply that target's trigger commands in dispatch order to the resulting
+  attachment, validating lifetime at application. Parked pushes coalesce, and
+  commands never do; they are separate queues, and the push always goes first.
+  A replacement keeps the attachment's `marker_target_id`
+  (`component_apply.zig:211`), so commands still apply to it. A removal ends
+  the attachment, so its commands are skipped.
+
 Removal is not deferred at all today. A prefab refresh that drops
 `SpriteAnimation` (`removeTransientType`, `prefab_refresh.zig:477-482`) and
 script `componentRemoveImpl` (`src/script_contract.zig:1790-1797`) both remove
@@ -466,7 +485,8 @@ it unconditionally. The November 8 probe measured this shipped behavior
 400-frame backlog of 267 marker cues and 133 loop events, of which 64 are
 already handed off. After removal:
 
-- **None of the 267 backlog marker cues is delivered.** The 43 queued ones fail
+- **None of the 267 backlog marker cues is delivered.** The 43 queued ones
+  (derived: 64 queued minus 21 loop events) fail
   `isAnimationMarkerTargetAlive`, and the occurrences retained in the cursor
   are destroyed together with the component.
 - **The 21 already-queued `engine__anim_loop` events of the removed attachment
@@ -546,10 +566,11 @@ table completed as part of the implementation specification:
 | Request | Contract to specify |
 | --- | --- |
 | `play: once/loop/ping_pong` | Playing the same active clip with unchanged playback mode is a no-op, for every mode. Playing a different clip starts at frame zero with a new playback identity. Playing a completed/stopped clip starts it again with a new identity. Owner-approved: `play` on paused playback of the same clip resumes from the preserved position. An explicit playback-mode change preserves the current position and applies going forward. |
-| `stop` | Agreed: reset playback to frame 0 and remain stopped. Reset the residual timer, direction, repetition and marker cursor; invalidate the stopped playback identity so its queued cues cannot affect a later playback. Repeated stop is a no-op. An explicitly authored idle image may override the displayed image. Visibility is unchanged. Mechanism (proposed): crossings the cursor still retains are drained first, as for any queued command (decision 4). The reset then applies, and stop retires the current `marker_playback_id`; the next start mints a new one. See "Stop, retained crossings and delivery validity". |
+| `play` composition (derived from the rows above) | **Same playback, same id.** A same-clip `play` that resumes paused playback, or that only changes the mode of a playing or paused playback, continues that playback. It keeps `marker_playback_id`, re-emits nothing, and (if paused) resumes with the new mode. Because today every bind mints an id (`animation_runtime_mixin.zig:95`), this path must not rebind. **Terminal states start over.** On completed or stopped playback, `play` in any mode starts again at frame zero with a new identity. The completed/stopped rule governs, and the mode-change rule applies only to playing or paused playback, since a terminal playback has no "going forward". **New playbacks are playing.** `restart`, or `play` of a different clip, on paused playback starts a new playback that is playing. The paused state belonged to the old playback; restart → pause in one batch is what yields a paused restart (decision 5(a)). |
+| `stop` | Agreed: reset playback to frame 0 and remain stopped. Reset the residual timer, direction, repetition and marker cursor; invalidate the stopped playback identity so its queued cues cannot affect a later playback. Repeated stop is a no-op. An explicitly authored idle image may override the displayed image. Visibility is unchanged. Mechanism (proposed): crossings the cursor still retains are drained first, as for any queued command (decision 4). The reset then applies. Stop retires the current `marker_playback_id` by minting a fresh id immediately; the stopped playback holds that id and emits nothing under it. The next start mints another. The field is therefore never 0 after a stop, so the named tick's "mint when 0" path (`src/named_animation_tick.zig:14`) cannot re-mint it silently. See "Stop, retained crossings and delivery validity". |
 | `pause` / `resume` | Agreed: pause preserves frame and residual timer; resume continues paused playback from that position. Repeated pause is a no-op. Owner-approved: `resume` on stopped or completed playback is a no-op; an explicit `play` starts it again with a new identity. This per-animation paused state is the independent local animation pause of section 5. A paused playback receives no elapsed time, so it enters no new frames. Pausing does not cancel the handoff of a frame already entered at the command boundary: under decision 5(a), restart → pause emits frame zero once (see "Frame zero under pause"). Local resume remains subject to the applicable game clock and editor-pause gates. |
 | `restart` | Reset frame, timer, direction, repetition and marker cursor; create a new playback identity; update the visible sprite even without a later frame crossing. |
-| `start: dormant` | Initial visible frame and behavior before the first request; reconciliation after loading. |
+| `start: dormant` | Shows frame 0 of the bound clip and does not advance or enter frames until a request starts it. Reconciliation on scene or prefab entry and after loading follows approved decision 16 (see "Dormant entry reconciliation"). |
 
 For example, a fan paused on frame 3 stays there and resumes from the same
 position. Stopping resets it to frame 0 and leaves it stopped. A distinct
@@ -636,6 +657,8 @@ therefore means:
 | restart → stop | nothing (the unpumped entry is discarded) | stopped, entry suppressed |
 | pause of a running playback | nothing new | frozen at its frame and residual time |
 | stopped or dormant | entry suppressed until playback starts | — |
+| held before validation (decision 6) | entry deferred: no advance and no cues, and no frame-zero sprite sync | emitted once when validation passes |
+| editor-paused (studio Play mode) | entry deferred: no simulation half runs | emitted once on the next ticking update |
 
 **Budget exhaustion.** The boundary entry shares the per-update handoff budget
 with decision 4's drain (64 handoffs per entity per update). If frame zero has
@@ -655,6 +678,38 @@ reset).
 while editor-paused. Boundary application and handoff therefore wait for the
 next ticking update, and nothing is emitted in between (approved
 `studio-preview-pause-scope`).
+
+#### Dormant entry reconciliation (decision 16)
+
+Approved decision 16 is "(a) same-entity predicate evaluated lazily on first
+engine pass; (d) as v1 fallback" (proposed, not implemented). Specified:
+
+- **Predicate.** A trigger entry may carry a reconciliation predicate (shown as
+  `start_when` above). It reads only the same entity's component data (a
+  boolean field, `"Comp.field"`) or game state (`"state:<name>"`). Cross-entity
+  predicates are outside v1, because sibling entities have no ordering
+  guarantee at entry. Exact syntax is schema work.
+- **When it is evaluated.** Once, on the first engine animation pass after the
+  entity appears: spawn, scene load or save restore. It is not evaluated in
+  `onReady`/`postLoad`. Those fire per entity before later siblings
+  (`HOOK-DELIVERY-CONTRACT.md` §11), and `loadGameState` respawns prefabs
+  before it restores saved component data. The first pass afterwards sees
+  restored state.
+- **Effect.** If the predicate holds, that entry's command is queued at the
+  command boundary exactly as if its event had fired. It then follows
+  decisions 3–5 and emits frame zero once. If it does not hold, the clip stays
+  dormant and waits for the edge event.
+- **Latch.** The evaluation is once-only per attachment. Prefab refresh
+  re-applies transient keys and resets the clip to dormant
+  (`prefab_refresh.zig:351-358`), so it re-arms the latch. When the saveable
+  playback sibling (decision 12) restores a non-dormant state, that restored
+  state is authoritative and the latch is treated as consumed.
+- **Fallback (d).** A clip whose initial state no predicate can express uses
+  edge-only dormancy. The game must emit an initial event after scene
+  readiness or restore. This is option (d) as listed in the round-1 review
+  ("v1 documents edge-only dormancy and requires games to emit initial
+  events", #794 comment 6713132800 and the author option list in comment
+  6713999997).
 
 ### Dispatch schedule and reentrancy
 
@@ -703,8 +758,10 @@ The current SpriteAnimation is transient, and #872 explicitly leaves it so
 (`animation/MARKERS.md`, "Scope still outstanding"); the agreed design adds
 persistence where continuity matters. **Approved decision 12 keeps it
 transient.** Continuity lives in a separate saveable playback-state component
-that lands with triggers. Flipping `SpriteAnimation` to `.saveable` is the
-rejected alternative (12(a)/(b)), for two reasons:
+that lands with triggers. Making `SpriteAnimation` itself saveable was the
+unchosen alternative. The author option list framed 12(a)/(b) as stages; the
+review's version of the same options reads "making SpriteAnimation itself
+saveable" (#794 comment 6713999997). It fails for two reasons:
 
 - Live prefab reload (`src/jsonc/scene_loader/prefab_refresh.zig:484-487`)
   refreshes only transient types, so a saveable `SpriteAnimation` would
@@ -986,16 +1043,29 @@ never sets or clears it, and it freezes both scaled and unscaled clips. It is
 also not `speed = 0`, which is a per-animation speed multiplier rather than a
 playback state. Both stop advancement, and neither cancels the handoff of a
 frame entered at the command boundary (section 3, "Frame zero under pause").
-Only the stopped and dormant states suppress frame-zero entry. A zero-speed
+Stopped and dormant suppress frame-zero entry until playback starts.
+Decision 6's pre-validation hold and editor pause defer it, and it is emitted
+once when they lift (section 3, "Frame zero under pause"). A zero-speed
 clip spawned fresh still emits its frame-0 markers on the first tick
 (`animation/test/animation_package_test.zig:206-233`, entity `b`).
 
-This reconciliation implements approvals rather than adding one. The agreed
-September items "pause/resume position preservation" and "independent pause
-and speed settings" (readiness list, checked) define the per-animation pause.
-Approved decision 13(b) defines the global inputs. Decision 13's alternative
-13(c) was the option labelled as revising the independent-pause requirement,
-and it was not chosen. The November 7 POC prototyped the global inputs only,
+This reconciliation implements approvals rather than adding one:
+
+- The agreed September items "pause/resume position preservation" and
+  "independent pause and speed settings" (readiness list, checked) define the
+  per-animation pause.
+- Approved decision 13(b) defines the global inputs.
+- The option that revised the independent pause was not chosen. In the author
+  option list it is (c): "time_scale == 0 only, as proposed on July 20,
+  revising the independent local-pause requirement" (#794 comment 6713999997).
+- The owner's approval record asked for exactly this reconciliation. Commit
+  `55acd26` lists "reconciling the accepted pause recommendation with
+  independent local animation pause" as a required review correction, and
+  comment 6714122754 says "The pause-contract inconsistency … still need
+  correction".
+- It is not option 13(d). (d) had "neither global flag touches animation
+  directly"; here the global `paused` flag still gates scaled clips, as 13(b)
+  requires. The November 7 POC prototyped the global inputs only,
 so its decision 13 table has no per-animation row. This combination has not
 been prototyped.
 
@@ -1120,7 +1190,8 @@ Implementation approval has not been granted.
 
 ### Summary
 
-The "Approved recommendation" column is the approved text. The "Deciding
+The "Approved recommendation" column is the approved text, verbatim. In row 2,
+"(1)" refers to option (a), rejecting authored values (see section 4). The "Deciding
 evidence" column summarizes November 7 POC results. Those are *reported*
 unless the November 8 revalidation marks them demonstrated (decision 7's
 removal row and decision 13's consumer note).
@@ -1227,9 +1298,10 @@ POC: a SpriteAnimation-specific strict hook (~60 lines; +12 in
   4 lines and drops them while live markers flow. (b) fails four existing
   tests (effective-next-drain subscription, scene lifecycle #864/#868) and
   would make `emitSync` events reach scripts for the first time, so it is not
-  an equal alternative. Script `labelle_component_set` on SpriteAnimation
-  should return a retry code (the POC used `-2`) while the cursor is pending,
-  mirroring prefab refresh.
+  an equal alternative. The POC also suggested that script
+  `labelle_component_set` on SpriteAnimation return a retry code (`-2`) while
+  the cursor is pending. That note is not part of the approved recommendation.
+  Under decision 7 such a set is parked like any push (section 3).
 
 ### Readiness and blocked refresh (6, 7)
 
@@ -1479,7 +1551,10 @@ POC: 10 tests; the assembler was read at `5718043`.
      does not clear `game.event_buffer` (it never calls
      `clearPendingSceneEvents`; `src/game/save_load/load.zig:549`, inspected),
      so cues queued before a load into a live `Game` could otherwise match a
-     restored id. Saved occurrence identity (point 3) is preserved.
+     restored id. Saved occurrence identity (point 3) is preserved. Because
+     the sibling is a registered component, authored data (prefab JSONC,
+     script set) must not be able to write its identity or cursor fields
+     (readiness, fail-closed item).
   3. **Cover occurrences already handed off to `game.event_buffer`.** They are
      outside the component (the probe shows 64 queued while the cursor holds
      the rest). Either put the save boundary after the drain, so no animation
@@ -1512,8 +1587,8 @@ output are in
 
 | Check | Command | Outcome |
 | --- | --- | --- |
-| Shipped animation tests | `zig build test-animation` | 21 pass (21 total), including the refresh test that asserts 268 |
-| Refresh/removal accounting | `zig build test-rfc794-probe`, then the test binary run directly | passes; 400 = 267 markers + 133 loops, 64 handed off, 336 retained, 268 markers delivered on a full drain; today's removal delivers 0 backlog markers and 21 queued loop events |
+| Shipped animation tests | `zig build test-animation --summary all` | 21 pass (21 total), including the refresh test that asserts 268 (`poc-794/test-animation.log`) |
+| Refresh/removal accounting | `zig build test-rfc794-probe`, then the test binary run directly | passes. Measured: 64 handed off, cursor `steps = 334` with `entering`/`loop_pending` set, 268 markers and 133 loops delivered on a full drain; today's removal delivers 0 backlog markers and 21 queued loop events. Derived from those: 400 = 267 + 133 occurrences, 336 retained (asserted as `(markers − 1) + loops − 64`), and 43 queued markers dropped by liveness (64 − 21) |
 | Frame-zero handoff over budget without advancing | same probe | 64 then 6 handoffs (70 cues), sequences 0–69 in order, frame stays 0, under both a zero-delta tick and `speed = 0` |
 | Cursor persistence | same probe | `MarkerCursor` round-trips through core `serde` mid-backlog; the 64 queued events stay outside it |
 | `invalidateAtlasBinding` version | code read, `src/atlas.zig:489-496` | bumps on re-arm; no bump on early return |
@@ -1540,7 +1615,7 @@ classified here:
 | `stop-retained-crossings-disposition` | Review of `a5dd7f8`, against the committed stop row and the withdrawn recommendation | T | The agreed no-drop and interruption rules, approved decision 4's drain and the agreed stop reset compose without conflict: drain under the stopped identity (stalling when the budget runs out), then reset. An unpumped entry is discarded (decisions 3 and 5(a)). |
 | `parked-removal-window-behavior` | Committed `a5dd7f8` (then "ambiguity 2") | T | See the rule table below. |
 | `code-level-identity-forging` | **Introduced by the pipeline's author rewrite**; not in any commit | A | Approved decision 2(b) was chosen over 2(c) with the residual stated in the option ("Zig gameplay code can still forge an id under (b)"). Direct writes and struct copies are unsupported. The persistence restore path is a deliberate engine write (decision 12, point 2). |
-| `local-pause-under-decision-13b` | Review of `a5dd7f8`, against the committed summary row | T | The agreed September items (pause/resume position preservation; independent pause and speed settings) plus approved 13(b). 13(c), the option labelled as revising the independent pause, was not chosen. The summary row no longer places the reconciliation in the approved column (section 5). |
+| `local-pause-under-decision-13b` | Review of `a5dd7f8`, against the committed summary row | T | The agreed September items (pause/resume position preservation; independent pause and speed settings) plus approved 13(b). The revising option ((c) in the author list) was not chosen, and the owner's `55acd26` record requested this reconciliation as a correction. It is not 13(d), because the global flag still gates scaled clips. The summary row no longer places the reconciliation in the approved column (section 5). |
 
 `parked-removal-window-behavior` follows from these existing rules:
 
@@ -1549,7 +1624,7 @@ classified here:
 | The engine parks the push, keeps the latest push per entity, applies it after the drain and emits a completion event | Approved decision 7(a) | A later set of `SpriteAnimation` supersedes the parked removal. `engine__anim_refresh_applied` also fires for removals. |
 | A pending cursor accepts no new time | Shipped backpressure (section 4) | The animation stays frozen on its current frame. |
 | Visibility is separate state | Agreed (section 3, action table) | It is neither hidden nor shown differently. |
-| Commands are applied in per-target dispatch order, and lifetime is validated at application | Agreed targeting and command rules; decision 4 | A command dispatched after the removal is applied after it, finds no attachment and is skipped. A command dispatched before it is applied first. |
+| Per target, the boundary drains, then applies the parked push, then applies commands in dispatch order with lifetime validated at application | Agreed targeting and command rules; decisions 4 and 7 (section 3) | After the removal applies, commands queued for that target find no attachment and are skipped. A script set during the window is a push, and the latest push wins. |
 
 `hasComponent` stays true until the removal applies; that is a specification
 detail.
@@ -1624,6 +1699,15 @@ the item says so; everything else is agreement, not delivery.
   preservation). Required before `triggers`, `start`, `update` or `drive`
   ship, so pre-rollout authoring cannot load silently or corrupt playback.
   `AnimationTriggers` keys get the same treatment when that component ships.
+  The saveable playback sibling (decision 12) gets it too. Its identity fields
+  and cursor state are engine-written only (save copy and load restore), so
+  prefab JSONC and script set must reject them, or it would reopen the forging
+  path that decisions 1 and 2 close.
+- [ ] Specify dormant entry reconciliation per decision 16: the same-entity
+  predicate syntax on `AnimationTriggers`, first-pass evaluation, the
+  once-only latch re-armed on refresh and consumed by a restored non-dormant
+  state, and the edge-only fallback (d) (section 3, "Dormant entry
+  reconciliation").
 - [ ] Specify persistence per decision 12. `SpriteAnimation` stays
   `.transient`; a saveable playback sibling lands with triggers and must meet
   points 1–6 under decision 12 in the POC section: full cursor state,

@@ -28,7 +28,8 @@ labelle-core `85b554627ee050ccd56c5b4a5f51902e8b7a7e2a` (v2.2.0: the last core
 `main` commit before `be0991e`, checked out as the sibling `../labelle-core`
 exactly as CI does), Zig 0.16.0 (`minimum_zig_version`).
 
-1. Shipped tests: `zig build test-animation` → `21 pass (21 total)`. That run
+1. Shipped tests: `zig build test-animation --summary all` → `21 pass (21 total)`
+   (full output in `test-animation.log`). That run
    includes `prefab refresh preserves pending crossings and queued target identity`,
    which asserts `receiver.count == 268`.
 2. Probe: `rfc794_refresh_accounting_probe.zig`, wired by `build.zig.patch` as
