@@ -176,3 +176,68 @@ test "rfc794 MarkerCursor round-trips through core serde mid-backlog" {
     // 64 occurrences are already in event_buffer and are NOT part of the cursor.
     try std.testing.expectEqual(@as(usize, 64), game.event_buffer.items.len);
 }
+
+// Frame zero under pause: a frame-zero entry with more cues than the 64-event
+// handoff budget finishes its handoff on later updates while the clip does not
+// advance (shipped zero-delta / speed-0 behavior at be0991e), in order and
+// without duplicates.
+const SeqReceiver = struct {
+    ctx: engine.HookContext = .{},
+    seqs: [256]u64 = undefined,
+    count: usize = 0,
+    pub fn engine__anim_marker(self: *@This(), e: engine.Events.anim_marker) void {
+        self.seqs[self.count] = e.sequence;
+        self.count += 1;
+    }
+};
+const SeqHooks = core.MergeHooks(Payload, .{*SeqReceiver});
+const SG = engine.GameConfig(core.StubRender(Ecs.Entity), Ecs, engine.StubInput, engine.StubAudio, engine.StubVideo, engine.StubGui, *SeqHooks, core.StubLogSink, Components, &.{}, Events);
+
+fn wideSource(buf: []u8) ![]const u8 {
+    var w: std.Io.Writer = .fixed(buf);
+    try w.writeAll("{\"version\":1,\"clips\":{\"walk\":{\"frames\":[\"a\",\"b\",\"c\"],\"markers\":[");
+    var i: usize = 0;
+    while (i < 70) : (i += 1) {
+        if (i != 0) try w.writeAll(",");
+        try w.print("{{\"name\":\"m{d}\",\"frame\":0}}", .{i});
+    }
+    try w.writeAll("]}}}");
+    return w.buffered();
+}
+
+fn frameZeroUnderPause(comptime use_speed_zero: bool) !void {
+    var game = SG.init(std.testing.allocator);
+    defer game.deinit();
+    var r: SeqReceiver = .{};
+    var hooks = SeqHooks{ .receivers = .{&r} };
+    game.setHooks(&hooks);
+    var buf: [4096]u8 = undefined;
+    try game.loadAnimationJsoncSource("wide", try wideSource(&buf));
+    const e = game.createEntity();
+    var anim = engine.SpriteAnimation{ .definition = "wide", .clip = "walk", .fps = 4 };
+    if (use_speed_zero) anim.speed = 0;
+    try game.bindSpriteAnimation(&anim);
+    game.addComponent(e, anim);
+    game.addComponent(e, SG.SpriteComp{ .sprite_name = "a" });
+    const dt: f32 = if (use_speed_zero) 1.0 else 0;
+    var per_update: [4]usize = undefined;
+    var u: usize = 0;
+    while (u < 4) : (u += 1) {
+        const before = r.count;
+        engine.spriteAnimationTick(&game, dt);
+        game.dispatchEvents();
+        per_update[u] = r.count - before;
+    }
+    const a = game.ecs_backend.getComponent(e, engine.SpriteAnimation).?;
+    std.debug.print("PROBE frame_zero_under_pause speed_zero={} handoffs_per_update={any} total={d} frame={d} pending={}\n", .{ use_speed_zero, per_update, r.count, a.frame, a.marker_cursor.pending() });
+    try std.testing.expectEqual(@as(usize, 64), per_update[0]);
+    try std.testing.expectEqual(@as(usize, 6), per_update[1]);
+    try std.testing.expectEqual(@as(usize, 0), per_update[2] + per_update[3]);
+    try std.testing.expectEqual(@as(u8, 0), a.frame);
+    for (r.seqs[0..r.count], 0..) |seq, i| try std.testing.expectEqual(@as(u64, i), seq);
+}
+
+test "rfc794 frame-zero entry over budget finishes handoff without advancing" {
+    try frameZeroUnderPause(false);
+    try frameZeroUnderPause(true);
+}

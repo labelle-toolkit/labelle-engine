@@ -1,11 +1,14 @@
 # zig 0.16.0; engine be0991eabf5ff4bf75700ceab7bfc2365c7ce22b; labelle-core 85b554627ee050ccd56c5b4a5f51902e8b7a7e2a (v2.2.0)
 # cmd: ~/.zvm/0.16.0/zig build test-rfc794-probe  (binary re-run directly for stdout)
-1/2 rfc794_refresh_accounting_probe.test.rfc794 refresh accounting probe...PROBE baseline_drain: spawn_markers=1 queued_after_tick100=64 cursor_steps_after_tick100=334 drain_updates=6 markers_total=268 old_playback_markers=268 new_playback_markers=0 loops_total=133 markers_after_mutation=267 loops_after_mutation=133
+1/3 rfc794_refresh_accounting_probe.test.rfc794 refresh accounting probe...PROBE baseline_drain: spawn_markers=1 queued_after_tick100=64 cursor_steps_after_tick100=334 drain_updates=6 markers_total=268 old_playback_markers=268 new_playback_markers=0 loops_total=133 markers_after_mutation=267 loops_after_mutation=133
 PROBE today_remove: spawn_markers=1 queued_after_tick100=64 cursor_steps_after_tick100=334 drain_updates=0 markers_total=1 old_playback_markers=1 new_playback_markers=0 loops_total=21 markers_after_mutation=0 loops_after_mutation=21
 PROBE today_replace: spawn_markers=1 queued_after_tick100=64 cursor_steps_after_tick100=334 drain_updates=6 markers_total=274 old_playback_markers=274 new_playback_markers=0 loops_total=136 markers_after_mutation=267 loops_after_mutation=133
 PROBE drain_then_remove: spawn_markers=1 queued_after_tick100=64 cursor_steps_after_tick100=334 drain_updates=6 markers_total=268 old_playback_markers=268 new_playback_markers=0 loops_total=133 markers_after_mutation=267 loops_after_mutation=133
 PROBE drain_then_replace: spawn_markers=1 queued_after_tick100=64 cursor_steps_after_tick100=334 drain_updates=6 markers_total=276 old_playback_markers=268 new_playback_markers=8 loops_total=136 markers_after_mutation=267 loops_after_mutation=133
 OK
-2/2 rfc794_refresh_accounting_probe.test.rfc794 MarkerCursor round-trips through core serde mid-backlog...PROBE cursor_json={"frame": 0,"forward": true,"repetition": 22,"sequence": 65,"remainder_seconds": 0.000000,"pump_started": true,"steps": 334,"marker_index": 0,"entering": true,"loop_pending": true,"complete_pending": false,"completed": false}
+2/3 rfc794_refresh_accounting_probe.test.rfc794 MarkerCursor round-trips through core serde mid-backlog...PROBE cursor_json={"frame": 0,"forward": true,"repetition": 22,"sequence": 65,"remainder_seconds": 0.000000,"pump_started": true,"steps": 334,"marker_index": 0,"entering": true,"loop_pending": true,"complete_pending": false,"completed": false}
 OK
-All 2 tests passed.
+3/3 rfc794_refresh_accounting_probe.test.rfc794 frame-zero entry over budget finishes handoff without advancing...PROBE frame_zero_under_pause speed_zero=false handoffs_per_update={ 64, 6, 0, 0 } total=70 frame=0 pending=false
+PROBE frame_zero_under_pause speed_zero=true handoffs_per_update={ 64, 6, 0, 0 } total=70 frame=0 pending=false
+OK
+All 3 tests passed.

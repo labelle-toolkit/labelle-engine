@@ -35,7 +35,7 @@ exactly as CI does), Zig 0.16.0 (`minimum_zig_version`).
    `zig build test-rfc794-probe`. It is not production code and is not part of
    `zig build test`. The build runner reports the step as failed only because
    the probe prints to stderr. Running the built test binary directly prints
-   `All 2 tests passed.` That output is in `probe.log`.
+   `All 3 tests passed.` That output is in `probe.log`.
 
 Reproduce:
 
@@ -67,6 +67,7 @@ spawn frame followed by `tick(100)`.
 | Drain-then-replace, 10-update tail | 268 old + 8 new | the new-playback count depends on the window |
 | Today's removal | 0 backlog markers, **21 loop events** | 43 queued markers fail liveness, the cursor's 336 are destroyed, and the queued loop events still reach hooks |
 | Today's blocked replacement | refresh never applied, old clip keeps playing | delivered count depends on the window |
+| Frame zero with 70 cues (over the 64 budget) under a zero-delta tick, and under `speed = 0` | 64 then 6 handoffs, then 0 | sequences 0–69 in order and frame stays 0: an entered frame finishes its handoff without advancing (second pass, RFC "Frame zero under pause") |
 | `MarkerCursor` through core `serde` mid-backlog | round-trips | `steps=334`, `sequence=65`, `entering`, `loop_pending`; `remainder_seconds` printed with 6 decimals |
 
 Conclusion: the POC's "336 pending crossings" against "268/304 cues delivered"

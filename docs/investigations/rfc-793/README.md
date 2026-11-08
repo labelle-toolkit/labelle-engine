@@ -25,3 +25,10 @@ the behavior of unreleased RFC features or reproduce a full game/UI run.
 November 7 POC claims at engine `be0991e`: why the six `poc/794-*` branches
 cannot be re-run, plus the refresh/removal accounting probe, its build patch,
 the exact commands and the full output.
+
+## RFC #794 review provenance
+
+[`review-provenance.md`](review-provenance.md) records, outside the RFC, which
+committed revision each review-pipeline job was given, which document its
+reviewers actually read, the artifact hashes, and which findings came from a
+pipeline-generated rewrite instead of the committed file.
