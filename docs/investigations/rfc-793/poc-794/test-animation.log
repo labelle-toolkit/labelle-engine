@@ -1,0 +1,8 @@
+# zig 0.16.0; engine be0991eabf5ff4bf75700ceab7bfc2365c7ce22b; labelle-core 85b554627ee050ccd56c5b4a5f51902e8b7a7e2a (v2.2.0)
+# cmd: ~/.zvm/0.16.0/zig build test-animation --summary all
+Build Summary: 4/4 steps succeeded; 21/21 tests passed
+test-animation success
++- run test 21 pass (21 total) 54ms MaxRSS:10M
+   +- compile test Debug native success 2s MaxRSS:440M
+      +- options success
+
