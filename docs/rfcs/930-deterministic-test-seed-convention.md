@@ -1,6 +1,6 @@
 # RFC 930: Seed convention for engine tests
 
-**Status:** Draft (revision 3). Documentation only. Nothing is implemented, and runtime behaviour does not change.
+**Status:** Draft (revision 4). Documentation only. Nothing is implemented, and runtime behaviour does not change.
 
 **Tracking:** labelle-engine#930
 
@@ -18,12 +18,21 @@ adds no dependency, no CI service, no command change and no runtime change.
 
 ## 2. Current state (what the code and toolchain show today)
 
-Sources: `grep` over `src/`, `test/`, `animation/`, `examples/` and `tools/`
-for `Random`, `DefaultPrng`, `Xoshiro`, `random`, `random_seed` and `seed`;
-the Zig 0.16.0 library at `/opt/zig/lib` (`build.zig.zon`:
-`minimum_zig_version = "0.16.0"`); and the runtime observations recorded in
-the review of revision 2 (marked *observed by review* below). I ran no builds
-or tests for this revision.
+Sources:
+
+- `grep` over every Zig source directory in the repository (`animation/`,
+  `audio_backend/`, `codegen/`, `contract/`, `examples/`, `jsonc/`, `scene/`,
+  `spec/`, `src/`, `test/`, `tools/`, `usage/`) for `std.Random`,
+  `DefaultPrng`, `Xoshiro`, `random_seed`, `io.random` and
+  `crypto.random`. Only two files match: `src/particles.zig` and
+  `src/storage/files.zig`. A broader `seed` grep was used for §2.2.
+- The Zig standard library for the pinned toolchain, Zig 0.16.0
+  (`build.zig.zon:5`, `minimum_zig_version = "0.16.0"`). Paths below are
+  relative to the Zig installation (`lib/std/…`, `lib/compiler/…`). *Evidence
+  note:* they were read from the local installation; line numbers may shift
+  in other 0.16.x builds.
+- Runtime observations recorded in the review of revision 2, marked
+  *observed by review* below. No builds or tests were run for this revision.
 
 ### 2.1 Where RNGs are created
 
@@ -34,22 +43,40 @@ or tests for this revision.
 | `src/particles.zig:402, 420, 439` (`presets`) | config values | literals `0x5_010`, `0x5_9a5`, `0x5_141` | Engine source; "deterministic out of the box". |
 | `src/storage/files.zig:89` | `io.random` (OS entropy) | not seedable | Unique staging file names; needs uniqueness, not reproducibility. |
 
-No other RNG exists in engine source or `tools/`. The only example,
+The repository-wide grep above finds no other RNG and no read of
+`std.testing.random_seed`, `io.random` or `std.crypto.random` in any test
+directory (`test/`, `animation/`, `scene/`, `jsonc/`, `audio_backend/`,
+`spec/`) or in `tools/`. The only example,
 `examples/uikit-gpu/main.zig`, uses no randomness. Most other `seed` hits mean
 camera seeding (`src/game/camera_mixin.zig:66`), unrelated to RNGs.
 
 ### 2.2 How tests choose seeds
 
-- `test/particles_test.zig` hard-codes a seed in every config (e.g. `0xABCDEF`
-  at line 30, `42` at 57, `7` at 87, `0` at 257).
+- `test/particles_test.zig` hard-codes a seed in every hand-written config
+  (e.g. `0xABCDEF` at line 30, `42` at 57, `7` at 87, `0` at 257). Its preset
+  loop (`:289-303`) uses `engine.particle_presets`, whose seeds are the
+  literals in `src/particles.zig:402, 420, 439`.
 - `test/particles_tick_test.zig` hard-codes `1`–`5` (lines 135, 161, 198, 215,
   230). Literals overlap across files, which is harmless: each test builds its
   own `ParticleSystem`.
-- `test/editor_api_test.zig:2148-2155` uses `{"seed":42}` only as an opaque
-  JSON payload.
+- `test/editor_api_test.zig:2148-2155` uses `{"seed":42}`, and
+  `test/script_contract_test.zig:3518` formats `{"seed":…}`, only as opaque
+  JSON payloads, not RNG seeds.
 - No file reads `std.testing.random_seed`.
 
-So the de-facto practice is **fixed literal seeds**, unwritten.
+**How a failing test reports its seed today: it does not.** No test prints a
+seed. None of the `std.debug.print` calls in `test/` print a seed; the only
+`seed`-plus-print match is the JSON `bufPrint` at
+`test/script_contract_test.zig:3518`. Each test's seed is the literal in
+its own source (`test/particles_test.zig:30, 57, 87, 257`;
+`test/particles_tick_test.zig:135, 161, 198, 215, 230`; presets at
+`src/particles.zig:402, 420, 439`). So for a failure, the test name plus that
+literal is the whole reproduction record. The `--seed=0x…` in the build
+runner's `failed command:` line (§2.3) is the *run* seed, and these tests
+ignore it.
+
+So the de-facto practice is **fixed literal seeds**, unwritten, with the
+literal in the source as the only seed record.
 
 ### 2.3 What the toolchain provides
 
@@ -60,18 +87,23 @@ So the de-facto practice is **fixed literal seeds**, unwritten.
   `--listen=-` to every test run step (`lib/std/Build/Step/Run.zig:244-251`).
   `build.zig:558-572` routes every `test_files` entry (`build.zig:140`)
   through `addTest` + `addRunArtifact`, so every engine test binary gets it.
-- **The default seed is random per invocation.** `Graph.random_seed = 0`
+- **Under `zig build test` and `zig test`, the default seed is random per
+  invocation.** `Graph.random_seed = 0`
   (`lib/std/Build.zig:128`) is only the build runner's initial value; the
-  `zig build` driver (Zig's `src/main.zig`, not shipped in `/opt/zig/lib`)
+  `zig build` driver (Zig's `src/main.zig`, not shipped in the installation's `lib/`)
   passes `--seed 0x<random u32>` to the build runner, which parses it as a
   `u32` (`lib/compiler/build_runner.zig:270-277`). The help text
   "(default: random)" (`build_runner.zig:1678`) is accurate. *Observed by
   review:* two plain `zig build test` runs gave test seeds `173992823` and
   `3341774029`; `zig build test --seed 0x1234` gave `4660`; two plain
   `zig test t.zig` runs also gave different seeds.
+- **A test binary run directly without `--seed=` gets seed 0, not a random
+  one.** `random_seed` starts at `0` (`lib/std/testing.zig:11`), and only a
+  `--seed=` argument changes it (`lib/compiler/test_runner.zig:55-57`). A
+  bare binary run is therefore repeatable but does not explore.
 - Consequence: CI's `zig build test --summary all` (`.github/workflows/ci.yml:80`)
   passes no seed, so every CI run uses a fresh random `random_seed`. Today
-  this has no effect because no test reads it.
+  this has no effect because no test reads it (§2.2).
 - **Failure output.** Under the default `.verbose` error style
   (`build_runner.zig:116`, `:1724-1729`) the build runner prints
   `failed command: …` (`build_runner.zig:1515-1523`). The command, including
@@ -126,7 +158,9 @@ treats that as a defect (§6 step 4 checks it by grep). Consequences:
 - **Running a binary by hand.** Copy the `failed command:` line, **remove
   `--listen=-`** (and optionally `--cache-dir=…`), and keep
   `--seed=0x<u32>` (`=` syntax, test-runner form). Without removing
-  `--listen=-` the runner waits on stdin and aborts (§2.3).
+  `--listen=-` the runner waits on stdin and aborts (§2.3). Keep the
+  `--seed=` argument: a binary run without it uses seed 0 (§2.3), not the
+  failing seed and not a fresh random one.
 - **Pinning locally.** `zig build test --seed 0` gives a repeatable run
   while debugging.
 
@@ -141,7 +175,13 @@ treats that as a defect (§6 step 4 checks it by grep). Consequences:
   the default and CI error style; replay with `zig build test --seed 0x<u32>`
   or the edited command from Rule 2. Under `--error-style minimal` that line
   is absent, so a contributor using it must pass and note `--seed` explicitly.
-- Rule 1 tests need nothing extra.
+- **Rule 1 (fixed-literal) tests need no printing.** This matches today
+  (§2.2): their seed is the literal in the test source, which together with
+  the test name is the reproduction record. Rerunning the named test
+  reproduces the failure for any `--seed`, so the run seed in
+  `failed command:` does not matter for them. A test that builds configs from
+  a table or presets (as at `test/particles_test.zig:289-303`) should include
+  the case index or name in its failure message so the literal can be found.
 
 A shared helper (`test/support/seed.zig`) is deferred until two tests need it.
 If added, it is imported by relative path and **not** listed in `test_files`
@@ -149,9 +189,19 @@ If added, it is imported by relative path and **not** listed in `test_files`
 
 ### Rule 4: examples
 
-No example uses randomness today. A future example that needs it hard-codes
-a visible literal seed (Rule 1). Overriding and printing an example's seed
-belongs to that example's own arguments and is out of scope.
+No example uses randomness today (§2.1). A future example that needs it
+hard-codes a visible literal seed (Rule 1). That answers the issue's three
+questions for examples:
+
+- **Default seed:** the literal in the example source.
+- **Override:** edit the literal. No flag is needed, because the example runs
+  the same way every time.
+- **Reporting:** none needed. The seed is visible in source, just as for
+  Rule 1 tests.
+
+A runtime seed flag for an example (argv parsing lives in generated mains, not
+the engine library, per `CLAUDE.md`) would be new behaviour and is out of
+scope.
 
 ### Illustrative example (NOT existing code; illustration only)
 
@@ -194,7 +244,7 @@ uses `(0x1234 << 32) ^ 0x930_01`.
 - `src/storage/files.zig` staging names (OS entropy is correct there).
 - Changing the CI command, adding seed matrices, CI artefacts, or
   `zig build test --fuzz` infrastructure.
-- Example seed override/reporting (Rule 4).
+- Runtime seed flags for examples (Rule 4); fixed-literal examples need none.
 - Changing existing tests; they already follow Rule 1.
 
 ## 4. Alternatives considered
@@ -228,7 +278,7 @@ uses `(0x1234 << 32) ^ 0x930_01`.
   caught only by review/grep.
 - **`u32` width.** Mixing adds no entropy; only 2³² streams per test.
 - **Toolchain drift.** The random default lives in the Zig driver, outside
-  `/opt/zig/lib`; a Zig upgrade should re-check §2.3.
+  `lib/`; a Zig upgrade beyond 0.16.0 should re-check §2.3.
 
 ## 6. Validation plan (proposed; not run in this column)
 
@@ -247,24 +297,31 @@ Existing evidence is §2. Later work should, with `-j1`:
 4. **Literal uniqueness.** Grep sweep tests' per-test literals for
    duplicates.
 5. **Rule 1 independence.** Existing tests pass under `--seed 0` and
-   `--seed 0x1234`.
-6. **Helper wiring.** If `test/support/seed.zig` is added, confirm it is not
+   `--seed 0x1234`, which confirms that a fixed-literal failure is reproduced
+   from its source literal regardless of run seed.
+6. **Bare binary default.** Run a built test binary without `--seed=` or
+   `--listen=-` and confirm that the throwaway test from step 1 prints `0`.
+7. **Helper wiring.** If `test/support/seed.zig` is added, confirm it is not
    in `test_files` and gets no run step.
-7. **Re-grep** for `io.random`, `std.crypto.random` or time-based seeds in
-   tests and examples.
+8. **Re-grep** every Zig source directory listed in §2 for `io.random`,
+   `std.crypto.random`, `DefaultPrng`, `random_seed` or time-based seeds.
 
 ## 7. Acceptance criteria for this RFC
 
 - [ ] The PR adds exactly one file, `docs/rfcs/930-deterministic-test-seed-convention.md`.
-- [ ] Current state cites file/line evidence, states that the default
-      `zig build test` / CI seed is random per invocation, and claims no
-      written convention exists today.
+- [ ] Current state cites file/line evidence and lists the full grep scope.
+      It states that the default `zig build test` / CI seed is random per
+      invocation, that a bare binary run defaults to 0, and that no written
+      convention exists today.
+- [ ] Current state says how a failing test reports its seed today: it does
+      not print one, and the literal in the source is the reproduction
+      record. Rule 3 keeps that for fixed-seed tests.
 - [ ] Rules cover the default seed (Rule 1, plus random run seed for sweeps),
       override via `zig build test --seed 0x<u32>` with the `--listen=-`
       caveat (Rule 2), and failure visibility for error returns and panics
       (Rule 3).
 - [ ] Sweep-test literals are required to be unique.
-- [ ] Examples are addressed (Rule 4).
+- [ ] Examples are addressed for default, override and reporting (Rule 4).
 - [ ] The illustrative example is clearly marked as not existing code.
 - [ ] Out of scope includes runtime gameplay randomness; no new dependency,
       CI service, command change or runtime change is proposed.
