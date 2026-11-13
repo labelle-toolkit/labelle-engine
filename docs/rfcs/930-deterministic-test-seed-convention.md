@@ -1,6 +1,6 @@
 # RFC 930: Seed convention for engine tests
 
-**Status:** Draft (revision 4). Documentation only. Nothing is implemented, and runtime behaviour does not change.
+**Status:** Draft (revision 5). Documentation only. Nothing is implemented, and runtime behaviour does not change.
 
 **Tracking:** labelle-engine#930
 
@@ -20,11 +20,12 @@ adds no dependency, no CI service, no command change and no runtime change.
 
 Sources:
 
-- `grep` over every Zig source directory in the repository (`animation/`,
+- `grep` over first-party *.zig files in (`animation/`,
   `audio_backend/`, `codegen/`, `contract/`, `examples/`, `jsonc/`, `scene/`,
   `spec/`, `src/`, `test/`, `tools/`, `usage/`) for `std.Random`,
   `DefaultPrng`, `Xoshiro`, `random_seed`, `io.random` and
-  `crypto.random`. Only two files match: `src/particles.zig` and
+  `crypto.random`. This excludes vendored `zig-pkg/` and non-Zig files such as
+  `codegen/main.zig.template`. Only two files match: `src/particles.zig` and
   `src/storage/files.zig`. A broader `seed` grep was used for §2.2.
 - The Zig standard library for the pinned toolchain, Zig 0.16.0
   (`build.zig.zon:5`, `minimum_zig_version = "0.16.0"`). Paths below are
@@ -43,7 +44,7 @@ Sources:
 | `src/particles.zig:402, 420, 439` (`presets`) | config values | literals `0x5_010`, `0x5_9a5`, `0x5_141` | Engine source; "deterministic out of the box". |
 | `src/storage/files.zig:89` | `io.random` (OS entropy) | not seedable | Unique staging file names; needs uniqueness, not reproducibility. |
 
-The repository-wide grep above finds no other RNG and no read of
+The scoped grep above finds no other RNG and no read of
 `std.testing.random_seed`, `io.random` or `std.crypto.random` in any test
 directory (`test/`, `animation/`, `scene/`, `jsonc/`, `audio_backend/`,
 `spec/`) or in `tools/`. The only example,
@@ -62,7 +63,9 @@ camera seeding (`src/game/camera_mixin.zig:66`), unrelated to RNGs.
 - `test/editor_api_test.zig:2148-2155` uses `{"seed":42}`, and
   `test/script_contract_test.zig:3518` formats `{"seed":…}`, only as opaque
   JSON payloads, not RNG seeds.
-- No file reads `std.testing.random_seed`.
+- No file in the search scope reads `std.testing.random_seed`.
+- A particle config that omits `.seed` gets the fixed value `0` from
+  `EmitterConfig.seed` (`src/particles.zig:121`) and is reproducible.
 
 **How a failing test reports its seed today: it does not.** No test prints a
 seed. None of the `std.debug.print` calls in `test/` print a seed; the only
@@ -83,11 +86,15 @@ literal in the source as the only seed record.
 - `std.testing.random_seed: u32` (`lib/std/testing.zig:9-11`), "deterministic
   randomness in unit tests". The test runner sets it from `--seed=<u32>`
   (`lib/compiler/test_runner.zig:55-57`).
-- `zig build` passes `--cache-dir=…`, `--seed=0x<b.graph.random_seed>` and
-  `--listen=-` to every test run step (`lib/std/Build/Step/Run.zig:244-251`).
-  `build.zig:558-572` routes every `test_files` entry (`build.zig:140`)
-  through `addTest` + `addRunArtifact`, so every engine test binary gets it.
-- **Under `zig build test` and `zig test`, the default seed is random per
+- The standard Zig test runner receives `--cache-dir=…`, `--seed=0x<b.graph.random_seed>`
+  and `--listen=-` through `addRunArtifact` (`lib/std/Build/Step/Run.zig:244-251`).
+  This covers the `test_files` binaries wired through `addTest` and
+  `addRunArtifact` (`build.zig:140,558-572`). The zspec `spec/` runner uses
+  `.simple` (`build.zig:844-851`), which skips that wiring
+  (`lib/std/Build.zig:986-989`), so its testing seed stays at 0. The
+  `test/*_exe.zig` harnesses use `addExecutable`
+  (`build.zig:471-484,506-545`) and receive no runner seed either.
+- **For standard-runner tests under `zig build test` and `zig test`, the default seed is random per
   invocation.** `Graph.random_seed = 0`
   (`lib/std/Build.zig:128`) is only the build runner's initial value; the
   `zig build` driver (Zig's `src/main.zig`, not shipped in the installation's `lib/`)
@@ -102,7 +109,7 @@ literal in the source as the only seed record.
   `--seed=` argument changes it (`lib/compiler/test_runner.zig:55-57`). A
   bare binary run is therefore repeatable but does not explore.
 - Consequence: CI's `zig build test --summary all` (`.github/workflows/ci.yml:80`)
-  passes no seed, so every CI run uses a fresh random `random_seed`. Today
+  passes no seed, so eligible standard-runner binaries receive a random run seed. Today
   this has no effect because no test reads it (§2.2).
 - **Failure output.** Under the default `.verbose` error style
   (`build_runner.zig:116`, `:1724-1729`) the build runner prints
@@ -136,19 +143,22 @@ each test owns its generator.
 
 ### Rule 2: sweep tests mix in `std.testing.random_seed`
 
-A test meant to cover many inputs must not use `io.random`,
-`std.crypto.random` or a clock. It derives its seed from the run seed and a
-**per-test literal that is unique among sweep tests**:
+Place sweep tests only in standard-runner binaries wired through `test_files`.
+Use Rule 1 in zspec and executable harnesses until they have explicit seed
+forwarding. A sweep derives its seed from the run seed and a nonzero,
+unique per-test literal declared as `const sweep_seed_<test>: u64 = …`.
+Use canonical hexadecimal without digit separators so duplicates are easy to
+compare. Avoid OS entropy and clocks.
 
 ```
 effective_seed: u64 = (@as(u64, std.testing.random_seed) << 32) ^ <per-test literal>
 ```
 
-Two sweep tests with the same literal share a stream on every run; a reviewer
+Two sweep tests with the same literal share a stream on every run. A reviewer
 treats that as a defect (§6 step 4 checks it by grep). Consequences:
 
-- **Default run (local and CI).** Each invocation picks a new random
-  `u32`, so sweep tests explore a different stream every run. A sweep test
+- **Default run (local and CI).** Each eligible invocation picks a random
+  `u32`, so sweep tests explore a stream that can vary between runs. A sweep test
   must therefore pass for *every* seed; a seed-dependent failure is a real
   bug, not flakiness to retry away.
 - **Reproducing.** Take the `u32` from the failure report (Rule 3) and run
@@ -170,7 +180,9 @@ treats that as a defect (§6 step 4 checks it by grep). Consequences:
   after computing the seed that prints the `u32` and the
   `zig build test --seed 0x…` command. Its stderr reaches the build output
   (§2.3).
-- **Panics and crashes** skip `errdefer`. The build runner's
+- **Build-runner fallback.** Panics, crashes, leak checks and logged-error
+  failures can bypass the test's `errdefer` (`Run.zig:1970-1978`). For any
+  failed standard-runner step with a recorded command, the build runner's
   `failed command: … --seed=0x<u32> --listen=-` line carries the seed under
   the default and CI error style; replay with `zig build test --seed 0x<u32>`
   or the edited command from Rule 2. Under `--error-style minimal` that line
@@ -208,9 +220,9 @@ scope.
 ```zig
 // ILLUSTRATIVE ONLY: not present in the repository.
 test "particle pool never exceeds max_particles under random configs" {
-    const per_test: u64 = 0x930_01; // unique among sweep tests
-    const seed: u64 = (@as(u64, std.testing.random_seed) << 32) ^ per_test;
-    // Error returns only; panics rely on the `failed command:` line.
+    const sweep_seed_particle_pool: u64 = 0x93001; // unique among sweep tests
+    const seed: u64 = (@as(u64, std.testing.random_seed) << 32) ^ sweep_seed_particle_pool;
+    // Error returns only; other failures can rely on the `failed command:` line.
     errdefer std.debug.print(
         "sweep seed 0x{x} (reproduce: zig build test --seed 0x{x})\n",
         .{ std.testing.random_seed, std.testing.random_seed },
@@ -233,9 +245,9 @@ test "particle pool never exceeds max_particles under random configs" {
 }
 ```
 
-Under plain `zig build test` this uses `(random_u32 << 32) ^ 0x930_01`, a
-different stream each run; under `zig build test --seed 0x1234` it always
-uses `(0x1234 << 32) ^ 0x930_01`.
+Under plain `zig build test` this uses `(random_u32 << 32) ^ 0x93001`, a
+stream that can vary between runs; under `zig build test --seed 0x1234` it always
+uses `(0x1234 << 32) ^ 0x93001`.
 
 ### Out of scope
 
@@ -266,16 +278,20 @@ uses `(0x1234 << 32) ^ 0x930_01`.
 ## 5. Risks
 
 - **CI is non-deterministic for sweep tests.** A sweep test can fail in CI on
-  a seed no one has tried locally. Mitigation: Rule 2's "pass for every
-  seed" requirement, and the seed in the failure output makes it replayable.
-  Rule 1 tests stay deterministic.
+  a seed no one has tried locally. Replay the printed seed, isolate the
+  failing input, and add it as a fixed-literal Rule 1 regression. Keep the
+  sweep to explore other inputs.
+- **Build ordering.** The same `--seed` also controls build-graph dependency
+  traversal (`build_runner.zig:272-277,1678`). Replay with the original seed,
+  toolchain and build options, and investigate ordering or isolation if
+  changing the seed changes the failure.
 - **Bad replay instructions.** Copying `failed command:` verbatim aborts
   (`--listen=-`); mixing `--seed 0x…` (build) and `--seed=0x…` (runner)
   syntax fails to parse. Rule 2 spells out both.
-- **`errdefer` gaps.** Panics skip it; replay relies on `failed command:`,
+- **`errdefer` gaps.** Some failures bypass it (Rule 3); replay relies on `failed command:`,
   absent under `--error-style minimal`.
 - **Literal collisions.** Duplicate sweep literals silently share streams;
-  caught only by review/grep.
+  check named literals during review using §6.
 - **`u32` width.** Mixing adds no entropy; only 2³² streams per test.
 - **Toolchain drift.** The random default lives in the Zig driver, outside
   `lib/`; a Zig upgrade beyond 0.16.0 should re-check §2.3.
@@ -293,34 +309,39 @@ Existing evidence is §2. Later work should, with `-j1`:
 3. **Panic replay.** Switch to `@panic`; confirm no `errdefer` line, a
    `failed command:` line with `--seed=0x…`, that the verbatim command aborts
    with `EndOfStream`, and that removing `--listen=-` (or using
-   `zig build test --seed 0x…`) replays it. Remove the throwaway test.
-4. **Literal uniqueness.** Grep sweep tests' per-test literals for
-   duplicates.
+   `zig build test --seed 0x…`) replays it. Keep the throwaway test for step 6.
+4. **Literal uniqueness.** Run `rg -n 'const sweep_seed_' --glob '*.zig' test`
+   (include other source directories if they acquire eligible `test_files`).
+   Check that each value is nonzero, unique, and in a standard-runner test.
 5. **Rule 1 independence.** Existing tests pass under `--seed 0` and
    `--seed 0x1234`, which confirms that a fixed-literal failure is reproduced
    from its source literal regardless of run seed.
 6. **Bare binary default.** Run a built test binary without `--seed=` or
-   `--listen=-` and confirm that the throwaway test from step 1 prints `0`.
+   `--listen=-` and restore the seed print from step 1 and confirm it prints `0`. Remove it afterward.
 7. **Helper wiring.** If `test/support/seed.zig` is added, confirm it is not
    in `test_files` and gets no run step.
-8. **Re-grep** every Zig source directory listed in §2 for `io.random`,
+8. **Multi-seed sweep.** Run the relevant standard-runner target with 32
+   explicit seeds (0 through 31) and record any failure. Replay a failure
+   and promote the smallest failing case to a Rule 1 regression. This
+   sample validates the workflow and is not exhaustive.
+9. **Re-grep** every Zig source directory listed in §2 for `io.random`,
    `std.crypto.random`, `DefaultPrng`, `random_seed` or time-based seeds.
 
 ## 7. Acceptance criteria for this RFC
 
 - [ ] The PR adds exactly one file, `docs/rfcs/930-deterministic-test-seed-convention.md`.
-- [ ] Current state cites file/line evidence and lists the full grep scope.
+- [ ] Current state cites file/line evidence and lists the grep scope and exclusions.
       It states that the default `zig build test` / CI seed is random per
-      invocation, that a bare binary run defaults to 0, and that no written
+      invocation for standard-runner tests, that a bare standard-runner binary defaults to 0, and that no written
       convention exists today.
 - [ ] Current state says how a failing test reports its seed today: it does
       not print one, and the literal in the source is the reproduction
       record. Rule 3 keeps that for fixed-seed tests.
 - [ ] Rules cover the default seed (Rule 1, plus random run seed for sweeps),
       override via `zig build test --seed 0x<u32>` with the `--listen=-`
-      caveat (Rule 2), and failure visibility for error returns and panics
+      caveat (Rule 2), and failure visibility for error returns and runner failures
       (Rule 3).
-- [ ] Sweep-test literals are required to be unique.
+- [ ] Sweep tests are scoped to standard-runner binaries and their named literals are nonzero and unique.
 - [ ] Examples are addressed for default, override and reporting (Rule 4).
 - [ ] The illustrative example is clearly marked as not existing code.
 - [ ] Out of scope includes runtime gameplay randomness; no new dependency,
