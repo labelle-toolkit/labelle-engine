@@ -497,6 +497,7 @@ pub fn GameConfigWithYAxis(
         /// The active world is a heap-allocated pointer for stable references.
         /// Inactive worlds live in the `worlds` map as heap pointers.
         pub const World = struct {
+            position_revisions: @import("position_revisions.zig").PositionRevisions = .{},
             ecs_backend: EcsImpl,
             renderer: RenderImpl,
             sprite_cache: atlas_mod.SpriteCache,
@@ -579,6 +580,7 @@ pub fn GameConfigWithYAxis(
             }
 
             pub fn deinit(self: *World) void {
+                self.position_revisions.deinit(self.allocator);
                 // Deferred backend destroys (#883) must run while the
                 // renderer is still alive — this is the last flush, so a
                 // material retired after the final sync is destroyed here
@@ -1405,6 +1407,9 @@ pub fn GameConfigWithYAxis(
         // ── Position & Hierarchy ──────────────────────────────────
 
         pub const setPosition = ComponentsMixin.setPosition;
+        pub const trackPositionRevision = ComponentsMixin.trackPositionRevision;
+        pub const positionRevision = ComponentsMixin.positionRevision;
+        pub const invalidatePosition = ComponentsMixin.invalidatePosition;
         pub const getPosition = ComponentsMixin.getPosition;
         pub const getWorldPosition = ComponentsMixin.getWorldPosition;
         pub const setWorldPosition = ComponentsMixin.setWorldPosition;
