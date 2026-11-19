@@ -523,3 +523,37 @@ test "reads refuse a FIFO key without blocking" {
     defer list.deinit(a);
     try std.testing.expectEqual(@as(usize, 0), list.list.len);
 }
+
+// `fileInfo`: kind/size/mtime without statx on Linux (old kernels).
+test "kindOf reads the S_IFMT bits" {
+    try std.testing.expectEqual(std.Io.File.Kind.file, s.fileInfo.kindOf(0o100644));
+    try std.testing.expectEqual(std.Io.File.Kind.directory, s.fileInfo.kindOf(0o040755));
+    try std.testing.expectEqual(std.Io.File.Kind.sym_link, s.fileInfo.kindOf(0o120777));
+    try std.testing.expectEqual(std.Io.File.Kind.named_pipe, s.fileInfo.kindOf(0o010644));
+}
+
+test "at and ofFile report a file's kind, size and modified time" {
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(io, .{ .sub_path = "slot.json", .data = "hello" });
+    try tmp.dir.createDir(io, "sub", .default_dir);
+
+    const info = try s.fileInfo.at(io, tmp.dir, "slot.json");
+    try std.testing.expectEqual(std.Io.File.Kind.file, info.kind);
+    try std.testing.expectEqual(@as(u64, 5), info.size);
+    try std.testing.expect(info.mtime_ns > 0);
+    // The same answer as std's own stat where it works.
+    const st = try tmp.dir.statFile(io, "slot.json", .{ .follow_symlinks = false });
+    try std.testing.expectEqual(st.size, info.size);
+    try std.testing.expectEqual(st.mtime.nanoseconds, info.mtime_ns);
+
+    try std.testing.expectEqual(std.Io.File.Kind.directory, (try s.fileInfo.at(io, tmp.dir, "sub")).kind);
+    try std.testing.expectError(error.FileNotFound, s.fileInfo.at(io, tmp.dir, "missing.json"));
+
+    const file = try tmp.dir.openFile(io, "slot.json", .{});
+    defer file.close(io);
+    const opened = try s.fileInfo.ofFile(io, file);
+    try std.testing.expectEqual(std.Io.File.Kind.file, opened.kind);
+    try std.testing.expectEqual(@as(u64, 5), opened.size);
+}
