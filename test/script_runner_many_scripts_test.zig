@@ -16,6 +16,9 @@ const engine = @import("engine");
 const ScriptRunner = engine.ScriptRunner;
 
 const Stateless = struct {
+    pub fn setup(game: anytype) void {
+        game.setups += 1;
+    }
     pub fn tick(game: anytype, _: f32) void {
         game.ticks += 1;
     }
@@ -343,6 +346,7 @@ const ManyScripts = struct {
 const Runner = ScriptRunner(ManyScripts, struct {}, struct {});
 
 const Game = struct {
+    setups: u32 = 0,
     ticks: u32 = 0,
     draws: u32 = 0,
 };
@@ -357,6 +361,9 @@ test "a runner over hundreds of scripts compiles, counts them all and keeps ever
     try std.testing.expectEqual(@as(usize, SCRIPTS / 3), @typeInfo(@TypeOf(runner.states)).@"struct".fields.len);
 
     var game = Game{};
+    runner.setup(&game);
+    // A third set up (the stateless ones).
+    try std.testing.expectEqual(@as(u32, SCRIPTS / 3), game.setups);
     runner.tick(&game, 0.016);
     runner.drawGui(&game);
     // Two thirds tick (stateless + stateful), one third draws.
