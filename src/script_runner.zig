@@ -37,7 +37,19 @@ pub fn ScriptRunner(
         /// pointer casts back to a stable, plugin-visible layout.
         pub const ProfileEntry = profiler.ScriptRow;
 
+        /// Branch quota for the comptime walks over `AllScripts`: the
+        /// comptime blocks below and every function that dispatches with
+        /// an `inline for` over the scripts (its `comptime` probes count
+        /// against that function's quota). Each script costs a handful
+        /// of backwards branches (the loop itself plus the `@hasDecl`
+        /// probes), so Zig's default of 1000 ran out at a few dozen
+        /// scripts and the game stopped compiling with an error pointing
+        /// in here, not at the script that was added (#935). Scaled with
+        /// the script count so no fixed number becomes the next limit.
+        const walk_quota: u32 = 1000 + @typeInfo(AllScripts).@"struct".decls.len * 200;
+
         pub const script_count: usize = blk: {
+            @setEvalBranchQuota(walk_quota);
             var count: usize = 0;
             for (@typeInfo(AllScripts).@"struct".decls) |d| {
                 const mod = @field(AllScripts, d.name);
@@ -58,6 +70,7 @@ pub fn ScriptRunner(
 
         fn initProfile() [script_count]ProfileEntry {
             comptime {
+                @setEvalBranchQuota(walk_quota);
                 var entries: [script_count]ProfileEntry = undefined;
                 var idx: usize = 0;
                 for (@typeInfo(AllScripts).@"struct".decls) |d| {
@@ -75,6 +88,7 @@ pub fn ScriptRunner(
         const States = buildStatesType();
 
         fn buildStatesType() type {
+            @setEvalBranchQuota(walk_quota);
             const decls = @typeInfo(AllScripts).@"struct".decls;
             var names: [decls.len][]const u8 = undefined;
             var types: [decls.len]type = undefined;
@@ -131,6 +145,7 @@ pub fn ScriptRunner(
         }
 
         pub fn init(allocator: std.mem.Allocator, ecs_backend: anytype) Self {
+            @setEvalBranchQuota(walk_quota);
             var self = Self{
                 .states = undefined,
                 .ctx = .{},
@@ -152,6 +167,7 @@ pub fn ScriptRunner(
         }
 
         pub fn deinit(self: *Self) void {
+            @setEvalBranchQuota(walk_quota);
             const decls = @typeInfo(AllScripts).@"struct".decls;
             inline for (decls) |d| {
                 const mod = @field(AllScripts, d.name);
@@ -172,6 +188,7 @@ pub fn ScriptRunner(
         /// other scripts having run first. Entity creation happens later, during scene
         /// loading or the first tick.
         pub fn setup(self: *Self, game: anytype) void {
+            @setEvalBranchQuota(walk_quota);
             const decls = @typeInfo(AllScripts).@"struct".decls;
             comptime var profile_idx: usize = 0;
             inline for (decls) |d| {
@@ -193,6 +210,7 @@ pub fn ScriptRunner(
         }
 
         pub fn tick(self: *Self, game: anytype, dt: f32) void {
+            @setEvalBranchQuota(walk_quota);
             const current_state = getGameState(game);
             const decls = @typeInfo(AllScripts).@"struct".decls;
             // Read the runtime profiling flag once per frame (cached env).
@@ -238,6 +256,7 @@ pub fn ScriptRunner(
         }
 
         pub fn drawGui(self: *Self, game: anytype) void {
+            @setEvalBranchQuota(walk_quota);
             const current_state = getGameState(game);
             const decls = @typeInfo(AllScripts).@"struct".decls;
             const rec = profiler.recording();

@@ -196,6 +196,9 @@ pub fn build(b: *std.Build) void {
         "test/gui_runtime_state_test.zig",
         "test/form_binder_test.zig",
         "test/script_runner_test.zig",
+        // #935 — the comptime walks over the scripts must not run out of
+        // branch quota: a runner over 300 scripts has to compile.
+        "test/script_runner_many_scripts_test.zig",
         "test/game_log_test.zig",
         "test/fullscreen_api_test.zig",
         "test/cursor_api_test.zig",
