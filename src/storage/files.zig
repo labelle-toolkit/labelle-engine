@@ -2,6 +2,10 @@
 //! namespace (normally <dataRoot>/saves). It is created only for writes.
 const std = @import("std");
 const storage = @import("../storage.zig");
+// Kind/size/mtime without Zig 0.16's statx on Linux (see its header): every
+// stat here goes through it, and directories are opened before they are
+// created, since `createDirPath` stats a directory that already exists.
+const file_info = @import("file_info.zig");
 
 pub const Files = struct {
     io: std.Io,
@@ -35,7 +39,7 @@ pub const Files = struct {
 
     fn execute(self: *Files, allocator: std.mem.Allocator, request: storage.Request) !storage.Result {
         const io = self.io;
-        if (request == .write) try std.Io.Dir.cwd().createDirPath(io, self.directory);
+        if (request == .write) try ensureDir(io, std.Io.Dir.cwd(), self.directory);
         var dir = std.Io.Dir.cwd().openDir(io, self.directory, .{ .iterate = true }) catch |err| {
             if (err == error.FileNotFound) switch (request) {
                 .list => return .{ .list = try allocator.alloc(storage.Entry, 0) },
@@ -57,7 +61,9 @@ pub const Files = struct {
                 defer file.close(io);
                 // Reader needs room for an EOF probe even for a zero-byte
                 // limit. Check the public inclusive bound after that probe.
-                var reader = file.reader(io, &.{});
+                // Streaming: read to EOF without asking the file's size,
+                // which std would do with statx.
+                var reader = file.readerStreaming(io, &.{});
                 const bytes = reader.interface.allocRemaining(allocator, .limited(r.max_bytes +| 1)) catch |err| switch (err) {
                     error.ReadFailed => return reader.err.?,
                     error.OutOfMemory, error.StreamTooLong => |e| return e,
@@ -74,7 +80,7 @@ pub const Files = struct {
                 // it over the key. A crash before the rename leaves only a
                 // staging file, which a later write purges once it is
                 // older than `staging_stale_ns` (see purgeStaging).
-                try dir.createDirPath(io, ".pending");
+                try ensureDir(io, dir, ".pending");
                 // No symlink following: a `.pending` that is not a real
                 // directory inside the namespace is refused, never traversed.
                 var staging = try dir.openDir(io, ".pending", .{ .iterate = true, .follow_symlinks = false });
@@ -125,14 +131,14 @@ pub const Files = struct {
                     // those are decided by lstat. Links are never blobs.
                     if (!entryKindIsCandidate(entry.kind)) continue;
                     storage.validateName(entry.name) catch continue;
-                    const stat = dir.statFile(io, entry.name, .{ .follow_symlinks = false }) catch |err| switch (err) {
+                    const info = file_info.at(io, dir, entry.name) catch |err| switch (err) {
                         error.FileNotFound => continue,
                         else => return err,
                     };
-                    if (stat.kind != .file) continue;
+                    if (info.kind != .file) continue;
                     const name = try allocator.dupe(u8, entry.name);
                     errdefer allocator.free(name);
-                    try entries.append(allocator, .{ .name = name, .size = stat.size, .modified_ns = stat.mtime.nanoseconds });
+                    try entries.append(allocator, .{ .name = name, .size = info.size, .modified_ns = info.mtime_ns });
                 }
                 return .{ .list = try entries.toOwnedSlice(allocator) };
             },
@@ -151,7 +157,7 @@ fn openKey(io: std.Io, dir: std.Io.Dir, name: []const u8) !std.Io.File {
     if (os == .windows or os == .wasi) {
         var file = try dir.openFile(io, name, .{ .follow_symlinks = false, .allow_directory = false });
         errdefer file.close(io);
-        if ((try file.stat(io)).kind != .file) return error.AccessDenied;
+        if ((try file_info.ofFile(io, file)).kind != .file) return error.AccessDenied;
         // Zig 0.16's Windows no-follow open uses an asynchronous NT handle,
         // but returns nonblocking=false. A pending read then hits unreachable
         // instead of waiting for completion (Flying Platform #972). Match the
@@ -167,7 +173,7 @@ fn openKey(io: std.Io, dir: std.Io.Dir, name: []const u8) !std.Io.File {
     const fd = try posix.openat(dir.handle, name, flags, 0);
     var file: std.Io.File = .{ .handle = fd, .flags = .{ .nonblocking = true } };
     errdefer file.close(io);
-    if ((try file.stat(io)).kind != .file) return error.AccessDenied;
+    if ((try file_info.ofFile(io, file)).kind != .file) return error.AccessDenied;
     const status = while (true) {
         const rc = posix.system.fcntl(fd, posix.F.GETFL, @as(usize, 0));
         switch (posix.errno(rc)) {
@@ -184,6 +190,38 @@ fn openKey(io: std.Io, dir: std.Io.Dir, name: []const u8) !std.Io.File {
     };
     file.flags.nonblocking = false;
     return file;
+}
+
+/// Ensure each missing component exists without stat-based directory helpers.
+/// Another writer may create a component between open and mkdir; validate
+/// EEXIST by opening it, never by statting it (old Linux has no statx).
+/// Namespace symlinks are followed; `.pending` is reopened no-follow by the
+/// caller before any staging files are accessed.
+fn ensureDir(io: std.Io, base: std.Io.Dir, path: []const u8) !void {
+    if (base.openDir(io, path, .{})) |opened| {
+        opened.close(io);
+        return;
+    } else |err| switch (err) {
+        error.FileNotFound => {},
+        else => return err,
+    }
+
+    var components = std.Io.Dir.path.componentIterator(path);
+    var component = components.last() orelse return error.BadPathName;
+    while (true) {
+        base.createDir(io, component.path, .default_dir) catch |err| switch (err) {
+            error.PathAlreadyExists => {
+                const opened = try base.openDir(io, component.path, .{});
+                opened.close(io);
+            },
+            error.FileNotFound => |e| {
+                component = components.previous() orelse return e;
+                continue;
+            },
+            else => |e| return e,
+        };
+        component = components.next() orelse return;
+    }
 }
 
 /// Staging files are exactly 16 lowercase hex digits (a random u64).
@@ -225,11 +263,12 @@ fn purgeStaging(io: std.Io, staging: std.Io.Dir, now: std.Io.Timestamp) ?std.Io.
     var iterator = staging.iterate();
     while (iterator.next(io) catch return now) |entry| {
         if (!entryKindIsCandidate(entry.kind) or !matchesStagingName(entry.name)) continue;
-        const stat = staging.statFile(io, entry.name, .{ .follow_symlinks = false }) catch continue;
-        if (stat.kind != .file) continue;
-        if (!stagingIsStale(stat.mtime, now)) {
+        const info = file_info.at(io, staging, entry.name) catch continue;
+        if (info.kind != .file) continue;
+        const modified: std.Io.Timestamp = .fromNanoseconds(info.mtime_ns);
+        if (!stagingIsStale(modified, now)) {
             // Stale once strictly older than the safety age.
-            const stale_at: std.Io.Timestamp = .fromNanoseconds(stat.mtime.nanoseconds +| (staging_stale_ns + 1));
+            const stale_at: std.Io.Timestamp = .fromNanoseconds(info.mtime_ns +| (staging_stale_ns + 1));
             if (due == null or stale_at.nanoseconds < due.?.nanoseconds) due = stale_at;
             continue;
         }

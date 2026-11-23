@@ -3,6 +3,7 @@
 //! null means pending, not success. A result is transferred exactly once.
 const std = @import("std");
 pub const Files = @import("storage/files.zig").Files;
+pub const fileInfo = @import("storage/file_info.zig");
 pub const dataRoot = @import("storage/data_root.zig");
 pub const Web = @import("storage/web.zig").Web;
 pub const Default = @import("storage/default.zig").Default;

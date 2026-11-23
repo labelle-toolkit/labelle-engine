@@ -523,3 +523,125 @@ test "reads refuse a FIFO key without blocking" {
     defer list.deinit(a);
     try std.testing.expectEqual(@as(usize, 0), list.list.len);
 }
+
+// `fileInfo`: kind/size/mtime without statx on Linux (old kernels).
+test "kindOf reads the S_IFMT bits" {
+    try std.testing.expectEqual(std.Io.File.Kind.file, s.fileInfo.kindOf(0o100644));
+    try std.testing.expectEqual(std.Io.File.Kind.directory, s.fileInfo.kindOf(0o040755));
+    try std.testing.expectEqual(std.Io.File.Kind.sym_link, s.fileInfo.kindOf(0o120777));
+    try std.testing.expectEqual(std.Io.File.Kind.named_pipe, s.fileInfo.kindOf(0o010644));
+}
+
+test "at and ofFile report a file's kind, size and modified time" {
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(io, .{ .sub_path = "slot.json", .data = "hello" });
+    try tmp.dir.createDir(io, "sub", .default_dir);
+
+    const info = try s.fileInfo.at(io, tmp.dir, "slot.json");
+    try std.testing.expectEqual(std.Io.File.Kind.file, info.kind);
+    try std.testing.expectEqual(@as(u64, 5), info.size);
+    try std.testing.expect(info.mtime_ns > 0);
+    // The same answer as std's own stat where it works.
+    const st = try tmp.dir.statFile(io, "slot.json", .{ .follow_symlinks = false });
+    try std.testing.expectEqual(st.size, info.size);
+    try std.testing.expectEqual(st.mtime.nanoseconds, info.mtime_ns);
+
+    try std.testing.expectEqual(std.Io.File.Kind.directory, (try s.fileInfo.at(io, tmp.dir, "sub")).kind);
+    try std.testing.expectError(error.FileNotFound, s.fileInfo.at(io, tmp.dir, "missing.json"));
+
+    const file = try tmp.dir.openFile(io, "slot.json", .{});
+    defer file.close(io);
+    const opened = try s.fileInfo.ofFile(io, file);
+    try std.testing.expectEqual(std.Io.File.Kind.file, opened.kind);
+    try std.testing.expectEqual(@as(u64, 5), opened.size);
+}
+
+// Force directory-creation races deterministically. Reject the std helper
+// because its EEXIST path calls statx on Linux, even when used with this Io.
+const DirectoryCreationRace = struct {
+    var target: []const u8 = "";
+    var injected: bool = false;
+    var helper_called: bool = false;
+    var create_file: bool = false;
+
+    fn create(_: ?*anyopaque, dir: std.Io.Dir, path: []const u8, permissions: std.Io.Dir.Permissions) std.Io.Dir.CreateDirError!void {
+        if (!injected and std.mem.eql(u8, path, target)) {
+            injected = true;
+            if (create_file) {
+                dir.writeFile(std.testing.io, .{ .sub_path = path, .data = "foreign" }) catch unreachable;
+            } else {
+                try dir.createDir(std.testing.io, path, permissions);
+            }
+        }
+        // The real mkdir now returns PathAlreadyExists for the raced path.
+        return dir.createDir(std.testing.io, path, permissions);
+    }
+
+    fn forbiddenHelper(_: ?*anyopaque, _: std.Io.Dir, _: []const u8, _: std.Io.Dir.Permissions) std.Io.Dir.CreateDirPathError!std.Io.Dir.CreatePathStatus {
+        helper_called = true;
+        return error.Unexpected;
+    }
+};
+
+fn directoryCreationRace(intermediate: bool, obstruction: bool) !void {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var buffer: [4096]u8 = undefined;
+    const length = try tmp.dir.realPath(std.testing.io, &buffer);
+    const namespace = if (intermediate)
+        try std.fmt.allocPrint(a, "{s}/new-parent/saves", .{buffer[0..length]})
+    else
+        try a.dupe(u8, buffer[0..length]);
+    defer a.free(namespace);
+    const raced_path = if (intermediate)
+        try std.fmt.allocPrint(a, "{s}/new-parent", .{buffer[0..length]})
+    else
+        try a.dupe(u8, ".pending");
+    defer a.free(raced_path);
+    DirectoryCreationRace.target = raced_path;
+    defer DirectoryCreationRace.target = "";
+    DirectoryCreationRace.injected = false;
+    DirectoryCreationRace.helper_called = false;
+    DirectoryCreationRace.create_file = obstruction;
+    var vtable = std.testing.io.vtable.*;
+    vtable.dirCreateDir = DirectoryCreationRace.create;
+    vtable.dirCreateDirPath = DirectoryCreationRace.forbiddenHelper;
+    var io = std.testing.io;
+    io.vtable = &vtable;
+    var files = try s.Files.init(io, namespace);
+    const result = finish(files.store(), .{ .write = .{ .name = "race.json", .bytes = "saved" } });
+    try std.testing.expect(!DirectoryCreationRace.helper_called);
+    try std.testing.expect(DirectoryCreationRace.injected);
+    if (obstruction) {
+        if (result) |value| {
+            value.deinit(a);
+            return error.TestExpectedError;
+        } else |_| {}
+        // The obstructing file must never be replaced or traversed.
+        const file = try tmp.dir.openFile(std.testing.io, ".pending", .{});
+        defer file.close(std.testing.io);
+        var reader = file.readerStreaming(std.testing.io, &.{});
+        const bytes = try reader.interface.allocRemaining(a, .limited(100));
+        defer a.free(bytes);
+        try std.testing.expectEqualStrings("foreign", bytes);
+    } else {
+        _ = try result;
+        const read = try finish(files.store(), .{ .read = .{ .name = "race.json", .max_bytes = 20 } });
+        defer read.deinit(a);
+        try std.testing.expectEqualStrings("saved", read.read);
+    }
+}
+
+test "concurrent staging directory creation does not use stat-based helpers" {
+    try directoryCreationRace(false, false);
+}
+
+test "concurrent intermediate directory creation does not use stat-based helpers" {
+    try directoryCreationRace(true, false);
+}
+
+test "a file appearing in place of the staging directory is refused" {
+    try directoryCreationRace(false, true);
+}
