@@ -192,11 +192,11 @@ fn openKey(io: std.Io, dir: std.Io.Dir, name: []const u8) !std.Io.File {
     return file;
 }
 
-/// `createDirPath`, but only when `path` is not already a directory: std's
-/// stats a path that exists (statx, see `file_info`), so an existing save
-/// directory is opened instead. Symlinks are followed, as `createDirPath`
-/// follows them (`.pending` is then reopened without following them). A
-/// path that exists but is not a directory fails (NotDir), as before.
+/// Ensure each missing component exists without stat-based directory helpers.
+/// Another writer may create a component between open and mkdir; validate
+/// EEXIST by opening it, never by statting it (old Linux has no statx).
+/// Namespace symlinks are followed; `.pending` is reopened no-follow by the
+/// caller before any staging files are accessed.
 fn ensureDir(io: std.Io, base: std.Io.Dir, path: []const u8) !void {
     if (base.openDir(io, path, .{})) |opened| {
         opened.close(io);
@@ -205,7 +205,23 @@ fn ensureDir(io: std.Io, base: std.Io.Dir, path: []const u8) !void {
         error.FileNotFound => {},
         else => return err,
     }
-    try base.createDirPath(io, path);
+
+    var components = std.Io.Dir.path.componentIterator(path);
+    var component = components.last() orelse return error.BadPathName;
+    while (true) {
+        base.createDir(io, component.path, .default_dir) catch |err| switch (err) {
+            error.PathAlreadyExists => {
+                const opened = try base.openDir(io, component.path, .{});
+                opened.close(io);
+            },
+            error.FileNotFound => |e| {
+                component = components.previous() orelse return e;
+                continue;
+            },
+            else => |e| return e,
+        };
+        component = components.next() orelse return;
+    }
 }
 
 /// Staging files are exactly 16 lowercase hex digits (a random u64).

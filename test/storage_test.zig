@@ -557,3 +557,91 @@ test "at and ofFile report a file's kind, size and modified time" {
     try std.testing.expectEqual(std.Io.File.Kind.file, opened.kind);
     try std.testing.expectEqual(@as(u64, 5), opened.size);
 }
+
+// Force directory-creation races deterministically. Reject the std helper
+// because its EEXIST path calls statx on Linux, even when used with this Io.
+const DirectoryCreationRace = struct {
+    var target: []const u8 = "";
+    var injected: bool = false;
+    var helper_called: bool = false;
+    var create_file: bool = false;
+
+    fn create(_: ?*anyopaque, dir: std.Io.Dir, path: []const u8, permissions: std.Io.Dir.Permissions) std.Io.Dir.CreateDirError!void {
+        if (!injected and std.mem.eql(u8, path, target)) {
+            injected = true;
+            if (create_file) {
+                dir.writeFile(std.testing.io, .{ .sub_path = path, .data = "foreign" }) catch unreachable;
+            } else {
+                try dir.createDir(std.testing.io, path, permissions);
+            }
+        }
+        // The real mkdir now returns PathAlreadyExists for the raced path.
+        return dir.createDir(std.testing.io, path, permissions);
+    }
+
+    fn forbiddenHelper(_: ?*anyopaque, _: std.Io.Dir, _: []const u8, _: std.Io.Dir.Permissions) std.Io.Dir.CreateDirPathError!std.Io.Dir.CreatePathStatus {
+        helper_called = true;
+        return error.Unexpected;
+    }
+};
+
+fn directoryCreationRace(intermediate: bool, obstruction: bool) !void {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var buffer: [4096]u8 = undefined;
+    const length = try tmp.dir.realPath(std.testing.io, &buffer);
+    const namespace = if (intermediate)
+        try std.fmt.allocPrint(a, "{s}/new-parent/saves", .{buffer[0..length]})
+    else
+        try a.dupe(u8, buffer[0..length]);
+    defer a.free(namespace);
+    const raced_path = if (intermediate)
+        try std.fmt.allocPrint(a, "{s}/new-parent", .{buffer[0..length]})
+    else
+        try a.dupe(u8, ".pending");
+    defer a.free(raced_path);
+    DirectoryCreationRace.target = raced_path;
+    defer DirectoryCreationRace.target = "";
+    DirectoryCreationRace.injected = false;
+    DirectoryCreationRace.helper_called = false;
+    DirectoryCreationRace.create_file = obstruction;
+    var vtable = std.testing.io.vtable.*;
+    vtable.dirCreateDir = DirectoryCreationRace.create;
+    vtable.dirCreateDirPath = DirectoryCreationRace.forbiddenHelper;
+    var io = std.testing.io;
+    io.vtable = &vtable;
+    var files = try s.Files.init(io, namespace);
+    const result = finish(files.store(), .{ .write = .{ .name = "race.json", .bytes = "saved" } });
+    try std.testing.expect(!DirectoryCreationRace.helper_called);
+    try std.testing.expect(DirectoryCreationRace.injected);
+    if (obstruction) {
+        if (result) |value| {
+            value.deinit(a);
+            return error.TestExpectedError;
+        } else |_| {}
+        // The obstructing file must never be replaced or traversed.
+        const file = try tmp.dir.openFile(std.testing.io, ".pending", .{});
+        defer file.close(std.testing.io);
+        var reader = file.readerStreaming(std.testing.io, &.{});
+        const bytes = try reader.interface.allocRemaining(a, .limited(100));
+        defer a.free(bytes);
+        try std.testing.expectEqualStrings("foreign", bytes);
+    } else {
+        _ = try result;
+        const read = try finish(files.store(), .{ .read = .{ .name = "race.json", .max_bytes = 20 } });
+        defer read.deinit(a);
+        try std.testing.expectEqualStrings("saved", read.read);
+    }
+}
+
+test "concurrent staging directory creation does not use stat-based helpers" {
+    try directoryCreationRace(false, false);
+}
+
+test "concurrent intermediate directory creation does not use stat-based helpers" {
+    try directoryCreationRace(true, false);
+}
+
+test "a file appearing in place of the staging directory is refused" {
+    try directoryCreationRace(false, true);
+}
