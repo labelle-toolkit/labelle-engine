@@ -22,6 +22,42 @@ pub fn Mixin(comptime Game: type) type {
     const Children = Game.ChildrenComp;
 
     return struct {
+        /// Register a matching participant during preparation, never in a query.
+        pub fn trackPositionRevision(self: *Game, entity: Entity) !?u64 {
+            if (!self.ecs_backend.entityExists(entity)) return null;
+            return try self.active_world.position_revisions.track(self.allocator, @intCast(entity));
+        }
+
+        /// Token is scoped to the active world. Pair it with world/entity
+        /// identity; never compare tokens across different worlds.
+        pub fn positionRevision(self: *Game, entity: Entity) ?u64 {
+            if (!self.ecs_backend.entityExists(entity)) return null;
+            return self.active_world.position_revisions.get(@intCast(entity));
+        }
+
+        /// Call after unavoidable direct ECS position writes. Shared setters
+        /// call this automatically. Includes all descendants, even when the
+        /// changed ancestor itself is not a matching participant.
+        pub fn invalidatePosition(self: *Game, entity: Entity) void {
+            if (self.active_world.position_revisions.entries.count() == 0) return;
+            if (self.active_world.position_revisions.hierarchy_untrusted) {
+                self.active_world.position_revisions.invalidateAll();
+                return;
+            }
+            invalidatePositionTree(self, entity, 0);
+        }
+
+        fn invalidatePositionTree(self: *Game, entity: Entity, depth: usize) void {
+            if (depth >= 256) {
+                // Malformed/cyclic hierarchy must never leave a token current.
+                self.active_world.position_revisions.invalidateAll();
+                return;
+            }
+            if (!self.ecs_backend.entityExists(entity)) return;
+            self.active_world.position_revisions.invalidate(@intCast(entity));
+            for (getChildren(self, entity)) |child| invalidatePositionTree(self, child, depth + 1);
+        }
+
         pub fn setPosition(self: *Game, entity: Entity, pos: Position) void {
             // Only a first-time add changes tag-set membership; the
             // common per-frame move is an in-place update, so guard the
@@ -29,6 +65,7 @@ pub fn Mixin(comptime Game: type) type {
             // time an entity moves (#653).
             if (!self.ecs_backend.hasComponent(entity, Position)) self.bumpRoster();
             self.ecs_backend.addComponent(entity, pos);
+            invalidatePosition(self, entity);
             self.renderer.markPositionDirtyWithChildren(EcsImpl, self.ecs_backend, entity);
             notifyComponentChanged(self, entity, pos);
         }
@@ -114,6 +151,7 @@ pub fn Mixin(comptime Game: type) type {
             // Parent (and possibly Children) membership changed via the
             // ecs_backend directly, so invalidate rosters (#653).
             self.bumpRoster();
+            invalidatePosition(self, child);
             self.renderer.updateHierarchyFlag(child, true);
             self.renderer.markPositionDirty(child);
         }
@@ -159,6 +197,7 @@ pub fn Mixin(comptime Game: type) type {
                 }
             }
             self.ecs_backend.removeComponent(child, Parent);
+            invalidatePosition(self, child);
             // Parent membership changed via the ecs_backend directly, so
             // invalidate rosters (#653).
             self.bumpRoster();
@@ -198,7 +237,13 @@ pub fn Mixin(comptime Game: type) type {
             if (@TypeOf(component) == Children) {
                 if (self.ecs_backend.getComponent(entity, Children)) |old| old.deinit(self.allocator);
             }
-            self.ecs_backend.addComponent(entity, component);
+            if (@TypeOf(component) == Parent) {
+                setParent(self, entity, component.entity, .{ .inherit_rotation = component.inherit_rotation, .inherit_scale = component.inherit_scale });
+            } else {
+                self.ecs_backend.addComponent(entity, component);
+                if (@TypeOf(component) == Position) invalidatePosition(self, entity);
+                if (@TypeOf(component) == Children) self.active_world.position_revisions.invalidateHierarchy();
+            }
             // Tag-set membership may have changed — invalidate rosters
             // (#653). Over-invalidation on a re-add is safe: it just
             // forces the next `entitiesWith` read to re-query.
@@ -218,7 +263,13 @@ pub fn Mixin(comptime Game: type) type {
             if (T == Children and is_update) {
                 if (self.ecs_backend.getComponent(entity, Children)) |old| old.deinit(self.allocator);
             }
-            self.ecs_backend.addComponent(entity, component);
+            if (@TypeOf(component) == Parent) {
+                setParent(self, entity, component.entity, .{ .inherit_rotation = component.inherit_rotation, .inherit_scale = component.inherit_scale });
+            } else {
+                self.ecs_backend.addComponent(entity, component);
+                if (@TypeOf(component) == Position) invalidatePosition(self, entity);
+                if (@TypeOf(component) == Children) self.active_world.position_revisions.invalidateHierarchy();
+            }
             // A genuine add changes tag-set membership; an in-place
             // update does not — only invalidate rosters in the former
             // case so per-field updates via `setComponent` don't thrash
@@ -265,8 +316,17 @@ pub fn Mixin(comptime Game: type) type {
             value: @FieldType(T, @tagName(field)),
         ) void {
             const comp_ptr = self.ecs_backend.getComponent(entity, T) orelse return;
+            if (T == Parent) {
+                var updated = comp_ptr.*;
+                @field(updated, @tagName(field)) = value;
+                setParent(self, entity, updated.entity, .{ .inherit_rotation = updated.inherit_rotation, .inherit_scale = updated.inherit_scale });
+                if (self.ecs_backend.getComponent(entity, Parent)) |actual| notifyComponentChanged(self, entity, actual);
+                return;
+            }
             @field(comp_ptr.*, @tagName(field)) = value;
+            if (T == Children) self.active_world.position_revisions.invalidateHierarchy();
             if (T == Position) {
+                invalidatePosition(self, entity);
                 self.renderer.markPositionDirtyWithChildren(EcsImpl, self.ecs_backend, entity);
             }
             notifyComponentChanged(self, entity, comp_ptr);
@@ -285,7 +345,13 @@ pub fn Mixin(comptime Game: type) type {
             if (T == Children) {
                 if (self.ecs_backend.getComponent(entity, Children)) |old| old.deinit(self.allocator);
             }
-            self.ecs_backend.removeComponent(entity, T);
+            if (T == Parent) {
+                removeParent(self, entity);
+            } else {
+                if (T == Position) invalidatePosition(self, entity);
+                if (T == Children) self.active_world.position_revisions.invalidateHierarchy();
+                self.ecs_backend.removeComponent(entity, T);
+            }
             // Tag-set membership changed — invalidate rosters (#653).
             self.bumpRoster();
         }
