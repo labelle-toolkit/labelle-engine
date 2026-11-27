@@ -82,13 +82,16 @@ pub fn Mixin(comptime Game: type) type {
                 for (std.enums.values(@import("scene").builtins.Builtin)) |builtin_component| {
                     types = types ++ &[_]type{builtin_component.Type(Game)};
                 }
-                for (Game.ComponentRegistry.names()) |name| {
-                    const T = Game.ComponentRegistry.getType(name);
-                    var found = false;
-                    for (types) |existing| {
-                        if (existing == T) found = true;
+                const Registry = Game.ComponentRegistry;
+                if (@hasDecl(Registry, "names") and @hasDecl(Registry, "getType")) {
+                    for (Registry.names()) |name| {
+                        const T = Registry.getType(name);
+                        var found = false;
+                        for (types) |existing| {
+                            if (existing == T) found = true;
+                        }
+                        if (!found) types = types ++ &[_]type{T};
                     }
-                    if (!found) types = types ++ &[_]type{T};
                 }
                 return types;
             }

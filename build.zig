@@ -577,7 +577,7 @@ pub fn build(b: *std.Build) void {
         const run = b.addRunArtifact(t);
         test_step.dependOn(&run.step);
         if (std.mem.eql(u8, test_file, "test/component_lifecycle_test.zig")) b.step("test-component-lifecycle", "Test component writes and destruction callbacks").dependOn(&run.step);
-        for ([_][]const u8{ "test/component_lifecycle_test.zig", "test/script_contract_test.zig", "test/scene_teardown_test.zig", "test/scene_lifecycle_events_test.zig", "test/hook_delivery_contract_test.zig", "test/typed_hook_context_test.zig" }) |related| {
+        for ([_][]const u8{ "test/component_lifecycle_test.zig", "test/script_contract_test.zig", "test/scene_teardown_test.zig", "test/scene_lifecycle_events_test.zig", "test/hook_delivery_contract_test.zig", "test/typed_hook_context_test.zig", "test/payload_lifetime_test.zig" }) |related| {
             if (std.mem.eql(u8, test_file, related)) component_regressions.dependOn(&run.step);
         }
         if (std.mem.startsWith(u8, test_file, "test/save_") or std.mem.eql(u8, test_file, "test/storage_serialization_test.zig")) save_regressions.dependOn(&run.step);
