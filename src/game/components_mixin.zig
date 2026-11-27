@@ -36,6 +36,9 @@ pub fn Mixin(comptime Game: type) type {
         }
 
         fn emitChange(self: *Game, entity: Entity, comptime T: type, change: hooks_types.ComponentChange) void {
+            const was_notifying = self.component_notification_active;
+            self.component_notification_active = true;
+            defer self.component_notification_active = was_notifying;
             self.emitHook(.{ .component_changed = .{
                 .entity_id = entity,
                 .component_name = @typeName(T),

@@ -36,7 +36,7 @@ const Footprint = struct {
             .destroy_self => game.destroyEntity(entity),
             .switch_world => {
                 game.setActiveWorld("destination") catch |err| {
-                    callback_switch_blocked = err == error.WorldTeardownInProgress;
+                    callback_switch_blocked = err == error.WorldMutationInProgress;
                     return;
                 };
             },
@@ -54,6 +54,7 @@ const Recorder = struct {
     remove_on_change: bool = false,
     switch_world_on_remove: bool = false,
     hook_switch_blocked: bool = false,
+    switch_world_on_write: bool = false,
 
     pub fn component_changed(self: *Recorder, p: engine.ComponentChangeInfo(u32)) void {
         const game = self.ctx.gameAs(Game);
@@ -69,10 +70,16 @@ const Recorder = struct {
             self.removing += 1;
             if (self.switch_world_on_remove) {
                 game.setActiveWorld("destination") catch |err| {
-                    self.hook_switch_blocked = err == error.WorldTeardownInProgress;
+                    self.hook_switch_blocked = err == error.WorldMutationInProgress;
                     return;
                 };
             }
+        }
+        if (self.switch_world_on_write and p.change != .removing) {
+            game.setActiveWorld("destination") catch |err| {
+                self.hook_switch_blocked = err == error.WorldMutationInProgress;
+                return;
+            };
         }
         if (self.remove_on_change and std.mem.eql(u8, p.component_name, @typeName(Footprint))) {
             game.removeComponent(p.entity_id, Footprint);
@@ -236,4 +243,28 @@ test "removal and destruction cannot switch worlds with overlapping entity ids" 
         try game.setActiveWorld("destination");
         try testing.expectEqual(@as(f32, 9), game.getComponent(other, Footprint).?.width);
     }
+}
+
+test "write notification cannot redirect onSet to a component in another world" {
+    sets = 0;
+    var recorder = Recorder{};
+    var game = Game.init(testing.allocator);
+    defer game.deinit();
+    game.setHooks(&recorder);
+    try game.createWorld("source");
+    try game.createWorld("destination");
+    try game.setActiveWorld("destination");
+    const other = game.createEntity();
+    game.addComponent(other, Footprint{ .width = 9 });
+    try game.setActiveWorld("source");
+    const entity = game.createEntity();
+    try testing.expectEqual(other, entity);
+    game.addComponent(entity, Footprint{});
+    recorder.switch_world_on_write = true;
+    game.setField(Footprint, .width, entity, 4);
+    try testing.expect(recorder.hook_switch_blocked);
+    try testing.expectEqual(@as(usize, 1), sets);
+    try testing.expectEqual(@as(f32, 4), game.getComponent(entity, Footprint).?.width);
+    try game.setActiveWorld("destination");
+    try testing.expectEqual(@as(f32, 9), game.getComponent(other, Footprint).?.width);
 }

@@ -53,16 +53,22 @@ If a native receiver deletes the entity or directly drops the component,
 the subsequent type callback is skipped rather than using invalid data.
 No component pointers are retained across these callbacks.
 
-Register component types in `ComponentRegistry` for destruction callbacks;
-arbitrary unregistered types attached directly to the backend cannot be
-enumerated by the engine. Registry aliases are deduplicated by type.
+Destruction enumerates known engine components and custom types exposed by
+`ComponentRegistry.names()` and `getType()`. A minimal registry without
+enumeration still supports explicit removal of custom types. The engine can
+only notify known types during entity destruction. Registry aliases are
+deduplicated by type.
 Recursive removal of the same component waits for the outer removal;
 recursive destruction of an entity already being destroyed is a no-op.
 Callbacks may remove other components or entities; re-check presence before
 reading siblings and do not depend on the order between component types.
-During removal or entity destruction, `setActiveWorld` returns
-`error.WorldTeardownInProgress` without changing either world. Schedule the
-switch after the outermost operation returns.
+During native component notifications, removal or entity destruction,
+`setActiveWorld` returns `error.WorldMutationInProgress` without changing either
+world. Schedule the switch after the outermost operation returns.
+
+The notification reports the type actually passed to the ECS. A pointer
+stored as a component reports its pointer type. Pass the component value
+when the ECS should store and notify the value type.
 
 Receivers maintaining a grid or index should enqueue the entity id and
 reconcile after the mutation returns, rather than read a final-world

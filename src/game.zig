@@ -1154,6 +1154,7 @@ pub fn GameConfigWithYAxis(
         // Stack-owned synchronous callback guards; never survive an API call.
         component_removals: ?*const @import("game/component_lifecycle.zig").Removal = null,
         entity_destructions: ?*const @import("game/component_lifecycle.zig").Destruction = null,
+        component_notification_active: bool = false,
 
         // Profiling (debug builds only)
         /// Opaque pointer to ScriptRunner's profile array. Set by generated code.

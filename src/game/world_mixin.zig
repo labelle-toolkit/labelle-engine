@@ -48,11 +48,11 @@ pub fn Mixin(comptime Game: type) type {
         /// Swap the active world. The named world becomes active; the current
         /// active world is shelved into the map (if named) or destroyed (if unnamed).
         /// Verifies the target exists BEFORE modifying any state.
-        /// Callers inside removal or destruction callbacks must defer the swap
-        /// until teardown returns.
+        /// Callers inside native component notifications or teardown callbacks
+        /// must defer the swap until the mutation returns.
         pub fn setActiveWorld(self: *Game, name: []const u8) !void {
-            if (self.component_removals != null or self.entity_destructions != null) {
-                return error.WorldTeardownInProgress;
+            if (self.component_notification_active or self.component_removals != null or self.entity_destructions != null) {
+                return error.WorldMutationInProgress;
             }
 
             // Remove target first — guarantees a free slot for shelving the current world
