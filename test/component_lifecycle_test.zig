@@ -5,7 +5,8 @@ const core = @import("labelle-core");
 
 var sets: usize = 0;
 var removes: usize = 0;
-var remove_action: enum { none, remove_self, destroy_self } = .none;
+var remove_action: enum { none, remove_self, destroy_self, switch_world } = .none;
+var callback_switch_blocked: bool = false;
 var sibling_removes: usize = 0;
 
 const Sibling = struct {
@@ -33,6 +34,12 @@ const Footprint = struct {
             .none => {},
             .remove_self => game.removeComponent(entity, Footprint),
             .destroy_self => game.destroyEntity(entity),
+            .switch_world => {
+                game.setActiveWorld("destination") catch |err| {
+                    callback_switch_blocked = err == error.WorldTeardownInProgress;
+                    return;
+                };
+            },
         }
     }
 };
@@ -45,6 +52,8 @@ const Recorder = struct {
     last_change: engine.ComponentChange = .added,
     last_x: f32 = 0,
     remove_on_change: bool = false,
+    switch_world_on_remove: bool = false,
+    hook_switch_blocked: bool = false,
 
     pub fn component_changed(self: *Recorder, p: engine.ComponentChangeInfo(u32)) void {
         const game = self.ctx.gameAs(Game);
@@ -58,6 +67,12 @@ const Recorder = struct {
         if (std.mem.eql(u8, p.component_name, @typeName(Footprint)) and p.change == .removing) {
             std.debug.assert(game.getComponent(p.entity_id, Footprint) != null);
             self.removing += 1;
+            if (self.switch_world_on_remove) {
+                game.setActiveWorld("destination") catch |err| {
+                    self.hook_switch_blocked = err == error.WorldTeardownInProgress;
+                    return;
+                };
+            }
         }
         if (self.remove_on_change and std.mem.eql(u8, p.component_name, @typeName(Footprint))) {
             game.removeComponent(p.entity_id, Footprint);
@@ -186,4 +201,39 @@ test "a later destruction callback cannot repeat an earlier component removal" {
     game.destroyEntity(entity);
     try testing.expectEqual(@as(usize, 1), removes);
     try testing.expectEqual(@as(usize, 1), sibling_removes);
+}
+
+test "removal and destruction cannot switch worlds with overlapping entity ids" {
+    for (0..3) |operation| {
+        removes = 0;
+        remove_action = .switch_world;
+        callback_switch_blocked = false;
+        var recorder = Recorder{ .switch_world_on_remove = true };
+        var game = Game.init(testing.allocator);
+        defer game.deinit();
+        game.setHooks(&recorder);
+        try game.createWorld("source");
+        try game.createWorld("destination");
+        try game.setActiveWorld("destination");
+        const other = game.createEntity();
+        game.addComponent(other, Footprint{ .width = 9 });
+        try game.setActiveWorld("source");
+        const entity = game.createEntity();
+        try testing.expectEqual(other, entity);
+        game.addComponent(entity, Footprint{});
+        switch (operation) {
+            0 => game.removeComponent(entity, Footprint),
+            1 => game.destroyEntity(entity),
+            2 => game.destroyEntityOnly(entity),
+            else => unreachable,
+        }
+        try testing.expect(recorder.hook_switch_blocked);
+        try testing.expect(callback_switch_blocked);
+        try testing.expectEqual(@as(usize, 1), removes);
+        try testing.expectEqualStrings("source", game.getActiveWorldName().?);
+        try testing.expectEqual(operation == 0, game.ecs_backend.entityExists(entity));
+        if (operation == 0) try testing.expect(!game.hasComponent(entity, Footprint));
+        try game.setActiveWorld("destination");
+        try testing.expectEqual(@as(f32, 9), game.getComponent(other, Footprint).?.width);
+    }
 }

@@ -60,6 +60,9 @@ Recursive removal of the same component waits for the outer removal;
 recursive destruction of an entity already being destroyed is a no-op.
 Callbacks may remove other components or entities; re-check presence before
 reading siblings and do not depend on the order between component types.
+During removal or entity destruction, `setActiveWorld` returns
+`error.WorldTeardownInProgress` without changing either world. Schedule the
+switch after the outermost operation returns.
 
 Receivers maintaining a grid or index should enqueue the entity id and
 reconcile after the mutation returns, rather than read a final-world
