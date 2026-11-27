@@ -760,6 +760,8 @@ pub const StateChangeInfo = hooks_types_mod.StateChangeInfo;
 pub const PauseChangedInfo = hooks_types_mod.PauseChangedInfo;
 pub const EntityInfo = hooks_types_mod.EntityInfo;
 pub const ComponentPayload = hooks_types_mod.ComponentPayload;
+pub const ComponentChange = hooks_types_mod.ComponentChange;
+pub const ComponentChangeInfo = hooks_types_mod.ComponentChangeInfo;
 
 // ── Typed hook context (#855) ──
 /// Declare `ctx: engine.HookContext = .{}` on a hook receiver and the

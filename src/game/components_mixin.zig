@@ -27,10 +27,94 @@ pub fn Mixin(comptime Game: type) type {
             // common per-frame move is an in-place update, so guard the
             // roster invalidation to avoid thrashing the cache every
             // time an entity moves (#653).
-            if (!self.ecs_backend.hasComponent(entity, Position)) self.bumpRoster();
+            const is_update = self.ecs_backend.hasComponent(entity, Position);
+            if (!is_update) self.bumpRoster();
             self.ecs_backend.addComponent(entity, pos);
             self.renderer.markPositionDirtyWithChildren(EcsImpl, self.ecs_backend, entity);
             notifyComponentChanged(self, entity, pos);
+            emitChange(self, entity, Position, if (is_update) .set else .added);
+        }
+
+        fn emitChange(self: *Game, entity: Entity, comptime T: type, change: hooks_types.ComponentChange) void {
+            self.emitHook(.{ .component_changed = .{
+                .entity_id = entity,
+                .component_name = @typeName(T),
+                .change = change,
+            } });
+        }
+
+        /// Shared by explicit removal and entity teardown. The callback runs
+        /// before deletion and may reenter either API without duplicate calls.
+        fn isRemoving(self: *Game, entity: Entity, comptime T: type) bool {
+            var cursor = self.component_removals;
+            while (cursor) |entry| : (cursor = entry.previous) {
+                if (entry.entity == @as(u64, @intCast(entity)) and entry.world == @as(*anyopaque, @ptrCast(self.ecs_backend)) and
+                    std.mem.eql(u8, entry.component, @typeName(T))) return true;
+            }
+            return false;
+        }
+
+        pub fn fireRemoval(self: *Game, entity: Entity, comptime T: type) void {
+            if (!self.ecs_backend.entityExists(entity) or !self.ecs_backend.hasComponent(entity, T) or isRemoving(self, entity, T)) return;
+            const frame = @import("component_lifecycle.zig").Removal{
+                .entity = @intCast(entity),
+                .component = @typeName(T),
+                .world = @ptrCast(self.ecs_backend),
+                .previous = self.component_removals,
+            };
+            self.component_removals = &frame;
+            defer self.component_removals = frame.previous;
+            // Publish first: a type callback may itself delete the component.
+            emitChange(self, entity, T, .removing);
+            if (!self.ecs_backend.entityExists(entity) or !self.ecs_backend.hasComponent(entity, T)) return;
+            if (@typeInfo(T) == .@"struct" and @hasDecl(T, "onRemove")) {
+                T.onRemove(ComponentPayload{ .entity_id = @intCast(entity), .game_ptr = @ptrCast(self) });
+            }
+        }
+
+        /// Registered types plus engine built-ins. Deduplicate aliases so one
+        /// component receives one removal notification, not one per name.
+        fn destructionTypes() []const type {
+            comptime {
+                @setEvalBranchQuota(100_000);
+                var types: []const type = &.{ Position, Game.ParentComp, Game.ChildrenComp, Game.TextComp, Game.IconComp, Game.PrefabInstanceComp, Game.PrefabChildComp, Game.GizmoDraw, core.VideoComponent };
+                // Follow the scene package's authoritative built-in set.
+                for (std.enums.values(@import("scene").builtins.Builtin)) |builtin_component| {
+                    types = types ++ &[_]type{builtin_component.Type(Game)};
+                }
+                for (Game.ComponentRegistry.names()) |name| {
+                    const T = Game.ComponentRegistry.getType(name);
+                    var found = false;
+                    for (types) |existing| {
+                        if (existing == T) found = true;
+                    }
+                    if (!found) types = types ++ &[_]type{T};
+                }
+                return types;
+            }
+        }
+
+        pub fn fireEntityRemovals(self: *Game, entity: Entity) void {
+            // Keep completed removals guarded until the entire callback pass
+            // finishes: a later sibling callback may try to remove an earlier
+            // component that remains attached until backend destruction.
+            var completed: [destructionTypes().len]@import("component_lifecycle.zig").Removal = undefined;
+            var completed_count: usize = 0;
+            const previous = self.component_removals;
+            defer self.component_removals = previous;
+            inline for (comptime destructionTypes()) |T| {
+                if (self.ecs_backend.entityExists(entity) and self.ecs_backend.hasComponent(entity, T)) {
+                    fireRemoval(self, entity, T);
+                    completed[completed_count] = .{
+                        .entity = @intCast(entity),
+                        .component = @typeName(T),
+                        .world = @ptrCast(self.ecs_backend),
+                        .previous = self.component_removals,
+                    };
+                    self.component_removals = &completed[completed_count];
+                    completed_count += 1;
+                }
+            }
         }
 
         /// Preview-mode helper. No-op unless `self.preview` is set AND
@@ -204,10 +288,13 @@ pub fn Mixin(comptime Game: type) type {
             // forces the next `entitiesWith` read to re-query.
             self.bumpRoster();
             const T = @TypeOf(component);
+            notifyComponentChanged(self, entity, component);
+            if (T == Position) self.renderer.markPositionDirtyWithChildren(EcsImpl, self.ecs_backend, entity);
+            emitChange(self, entity, T, .added);
+            if (!self.ecs_backend.entityExists(entity) or !self.ecs_backend.hasComponent(entity, T)) return;
             if (@typeInfo(T) == .@"struct" and @hasDecl(T, "onAdd")) {
                 T.onAdd(ComponentPayload{ .entity_id = @intCast(entity), .game_ptr = @ptrCast(self) });
             }
-            notifyComponentChanged(self, entity, component);
         }
 
         pub fn setComponent(self: *Game, entity: Entity, component: anytype) void {
@@ -224,6 +311,10 @@ pub fn Mixin(comptime Game: type) type {
             // case so per-field updates via `setComponent` don't thrash
             // the cache (#653).
             if (!is_update) self.bumpRoster();
+            notifyComponentChanged(self, entity, component);
+            if (T == Position) self.renderer.markPositionDirtyWithChildren(EcsImpl, self.ecs_backend, entity);
+            emitChange(self, entity, T, if (is_update) .set else .added);
+            if (!self.ecs_backend.entityExists(entity) or !self.ecs_backend.hasComponent(entity, T)) return;
             if (@typeInfo(T) == .@"struct") {
                 if (is_update and @hasDecl(T, "onSet")) {
                     T.onSet(ComponentPayload{ .entity_id = @intCast(entity), .game_ptr = @ptrCast(self) });
@@ -231,7 +322,6 @@ pub fn Mixin(comptime Game: type) type {
                     T.onAdd(ComponentPayload{ .entity_id = @intCast(entity), .game_ptr = @ptrCast(self) });
                 }
             }
-            notifyComponentChanged(self, entity, component);
         }
 
         pub fn getComponent(self: *Game, entity: Entity, comptime T: type) ?*T {
@@ -270,6 +360,11 @@ pub fn Mixin(comptime Game: type) type {
                 self.renderer.markPositionDirtyWithChildren(EcsImpl, self.ecs_backend, entity);
             }
             notifyComponentChanged(self, entity, comp_ptr);
+            emitChange(self, entity, T, .set);
+            if (!self.ecs_backend.entityExists(entity) or !self.ecs_backend.hasComponent(entity, T)) return;
+            if (@typeInfo(T) == .@"struct" and @hasDecl(T, "onSet")) {
+                T.onSet(ComponentPayload{ .entity_id = @intCast(entity), .game_ptr = @ptrCast(self) });
+            }
         }
 
         pub fn hasComponent(self: *Game, entity: Entity, comptime T: type) bool {
@@ -277,9 +372,11 @@ pub fn Mixin(comptime Game: type) type {
         }
 
         pub fn removeComponent(self: *Game, entity: Entity, comptime T: type) void {
-            if (@typeInfo(T) == .@"struct" and @hasDecl(T, "onRemove")) {
-                T.onRemove(ComponentPayload{ .entity_id = @intCast(entity), .game_ptr = @ptrCast(self) });
-            }
+            // The outer removal owns deletion; keep data readable until both
+            // the native hook and the type callback have returned.
+            if (isRemoving(self, entity, T)) return;
+            fireRemoval(self, entity, T);
+            if (!self.ecs_backend.entityExists(entity) or !self.ecs_backend.hasComponent(entity, T)) return;
             // Free `Children`'s heap list before the by-value drop — the
             // engine strips it via detach/destroy, but this is a public path.
             if (T == Children) {

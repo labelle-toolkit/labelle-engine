@@ -25,6 +25,60 @@ pinned by executable tests:
 
 ## 1. The emit paths
 
+### Component mutation notifications
+
+**Unreleased addition.**
+
+`HookPayload.component_changed` is an **immediate native hook**, independent
+of preview mode and the project's `GameEvents` union. Its payload contains
+`entity_id`, `component_name` (the fully qualified `@typeName(T)`) and
+`change: engine.ComponentChange` (`added`, `set`, or `removing`). It is not
+the preview socket's similarly named frame, and has no buffered
+`engine__component_changed` twin: a plugin that maintains derived state
+needs the mutation notification before its next advancement.
+
+| Game API | Type callback | Native notification |
+|---|---|---|
+| `addComponent` | existing `T.onAdd` behavior, including replacement | `added`, after writing |
+| `setComponent` | `T.onAdd` on insertion; `T.onSet` on update | `added` or `set`, after writing |
+| `setField` | `T.onSet` after writing; absent component is a no-op | `set`, after writing |
+| `setPosition`, `setWorldPosition` | core Position has no type callbacks | `added` or `set`, after writing |
+| `removeComponent` | `T.onRemove` before removal; absent component is a no-op | `removing`, before removal |
+| `destroyEntity`, `destroyEntityOnly` | `T.onRemove` for present registered components and known engine components | one `removing` per component before deletion; `entity_destroyed` remains after deletion |
+
+For writes, renderer dirty tracking and preview serialization finish before
+native notification. The native hook then runs before the type callback.
+For removal, the native hook runs before `onRemove`, while data is readable.
+If a native receiver deletes the entity or directly drops the component,
+the subsequent type callback is skipped rather than using invalid data.
+No component pointers are retained across these callbacks.
+
+Register component types in `ComponentRegistry` for destruction callbacks;
+arbitrary unregistered types attached directly to the backend cannot be
+enumerated by the engine. Registry aliases are deduplicated by type.
+Recursive removal of the same component waits for the outer removal;
+recursive destruction of an entity already being destroyed is a no-op.
+Callbacks may remove other components or entities; re-check presence before
+reading siblings and do not depend on the order between component types.
+
+Receivers maintaining a grid or index should enqueue the entity id and
+reconcile after the mutation returns, rather than read a final-world
+snapshot inside a `removing` handler. A receiver can compare
+`component_name` with `@typeName(core.Position)` to track movement without
+modifying the core component or adding explicit game-side refresh calls.
+
+This is the **Game API** contract. Writes through a mutable component
+pointer or directly through `ecs_backend` / core ECS bypass notifications.
+Use `setField`, `setComponent` or position setters for observed mutations.
+The hook describes the entity's own Position component; an ancestor's
+movement does not write each descendant's local Position. Consumers indexing
+world positions must additionally account for hierarchy changes. Whole-ECS
+reset/load remains a scene-level rebuild boundary. These semantics are
+covered by `test/component_lifecycle_test.zig` and the focused
+`zig build test-component-regressions` step.
+
+### General emit paths
+
 Four ways to get a handler called. They differ in **when** — and one of them
 also differs in **who**.
 

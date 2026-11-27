@@ -1151,6 +1151,10 @@ pub fn GameConfigWithYAxis(
         /// idle editor pays nothing per write.
         preview: ?preview_mode_mod.Preview = null,
 
+        // Stack-owned synchronous callback guards; never survive an API call.
+        component_removals: ?*const @import("game/component_lifecycle.zig").Removal = null,
+        entity_destructions: ?*const @import("game/component_lifecycle.zig").Destruction = null,
+
         // Profiling (debug builds only)
         /// Opaque pointer to ScriptRunner's profile array. Set by generated code.
         script_profile_ptr: ?*const anyopaque = null,

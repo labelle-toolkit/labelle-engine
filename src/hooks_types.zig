@@ -36,6 +36,10 @@ pub fn HookPayload(comptime Entity: type) type {
         // Entity lifecycle
         entity_created: EntityInfo(Entity),
         entity_destroyed: EntityInfo(Entity),
+        /// Immediate Game-API component notification, independent of preview.
+        /// Removal fires while the component is still readable. Receivers
+        /// should enqueue work rather than mutate the component recursively.
+        component_changed: ComponentChangeInfo(Entity),
     };
 }
 
@@ -109,6 +113,17 @@ pub const ComponentPayload = struct {
         return @ptrCast(@alignCast(self.game_ptr));
     }
 };
+
+pub const ComponentChange = enum { added, set, removing };
+
+pub fn ComponentChangeInfo(comptime Entity: type) type {
+    return struct {
+        entity_id: Entity,
+        /// Stable, fully qualified Zig type name (compare with @typeName(T)).
+        component_name: []const u8,
+        change: ComponentChange,
+    };
+}
 
 // ─── Typed hook context (#855) ──────────────────────────────────────────
 //
