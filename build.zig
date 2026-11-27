@@ -138,6 +138,7 @@ pub fn build(b: *std.Build) void {
 
     // Test files in test/ directory
     const test_files = [_][]const u8{
+        "test/component_lifecycle_test.zig",
         "test/root_test.zig",
         "test/shader_material_test.zig",
         // #881 — the comptime `.zon` entity writer must never silently
@@ -558,6 +559,7 @@ pub fn build(b: *std.Build) void {
     const save_regressions = b.step("test-save-storage", "Test storage and engine save/load integration");
     save_regressions.dependOn(&storage_run.step);
     const shader_regressions = b.step("test-shader-regressions", "Execute shader, scene, prefab, and material regressions");
+    const component_regressions = b.step("test-component-regressions", "Test component callbacks, event delivery, scripts and scene teardown");
     for (test_files) |test_file| {
         const t = b.addTest(.{
             .root_module = b.createModule(.{
@@ -574,6 +576,10 @@ pub fn build(b: *std.Build) void {
         });
         const run = b.addRunArtifact(t);
         test_step.dependOn(&run.step);
+        if (std.mem.eql(u8, test_file, "test/component_lifecycle_test.zig")) b.step("test-component-lifecycle", "Test component writes and destruction callbacks").dependOn(&run.step);
+        for ([_][]const u8{ "test/component_lifecycle_test.zig", "test/script_contract_test.zig", "test/scene_teardown_test.zig", "test/scene_lifecycle_events_test.zig", "test/hook_delivery_contract_test.zig", "test/typed_hook_context_test.zig", "test/payload_lifetime_test.zig" }) |related| {
+            if (std.mem.eql(u8, test_file, related)) component_regressions.dependOn(&run.step);
+        }
         if (std.mem.startsWith(u8, test_file, "test/save_") or std.mem.eql(u8, test_file, "test/storage_serialization_test.zig")) save_regressions.dependOn(&run.step);
         for ([_][]const u8{ "test/shader_material_test.zig", "test/scene_test.zig", "test/scene_lifecycle_events_test.zig", "test/scene_teardown_test.zig", "test/prefab_refresh_test.zig", "test/jsonc/deserializer_test.zig", "test/set_material_test.zig" }) |related| {
             if (std.mem.eql(u8, test_file, related)) shader_regressions.dependOn(&run.step);

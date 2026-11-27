@@ -24,6 +24,14 @@ pub fn Mixin(comptime Game: type) type {
     const is_debug = builtin.mode == .Debug;
 
     return struct {
+        fn isDestroying(self: *Game, entity: Entity) bool {
+            var cursor = self.entity_destructions;
+            while (cursor) |entry| : (cursor = entry.previous) {
+                if (entry.entity == @as(u64, @intCast(entity)) and entry.world == @as(*anyopaque, @ptrCast(self.ecs_backend))) return true;
+            }
+            return false;
+        }
+
         // ── Debug entity guards (#419, #420) ─────────────────────
 
         pub fn recordTombstone(self: *Game, entity: Entity) void {
@@ -246,7 +254,14 @@ pub fn Mixin(comptime Game: type) type {
             // own full teardown (including freeing its `Children` list), so
             // bailing here is a leak-free no-op. `entityExists` is the same
             // liveness oracle `detachFromParent` trusts.
-            if (!self.ecs_backend.entityExists(entity)) return;
+            if (!self.ecs_backend.entityExists(entity) or isDestroying(self, entity)) return;
+            const destruction_frame = @import("component_lifecycle.zig").Destruction{
+                .entity = @intCast(entity),
+                .world = @ptrCast(self.ecs_backend),
+                .previous = self.entity_destructions,
+            };
+            self.entity_destructions = &destruction_frame;
+            defer self.entity_destructions = destruction_frame.previous;
             if (self.ecs_backend.getComponent(entity, Children)) |children_comp| {
                 // Cascade over an INDEPENDENT copy of the child ids. Each
                 // child's destroy unlinks it from THIS live list via
@@ -281,6 +296,8 @@ pub fn Mixin(comptime Game: type) type {
             // `Children` free below must stay AFTER this: freeing the list
             // first would hand a preview `getChildren` a slice into a freed
             // allocation.
+            @import("components_mixin.zig").Mixin(Game).fireEntityRemovals(self, entity);
+            if (!self.ecs_backend.entityExists(entity)) return;
             if (self.preview) |*p| p.emitEntityDestroyed(@intCast(entity)) catch {};
             // #701 — unlink from the parent's `Children` before the
             // backend destroy (after it, the `Parent` component is
@@ -328,6 +345,15 @@ pub fn Mixin(comptime Game: type) type {
             // both entry points remove a footgun when code switches between
             // them. It does NOT change the contract: the listed children
             // still stay alive; a dead entity simply has nothing left to do.
+            if (!self.ecs_backend.entityExists(entity) or isDestroying(self, entity)) return;
+            const destruction_frame = @import("component_lifecycle.zig").Destruction{
+                .entity = @intCast(entity),
+                .world = @ptrCast(self.ecs_backend),
+                .previous = self.entity_destructions,
+            };
+            self.entity_destructions = &destruction_frame;
+            defer self.entity_destructions = destruction_frame.previous;
+            @import("components_mixin.zig").Mixin(Game).fireEntityRemovals(self, entity);
             if (!self.ecs_backend.entityExists(entity)) return;
             if (self.preview) |*p| p.emitEntityDestroyed(@intCast(entity)) catch {};
             // #701 — same parent-unlink as `destroyEntity`. This variant
