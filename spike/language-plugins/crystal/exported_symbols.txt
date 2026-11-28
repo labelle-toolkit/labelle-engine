@@ -1,0 +1,3 @@
+_crystal_script_boot
+_crystal_script_init
+_crystal_script_update
