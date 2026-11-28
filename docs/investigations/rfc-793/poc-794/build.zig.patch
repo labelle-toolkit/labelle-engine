@@ -1,0 +1,24 @@
+diff --git a/build.zig b/build.zig
+index da1f287..d0f4589 100644
+--- a/build.zig
++++ b/build.zig
+@@ -136,6 +136,19 @@ pub fn build(b: *std.Build) void {
+     test_step.dependOn(&run_animation_tests.step);
+     b.step("test-animation", "Test definition-to-engine playback compatibility").dependOn(&run_animation_tests.step);
+ 
++    // RFC #794 evidence probe: `zig build test-rfc794-probe` only.
++    const rfc794_probe = b.addTest(.{ .root_module = b.createModule(.{
++        .root_source_file = b.path("animation/test/rfc794_refresh_accounting_probe.zig"),
++        .target = target,
++        .optimize = optimize,
++        .imports = &.{
++            .{ .name = "engine", .module = engine_module },
++            .{ .name = "animation", .module = animation_module },
++            .{ .name = "labelle-core", .module = core_module },
++        },
++    }) });
++    b.step("test-rfc794-probe", "RFC 794 refresh accounting probe").dependOn(&b.addRunArtifact(rfc794_probe).step);
++
+     // Test files in test/ directory
+     const test_files = [_][]const u8{
+         "test/root_test.zig",
